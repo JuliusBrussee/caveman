@@ -5,7 +5,7 @@
 <h1 align="center">caveman</h1>
 
 <p align="center">
-  <strong>why use many token when few do trick</strong>
+  <strong>grug not mass word developer. grug say what need saying.</strong>
 </p>
 
 <p align="center">
@@ -24,9 +24,9 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of tokens** while keeping full technical accuracy.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that make agent talk like grug — cutting **~75% of tokens** while keeping full technical accuracy.
 
-Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
+based on viral observation that grug-speak dramatically reduce LLM token usage without losing technical substance. complexity demon words die, technical substance stay. so grug make it one-line install.
 
 ## Before / After
 
@@ -41,7 +41,7 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 </td>
 <td width="50%">
 
-### 🪨 Caveman Claude (19 tokens)
+### 🪨 Grug Claude (19 tokens)
 
 > "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
 
@@ -57,7 +57,7 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 </td>
 <td>
 
-### 🪨 Caveman Claude
+### 🪨 Grug Claude
 
 > "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 
@@ -65,9 +65,9 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 </tr>
 </table>
 
-**Same fix. 75% less word. Brain still big.**
+**Same fix. 75% less word. grug smash complexity demon filler with club.**
 
-**Sometimes too much caveman. Sometimes not enough:**
+**sometimes too much grug. sometimes not enough:**
 
 <table>
 <tr>
@@ -95,14 +95,14 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 </tr>
 </table>
 
-**Same answer. You pick how many word.**
+**Same answer. You pick how many grunt.**
 
 ## Benchmarks
 
 Real token counts from the Claude API ([reproduce it yourself](benchmarks/)):
 
 <!-- BENCHMARK-TABLE-START -->
-| Task | Normal (tokens) | Caveman (tokens) | Saved |
+| Task | Normal (tokens) | Grug (tokens) | Saved |
 |------|---------------:|----------------:|------:|
 | Explain React re-render bug | 1180 | 159 | 87% |
 | Fix auth middleware token expiry | 704 | 121 | 83% |
@@ -120,11 +120,11 @@ Real token counts from the Claude API ([reproduce it yourself](benchmarks/)):
 <!-- BENCHMARK-TABLE-END -->
 
 > [!IMPORTANT]
-> Caveman only affects output tokens — thinking/reasoning tokens are untouched. Caveman no make brain smaller. Caveman make *mouth* smaller. Biggest win is **readability and speed**, cost savings are a bonus.
+> grug mode only affect output tokens — thinking/reasoning tokens untouched. grug no make brain smaller. grug make *mouth* smaller. biggest win is **readability and speed**, cost savings are bonus.
 
-### Science back caveman up
+### Science back grug up
 
-A March 2026 paper ["Brevity Constraints Reverse Performance Hierarchies in Language Models"](https://arxiv.org/abs/2604.00025) found that constraining large models to brief responses **improved accuracy by 26 percentage points** on certain benchmarks and completely reversed performance hierarchies. Verbose not always better. Sometimes less word = more correct.
+A March 2026 paper ["Brevity Constraints Reverse Performance Hierarchies in Language Models"](https://arxiv.org/abs/2604.00025) found that constraining large models to brief responses **improved accuracy by 26 percentage points** on certain benchmarks and completely reversed performance hierarchies. verbose not always better. sometimes less word = more correct. grug know this all along.
 
 ## Install
 
@@ -155,35 +155,36 @@ One rock. That it.
 
 Trigger with:
 - `/caveman` or Codex `$caveman`
-- "talk like caveman"
+- "talk like grug"
+- "grug mode"
 - "caveman mode"
 - "less tokens please"
 
-Stop with: "stop caveman" or "normal mode"
+Stop with: "stop grug", "stop caveman", or "normal mode"
 
 ### Intensity Levels
 
-Sometimes full caveman too much. Sometimes not enough. Now you pick:
+sometimes full grug too much. sometimes not enough. now you pick:
 
-| Level | Trigger | What it do |
+| Level | Trigger | What grug do |
 |-------|---------|------------|
-| **Lite** | `/caveman lite` or `$caveman lite` | Drop filler, keep grammar. Professional but no fluff |
-| **Full** | `/caveman full` or `$caveman full` | Default caveman. Drop articles, fragments, full grunt |
-| **Ultra** | `/caveman ultra` or `$caveman ultra` | Maximum compression. Telegraphic. Abbreviate everything |
+| **Lite** | `/caveman lite` or `$caveman lite` | grug trim filler, keep grammar. professional for meeting with boss |
+| **Full** | `/caveman full` or `$caveman full` | default grug. drop articles, fragments, smash complexity demon with club |
+| **Ultra** | `/caveman ultra` or `$caveman ultra` | grug survival mode. abbreviate everything. one grunt when one grunt enough |
 
 Level stick until you change it or session end.
 
-## What Caveman Do
+## What Grug Do
 
-| Thing | Caveman Do? |
+| Thing | Grug Do? |
 |-------|------------|
-| English explanation | 🪨 Caveman smash filler words |
-| Code blocks | ✍️ Write normal (caveman not stupid) |
+| English explanation | 🪨 grug smash complexity demon filler words |
+| Code blocks | ✍️ Write normal (grug not touch code with club) |
 | Technical terms | 🧠 Keep exact (polymorphism stay polymorphism) |
 | Error messages | 📋 Quote exact |
 | Git commits & PRs | ✍️ Write normal |
-| Articles (a, an, the) | 💀 Gone |
-| Pleasantries | 💀 "Sure I'd be happy to" is dead |
+| Articles (a, an, the) | 💀 Gone — complexity demon ceremony words |
+| Pleasantries | 💀 "Sure I'd be happy to" is dead. grug not shaman |
 | Hedging | 💀 "It might be worth considering" extinct |
 
 ## Why
@@ -198,26 +199,26 @@ Level stick until you change it or session end.
 ```
 
 - **Faster response** — less token to generate = speed go brrr
-- **Easier to read** — no wall of text, just the answer
-- **Same accuracy** — all technical info kept, only fluff removed ([science say so](https://arxiv.org/abs/2604.00025))
-- **Save money** — ~71% less output token = less cost
+- **Easier to read** — no wall of text, grug say what need saying
+- **Same accuracy** — all technical info kept, only complexity demon fluff removed ([science say so](https://arxiv.org/abs/2604.00025))
+- **Save shiney rock** — ~71% less output token = less cost
 - **Fun** — every code review become comedy
 
 ## How It Work
 
-Caveman not dumb. Caveman **efficient**.
+grug not dumb. grug **efficient**.
 
-Normal LLM waste token on:
+Normal LLM waste token on complexity demon ceremony words:
 - "I'd be happy to help you with that" (8 wasted tokens)
 - "The reason this is happening is because" (7 wasted tokens)
 - "I would recommend that you consider" (7 wasted tokens)
 - "Sure, let me take a look at that for you" (10 wasted tokens)
 
-Caveman say what need saying. Then stop.
+grug say what need saying. then stop. is fine.
 
 ## Star This Repo
 
-If caveman save you mass token, mass money — leave mass star. ⭐
+If grug save you mass token, mass shiney rock — leave mass star. ⭐
 
 [![Star History Chart](https://api.star-history.com/svg?repos=JuliusBrussee/caveman&type=Date)](https://star-history.com/#JuliusBrussee/caveman&Date)
 
