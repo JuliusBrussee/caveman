@@ -1,0 +1,47 @@
+# Golden pairs for measuring caveman skill compression.
+# Inputs are typical dev questions. Outputs are taken verbatim from each
+# skill's SKILL.md examples — measuring what the skill *promises* to produce.
+#
+# Add a new case here when adding a new skill or stress-testing compression.
+
+- id: react-rerender
+  input: "Why does my React component re-render every time the parent updates?"
+  baseline: "Great question! Your React component is re-rendering every time the parent updates because you're likely creating a new object reference inside the parent's render function, which then gets passed down as a prop. Since React uses shallow comparison for props by default, a new object reference on every render will cause the child component to think its props have changed, triggering a re-render. To fix this, you can wrap the object in `useMemo` so that React reuses the same reference between renders unless its dependencies change. Hope this helps!"
+  outputs:
+    caveman:
+      lite: "Your component re-renders because you create a new object reference each render. Wrap it in `useMemo`."
+      full: "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
+      ultra: "Inline obj prop → new ref → re-render. `useMemo`."
+    caveman-es:
+      lite: "Tu componente se re-renderiza porque creas una nueva referencia de objeto en cada render. Envuelve en `useMemo`."
+      full: "Ref nuevo cada render. Objeto inline en prop = ref nuevo = re-render. Envolver en `useMemo`."
+      ultra: "Obj inline prop → ref nuevo → re-render. `useMemo`."
+    caveman-cn:
+      lite: "组件重复渲染，因为你每次 render 都创建了新的对象引用。把对象包进 `useMemo`。"
+      full: "每次 render 都新对象引用。prop 浅比较次次变。于是重渲染。包进 `useMemo`。"
+      ultra: "内联对象 prop -> 新引用 -> 重渲染。`useMemo`。"
+    abathur:
+      lite: "Component re-renders because new object reference created each cycle. Wrap in `useMemo` to preserve essence."
+      full: "Organism re-renders. New reference each cycle. Inefficient. Evolve: `useMemo`. Preserve essence across renders."
+      ultra: "Re-render → new ref each cycle. Wasteful. `useMemo`."
+
+- id: db-pooling
+  input: "Explain database connection pooling."
+  baseline: "Sure, I'd be happy to explain database connection pooling! Database connection pooling is a technique used to manage and reuse database connections efficiently. Instead of opening a brand new connection to the database every time your application needs to make a query — which involves a relatively expensive handshake and authentication process — a connection pool keeps a set of open connections ready to be reused. When your application needs to query the database, it borrows a connection from the pool, uses it, and then returns it to the pool when done. This significantly reduces the overhead of repeatedly establishing and tearing down connections, which is especially important under high load. Most modern database drivers and ORMs come with built-in connection pooling support."
+  outputs:
+    caveman:
+      lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."
+      full: "Pool reuse open DB connections. No new connection per request. Skip handshake overhead."
+      ultra: "Pool = reuse DB conn. Skip handshake → fast under load."
+    caveman-es:
+      lite: "Connection pooling reutiliza conexiones abiertas en vez de crear nuevas por request. Evita overhead de handshake repetido."
+      full: "Pool reutiliza conexiones BD abiertas. No conexión nueva por request. Saltar overhead handshake."
+      ultra: "Pool = reusar conn BD. Saltar handshake → rápido bajo carga."
+    caveman-cn:
+      lite: "连接池会复用已打开的数据库连接，而不是每个请求都新建连接，这样能减少握手开销。"
+      full: "连接池复用现成 DB 连接。不必每个请求都新建。少握手开销。"
+      ultra: "池 = 复用 DB 连接。跳过握手 -> 更快。"
+    abathur:
+      lite: "Connection pooling reuses existing substrate links instead of spawning new ones per request. Avoids repeated handshake cost."
+      full: "Pool. Reuse substrate connections. No new spawn per request. Handshake overhead eliminated. Improved fitness under load."
+      ultra: "Pool = reuse DB conn. No spawn. Handshake excised → fit under load."
