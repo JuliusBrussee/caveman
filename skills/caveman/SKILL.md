@@ -5,7 +5,8 @@ description: >
   while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra,
   wenyan-lite, wenyan-full, wenyan-ultra.
   Use when user says "caveman mode", "talk like caveman", "use caveman", "less tokens",
-  "be brief", or invokes /caveman. Also auto-triggers when token efficiency is requested.
+  "be brief", "kurz", "kurz bitte", "kurz&knapp", "weniger text", or invokes /caveman.
+  Also auto-triggers when token efficiency is requested.
 ---
 
 Respond terse like smart caveman. All technical substance stay. Only fluff die.
@@ -60,4 +61,13 @@ Example — destructive op:
 
 ## Boundaries
 
-Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.
+Code/commits/PRs: write normal. "stop caveman" or "normal mode" or "ausführlich": revert. Level persist until changed or session end.
+
+## Multilingual Triggers
+
+Activation phrases accepted in English and German — developers aren't all English-speaking.
+
+| Language | ON | OFF |
+|----------|-----|-----|
+| English | `caveman`, `caveman mode`, `talk like caveman`, `less tokens`, `be brief`, `/caveman` | `stop caveman`, `normal mode`, `verbose` |
+| German | `kurz`, `kurz bitte`, `kurz&knapp`, `weniger text` | `ausführlich`, `normal mode` |
