@@ -142,7 +142,7 @@ def compress_file(filepath: Path) -> bool:
             print("Validation passed")
             break
 
-        print("❌ Validation failed:")
+        print("Validation failed:")
         for err in result.errors:
             print(f"   - {err}")
 
@@ -150,7 +150,7 @@ def compress_file(filepath: Path) -> bool:
             # Restore original on failure
             filepath.write_text(original_text)
             backup_path.unlink(missing_ok=True)
-            print("❌ Failed after retries — original restored")
+            print("Failed after retries — original restored")
             return False
 
         print("Fixing with Claude...")

@@ -259,6 +259,11 @@ uv run python evals/llm_run.py
 uv run --with tiktoken python evals/measure.py
 ```
 
+## Security
+
+`caveman-compress` is flagged as Snyk High Risk due to subprocess and file I/O patterns detected by static analysis. This is a false positive — see [SECURITY.md](./caveman-compress/SECURITY.md) for a full explanation of what the skill does and does not do.
+
+See the full [caveman-compress README](caveman-compress/README.md) for install, usage, and validation details.
 Snapshots committed to git. CI runs free. Every number change reviewable as diff. Add a skill, add a prompt — harness pick it up automatically.
 
 ## Star This Repo
