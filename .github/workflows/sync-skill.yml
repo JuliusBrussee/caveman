@@ -30,7 +30,6 @@ jobs:
         run: |
           cp skills/caveman/SKILL.md caveman/SKILL.md
           cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
-          cp skills/caveman/SKILL.md .cursor/skills/caveman/SKILL.md
 
       - name: Rebuild caveman.skill ZIP
         run: |
@@ -39,6 +38,6 @@ jobs:
       - name: Commit and push if changed
         run: |
           git diff --quiet && exit 0
-          git add caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md .cursor/skills/caveman/SKILL.md caveman.skill
+          git add caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md caveman.skill
           git commit -m "chore: sync SKILL.md copies and caveman.skill [skip ci]"
           git push
