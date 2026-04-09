@@ -26,9 +26,14 @@
       "Write"
     ],
     "websiteURL": "https://github.com/JuliusBrussee/caveman",
+    "privacyPolicyURL": "https://github.com/JuliusBrussee/caveman/blob/main/README.md",
+    "termsOfServiceURL": "https://github.com/JuliusBrussee/caveman/blob/main/LICENSE",
     "defaultPrompt": [
       "Use caveman mode. Cut filler. Keep technical accuracy."
     ],
+    "composerIcon": "./assets/caveman-small.svg",
+    "logo": "./assets/caveman.svg",
+    "screenshots": [],
     "brandColor": "#6B7280"
   }
 }

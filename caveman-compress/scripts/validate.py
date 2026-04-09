@@ -8,7 +8,8 @@ HEADING_REGEX = re.compile(r"^(#{1,6})\s+(.*)", re.MULTILINE)
 BULLET_REGEX = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
 
 # crude but effective path detection
-PATH_REGEX = re.compile(r"(\./|\../|/|[A-Za-z]:\\)[\w\-/\\\.]+")
+# Requires either a path prefix (./ ../ / or drive letter) or a slash/backslash within the match
+PATH_REGEX = re.compile(r"(?:\./|\.\./|/|[A-Za-z]:\\)[\w\-/\\\.]+|[\w\-\.]+[/\\][\w\-/\\\.]+")
 
 
 class ValidationResult:
@@ -130,8 +131,8 @@ if __name__ == "__main__":
         print("Usage: python validate.py <original> <compressed>")
         sys.exit(1)
 
-    orig = Path(sys.argv[1])
-    comp = Path(sys.argv[2])
+    orig = Path(sys.argv[1]).resolve()
+    comp = Path(sys.argv[2]).resolve()
 
     res = validate(orig, comp)
 

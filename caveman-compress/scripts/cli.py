@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Caveman Memory CLI
+Caveman Compress CLI
 
 Usage:
     caveman <filepath>
@@ -32,6 +32,8 @@ def main():
     if not filepath.is_file():
         print(f"❌ Not a file: {filepath}")
         sys.exit(1)
+
+    filepath = filepath.resolve()
 
     # Detect file type
     file_type = detect_file_type(filepath)

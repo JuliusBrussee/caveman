@@ -44,8 +44,8 @@ def print_table(rows):
 def main():
     # Direct file pair: python3 benchmark.py original.md compressed.md
     if len(sys.argv) == 3:
-        orig = Path(sys.argv[1])
-        comp = Path(sys.argv[2])
+        orig = Path(sys.argv[1]).resolve()
+        comp = Path(sys.argv[2]).resolve()
         if not orig.exists():
             print(f"❌ Not found: {orig}")
             sys.exit(1)

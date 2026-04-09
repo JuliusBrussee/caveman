@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Caveman">
+  <circle cx="32" cy="32" r="28" fill="#6B7280"/>
+  <path d="M18 40c4-10 24-10 28 0" fill="none" stroke="#F9FAFB" stroke-linecap="round" stroke-width="4"/>
+  <circle cx="24" cy="27" r="4" fill="#F9FAFB"/>
+  <circle cx="40" cy="27" r="4" fill="#F9FAFB"/>
+  <path d="M21 18c3-5 8-8 15-8 5 0 10 2 14 7" fill="none" stroke="#D1D5DB" stroke-linecap="round" stroke-width="4"/>
+</svg>

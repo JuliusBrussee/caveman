@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Caveman Memory Orchestrator
+Caveman Memory Compression Orchestrator
 
 Usage:
-    python memory/compress.py <filepath>
+    python scripts/compress.py <filepath>
 """
 
+import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import List
 
@@ -21,6 +21,21 @@ MAX_RETRIES = 2
 
 
 def call_claude(prompt: str) -> str:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if api_key:
+        try:
+            import anthropic
+
+            client = anthropic.Anthropic(api_key=api_key)
+            msg = client.messages.create(
+                model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
+                max_tokens=8096,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return msg.content[0].text.strip()
+        except ImportError:
+            pass  # anthropic not installed, fall back to CLI
+    # Fallback: use claude CLI (handles desktop auth)
     try:
         result = subprocess.run(
             ["claude", "--print"],
@@ -85,17 +100,32 @@ Return ONLY the fixed compressed file. No explanation.
 
 
 def compress_file(filepath: Path) -> bool:
-    print(f"📄 Processing: {filepath}")
+    # Resolve and validate path
+    filepath = filepath.resolve()
+    MAX_FILE_SIZE = 500_000  # 500KB
+    if not filepath.exists():
+        raise FileNotFoundError(f"File not found: {filepath}")
+    if filepath.stat().st_size > MAX_FILE_SIZE:
+        raise ValueError(f"File too large to compress safely (max 500KB): {filepath}")
+
+    print(f"Processing: {filepath}")
 
     if not should_compress(filepath):
-        print("⚠️ Skipping (not natural language)")
+        print("Skipping (not natural language)")
         return False
 
     original_text = filepath.read_text(errors="ignore")
     backup_path = filepath.with_name(filepath.stem + ".original.md")
 
+    # Check if backup already exists to prevent accidental overwriting
+    if backup_path.exists():
+        print(f"⚠️ Backup file already exists: {backup_path}")
+        print("The original backup may contain important content.")
+        print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
+        return False
+
     # Step 1: Compress
-    print("🧠 Compressing with Claude...")
+    print("Compressing with Claude...")
     compressed = call_claude(build_compress_prompt(original_text))
 
     # Save original as backup, write compressed to original path
@@ -104,12 +134,12 @@ def compress_file(filepath: Path) -> bool:
 
     # Step 2: Validate + Retry
     for attempt in range(MAX_RETRIES):
-        print(f"\n🔍 Validation attempt {attempt + 1}")
+        print(f"\nValidation attempt {attempt + 1}")
 
         result = validate(backup_path, filepath)
 
         if result.is_valid:
-            print("✅ Validation passed")
+            print("Validation passed")
             break
 
         print("❌ Validation failed:")
@@ -123,36 +153,10 @@ def compress_file(filepath: Path) -> bool:
             print("❌ Failed after retries — original restored")
             return False
 
-        print("🛠 Fixing with Claude...")
+        print("Fixing with Claude...")
         compressed = call_claude(
             build_fix_prompt(original_text, compressed, result.errors)
         )
         filepath.write_text(compressed)
 
     return True
-
-
-# ---------- Main ----------
-
-
-def main():
-    if len(sys.argv) != 2:
-        print("Usage: python memory/compress.py <filepath>")
-        sys.exit(1)
-
-    filepath = Path(sys.argv[1])
-
-    if not filepath.exists():
-        print(f"❌ File not found: {filepath}")
-        sys.exit(1)
-
-    success = compress_file(filepath)
-
-    if success:
-        sys.exit(0)
-    else:
-        sys.exit(2)
-
-
-if __name__ == "__main__":
-    main()

@@ -115,7 +115,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     for path_str in sys.argv[1:]:
-        p = Path(path_str)
+        p = Path(path_str).resolve()
         file_type = detect_file_type(p)
         compress = should_compress(p)
         print(f"  {p.name:30s} type={file_type:20s} compress={compress}")

@@ -17,7 +17,7 @@ Claude read `CLAUDE.md` on every session start. If file big, cost big. Caveman m
 ## What It Do
 
 ```
-/caveman-compress CLAUDE.md
+/caveman:compress CLAUDE.md
 ```
 
 ```
@@ -65,16 +65,18 @@ All validations passed ✅ — headings, code blocks, URLs, file paths preserved
 
 **Same instructions. 60% fewer tokens. Every. Single. Session.**
 
+## Security
+
+`caveman-compress` is flagged as Snyk High Risk due to subprocess and file I/O patterns detected by static analysis. This is a false positive — see [SECURITY.md](./SECURITY.md) for a full explanation of what the skill does and does not do.
+
 ## Install
 
-```bash
-cp -r ~/.claude/skills/caveman-compress <path-to-skill>
-```
+Compress is built in with the `caveman` plugin. Install `caveman` once, then use `/caveman:compress`.
 
-Or if you have the caveman repo:
+If you need local files, the compress skill lives at:
 
 ```bash
-cp -r skills/caveman-compress ~/.claude/skills/caveman-compress
+caveman-compress/
 ```
 
 **Requires:** Python 3.10+
@@ -82,14 +84,14 @@ cp -r skills/caveman-compress ~/.claude/skills/caveman-compress
 ## Usage
 
 ```
-/caveman-compress <filepath>
+/caveman:compress <filepath>
 ```
 
 Examples:
 ```
-/caveman-compress CLAUDE.md
-/caveman-compress docs/preferences.md
-/caveman-compress todos.md
+/caveman:compress CLAUDE.md
+/caveman:compress docs/preferences.md
+/caveman:compress todos.md
 ```
 
 ### What files work
@@ -104,7 +106,7 @@ Examples:
 ## How It Work
 
 ```
-/caveman-compress CLAUDE.md
+/caveman:compress CLAUDE.md
         ↓
 detect file type        (no tokens)
         ↓
@@ -145,12 +147,12 @@ Caveman compress natural language. It never touch:
 Caveman cut that by ~45% on average. Same instructions. Same accuracy. Less waste.
 
 ```
-┌──────────────────────────────────────────┐
-│  TOKEN SAVINGS PER FILE    ████████  45% │
-│  SESSIONS THAT BENEFIT     ████████ 100% │
-│  INFORMATION PRESERVED     ████████ 100% │
-│  SETUP TIME                █         1x  │
-└──────────────────────────────────────────┘
+┌────────────────────────────────────────────┐
+│  TOKEN SAVINGS PER FILE    █████       45% │
+│  SESSIONS THAT BENEFIT     ██████████ 100% │
+│  INFORMATION PRESERVED     ██████████ 100% │
+│  SETUP TIME                █            1x │
+└────────────────────────────────────────────┘
 ```
 
 ## Part of Caveman
