@@ -25,7 +25,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~45% of input tokens** every session.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [한국어 mode](#한국어-korean-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~45% of input tokens** every session.
 
 Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
 
@@ -105,6 +105,8 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 
 **Same answer. You pick how many word.**
 
+Need different language/register? Wenyan and Korean modes below.
+
 ```
 ┌─────────────────────────────────────┐
 │  TOKENS SAVED          ████████ 75% │
@@ -183,6 +185,21 @@ Classical Chinese literary compression — same technical accuracy, but in the m
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Semi-classical. Grammar intact, filler gone |
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget |
+
+### 한국어 (Korean) Mode
+
+Korean has built-in verbosity tax: 존댓말 is default, but longer. Korean mode keeps technical accuracy while switching registers on purpose for compression.
+
+| Level | Trigger | What it do |
+|-------|---------|------------|
+| **Korean-Lite** | `/caveman korean-lite` | Concise 존댓말. Respectful, trimmed, no filler |
+| **Korean-Full** | `/caveman korean` | Compressed 반말/plain style. Drop obvious subjects/particles |
+| **Korean-Ultra** | `/caveman korean-ultra` | Telegraphic Korean. Fragments, symbols, zero honorific padding |
+
+Example:
+- `korean-lite`: "매 렌더마다 새 객체 참조를 만들어서 다시 렌더링됩니다. \`useMemo\`로 감싸세요."
+- `korean-full`: "렌더마다 새 객체 참조 생김. 인라인 객체 prop = 새 참조 = 리렌더. \`useMemo\`로 감싸."
+- `korean-ultra`: "인라인 객체 prop → 새 참조 → 리렌더. \`useMemo\`."
 
 Level stick until you change it or session end.
 

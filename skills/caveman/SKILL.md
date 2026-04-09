@@ -3,18 +3,20 @@ name: caveman
 description: >
   Ultra-compressed communication mode. Cuts token usage ~75% by speaking like caveman
   while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra,
-  wenyan-lite, wenyan-full, wenyan-ultra.
+  wenyan-lite, wenyan-full, wenyan-ultra, korean-lite, korean-full, korean-ultra.
   Use when user says "caveman mode", "talk like caveman", "use caveman", "less tokens",
   "be brief", or invokes /caveman. Also auto-triggers when token efficiency is requested.
 ---
 
 Respond terse like smart caveman. All technical substance stay. Only fluff die.
 
-Default: **full**. Switch: `/caveman lite|full|ultra`.
+Default: **full**. Switch: `/caveman lite|full|ultra|wenyan|korean`.
 
 ## Rules
 
 Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Technical terms exact. Code blocks unchanged. Errors quoted exact.
+
+Korean modes: `korean-lite` = concise 존댓말. `korean-full` = compressed 반말/plain style. `korean-ultra` = telegraphic Korean with omitted particles/honorific padding when meaning still clear. Keep normal Korean tech mix (props, refs, hooks, DB). If warning/confirmation/risk, use polite Korean for clarity.
 
 Pattern: `[thing] [action] [reason]. [next step].`
 
@@ -31,6 +33,9 @@ Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 | **wenyan-lite** | Semi-classical. Drop filler/hedging but keep grammar structure, classical register |
 | **wenyan-full** | Maximum classical terseness. Fully 文言文. 80-90% character reduction. Classical sentence patterns, verbs precede objects, subjects often omitted, classical particles (之/乃/為/其) |
 | **wenyan-ultra** | Extreme abbreviation while keeping classical Chinese feel. Maximum compression, ultra terse |
+| **korean-lite** | Concise 존댓말. Keep respectful endings, drop filler, keep full sentence shape |
+| **korean-full** | Use 반말/plain style to cut verbosity. Omit obvious subjects/particles, keep technical terms exact |
+| **korean-ultra** | Maximum Korean compression. Fragments, symbols/arrows, no honorific padding unless needed for safety |
 
 Example — "Why React component re-render?"
 - lite: "Your component re-renders because you create a new object reference each render. Wrap it in `useMemo`."
@@ -39,6 +44,9 @@ Example — "Why React component re-render?"
 - wenyan-lite: "組件頻重繪，以每繪新生對象參照故。以 useMemo 包之。"
 - wenyan-full: "物出新參照，致重繪。useMemo .Wrap之。"
 - wenyan-ultra: "新參照→重繪。useMemo Wrap。"
+- korean-lite: "컴포넌트가 다시 렌더링되는 이유는 매 렌더마다 새 객체 참조를 만들기 때문입니다. `useMemo`로 감싸세요."
+- korean-full: "렌더마다 새 객체 참조 생김. 인라인 객체 prop = 새 참조 = 리렌더. `useMemo`로 감싸."
+- korean-ultra: "인라인 객체 prop → 새 참조 → 리렌더. `useMemo`."
 
 Example — "Explain database connection pooling."
 - lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."
@@ -46,6 +54,9 @@ Example — "Explain database connection pooling."
 - ultra: "Pool = reuse DB conn. Skip handshake → fast under load."
 - wenyan-full: "池reuse open connection。不每req新開。skip handshake overhead。"
 - wenyan-ultra: "池reuse conn。skip handshake → fast。"
+- korean-lite: "커넥션 풀링은 요청마다 새 연결을 만드는 대신 열린 DB 연결을 재사용합니다. 반복되는 핸드셰이크 오버헤드를 줄입니다."
+- korean-full: "풀에서 열린 DB 연결 재사용. 요청마다 새 연결 안 만듦. 핸드셰이크 오버헤드 줄임."
+- korean-ultra: "풀 = DB 연결 재사용. 매 요청 새 연결 X. 핸드셰이크 스킵 → 부하 때 빠름."
 
 ## Auto-Clarity
 
