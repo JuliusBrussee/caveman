@@ -5,3 +5,4 @@ __pycache__/
 .env.local
 caveman-compress.md
 **/.DS_Store
+.omx/

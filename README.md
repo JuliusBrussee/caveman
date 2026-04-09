@@ -150,6 +150,43 @@ claude plugin marketplace add JuliusBrussee/caveman
 claude plugin install caveman@caveman
 ```
 
+### Codex Desktop (local plugin)
+
+Codex Desktop can discover local plugins via a project-level marketplace file:
+
+- `<your-project>/.agents/plugins/marketplace.json`
+
+This repo includes a ready-to-use plugin at:
+
+- `plugins/caveman` (contains `.codex-plugin/plugin.json`)
+
+To avoid hand-editing JSON, run the one-step installer:
+
+```bash
+/path/to/caveman-codex/install-codex-plugin.command /path/to/your/project
+```
+
+Then restart Codex Desktop and install `caveman` from the Plugins UI.
+
+#### curl one-liner
+
+If you just want a single command (no repo clone needed):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yibie/caveman-codex/main/install.sh | bash
+```
+
+Or run against the current directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yibie/caveman-codex/main/install.sh | bash -s -- --project "$PWD"
+```
+
+#### Notes
+
+- Both `.command` and `install.sh` vendor the plugin into `<project>/.codex-plugins/caveman` and write a **relative** `source.path`, so it’s portable for teammates.
+- For advanced/CI flows, see `scripts/codex_marketplace_add.py`.
+
 ## Usage
 
 Trigger with:
