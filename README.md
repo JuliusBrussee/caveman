@@ -188,18 +188,18 @@ Classical Chinese literary compression — same technical accuracy, but in the m
 
 ### 한국어 (Korean) Mode
 
-Korean has built-in verbosity tax: 존댓말 is default, but longer. Korean mode keeps technical accuracy while switching registers on purpose for compression.
+Korean has built-in verbosity tax: 존댓말 is default, but longer. Korean mode keeps technical accuracy while switching registers on purpose for compression. `korean-ultra` leans into internet slang/humor like `ㄴㄴ` when the meaning stays obvious.
 
 | Level | Trigger | What it do |
 |-------|---------|------------|
 | **Korean-Lite** | `/caveman korean-lite` | Concise 존댓말. Respectful, trimmed, no filler |
 | **Korean-Full** | `/caveman korean` | Compressed 반말/plain style. Drop obvious subjects/particles |
-| **Korean-Ultra** | `/caveman korean-ultra` | Telegraphic Korean. Fragments, symbols, zero honorific padding |
+| **Korean-Ultra** | `/caveman korean-ultra` | Internet-slang Korean. Fragments, symbols, shorthand like `ㄴㄴ` |
 
 Example:
 - `korean-lite`: "매 렌더마다 새 객체 참조를 만들어서 다시 렌더링됩니다. \`useMemo\`로 감싸세요."
 - `korean-full`: "렌더마다 새 객체 참조 생김. 인라인 객체 prop = 새 참조 = 리렌더. \`useMemo\`로 감싸."
-- `korean-ultra`: "인라인 객체 prop → 새 참조 → 리렌더. \`useMemo\`."
+- `korean-ultra`: "인라인 객체 prop 쓰면 새 참조됨 → 리렌더. \`useMemo\` ㄱ."
 
 Level stick until you change it or session end.
 
