@@ -131,7 +131,7 @@ claude plugin marketplace add JuliusBrussee/caveman
 claude plugin install caveman@caveman
 ```
 
-### Any agent (Claude Code, Cursor, Copilot, Windsurf, Cline, Codex)
+### Any agent (Claude Code, Cursor, Copilot, Windsurf, Cline, Codex, OpenCode)
 
 ```bash
 npx skills add JuliusBrussee/caveman
@@ -150,6 +150,21 @@ For a specific agent: `npx skills add JuliusBrussee/caveman -a cursor`
 > **Windows Codex users:** Clone repo → VS Code → Codex Settings → Plugins → find `Caveman` under local marketplace → Install → Reload Window. Also enable `git config core.symlinks true` before cloning (requires developer mode or admin).
 
 Install once. Use in all sessions after that. One rock. That it.
+
+### OpenCode
+
+**Skills only:**
+```bash
+npx skills add JuliusBrussee/caveman -a opencode
+```
+
+**Skills + plugin (prompts local vs global interactive):**
+```bash
+bash hooks/install-opencode.sh
+```
+
+Plugin auto-activates `/caveman full` on every new session. Tracks mode changes via `/caveman lite|ultra|wenyan` commands.
+
 
 ### Optional: Statusline Badge
 
