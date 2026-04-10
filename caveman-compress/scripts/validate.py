@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 URL_REGEX = re.compile(r"https?://[^\s)]+")
-CODE_BLOCK_REGEX = re.compile(r"```.*?```", re.DOTALL)
+FENCE_OPEN_REGEX = re.compile(r"^(\s{0,3})(`{3,}|~{3,})(.*)$")
 HEADING_REGEX = re.compile(r"^(#{1,6})\s+(.*)", re.MULTILINE)
 BULLET_REGEX = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
 
@@ -38,7 +38,44 @@ def extract_headings(text):
 
 
 def extract_code_blocks(text):
-    return CODE_BLOCK_REGEX.findall(text)
+    """Line-based fenced code block extractor.
+
+    Handles ``` and ~~~ fences with variable length (CommonMark: closing
+    fence must use same char and be at least as long as opening). Supports
+    info strings and nested fences (e.g. an outer 4-backtick block wrapping
+    inner 3-backtick content — common in docs about markdown and in report
+    templates that illustrate code output).
+
+    Previous regex (```.*?```) paired fences greedily from-left and silently
+    mispaired nested fences, causing valid compressions to fail validation.
+    """
+    blocks = []
+    lines = text.split("\n")
+    i = 0
+    n = len(lines)
+    while i < n:
+        m = FENCE_OPEN_REGEX.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        fence = m.group(2)
+        fence_char = fence[0]
+        fence_len = len(fence)
+        start = i
+        i += 1
+        while i < n:
+            cm = FENCE_OPEN_REGEX.match(lines[i])
+            if (
+                cm
+                and cm.group(2)[0] == fence_char
+                and len(cm.group(2)) >= fence_len
+                and cm.group(3).strip() == ""
+            ):
+                i += 1
+                break
+            i += 1
+        blocks.append("\n".join(lines[start:i]))
+    return blocks
 
 
 def extract_urls(text):
