@@ -60,6 +60,31 @@ Diff: breaking API change
 
 Always include body for: breaking changes, security fixes, data migrations, anything reverting a prior commit. Never compress these into subject-only — future debuggers need the context.
 
+## Italiano
+
+Stesse regole, verbi all'imperativo italiano. Esempi:
+
+Diff: nuovo endpoint per profilo utente
+- ❌ "feat: aggiunto endpoint per ottenere info profilo utente da database"
+- ✅
+  ```
+  feat(api): aggiungi GET /users/:id/profile
+
+  Client mobile necessita dati profilo senza payload completo
+  per ridurre banda LTE su cold-launch screens.
+
+  Closes #128
+  ```
+
+Diff: breaking change API
+- ✅
+  ```
+  feat(api)!: rinomina /v1/orders a /v1/checkout
+
+  BREAKING CHANGE: client su /v1/orders migrare a /v1/checkout
+  prima 2026-06-01. Rotta vecchia ritorna 410 dopo data.
+  ```
+
 ## Boundaries
 
 Only generates the commit message. Does not run `git commit`, does not stage files, does not amend. Output the message as a code block ready to paste. "stop caveman-commit" or "normal mode": revert to verbose commit style.

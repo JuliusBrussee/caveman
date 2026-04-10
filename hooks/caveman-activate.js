@@ -30,5 +30,6 @@ process.stdout.write(
   "Not: 'Sure! I'd be happy to help you with that.' " +
   "Yes: 'Bug in auth middleware. Fix:' " +
   "Code/commits/security: write normal. " +
-  "User says 'normal' or 'stop caveman' to deactivate."
+  "User says 'normal' or 'stop caveman' to deactivate. " +
+  "Italiano: /caveman it-lite|it-full|it-ultra per modalità italiana."
 );

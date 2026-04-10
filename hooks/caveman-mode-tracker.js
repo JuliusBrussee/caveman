@@ -35,6 +35,10 @@ process.stdin.on('end', () => {
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
         else if (arg === 'wenyan-ultra') mode = 'wenyan-ultra';
+        else if (arg === 'it-lite') mode = 'it-lite';
+        else if (arg === 'it-ultra') mode = 'it-ultra';
+        else if (arg === 'it' || arg === 'it-full') mode = 'it-full';
+        else if (arg === 'italian') mode = 'it-full';
         else mode = 'full';
       }
 

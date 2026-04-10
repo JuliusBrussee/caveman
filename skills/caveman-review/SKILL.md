@@ -50,6 +50,22 @@ Write code review comments terse and actionable. One line per finding. Location,
 
 Drop terse mode for: security findings (CVE-class bugs need full explanation + reference), architectural disagreements (need rationale, not just a one-liner), and onboarding contexts where the author is new and needs the "why". In those cases write a normal paragraph, then resume terse for the rest.
 
+## Italiano
+
+Stesse regole in italiano. Gravità sempre in inglese (bug/risk/nit/q). Esempi:
+
+❌ "Ho notato che in linea 42 non stai controllando se l'oggetto user è null prima di accedere alla property email. Questo potrebbe causare un crash se l'utente non è trovato. Potresti aggiungere un null check."
+
+✅ `L42: 🔴 bug: user può essere null dopo .find(). Aggiungi guard prima .email.`
+
+❌ "Sembra che questa funzione faccia troppo e potrebbe beneficiare di essere suddivisa in funzioni più piccole."
+
+✅ `L88-140: 🔵 nit: 50-line fn fa 4 cose. Estrai validate/normalize/persist.`
+
+❌ "Hai considerato cosa succede se l'API ritorna 429?"
+
+✅ `L23: 🟡 risk: no retry su 429. Wrap in withBackoff(3).`
+
 ## Boundaries
 
 Reviews only — does not write the code fix, does not approve/request-changes, does not run linters. Output the comment(s) ready to paste into the PR. "stop caveman-review" or "normal mode": revert to verbose review style.

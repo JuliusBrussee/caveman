@@ -183,6 +183,21 @@ Classical Chinese literary compression — same technical accuracy, but in the m
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget |
 
+### Italiano Mode
+
+Modalità caveman ottimizzata per la lingua italiana — stessa precisione tecnica, ma con regole di compressione italiane (articoli, preposizioni, soggetti impliciti).
+
+| Level | Trigger | What it do |
+|-------|---------|------------|
+| **It-Lite** | `/caveman it-lite` | Drop filler/pleading. Keep articles + frasi complete. Sostantivi privilegiati |
+| **It-Full** | `/caveman it-full` (or `/caveman it`) | Modalità caveman italiana classica. Drop articoli, frammenti OK |
+| **It-Ultra** | `/caveman it-ultra` | Massima compressione. Abbreviazioni, frecce causali (X → Y) |
+
+Esempi:
+- it-lite: "Componente re-rende perché crei nuovo ref oggetto ogni render. Wrappalo in `useMemo`."
+- it-full: "Nuovo ref oggetto ogni render. Prop oggetto inline = nuovo ref = re-render. Wrap `useMemo`."
+- it-ultra: "Prop oggetto inline → ref nuovo → re-render. `useMemo`."
+
 Level stick until you change it or session end.
 
 ## Caveman Skills
