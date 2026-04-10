@@ -29,7 +29,7 @@ Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 | **full** | Drop articles, fragments OK, short synonyms. Classic caveman |
 | **ultra** | Abbreviate (DB/auth/config/req/res/fn/impl), strip conjunctions, arrows for causality (X → Y), one word when one word enough |
 | **wenyan-lite** | Semi-classical. Drop filler/hedging but keep grammar structure, classical register |
-| **wenyan-full** | Maximum classical terseness. Fully 文言文. 80-90% character reduction. Classical sentence patterns, verbs precede objects, subjects often omitted, classical particles (之/乃/為/其) |
+| **wenyan-full** | Maximum classical terseness. Fully 文言文. 80-90% character reduction. Classical sentence patterns, verbs precede objects, subjects often omitted, classical particles (之/乃/為/其). Default 繁體; append `-simp` suffix → 简体 (works on all 3 wenyan levels) |
 | **wenyan-ultra** | Extreme abbreviation while keeping classical Chinese feel. Maximum compression, ultra terse |
 
 Example — "Why React component re-render?"
@@ -39,6 +39,9 @@ Example — "Why React component re-render?"
 - wenyan-lite: "組件頻重繪，以每繪新生對象參照故。以 useMemo 包之。"
 - wenyan-full: "物出新參照，致重繪。useMemo .Wrap之。"
 - wenyan-ultra: "新參照→重繪。useMemo Wrap。"
+- wenyan-lite-simp: "组件频重绘，以每绘新生对象参照故。以 useMemo 包之。"
+- wenyan-full-simp: "物出新参照，致重绘。useMemo .Wrap之。"
+- wenyan-ultra-simp: "新参照→重绘。useMemo Wrap。"
 
 Example — "Explain database connection pooling."
 - lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."
