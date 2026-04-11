@@ -157,5 +157,48 @@ class HookScriptTests(unittest.TestCase):
             self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
 
 
+    def run_mode_tracker(self, prompt, home):
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+        env["USERPROFILE"] = str(home)
+        payload = json.dumps({"prompt": prompt})
+        return subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=REPO_ROOT,
+            env=env,
+            input=payload,
+            text=True,
+            capture_output=True,
+        )
+
+    def test_translate_command_sets_translate_mode(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-translate-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            self.run_mode_tracker("/caveman-translate", home)
+
+            flag = home / ".claude" / ".caveman-active"
+            self.assertTrue(flag.exists(), "flag file should be created by /caveman-translate")
+            self.assertEqual(flag.read_text(), "translate")
+
+    def test_translate_mode_statusline_badge(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-translate-statusline-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+            (home / ".claude" / ".caveman-active").write_text("translate")
+
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            result = subprocess.run(
+                ["bash", "hooks/caveman-statusline.sh"],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+            self.assertIn("TRANSLATE", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
