@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "caveman-compress"
+version = "1.0.0"
+requires-python = ">=3.10"
+description = "Compress natural language files into caveman format to save LLM input tokens"
+
+[project.optional-dependencies]
+sdk = ["anthropic>=0.40.0"]
+benchmark = ["anthropic>=0.40.0", "tiktoken"]
+
+[project.scripts]
+caveman-compress = "scripts.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scripts*"]
