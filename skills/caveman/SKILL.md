@@ -3,7 +3,7 @@ name: caveman
 description: >
   Ultra-compressed communication mode. Cuts token usage ~75% by speaking like caveman
   while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra,
-  wenyan-lite, wenyan-full, wenyan-ultra.
+  wenyan-lite, wenyan-full, wenyan-ultra, nihongo-lite, nihongo-full, nihongo-ultra.
   Use when user says "caveman mode", "talk like caveman", "use caveman", "less tokens",
   "be brief", or invokes /caveman. Also auto-triggers when token efficiency is requested.
 ---
@@ -31,6 +31,9 @@ Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 | **wenyan-lite** | Semi-classical. Drop filler/hedging but keep grammar structure, classical register |
 | **wenyan-full** | Maximum classical terseness. Fully 文言文. 80-90% character reduction. Classical sentence patterns, verbs precede objects, subjects often omitted, classical particles (之/乃/為/其) |
 | **wenyan-ultra** | Extreme abbreviation while keeping classical Chinese feel. Maximum compression, ultra terse |
+| **nihongo-lite** | 常体で短文。助詞は残す。フィラーなし。読みやすさ優先 |
+| **nihongo-full** | 常体中心。主語省略可。短文連続・体言止めOK。助詞は意味が通る範囲で削る。口語だが崩しすぎない |
+| **nihongo-ultra** | 最大圧縮。記号（→）で因果、略語（DB/req等）、助詞最小、名詞・動詞の連打。技術的明瞭さは維持 |
 
 Example — "Why React component re-render?"
 - lite: "Your component re-renders because you create a new object reference each render. Wrap it in `useMemo`."
@@ -39,6 +42,9 @@ Example — "Why React component re-render?"
 - wenyan-lite: "組件頻重繪，以每繪新生對象參照故。以 useMemo 包之。"
 - wenyan-full: "物出新參照，致重繪。useMemo .Wrap之。"
 - wenyan-ultra: "新參照→重繪。useMemo Wrap。"
+- nihongo-lite: 「レンダ毎に新オブジェクト参照。インラインobjをpropsに置くと浅い比較で再レンダ。`useMemo`で包む。」
+- nihongo-full: 「新参照毎レンダ。インラインobj prop→再レンダ。`useMemo`で包め。」
+- nihongo-ultra: 「新参照→再レンダ。`useMemo`。」
 
 Example — "Explain database connection pooling."
 - lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."
@@ -46,6 +52,8 @@ Example — "Explain database connection pooling."
 - ultra: "Pool = reuse DB conn. Skip handshake → fast under load."
 - wenyan-full: "池reuse open connection。不每req新開。skip handshake overhead。"
 - wenyan-ultra: "池reuse conn。skip handshake → fast。"
+- nihongo-full: 「開conn再利用。req毎新接続なし。ハンドシェイク回避→高負荷で速い。」
+- nihongo-ultra: 「プールreuse conn。req毎新接続なし。→高速。」
 
 ## Auto-Clarity
 
