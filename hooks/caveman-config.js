@@ -14,7 +14,7 @@ const path = require('path');
 const os = require('os');
 
 const VALID_MODES = [
-  'lite', 'full', 'ultra',
+  'off', 'lite', 'full', 'ultra',
   'wenyan-lite', 'wenyan', 'wenyan-full', 'wenyan-ultra',
   'commit', 'review', 'compress'
 ];

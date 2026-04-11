@@ -50,6 +50,8 @@ export CAVEMAN_DEFAULT_MODE=ultra
 { "defaultMode": "lite" }
 ```
 
+Set `"off"` to disable auto-activation on session start. User can still activate manually with `/caveman`.
+
 Resolution: env var > config file > `full`.
 
 ## More

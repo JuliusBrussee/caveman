@@ -15,10 +15,19 @@ const claudeDir = path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
+const mode = getDefaultMode();
+
+// "off" mode — skip activation entirely, don't write flag or emit rules
+if (mode === 'off') {
+  try { fs.unlinkSync(flagPath); } catch (e) {}
+  process.stdout.write('OK');
+  process.exit(0);
+}
+
 // 1. Write flag file
 try {
   fs.mkdirSync(path.dirname(flagPath), { recursive: true });
-  fs.writeFileSync(flagPath, getDefaultMode());
+  fs.writeFileSync(flagPath, mode);
 } catch (e) {
   // Silent fail -- flag is best-effort, don't block the hook
 }
