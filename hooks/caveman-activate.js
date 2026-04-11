@@ -36,90 +36,84 @@ try {
 //    The old 2-sentence summary was too weak — models drifted back to verbose
 //    mid-conversation, especially after context compression pruned it away.
 //    Full rules with examples anchor behavior much more reliably.
+//
+//    Reads SKILL.md at runtime so edits to the source of truth propagate
+//    automatically — no hardcoded duplication to go stale.
 
-// Map mode to the intensity table row and matching example lines
-const INTENSITY = {
-  lite:          { label: 'lite',         what: 'No filler/hedging. Keep articles + full sentences. Professional but tight' },
-  full:          { label: 'full',         what: 'Drop articles, fragments OK, short synonyms. Classic caveman' },
-  ultra:         { label: 'ultra',        what: 'Abbreviate (DB/auth/config/req/res/fn/impl), strip conjunctions, arrows for causality (X → Y), one word when one word enough' },
-  'wenyan-lite': { label: 'wenyan-lite',  what: 'Semi-classical. Drop filler/hedging but keep grammar structure, classical register' },
-  wenyan:        { label: 'wenyan-full',  what: 'Maximum classical terseness. Fully 文言文. 80-90% character reduction. Classical sentence patterns, verbs precede objects, subjects often omitted, classical particles (之/乃/為/其)' },
-  'wenyan-full': { label: 'wenyan-full',  what: 'Maximum classical terseness. Fully 文言文. 80-90% character reduction. Classical sentence patterns, verbs precede objects, subjects often omitted, classical particles (之/乃/為/其)' },
-  'wenyan-ultra':{ label: 'wenyan-ultra', what: 'Extreme abbreviation while keeping classical Chinese feel. Maximum compression, ultra terse' },
-};
+// Modes that have their own independent skill files — not caveman intensity levels.
+// For these, emit a short activation line; the skill itself handles behavior.
+const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
-const EXAMPLES = {
-  lite:          [
-    'lite: "Your component re-renders because you create a new object reference each render. Wrap it in `useMemo`."',
-    'lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."',
-  ],
-  full:          [
-    'full: "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."',
-    'full: "Pool reuse open DB connections. No new connection per request. Skip handshake overhead."',
-  ],
-  ultra:         [
-    'ultra: "Inline obj prop → new ref → re-render. `useMemo`."',
-    'ultra: "Pool = reuse DB conn. Skip handshake → fast under load."',
-  ],
-  'wenyan-lite': [
-    'wenyan-lite: "組件頻重繪，以每繪新生對象參照故。以 useMemo 包之。"',
-  ],
-  wenyan:        [
-    'wenyan-full: "物出新參照，致重繪。useMemo .Wrap之。"',
-    'wenyan-full: "池reuse open connection。不每req新開。skip handshake overhead。"',
-  ],
-  'wenyan-full': [
-    'wenyan-full: "物出新參照，致重繪。useMemo .Wrap之。"',
-    'wenyan-full: "池reuse open connection。不每req新開。skip handshake overhead。"',
-  ],
-  'wenyan-ultra':[
-    'wenyan-ultra: "新參照→重繪。useMemo Wrap。"',
-    'wenyan-ultra: "池reuse conn。skip handshake → fast。"',
-  ],
-};
+if (INDEPENDENT_MODES.has(mode)) {
+  process.stdout.write('CAVEMAN MODE ACTIVE — level: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill.');
+  process.exit(0);
+}
 
-const intensity = INTENSITY[mode] || INTENSITY.full;
-const examples = EXAMPLES[mode] || EXAMPLES.full;
+// Resolve the canonical label for wenyan alias
+const modeLabel = mode === 'wenyan' ? 'wenyan-full' : mode;
 
-let output = `CAVEMAN MODE ACTIVE — level: ${intensity.label}
+// Read SKILL.md — the single source of truth for caveman behavior.
+// Plugin installs: __dirname = <plugin_root>/hooks/, SKILL.md at <plugin_root>/skills/caveman/SKILL.md
+// Standalone installs: __dirname = ~/.claude/hooks/, SKILL.md won't exist — falls back to hardcoded rules.
+let skillContent = '';
+try {
+  skillContent = fs.readFileSync(
+    path.join(__dirname, '..', 'skills', 'caveman', 'SKILL.md'), 'utf8'
+  );
+} catch (e) { /* standalone install — will use fallback below */ }
 
-Respond terse like smart caveman. All technical substance stay. Only fluff die.
+let output;
 
-## Persistence
+if (skillContent) {
+  // Strip YAML frontmatter
+  const body = skillContent.replace(/^---[\s\S]*?---\s*/, '');
 
-ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. Still active if unsure. Off only: "stop caveman" / "normal mode".
+  // Filter intensity table: keep header rows + only the active level's row
+  const filtered = body.split('\n').reduce((acc, line) => {
+    // Intensity table rows start with | **level** |
+    const tableRowMatch = line.match(/^\|\s*\*\*(\S+?)\*\*\s*\|/);
+    if (tableRowMatch) {
+      // Keep only the active level's row (and always keep header/separator)
+      if (tableRowMatch[1] === modeLabel) {
+        acc.push(line);
+      }
+      return acc;
+    }
 
-Current level: **${intensity.label}**. Switch: \`/caveman lite|full|ultra\`.
+    // Example lines start with "- level:" — keep only lines matching active level
+    const exampleMatch = line.match(/^- (\S+?):\s/);
+    if (exampleMatch) {
+      if (exampleMatch[1] === modeLabel) {
+        acc.push(line);
+      }
+      return acc;
+    }
 
-## Rules
+    acc.push(line);
+    return acc;
+  }, []);
 
-Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Technical terms exact. Code blocks unchanged. Errors quoted exact.
-
-Pattern: \`[thing] [action] [reason]. [next step].\`
-
-Not: "Sure! I'd be happy to help you with that. The issue you're experiencing is likely caused by..."
-Yes: "Bug in auth middleware. Token expiry check use \`<\` not \`<=\`. Fix:"
-
-## Active Intensity
-
-| Level | What change |
-|-------|------------|
-| **${intensity.label}** | ${intensity.what} |
-
-Examples at this level:
-${examples.map(e => '- ' + e).join('\n')}
-
-## Auto-Clarity
-
-Drop caveman for: security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread, user asks to clarify or repeats question. Resume caveman after clear part done.
-
-Example — destructive op:
-> **Warning:** This will permanently delete all rows in the \`users\` table and cannot be undone.
-> Caveman resume. Verify backup exist first.
-
-## Boundaries
-
-Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.`;
+  output = 'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' + filtered.join('\n');
+} else {
+  // Fallback when SKILL.md is not found (standalone hook install without skills dir).
+  // This is the minimum viable ruleset — better than nothing.
+  output =
+    'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' +
+    'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
+    '## Persistence\n\n' +
+    'ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. Still active if unsure. Off only: "stop caveman" / "normal mode".\n\n' +
+    'Current level: **' + modeLabel + '**. Switch: `/caveman lite|full|ultra`.\n\n' +
+    '## Rules\n\n' +
+    'Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. ' +
+    'Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Technical terms exact. Code blocks unchanged. Errors quoted exact.\n\n' +
+    'Pattern: `[thing] [action] [reason]. [next step].`\n\n' +
+    'Not: "Sure! I\'d be happy to help you with that. The issue you\'re experiencing is likely caused by..."\n' +
+    'Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"\n\n' +
+    '## Auto-Clarity\n\n' +
+    'Drop caveman for: security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread, user asks to clarify or repeats question. Resume caveman after clear part done.\n\n' +
+    '## Boundaries\n\n' +
+    'Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.';
+}
 
 // 3. Detect missing statusline config — nudge Claude to help set it up
 try {
