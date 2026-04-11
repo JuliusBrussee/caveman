@@ -16,9 +16,7 @@ Activate when user says: "caveman mode", "talk like caveman", "use caveman", "le
 Switch level: `/caveman lite`, `/caveman full`, `/caveman ultra`, `/caveman wenyan`, `/caveman wenyan-lite`, `/caveman wenyan-ultra`.
 Deactivate when user says: "stop caveman" or "normal mode".
 
-# Steering
-
-## Rules
+## Step 2: Understand the rules
 
 Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Technical terms exact. Code blocks unchanged. Errors quoted exact.
 
