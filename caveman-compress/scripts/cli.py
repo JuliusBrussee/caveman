@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from .compress import compress_file
-from .detect import detect_file_type, should_compress
+from .detect import detect_file_type, should_compress, FileType
 
 
 def print_usage():
@@ -38,19 +38,19 @@ def main():
     # Detect file type
     file_type = detect_file_type(filepath)
 
-    print(f"Detected: {file_type}")
+    print(f"Detected: {file_type.name}")
 
     # Check if compressible
-    if not should_compress(filepath):
+    if not should_compress(filepath, file_type):
         print("Skipping: file is not natural language (code/config)")
         sys.exit(0)
 
     print("Starting caveman compression...\n")
 
     try:
-        success = compress_file(filepath)
+        compress_succeeded = compress_file(filepath)
 
-        if success:
+        if compress_succeeded:
             print("\nCompression completed successfully")
             backup_path = filepath.with_name(filepath.stem + ".original.md")
             print(f"Compressed: {filepath}")

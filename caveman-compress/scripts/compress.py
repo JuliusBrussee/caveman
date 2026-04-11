@@ -11,6 +11,8 @@ import re
 import subprocess
 from pathlib import Path
 from typing import List
+from .detect import should_compress, detect_file_type
+from .validate import validate
 
 OUTER_FENCE_REGEX = re.compile(
     r"\A\s*(`{3,}|~{3,})[^\n]*\n(.*)\n\1\s*\Z", re.DOTALL
@@ -24,11 +26,9 @@ def strip_llm_wrapper(text: str) -> str:
         return m.group(2)
     return text
 
-from .detect import should_compress
-from .validate import validate
 
 MAX_RETRIES = 2
-
+MAX_TOKENS = 8096
 
 # ---------- Claude Calls ----------
 
@@ -42,7 +42,7 @@ def call_claude(prompt: str) -> str:
             client = anthropic.Anthropic(api_key=api_key)
             msg = client.messages.create(
                 model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
-                max_tokens=8192,
+                max_tokens=MAX_TOKENS,
                 messages=[{"role": "user", "content": prompt}],
             )
             return strip_llm_wrapper(msg.content[0].text.strip())
@@ -124,7 +124,9 @@ def compress_file(filepath: Path) -> bool:
 
     print(f"Processing: {filepath}")
 
-    if not should_compress(filepath):
+    file_type = detect_file_type(filepath)
+
+    if not should_compress(filepath, file_type):
         print("Skipping (not natural language)")
         return False
 

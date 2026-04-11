@@ -4,6 +4,17 @@
 import json
 import re
 from pathlib import Path
+from enum import Enum
+
+class FileType(Enum):
+    """Represents the detected type of a file."""
+    NaturalLanguage = 1
+    Config = 2
+    Code = 3
+    Unknown = 4
+
+MAX_LINES = 50
+MAX_WORDS = 10000
 
 # Extensions that are natural language and compressible
 COMPRESSIBLE_EXTENSIONS = {".md", ".txt", ".markdown", ".rst"}
@@ -59,52 +70,53 @@ def _is_yaml_content(lines: list[str]) -> bool:
     return non_empty > 0 and yaml_indicators / non_empty > 0.6
 
 
-def detect_file_type(filepath: Path) -> str:
-    """Classify a file as 'natural_language', 'code', 'config', or 'unknown'.
+def detect_file_type(filepath: Path) -> FileType:
+    """
+    Classify a file into a FileType.
 
     Returns:
-        One of: 'natural_language', 'code', 'config', 'unknown'
+        FileType: NaturalLanguage, Code, Config, or Unknown
     """
     ext = filepath.suffix.lower()
 
     # Extension-based classification
     if ext in COMPRESSIBLE_EXTENSIONS:
-        return "natural_language"
+        return FileType.NaturalLanguage
     if ext in SKIP_EXTENSIONS:
-        return "code" if ext not in {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".env"} else "config"
+        return FileType.Code if ext not in {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".env"} else FileType.Config
 
     # Extensionless files (like CLAUDE.md, TODO) — check content
     if not ext:
         try:
             text = filepath.read_text(errors="ignore")
         except (OSError, PermissionError):
-            return "unknown"
+            return FileType.Unknown
 
-        lines = text.splitlines()[:50]
+        lines = text.splitlines()[:MAX_LINES]
 
-        if _is_json_content(text[:10000]):
-            return "config"
+        if _is_json_content(text[:MAX_WORDS]):
+            return FileType.Config
         if _is_yaml_content(lines):
-            return "config"
+            return FileType.Config
 
         code_lines = sum(1 for l in lines if l.strip() and _is_code_line(l))
         non_empty = sum(1 for l in lines if l.strip())
         if non_empty > 0 and code_lines / non_empty > 0.4:
-            return "code"
+            return FileType.Code
 
-        return "natural_language"
+        return FileType.NaturalLanguage
 
-    return "unknown"
+    return FileType.Unknown
 
 
-def should_compress(filepath: Path) -> bool:
+def should_compress(filepath: Path, file_type: FileType) -> bool:
     """Return True if the file is natural language and should be compressed."""
     if not filepath.is_file():
         return False
     # Skip backup files
     if filepath.name.endswith(".original.md"):
         return False
-    return detect_file_type(filepath) == "natural_language"
+    return file_type == FileType.NaturalLanguage
 
 
 if __name__ == "__main__":
@@ -117,5 +129,5 @@ if __name__ == "__main__":
     for path_str in sys.argv[1:]:
         p = Path(path_str).resolve()
         file_type = detect_file_type(p)
-        compress = should_compress(p)
-        print(f"  {p.name:30s} type={file_type:20s} compress={compress}")
+        compress = should_compress(p, file_type)
+        print(f"  {p.name:30s} type={file_type.name:20s} compress={compress}")
