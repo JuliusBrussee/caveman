@@ -146,7 +146,7 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 | Caveman mode | Y | Y | Y | Y | Y | Y | Y |
 | Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² |
 | `/caveman` command | Y | Y¹ | Y | — | — | — | — |
-| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — |
+| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | Y⁵ | Y⁵ |
 | Statusline badge | Y⁴ | — | — | — | — | — | — |
 | caveman-commit | Y | — | Y | Y | Y | Y | Y |
 | caveman-review | Y | — | Y | Y | Y | Y | Y |
@@ -159,6 +159,7 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 > ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
 > ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
 > ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
+> ⁵ Mode switching via in-context instruction — say `/caveman ultra` and the level switches for that conversation. No slash command system; works because mode behavior is defined in the always-on rule file.
 
 <details>
 <summary><strong>Claude Code — full details</strong></summary>
