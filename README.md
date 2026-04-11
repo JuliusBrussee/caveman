@@ -223,64 +223,20 @@ Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
 </details>
 
 <details>
-<summary><strong>Cursor — full details</strong></summary>
+<summary><strong>Cursor / Windsurf / Cline / Copilot — full details</strong></summary>
 
-```bash
-npx skills add JuliusBrussee/caveman -a cursor
-```
+`npx skills add` installs the skill file only — it does **not** install the agent's rule/instruction file, so caveman does not auto-start. Skill provides full intensity levels and mode switching on-demand. For always-on, add the "Want it always on?" snippet below to your agent's rules.
 
-`npx skills add` installs the skill file for Cursor. It does **not** install `.cursor/rules/caveman.mdc`, so caveman does not auto-start from this command alone.
-
-The skill file provides full intensity levels and mode switching when invoked on-demand. If you want always-on behavior, add the "Want it always on?" snippet below to your Cursor rules.
-
-Uninstall: `npx skills remove caveman`
-
-</details>
-
-<details>
-<summary><strong>Windsurf — full details</strong></summary>
-
-```bash
-npx skills add JuliusBrussee/caveman -a windsurf
-```
-
-`npx skills add` installs the skill file for Windsurf. It does **not** install `.windsurf/rules/caveman.md`, so caveman does not auto-start from this command alone.
-
-The skill file provides full intensity levels and mode switching when invoked on-demand. If you want always-on behavior, add the "Want it always on?" snippet below to your Windsurf rules.
+| Agent | Command | Rule file (not installed) |
+|-------|---------|--------------------------|
+| Cursor | `npx skills add JuliusBrussee/caveman -a cursor` | `.cursor/rules/caveman.mdc` |
+| Windsurf | `npx skills add JuliusBrussee/caveman -a windsurf` | `.windsurf/rules/caveman.md` |
+| Cline | `npx skills add JuliusBrussee/caveman -a cline` | `.clinerules/caveman.md` |
+| Copilot | `npx skills add JuliusBrussee/caveman -a github-copilot` | `.github/copilot-instructions.md` |
 
 Uninstall: `npx skills remove caveman`
 
-</details>
-
-<details>
-<summary><strong>Cline — full details</strong></summary>
-
-```bash
-npx skills add JuliusBrussee/caveman -a cline
-```
-
-`npx skills add` installs the skill for Cline. It does **not** install `.clinerules/caveman.md`, so caveman does not auto-start from this command alone.
-
-If you want always-on behavior, add the "Want it always on?" snippet below to your Cline rules or system prompt.
-
-Uninstall: `npx skills remove caveman`
-
-</details>
-
-<details>
-<summary><strong>Copilot — full details</strong></summary>
-
-```bash
-npx skills add JuliusBrussee/caveman -a github-copilot
-```
-
-`npx skills add` installs the skill for Copilot. It does **not** install `.github/copilot-instructions.md` or `AGENTS.md`, so caveman does not auto-start from this command alone.
-
-If you want always-on behavior, add the "Want it always on?" snippet below to your Copilot custom instructions.
-
-Works with Copilot Chat, Copilot Edits, and Copilot Coding Agent.
-
-Uninstall: `npx skills remove caveman`
+Copilot works with Chat, Edits, and Coding Agent.
 
 </details>
 
