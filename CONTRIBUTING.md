@@ -11,7 +11,7 @@ Improvements to the SKILL.md prompt are welcome — open a PR with before/after 
    - **After:** what caveman say with change
    - One sentence why change better
 
-> **Note:** `caveman/SKILL.md`, `plugins/caveman/skills/caveman/SKILL.md`, `.cursor/skills/caveman/SKILL.md`, and `caveman.skill` are auto-synced by CI after merge. Do not edit them directly.
+> **Note:** `caveman/SKILL.md`, `plugins/caveman/skills/caveman/SKILL.md`, `.cursor/skills/caveman/SKILL.md`, `.agents/skills/caveman/SKILL.md`, `.agents/skills/caveman-commit/SKILL.md`, `.agents/skills/caveman-review/SKILL.md`, `.agents/skills/compress/SKILL.md`, `.agents/skills/compress/scripts`, and `caveman.skill` are auto-synced by CI after merge. Do not edit them directly.
 
 Small focused change > big rewrite. Caveman like simple.
 
