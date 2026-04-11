@@ -49,9 +49,13 @@ def call_claude(prompt: str) -> str:
         except ImportError:
             pass  # anthropic not installed, fall back to CLI
     # Fallback: use claude CLI (handles desktop auth)
+    cmd = ["claude", "--print"]
+    cli_model = os.environ.get("CAVEMAN_MODEL")
+    if cli_model:
+        cmd += ["--model", cli_model]
     try:
         result = subprocess.run(
-            ["claude", "--print"],
+            cmd,
             input=prompt,
             text=True,
             capture_output=True,
@@ -59,7 +63,9 @@ def call_claude(prompt: str) -> str:
         )
         return strip_llm_wrapper(result.stdout.strip())
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Claude call failed:\n{e.stderr}")
+        raise RuntimeError(
+            f"Claude call failed (model={cli_model or 'default'}):\n{e.stderr}"
+        )
 
 
 def build_compress_prompt(original: str) -> str:
