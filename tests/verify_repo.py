@@ -105,11 +105,18 @@ def verify_manifests_and_syntax() -> None:
     for path in manifest_paths:
         read_json(path)
 
+    run(["node", "--check", "hooks/caveman-config.js"])
     run(["node", "--check", "hooks/caveman-activate.js"])
     run(["node", "--check", "hooks/caveman-mode-tracker.js"])
     run(["bash", "-n", "hooks/install.sh"])
     run(["bash", "-n", "hooks/uninstall.sh"])
     run(["bash", "-n", "hooks/caveman-statusline.sh"])
+
+    # Ensure install/uninstall scripts include caveman-config.js
+    install_sh = (ROOT / "hooks/install.sh").read_text()
+    uninstall_sh = (ROOT / "hooks/uninstall.sh").read_text()
+    ensure("caveman-config.js" in install_sh, "install.sh missing caveman-config.js")
+    ensure("caveman-config.js" in uninstall_sh, "uninstall.sh missing caveman-config.js")
 
     print("JSON manifests and JS/bash syntax OK")
 
@@ -120,6 +127,8 @@ def verify_powershell_static() -> None:
     uninstall_text = (ROOT / "hooks/uninstall.ps1").read_text()
     statusline_text = (ROOT / "hooks/caveman-statusline.ps1").read_text()
 
+    ensure("caveman-config.js" in install_text, "install.ps1 missing caveman-config.js")
+    ensure("caveman-config.js" in uninstall_text, "uninstall.ps1 missing caveman-config.js")
     ensure("caveman-statusline.ps1" in install_text, "install.ps1 missing statusline.ps1")
     ensure("caveman-statusline.ps1" in uninstall_text, "uninstall.ps1 missing statusline.ps1")
     ensure("-AsHashtable" not in install_text, "install.ps1 should stay compatible with Windows PowerShell 5.1")
@@ -219,6 +228,16 @@ def verify_hook_install_flow() -> None:
         ensure("CAVEMAN MODE ACTIVE." in activate.stdout, "activation output missing caveman banner")
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "activation should stay quiet when custom statusline exists")
         ensure((claude_dir / ".caveman-active").read_text() == "full", "activation flag should default to full")
+
+        # Test configurable default mode via CAVEMAN_DEFAULT_MODE env var
+        activate_custom = run(
+            ["node", "hooks/caveman-activate.js"],
+            env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "ultra"},
+        )
+        ensure("CAVEMAN MODE ACTIVE." in activate_custom.stdout, "activation with custom default missing banner")
+        ensure((claude_dir / ".caveman-active").read_text() == "ultra", "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra")
+        # Reset back to full for subsequent tests
+        (claude_dir / ".caveman-active").write_text("full")
 
         run(
             ["node", "hooks/caveman-mode-tracker.js"],

@@ -10,7 +10,7 @@ HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
 FLAG_FILE="$CLAUDE_DIR/.caveman-active"
 
-HOOK_FILES=("caveman-activate.js" "caveman-mode-tracker.js" "caveman-statusline.sh")
+HOOK_FILES=("caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-statusline.sh")
 
 # Detect if caveman is installed as a plugin (check plugin cache)
 PLUGIN_INSTALLED=0

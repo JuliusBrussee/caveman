@@ -24,7 +24,7 @@ $HooksDir = Join-Path $ClaudeDir "hooks"
 $Settings = Join-Path $ClaudeDir "settings.json"
 $RepoUrl = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks"
 
-$HookFiles = @("caveman-activate.js", "caveman-mode-tracker.js", "caveman-statusline.sh", "caveman-statusline.ps1")
+$HookFiles = @("caveman-config.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-statusline.sh", "caveman-statusline.ps1")
 
 # Resolve source — works from repo clone or remote
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
