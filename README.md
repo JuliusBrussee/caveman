@@ -151,18 +151,23 @@ For a specific agent: `npx skills add JuliusBrussee/caveman -a cursor`
 
 Install once. Use in all sessions after that. One rock. That it.
 
-### Warp
+### Warp (manual)
 
-Warp local agents use Skills instead of plugin manifests. This repository includes:
+Warp local agents discover skills from `.agents/skills/` (project) or `~/.agents/skills/` (global).
 
-- `.agents/skills/caveman/SKILL.md`
-- `.agents/skills/caveman-commit/SKILL.md`
-- `.agents/skills/caveman-review/SKILL.md`
-- `.agents/skills/compress/SKILL.md`
+Project-local install:
 
-Warp discovers all of them when opened in this repository.
+```bash
+mkdir -p .agents/skills/caveman .agents/skills/caveman-commit .agents/skills/caveman-review .agents/skills/compress
+cp skills/caveman/SKILL.md .agents/skills/caveman/SKILL.md
+cp skills/caveman-commit/SKILL.md .agents/skills/caveman-commit/SKILL.md
+cp skills/caveman-review/SKILL.md .agents/skills/caveman-review/SKILL.md
+cp caveman-compress/SKILL.md .agents/skills/compress/SKILL.md
+rm -rf .agents/skills/compress/scripts
+cp -R caveman-compress/scripts .agents/skills/compress/scripts
+```
 
-For a global install in Warp:
+Global install:
 
 ```bash
 mkdir -p ~/.agents/skills/caveman ~/.agents/skills/caveman-commit ~/.agents/skills/caveman-review ~/.agents/skills/compress
@@ -170,10 +175,11 @@ cp skills/caveman/SKILL.md ~/.agents/skills/caveman/SKILL.md
 cp skills/caveman-commit/SKILL.md ~/.agents/skills/caveman-commit/SKILL.md
 cp skills/caveman-review/SKILL.md ~/.agents/skills/caveman-review/SKILL.md
 cp caveman-compress/SKILL.md ~/.agents/skills/compress/SKILL.md
+rm -rf ~/.agents/skills/compress/scripts
 cp -R caveman-compress/scripts ~/.agents/skills/compress/scripts
 ```
 
-Trigger with `/caveman`, `/caveman-commit`, `/caveman-review`, or natural-language prompts like "caveman mode".
+Use `/caveman`, `/caveman-commit`, `/caveman-review`, or natural-language prompts like "caveman mode".
 
 ### Optional: Statusline Badge
 
