@@ -107,13 +107,13 @@ if [ -f "$SETTINGS" ]; then
   fi
 fi
 
-# 4. Clean up backup file left by installer
+# 3. Clean up backup file left by installer
 if [ -f "$SETTINGS.bak" ]; then
   rm "$SETTINGS.bak"
   echo "  Removed: $SETTINGS.bak"
 fi
 
-# 3. Remove flag file
+# 4. Remove flag file
 if [ -f "$FLAG_FILE" ]; then
   rm "$FLAG_FILE"
   echo "  Removed: $FLAG_FILE"

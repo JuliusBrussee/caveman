@@ -93,7 +93,7 @@ Silent-fails on all filesystem errors — never blocks session start.
 ### `hooks/caveman-mode-tracker.js` — UserPromptSubmit hook
 
 Reads JSON from stdin. Checks if prompt starts with `/caveman`. If yes, writes mode to flag file:
-- `/caveman` → `full`
+- `/caveman` → configured default (see `caveman-config.js`, defaults to `full`)
 - `/caveman lite` → `lite`
 - `/caveman ultra` → `ultra`
 - `/caveman wenyan` or `/caveman wenyan-full` → `wenyan`

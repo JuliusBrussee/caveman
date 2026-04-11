@@ -39,9 +39,11 @@ process.stdin.on('end', () => {
         else mode = getDefaultMode();
       }
 
-      if (mode) {
+      if (mode && mode !== 'off') {
         fs.mkdirSync(path.dirname(flagPath), { recursive: true });
         fs.writeFileSync(flagPath, mode);
+      } else if (mode === 'off') {
+        try { fs.unlinkSync(flagPath); } catch (e) {}
       }
     }
 

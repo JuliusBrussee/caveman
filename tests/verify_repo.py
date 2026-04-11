@@ -236,6 +236,26 @@ def verify_hook_install_flow() -> None:
         )
         ensure("CAVEMAN MODE ACTIVE." in activate_custom.stdout, "activation with custom default missing banner")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra")
+        # Test "off" mode — activation skipped, flag removed
+        activate_off = run(
+            ["node", "hooks/caveman-activate.js"],
+            env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "off"},
+        )
+        ensure("CAVEMAN MODE ACTIVE." not in activate_off.stdout, "off mode should not emit caveman banner")
+        ensure(not (claude_dir / ".caveman-active").exists(), "off mode should remove flag file")
+
+        # Test mode tracker with /caveman when default is off — should NOT write flag
+        subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home), "CAVEMAN_DEFAULT_MODE": "off"},
+            text=True,
+            input='{"prompt":"/caveman"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(not (claude_dir / ".caveman-active").exists(), "/caveman with off default should not write flag")
+
         # Reset back to full for subsequent tests
         (claude_dir / ".caveman-active").write_text("full")
 
