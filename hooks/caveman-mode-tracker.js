@@ -35,7 +35,17 @@ process.stdin.on('end', () => {
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
         else if (arg === 'wenyan-ultra') mode = 'wenyan-ultra';
-        else mode = 'full';
+        else if (arg === 'nihongo-lite' || arg === 'ja-lite') mode = 'nihongo-lite';
+        else if (arg === 'nihongo-ultra' || arg === 'ja-ultra') mode = 'nihongo-ultra';
+        else if (
+          arg === 'nihongo' ||
+          arg === 'nihongo-full' ||
+          arg === 'ja' ||
+          arg === 'japanese' ||
+          arg === '日本語'
+        ) {
+          mode = 'nihongo';
+        } else mode = 'full';
       }
 
       if (mode) {
