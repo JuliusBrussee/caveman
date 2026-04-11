@@ -25,7 +25,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [日本語 mode](#日本語-nihongo-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~45% of input tokens** every session.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [日本語 mode](#日本語-nihongo-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
 
 Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
 
@@ -122,38 +122,208 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 
 ## Install
 
-### Claude Code (recommended)
+Pick your agent. One command. Done.
 
-Install as a plugin — includes skills + auto-loading hooks (caveman activates every session, mode badge tracks `/caveman ultra` etc.):
+| Agent | Install |
+|-------|---------|
+| **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` |
+| **Codex** | Clone repo → `/plugins` → Search "Caveman" → Install |
+| **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` |
+| **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
+| **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
+| **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
+| **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
+| **Any other** | `npx skills add JuliusBrussee/caveman` |
+
+Install once. Use in every session for that install target after that. One rock. That it.
+
+### What You Get
+
+Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
+
+| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
+|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|
+| Caveman mode | Y | Y | Y | Y | Y | Y | Y |
+| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² |
+| `/caveman` command | Y | Y¹ | Y | — | — | — | — |
+| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — |
+| Statusline badge | Y⁴ | — | — | — | — | — | — |
+| caveman-commit | Y | — | Y | Y | Y | Y | Y |
+| caveman-review | Y | — | Y | Y | Y | Y | Y |
+| caveman-compress | Y | Y | Y | Y | Y | Y | Y |
+
+> [!NOTE]
+> Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
+>
+> ¹ Codex uses `$caveman` syntax, not `/caveman`. This repo ships `.codex/hooks.json`, so caveman auto-starts when you run Codex inside this repo. The installed plugin itself gives you `$caveman`; copy the same hook into another repo if you want always-on behavior there too. caveman-commit and caveman-review are not in the Codex plugin bundle — use the SKILL.md files directly.
+> ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
+> ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
+> ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
+
+<details>
+<summary><strong>Claude Code — full details</strong></summary>
+
+The plugin install gives you skills + auto-loading hooks. If no custom `statusLine` is configured, Caveman nudges Claude to offer badge setup on first session.
 
 ```bash
 claude plugin marketplace add JuliusBrussee/caveman
 claude plugin install caveman@caveman
 ```
 
-### Any agent (Claude Code, Cursor, Copilot, Windsurf, Cline, Codex)
-
+**Standalone hooks (without plugin):** If you prefer not to use the plugin system:
 ```bash
-npx skills add JuliusBrussee/caveman
+# macOS / Linux / WSL
+bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.sh)
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.ps1 | iex
 ```
 
-For a specific agent: `npx skills add JuliusBrussee/caveman -a cursor`
+Or from a local clone: `bash hooks/install.sh` / `powershell -File hooks\install.ps1`
 
-> [!NOTE]
-> `npx skills` installs skills only (no hooks). For Claude Code auto-loading hooks, use the plugin install above or run `bash hooks/install.sh`.
+Uninstall: `bash hooks/uninstall.sh` or `powershell -File hooks\uninstall.ps1`
 
-### Codex
+**Statusline badge:** Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, etc. in your Claude Code status bar.
 
-1. Clone repo → Open Codex in repo → `/plugins` → Search `Caveman` → Install
+- **Plugin install:** If you do not already have a custom `statusLine`, Claude should offer to configure it on first session
+- **Standalone install:** Configured automatically by `install.sh` / `install.ps1` unless you already have a custom statusline
+- **Custom statusline:** Installer leaves your existing statusline alone. See [`hooks/README.md`](hooks/README.md) for the merge snippet
 
-> [!NOTE]
-> **Windows Codex users:** Clone repo → VS Code → Codex Settings → Plugins → find `Caveman` under local marketplace → Install → Reload Window. Also enable `git config core.symlinks true` before cloning (requires developer mode or admin).
+</details>
 
-Install once. Use in all sessions after that. One rock. That it.
+<details>
+<summary><strong>Codex — full details</strong></summary>
 
-### Optional: Statusline Badge
+**macOS / Linux:**
+1. Clone repo → Open Codex in the repo directory → `/plugins` → Search "Caveman" → Install
 
-Add a `[CAVEMAN:ULTRA]` badge to your statusline showing which mode is active. See [`hooks/README.md`](hooks/README.md) for the snippet.
+**Windows:**
+1. Enable symlinks first: `git config --global core.symlinks true` (requires Developer Mode or admin)
+2. Clone repo → Open VS Code → Codex Settings → Plugins → find "Caveman" under local marketplace → Install → Reload Window
+
+This repo also ships `.codex/hooks.json`, so caveman auto-activates while you run Codex inside this repo. The installed plugin gives you `$caveman`; if you want always-on behavior in other repos too, add the same SessionStart hook there.
+
+</details>
+
+<details>
+<summary><strong>Gemini CLI — full details</strong></summary>
+
+```bash
+gemini extensions install https://github.com/JuliusBrussee/caveman
+```
+
+Update: `gemini extensions update caveman` · Uninstall: `gemini extensions uninstall caveman`
+
+Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
+- `/caveman` — switch intensity level (lite/full/ultra/wenyan)
+- `/caveman-commit` — generate terse commit message
+- `/caveman-review` — one-line code review
+
+</details>
+
+<details>
+<summary><strong>Cursor — full details</strong></summary>
+
+```bash
+npx skills add JuliusBrussee/caveman -a cursor
+```
+
+`npx skills add` installs the skill file for Cursor. It does **not** install `.cursor/rules/caveman.mdc`, so caveman does not auto-start from this command alone.
+
+The skill file provides full intensity levels and mode switching when invoked on-demand. If you want always-on behavior, add the "Want it always on?" snippet below to your Cursor rules.
+
+Uninstall: `npx skills remove caveman`
+
+</details>
+
+<details>
+<summary><strong>Windsurf — full details</strong></summary>
+
+```bash
+npx skills add JuliusBrussee/caveman -a windsurf
+```
+
+`npx skills add` installs the skill file for Windsurf. It does **not** install `.windsurf/rules/caveman.md`, so caveman does not auto-start from this command alone.
+
+The skill file provides full intensity levels and mode switching when invoked on-demand. If you want always-on behavior, add the "Want it always on?" snippet below to your Windsurf rules.
+
+Uninstall: `npx skills remove caveman`
+
+</details>
+
+<details>
+<summary><strong>Cline — full details</strong></summary>
+
+```bash
+npx skills add JuliusBrussee/caveman -a cline
+```
+
+`npx skills add` installs the skill for Cline. It does **not** install `.clinerules/caveman.md`, so caveman does not auto-start from this command alone.
+
+If you want always-on behavior, add the "Want it always on?" snippet below to your Cline rules or system prompt.
+
+Uninstall: `npx skills remove caveman`
+
+</details>
+
+<details>
+<summary><strong>Copilot — full details</strong></summary>
+
+```bash
+npx skills add JuliusBrussee/caveman -a github-copilot
+```
+
+`npx skills add` installs the skill for Copilot. It does **not** install `.github/copilot-instructions.md` or `AGENTS.md`, so caveman does not auto-start from this command alone.
+
+If you want always-on behavior, add the "Want it always on?" snippet below to your Copilot custom instructions.
+
+Works with Copilot Chat, Copilot Edits, and Copilot Coding Agent.
+
+Uninstall: `npx skills remove caveman`
+
+</details>
+
+<details>
+<summary><strong>Any other agent (opencode, Roo, Amp, Goose, Kiro, and 40+ more)</strong></summary>
+
+[npx skills](https://github.com/vercel-labs/skills) supports 40+ agents:
+
+```bash
+npx skills add JuliusBrussee/caveman           # auto-detect agent
+npx skills add JuliusBrussee/caveman -a amp
+npx skills add JuliusBrussee/caveman -a augment
+npx skills add JuliusBrussee/caveman -a goose
+npx skills add JuliusBrussee/caveman -a kiro-cli
+npx skills add JuliusBrussee/caveman -a roo
+# ... and many more
+```
+
+Uninstall: `npx skills remove caveman`
+
+> **Windows note:** `npx skills` uses symlinks by default. If symlinks fail, add `--copy`: `npx skills add JuliusBrussee/caveman --copy`
+
+**Important:** These agents don't have a hook system, so caveman won't auto-start. Say `/caveman` or "talk like caveman" to activate each session.
+
+**Want it always on?** Paste this into your agent's system prompt or rules file — caveman will be active from the first message, every session:
+
+```
+Terse like caveman. Technical substance exact. Only fluff die.
+Drop: articles, filler (just/really/basically), pleasantries, hedging.
+Fragments OK. Short synonyms. Code unchanged.
+Pattern: [thing] [action] [reason]. [next step].
+ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift.
+Code/commits/PRs: normal. Off: "stop caveman" / "normal mode".
+```
+
+Where to put it:
+| Agent | File |
+|-------|------|
+| opencode | `.config/opencode/AGENTS.md` |
+| Roo | `.roo/rules/caveman.md` |
+| Amp | your workspace system prompt |
+| Others | your agent's system prompt or rules file |
+
+</details>
 
 ## Usage
 
@@ -221,10 +391,10 @@ CLAUDE.original.md ← human-readable backup (you read and edit this)
 |------|----------:|----------:|------:|
 | `claude-md-preferences.md` | 706 | 285 | **59.6%** |
 | `project-notes.md` | 1145 | 535 | **53.3%** |
-| `claude-md-project.md` | 1122 | 687 | **38.8%** |
+| `claude-md-project.md` | 1122 | 636 | **43.3%** |
 | `todo-list.md` | 627 | 388 | **38.1%** |
-| `mixed-with-code.md` | 888 | 574 | **35.4%** |
-| **Average** | **898** | **494** | **45%** |
+| `mixed-with-code.md` | 888 | 560 | **36.9%** |
+| **Average** | **898** | **481** | **46%** |
 
 Code blocks, URLs, file paths, commands, headings, dates, version numbers — anything technical passes through untouched. Only prose gets compressed. See the full [caveman-compress README](caveman-compress/README.md) for details. [Security note](./caveman-compress/SECURITY.md): Snyk flags this as High Risk due to subprocess/file patterns — it's a false positive.
 
@@ -268,8 +438,6 @@ uv run python evals/llm_run.py
 # Read results (no API key, runs offline)
 uv run --with tiktoken python evals/measure.py
 ```
-
-Snapshots committed to git. CI runs free. Every number change reviewable as diff. Add a skill, add a prompt — harness pick it up automatically.
 
 ## Star This Repo
 

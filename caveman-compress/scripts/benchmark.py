@@ -11,7 +11,7 @@ except ImportError:
 
 try:
     import tiktoken
-    _enc = tiktoken.get_encoding("cl100k_base")
+    _enc = tiktoken.get_encoding("o200k_base")
 except ImportError:
     _enc = None
 
@@ -28,7 +28,7 @@ def benchmark_pair(orig_path: Path, comp_path: Path):
 
     orig_tokens = count_tokens(orig_text)
     comp_tokens = count_tokens(comp_text)
-    saved = 100 * (orig_tokens - comp_tokens) / orig_tokens
+    saved = 100 * (orig_tokens - comp_tokens) / orig_tokens if orig_tokens > 0 else 0.0
     result = validate(orig_path, comp_path)
 
     return (comp_path.name, orig_tokens, comp_tokens, saved, result.is_valid)

@@ -7,9 +7,22 @@ Usage:
 """
 
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import List
+
+OUTER_FENCE_REGEX = re.compile(
+    r"\A\s*(`{3,}|~{3,})[^\n]*\n(.*)\n\1\s*\Z", re.DOTALL
+)
+
+
+def strip_llm_wrapper(text: str) -> str:
+    """Strip outer ```markdown ... ``` fence when it wraps the entire output."""
+    m = OUTER_FENCE_REGEX.match(text)
+    if m:
+        return m.group(2)
+    return text
 
 from .detect import should_compress
 from .validate import validate
@@ -29,10 +42,10 @@ def call_claude(prompt: str) -> str:
             client = anthropic.Anthropic(api_key=api_key)
             msg = client.messages.create(
                 model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
-                max_tokens=8096,
+                max_tokens=8192,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return msg.content[0].text.strip()
+            return strip_llm_wrapper(msg.content[0].text.strip())
         except ImportError:
             pass  # anthropic not installed, fall back to CLI
     # Fallback: use claude CLI (handles desktop auth)
@@ -44,7 +57,7 @@ def call_claude(prompt: str) -> str:
             capture_output=True,
             check=True,
         )
-        return result.stdout.strip()
+        return strip_llm_wrapper(result.stdout.strip())
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Claude call failed:\n{e.stderr}")
 
@@ -59,6 +72,7 @@ STRICT RULES:
 - Preserve ALL URLs exactly
 - Preserve ALL headings exactly
 - Preserve file paths and commands
+- Return ONLY the compressed markdown body — do NOT wrap the entire output in a ```markdown fence or any other fence. Inner code blocks from the original stay as-is; do not add a new outer fence around the whole file.
 
 Only compress natural language.
 
