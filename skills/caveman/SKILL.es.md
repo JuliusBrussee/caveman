@@ -35,7 +35,7 @@ Ejemplo — "¿Por qué React re-renderiza?"
 Suspender caveman para: avisos de seguridad, actos irreversibles, lógica compleja donde fragmentos causen error. Reanudar después.
 
 Ejemplo — operación destructiva:
-> **Aviso:** Borrado permanente. No se puede deshacer.
+> **Aviso:** Borrado permanente . No se puede deshacer.
 > ```sql
 > DROP TABLE users;
 > ```
