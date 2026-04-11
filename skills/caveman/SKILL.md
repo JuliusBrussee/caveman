@@ -3,7 +3,7 @@ name: caveman
 description: >
   Ultra-compressed communication mode. Cuts token usage ~75% by speaking like caveman
   while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra,
-  wenyan-lite, wenyan-full, wenyan-ultra.
+  wenyan-lite, wenyan-full, wenyan-ultra, axon.
   Use when user says "caveman mode", "talk like caveman", "use caveman", "less tokens",
   "be brief", or invokes /caveman. Also auto-triggers when token efficiency is requested.
 ---
@@ -14,7 +14,7 @@ Respond terse like smart caveman. All technical substance stay. Only fluff die.
 
 ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. Still active if unsure. Off only: "stop caveman" / "normal mode".
 
-Default: **full**. Switch: `/caveman lite|full|ultra`.
+Default: **full**. Switch: `/caveman lite|full|ultra|axon`.
 
 ## Rules
 
@@ -35,6 +35,17 @@ Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 | **wenyan-lite** | Semi-classical. Drop filler/hedging but keep grammar structure, classical register |
 | **wenyan-full** | Maximum classical terseness. Fully 文言文. 80-90% character reduction. Classical sentence patterns, verbs precede objects, subjects often omitted, classical particles (之/乃/為/其) |
 | **wenyan-ultra** | Extreme abbreviation while keeping classical Chinese feel. Maximum compression, ultra terse |
+| **axon** | AXON notation: tag nouns `#word`, verbs `$word`, use `∀` for each/every/all, `→` for causality. Drop articles/prepositions/conjunctions. Lowercase. No punctuation except `→`. Machine-optimised |
+
+### AXON rules (active when `/caveman axon`)
+
+- Prefix every noun, concept, or attribute with `#` (e.g. `#object`, `#render`, `#usememo`)
+- Prefix every verb or action with `$` (e.g. `$render`, `$reuse`, `$wrap`)
+- Use `∀` for "each / every / all / for all"
+- Use `→` for causality, implication, or sequence ("causes", "leads to", "therefore")
+- Drop: articles (a/an/the), prepositions (in/of/for/with), conjunctions (and/or/but), punctuation
+- Lowercase everything; preserve exact casing only inside code spans
+- Code blocks and inline code: unchanged, no tagging inside backticks
 
 Example — "Why React component re-render?"
 - lite: "Your component re-renders because you create a new object reference each render. Wrap it in `useMemo`."
@@ -43,6 +54,7 @@ Example — "Why React component re-render?"
 - wenyan-lite: "組件頻重繪，以每繪新生對象參照故。以 useMemo 包之。"
 - wenyan-full: "物出新參照，致重繪。useMemo .Wrap之。"
 - wenyan-ultra: "新參照→重繪。useMemo Wrap。"
+- axon: "∀#new #object #ref $render #inline #object #prop #new #ref $re-render #wrap #usememo"
 
 Example — "Explain database connection pooling."
 - lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."
@@ -50,6 +62,7 @@ Example — "Explain database connection pooling."
 - ultra: "Pool = reuse DB conn. Skip handshake → fast under load."
 - wenyan-full: "池reuse open connection。不每req新開。skip handshake overhead。"
 - wenyan-ultra: "池reuse conn。skip handshake → fast。"
+- axon: "#pool $reuse #open #db #connection ∀#request → $skip #handshake #overhead"
 
 ## Auto-Clarity
 
