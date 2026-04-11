@@ -225,14 +225,14 @@ Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
 <details>
 <summary><strong>Cursor / Windsurf / Cline / Copilot — full details</strong></summary>
 
-`npx skills add` installs the skill file only — it does **not** install the agent's rule/instruction file, so caveman does not auto-start. Skill provides full intensity levels and mode switching on-demand. For always-on, add the "Want it always on?" snippet below to your agent's rules.
+`npx skills add` installs the skill file only — it does **not** install the agent's rule/instruction file, so caveman does not auto-start. For always-on, add the "Want it always on?" snippet below to your agent's rules or system prompt.
 
-| Agent | Command | Rule file (not installed) |
-|-------|---------|--------------------------|
-| Cursor | `npx skills add JuliusBrussee/caveman -a cursor` | `.cursor/rules/caveman.mdc` |
-| Windsurf | `npx skills add JuliusBrussee/caveman -a windsurf` | `.windsurf/rules/caveman.md` |
-| Cline | `npx skills add JuliusBrussee/caveman -a cline` | `.clinerules/caveman.md` |
-| Copilot | `npx skills add JuliusBrussee/caveman -a github-copilot` | `.github/copilot-instructions.md` |
+| Agent | Command | Not installed | Mode switching | Always-on location |
+|-------|---------|--------------|:--------------:|--------------------|
+| Cursor | `npx skills add JuliusBrussee/caveman -a cursor` | `.cursor/rules/caveman.mdc` | Y | Cursor rules |
+| Windsurf | `npx skills add JuliusBrussee/caveman -a windsurf` | `.windsurf/rules/caveman.md` | Y | Windsurf rules |
+| Cline | `npx skills add JuliusBrussee/caveman -a cline` | `.clinerules/caveman.md` | — | Cline rules or system prompt |
+| Copilot | `npx skills add JuliusBrussee/caveman -a github-copilot` | `.github/copilot-instructions.md` + `AGENTS.md` | — | Copilot custom instructions |
 
 Uninstall: `npx skills remove caveman`
 
