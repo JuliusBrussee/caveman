@@ -131,7 +131,15 @@ claude plugin marketplace add JuliusBrussee/caveman
 claude plugin install caveman@caveman
 ```
 
-### Any agent (Claude Code, Cursor, Copilot, Windsurf, Cline, Codex)
+### Gemini CLI
+
+Install as an extension directly from GitHub:
+
+```bash
+gemini extensions install https://github.com/JuliusBrussee/caveman
+```
+
+### Any agent (Claude Code, Cursor, Copilot, Windsurf, Cline, Codex, Antigravity)
 
 ```bash
 npx skills add JuliusBrussee/caveman
