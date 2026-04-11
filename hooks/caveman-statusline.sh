@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env sh
 # caveman — statusline badge script for Claude Code
 # Reads the caveman mode flag file and outputs a colored badge.
 #

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # caveman — uninstaller for the SessionStart + UserPromptSubmit hooks
 # Removes: hook files in ~/.claude/hooks, settings.json entries, and the flag file
 # Usage: bash hooks/uninstall.sh
