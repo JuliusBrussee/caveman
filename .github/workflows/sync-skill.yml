@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - skills/caveman/SKILL.md
+      - skills/caveman-commit/SKILL.md
+      - skills/caveman-review/SKILL.md
+      - caveman-compress/SKILL.md
+      - caveman-compress/scripts/**
 
 concurrency:
   group: sync-skill
@@ -28,9 +32,19 @@ jobs:
 
       - name: Copy to duplicate locations
         run: |
+          mkdir -p .agents/skills/caveman
+          mkdir -p .agents/skills/caveman-commit
+          mkdir -p .agents/skills/caveman-review
+          mkdir -p .agents/skills/compress
           cp skills/caveman/SKILL.md caveman/SKILL.md
           cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
           cp skills/caveman/SKILL.md .cursor/skills/caveman/SKILL.md
+          cp skills/caveman/SKILL.md .agents/skills/caveman/SKILL.md
+          cp skills/caveman-commit/SKILL.md .agents/skills/caveman-commit/SKILL.md
+          cp skills/caveman-review/SKILL.md .agents/skills/caveman-review/SKILL.md
+          cp caveman-compress/SKILL.md .agents/skills/compress/SKILL.md
+          rm -rf .agents/skills/compress/scripts
+          cp -R caveman-compress/scripts .agents/skills/compress/scripts
 
       - name: Rebuild caveman.skill ZIP
         run: |
@@ -40,5 +54,6 @@ jobs:
         run: |
           git diff --quiet && exit 0
           git add caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md .cursor/skills/caveman/SKILL.md caveman.skill
+          git add .agents/skills/caveman/SKILL.md .agents/skills/caveman-commit/SKILL.md .agents/skills/caveman-review/SKILL.md .agents/skills/compress/SKILL.md .agents/skills/compress/scripts
           git commit -m "chore: sync SKILL.md copies and caveman.skill [skip ci]"
           git push
