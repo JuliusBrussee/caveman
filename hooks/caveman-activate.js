@@ -14,12 +14,13 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { getDefaultMode } = require('./caveman-config');
 
 const flagPath = path.join(os.homedir(), '.claude', '.caveman-active');
 
 try {
   fs.mkdirSync(path.dirname(flagPath), { recursive: true });
-  fs.writeFileSync(flagPath, 'full');
+  fs.writeFileSync(flagPath, getDefaultMode());
 } catch (e) {
   // Silent fail -- flag is best-effort, don't block the hook
 }
