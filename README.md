@@ -17,6 +17,7 @@
 <p align="center">
   <a href="#before--after">Before/After</a> •
   <a href="#install">Install</a> •
+  <a href="#kiro">Kiro</a> •
   <a href="#intensity-levels">Levels</a> •
   <a href="#caveman-skills">Skills</a> •
   <a href="#benchmarks">Benchmarks</a> •
@@ -150,6 +151,18 @@ For a specific agent: `npx skills add JuliusBrussee/caveman -a cursor`
 > **Windows Codex users:** Clone repo → VS Code → Codex Settings → Plugins → find `Caveman` under local marketplace → Install → Reload Window. Also enable `git config core.symlinks true` before cloning (requires developer mode or admin).
 
 Install once. Use in all sessions after that. One rock. That it.
+
+### Kiro
+
+Install caveman as a power from GitHub:
+
+1. Open the Powers panel → **Add Power**
+2. Select **From GitHub repo**
+3. Enter `JuliusBrussee/caveman`
+4. Done. Trigger with `/caveman`, "caveman mode", or "less tokens please"
+
+> [!NOTE]
+> Kiro reads the `POWER.md` at the repo root. No clone, no build step. Add from GitHub and go.
 
 ### Optional: Statusline Badge
 
