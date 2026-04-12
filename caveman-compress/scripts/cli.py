@@ -7,22 +7,26 @@ Usage:
 """
 
 import sys
+import argparse
 from pathlib import Path
 
-from .compress import compress_file
-from .detect import detect_file_type, should_compress
+# Add script directory to sys.path to fix direct execution ImportError
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-
-def print_usage():
-    print("Usage: caveman <filepath>")
+from compress import compress_file
+from detect import detect_file_type, should_compress
 
 
 def main():
-    if len(sys.argv) != 2:
-        print_usage()
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Caveman Compress CLI")
+    parser.add_argument("filepath", type=Path, help="Markdown file to compress")
+    parser.add_argument("-f", "--force", action="store_true", help="Overwrite existing backup")
+    parser.add_argument("--max-size", type=int, default=500_000, help="Max file size in bytes")
+    parser.add_argument("--retries", type=int, default=2, help="Validation retry budget")
+    args = parser.parse_args()
 
-    filepath = Path(sys.argv[1])
+    filepath = args.filepath
+
 
     # Check file exists
     if not filepath.exists():
@@ -48,9 +52,15 @@ def main():
     print("Starting caveman compression...\n")
 
     try:
-        success = compress_file(filepath)
+        success = compress_file(
+            filepath, 
+            force=args.force, 
+            max_size=args.max_size, 
+            max_retries=args.retries
+        )
 
         if success:
+
             print("\nCompression completed successfully")
             backup_path = filepath.with_name(filepath.stem + ".original.md")
             print(f"Compressed: {filepath}")

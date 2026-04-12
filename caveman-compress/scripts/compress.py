@@ -24,8 +24,8 @@ def strip_llm_wrapper(text: str) -> str:
         return m.group(2)
     return text
 
-from .detect import should_compress
-from .validate import validate
+from detect import should_compress
+from validate import validate
 
 MAX_RETRIES = 2
 
@@ -113,14 +113,13 @@ Return ONLY the fixed compressed file. No explanation.
 # ---------- Core Logic ----------
 
 
-def compress_file(filepath: Path) -> bool:
+def compress_file(filepath: Path, force: bool = False, max_size: int = 500_000, max_retries: int = 2) -> bool:
     # Resolve and validate path
     filepath = filepath.resolve()
-    MAX_FILE_SIZE = 500_000  # 500KB
     if not filepath.exists():
         raise FileNotFoundError(f"File not found: {filepath}")
-    if filepath.stat().st_size > MAX_FILE_SIZE:
-        raise ValueError(f"File too large to compress safely (max 500KB): {filepath}")
+    if filepath.stat().st_size > max_size:
+        raise ValueError(f"File too large to compress safely (max {max_size} bytes): {filepath}")
 
     print(f"Processing: {filepath}")
 
@@ -132,7 +131,7 @@ def compress_file(filepath: Path) -> bool:
     backup_path = filepath.with_name(filepath.stem + ".original.md")
 
     # Check if backup already exists to prevent accidental overwriting
-    if backup_path.exists():
+    if backup_path.exists() and not force:
         print(f"⚠️ Backup file already exists: {backup_path}")
         print("The original backup may contain important content.")
         print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
@@ -147,7 +146,7 @@ def compress_file(filepath: Path) -> bool:
     filepath.write_text(compressed)
 
     # Step 2: Validate + Retry
-    for attempt in range(MAX_RETRIES):
+    for attempt in range(max_retries):
         print(f"\nValidation attempt {attempt + 1}")
 
         result = validate(backup_path, filepath)
@@ -160,7 +159,7 @@ def compress_file(filepath: Path) -> bool:
         for err in result.errors:
             print(f"   - {err}")
 
-        if attempt == MAX_RETRIES - 1:
+        if attempt == max_retries - 1:
             # Restore original on failure
             filepath.write_text(original_text)
             backup_path.unlink(missing_ok=True)

@@ -102,6 +102,16 @@ Examples:
 | Extensionless natural language | ✅ Yes |
 | `.py`, `.js`, `.ts`, `.json`, `.yaml` | ❌ Skip (code/config) |
 | `*.original.md` | ❌ Skip (backup files) |
+``
+### CLI Options
+
+If you run the Python script manually, you get access to advanced configuration flags:
+```bash
+python caveman-compress/scripts/cli.py CLAUDE.md --force --max-size 1048576 --retries 5
+```
+- `-f`, `--force`: Overwrite an existing `.original.md` backup without warning.
+- `--max-size`: Override the file size limit (default 500,000 bytes).
+- `--retries`: Change the validation retry budget (default 2).
 
 ## How It Work
 
