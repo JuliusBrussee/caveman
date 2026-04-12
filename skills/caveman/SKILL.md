@@ -3,7 +3,7 @@ name: caveman
 description: >
   Ultra-compressed communication mode. Cuts token usage ~75% by speaking like caveman
   while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra,
-  wenyan-lite, wenyan-full, wenyan-ultra.
+  wenyan-lite, wenyan-full, wenyan-ultra. Auto-detects Thai language and applies Thai filler rules.
   Use when user says "caveman mode", "talk like caveman", "use caveman", "less tokens",
   "be brief", or invokes /caveman. Also auto-triggers when token efficiency is requested.
 ---
@@ -43,6 +43,9 @@ Example — "Why React component re-render?"
 - wenyan-lite: "組件頻重繪，以每繪新生對象參照故。以 useMemo 包之。"
 - wenyan-full: "物出新參照，致重繪。useMemo .Wrap之。"
 - wenyan-ultra: "新參照→重繪。useMemo Wrap。"
+- thai-lite: "Component re-render เพราะสร้าง object reference ใหม่ทุก render ต้อง wrap ด้วย `useMemo`."
+- thai-full: "Object ref ใหม่ทุก render. Inline prop = ref ใหม่ = re-render. ใช้ `useMemo`."
+- thai-ultra: "Inline prop → ref ใหม่ → re-render. `useMemo`."
 
 Example — "Explain database connection pooling."
 - lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."
@@ -50,6 +53,17 @@ Example — "Explain database connection pooling."
 - ultra: "Pool = reuse DB conn. Skip handshake → fast under load."
 - wenyan-full: "池reuse open connection。不每req新開。skip handshake overhead。"
 - wenyan-ultra: "池reuse conn。skip handshake → fast。"
+- thai-lite: "Pool ใช้ connection เดิมซ้ำแทนการสร้างใหม่ทุก request หลีกเลี่ยง handshake overhead."
+- thai-full: "Pool reuse DB connection. ไม่เปิดใหม่ทุก request. Skip handshake."
+- thai-ultra: "Pool = reuse conn. Skip handshake → fast."
+
+## Thai Language
+
+Auto-detect: when user writes in Thai or response is in Thai, apply Thai filler rules at current intensity level (lite/full/ultra). No mode switch needed — language detection is automatic.
+
+Drop (always safe): ก็ (padding "also/just"), อะ/อ่ะ/วะ (informal sentence particles), นะ (softener), เออ (opener filler), แบบว่า/แบบ (hedge "like"), ก็คือ (intro starter), แล้วก็ (redundant clause chaining), เลย (trailing emphasis particle), อยู่ (trailing stative particle), ถ้าเกิดว่า→ถ้า (verbose conditional), เหรอ/เหรอวะ (question particles)
+
+Keep (context-dependent): คือ (when = definition/meaning), แค่ (when meaningful limit), น่าจะ (genuine uncertainty), ใช่ไหม (seeking confirmation)
 
 ## Auto-Clarity
 
