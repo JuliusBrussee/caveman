@@ -157,5 +157,78 @@ class HookScriptTests(unittest.TestCase):
             self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
 
 
+class PortableShebangTests(unittest.TestCase):
+    """Shell scripts must use #!/usr/bin/env so interpreters are found portably."""
+
+    def _first_line(self, rel_path):
+        return (REPO_ROOT / rel_path).read_text().splitlines()[0]
+
+    def test_statusline_uses_env_sh(self):
+        self.assertEqual(
+            self._first_line("hooks/caveman-statusline.sh"),
+            "#!/usr/bin/env sh",
+        )
+
+    def test_install_uses_env_bash(self):
+        self.assertEqual(
+            self._first_line("hooks/install.sh"),
+            "#!/usr/bin/env bash",
+        )
+
+    def test_uninstall_uses_env_bash(self):
+        self.assertEqual(
+            self._first_line("hooks/uninstall.sh"),
+            "#!/usr/bin/env bash",
+        )
+
+    def test_run_hook_uses_env_sh(self):
+        self.assertEqual(
+            self._first_line("hooks/run-hook.sh"),
+            "#!/usr/bin/env sh",
+        )
+
+    def test_run_hook_finds_node_in_fallback_path(self):
+        """run-hook.sh should find node via PATH even in a restricted environment."""
+        node_path = subprocess.check_output(["which", "node"], text=True).strip()
+        node_dir = str(Path(node_path).parent)
+
+        # Run with a PATH that does NOT contain node's directory, then make
+        # run-hook.sh discover it via the first fallback ($HOME/.nvm/current/bin
+        # wins only if real node is there; here we use a fake HOME that puts a
+        # node wrapper in the nvm slot).
+        with tempfile.TemporaryDirectory(prefix="caveman-run-hook-") as tmp:
+            fake_home = Path(tmp)
+            nvm_bin = fake_home / ".nvm" / "current" / "bin"
+            nvm_bin.mkdir(parents=True)
+            # Symlink real node into the fake nvm bin dir
+            (nvm_bin / "node").symlink_to(node_path)
+
+            env = os.environ.copy()
+            env["HOME"] = str(fake_home)
+            env["PATH"] = "/usr/bin:/bin"  # node_dir intentionally absent
+
+            result = subprocess.run(
+                ["sh", str(REPO_ROOT / "hooks" / "run-hook.sh"),
+                 str(REPO_ROOT / "hooks" / "caveman-activate.js")],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("CAVEMAN MODE ACTIVE", result.stdout)
+
+    def test_plugin_json_uses_run_hook(self):
+        """plugin.json hook commands must go through run-hook.sh, not call node directly."""
+        plugin_json = REPO_ROOT / ".claude-plugin" / "plugin.json"
+        data = json.loads(plugin_json.read_text())
+        for event in ("SessionStart", "UserPromptSubmit"):
+            hooks = data["hooks"][event]
+            for entry in hooks:
+                for h in entry["hooks"]:
+                    cmd = h["command"]
+                    self.assertIn("run-hook.sh", cmd, f"{event} command should use run-hook.sh")
+                    self.assertNotIn("node ", cmd, f"{event} command should not call node directly")
+
+
 if __name__ == "__main__":
     unittest.main()

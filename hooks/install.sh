@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # caveman — one-command hook installer for Claude Code
 # Installs: SessionStart hook (auto-load rules) + UserPromptSubmit hook (mode tracking)
 # Usage: bash hooks/install.sh
@@ -143,7 +143,7 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
     settings.hooks.SessionStart.push({
       hooks: [{
         type: 'command',
-        command: 'node \"' + hooksDir + '/caveman-activate.js\"',
+        command: 'sh \"' + hooksDir + '/run-hook.sh\" \"' + hooksDir + '/caveman-activate.js\"',
         timeout: 5,
         statusMessage: 'Loading caveman mode...'
       }]
@@ -159,7 +159,7 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
     settings.hooks.UserPromptSubmit.push({
       hooks: [{
         type: 'command',
-        command: 'node \"' + hooksDir + '/caveman-mode-tracker.js\"',
+        command: 'sh \"' + hooksDir + '/run-hook.sh\" \"' + hooksDir + '/caveman-mode-tracker.js\"',
         timeout: 5,
         statusMessage: 'Tracking caveman mode...'
       }]
