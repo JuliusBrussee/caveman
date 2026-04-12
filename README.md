@@ -23,6 +23,15 @@
   <a href="#evals">Evals</a>
 </p>
 
+<p align="center">
+  <a href="README_FR.md">Français</a> •
+  <a href="README_ES.md">Español</a> •
+  <a href="README_RU.md">Русский</a> •
+  <a href="README_IT.md">Italiano</a> •
+  <a href="README_ZH.md">中文</a> •
+  <a href="README_CAVEMAN.md">🪨 Caveman</a>
+</p>
+
 ---
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
