@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { getDefaultMode } = require('./caveman-config');
 
 const flagPath = path.join(os.homedir(), '.claude', '.caveman-active');
 
@@ -35,12 +36,14 @@ process.stdin.on('end', () => {
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
         else if (arg === 'wenyan-ultra') mode = 'wenyan-ultra';
-        else mode = 'full';
+        else mode = getDefaultMode();
       }
 
-      if (mode) {
+      if (mode && mode !== 'off') {
         fs.mkdirSync(path.dirname(flagPath), { recursive: true });
         fs.writeFileSync(flagPath, mode);
+      } else if (mode === 'off') {
+        try { fs.unlinkSync(flagPath); } catch (e) {}
       }
     }
 
