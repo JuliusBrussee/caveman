@@ -133,6 +133,7 @@ Pick your agent. One command. Done.
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
 | **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
+| **Antigravity** | `npx skills add JuliusBrussee/caveman -a antigravity` |
 | **Any other** | `npx skills add JuliusBrussee/caveman` |
 
 Install once. Use in every session for that install target after that. One rock. That it.
@@ -141,17 +142,17 @@ Install once. Use in every session for that install target after that. One rock.
 
 Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
 
-| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
-|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|
-| Caveman mode | Y | Y | Y | Y | Y | Y | Y |
-| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² |
-| `/caveman` command | Y | Y¹ | Y | — | — | — | — |
-| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — |
-| Statusline badge | Y⁴ | — | — | — | — | — | — |
-| caveman-commit | Y | — | Y | Y | Y | Y | Y |
-| caveman-review | Y | — | Y | Y | Y | Y | Y |
-| caveman-compress | Y | Y | Y | Y | Y | Y | Y |
-| caveman-help | Y | — | Y | Y | Y | Y | Y |
+| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot | Antigravity |
+|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|:-----------:|
+| Caveman mode | Y | Y | Y | Y | Y | Y | Y | Y |
+| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² | Y⁵ |
+| `/caveman` command | Y | Y¹ | Y | — | — | — | — | — |
+| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — | Y³ |
+| Statusline badge | Y⁴ | — | — | — | — | — | — | — |
+| caveman-commit | Y | — | Y | Y | Y | Y | Y | Y |
+| caveman-review | Y | — | Y | Y | Y | Y | Y | Y |
+| caveman-compress | Y | Y | Y | Y | Y | Y | Y | Y |
+| caveman-help | Y | — | Y | Y | Y | Y | Y | Y |
 
 > [!NOTE]
 > Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
@@ -160,6 +161,7 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 > ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
 > ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
 > ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
+> ⁵ Antigravity auto-discovers `.agents/rules/caveman.md` as a workspace rule. Also reads `AGENTS.md` at repo root. Auto-activation works out of the box when skill is installed via `npx skills` or when cloning this repo.
 
 <details>
 <summary><strong>Claude Code — full details</strong></summary>
@@ -241,6 +243,25 @@ Copilot works with Chat, Edits, and Coding Agent.
 </details>
 
 <details>
+<summary><strong>Antigravity — full details</strong></summary>
+
+```bash
+npx skills add JuliusBrussee/caveman -a antigravity
+```
+
+Installs caveman skill files into your Antigravity workspace. Antigravity also reads `AGENTS.md` and `GEMINI.md` at the project root, so cloning this repo activates caveman automatically.
+
+**Workspace rules:** Antigravity loads `.agents/rules/caveman.md` as an always-on workspace rule. The skill is active from your first message.
+
+**Mode switching:** Say `/caveman lite`, `/caveman ultra`, or `/caveman wenyan` to change intensity. Works on-demand via the skill; no slash command system.
+
+**Custom rules:** You can also add caveman to your global rules at `~/.gemini/GEMINI.md` for activation across all workspaces.
+
+Uninstall: `npx skills remove caveman`
+
+</details>
+
+<details>
 <summary><strong>Any other agent (opencode, Roo, Amp, Goose, Kiro, and 40+ more)</strong></summary>
 
 [npx skills](https://github.com/vercel-labs/skills) supports 40+ agents:
@@ -276,6 +297,7 @@ Where to put it:
 | Agent | File |
 |-------|------|
 | opencode | `.config/opencode/AGENTS.md` |
+| Antigravity | `.agents/rules/caveman.md` |
 | Roo | `.roo/rules/caveman.md` |
 | Amp | your workspace system prompt |
 | Others | your agent's system prompt or rules file |
