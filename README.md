@@ -151,6 +151,7 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 | caveman-commit | Y | — | Y | Y | Y | Y | Y |
 | caveman-review | Y | — | Y | Y | Y | Y | Y |
 | caveman-compress | Y | Y | Y | Y | Y | Y | Y |
+| caveman-help | Y | — | Y | Y | Y | Y | Y |
 
 > [!NOTE]
 > Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
@@ -222,64 +223,20 @@ Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
 </details>
 
 <details>
-<summary><strong>Cursor — full details</strong></summary>
+<summary><strong>Cursor / Windsurf / Cline / Copilot — full details</strong></summary>
 
-```bash
-npx skills add JuliusBrussee/caveman -a cursor
-```
+`npx skills add` installs the skill file only — it does **not** install the agent's rule/instruction file, so caveman does not auto-start. For always-on, add the "Want it always on?" snippet below to your agent's rules or system prompt.
 
-`npx skills add` installs the skill file for Cursor. It does **not** install `.cursor/rules/caveman.mdc`, so caveman does not auto-start from this command alone.
-
-The skill file provides full intensity levels and mode switching when invoked on-demand. If you want always-on behavior, add the "Want it always on?" snippet below to your Cursor rules.
-
-Uninstall: `npx skills remove caveman`
-
-</details>
-
-<details>
-<summary><strong>Windsurf — full details</strong></summary>
-
-```bash
-npx skills add JuliusBrussee/caveman -a windsurf
-```
-
-`npx skills add` installs the skill file for Windsurf. It does **not** install `.windsurf/rules/caveman.md`, so caveman does not auto-start from this command alone.
-
-The skill file provides full intensity levels and mode switching when invoked on-demand. If you want always-on behavior, add the "Want it always on?" snippet below to your Windsurf rules.
+| Agent | Command | Not installed | Mode switching | Always-on location |
+|-------|---------|--------------|:--------------:|--------------------|
+| Cursor | `npx skills add JuliusBrussee/caveman -a cursor` | `.cursor/rules/caveman.mdc` | Y | Cursor rules |
+| Windsurf | `npx skills add JuliusBrussee/caveman -a windsurf` | `.windsurf/rules/caveman.md` | Y | Windsurf rules |
+| Cline | `npx skills add JuliusBrussee/caveman -a cline` | `.clinerules/caveman.md` | — | Cline rules or system prompt |
+| Copilot | `npx skills add JuliusBrussee/caveman -a github-copilot` | `.github/copilot-instructions.md` + `AGENTS.md` | — | Copilot custom instructions |
 
 Uninstall: `npx skills remove caveman`
 
-</details>
-
-<details>
-<summary><strong>Cline — full details</strong></summary>
-
-```bash
-npx skills add JuliusBrussee/caveman -a cline
-```
-
-`npx skills add` installs the skill for Cline. It does **not** install `.clinerules/caveman.md`, so caveman does not auto-start from this command alone.
-
-If you want always-on behavior, add the "Want it always on?" snippet below to your Cline rules or system prompt.
-
-Uninstall: `npx skills remove caveman`
-
-</details>
-
-<details>
-<summary><strong>Copilot — full details</strong></summary>
-
-```bash
-npx skills add JuliusBrussee/caveman -a github-copilot
-```
-
-`npx skills add` installs the skill for Copilot. It does **not** install `.github/copilot-instructions.md` or `AGENTS.md`, so caveman does not auto-start from this command alone.
-
-If you want always-on behavior, add the "Want it always on?" snippet below to your Copilot custom instructions.
-
-Works with Copilot Chat, Copilot Edits, and Copilot Coding Agent.
-
-Uninstall: `npx skills remove caveman`
+Copilot works with Chat, Edits, and Coding Agent.
 
 </details>
 
@@ -371,6 +328,7 @@ Level stick until you change it or session end.
 |-------|-----------|---------|
 | **caveman-commit** | Terse commit messages. Conventional Commits. ≤50 char subject. Why over what. | `/caveman-commit` |
 | **caveman-review** | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` No throat-clearing. | `/caveman-review` |
+| **caveman-help** | Quick-reference card. All modes, skills, commands, one command away. | `/caveman-help` |
 
 ### caveman-compress
 

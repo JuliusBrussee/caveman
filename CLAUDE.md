@@ -33,6 +33,7 @@ Caveman makes AI coding agents respond in compressed caveman-style prose — cut
 | `rules/caveman-activate.md` | Always-on auto-activation rule body. CI injects into Cursor, Windsurf, Cline, Copilot rule files. Edit here, not agent-specific copies. |
 | `skills/caveman-commit/SKILL.md` | Caveman commit message behavior. Fully independent skill. |
 | `skills/caveman-review/SKILL.md` | Caveman code review behavior. Fully independent skill. |
+| `skills/caveman-help/SKILL.md` | Quick-reference card. One-shot display, not a persistent mode. |
 | `caveman-compress/SKILL.md` | Compress sub-skill behavior. |
 
 ### Auto-generated / auto-synced — do not edit directly
@@ -92,12 +93,15 @@ Silent-fails on all filesystem errors — never blocks session start.
 ### `hooks/caveman-mode-tracker.js` — UserPromptSubmit hook
 
 Reads JSON from stdin. Checks if prompt starts with `/caveman`. If yes, writes mode to flag file:
-- `/caveman` → `full`
+- `/caveman` → configured default (see `caveman-config.js`, defaults to `full`)
 - `/caveman lite` → `lite`
 - `/caveman ultra` → `ultra`
 - `/caveman wenyan` or `/caveman wenyan-full` → `wenyan`
 - `/caveman wenyan-lite` → `wenyan-lite`
 - `/caveman wenyan-ultra` → `wenyan-ultra`
+- `/caveman nihongo` or `/caveman nihongo-full` or `/caveman ja` or `/caveman japanese` or `/caveman 日本語` → `nihongo`
+- `/caveman nihongo-lite` or `/caveman ja-lite` → `nihongo-lite`
+- `/caveman nihongo-ultra` or `/caveman ja-ultra` → `nihongo-ultra`
 - `/caveman-commit` → `commit`
 - `/caveman-review` → `review`
 - `/caveman-compress` → `compress`
@@ -128,7 +132,7 @@ Skills = Markdown files with YAML frontmatter consumed by Claude Code's skill/pl
 
 ### Intensity levels
 
-Defined in `skills/caveman/SKILL.md`. Six levels: `lite`, `full` (default), `ultra`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`. Persists until changed or session ends.
+Defined in `skills/caveman/SKILL.md`. Nine levels: `lite`, `full` (default), `ultra`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`, `nihongo-lite`, `nihongo-full`, `nihongo-ultra`. Persists until changed or session ends.
 
 ### Auto-clarity rule
 

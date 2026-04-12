@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { getDefaultMode } = require('./caveman-config');
 
 const flagPath = path.join(os.homedir(), '.claude', '.caveman-active');
 
@@ -45,12 +46,14 @@ process.stdin.on('end', () => {
           arg === '日本語'
         ) {
           mode = 'nihongo';
-        } else mode = 'full';
+        } else mode = getDefaultMode();
       }
 
-      if (mode) {
+      if (mode && mode !== 'off') {
         fs.mkdirSync(path.dirname(flagPath), { recursive: true });
         fs.writeFileSync(flagPath, mode);
+      } else if (mode === 'off') {
+        try { fs.unlinkSync(flagPath); } catch (e) {}
       }
     }
 

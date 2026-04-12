@@ -10,7 +10,7 @@ HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
 FLAG_FILE="$CLAUDE_DIR/.caveman-active"
 
-HOOK_FILES=("caveman-activate.js" "caveman-mode-tracker.js" "caveman-statusline.sh")
+HOOK_FILES=("caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-statusline.sh")
 
 # Detect if caveman is installed as a plugin (check plugin cache)
 PLUGIN_INSTALLED=0
@@ -107,13 +107,13 @@ if [ -f "$SETTINGS" ]; then
   fi
 fi
 
-# 4. Clean up backup file left by installer
+# 3. Clean up backup file left by installer
 if [ -f "$SETTINGS.bak" ]; then
   rm "$SETTINGS.bak"
   echo "  Removed: $SETTINGS.bak"
 fi
 
-# 3. Remove flag file
+# 4. Remove flag file
 if [ -f "$FLAG_FILE" ]; then
   rm "$FLAG_FILE"
   echo "  Removed: $FLAG_FILE"
