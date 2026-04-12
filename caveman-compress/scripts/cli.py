@@ -38,7 +38,7 @@ def main():
     # Detect file type
     file_type = detect_file_type(filepath)
 
-    print(f"Detected: {file_type}")
+    print(f"Detected: {file_type.name}")
 
     # Check if compressible
     if not should_compress(filepath):
