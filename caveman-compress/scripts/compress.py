@@ -11,7 +11,7 @@ import re
 import subprocess
 from pathlib import Path
 from typing import List
-from .detect import should_compress, detect_file_type
+from .detect import should_compress
 from .validate import validate
 
 OUTER_FENCE_REGEX = re.compile(
@@ -124,9 +124,7 @@ def compress_file(filepath: Path) -> bool:
 
     print(f"Processing: {filepath}")
 
-    file_type = detect_file_type(filepath)
-
-    if not should_compress(filepath, file_type):
+    if not should_compress(filepath):
         print("Skipping (not natural language)")
         return False
 

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from .compress import compress_file
-from .detect import detect_file_type, should_compress, FileType
+from .detect import detect_file_type, should_compress
 
 
 def print_usage():
@@ -41,7 +41,7 @@ def main():
     print(f"Detected: {file_type.name}")
 
     # Check if compressible
-    if not should_compress(filepath, file_type):
+    if not should_compress(filepath):
         print("Skipping: file is not natural language (code/config)")
         sys.exit(0)
 

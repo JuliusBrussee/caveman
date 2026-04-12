@@ -109,14 +109,14 @@ def detect_file_type(filepath: Path) -> FileType:
     return FileType.Unknown
 
 
-def should_compress(filepath: Path, file_type: FileType) -> bool:
+def should_compress(filepath: Path) -> bool:
     """Return True if the file is natural language and should be compressed."""
     if not filepath.is_file():
         return False
     # Skip backup files
     if filepath.name.endswith(".original.md"):
         return False
-    return file_type == FileType.NaturalLanguage
+    return detect_file_type(filepath) == FileType.NaturalLanguage
 
 
 if __name__ == "__main__":
@@ -129,5 +129,5 @@ if __name__ == "__main__":
     for path_str in sys.argv[1:]:
         p = Path(path_str).resolve()
         file_type = detect_file_type(p)
-        compress = should_compress(p, file_type)
+        compress = should_compress(p)
         print(f"  {p.name:30s} type={file_type.name:20s} compress={compress}")
