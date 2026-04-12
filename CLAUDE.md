@@ -49,6 +49,7 @@ Overwritten by CI on push to main when sources change. Edits here lost.
 | `caveman.skill` | ZIP of `skills/caveman/` directory |
 | `.clinerules/caveman.md` | `rules/caveman-activate.md` |
 | `.github/copilot-instructions.md` | `rules/caveman-activate.md` |
+| `.github/instructions/caveman.instructions.md` | Frontmatter + `rules/caveman-activate.md` |
 | `.cursor/rules/caveman.mdc` | `rules/caveman-activate.md` + Cursor frontmatter |
 | `.windsurf/rules/caveman.md` | `rules/caveman-activate.md` + Windsurf frontmatter |
 
@@ -61,7 +62,7 @@ Overwritten by CI on push to main when sources change. Edits here lost.
 What it does:
 1. Copies `skills/caveman/SKILL.md` to all agent-specific SKILL.md locations
 2. Rebuilds `caveman.skill` as a ZIP of `skills/caveman/`
-3. Rebuilds all agent rule files from `rules/caveman-activate.md`, prepending agent-specific frontmatter (Cursor needs `alwaysApply: true`, Windsurf needs `trigger: always_on`)
+3. Rebuilds all agent rule files from `rules/caveman-activate.md`, prepending agent-specific frontmatter (Cursor needs `alwaysApply: true`, Windsurf needs `trigger: always_on`) and generates `.github/instructions/caveman.instructions.md`
 4. Commits and pushes with `[skip ci]` to avoid loops
 
 CI bot commits as `github-actions[bot]`. After PR merge, wait for workflow before declaring release complete.
@@ -157,7 +158,7 @@ How caveman reaches each agent type:
 | Cursor | `.cursor/rules/caveman.mdc` with `alwaysApply: true` | Yes — always-on rule |
 | Windsurf | `.windsurf/rules/caveman.md` with `trigger: always_on` | Yes — always-on rule |
 | Cline | `.clinerules/caveman.md` (auto-discovered) | Yes — Cline injects all .clinerules files |
-| Copilot | `.github/copilot-instructions.md` + `AGENTS.md` | Yes — repo-wide instructions |
+| Copilot | `.github/instructions/caveman.instructions.md` (recommended) or `.github/copilot-instructions.md` + `AGENTS.md` | Yes — repo-wide instructions |
 | Others | `npx skills add JuliusBrussee/caveman` | No — user must say `/caveman` each session |
 
 For agents without hook systems, minimal always-on snippet lives in README under "Want it always on?" — keep current with `rules/caveman-activate.md`.

@@ -56,10 +56,14 @@ jobs:
         run: |
           BODY="rules/caveman-activate.md"
 
-          # Cline + Copilot — no frontmatter, direct copy
-          mkdir -p .clinerules .github
+          # Cline + Copilot workspace instructions — no frontmatter, direct copy
+          mkdir -p .clinerules .github .github/instructions
           cp "$BODY" .clinerules/caveman.md
           cp "$BODY" .github/copilot-instructions.md
+
+          # Copilot file instruction template for easy post-install copy
+          printf '%s\n' '---' 'applyTo: "**"' 'description: "Always-on compressed response mode for GitHub Copilot in this repository. Enforce persistent caveman style, runtime mode switching (/caveman ...), and explicit off command."' '---' '' > .github/instructions/caveman.instructions.md
+          cat "$BODY" >> .github/instructions/caveman.instructions.md
 
           # Cursor — needs alwaysApply frontmatter
           mkdir -p .cursor/rules
@@ -82,6 +86,7 @@ jobs:
             caveman.skill \
             .clinerules/caveman.md \
             .github/copilot-instructions.md \
+            .github/instructions/caveman.instructions.md \
             .cursor/rules/caveman.mdc \
             .windsurf/rules/caveman.md
           git diff --staged --quiet && exit 0
