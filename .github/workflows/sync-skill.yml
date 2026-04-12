@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - skills/caveman/SKILL.md
+      - .codex/hooks.json
       - rules/caveman-activate.md
       - caveman-compress/SKILL.md
       - caveman-compress/scripts/**
@@ -33,6 +34,8 @@ jobs:
         run: |
           cp skills/caveman/SKILL.md caveman/SKILL.md
           cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
+          mkdir -p plugins/caveman/.codex
+          cp .codex/hooks.json plugins/caveman/.codex/hooks.json
           cp skills/caveman/SKILL.md .cursor/skills/caveman/SKILL.md
           mkdir -p .windsurf/skills/caveman
           cp skills/caveman/SKILL.md .windsurf/skills/caveman/SKILL.md
@@ -75,6 +78,7 @@ jobs:
         run: |
           git add \
             caveman/SKILL.md \
+            plugins/caveman/.codex/hooks.json \
             plugins/caveman/skills/compress/ \
             plugins/caveman/skills/caveman/SKILL.md \
             .cursor/skills/caveman/SKILL.md \

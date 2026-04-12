@@ -30,6 +30,7 @@ Caveman makes AI coding agents respond in compressed caveman-style prose — cut
 | File | What it controls |
 |------|-----------------|
 | `skills/caveman/SKILL.md` | Caveman behavior: intensity levels, rules, wenyan mode, auto-clarity, persistence. Only file to edit for behavior changes. |
+| `.codex/hooks.json` | Codex SessionStart activation rule. Synced into `plugins/caveman/.codex/hooks.json`. |
 | `rules/caveman-activate.md` | Always-on auto-activation rule body. CI injects into Cursor, Windsurf, Cline, Copilot rule files. Edit here, not agent-specific copies. |
 | `skills/caveman-commit/SKILL.md` | Caveman commit message behavior. Fully independent skill. |
 | `skills/caveman-review/SKILL.md` | Caveman code review behavior. Fully independent skill. |
@@ -43,6 +44,7 @@ Overwritten by CI on push to main when sources change. Edits here lost.
 | File | Synced from |
 |------|-------------|
 | `caveman/SKILL.md` | `skills/caveman/SKILL.md` |
+| `plugins/caveman/.codex/hooks.json` | `.codex/hooks.json` |
 | `plugins/caveman/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
 | `.cursor/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
 | `.windsurf/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
@@ -56,12 +58,13 @@ Overwritten by CI on push to main when sources change. Edits here lost.
 
 ## CI sync workflow
 
-`.github/workflows/sync-skill.yml` triggers on main push when `skills/caveman/SKILL.md` or `rules/caveman-activate.md` changes.
+`.github/workflows/sync-skill.yml` triggers on main push when `skills/caveman/SKILL.md`, `.codex/hooks.json`, or `rules/caveman-activate.md` changes.
 
 What it does:
 1. Copies `skills/caveman/SKILL.md` to all agent-specific SKILL.md locations
-2. Rebuilds `caveman.skill` as a ZIP of `skills/caveman/`
-3. Rebuilds all agent rule files from `rules/caveman-activate.md`, prepending agent-specific frontmatter (Cursor needs `alwaysApply: true`, Windsurf needs `trigger: always_on`)
+2. Copies `.codex/hooks.json` into `plugins/caveman/.codex/hooks.json`
+3. Rebuilds `caveman.skill` as a ZIP of `skills/caveman/`
+4. Rebuilds all agent rule files from `rules/caveman-activate.md`, prepending agent-specific frontmatter (Cursor needs `alwaysApply: true`, Windsurf needs `trigger: always_on`)
 4. Commits and pushes with `[skip ci]` to avoid loops
 
 CI bot commits as `github-actions[bot]`. After PR merge, wait for workflow before declaring release complete.
@@ -152,7 +155,7 @@ How caveman reaches each agent type:
 | Agent | Mechanism | Auto-activates? |
 |-------|-----------|----------------|
 | Claude Code | Plugin (hooks + skills) or standalone hooks | Yes — SessionStart hook injects rules |
-| Codex | Plugin in `plugins/caveman/` with `hooks.json` | Yes — SessionStart hook |
+| Codex | Plugin in `plugins/caveman/` with `.codex/hooks.json` | Yes — SessionStart hook |
 | Gemini CLI | Extension with `GEMINI.md` context file | Yes — context file loads every session |
 | Cursor | `.cursor/rules/caveman.mdc` with `alwaysApply: true` | Yes — always-on rule |
 | Windsurf | `.windsurf/rules/caveman.md` with `trigger: always_on` | Yes — always-on rule |

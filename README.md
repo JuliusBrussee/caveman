@@ -139,7 +139,7 @@ Install once. Use in every session for that install target after that. One rock.
 
 ### What You Get
 
-Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
+Auto-activation is built in for Claude Code, Codex, and Gemini CLI. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
 
 | Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
 |---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|
@@ -154,9 +154,9 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 | caveman-help | Y | — | Y | Y | Y | Y | Y |
 
 > [!NOTE]
-> Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
+> Auto-activation works differently per agent: Claude Code uses SessionStart hooks, the Codex plugin bundles `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
 >
-> ¹ Codex uses `$caveman` syntax, not `/caveman`. This repo ships `.codex/hooks.json`, so caveman auto-starts when you run Codex inside this repo. The installed plugin itself gives you `$caveman`; copy the same hook into another repo if you want always-on behavior there too. caveman-commit and caveman-review are not in the Codex plugin bundle — use the SKILL.md files directly.
+> ¹ Codex uses `$caveman` syntax, not `/caveman`. The installed plugin bundles `.codex/hooks.json`, so caveman auto-starts after install instead of only inside this repo. caveman-commit and caveman-review are not in the Codex plugin bundle — use the SKILL.md files directly.
 > ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
 > ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
 > ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
@@ -202,7 +202,7 @@ Uninstall: `bash hooks/uninstall.sh` or `powershell -File hooks\uninstall.ps1`
 1. Enable symlinks first: `git config --global core.symlinks true` (requires Developer Mode or admin)
 2. Clone repo → Open VS Code → Codex Settings → Plugins → find "Caveman" under local marketplace → Install → Reload Window
 
-This repo also ships `.codex/hooks.json`, so caveman auto-activates while you run Codex inside this repo. The installed plugin gives you `$caveman`; if you want always-on behavior in other repos too, add the same SessionStart hook there.
+The Codex plugin bundles `.codex/hooks.json`, so caveman auto-activates after install instead of only inside this repo. It still uses `$caveman` rather than `/caveman`.
 
 </details>
 

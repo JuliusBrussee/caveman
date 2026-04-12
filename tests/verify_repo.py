@@ -74,6 +74,11 @@ def verify_synced_files() -> None:
     for copy in skill_copies:
         ensure(copy.read_text() == skill_source.read_text(), f"Skill copy mismatch: {copy}")
 
+    ensure(
+        (ROOT / "plugins/caveman/.codex/hooks.json").read_text() == (ROOT / ".codex/hooks.json").read_text(),
+        "Codex plugin hooks mismatch",
+    )
+
     rule_copies = [
         ROOT / ".clinerules/caveman.md",
         ROOT / ".github/copilot-instructions.md",
@@ -100,6 +105,7 @@ def verify_manifests_and_syntax() -> None:
         ROOT / ".claude-plugin/marketplace.json",
         ROOT / ".codex/hooks.json",
         ROOT / "gemini-extension.json",
+        ROOT / "plugins/caveman/.codex/hooks.json",
         ROOT / "plugins/caveman/.codex-plugin/plugin.json",
     ]
     for path in manifest_paths:
@@ -225,7 +231,7 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home)},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate.stdout, "activation output missing caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate.stdout, "activation output missing caveman banner")
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "activation should stay quiet when custom statusline exists")
         ensure((claude_dir / ".caveman-active").read_text() == "full", "activation flag should default to full")
 
@@ -234,14 +240,14 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "ultra"},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate_custom.stdout, "activation with custom default missing banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate_custom.stdout, "activation with custom default missing banner")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra")
         # Test "off" mode — activation skipped, flag removed
         activate_off = run(
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "off"},
         )
-        ensure("CAVEMAN MODE ACTIVE." not in activate_off.stdout, "off mode should not emit caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" not in activate_off.stdout, "off mode should not emit caveman banner")
         ensure(not (claude_dir / ".caveman-active").exists(), "off mode should remove flag file")
 
         # Test mode tracker with /caveman when default is off — should NOT write flag
