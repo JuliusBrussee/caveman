@@ -57,7 +57,7 @@ def call_api(client, model, system, prompt, max_retries=3):
                 model=model,
                 max_tokens=4096,
                 temperature=0,
-                system=system,
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": prompt}],
             )
             return {
@@ -238,7 +238,7 @@ def dry_run(prompts, model, trials):
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark caveman vs normal Claude")
-    parser.add_argument("--trials", type=int, default=3, help="Trials per prompt per mode (default: 3)")
+    parser.add_argument("--trials", type=int, default=1, help="Trials per prompt per mode (default: 1)")
     parser.add_argument("--dry-run", action="store_true", help="Print config, no API calls")
     parser.add_argument("--update-readme", action="store_true", help="Update README.md benchmark table")
     parser.add_argument("--model", default="claude-sonnet-4-20250514", help="Model to use")
