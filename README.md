@@ -29,6 +29,8 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and
 
 Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
 
+Also works with [Kiro](https://kiro.dev/), Gemini CLI, Codex, Cursor, Windsurf, Copilot, Cline, and [40+ other agents](#install).
+
 ## Before / After
 
 <table>
@@ -133,25 +135,26 @@ Pick your agent. One command. Done.
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
 | **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
+| **[Kiro](https://kiro.dev/)** | `npx skills add JuliusBrussee/caveman -a kiro-cli` |
 | **Any other** | `npx skills add JuliusBrussee/caveman` |
 
 Install once. Use in every session for that install target after that. One rock. That it.
 
 ### What You Get
 
-Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
+Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below. This repo ships Kiro steering files, so caveman auto-activates when opened in Kiro.
 
-| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
-|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|
-| Caveman mode | Y | Y | Y | Y | Y | Y | Y |
-| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² |
-| `/caveman` command | Y | Y¹ | Y | — | — | — | — |
-| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — |
-| Statusline badge | Y⁴ | — | — | — | — | — | — |
-| caveman-commit | Y | — | Y | Y | Y | Y | Y |
-| caveman-review | Y | — | Y | Y | Y | Y | Y |
-| caveman-compress | Y | Y | Y | Y | Y | Y | Y |
-| caveman-help | Y | — | Y | Y | Y | Y | Y |
+| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Kiro | Cline | Copilot |
+|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:----:|:-----:|:-------:|
+| Caveman mode | Y | Y | Y | Y | Y | Y | Y | Y |
+| Auto-activate every session | Y | Y¹ | Y | —² | —² | Y⁵ | —² | —² |
+| `/caveman` command | Y | Y¹ | Y | — | — | Y | — | — |
+| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | Y | — | — |
+| Statusline badge | Y⁴ | — | — | — | — | — | — | — |
+| caveman-commit | Y | — | Y | Y | Y | Y | Y | Y |
+| caveman-review | Y | — | Y | Y | Y | Y | Y | Y |
+| caveman-compress | Y | Y | Y | Y | Y | Y | Y | Y |
+| caveman-help | Y | — | Y | Y | Y | Y | Y | Y |
 
 > [!NOTE]
 > Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
@@ -160,6 +163,7 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 > ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
 > ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
 > ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
+> ⁵ Kiro auto-activates via `.kiro/steering/caveman.md` (always-included [steering file](https://kiro.dev/docs/steering/)) and loads the full [skill](https://kiro.dev/docs/skills/) from `.kiro/skills/caveman/SKILL.md` on demand.
 
 <details>
 <summary><strong>Claude Code — full details</strong></summary>
@@ -223,6 +227,23 @@ Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
 </details>
 
 <details>
+<summary><strong>Kiro — full details</strong></summary>
+
+```bash
+npx skills add JuliusBrussee/caveman -a kiro-cli
+```
+
+Kiro supports the [Agent Skills](https://agentskills.io/) standard natively. The skill installs to `.kiro/skills/caveman/SKILL.md`. See [Kiro skills docs](https://kiro.dev/docs/skills/) for details on how skills work.
+
+This repo also ships `.kiro/steering/caveman.md` (always-included [steering file](https://kiro.dev/docs/steering/)), so caveman auto-activates when you open this repo in Kiro. For always-on behavior in other repos, copy the "Want it always on?" snippet below into `.kiro/steering/caveman.md` in that repo.
+
+Kiro activates skills on-demand when your request matches the skill description, or you can invoke `/caveman` directly as a slash command. Mode switching (lite/full/ultra/wenyan) works via the skill.
+
+Uninstall: `npx skills remove caveman`
+
+</details>
+
+<details>
 <summary><strong>Cursor / Windsurf / Cline / Copilot — full details</strong></summary>
 
 `npx skills add` installs the skill file only — it does **not** install the agent's rule/instruction file, so caveman does not auto-start. For always-on, add the "Want it always on?" snippet below to your agent's rules or system prompt.
@@ -241,7 +262,7 @@ Copilot works with Chat, Edits, and Coding Agent.
 </details>
 
 <details>
-<summary><strong>Any other agent (opencode, Roo, Amp, Goose, Kiro, and 40+ more)</strong></summary>
+<summary><strong>Any other agent (opencode, Roo, Amp, Goose, and 40+ more)</strong></summary>
 
 [npx skills](https://github.com/vercel-labs/skills) supports 40+ agents:
 
@@ -250,7 +271,6 @@ npx skills add JuliusBrussee/caveman           # auto-detect agent
 npx skills add JuliusBrussee/caveman -a amp
 npx skills add JuliusBrussee/caveman -a augment
 npx skills add JuliusBrussee/caveman -a goose
-npx skills add JuliusBrussee/caveman -a kiro-cli
 npx skills add JuliusBrussee/caveman -a roo
 # ... and many more
 ```
@@ -275,6 +295,7 @@ Code/commits/PRs: normal. Off: "stop caveman" / "normal mode".
 Where to put it:
 | Agent | File |
 |-------|------|
+| Kiro | [`.kiro/steering/caveman.md`](https://kiro.dev/docs/steering/) |
 | opencode | `.config/opencode/AGENTS.md` |
 | Roo | `.roo/rules/caveman.md` |
 | Amp | your workspace system prompt |
