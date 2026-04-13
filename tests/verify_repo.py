@@ -277,6 +277,18 @@ def verify_hook_install_flow() -> None:
         ensure(ultra_prompt.stdout == "", "mode tracker should stay silent")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "mode tracker did not record ultra")
 
+        russian_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"/caveman russian"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(russian_prompt.stdout == "", "mode tracker should stay silent for russian mode")
+        ensure((claude_dir / ".caveman-active").read_text() == "russian", "mode tracker did not record russian")
+
         subprocess.run(
             ["node", "hooks/caveman-mode-tracker.js"],
             cwd=ROOT,

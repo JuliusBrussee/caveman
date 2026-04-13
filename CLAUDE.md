@@ -96,6 +96,9 @@ Reads JSON from stdin. Checks if prompt starts with `/caveman`. If yes, writes m
 - `/caveman` → configured default (see `caveman-config.js`, defaults to `full`)
 - `/caveman lite` → `lite`
 - `/caveman ultra` → `ultra`
+- `/caveman russian` or `/caveman russian-full` → `russian`
+- `/caveman russian-lite` → `russian-lite`
+- `/caveman russian-ultra` → `russian-ultra`
 - `/caveman wenyan` or `/caveman wenyan-full` → `wenyan`
 - `/caveman wenyan-lite` → `wenyan-lite`
 - `/caveman wenyan-ultra` → `wenyan-ultra`
@@ -129,7 +132,7 @@ Skills = Markdown files with YAML frontmatter consumed by Claude Code's skill/pl
 
 ### Intensity levels
 
-Defined in `skills/caveman/SKILL.md`. Six levels: `lite`, `full` (default), `ultra`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`. Persists until changed or session ends.
+Defined in `skills/caveman/SKILL.md`. Nine levels: `lite`, `full` (default), `ultra`, `russian-lite`, `russian-full`, `russian-ultra`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`. Persists until changed or session ends.
 
 ### Auto-clarity rule
 

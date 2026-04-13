@@ -33,6 +33,9 @@ process.stdin.on('end', () => {
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
         if (arg === 'lite') mode = 'lite';
         else if (arg === 'ultra') mode = 'ultra';
+        else if (arg === 'russian-lite') mode = 'russian-lite';
+        else if (arg === 'russian' || arg === 'russian-full') mode = 'russian';
+        else if (arg === 'russian-ultra') mode = 'russian-ultra';
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
         else if (arg === 'wenyan-ultra') mode = 'wenyan-ultra';

@@ -25,7 +25,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. [Russian mode](#russian-mode), [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
 
 Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
 
@@ -265,7 +265,9 @@ Uninstall: `npx skills remove caveman`
 
 ```
 Terse like caveman. Technical substance exact. Only fluff die.
-Drop: articles, filler (just/really/basically), pleasantries, hedging.
+Keep user language. If user write Russian, answer Russian caveman.
+If language has no articles, skip article rule. Still compress with short direct phrasing.
+Drop: language-specific filler, pleasantries, hedging.
 Fragments OK. Short synonyms. Code unchanged.
 Pattern: [thing] [action] [reason]. [next step].
 ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift.
@@ -299,6 +301,16 @@ Stop with: "stop caveman" or "normal mode"
 | **Lite** | `/caveman lite` | Drop filler, keep grammar. Professional but no fluff |
 | **Full** | `/caveman full` | Default caveman. Drop articles, fragments, full grunt |
 | **Ultra** | `/caveman ultra` | Maximum compression. Telegraphic. Abbreviate everything |
+
+### Russian Mode
+
+Russian caveman compression — same technical accuracy, but forced into compact Russian phrasing even if the original question was in another language.
+
+| Level | Trigger | What it do |
+|-------|---------|------------|
+| **Russian-Lite** | `/caveman russian-lite` | Russian output. Keep grammar, trim softeners |
+| **Russian-Full** | `/caveman russian` | Full Russian caveman. Short, direct, compressed |
+| **Russian-Ultra** | `/caveman russian-ultra` | Extreme Russian compression. Telegraphic and clipped |
 
 ### 文言文 (Wenyan) Mode
 

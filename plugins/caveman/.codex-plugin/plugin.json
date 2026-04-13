@@ -1,7 +1,7 @@
 {
   "name": "caveman",
   "version": "0.1.0",
-  "description": "Ultra-compressed communication mode. Cut filler. Keep technical accuracy.",
+  "description": "Ultra-compressed communication mode. Cut filler. Keep technical accuracy. Includes Russian and Wenyan modes.",
   "author": {
     "name": "Julius Brussee",
     "url": "https://github.com/JuliusBrussee"
@@ -18,8 +18,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Caveman",
-    "shortDescription": "Talk like caveman. Cut filler. Keep technical accuracy.",
-    "longDescription": "Ultra-compressed communication mode for Codex. Use fewer words. Keep exact technical substance.",
+    "shortDescription": "Talk like caveman. Includes Russian and Wenyan modes.",
+    "longDescription": "Ultra-compressed communication mode for Codex. Use fewer words, preserve exact technical substance, and support standard, Russian, and Wenyan caveman submodes.",
     "developerName": "Julius Brussee",
     "category": "Productivity",
     "capabilities": [
@@ -29,7 +29,7 @@
     "privacyPolicyURL": "https://github.com/JuliusBrussee/caveman/blob/main/README.md",
     "termsOfServiceURL": "https://github.com/JuliusBrussee/caveman/blob/main/LICENSE",
     "defaultPrompt": [
-      "Use caveman mode. Cut filler. Keep technical accuracy."
+      "Use caveman mode. Cut filler. Keep technical accuracy. Support standard caveman plus explicit Russian and Wenyan submodes."
     ],
     "composerIcon": "./assets/caveman-small.svg",
     "logo": "./assets/caveman.svg",
