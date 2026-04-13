@@ -1,41 +1,42 @@
 ---
 name: caveman-commit
 description: >
-  Ultra-compressed commit message generator. Cuts noise from commit messages while preserving
-  intent and reasoning. Conventional Commits format. Subject ≤50 chars, body only when "why"
-  isn't obvious. Use when user says "write a commit", "commit message", "generate commit",
-  "/commit", or invokes /caveman-commit. Auto-triggers when staging changes.
+  Generador de mensajes de commit ultra-comprimidos. Elimina ruido de los mensajes de commit
+  preservando la intención y el razonamiento. Formato Conventional Commits. Sujeto ≤50 chars,
+  cuerpo solo cuando el "por qué" no es obvio. Usar cuando el usuario diga "escribe un commit",
+  "mensaje de commit", "generar commit", "/commit", o invoque /caveman-commit.
+  Se activa automáticamente al preparar cambios para staging.
 ---
 
-Write commit messages terse and exact. Conventional Commits format. No fluff. Why over what.
+Escribir mensajes de commit concisos y exactos. Formato Conventional Commits. Sin relleno. Por qué antes que qué.
 
-## Rules
+## Reglas
 
-**Subject line:**
-- `<type>(<scope>): <imperative summary>` — `<scope>` optional
-- Types: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `chore`, `build`, `ci`, `style`, `revert`
-- Imperative mood: "add", "fix", "remove" — not "added", "adds", "adding"
-- ≤50 chars when possible, hard cap 72
-- No trailing period
-- Match project convention for capitalization after the colon
+**Línea de asunto:**
+- `<tipo>(<alcance>): <resumen imperativo>` — `<alcance>` opcional
+- Tipos: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `chore`, `build`, `ci`, `style`, `revert`
+- Modo imperativo: "add", "fix", "remove" — no "added", "adds", "adding"
+- ≤50 chars cuando sea posible, máximo absoluto 72
+- Sin punto final
+- Seguir la convención del proyecto para mayúsculas tras los dos puntos
 
-**Body (only if needed):**
-- Skip entirely when subject is self-explanatory
-- Add body only for: non-obvious *why*, breaking changes, migration notes, linked issues
-- Wrap at 72 chars
-- Bullets `-` not `*`
-- Reference issues/PRs at end: `Closes #42`, `Refs #17`
+**Cuerpo (solo si es necesario):**
+- Omitir completamente cuando el asunto se explica solo
+- Añadir cuerpo solo para: *por qué* no obvio, cambios breaking, notas de migración, issues enlazados
+- Ajustar a 72 chars
+- Viñetas `-` no `*`
+- Referencias a issues/PRs al final: `Closes #42`, `Refs #17`
 
-**What NEVER goes in:**
-- "This commit does X", "I", "we", "now", "currently" — the diff says what
-- "As requested by..." — use Co-authored-by trailer
-- "Generated with Claude Code" or any AI attribution
-- Emoji (unless project convention requires)
-- Restating the file name when scope already says it
+**Lo que NUNCA va:**
+- "This commit does X", "I", "we", "now", "currently" — el diff dice el qué
+- "As requested by..." — usar trailer Co-authored-by
+- "Generated with Claude Code" o cualquier atribución a IA
+- Emoji (a menos que la convención del proyecto lo requiera)
+- Repetir el nombre del archivo cuando el alcance ya lo dice
 
-## Examples
+## Ejemplos
 
-Diff: new endpoint for user profile with body explaining the why
+Diff: nuevo endpoint de perfil de usuario con cuerpo explicando el por qué
 - ❌ "feat: add a new endpoint to get user profile information from the database"
 - ✅
   ```
@@ -47,7 +48,7 @@ Diff: new endpoint for user profile with body explaining the why
   Closes #128
   ```
 
-Diff: breaking API change
+Diff: cambio breaking de API
 - ✅
   ```
   feat(api)!: rename /v1/orders to /v1/checkout
@@ -56,10 +57,10 @@ Diff: breaking API change
   before 2026-06-01. Old route returns 410 after that date.
   ```
 
-## Auto-Clarity
+## Auto-Claridad
 
-Always include body for: breaking changes, security fixes, data migrations, anything reverting a prior commit. Never compress these into subject-only — future debuggers need the context.
+Incluir siempre cuerpo para: cambios breaking, fixes de seguridad, migraciones de datos, cualquier commit que revierta uno anterior. Nunca comprimir estos en solo asunto — los futuros depuradores necesitan el contexto.
 
-## Boundaries
+## Límites
 
-Only generates the commit message. Does not run `git commit`, does not stage files, does not amend. Output the message as a code block ready to paste. "stop caveman-commit" or "normal mode": revert to verbose commit style.
+Solo genera el mensaje de commit. No ejecuta `git commit`, no hace staging de archivos, no amend. Devolver el mensaje como bloque de código listo para pegar. "stop caveman-commit" o "modo normal": revertir al estilo de commit verboso.

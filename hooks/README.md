@@ -1,46 +1,46 @@
-# Caveman Hooks
+# Hooks de Caveman
 
-These hooks are **bundled with the caveman plugin** and activate automatically when the plugin is installed. No manual setup required.
+Estos hooks están **incluidos en el plugin caveman** y se activan automáticamente cuando el plugin se instala. No se requiere configuración manual.
 
-If you installed caveman standalone (without the plugin), you can use `bash hooks/install.sh` to wire them into your settings.json manually.
+Si instalaste caveman de forma standalone (sin el plugin), puedes usar `bash hooks/install.sh` para conectarlos a tu settings.json manualmente.
 
-## What's Included
+## Qué se incluye
 
-### `caveman-activate.js` — SessionStart hook
+### `caveman-activate.js` — Hook SessionStart
 
-- Runs once when Claude Code starts
-- Writes `full` to `~/.claude/.caveman-active` (flag file)
-- Emits caveman rules as hidden SessionStart context
-- Detects missing statusline config and emits setup nudge (Claude will offer to help)
+- Se ejecuta una vez cuando Claude Code arranca
+- Escribe `full` en `~/.claude/.caveman-active` (archivo de bandera)
+- Emite las reglas caveman como contexto SessionStart oculto
+- Detecta configuración de statusline faltante y emite sugerencia de configuración (Claude ofrecerá ayuda)
 
-### `caveman-mode-tracker.js` — UserPromptSubmit hook
+### `caveman-mode-tracker.js` — Hook UserPromptSubmit
 
-- Fires on every user prompt, checks for `/caveman` commands
-- Writes the active mode to the flag file when a caveman command is detected
-- Supports: `full`, `lite`, `ultra`, `wenyan`, `wenyan-lite`, `wenyan-ultra`, `commit`, `review`, `compress`
+- Se dispara en cada prompt de usuario, comprueba comandos `/caveman`
+- Escribe el modo activo en el archivo de bandera cuando detecta un comando caveman
+- Soporta: `full`, `lite`, `ultra`, `wenyan`, `wenyan-lite`, `wenyan-ultra`, `commit`, `review`, `compress`
 
-### `caveman-statusline.sh` / `caveman-statusline.ps1` — Statusline badge script
+### `caveman-statusline.sh` / `caveman-statusline.ps1` — Script de insignia de statusline
 
-- Reads `~/.claude/.caveman-active` and outputs a colored badge
-- Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc.
+- Lee `~/.claude/.caveman-active` y devuelve una insignia coloreada
+- Muestra `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc.
 
-## Statusline Badge
+## Insignia de Statusline
 
-The statusline badge shows which caveman mode is active directly in your Claude Code status bar.
+La insignia de statusline muestra qué modo caveman está activo directamente en la barra de estado de Claude Code.
 
-**Plugin users:** If you do not already have a `statusLine` configured, Claude will detect that on your first session after install and offer to set it up for you. Accept and you're done.
+**Usuarios con plugin:** Si no tienes ya una `statusLine` configurada, Claude lo detectará en tu primera sesión tras la instalación y ofrecerá configurarla. Acepta y listo.
 
-If you already have a custom statusline, caveman does not overwrite it and Claude stays quiet. Add the badge snippet to your existing script instead.
+Si ya tienes una statusline personalizada, caveman no la sobreescribe y Claude no dice nada. Añade el fragmento de la insignia a tu script existente en su lugar.
 
-**Standalone users:** `install.sh` / `install.ps1` wires the statusline automatically if you do not already have a custom statusline. If you do, the installer leaves it alone and prints the merge note.
+**Usuarios standalone:** `install.sh` / `install.ps1` conecta la statusline automáticamente si no tienes ya una statusline personalizada. Si la tienes, el instalador la deja intacta e imprime la nota de fusión.
 
-**Manual setup:** If you need to configure it yourself, add one of these to `~/.claude/settings.json`:
+**Configuración manual:** Si necesitas configurarla tú mismo, añade uno de estos a `~/.claude/settings.json`:
 
 ```json
 {
   "statusLine": {
     "type": "command",
-    "command": "bash /path/to/caveman-statusline.sh"
+    "command": "bash /ruta/a/caveman-statusline.sh"
   }
 }
 ```
@@ -49,14 +49,14 @@ If you already have a custom statusline, caveman does not overwrite it and Claud
 {
   "statusLine": {
     "type": "command",
-    "command": "powershell -ExecutionPolicy Bypass -File C:\\path\\to\\caveman-statusline.ps1"
+    "command": "powershell -ExecutionPolicy Bypass -File C:\\ruta\\a\\caveman-statusline.ps1"
   }
 }
 ```
 
-Replace the path with the actual script location (e.g. `~/.claude/hooks/` for standalone installs, or the plugin install directory for plugin installs).
+Reemplaza la ruta con la ubicación real del script (p.ej. `~/.claude/hooks/` para instalaciones standalone, o el directorio de instalación del plugin para instalaciones con plugin).
 
-**Custom statusline:** If you already have a statusline script, add this snippet to it:
+**Statusline personalizada:** Si ya tienes un script de statusline, añade este fragmento:
 
 ```bash
 caveman_text=""
@@ -72,36 +72,36 @@ if [ -f "$caveman_flag" ]; then
 fi
 ```
 
-Badge examples:
+Ejemplos de insignia:
 - `/caveman` → `[CAVEMAN]`
 - `/caveman ultra` → `[CAVEMAN:ULTRA]`
 - `/caveman wenyan` → `[CAVEMAN:WENYAN]`
 - `/caveman-commit` → `[CAVEMAN:COMMIT]`
 - `/caveman-review` → `[CAVEMAN:REVIEW]`
 
-## How It Works
+## Cómo Funciona
 
 ```
-SessionStart hook ──writes "full"──▶ ~/.claude/.caveman-active ◀──writes mode── UserPromptSubmit hook
+Hook SessionStart ──escribe "full"──▶ ~/.claude/.caveman-active ◀──escribe modo── Hook UserPromptSubmit
                                               │
-                                           reads
+                                           lee
                                               ▼
-                                     Statusline script
+                                     Script statusline
                                     [CAVEMAN:ULTRA] │ ...
 ```
 
-SessionStart stdout is injected as hidden system context — Claude sees it, users don't. The statusline runs as a separate process. The flag file is the bridge.
+El stdout de SessionStart se inyecta como contexto de sistema oculto — Claude lo ve, los usuarios no. La statusline corre como proceso separado. El archivo de bandera es el puente.
 
-## Uninstall
+## Desinstalar
 
-If installed via plugin: disable the plugin — hooks deactivate automatically.
+Si instalado vía plugin: deshabilitar el plugin — los hooks se desactivan automáticamente.
 
-If installed via `install.sh`:
+Si instalado vía `install.sh`:
 ```bash
 bash hooks/uninstall.sh
 ```
 
-Or manually:
-1. Remove `~/.claude/hooks/caveman-activate.js`, `~/.claude/hooks/caveman-mode-tracker.js`, and the matching statusline script (`caveman-statusline.sh` on macOS/Linux or `caveman-statusline.ps1` on Windows)
-2. Remove the SessionStart, UserPromptSubmit, and statusLine entries from `~/.claude/settings.json`
-3. Delete `~/.claude/.caveman-active`
+O manualmente:
+1. Eliminar `~/.claude/hooks/caveman-activate.js`, `~/.claude/hooks/caveman-mode-tracker.js` y el script de statusline correspondiente (`caveman-statusline.sh` en macOS/Linux o `caveman-statusline.ps1` en Windows)
+2. Eliminar las entradas SessionStart, UserPromptSubmit y statusLine de `~/.claude/settings.json`
+3. Borrar `~/.claude/.caveman-active`

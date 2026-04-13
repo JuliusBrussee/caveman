@@ -1,2 +1,2 @@
-description = "Switch caveman intensity level (lite/full/ultra/wenyan)"
-prompt = "Switch to caveman {{args}} mode. If no level specified, use full. Respond terse like smart caveman — drop articles, filler, pleasantries. Fragments OK. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step]."
+description = "Cambiar nivel de intensidad caveman (lite/full/ultra/wenyan)"
+prompt = "Cambiar a modo caveman {{args}}. Si no se especifica nivel, usar full. Responder conciso como cavernícola inteligente — eliminar artículos, relleno, formalidades. Fragmentos OK. Términos técnicos exactos. Código sin cambios. Patrón: [cosa] [acción] [razón]. [siguiente paso]."

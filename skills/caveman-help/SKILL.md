@@ -1,59 +1,59 @@
 ---
 name: caveman-help
 description: >
-  Quick-reference card for all caveman modes, skills, and commands.
-  One-shot display, not a persistent mode. Trigger: /caveman-help,
-  "caveman help", "what caveman commands", "how do I use caveman".
+  Tarjeta de referencia rápida para todos los modos, skills y comandos de caveman.
+  Visualización única, no es un modo persistente. Activar: /caveman-help,
+  "caveman help", "qué comandos tiene caveman", "cómo uso caveman".
 ---
 
-# Caveman Help
+# Ayuda Caveman
 
-Display this reference card when invoked. One-shot — do NOT change mode, write flag files, or persist anything. Output in caveman style.
+Mostrar esta tarjeta de referencia al ser invocado. Una sola vez — NO cambiar modo, escribir archivos de bandera, ni persistir nada. Devolver en estilo caveman.
 
-## Modes
+## Modos
 
-| Mode | Trigger | What change |
-|------|---------|-------------|
-| **Lite** | `/caveman lite` | Drop filler. Keep sentence structure. |
-| **Full** | `/caveman` | Drop articles, filler, pleasantries, hedging. Fragments OK. Default. |
-| **Ultra** | `/caveman ultra` | Extreme compression. Bare fragments. Tables over prose. |
-| **Wenyan-Lite** | `/caveman wenyan-lite` | Classical Chinese style, light compression. |
-| **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness. |
-| **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget. |
+| Modo | Activar | Qué cambia |
+|------|---------|------------|
+| **Lite** | `/caveman lite` | Elimina relleno. Mantiene estructura de frases. |
+| **Full** | `/caveman` | Elimina artículos, relleno, formalidades, vacilaciones. Fragmentos OK. Predeterminado. |
+| **Ultra** | `/caveman ultra` | Compresión extrema. Fragmentos mínimos. Tablas sobre prosa. |
+| **Wenyan-Lite** | `/caveman wenyan-lite` | Estilo chino clásico, compresión ligera. |
+| **Wenyan-Full** | `/caveman wenyan` | 文言文 completo. Máxima tersura clásica. |
+| **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extremo. Erudito antiguo con presupuesto ajustado. |
 
-Mode stick until changed or session end.
+Modo persiste hasta que se cambie o finalice la sesión.
 
 ## Skills
 
-| Skill | Trigger | What it do |
-|-------|---------|-----------|
-| **caveman-commit** | `/caveman-commit` | Terse commit messages. Conventional Commits. ≤50 char subject. |
-| **caveman-review** | `/caveman-review` | One-line PR comments: `L42: bug: user null. Add guard.` |
-| **caveman-compress** | `/caveman:compress <file>` | Compress .md files to caveman prose. Saves ~46% input tokens. |
-| **caveman-help** | `/caveman-help` | This card. |
+| Skill | Activar | Qué hace |
+|-------|---------|----------|
+| **caveman-commit** | `/caveman-commit` | Mensajes de commit concisos. Conventional Commits. Sujeto ≤50 chars. |
+| **caveman-review** | `/caveman-review` | Comentarios de PR de una línea: `L42: bug: user nulo. Añadir guard.` |
+| **caveman-compress** | `/caveman:compress <archivo>` | Comprimir archivos .md a prosa caveman. Ahorra ~46% tokens de entrada. |
+| **caveman-help** | `/caveman-help` | Esta tarjeta. |
 
-## Deactivate
+## Desactivar
 
-Say "stop caveman" or "normal mode". Resume anytime with `/caveman`.
+Di "stop caveman" o "modo normal". Reanudar en cualquier momento con `/caveman`.
 
-## Configure Default Mode
+## Configurar Modo Predeterminado
 
-Default mode = `full`. Change it:
+Modo predeterminado = `full`. Cambiarlo:
 
-**Environment variable** (highest priority):
+**Variable de entorno** (máxima prioridad):
 ```bash
 export CAVEMAN_DEFAULT_MODE=ultra
 ```
 
-**Config file** (`~/.config/caveman/config.json`):
+**Archivo de configuración** (`~/.config/caveman/config.json`):
 ```json
 { "defaultMode": "lite" }
 ```
 
-Set `"off"` to disable auto-activation on session start. User can still activate manually with `/caveman`.
+Poner `"off"` para desactivar la auto-activación al inicio de sesión. El usuario puede activar manualmente con `/caveman`.
 
-Resolution: env var > config file > `full`.
+Resolución: var entorno > archivo config > `full`.
 
-## More
+## Más
 
-Full docs: https://github.com/JuliusBrussee/caveman
+Documentación completa: https://github.com/JuliusBrussee/caveman

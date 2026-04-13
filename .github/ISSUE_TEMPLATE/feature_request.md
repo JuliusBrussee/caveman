@@ -1,17 +1,17 @@
 ---
-name: Feature request
-about: Make caveman better
+name: Solicitud de función
+about: Hacer caveman mejor
 labels: enhancement
 ---
 
-**What you want**
-<!-- New behavior, new persona, new rule -->
+**Qué quieres**
+<!-- Nuevo comportamiento, nueva persona, nueva regla -->
 
-**Before/after example**
+**Ejemplo antes/después**
 ```
-Before: [current behavior]
-After:  [desired behavior]
+Antes: [comportamiento actual]
+Después: [comportamiento deseado]
 ```
 
-**Why good**
-<!-- Why this help users -->
+**Por qué es bueno**
+<!-- Por qué esto ayuda a los usuarios -->
