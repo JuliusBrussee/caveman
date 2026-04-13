@@ -5,44 +5,44 @@
 <h1 align="center">caveman-compress</h1>
 
 <p align="center">
-  <strong>shrink memory file. save token every session.</strong>
+  <strong>comprimir archivo de memoria. ahorrar token en cada sesión.</strong>
 </p>
 
 ---
 
-A Claude Code skill that compresses your project memory files (`CLAUDE.md`, todos, preferences) into caveman format — so every session loads fewer tokens automatically.
+Un skill de Claude Code que comprime tus archivos de memoria del proyecto (`CLAUDE.md`, todos, preferencias) al formato caveman — para que cada sesión cargue menos tokens automáticamente.
 
-Claude read `CLAUDE.md` on every session start. If file big, cost big. Caveman make file small. Cost go down forever.
+Claude lee `CLAUDE.md` en cada inicio de sesión. Si archivo grande, coste grande. Caveman hace archivo pequeño. Coste baja para siempre.
 
-## What It Do
+## Qué Hace
 
 ```
 /caveman:compress CLAUDE.md
 ```
 
 ```
-CLAUDE.md          ← compressed (Claude reads this — fewer tokens every session)
-CLAUDE.original.md ← human-readable backup (you edit this)
+CLAUDE.md          ← comprimido (Claude lee esto — menos tokens en cada sesión)
+CLAUDE.original.md ← backup legible (tú editas esto)
 ```
 
-Original never lost. You can read and edit `.original.md`. Run skill again to re-compress after edits.
+El original nunca se pierde. Puedes leer y editar `.original.md`. Ejecutar el skill de nuevo para re-comprimir tras las ediciones.
 
 ## Benchmarks
 
-Real results on real project files:
+Resultados reales en archivos reales de proyectos:
 
-| File | Original | Compressed | Saved |
-|------|----------:|----------:|------:|
-| `claude-md-preferences.md` | 706 | 285 | **59.6%** |
-| `project-notes.md` | 1145 | 535 | **53.3%** |
-| `claude-md-project.md` | 1122 | 636 | **43.3%** |
-| `todo-list.md` | 627 | 388 | **38.1%** |
-| `mixed-with-code.md` | 888 | 560 | **36.9%** |
-| **Average** | **898** | **481** | **46%** |
+| Archivo | Original | Comprimido | Ahorro |
+|---------|----------:|----------:|-------:|
+| `claude-md-preferences.md` | 706 | 285 | **59,6%** |
+| `project-notes.md` | 1145 | 535 | **53,3%** |
+| `claude-md-project.md` | 1122 | 636 | **43,3%** |
+| `todo-list.md` | 627 | 388 | **38,1%** |
+| `mixed-with-code.md` | 888 | 560 | **36,9%** |
+| **Media** | **898** | **481** | **46%** |
 
-All validations passed ✅ — headings, code blocks, URLs, file paths preserved exactly.
+Todas las validaciones pasaron ✅ — headings, bloques de código, URLs, rutas de archivo preservados exactamente.
 
-## Before / After
+## Antes / Después
 
 <table>
 <tr>
@@ -63,101 +63,101 @@ All validations passed ✅ — headings, code blocks, URLs, file paths preserved
 </tr>
 </table>
 
-**Same instructions. 60% fewer tokens. Every. Single. Session.**
+**Mismas instrucciones. 60% menos tokens. Cada. Sesión.**
 
-## Security
+## Seguridad
 
-`caveman-compress` is flagged as Snyk High Risk due to subprocess and file I/O patterns detected by static analysis. This is a false positive — see [SECURITY.md](./SECURITY.md) for a full explanation of what the skill does and does not do.
+`caveman-compress` está marcado como Alto Riesgo por Snyk debido a patrones de subprocess y E/S de archivos detectados por análisis estático. Es un falso positivo — ver [SECURITY.md](./SECURITY.md) para una explicación completa de lo que el skill hace y no hace.
 
-## Install
+## Instalar
 
-Compress is built in with the `caveman` plugin. Install `caveman` once, then use `/caveman:compress`.
+Compress está incluido con el plugin `caveman`. Instala `caveman` una vez, luego usa `/caveman:compress`.
 
-If you need local files, the compress skill lives at:
+Si necesitas los archivos locales, el skill de compress está en:
 
 ```bash
 caveman-compress/
 ```
 
-**Requires:** Python 3.10+
+**Requiere:** Python 3.10+
 
-## Usage
+## Uso
 
 ```
-/caveman:compress <filepath>
+/caveman:compress <ruta_archivo>
 ```
 
-Examples:
+Ejemplos:
 ```
 /caveman:compress CLAUDE.md
 /caveman:compress docs/preferences.md
 /caveman:compress todos.md
 ```
 
-### What files work
+### Qué archivos funcionan
 
-| Type | Compress? |
-|------|-----------|
-| `.md`, `.txt`, `.rst` | ✅ Yes |
-| Extensionless natural language | ✅ Yes |
-| `.py`, `.js`, `.ts`, `.json`, `.yaml` | ❌ Skip (code/config) |
-| `*.original.md` | ❌ Skip (backup files) |
+| Tipo | ¿Comprimir? |
+|------|-------------|
+| `.md`, `.txt`, `.rst` | ✅ Sí |
+| Lenguaje natural sin extensión | ✅ Sí |
+| `.py`, `.js`, `.ts`, `.json`, `.yaml` | ❌ Ignorar (código/config) |
+| `*.original.md` | ❌ Ignorar (archivos de backup) |
 
-## How It Work
+## Cómo Funciona
 
 ```
 /caveman:compress CLAUDE.md
         ↓
-detect file type        (no tokens)
+detectar tipo de archivo        (sin tokens)
         ↓
-Claude compresses       (tokens — one call)
+Claude comprime                 (tokens — una llamada)
         ↓
-validate output         (no tokens)
-  checks: headings, code blocks, URLs, file paths, bullets
+validar salida                  (sin tokens)
+  comprueba: headings, bloques de código, URLs, rutas de archivo, viñetas
         ↓
-if errors: Claude fixes cherry-picked issues only   (tokens — targeted fix)
-  does NOT recompress — only patches broken parts
+si errores: Claude fix solo problemas concretos   (tokens — fix específico)
+  NO recomprime — solo parchea las partes rotas
         ↓
-retry up to 2 times
+reintentar hasta 2 veces
         ↓
-write compressed → CLAUDE.md
-write original   → CLAUDE.original.md
+escribir comprimido → CLAUDE.md
+escribir original   → CLAUDE.original.md
 ```
 
-Only two things use tokens: initial compression + targeted fix if validation fails. Everything else is local Python.
+Solo dos cosas usan tokens: compresión inicial + fix específico si falla la validación. Todo lo demás es Python local.
 
-## What Is Preserved
+## Qué se Preserva
 
-Caveman compress natural language. It never touch:
+Caveman comprime lenguaje natural. Nunca toca:
 
-- Code blocks (` ``` ` fenced or indented)
-- Inline code (`` `backtick content` ``)
-- URLs and links
-- File paths (`/src/components/...`)
-- Commands (`npm install`, `git commit`)
-- Technical terms, library names, API names
-- Headings (exact text preserved)
-- Tables (structure preserved, cell text compressed)
-- Dates, version numbers, numeric values
+- Bloques de código (` ``` ` cercados o indentados)
+- Código inline (`` `contenido backtick` ``)
+- URLs y enlaces
+- Rutas de archivo (`/src/components/...`)
+- Comandos (`npm install`, `git commit`)
+- Términos técnicos, nombres de librerías, nombres de APIs
+- Headings (texto exacto preservado)
+- Tablas (estructura preservada, texto de celdas comprimido)
+- Fechas, números de versión, valores numéricos
 
-## Why This Matter
+## Por Qué Importa
 
-`CLAUDE.md` loads on **every session start**. A 1000-token project memory file costs tokens every single time you open a project. Over 100 sessions that's 100,000 tokens of overhead — just for context you already wrote.
+`CLAUDE.md` carga en **cada inicio de sesión**. Un archivo de memoria del proyecto de 1000 tokens cuesta tokens cada vez que abres un proyecto. En 100 sesiones son 100.000 tokens de overhead — solo por contexto que ya escribiste.
 
-Caveman cut that by ~46% on average. Same instructions. Same accuracy. Less waste.
+Caveman lo reduce ~46% de media. Mismas instrucciones. Misma precisión. Menos desperdicio.
 
 ```
 ┌────────────────────────────────────────────┐
-│  TOKEN SAVINGS PER FILE    █████       46% │
-│  SESSIONS THAT BENEFIT     ██████████ 100% │
-│  INFORMATION PRESERVED     ██████████ 100% │
-│  SETUP TIME                █            1x │
+│  AHORRO DE TOKENS POR ARCHIVO  █████   46% │
+│  SESIONES QUE SE BENEFICIAN    ██████ 100% │
+│  INFORMACIÓN PRESERVADA        ██████ 100% │
+│  TIEMPO DE CONFIGURACIÓN       █         1x│
 └────────────────────────────────────────────┘
 ```
 
-## Part of Caveman
+## Parte de Caveman
 
-This skill is part of the [caveman](https://github.com/JuliusBrussee/caveman) toolkit — making Claude use fewer tokens without losing accuracy.
+Este skill es parte del toolkit [caveman](https://github.com/JuliusBrussee/caveman) — haciendo que Claude use menos tokens sin perder precisión.
 
-- **caveman** — make Claude *speak* like caveman (cuts response tokens ~65%)
-- **caveman-compress** — make Claude *read* less (cuts context tokens ~46%)
+- **caveman** — hace que Claude *hable* como cavernícola (recorta tokens de respuesta ~65%)
+- **caveman-compress** — hace que Claude *lea* menos (recorta tokens de contexto ~46%)

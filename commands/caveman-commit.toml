@@ -1,2 +1,2 @@
-description = "Generate terse caveman-style commit message"
-prompt = "Generate a terse commit message for the current staged changes. Conventional Commits format. Subject: ≤50 chars, imperative, lowercase after type. Body: only when 'why' isn't obvious from subject. Why over what. No period on subject."
+description = "Generar mensaje de commit conciso estilo caveman"
+prompt = "Generar un mensaje de commit conciso para los cambios actuales en staging. Formato Conventional Commits. Asunto: ≤50 chars, imperativo, minúsculas tras el tipo. Cuerpo: solo cuando el 'por qué' no es obvio en el asunto. Por qué antes que qué. Sin punto final en el asunto."

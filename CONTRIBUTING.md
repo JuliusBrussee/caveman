@@ -1,20 +1,20 @@
-# Contributing
+# Contribuir
 
-Improvements to the SKILL.md prompt are welcome — open a PR with before/after examples showing the change.
+Las mejoras al prompt en SKILL.md son bienvenidas — abre un PR con ejemplos antes/después que muestren el cambio.
 
-## How
+## Cómo
 
-1. Fork repo
-2. Edit `skills/caveman/SKILL.md` — this is the only copy you need to touch
-3. Open PR with:
-   - **Before:** what caveman say now
-   - **After:** what caveman say with change
-   - One sentence why change better
+1. Hacer fork del repo
+2. Editar `skills/caveman/SKILL.md` — es la única copia que necesitas tocar
+3. Abrir PR con:
+   - **Antes:** qué dice caveman ahora
+   - **Después:** qué diría caveman con el cambio
+   - Una frase explicando por qué el cambio es mejor
 
-> **Note:** `caveman/SKILL.md`, `plugins/caveman/skills/caveman/SKILL.md`, `.cursor/skills/caveman/SKILL.md`, and `caveman.skill` are auto-synced by CI after merge. Do not edit them directly.
+> **Nota:** `caveman/SKILL.md`, `plugins/caveman/skills/caveman/SKILL.md`, `.cursor/skills/caveman/SKILL.md` y `caveman.skill` son sincronizados automáticamente por CI tras el merge. No editarlos directamente.
 
-Small focused change > big rewrite. Caveman like simple.
+Cambio pequeño y enfocado > reescritura grande. Caveman prefiere simple.
 
 ## Ideas
 
-See [issues labeled `good first issue`](../../issues?q=label%3A%22good+first+issue%22) for starter tasks.
+Ver [issues etiquetados como `good first issue`](../../issues?q=label%3A%22good+first+issue%22) para tareas de inicio.

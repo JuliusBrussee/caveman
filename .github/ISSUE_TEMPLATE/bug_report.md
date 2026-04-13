@@ -1,25 +1,25 @@
 ---
-name: Bug report
-about: Caveman speak wrong or break
+name: Reporte de bug
+about: Caveman habla mal o se rompe
 labels: bug
 ---
 
-**What happen**
-<!-- What caveman do wrong -->
+**Qué pasó**
+<!-- Qué hizo mal caveman -->
 
-**Expected**
-<!-- What caveman should do -->
+**Esperado**
+<!-- Qué debería hacer caveman -->
 
-**Before/after example**
+**Ejemplo antes/después**
 ```
-Input: [your prompt]
-Got:   [what caveman said]
-Want:  [what caveman should say]
+Entrada: [tu prompt]
+Obtuvo:  [lo que dijo caveman]
+Quería:  [lo que debería haber dicho caveman]
 ```
 
-**Platform**
+**Plataforma**
 - [ ] Claude Code
 - [ ] Codex
-- [ ] Other: ___
+- [ ] Otro: ___
 
-**Version / install method**
+**Versión / método de instalación**

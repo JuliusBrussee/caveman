@@ -1,7 +1,7 @@
 {
   "name": "caveman",
   "version": "0.1.0",
-  "description": "Ultra-compressed communication mode. Cut filler. Keep technical accuracy.",
+  "description": "Modo de comunicación ultra-comprimido. Eliminar relleno. Mantener precisión técnica.",
   "author": {
     "name": "Julius Brussee",
     "url": "https://github.com/JuliusBrussee"
@@ -18,8 +18,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Caveman",
-    "shortDescription": "Talk like caveman. Cut filler. Keep technical accuracy.",
-    "longDescription": "Ultra-compressed communication mode for Codex. Use fewer words. Keep exact technical substance.",
+    "shortDescription": "Hablar como cavernícola. Eliminar relleno. Mantener precisión técnica.",
+    "longDescription": "Modo de comunicación ultra-comprimido para Codex. Usar menos palabras. Mantener sustancia técnica exacta.",
     "developerName": "Julius Brussee",
     "category": "Productivity",
     "capabilities": [
@@ -29,7 +29,7 @@
     "privacyPolicyURL": "https://github.com/JuliusBrussee/caveman/blob/main/README.md",
     "termsOfServiceURL": "https://github.com/JuliusBrussee/caveman/blob/main/LICENSE",
     "defaultPrompt": [
-      "Use caveman mode. Cut filler. Keep technical accuracy."
+      "Usar modo caveman. Eliminar relleno. Mantener precisión técnica."
     ],
     "composerIcon": "./assets/caveman-small.svg",
     "logo": "./assets/caveman.svg",
