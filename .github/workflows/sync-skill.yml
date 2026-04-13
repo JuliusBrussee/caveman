@@ -36,6 +36,8 @@ jobs:
           cp skills/caveman/SKILL.md .cursor/skills/caveman/SKILL.md
           mkdir -p .windsurf/skills/caveman
           cp skills/caveman/SKILL.md .windsurf/skills/caveman/SKILL.md
+          mkdir -p .kiro/skills/caveman
+          cp skills/caveman/SKILL.md .kiro/skills/caveman/SKILL.md
 
       - name: Sync compress skill to plugin
         run: |
@@ -71,6 +73,10 @@ jobs:
           printf '%s\n' '---' 'trigger: always_on' '---' '' > .windsurf/rules/caveman.md
           cat "$BODY" >> .windsurf/rules/caveman.md
 
+          # Kiro — steering file (inclusion: always is default, no frontmatter needed)
+          mkdir -p .kiro/steering
+          cp "$BODY" .kiro/steering/caveman.md
+
       - name: Commit and push if changed
         run: |
           git add \
@@ -79,6 +85,8 @@ jobs:
             plugins/caveman/skills/caveman/SKILL.md \
             .cursor/skills/caveman/SKILL.md \
             .windsurf/skills/caveman/SKILL.md \
+            .kiro/skills/caveman/SKILL.md \
+            .kiro/steering/caveman.md \
             caveman.skill \
             .clinerules/caveman.md \
             .github/copilot-instructions.md \
