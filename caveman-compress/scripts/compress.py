@@ -105,6 +105,7 @@ STRICT RULES:
 - Do NOT modify anything inside inline backticks
 - Do NOT add new ``` fences around content that is not already fenced — even if it looks like code or JSON
 - Do NOT create or promote text to markdown headings — only preserve existing # headings exactly as-is
+- Do NOT convert XML-like tags (e.g. <section>, <foo>) into headings or any other markdown structure — leave them as plain text
 - Preserve ALL URLs exactly
 - Preserve ALL headings exactly (do not add, remove, or reword any heading)
 - Preserve file paths and commands

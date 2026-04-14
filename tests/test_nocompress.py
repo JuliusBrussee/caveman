@@ -179,5 +179,54 @@ class TestValidateIgnoresNocompressRegions(unittest.TestCase):
             self.assertTrue(result.is_valid, f"Unexpected errors: {result.errors}")
 
 
+class TestXmlTagHeadingPrevention(unittest.TestCase):
+    """Validator must catch when Claude converts XML tags to markdown headings."""
+
+    def test_xml_tag_promoted_to_heading_fails_validation(self):
+        """Original has XML tags + no headings; compressed invents a heading → fail."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            original = (
+                "<section_intro>\n\n"
+                "This is the introduction text.\n\n"
+                "</section_intro>\n"
+            )
+            # Claude converts <section_intro> to a markdown heading
+            compressed = (
+                "# Introduction\n\n"
+                "This is intro text.\n"
+            )
+            (d / "orig.md").write_text(original)
+            (d / "comp.md").write_text(compressed)
+            result = validate(d / "orig.md", d / "comp.md")
+            self.assertFalse(result.is_valid, "Should fail: Claude added a heading that wasn't in original")
+            self.assertTrue(
+                any("Heading count mismatch" in e for e in result.errors),
+                f"Expected heading count error, got: {result.errors}",
+            )
+
+    def test_xml_tags_preserved_as_plain_text_passes_validation(self):
+        """Original has XML tags + no headings; compressed keeps XML tags as plain text → pass."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            original = (
+                "<section_intro>\n\n"
+                "This is the introduction text with lots of extra filler words.\n\n"
+                "</section_intro>\n"
+            )
+            # Claude compresses prose but leaves XML tags intact, no headings added
+            compressed = (
+                "<section_intro>\n\n"
+                "Introduction text.\n\n"
+                "</section_intro>\n"
+            )
+            (d / "orig.md").write_text(original)
+            (d / "comp.md").write_text(compressed)
+            result = validate(d / "orig.md", d / "comp.md")
+            self.assertTrue(result.is_valid, f"Unexpected errors: {result.errors}")
+
+
 if __name__ == "__main__":
     unittest.main()
