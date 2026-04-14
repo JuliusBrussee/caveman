@@ -1,19 +1,22 @@
 import { CONFIG_MODES, DEFAULT_MODE, FALLBACK_MODES } from "./constants.js";
 
-export function normalizeMode(mode) {
+function normalizeModeText(mode) {
   if (typeof mode !== "string") return null;
 
   const normalized = mode.trim().toLowerCase();
+  return normalized || null;
+}
+
+export function normalizeMode(mode) {
+  const normalized = normalizeModeText(mode);
   if (!normalized) return null;
   if (normalized === "wenyan") return "wenyan-full";
   return FALLBACK_MODES.has(normalized) ? normalized : null;
 }
 
 export function normalizeConfigMode(mode) {
-  if (typeof mode !== "string") return null;
-
-  const normalized = mode.trim().toLowerCase();
-  return CONFIG_MODES.has(normalized) ? normalized : null;
+  const normalized = normalizeModeText(mode);
+  return normalized && CONFIG_MODES.has(normalized) ? normalized : null;
 }
 
 export function normalizePersistedMode(mode) {
@@ -42,15 +45,11 @@ export function resolveSessionMode(entries, fallbackMode = DEFAULT_MODE) {
   return fallback;
 }
 
-export function parseCavemanCommand(text, defaultMode = DEFAULT_MODE) {
-  const fallback = normalizePersistedMode(defaultMode) || DEFAULT_MODE;
+export function parseCavemanCommand(text, _defaultMode = DEFAULT_MODE) {
   const normalizedText = String(text || "").trim();
 
   if (!normalizedText) {
-    return {
-      type: "set-mode",
-      mode: fallback === "off" ? "full" : fallback,
-    };
+    return { type: "status" };
   }
 
   const [primary, secondary] = normalizedText.split(/\s+/);

@@ -12,25 +12,29 @@ import {
   writeDefaultMode,
 } from "../index.js";
 
-test("parseCavemanCommand falls back to full when invoked bare and default is off", () => {
-  assert.deepEqual(parseCavemanCommand("", "off"), {
-    type: "set-mode",
-    mode: "full",
-  });
-});
+function assertParsedCommand(input, defaultMode, expected) {
+  assert.deepEqual(parseCavemanCommand(input, defaultMode), expected);
+}
 
-test("parseCavemanCommand parses mode, status, and default subcommands", () => {
-  assert.deepEqual(parseCavemanCommand("wenyan-ultra", "full"), {
-    type: "set-mode",
-    mode: "wenyan-ultra",
-  });
-  assert.deepEqual(parseCavemanCommand("status", "full"), {
-    type: "status",
-  });
-  assert.deepEqual(parseCavemanCommand("default ultra", "full"), {
-    type: "set-default",
-    mode: "ultra",
-  });
+test("parseCavemanCommand parses status, mode, and defaults", () => {
+  const parseCases = [
+    { input: "", defaultMode: "off", expected: { type: "status" } },
+    {
+      input: "wenyan-ultra",
+      defaultMode: "full",
+      expected: { type: "set-mode", mode: "wenyan-ultra" },
+    },
+    { input: "status", defaultMode: "full", expected: { type: "status" } },
+    {
+      input: "default ultra",
+      defaultMode: "full",
+      expected: { type: "set-default", mode: "ultra" },
+    },
+  ];
+
+  for (const { input, defaultMode, expected } of parseCases) {
+    assertParsedCommand(input, defaultMode, expected);
+  }
 });
 
 test("resolveSessionMode prefers the latest persisted session mode over config default", () => {

@@ -48,6 +48,33 @@ function createCommandContext(overrides = {}) {
   };
 }
 
+async function withTemporaryXdgConfigHome(prefix, fn) {
+  const tempConfigHome = mkdtempSync(join(tmpdir(), prefix));
+  const previousXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = tempConfigHome;
+
+  try {
+    return await fn();
+  } finally {
+    if (previousXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = previousXdg;
+    }
+    rmSync(tempConfigHome, { recursive: true, force: true });
+  }
+}
+
+function getSessionHandlers(events) {
+  const sessionStart = events.get("session_start");
+  const beforeAgentStart = events.get("before_agent_start");
+
+  assert.ok(sessionStart, "session_start handler should be registered");
+  assert.ok(beforeAgentStart, "before_agent_start handler should be registered");
+
+  return { sessionStart, beforeAgentStart };
+}
+
 test("extension registers the full Caveman command set", () => {
   const { commands } = createPiHarness();
 
@@ -60,18 +87,40 @@ test("extension registers the full Caveman command set", () => {
   ]);
 });
 
-test("/caveman updates persisted mode and before_agent_start injects that mode", async () => {
-  const tempConfigHome = mkdtempSync(join(tmpdir(), "caveman-session-"));
-  const previousXdg = process.env.XDG_CONFIG_HOME;
-  process.env.XDG_CONFIG_HOME = tempConfigHome;
-
-  try {
+test("/caveman reports current status by default without mutating the active mode", async () => {
+  await withTemporaryXdgConfigHome("caveman-status-", async () => {
+    const notifications = [];
     const { commands, events, appendedEntries } = createPiHarness();
-    const sessionStart = events.get("session_start");
-    const beforeAgentStart = events.get("before_agent_start");
+    const { sessionStart, beforeAgentStart } = getSessionHandlers(events);
 
-    assert.ok(sessionStart, "session_start handler should be registered");
-    assert.ok(beforeAgentStart, "before_agent_start handler should be registered");
+    const ctx = createCommandContext({
+      ui: {
+        notify(message, level) {
+          notifications.push({ message, level });
+        },
+        setStatus() {},
+      },
+    });
+
+    await sessionStart({ reason: "startup" }, ctx);
+    await commands.get("caveman").handler("", ctx);
+
+    assert.equal(appendedEntries.length, 0);
+    assert.deepEqual(notifications.at(-1), {
+      message: "Caveman: current full • default full",
+      level: "info",
+    });
+
+    const result = await beforeAgentStart({ systemPrompt: "BASE" }, ctx);
+    assert.ok(result.systemPrompt.includes("CAVEMAN MODE ACTIVE"));
+    assert.ok(result.systemPrompt.includes("full"));
+  });
+});
+
+test("/caveman updates persisted mode and before_agent_start injects that mode", async () => {
+  await withTemporaryXdgConfigHome("caveman-session-", async () => {
+    const { commands, events, appendedEntries } = createPiHarness();
+    const { sessionStart, beforeAgentStart } = getSessionHandlers(events);
 
     const ctx = createCommandContext();
     await sessionStart({ reason: "startup" }, ctx);
@@ -86,22 +135,13 @@ test("/caveman updates persisted mode and before_agent_start injects that mode",
     const result = await beforeAgentStart({ systemPrompt: "BASE" }, ctx);
     assert.ok(result.systemPrompt.includes("CAVEMAN MODE ACTIVE"));
     assert.ok(result.systemPrompt.includes("ultra"));
-  } finally {
-    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = previousXdg;
-    rmSync(tempConfigHome, { recursive: true, force: true });
-  }
+  });
 });
 
 test("session_start restores the latest persisted session mode over the global default", async () => {
-  const tempConfigHome = mkdtempSync(join(tmpdir(), "caveman-restore-"));
-  const previousXdg = process.env.XDG_CONFIG_HOME;
-  process.env.XDG_CONFIG_HOME = tempConfigHome;
-
-  try {
+  await withTemporaryXdgConfigHome("caveman-restore-", async () => {
     const { events } = createPiHarness();
-    const sessionStart = events.get("session_start");
-    const beforeAgentStart = events.get("before_agent_start");
+    const { sessionStart, beforeAgentStart } = getSessionHandlers(events);
 
     const ctx = createCommandContext({
       sessionManager: {
@@ -118,11 +158,7 @@ test("session_start restores the latest persisted session mode over the global d
     await sessionStart({ reason: "resume" }, ctx);
     const result = await beforeAgentStart({ systemPrompt: "BASE" }, ctx);
     assert.ok(result.systemPrompt.includes("wenyan-lite"));
-  } finally {
-    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = previousXdg;
-    rmSync(tempConfigHome, { recursive: true, force: true });
-  }
+  });
 });
 
 test("skill alias commands delegate to Pi skill commands via sendUserMessage", async () => {
