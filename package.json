@@ -5,6 +5,7 @@
   "keywords": ["pi-package", "pi", "skills", "caveman"],
   "license": "MIT",
   "pi": {
+    "extensions": ["./pi-extension/index.js"],
     "skills": ["./skills", "./caveman-compress"]
   }
 }
