@@ -103,12 +103,14 @@ Compress this markdown into caveman format.
 STRICT RULES:
 - Do NOT modify anything inside ``` code blocks
 - Do NOT modify anything inside inline backticks
+- Do NOT add new ``` fences around content that is not already fenced — even if it looks like code or JSON
+- Do NOT create or promote text to markdown headings — only preserve existing # headings exactly as-is
 - Preserve ALL URLs exactly
-- Preserve ALL headings exactly
+- Preserve ALL headings exactly (do not add, remove, or reword any heading)
 - Preserve file paths and commands
 - Return ONLY the compressed markdown body — do NOT wrap the entire output in a ```markdown fence or any other fence. Inner code blocks from the original stay as-is; do not add a new outer fence around the whole file.
 
-Only compress natural language.
+Only compress natural language prose. Never restructure, add formatting, or improve organization.
 
 TEXT:
 {original}

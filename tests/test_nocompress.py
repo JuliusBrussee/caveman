@@ -70,6 +70,37 @@ class TestRestoreNocompress(unittest.TestCase):
         self.assertEqual(result, text)
 
 
+class TestUrlRegex(unittest.TestCase):
+    """URL_REGEX should not capture trailing backticks from inline code wrapping."""
+
+    def test_url_stops_at_trailing_backtick(self):
+        from scripts.validate import extract_urls
+        # Claude sometimes wraps URLs in inline code: `http://example.com/`
+        text = "See `http://example.com/` for details."
+        urls = extract_urls(text)
+        self.assertIn("http://example.com/", urls)
+        self.assertNotIn("http://example.com/`", urls)
+
+    def test_url_stops_at_trailing_paren(self):
+        from scripts.validate import extract_urls
+        text = "See (http://example.com/) for details."
+        urls = extract_urls(text)
+        self.assertIn("http://example.com/", urls)
+
+    def test_backtick_wrapped_url_matches_plain_url(self):
+        """Validation: original has plain URL, compressed wraps in backticks — should still match."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            original = "See http://example.com/ for details."
+            compressed = "See `http://example.com/` for details."
+            (d / "orig.md").write_text(original)
+            (d / "comp.md").write_text(compressed)
+            result = validate(d / "orig.md", d / "comp.md")
+            self.assertTrue(result.is_valid, f"URL mismatch false positive: {result.errors}")
+
+
 class TestStripNocompressForValidation(unittest.TestCase):
     def test_strips_region(self):
         text = "Before\n<!-- nocompress -->\n```json\n{}\n```\n<!-- /nocompress -->\nAfter"

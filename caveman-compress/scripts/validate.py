@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 
-URL_REGEX = re.compile(r"https?://[^\s)]+")
+URL_REGEX = re.compile(r"https?://[^\s)`]+")
 FENCE_OPEN_REGEX = re.compile(r"^(\s{0,3})(`{3,}|~{3,})(.*)$")
 HEADING_REGEX = re.compile(r"^(#{1,6})\s+(.*)", re.MULTILINE)
 BULLET_REGEX = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
