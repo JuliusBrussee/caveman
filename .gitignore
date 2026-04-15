@@ -8,3 +8,4 @@ caveman-compress.md
 .claude/worktrees/
 evals/snapshots/*.html
 evals/snapshots/*.png
+.eval-home/
