@@ -306,13 +306,15 @@ Turkish is an agglutinative language, so we can't just drop articles (they don't
 
 | Level | Trigger | What it do |
 |-------|---------|------------|
-| **Turkce-Lite** | `/caveman turkce-lite` | Semi-terse Turkish. Drop filler/hedging, keep grammar |
-| **Turkce-Full** | `/caveman turkce` | Default Turkish caveman. Drop filler, fragments OK, short verbs |
-| **Turkce-Ultra** | `/caveman turkce-ultra` | Maximum Turkish compression. Telegram style. Arrows for causality |
+| **Turkce-Lite** | `/caveman turkce-lite` | Semi-terse Turkish. Active voice, drop pleasantries/filler, keep grammar |
+| **Turkce-Full** | `/caveman turkce` | Default Turkish caveman. Drop subjects (pro-drop) and long suffixes, use abbreviations (VT/ayar/komp) |
+| **Turkce-Ultra** | `/caveman turkce-ultra` | Maximum Turkish compression. Bare verbs only, mandatory arrows (→), max 1 line per point |
 
 _Example — "React bileşenim neden yeniden çiziliyor?"_
 - **Normal:** "React bileşeninizin yeniden çizilmesinin nedeni muhtemelen her render döngüsünde yeni bir nesne referansı oluşturmanızdır. Satıriçi bir nesneyi prop olarak geçirdiğinizde, React'in yüzeysel karşılaştırması bunu her seferinde farklı bir nesne olarak görür ve bu da yeniden çizimi tetikler. Nesneyi önbelleğe almak için useMemo kullanmanızı öneririm."
+- **Turkce-Lite:** "Bileşen her render'da yeni nesne referansı oluşturuyor, bu yüzden yeniden çiziliyor. useMemo ile sarın."
 - **Turkce-Full:** "Her render yeni ref. Satıriçi obj prop = yeni ref = yeniden çizim. useMemo sar."
+- **Turkce-Ultra:** "Satıriçi obj → yeni ref → tekrar çizim. useMemo."
 
 **Turkish Benchmark Results:**
 - Average savings: **66%**
