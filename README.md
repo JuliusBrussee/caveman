@@ -300,26 +300,6 @@ Stop with: "stop caveman" or "normal mode"
 | **Full** | `/caveman full` | Default caveman. Drop articles, fragments, full grunt |
 | **Ultra** | `/caveman ultra` | Maximum compression. Telegraphic. Abbreviate everything |
 
-### Türkçe (Turkish) Mode
-
-Turkish is an agglutinative language, so we can't just drop articles (they don't exist). Instead, we drop pleasantries, shorten verbs (bulunmaktadır → var), and use abbreviations to cut tokens while keeping grammar mostly intact.
-
-| Level | Trigger | What it do |
-|-------|---------|------------|
-| **Turkce-Lite** | `/caveman turkce-lite` | Semi-terse Turkish. Drop filler/hedging, keep grammar |
-| **Turkce-Full** | `/caveman turkce` | Default Turkish caveman. Drop filler, fragments OK, short verbs |
-| **Turkce-Ultra** | `/caveman turkce-ultra` | Maximum Turkish compression. Telegram style. Arrows for causality |
-
-_Example — "React bileşenim neden yeniden çiziliyor?"_
-- **Normal:** "React bileşeninizin yeniden çizilmesinin nedeni muhtemelen her render döngüsünde yeni bir nesne referansı oluşturmanızdır. Satıriçi bir nesneyi prop olarak geçirdiğinizde, React'in yüzeysel karşılaştırması bunu her seferinde farklı bir nesne olarak görür ve bu da yeniden çizimi tetikler. Nesneyi önbelleğe almak için useMemo kullanmanızı öneririm."
-- **Turkce-Full:** "Her render yeni ref. Satıriçi obj prop = yeni ref = yeniden çizim. useMemo sar."
-
-**Turkish Benchmark Results:**
-- Average savings: **66%**
-- Savings range: **24% - 87%**
-- Normal avg output: **1272 tokens**
-- Caveman avg output: **339 tokens**
-
 ### 文言文 (Wenyan) Mode
 
 Classical Chinese literary compression — same technical accuracy, but in the most token-efficient written language humans ever invented.
@@ -373,19 +353,19 @@ Real token counts from the Claude API ([reproduce it yourself](benchmarks/)):
 <!-- BENCHMARK-TABLE-START -->
 | Task | Normal (tokens) | Caveman (tokens) | Saved |
 |------|---------------:|----------------:|------:|
-| Explain React re-render bug | 1180 | 153 | 87% |
-| Fix auth middleware token expiry | 704 | 119 | 83% |
-| Set up PostgreSQL connection pool | 2447 | 425 | 83% |
-| Explain git rebase vs merge | 715 | 334 | 53% |
-| Refactor callback to async/await | 387 | 235 | 39% |
-| Architecture: microservices vs monolith | 451 | 344 | 24% |
-| Review PR for security issues | 678 | 249 | 63% |
-| Docker multi-stage build | 1116 | 307 | 72% |
-| Debug PostgreSQL race condition | 1200 | 265 | 78% |
-| Implement React error boundary | 3846 | 959 | 75% |
-| **Average** | **1272** | **339** | **66%** |
+| Explain React re-render bug | 1180 | 159 | 87% |
+| Fix auth middleware token expiry | 704 | 121 | 83% |
+| Set up PostgreSQL connection pool | 2347 | 380 | 84% |
+| Explain git rebase vs merge | 702 | 292 | 58% |
+| Refactor callback to async/await | 387 | 301 | 22% |
+| Architecture: microservices vs monolith | 446 | 310 | 30% |
+| Review PR for security issues | 678 | 398 | 41% |
+| Docker multi-stage build | 1042 | 290 | 72% |
+| Debug PostgreSQL race condition | 1200 | 232 | 81% |
+| Implement React error boundary | 3454 | 456 | 87% |
+| **Average** | **1214** | **294** | **65%** |
 
-*Range: 24%–87% savings across prompts.*
+*Range: 22%–87% savings across prompts.*
 <!-- BENCHMARK-TABLE-END -->
 
 > [!IMPORTANT]
