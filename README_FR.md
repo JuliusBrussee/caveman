@@ -19,8 +19,7 @@
   <a href="#installation">Installation</a> •
   <a href="#niveaux-dintensité">Niveaux</a> •
   <a href="#compétences-caveman">Compétences</a> •
-  <a href="#benchmarks">Benchmarks</a> •
-  <a href="#évaluations">Évals</a>
+  <a href="#benchmarks">Benchmarks</a>
 </p>
 
 ---
