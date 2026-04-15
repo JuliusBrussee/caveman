@@ -1,0 +1,39 @@
+name: Lint SKILL.md files
+
+# Runs on every push and PR that touches a skill file. Catches malformed
+# frontmatter, missing required fields, and hardcoded secrets before they
+# break users who install the skill.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/SKILL.md'
+      - '.github/workflows/lint-skills.yml'
+  pull_request:
+    paths:
+      - '**/SKILL.md'
+      - '.github/workflows/lint-skills.yml'
+
+jobs:
+  lint:
+    name: claude-skill-linter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint all SKILL.md files
+        uses: MukundaKatta/claude-skill-linter@v1
+        with:
+          # Matches all SKILL.md files in the repo. Covers:
+          #   caveman/SKILL.md, caveman-compress/SKILL.md, compress/SKILL.md,
+          #   skills/*/SKILL.md, plugins/caveman/skills/*/SKILL.md,
+          #   .cursor/skills/*/SKILL.md, .windsurf/skills/*/SKILL.md
+          skills-path: '**/SKILL.md'
+          # fail-on-missing stays off: the workflow is path-filtered above,
+          # so if it ran you know SKILL.md files exist.
+          fail-on-missing: 'false'
+          # strict mode keeps signal high for a high-visibility repo:
+          # warnings (like missing trigger language in descriptions) become
+          # CI errors. Flip to 'false' if the noise becomes counterproductive.
+          strict: 'true'
