@@ -44,6 +44,8 @@ def run(
         cwd=cwd,
         env=merged_env,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
     )
@@ -56,8 +58,12 @@ def run(
     return result
 
 
+def bash_args(*args: str) -> list[str]:
+    return ["bash", *args]
+
+
 def read_json(path: Path) -> object:
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def verify_synced_files() -> None:
@@ -72,23 +78,89 @@ def verify_synced_files() -> None:
         ROOT / ".windsurf/skills/caveman/SKILL.md",
     ]
     for copy in skill_copies:
-        ensure(copy.read_text() == skill_source.read_text(), f"Skill copy mismatch: {copy}")
+        ensure(
+            copy.read_text(encoding="utf-8") == skill_source.read_text(encoding="utf-8"),
+            f"Skill copy mismatch: {copy}",
+        )
 
     rule_copies = [
         ROOT / ".clinerules/caveman.md",
         ROOT / ".github/copilot-instructions.md",
     ]
     for copy in rule_copies:
-        ensure(copy.read_text() == rule_source.read_text(), f"Rule copy mismatch: {copy}")
+        ensure(
+            copy.read_text(encoding="utf-8") == rule_source.read_text(encoding="utf-8"),
+            f"Rule copy mismatch: {copy}",
+        )
 
     with zipfile.ZipFile(ROOT / "caveman.skill") as archive:
         ensure("caveman/SKILL.md" in archive.namelist(), "caveman.skill missing caveman/SKILL.md")
         ensure(
-            archive.read("caveman/SKILL.md").decode("utf-8") == skill_source.read_text(),
+            archive.read("caveman/SKILL.md").decode("utf-8") == skill_source.read_text(encoding="utf-8"),
             "caveman.skill payload mismatch",
         )
 
     print("Synced copies and caveman.skill zip OK")
+
+
+def verify_extension_sync() -> None:
+    section("Copilot CLI Extension Sync")
+    ext_dir = ROOT / ".github/extensions/caveman"
+
+    # Extension files exist
+    for name in ("extension.mjs", "rules.mjs", "parser.mjs", "config.js"):
+        ensure((ext_dir / name).exists(), f"Extension file missing: {name}")
+
+    # parser.mjs matches canonical source
+    canonical = (ROOT / "lib/caveman-mode-parser.mjs").read_text(encoding="utf-8")
+    copy = (ext_dir / "parser.mjs").read_text(encoding="utf-8")
+    ensure(canonical == copy, "parser.mjs out of sync with lib/caveman-mode-parser.mjs")
+
+    canonical_config = (ROOT / "lib/caveman-config.js").read_text(encoding="utf-8")
+    hook_config = (ROOT / "hooks/caveman-config.js").read_text(encoding="utf-8")
+    extension_config = (ext_dir / "config.js").read_text(encoding="utf-8")
+    ensure(hook_config == canonical_config, "hooks/caveman-config.js out of sync with lib/caveman-config.js")
+    ensure(extension_config == canonical_config, ".github/extensions/caveman/config.js out of sync with lib/caveman-config.js")
+
+    # rules.mjs contains expected exports with non-empty content
+    rules_text = (ext_dir / "rules.mjs").read_text(encoding="utf-8")
+    ensure(
+        rules_text.startswith("// caveman — bundled SKILL.md rules for Copilot CLI extension"),
+        "rules.mjs header mismatch",
+    )
+    for export_name in ("CAVEMAN_SKILL", "CAVEMAN_COMMIT_SKILL", "CAVEMAN_REVIEW_SKILL",
+                        "CAVEMAN_HELP_SKILL", "CAVEMAN_COMPRESS_SKILL"):
+        ensure(f"export const {export_name}" in rules_text,
+               f"rules.mjs missing export: {export_name}")
+        # Verify export is not an empty string
+        idx = rules_text.find(f"export const {export_name}")
+        ensure(idx != -1 and '""' not in rules_text[idx:idx+len(export_name)+30],
+               f"rules.mjs export {export_name} appears empty")
+
+    print("Copilot CLI extension files present and in sync")
+
+
+def verify_copilot_installer_static() -> None:
+    section("Copilot CLI Installer")
+
+    installer = ROOT / "scripts/install-copilot-extension.mjs"
+    installer_sh = ROOT / "scripts/install-copilot-extension.sh"
+    installer_ps1 = ROOT / "scripts/install-copilot-extension.ps1"
+
+    ensure(installer.exists(), "Copilot installer missing")
+    ensure(installer_sh.exists(), "Copilot shell wrapper missing")
+    ensure(installer_ps1.exists(), "Copilot PowerShell wrapper missing")
+
+    run(["node", "scripts/install-copilot-extension.mjs", "--help"])
+    if os.name != "nt":
+        run(bash_args("-n", "scripts/install-copilot-extension.sh"))
+
+    shell_text = installer_sh.read_text(encoding="utf-8")
+    ps1_text = installer_ps1.read_text(encoding="utf-8")
+    ensure("install-copilot-extension.mjs" in shell_text, "Shell wrapper missing installer reference")
+    ensure("install-copilot-extension.mjs" in ps1_text, "PowerShell wrapper missing installer reference")
+
+    print("Copilot CLI installer files present and wired")
 
 
 def verify_manifests_and_syntax() -> None:
@@ -105,16 +177,27 @@ def verify_manifests_and_syntax() -> None:
     for path in manifest_paths:
         read_json(path)
 
+    run(["node", "--check", "lib/caveman-config.js"])
     run(["node", "--check", "hooks/caveman-config.js"])
     run(["node", "--check", "hooks/caveman-activate.js"])
     run(["node", "--check", "hooks/caveman-mode-tracker.js"])
-    run(["bash", "-n", "hooks/install.sh"])
-    run(["bash", "-n", "hooks/uninstall.sh"])
-    run(["bash", "-n", "hooks/caveman-statusline.sh"])
+
+    # Copilot CLI extension syntax (ES module). Use --check instead of dynamic
+    # import because the SDK package is only available inside Copilot CLI.
+    run(["node", "--check", ".github/extensions/caveman/extension.mjs"])
+    run(["node", "--check", ".github/extensions/caveman/config.js"])
+    run(["node", "--input-type=module", "-e",
+         f"import('{(ROOT / '.github/extensions/caveman/rules.mjs').resolve().as_uri()}')"])
+    run(["node", "--input-type=module", "-e",
+         f"import('{(ROOT / '.github/extensions/caveman/parser.mjs').resolve().as_uri()}')"])
+    if os.name != "nt":
+        run(bash_args("-n", "hooks/install.sh"))
+        run(bash_args("-n", "hooks/uninstall.sh"))
+        run(bash_args("-n", "hooks/caveman-statusline.sh"))
 
     # Ensure install/uninstall scripts include caveman-config.js
-    install_sh = (ROOT / "hooks/install.sh").read_text()
-    uninstall_sh = (ROOT / "hooks/uninstall.sh").read_text()
+    install_sh = (ROOT / "hooks/install.sh").read_text(encoding="utf-8")
+    uninstall_sh = (ROOT / "hooks/uninstall.sh").read_text(encoding="utf-8")
     ensure("caveman-config.js" in install_sh, "install.sh missing caveman-config.js")
     ensure("caveman-config.js" in uninstall_sh, "uninstall.sh missing caveman-config.js")
 
@@ -123,9 +206,9 @@ def verify_manifests_and_syntax() -> None:
 
 def verify_powershell_static() -> None:
     section("PowerShell Static Checks")
-    install_text = (ROOT / "hooks/install.ps1").read_text()
-    uninstall_text = (ROOT / "hooks/uninstall.ps1").read_text()
-    statusline_text = (ROOT / "hooks/caveman-statusline.ps1").read_text()
+    install_text = (ROOT / "hooks/install.ps1").read_text(encoding="utf-8")
+    uninstall_text = (ROOT / "hooks/uninstall.ps1").read_text(encoding="utf-8")
+    statusline_text = (ROOT / "hooks/caveman-statusline.ps1").read_text(encoding="utf-8")
 
     ensure("caveman-config.js" in install_text, "install.ps1 missing caveman-config.js")
     ensure("caveman-config.js" in uninstall_text, "uninstall.ps1 missing caveman-config.js")
@@ -171,10 +254,12 @@ def verify_compress_fixtures() -> None:
 
 def verify_compress_cli() -> None:
     section("Compress CLI")
+    python_env = {"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
 
     skip_result = run(
-        ["python3", "-m", "scripts", "../hooks/install.sh"],
+        [sys.executable, "-m", "scripts", "../hooks/install.sh"],
         cwd=ROOT / "caveman-compress",
+        env=python_env,
         check=False,
     )
     ensure(skip_result.returncode == 0, "compress CLI skip path should exit 0")
@@ -185,8 +270,9 @@ def verify_compress_cli() -> None:
     )
 
     missing_result = run(
-        ["python3", "-m", "scripts", "../does-not-exist.md"],
+        [sys.executable, "-m", "scripts", "../does-not-exist.md"],
         cwd=ROOT / "caveman-compress",
+        env=python_env,
         check=False,
     )
     ensure(missing_result.returncode == 1, "compress CLI missing-file path should exit 1")
@@ -199,6 +285,10 @@ def verify_hook_install_flow() -> None:
     section("Claude Hook Flow")
 
     ensure(shutil.which("node") is not None, "node is required for hook verification")
+    if os.name == "nt":
+        print("Skipping bash hook flow on Windows; PowerShell path is covered separately")
+        return
+
     ensure(shutil.which("bash") is not None, "bash is required for hook verification")
 
     with tempfile.TemporaryDirectory(prefix="caveman-verify-") as temp_root:
@@ -213,7 +303,7 @@ def verify_hook_install_flow() -> None:
         }
         (claude_dir / "settings.json").write_text(json.dumps(existing_settings, indent=2) + "\n")
 
-        run(["bash", "hooks/install.sh"], env={"HOME": str(home)})
+        run(bash_args("hooks/install.sh"), env={"HOME": str(home)})
 
         settings = read_json(claude_dir / "settings.json")
         hooks = settings["hooks"]
@@ -277,6 +367,43 @@ def verify_hook_install_flow() -> None:
         ensure(ultra_prompt.stdout == "", "mode tracker should stay silent")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "mode tracker did not record ultra")
 
+        full_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"/caveman full"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(full_prompt.stdout == "", "mode tracker should stay silent for /caveman full")
+        ensure((claude_dir / ".caveman-active").read_text() == "full", "mode tracker did not record full")
+
+        not_stop_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"How do I stop caveman?"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(not_stop_prompt.stdout == "", "mode tracker should stay silent for non-stop prose")
+        ensure((claude_dir / ".caveman-active").read_text() == "full", "question about stop should not clear flag")
+
+        off_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"/caveman off"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(off_prompt.stdout == "", "mode tracker should stay silent for /caveman off")
+        ensure(not (claude_dir / ".caveman-active").exists(), "/caveman off should remove flag file")
+
+        (claude_dir / ".caveman-active").write_text("full")
         subprocess.run(
             ["node", "hooks/caveman-mode-tracker.js"],
             cwd=ROOT,
@@ -290,28 +417,28 @@ def verify_hook_install_flow() -> None:
 
         (claude_dir / ".caveman-active").write_text("wenyan-ultra")
         statusline = run(
-            ["bash", "hooks/caveman-statusline.sh"],
+            bash_args("hooks/caveman-statusline.sh"),
             env={"HOME": str(home)},
         )
         ensure("[CAVEMAN:WENYAN-ULTRA]" in statusline.stdout, "statusline badge output mismatch")
 
-        reinstall = run(["bash", "hooks/install.sh"], env={"HOME": str(home)})
+        reinstall = run(bash_args("hooks/install.sh"), env={"HOME": str(home)})
         ensure("Nothing to do" in reinstall.stdout, "install.sh should be idempotent")
 
-        run(["bash", "hooks/uninstall.sh"], env={"HOME": str(home)})
+        run(bash_args("hooks/uninstall.sh"), env={"HOME": str(home)})
         settings_after = read_json(claude_dir / "settings.json")
         ensure(settings_after == existing_settings, "uninstall.sh did not restore non-caveman settings")
         ensure(not (claude_dir / ".caveman-active").exists(), "uninstall.sh should remove flag file")
 
     with tempfile.TemporaryDirectory(prefix="caveman-verify-fresh-") as temp_root:
         home = Path(temp_root) / "home"
-        run(["bash", "hooks/install.sh"], env={"HOME": str(home)})
+        run(bash_args("hooks/install.sh"), env={"HOME": str(home)})
         claude_dir = home / ".claude"
         settings = read_json(claude_dir / "settings.json")
         ensure("statusLine" in settings, "fresh install should configure statusline")
         activate = run(["node", "hooks/caveman-activate.js"], env={"HOME": str(home)})
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "fresh install should not nudge for statusline")
-        run(["bash", "hooks/uninstall.sh"], env={"HOME": str(home)})
+        run(bash_args("hooks/uninstall.sh"), env={"HOME": str(home)})
         ensure(read_json(claude_dir / "settings.json") == {}, "fresh uninstall should leave empty settings")
 
     print("Claude hook install/uninstall flow OK")
@@ -320,6 +447,8 @@ def verify_hook_install_flow() -> None:
 def main() -> int:
     checks = [
         verify_synced_files,
+        verify_extension_sync,
+        verify_copilot_installer_static,
         verify_manifests_and_syntax,
         verify_powershell_static,
         verify_compress_fixtures,

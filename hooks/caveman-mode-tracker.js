@@ -15,7 +15,8 @@ process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
-    const prompt = (data.prompt || '').trim().toLowerCase();
+    const prompt = (data.prompt || '').trim();
+    const normalizedPrompt = prompt.toLowerCase();
 
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
     // "talk like caveman"). README tells users they can say these, but the hook
@@ -31,8 +32,8 @@ process.stdin.on('end', () => {
     }
 
     // Match /caveman commands
-    if (prompt.startsWith('/caveman')) {
-      const parts = prompt.split(/\s+/);
+    if (normalizedPrompt.startsWith('/caveman')) {
+      const parts = normalizedPrompt.split(/\s+/);
       const cmd = parts[0]; // /caveman, /caveman-commit, /caveman-review, etc.
       const arg = parts[1] || '';
 
@@ -46,10 +47,12 @@ process.stdin.on('end', () => {
         mode = 'compress';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
         if (arg === 'lite') mode = 'lite';
+        else if (arg === 'full') mode = 'full';
         else if (arg === 'ultra') mode = 'ultra';
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
         else if (arg === 'wenyan-ultra') mode = 'wenyan-ultra';
+        else if (arg === 'off') mode = 'off';
         else mode = getDefaultMode();
       }
 
