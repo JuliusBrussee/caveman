@@ -15,11 +15,11 @@
 </p>
 
 <p align="center">
-  <a href="#see-rock">See Rock</a> •
-  <a href="#get-rock">Get Rock</a> •
-  <a href="#rock-heavy">Rock Heavy</a> •
+  <a href="#before--after">See Rock</a> •
+  <a href="#get-rock-install">Get Rock</a> •
+  <a href="#benchmarks">Rock Heavy</a> •
   <a href="#rock-skills">Rock Skills</a> •
-  <a href="#rock-fast">Rock Fast</a>
+  <a href="#star-rock">Rock Fast</a>
 </p>
 
 ---
