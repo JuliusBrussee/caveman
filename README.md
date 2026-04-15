@@ -314,6 +314,12 @@ _Example — "React bileşenim neden yeniden çiziliyor?"_
 - **Normal:** "React bileşeninizin yeniden çizilmesinin nedeni muhtemelen her render döngüsünde yeni bir nesne referansı oluşturmanızdır. Satıriçi bir nesneyi prop olarak geçirdiğinizde, React'in yüzeysel karşılaştırması bunu her seferinde farklı bir nesne olarak görür ve bu da yeniden çizimi tetikler. Nesneyi önbelleğe almak için useMemo kullanmanızı öneririm."
 - **Turkce-Full:** "Her render yeni ref. Satıriçi obj prop = yeni ref = yeniden çizim. useMemo sar."
 
+**Turkish Benchmark Results:**
+- Average savings: **66%**
+- Savings range: **24% - 87%**
+- Normal avg output: **1272 tokens**
+- Caveman avg output: **339 tokens**
+
 ### 文言文 (Wenyan) Mode
 
 Classical Chinese literary compression — same technical accuracy, but in the most token-efficient written language humans ever invented.
