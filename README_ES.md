@@ -19,8 +19,7 @@
   <a href="#instalación">Instalación</a> •
   <a href="#niveles-de-intensidad">Niveles</a> •
   <a href="#habilidades-caveman">Habilidades</a> •
-  <a href="#benchmarks">Benchmarks</a> •
-  <a href="#evaluaciones">Evals</a>
+  <a href="#benchmarks">Benchmarks</a>
 </p>
 
 ---
