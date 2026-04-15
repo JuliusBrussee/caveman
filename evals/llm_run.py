@@ -62,7 +62,9 @@ def claude_version() -> str:
 
 
 def main() -> None:
-    prompts = [p.strip() for p in PROMPTS.read_text().splitlines() if p.strip()]
+    prompts = []
+    for p_file in PROMPTS.parent.glob("*.txt"):
+        prompts.extend([p.strip() for p in p_file.read_text().splitlines() if p.strip()])
     skills = sorted(p.name for p in SKILLS.iterdir() if (p / "SKILL.md").exists())
 
     print(

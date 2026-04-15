@@ -300,6 +300,20 @@ Stop with: "stop caveman" or "normal mode"
 | **Full** | `/caveman full` | Default caveman. Drop articles, fragments, full grunt |
 | **Ultra** | `/caveman ultra` | Maximum compression. Telegraphic. Abbreviate everything |
 
+### Türkçe (Turkish) Mode
+
+Turkish is an agglutinative language, so we can't just drop articles (they don't exist). Instead, we drop pleasantries, shorten verbs (bulunmaktadır → var), and use abbreviations to cut tokens while keeping grammar mostly intact.
+
+| Level | Trigger | What it do |
+|-------|---------|------------|
+| **Turkce-Lite** | `/caveman turkce-lite` | Semi-terse Turkish. Drop filler/hedging, keep grammar |
+| **Turkce-Full** | `/caveman turkce` | Default Turkish caveman. Drop filler, fragments OK, short verbs |
+| **Turkce-Ultra** | `/caveman turkce-ultra` | Maximum Turkish compression. Telegram style. Arrows for causality |
+
+_Example — "React bileşenim neden yeniden çiziliyor?"_
+- **Normal (93 tokens):** "React bileşeninizin yeniden çizilmesinin nedeni muhtemelen her render döngüsünde yeni bir nesne referansı oluşturmanızdır. Satıriçi bir nesneyi prop olarak geçirdiğinizde, React'in yüzeysel karşılaştırması bunu her seferinde farklı bir nesne olarak görür ve bu da yeniden çizimi tetikler. Nesneyi önbelleğe almak için useMemo kullanmanızı öneririm."
+- **Turkce-Full (23 tokens):** "Her render yeni ref. Satıriçi obj prop = yeni ref = yeniden çizim. useMemo sar." **(75% saved)**
+
 ### 文言文 (Wenyan) Mode
 
 Classical Chinese literary compression — same technical accuracy, but in the most token-efficient written language humans ever invented.

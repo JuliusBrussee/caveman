@@ -1,0 +1,6 @@
+[Trae] feat: Add Turkish language support (Turkce mode)
+
+- Added `turkce-lite`, `turkce-full`, and `turkce-ultra` intensity levels to `skills/caveman/SKILL.md`
+- Added `/caveman turkce`, `/caveman türkçe`, "mağara adam modu", "az token lütfen", and "kısa konuş" triggers to the skill description and `hooks/caveman-mode-tracker.js`
+- Added Turkish benchmark prompts in `evals/prompts/tr.txt` and updated `evals/llm_run.py` to read all `.txt` prompt files
+- Updated README.md to include the Turkish mode documentation, examples, and token saving demonstration (using agglutinative language optimizations)
