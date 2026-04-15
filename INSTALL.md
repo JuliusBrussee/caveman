@@ -39,6 +39,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 |---|---|:-:|
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` | Yes |
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` | Yes |
+| **Copilot CLI** | `git clone https://github.com/JuliusBrussee/caveman.git && node caveman/scripts/install-copilot-extension.mjs --global` | Yes (native extension) |
 | **opencode** | `node bin/install.js --only opencode` *(or `npx -y github:JuliusBrussee/caveman -- --only opencode`)* | Yes (plugin + AGENTS.md) |
 | **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
 | **Codex CLI** | `npx skills add JuliusBrussee/caveman -a codex` | Per-session: `/caveman` |
@@ -77,6 +78,39 @@ If you want to install for one agent (or want to know exactly what command runs 
 For "auto-activates? No" agents, type `/caveman` once per session (or use natural-language triggers like "talk like caveman", "caveman mode").
 
 Full agent matrix (with detection rules) is in `bin/install.js` under the `PROVIDERS` array.
+
+## Copilot CLI (native extension)
+
+GitHub Copilot CLI auto-discovers extensions under `.github/extensions/`. Caveman ships a native extension there — auto-activates every session with the same feature set as Claude Code (minus the statusline badge, which Copilot CLI has no API for).
+
+**Global install (recommended)** — available in every repo for your user account:
+
+```bash
+git clone https://github.com/JuliusBrussee/caveman.git
+node caveman/scripts/install-copilot-extension.mjs --global
+```
+
+Installs into `~/.copilot/extensions/caveman/`.
+
+**Per-repo install** — copies into `<repo>/.github/extensions/caveman/`:
+
+```bash
+node caveman/scripts/install-copilot-extension.mjs /path/to/your/repo
+```
+
+Re-run with `--force` to overwrite an existing install. Shell wrappers `scripts/install-copilot-extension.sh` (macOS/Linux) and `scripts/install-copilot-extension.ps1` (Windows) accept the same arguments.
+
+**What you get:**
+
+- Auto-activation on every session start (full mode by default).
+- `/caveman`, `/caveman ultra`, `/caveman wenyan`, `/caveman-commit`, `/caveman-review`, `/caveman-compress`, `/caveman-help` slash commands.
+- All intensity levels (lite/full/ultra/wenyan variants).
+- `stop caveman` or `normal mode` to deactivate.
+
+**Config:** Set `CAVEMAN_DEFAULT_MODE` to change the default (e.g. `lite`, `ultra`), or create `~/.config/caveman/config.json` (any platform) or `%APPDATA%\caveman\config.json` on Windows with `{"defaultMode": "ultra"}`.
+
+**Copilot Chat / VS Code Copilot** don't use CLI extensions — use `npx skills add JuliusBrussee/caveman -a github-copilot` instead.
+
 
 ## Manual install (no `curl | bash`)
 

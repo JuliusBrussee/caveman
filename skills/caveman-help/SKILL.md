@@ -45,7 +45,7 @@ Default mode = `full`. Change it:
 export CAVEMAN_DEFAULT_MODE=ultra
 ```
 
-**Config file** (`~/.config/caveman/config.json`):
+**Config file** (`~/.config/caveman/config.json`, or `%APPDATA%\caveman\config.json` on Windows):
 ```json
 { "defaultMode": "lite" }
 ```
