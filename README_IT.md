@@ -19,8 +19,7 @@
   <a href="#installazione">Installazione</a> •
   <a href="#livelli-di-intensità">Livelli</a> •
   <a href="#abilità-caveman">Abilità</a> •
-  <a href="#benchmark">Benchmark</a> •
-  <a href="#eval">Eval</a>
+  <a href="#benchmark">Benchmark</a>
 </p>
 
 ---
