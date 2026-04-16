@@ -88,7 +88,7 @@ All hooks honor `CLAUDE_CONFIG_DIR` for non-default Claude Code config locations
 ### `hooks/caveman-config.js` — shared module
 
 Exports:
-- `getDefaultMode()` — resolves default mode from `CAVEMAN_DEFAULT_MODE` env var, then `$XDG_CONFIG_HOME/caveman/config.json` / `~/.config/caveman/config.json` / `%APPDATA%\caveman\config.json`, then `'full'`
+- `getDefaultMode()` — resolves default mode from `CAVEMAN_DEFAULT_MODE` env var, then `pluginConfigs."caveman@caveman".options.defaultLevel` in `settings.json`, then `$XDG_CONFIG_HOME/caveman/config.json` / `~/.config/caveman/config.json` / `%APPDATA%\caveman\config.json`, then `'full'`
 - `safeWriteFlag(flagPath, content)` — symlink-safe flag write. Refuses if flag target or its immediate parent is a symlink. Opens with `O_NOFOLLOW` where supported. Atomic temp + rename. Creates with `0600`. Protects against local attackers replacing the predictable flag path with a symlink to clobber files writable by the user. Used by both write hooks. Silent-fails on all filesystem errors.
 
 ### `hooks/caveman-activate.js` — SessionStart hook

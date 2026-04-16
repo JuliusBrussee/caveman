@@ -3,11 +3,12 @@
 //
 // Resolution order for default mode:
 //   1. CAVEMAN_DEFAULT_MODE environment variable
-//   2. Config file defaultMode field:
+//   2. pluginConfigs."caveman@caveman".options.defaultLevel in settings.json
+//   3. Config file defaultMode field:
 //      - $XDG_CONFIG_HOME/caveman/config.json (any platform, if set)
 //      - ~/.config/caveman/config.json (macOS / Linux fallback)
 //      - %APPDATA%\caveman\config.json (Windows fallback)
-//   3. 'full'
+//   4. 'full'
 
 const fs = require('fs');
 const path = require('path');
@@ -43,7 +44,24 @@ function getDefaultMode() {
     return envMode.toLowerCase();
   }
 
-  // 2. Config file
+  // 2. Plugin config in Claude Code settings.json
+  try {
+    const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+    const settingsPath = path.join(claudeDir, 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const pluginLevel =
+      settings.pluginConfigs &&
+      settings.pluginConfigs['caveman@caveman'] &&
+      settings.pluginConfigs['caveman@caveman'].options &&
+      settings.pluginConfigs['caveman@caveman'].options.defaultLevel;
+    if (pluginLevel && VALID_MODES.includes(pluginLevel.toLowerCase())) {
+      return pluginLevel.toLowerCase();
+    }
+  } catch (e) {
+    // settings.json missing or invalid — fall through
+  }
+
+  // 3. Config file
   try {
     const configPath = getConfigPath();
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -54,7 +72,7 @@ function getDefaultMode() {
     // Config file doesn't exist or is invalid — fall through
   }
 
-  // 3. Default
+  // 4. Default
   return 'full';
 }
 
