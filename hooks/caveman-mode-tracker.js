@@ -28,7 +28,7 @@ process.stdin.on('end', () => {
         /\btalk like\b.*\bcaveman\b/i.test(prompt) ||
         /\bstart caveman\b/i.test(prompt) ||
         /\bcaveman\b.*\b(mode|activate|enable|turn on)\b/i.test(prompt)) {
-      if (!/\b(stop|disable|turn off|deactivate|don't|do not|no)\b/i.test(prompt)) {
+      if (!/\b(stop|disable|turn off|deactivate|don't|do not)\b/i.test(prompt)) {
         const mode = getDefaultMode();
         if (mode !== 'off') {
           safeWriteFlag(flagPath, mode);
@@ -67,11 +67,13 @@ process.stdin.on('end', () => {
     }
 
     // Detect deactivation — natural language and slash commands.
-    // "normal mode" requires "caveman" in the same prompt to avoid false
-    // deactivation when users discuss unrelated "normal mode" topics.
+    // "normal mode" works standalone when caveman is already active (flag
+    // exists), preserving the documented stop phrase. When caveman is not
+    // active, require "caveman" in the prompt to avoid false deactivation
+    // from unrelated "normal mode" discussion.
     if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
         /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
-        (/\bnormal mode\b/i.test(prompt) && /\bcaveman\b/i.test(prompt))) {
+        (/\bnormal mode\b/i.test(prompt) && (readFlag(flagPath) !== null || /\bcaveman\b/i.test(prompt)))) {
       try { fs.unlinkSync(flagPath); } catch (e) {}
     }
 
