@@ -12,9 +12,9 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, readFlag } = require('./caveman-config');
 
-const claudeDir = path.join(os.homedir(), '.claude');
+const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
@@ -39,23 +39,6 @@ function autoDetectEnabled(settings) {
   if (env === '0' || env === 'false' || env === 'no') return false;
   const cfg = settings && settings.caveman;
   return !!(cfg && cfg.autoDetectLanguage);
-}
-
-function readFlag() {
-  try {
-    return fs.readFileSync(flagPath, 'utf8').trim();
-  } catch (e) {
-    return null;
-  }
-}
-
-function writeFlag(mode) {
-  try {
-    fs.mkdirSync(path.dirname(flagPath), { recursive: true });
-    fs.writeFileSync(flagPath, mode);
-  } catch (e) {
-    // Silent fail
-  }
 }
 
 function deleteFlag() {
@@ -113,6 +96,19 @@ process.stdin.on('end', () => {
     const rawPrompt = (data.prompt || '').trim();
     const prompt = rawPrompt.toLowerCase();
 
+    // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
+    // "talk like caveman"). README tells users they can say these, but the hook
+    // only matched /caveman commands — flag file and statusline stayed out of sync.
+    if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
+        /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
+      if (!/\b(stop|disable|turn off|deactivate)\b/i.test(prompt)) {
+        const mode = getDefaultMode();
+        if (mode !== 'off') {
+          safeWriteFlag(flagPath, mode);
+        }
+      }
+    }
+
     // --- 1. Explicit /caveman commands always win ------------------------
     let explicitMode = null;
     if (prompt.startsWith('/caveman')) {
@@ -145,14 +141,16 @@ process.stdin.on('end', () => {
       }
 
       if (explicitMode && explicitMode !== 'off') {
-        writeFlag(explicitMode);
+        safeWriteFlag(flagPath, explicitMode);
       } else if (explicitMode === 'off') {
         deleteFlag();
       }
     }
 
     // --- 2. Deactivation phrases (EN + RU) -------------------------------
-    if (/\b(stop caveman|normal mode)\b/i.test(prompt) ||
+    if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
+        /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
+        /\bnormal mode\b/i.test(prompt) ||
         /(обычный режим|выключи пещерн|стоп пещерн|выключи caveman|нормальный режим)/i.test(prompt)) {
       deleteFlag();
       return;
@@ -163,21 +161,45 @@ process.stdin.on('end', () => {
     if (explicitMode) return;
 
     const settings = readSettings();
-    if (!autoDetectEnabled(settings)) return;
+    if (autoDetectEnabled(settings)) {
+      const prose = stripCode(rawPrompt);
+      if (prose.length >= AUTO_DETECT_MIN_LEN) {
+        const ratio = cyrillicLetterRatio(prose);
+        const current = readFlag(flagPath);
+        if (current != null) { // flag not set — respect deactivated state
+          if (ratio >= CYRILLIC_RU_THRESHOLD && isGenericEnglishMode(current)) {
+            const target = EN_TO_RU[current || 'full'] || 'ru-full';
+            safeWriteFlag(flagPath, target);
+          } else if (ratio <= CYRILLIC_EN_THRESHOLD && isRussianMode(current)) {
+            const target = RU_TO_EN[current] || 'full';
+            safeWriteFlag(flagPath, target);
+          }
+        }
+      }
+    }
 
-    const prose = stripCode(rawPrompt);
-    if (prose.length < AUTO_DETECT_MIN_LEN) return;
-
-    const ratio = cyrillicLetterRatio(prose);
-    const current = readFlag();
-    if (current == null) return; // flag not set — respect deactivated state
-
-    if (ratio >= CYRILLIC_RU_THRESHOLD && isGenericEnglishMode(current)) {
-      const target = EN_TO_RU[current || 'full'] || 'ru-full';
-      writeFlag(target);
-    } else if (ratio <= CYRILLIC_EN_THRESHOLD && isRussianMode(current)) {
-      const target = RU_TO_EN[current] || 'full';
-      writeFlag(target);
+    // Per-turn reinforcement: emit a structured reminder when caveman is active.
+    // The SessionStart hook injects the full ruleset once, but models lose it
+    // when other plugins inject competing style instructions every turn.
+    // This keeps caveman visible in the model's attention on every user message.
+    //
+    // Skip independent modes (commit, review, compress) — they have their own
+    // skill behavior and the base caveman rules would conflict.
+    // readFlag enforces symlink-safe read + size cap + VALID_MODES whitelist.
+    // If the flag is missing, corrupted, oversized, or a symlink pointing at
+    // something like ~/.ssh/id_rsa, readFlag returns null and we emit nothing
+    // — never inject untrusted bytes into model context.
+    const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
+    const activeMode = readFlag(flagPath);
+    if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
+            "Code/commits/security: write normal."
+        }
+      }));
     }
   } catch (e) {
     // Silent fail

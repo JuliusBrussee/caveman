@@ -197,12 +197,19 @@ Uninstall: `bash hooks/uninstall.sh` or `powershell -File hooks\uninstall.ps1`
 
 **macOS / Linux:**
 1. Clone repo → Open Codex in the repo directory → `/plugins` → Search "Caveman" → Install
+2. Repo-local auto-start is already wired by `.codex/hooks.json` + `.codex/config.toml`
 
 **Windows:**
 1. Enable symlinks first: `git config --global core.symlinks true` (requires Developer Mode or admin)
 2. Clone repo → Open VS Code → Codex Settings → Plugins → find "Caveman" under local marketplace → Install → Reload Window
+3. Codex hooks are currently disabled on Windows, so use `$caveman` to start manually
 
-This repo also ships `.codex/hooks.json`, so caveman auto-activates while you run Codex inside this repo. The installed plugin gives you `$caveman`; if you want always-on behavior in other repos too, add the same SessionStart hook there.
+This repo also ships `.codex/hooks.json` and enables hooks in `.codex/config.toml`, so caveman auto-activates while you run Codex inside this repo on macOS/Linux. The installed plugin gives you `$caveman`; if you want always-on behavior in other repos too, copy the same `SessionStart` hook there and enable:
+
+```toml
+[features]
+codex_hooks = true
+```
 
 </details>
 
@@ -333,15 +340,21 @@ Stop with: "обычный режим" or "stop caveman".
 
 ## Caveman Skills
 
-| Skill | What it do | Trigger |
-|-------|-----------|---------|
-| **caveman-commit** | Terse commit messages. Conventional Commits. ≤50 char subject. Why over what. | `/caveman-commit` |
-| **caveman-review** | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` No throat-clearing. | `/caveman-review` |
-| **caveman-help** | Quick-reference card. All modes, skills, commands, one command away. | `/caveman-help` |
+### caveman-commit
+
+`/caveman-commit` — terse commit messages. Conventional Commits. ≤50 char subject. Why over what.
+
+### caveman-review
+
+`/caveman-review` — one-line PR comments: `L42: 🔴 bug: user null. Add guard.` No throat-clearing.
+
+### caveman-help
+
+`/caveman-help` — quick-reference card. All modes, skills, commands, one command away.
 
 ### caveman-compress
 
-Caveman make Claude *speak* with fewer tokens. **Compress** make Claude *read* fewer tokens.
+`/caveman:compress <filepath>` — caveman make Claude *speak* with fewer tokens. **Compress** make Claude *read* fewer tokens.
 
 Your `CLAUDE.md` loads on **every session start**. Caveman Compress rewrites memory files into caveman-speak so Claude reads less — without you losing the human-readable original.
 
