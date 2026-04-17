@@ -69,6 +69,23 @@ from .validate import validate
 MAX_RETRIES = 2
 
 
+def _atomic_write_text(target: Path, content: str) -> None:
+    """Write `content` to `target` via temp file + rename.
+
+    Path.replace is atomic on same filesystem. Guarantees that `target`
+    contains either the pre-existing content or the full new content —
+    never a partial write. If the temp write fails, the temp file is
+    removed and `target` is left untouched.
+    """
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    try:
+        tmp.write_text(content)
+        tmp.replace(target)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 # ---------- Claude Calls ----------
 
 
@@ -193,9 +210,13 @@ def compress_file(filepath: Path) -> bool:
     print("Compressing with Claude...")
     compressed = call_claude(build_compress_prompt(original_text))
 
-    # Save original as backup, write compressed to original path
+    # Save original as backup, write compressed via atomic temp-rename.
+    # Invariant: filepath is always either the original or the new compressed
+    # text — never a partial write. If the second write fails (disk full,
+    # antivirus lock, permission denied), the backup preserves the original
+    # AND filepath is unchanged.
     backup_path.write_text(original_text)
-    filepath.write_text(compressed)
+    _atomic_write_text(filepath, compressed)
 
     # Step 2: Validate + Retry
     for attempt in range(MAX_RETRIES):
@@ -212,8 +233,8 @@ def compress_file(filepath: Path) -> bool:
             print(f"   - {err}")
 
         if attempt == MAX_RETRIES - 1:
-            # Restore original on failure
-            filepath.write_text(original_text)
+            # Restore original on failure (atomic)
+            _atomic_write_text(filepath, original_text)
             backup_path.unlink(missing_ok=True)
             print("❌ Failed after retries — original restored")
             return False
@@ -222,6 +243,6 @@ def compress_file(filepath: Path) -> bool:
         compressed = call_claude(
             build_fix_prompt(original_text, compressed, result.errors)
         )
-        filepath.write_text(compressed)
+        _atomic_write_text(filepath, compressed)
 
     return True
