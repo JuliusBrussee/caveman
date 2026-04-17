@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag, readFlag } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, readFlag, INDEPENDENT_MODES } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -78,7 +78,6 @@ process.stdin.on('end', () => {
     // If the flag is missing, corrupted, oversized, or a symlink pointing at
     // something like ~/.ssh/id_rsa, readFlag returns null and we emit nothing
     // — never inject untrusted bytes into model context.
-    const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
     const activeMode = readFlag(flagPath);
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
       process.stdout.write(JSON.stringify({
