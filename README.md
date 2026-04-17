@@ -319,6 +319,48 @@ Classical Chinese literary compression — same technical accuracy, but in the m
 
 Level stick until you change it or session end.
 
+### Configuration
+
+Default mode resolves in this order:
+
+1. **`CAVEMAN_DEFAULT_MODE`** env var — session override
+2. **`.claude/caveman.local.md`** in your project root — per-project default
+3. **`~/.config/caveman/config.json`** (or `$XDG_CONFIG_HOME/caveman/config.json`) — global default
+4. Hardcoded `full`
+
+#### Per-project default
+
+Create `.claude/caveman.local.md` in your project root:
+
+```markdown
+---
+defaultMode: off
+---
+
+# Project notes (optional markdown body, ignored by plugin)
+Caveman disabled for this repo.
+```
+
+Valid `defaultMode` values: `off`, `lite`, `full`, `ultra`, `wenyan-lite`, `wenyan`, `wenyan-ultra`.
+
+Add to `.gitignore` if per-user (Claude Code convention for `.claude/*.local.md`):
+
+```gitignore
+.claude/*.local.md
+```
+
+Per-project config is read at session start. Restart Claude Code to pick up changes.
+
+#### Global default
+
+```json
+{
+  "defaultMode": "lite"
+}
+```
+
+Save as `~/.config/caveman/config.json` (or `$XDG_CONFIG_HOME/caveman/config.json`).
+
 ## Caveman Skills
 
 ### caveman-commit
