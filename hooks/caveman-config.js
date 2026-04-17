@@ -85,6 +85,14 @@ function readProjectDefaultMode() {
       if (fd !== undefined) fs.closeSync(fd);
     }
 
+    // Strip UTF-8 BOM if present. Windows editors (Notepad, older VS Code
+    // configurations, some PowerShell `Out-File` invocations) prefix saved
+    // UTF-8 files with \uFEFF, which would otherwise make the frontmatter
+    // regex silently fail and the config fall through to the global default.
+    if (content.charCodeAt(0) === 0xFEFF) {
+      content = content.slice(1);
+    }
+
     // Extract YAML frontmatter block: content between opening --- and closing ---.
     const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (!fmMatch) return null;
