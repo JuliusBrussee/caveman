@@ -38,7 +38,7 @@ def print_table(rows):
     print("\n| File | Original | Compressed | Saved % | Valid |")
     print("|------|----------|------------|---------|-------|")
     for r in rows:
-        print(f"| {r[0]} | {r[1]} | {r[2]} | {r[3]:.1f}% | {'✅' if r[4] else '❌'} |")
+        print(f"| {r[0]} | {r[1]} | {r[2]} | {r[3]:.1f}% | {'[OK]' if r[4] else '[ERROR]'} |")
 
 
 def main():
@@ -47,10 +47,10 @@ def main():
         orig = Path(sys.argv[1]).resolve()
         comp = Path(sys.argv[2]).resolve()
         if not orig.exists():
-            print(f"❌ Not found: {orig}")
+            print(f"[ERROR] Not found: {orig}")
             sys.exit(1)
         if not comp.exists():
-            print(f"❌ Not found: {comp}")
+            print(f"[ERROR] Not found: {comp}")
             sys.exit(1)
         print_table([benchmark_pair(orig, comp)])
         return
@@ -58,7 +58,7 @@ def main():
     # Glob mode: repo_root/tests/caveman-compress/
     tests_dir = Path(__file__).parent.parent.parent / "tests" / "caveman-compress"
     if not tests_dir.exists():
-        print(f"❌ Tests dir not found: {tests_dir}")
+        print(f"[ERROR] Tests dir not found: {tests_dir}")
         sys.exit(1)
 
     rows = []
