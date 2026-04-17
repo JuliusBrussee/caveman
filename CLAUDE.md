@@ -108,9 +108,6 @@ Reads JSON from stdin. Three responsibilities:
 - `/caveman` → configured default (see `caveman-config.js`, defaults to `full`)
 - `/caveman lite` → `lite`
 - `/caveman ultra` → `ultra`
-- `/caveman wenyan` or `/caveman wenyan-full` → `wenyan`
-- `/caveman wenyan-lite` → `wenyan-lite`
-- `/caveman wenyan-ultra` → `wenyan-ultra`
 - `/caveman maeng-gu` or `/caveman maeng-gu-full` → `maeng-gu`
 - `/caveman maeng-gu-lite` → `maeng-gu-lite`
 - `/caveman maeng-gu-ultra` → `maeng-gu-ultra`
@@ -146,7 +143,7 @@ Skills = Markdown files with YAML frontmatter consumed by Claude Code's skill/pl
 
 ### Intensity levels
 
-Defined in `skills/caveman/SKILL.md`. Nine levels: `lite`, `full` (default), `ultra`, three wenyan (`wenyan-lite`, `wenyan-full`, `wenyan-ultra`), three maeng-gu (`maeng-gu-lite`, `maeng-gu-full`, `maeng-gu-ultra`). Persists until changed or session ends.
+Defined in `skills/caveman/SKILL.md`. Six levels: `lite`, `full` (default), `ultra`, three maeng-gu (`maeng-gu-lite`, `maeng-gu-full`, `maeng-gu-ultra`). Persists until changed or session ends. The wenyan (文言文) family was removed in favor of maeng-gu to keep the SKILL.md footprint small for prompt-cache efficiency.
 
 ### Auto-clarity rule
 

@@ -25,7 +25,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [맹구 mode](#맹구-maeng-gu-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [맹구 mode](#맹구-maeng-gu-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
 
 Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
 
@@ -72,35 +72,28 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 
 <table>
 <tr>
-<td width="20%">
+<td width="25%">
 
 #### 🪶 Lite
 
 > "Your component re-renders because you create a new object reference each render. Inline object props fail shallow comparison every time. Wrap it in `useMemo`."
 
 </td>
-<td width="20%">
+<td width="25%">
 
 #### 🪨 Full
 
 > "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
 
 </td>
-<td width="20%">
+<td width="25%">
 
 #### 🔥 Ultra
 
 > "Inline obj prop → new ref → re-render. `useMemo`."
 
 </td>
-<td width="20%">
-
-#### 📜 文言文
-
-> "物出新參照，致重繪。useMemo Wrap之。"
-
-</td>
-<td width="20%">
+<td width="25%">
 
 #### 🇰🇷 맹구
 
@@ -230,7 +223,7 @@ gemini extensions install https://github.com/JuliusBrussee/caveman
 Update: `gemini extensions update caveman` · Uninstall: `gemini extensions uninstall caveman`
 
 Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
-- `/caveman` — switch intensity level (lite/full/ultra/wenyan/maeng-gu)
+- `/caveman` — switch intensity level (lite/full/ultra/maeng-gu)
 - `/caveman-commit` — generate terse commit message
 - `/caveman-review` — one-line code review
 
@@ -313,18 +306,6 @@ Stop with: "stop caveman" or "normal mode"
 | **Lite** | `/caveman lite` | Drop filler, keep grammar. Professional but no fluff |
 | **Full** | `/caveman full` | Default caveman. Drop articles, fragments, full grunt |
 | **Ultra** | `/caveman ultra` | Maximum compression. Telegraphic. Abbreviate everything |
-
-### 文言文 (Wenyan) Mode
-
-Classical Chinese literary compression — same technical accuracy, but in the most token-efficient written language humans ever invented.
-
-| Level | Trigger | What it do |
-|-------|---------|------------|
-| **Wenyan-Lite** | `/caveman wenyan-lite` | Semi-classical. Grammar intact, filler gone |
-| **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness |
-| **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget |
-
-Level stick until you change it or session end.
 
 ### 맹구 (Maeng-Gu) Mode
 
