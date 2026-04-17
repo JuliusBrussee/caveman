@@ -16,6 +16,7 @@ const os = require('os');
 const VALID_MODES = [
   'off', 'lite', 'full', 'ultra',
   'wenyan-lite', 'wenyan', 'wenyan-full', 'wenyan-ultra',
+  'maeng-gu-lite', 'maeng-gu', 'maeng-gu-full', 'maeng-gu-ultra',
   'commit', 'review', 'compress'
 ];
 
@@ -115,8 +116,8 @@ function safeWriteFlag(flagPath, content) {
 // reader — statusline, per-turn reinforcement — would slurp that content and
 // either echo it to the terminal or inject it into model context.
 //
-// MAX_FLAG_BYTES is a hard cap. The longest legitimate value is "wenyan-ultra"
-// (12 bytes); 64 leaves slack without enabling exfil.
+// MAX_FLAG_BYTES is a hard cap. The longest legitimate value is "maeng-gu-ultra"
+// (14 bytes); 64 leaves slack without enabling exfil.
 const MAX_FLAG_BYTES = 64;
 
 function readFlag(flagPath) {
