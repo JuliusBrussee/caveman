@@ -225,7 +225,7 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home)},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate.stdout, "activation output missing caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate.stdout, "activation output missing caveman banner")
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "activation should stay quiet when custom statusline exists")
         ensure((claude_dir / ".caveman-active").read_text() == "full", "activation flag should default to full")
 
@@ -234,14 +234,14 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "ultra"},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate_custom.stdout, "activation with custom default missing banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate_custom.stdout, "activation with custom default missing banner")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra")
         # Test "off" mode — activation skipped, flag removed
         activate_off = run(
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "off"},
         )
-        ensure("CAVEMAN MODE ACTIVE." not in activate_off.stdout, "off mode should not emit caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" not in activate_off.stdout, "off mode should not emit caveman banner")
         ensure(not (claude_dir / ".caveman-active").exists(), "off mode should remove flag file")
 
         # Test mode tracker with /caveman when default is off — should NOT write flag
@@ -274,7 +274,11 @@ def verify_hook_install_flow() -> None:
             capture_output=True,
             check=True,
         )
-        ensure(ultra_prompt.stdout == "", "mode tracker should stay silent")
+        ultra_out = ultra_prompt.stdout.strip()
+        ensure(
+            ultra_out == "" or ultra_out.startswith("{"),
+            "mode tracker output should be empty or JSON reinforcement, got: " + ultra_out[:200],
+        )
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "mode tracker did not record ultra")
 
         subprocess.run(
@@ -294,6 +298,70 @@ def verify_hook_install_flow() -> None:
             env={"HOME": str(home)},
         )
         ensure("[CAVEMAN:WENYAN-ULTRA]" in statusline.stdout, "statusline badge output mismatch")
+
+        # maeng-gu (Korean) family — mirror of wenyan checks
+        (claude_dir / ".caveman-active").write_text("maeng-gu-ultra")
+        statusline_mg = run(
+            ["bash", "hooks/caveman-statusline.sh"],
+            env={"HOME": str(home)},
+        )
+        ensure(
+            "[CAVEMAN:MAENG-GU-ULTRA]" in statusline_mg.stdout,
+            "statusline badge missing maeng-gu-ultra",
+        )
+
+        subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"/caveman maeng-gu"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(
+            (claude_dir / ".caveman-active").read_text() == "maeng-gu",
+            "mode tracker did not record maeng-gu",
+        )
+
+        subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"/caveman maeng-gu-ultra"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(
+            (claude_dir / ".caveman-active").read_text() == "maeng-gu-ultra",
+            "mode tracker did not record maeng-gu-ultra",
+        )
+
+        activate_mg = run(
+            ["node", "hooks/caveman-activate.js"],
+            env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "maeng-gu-full"},
+        )
+        ensure(
+            "maeng-gu-full" in activate_mg.stdout,
+            "activation banner missing maeng-gu-full label",
+        )
+        ensure(
+            "**maeng-gu-full**" in activate_mg.stdout,
+            "activation should retain maeng-gu-full intensity row",
+        )
+        ensure(
+            "**maeng-gu-lite**" not in activate_mg.stdout,
+            "activation should filter out non-active maeng-gu rows",
+        )
+        ensure(
+            "**wenyan-full**" not in activate_mg.stdout,
+            "activation should filter out wenyan rows when maeng-gu-full active",
+        )
+        ensure(
+            (claude_dir / ".caveman-active").read_text() == "maeng-gu-full",
+            "CAVEMAN_DEFAULT_MODE=maeng-gu-full should set flag",
+        )
 
         reinstall = run(["bash", "hooks/install.sh"], env={"HOME": str(home)})
         ensure("Nothing to do" in reinstall.stdout, "install.sh should be idempotent")
