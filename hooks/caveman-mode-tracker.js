@@ -18,11 +18,17 @@ process.stdin.on('end', () => {
     const prompt = (data.prompt || '').trim().toLowerCase();
 
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
-    // "talk like caveman"). README tells users they can say these, but the hook
-    // only matched /caveman commands — flag file and statusline stayed out of sync.
-    if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-        /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
-      if (!/\b(stop|disable|turn off|deactivate)\b/i.test(prompt)) {
+    // "talk like caveman", "caveman on", "go caveman"). Bare "on" is matched
+    // only in tight proximity to "caveman" to avoid false positives on
+    // unrelated prose. Negative guard prevents activation when the same prompt
+    // also contains a deactivation verb ("stop", "off", "no", etc).
+    const activationMatch =
+        /\b(activate|enable|turn on|switch on|start|talk like|go|use|be)\b.*\bcaveman\b/i.test(prompt) ||
+        /\bcaveman\b.*\b(mode|activate|enable|turn on|switch on|start)\b/i.test(prompt) ||
+        /\bcaveman\s+on\b/i.test(prompt) ||
+        /\bon\s+caveman\b/i.test(prompt);
+    if (activationMatch) {
+      if (!/\b(stop|disable|turn off|switch off|deactivate|exit|end|cancel|off|no)\b/i.test(prompt)) {
         const mode = getDefaultMode();
         if (mode !== 'off') {
           safeWriteFlag(flagPath, mode);
@@ -60,10 +66,15 @@ process.stdin.on('end', () => {
       }
     }
 
-    // Detect deactivation — natural language and slash commands
-    if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
-        /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
-        /\bnormal mode\b/i.test(prompt)) {
+    // Detect deactivation — natural language and slash commands.
+    // Bare "off" and "no" use tight proximity to "caveman" to avoid matching
+    // unrelated prose ("no problem", "switched it off", etc.).
+    if (/\b(stop|disable|deactivate|turn off|switch off|exit|end|cancel)\b.*\bcaveman\b/i.test(prompt) ||
+        /\bcaveman\b.*\b(stop|disable|deactivate|turn off|switch off|exit|end|cancel)\b/i.test(prompt) ||
+        /\bcaveman\s+off\b/i.test(prompt) ||
+        /\boff\s+caveman\b/i.test(prompt) ||
+        /\bno\s+caveman\b/i.test(prompt) ||
+        /\b(normal mode|back to normal)\b/i.test(prompt)) {
       try { fs.unlinkSync(flagPath); } catch (e) {}
     }
 
