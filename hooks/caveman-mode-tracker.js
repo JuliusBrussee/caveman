@@ -67,13 +67,13 @@ process.stdin.on('end', () => {
     }
 
     // Detect deactivation — natural language and slash commands.
-    // "normal mode" works standalone when caveman is already active (flag
-    // exists), preserving the documented stop phrase. When caveman is not
-    // active, require "caveman" in the prompt to avoid false deactivation
-    // from unrelated "normal mode" discussion.
+    // Keep the documented stop phrase "normal mode", but only as an exact
+    // standalone command. Broad /\bnormal mode\b/ matching still deactivates
+    // on incidental discussion such as "switch from normal mode to debug mode"
+    // or "is this normal mode behavior?".
     if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
         /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
-        (/\bnormal mode\b/i.test(prompt) && (readFlag(flagPath) !== null || /\bcaveman\b/i.test(prompt)))) {
+        prompt === 'normal mode') {
       try { fs.unlinkSync(flagPath); } catch (e) {}
     }
 
