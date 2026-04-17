@@ -45,9 +45,7 @@ if (INDEPENDENT_MODES.has(mode)) {
 }
 
 // Resolve the canonical label for alias modes
-const modeLabel = mode === 'wenyan' ? 'wenyan-full'
-                : mode === 'maeng-gu' ? 'maeng-gu-full'
-                : mode;
+const modeLabel = mode === 'maeng-gu' ? 'maeng-gu-full' : mode;
 
 // Read SKILL.md — the single source of truth for caveman behavior.
 // Plugin installs: __dirname = <plugin_root>/hooks/, SKILL.md at <plugin_root>/skills/caveman/SKILL.md

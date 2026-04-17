@@ -27,7 +27,7 @@ try {
 $Mode = $Mode.ToLowerInvariant()
 $Mode = ($Mode -replace '[^a-z0-9-]', '')
 
-$Valid = @('off','lite','full','ultra','wenyan-lite','wenyan','wenyan-full','wenyan-ultra','maeng-gu-lite','maeng-gu','maeng-gu-full','maeng-gu-ultra','commit','review','compress')
+$Valid = @('off','lite','full','ultra','maeng-gu-lite','maeng-gu','maeng-gu-full','maeng-gu-ultra','commit','review','compress')
 if (-not ($Valid -contains $Mode)) { exit 0 }
 
 $Esc = [char]27
