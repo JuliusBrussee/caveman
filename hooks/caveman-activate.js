@@ -115,7 +115,12 @@ try {
   let hasStatusline = false;
   if (fs.existsSync(settingsPath)) {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    if (settings.statusLine) {
+    // Validate against the actual statusLine schema rather than a generic
+    // truthy check. A plain `if (settings.statusLine)` passes on strings,
+    // numbers, arrays, and partial/malformed objects — all of which suppress
+    // the nudge even though no working statusline is configured.
+    const sl = settings && settings.statusLine;
+    if (sl && sl.type === 'command' && typeof sl.command === 'string' && sl.command.length > 0) {
       hasStatusline = true;
     }
   }
