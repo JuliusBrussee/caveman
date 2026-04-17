@@ -81,6 +81,11 @@ def verify_synced_files() -> None:
     for copy in rule_copies:
         ensure(copy.read_text() == rule_source.read_text(), f"Rule copy mismatch: {copy}")
 
+    # Kiro steering file — frontmatter + rule body
+    kiro_steering = ROOT / ".kiro/steering/caveman.md"
+    expected_kiro = "---\ninclusion: always\n---\n\n" + rule_source.read_text()
+    ensure(kiro_steering.read_text() == expected_kiro, f"Kiro steering file mismatch: {kiro_steering}")
+
     with zipfile.ZipFile(ROOT / "caveman.skill") as archive:
         ensure("caveman/SKILL.md" in archive.namelist(), "caveman.skill missing caveman/SKILL.md")
         ensure(
