@@ -31,7 +31,8 @@ class RussianCavemanAssetsTests(unittest.TestCase):
         rules = SKILL_DIR / "russian-rules.md"
         self.assertTrue(rules.exists(), f"missing {rules}")
         text = rules.read_text(encoding="utf-8")
-        self.assertIn("Инварианты", text)
+        self.assertIn("Сжатие синтаксиса", text)
+        self.assertIn("Разрешённые сокращения", text)
         self.assertIn("ru-lite", text)
         self.assertIn("ru-full", text)
         self.assertIn("ru-ultra", text)
@@ -374,7 +375,7 @@ class SessionStartLanguageTests(unittest.TestCase):
         r = self._run(settings={"caveman": {"lang": "ru"}})
         self.assertEqual(r["flag"], "ru-full")
         self.assertIn("CAVEMAN-RU", r["stdout"])
-        self.assertIn("Инварианты", r["stdout"])
+        self.assertIn("Разрешённые сокращения", r["stdout"])
 
     def test_settings_caveman_lang_en_explicit(self):
         r = self._run(settings={"caveman": {"lang": "en"}})
