@@ -37,6 +37,16 @@ jobs:
           mkdir -p .windsurf/skills/caveman
           cp skills/caveman/SKILL.md .windsurf/skills/caveman/SKILL.md
 
+      - name: Sync Kiro skills
+        run: |
+          mkdir -p .kiro/skills/caveman .kiro/skills/caveman-commit .kiro/skills/caveman-review .kiro/skills/caveman-compress .kiro/skills/caveman-help .kiro/agents
+          cp skills/caveman/SKILL.md .kiro/skills/caveman/SKILL.md
+          cp skills/caveman-commit/SKILL.md .kiro/skills/caveman-commit/SKILL.md
+          cp skills/caveman-review/SKILL.md .kiro/skills/caveman-review/SKILL.md
+          cp skills/caveman-help/SKILL.md .kiro/skills/caveman-help/SKILL.md
+          # Compress skill needs path adjustment for Kiro context
+          cp caveman-compress/SKILL.md .kiro/skills/caveman-compress/SKILL.md
+
       - name: Sync compress skill
         run: |
           # Sync to skills/compress (main location for Gemini CLI)
@@ -91,6 +101,8 @@ jobs:
             plugins/caveman/skills/caveman/SKILL.md \
             .cursor/skills/caveman/SKILL.md \
             .windsurf/skills/caveman/SKILL.md \
+            .kiro/skills/ \
+            .kiro/agents/caveman.json \
             caveman.skill \
             .clinerules/caveman.md \
             .github/copilot-instructions.md \

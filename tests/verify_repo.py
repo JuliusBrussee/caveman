@@ -91,6 +91,37 @@ def verify_synced_files() -> None:
     print("Synced copies and caveman.skill zip OK")
 
 
+def verify_kiro_skills() -> None:
+    section("Kiro Skills")
+
+    kiro_skills = [
+        "caveman",
+        "caveman-commit",
+        "caveman-review",
+        "caveman-compress",
+        "caveman-help",
+    ]
+    for name in kiro_skills:
+        skill_path = ROOT / f".kiro/skills/{name}/SKILL.md"
+        ensure(skill_path.exists(), f"Missing Kiro skill: {skill_path}")
+        text = skill_path.read_text()
+        ensure(text.startswith("---"), f"Kiro skill missing YAML frontmatter: {name}")
+        ensure(f"name: {name}" in text, f"Kiro skill frontmatter missing name: {name}")
+        ensure("description:" in text, f"Kiro skill frontmatter missing description: {name}")
+
+    agent_path = ROOT / ".kiro/agents/caveman.json"
+    ensure(agent_path.exists(), "Missing Kiro agent config")
+    agent = read_json(agent_path)
+    ensure(agent.get("name") == "caveman", "Kiro agent config missing name")
+    ensure("resources" in agent, "Kiro agent config missing resources")
+    ensure(
+        any("skill://" in r for r in agent["resources"]),
+        "Kiro agent config missing skill:// resource",
+    )
+
+    print(f"Validated {len(kiro_skills)} Kiro skills + agent config OK")
+
+
 def verify_manifests_and_syntax() -> None:
     section("Manifests And Syntax")
 
@@ -320,6 +351,7 @@ def verify_hook_install_flow() -> None:
 def main() -> int:
     checks = [
         verify_synced_files,
+        verify_kiro_skills,
         verify_manifests_and_syntax,
         verify_powershell_static,
         verify_compress_fixtures,
