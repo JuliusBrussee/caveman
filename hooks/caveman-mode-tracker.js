@@ -50,6 +50,9 @@ process.stdin.on('end', () => {
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
         else if (arg === 'wenyan-ultra') mode = 'wenyan-ultra';
+        else if (arg === 'korean-lite') mode = 'korean-lite';
+        else if (arg === 'korean' || arg === 'korean-full') mode = 'korean';
+        else if (arg === 'korean-ultra') mode = 'korean-ultra';
         else mode = getDefaultMode();
       }
 
@@ -81,12 +84,19 @@ process.stdin.on('end', () => {
     const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
     const activeMode = readFlag(flagPath);
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+      const isKorean = activeMode.startsWith('korean');
+      const reminder = isKorean
+        ? "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+          "Respond in Korean. Drop filler (사실/기본적으로/정말), pleasantries (드리겠습니다), " +
+          "hedging (것 같습니다), particles (은/는/이/가/을/를). Use noun endings (함/됨/필요). " +
+          "Code/commits/security: write normal."
+        : "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+          "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
+          "Code/commits/security: write normal.";
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-            "Code/commits/security: write normal."
+          additionalContext: reminder
         }
       }));
     }
