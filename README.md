@@ -25,7 +25,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [맹구 mode](#맹구-maeng-gu-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
 
 Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
 
@@ -72,38 +72,45 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 
 <table>
 <tr>
-<td width="25%">
+<td width="20%">
 
 #### 🪶 Lite
 
 > "Your component re-renders because you create a new object reference each render. Inline object props fail shallow comparison every time. Wrap it in `useMemo`."
 
 </td>
-<td width="25%">
+<td width="20%">
 
 #### 🪨 Full
 
 > "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
 
 </td>
-<td width="25%">
+<td width="20%">
 
 #### 🔥 Ultra
 
 > "Inline obj prop → new ref → re-render. `useMemo`."
 
 </td>
-<td width="25%">
+<td width="20%">
 
 #### 📜 文言文
 
 > "物出新參照，致重繪。useMemo Wrap之。"
 
 </td>
+<td width="20%">
+
+#### 🇰🇷 맹구
+
+> "인라인 객체 prop → 신참조 → 리렌더. `useMemo`."
+
+</td>
 </tr>
 </table>
 
-**Same answer. You pick how many word.**
+**Same answer. You pick how many word.** *(Korean card shows maeng-gu-ultra; illustrative, not a measured benchmark.)*
 
 ```
 ┌─────────────────────────────────────┐
@@ -223,7 +230,7 @@ gemini extensions install https://github.com/JuliusBrussee/caveman
 Update: `gemini extensions update caveman` · Uninstall: `gemini extensions uninstall caveman`
 
 Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
-- `/caveman` — switch intensity level (lite/full/ultra/wenyan)
+- `/caveman` — switch intensity level (lite/full/ultra/wenyan/maeng-gu)
 - `/caveman-commit` — generate terse commit message
 - `/caveman-review` — one-line code review
 
@@ -316,6 +323,26 @@ Classical Chinese literary compression — same technical accuracy, but in the m
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Semi-classical. Grammar intact, filler gone |
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget |
+
+Level stick until you change it or session end.
+
+### 맹구 (Maeng-Gu) Mode
+
+Korean compression family. 맹구 = classic Korean cartoon character, dim-but-sincere — caveman cousin from across sea. 개조식, 명사형, 전보체. Drop particles, lean Sino-Korean, Hanja when natural. Brain still big. 머리 크다.
+
+| Level | Trigger | What it do |
+|-------|---------|------------|
+| **Maeng-Gu-Lite** | `/caveman maeng-gu-lite` | 개조식. Drop filler, drop honorifics, keep grammar |
+| **Maeng-Gu-Full** | `/caveman maeng-gu` | 명사형/전보체. Drop particles, Sino-Korean preferred, arrows for causality |
+| **Maeng-Gu-Ultra** | `/caveman maeng-gu-ultra` | Pure noun strings. Aggressive Hanja. `[명사] [명사] → [결과]. [조치].` |
+
+Korean technical English unchanged: `useMemo`, `API`, `DB`, `handshake`, `middleware`. Code blocks pass through. Auto-clarity carve-outs apply (security warnings, irreversible ops).
+
+Examples (hand-authored illustrations, not measured benchmarks):
+
+- `maeng-gu-lite` — "커넥션 풀은 요청마다 새로 만들지 않고 열린 연결을 재사용한다. 반복적인 handshake 부하를 피한다."
+- `maeng-gu-full` — "풀 = 열린 DB 연결 재사용. 요청마다 신연결 X. handshake 부하 생략."
+- `maeng-gu-ultra` — "풀 = DB 연결 재사용. handshake 생략 → 부하시 高速."
 
 Level stick until you change it or session end.
 

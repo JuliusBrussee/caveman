@@ -20,6 +20,9 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Classical Chinese style, light compression. |
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness. |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget. |
+| **Maeng-Gu-Lite** | `/caveman maeng-gu-lite` | Korean 개조식. Drop filler/honorifics, keep grammar. |
+| **Maeng-Gu-Full** | `/caveman maeng-gu` | Full 명사형/전보체. Drop particles, Sino-Korean preferred. |
+| **Maeng-Gu-Ultra** | `/caveman maeng-gu-ultra` | Pure noun sequences. Telegraphic. Aggressive Hanja. |
 
 Mode stick until changed or session end.
 
