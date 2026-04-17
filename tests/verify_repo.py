@@ -292,14 +292,7 @@ def verify_hook_install_flow() -> None:
         )
         ensure(not (claude_dir / ".caveman-active").exists(), "normal mode should remove flag file")
 
-        (claude_dir / ".caveman-active").write_text("wenyan-ultra")
-        statusline = run(
-            ["bash", "hooks/caveman-statusline.sh"],
-            env={"HOME": str(home)},
-        )
-        ensure("[CAVEMAN:WENYAN-ULTRA]" in statusline.stdout, "statusline badge output mismatch")
-
-        # maeng-gu (Korean) family — mirror of wenyan checks
+        # maeng-gu (Korean) family — replaces the removed wenyan family
         (claude_dir / ".caveman-active").write_text("maeng-gu-ultra")
         statusline_mg = run(
             ["bash", "hooks/caveman-statusline.sh"],
@@ -309,6 +302,19 @@ def verify_hook_install_flow() -> None:
             "[CAVEMAN:MAENG-GU-ULTRA]" in statusline_mg.stdout,
             "statusline badge missing maeng-gu-ultra",
         )
+
+        # wenyan was removed — confirm the statusline whitelist no longer accepts it
+        (claude_dir / ".caveman-active").write_text("wenyan-ultra")
+        statusline_wenyan = run(
+            ["bash", "hooks/caveman-statusline.sh"],
+            env={"HOME": str(home)},
+        )
+        ensure(
+            statusline_wenyan.stdout == "",
+            "statusline should ignore removed wenyan mode, got: " + statusline_wenyan.stdout,
+        )
+        # restore a valid flag for any subsequent checks
+        (claude_dir / ".caveman-active").write_text("maeng-gu-ultra")
 
         subprocess.run(
             ["node", "hooks/caveman-mode-tracker.js"],
@@ -338,6 +344,22 @@ def verify_hook_install_flow() -> None:
             "mode tracker did not record maeng-gu-ultra",
         )
 
+        # wenyan slash command should NOT write a flag (removed mode)
+        subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"/caveman wenyan"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(
+            (claude_dir / ".caveman-active").read_text() == "full",
+            "/caveman wenyan should fall through to default 'full', got: "
+            + (claude_dir / ".caveman-active").read_text(),
+        )
+
         activate_mg = run(
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "maeng-gu-full"},
@@ -355,8 +377,8 @@ def verify_hook_install_flow() -> None:
             "activation should filter out non-active maeng-gu rows",
         )
         ensure(
-            "**wenyan-full**" not in activate_mg.stdout,
-            "activation should filter out wenyan rows when maeng-gu-full active",
+            "wenyan" not in activate_mg.stdout.lower(),
+            "activation should not mention removed wenyan mode",
         )
         ensure(
             (claude_dir / ".caveman-active").read_text() == "maeng-gu-full",
