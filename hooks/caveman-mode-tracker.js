@@ -17,22 +17,36 @@ process.stdin.on('end', () => {
     const data = JSON.parse(input);
     const prompt = (data.prompt || '').trim().toLowerCase();
 
+    // Deactivation patterns — reused below to unlink the flag and above as the
+    // activation guard. Broad verbs (stop/disable/deactivate/turn off/switch off)
+    // use sentence-spanning .* because they unambiguously indicate deactivation.
+    // Bare off/no and the ambiguous verbs exit/end/cancel require tight proximity
+    // to "caveman" so unrelated prose like "go caveman and end with a summary"
+    // does not flip the flag.
+    const isDeactivation =
+        /\b(stop|disable|deactivate|turn off|switch off)\b.*\bcaveman\b/i.test(prompt) ||
+        /\bcaveman\b.*\b(stop|disable|deactivate|turn off|switch off)\b/i.test(prompt) ||
+        /\bcaveman\s+off\b/i.test(prompt) ||
+        /\boff\s+caveman\b/i.test(prompt) ||
+        /\bno\s+caveman\b/i.test(prompt) ||
+        /\b(exit|end|cancel)\s+caveman\b/i.test(prompt) ||
+        /\bcaveman\s+(exit|end|cancel)\b/i.test(prompt) ||
+        /\b(normal mode|back to normal)\b/i.test(prompt);
+
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
-    // "talk like caveman", "caveman on", "go caveman"). Bare "on" is matched
-    // only in tight proximity to "caveman" to avoid false positives on
-    // unrelated prose. Negative guard prevents activation when the same prompt
-    // also contains a deactivation verb ("stop", "off", "no", etc).
+    // "talk like caveman", "caveman on", "go caveman"). Bare "on" only matches
+    // in tight proximity to "caveman". Skipped when the same prompt also looks
+    // like a deactivation so "stop caveman mode" cannot both activate and
+    // deactivate simultaneously.
     const activationMatch =
         /\b(activate|enable|turn on|switch on|start|talk like|go|use|be)\b.*\bcaveman\b/i.test(prompt) ||
         /\bcaveman\b.*\b(mode|activate|enable|turn on|switch on|start)\b/i.test(prompt) ||
         /\bcaveman\s+on\b/i.test(prompt) ||
         /\bon\s+caveman\b/i.test(prompt);
-    if (activationMatch) {
-      if (!/\b(stop|disable|turn off|switch off|deactivate|exit|end|cancel|off|no)\b/i.test(prompt)) {
-        const mode = getDefaultMode();
-        if (mode !== 'off') {
-          safeWriteFlag(flagPath, mode);
-        }
+    if (activationMatch && !isDeactivation) {
+      const mode = getDefaultMode();
+      if (mode !== 'off') {
+        safeWriteFlag(flagPath, mode);
       }
     }
 
@@ -66,15 +80,8 @@ process.stdin.on('end', () => {
       }
     }
 
-    // Detect deactivation — natural language and slash commands.
-    // Bare "off" and "no" use tight proximity to "caveman" to avoid matching
-    // unrelated prose ("no problem", "switched it off", etc.).
-    if (/\b(stop|disable|deactivate|turn off|switch off|exit|end|cancel)\b.*\bcaveman\b/i.test(prompt) ||
-        /\bcaveman\b.*\b(stop|disable|deactivate|turn off|switch off|exit|end|cancel)\b/i.test(prompt) ||
-        /\bcaveman\s+off\b/i.test(prompt) ||
-        /\boff\s+caveman\b/i.test(prompt) ||
-        /\bno\s+caveman\b/i.test(prompt) ||
-        /\b(normal mode|back to normal)\b/i.test(prompt)) {
+    // Unlink the flag if the prompt looks like a deactivation.
+    if (isDeactivation) {
       try { fs.unlinkSync(flagPath); } catch (e) {}
     }
 
