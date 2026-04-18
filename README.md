@@ -139,6 +139,7 @@ Pick your agent. One command. Done.
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
 | **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
+| **Copilot CLI** | `copilot plugin marketplace add JuliusBrussee/caveman && copilot plugin install caveman@caveman` |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
 | **Any other** | `npx skills add JuliusBrussee/caveman` |
 
