@@ -125,7 +125,7 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 - **Easier to read** — no wall of text, just the answer
 - **Same accuracy** — all technical info kept, only fluff removed ([science say so](https://arxiv.org/abs/2604.00025))
 - **Save money** — ~71% less output token = less cost
-- **Fun** — every code review become comedy
+- **Fun** — every code review becomes comedic
 
 ## Install
 
