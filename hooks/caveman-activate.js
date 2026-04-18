@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, INDEPENDENT_MODES } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -34,10 +34,6 @@ safeWriteFlag(flagPath, mode);
 //
 //    Reads SKILL.md at runtime so edits to the source of truth propagate
 //    automatically — no hardcoded duplication to go stale.
-
-// Modes that have their own independent skill files — not caveman intensity levels.
-// For these, emit a short activation line; the skill itself handles behavior.
-const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 if (INDEPENDENT_MODES.has(mode)) {
   process.stdout.write('CAVEMAN MODE ACTIVE — level: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill.');

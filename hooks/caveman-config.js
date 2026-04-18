@@ -19,6 +19,11 @@ const VALID_MODES = [
   'commit', 'review', 'compress'
 ];
 
+// Modes that have their own independent skill files — not caveman intensity
+// levels. For these, hooks emit a short activation line and skip intensity
+// ruleset injection; the skill itself defines behavior.
+const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
+
 function getConfigDir() {
   if (process.env.XDG_CONFIG_HOME) {
     return path.join(process.env.XDG_CONFIG_HOME, 'caveman');
@@ -151,4 +156,4 @@ function readFlag(flagPath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag };
+module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, INDEPENDENT_MODES, safeWriteFlag, readFlag };
