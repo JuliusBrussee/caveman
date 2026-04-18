@@ -19,11 +19,11 @@ Compress natural language files (CLAUDE.md, todos, preferences) into caveman-spe
 
 ## Process
 
-1. The compression scripts live in `caveman-compress/scripts/` (adjacent to this SKILL.md). If the path is not immediately available, search for `caveman-compress/scripts/__main__.py`.
+1. Ensure `caveman-compress` is available on `$PATH` (installed via Nix or `pip install -e caveman-compress/`).
 
 2. Run:
 
-cd caveman-compress && python3 -m scripts <absolute_filepath>
+caveman-compress <absolute_filepath>
 
 3. The CLI will:
 - detect file type (no tokens)
