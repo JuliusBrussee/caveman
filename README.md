@@ -133,6 +133,7 @@ Pick your agent. One command. Done.
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
 | **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
+| **[Continue](https://continue.dev)** (VS Code + JetBrains extension) | `npx skills add JuliusBrussee/caveman -a continue` |
 | **Any other** | `npx skills add JuliusBrussee/caveman` |
 
 Install once. Use in every session for that install target after that. One rock. That it.
@@ -141,17 +142,17 @@ Install once. Use in every session for that install target after that. One rock.
 
 Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
 
-| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
-|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|
-| Caveman mode | Y | Y | Y | Y | Y | Y | Y |
-| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² |
-| `/caveman` command | Y | Y¹ | Y | — | — | — | — |
-| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — |
-| Statusline badge | Y⁴ | — | — | — | — | — | — |
-| caveman-commit | Y | — | Y | Y | Y | Y | Y |
-| caveman-review | Y | — | Y | Y | Y | Y | Y |
-| caveman-compress | Y | Y | Y | Y | Y | Y | Y |
-| caveman-help | Y | — | Y | Y | Y | Y | Y |
+| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot | Continue |
+|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|:--------:|
+| Caveman mode | Y | Y | Y | Y | Y | Y | Y | Y |
+| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² | —² |
+| `/caveman` command | Y | Y¹ | Y | — | — | — | — | — |
+| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — | Y³ |
+| Statusline badge | Y⁴ | — | — | — | — | — | — | — |
+| caveman-commit | Y | — | Y | Y | Y | Y | Y | Y |
+| caveman-review | Y | — | Y | Y | Y | Y | Y | Y |
+| caveman-compress | Y | Y | Y | Y | Y | Y | Y | Y |
+| caveman-help | Y | — | Y | Y | Y | Y | Y | Y |
 
 > [!NOTE]
 > Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
@@ -230,7 +231,7 @@ Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
 </details>
 
 <details>
-<summary><strong>Cursor / Windsurf / Cline / Copilot — full details</strong></summary>
+<summary><strong>Cursor / Windsurf / Cline / Copilot / Continue — full details</strong></summary>
 
 `npx skills add` installs the skill file only — it does **not** install the agent's rule/instruction file, so caveman does not auto-start. For always-on, add the "Want it always on?" snippet below to your agent's rules or system prompt.
 
@@ -240,10 +241,27 @@ Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
 | Windsurf | `npx skills add JuliusBrussee/caveman -a windsurf` | `.windsurf/rules/caveman.md` | Y | Windsurf rules |
 | Cline | `npx skills add JuliusBrussee/caveman -a cline` | `.clinerules/caveman.md` | — | Cline rules or system prompt |
 | Copilot | `npx skills add JuliusBrussee/caveman -a github-copilot` | `.github/copilot-instructions.md` + `AGENTS.md` | — | Copilot custom instructions |
+| Continue | `npx skills add JuliusBrussee/caveman -a continue` | `.continue/rules/caveman.md` | Y | Continue rules (`.continue/rules/*.md`, `alwaysApply: true`) |
 
 Uninstall: `npx skills remove caveman`
 
 Copilot works with Chat, Edits, and Coding Agent.
+
+**[Continue.dev](https://continue.dev) note (VS Code + JetBrains):** `npx skills add -a continue` installs the skill into `.continue/skills/` — you invoke it on demand via Continue's skills UI or by typing `/caveman`. For **always-on caveman** in every Continue chat, drop a rule file at one of these paths instead:
+
+```bash
+# Per-project (only this workspace)
+mkdir -p .continue/rules
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/.continue/rules/caveman.md \
+  -o .continue/rules/caveman.md
+
+# Global (every project on your machine)
+mkdir -p ~/.continue/rules
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/.continue/rules/caveman.md \
+  -o ~/.continue/rules/caveman.md
+```
+
+Reload the Continue extension (VS Code: `Cmd/Ctrl+Shift+P` → `Developer: Reload Window`; JetBrains: restart the IDE or reopen the Continue tool window). The rule appears in Continue's Rules list with `alwaysApply: true`, and every chat starts caveman-mode from the first message.
 
 </details>
 

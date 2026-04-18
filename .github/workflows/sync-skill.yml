@@ -82,6 +82,11 @@ jobs:
           printf '%s\n' '---' 'trigger: always_on' '---' '' > .windsurf/rules/caveman.md
           cat "$BODY" >> .windsurf/rules/caveman.md
 
+          # Continue.dev — needs name + alwaysApply frontmatter
+          mkdir -p .continue/rules
+          printf '%s\n' '---' 'name: Caveman' 'description: "Caveman mode — terse communication, ~75% fewer tokens, full technical accuracy"' 'alwaysApply: true' '---' '' > .continue/rules/caveman.md
+          cat "$BODY" >> .continue/rules/caveman.md
+
       - name: Commit and push if changed
         run: |
           git add \
@@ -95,7 +100,8 @@ jobs:
             .clinerules/caveman.md \
             .github/copilot-instructions.md \
             .cursor/rules/caveman.mdc \
-            .windsurf/rules/caveman.md
+            .windsurf/rules/caveman.md \
+            .continue/rules/caveman.md
           git diff --staged --quiet && exit 0
           git commit -m "chore: sync SKILL.md copies and auto-activation rules [skip ci]"
           git push
