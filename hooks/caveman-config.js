@@ -3,11 +3,13 @@
 //
 // Resolution order for default mode:
 //   1. CAVEMAN_DEFAULT_MODE environment variable
-//   2. Config file defaultMode field:
+//   2. Per-project config: $CLAUDE_PROJECT_DIR/.claude/caveman.local.md
+//      (YAML frontmatter with `defaultMode` field)
+//   3. Global config file defaultMode field:
 //      - $XDG_CONFIG_HOME/caveman/config.json (any platform, if set)
 //      - ~/.config/caveman/config.json (macOS / Linux fallback)
 //      - %APPDATA%\caveman\config.json (Windows fallback)
-//   3. 'full'
+//   4. 'full'
 
 const fs = require('fs');
 const path = require('path');
@@ -36,14 +38,94 @@ function getConfigPath() {
   return path.join(getConfigDir(), 'config.json');
 }
 
+// Per-project settings path. Follows the Claude Code plugin convention
+// of `.claude/<plugin-name>.local.md`. $CLAUDE_PROJECT_DIR is set by Claude
+// Code for every hook invocation — falls back to process.cwd() for direct
+// CLI invocation or tests.
+function getProjectConfigPath() {
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  if (!projectDir) return null;
+  return path.join(projectDir, '.claude', 'caveman.local.md');
+}
+
+// Read `defaultMode` from YAML frontmatter in the project config file.
+// Hard-capped at 4096 bytes to limit attack surface; rejects symlinks for
+// the same reason as readFlag (local attacker could redirect to ~/.ssh/id_rsa
+// etc.). Returns a validated mode string or null.
+//
+// Only the `defaultMode:` line is parsed — no full YAML parser is needed
+// because the plugin has zero npm dependencies and we deliberately keep
+// the config surface minimal. Markdown body is ignored.
+const MAX_PROJECT_CONFIG_BYTES = 4096;
+
+function readProjectDefaultMode() {
+  const projectPath = getProjectConfigPath();
+  if (!projectPath) return null;
+
+  try {
+    let st;
+    try {
+      st = fs.lstatSync(projectPath);
+    } catch (e) {
+      return null;
+    }
+    if (st.isSymbolicLink() || !st.isFile()) return null;
+    if (st.size > MAX_PROJECT_CONFIG_BYTES) return null;
+
+    const O_NOFOLLOW = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+    const flags = fs.constants.O_RDONLY | O_NOFOLLOW;
+    let fd;
+    let content;
+    try {
+      fd = fs.openSync(projectPath, flags);
+      const buf = Buffer.alloc(MAX_PROJECT_CONFIG_BYTES);
+      const n = fs.readSync(fd, buf, 0, MAX_PROJECT_CONFIG_BYTES, 0);
+      content = buf.slice(0, n).toString('utf8');
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+
+    // Strip UTF-8 BOM if present. Windows editors (Notepad, older VS Code
+    // configurations, some PowerShell `Out-File` invocations) prefix saved
+    // UTF-8 files with \uFEFF, which would otherwise make the frontmatter
+    // regex silently fail and the config fall through to the global default.
+    if (content.charCodeAt(0) === 0xFEFF) {
+      content = content.slice(1);
+    }
+
+    // Extract YAML frontmatter block: content between opening --- and closing ---.
+    const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (!fmMatch) return null;
+    const frontmatter = fmMatch[1];
+
+    // Extract `defaultMode:` line. Strip surrounding quotes if present.
+    const fieldMatch = frontmatter.match(/^\s*defaultMode\s*:\s*(.+?)\s*$/m);
+    if (!fieldMatch) return null;
+    let value = fieldMatch[1].trim();
+    value = value.replace(/^(["'])(.*)\1$/, '$2');
+
+    const mode = value.toLowerCase();
+    if (!VALID_MODES.includes(mode)) return null;
+    return mode;
+  } catch (e) {
+    return null;
+  }
+}
+
 function getDefaultMode() {
-  // 1. Environment variable (highest priority)
+  // 1. Environment variable (highest priority — session override)
   const envMode = process.env.CAVEMAN_DEFAULT_MODE;
   if (envMode && VALID_MODES.includes(envMode.toLowerCase())) {
     return envMode.toLowerCase();
   }
 
-  // 2. Config file
+  // 2. Per-project config at $CLAUDE_PROJECT_DIR/.claude/caveman.local.md
+  const projectMode = readProjectDefaultMode();
+  if (projectMode) {
+    return projectMode;
+  }
+
+  // 3. Global config file
   try {
     const configPath = getConfigPath();
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -54,7 +136,7 @@ function getDefaultMode() {
     // Config file doesn't exist or is invalid — fall through
   }
 
-  // 3. Default
+  // 4. Default
   return 'full';
 }
 
@@ -151,4 +233,13 @@ function readFlag(flagPath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag };
+module.exports = {
+  getDefaultMode,
+  getConfigDir,
+  getConfigPath,
+  getProjectConfigPath,
+  readProjectDefaultMode,
+  VALID_MODES,
+  safeWriteFlag,
+  readFlag,
+};
