@@ -82,6 +82,11 @@ jobs:
           printf '%s\n' '---' 'trigger: always_on' '---' '' > .windsurf/rules/caveman.md
           cat "$BODY" >> .windsurf/rules/caveman.md
 
+          # Kiro — needs inclusion: always frontmatter
+          mkdir -p .kiro/steering
+          printf '%s\n' '---' 'inclusion: always' '---' '' > .kiro/steering/caveman.md
+          cat "$BODY" >> .kiro/steering/caveman.md
+
       - name: Commit and push if changed
         run: |
           git add \
@@ -95,7 +100,8 @@ jobs:
             .clinerules/caveman.md \
             .github/copilot-instructions.md \
             .cursor/rules/caveman.mdc \
-            .windsurf/rules/caveman.md
+            .windsurf/rules/caveman.md \
+            .kiro/steering/caveman.md
           git diff --staged --quiet && exit 0
           git commit -m "chore: sync SKILL.md copies and auto-activation rules [skip ci]"
           git push
