@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - skills/caveman/SKILL.md
+      - skills/caveman/russian-rules.md
       - rules/caveman-activate.md
       - caveman-compress/SKILL.md
       - caveman-compress/scripts/**
@@ -36,6 +37,13 @@ jobs:
           cp skills/caveman/SKILL.md .cursor/skills/caveman/SKILL.md
           mkdir -p .windsurf/skills/caveman
           cp skills/caveman/SKILL.md .windsurf/skills/caveman/SKILL.md
+
+      - name: Sync russian-rules.md copies
+        run: |
+          cp skills/caveman/russian-rules.md caveman/russian-rules.md
+          cp skills/caveman/russian-rules.md plugins/caveman/skills/caveman/russian-rules.md
+          cp skills/caveman/russian-rules.md .cursor/skills/caveman/russian-rules.md
+          cp skills/caveman/russian-rules.md .windsurf/skills/caveman/russian-rules.md
 
       - name: Sync compress skill
         run: |
@@ -86,11 +94,15 @@ jobs:
         run: |
           git add \
             caveman/SKILL.md \
+            caveman/russian-rules.md \
             skills/compress/ \
             plugins/caveman/skills/compress/ \
             plugins/caveman/skills/caveman/SKILL.md \
+            plugins/caveman/skills/caveman/russian-rules.md \
             .cursor/skills/caveman/SKILL.md \
+            .cursor/skills/caveman/russian-rules.md \
             .windsurf/skills/caveman/SKILL.md \
+            .windsurf/skills/caveman/russian-rules.md \
             caveman.skill \
             .clinerules/caveman.md \
             .github/copilot-instructions.md \

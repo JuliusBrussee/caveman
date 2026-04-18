@@ -37,6 +37,10 @@ def run(
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     merged_env = os.environ.copy()
+    # Ensure caveman language env vars don't leak from the test runner
+    merged_env.pop("CAVEMAN_LANG", None)
+    merged_env.pop("CAVEMAN_AUTO_DETECT_LANG", None)
+    merged_env.pop("CAVEMAN_DEFAULT_MODE", None)
     if env:
         merged_env.update(env)
     result = subprocess.run(
@@ -74,6 +78,17 @@ def verify_synced_files() -> None:
     for copy in skill_copies:
         ensure(copy.read_text() == skill_source.read_text(), f"Skill copy mismatch: {copy}")
 
+    # Russian rules supplementary file must be synced to all skill copy locations
+    russian_source = ROOT / "skills/caveman/russian-rules.md"
+    russian_copies = [
+        ROOT / "caveman/russian-rules.md",
+        ROOT / "plugins/caveman/skills/caveman/russian-rules.md",
+        ROOT / ".cursor/skills/caveman/russian-rules.md",
+        ROOT / ".windsurf/skills/caveman/russian-rules.md",
+    ]
+    for copy in russian_copies:
+        ensure(copy.read_text() == russian_source.read_text(), f"Russian rules copy mismatch: {copy}")
+
     rule_copies = [
         ROOT / ".clinerules/caveman.md",
         ROOT / ".github/copilot-instructions.md",
@@ -86,6 +101,11 @@ def verify_synced_files() -> None:
         ensure(
             archive.read("caveman/SKILL.md").decode("utf-8") == skill_source.read_text(),
             "caveman.skill payload mismatch",
+        )
+        ensure("caveman/russian-rules.md" in archive.namelist(), "caveman.skill missing caveman/russian-rules.md")
+        ensure(
+            archive.read("caveman/russian-rules.md").decode("utf-8") == russian_source.read_text(),
+            "caveman.skill russian-rules.md payload mismatch",
         )
 
     print("Synced copies and caveman.skill zip OK")
@@ -225,7 +245,7 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home)},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate.stdout, "activation output missing caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate.stdout, "activation output missing caveman banner")
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "activation should stay quiet when custom statusline exists")
         ensure((claude_dir / ".caveman-active").read_text() == "full", "activation flag should default to full")
 
@@ -234,14 +254,14 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "ultra"},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate_custom.stdout, "activation with custom default missing banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate_custom.stdout, "activation with custom default missing banner")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra")
         # Test "off" mode — activation skipped, flag removed
         activate_off = run(
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "off"},
         )
-        ensure("CAVEMAN MODE ACTIVE." not in activate_off.stdout, "off mode should not emit caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" not in activate_off.stdout, "off mode should not emit caveman banner")
         ensure(not (claude_dir / ".caveman-active").exists(), "off mode should remove flag file")
 
         # Test mode tracker with /caveman when default is off — should NOT write flag

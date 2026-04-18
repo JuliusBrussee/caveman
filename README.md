@@ -326,6 +326,25 @@ Classical Chinese literary compression — same technical accuracy, but in the m
 
 Level stick until you change it or session end.
 
+### Russian Mode (Русский режим)
+
+Same caveman brain, but speak Russian. Four levels of grunt:
+
+| Level | Trigger | What it do |
+|-------|---------|------------|
+| **ru-lite** | `/caveman ru-lite` | Full sentences, no fluff. For docs and user answers |
+| **ru-full** | `/caveman ru` | Short phrases, drop pronouns. For tech explanations |
+| **ru-ultra** | `/caveman ru-ultra` | Telegraphic. Arrows, colons, bullets |
+| **ru-notes** | `/caveman ru-notes` | Maximum compression. Agent-to-agent notes |
+
+Example — "Why React component re-render?"
+
+| ru-lite | ru-full | ru-ultra |
+|---------|---------|----------|
+| «Компонент повторно рендерится, потому что на каждом рендере создаётся новая ссылка на объект. Оберните в `useMemo`.» | «Новый объект каждый рендер → React видит новое свойство → повторный рендер. Оберни в `useMemo`.» | «Встроенный объект → новая ссылка → повторный рендер. Решение: `useMemo`.» |
+
+Stop with: "обычный режим" or "stop caveman".
+
 ## Caveman Skills
 
 ### caveman-commit

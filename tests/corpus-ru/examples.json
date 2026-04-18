@@ -1,0 +1,113 @@
+{
+  "description": "Russian Caveman test corpus. Each case has a baseline (normal Russian) and 4 compressed levels.",
+  "levels": ["ru-lite", "ru-full", "ru-ultra", "ru-notes"],
+  "cases": [
+    {
+      "id": "react-rerender",
+      "type": "bug-explanation",
+      "prompt": "Почему мой React компонент повторно рендерится каждый раз?",
+      "baseline": "Скорее всего, проблема заключается в том, что объект создаётся на каждом рендере, поэтому React считает prop новым и повторно рендерит компонент. Используйте `useMemo`, чтобы сохранить ссылку между рендерами.",
+      "ru-lite": "Объект создаётся на каждом рендере. React видит новый prop и делает повторный рендер. Используйте `useMemo`.",
+      "ru-full": "Новый объект каждый рендер → React видит новый prop → повторный рендер. Оберни в `useMemo`.",
+      "ru-ultra": "Каждый рендер: новый object → новый prop → re-render. Решение: `useMemo`.",
+      "ru-notes": "new object each render → prop changed → re-render. fix: `useMemo`."
+    },
+    {
+      "id": "db-env-missing",
+      "type": "debug-summary",
+      "prompt": "Сервис не подключается к базе. В логах: `DATABASE_URL` is undefined.",
+      "baseline": "Скорее всего, проблема заключается в том, что сервис не может подключиться к базе данных, потому что переменная окружения `DATABASE_URL` не задана. Задайте её в окружении или в `.env` файле.",
+      "ru-lite": "Сервис не подключается к БД, т.к. переменная окружения `DATABASE_URL` не задана. Задай её в окружении или в `.env`.",
+      "ru-full": "Проблема: сервис не подключается к БД — `DATABASE_URL` не задана. Фикс: задать env.",
+      "ru-ultra": "Нет `DATABASE_URL` → нет подключения к БД. Фикс: set env.",
+      "ru-notes": "env: `DATABASE_URL` пусто → conn fail. set env."
+    },
+    {
+      "id": "connection-pool",
+      "type": "explanation",
+      "prompt": "Объясни, что такое connection pool.",
+      "baseline": "Connection pool — это механизм, который переиспользует уже открытые соединения с базой данных вместо того, чтобы создавать новое соединение на каждый запрос. Это позволяет избежать затрат на TCP-хендшейк и аутентификацию при каждом запросе.",
+      "ru-lite": "Connection pool переиспользует открытые соединения с БД вместо создания нового на каждый запрос. Экономит handshake и аутентификацию.",
+      "ru-full": "Пул = переиспользование коннектов. Нет нового коннекта на запрос. Экономит handshake + auth.",
+      "ru-ultra": "Пул reuse conn → skip handshake/auth → быстрее под нагрузкой.",
+      "ru-notes": "pool: reuse conn. skip handshake + auth. fast @ load."
+    },
+    {
+      "id": "tcp-vs-udp",
+      "type": "comparison",
+      "prompt": "Чем TCP отличается от UDP?",
+      "baseline": "TCP — это протокол с установлением соединения, гарантирует доставку, порядок пакетов и контроль ошибок, но имеет большие накладные расходы. UDP — протокол без установления соединения, не гарантирует доставку и порядок, но работает быстрее и легче.",
+      "ru-lite": "TCP: connection-oriented, гарантирует доставку и порядок, выше overhead. UDP: connectionless, без гарантий, быстрее.",
+      "ru-full": "TCP — с коннектом, гарантии, медленнее. UDP — без коннекта, без гарантий, быстрее.",
+      "ru-ultra": "TCP: conn, reliable, slow. UDP: no-conn, best-effort, fast.",
+      "ru-notes": "TCP = reliable/ordered/slow. UDP = unreliable/fast."
+    },
+    {
+      "id": "code-review",
+      "type": "code-review-comment",
+      "prompt": "Review: функция getUser() не проверяет, что id не null.",
+      "baseline": "В функции `getUser()` отсутствует проверка на то, что параметр `id` не равен `null`. Это может привести к исключению при обращении к БД. Следует добавить guard clause в начале функции.",
+      "ru-lite": "`getUser()` не проверяет `id === null`. При null будет исключение в БД-запросе. Добавь guard в начале.",
+      "ru-full": "`getUser()`: нет guard на `id == null` → exception при БД-запросе. Фикс: early return.",
+      "ru-ultra": "`getUser()`: `id` null → exception. Add guard.",
+      "ru-notes": "L12: 🔴 bug: `getUser()` no null-check on id. guard."
+    },
+    {
+      "id": "shell-debug",
+      "type": "shell-instruction",
+      "prompt": "Как посмотреть, какой процесс держит порт 8080 на Linux?",
+      "baseline": "Чтобы посмотреть, какой процесс держит порт 8080, можно использовать команду `lsof` с флагами `-i` и номером порта. Также можно воспользоваться `ss` или `netstat`, если `lsof` не установлен.",
+      "ru-lite": "Используй `lsof -i :8080`. Альтернативы: `ss -ltnp | grep 8080` или `netstat -tulnp | grep 8080`.",
+      "ru-full": "`lsof -i :8080`. Или `ss -ltnp | grep 8080`.",
+      "ru-ultra": "`lsof -i :8080`",
+      "ru-notes": "port 8080: `lsof -i :8080` / `ss -ltnp | grep 8080`."
+    },
+    {
+      "id": "git-rebase-merge",
+      "type": "comparison",
+      "prompt": "Чем git rebase отличается от git merge?",
+      "baseline": "`git rebase` переписывает историю коммитов, перенося ваши коммиты поверх целевой ветки, создавая линейную историю. `git merge` создаёт отдельный merge-коммит, сохраняя историю ветвления. `rebase` даёт чище лог, `merge` — точное отражение истории работы.",
+      "ru-lite": "`rebase` переписывает историю: коммиты переносятся поверх целевой ветки, история линейная. `merge` создаёт merge-коммит, история ветвится. Rebase — чистый лог, merge — правдивая история.",
+      "ru-full": "`rebase` — линейная история, переписывает коммиты. `merge` — merge-коммит, история с ветками. Rebase чище, merge честнее.",
+      "ru-ultra": "rebase: linear, rewrite. merge: branchy, merge-commit.",
+      "ru-notes": "rebase = linear/rewrite. merge = branchy/honest."
+    },
+    {
+      "id": "json-response",
+      "type": "answer-with-json",
+      "prompt": "Какой JSON вернёт endpoint /users/42 при успехе?",
+      "baseline": "При успешном запросе endpoint возвращает JSON-объект с полями `id`, `name` и `email`, например: `{\"id\": 42, \"name\": \"Alice\", \"email\": \"alice@example.com\"}`",
+      "ru-lite": "Успех → JSON с полями `id`, `name`, `email`:\n```json\n{\"id\": 42, \"name\": \"Alice\", \"email\": \"alice@example.com\"}\n```",
+      "ru-full": "200 OK:\n```json\n{\"id\": 42, \"name\": \"Alice\", \"email\": \"alice@example.com\"}\n```",
+      "ru-ultra": "200:\n```json\n{\"id\": 42, \"name\": \"Alice\", \"email\": \"alice@example.com\"}\n```",
+      "ru-notes": "200 → `{id,name,email}`"
+    },
+    {
+      "id": "internal-note",
+      "type": "agent-notes",
+      "prompt": "Запиши для следующего агента: что сломано, что починено.",
+      "baseline": "Было сломано подключение к базе данных из-за отсутствующей переменной окружения `DATABASE_URL`. Починили, добавив её в `.env`. Осталось сделать миграцию схемы пользователей.",
+      "ru-lite": "Сломано: нет `DATABASE_URL` → БД не подключается. Починено: добавлена в `.env`. Осталось: миграция users schema.",
+      "ru-full": "Было: нет `DATABASE_URL` → conn fail. Стало: `.env` ok. TODO: users migration.",
+      "ru-ultra": "fix: `DATABASE_URL` → `.env`. TODO: users migration.",
+      "ru-notes": "fixed: env `DATABASE_URL`. todo: users migration."
+    },
+    {
+      "id": "cors-error",
+      "type": "bug-explanation",
+      "prompt": "Почему я вижу CORS-ошибку в консоли браузера?",
+      "baseline": "Скорее всего, дело в том, что ваш сервер не отправляет заголовок Access-Control-Allow-Origin для домена, с которого идёт запрос. Браузер блокирует ответ по CORS-политике. Нужно добавить этот заголовок на сервере.",
+      "ru-lite": "Сервер не отправляет `Access-Control-Allow-Origin` для вашего домена. Браузер блокирует ответ по CORS. Добавьте заголовок на сервере.",
+      "ru-full": "Сервер без `Access-Control-Allow-Origin` → браузер режет ответ. Фикс: заголовок на сервере.",
+      "ru-ultra": "Нет `Access-Control-Allow-Origin` → CORS block. Fix: add header.",
+      "ru-notes": "CORS: no `Access-Control-Allow-Origin` header. add on server."
+    }
+  ],
+  "invariants_checklist": [
+    "код не переписан",
+    "имена функций/классов/переменных не изменены",
+    "URL и пути не искажены",
+    "JSON/YAML/SQL валидны",
+    "цитаты ошибок дословны"
+  ]
+}

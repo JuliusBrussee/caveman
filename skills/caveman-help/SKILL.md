@@ -20,6 +20,10 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Classical Chinese style, light compression. |
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness. |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget. |
+| **ru-lite** | `/caveman ru-lite` | Russian. Full sentences, no fluff. |
+| **ru-full** | `/caveman ru` | Russian. Short phrases, drop pronouns. |
+| **ru-ultra** | `/caveman ru-ultra` | Russian. Telegraphic, arrows/colons/bullets. |
+| **ru-notes** | `/caveman ru-notes` | Russian. Maximum compression, agent notes. |
 
 Mode stick until changed or session end.
 
@@ -34,7 +38,7 @@ Mode stick until changed or session end.
 
 ## Deactivate
 
-Say "stop caveman" or "normal mode". Resume anytime with `/caveman`.
+Say "stop caveman", "normal mode", or "обычный режим". Resume anytime with `/caveman`.
 
 ## Configure Default Mode
 
