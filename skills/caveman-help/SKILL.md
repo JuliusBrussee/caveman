@@ -20,6 +20,9 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Classical Chinese style, light compression. |
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness. |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget. |
+| **Fr-Lite** | `/caveman fr-lite` | French. Professional but tight. |
+| **Fr-Full** | `/caveman fr` | French caveman. Fragments, no articles. |
+| **Fr-Ultra** | `/caveman fr-ultra` | Extreme French compression. Abbreviations + arrows. |
 
 Mode stick until changed or session end.
 

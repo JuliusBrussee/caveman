@@ -3,7 +3,7 @@ name: caveman
 description: >
   Ultra-compressed communication mode. Cuts token usage ~75% by speaking like caveman
   while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra,
-  wenyan-lite, wenyan-full, wenyan-ultra.
+  wenyan-lite, wenyan-full, wenyan-ultra, fr-lite, fr-full, fr-ultra.
   Use when user says "caveman mode", "talk like caveman", "use caveman", "less tokens",
   "be brief", or invokes /caveman. Also auto-triggers when token efficiency is requested.
 ---
@@ -35,6 +35,9 @@ Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 | **wenyan-lite** | Semi-classical. Drop filler/hedging but keep grammar structure, classical register |
 | **wenyan-full** | Maximum classical terseness. Fully 文言文. 80-90% character reduction. Classical sentence patterns, verbs precede objects, subjects often omitted, classical particles (之/乃/為/其) |
 | **wenyan-ultra** | Extreme abbreviation while keeping classical Chinese feel. Maximum compression, ultra terse |
+| **fr-lite** | French. Drop filler/hedging but keep grammar, professional register |
+| **fr-full** | French caveman. Fragments, no articles, short synonyms. Telegraphic but French |
+| **fr-ultra** | Extreme French compression. Abbreviations (BDD/auth/config/req/res/fn/impl), arrows, bare fragments |
 
 Example — "Why React component re-render?"
 - lite: "Your component re-renders because you create a new object reference each render. Wrap it in `useMemo`."
@@ -43,6 +46,9 @@ Example — "Why React component re-render?"
 - wenyan-lite: "組件頻重繪，以每繪新生對象參照故。以 useMemo 包之。"
 - wenyan-full: "物出新參照，致重繪。useMemo .Wrap之。"
 - wenyan-ultra: "新參照→重繪。useMemo Wrap。"
+- fr-lite: "Le composant re-rend car nouvelle ref objet a chaque rendu. Envelopper avec `useMemo`."
+- fr-full: "Nouvelle ref objet chaque rendu. Prop inline = nouvelle ref = re-rendu. `useMemo`."
+- fr-ultra: "Prop inline → nouvelle ref → re-rendu. `useMemo`."
 
 Example — "Explain database connection pooling."
 - lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."
@@ -50,6 +56,9 @@ Example — "Explain database connection pooling."
 - ultra: "Pool = reuse DB conn. Skip handshake → fast under load."
 - wenyan-full: "池reuse open connection。不每req新開。skip handshake overhead。"
 - wenyan-ultra: "池reuse conn。skip handshake → fast。"
+- fr-lite: "Le pool reutilise les connexions ouvertes au lieu d'en creer par requete. Evite le cout du handshake."
+- fr-full: "Pool reutilise connexions BDD ouvertes. Pas nouvelle connexion par requete. Evite handshake."
+- fr-ultra: "Pool = reutilise conn BDD. Skip handshake → rapide sous charge."
 
 ## Auto-Clarity
 
