@@ -317,6 +317,17 @@ def verify_hook_install_flow() -> None:
     print("Claude hook install/uninstall flow OK")
 
 
+def verify_rule_completeness() -> None:
+    section("Rule Completeness")
+    rule_source = (ROOT / "rules/caveman-activate.md").read_text()
+    # All 6 intensity modes must be listed so hookless agents (Copilot, Cline)
+    # know what each level actually means and can honour mode-switch requests.
+    required_modes = ["lite", "full", "ultra", "wenyan-lite", "wenyan-full", "wenyan-ultra"]
+    for mode in required_modes:
+        ensure(mode in rule_source, f"rules/caveman-activate.md missing mode description: {mode}")
+    print("Rule completeness OK")
+
+
 def main() -> int:
     checks = [
         verify_synced_files,
@@ -325,6 +336,7 @@ def main() -> int:
         verify_compress_fixtures,
         verify_compress_cli,
         verify_hook_install_flow,
+        verify_rule_completeness,
     ]
 
     try:
