@@ -50,6 +50,7 @@ process.stdin.on('end', () => {
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
         else if (arg === 'wenyan-ultra') mode = 'wenyan-ultra';
+        else if (arg === 'axon') mode = 'axon';
         else mode = getDefaultMode();
       }
 

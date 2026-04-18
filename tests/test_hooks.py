@@ -134,6 +134,26 @@ class HookScriptTests(unittest.TestCase):
             )
             self.assertNotIn("hooks", updated)
 
+    def test_mode_tracker_writes_axon_mode(self):
+        """Verify /caveman axon writes 'axon' to the flag file."""
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-axon-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            prompt_payload = json.dumps({"prompt": "/caveman axon"})
+            result = subprocess.run(
+                ["node", "hooks/caveman-mode-tracker.js"],
+                cwd=REPO_ROOT,
+                input=prompt_payload,
+                env={**os.environ, "HOME": str(home), "USERPROFILE": str(home)},
+                text=True,
+                capture_output=True,
+            )
+
+            flag = home / ".claude" / ".caveman-active"
+            self.assertTrue(flag.exists(), "flag file should be created by /caveman axon")
+            self.assertEqual(flag.read_text(), "axon")
+
     def test_activate_does_not_nudge_when_custom_statusline_exists(self):
         with tempfile.TemporaryDirectory(prefix="caveman-hooks-activate-") as tmp:
             home = Path(tmp)
