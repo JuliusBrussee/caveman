@@ -16,6 +16,7 @@ const os = require('os');
 const VALID_MODES = [
   'off', 'lite', 'full', 'ultra',
   'wenyan-lite', 'wenyan', 'wenyan-full', 'wenyan-ultra',
+  'korean-lite', 'korean', 'korean-full', 'korean-ultra',
   'commit', 'review', 'compress'
 ];
 
