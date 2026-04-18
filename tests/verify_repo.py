@@ -81,6 +81,19 @@ def verify_synced_files() -> None:
     for copy in rule_copies:
         ensure(copy.read_text() == rule_source.read_text(), f"Rule copy mismatch: {copy}")
 
+    copilot_instruction = ROOT / ".github/instructions/caveman.instructions.md"
+    expected_copilot_instruction = (
+        "---\n"
+        'applyTo: "**"\n'
+        'description: "Always-on compressed response mode for GitHub Copilot in this repository. Enforce persistent caveman style, runtime mode switching (/caveman ...), and explicit off command."\n'
+        "---\n\n"
+        f"{rule_source.read_text()}"
+    )
+    ensure(
+        copilot_instruction.read_text() == expected_copilot_instruction,
+        f"Copilot instruction template mismatch: {copilot_instruction}",
+    )
+
     with zipfile.ZipFile(ROOT / "caveman.skill") as archive:
         ensure("caveman/SKILL.md" in archive.namelist(), "caveman.skill missing caveman/SKILL.md")
         ensure(
