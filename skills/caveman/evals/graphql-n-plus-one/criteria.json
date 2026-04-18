@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response correctly explains the GraphQL N+1 problem and provides the standard solution.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Explains why N+1 happens in GraphQL",
+      "max_score": 12,
+      "description": "Explains that each field resolver runs independently, so the author resolver fires once per post"
+    },
+    {
+      "name": "Recommends DataLoader or batching",
+      "max_score": 15,
+      "description": "Suggests DataLoader (or equivalent batching/coalescing library) to batch author lookups into a single query"
+    },
+    {
+      "name": "Explains DataLoader mechanism",
+      "max_score": 10,
+      "description": "Describes how DataLoader collects IDs during a tick and makes one batched query (WHERE id IN (...))"
+    },
+    {
+      "name": "Mentions per-request DataLoader instances",
+      "max_score": 8,
+      "description": "Notes that DataLoader instances should be created per-request to avoid stale cache across requests"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Response does not contain factually wrong statements about GraphQL resolution or DataLoader"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response correctly explains the technical differences between git rebase and git merge with accurate tradeoffs.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Explains merge creates a merge commit",
+      "max_score": 12,
+      "description": "States that git merge creates a merge commit that joins two branch histories"
+    },
+    {
+      "name": "Explains rebase replays commits",
+      "max_score": 12,
+      "description": "States that git rebase replays/moves commits onto a new base, creating new commit hashes"
+    },
+    {
+      "name": "Mentions history linearity tradeoff",
+      "max_score": 12,
+      "description": "Notes that rebase produces a linear history while merge preserves the branching structure"
+    },
+    {
+      "name": "Warns about rebase on shared branches",
+      "max_score": 12,
+      "description": "Warns against rebasing commits that have been pushed/shared, as it rewrites history"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 12,
+      "description": "Response does not contain factually wrong statements about git internals or behavior"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "context": "Tests whether the response implements a correct parameterized Python decorator for role-based auth.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Decorator accepts role parameter",
+      "max_score": 12,
+      "description": "Uses a decorator factory pattern — @require_role('admin') returns a decorator (nested function structure)"
+    },
+    {
+      "name": "Extracts and decodes JWT",
+      "max_score": 12,
+      "description": "Reads the Authorization header, extracts the Bearer token, and decodes the JWT"
+    },
+    {
+      "name": "Returns 401 for missing/invalid token",
+      "max_score": 10,
+      "description": "Returns HTTP 401 when the token is missing, malformed, or expired"
+    },
+    {
+      "name": "Returns 403 for wrong role",
+      "max_score": 10,
+      "description": "Returns HTTP 403 when the token is valid but the user lacks the required role"
+    },
+    {
+      "name": "Uses functools.wraps",
+      "max_score": 8,
+      "description": "Applies @functools.wraps(f) to preserve the wrapped function's name and docstring"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Python code is syntactically valid and Flask/JWT usage is correct"
+    }
+  ]
+}

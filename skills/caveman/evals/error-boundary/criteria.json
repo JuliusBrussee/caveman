@@ -1,0 +1,36 @@
+{
+  "context": "Tests whether the response implements a correct React error boundary with all required features.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Uses class component",
+      "max_score": 12,
+      "description": "Error boundary is a class component (error boundaries cannot be function components in React)"
+    },
+    {
+      "name": "Implements getDerivedStateFromError or componentDidCatch",
+      "max_score": 15,
+      "description": "Implements static getDerivedStateFromError to update state and/or componentDidCatch for side effects"
+    },
+    {
+      "name": "Renders fallback UI on error",
+      "max_score": 12,
+      "description": "The render method checks error state and shows a fallback UI instead of children when an error has occurred"
+    },
+    {
+      "name": "Retry button resets state",
+      "max_score": 12,
+      "description": "Fallback UI includes a retry/reset button that clears the error state so children re-render"
+    },
+    {
+      "name": "Logs error details",
+      "max_score": 10,
+      "description": "Error information is logged (console.error, external service, or callback prop)"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Code is syntactically valid React and correctly uses the error boundary API"
+    }
+  ]
+}

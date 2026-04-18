@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response designs a correct distributed rate limiting system.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Uses centralized store for multi-instance",
+      "max_score": 15,
+      "description": "Recognizes that multiple server instances need a shared store (Redis, Memcached) for consistent rate limiting"
+    },
+    {
+      "name": "Describes a valid algorithm",
+      "max_score": 12,
+      "description": "Uses a recognized rate limiting algorithm: sliding window, token bucket, leaky bucket, or fixed window counter"
+    },
+    {
+      "name": "Returns correct HTTP headers",
+      "max_score": 10,
+      "description": "Includes X-RateLimit-Limit, X-RateLimit-Remaining, and X-RateLimit-Reset (or Retry-After) headers"
+    },
+    {
+      "name": "Returns 429 status code",
+      "max_score": 8,
+      "description": "Returns HTTP 429 Too Many Requests when the limit is exceeded"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Rate limiting concepts and implementation details are technically correct"
+    }
+  ]
+}

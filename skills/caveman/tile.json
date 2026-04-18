@@ -1,0 +1,11 @@
+{
+  "name": "juliusbrussee/caveman",
+  "version": "1.0.1",
+  "summary": "Compressed caveman-style prose for AI coding agents — cuts ~65% output tokens while keeping full technical accuracy",
+  "private": false,
+  "skills": {
+    "caveman": {
+      "path": "SKILL.md"
+    }
+  }
+}

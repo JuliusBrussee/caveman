@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response explains cache invalidation strategies and recommends an appropriate one.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Explains write-through or write-behind",
+      "max_score": 10,
+      "description": "Describes write-through (update cache on write) or write-behind (async cache update) as strategies"
+    },
+    {
+      "name": "Explains cache-aside with invalidation",
+      "max_score": 10,
+      "description": "Describes cache-aside (lazy loading) with explicit invalidation on write (delete cache key on update)"
+    },
+    {
+      "name": "Recommends invalidation on write for this case",
+      "max_score": 12,
+      "description": "Recommends actively invalidating (deleting or updating) the cache entry when the user updates their profile, not just waiting for TTL"
+    },
+    {
+      "name": "Addresses consistency vs performance tradeoff",
+      "max_score": 10,
+      "description": "Discusses the tradeoff between cache freshness and read performance, or mentions eventual consistency"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 12,
+      "description": "Caching patterns and Redis behavior are described correctly"
+    }
+  ]
+}

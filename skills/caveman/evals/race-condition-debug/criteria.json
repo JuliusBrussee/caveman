@@ -1,0 +1,26 @@
+{
+  "context": "Tests whether the response correctly identifies the read-then-write race condition and provides a valid database-level fix.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Identifies read-then-write as the problem",
+      "max_score": 15,
+      "description": "Explains that separate SELECT then UPDATE creates a race window where concurrent requests read the same value before either writes"
+    },
+    {
+      "name": "Recommends atomic UPDATE RETURNING",
+      "max_score": 15,
+      "description": "Suggests using UPDATE ... SET counter = counter + 1 RETURNING counter (or equivalent atomic single-statement approach)"
+    },
+    {
+      "name": "Mentions alternative: transactions with row locking",
+      "max_score": 10,
+      "description": "Mentions SELECT FOR UPDATE or serializable isolation as an alternative approach"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 12,
+      "description": "Response does not contain factually wrong statements about PostgreSQL concurrency, transactions, or locking"
+    }
+  ]
+}

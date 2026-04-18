@@ -133,6 +133,7 @@ Pick your agent. One command. Done.
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
 | **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
+| **Tessl** | `tessl install juliusbrussee/caveman` |
 | **Any other** | `npx skills add JuliusBrussee/caveman` |
 
 Install once. Use in every session for that install target after that. One rock. That it.
@@ -141,17 +142,18 @@ Install once. Use in every session for that install target after that. One rock.
 
 Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
 
-| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
-|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|
-| Caveman mode | Y | Y | Y | Y | Y | Y | Y |
-| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² |
-| `/caveman` command | Y | Y¹ | Y | — | — | — | — |
-| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — |
-| Statusline badge | Y⁴ | — | — | — | — | — | — |
-| caveman-commit | Y | — | Y | Y | Y | Y | Y |
-| caveman-review | Y | — | Y | Y | Y | Y | Y |
-| caveman-compress | Y | Y | Y | Y | Y | Y | Y |
-| caveman-help | Y | — | Y | Y | Y | Y | Y |
+| Feature | Claude Code | Codex | Gemini CLI | Tessl | Cursor | Windsurf | Cline | Copilot |
+|---------|:-----------:|:-----:|:----------:|:-----:|:------:|:--------:|:-----:|:-------:|
+| Caveman mode | Y | Y | Y | Y | Y | Y | Y | Y |
+| Auto-activate every session | Y | Y¹ | Y | — | —² | —² | —² | —² |
+| `/caveman` command | Y | Y¹ | Y | — | — | — | — | — |
+| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y | Y³ | Y³ | — | — |
+| Statusline badge | Y⁴ | — | — | — | — | — | — | — |
+| Quality evals | — | — | — | Y⁵ | — | — | — | — |
+| caveman-commit | Y | — | Y | — | Y | Y | Y | Y |
+| caveman-review | Y | — | Y | — | Y | Y | Y | Y |
+| caveman-compress | Y | Y | Y | — | Y | Y | Y | Y |
+| caveman-help | Y | — | Y | — | Y | Y | Y | Y |
 
 > [!NOTE]
 > Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
@@ -160,6 +162,7 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 > ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
 > ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
 > ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
+> ⁵ Tessl tile ships 38 eval scenarios. Run `tessl eval run` to verify quality on your own agent/model. [Results public on Tessl](https://tessl.io/eval-runs/019d9ce5-3e4a-71ac-81fb-e8de7c5de827).
 
 <details>
 <summary><strong>Claude Code — full details</strong></summary>
@@ -388,6 +391,8 @@ A March 2026 paper ["Brevity Constraints Reverse Performance Hierarchies in Lang
 
 ## Evals
 
+### Token compression
+
 Caveman not just claim 75%. Caveman **prove** it.
 
 The `evals/` directory has a three-arm eval harness that measures real token compression against a proper control — not just "verbose vs skill" but "terse vs skill". Because comparing caveman to verbose Claude conflate the skill with generic terseness. That cheating. Caveman not cheat.
@@ -398,6 +403,30 @@ uv run python evals/llm_run.py
 
 # Read results (no API key, runs offline)
 uv run --with tiktoken python evals/measure.py
+```
+
+### Quality — fewer word, same brain
+
+Token go down. But brain stay same? Caveman **prove** that too.
+
+38 [Tessl task eval](https://docs.tessl.io/evaluate/evaluate-skill-quality-using-scenarios) scenarios (35 coding problems + 3 negative cases) test whether caveman degrades technical correctness. Each scenario scores agent responses against weighted technical checklists — zero style points, only facts. Run with and without caveman, compare scores.
+
+Tested across 4 agents, 19 independent runs:
+
+| Agent | Runs | Baseline | Caveman | Delta |
+|-------|------|----------|---------|-------|
+| Claude Sonnet 4.6 | 10 | 97.6% | 96.5% | -1.1 |
+| Cursor Composer 2 | 3 | 97.7% | 96.7% | -1.0 |
+| Codex GPT-5.4 | 3 | 97.0% | 96.7% | -0.3 |
+| Claude Haiku 4.5 | 3 | 94.3% | 94.0% | -0.3 |
+
+Delta never exceed 1.1 percentage point. On some scenarios caveman score **higher** than baseline. Fewer word, same brain. [Full results on Tessl](https://tessl.io/eval-runs/019d9ce5-3e4a-71ac-81fb-e8de7c5de827).
+
+Scenarios cover 10 languages (JS, TS, Python, Go, Rust, Java, CSS, SQL, HCL, YAML) and span debugging, architecture, security, DevOps, databases, networking, testing, and implementation. Reproduce with:
+
+```bash
+tessl install juliusbrussee/caveman
+tessl eval run skills/caveman --agent claude:claude-sonnet-4-6 --variant without-context --variant with-context
 ```
 
 ## Star This Repo

@@ -1,0 +1,21 @@
+{
+  "context": "Tests whether the agent correctly identifies that requests.cache() does not exist instead of hallucinating an implementation. Brevity compression should not cause the agent to skip the correction and blindly implement a nonexistent API.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Identifies that requests.cache() does not exist",
+      "max_score": 20,
+      "description": "States that the requests library has no built-in cache() method"
+    },
+    {
+      "name": "Suggests a real alternative",
+      "max_score": 15,
+      "description": "Recommends an actual caching approach: requests-cache, cachetools, manual caching with a dict/TTL, or functools.lru_cache"
+    },
+    {
+      "name": "Does not hallucinate a working requests.cache() implementation",
+      "max_score": 20,
+      "description": "Does not write code that calls requests.cache() as if it were a real method"
+    }
+  ]
+}

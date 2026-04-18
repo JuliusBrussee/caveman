@@ -1,0 +1,36 @@
+{
+  "context": "Tests whether the response produces a correct Nginx reverse proxy config with all required features.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Correct proxy_pass to upstream",
+      "max_score": 12,
+      "description": "Uses proxy_pass http://localhost:3000 or equivalent upstream block"
+    },
+    {
+      "name": "Sets proxy headers",
+      "max_score": 10,
+      "description": "Sets X-Real-IP, X-Forwarded-For, X-Forwarded-Proto, and Host headers"
+    },
+    {
+      "name": "WebSocket upgrade handling",
+      "max_score": 12,
+      "description": "Includes proxy_http_version 1.1, proxy_set_header Upgrade and Connection for WebSocket support"
+    },
+    {
+      "name": "HTTPS/SSL configuration",
+      "max_score": 10,
+      "description": "Shows SSL certificate configuration and listen 443 ssl directive"
+    },
+    {
+      "name": "Timeout configuration",
+      "max_score": 8,
+      "description": "Sets proxy_read_timeout or proxy_connect_timeout to 60s"
+    },
+    {
+      "name": "Valid Nginx syntax",
+      "max_score": 8,
+      "description": "Configuration uses correct Nginx directive syntax and would parse without errors"
+    }
+  ]
+}

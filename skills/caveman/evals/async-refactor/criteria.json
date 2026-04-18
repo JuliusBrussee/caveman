@@ -1,0 +1,36 @@
+{
+  "context": "Tests whether the response correctly refactors a callback-based function to async/await with proper error handling.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Function is async",
+      "max_score": 12,
+      "description": "The refactored function uses the async keyword"
+    },
+    {
+      "name": "Uses await on db.query",
+      "max_score": 12,
+      "description": "Awaits the database query call instead of using a callback"
+    },
+    {
+      "name": "Preserves not-found check",
+      "max_score": 12,
+      "description": "Still throws or rejects when no rows are returned (the empty result case)"
+    },
+    {
+      "name": "Returns the user row",
+      "max_score": 10,
+      "description": "Returns rows[0] or equivalent single user result"
+    },
+    {
+      "name": "Error propagation via throw or rejection",
+      "max_score": 10,
+      "description": "Database errors propagate naturally via async/await (thrown or uncaught) rather than being swallowed"
+    },
+    {
+      "name": "No callback parameter in signature",
+      "max_score": 8,
+      "description": "The refactored function removes the callback parameter from the function signature"
+    }
+  ]
+}

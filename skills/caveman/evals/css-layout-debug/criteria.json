@@ -1,0 +1,26 @@
+{
+  "context": "Tests whether the response correctly solves the three-column flexbox centering problem.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Identifies the margin-auto centering limitation",
+      "max_score": 12,
+      "description": "Explains that margin-auto distributes remaining space, so unequal left/right elements cause the center to shift"
+    },
+    {
+      "name": "Provides a working solution",
+      "max_score": 15,
+      "description": "Suggests a valid approach: equal-width flex children (flex: 1), CSS Grid with 3 columns, or absolute positioning for the center element"
+    },
+    {
+      "name": "Solution achieves true centering",
+      "max_score": 12,
+      "description": "The proposed solution actually centers the menu items relative to the viewport/container, not relative to remaining space"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "CSS properties and values are correct and would work as described"
+    }
+  ]
+}

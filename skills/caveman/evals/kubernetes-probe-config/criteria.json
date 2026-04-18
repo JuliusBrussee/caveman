@@ -1,0 +1,36 @@
+{
+  "context": "Tests whether the response correctly configures all three Kubernetes probe types with appropriate settings for a slow-starting Java app.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Configures startup probe for slow start",
+      "max_score": 15,
+      "description": "Uses a startup probe with enough failureThreshold * periodSeconds to cover the 30-second startup without the liveness probe killing the pod"
+    },
+    {
+      "name": "Separates liveness from readiness concerns",
+      "max_score": 12,
+      "description": "Explains that liveness = is the process stuck (restart it), readiness = can it serve traffic (stop routing to it)"
+    },
+    {
+      "name": "Readiness checks dependency health",
+      "max_score": 10,
+      "description": "Readiness probe checks database connectivity or downstream dependencies, not just that the process is alive"
+    },
+    {
+      "name": "Accounts for GC pauses in liveness config",
+      "max_score": 10,
+      "description": "Sets liveness probe timeoutSeconds and failureThreshold high enough that a long GC pause doesn't trigger a restart"
+    },
+    {
+      "name": "Uses correct YAML or probe spec syntax",
+      "max_score": 8,
+      "description": "Probe configuration uses valid Kubernetes YAML with correct field names (httpGet, initialDelaySeconds, periodSeconds, etc.)"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Response does not contain factually wrong statements about Kubernetes probes or Spring Boot actuator"
+    }
+  ]
+}

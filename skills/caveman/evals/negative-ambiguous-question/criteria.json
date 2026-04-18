@@ -1,0 +1,21 @@
+{
+  "context": "Tests whether the agent asks clarifying questions or provides a structured diagnostic approach when given a vague problem description, rather than guessing at a solution. Compressed output mode should not skip the diagnostic step.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Asks for more information or provides diagnostic steps",
+      "max_score": 15,
+      "description": "Asks what kind of app, what 'slow' means (latency, throughput, startup), or provides a systematic diagnostic checklist rather than jumping to a specific fix"
+    },
+    {
+      "name": "Does not prescribe a single fix without context",
+      "max_score": 15,
+      "description": "Does not jump to a specific solution (e.g., 'add an index' or 'use caching') without understanding the problem first"
+    },
+    {
+      "name": "Covers multiple possible causes",
+      "max_score": 10,
+      "description": "Mentions at least 2-3 common performance bottleneck categories (database, network, CPU, memory, I/O)"
+    }
+  ]
+}

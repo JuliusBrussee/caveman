@@ -1,0 +1,26 @@
+{
+  "context": "Tests whether the response correctly explains Rust ownership/borrowing errors with threads.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Identifies the closure capture issue",
+      "max_score": 15,
+      "description": "Explains that the closure borrows data, but the thread might outlive the main function, so Rust requires ownership transfer"
+    },
+    {
+      "name": "Fix 1: move keyword",
+      "max_score": 12,
+      "description": "Shows using move || to transfer ownership into the thread (and removing the second println since data is moved)"
+    },
+    {
+      "name": "Fix 2: Arc or clone",
+      "max_score": 12,
+      "description": "Shows using Arc<Vec> to share ownership across threads, or cloning the data before spawning"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 12,
+      "description": "Response does not contain factually wrong statements about Rust ownership, lifetimes, or thread safety"
+    }
+  ]
+}

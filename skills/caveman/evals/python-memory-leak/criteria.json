@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response correctly identifies common Python memory leak patterns in a pandas/web service context.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Identifies DataFrame retention as likely cause",
+      "max_score": 15,
+      "description": "Points out that DataFrames may be held in memory via references (global variables, caches, closures, or uncleared lists)"
+    },
+    {
+      "name": "Recommends diagnostic tools",
+      "max_score": 12,
+      "description": "Suggests tracemalloc, objgraph, memory_profiler, or similar tools to diagnose the leak"
+    },
+    {
+      "name": "Mentions garbage collection considerations",
+      "max_score": 10,
+      "description": "Discusses gc module, reference cycles, or del to explicitly free DataFrames"
+    },
+    {
+      "name": "Suggests chunked processing",
+      "max_score": 10,
+      "description": "Recommends processing large CSVs in chunks (pd.read_csv chunksize) instead of loading all at once"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 12,
+      "description": "Response does not contain factually wrong statements about Python memory management or pandas"
+    }
+  ]
+}

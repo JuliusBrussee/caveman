@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response correctly distinguishes test doubles and provides appropriate examples.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Correctly defines stub",
+      "max_score": 12,
+      "description": "Describes a stub as returning predefined responses without behavior verification (provides canned answers)"
+    },
+    {
+      "name": "Correctly defines mock",
+      "max_score": 12,
+      "description": "Describes a mock as verifying interactions/calls happened (behavior verification — was this method called with these args?)"
+    },
+    {
+      "name": "Correctly defines fake",
+      "max_score": 10,
+      "description": "Describes a fake as a working lightweight implementation (in-memory database, fake SMTP server)"
+    },
+    {
+      "name": "Provides concrete examples for the email/DB scenario",
+      "max_score": 12,
+      "description": "Maps each test double to the scenario: e.g., stub the DB for read tests, mock the email service to verify send was called, fake DB with in-memory store"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Definitions and examples are technically correct and not conflated"
+    }
+  ]
+}

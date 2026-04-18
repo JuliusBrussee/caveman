@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response correctly maps application types to appropriate OAuth2 flows.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Server-side app: Authorization Code flow",
+      "max_score": 12,
+      "description": "Recommends Authorization Code flow (with client secret) for the server-side web app since it can securely store the client secret"
+    },
+    {
+      "name": "SPA: Authorization Code with PKCE",
+      "max_score": 12,
+      "description": "Recommends Authorization Code flow with PKCE for the SPA since it cannot store a client secret (NOT the deprecated Implicit flow)"
+    },
+    {
+      "name": "CLI: Device Authorization flow",
+      "max_score": 12,
+      "description": "Recommends Device Authorization flow (or Authorization Code with localhost redirect) for the CLI tool"
+    },
+    {
+      "name": "Explains security rationale",
+      "max_score": 10,
+      "description": "Explains why different flows exist: client secret confidentiality, redirect URI validation, token exposure in browser"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 12,
+      "description": "OAuth2 flow names, mechanics, and security properties are technically correct"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response correctly explains Terraform state locking with remote backends.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Recommends remote backend with locking",
+      "max_score": 15,
+      "description": "Suggests a remote backend that supports locking (S3 + DynamoDB, GCS, Azure Blob, Terraform Cloud, etc.)"
+    },
+    {
+      "name": "Shows backend configuration",
+      "max_score": 10,
+      "description": "Provides the HCL backend configuration block with the necessary locking parameters (e.g., dynamodb_table for S3)"
+    },
+    {
+      "name": "Explains lock behavior",
+      "max_score": 10,
+      "description": "Explains that Terraform acquires a lock before state operations and releases it after, preventing concurrent modifications"
+    },
+    {
+      "name": "Addresses stuck lock recovery",
+      "max_score": 12,
+      "description": "Mentions terraform force-unlock or manual lock removal from the lock store as recovery for stuck locks"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Response does not contain factually wrong statements about Terraform state management"
+    }
+  ]
+}

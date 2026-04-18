@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response designs an optimal compound index following MongoDB's ESR rule.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Creates compound index with correct field order",
+      "max_score": 15,
+      "description": "Proposes a compound index like { customerId: 1, status: 1, createdAt: -1 } following Equality-Sort-Range principles"
+    },
+    {
+      "name": "Explains field ordering rationale",
+      "max_score": 12,
+      "description": "Explains why equality fields come first (narrow the set), then sort field (avoid in-memory sort)"
+    },
+    {
+      "name": "Sort direction matches query",
+      "max_score": 10,
+      "description": "The createdAt index direction matches the sort direction in the query (-1 for descending)"
+    },
+    {
+      "name": "Mentions explain() for verification",
+      "max_score": 8,
+      "description": "Suggests using .explain() to verify the query plan uses the index and avoids SORT stage"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Response does not contain factually wrong statements about MongoDB indexing"
+    }
+  ]
+}

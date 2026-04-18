@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response correctly maps scenarios to load balancing algorithms.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Stateless API: Round Robin",
+      "max_score": 12,
+      "description": "Recommends Round Robin (or Random) for identical stateless servers — simplest and sufficient"
+    },
+    {
+      "name": "Mixed servers: Weighted or Least Connections",
+      "max_score": 12,
+      "description": "Recommends Weighted Round Robin, Weighted Least Connections, or Least Connections for heterogeneous server sizes"
+    },
+    {
+      "name": "Chat app: Sticky Sessions / IP Hash",
+      "max_score": 12,
+      "description": "Recommends sticky sessions (session affinity), IP hash, or consistent hashing for the WebSocket use case"
+    },
+    {
+      "name": "Explains why each algorithm fits",
+      "max_score": 10,
+      "description": "Provides reasoning for each choice, not just the algorithm name"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Load balancing algorithm descriptions and behaviors are technically correct"
+    }
+  ]
+}

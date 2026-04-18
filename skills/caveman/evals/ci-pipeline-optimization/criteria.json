@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response provides practical CI pipeline optimization strategies.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Suggests parallelizing independent steps",
+      "max_score": 15,
+      "description": "Recommends running lint, unit tests, and build in parallel since they're independent"
+    },
+    {
+      "name": "Recommends dependency caching",
+      "max_score": 12,
+      "description": "Suggests caching node_modules or the npm/yarn cache to skip repeated installs"
+    },
+    {
+      "name": "Proposes test splitting or sharding",
+      "max_score": 10,
+      "description": "Suggests splitting test suites across parallel runners/matrices to reduce the longest step"
+    },
+    {
+      "name": "Mentions conditional or incremental steps",
+      "max_score": 8,
+      "description": "Suggests skipping steps when unchanged (e.g., skip lint if no source changes, skip deploy on non-main branches)"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "GitHub Actions syntax references and CI concepts are correct"
+    }
+  ]
+}

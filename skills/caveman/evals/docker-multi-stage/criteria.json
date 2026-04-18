@@ -1,0 +1,36 @@
+{
+  "context": "Tests whether the response produces a correct multi-stage Dockerfile with proper separation of build and runtime stages.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Has build stage",
+      "max_score": 12,
+      "description": "Defines a build stage (FROM ... AS build or similar) that installs dependencies and compiles TypeScript"
+    },
+    {
+      "name": "Has separate runtime stage",
+      "max_score": 12,
+      "description": "Defines a second stage that copies only the compiled output, not the full build environment"
+    },
+    {
+      "name": "Uses slim or alpine base for runtime",
+      "max_score": 10,
+      "description": "The runtime stage uses a minimal base image (node:*-slim, node:*-alpine, or distroless)"
+    },
+    {
+      "name": "Copies only production artifacts",
+      "max_score": 12,
+      "description": "The runtime stage copies compiled JS and production node_modules (or just compiled output), not TypeScript source or devDependencies"
+    },
+    {
+      "name": "Runs TypeScript compilation",
+      "max_score": 10,
+      "description": "Build stage includes a step to compile TypeScript (npx tsc, npm run build, or similar)"
+    },
+    {
+      "name": "Valid Dockerfile syntax",
+      "max_score": 10,
+      "description": "The Dockerfile is syntactically valid and would build without errors given standard project files"
+    }
+  ]
+}

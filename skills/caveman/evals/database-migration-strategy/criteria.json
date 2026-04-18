@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response describes a safe zero-downtime column rename strategy.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Uses expand-contract (multi-phase) approach",
+      "max_score": 15,
+      "description": "Describes a phased approach: add new column, dual-write, backfill, switch reads, remove old column — NOT a direct ALTER TABLE RENAME"
+    },
+    {
+      "name": "Explains why direct rename is risky",
+      "max_score": 10,
+      "description": "Notes that a direct column rename breaks running application code that references the old name"
+    },
+    {
+      "name": "Includes backfill step",
+      "max_score": 10,
+      "description": "Describes backfilling existing data from old column to new column (in batches to avoid locking)"
+    },
+    {
+      "name": "Mentions dual-write period",
+      "max_score": 10,
+      "description": "Application writes to both old and new columns during transition so no data is lost"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 12,
+      "description": "PostgreSQL DDL behavior and migration strategy are technically correct"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response correctly diagnoses a CORS preflight failure beyond just the Allow-Origin header.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Explains the preflight (OPTIONS) request",
+      "max_score": 12,
+      "description": "Explains that the browser sends an OPTIONS preflight request before the actual POST, and the server must respond to it correctly"
+    },
+    {
+      "name": "Identifies missing Allow-Headers",
+      "max_score": 15,
+      "description": "Points out that Content-Type: application/json triggers a preflight that requires Access-Control-Allow-Headers to include Content-Type"
+    },
+    {
+      "name": "Mentions Allow-Methods needed",
+      "max_score": 10,
+      "description": "Notes that Access-Control-Allow-Methods must include POST"
+    },
+    {
+      "name": "Server must handle OPTIONS method",
+      "max_score": 10,
+      "description": "Notes that the server must respond to the OPTIONS request with a 200/204 and the CORS headers (not just add headers to POST responses)"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "CORS mechanism explanation is technically correct"
+    }
+  ]
+}

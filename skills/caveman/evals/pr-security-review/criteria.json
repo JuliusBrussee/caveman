@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response identifies the SQL injection vulnerability and provides the correct fix.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Identifies SQL injection",
+      "max_score": 20,
+      "description": "Identifies that string interpolation of req.params.id into the SQL query creates a SQL injection vulnerability"
+    },
+    {
+      "name": "Recommends parameterized queries",
+      "max_score": 15,
+      "description": "Recommends using parameterized/prepared statements (e.g., $1 placeholder or ? with parameter array) as the fix"
+    },
+    {
+      "name": "Shows fixed code",
+      "max_score": 10,
+      "description": "Provides a corrected code example using parameterized queries"
+    },
+    {
+      "name": "Mentions missing error handling",
+      "max_score": 8,
+      "description": "Notes the missing .catch() or try/catch for the database query promise"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Response does not contain factually wrong security advice"
+    }
+  ]
+}

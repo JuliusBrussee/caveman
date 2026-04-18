@@ -1,0 +1,26 @@
+{
+  "context": "Tests whether the response identifies both the singleton race condition and the shared mutable state bug.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Identifies shared mutable state as primary bug",
+      "max_score": 20,
+      "description": "Explains that storing per-user data in a singleton field means all threads share the same currentUserId — one thread's setUser overwrites another's"
+    },
+    {
+      "name": "Recommends ThreadLocal",
+      "max_score": 15,
+      "description": "Suggests using ThreadLocal<String> for per-thread user context isolation"
+    },
+    {
+      "name": "Identifies double-checked locking issue",
+      "max_score": 10,
+      "description": "Notes the singleton getInstance() has a race condition — two threads could create separate instances (or suggests fixing with synchronized, enum, or holder pattern)"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 12,
+      "description": "Response does not contain factually wrong statements about Java concurrency, ThreadLocal, or singleton patterns"
+    }
+  ]
+}

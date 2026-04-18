@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response implements a correct type-safe generic groupBy function in TypeScript.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Correct generic signature",
+      "max_score": 15,
+      "description": "Function signature uses generics with K extends keyof T constraint to restrict the key parameter"
+    },
+    {
+      "name": "Correct grouping logic",
+      "max_score": 12,
+      "description": "Implementation correctly groups items into a Record/object where each key maps to an array of matching items"
+    },
+    {
+      "name": "Handles key value to string conversion",
+      "max_score": 8,
+      "description": "Converts the key's value to a string for use as Record key (via String() or template literal)"
+    },
+    {
+      "name": "Includes usage example",
+      "max_score": 10,
+      "description": "Shows example usage with the specified type and demonstrates that invalid keys cause compile errors"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 12,
+      "description": "TypeScript code compiles correctly with strict mode and generic constraints are properly applied"
+    }
+  ]
+}

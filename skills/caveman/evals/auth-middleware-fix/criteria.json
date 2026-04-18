@@ -1,0 +1,26 @@
+{
+  "context": "Tests whether the response correctly identifies the JWT exp vs Date.now() unit mismatch bug and provides the correct fix.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Identifies seconds vs milliseconds mismatch",
+      "max_score": 20,
+      "description": "Explains that JWT exp is in seconds (Unix timestamp) while Date.now() returns milliseconds"
+    },
+    {
+      "name": "Provides correct fix",
+      "max_score": 15,
+      "description": "Shows the fix: either divide Date.now() by 1000 or multiply exp by 1000 before comparing"
+    },
+    {
+      "name": "Correct comparison direction",
+      "max_score": 10,
+      "description": "The fix checks that current time is less than exp (token not yet expired), not the reverse"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 15,
+      "description": "Response does not contain factually wrong statements about JWT, Unix timestamps, or JavaScript Date APIs"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response designs a coherent log aggregation pipeline for a microservices architecture.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Describes log collection from containers",
+      "max_score": 10,
+      "description": "Explains how to collect stdout logs (sidecar, DaemonSet log agent like Fluentd/Filebeat/Promtail, or Docker/K8s log driver)"
+    },
+    {
+      "name": "Includes a log processing/transport layer",
+      "max_score": 10,
+      "description": "Mentions a processing or buffering layer (Kafka, Fluentd, Logstash, Vector) for transformation, filtering, or buffering"
+    },
+    {
+      "name": "Recommends searchable storage",
+      "max_score": 10,
+      "description": "Suggests a log storage backend with search capability (Elasticsearch, Loki, OpenSearch, CloudWatch, etc.)"
+    },
+    {
+      "name": "Addresses request correlation",
+      "max_score": 15,
+      "description": "Recommends correlation/trace IDs propagated across services so logs for a single request can be linked"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Architecture components and their roles are described correctly"
+    }
+  ]
+}

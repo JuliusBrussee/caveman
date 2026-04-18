@@ -1,0 +1,26 @@
+{
+  "context": "Tests whether the response correctly identifies the goroutine leak caused by an unbuffered channel send after timeout.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Identifies blocked channel send as the leak",
+      "max_score": 20,
+      "description": "Explains that when the timeout fires, nobody reads from ch, so the goroutine blocks forever on ch <- resp"
+    },
+    {
+      "name": "Suggests buffered channel fix",
+      "max_score": 12,
+      "description": "Recommends making ch a buffered channel (make(chan string, 1)) so the goroutine can send even if nobody reads"
+    },
+    {
+      "name": "Mentions context cancellation as alternative",
+      "max_score": 10,
+      "description": "Suggests using context.WithTimeout and passing it to callExternalAPI so the goroutine itself can abort"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 12,
+      "description": "Response does not contain factually wrong statements about Go concurrency, channels, or goroutine lifecycle"
+    }
+  ]
+}

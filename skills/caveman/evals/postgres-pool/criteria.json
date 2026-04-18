@@ -1,0 +1,36 @@
+{
+  "context": "Tests whether the response provides a working PostgreSQL connection pool setup with essential configuration.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Uses pg Pool",
+      "max_score": 12,
+      "description": "Uses the pg (node-postgres) Pool class or another established PostgreSQL client library"
+    },
+    {
+      "name": "Configures pool size",
+      "max_score": 10,
+      "description": "Sets max connections or pool size parameter"
+    },
+    {
+      "name": "Configures timeouts",
+      "max_score": 12,
+      "description": "Sets connection timeout, idle timeout, or both"
+    },
+    {
+      "name": "Includes error handling",
+      "max_score": 12,
+      "description": "Shows error handling on the pool (pool.on('error') or try/catch around queries)"
+    },
+    {
+      "name": "Shows query usage pattern",
+      "max_score": 10,
+      "description": "Demonstrates how to acquire a client and run a query using the pool (pool.query or pool.connect)"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Code is syntactically valid and configuration options are real pg Pool options"
+    }
+  ]
+}

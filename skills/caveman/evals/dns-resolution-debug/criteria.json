@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response correctly diagnoses Docker DNS issues as distinct from host DNS.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Identifies Docker DNS isolation",
+      "max_score": 15,
+      "description": "Explains that Docker containers have their own DNS configuration, separate from the host's resolv.conf"
+    },
+    {
+      "name": "Suggests checking container DNS config",
+      "max_score": 12,
+      "description": "Recommends checking /etc/resolv.conf inside the container or docker run --dns settings"
+    },
+    {
+      "name": "Mentions Docker's embedded DNS (127.0.0.11)",
+      "max_score": 10,
+      "description": "References Docker's internal DNS server at 127.0.0.11 for user-defined networks or the default DNS behavior"
+    },
+    {
+      "name": "Provides debugging commands",
+      "max_score": 10,
+      "description": "Suggests practical debugging steps: nslookup/dig inside container, docker inspect for DNS settings, checking Docker network configuration"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "DNS and Docker networking concepts are technically correct"
+    }
+  ]
+}

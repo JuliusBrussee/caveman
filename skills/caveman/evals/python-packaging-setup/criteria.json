@@ -1,0 +1,36 @@
+{
+  "context": "Tests whether the response produces a correct modern pyproject.toml with all required configuration.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Uses pyproject.toml with build-system",
+      "max_score": 12,
+      "description": "Includes [build-system] section with requires and build-backend pointing to setuptools"
+    },
+    {
+      "name": "Specifies Python version requirement",
+      "max_score": 10,
+      "description": "Sets requires-python >= 3.10 in the [project] section"
+    },
+    {
+      "name": "Declares dependencies correctly",
+      "max_score": 10,
+      "description": "Lists requests and click in the dependencies array under [project]"
+    },
+    {
+      "name": "Configures CLI entry point",
+      "max_score": 12,
+      "description": "Sets up [project.scripts] with mycli = mypackage.cli:main"
+    },
+    {
+      "name": "Configures pytest",
+      "max_score": 8,
+      "description": "Includes [tool.pytest.ini_options] or [project.optional-dependencies] with pytest for test configuration"
+    },
+    {
+      "name": "Valid TOML syntax",
+      "max_score": 8,
+      "description": "The pyproject.toml is syntactically valid TOML"
+    }
+  ]
+}

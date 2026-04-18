@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response provides a robust WebSocket reconnection design.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Implements exponential backoff",
+      "max_score": 15,
+      "description": "Reconnection delays increase exponentially (e.g., 1s, 2s, 4s, 8s...) with a maximum cap"
+    },
+    {
+      "name": "Adds jitter to backoff",
+      "max_score": 8,
+      "description": "Adds randomized jitter to prevent all clients reconnecting simultaneously after server restart"
+    },
+    {
+      "name": "Handles missed message recovery",
+      "max_score": 12,
+      "description": "Describes a mechanism to catch up on missed data after reconnection (last-event-id, sequence numbers, timestamp-based replay, or full state sync)"
+    },
+    {
+      "name": "Detects connection loss",
+      "max_score": 10,
+      "description": "Uses onclose/onerror handlers and optionally heartbeat/ping-pong to detect stale connections"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "WebSocket API usage is correct and the reconnection logic is sound"
+    }
+  ]
+}

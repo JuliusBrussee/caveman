@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response correctly identifies the root cause of unnecessary React re-renders when passing object props and provides valid fixes.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Identifies referential equality as root cause",
+      "max_score": 15,
+      "description": "Explains that objects are compared by reference in JavaScript, so a new object literal on each render is a new reference even if values are identical"
+    },
+    {
+      "name": "Mentions React.memo",
+      "max_score": 12,
+      "description": "Recommends wrapping the child component in React.memo to skip re-renders when props are shallowly equal"
+    },
+    {
+      "name": "Mentions useMemo or useCallback",
+      "max_score": 12,
+      "description": "Recommends useMemo for stabilizing object references or useCallback for function props"
+    },
+    {
+      "name": "Explains shallow comparison limitation",
+      "max_score": 10,
+      "description": "Notes that React.memo uses shallow comparison by default, which still fails for new object references unless the object is memoized"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 15,
+      "description": "Response does not contain factually wrong statements about React rendering behavior, hooks, or JavaScript reference equality"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "context": "Tests whether the response provides balanced, technically accurate guidance on the monolith-to-microservices decision.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Mentions operational complexity increase",
+      "max_score": 12,
+      "description": "Warns that microservices add operational overhead: deployment, monitoring, networking, service discovery"
+    },
+    {
+      "name": "Suggests profiling first",
+      "max_score": 12,
+      "description": "Recommends identifying the actual bottleneck before splitting — the slowness might be fixable within the monolith"
+    },
+    {
+      "name": "Mentions data consistency challenges",
+      "max_score": 10,
+      "description": "Notes that splitting introduces distributed data problems: transactions across services, eventual consistency"
+    },
+    {
+      "name": "Mentions team structure consideration",
+      "max_score": 10,
+      "description": "References team size or organization as a factor (Conway's law or similar reasoning)"
+    },
+    {
+      "name": "Does not unconditionally recommend microservices",
+      "max_score": 12,
+      "description": "Response is balanced — does not simply say 'yes, switch to microservices' without caveats"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Response does not contain factually wrong statements about microservices architecture or Django"
+    }
+  ]
+}

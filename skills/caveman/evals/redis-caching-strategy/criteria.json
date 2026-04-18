@@ -1,0 +1,31 @@
+{
+  "context": "Tests whether the response provides a sound Redis caching design for a read-heavy, infrequently-updated catalog.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "Proposes cache key structure",
+      "max_score": 12,
+      "description": "Defines a sensible cache key pattern that accounts for pagination, filters, or query parameters"
+    },
+    {
+      "name": "Sets appropriate TTL",
+      "max_score": 10,
+      "description": "Suggests a TTL that balances freshness vs performance given the few-times-per-day update frequency"
+    },
+    {
+      "name": "Describes invalidation strategy",
+      "max_score": 15,
+      "description": "Explains how to invalidate cache when products are updated (event-driven, key deletion, versioned keys, or pattern-based)"
+    },
+    {
+      "name": "Addresses cache stampede or thundering herd",
+      "max_score": 10,
+      "description": "Mentions the risk of many concurrent requests hitting the DB when cache expires and suggests mitigation (locking, stale-while-revalidate, jittered TTL)"
+    },
+    {
+      "name": "No incorrect information",
+      "max_score": 10,
+      "description": "Response does not contain factually wrong statements about Redis or caching patterns"
+    }
+  ]
+}
