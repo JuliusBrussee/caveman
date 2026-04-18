@@ -23,6 +23,13 @@
   <a href="#evals">Evals</a>
 </p>
 
+<p align="center">
+  <strong>🪨 Caveman Ecosystem</strong> &nbsp;·&nbsp;
+  <strong>caveman</strong> <em>talk less</em> <sub>(you are here)</sub> &nbsp;·&nbsp;
+  <a href="https://github.com/JuliusBrussee/cavemem">cavemem</a> <em>remember more</em> &nbsp;·&nbsp;
+  <a href="https://github.com/JuliusBrussee/cavekit">cavekit</a> <em>build better</em>
+</p>
+
 ---
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
@@ -406,9 +413,20 @@ If caveman save you mass token, mass money — leave mass star. ⭐
 
 [![Star History Chart](https://api.star-history.com/svg?repos=JuliusBrussee/caveman&type=Date)](https://star-history.com/#JuliusBrussee/caveman&Date)
 
+## 🪨 The Caveman Ecosystem
+
+Three tools. One philosophy: **agent do more with less**.
+
+| Repo | What | One-liner |
+|------|------|-----------|
+| [**caveman**](https://github.com/JuliusBrussee/caveman) *(you are here)* | Output compression skill | *why use many token when few do trick* — ~75% fewer output tokens across Claude Code, Cursor, Gemini, Codex |
+| [**cavemem**](https://github.com/JuliusBrussee/cavemem) | Cross-agent persistent memory | *why agent forget when agent can remember* — compressed SQLite + MCP, local by default |
+| [**cavekit**](https://github.com/JuliusBrussee/cavekit) | Spec-driven autonomous build loop | *why agent guess when agent can know* — natural language → kits → parallel build → verified |
+
+They compose: **cavekit** orchestrates the build, **caveman** compresses what the agent *says*, **cavemem** compresses what the agent *remembers*. Install one, some, or all — each stands alone.
+
 ## Also by Julius Brussee
 
-- **[Cavekit](https://github.com/JuliusBrussee/cavekit)** — specification-driven development for Claude Code. Caveman language → specs → parallel builds → working software.
 - **[Revu](https://github.com/JuliusBrussee/revu-swift)** — local-first macOS study app with FSRS spaced repetition, decks, exams, and study guides. [revu.cards](https://revu.cards)
 
 ## License
