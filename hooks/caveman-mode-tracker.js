@@ -45,7 +45,20 @@ process.stdin.on('end', () => {
       } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
         mode = 'compress';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
-        if (arg === 'lite') mode = 'lite';
+        if (arg === 'status') {
+          // Status query — don't change mode, just report current state
+          const current = readFlag(flagPath);
+          const statusMsg = current
+            ? 'CAVEMAN STATUS: Active mode is "' + current + '". Tell the user their current caveman mode is: ' + current
+            : 'CAVEMAN STATUS: Caveman is not active. Tell the user caveman mode is currently off.';
+          process.stdout.write(JSON.stringify({
+            hookSpecificOutput: {
+              hookEventName: "UserPromptSubmit",
+              additionalContext: statusMsg
+            }
+          }));
+          return; // skip all other processing — status is read-only
+        } else if (arg === 'lite') mode = 'lite';
         else if (arg === 'ultra') mode = 'ultra';
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';

@@ -32,6 +32,10 @@ Mode stick until changed or session end.
 | **caveman-compress** | `/caveman:compress <file>` | Compress .md files to caveman prose. Saves ~46% input tokens. |
 | **caveman-help** | `/caveman-help` | This card. |
 
+## Check Active Mode
+
+`/caveman status` — show which mode active right now (lite/full/ultra/wenyan-*/off).
+
 ## Deactivate
 
 Say "stop caveman" or "normal mode". Resume anytime with `/caveman`.

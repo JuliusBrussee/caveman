@@ -59,6 +59,7 @@ Overwritten by CI on push to main when sources change. Edits here lost.
 `.github/workflows/sync-skill.yml` triggers on main push when `skills/caveman/SKILL.md` or `rules/caveman-activate.md` changes.
 
 What it does:
+
 1. Copies `skills/caveman/SKILL.md` to all agent-specific SKILL.md locations
 2. Rebuilds `caveman.skill` as a ZIP of `skills/caveman/`
 3. Rebuilds all agent rule files from `rules/caveman-activate.md`, prepending agent-specific frontmatter (Cursor needs `alwaysApply: true`, Windsurf needs `trigger: always_on`)
@@ -88,12 +89,14 @@ All hooks honor `CLAUDE_CONFIG_DIR` for non-default Claude Code config locations
 ### `hooks/caveman-config.js` — shared module
 
 Exports:
+
 - `getDefaultMode()` — resolves default mode from `CAVEMAN_DEFAULT_MODE` env var, then `$XDG_CONFIG_HOME/caveman/config.json` / `~/.config/caveman/config.json` / `%APPDATA%\caveman\config.json`, then `'full'`
 - `safeWriteFlag(flagPath, content)` — symlink-safe flag write. Refuses if flag target or its immediate parent is a symlink. Opens with `O_NOFOLLOW` where supported. Atomic temp + rename. Creates with `0600`. Protects against local attackers replacing the predictable flag path with a symlink to clobber files writable by the user. Used by both write hooks. Silent-fails on all filesystem errors.
 
 ### `hooks/caveman-activate.js` — SessionStart hook
 
 Runs once per Claude Code session start. Three things:
+
 1. Writes the active mode to `$CLAUDE_CONFIG_DIR/.caveman-active` via `safeWriteFlag` (creates if missing)
 2. Emits caveman ruleset as hidden stdout — Claude Code injects SessionStart hook stdout as system context, invisible to user
 3. Checks `settings.json` for statusline config; if missing, appends nudge to offer setup on first interaction
@@ -105,7 +108,9 @@ Silent-fails on all filesystem errors — never blocks session start.
 Reads JSON from stdin. Three responsibilities:
 
 **1. Slash-command activation.** If prompt starts with `/caveman`, writes mode to flag file via `safeWriteFlag`:
+
 - `/caveman` → configured default (see `caveman-config.js`, defaults to `full`)
+- `/caveman status` → read-only query, emits current mode via `hookSpecificOutput`, no flag write
 - `/caveman lite` → `lite`
 - `/caveman ultra` → `ultra`
 - `/caveman wenyan` or `/caveman wenyan-full` → `wenyan`
@@ -122,6 +127,7 @@ Reads JSON from stdin. Three responsibilities:
 ### `hooks/caveman-statusline.sh` — Statusline badge
 
 Reads flag file at `$CLAUDE_CONFIG_DIR/.caveman-active`. Outputs colored badge string for Claude Code statusline:
+
 - `full` or empty → `[CAVEMAN]` (orange)
 - anything else → `[CAVEMAN:<MODE_UPPERCASED>]` (orange)
 
@@ -181,6 +187,7 @@ For agents without hook systems, minimal always-on snippet lives in README under
 ## Evals
 
 `evals/` has three-arm harness:
+
 - `__baseline__` — no system prompt
 - `__terse__` — `Answer concisely.`
 - `<skill>` — `Answer concisely.\n\n{SKILL.md}`
