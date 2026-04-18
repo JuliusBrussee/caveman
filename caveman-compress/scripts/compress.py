@@ -87,16 +87,26 @@ def call_claude(prompt: str) -> str:
             return strip_llm_wrapper(msg.content[0].text.strip())
         except ImportError:
             pass  # anthropic not installed, fall back to CLI
-    # Fallback: use claude CLI (handles desktop auth)
+    # Fallback: use claude CLI (handles desktop auth).
+    # Explicit --model avoids settings.json routers/aliases that only work
+    # interactively (e.g. custom routing plugins), which exit non-zero in
+    # subprocess. Default matches the SDK path for consistency.
+    cli_model = os.environ.get("CAVEMAN_MODEL") or "claude-sonnet-4-5"
     try:
         result = subprocess.run(
-            ["claude", "--print"],
+            ["claude", "--print", "--model", cli_model],
             input=prompt,
             text=True,
             capture_output=True,
             check=True,
         )
         return strip_llm_wrapper(result.stdout.strip())
+    except FileNotFoundError:
+        raise RuntimeError(
+            "claude CLI not found on PATH and anthropic SDK unavailable. "
+            "Install the Claude CLI or `pip install anthropic` and set "
+            "ANTHROPIC_API_KEY."
+        )
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Claude call failed:\n{e.stderr}")
 
