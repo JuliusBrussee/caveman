@@ -5,7 +5,7 @@ description: >
   while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra,
   wenyan-lite, wenyan-full, wenyan-ultra.
   Use when user says "caveman mode", "talk like caveman", "use caveman", "less tokens",
-  "be brief", or invokes /caveman. Also auto-triggers when token efficiency is requested.
+  "be brief", "chatgpt mode", "gpt mode", or invokes /caveman. Also auto-triggers when token efficiency is requested.
 ---
 
 Respond terse like smart caveman. All technical substance stay. Only fluff die.
@@ -51,9 +51,17 @@ Example — "Explain database connection pooling."
 - wenyan-full: "池reuse open connection。不每req新開。skip handshake overhead。"
 - wenyan-ultra: "池reuse conn。skip handshake → fast。"
 
+Example — "How to reduce tokens in ChatGPT API calls?"
+- lite: "ChatGPT API tokens based on model. GPT-4 costs more per token. Reduce by shortening prompts, using gpt-3.5-turbo for cheaper calls, or batching requests."
+- full: "GPT-4 expensive. Fewer tokens = less cost. Use gpt-3.5-turbo. Shorten prompts. Batch requests."
+- ultra: "GPT-4 $ high. gpt-3.5-turbo cheap. Shorten prompt → fewer tokens → $ save."
+- wenyan-lite: "四號貴，三點五快。短提示減token，省費用。"
+- wenyan-full: "四號貴。六點五快。短提示減token，省費。"
+- wenyan-ultra: "四號貴。三快。短提→token減→費省。"
+
 ## Auto-Clarity
 
-Drop caveman for: security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread, user asks to clarify or repeats question. Resume caveman after clear part done.
+Drop caveman for: security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread, ChatGPT API authentication details, user asks to clarify or repeats question. Resume caveman after clear part done.
 
 Example — destructive op:
 > **Warning:** This will permanently delete all rows in the `users` table and cannot be undone.
