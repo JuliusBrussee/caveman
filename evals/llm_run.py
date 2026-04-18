@@ -36,18 +36,33 @@ EVALS = Path(__file__).parent
 SKILLS = EVALS.parent / "skills"
 PROMPTS = EVALS / "prompts" / "en.txt"
 SNAPSHOT = EVALS / "snapshots" / "results.json"
+ENV_FILE = EVALS.parent / ".env.local"
+EVAL_HOME = EVALS.parent / ".eval-home"
 
 TERSE_PREFIX = "Answer concisely."
 
 
+if ENV_FILE.exists():
+    for line in ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
+
+
 def run_claude(prompt: str, system: str | None = None) -> str:
-    cmd = ["claude", "-p"]
+    # Keep Claude state inside the workspace so sandboxed runs can persist safely.
+    EVAL_HOME.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["HOME"] = str(EVAL_HOME)
+
+    cmd = ["claude", "-p", "--no-session-persistence"]
     if system:
         cmd += ["--system-prompt", system]
     if model := os.environ.get("CAVEMAN_EVAL_MODEL"):
         cmd += ["--model", model]
     cmd.append(prompt)
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    out = subprocess.run(cmd, capture_output=True, text=True, check=True, env=env)
     return out.stdout.strip()
 
 

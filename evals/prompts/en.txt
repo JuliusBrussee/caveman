@@ -8,3 +8,15 @@ Why am I getting CORS errors in my browser console?
 What's the point of using a debouncer on a search input?
 How does git rebase differ from git merge?
 When should I use a queue vs a topic in messaging systems?
+React bileşenim ebeveyni güncellendiğinde neden her seferinde yeniden çiziliyor?
+Vue component parent'i prop'lari eksiksiz mi? Prop drilling yok mu?
+Veritabanı bağlantı havuzunu (connection pooling) açıklar mısın?
+TCP ve UDP arasındaki fark nedir?
+Uzun süre çalışan bir Node.js sürecindeki bellek sızıntısını nasıl çözerim?
+SQL EXPLAIN komutu bana ne anlatır?
+Hash tabloları çarpışmaları (collision) nasıl yönetir?
+Tarayıcı konsolunda neden CORS hataları alıyorum?
+Arama input'unda debouncer kullanmanın amacı nedir?
+Git rebase ile git merge arasındaki fark nedir?
+Mesajlaşma sistemlerinde ne zaman queue, ne zaman topic kullanmalıyım?
+Laravel controller'da problem olursa ilk nasıl ele alınmalı?

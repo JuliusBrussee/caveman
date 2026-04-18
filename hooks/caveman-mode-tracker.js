@@ -50,6 +50,9 @@ process.stdin.on('end', () => {
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
         else if (arg === 'wenyan-ultra') mode = 'wenyan-ultra';
+        else if (arg === 'turkce-lite' || arg === 'türkçe-lite') mode = 'turkce-lite';
+        else if (arg === 'turkce' || arg === 'turkce-full' || arg === 'türkçe' || arg === 'türkçe-full') mode = 'turkce';
+        else if (arg === 'turkce-ultra' || arg === 'türkçe-ultra') mode = 'turkce-ultra';
         else mode = getDefaultMode();
       }
 
