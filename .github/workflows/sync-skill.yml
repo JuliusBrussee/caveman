@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - skills/caveman/SKILL.md
+      - skills/caveman/**
+      - skills/compress/**
 
 concurrency:
   group: sync-skill
@@ -30,14 +31,23 @@ jobs:
         run: |
           cp skills/caveman/SKILL.md caveman/SKILL.md
           cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
+          mkdir -p plugins/caveman/skills/compress
+          cp skills/compress/SKILL.md plugins/caveman/skills/compress/SKILL.md
+          rm -rf plugins/caveman/skills/compress/scripts
+          cp -R skills/compress/scripts plugins/caveman/skills/compress/
+          rm -rf plugins/caveman/skills/compress/scripts/__pycache__
 
       - name: Rebuild caveman.skill ZIP
         run: |
-          cd skills && zip -r ../caveman.skill caveman/
+          cd skills && zip -rq ../caveman.skill caveman/
 
       - name: Commit and push if changed
         run: |
           git diff --quiet && exit 0
-          git add caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md caveman.skill
-          git commit -m "chore: sync SKILL.md copies and caveman.skill [skip ci]"
+          git add \
+            caveman/SKILL.md \
+            plugins/caveman/skills/caveman/SKILL.md \
+            plugins/caveman/skills/compress \
+            caveman.skill
+          git commit -m "chore: sync skill copies and caveman.skill [skip ci]"
           git push

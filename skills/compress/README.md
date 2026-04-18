@@ -2,7 +2,7 @@
   <img src="https://em-content.zobj.net/source/apple/391/rock_1faa8.png" width="80" />
 </p>
 
-<h1 align="center">caveman-compress</h1>
+<h1 align="center">compress</h1>
 
 <p align="center">
   <strong>shrink memory file. save token every session.</strong>
@@ -17,7 +17,7 @@ Claude read `CLAUDE.md` on every session start. If file big, cost big. Caveman m
 ## What It Do
 
 ```
-/caveman-compress CLAUDE.md
+/caveman:compress CLAUDE.md
 ```
 
 ```
@@ -68,13 +68,13 @@ All validations passed ✅ — headings, code blocks, URLs, file paths preserved
 ## Install
 
 ```bash
-cp -r ~/.claude/skills/caveman-compress <path-to-skill>
+cp -r <path-to-skill> ~/.claude/skills/compress
 ```
 
 Or if you have the caveman repo:
 
 ```bash
-cp -r skills/caveman-compress ~/.claude/skills/caveman-compress
+cp -r skills/compress ~/.claude/skills/compress
 ```
 
 **Requires:** Python 3.10+
@@ -82,14 +82,14 @@ cp -r skills/caveman-compress ~/.claude/skills/caveman-compress
 ## Usage
 
 ```
-/caveman-compress <filepath>
+/caveman:compress <filepath>
 ```
 
 Examples:
 ```
-/caveman-compress CLAUDE.md
-/caveman-compress docs/preferences.md
-/caveman-compress todos.md
+/caveman:compress CLAUDE.md
+/caveman:compress docs/preferences.md
+/caveman:compress todos.md
 ```
 
 ### What files work
@@ -104,7 +104,7 @@ Examples:
 ## How It Work
 
 ```
-/caveman-compress CLAUDE.md
+/caveman:compress CLAUDE.md
         ↓
 detect file type        (no tokens)
         ↓
@@ -158,4 +158,4 @@ Caveman cut that by ~45% on average. Same instructions. Same accuracy. Less wast
 This skill is part of the [caveman](https://github.com/JuliusBrussee/caveman) toolkit — making Claude use fewer tokens without losing accuracy.
 
 - **caveman** — make Claude *speak* like caveman (cuts response tokens ~65%)
-- **caveman-compress** — make Claude *read* less (cuts context tokens ~45%)
+- **compress** — make Claude *read* less (cuts context tokens ~45%)

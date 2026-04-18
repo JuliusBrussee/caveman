@@ -19,7 +19,7 @@
   <a href="#benchmarks">Benchmarks</a> •
   <a href="#before--after">Before/After</a> •
   <a href="#intensity-levels">Intensity Levels</a> •
-  <a href="#caveman-compress">Compress</a> •
+  <a href="#compress">Compress</a> •
   <a href="#why">Why</a>
 </p>
 
@@ -214,14 +214,14 @@ Normal LLM waste token on:
 
 Caveman say what need saying. Then stop.
 
-## Caveman Compress
+## Compress
 
-Caveman makes Claude *speak* with fewer tokens. **Caveman Compress** makes Claude *read* fewer tokens.
+Caveman makes Claude *speak* with fewer tokens. **Compress** makes Claude *read* fewer tokens.
 
-Your `CLAUDE.md` loads on **every session start**. A 1000-token project memory file costs you tokens every single time you open a project. Caveman Compress rewrites those files into caveman-speak so Claude reads less — without you losing the human-readable original.
+Your `CLAUDE.md` loads on **every session start**. A 1000-token project memory file costs you tokens every single time you open a project. Compress rewrites those files into caveman-speak so Claude reads less — without you losing the human-readable original.
 
 ```
-/caveman-compress CLAUDE.md
+/caveman:compress CLAUDE.md
 ```
 
 ```
@@ -261,10 +261,10 @@ Code blocks, inline code, URLs, file paths, commands, headings, table structure,
 | Tool | What it cuts | Savings |
 |------|-------------|---------|
 | **caveman** | Output tokens (Claude's responses) | ~65% |
-| **caveman-compress** | Input tokens (memory files loaded per session) | ~45% |
+| **compress** | Input tokens (memory files loaded per session) | ~45% |
 | **Both together** | The whole conversation | Output + input both shrunk |
 
-See the full [caveman-compress README](caveman-compress/README.md) for install, usage, and validation details.
+See the full [compress README](skills/compress/README.md) for install, usage, and validation details.
 
 ## Star This Repo
 

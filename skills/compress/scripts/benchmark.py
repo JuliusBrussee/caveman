@@ -55,8 +55,8 @@ def main():
         print_table([benchmark_pair(orig, comp)])
         return
 
-    # Glob mode: repo_root/tests/caveman-compress/
-    tests_dir = Path(__file__).parent.parent.parent / "tests" / "caveman-compress"
+    # Glob mode: repo_root/tests/compress/
+    tests_dir = Path(__file__).parent.parent.parent / "tests" / "compress"
     if not tests_dir.exists():
         print(f"❌ Tests dir not found: {tests_dir}")
         sys.exit(1)
