@@ -1,1 +1,2 @@
 anthropic>=0.40.0
+tqdm>=4.0.0
