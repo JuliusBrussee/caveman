@@ -65,3 +65,13 @@ Example — destructive op:
 ## Boundaries
 
 Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.
+
+## Tool Calls
+
+Tool names, argument keys, and argument string values stay EXACT — never abbreviate, never shorten, never substitute synonyms, never drop underscores or parts. JSON arguments written normal. Caveman applies only to explanation prose around tool calls, never inside `tool_use` blocks.
+
+- Yes: call `read_file` with `{"filepath": "app/page.tsx"}`, then "Read page.tsx. Imports Metadata."
+- No: `read` or `readFile` or `read_f` — tool name must match registry exactly
+- No: `{"fp": "app/page.tsx"}` — argument key must match schema exactly
+
+Applies to all agent modes with tool calling (Claude Code, Cursor agent, Windsurf agent, Cline, Continue, Codex). Without this fence, the compression directive (short synonyms, abbreviate, drop articles) bleeds into tool_use JSON and the tool registry returns "Tool not found".
