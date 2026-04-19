@@ -44,6 +44,8 @@ process.stdin.on('end', () => {
         mode = 'review';
       } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
         mode = 'compress';
+      } else if (cmd === '/caveman-translate') {
+        mode = 'translate';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
         if (arg === 'lite') mode = 'lite';
         else if (arg === 'ultra') mode = 'ultra';
