@@ -32,7 +32,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [日本語 mode](#日本語-nihongo-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
 
 Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
 
@@ -323,6 +323,16 @@ Classical Chinese literary compression — same technical accuracy, but in the m
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Semi-classical. Grammar intact, filler gone |
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget |
+
+### 日本語 (Nihongo) Mode
+
+Japanese literary compression — same technical accuracy, same grunt as English caveman, different language.
+
+| Level | Trigger | What it do |
+|-------|---------|------------|
+| **Nihongo-Lite** | `/caveman nihongo-lite` | 常体短文. Grammar intact, filler gone |
+| **Nihongo-Full** | `/caveman nihongo` | Full grunt. Short clauses, 体言止め OK |
+| **Nihongo-Ultra** | `/caveman nihongo-ultra` | Extreme. Maximum terseness |
 
 Level stick until you change it or session end.
 

@@ -20,6 +20,9 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Classical Chinese style, light compression. |
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness. |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget. |
+| **Nihongo-Lite** | `/caveman nihongo-lite` | 常体短文. Grammar intact, filler gone. |
+| **Nihongo-Full** | `/caveman nihongo` | Full grunt in Japanese. 体言止めOK. |
+| **Nihongo-Ultra** | `/caveman nihongo-ultra` | Extreme. Maximum Japanese terseness. |
 
 Mode stick until changed or session end.
 

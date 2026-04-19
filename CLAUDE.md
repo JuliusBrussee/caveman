@@ -111,6 +111,9 @@ Reads JSON from stdin. Three responsibilities:
 - `/caveman wenyan` or `/caveman wenyan-full` → `wenyan`
 - `/caveman wenyan-lite` → `wenyan-lite`
 - `/caveman wenyan-ultra` → `wenyan-ultra`
+- `/caveman nihongo` or `/caveman nihongo-full` or `/caveman ja` or `/caveman japanese` or `/caveman 日本語` → `nihongo`
+- `/caveman nihongo-lite` or `/caveman ja-lite` → `nihongo-lite`
+- `/caveman nihongo-ultra` or `/caveman ja-ultra` → `nihongo-ultra`
 - `/caveman-commit` → `commit`
 - `/caveman-review` → `review`
 - `/caveman-compress` → `compress`
@@ -143,7 +146,7 @@ Skills = Markdown files with YAML frontmatter consumed by Claude Code's skill/pl
 
 ### Intensity levels
 
-Defined in `skills/caveman/SKILL.md`. Six levels: `lite`, `full` (default), `ultra`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`. Persists until changed or session ends.
+Defined in `skills/caveman/SKILL.md`. Nine levels: `lite`, `full` (default), `ultra`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`, `nihongo-lite`, `nihongo-full`, `nihongo-ultra`. Persists until changed or session ends.
 
 ### Auto-clarity rule
 
