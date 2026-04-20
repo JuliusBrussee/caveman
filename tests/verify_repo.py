@@ -98,12 +98,26 @@ def verify_manifests_and_syntax() -> None:
         ROOT / ".agents/plugins/marketplace.json",
         ROOT / ".claude-plugin/plugin.json",
         ROOT / ".claude-plugin/marketplace.json",
-        ROOT / ".codex/hooks.json",
+        ROOT / ".codex/settings.json",
         ROOT / "gemini-extension.json",
         ROOT / "plugins/caveman/.codex-plugin/plugin.json",
     ]
     for path in manifest_paths:
         read_json(path)
+
+    codex_settings = read_json(ROOT / ".codex/settings.json")
+    ensure(not (ROOT / ".codex/hooks.json").exists(), "legacy .codex/hooks.json should be removed")
+    ensure(not (ROOT / ".codex/config.toml").exists(), "legacy .codex/config.toml should be removed")
+    session_entries = codex_settings.get("hooks", {}).get("SessionStart", [])
+    ensure(session_entries, ".codex/settings.json missing SessionStart hook")
+    session_hooks = session_entries[0].get("hooks", [])
+    ensure(session_hooks, ".codex/settings.json missing SessionStart command")
+    first_hook = session_hooks[0]
+    ensure(first_hook.get("type") == "command", "Codex SessionStart hook should stay command-based")
+    ensure(
+        "CAVEMAN MODE ACTIVE" in first_hook.get("command", ""),
+        "Codex SessionStart hook missing caveman activation banner",
+    )
 
     run(["node", "--check", "hooks/caveman-config.js"])
     run(["node", "--check", "hooks/caveman-activate.js"])
@@ -225,7 +239,7 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home)},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate.stdout, "activation output missing caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate.stdout, "activation output missing caveman banner")
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "activation should stay quiet when custom statusline exists")
         ensure((claude_dir / ".caveman-active").read_text() == "full", "activation flag should default to full")
 
@@ -234,14 +248,14 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "ultra"},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate_custom.stdout, "activation with custom default missing banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate_custom.stdout, "activation with custom default missing banner")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra")
         # Test "off" mode — activation skipped, flag removed
         activate_off = run(
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "off"},
         )
-        ensure("CAVEMAN MODE ACTIVE." not in activate_off.stdout, "off mode should not emit caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" not in activate_off.stdout, "off mode should not emit caveman banner")
         ensure(not (claude_dir / ".caveman-active").exists(), "off mode should remove flag file")
 
         # Test mode tracker with /caveman when default is off — should NOT write flag
@@ -274,8 +288,47 @@ def verify_hook_install_flow() -> None:
             capture_output=True,
             check=True,
         )
-        ensure(ultra_prompt.stdout == "", "mode tracker should stay silent")
+        reinforcement = json.loads(ultra_prompt.stdout)
+        ensure(
+            reinforcement.get("hookSpecificOutput", {}).get("hookEventName") == "UserPromptSubmit",
+            "mode tracker should emit UserPromptSubmit reinforcement JSON",
+        )
+        ensure(
+            "CAVEMAN MODE ACTIVE (ultra)." in reinforcement.get("hookSpecificOutput", {}).get("additionalContext", ""),
+            "mode tracker reinforcement missing active ultra reminder",
+        )
+        ensure(
+            "Answer first." in reinforcement.get("hookSpecificOutput", {}).get("additionalContext", ""),
+            "mode tracker reinforcement should remind answer-first ordering",
+        )
+        ensure(
+            "Keep code/commands/file paths/flags/env vars/URLs/numbers/error text exact." in reinforcement.get("hookSpecificOutput", {}).get("additionalContext", ""),
+            "mode tracker reinforcement should preserve literal material",
+        )
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "mode tracker did not record ultra")
+
+        full_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home), "CAVEMAN_DEFAULT_MODE": "ultra"},
+            text=True,
+            input='{"prompt":"/caveman full"}',
+            capture_output=True,
+            check=True,
+        )
+        json.loads(full_prompt.stdout)
+        ensure((claude_dir / ".caveman-active").read_text() == "full", "/caveman full should force full mode")
+
+        subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"less tokens please"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure((claude_dir / ".caveman-active").read_text() == "full", '"less tokens please" should activate caveman default mode')
 
         subprocess.run(
             ["node", "hooks/caveman-mode-tracker.js"],

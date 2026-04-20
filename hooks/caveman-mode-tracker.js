@@ -9,6 +9,40 @@ const { getDefaultMode, safeWriteFlag, readFlag } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
+const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
+
+const ACTIVATION_PATTERNS = [
+  /\b(activate|enable|turn on|start|use|switch to|talk like)\b.*\bcaveman\b/i,
+  /\bcaveman\b.*\b(mode|activate|enable|turn on|start|on)\b/i,
+  /\b(less|fewer)\s+tokens\b/i,
+  /\b(be|answer|reply)\s+(brief|terse|short)\b/i,
+  /\bshorter\s+(answer|reply)\b/i,
+];
+
+const DEACTIVATION_PATTERNS = [
+  /\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i,
+  /\bcaveman\b.*\b(stop|disable|deactivate|turn off|off)\b/i,
+  /\bnormal mode\b/i,
+  /\b(back to normal|talk normally|speak normally|use normal mode)\b/i,
+];
+
+const MODE_HINTS = {
+  lite: 'Tight full sentences.',
+  full: 'Drop articles. Fragments OK.',
+  ultra: 'Abbrev OK. Arrows OK.',
+  'wenyan-lite': 'Light classical register.',
+  wenyan: 'Classical terseness.',
+  'wenyan-full': 'Classical terseness.',
+  'wenyan-ultra': 'Extreme classical compression.',
+};
+
+function matchesAny(patterns, value) {
+  return patterns.some((pattern) => pattern.test(value));
+}
+
+function renderModeLabel(mode) {
+  return mode === 'wenyan' ? 'wenyan-full' : mode;
+}
 
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
@@ -16,17 +50,15 @@ process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
     const prompt = (data.prompt || '').trim().toLowerCase();
+    const isDeactivationRequested = matchesAny(DEACTIVATION_PATTERNS, prompt);
 
-    // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
-    // "talk like caveman"). README tells users they can say these, but the hook
-    // only matched /caveman commands — flag file and statusline stayed out of sync.
-    if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-        /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
-      if (!/\b(stop|disable|turn off|deactivate)\b/i.test(prompt)) {
-        const mode = getDefaultMode();
-        if (mode !== 'off') {
-          safeWriteFlag(flagPath, mode);
-        }
+    // Natural language activation (e.g. "activate caveman", "less tokens please",
+    // "be brief"). README and SKILL copy promise these cues; keep flag/statusline
+    // in sync with what the model is being asked to do.
+    if (matchesAny(ACTIVATION_PATTERNS, prompt) && !isDeactivationRequested) {
+      const mode = getDefaultMode();
+      if (mode !== 'off') {
+        safeWriteFlag(flagPath, mode);
       }
     }
 
@@ -46,6 +78,7 @@ process.stdin.on('end', () => {
         mode = 'compress';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
         if (arg === 'lite') mode = 'lite';
+        else if (arg === 'full') mode = 'full';
         else if (arg === 'ultra') mode = 'ultra';
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
@@ -61,9 +94,7 @@ process.stdin.on('end', () => {
     }
 
     // Detect deactivation — natural language and slash commands
-    if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
-        /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
-        /\bnormal mode\b/i.test(prompt)) {
+    if (isDeactivationRequested) {
       try { fs.unlinkSync(flagPath); } catch (e) {}
     }
 
@@ -78,14 +109,17 @@ process.stdin.on('end', () => {
     // If the flag is missing, corrupted, oversized, or a symlink pointing at
     // something like ~/.ssh/id_rsa, readFlag returns null and we emit nothing
     // — never inject untrusted bytes into model context.
-    const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
     const activeMode = readFlag(flagPath);
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+      const modeLabel = renderModeLabel(activeMode);
+      const modeHint = MODE_HINTS[modeLabel] || MODE_HINTS[activeMode] || 'Keep terse.';
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
+          additionalContext: "CAVEMAN MODE ACTIVE (" + modeLabel + "). " +
+            modeHint + " " +
+            "Answer first. Keep code/commands/file paths/flags/env vars/URLs/numbers/error text exact. " +
+            "Use normal prose for security, irreversible, ordered multi-step, or confused-user moments. " +
             "Code/commits/security: write normal."
         }
       }));
