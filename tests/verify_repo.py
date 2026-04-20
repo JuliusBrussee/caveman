@@ -297,7 +297,38 @@ def verify_hook_install_flow() -> None:
             "CAVEMAN MODE ACTIVE (ultra)." in reinforcement.get("hookSpecificOutput", {}).get("additionalContext", ""),
             "mode tracker reinforcement missing active ultra reminder",
         )
+        ensure(
+            "Answer first." in reinforcement.get("hookSpecificOutput", {}).get("additionalContext", ""),
+            "mode tracker reinforcement should remind answer-first ordering",
+        )
+        ensure(
+            "Keep code/commands/file paths/flags/env vars/URLs/numbers/error text exact." in reinforcement.get("hookSpecificOutput", {}).get("additionalContext", ""),
+            "mode tracker reinforcement should preserve literal material",
+        )
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "mode tracker did not record ultra")
+
+        full_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home), "CAVEMAN_DEFAULT_MODE": "ultra"},
+            text=True,
+            input='{"prompt":"/caveman full"}',
+            capture_output=True,
+            check=True,
+        )
+        json.loads(full_prompt.stdout)
+        ensure((claude_dir / ".caveman-active").read_text() == "full", "/caveman full should force full mode")
+
+        subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"less tokens please"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure((claude_dir / ".caveman-active").read_text() == "full", '"less tokens please" should activate caveman default mode')
 
         subprocess.run(
             ["node", "hooks/caveman-mode-tracker.js"],
