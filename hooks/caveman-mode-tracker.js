@@ -20,9 +20,15 @@ process.stdin.on('end', () => {
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
     // "talk like caveman"). README tells users they can say these, but the hook
     // only matched /caveman commands — flag file and statusline stayed out of sync.
-    if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-        /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
-      if (!/\b(stop|disable|turn off|deactivate)\b/i.test(prompt)) {
+    //
+    // Guard: require "caveman" to appear as a direct object of the action verb,
+    // not as a modifier in an unrelated clause ("start a caveman fire" should NOT
+    // activate). Also reject prompts containing negation words before the trigger.
+    if (/\b(activate|enable|turn on)\b.*\bcaveman\b/i.test(prompt) ||
+        /\btalk like\b.*\bcaveman\b/i.test(prompt) ||
+        /\bstart caveman\b/i.test(prompt) ||
+        /\bcaveman\b.*\b(mode|activate|enable|turn on)\b/i.test(prompt)) {
+      if (!/\b(stop|disable|turn off|deactivate|don't|do not)\b/i.test(prompt)) {
         const mode = getDefaultMode();
         if (mode !== 'off') {
           safeWriteFlag(flagPath, mode);
@@ -60,10 +66,14 @@ process.stdin.on('end', () => {
       }
     }
 
-    // Detect deactivation — natural language and slash commands
+    // Detect deactivation — natural language and slash commands.
+    // Keep the documented stop phrase "normal mode", but only as an exact
+    // standalone command. Broad /\bnormal mode\b/ matching still deactivates
+    // on incidental discussion such as "switch from normal mode to debug mode"
+    // or "is this normal mode behavior?".
     if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
         /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
-        /\bnormal mode\b/i.test(prompt)) {
+        prompt === 'normal mode') {
       try { fs.unlinkSync(flagPath); } catch (e) {}
     }
 
