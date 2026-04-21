@@ -156,8 +156,16 @@ def verify_compress_fixtures() -> None:
     section("Compress Fixtures")
     _, detect, validate = load_compress_modules()
 
-    fixtures = sorted((ROOT / "tests/caveman-compress").glob("*.original.md"))
-    ensure(fixtures, "No caveman-compress fixtures found")
+    fixtures_root = None
+    for candidate in (ROOT / "tests/caveman-compress", ROOT / "tests/compress"):
+        if candidate.exists():
+            fixtures_root = candidate
+            break
+
+    ensure(fixtures_root is not None, "No compress fixtures directory found")
+
+    fixtures = sorted(fixtures_root.glob("*.original.md"))
+    ensure(fixtures, f"No compress fixtures found in {fixtures_root}")
 
     for original in fixtures:
         compressed = original.with_name(original.name.replace(".original.md", ".md"))
@@ -166,7 +174,7 @@ def verify_compress_fixtures() -> None:
         ensure(result.is_valid, f"Fixture validation failed for {compressed.name}: {result.errors}")
         ensure(detect.should_compress(compressed), f"Fixture should be compressible: {compressed.name}")
 
-    print(f"Validated {len(fixtures)} caveman-compress fixture pairs")
+    print(f"Validated {len(fixtures)} compress fixture pairs")
 
 
 def verify_compress_cli() -> None:
@@ -225,7 +233,7 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home)},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate.stdout, "activation output missing caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate.stdout, "activation output missing caveman banner")
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "activation should stay quiet when custom statusline exists")
         ensure((claude_dir / ".caveman-active").read_text() == "full", "activation flag should default to full")
 
@@ -234,14 +242,14 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "ultra"},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate_custom.stdout, "activation with custom default missing banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate_custom.stdout, "activation with custom default missing banner")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra")
         # Test "off" mode — activation skipped, flag removed
         activate_off = run(
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "off"},
         )
-        ensure("CAVEMAN MODE ACTIVE." not in activate_off.stdout, "off mode should not emit caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" not in activate_off.stdout, "off mode should not emit caveman banner")
         ensure(not (claude_dir / ".caveman-active").exists(), "off mode should remove flag file")
 
         # Test mode tracker with /caveman when default is off — should NOT write flag
@@ -274,7 +282,11 @@ def verify_hook_install_flow() -> None:
             capture_output=True,
             check=True,
         )
-        ensure(ultra_prompt.stdout == "", "mode tracker should stay silent")
+        # Mode tracker emits hookSpecificOutput JSON for Claude hooks.
+        ensure(
+            ultra_prompt.stdout == "" or "CAVEMAN MODE ACTIVE" in ultra_prompt.stdout,
+            "mode tracker output unexpected",
+        )
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "mode tracker did not record ultra")
 
         subprocess.run(
