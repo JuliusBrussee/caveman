@@ -189,18 +189,24 @@ irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.p
 
 Or from a local clone: `bash hooks/install.sh` / `powershell -File hooks\install.ps1`
 
-**Windows Installation (Manual Fallback):** In some Windows environments, automated install can fail in edge cases (#249, #199, #72; #150 is historical related context). If that happens, use this manual fallback for plugin-skill activation (not standalone hooks install):
+**Windows Installation (Manual Fallback):** In some Windows environments, automated install can fail in edge cases (#249, #199, #72; #150 is historical related context).
+
+Use this fallback only for plugin-skill activation. It does **not** install standalone hooks/statusline.
+
+1. Open PowerShell in your repo root.
+2. Run this setup block:
 
 ```powershell
-# Run from repo root
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }
 $PluginSkillDir = Join-Path $ClaudeDir ".agents\plugins\caveman\skills\caveman"
 $MarketplaceDir = Join-Path $ClaudeDir ".agents\plugins"
 $MarketplaceFile = Join-Path $MarketplaceDir "marketplace.json"
 
+# Step A: Copy skill file into Claude plugin path
 New-Item -ItemType Directory -Path $PluginSkillDir -Force | Out-Null
 Copy-Item ".\skills\caveman\SKILL.md" "$PluginSkillDir\SKILL.md" -Force
 
+# Step B: Create or update marketplace.json with caveman plugin entry
 New-Item -ItemType Directory -Path $MarketplaceDir -Force | Out-Null
 if (Test-Path $MarketplaceFile) {
   $marketplace = Get-Content $MarketplaceFile -Raw | ConvertFrom-Json
@@ -223,13 +229,18 @@ $plugins["caveman"] = [ordered]@{
 }
 $marketplace.plugins = [pscustomobject]$plugins
 $marketplace | ConvertTo-Json -Depth 10 | Set-Content -Path $MarketplaceFile -Encoding UTF8
+```
 
-# Verify files
+3. Verify install:
+
+```powershell
 Test-Path "$PluginSkillDir\SKILL.md"
 Get-Content $MarketplaceFile
 ```
 
-Restart Claude Code, then run `/caveman` to confirm mode activates.
+`Test-Path` should print `True`, and `Get-Content` should show a `caveman` plugin entry.
+
+4. Restart Claude Code, then run `/caveman` to confirm mode activates.
 
 Uninstall: `bash hooks/uninstall.sh` or `powershell -File hooks\uninstall.ps1`
 
