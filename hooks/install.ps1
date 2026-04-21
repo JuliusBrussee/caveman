@@ -180,7 +180,13 @@ fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
 console.log('  Hooks wired in settings.json');
 '@
 
-node -e $nodeScript
+$tmpScript = Join-Path $env:TEMP "caveman-install-$([System.Diagnostics.Process]::GetCurrentProcess().Id).js"
+try {
+    [System.IO.File]::WriteAllText($tmpScript, $nodeScript, [System.Text.Encoding]::UTF8)
+    node $tmpScript
+} finally {
+    if (Test-Path $tmpScript) { Remove-Item $tmpScript -Force }
+}
 
 Write-Host ""
 Write-Host "Done! Restart Claude Code to activate." -ForegroundColor Green
