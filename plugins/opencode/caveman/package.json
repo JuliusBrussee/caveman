@@ -1,0 +1,29 @@
+{
+  "name": "opencode-caveman",
+  "version": "0.1.0",
+  "description": "Ultra-compressed communication plugin for OpenCode. Cuts ~75% tokens while keeping full technical accuracy.",
+  "type": "module",
+  "main": "plugin.js",
+  "exports": {
+    ".": "./plugin.js"
+  },
+  "author": {
+    "name": "Daniel Pardo",
+    "url": "https://github.com/danipl"
+  },
+  "homepage": "https://github.com/JuliusBrussee/caveman",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JuliusBrussee/caveman",
+    "directory": "plugins/opencode/caveman"
+  },
+  "license": "MIT",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "productivity",
+    "communication",
+    "brevity",
+    "caveman"
+  ]
+}
