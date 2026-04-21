@@ -72,8 +72,13 @@ if [ "$ACTION" = "uninstall" ]; then
   fi
 
   if [[ "$REMOVE_SKILLS" =~ ^[Yy]$ ]]; then
+    if [ "$SCOPE" = "global" ]; then
+      SKILL_DIRS=("$HOME/.config/opencode/skills" "$HOME/.agents/skills")
+    else
+      SKILL_DIRS=("$(pwd)/.opencode/skills")
+    fi
     for skill in "${SKILLS[@]}"; do
-      for dir in "$HOME/.config/opencode/skills" "$(pwd)/.opencode/skills" "$HOME/.agents/skills"; do
+      for dir in "${SKILL_DIRS[@]}"; do
         if [ -d "$dir/$skill" ]; then
           rm -rf "$dir/$skill"
           echo "Removed: $dir/$skill"
