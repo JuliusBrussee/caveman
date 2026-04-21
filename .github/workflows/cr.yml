@@ -1,0 +1,27 @@
+name: Code Review
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - name: Skip when OPENAI_API_KEY is missing
+        if: ${{ env.OPENAI_API_KEY == '' }}
+        run: echo "OPENAI_API_KEY is not configured; skipping Code Review workflow."
+
+      - uses: anc95/ChatGPT-CodeReview@1e3df152c1b85c12da580b206c91ad343460c584 # v1.0.23
+        if: ${{ env.OPENAI_API_KEY != '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
+          OPENAI_API_ENDPOINT: https://api.openai.com/v1
+          MODEL: gpt-4o-mini

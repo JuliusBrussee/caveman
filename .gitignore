@@ -8,3 +8,15 @@ caveman-compress.md
 .claude/worktrees/
 evals/snapshots/*.html
 evals/snapshots/*.png
+
+# multiagent-safety:START
+.omx/
+.omc/
+scripts/*
+.githooks
+oh-my-codex/
+.codex/skills/gitguardex/SKILL.md
+.codex/skills/guardex-merge-skills-to-dev/SKILL.md
+.claude/commands/gitguardex.md
+.omx/state/agent-file-locks.json
+# multiagent-safety:END
