@@ -135,7 +135,7 @@ docker compose up -d     # Start all services locally with Docker
 
 Required env vars. Copy `.env.example` → `.env.local`.
 
-* `DATABASE_URL` — PostgreSQL connection string (`postgresql://user:pass@localhost:5432/taskflow`)
+* `DATABASE_URL` — PostgreSQL connection string (`postgresql://localhost:5432/taskflow`)
 * `REDIS_URL` — Redis connection string (`redis://localhost:6379`)
 * `JWT_SECRET` — JWT signing key (≥32 chars)
 * `NEXT_PUBLIC_API_URL` — API URL (`http://localhost:3001`)

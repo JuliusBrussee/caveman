@@ -225,7 +225,7 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home)},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate.stdout, "activation output missing caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate.stdout, "activation output missing caveman banner")
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "activation should stay quiet when custom statusline exists")
         ensure((claude_dir / ".caveman-active").read_text() == "full", "activation flag should default to full")
 
@@ -234,14 +234,14 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "ultra"},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate_custom.stdout, "activation with custom default missing banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate_custom.stdout, "activation with custom default missing banner")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra")
         # Test "off" mode — activation skipped, flag removed
         activate_off = run(
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "off"},
         )
-        ensure("CAVEMAN MODE ACTIVE." not in activate_off.stdout, "off mode should not emit caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" not in activate_off.stdout, "off mode should not emit caveman banner")
         ensure(not (claude_dir / ".caveman-active").exists(), "off mode should remove flag file")
 
         # Test mode tracker with /caveman when default is off — should NOT write flag
@@ -274,7 +274,10 @@ def verify_hook_install_flow() -> None:
             capture_output=True,
             check=True,
         )
-        ensure(ultra_prompt.stdout == "", "mode tracker should stay silent")
+        ensure(
+            "CAVEMAN MODE ACTIVE (ultra)." in ultra_prompt.stdout,
+            "mode tracker should emit ultra mode context",
+        )
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "mode tracker did not record ultra")
 
         subprocess.run(
