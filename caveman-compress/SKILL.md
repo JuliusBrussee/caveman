@@ -1,5 +1,5 @@
 ---
-name: compress
+name: caveman-compress
 description: >
   Compress natural language memory files (CLAUDE.md, todos, preferences) into caveman format
   to save input tokens. Preserves all technical substance, code, URLs, and structure.
@@ -19,11 +19,11 @@ Compress natural language files (CLAUDE.md, todos, preferences) into caveman-spe
 
 ## Process
 
-1. This SKILL.md lives alongside `scripts/` in the same directory. Find that directory.
+1. The compression scripts live in `caveman-compress/scripts/` (adjacent to this SKILL.md). If the path is not immediately available, search for `caveman-compress/scripts/__main__.py`.
 
 2. Run:
 
-cd <directory_containing_this_SKILL.md> && python3 -m scripts <absolute_filepath>
+cd caveman-compress && python3 -m scripts <absolute_filepath>
 
 3. The CLI will:
 - detect file type (no tokens)
@@ -31,6 +31,7 @@ cd <directory_containing_this_SKILL.md> && python3 -m scripts <absolute_filepath
 - validate output (no tokens)
 - if errors: cherry-pick fix with Claude (targeted fixes only, no recompression)
 - retry up to 2 times
+- if still failing after 2 retries: report error to user, leave original file untouched
 
 4. Return result to user
 

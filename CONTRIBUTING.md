@@ -12,6 +12,8 @@ Improvements to the SKILL.md prompt are welcome — open a PR with before/after 
    - One sentence why change better
 
 > **Note:** `caveman/SKILL.md`, `plugins/caveman/skills/caveman/SKILL.md`, `.cursor/skills/caveman/SKILL.md`, and `caveman.skill` are auto-synced by CI after merge. Do not edit them directly.
+> 
+> **Note on compress skill:** If you are modifying the compress skill, edit `caveman-compress/SKILL.md` or `caveman-compress/scripts/`. CI will automatically sync these changes to `skills/compress/` and `plugins/caveman/skills/compress/`.
 
 Small focused change > big rewrite. Caveman like simple.
 
