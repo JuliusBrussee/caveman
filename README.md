@@ -32,7 +32,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin, Codex plugin, and Copilot CLI extension that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
 
 Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
 
@@ -136,9 +136,10 @@ Pick your agent. One command. Done.
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` |
 | **Codex** | Clone repo → `/plugins` → Search "Caveman" → Install |
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` |
+| **Copilot CLI** | `git clone https://github.com/JuliusBrussee/caveman.git && node caveman/scripts/install-copilot-extension.mjs --global` |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
-| **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
+| **Copilot (other)** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
 | **Any other** | `npx skills add JuliusBrussee/caveman` |
 
@@ -146,27 +147,28 @@ Install once. Use in every session for that install target after that. One rock.
 
 ### What You Get
 
-Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
+Auto-activation is built in for Claude Code, Copilot CLI, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
 
-| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
-|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|
-| Caveman mode | Y | Y | Y | Y | Y | Y | Y |
-| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² |
-| `/caveman` command | Y | Y¹ | Y | — | — | — | — |
-| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — |
-| Statusline badge | Y⁴ | — | — | — | — | — | — |
-| caveman-commit | Y | — | Y | Y | Y | Y | Y |
-| caveman-review | Y | — | Y | Y | Y | Y | Y |
-| caveman-compress | Y | Y | Y | Y | Y | Y | Y |
-| caveman-help | Y | — | Y | Y | Y | Y | Y |
+| Feature | Claude Code | Codex | Gemini CLI | Copilot CLI | Cursor | Windsurf | Cline | Copilot (other) |
+|---------|:-----------:|:-----:|:----------:|:-----------:|:------:|:--------:|:-----:|:---------------:|
+| Caveman mode | Y | Y | Y | Y | Y | Y | Y | Y |
+| Auto-activate every session | Y | Y¹ | Y | Y⁵ | —² | —² | —² | —² |
+| `/caveman` command | Y | Y¹ | Y | Y⁵ | — | — | — | — |
+| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y⁵ | Y³ | Y³ | — | — |
+| Statusline badge | Y⁴ | — | — | — | — | — | — | — |
+| caveman-commit | Y | — | Y | Y⁵ | Y | Y | Y | Y |
+| caveman-review | Y | — | Y | Y⁵ | Y | Y | Y | Y |
+| caveman-compress | Y | Y | Y | Y⁵ | Y | Y | Y | Y |
+| caveman-help | Y | — | Y | Y⁵ | Y | Y | Y | Y |
 
 > [!NOTE]
-> Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
+> Auto-activation works differently per agent: Claude Code uses SessionStart hooks, Copilot CLI uses a native extension with `onSessionStart`/`onUserPromptSubmitted` hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot (other) can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
 >
 > ¹ Codex uses `$caveman` syntax, not `/caveman`. This repo ships `.codex/hooks.json`, so caveman auto-starts when you run Codex inside this repo. The installed plugin itself gives you `$caveman`; copy the same hook into another repo if you want always-on behavior there too. caveman-commit and caveman-review are not in the Codex plugin bundle — use the SKILL.md files directly.
 > ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
 > ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
 > ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
+> ⁵ Copilot CLI extension installs into your target repo's `.github/extensions/caveman/` via installer script. Full mode switching, all intensity levels, one-shot skills — same as Claude Code except no persistent status badge (Copilot CLI has no statusline API).
 
 <details>
 <summary><strong>Claude Code — full details</strong></summary>
@@ -237,7 +239,44 @@ Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
 </details>
 
 <details>
-<summary><strong>Cursor / Windsurf / Cline / Copilot — full details</strong></summary>
+<summary><strong>Copilot CLI — full details</strong></summary>
+
+Native extension — auto-activates every session, same feature set as Claude Code (minus statusline badge).
+
+**Global install (recommended):**
+
+```bash
+git clone https://github.com/JuliusBrussee/caveman.git
+node caveman/scripts/install-copilot-extension.mjs --global
+```
+
+Installs into `~/.copilot/extensions/caveman/` — Caveman available in every repo for your user account.
+
+**Per-repo install:**
+
+```bash
+node caveman/scripts/install-copilot-extension.mjs /path/to/your/repo
+```
+
+Copies into `<repo>/.github/extensions/caveman/`. Re-run with `--force` to overwrite existing install.
+
+> **Shell wrappers** — `scripts/install-copilot-extension.sh` (macOS/Linux) and `scripts/install-copilot-extension.ps1` (Windows) accept the same arguments.
+
+**What you get:**
+- Auto-activation on every session start (full mode by default)
+- `/caveman`, `/caveman ultra`, `/caveman wenyan`, `/caveman-commit`, `/caveman-review`, `/caveman-compress`, `/caveman-help` slash commands
+- All intensity levels (lite/full/ultra/wenyan variants)
+- `stop caveman` or `normal mode` to deactivate
+- Mode changes logged to timeline
+
+**Config:** Set `CAVEMAN_DEFAULT_MODE` env var to change default (e.g., `lite`, `ultra`). Or create `~/.config/caveman/config.json` (works on all platforms) or `%APPDATA%\caveman\config.json` on Windows with `{"defaultMode": "ultra"}`.
+
+**Copilot Chat / VS Code Copilot:** These don't use extensions — use `npx skills add JuliusBrussee/caveman -a github-copilot` instead.
+
+</details>
+
+<details>
+<summary><strong>Cursor / Windsurf / Cline / Copilot (other) — full details</strong></summary>
 
 `npx skills add` installs the skill file only — it does **not** install the agent's rule/instruction file, so caveman does not auto-start. For always-on, add the "Want it always on?" snippet below to your agent's rules or system prompt.
 
@@ -246,7 +285,7 @@ Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
 | Cursor | `npx skills add JuliusBrussee/caveman -a cursor` | `.cursor/rules/caveman.mdc` | Y | Cursor rules |
 | Windsurf | `npx skills add JuliusBrussee/caveman -a windsurf` | `.windsurf/rules/caveman.md` | Y | Windsurf rules |
 | Cline | `npx skills add JuliusBrussee/caveman -a cline` | `.clinerules/caveman.md` | — | Cline rules or system prompt |
-| Copilot | `npx skills add JuliusBrussee/caveman -a github-copilot` | `.github/copilot-instructions.md` + `AGENTS.md` | — | Copilot custom instructions |
+| Copilot (other) | `npx skills add JuliusBrussee/caveman -a github-copilot` | `.github/copilot-instructions.md` + `AGENTS.md` | — | Copilot custom instructions |
 
 Uninstall: `npx skills remove caveman`
 
@@ -310,9 +349,9 @@ Stop with: "stop caveman" or "normal mode"
 
 | Level | Trigger | What it do |
 |-------|---------|------------|
-| **Lite** | `/caveman lite` | Drop filler, keep grammar. Professional but no fluff |
-| **Full** | `/caveman full` | Default caveman. Drop articles, fragments, full grunt |
-| **Ultra** | `/caveman ultra` | Maximum compression. Telegraphic. Abbreviate everything |
+| **Lite** | `/caveman lite` or `caveman lite` | Drop filler, keep grammar. Professional but no fluff |
+| **Full** | `/caveman full` or `caveman full` | Default caveman. Drop articles, fragments, full grunt |
+| **Ultra** | `/caveman ultra` or `caveman ultra` | Maximum compression. Telegraphic. Abbreviate everything |
 
 ### 文言文 (Wenyan) Mode
 
@@ -320,25 +359,19 @@ Classical Chinese literary compression — same technical accuracy, but in the m
 
 | Level | Trigger | What it do |
 |-------|---------|------------|
-| **Wenyan-Lite** | `/caveman wenyan-lite` | Semi-classical. Grammar intact, filler gone |
-| **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness |
-| **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget |
+| **Wenyan-Lite** | `/caveman wenyan-lite` or `caveman wenyan-lite` | Semi-classical. Grammar intact, filler gone |
+| **Wenyan-Full** | `/caveman wenyan` or `caveman wenyan` | Full 文言文. Maximum classical terseness |
+| **Wenyan-Ultra** | `/caveman wenyan-ultra` or `caveman wenyan-ultra` | Extreme. Ancient scholar on a budget |
 
 Level stick until you change it or session end.
 
 ## Caveman Skills
 
-### caveman-commit
-
-`/caveman-commit` — terse commit messages. Conventional Commits. ≤50 char subject. Why over what.
-
-### caveman-review
-
-`/caveman-review` — one-line PR comments: `L42: 🔴 bug: user null. Add guard.` No throat-clearing.
-
-### caveman-help
-
-`/caveman-help` — quick-reference card. All modes, skills, commands, one command away.
+| Skill | What it do | Trigger |
+|-------|-----------|---------|
+| **caveman-commit** | Terse commit messages. Conventional Commits. ≤50 char subject. Why over what. | `/caveman-commit` or `caveman commit` |
+| **caveman-review** | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` No throat-clearing. | `/caveman-review` or `caveman review` |
+| **caveman-help** | Quick-reference card. All modes, skills, commands, one command away. | `/caveman-help` or `caveman help` |
 
 ### caveman-compress
 

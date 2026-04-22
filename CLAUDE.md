@@ -35,6 +35,9 @@ Caveman makes AI coding agents respond in compressed caveman-style prose — cut
 | `skills/caveman-review/SKILL.md` | Caveman code review behavior. Fully independent skill. |
 | `skills/caveman-help/SKILL.md` | Quick-reference card. One-shot display, not a persistent mode. |
 | `caveman-compress/SKILL.md` | Compress sub-skill behavior. |
+| `lib/caveman-mode-parser.mjs` | Shared mode/command parsing logic (ESM). Used by Copilot CLI extension. CI syncs copy into extension dir. |
+| `lib/caveman-config.js` | Shared default-mode config resolver. CI syncs copies into hooks/ and Copilot CLI extension dir. |
+| `scripts/install-copilot-extension.mjs` | Canonical installer for copying/updating the native Copilot CLI extension into another repo or the user-wide Copilot extensions dir. |
 
 ### Auto-generated / auto-synced — do not edit directly
 
@@ -51,6 +54,10 @@ Overwritten by CI on push to main when sources change. Edits here lost.
 | `.github/copilot-instructions.md` | `rules/caveman-activate.md` |
 | `.cursor/rules/caveman.mdc` | `rules/caveman-activate.md` + Cursor frontmatter |
 | `.windsurf/rules/caveman.md` | `rules/caveman-activate.md` + Windsurf frontmatter |
+| `.github/extensions/caveman/rules.mjs` | All `skills/*/SKILL.md` + `caveman-compress/SKILL.md` bundled as ESM exports |
+| `.github/extensions/caveman/parser.mjs` | `lib/caveman-mode-parser.mjs` |
+| `.github/extensions/caveman/config.js` | `lib/caveman-config.js` |
+| `hooks/caveman-config.js` | `lib/caveman-config.js` |
 
 ---
 
@@ -167,11 +174,12 @@ How caveman reaches each agent type:
 |-------|-----------|----------------|
 | Claude Code | Plugin (hooks + skills) or standalone hooks | Yes — SessionStart hook injects rules |
 | Codex | Plugin in `plugins/caveman/` plus repo `.codex/hooks.json` and `.codex/config.toml` | Yes on macOS/Linux — SessionStart hook |
+| Copilot CLI | Native extension in `.github/extensions/caveman/`, installed via `scripts/install-copilot-extension.*` | Yes — onSessionStart hook injects rules |
 | Gemini CLI | Extension with `GEMINI.md` context file | Yes — context file loads every session |
 | Cursor | `.cursor/rules/caveman.mdc` with `alwaysApply: true` | Yes — always-on rule |
 | Windsurf | `.windsurf/rules/caveman.md` with `trigger: always_on` | Yes — always-on rule |
 | Cline | `.clinerules/caveman.md` (auto-discovered) | Yes — Cline injects all .clinerules files |
-| Copilot | `.github/copilot-instructions.md` + `AGENTS.md` | Yes — repo-wide instructions |
+| Copilot (other) | `.github/copilot-instructions.md` + `AGENTS.md` | Yes — repo-wide instructions |
 | Others | `npx skills add JuliusBrussee/caveman` | No — user must say `/caveman` each session |
 
 For agents without hook systems, minimal always-on snippet lives in README under "Want it always on?" — keep current with `rules/caveman-activate.md`.
