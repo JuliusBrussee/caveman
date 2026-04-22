@@ -1,0 +1,6 @@
+{
+  "name": "caveman",
+  "description": "Ultra-compressed communication mode. Cuts ~75% of tokens while keeping full technical accuracy by speaking like a caveman.",
+  "version": "1.0.1",
+  "contextFileName": "GEMINI.md"
+}
