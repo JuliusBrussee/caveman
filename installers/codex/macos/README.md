@@ -179,6 +179,13 @@ Important differences:
 
 ## Uninstall
 
+Prompt-based uninstall docs also exist:
+
+- `skills-only/prompt-uninstall.md`
+- `plugin-with-all-skills/prompt-uninstall.md`
+
+These are manual Codex prompts, not shell scripts.
+
 ### Full expunge
 
 Use this when you want highest-confidence cleanup before reinstalling.
@@ -330,9 +337,11 @@ installers/codex/macos/
 ├── plugin-with-all-skills/
 │   ├── install.sh
 │   ├── prompt-install.md
+│   ├── prompt-uninstall.md
 │   └── uninstall.sh
 └── skills-only/
     ├── install.sh
     ├── prompt-install.md
+    ├── prompt-uninstall.md
     └── uninstall.sh
 ```
