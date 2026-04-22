@@ -6,8 +6,6 @@ PLUGIN_NAME="caveman"
 TARGET_PLUGIN_DIR="${HOME}/.codex/plugins/${PLUGIN_NAME}"
 CACHED_PLUGIN_DIR="${HOME}/.codex/plugins/cache/local-plugins/${PLUGIN_NAME}"
 CACHED_MARKETPLACE_DIR="${HOME}/.codex/plugins/cache/local-plugins"
-TARGET_SKILLS_DIR="${HOME}/.codex/skills"
-EXTRA_SKILLS=("caveman-commit" "caveman-help" "caveman-review")
 MARKETPLACE_DIR="${HOME}/.agents/plugins"
 MARKETPLACE_FILE="${MARKETPLACE_DIR}/marketplace.json"
 CODEX_CONFIG_FILE="${HOME}/.codex/config.toml"
@@ -59,7 +57,6 @@ PLUGIN_EXISTS=0
 MARKETPLACE_HAS_ENTRY=0
 CONFIG_HAS_ENTRY=0
 CACHED_PLUGIN_EXISTS=0
-STANDALONE_SKILLS_EXIST=0
 
 if [ -e "${TARGET_PLUGIN_DIR}" ]; then
   PLUGIN_EXISTS=1
@@ -68,12 +65,6 @@ fi
 if [ -e "${CACHED_PLUGIN_DIR}" ]; then
   CACHED_PLUGIN_EXISTS=1
 fi
-
-for skill in "${EXTRA_SKILLS[@]}"; do
-  if [ -e "${TARGET_SKILLS_DIR}/${skill}" ]; then
-    STANDALONE_SKILLS_EXIST=1
-  fi
-done
 
 if [ -f "${MARKETPLACE_FILE}" ]; then
   if python3 - "${MARKETPLACE_FILE}" <<'PY'
@@ -121,7 +112,7 @@ PY
   fi
 fi
 
-if [ "${PLUGIN_EXISTS}" -eq 0 ] && [ "${MARKETPLACE_HAS_ENTRY}" -eq 0 ] && [ "${CONFIG_HAS_ENTRY}" -eq 0 ] && [ "${CACHED_PLUGIN_EXISTS}" -eq 0 ] && [ "${STANDALONE_SKILLS_EXIST}" -eq 0 ]; then
+if [ "${PLUGIN_EXISTS}" -eq 0 ] && [ "${MARKETPLACE_HAS_ENTRY}" -eq 0 ] && [ "${CONFIG_HAS_ENTRY}" -eq 0 ] && [ "${CACHED_PLUGIN_EXISTS}" -eq 0 ]; then
   echo "Caveman not installed. Nothing to do."
   exit 0
 fi
@@ -189,13 +180,6 @@ if [ -e "${CACHED_PLUGIN_DIR}" ]; then
   rm -rf "${CACHED_PLUGIN_DIR}"
 fi
 
-for skill in "${EXTRA_SKILLS[@]}"; do
-  if [ -e "${TARGET_SKILLS_DIR}/${skill}" ]; then
-    echo "Remove legacy standalone skill ${skill}..."
-    rm -rf "${TARGET_SKILLS_DIR}/${skill}"
-  fi
-done
-
 if [ -d "${MARKETPLACE_DIR}" ] && [ -z "$(ls -A "${MARKETPLACE_DIR}")" ]; then
   rmdir "${MARKETPLACE_DIR}"
 fi
@@ -215,12 +199,6 @@ fi
 if [ -e "${CACHED_PLUGIN_DIR}" ]; then
   fail "installed cache still exists: ${CACHED_PLUGIN_DIR}"
 fi
-
-for skill in "${EXTRA_SKILLS[@]}"; do
-  if [ -e "${TARGET_SKILLS_DIR}/${skill}" ]; then
-    fail "legacy standalone skill still exists: ${TARGET_SKILLS_DIR}/${skill}"
-  fi
-done
 
 if [ -f "${MARKETPLACE_FILE}" ]; then
   if python3 - "${MARKETPLACE_FILE}" <<'PY'

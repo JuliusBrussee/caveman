@@ -14,7 +14,7 @@ Choose one. Most users should not install both.
 - you use Codex Desktop
 - you want Caveman to appear in Codex's local plugin marketplace
 - you want one plugin entry that contains all Caveman skills
-- you want plugin uninstall to remove plugin-managed skills together
+- you want plugin uninstall to remove plugin files cleanly
 
 ### Use `skills-only` if:
 
@@ -224,22 +224,16 @@ Behavior:
 - removes `caveman` entry from `~/.agents/plugins/marketplace.json`
 - deletes `~/.agents/plugins/marketplace.json` entirely if file becomes empty and still matches default local-marketplace shape
 - removes config section `[plugins."caveman@local-plugins"]` from `~/.codex/config.toml` if present
+- does not remove standalone skills under `~/.codex/skills`
 - removes empty parent dirs like `~/.agents/plugins`, `~/.codex/plugins/cache/local-plugins`, and `~/.agents` when they become empty
 
-## Important caveat about plugin uninstall
-
-`plugin-with-all-skills/uninstall.sh` also removes these standalone skill directories from `~/.codex/skills` if they exist:
-
-- `~/.codex/skills/caveman-commit`
-- `~/.codex/skills/caveman-help`
-- `~/.codex/skills/caveman-review`
-
-Script labels these as legacy standalone skills. If you intentionally installed those three outside plugin flow, uninstall will still delete them. README calls this out because behavior is easy to miss.
-
-It does **not** remove standalone:
+It leaves standalone installs untouched, including:
 
 - `~/.codex/skills/caveman`
 - `~/.codex/skills/compress`
+- `~/.codex/skills/caveman-commit`
+- `~/.codex/skills/caveman-help`
+- `~/.codex/skills/caveman-review`
 
 ## Recommended path
 
