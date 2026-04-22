@@ -44,6 +44,17 @@ if (INDEPENDENT_MODES.has(mode)) {
   process.exit(0);
 }
 
+// Opt-in SessionStart ruleset dump.
+// The full ruleset (~60 lines) is valuable for first-time users but heavy for
+// power users who already know caveman and just want the flag written + the
+// statusline active. Set CAVEMAN_SESSIONSTART_DUMP=1 to restore the full dump;
+// default off emits a 3-line acknowledgment so the ruleset isn't re-injected
+// into every session's context window.
+if (!process.env.CAVEMAN_SESSIONSTART_DUMP) {
+  process.stdout.write('CAVEMAN ACTIVE — level: ' + mode + '. Short mode. Set CAVEMAN_SESSIONSTART_DUMP=1 for full ruleset.');
+  process.exit(0);
+}
+
 // Resolve the canonical label for wenyan alias
 const modeLabel = mode === 'wenyan' ? 'wenyan-full' : mode;
 
