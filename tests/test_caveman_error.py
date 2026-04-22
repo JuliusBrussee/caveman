@@ -1,69 +1,77 @@
-"""Tests for caveman-error skill behavior."""
+"""Tests for caveman-error skill discovery and registration."""
 
+import re
 import unittest
+from pathlib import Path
 
 
-class CavemanErrorSkillTests(unittest.TestCase):
-    """Verify caveman-error output format and parsing rules."""
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
-    def test_python_nameerror_format(self):
-        """Python NameError → terse one-liner with file:line, type, cause, fix."""
-        error = """Traceback (most recent call last):
-  File "main.py", line 42, in <module>
-    print(user.email)
-NameError: name 'user' is not defined"""
-        # Expected caveman output pattern
-        # main.py:L42: NameError. Var 'user' undefined. Fix: ...
-        self.assertIn("main.py", error)  # File present
-        self.assertIn("42", error)       # Line present
-        self.assertIn("NameError", error)
 
-    def test_javascript_typeerror_format(self):
-        """JS TypeError → terse with null check suggestion."""
-        error = """TypeError: Cannot read properties of undefined (reading 'email')
-    at authUser (/app/auth.js:23:15)
-    at processRequest (/app/server.js:45:3)"""
-        self.assertIn("auth.js", error)
-        self.assertIn("23", error)
-        self.assertIn("TypeError", error)
+class CavemanErrorRegistrationTests(unittest.TestCase):
+    """Verify caveman-error skill is properly registered and discoverable."""
 
-    def test_rust_compile_error_format(self):
-        """Rust error code → terse with file and error code."""
-        error = """error[E0425]: cannot find value `config` in this scope
-  --> src/main.rs:15:23
-   |
-15 |     let db = connect(&config);
-   |                       ^^^^^^ not found in this scope"""
-        self.assertIn("main.rs", error)
-        self.assertIn("15", error)
-        self.assertIn("E0425", error)
+    def test_skill_file_exists(self):
+        """SKILL.md must exist at expected location."""
+        skill_path = REPO_ROOT / "skills" / "caveman-error" / "SKILL.md"
+        self.assertTrue(skill_path.exists(), f"Skill file not found: {skill_path}")
 
-    def test_output_pattern_has_file_line_error(self):
-        """All caveman-error outputs must contain file:line and error type."""
-        # Pattern validation for SKILL.md examples
-        examples = [
-            "main.py:L42: NameError. Var 'user' undefined. Fix: Define or check before use.",
-            "auth.js:L23: TypeError. Cannot read 'email' of undefined. Fix: Add null guard before access.",
-            "src/main.rs:L15: E0425. Var 'config' not found in scope. Fix: Import or define config.",
-        ]
-        for ex in examples:
-            # Must have :L<digits> pattern
-            self.assertRegex(ex, r":L\d+:")
+    def test_skill_has_required_sections(self):
+        """SKILL.md must have frontmatter, rules, examples, boundaries."""
+        skill_path = REPO_ROOT / "skills" / "caveman-error" / "SKILL.md"
+        content = skill_path.read_text()
+
+        # Required sections
+        self.assertIn("name: caveman-error", content, "Missing skill name in frontmatter")
+        self.assertIn("description:", content, "Missing description in frontmatter")
+        self.assertIn("## Rules", content, "Missing Rules section")
+        self.assertIn("## Examples", content, "Missing Examples section")
+        self.assertIn("## Boundaries", content, "Missing Boundaries section")
+
+    def test_command_file_exists(self):
+        """Command TOML must exist for Gemini CLI."""
+        cmd_path = REPO_ROOT / "commands" / "caveman-error.toml"
+        self.assertTrue(cmd_path.exists(), f"Command file not found: {cmd_path}")
+
+    def test_command_has_required_fields(self):
+        """Command TOML must have description and prompt."""
+        cmd_path = REPO_ROOT / "commands" / "caveman-error.toml"
+        content = cmd_path.read_text()
+
+        self.assertIn("description", content, "Missing description in command file")
+        self.assertIn("prompt", content, "Missing prompt in command file")
+
+    def test_referenced_in_agents_md(self):
+        """Skill must be listed in AGENTS.md for agent context loading."""
+        agents_path = REPO_ROOT / "AGENTS.md"
+        content = agents_path.read_text()
+
+        self.assertIn("caveman-error/SKILL.md", content, "Not referenced in AGENTS.md")
+
+    def test_referenced_in_gemini_md(self):
+        """Skill must be listed in GEMINI.md for Gemini CLI context."""
+        gemini_path = REPO_ROOT / "GEMINI.md"
+        content = gemini_path.read_text()
+
+        self.assertIn("caveman-error/SKILL.md", content, "Not referenced in GEMINI.md")
+
+    def test_skill_output_format_examples(self):
+        """Examples in SKILL.md must follow output format pattern."""
+        skill_path = REPO_ROOT / "skills" / "caveman-error" / "SKILL.md"
+        content = skill_path.read_text()
+
+        # Count lines that start with arrow + backtick (output examples)
+        # Arrow char: → (Unicode U+2192)
+        arrow_lines = [line for line in content.split('\n') if line.strip().startswith('→ `')]
+        matches = [line.strip()[2:].strip().strip('`') for line in arrow_lines]
+
+        self.assertTrue(len(matches) >= 3, f"Expected at least 3 examples, found {len(matches)}")
+
+        for example in matches:
+            # Must have :L<digits>: pattern
+            self.assertRegex(example, r":L\d+:", f"Example missing :L<line>: pattern: {example}")
             # Must have Fix: suggestion
-            self.assertIn("Fix:", ex)
-
-    def test_framework_frames_collapsed(self):
-        """Framework frames (node_modules, site-packages) should be collapsed."""
-        # This test documents expected behavior
-        # Full traces with many framework frames should show user code only
-        framework_paths = [
-            "/node_modules/react/",
-            "/site-packages/django/",
-            "/usr/lib/python3.11/",
-        ]
-        for path in framework_paths:
-            # These should be collapsed in caveman output
-            self.assertIn("node_modules" if "node" in path else "site-packages" if "site" in path else "lib", path)
+            self.assertIn("Fix:", example, f"Example missing Fix: suggestion: {example}")
 
 
 if __name__ == "__main__":
