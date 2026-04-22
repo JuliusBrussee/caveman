@@ -159,6 +159,7 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 | caveman-review | Y | — | Y | Y | Y | Y | Y |
 | caveman-compress | Y | Y | Y | Y | Y | Y | Y |
 | caveman-help | Y | — | Y | Y | Y | Y | Y |
+| caveman-error | Y | — | Y | Y | Y | Y | Y |
 
 > [!NOTE]
 > Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
@@ -339,6 +340,10 @@ Level stick until you change it or session end.
 ### caveman-help
 
 `/caveman-help` — quick-reference card. All modes, skills, commands, one command away.
+
+### caveman-error
+
+`/caveman-error` — compress stack traces and errors into terse one-liners. Cuts 70-90% tokens while preserving root cause and fix.
 
 ### caveman-compress
 
