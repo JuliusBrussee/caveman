@@ -37,6 +37,17 @@ jobs:
           mkdir -p .windsurf/skills/caveman
           cp skills/caveman/SKILL.md .windsurf/skills/caveman/SKILL.md
 
+      - name: Sync compress skill
+        run: |
+          # Sync to skills/compress (main location for Gemini CLI)
+          rm -rf skills/compress/scripts
+          cp caveman-compress/SKILL.md skills/compress/SKILL.md
+          sed -i 's/^name: caveman-compress$/name: compress/' skills/compress/SKILL.md
+          sed -i "s|The compression scripts live in \`caveman-compress/scripts/\` (adjacent to this SKILL.md). If the path is not immediately available, search for \`caveman-compress/scripts/__main__.py\`.|This SKILL.md lives alongside \`scripts/\` in the same directory. Find that directory.|" skills/compress/SKILL.md
+          sed -i 's|cd caveman-compress && python3|cd <directory_containing_this_SKILL.md> \&\& python3|' skills/compress/SKILL.md
+          cp -r caveman-compress/scripts skills/compress/scripts
+          rm -rf skills/compress/scripts/__pycache__
+
       - name: Sync compress skill to plugin
         run: |
           # Copy SKILL.md and patch name + process instructions for plugin context
@@ -75,6 +86,7 @@ jobs:
         run: |
           git add \
             caveman/SKILL.md \
+            skills/compress/ \
             plugins/caveman/skills/compress/ \
             plugins/caveman/skills/caveman/SKILL.md \
             .cursor/skills/caveman/SKILL.md \

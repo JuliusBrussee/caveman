@@ -70,29 +70,41 @@ CI bot commits as `github-actions[bot]`. After PR merge, wait for workflow befor
 
 ## Hook system (Claude Code)
 
-Three hooks in `hooks/`. Communicate via flag file at `~/.claude/.caveman-active`.
+Three hooks in `hooks/` plus a `caveman-config.js` shared module and a `package.json` CommonJS marker. Communicate via flag file at `$CLAUDE_CONFIG_DIR/.caveman-active` (falls back to `~/.claude/.caveman-active`).
 
 ```
-SessionStart hook ──writes "full"──▶ ~/.claude/.caveman-active ◀──writes mode── UserPromptSubmit hook
-                                               │
-                                            reads
-                                               ▼
-                                      caveman-statusline.sh
-                                     [CAVEMAN] / [CAVEMAN:ULTRA] / ...
+SessionStart hook ──writes "full"──▶ $CLAUDE_CONFIG_DIR/.caveman-active ◀──writes mode── UserPromptSubmit hook
+                                                       │
+                                                    reads
+                                                       ▼
+                                              caveman-statusline.sh
+                                            [CAVEMAN] / [CAVEMAN:ULTRA] / ...
 ```
+
+`hooks/package.json` pins the directory to `{"type": "commonjs"}` so the `.js` hooks resolve as CJS even when an ancestor `package.json` (e.g. `~/.claude/package.json` from another plugin) declares `"type": "module"`. Without this, `require()` blows up with `ReferenceError: require is not defined in ES module scope`.
+
+All hooks honor `CLAUDE_CONFIG_DIR` for non-default Claude Code config locations.
+
+### `hooks/caveman-config.js` — shared module
+
+Exports:
+- `getDefaultMode()` — resolves default mode from `CAVEMAN_DEFAULT_MODE` env var, then `$XDG_CONFIG_HOME/caveman/config.json` / `~/.config/caveman/config.json` / `%APPDATA%\caveman\config.json`, then `'full'`
+- `safeWriteFlag(flagPath, content)` — symlink-safe flag write. Refuses if flag target or its immediate parent is a symlink. Opens with `O_NOFOLLOW` where supported. Atomic temp + rename. Creates with `0600`. Protects against local attackers replacing the predictable flag path with a symlink to clobber files writable by the user. Used by both write hooks. Silent-fails on all filesystem errors.
 
 ### `hooks/caveman-activate.js` — SessionStart hook
 
 Runs once per Claude Code session start. Three things:
-1. Writes `"full"` to `~/.claude/.caveman-active` (creates if missing)
+1. Writes the active mode to `$CLAUDE_CONFIG_DIR/.caveman-active` via `safeWriteFlag` (creates if missing)
 2. Emits caveman ruleset as hidden stdout — Claude Code injects SessionStart hook stdout as system context, invisible to user
-3. Checks `~/.claude/settings.json` for statusline config; if missing, appends nudge to offer setup on first interaction
+3. Checks `settings.json` for statusline config; if missing, appends nudge to offer setup on first interaction
 
 Silent-fails on all filesystem errors — never blocks session start.
 
 ### `hooks/caveman-mode-tracker.js` — UserPromptSubmit hook
 
-Reads JSON from stdin. Checks if prompt starts with `/caveman`. If yes, writes mode to flag file:
+Reads JSON from stdin. Three responsibilities:
+
+**1. Slash-command activation.** If prompt starts with `/caveman`, writes mode to flag file via `safeWriteFlag`:
 - `/caveman` → configured default (see `caveman-config.js`, defaults to `full`)
 - `/caveman lite` → `lite`
 - `/caveman ultra` → `ultra`
@@ -103,15 +115,17 @@ Reads JSON from stdin. Checks if prompt starts with `/caveman`. If yes, writes m
 - `/caveman-review` → `review`
 - `/caveman-compress` → `compress`
 
-Detects "stop caveman" or "normal mode" in prompt and deletes flag file.
+**2. Natural-language activation/deactivation.** Matches phrases like "activate caveman", "turn on caveman mode", "talk like caveman" and writes the configured default mode. Matches "stop caveman", "disable caveman", "normal mode", "deactivate caveman" etc. and deletes the flag file. README promises these triggers, the hook enforces them.
+
+**3. Per-turn reinforcement.** When flag is set to a non-independent mode (i.e. not `commit`/`review`/`compress`), emits a small `hookSpecificOutput` JSON reminder so the model keeps caveman style after other plugins inject competing instructions mid-conversation. The full ruleset still comes from SessionStart — this is just an attention anchor.
 
 ### `hooks/caveman-statusline.sh` — Statusline badge
 
-Reads flag file. Outputs colored badge string for Claude Code statusline:
+Reads flag file at `$CLAUDE_CONFIG_DIR/.caveman-active`. Outputs colored badge string for Claude Code statusline:
 - `full` or empty → `[CAVEMAN]` (orange)
 - anything else → `[CAVEMAN:<MODE_UPPERCASED>]` (orange)
 
-Configured in `~/.claude/settings.json` under `statusLine.command`.
+Configured in `settings.json` under `statusLine.command`. PowerShell counterpart at `hooks/caveman-statusline.ps1` for Windows.
 
 ### Hook installation
 
@@ -152,7 +166,7 @@ How caveman reaches each agent type:
 | Agent | Mechanism | Auto-activates? |
 |-------|-----------|----------------|
 | Claude Code | Plugin (hooks + skills) or standalone hooks | Yes — SessionStart hook injects rules |
-| Codex | Plugin in `plugins/caveman/` with `hooks.json` | Yes — SessionStart hook |
+| Codex | Plugin in `plugins/caveman/` plus repo `.codex/hooks.json` and `.codex/config.toml` | Yes on macOS/Linux — SessionStart hook |
 | Gemini CLI | Extension with `GEMINI.md` context file | Yes — context file loads every session |
 | Cursor | `.cursor/rules/caveman.mdc` with `alwaysApply: true` | Yes — always-on rule |
 | Windsurf | `.windsurf/rules/caveman.md` with `trigger: always_on` | Yes — always-on rule |
@@ -197,3 +211,5 @@ To reproduce: `uv run python benchmarks/run.py` (needs `ANTHROPIC_API_KEY` in `.
 - Benchmark and eval numbers must be real. Never fabricate or estimate.
 - CI workflow commits back to main after merge. Account for when checking branch state.
 - Hook files must silent-fail on all filesystem errors. Never let hook crash block session start.
+- Any new flag file write must go through `safeWriteFlag()` in `caveman-config.js`. Direct `fs.writeFileSync` on predictable user-owned paths reopens the symlink-clobber attack surface.
+- Hooks must respect `CLAUDE_CONFIG_DIR` env var, not hardcode `~/.claude`. Same for `install.sh` / `install.ps1` / statusline scripts.
