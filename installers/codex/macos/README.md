@@ -1,12 +1,319 @@
+# Caveman Installers for Codex on macOS
 
+This folder contains two macOS installer flows for Caveman:
 
-# Install instructions for Codex Desktop and Codex CLI on macOS
+- `plugin-with-all-skills/`: installs Caveman as a local Codex plugin, with all shipped skills bundled under that plugin.
+- `skills-only/`: installs Caveman skills directly into your Codex skills directory, with no plugin marketplace integration.
 
-The install scripts or prompts should work in both Codex Desktop and Codex CLI. The prompt version of the installer was written by GPT-5.4 (High), so it should probably only be used with that version, although it will probably work with other model versions. 
+Choose one. Most users should not install both.
 
-## Option 1: Full Plugin Installer
-This installer installs all the skills as a single plugin, which provides additional functionality beyond just the skills.
+## Which installer should you use?
 
-## Option 2: All-in-1 Skills Only Installer
-This installer provides a simple way to get all caveman-related skills installed as Codex skills without any plugin integration. 
+### Use `plugin-with-all-skills` if:
 
+- you use Codex Desktop
+- you want Caveman to appear in Codex's local plugin marketplace
+- you want one plugin entry that contains all Caveman skills
+- you want plugin uninstall to remove plugin-managed skills together
+
+### Use `skills-only` if:
+
+- you want simplest install
+- you want plain skills under `~/.codex/skills`
+- you do not need plugin marketplace integration
+- you use Codex CLI or prefer direct skill install
+
+## What gets installed?
+
+### `skills-only`
+
+Installs these skill directories into `~/.codex/skills/`:
+
+- `caveman`
+- `compress`
+- `caveman-commit`
+- `caveman-help`
+- `caveman-review`
+
+### `plugin-with-all-skills`
+
+Installs local plugin at:
+
+- `~/.codex/plugins/caveman`
+
+That plugin contains these skills under `~/.codex/plugins/caveman/skills/`:
+
+- `caveman`
+- `compress`
+- `caveman-commit`
+- `caveman-help`
+- `caveman-review`
+
+It also adds local marketplace entry at:
+
+- `~/.agents/plugins/marketplace.json`
+
+After script finishes, plugin files exist locally but plugin is not fully active until you restart Codex and install `Caveman` from `Local Plugins` inside marketplace.
+
+## Requirements
+
+### Common
+
+- macOS
+- internet access to clone [github.com/JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman)
+- permission to write inside your home directory
+
+### `skills-only/install.sh`
+
+Needs:
+
+- `git`
+- `mv`
+- `mkdir`
+
+### `skills-only/uninstall.sh`
+
+Needs:
+
+- `rm`
+- `rmdir`
+
+### `plugin-with-all-skills/install.sh`
+
+Needs:
+
+- `git`
+- `python3`
+- `mv`
+- `mkdir`
+
+### `plugin-with-all-skills/uninstall.sh`
+
+Needs:
+
+- `python3`
+- `rm`
+- `rmdir`
+
+## Safety and overwrite behavior
+
+Both installers are conservative:
+
+- they clone only needed parts of repo with Git sparse checkout
+- they fail instead of overwriting existing target install
+- they verify expected files exist after install
+- they clean up temporary clone directory on exit
+
+### Existing install behavior
+
+`skills-only/install.sh` stops if any of these already exist:
+
+- `~/.codex/skills/caveman`
+- `~/.codex/skills/compress`
+- `~/.codex/skills/caveman-commit`
+- `~/.codex/skills/caveman-help`
+- `~/.codex/skills/caveman-review`
+
+`plugin-with-all-skills/install.sh` stops if this already exists:
+
+- `~/.codex/plugins/caveman`
+
+Neither installer offers in-place upgrade. If you want clean reinstall, uninstall first.
+
+## Script install
+
+Run from this directory or by absolute path.
+
+### Skills-only install
+
+```sh
+chmod +x installers/codex/macos/skills-only/install.sh
+installers/codex/macos/skills-only/install.sh
+```
+
+Result:
+
+- clones only required skill folders
+- creates `~/.codex/skills` if missing
+- moves five skill directories into `~/.codex/skills`
+- tells you to restart Codex
+
+### Plugin install
+
+```sh
+chmod +x installers/codex/macos/plugin-with-all-skills/install.sh
+installers/codex/macos/plugin-with-all-skills/install.sh
+```
+
+Result:
+
+- clones plugin subtree plus companion skill folders
+- creates `~/.codex/plugins` and `~/.agents/plugins` if missing
+- writes or updates `~/.agents/plugins/marketplace.json` with local `caveman` entry
+- installs plugin to `~/.codex/plugins/caveman`
+- moves companion skills into plugin's `skills/` directory
+- tells you to restart Codex, open marketplace, then install `Caveman` from `Local Plugins`
+
+## Prompt install
+
+Each installer folder also includes `prompt-install.md`.
+
+These files are not shell scripts. They are exact step-by-step prompts for Codex to perform install manually.
+
+Use prompt version if:
+
+- you want Codex to execute install for you
+- you prefer reviewed instructions over running shell script directly
+- you want same install logic expressed as agent workflow
+
+### Prompt files
+
+- `skills-only/prompt-install.md`
+- `plugin-with-all-skills/prompt-install.md`
+
+Important differences:
+
+- `skills-only/prompt-install.md` explicitly forbids writing under `~/.codex/plugins` or `~/.agents/plugins`
+- `plugin-with-all-skills/prompt-install.md` explicitly uses local plugin marketplace flow for Codex Desktop
+
+## Uninstall
+
+### Skills-only uninstall
+
+```sh
+chmod +x installers/codex/macos/skills-only/uninstall.sh
+installers/codex/macos/skills-only/uninstall.sh
+```
+
+Optional non-interactive mode:
+
+```sh
+installers/codex/macos/skills-only/uninstall.sh --yes
+```
+
+Behavior:
+
+- prompts for confirmation unless `--yes`
+- removes any of these if present:
+  - `~/.codex/skills/caveman`
+  - `~/.codex/skills/compress`
+  - `~/.codex/skills/caveman-commit`
+  - `~/.codex/skills/caveman-help`
+  - `~/.codex/skills/caveman-review`
+- prints `Nothing to do` if none exist
+- tells you to restart Codex if skills still appear in current session
+
+### Plugin uninstall
+
+```sh
+chmod +x installers/codex/macos/plugin-with-all-skills/uninstall.sh
+installers/codex/macos/plugin-with-all-skills/uninstall.sh
+```
+
+Optional non-interactive mode:
+
+```sh
+installers/codex/macos/plugin-with-all-skills/uninstall.sh --yes
+```
+
+Behavior:
+
+- prompts for confirmation unless `--yes`
+- removes plugin directory `~/.codex/plugins/caveman` if present
+- removes installed plugin cache at `~/.codex/plugins/cache/local-plugins/caveman` if present
+- removes `caveman` entry from `~/.agents/plugins/marketplace.json`
+- deletes `~/.agents/plugins/marketplace.json` entirely if file becomes empty and still matches default local-marketplace shape
+- removes config section `[plugins."caveman@local-plugins"]` from `~/.codex/config.toml` if present
+- removes empty parent dirs like `~/.agents/plugins`, `~/.codex/plugins/cache/local-plugins`, and `~/.agents` when they become empty
+
+## Important caveat about plugin uninstall
+
+`plugin-with-all-skills/uninstall.sh` also removes these standalone skill directories from `~/.codex/skills` if they exist:
+
+- `~/.codex/skills/caveman-commit`
+- `~/.codex/skills/caveman-help`
+- `~/.codex/skills/caveman-review`
+
+Script labels these as legacy standalone skills. If you intentionally installed those three outside plugin flow, uninstall will still delete them. README calls this out because behavior is easy to miss.
+
+It does **not** remove standalone:
+
+- `~/.codex/skills/caveman`
+- `~/.codex/skills/compress`
+
+## Recommended path
+
+### Best default
+
+Use `skills-only` if you want lowest-friction install.
+
+### Use plugin flow only when you specifically want:
+
+- Codex Desktop local plugin marketplace integration
+- one plugin container for all Caveman skills
+- plugin-style install/uninstall lifecycle
+
+## Verify install
+
+### Skills-only
+
+Check:
+
+- `~/.codex/skills/caveman/SKILL.md`
+- `~/.codex/skills/compress/SKILL.md`
+- `~/.codex/skills/caveman-commit/SKILL.md`
+- `~/.codex/skills/caveman-help/SKILL.md`
+- `~/.codex/skills/caveman-review/SKILL.md`
+
+Then restart Codex.
+
+### Plugin install
+
+Check:
+
+- `~/.codex/plugins/caveman/.codex-plugin/plugin.json`
+- `~/.codex/plugins/caveman/skills/caveman/SKILL.md`
+- `~/.codex/plugins/caveman/skills/compress/SKILL.md`
+- `~/.codex/plugins/caveman/skills/caveman-commit/SKILL.md`
+- `~/.codex/plugins/caveman/skills/caveman-help/SKILL.md`
+- `~/.codex/plugins/caveman/skills/caveman-review/SKILL.md`
+- `~/.agents/plugins/marketplace.json`
+
+Then:
+
+1. Restart Codex.
+2. Open plugin marketplace.
+3. Install `Caveman` from `Local Plugins`.
+
+## Troubleshooting
+
+### Error: target already exists
+
+You already have previous install or partial install at target path. Uninstall first, or remove conflicting install manually if you know what you are doing.
+
+### Error: missing required command
+
+Install missing dependency first. Script checks commands before doing real work.
+
+### Marketplace entry exists but plugin not visible
+
+Restart Codex first. Plugin flow depends on Codex reloading local marketplace after files land on disk.
+
+### Prompt install vs script install
+
+Use one method per target. Running prompt flow after script flow usually hits existing-path safety checks.
+
+## Folder map
+
+```text
+installers/codex/macos/
+├── README.md
+├── plugin-with-all-skills/
+│   ├── install.sh
+│   ├── prompt-install.md
+│   └── uninstall.sh
+└── skills-only/
+    ├── install.sh
+    ├── prompt-install.md
+    └── uninstall.sh
+```
