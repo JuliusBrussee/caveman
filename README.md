@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://em-content.zobj.net/source/apple/391/rock_1faa8.png" width="120" />
+  <img src="assets/readme-banner.png" alt="caveman banner" width="100%" />
 </p>
 
 <h1 align="center">caveman</h1>
