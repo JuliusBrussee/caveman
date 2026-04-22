@@ -4,6 +4,7 @@ This folder contains two macOS installer flows for Caveman:
 
 - `plugin-with-all-skills/`: installs Caveman as a local Codex plugin, with all shipped skills bundled under that plugin.
 - `skills-only/`: installs Caveman skills directly into your Codex skills directory, with no plugin marketplace integration.
+- `expunge-all-caveman-files.sh`: runs both uninstall flows with `--yes` so users can clear installer-managed Caveman files before a fresh install.
 
 Choose one. Most users should not install both.
 
@@ -178,6 +179,29 @@ Important differences:
 
 ## Uninstall
 
+### Full expunge
+
+Use this when you want highest-confidence cleanup before reinstalling.
+
+```sh
+chmod +x installers/codex/macos/expunge-all-caveman-files.sh
+installers/codex/macos/expunge-all-caveman-files.sh
+```
+
+Behavior:
+
+- runs `skills-only/uninstall.sh --yes`
+- runs `plugin-with-all-skills/uninstall.sh --yes`
+- removes anything those uninstallers manage, in one pass
+- prints `Nothing to do` where one install type is not present
+- tells you to restart Codex before fresh install
+
+Recommended use:
+
+- switching from one install mode to another
+- cleaning up partial installs
+- resetting machine before testing install docs
+
 ### Skills-only uninstall
 
 ```sh
@@ -301,6 +325,7 @@ Use one method per target. Running prompt flow after script flow usually hits ex
 
 ```text
 installers/codex/macos/
+├── expunge-all-caveman-files.sh
 ├── README.md
 ├── plugin-with-all-skills/
 │   ├── install.sh
