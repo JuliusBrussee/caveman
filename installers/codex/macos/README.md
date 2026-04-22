@@ -203,6 +203,13 @@ Behavior:
 - prints `Nothing to do` where one install type is not present
 - tells you to restart Codex before fresh install
 
+Important note:
+
+- if you are working inside this `caveman` repo, Codex may still show `Caveman Repo` in plugin marketplace even after full expunge
+- that entry comes from repo-local source files in this workspace, not from installed user state
+- specifically, this repo includes `.agents/plugins/marketplace.json` and `plugins/caveman`
+- full expunge removes installed Caveman state under your home directory, but it does not remove source files that are part of this repo
+
 Recommended use:
 
 - switching from one install mode to another
@@ -251,12 +258,12 @@ Behavior:
 
 - prompts for confirmation unless `--yes`
 - removes plugin directory `~/.codex/plugins/caveman` if present
-- removes installed plugin cache at `~/.codex/plugins/cache/local-plugins/caveman` if present
+- removes installed plugin cache at any path matching `~/.codex/plugins/cache/*/caveman`
 - removes `caveman` entry from `~/.agents/plugins/marketplace.json`
 - deletes `~/.agents/plugins/marketplace.json` entirely if file becomes empty and still matches default local-marketplace shape
-- removes config section `[plugins."caveman@local-plugins"]` from `~/.codex/config.toml` if present
+- removes any config section matching `[plugins."caveman@..."]` from `~/.codex/config.toml`
 - does not remove standalone skills under `~/.codex/skills`
-- removes empty parent dirs like `~/.agents/plugins`, `~/.codex/plugins/cache/local-plugins`, and `~/.agents` when they become empty
+- removes empty parent dirs like `~/.agents/plugins`, empty Caveman cache parents under `~/.codex/plugins/cache`, and `~/.agents` when they become empty
 
 It leaves standalone installs untouched, including:
 
