@@ -17,6 +17,7 @@
 <p align="center">
   <a href="#before--after">Before/After</a> •
   <a href="#install">Install</a> •
+  <a href="#kiro">Kiro</a> •
   <a href="#intensity-levels">Levels</a> •
   <a href="#caveman-skills">Skills</a> •
   <a href="#benchmarks">Benchmarks</a> •
@@ -269,6 +270,19 @@ npx skills add JuliusBrussee/caveman -a roo
 # ... and many more
 ```
 
+### Kiro
+
+Install caveman as a power from GitHub:
+
+1. Open the Powers panel → **Add Power**
+2. Select **From GitHub repo**
+3. Enter `JuliusBrussee/caveman`
+4. Done. Trigger with `/caveman`, "caveman mode", or "less tokens please"
+
+> [!NOTE]
+> Kiro reads the `POWER.md` at the repo root. No clone, no build step. Add from GitHub and go.
+
+### Optional: Statusline Badge
 Uninstall: `npx skills remove caveman`
 
 > **Windows note:** `npx skills` uses symlinks by default. If symlinks fail, add `--copy`: `npx skills add JuliusBrussee/caveman --copy`
