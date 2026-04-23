@@ -168,13 +168,12 @@ def write_atomic(path: pathlib.Path, content: str) -> None:
     tmp_path.replace(path)
 
 delete_file = (
-    not plugins
-    and data.get("name") == "local-plugins"
-    and (
-        data.get("interface", {}).get("displayName")
-        if isinstance(data.get("interface"), dict)
-        else None
-    ) == "Local Plugins"
+    data
+    == {
+        "name": "local-plugins",
+        "interface": {"displayName": "Local Plugins"},
+        "plugins": [],
+    }
 )
 
 if delete_file:
@@ -202,11 +201,14 @@ result = []
 skip = False
 for line in lines:
     stripped = line.strip()
-    if not skip and pattern.match(stripped):
+    if pattern.match(stripped):
         skip = True
         continue
-    if skip and section_header_pattern.match(stripped):
-        skip = False
+    if skip:
+        if section_header_pattern.match(stripped):
+            skip = False
+        else:
+            continue
     if not skip:
         result.append(line)
 
@@ -225,23 +227,27 @@ if [ -e "${TARGET_PLUGIN_DIR}" ]; then
   rm -rf "${TARGET_PLUGIN_DIR}"
 fi
 
-for cached_plugin_dir in "${CACHED_PLUGIN_DIRS[@]}"; do
-  if [ -e "${cached_plugin_dir}" ]; then
-    echo "Remove installed plugin cache ${cached_plugin_dir}..."
-    rm -rf "${cached_plugin_dir}"
-  fi
-done
+if [ "${#CACHED_PLUGIN_DIRS[@]}" -gt 0 ]; then
+  for cached_plugin_dir in "${CACHED_PLUGIN_DIRS[@]}"; do
+    if [ -e "${cached_plugin_dir}" ]; then
+      echo "Remove installed plugin cache ${cached_plugin_dir}..."
+      rm -rf "${cached_plugin_dir}"
+    fi
+  done
+fi
 
 if [ -d "${MARKETPLACE_DIR}" ] && [ -z "$(ls -A "${MARKETPLACE_DIR}")" ]; then
   rmdir "${MARKETPLACE_DIR}"
 fi
 
-for cached_plugin_dir in "${CACHED_PLUGIN_DIRS[@]}"; do
-  cached_marketplace_dir="$(dirname "${cached_plugin_dir}")"
-  if [ -d "${cached_marketplace_dir}" ] && [ -z "$(ls -A "${cached_marketplace_dir}")" ]; then
-    rmdir "${cached_marketplace_dir}"
-  fi
-done
+if [ "${#CACHED_PLUGIN_DIRS[@]}" -gt 0 ]; then
+  for cached_plugin_dir in "${CACHED_PLUGIN_DIRS[@]}"; do
+    cached_marketplace_dir="$(dirname "${cached_plugin_dir}")"
+    if [ -d "${cached_marketplace_dir}" ] && [ -z "$(ls -A "${cached_marketplace_dir}")" ]; then
+      rmdir "${cached_marketplace_dir}"
+    fi
+  done
+fi
 
 if [ -d "${HOME}/.agents" ] && [ -z "$(ls -A "${HOME}/.agents")" ]; then
   rmdir "${HOME}/.agents"
@@ -251,11 +257,13 @@ if [ -e "${TARGET_PLUGIN_DIR}" ]; then
   fail "plugin directory still exists: ${TARGET_PLUGIN_DIR}"
 fi
 
-for cached_plugin_dir in "${CACHED_PLUGIN_DIRS[@]}"; do
-  if [ -e "${cached_plugin_dir}" ]; then
-    fail "installed cache still exists: ${cached_plugin_dir}"
-  fi
-done
+if [ "${#CACHED_PLUGIN_DIRS[@]}" -gt 0 ]; then
+  for cached_plugin_dir in "${CACHED_PLUGIN_DIRS[@]}"; do
+    if [ -e "${cached_plugin_dir}" ]; then
+      fail "installed cache still exists: ${cached_plugin_dir}"
+    fi
+  done
+fi
 
 if [ -f "${MARKETPLACE_FILE}" ]; then
   if python3 - "${MARKETPLACE_FILE}" <<'PY'
