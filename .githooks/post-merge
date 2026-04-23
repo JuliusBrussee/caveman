@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -n "${GUARDEX_CLI_ENTRY:-}" ]]; then
+  node_bin="${GUARDEX_NODE_BIN:-node}"
+  exec "$node_bin" "$GUARDEX_CLI_ENTRY" 'hook' 'run' 'post-merge' "$@"
+fi
+
+resolve_guardex_cli() {
+  if [[ -n "${GUARDEX_CLI_BIN:-}" ]]; then
+    printf '%s' "$GUARDEX_CLI_BIN"
+    return 0
+  fi
+  if command -v gx >/dev/null 2>&1; then
+    printf '%s' "gx"
+    return 0
+  fi
+  if command -v gitguardex >/dev/null 2>&1; then
+    printf '%s' "gitguardex"
+    return 0
+  fi
+  echo "[gitguardex-shim] Missing gx CLI in PATH." >&2
+  exit 1
+}
+
+cli_bin="$(resolve_guardex_cli)"
+exec "$cli_bin" 'hook' 'run' 'post-merge' "$@"

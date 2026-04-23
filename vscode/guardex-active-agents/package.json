@@ -1,0 +1,131 @@
+{
+  "name": "gitguardex-active-agents",
+  "displayName": "GitGuardex Active Agents",
+  "description": "Shows live Guardex sandbox sessions and repo changes inside VS Code Source Control.",
+  "publisher": "recodeee",
+  "version": "0.0.7",
+  "license": "MIT",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.88.0"
+  },
+  "categories": [
+    "Source Control",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:.omx/state/active-sessions",
+    "workspaceContains:.omx/agent-worktrees",
+    "workspaceContains:.omc/agent-worktrees",
+    "onView:gitguardex.activeAgents"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitguardex.activeAgents.startAgent",
+        "title": "Start Guardex Agent"
+      },
+      {
+        "command": "gitguardex.activeAgents.refresh",
+        "title": "Refresh Active Agents"
+      },
+      {
+        "command": "gitguardex.activeAgents.commitSelectedSession",
+        "title": "Commit Selected Session",
+        "icon": "$(check)"
+      },
+      {
+        "command": "gitguardex.activeAgents.inspect",
+        "title": "Inspect Session",
+        "icon": "$(info)"
+      },
+      {
+        "command": "gitguardex.activeAgents.openWorktree",
+        "title": "Open Agent Worktree"
+      },
+      {
+        "command": "gitguardex.activeAgents.finishSession",
+        "title": "Finish",
+        "icon": "$(check)"
+      },
+      {
+        "command": "gitguardex.activeAgents.syncSession",
+        "title": "Sync",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "gitguardex.activeAgents.stopSession",
+        "title": "Stop",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "gitguardex.activeAgents.openSessionDiff",
+        "title": "Open Diff",
+        "icon": "$(diff)"
+      }
+    ],
+    "views": {
+      "scm": [
+        {
+          "id": "gitguardex.activeAgents",
+          "name": "Active Agents",
+          "visibility": "visible"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "gitguardex.activeAgents",
+        "contents": "No live Guardex agents are visible in this workspace yet.\n\nThis view tracks Guardex session files and managed worktree telemetry, not every repo visible in Source Control.\n\n[Start agent](command:gitguardex.activeAgents.startAgent)\n[Open guide](https://github.com/recodeee/gitguardex/blob/main/vscode/guardex-active-agents/README.md#quick-start)\n[Refresh](command:gitguardex.activeAgents.refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "gitguardex.activeAgents.commitSelectedSession",
+          "when": "view == gitguardex.activeAgents && guardex.hasAgents",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gitguardex.activeAgents.refresh",
+          "when": "view == gitguardex.activeAgents",
+          "group": "navigation@9"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gitguardex.activeAgents.openWorktree",
+          "when": "view == gitguardex.activeAgents && viewItem == gitguardex.session",
+          "group": "inline"
+        },
+        {
+          "command": "gitguardex.activeAgents.inspect",
+          "when": "view == gitguardex.activeAgents && viewItem == gitguardex.session",
+          "group": "inline"
+        },
+        {
+          "command": "gitguardex.activeAgents.finishSession",
+          "when": "view == gitguardex.activeAgents && viewItem == gitguardex.session",
+          "group": "inline"
+        },
+        {
+          "command": "gitguardex.activeAgents.syncSession",
+          "when": "view == gitguardex.activeAgents && viewItem == gitguardex.session",
+          "group": "inline"
+        },
+        {
+          "command": "gitguardex.activeAgents.stopSession",
+          "when": "view == gitguardex.activeAgents && viewItem == gitguardex.session",
+          "group": "inline"
+        },
+        {
+          "command": "gitguardex.activeAgents.openSessionDiff",
+          "when": "view == gitguardex.activeAgents && viewItem == gitguardex.session",
+          "group": "inline"
+        }
+      ]
+    }
+  }
+}

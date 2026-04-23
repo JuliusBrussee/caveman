@@ -12,11 +12,14 @@ evals/snapshots/*.png
 # multiagent-safety:START
 .omx/
 .omc/
-scripts/*
+!.vscode/
+.vscode/*
+!.vscode/settings.json
+scripts/agent-session-state.js
+scripts/guardex-docker-loader.sh
+scripts/guardex-env.sh
+scripts/install-vscode-active-agents-extension.js
 .githooks
 oh-my-codex/
-.codex/skills/gitguardex/SKILL.md
-.codex/skills/guardex-merge-skills-to-dev/SKILL.md
-.claude/commands/gitguardex.md
 .omx/state/agent-file-locks.json
 # multiagent-safety:END

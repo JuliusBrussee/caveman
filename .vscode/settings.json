@@ -1,0 +1,8 @@
+{
+  "git.repositoryScanIgnoredFolders": [
+    ".omx/agent-worktrees",
+    "**/.omx/agent-worktrees",
+    ".omc/agent-worktrees",
+    "**/.omc/agent-worktrees"
+  ]
+}
