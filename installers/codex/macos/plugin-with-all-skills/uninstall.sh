@@ -170,7 +170,11 @@ def write_atomic(path: pathlib.Path, content: str) -> None:
 delete_file = (
     not plugins
     and data.get("name") == "local-plugins"
-    and data.get("interface", {}).get("displayName") == "Local Plugins"
+    and (
+        data.get("interface", {}).get("displayName")
+        if isinstance(data.get("interface"), dict)
+        else None
+    ) == "Local Plugins"
 )
 
 if delete_file:
@@ -191,7 +195,7 @@ import tempfile
 
 config_path = pathlib.Path(sys.argv[1])
 pattern = re.compile(r'^\[plugins\."caveman@[^"]+"\s*\]\s*(?:#.*)?$')
-section_header_pattern = re.compile(r'^\[\[?[^\]]+\]\]?$')
+section_header_pattern = re.compile(r'^\[\[?[^\]]+\]\]?\s*(?:#.*)?$')
 lines = config_path.read_text().splitlines(keepends=True)
 
 result = []
