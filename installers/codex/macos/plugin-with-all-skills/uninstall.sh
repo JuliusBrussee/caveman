@@ -133,7 +133,7 @@ fi
 
 confirm
 
-if [ -f "${MARKETPLACE_FILE}" ]; then
+if [ -f "${MARKETPLACE_FILE}" ] && [ "${MARKETPLACE_HAS_ENTRY}" -eq 1 ]; then
   echo "Update marketplace..."
   python3 - "${MARKETPLACE_FILE}" <<'PY'
 import json
@@ -169,7 +169,7 @@ else:
 PY
 fi
 
-if [ -f "${CODEX_CONFIG_FILE}" ]; then
+if [ -f "${CODEX_CONFIG_FILE}" ] && [ "${CONFIG_HAS_ENTRY}" -eq 1 ]; then
   echo "Update Codex config..."
   python3 - "${CODEX_CONFIG_FILE}" <<'PY'
 import pathlib
@@ -178,7 +178,7 @@ import sys
 
 config_path = pathlib.Path(sys.argv[1])
 pattern = re.compile(r'^\[plugins\."caveman@[^"]+"\]$')
-section_header_pattern = re.compile(r'^\[\[?(?:[A-Za-z_"\'][^\]]*)\]\]?$')
+section_header_pattern = re.compile(r'^\[\[?[^\]]+\]\]?$')
 lines = config_path.read_text().splitlines(keepends=True)
 
 result = []
@@ -188,7 +188,7 @@ for line in lines:
     if not skip and pattern.match(stripped):
         skip = True
         continue
-    if skip and section_header_pattern.match(stripped) and "=" not in stripped and "," not in stripped:
+    if skip and section_header_pattern.match(stripped):
         skip = False
     if not skip:
         result.append(line)

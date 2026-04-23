@@ -117,8 +117,8 @@ else:
         "plugins": [],
     }
 
-if data.get("name") != "local-plugins":
-    data["name"] = data.get("name") or "local-plugins"
+if not data.get("name"):
+    data["name"] = "local-plugins"
 
 interface = data.setdefault("interface", {})
 if not isinstance(interface, dict):
