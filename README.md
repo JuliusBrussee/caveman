@@ -206,6 +206,8 @@ Uninstall: `bash hooks/uninstall.sh` or `powershell -File hooks\uninstall.ps1`
 
 - Skills-only install: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/installers/codex/macos/skills-only/install.sh | bash`
 - Codex Desktop local-plugin install: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/installers/codex/macos/plugin-with-all-skills/install.sh | bash`
+- Skills-only uninstall (no prompt): `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/installers/codex/macos/skills-only/uninstall.sh | bash -s -- --yes`
+- Codex Desktop local-plugin uninstall (no prompt): `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/installers/codex/macos/plugin-with-all-skills/uninstall.sh | bash -s -- --yes`
 
 These direct-run installer scripts are for macOS. If you prefer manual steps, or if you are on Linux/Windows, use the instructions below.
 
