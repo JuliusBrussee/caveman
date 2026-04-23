@@ -112,7 +112,7 @@ import re
 import sys
 
 path = sys.argv[1]
-pattern = re.compile(r'^\[plugins\."caveman@[^"]+"\]$')
+pattern = re.compile(r'^\[plugins\."caveman@[^"]+"\s*\]\s*(?:#.*)?$')
 
 with open(path, "r", encoding="utf-8") as f:
     for line in f:
@@ -138,7 +138,9 @@ if [ -f "${MARKETPLACE_FILE}" ] && [ "${MARKETPLACE_HAS_ENTRY}" -eq 1 ]; then
   python3 - "${MARKETPLACE_FILE}" <<'PY'
 import json
 import pathlib
+import shutil
 import sys
+import tempfile
 
 marketplace_path = pathlib.Path(sys.argv[1])
 data = json.loads(marketplace_path.read_text())
@@ -156,6 +158,15 @@ plugins = [
 ]
 data["plugins"] = plugins
 
+backup_path = pathlib.Path(f"{marketplace_path}.bak")
+shutil.copy2(marketplace_path, backup_path)
+
+def write_atomic(path: pathlib.Path, content: str) -> None:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = pathlib.Path(tmp.name)
+    tmp_path.replace(path)
+
 delete_file = (
     not plugins
     and data.get("name") == "local-plugins"
@@ -165,7 +176,7 @@ delete_file = (
 if delete_file:
     marketplace_path.unlink()
 else:
-    marketplace_path.write_text(json.dumps(data, indent=2) + "\n")
+    write_atomic(marketplace_path, json.dumps(data, indent=2) + "\n")
 PY
 fi
 
@@ -174,10 +185,12 @@ if [ -f "${CODEX_CONFIG_FILE}" ] && [ "${CONFIG_HAS_ENTRY}" -eq 1 ]; then
   python3 - "${CODEX_CONFIG_FILE}" <<'PY'
 import pathlib
 import re
+import shutil
 import sys
+import tempfile
 
 config_path = pathlib.Path(sys.argv[1])
-pattern = re.compile(r'^\[plugins\."caveman@[^"]+"\]$')
+pattern = re.compile(r'^\[plugins\."caveman@[^"]+"\s*\]\s*(?:#.*)?$')
 section_header_pattern = re.compile(r'^\[\[?[^\]]+\]\]?$')
 lines = config_path.read_text().splitlines(keepends=True)
 
@@ -193,7 +206,13 @@ for line in lines:
     if not skip:
         result.append(line)
 
-config_path.write_text("".join(result))
+shutil.copy2(config_path, pathlib.Path(f"{config_path}.bak"))
+
+with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=config_path.parent, delete=False) as tmp:
+    tmp.write("".join(result))
+    tmp_path = pathlib.Path(tmp.name)
+
+tmp_path.replace(config_path)
 PY
 fi
 
@@ -271,7 +290,7 @@ import re
 import sys
 
 path = sys.argv[1]
-pattern = re.compile(r'^\[plugins\."caveman@[^"]+"\]$')
+pattern = re.compile(r'^\[plugins\."caveman@[^"]+"\s*\]\s*(?:#.*)?$')
 
 with open(path, "r", encoding="utf-8") as f:
     for line in f:

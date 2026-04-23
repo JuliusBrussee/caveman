@@ -85,7 +85,9 @@ echo "Update local marketplace..."
 python3 - "${MARKETPLACE_FILE}" <<'PY'
 import json
 import pathlib
+import shutil
 import sys
+import tempfile
 
 marketplace_path = pathlib.Path(sys.argv[1])
 entry = {
@@ -101,6 +103,13 @@ entry = {
     "category": "Productivity",
 }
 
+def write_atomic(path: pathlib.Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = pathlib.Path(tmp.name)
+    tmp_path.replace(path)
+
 if marketplace_path.exists():
     try:
         data = json.loads(marketplace_path.read_text())
@@ -108,6 +117,7 @@ if marketplace_path.exists():
         raise SystemExit(f"marketplace file is not valid JSON: {marketplace_path}")
     if not isinstance(data, dict):
         raise SystemExit(f"marketplace file is not valid JSON: {marketplace_path}")
+    shutil.copy2(marketplace_path, pathlib.Path(f"{marketplace_path}.bak"))
 else:
     data = {
         "name": "local-plugins",
@@ -134,7 +144,7 @@ plugins = [plugin for plugin in plugins if isinstance(plugin, dict) and plugin.g
 plugins.append(entry)
 data["plugins"] = plugins
 
-marketplace_path.write_text(json.dumps(data, indent=2) + "\n")
+write_atomic(marketplace_path, json.dumps(data, indent=2) + "\n")
 PY
 
 [ -f "${MARKETPLACE_FILE}" ] || fail "marketplace file missing"
