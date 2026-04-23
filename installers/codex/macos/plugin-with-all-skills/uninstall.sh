@@ -25,7 +25,7 @@ confirm() {
   fi
 
   printf "Remove Caveman plugin from Codex? [y/N] "
-  read -r reply
+  read -r reply || reply=""
   case "${reply}" in
     y|Y|yes|YES)
       return 0

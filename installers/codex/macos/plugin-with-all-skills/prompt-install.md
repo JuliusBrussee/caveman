@@ -50,7 +50,7 @@ Follow these steps exactly:
    }
    ```
 
-4. If `~/.agents/plugins/marketplace.json` already exists, do not overwrite whole file. Merge new `caveman` entry into existing `plugins` array with same values shown above.
+4. If `~/.agents/plugins/marketplace.json` already exists, do not overwrite whole file. Merge new `caveman` entry into existing `plugins` array with same values shown above, and leave existing top-level fields unchanged.
 
 5. Ensure parent directories exist:
 
@@ -89,6 +89,7 @@ Follow these steps exactly:
 Important constraints:
    - If `~/.codex/plugins/caveman` already exists, stop and ask before overwriting.
    - Use local plugin path `./.codex/plugins/caveman` exactly.
-   - Keep marketplace name `local-plugins` and display name `Local Plugins`.
+   - If creating new `~/.agents/plugins/marketplace.json`, use marketplace name `local-plugins` and display name `Local Plugins`.
+   - If `~/.agents/plugins/marketplace.json` already exists, preserve its existing top-level fields and only merge `caveman` into `plugins`.
    - This flow stages plugin plus companion skills locally first, then Codex picks it up after restart.
    - Companion skills must live under `~/.codex/plugins/caveman/skills/` so uninstalling plugin removes them too.
