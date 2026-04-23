@@ -98,6 +98,8 @@ Needs:
 - `python3`
 - `rm`
 - `rmdir`
+- `ls`
+- `dirname`
 
 ## Safety and overwrite behavior
 

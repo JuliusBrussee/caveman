@@ -51,6 +51,8 @@ done
 need_cmd python3
 need_cmd rm
 need_cmd rmdir
+need_cmd ls
+need_cmd dirname
 
 shopt -s nullglob
 
@@ -79,7 +81,16 @@ try:
 except Exception:
     raise SystemExit(2)
 
-for plugin in data.get("plugins", []):
+if not isinstance(data, dict):
+    raise SystemExit(2)
+
+plugins_value = data.get("plugins", [])
+if not isinstance(plugins_value, list):
+    raise SystemExit(2)
+
+for plugin in plugins_value:
+    if not isinstance(plugin, dict):
+        continue
     if plugin.get("name") == "caveman":
         raise SystemExit(0)
 
@@ -131,7 +142,18 @@ import sys
 
 marketplace_path = pathlib.Path(sys.argv[1])
 data = json.loads(marketplace_path.read_text())
-plugins = [plugin for plugin in data.get("plugins", []) if plugin.get("name") != "caveman"]
+if not isinstance(data, dict):
+    raise SystemExit(f"marketplace file is not valid JSON: {marketplace_path}")
+
+plugins_value = data.get("plugins", [])
+if not isinstance(plugins_value, list):
+    raise SystemExit(f"marketplace file is not valid JSON: {marketplace_path}")
+
+plugins = [
+    plugin
+    for plugin in plugins_value
+    if isinstance(plugin, dict) and plugin.get("name") != "caveman"
+]
 data["plugins"] = plugins
 
 delete_file = (
@@ -156,6 +178,7 @@ import sys
 
 config_path = pathlib.Path(sys.argv[1])
 pattern = re.compile(r'^\[plugins\."caveman@[^"]+"\]$')
+section_header_pattern = re.compile(r'^\[\[?(?:[A-Za-z_"\'][^\]]*)\]\]?$')
 lines = config_path.read_text().splitlines(keepends=True)
 
 result = []
@@ -165,7 +188,7 @@ for line in lines:
     if not skip and pattern.match(stripped):
         skip = True
         continue
-    if skip and stripped.startswith("["):
+    if skip and section_header_pattern.match(stripped) and "=" not in stripped and "," not in stripped:
         skip = False
     if not skip:
         result.append(line)
@@ -217,7 +240,16 @@ import json
 import sys
 
 data = json.load(open(sys.argv[1]))
-for plugin in data.get("plugins", []):
+if not isinstance(data, dict):
+    raise SystemExit(2)
+
+plugins_value = data.get("plugins", [])
+if not isinstance(plugins_value, list):
+    raise SystemExit(2)
+
+for plugin in plugins_value:
+    if not isinstance(plugin, dict):
+        continue
     if plugin.get("name") == "caveman":
         raise SystemExit(1)
 raise SystemExit(0)
@@ -225,6 +257,10 @@ PY
   then
     :
   else
+    status=$?
+    if [ "${status}" -eq 2 ]; then
+      fail "marketplace file is not valid JSON: ${MARKETPLACE_FILE}"
+    fi
     fail "marketplace still contains caveman entry"
   fi
 fi
