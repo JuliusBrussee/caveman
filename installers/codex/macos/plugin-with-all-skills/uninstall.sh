@@ -112,7 +112,8 @@ PY
     else
       status=$?
       if [ "${status}" -eq 2 ]; then
-        fail "marketplace file is not valid JSON: ${MARKETPLACE_FILE}"
+        PYTHON_SKIPPED_MARKETPLACE=1
+        warn "marketplace file is not valid JSON; skipping marketplace cleanup: ${MARKETPLACE_FILE}"
       fi
     fi
   else
@@ -290,7 +291,11 @@ if [ "${PYTHON_AVAILABLE}" -eq 1 ] && [ -f "${MARKETPLACE_FILE}" ]; then
 import json
 import sys
 
-data = json.load(open(sys.argv[1]))
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(2)
+
 if not isinstance(data, dict):
     raise SystemExit(2)
 
@@ -310,9 +315,11 @@ PY
   else
     status=$?
     if [ "${status}" -eq 2 ]; then
-      fail "marketplace file is not valid JSON: ${MARKETPLACE_FILE}"
+      warn "marketplace file is not valid JSON; skipping marketplace verification: ${MARKETPLACE_FILE}"
+      :
+    else
+      fail "marketplace still contains caveman entry"
     fi
-    fail "marketplace still contains caveman entry"
   fi
 fi
 
