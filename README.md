@@ -163,7 +163,7 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 > [!NOTE]
 > Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
 >
-> ¹ Codex uses `$caveman` syntax, not `/caveman`. This repo ships `.codex/hooks.json`, so caveman auto-starts when you run Codex inside this repo. The installed plugin itself gives you `$caveman`; copy the same hook into another repo if you want always-on behavior there too. caveman-commit and caveman-review are not in the Codex plugin bundle — use the SKILL.md files directly.
+> ¹ Codex uses `$caveman` syntax, not `/caveman`. This repo ships `.codex/hooks.json`, so caveman auto-starts when you run Codex inside this repo. The installed plugin itself gives you `$caveman`; copy the same hook into another repo if you want always-on behavior there too. caveman-commit, caveman-review, and caveman-help are not in the Codex plugin bundle itself, though the macOS local-plugin installer below also installs those companion skills for convenience.
 > ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
 > ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
 > ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
@@ -201,6 +201,15 @@ Uninstall: `bash hooks/uninstall.sh` or `powershell -File hooks\uninstall.ps1`
 
 <details>
 <summary><strong>Codex — full details</strong></summary>
+
+**macOS shortcut (no manual clone/download):**
+
+- Skills-only install: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/installers/codex/macos/skills-only/install.sh | bash`
+- Codex Desktop local-plugin install: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/installers/codex/macos/plugin-with-all-skills/install.sh | bash`
+- Skills-only uninstall (no prompt): `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/installers/codex/macos/skills-only/uninstall.sh | bash -s -- --yes`
+- Codex Desktop local-plugin uninstall (no prompt): `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/installers/codex/macos/plugin-with-all-skills/uninstall.sh | bash -s -- --yes`
+
+These direct-run installer scripts are for macOS. If you prefer manual steps, or if you are on Linux/Windows, use the instructions below.
 
 **macOS / Linux:**
 1. Clone repo → Open Codex in the repo directory → `/plugins` → Search "Caveman" → Install

@@ -111,6 +111,11 @@ def verify_manifests_and_syntax() -> None:
     run(["bash", "-n", "hooks/install.sh"])
     run(["bash", "-n", "hooks/uninstall.sh"])
     run(["bash", "-n", "hooks/caveman-statusline.sh"])
+    run(["bash", "-n", "installers/codex/macos/skills-only/install.sh"])
+    run(["bash", "-n", "installers/codex/macos/skills-only/uninstall.sh"])
+    run(["bash", "-n", "installers/codex/macos/plugin-with-all-skills/install.sh"])
+    run(["bash", "-n", "installers/codex/macos/plugin-with-all-skills/uninstall.sh"])
+    run(["bash", "-n", "installers/codex/macos/expunge-all-caveman-files.sh"])
 
     # Ensure install/uninstall scripts include caveman-config.js
     install_sh = (ROOT / "hooks/install.sh").read_text()
