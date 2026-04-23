@@ -1,0 +1,41 @@
+{
+  "name": "pi-caveman",
+  "version": "0.1.0",
+  "description": "Pi extension for caveman mode — ultra-compressed responses with full technical accuracy.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "caveman",
+    "agent",
+    "extension"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/JuliusBrussee/caveman",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JuliusBrussee/caveman.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JuliusBrussee/caveman/issues"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./extensions/caveman-pi": "./extensions/caveman-pi.ts"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}
