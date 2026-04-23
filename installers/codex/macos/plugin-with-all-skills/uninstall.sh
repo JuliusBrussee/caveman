@@ -15,6 +15,10 @@ fail() {
   exit 1
 }
 
+warn() {
+  echo "Warning: $*" >&2
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
@@ -48,11 +52,15 @@ for arg in "$@"; do
   esac
 done
 
-need_cmd python3
 need_cmd rm
 need_cmd rmdir
 need_cmd ls
 need_cmd dirname
+
+PYTHON_AVAILABLE=0
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_AVAILABLE=1
+fi
 
 shopt -s nullglob
 
@@ -60,6 +68,8 @@ PLUGIN_EXISTS=0
 MARKETPLACE_HAS_ENTRY=0
 CONFIG_HAS_ENTRY=0
 CACHED_PLUGIN_EXISTS=0
+PYTHON_SKIPPED_MARKETPLACE=0
+PYTHON_SKIPPED_CONFIG=0
 CACHED_PLUGIN_DIRS=( "${CACHE_ROOT_DIR}"/*/"${PLUGIN_NAME}" )
 
 if [ -e "${TARGET_PLUGIN_DIR}" ]; then
@@ -71,7 +81,8 @@ if [ "${#CACHED_PLUGIN_DIRS[@]}" -gt 0 ]; then
 fi
 
 if [ -f "${MARKETPLACE_FILE}" ]; then
-  if python3 - "${MARKETPLACE_FILE}" <<'PY'
+  if [ "${PYTHON_AVAILABLE}" -eq 1 ]; then
+    if python3 - "${MARKETPLACE_FILE}" <<'PY'
 import json
 import sys
 
@@ -96,18 +107,23 @@ for plugin in plugins_value:
 
 raise SystemExit(1)
 PY
-  then
-    MARKETPLACE_HAS_ENTRY=1
-  else
-    status=$?
-    if [ "${status}" -eq 2 ]; then
-      fail "marketplace file is not valid JSON: ${MARKETPLACE_FILE}"
+    then
+      MARKETPLACE_HAS_ENTRY=1
+    else
+      status=$?
+      if [ "${status}" -eq 2 ]; then
+        fail "marketplace file is not valid JSON: ${MARKETPLACE_FILE}"
+      fi
     fi
+  else
+    PYTHON_SKIPPED_MARKETPLACE=1
+    warn "python3 not found; skipping marketplace cleanup: ${MARKETPLACE_FILE}"
   fi
 fi
 
 if [ -f "${CODEX_CONFIG_FILE}" ]; then
-  if python3 - "${CODEX_CONFIG_FILE}" <<'PY'
+  if [ "${PYTHON_AVAILABLE}" -eq 1 ]; then
+    if python3 - "${CODEX_CONFIG_FILE}" <<'PY'
 import re
 import sys
 
@@ -121,12 +137,16 @@ with open(path, "r", encoding="utf-8") as f:
 
 raise SystemExit(1)
 PY
-  then
-    CONFIG_HAS_ENTRY=1
+    then
+      CONFIG_HAS_ENTRY=1
+    fi
+  else
+    PYTHON_SKIPPED_CONFIG=1
+    warn "python3 not found; skipping Codex config cleanup: ${CODEX_CONFIG_FILE}"
   fi
 fi
 
-if [ "${PLUGIN_EXISTS}" -eq 0 ] && [ "${MARKETPLACE_HAS_ENTRY}" -eq 0 ] && [ "${CONFIG_HAS_ENTRY}" -eq 0 ] && [ "${CACHED_PLUGIN_EXISTS}" -eq 0 ]; then
+if [ "${PLUGIN_EXISTS}" -eq 0 ] && [ "${MARKETPLACE_HAS_ENTRY}" -eq 0 ] && [ "${CONFIG_HAS_ENTRY}" -eq 0 ] && [ "${CACHED_PLUGIN_EXISTS}" -eq 0 ] && [ "${PYTHON_SKIPPED_MARKETPLACE}" -eq 0 ] && [ "${PYTHON_SKIPPED_CONFIG}" -eq 0 ]; then
   echo "Caveman not installed. Nothing to do."
   exit 0
 fi
@@ -265,7 +285,7 @@ if [ "${#CACHED_PLUGIN_DIRS[@]}" -gt 0 ]; then
   done
 fi
 
-if [ -f "${MARKETPLACE_FILE}" ]; then
+if [ "${PYTHON_AVAILABLE}" -eq 1 ] && [ -f "${MARKETPLACE_FILE}" ]; then
   if python3 - "${MARKETPLACE_FILE}" <<'PY'
 import json
 import sys
@@ -296,7 +316,7 @@ PY
   fi
 fi
 
-if [ -f "${CODEX_CONFIG_FILE}" ]; then
+if [ "${PYTHON_AVAILABLE}" -eq 1 ] && [ -f "${CODEX_CONFIG_FILE}" ]; then
   if python3 - "${CODEX_CONFIG_FILE}" <<'PY'
 import re
 import sys
@@ -319,5 +339,8 @@ PY
 fi
 
 echo
+if [ "${PYTHON_SKIPPED_MARKETPLACE}" -eq 1 ] || [ "${PYTHON_SKIPPED_CONFIG}" -eq 1 ]; then
+  echo "Skipped marketplace/config cleanup because python3 is not available."
+fi
 echo "Uninstall complete."
 echo "Restart Codex if plugin still appears in current session."
