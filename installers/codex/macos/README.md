@@ -95,11 +95,16 @@ Needs:
 
 Needs:
 
-- `python3`
 - `rm`
 - `rmdir`
 - `ls`
 - `dirname`
+
+Optional:
+
+- `python3` for marketplace/config cleanup
+
+Without `python3`, uninstall still removes plugin files but skips marketplace/config edits and prints a warning.
 
 ## Safety and overwrite behavior
 
