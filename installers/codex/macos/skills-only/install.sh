@@ -5,10 +5,20 @@ set -euo pipefail
 REPO_URL="https://github.com/JuliusBrussee/caveman"
 TARGET_SKILLS_DIR="${HOME}/.codex/skills"
 SKILLS=("caveman" "compress" "caveman-commit" "caveman-help" "caveman-review")
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/caveman-skill-only.XXXXXX")"
+TMP_DIR=""
+INSTALL_COMPLETE=0
+INSTALLED_SKILLS=()
 
 cleanup() {
-  rm -rf "${TMP_DIR}"
+  if [ "${INSTALL_COMPLETE}" -eq 0 ]; then
+    for skill in "${INSTALLED_SKILLS[@]}"; do
+      rm -rf "${TARGET_SKILLS_DIR}/${skill}"
+    done
+  fi
+
+  if [ -n "${TMP_DIR}" ]; then
+    rm -rf "${TMP_DIR}"
+  fi
 }
 
 trap cleanup EXIT
@@ -25,6 +35,8 @@ need_cmd() {
 need_cmd git
 need_cmd mv
 need_cmd mkdir
+need_cmd mktemp
+need_cmd rm
 
 for skill in "${SKILLS[@]}"; do
   if [ -e "${TARGET_SKILLS_DIR}/${skill}" ]; then
@@ -33,6 +45,7 @@ for skill in "${SKILLS[@]}"; do
 done
 
 echo "Clone caveman skill subtrees..."
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/caveman-skill-only.XXXXXX")"
 git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" "${TMP_DIR}/repo"
 git -C "${TMP_DIR}/repo" sparse-checkout set \
   "skills/caveman" \
@@ -51,11 +64,14 @@ mkdir -p "${TARGET_SKILLS_DIR}"
 echo "Move skills into Codex skills directory..."
 for skill in "${SKILLS[@]}"; do
   mv "${TMP_DIR}/repo/skills/${skill}" "${TARGET_SKILLS_DIR}/${skill}"
+  INSTALLED_SKILLS+=("${skill}")
 done
 
 for skill in "${SKILLS[@]}"; do
   [ -f "${TARGET_SKILLS_DIR}/${skill}/SKILL.md" ] || fail "installed skill missing: ${skill}"
 done
+
+INSTALL_COMPLETE=1
 
 echo
 echo "Install complete."

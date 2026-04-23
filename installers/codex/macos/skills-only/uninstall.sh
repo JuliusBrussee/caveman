@@ -45,7 +45,6 @@ for arg in "$@"; do
 done
 
 need_cmd rm
-need_cmd rmdir
 
 FOUND=0
 for skill in "${SKILLS[@]}"; do

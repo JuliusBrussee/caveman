@@ -8,10 +8,18 @@ TARGET_PLUGIN_DIR="${HOME}/.codex/plugins/${PLUGIN_NAME}"
 EXTRA_SKILLS=("caveman-commit" "caveman-help" "caveman-review")
 MARKETPLACE_DIR="${HOME}/.agents/plugins"
 MARKETPLACE_FILE="${MARKETPLACE_DIR}/marketplace.json"
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/caveman-install.XXXXXX")"
+TMP_DIR=""
+INSTALL_COMPLETE=0
+PLUGIN_INSTALLED=0
 
 cleanup() {
-  rm -rf "${TMP_DIR}"
+  if [ "${INSTALL_COMPLETE}" -eq 0 ] && [ "${PLUGIN_INSTALLED}" -eq 1 ] && [ -e "${TARGET_PLUGIN_DIR}" ]; then
+    rm -rf "${TARGET_PLUGIN_DIR}"
+  fi
+
+  if [ -n "${TMP_DIR}" ]; then
+    rm -rf "${TMP_DIR}"
+  fi
 }
 
 trap cleanup EXIT
@@ -29,12 +37,15 @@ need_cmd git
 need_cmd python3
 need_cmd mv
 need_cmd mkdir
+need_cmd mktemp
+need_cmd rm
 
 if [ -e "${TARGET_PLUGIN_DIR}" ]; then
   fail "${TARGET_PLUGIN_DIR} already exists. Stop before overwrite."
 fi
 
 echo "Clone caveman plugin and standalone skill subtrees..."
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/caveman-install.XXXXXX")"
 git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" "${TMP_DIR}/repo"
 git -C "${TMP_DIR}/repo" sparse-checkout set \
   "plugins/${PLUGIN_NAME}" \
@@ -53,6 +64,22 @@ done
 
 echo "Ensure local plugin directories exist..."
 mkdir -p "${HOME}/.codex/plugins" "${MARKETPLACE_DIR}"
+
+echo "Move plugin into Codex plugin directory..."
+mv "${PLUGIN_SRC_DIR}" "${TARGET_PLUGIN_DIR}"
+PLUGIN_INSTALLED=1
+
+echo "Move companion skills into plugin skills directory..."
+for skill in "${EXTRA_SKILLS[@]}"; do
+  mv "${TMP_DIR}/repo/skills/${skill}" "${TARGET_PLUGIN_DIR}/skills/${skill}"
+done
+
+[ -f "${TARGET_PLUGIN_DIR}/.codex-plugin/plugin.json" ] || fail "installed manifest missing"
+[ -f "${TARGET_PLUGIN_DIR}/skills/caveman/SKILL.md" ] || fail "installed caveman skill missing"
+[ -f "${TARGET_PLUGIN_DIR}/skills/compress/SKILL.md" ] || fail "installed compress skill missing"
+for skill in "${EXTRA_SKILLS[@]}"; do
+  [ -f "${TARGET_PLUGIN_DIR}/skills/${skill}/SKILL.md" ] || fail "installed companion skill missing: ${skill}"
+done
 
 echo "Update local marketplace..."
 python3 - "${MARKETPLACE_FILE}" <<'PY'
@@ -75,7 +102,12 @@ entry = {
 }
 
 if marketplace_path.exists():
-    data = json.loads(marketplace_path.read_text())
+    try:
+        data = json.loads(marketplace_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        raise SystemExit(f"marketplace file is not valid JSON: {marketplace_path}")
+    if not isinstance(data, dict):
+        raise SystemExit(f"marketplace file is not valid JSON: {marketplace_path}")
 else:
     data = {
         "name": "local-plugins",
@@ -89,32 +121,25 @@ if data.get("name") != "local-plugins":
     data["name"] = data.get("name") or "local-plugins"
 
 interface = data.setdefault("interface", {})
+if not isinstance(interface, dict):
+    interface = {}
+    data["interface"] = interface
 if not interface.get("displayName"):
     interface["displayName"] = "Local Plugins"
 
 plugins = data.setdefault("plugins", [])
-plugins = [plugin for plugin in plugins if plugin.get("name") != "caveman"]
+if not isinstance(plugins, list):
+    raise SystemExit(f"marketplace file is not valid JSON: {marketplace_path}")
+plugins = [plugin for plugin in plugins if isinstance(plugin, dict) and plugin.get("name") != "caveman"]
 plugins.append(entry)
 data["plugins"] = plugins
 
 marketplace_path.write_text(json.dumps(data, indent=2) + "\n")
 PY
 
-echo "Move plugin into Codex plugin directory..."
-mv "${PLUGIN_SRC_DIR}" "${TARGET_PLUGIN_DIR}"
-
-echo "Move companion skills into plugin skills directory..."
-for skill in "${EXTRA_SKILLS[@]}"; do
-  mv "${TMP_DIR}/repo/skills/${skill}" "${TARGET_PLUGIN_DIR}/skills/${skill}"
-done
-
-[ -f "${TARGET_PLUGIN_DIR}/.codex-plugin/plugin.json" ] || fail "installed manifest missing"
-[ -f "${TARGET_PLUGIN_DIR}/skills/caveman/SKILL.md" ] || fail "installed caveman skill missing"
-[ -f "${TARGET_PLUGIN_DIR}/skills/compress/SKILL.md" ] || fail "installed compress skill missing"
-for skill in "${EXTRA_SKILLS[@]}"; do
-  [ -f "${TARGET_PLUGIN_DIR}/skills/${skill}/SKILL.md" ] || fail "installed companion skill missing: ${skill}"
-done
 [ -f "${MARKETPLACE_FILE}" ] || fail "marketplace file missing"
+
+INSTALL_COMPLETE=1
 
 echo
 echo "Install complete."

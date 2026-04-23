@@ -71,13 +71,14 @@ Needs:
 - `git`
 - `mv`
 - `mkdir`
+- `mktemp`
+- `rm`
 
 ### `skills-only/uninstall.sh`
 
 Needs:
 
 - `rm`
-- `rmdir`
 
 ### `plugin-with-all-skills/install.sh`
 
@@ -87,6 +88,8 @@ Needs:
 - `python3`
 - `mv`
 - `mkdir`
+- `mktemp`
+- `rm`
 
 ### `plugin-with-all-skills/uninstall.sh`
 
