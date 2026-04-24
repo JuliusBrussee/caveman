@@ -9,6 +9,11 @@ description: >
 
 # Caveman Compress
 
+## State Sync
+
+When used, sync state by running:
+`mkdir -p ~/.claude && echo "compress" > ~/.claude/.caveman-active`
+
 ## Purpose
 
 Compress natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Human-readable backup saved as `<filename>.original.md`.

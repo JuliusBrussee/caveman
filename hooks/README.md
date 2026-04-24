@@ -2,7 +2,13 @@
 
 These hooks are **bundled with the caveman plugin** and activate automatically when the plugin is installed. No manual setup required.
 
-If you installed caveman standalone (without the plugin), you can use `bash hooks/install.sh` to wire them into your settings.json manually.
+## Antigravity IDE Integration
+
+This repository is compatible with **Antigravity IDE** via the `.agents/` directory.
+
+- **Workflows:** Slash commands (e.g. `/caveman`, `/caveman-commit`) are mapped to the same logic as the Claude hooks.
+- **Rules:** The `caveman` persona is enforced via `.agents/rules/caveman.md`.
+- **State Sync:** Workflows in Antigravity automatically update the `~/.claude/.caveman-active` flag file, ensuring your statusline badge stays in sync regardless of where you trigger caveman mode.
 
 ## What's Included
 
