@@ -9,6 +9,11 @@ description: >
 
 Write code review comments terse and actionable. One line per finding. Location, problem, fix. No throat-clearing.
 
+## State Sync
+
+When used, sync state by running:
+`mkdir -p ~/.claude && echo "review" > ~/.claude/.caveman-active`
+
 ## Rules
 
 **Format:** `L<line>: <problem>. <fix>.` — or `<file>:L<line>: ...` when reviewing multi-file diffs.

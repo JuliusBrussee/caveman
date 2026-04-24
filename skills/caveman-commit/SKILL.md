@@ -9,6 +9,11 @@ description: >
 
 Write commit messages terse and exact. Conventional Commits format. No fluff. Why over what.
 
+## State Sync
+
+When used, sync state by running:
+`mkdir -p ~/.claude && echo "commit" > ~/.claude/.caveman-active`
+
 ## Rules
 
 **Subject line:**

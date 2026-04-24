@@ -221,6 +221,22 @@ codex_hooks = true
 </details>
 
 <details>
+<summary><strong>Antigravity IDE — full details</strong></summary>
+
+Auto-activates via `.agents/rules/caveman.md`. Also provides dedicated Workflows (Slash Commands):
+- `/caveman` — switch intensity level
+- `/caveman-commit` — generate terse commit message
+- `/caveman-review` — one-line code review
+- `/caveman-compress` — compress natural language files
+- `/caveman-help` — quick-reference card
+
+**State Sync:** IDE workflows update the `~/.claude/.caveman-active` flag, so your terminal badge (if configured) stays in sync.
+
+⁵ Antigravity IDE does not have its own status bar badge, but its workflows update the flag file read by the Claude Code statusline script.
+
+</details>
+
+<details>
 <summary><strong>Gemini CLI — full details</strong></summary>
 
 ```bash
@@ -233,6 +249,10 @@ Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
 - `/caveman` — switch intensity level (lite/full/ultra/wenyan)
 - `/caveman-commit` — generate terse commit message
 - `/caveman-review` — one-line code review
+- `/caveman-compress` — compress natural language files
+- `/caveman-help` — show help card
+
+**State Sync:** All Gemini skills update the `~/.claude/.caveman-active` flag for statusline parity.
 
 </details>
 
