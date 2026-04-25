@@ -1,0 +1,4 @@
+interface:
+  display_name: "Caveman Compress"
+  short_description: "Compress markdown memory files with caveman prose while preserving code and structure."
+  default_prompt: "Use $caveman-compress CLAUDE.md to shrink a markdown memory file without changing code blocks or links."

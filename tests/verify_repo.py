@@ -67,7 +67,6 @@ def verify_synced_files() -> None:
 
     skill_copies = [
         ROOT / "caveman/SKILL.md",
-        ROOT / "plugins/caveman/skills/caveman/SKILL.md",
         ROOT / ".cursor/skills/caveman/SKILL.md",
         ROOT / ".windsurf/skills/caveman/SKILL.md",
     ]
@@ -91,6 +90,63 @@ def verify_synced_files() -> None:
     print("Synced copies and caveman.skill zip OK")
 
 
+def verify_codex_plugin_bundle() -> None:
+    section("Codex Plugin Bundle")
+
+    plugin_manifest = read_json(ROOT / "plugins/caveman/.codex-plugin/plugin.json")
+    ensure(plugin_manifest["hooks"] == "./hooks.json", "Codex plugin manifest missing hooks.json")
+
+    plugin_skill = (ROOT / "plugins/caveman/skills/caveman/SKILL.md").read_text()
+    ensure("invokes $caveman" in plugin_skill, "Codex caveman skill should use $caveman syntax")
+    ensure("Switch: `$caveman lite|full|ultra`." in plugin_skill, "Codex caveman skill switch text mismatch")
+
+    commit_skill = (ROOT / "plugins/caveman/skills/caveman-commit/SKILL.md").read_text()
+    review_skill = (ROOT / "plugins/caveman/skills/caveman-review/SKILL.md").read_text()
+    help_skill = (ROOT / "plugins/caveman/skills/caveman-help/SKILL.md").read_text()
+    compress_skill = (ROOT / "plugins/caveman/skills/caveman-compress/SKILL.md").read_text()
+    ensure("$caveman-commit" in commit_skill, "Codex commit skill should use $caveman-commit")
+    ensure("$caveman-review" in review_skill, "Codex review skill should use $caveman-review")
+    ensure("$caveman-help" in help_skill, "Codex help skill should use $caveman-help")
+    ensure("$caveman-compress <filepath>" in compress_skill, "Codex compress skill should use $caveman-compress")
+    ensure("CAVEMAN_PROVIDER=codex python3" in compress_skill, "Codex compress skill should force Codex provider")
+    ensure("call Codex to compress" in compress_skill, "Codex compress skill copy should mention Codex")
+
+    for relative in [
+        "plugins/caveman/skills/caveman-commit/agents/openai.yaml",
+        "plugins/caveman/skills/caveman-review/agents/openai.yaml",
+        "plugins/caveman/skills/caveman-help/agents/openai.yaml",
+        "plugins/caveman/skills/caveman-compress/agents/openai.yaml",
+    ]:
+        ensure((ROOT / relative).exists(), f"Missing Codex skill metadata: {relative}")
+
+    canonical_compress = (ROOT / "caveman-compress/scripts/compress.py").read_text()
+    plugin_compress = (ROOT / "plugins/caveman/skills/caveman-compress/scripts/compress.py").read_text()
+    ensure(plugin_compress == canonical_compress, "Codex plugin compress script mismatch")
+
+    plugin_hooks = read_json(ROOT / "plugins/caveman/hooks.json")["hooks"]
+    repo_hooks = read_json(ROOT / ".codex/hooks.json")["hooks"]
+    ensure("SessionStart" in plugin_hooks and "UserPromptSubmit" in plugin_hooks, "Codex plugin hooks incomplete")
+    ensure("SessionStart" in repo_hooks and "UserPromptSubmit" in repo_hooks, "Repo Codex hooks incomplete")
+    ensure(
+        "codex-caveman-activate.js" in json.dumps(plugin_hooks["SessionStart"]),
+        "Codex plugin SessionStart hook should use codex-caveman-activate.js",
+    )
+    ensure(
+        "codex-caveman-mode-tracker.js" in json.dumps(plugin_hooks["UserPromptSubmit"]),
+        "Codex plugin UserPromptSubmit hook should use codex-caveman-mode-tracker.js",
+    )
+    ensure(
+        "plugins/caveman/scripts/codex-caveman-activate.js" in json.dumps(repo_hooks["SessionStart"]),
+        "Repo Codex SessionStart fallback should point at plugin script",
+    )
+    ensure(
+        "plugins/caveman/scripts/codex-caveman-mode-tracker.js" in json.dumps(repo_hooks["UserPromptSubmit"]),
+        "Repo Codex UserPromptSubmit fallback should point at plugin script",
+    )
+
+    print("Codex plugin bundle surfaces OK")
+
+
 def verify_manifests_and_syntax() -> None:
     section("Manifests And Syntax")
 
@@ -100,6 +156,7 @@ def verify_manifests_and_syntax() -> None:
         ROOT / ".claude-plugin/marketplace.json",
         ROOT / ".codex/hooks.json",
         ROOT / "gemini-extension.json",
+        ROOT / "plugins/caveman/hooks.json",
         ROOT / "plugins/caveman/.codex-plugin/plugin.json",
     ]
     for path in manifest_paths:
@@ -108,6 +165,9 @@ def verify_manifests_and_syntax() -> None:
     run(["node", "--check", "hooks/caveman-config.js"])
     run(["node", "--check", "hooks/caveman-activate.js"])
     run(["node", "--check", "hooks/caveman-mode-tracker.js"])
+    run(["node", "--check", "plugins/caveman/scripts/codex-caveman-config.js"])
+    run(["node", "--check", "plugins/caveman/scripts/codex-caveman-activate.js"])
+    run(["node", "--check", "plugins/caveman/scripts/codex-caveman-mode-tracker.js"])
     run(["bash", "-n", "hooks/install.sh"])
     run(["bash", "-n", "hooks/uninstall.sh"])
     run(["bash", "-n", "hooks/caveman-statusline.sh"])
@@ -195,6 +255,12 @@ def verify_compress_cli() -> None:
     print("Compress CLI skip/error paths OK")
 
 
+def verify_python_tests() -> None:
+    section("Python Test Suite")
+    run(["python3", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"])
+    print("Python unittest suite OK")
+
+
 def verify_hook_install_flow() -> None:
     section("Claude Hook Flow")
 
@@ -225,7 +291,7 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home)},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate.stdout, "activation output missing caveman banner")
+        ensure("CAVEMAN MODE ACTIVE — level: full" in activate.stdout, "activation output missing caveman banner")
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "activation should stay quiet when custom statusline exists")
         ensure((claude_dir / ".caveman-active").read_text() == "full", "activation flag should default to full")
 
@@ -234,14 +300,14 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "ultra"},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate_custom.stdout, "activation with custom default missing banner")
+        ensure("CAVEMAN MODE ACTIVE — level: ultra" in activate_custom.stdout, "activation with custom default missing banner")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra")
         # Test "off" mode — activation skipped, flag removed
         activate_off = run(
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "off"},
         )
-        ensure("CAVEMAN MODE ACTIVE." not in activate_off.stdout, "off mode should not emit caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" not in activate_off.stdout, "off mode should not emit caveman banner")
         ensure(not (claude_dir / ".caveman-active").exists(), "off mode should remove flag file")
 
         # Test mode tracker with /caveman when default is off — should NOT write flag
@@ -274,7 +340,7 @@ def verify_hook_install_flow() -> None:
             capture_output=True,
             check=True,
         )
-        ensure(ultra_prompt.stdout == "", "mode tracker should stay silent")
+        ensure("CAVEMAN MODE ACTIVE (ultra)." in ultra_prompt.stdout, "mode tracker reinforcement output mismatch")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "mode tracker did not record ultra")
 
         subprocess.run(
@@ -320,10 +386,12 @@ def verify_hook_install_flow() -> None:
 def main() -> int:
     checks = [
         verify_synced_files,
+        verify_codex_plugin_bundle,
         verify_manifests_and_syntax,
         verify_powershell_static,
         verify_compress_fixtures,
         verify_compress_cli,
+        verify_python_tests,
         verify_hook_install_flow,
     ]
 

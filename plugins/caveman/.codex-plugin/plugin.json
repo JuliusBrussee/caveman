@@ -16,6 +16,7 @@
     "writing"
   ],
   "skills": "./skills/",
+  "hooks": "./hooks.json",
   "interface": {
     "displayName": "Caveman",
     "shortDescription": "Talk like caveman. Cut filler. Keep technical accuracy.",
@@ -23,13 +24,17 @@
     "developerName": "Julius Brussee",
     "category": "Productivity",
     "capabilities": [
+      "Interactive",
+      "Read",
       "Write"
     ],
     "websiteURL": "https://github.com/JuliusBrussee/caveman",
     "privacyPolicyURL": "https://github.com/JuliusBrussee/caveman/blob/main/README.md",
     "termsOfServiceURL": "https://github.com/JuliusBrussee/caveman/blob/main/LICENSE",
     "defaultPrompt": [
-      "Use caveman mode. Cut filler. Keep technical accuracy."
+      "Use $caveman and keep answers terse without dropping technical substance.",
+      "Use $caveman-review to review the current changes in one-line findings.",
+      "Use $caveman-compress CLAUDE.md to shrink memory-file tokens."
     ],
     "composerIcon": "./assets/caveman-small.svg",
     "logo": "./assets/caveman.svg",

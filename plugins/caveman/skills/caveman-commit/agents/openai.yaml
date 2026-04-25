@@ -1,0 +1,4 @@
+interface:
+  display_name: "Caveman Commit"
+  short_description: "Generate terse Conventional Commit messages with why over what."
+  default_prompt: "Use $caveman-commit to write a terse Conventional Commit message for the current staged changes."

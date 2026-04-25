@@ -8,7 +8,9 @@ Usage:
 
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import List
 
@@ -17,10 +19,10 @@ OUTER_FENCE_REGEX = re.compile(
 )
 
 # Filenames and paths that almost certainly hold secrets or PII. Compressing
-# them ships raw bytes to the Anthropic API — a third-party data boundary that
-# developers on sensitive codebases cannot cross. detect.py already skips .env
-# by extension, but credentials.md / secrets.txt / ~/.aws/credentials would
-# slip through the natural-language filter. This is a hard refuse before read.
+# them can ship raw bytes to an external LLM provider, which sensitive codebases
+# often cannot allow. detect.py already skips .env by extension, but
+# credentials.md / secrets.txt / ~/.aws/credentials would slip through the
+# natural-language filter. This is a hard refuse before read.
 SENSITIVE_BASENAME_REGEX = re.compile(
     r"(?ix)^("
     r"\.env(\..+)?"
@@ -69,10 +71,27 @@ from .validate import validate
 MAX_RETRIES = 2
 
 
-# ---------- Claude Calls ----------
+# ---------- Model Calls ----------
+
+def detect_provider() -> str:
+    provider = os.environ.get("CAVEMAN_PROVIDER", "").strip().lower()
+    if provider:
+        if provider not in {"claude", "codex"}:
+            raise ValueError(
+                f"Unsupported CAVEMAN_PROVIDER={provider!r}. Use 'claude' or 'codex'."
+            )
+        return provider
+
+    if os.environ.get("CODEX_HOME") and shutil.which("codex") is not None:
+        return "codex"
+    if os.environ.get("ANTHROPIC_API_KEY") or shutil.which("claude") is not None:
+        return "claude"
+    if shutil.which("codex") is not None:
+        return "codex"
+    return "claude"
 
 
-def call_claude(prompt: str) -> str:
+def call_with_claude(prompt: str) -> str:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if api_key:
         try:
@@ -99,6 +118,60 @@ def call_claude(prompt: str) -> str:
         return strip_llm_wrapper(result.stdout.strip())
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Claude call failed:\n{e.stderr}")
+
+
+def call_with_codex(prompt: str) -> str:
+    if shutil.which("codex") is None:
+        raise RuntimeError("Codex CLI not found on PATH")
+
+    model = os.environ.get("CAVEMAN_MODEL", "codex-mini-latest")
+
+    with tempfile.TemporaryDirectory(prefix="caveman-codex-") as temp_root:
+        temp_path = Path(temp_root)
+        output_path = temp_path / "last-message.txt"
+        cmd = [
+            "codex",
+            "exec",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--disable", "codex_hooks",
+            "--skip-git-repo-check",
+            "--sandbox", "read-only",
+            "--ask-for-approval", "never",
+            "--color", "never",
+            "--model", model,
+            "-C", str(temp_path),
+            "-o", str(output_path),
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                input=prompt,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            detail = e.stderr.strip() or e.stdout.strip()
+            raise RuntimeError(f"Codex call failed:\n{detail}")
+
+        if output_path.exists():
+            return strip_llm_wrapper(output_path.read_text().strip())
+
+        stdout = result.stdout.strip()
+        if stdout:
+            return strip_llm_wrapper(stdout)
+
+        raise RuntimeError("Codex call succeeded but produced no output")
+
+
+def call_model(prompt: str) -> str:
+    provider = detect_provider()
+    if provider == "codex":
+        return call_with_codex(prompt)
+    return call_with_claude(prompt)
 
 
 def build_compress_prompt(original: str) -> str:
@@ -161,15 +234,15 @@ def compress_file(filepath: Path) -> bool:
     if filepath.stat().st_size > MAX_FILE_SIZE:
         raise ValueError(f"File too large to compress safely (max 500KB): {filepath}")
 
-    # Refuse files that look like they contain secrets or PII. Compressing ships
-    # the raw bytes to the Anthropic API — a third-party boundary — so we fail
-    # loudly rather than silently exfiltrate credentials or keys. Override is
-    # intentional: the user must rename the file if the heuristic is wrong.
+    # Refuse files that look like they contain secrets or PII. Compression can
+    # send raw bytes to an external LLM provider, so fail loudly rather than
+    # silently exfiltrate credentials or keys. Override is intentional: the
+    # user must rename the file if the heuristic is wrong.
     if is_sensitive_path(filepath):
         raise ValueError(
             f"Refusing to compress {filepath}: filename looks sensitive "
             "(credentials, keys, secrets, or known private paths). "
-            "Compression sends file contents to the Anthropic API. "
+            "Compression may send file contents to an external LLM provider. "
             "Rename the file if this is a false positive."
         )
 
@@ -190,8 +263,8 @@ def compress_file(filepath: Path) -> bool:
         return False
 
     # Step 1: Compress
-    print("Compressing with Claude...")
-    compressed = call_claude(build_compress_prompt(original_text))
+    print(f"Compressing with {detect_provider()}...")
+    compressed = call_model(build_compress_prompt(original_text))
 
     # Save original as backup, write compressed to original path
     backup_path.write_text(original_text)
@@ -218,8 +291,8 @@ def compress_file(filepath: Path) -> bool:
             print("❌ Failed after retries — original restored")
             return False
 
-        print("Fixing with Claude...")
-        compressed = call_claude(
+        print(f"Fixing with {detect_provider()}...")
+        compressed = call_model(
             build_fix_prompt(original_text, compressed, result.errors)
         )
         filepath.write_text(compressed)

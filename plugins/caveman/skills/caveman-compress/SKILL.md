@@ -1,10 +1,10 @@
 ---
-name: compress
+name: caveman-compress
 description: >
   Compress natural language memory files (CLAUDE.md, todos, preferences) into caveman format
   to save input tokens. Preserves all technical substance, code, URLs, and structure.
   Compressed version overwrites the original file. Human-readable backup saved as FILE.original.md.
-  Trigger: /caveman:compress <filepath> or "compress memory file"
+  Trigger: $caveman-compress <filepath> or "compress memory file"
 ---
 
 # Caveman Compress
@@ -15,7 +15,7 @@ Compress natural language files (CLAUDE.md, todos, preferences) into caveman-spe
 
 ## Trigger
 
-`/caveman:compress <filepath>` or when user asks to compress a memory file.
+`$caveman-compress <filepath>` or when user asks to compress a memory file.
 
 ## Process
 
@@ -23,13 +23,13 @@ Compress natural language files (CLAUDE.md, todos, preferences) into caveman-spe
 
 2. Run:
 
-cd <directory_containing_this_SKILL.md> && python3 -m scripts <absolute_filepath>
+cd <directory_containing_this_SKILL.md> && CAVEMAN_PROVIDER=codex python3 -m scripts <absolute_filepath>
 
 3. The CLI will:
 - detect file type (no tokens)
-- call Claude to compress
+- call Codex to compress
 - validate output (no tokens)
-- if errors: cherry-pick fix with Claude (targeted fixes only, no recompression)
+- if errors: cherry-pick fix with Codex (targeted fixes only, no recompression)
 - retry up to 2 times
 - if still failing after 2 retries: report error to user, leave original file untouched
 

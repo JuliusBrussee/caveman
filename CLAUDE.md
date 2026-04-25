@@ -35,6 +35,9 @@ Caveman makes AI coding agents respond in compressed caveman-style prose — cut
 | `skills/caveman-review/SKILL.md` | Caveman code review behavior. Fully independent skill. |
 | `skills/caveman-help/SKILL.md` | Quick-reference card. One-shot display, not a persistent mode. |
 | `caveman-compress/SKILL.md` | Compress sub-skill behavior. |
+| `plugins/caveman/hooks.json` | Codex plugin hook wiring. Installable SessionStart + UserPromptSubmit source of truth. |
+| `plugins/caveman/scripts/codex-caveman-*.js` | Codex hook implementation: config, activation, mode tracking. |
+| `plugins/caveman/.codex-plugin/plugin.json` | Codex plugin manifest, default prompts, interface metadata. |
 
 ### Auto-generated / auto-synced — do not edit directly
 
@@ -43,7 +46,12 @@ Overwritten by CI on push to main when sources change. Edits here lost.
 | File | Synced from |
 |------|-------------|
 | `caveman/SKILL.md` | `skills/caveman/SKILL.md` |
-| `plugins/caveman/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
+| `plugins/caveman/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` + Codex `$...` trigger rewrite |
+| `plugins/caveman/skills/caveman-commit/SKILL.md` | `skills/caveman-commit/SKILL.md` + Codex `$...` trigger rewrite |
+| `plugins/caveman/skills/caveman-review/SKILL.md` | `skills/caveman-review/SKILL.md` + Codex `$...` trigger rewrite |
+| `plugins/caveman/skills/caveman-help/SKILL.md` | `skills/caveman-help/SKILL.md` + Codex `$...` trigger rewrite |
+| `plugins/caveman/skills/caveman-compress/SKILL.md` | `caveman-compress/SKILL.md` + Codex trigger/provider rewrite |
+| `plugins/caveman/skills/caveman-compress/scripts/*` | `caveman-compress/scripts/*` |
 | `.cursor/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
 | `.windsurf/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
 | `caveman.skill` | ZIP of `skills/caveman/` directory |
@@ -56,13 +64,15 @@ Overwritten by CI on push to main when sources change. Edits here lost.
 
 ## CI sync workflow
 
-`.github/workflows/sync-skill.yml` triggers on main push when `skills/caveman/SKILL.md` or `rules/caveman-activate.md` changes.
+`.github/workflows/sync-skill.yml` triggers on main push when `skills/caveman/SKILL.md`, `rules/caveman-activate.md`, `caveman-compress/SKILL.md`, or `caveman-compress/scripts/**` changes.
 
 What it does:
-1. Copies `skills/caveman/SKILL.md` to all agent-specific SKILL.md locations
-2. Rebuilds `caveman.skill` as a ZIP of `skills/caveman/`
-3. Rebuilds all agent rule files from `rules/caveman-activate.md`, prepending agent-specific frontmatter (Cursor needs `alwaysApply: true`, Windsurf needs `trigger: always_on`)
-4. Commits and pushes with `[skip ci]` to avoid loops
+1. Copies `skills/caveman/SKILL.md` to shared agent-specific copies and rewrites the Codex plugin copy to `$caveman` syntax
+2. Copies `skills/caveman-commit`, `skills/caveman-review`, `skills/caveman-help` into the Codex plugin and rewrites triggers to `$...`
+3. Syncs `caveman-compress/SKILL.md` and `caveman-compress/scripts/*` into both `skills/compress/` and the Codex plugin, with Codex provider rewrites in the plugin copy
+4. Rebuilds `caveman.skill` as a ZIP of `skills/caveman/`
+5. Rebuilds all agent rule files from `rules/caveman-activate.md`, prepending agent-specific frontmatter (Cursor needs `alwaysApply: true`, Windsurf needs `trigger: always_on`)
+6. Commits and pushes with `[skip ci]` to avoid loops
 
 CI bot commits as `github-actions[bot]`. After PR merge, wait for workflow before declaring release complete.
 
@@ -166,7 +176,7 @@ How caveman reaches each agent type:
 | Agent | Mechanism | Auto-activates? |
 |-------|-----------|----------------|
 | Claude Code | Plugin (hooks + skills) or standalone hooks | Yes — SessionStart hook injects rules |
-| Codex | Plugin in `plugins/caveman/` plus repo `.codex/hooks.json` and `.codex/config.toml` | Yes on macOS/Linux — SessionStart hook |
+| Codex | Installable plugin in `plugins/caveman/` with bundled `hooks.json` + repo `.codex/hooks.json` fallback | Yes — SessionStart hook |
 | Gemini CLI | Extension with `GEMINI.md` context file | Yes — context file loads every session |
 | Cursor | `.cursor/rules/caveman.mdc` with `alwaysApply: true` | Yes — always-on rule |
 | Windsurf | `.windsurf/rules/caveman.md` with `trigger: always_on` | Yes — always-on rule |

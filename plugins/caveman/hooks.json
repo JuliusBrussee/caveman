@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ./plugins/caveman/scripts/codex-caveman-activate.js",
+            "command": "node ./scripts/codex-caveman-activate.js",
             "async": false,
             "timeoutSec": 5,
             "statusMessage": "Loading caveman mode"
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ./plugins/caveman/scripts/codex-caveman-mode-tracker.js",
+            "command": "node ./scripts/codex-caveman-mode-tracker.js",
             "async": false,
             "timeoutSec": 5,
             "statusMessage": "Tracking caveman mode"
