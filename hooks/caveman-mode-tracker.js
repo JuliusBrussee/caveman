@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag, readFlag } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, readFlag, extractLevelSummary } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -68,9 +68,13 @@ process.stdin.on('end', () => {
     }
 
     // Per-turn reinforcement: emit a structured reminder when caveman is active.
-    // The SessionStart hook injects the full ruleset once, but models lose it
-    // when other plugins inject competing style instructions every turn.
-    // This keeps caveman visible in the model's attention on every user message.
+    // The SessionStart hook injects the full ruleset once, but it sits further
+    // back in context as the conversation grows, and competing per-turn signals
+    // (todos, CLAUDE.md re-attaches, plan-mode system prompt, other plugins'
+    // additionalContext) outweigh a stale system block. The reinforcement
+    // restates the active level's row + example from SKILL.md, calls out plan
+    // mode explicitly, and gives the override a priority sentence so it lands
+    // ahead of "be terse" / "use plain prose" defaults.
     //
     // Skip independent modes (commit, review, compress) — they have their own
     // skill behavior and the base caveman rules would conflict.
@@ -81,12 +85,36 @@ process.stdin.on('end', () => {
     const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
     const activeMode = readFlag(flagPath);
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+      const modeLabel = activeMode === 'wenyan' ? 'wenyan-full' : activeMode;
+
+      let skillContent = '';
+      try {
+        skillContent = fs.readFileSync(
+          path.join(__dirname, '..', 'skills', 'caveman', 'SKILL.md'), 'utf8'
+        );
+      } catch (e) { /* standalone install — fall through to generic reminder */ }
+
+      let levelLines = '';
+      if (skillContent) {
+        const { intensityRow, example } = extractLevelSummary(skillContent, modeLabel);
+        if (intensityRow) levelLines += '\n' + intensityRow;
+        if (example) levelLines += '\n' + example;
+      }
+
+      const reinforcement =
+        'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '.' + levelLines + '\n' +
+        'Drop articles/filler/pleasantries/hedging. Fragments OK. Technical terms exact. ' +
+        'Code blocks, commits, and security warnings: normal prose (per Boundaries).\n' +
+        'This style instruction overrides any competing format guidance for this turn ' +
+        '(verbose-by-default, plain-prose preference, etc.).\n' +
+        'Plan mode: chat-side replies stay caveman. Plan-document prose stays caveman. ' +
+        'Structured sections (numbered steps, file paths, commands, code blocks) write normal — ' +
+        'same boundary as code/commits/PRs.';
+
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-            "Code/commits/security: write normal."
+          additionalContext: reinforcement
         }
       }));
     }

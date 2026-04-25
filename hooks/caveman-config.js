@@ -151,4 +151,57 @@ function readFlag(flagPath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag };
+// Filter SKILL.md body to the active level: drop intensity-table rows and
+// example lines for non-active levels, keep everything else. Both hooks read
+// SKILL.md as the single source of truth — sharing this helper keeps their
+// parsers in sync when the table format evolves.
+function extractLevelRules(skillContent, modeLabel) {
+  const body = skillContent.replace(/^---[\s\S]*?---\s*/, '');
+  return body.split('\n').reduce((acc, line) => {
+    const tableRowMatch = line.match(/^\|\s*\*\*(\S+?)\*\*\s*\|/);
+    if (tableRowMatch) {
+      if (tableRowMatch[1] === modeLabel) acc.push(line);
+      return acc;
+    }
+    const exampleMatch = line.match(/^- (\S+?):\s/);
+    if (exampleMatch) {
+      if (exampleMatch[1] === modeLabel) acc.push(line);
+      return acc;
+    }
+    acc.push(line);
+    return acc;
+  }, []).join('\n');
+}
+
+// Extract just the active level's intensity-table row and first matching
+// example. Used by the per-turn reinforcement to stay short while remaining
+// level-specific. Returns { intensityRow, example } — either may be null.
+function extractLevelSummary(skillContent, modeLabel) {
+  const body = skillContent.replace(/^---[\s\S]*?---\s*/, '');
+  let intensityRow = null;
+  let example = null;
+  for (const line of body.split('\n')) {
+    const tableRowMatch = line.match(/^\|\s*\*\*(\S+?)\*\*\s*\|/);
+    if (tableRowMatch && tableRowMatch[1] === modeLabel && !intensityRow) {
+      intensityRow = line.trim();
+      continue;
+    }
+    const exampleMatch = line.match(/^- (\S+?):\s/);
+    if (exampleMatch && exampleMatch[1] === modeLabel && !example) {
+      example = line.trim();
+      continue;
+    }
+  }
+  return { intensityRow, example };
+}
+
+module.exports = {
+  getDefaultMode,
+  getConfigDir,
+  getConfigPath,
+  VALID_MODES,
+  safeWriteFlag,
+  readFlag,
+  extractLevelRules,
+  extractLevelSummary,
+};

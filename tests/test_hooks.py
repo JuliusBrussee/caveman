@@ -153,8 +153,134 @@ class HookScriptTests(unittest.TestCase):
 
             result = self.run_cmd(["node", "hooks/caveman-activate.js"], home)
 
-            self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
+            payload = json.loads(result.stdout)
+            ctx = payload["hookSpecificOutput"]["additionalContext"]
+            self.assertNotIn("STATUSLINE SETUP NEEDED", ctx)
             self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
+
+
+class HookOutputShapeTests(unittest.TestCase):
+    """Shape tests for the SessionStart + UserPromptSubmit hook outputs.
+
+    These exist because the persistence fix depends on Claude Code receiving
+    structured `hookSpecificOutput` payloads with level-specific reinforcement
+    on every turn. A regression that silently drops back to plain stdout or to
+    the old name-tag reinforcement would reintroduce the drift the user
+    reported.
+    """
+
+    def _run(self, cmd, home, stdin=None, extra_env=None):
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+        env["USERPROFILE"] = str(home)
+        if extra_env:
+            env.update(extra_env)
+        return subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            env=env,
+            input=stdin,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+    def test_session_start_emits_canonical_hookSpecificOutput_json(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-sessionstart-json-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            result = self._run(["node", "hooks/caveman-activate.js"], home)
+            payload = json.loads(result.stdout)
+
+            self.assertIn("hookSpecificOutput", payload)
+            self.assertEqual(
+                payload["hookSpecificOutput"]["hookEventName"], "SessionStart"
+            )
+            ctx = payload["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("CAVEMAN MODE ACTIVE", ctx)
+            self.assertIn("level: full", ctx)
+
+    def test_session_start_off_mode_still_emits_plain_ok(self):
+        # The 'off' path is a no-op signal — must not be wrapped in JSON,
+        # otherwise Claude Code injects an empty caveman ruleset as context.
+        with tempfile.TemporaryDirectory(prefix="caveman-sessionstart-off-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            result = self._run(
+                ["node", "hooks/caveman-activate.js"],
+                home,
+                extra_env={"CAVEMAN_DEFAULT_MODE": "off"},
+            )
+            self.assertEqual(result.stdout.strip(), "OK")
+            self.assertFalse((home / ".claude" / ".caveman-active").exists())
+
+    def test_user_prompt_submit_reinforcement_includes_level_rules(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-reinforce-level-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+            (claude_dir / ".caveman-active").write_text("ultra")
+
+            result = self._run(
+                ["node", "hooks/caveman-mode-tracker.js"],
+                home,
+                stdin=json.dumps({"prompt": "any prompt"}),
+            )
+            payload = json.loads(result.stdout)
+            ctx = payload["hookSpecificOutput"]["additionalContext"]
+
+            self.assertIn("level: ultra", ctx)
+            # ultra row in SKILL.md mentions "Abbreviate" and uses "→" for causality
+            self.assertTrue(
+                ("Abbreviate" in ctx) or ("→" in ctx),
+                f"reinforcement should include ultra-level signature, got: {ctx!r}",
+            )
+
+    def test_user_prompt_submit_includes_plan_mode_clause(self):
+        # Plan mode is the headline regression the fix addresses; the
+        # reinforcement must explicitly cover it on every turn.
+        with tempfile.TemporaryDirectory(prefix="caveman-reinforce-plan-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+            (claude_dir / ".caveman-active").write_text("full")
+
+            result = self._run(
+                ["node", "hooks/caveman-mode-tracker.js"],
+                home,
+                stdin=json.dumps({"prompt": "any prompt"}),
+            )
+            payload = json.loads(result.stdout)
+            ctx = payload["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("Plan mode", ctx)
+
+    def test_user_prompt_submit_skipped_for_independent_modes(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-reinforce-indep-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+            (claude_dir / ".caveman-active").write_text("commit")
+
+            result = self._run(
+                ["node", "hooks/caveman-mode-tracker.js"],
+                home,
+                stdin=json.dumps({"prompt": "any prompt"}),
+            )
+            self.assertEqual(result.stdout, "")
+
+    def test_user_prompt_submit_skipped_when_no_flag(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-reinforce-noflag-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            result = self._run(
+                ["node", "hooks/caveman-mode-tracker.js"],
+                home,
+                stdin=json.dumps({"prompt": "any prompt"}),
+            )
+            self.assertEqual(result.stdout, "")
 
 
 if __name__ == "__main__":
