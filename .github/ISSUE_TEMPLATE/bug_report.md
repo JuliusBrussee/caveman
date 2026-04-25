@@ -1,20 +1,20 @@
 ---
 name: Bug report
-about: Caveman speak wrong or break
+about: Layman summary is unclear or broken
 labels: bug
 ---
 
-**What happen**
-<!-- What caveman do wrong -->
+**What happened**
+<!-- What Layman did wrong -->
 
 **Expected**
-<!-- What caveman should do -->
+<!-- What Layman should do -->
 
 **Before/after example**
 ```
 Input: [your prompt]
-Got:   [what caveman said]
-Want:  [what caveman should say]
+Got:   [what Layman said]
+Want:  [what Layman should say]
 ```
 
 **Platform**

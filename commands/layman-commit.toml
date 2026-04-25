@@ -1,0 +1,2 @@
+description = "Generate clear commit message"
+prompt = "Generate a clear commit message for the current staged changes. Conventional Commits format. Subject: ≤50 chars when possible, imperative, lowercase after type. Body: only when the reason is not obvious. Explain why, not just what. No period on subject."

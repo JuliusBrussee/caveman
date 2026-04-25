@@ -1,0 +1,6 @@
+interface:
+  display_name: "Layman"
+  short_description: "Turn agent work into plain-English summaries."
+  icon_small: "./assets/layman-small.svg"
+  icon_large: "./assets/layman.svg"
+  default_prompt: "Use $layman to summarize completed coding work in plain English anyone can understand."

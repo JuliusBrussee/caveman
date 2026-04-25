@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark caveman vs normal Claude output token counts."""
+"""Benchmark Layman vs normal Claude output length."""
 
 import argparse
 import hashlib
@@ -26,7 +26,7 @@ SCRIPT_VERSION = "1.0.0"
 SCRIPT_DIR = Path(__file__).parent
 REPO_DIR = SCRIPT_DIR.parent
 PROMPTS_PATH = SCRIPT_DIR / "prompts.json"
-SKILL_PATH = REPO_DIR / "skills" / "caveman" / "SKILL.md"
+SKILL_PATH = REPO_DIR / "skills" / "layman" / "SKILL.md"
 README_PATH = REPO_DIR / "README.md"
 RESULTS_DIR = SCRIPT_DIR / "results"
 
@@ -41,7 +41,7 @@ def load_prompts():
     return data["prompts"]
 
 
-def load_caveman_system():
+def load_layman_system():
     return SKILL_PATH.read_text()
 
 
@@ -75,7 +75,7 @@ def call_api(client, model, system, prompt, max_retries=3):
                 raise
 
 
-def run_benchmarks(client, model, prompts, caveman_system, trials):
+def run_benchmarks(client, model, prompts, layman_system, trials):
     results = []
     total = len(prompts)
 
@@ -87,10 +87,10 @@ def run_benchmarks(client, model, prompts, caveman_system, trials):
             "category": prompt_entry["category"],
             "prompt": prompt_text,
             "normal": [],
-            "caveman": [],
+            "layman": [],
         }
 
-        for mode, system in [("normal", NORMAL_SYSTEM), ("caveman", caveman_system)]:
+        for mode, system in [("normal", NORMAL_SYSTEM), ("layman", layman_system)]:
             for t in range(1, trials + 1):
                 print(
                     f"  [{i}/{total}] {pid} | {mode} | trial {t}/{trials}",
@@ -113,10 +113,10 @@ def compute_stats(results):
         normal_medians = statistics.median(
             [t["output_tokens"] for t in entry["normal"]]
         )
-        caveman_medians = statistics.median(
-            [t["output_tokens"] for t in entry["caveman"]]
+        layman_medians = statistics.median(
+            [t["output_tokens"] for t in entry["layman"]]
         )
-        savings = 1 - (caveman_medians / normal_medians) if normal_medians > 0 else 0
+        savings = 1 - (layman_medians / normal_medians) if normal_medians > 0 else 0
         all_savings.append(savings)
 
         rows.append(
@@ -125,7 +125,7 @@ def compute_stats(results):
                 "category": entry["category"],
                 "prompt": entry["prompt"],
                 "normal_median": int(normal_medians),
-                "caveman_median": int(caveman_medians),
+                "layman_median": int(layman_medians),
                 "savings_pct": round(savings * 100),
             }
         )
@@ -134,14 +134,14 @@ def compute_stats(results):
     min_savings = round(min(all_savings) * 100)
     max_savings = round(max(all_savings) * 100)
     avg_normal = round(statistics.mean([r["normal_median"] for r in rows]))
-    avg_caveman = round(statistics.mean([r["caveman_median"] for r in rows]))
+    avg_layman = round(statistics.mean([r["layman_median"] for r in rows]))
 
     return rows, {
         "avg_savings": avg_savings,
         "min_savings": min_savings,
         "max_savings": max_savings,
         "avg_normal": avg_normal,
-        "avg_caveman": avg_caveman,
+        "avg_layman": avg_layman,
     }
 
 
@@ -163,16 +163,16 @@ def format_prompt_label(prompt_id):
 
 def format_table(rows, summary):
     lines = [
-        "| Task | Normal (tokens) | Caveman (tokens) | Saved |",
+        "| Task | Normal (tokens) | Layman (tokens) | Saved |",
         "|------|---------------:|----------------:|------:|",
     ]
     for r in rows:
         label = format_prompt_label(r["id"])
         lines.append(
-            f"| {label} | {r['normal_median']} | {r['caveman_median']} | {r['savings_pct']}% |"
+            f"| {label} | {r['normal_median']} | {r['layman_median']} | {r['savings_pct']}% |"
         )
     lines.append(
-        f"| **Average** | **{summary['avg_normal']}** | **{summary['avg_caveman']}** | **{summary['avg_savings']}%** |"
+        f"| **Average** | **{summary['avg_normal']}** | **{summary['avg_layman']}** | **{summary['avg_savings']}%** |"
     )
     lines.append("")
     lines.append(
@@ -237,7 +237,7 @@ def dry_run(prompts, model, trials):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Benchmark caveman vs normal Claude")
+    parser = argparse.ArgumentParser(description="Benchmark layman vs normal Claude")
     parser.add_argument("--trials", type=int, default=3, help="Trials per prompt per mode (default: 3)")
     parser.add_argument("--dry-run", action="store_true", help="Print config, no API calls")
     parser.add_argument("--update-readme", action="store_true", help="Update README.md benchmark table")
@@ -250,7 +250,7 @@ def main():
         dry_run(prompts, args.model, args.trials)
         return
 
-    caveman_system = load_caveman_system()
+    layman_system = load_layman_system()
     skill_hash = sha256_file(SKILL_PATH)
 
     client = anthropic.Anthropic()
@@ -259,7 +259,7 @@ def main():
     print(f"Model: {args.model}", file=sys.stderr)
     print(file=sys.stderr)
 
-    results = run_benchmarks(client, args.model, prompts, caveman_system, args.trials)
+    results = run_benchmarks(client, args.model, prompts, layman_system, args.trials)
     rows, summary = compute_stats(results)
     table_md = format_table(rows, summary)
 

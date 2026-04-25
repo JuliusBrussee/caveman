@@ -1,6 +1,6 @@
 """
 Read evals/snapshots/results.json (produced by llm_run.py) and report
-real token compression per skill against the *terse control arm* — i.e.
+real response length per skill against the *concise control arm* — i.e.
 how much the skill adds on top of a plain "Answer concisely." instruction.
 
 Reports median, min, max and stdev across prompts, not just the mean,
@@ -9,7 +9,7 @@ so the reader can see whether a number is solid or noisy.
 Tokenizer note: tiktoken o200k_base is OpenAI's tokenizer and is only an
 approximation of Claude's BPE. The ratios are still meaningful for
 comparing skills against each other, but the absolute numbers should be
-read as "approximate output-length reduction", not "exact Claude tokens".
+read as "approximate response length", not "exact Claude tokens".
 
 Run: uv run --with tiktoken python evals/measure.py
 """
@@ -73,7 +73,7 @@ def main() -> None:
         f"({fmt_pct(1 - sum(terse_tokens) / sum(baseline_tokens))} vs baseline)"
     )
     print()
-    print("**Skills, measured as additional reduction on top of the terse control:**")
+    print("**Skills, measured as additional length change on top of the concise control:**")
     print()
     print("| Skill | Median | Mean | Min | Max | Stdev | Tokens (skill / terse) |")
     print("|-------|--------|------|-----|-----|-------|-------------------------|")
@@ -99,7 +99,7 @@ def main() -> None:
         )
 
     print()
-    print("_Savings = `1 - skill_tokens / terse_tokens` per prompt._")
+    print("_Length change = `1 - skill_tokens / terse_tokens` per prompt._")
     print(f"_Source: {SNAPSHOT.name}. Refresh with `python evals/llm_run.py`._")
 
 

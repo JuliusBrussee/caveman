@@ -1,37 +1,37 @@
 #!/bin/bash
-# caveman — uninstaller for the SessionStart + UserPromptSubmit hooks
+# layman — uninstaller for the SessionStart + UserPromptSubmit hooks
 # Removes: hook files in ~/.claude/hooks, settings.json entries, and the flag file
 # Usage: bash hooks/uninstall.sh
-#   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/uninstall.sh)
+#   or:  bash <(curl -s https://raw.githubusercontent.com/vamsi920/layman/main/hooks/uninstall.sh)
 set -e
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
-FLAG_FILE="$CLAUDE_DIR/.caveman-active"
+FLAG_FILE="$CLAUDE_DIR/.layman-active"
 
-HOOK_FILES=("package.json" "caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-statusline.sh")
+HOOK_FILES=("package.json" "layman-config.js" "layman-activate.js" "layman-mode-tracker.js" "layman-statusline.sh")
 
-# Detect if caveman is installed as a plugin (check plugin cache)
+# Detect if layman is installed as a plugin (check plugin cache)
 PLUGIN_INSTALLED=0
 if [ -d "$CLAUDE_DIR/plugins" ]; then
-  if find "$CLAUDE_DIR/plugins" -path "*/caveman*" -name "plugin.json" -print -quit 2>/dev/null | grep -q .; then
+  if find "$CLAUDE_DIR/plugins" -path "*/layman*" -name "plugin.json" -print -quit 2>/dev/null | grep -q .; then
     PLUGIN_INSTALLED=1
   fi
 fi
 
 if [ "$PLUGIN_INSTALLED" -eq 1 ]; then
-  echo "Caveman appears to be installed as a Claude Code plugin."
+  echo "Layman appears to be installed as a Claude Code plugin."
   echo "To uninstall the plugin, run:"
   echo ""
-  echo "  claude plugin disable caveman"
+  echo "  claude plugin disable layman"
   echo ""
   echo "This script removes standalone hooks (installed via install.sh)."
   echo "Continuing with standalone hook removal..."
   echo ""
 fi
 
-echo "Uninstalling caveman hooks..."
+echo "Uninstalling layman hooks..."
 
 # 1. Remove hook files
 REMOVED_FILES=0
@@ -47,28 +47,28 @@ if [ "$REMOVED_FILES" -eq 0 ]; then
   echo "  No hook files found in $HOOKS_DIR"
 fi
 
-# 2. Remove caveman entries from settings.json (idempotent)
+# 2. Remove layman entries from settings.json (idempotent)
 if [ -f "$SETTINGS" ]; then
   # Require node for the same reason install.sh does — safe JSON editing
   if ! command -v node >/dev/null 2>&1; then
     echo "WARNING: 'node' not found — cannot safely edit settings.json."
-    echo "         Remove the caveman SessionStart and UserPromptSubmit"
+    echo "         Remove the layman SessionStart and UserPromptSubmit"
     echo "         entries from $SETTINGS manually."
   else
     # Back up before editing, same policy as install.sh
     cp "$SETTINGS" "$SETTINGS.bak"
 
     # Pass paths via env vars — avoids shell injection if $HOME contains single quotes
-    CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
+    LAYMAN_SETTINGS="$SETTINGS" LAYMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
       const fs = require('fs');
-      const settingsPath = process.env.CAVEMAN_SETTINGS;
-      const hooksDir = process.env.CAVEMAN_HOOKS_DIR;
-      const managedStatusLinePath = hooksDir + '/caveman-statusline.sh';
+      const settingsPath = process.env.LAYMAN_SETTINGS;
+      const hooksDir = process.env.LAYMAN_HOOKS_DIR;
+      const managedStatusLinePath = hooksDir + '/layman-statusline.sh';
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
 
-      const isCavemanEntry = (entry) =>
+      const isLaymanEntry = (entry) =>
         entry && entry.hooks && entry.hooks.some(h =>
-          h.command && h.command.includes('caveman')
+          h.command && h.command.includes('layman')
         );
 
       let removed = 0;
@@ -76,7 +76,7 @@ if [ -f "$SETTINGS" ]; then
         for (const event of ['SessionStart', 'UserPromptSubmit']) {
           if (Array.isArray(settings.hooks[event])) {
             const before = settings.hooks[event].length;
-            settings.hooks[event] = settings.hooks[event].filter(e => !isCavemanEntry(e));
+            settings.hooks[event] = settings.hooks[event].filter(e => !isLaymanEntry(e));
             removed += before - settings.hooks[event].length;
             // Drop the event key if it's now empty (keeps settings.json tidy)
             if (settings.hooks[event].length === 0) {
@@ -90,19 +90,19 @@ if [ -f "$SETTINGS" ]; then
         }
       }
 
-      // Remove statusLine if it references caveman
+      // Remove statusLine if it references layman
       if (settings.statusLine) {
         const cmd = typeof settings.statusLine === 'string'
           ? settings.statusLine
           : (settings.statusLine.command || '');
         if (cmd.includes(managedStatusLinePath)) {
           delete settings.statusLine;
-          console.log('  Removed caveman statusLine from settings.json');
+          console.log('  Removed layman statusLine from settings.json');
         }
       }
 
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-      console.log('  Removed ' + removed + ' caveman hook entries from settings.json');
+      console.log('  Removed ' + removed + ' layman hook entries from settings.json');
     "
   fi
 fi
@@ -125,6 +125,6 @@ echo "Done! Restart Claude Code to complete the uninstall."
 # Guidance for other agents
 echo ""
 echo "Other agents:"
-echo "  npx skills remove caveman    # Cursor, Windsurf, Cline, Copilot, etc."
-echo "  claude plugin disable caveman  # Claude Code plugin"
-echo "  gemini extensions uninstall caveman  # Gemini CLI"
+echo "  npx skills remove layman    # Cursor, Windsurf, Cline, Copilot, etc."
+echo "  claude plugin disable layman  # Claude Code plugin"
+echo "  gemini extensions uninstall layman  # Gemini CLI"

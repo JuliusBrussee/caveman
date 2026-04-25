@@ -4,10 +4,10 @@ on:
   push:
     branches: [main]
     paths:
-      - skills/caveman/SKILL.md
-      - rules/caveman-activate.md
-      - caveman-compress/SKILL.md
-      - caveman-compress/scripts/**
+      - skills/layman/SKILL.md
+      - rules/layman-activate.md
+      - layman-compress/SKILL.md
+      - layman-compress/scripts/**
 
 concurrency:
   group: sync-skill
@@ -31,71 +31,71 @@ jobs:
 
       - name: Sync SKILL.md copies
         run: |
-          cp skills/caveman/SKILL.md caveman/SKILL.md
-          cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
-          cp skills/caveman/SKILL.md .cursor/skills/caveman/SKILL.md
-          mkdir -p .windsurf/skills/caveman
-          cp skills/caveman/SKILL.md .windsurf/skills/caveman/SKILL.md
+          cp skills/layman/SKILL.md layman/SKILL.md
+          cp skills/layman/SKILL.md plugins/layman/skills/layman/SKILL.md
+          cp skills/layman/SKILL.md .cursor/skills/layman/SKILL.md
+          mkdir -p .windsurf/skills/layman
+          cp skills/layman/SKILL.md .windsurf/skills/layman/SKILL.md
 
       - name: Sync compress skill
         run: |
           # Sync to skills/compress (main location for Gemini CLI)
           rm -rf skills/compress/scripts
-          cp caveman-compress/SKILL.md skills/compress/SKILL.md
-          sed -i 's/^name: caveman-compress$/name: compress/' skills/compress/SKILL.md
-          sed -i "s|The compression scripts live in \`caveman-compress/scripts/\` (adjacent to this SKILL.md). If the path is not immediately available, search for \`caveman-compress/scripts/__main__.py\`.|This SKILL.md lives alongside \`scripts/\` in the same directory. Find that directory.|" skills/compress/SKILL.md
-          sed -i 's|cd caveman-compress && python3|cd <directory_containing_this_SKILL.md> \&\& python3|' skills/compress/SKILL.md
-          cp -r caveman-compress/scripts skills/compress/scripts
+          cp layman-compress/SKILL.md skills/compress/SKILL.md
+          sed -i 's/^name: layman-compress$/name: compress/' skills/compress/SKILL.md
+          sed -i "s|The compression scripts live in \`layman-compress/scripts/\` (adjacent to this SKILL.md). If the path is not immediately available, search for \`layman-compress/scripts/__main__.py\`.|This SKILL.md lives alongside \`scripts/\` in the same directory. Find that directory.|" skills/compress/SKILL.md
+          sed -i 's|cd layman-compress && python3|cd <directory_containing_this_SKILL.md> \&\& python3|' skills/compress/SKILL.md
+          cp -r layman-compress/scripts skills/compress/scripts
           rm -rf skills/compress/scripts/__pycache__
 
       - name: Sync compress skill to plugin
         run: |
           # Copy SKILL.md and patch name + process instructions for plugin context
-          cp caveman-compress/SKILL.md plugins/caveman/skills/compress/SKILL.md
-          sed -i 's/^name: caveman-compress$/name: compress/' plugins/caveman/skills/compress/SKILL.md
-          sed -i "s|The compression scripts live in \`caveman-compress/scripts/\` (adjacent to this SKILL.md). If the path is not immediately available, search for \`caveman-compress/scripts/__main__.py\`.|This SKILL.md lives alongside \`scripts/\` in the same directory. Find that directory.|" plugins/caveman/skills/compress/SKILL.md
-          sed -i 's|cd caveman-compress && python3|cd <directory_containing_this_SKILL.md> \&\& python3|' plugins/caveman/skills/compress/SKILL.md
+          cp layman-compress/SKILL.md plugins/layman/skills/compress/SKILL.md
+          sed -i 's/^name: layman-compress$/name: compress/' plugins/layman/skills/compress/SKILL.md
+          sed -i "s|The compression scripts live in \`layman-compress/scripts/\` (adjacent to this SKILL.md). If the path is not immediately available, search for \`layman-compress/scripts/__main__.py\`.|This SKILL.md lives alongside \`scripts/\` in the same directory. Find that directory.|" plugins/layman/skills/compress/SKILL.md
+          sed -i 's|cd layman-compress && python3|cd <directory_containing_this_SKILL.md> \&\& python3|' plugins/layman/skills/compress/SKILL.md
           # Copy scripts verbatim
-          rm -rf plugins/caveman/skills/compress/scripts
-          cp -r caveman-compress/scripts plugins/caveman/skills/compress/scripts
-          rm -rf plugins/caveman/skills/compress/scripts/__pycache__
+          rm -rf plugins/layman/skills/compress/scripts
+          cp -r layman-compress/scripts plugins/layman/skills/compress/scripts
+          rm -rf plugins/layman/skills/compress/scripts/__pycache__
 
-      - name: Rebuild caveman.skill ZIP
-        run: cd skills && zip -r ../caveman.skill caveman/
+      - name: Rebuild layman.skill ZIP
+        run: cd skills && zip -r ../layman.skill layman/
 
       - name: Sync auto-activation rules
         run: |
-          BODY="rules/caveman-activate.md"
+          BODY="rules/layman-activate.md"
 
           # Cline + Copilot — no frontmatter, direct copy
           mkdir -p .clinerules .github
-          cp "$BODY" .clinerules/caveman.md
+          cp "$BODY" .clinerules/layman.md
           cp "$BODY" .github/copilot-instructions.md
 
           # Cursor — needs alwaysApply frontmatter
           mkdir -p .cursor/rules
-          printf '%s\n' '---' 'description: "Caveman mode — terse communication, ~75% fewer tokens, full technical accuracy"' 'alwaysApply: true' '---' '' > .cursor/rules/caveman.mdc
-          cat "$BODY" >> .cursor/rules/caveman.mdc
+          printf '%s\n' '---' 'description: "Layman mode — plain-English summaries plus brief technical responses"' 'alwaysApply: true' '---' '' > .cursor/rules/layman.mdc
+          cat "$BODY" >> .cursor/rules/layman.mdc
 
           # Windsurf — needs always_on frontmatter
           mkdir -p .windsurf/rules
-          printf '%s\n' '---' 'trigger: always_on' '---' '' > .windsurf/rules/caveman.md
-          cat "$BODY" >> .windsurf/rules/caveman.md
+          printf '%s\n' '---' 'trigger: always_on' '---' '' > .windsurf/rules/layman.md
+          cat "$BODY" >> .windsurf/rules/layman.md
 
       - name: Commit and push if changed
         run: |
           git add \
-            caveman/SKILL.md \
+            layman/SKILL.md \
             skills/compress/ \
-            plugins/caveman/skills/compress/ \
-            plugins/caveman/skills/caveman/SKILL.md \
-            .cursor/skills/caveman/SKILL.md \
-            .windsurf/skills/caveman/SKILL.md \
-            caveman.skill \
-            .clinerules/caveman.md \
+            plugins/layman/skills/compress/ \
+            plugins/layman/skills/layman/SKILL.md \
+            .cursor/skills/layman/SKILL.md \
+            .windsurf/skills/layman/SKILL.md \
+            layman.skill \
+            .clinerules/layman.md \
             .github/copilot-instructions.md \
-            .cursor/rules/caveman.mdc \
-            .windsurf/rules/caveman.md
+            .cursor/rules/layman.mdc \
+            .windsurf/rules/layman.md
           git diff --staged --quiet && exit 0
           git commit -m "chore: sync SKILL.md copies and auto-activation rules [skip ci]"
           git push

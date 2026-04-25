@@ -6,9 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'CAVEMAN MODE ACTIVE. Rules: Drop articles/filler/pleasantries/hedging. Fragments OK. Short synonyms. Pattern: [thing] [action] [reason]. [next step]. Not: Sure! I would be happy to help you with that. Yes: Bug in auth middleware. Fix: Code/commits/security: write normal. User says stop caveman or normal mode to deactivate.'",
+            "command": "echo 'LAYMAN MODE ACTIVE. Default: after completed coding work, respond with Layman Summary: Done, Why it matters, What changed, Check this, Warning only if needed. Use simple plain English. Keep important technical terms when needed. Brief modes: /layman brief, /layman lite, /layman full, /layman ultra, /layman wenyan. In brief modes, cut filler and keep technical terms exact. User says stop layman or normal mode to deactivate.'",
             "timeout": 5,
-            "statusMessage": "Loading caveman mode"
+            "statusMessage": "Loading Layman summary mode"
           }
         ]
       }

@@ -1,14 +1,14 @@
 {
-  "name": "caveman-repo",
+  "name": "layman-repo",
   "interface": {
-    "displayName": "Caveman Repo"
+    "displayName": "Layman Repo"
   },
   "plugins": [
     {
-      "name": "caveman",
+      "name": "layman",
       "source": {
         "source": "local",
-        "path": "./plugins/caveman"
+        "path": "./plugins/layman"
       },
       "policy": {
         "installation": "AVAILABLE",

@@ -1,21 +1,21 @@
 # Contributing
 
-Improvements to the SKILL.md prompt are welcome — open a PR with before/after examples showing the change.
+Improvements to the Layman prompt are welcome. Open a PR with before/after examples showing the change.
 
 ## How
 
 1. Fork repo
-2. Edit `skills/caveman/SKILL.md` — this is the only copy you need to touch
+2. Edit `skills/layman/SKILL.md` — this is the main copy you need to touch
 3. Open PR with:
-   - **Before:** what caveman say now
-   - **After:** what caveman say with change
-   - One sentence why change better
+   - **Before:** current agent handoff
+   - **After:** clearer Layman handoff
+   - One sentence explaining why the change helps understanding
 
-> **Note:** `caveman/SKILL.md`, `plugins/caveman/skills/caveman/SKILL.md`, `.cursor/skills/caveman/SKILL.md`, and `caveman.skill` are auto-synced by CI after merge. Do not edit them directly.
+> **Note:** `layman/SKILL.md`, `plugins/layman/skills/layman/SKILL.md`, `.cursor/skills/layman/SKILL.md`, and `layman.skill` are auto-synced by CI after merge. Do not edit them directly.
 > 
-> **Note on compress skill:** If you are modifying the compress skill, edit `caveman-compress/SKILL.md` or `caveman-compress/scripts/`. CI will automatically sync these changes to `skills/compress/` and `plugins/caveman/skills/compress/`.
+> **Note on compress skill:** If you are modifying the compress skill, edit `layman-compress/SKILL.md` or `layman-compress/scripts/`. CI will automatically sync these changes to `skills/compress/` and `plugins/layman/skills/compress/`.
 
-Small focused change > big rewrite. Caveman like simple.
+Small focused change > big rewrite. Keep wording plain, useful, and accurate.
 
 ## Ideas
 

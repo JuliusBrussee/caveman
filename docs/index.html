@@ -1,442 +1,353 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Caveman | Lithic Token Compression</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<style>
-:root {
-  /* Ultra-premium stark palette */
-  --bg: #000000;
-  --bg-elevated: #080808;
-  --border: #1A1A1A;
-  --border-hover: #333333;
-  --text-primary: #FFFFFF;
-  --text-secondary: #888888;
-  --text-tertiary: #444444;
-  --accent: #FF3300;
-  --accent-glow: rgba(255, 51, 0, 0.15);
-  
-  /* Syntax / Diff colors */
-  --diff-removed: rgba(255, 51, 0, 0.2);
-  --diff-removed-text: #FF6644;
-  --diff-kept: rgba(255, 255, 255, 0.05);
-}
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Layman | Plain-English AI Agent Summaries</title>
+  <meta name="description" content="Layman turns completed Claude Code and Codex work into plain-English summaries anyone can understand.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,750&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f4efe4;
+      --ink: #1f2a24;
+      --muted: #667167;
+      --line: #d7ccb7;
+      --green: #245a41;
+      --green-deep: #143729;
+      --gold: #d6a83f;
+      --card: rgba(255, 252, 243, 0.78);
+    }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+    * { box-sizing: border-box; }
 
-body {
-  background-color: var(--bg); color: var(--text-primary);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  overflow-x: hidden; -webkit-font-smoothing: antialiased; letter-spacing: -0.02em;
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Ctext y='20' font-size='20'%3E🪨%3C/text%3E%3C/svg%3E"), auto;
-}
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 15% 12%, rgba(214, 168, 63, 0.28), transparent 28rem),
+        radial-gradient(circle at 88% 8%, rgba(36, 90, 65, 0.22), transparent 26rem),
+        linear-gradient(135deg, #fbf6ea 0%, var(--paper) 48%, #e7ddc8 100%);
+      font-family: "IBM Plex Sans", sans-serif;
+      line-height: 1.5;
+    }
 
-::selection { background: var(--text-primary); color: var(--bg); }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(31, 42, 36, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(31, 42, 36, 0.04) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: linear-gradient(to bottom, black, transparent 85%);
+    }
 
-/* --- DYNAMIC BACKGROUND ELEMENTS --- */
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 48px 0 72px;
+    }
 
-/* 1. Crisp Grid Background */
-.bg-grid {
-  position: fixed; inset: 0; z-index: -2; pointer-events: none;
-  background-image: linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
-                    linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
-  background-size: 40px 40px;
-  mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
-  -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
-}
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 76px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
 
-/* 2. Slow Breathing Aura */
-.ambient-aura {
-  position: fixed; width: 80vw; height: 80vh; border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 51, 0, 0.05) 0%, transparent 60%);
-  top: 50%; left: 50%; transform: translate(-50%, -50%);
-  pointer-events: none; z-index: -3; filter: blur(80px);
-  animation: breatheAura 15s ease-in-out infinite alternate;
-}
-@keyframes breatheAura {
-  0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0.5; }
-  100% { transform: translate(-50%, -60%) scale(1.2); opacity: 1; }
-}
+    .nav a {
+      color: var(--green);
+      text-decoration: none;
+      border-bottom: 1px solid currentColor;
+    }
 
-/* 3. Cursor Tracking Spotlight */
-.cursor-glow {
-  position: fixed; width: 500px; height: 500px; border-radius: 50%;
-  background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
-  top: 0; left: 0; transform: translate(-50%, -50%);
-  pointer-events: none; z-index: -1; transition: opacity 0.3s ease;
-  mix-blend-mode: screen;
-}
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 18px;
+    }
 
-/* GLOBAL LAYOUT */
-.container { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
-.section { padding: 8rem 0; position: relative; }
-.section-badge {
-  font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; text-transform: uppercase;
-  color: var(--accent); letter-spacing: 0.1em; margin-bottom: 1.5rem; display: block;
-}
-.section-title { font-size: clamp(2rem, 4vw, 3rem); font-weight: 500; letter-spacing: -0.04em; margin-bottom: 1.5rem; line-height: 1.1; }
-.section-desc { font-size: 1.1rem; color: var(--text-secondary); max-width: 600px; line-height: 1.6; font-weight: 300; }
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--green);
+      color: #fff8e8;
+    }
 
-/* TELEMETRY BONK WIDGET */
-.telemetry-widget {
-  position: fixed; top: 24px; right: 24px; z-index: 100;
-  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
-  font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--text-tertiary);
-  pointer-events: none;
-}
-.telemetry-val { color: var(--text-primary); font-size: 0.85rem; }
-.bonk-flash { color: var(--accent); text-shadow: 0 0 10px var(--accent); }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+      gap: 48px;
+      align-items: center;
+      min-height: 68vh;
+    }
 
-/* HERO */
-.hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; padding-top: 4rem; position: relative; }
-.hero-repo {
-  display: inline-flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', monospace;
-  font-size: 0.8rem; color: var(--text-secondary); text-decoration: none;
-  padding: 6px 12px; border: 1px solid var(--border); border-radius: 4px;
-  margin-bottom: 3rem; transition: all 0.2s; background: rgba(0,0,0,0.5);
-  backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
-}
-.hero-repo:hover { border-color: var(--text-secondary); color: var(--text-primary); }
-.hero h1 {
-  font-size: clamp(4rem, 10vw, 8rem); font-weight: 400; letter-spacing: -0.06em;
-  line-height: 0.9; margin-bottom: 2rem; text-transform: lowercase;
-}
-.hero-subtitle { font-size: clamp(1.2rem, 3vw, 1.5rem); color: var(--text-secondary); max-width: 700px; font-weight: 300; line-height: 1.5; }
+    h1 {
+      margin: 0;
+      font-family: "Fraunces", serif;
+      font-size: clamp(58px, 9vw, 116px);
+      line-height: 0.88;
+      letter-spacing: -0.07em;
+      max-width: 760px;
+    }
 
-/* THE INLINE CLI COPY */
-.cli-install {
-  margin-top: 4rem; display: inline-flex; align-items: center; background: rgba(10,10,10,0.6);
-  border: 1px solid var(--border); border-radius: 8px; padding: 4px 4px 4px 20px;
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); transition: border-color 0.3s;
-}
-.cli-install:hover { border-color: var(--border-hover); }
-.cli-prefix { color: var(--text-tertiary); font-family: 'JetBrains Mono', monospace; margin-right: 16px; }
-.cli-code { font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; color: var(--text-primary); padding-right: 24px; }
-.cli-btn {
-  background: var(--text-primary); color: var(--bg); border: none;
-  padding: 10px 20px; border-radius: 4px; font-weight: 500; font-size: 0.85rem;
-  cursor: pointer; transition: transform 0.2s;
-}
-.cli-btn:active { transform: scale(0.96); }
+    .tagline {
+      margin: 28px 0 0;
+      max-width: 690px;
+      font-size: clamp(20px, 2.3vw, 29px);
+      color: var(--green-deep);
+      letter-spacing: -0.03em;
+    }
 
-/* TOKEN PAYLOAD DIFF */
-.diff-container { margin-top: 4rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: rgba(0,0,0,0.3); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-.diff-header {
-  display: flex; justify-content: space-between; padding: 12px 20px;
-  border-bottom: 1px solid var(--border); background: rgba(10,10,10,0.8);
-  font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--text-secondary);
-}
-.diff-body { padding: 32px; font-size: 1.1rem; line-height: 1.8; font-weight: 300; color: var(--text-secondary); }
-.diff-strike {
-  text-decoration: line-through; color: var(--diff-removed-text); background: var(--diff-removed);
-  padding: 2px 4px; border-radius: 3px; transition: opacity 0.3s;
-}
-.diff-keep { color: var(--text-primary); font-weight: 400; }
-.diff-toggle { margin-top: 1rem; display: flex; gap: 1rem; justify-content: flex-end; padding: 0 20px 20px; }
-.toggle-btn {
-  background: none; border: 1px solid var(--border); color: var(--text-secondary);
-  padding: 6px 12px; border-radius: 4px; font-size: 0.8rem; cursor: pointer;
-  font-family: 'JetBrains Mono', monospace; transition: all 0.2s;
-}
-.toggle-btn.active { background: var(--text-primary); color: var(--bg); border-color: var(--text-primary); }
+    .position {
+      display: inline-block;
+      margin-top: 26px;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 252, 243, 0.58);
+      color: var(--muted);
+      font-weight: 700;
+    }
 
-/* BENTO GRID */
-.bento-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
-  background: var(--border); border: 1px solid var(--border); border-radius: 8px;
-  overflow: hidden; margin-top: 4rem;
-}
-.bento-box { background: rgba(5,5,5,0.9); padding: 40px; display: flex; flex-direction: column; justify-content: space-between; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-.bento-large { grid-column: span 2; }
-@media (max-width: 800px) { .bento-grid { grid-template-columns: 1fr; } .bento-large { grid-column: span 1; } }
-.bento-icon { font-size: 2rem; margin-bottom: 2rem; filter: grayscale(1); opacity: 0.7; }
-.bento-title { font-size: 1.2rem; font-weight: 500; margin-bottom: 0.5rem; color: var(--text-primary); }
-.bento-desc { color: var(--text-secondary); font-size: 0.95rem; line-height: 1.5; }
+    .panel {
+      position: relative;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      background: var(--card);
+      box-shadow: 0 24px 80px rgba(31, 42, 36, 0.14);
+      backdrop-filter: blur(20px);
+    }
 
-/* DATA VIZ BENCHMARKS */
-.viz-container { margin-top: 4rem; display: flex; flex-direction: column; gap: 2px; background: var(--border); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.viz-row { display: grid; grid-template-columns: 35% 65%; background: rgba(5,5,5,0.9); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); transition: background 0.2s; }
-.viz-row:hover { background: rgba(15,15,15,0.9); }
-.viz-label { padding: 20px; font-size: 0.95rem; color: var(--text-secondary); border-right: 1px solid var(--border); display: flex; align-items: center; }
-.viz-track-container { padding: 20px; display: flex; align-items: center; }
-.viz-track { width: 100%; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; position: relative; overflow: hidden; }
-.viz-fill { position: absolute; left: 0; top: 0; height: 100%; background: var(--accent); border-radius: 3px; }
-.viz-stats { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; width: 120px; text-align: right; color: var(--text-primary); }
-.viz-stats span { color: var(--text-tertiary); margin-right: 8px; }
+    .panel::before {
+      content: "final response";
+      position: absolute;
+      top: -16px;
+      left: 24px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: var(--gold);
+      color: #241d0b;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
 
-/* FLOATING GLASS TERMINAL */
-.glass-terminal {
-  margin-top: 4rem; background: rgba(10, 10, 10, 0.4); border: 1px solid var(--border);
-  border-radius: 12px; backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
-  box-shadow: 0 40px 80px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.05); overflow: hidden;
-}
-.term-header { padding: 16px 24px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; gap: 8px; }
-.term-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--border-hover); }
-.term-body { padding: 32px 24px; font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; color: var(--text-secondary); min-height: 250px; }
-.term-line { margin-bottom: 8px; line-height: 1.6; }
-.term-accent { color: var(--accent); }
-.term-input-row { display: flex; align-items: center; gap: 16px; margin-top: 16px; }
-.term-input { background: none; border: none; color: var(--text-primary); font-family: inherit; font-size: inherit; flex: 1; outline: none; caret-color: var(--accent); }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      font: 500 15px/1.55 "IBM Plex Sans", sans-serif;
+    }
 
-/* TICKER MARQUEE */
-.marquee { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 1.5rem 0; overflow: hidden; display: flex; background: rgba(0,0,0,0.3); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); }
-.marquee-content { display: flex; gap: 4rem; animation: marquee 20s linear infinite; white-space: nowrap; }
-.marquee-item { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--text-tertiary); letter-spacing: 0.05em; }
-.marquee-item span { color: var(--text-primary); font-weight: 500; margin-left: 8px; }
-@keyframes marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 34px;
+    }
 
-/* FOOTER */
-.footer { border-top: 1px solid var(--border); padding: 4rem 24px; font-size: 0.85rem; color: var(--text-tertiary); display: flex; justify-content: space-between; max-width: 1040px; margin: 0 auto; position: relative; z-index: 10; }
-.footer a { color: var(--text-secondary); text-decoration: none; transition: color 0.2s; }
-.footer a:hover { color: var(--text-primary); }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 48px;
+      padding: 0 18px;
+      border-radius: 999px;
+      text-decoration: none;
+      font-weight: 800;
+    }
 
-.reveal { opacity: 0; transform: translateY(30px); transition: all 1s cubic-bezier(0.16, 1, 0.3, 1); }
-.reveal.visible { opacity: 1; transform: translateY(0); }
-</style>
+    .primary {
+      background: var(--green);
+      color: #fff8e8;
+      box-shadow: 0 14px 34px rgba(36, 90, 65, 0.28);
+    }
+
+    .secondary {
+      color: var(--green);
+      border: 1px solid var(--line);
+      background: rgba(255, 252, 243, 0.58);
+    }
+
+    section {
+      margin-top: 86px;
+    }
+
+    h2 {
+      margin: 0 0 18px;
+      font-family: "Fraunces", serif;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 0.98;
+      letter-spacing: -0.05em;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .card {
+      min-height: 190px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: rgba(255, 252, 243, 0.58);
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--green-deep);
+      font-size: 19px;
+    }
+
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .bad {
+      color: #74463e;
+      background: rgba(255, 239, 226, 0.72);
+    }
+
+    .good {
+      color: var(--green-deep);
+      background: rgba(235, 246, 235, 0.78);
+    }
+
+    code {
+      padding: 3px 7px;
+      border-radius: 8px;
+      background: rgba(31, 42, 36, 0.08);
+    }
+
+    footer {
+      margin-top: 92px;
+      padding-top: 28px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    @media (max-width: 840px) {
+      .hero,
+      .compare,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .nav {
+        margin-bottom: 44px;
+      }
+    }
+  </style>
 </head>
 <body>
+  <main>
+    <nav class="nav">
+      <div class="brand"><span class="mark">L</span> Layman</div>
+      <a href="https://github.com/vamsi920/layman">GitHub</a>
+    </nav>
 
-<div class="bg-grid"></div>
-<div class="ambient-aura"></div>
-<div class="cursor-glow" id="cursorGlow"></div>
-
-<div class="telemetry-widget">
-  <div>STATUS: <span class="telemetry-val" style="color:#4ade80">OPTIMIZED</span></div>
-  <div>PHYSICAL_IMPACTS: <span class="telemetry-val" id="bonkCount">0</span></div>
-  <div>TOKENS_PURGED: <span class="telemetry-val">~75%</span></div>
-</div>
-
-<section class="hero container">
-  <div class="reveal">
-    <a href="https://github.com/JuliusBrussee/caveman" target="_blank" class="hero-repo">
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-      JuliusBrussee / caveman
-    </a>
-    <h1>Few tokens.<br>Do trick.</h1>
-    <p class="hero-subtitle">A semantic constraint engine for Claude Code & Codex. Forces agentic communication into minimal-token lithic structures. Retain 100% technical accuracy while destroying up to 87% of output latency.</p>
-    
-    <div class="cli-install">
-      <span class="cli-prefix">❯</span>
-      <span class="cli-code">npx skills add JuliusBrussee/caveman</span>
-      <button class="cli-btn" onclick="copyInstall(this)">Copy</button>
-    </div>
-  </div>
-</section>
-
-<div class="marquee">
-  <div class="marquee-content" id="marqueeTrack">
-    </div>
-</div>
-
-<section class="section container reveal">
-  <span class="section-badge">01 // Compression Matrix</span>
-  <h2 class="section-title">The Lithic Payload Diff</h2>
-  <p class="section-desc">Visualize the exact tokens purged by the Caveman protocol. Technical imperatives are retained; conversational padding is annihilated.</p>
-
-  <div class="diff-container">
-    <div class="diff-header">
-      <span>Payload: React Re-render Diagnosis</span>
-      <span style="color: var(--text-primary);">69 Tokens → 19 Tokens</span>
-    </div>
-    <div class="diff-body" id="diffBody">
-      <span class="diff-strike">"The reason your React component is re-rendering is likely because you're creating a</span> <span class="diff-keep">New</span> object ref<span class="diff-keep">erence on</span> each render <span class="diff-strike">cycle. When you pass an</span> inline object <span class="diff-strike">as a</span> prop<span class="diff-strike">, React's shallow comparison sees it as a different object every time, which triggers a</span> = new ref = re-render. <span class="diff-strike">I'd recommend using</span> <span class="diff-keep">Wrap in <code>useMemo</code></span><span class="diff-strike"> to memoize the object."</span>
-    </div>
-    <div class="diff-toggle">
-      <button class="toggle-btn active" onclick="setDiffMode('diff', this)">View Diff</button>
-      <button class="toggle-btn" onclick="setDiffMode('caveman', this)">Output Only</button>
-    </div>
-  </div>
-</section>
-
-<section class="section container reveal">
-  <span class="section-badge">02 // Empirical Data</span>
-  <h2 class="section-title">Token Latency Reduction</h2>
-  <p class="section-desc">Average reduction of 65% across standard software engineering tasks. Reasoning tokens remain unaffected; only the output payload is compressed.</p>
-
-  <div class="viz-container">
-    <div class="viz-row">
-      <div class="viz-label">Explain React re-render bug</div>
-      <div class="viz-track-container">
-        <div class="viz-track"><div class="viz-fill" style="width: 13.4%;"></div></div>
-        <div class="viz-stats"><span>159/1180</span> 87%</div>
+    <section class="hero">
+      <div>
+        <h1>Now anyone can code, for real.</h1>
+        <p class="tagline">🧠 why read big AI dump when simple words do trick — Claude Code / Codex skill that turns agent work into plain-English summaries anyone can understand</p>
+        <p class="position">Layman saves understanding. Brief Mode saves tokens.</p>
+        <div class="actions">
+          <a class="button primary" href="#install">Install Layman</a>
+          <a class="button secondary" href="#example">See example</a>
+        </div>
       </div>
-    </div>
-    <div class="viz-row">
-      <div class="viz-label">Fix auth token expiry</div>
-      <div class="viz-track-container">
-        <div class="viz-track"><div class="viz-fill" style="width: 17.1%;"></div></div>
-        <div class="viz-stats"><span>121/704</span> 83%</div>
+
+      <div class="panel" id="example">
+<pre>Layman Summary
+
+Done:
+- Fixed the login bug
+- Added clearer error messages
+- Stopped the page from crashing
+
+Why it matters:
+Users now understand what went wrong instead of seeing a broken screen.
+
+What changed:
+The form checks the login response before using it and shows a friendly error when login fails.
+
+Check this:
+Try logging in with a wrong password, then with a normal account.</pre>
       </div>
-    </div>
-    <div class="viz-row">
-      <div class="viz-label">Debug PostgreSQL race condition</div>
-      <div class="viz-track-container">
-        <div class="viz-track"><div class="viz-fill" style="width: 19.3%;"></div></div>
-        <div class="viz-stats"><span>232/1200</span> 81%</div>
+    </section>
+
+    <section>
+      <h2>Less dump. More understanding.</h2>
+      <div class="grid">
+        <div class="card">
+          <strong>For founders</strong>
+          Know what shipped, why it matters, and what to check next without reading implementation noise.
+        </div>
+        <div class="card">
+          <strong>For builders</strong>
+          Keep technical accuracy while turning file-by-file work into a useful handoff.
+        </div>
+        <div class="card">
+          <strong>For teams</strong>
+          Make agent output easier to review, QA, and share with non-engineers.
+        </div>
       </div>
-    </div>
-    <div class="viz-row">
-      <div class="viz-label">Explain git rebase vs merge</div>
-      <div class="viz-track-container">
-        <div class="viz-track"><div class="viz-fill" style="width: 41.5%;"></div></div>
-        <div class="viz-stats"><span>292/702</span> 58%</div>
+    </section>
+
+    <section>
+      <h2>Before and after</h2>
+      <div class="compare">
+        <div class="card bad">
+          <strong>Before</strong>
+          Implemented auth form validation by adding schema-level checks, normalizing server responses, refactoring the submit handler, and updating the error-state rendering path.
+        </div>
+        <div class="card good">
+          <strong>After</strong>
+          Fixed the login form so users see a clear message instead of a confusing broken screen. Check it with a wrong email and password.
+        </div>
       </div>
-    </div>
-    <div class="viz-row">
-      <div class="viz-label">Review PR for security</div>
-      <div class="viz-track-container">
-        <div class="viz-track"><div class="viz-fill" style="width: 58.7%;"></div></div>
-        <div class="viz-stats"><span>398/678</span> 41%</div>
+    </section>
+
+    <section id="install">
+      <h2>Install</h2>
+      <div class="card">
+        <p><strong>Claude Code</strong></p>
+        <p><code>claude plugin marketplace add vamsi920/layman</code></p>
+        <p><code>claude plugin install layman@layman</code></p>
+        <p><strong>Claude Code standalone hooks</strong></p>
+        <p><code>bash &lt;(curl -s https://raw.githubusercontent.com/vamsi920/layman/main/hooks/install.sh)</code></p>
+        <p><strong>Gemini CLI</strong></p>
+        <p><code>gemini extensions install https://github.com/vamsi920/layman</code></p>
+        <p><strong>Other agents</strong></p>
+        <p><code>npx skills add vamsi920/layman</code></p>
+        <p><code>npx skills add vamsi920/layman -a cursor</code></p>
+        <p><code>npx skills add vamsi920/layman -a windsurf</code></p>
+        <p><strong>Codex</strong></p>
+        <p>Clone the repo, open <code>/plugins</code>, search <code>Layman</code>, then install.</p>
       </div>
-    </div>
-  </div>
-</section>
+    </section>
 
-<section class="section container reveal">
-  <span class="section-badge">03 // Lexical Ruleset</span>
-  <h2 class="section-title">Execution Architecture</h2>
-  
-  <div class="bento-grid">
-    <div class="bento-box bento-large">
-      <div class="bento-icon">💀</div>
-      <div class="bento-title">Pleasantry Annihilation</div>
-      <div class="bento-desc">Standard LLMs waste compute on sycophantic hedging: "I'd be happy to help," or "It might be worth considering." Caveman protocol identifies and destroys these patterns at the generation layer.</div>
-    </div>
-    <div class="bento-box">
-      <div class="bento-icon">✍️</div>
-      <div class="bento-title">Code Preservation</div>
-      <div class="bento-desc">Code blocks, Git commits, and PR descriptions bypass the lithic filter. Caveman writes normal code.</div>
-    </div>
-    <div class="bento-box">
-      <div class="bento-icon">🧠</div>
-      <div class="bento-title">Nomenclature Integrity</div>
-      <div class="bento-desc">Technical jargon is retained precisely. "Polymorphism" remains "polymorphism." Caveman not stupid. Caveman efficient.</div>
-    </div>
-    <div class="bento-box bento-large">
-      <div class="bento-icon">🔬</div>
-      <div class="bento-title">Scientific Backing</div>
-      <div class="bento-desc">Based on the March 2026 paper <em>"Brevity Constraints Reverse Performance Hierarchies in Language Models"</em>. Forcing brevity improves accuracy by 26 percentage points on key benchmarks. Less word = more correct.</div>
-    </div>
-  </div>
-</section>
-
-<section class="section container reveal">
-  <span class="section-badge">04 // Interface</span>
-  <h2 class="section-title">Initialize Protocol</h2>
-  
-  <div class="glass-terminal">
-    <div class="term-header">
-      <div class="term-dot"></div><div class="term-dot"></div><div class="term-dot"></div>
-    </div>
-    <div class="term-body" id="termBody">
-      <div class="term-line">System ready. Establishing connection to Claude Code Env...</div>
-      <div class="term-line">Installing plugins via marketplace...</div>
-      <div class="term-line term-accent">claude plugin install caveman@caveman</div>
-      <div class="term-line" style="margin-top: 16px;">Trigger the protocol:</div>
-      <div class="term-line term-accent">/caveman</div>
-      <div class="term-line">Me ready.</div>
-      
-      <div class="term-input-row">
-        <span class="term-accent">❯</span>
-        <input class="term-input" id="cli-input" type="text" autocomplete="off" spellcheck="false" placeholder="Enter prompt or impact surface anywhere to bonk...">
-      </div>
-    </div>
-  </div>
-</section>
-
-<footer class="footer">
-  <div>Built by <a href="https://github.com/JuliusBrussee" target="_blank">Julius Brussee</a>. See also: <a href="https://revu.cards" target="_blank">Revu</a>.</div>
-  <div>MIT License. Operational.</div>
-</footer>
-
-<script>
-// --- Ambient Cursor Glow ---
-const glow = document.getElementById('cursorGlow');
-document.addEventListener('mousemove', (e) => {
-  glow.style.transform = `translate(calc(${e.clientX}px - 50%), calc(${e.clientY}px - 50%))`;
-});
-
-// --- Marquee Population ---
-const items = [
-  { k: "TOKENS_SAVED", v: "75%" }, { k: "ACCURACY", v: "100%" },
-  { k: "LATENCY_DROP", v: "3x" }, { k: "VIBES", v: "OOG" },
-  { k: "PRICE", v: "$0.00" }, { k: "DEPENDENCIES", v: "NONE" }
-];
-const track = document.getElementById('marqueeTrack');
-const marqueeHTML = [...items, ...items, ...items].map(i => `<div class="marquee-item">${i.k}<span>${i.v}</span></div>`).join('');
-track.innerHTML = marqueeHTML;
-
-// --- Copy Install ---
-function copyInstall(btn) {
-  navigator.clipboard.writeText('npx skills add JuliusBrussee/caveman');
-  btn.textContent = 'Copied';
-  btn.style.background = 'var(--accent)';
-  btn.style.color = '#000';
-  setTimeout(() => {
-    btn.textContent = 'Copy';
-    btn.style.background = 'var(--text-primary)';
-  }, 2000);
-}
-
-// --- Diff Toggle ---
-function setDiffMode(mode, btn) {
-  document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  const body = document.getElementById('diffBody');
-  
-  if (mode === 'diff') {
-    body.innerHTML = `<span class="diff-strike">"The reason your React component is re-rendering is likely because you're creating a</span> <span class="diff-keep">New</span> object ref<span class="diff-keep">erence on</span> each render <span class="diff-strike">cycle. When you pass an</span> inline object <span class="diff-strike">as a</span> prop<span class="diff-strike">, React's shallow comparison sees it as a different object every time, which triggers a</span> = new ref = re-render. <span class="diff-strike">I'd recommend using</span> <span class="diff-keep">Wrap in <code>useMemo</code></span><span class="diff-strike"> to memoize the object."</span>`;
-  } else {
-    body.innerHTML = `<span class="diff-keep">"New object ref each render. Inline object prop = new ref = re-render. Wrap in <code>useMemo</code>."</span>`;
-  }
-}
-
-// --- Stealth Bonk System ---
-let bonkCount = 0;
-const bonkVal = document.getElementById('bonkCount');
-document.addEventListener('click', (e) => {
-  // Prevent bonk on interactive elements
-  if(e.target.closest('a') || e.target.closest('button') || e.target.closest('input')) return;
-  
-  bonkCount++;
-  bonkVal.textContent = bonkCount;
-  bonkVal.classList.add('bonk-flash');
-  setTimeout(() => bonkVal.classList.remove('bonk-flash'), 150);
-});
-
-// --- CLI Interactions ---
-const cliInput = document.getElementById('cli-input');
-const termBody = document.getElementById('termBody');
-cliInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && cliInput.value.trim()) {
-    const val = cliInput.value.trim();
-    const row = document.createElement('div');
-    row.className = 'term-line';
-    row.innerHTML = `<span class="term-accent">❯</span> ${val}`;
-    cliInput.parentElement.before(row);
-    
-    const res = document.createElement('div');
-    res.className = 'term-line';
-    res.style.color = 'var(--text-tertiary)';
-    if (val.toLowerCase() === 'help') res.textContent = "Commands: npx skills add JuliusBrussee/caveman";
-    else res.textContent = "Input received. Caveman processing... Done. Few words used.";
-    
-    cliInput.parentElement.before(res);
-    cliInput.value = '';
-    termBody.parentElement.scrollTop = termBody.parentElement.scrollHeight;
-  }
-});
-
-// --- Scroll Reveals ---
-const observer = new IntersectionObserver((entries) => {
-  entries.forEach(e => { if(e.isIntersecting) e.target.classList.add('visible') });
-}, { threshold: 0.1 });
-document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
-</script>
+    <footer>
+      Layman is for people who want AI agents to build software and explain the handoff clearly.
+    </footer>
+  </main>
 </body>
 </html>

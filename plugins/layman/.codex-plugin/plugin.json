@@ -1,0 +1,39 @@
+{
+  "name": "layman",
+  "version": "0.1.0",
+  "description": "Plain-English completion summaries for AI coding agents.",
+  "author": {
+    "name": "vamsi920",
+    "url": "https://github.com/vamsi920"
+  },
+  "homepage": "https://github.com/vamsi920/layman",
+  "repository": "https://github.com/vamsi920/layman",
+  "license": "MIT",
+  "keywords": [
+    "productivity",
+    "communication",
+    "brevity",
+    "writing"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Layman",
+    "shortDescription": "Plain-English summaries anyone can understand.",
+    "longDescription": "Layman turns completed Codex work into short summaries that explain what got done, why it matters, what changed, and what to check next.",
+    "developerName": "vamsi920",
+    "category": "Productivity",
+    "capabilities": [
+      "Write"
+    ],
+    "websiteURL": "https://github.com/vamsi920/layman",
+    "privacyPolicyURL": "https://github.com/vamsi920/layman/blob/main/README.md",
+    "termsOfServiceURL": "https://github.com/vamsi920/layman/blob/main/LICENSE",
+    "defaultPrompt": [
+      "Use Layman mode. After completed coding work, summarize in plain English with Done, Why it matters, What changed, Check this, and Warning only if needed."
+    ],
+    "composerIcon": "./assets/layman-small.svg",
+    "logo": "./assets/layman.svg",
+    "screenshots": [],
+    "brandColor": "#6B7280"
+  }
+}

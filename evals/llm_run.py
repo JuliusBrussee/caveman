@@ -3,12 +3,12 @@ Run each prompt through Claude Code in three conditions and snapshot the
 real LLM outputs:
 
   1. baseline      — no extra system prompt at all
-  2. terse         — system prompt: "Answer concisely."
-  3. terse+skill   — system prompt: "Answer concisely.\n\n{SKILL.md}"
+  2. concise       — system prompt: "Answer concisely."
+  3. concise+skill — system prompt: "Answer concisely.\n\n{SKILL.md}"
 
 The honest delta is (3) vs (2): how much does the SKILL itself add on top
-of a plain "be terse" instruction? Comparing (3) vs (1) conflates the
-skill with the generic terseness ask, which is what the previous version
+of a plain "be concise" instruction? Comparing (3) vs (1) conflates the
+skill with the generic concision ask, which is what the previous version
 of this harness did.
 
 This is the source-of-truth generator. It calls a real LLM and produces
@@ -21,7 +21,7 @@ Requires:
 Run: uv run python evals/llm_run.py
 
 Environment:
-  CAVEMAN_EVAL_MODEL  optional --model flag value passed through to claude
+  LAYMAN_EVAL_MODEL  optional --model flag value passed through to claude
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def run_claude(prompt: str, system: str | None = None) -> str:
     cmd = ["claude", "-p"]
     if system:
         cmd += ["--system-prompt", system]
-    if model := os.environ.get("CAVEMAN_EVAL_MODEL"):
+    if model := os.environ.get("LAYMAN_EVAL_MODEL"):
         cmd += ["--model", model]
     cmd.append(prompt)
     out = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -74,7 +74,7 @@ def main() -> None:
         "metadata": {
             "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "claude_cli_version": claude_version(),
-            "model": os.environ.get("CAVEMAN_EVAL_MODEL", "default"),
+            "model": os.environ.get("LAYMAN_EVAL_MODEL", "default"),
             "n_prompts": len(prompts),
             "terse_prefix": TERSE_PREFIX,
         },
@@ -85,7 +85,7 @@ def main() -> None:
     print("baseline (no system prompt)", flush=True)
     snapshot["arms"]["__baseline__"] = [run_claude(p) for p in prompts]
 
-    print("terse (control: terse instruction only, no skill)", flush=True)
+    print("concise control (instruction only, no skill)", flush=True)
     snapshot["arms"]["__terse__"] = [
         run_claude(p, system=TERSE_PREFIX) for p in prompts
     ]

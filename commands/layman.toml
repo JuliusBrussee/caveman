@@ -1,0 +1,2 @@
+description = "Switch Layman mode (summary/explain/brief/lite/full/ultra/wenyan)"
+prompt = "Switch to Layman {{args}} mode. If no mode is specified, use summary. Summary explains completed work with Done, Why it matters, What changed, Check this, and Warning only if needed. Explain adds more plain-English context. Brief/lite/full/ultra/wenyan cut filler and keep technical terms exact."

@@ -24,17 +24,17 @@ class HookScriptTests(unittest.TestCase):
         )
 
     def test_install_upgrades_old_two_file_install(self):
-        with tempfile.TemporaryDirectory(prefix="caveman-hooks-upgrade-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="layman-hooks-upgrade-") as tmp:
             home = Path(tmp)
             hooks_dir = home / ".claude" / "hooks"
             hooks_dir.mkdir(parents=True)
             (home / ".claude" / "settings.json").write_text("{}\n")
-            (hooks_dir / "caveman-activate.js").write_text("")
-            (hooks_dir / "caveman-mode-tracker.js").write_text("")
+            (hooks_dir / "layman-activate.js").write_text("")
+            (hooks_dir / "layman-mode-tracker.js").write_text("")
 
             self.run_cmd(["bash", "hooks/install.sh"], home)
 
-            statusline = hooks_dir / "caveman-statusline.sh"
+            statusline = hooks_dir / "layman-statusline.sh"
             self.assertTrue(statusline.exists(), "upgrade should install statusline script")
 
             settings = json.loads((home / ".claude" / "settings.json").read_text())
@@ -42,13 +42,13 @@ class HookScriptTests(unittest.TestCase):
             self.assertIn(str(statusline), settings["statusLine"]["command"])
 
     def test_install_reconfigures_missing_statusline(self):
-        with tempfile.TemporaryDirectory(prefix="caveman-hooks-statusline-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="layman-hooks-statusline-") as tmp:
             home = Path(tmp)
             claude_dir = home / ".claude"
             hooks_dir = claude_dir / "hooks"
             hooks_dir.mkdir(parents=True)
 
-            for name in ("caveman-activate.js", "caveman-mode-tracker.js", "caveman-statusline.sh"):
+            for name in ("layman-activate.js", "layman-mode-tracker.js", "layman-statusline.sh"):
                 (hooks_dir / name).write_text("")
 
             settings = {
@@ -58,7 +58,7 @@ class HookScriptTests(unittest.TestCase):
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": f'node "{hooks_dir / "caveman-activate.js"}"',
+                                    "command": f'node "{hooks_dir / "layman-activate.js"}"',
                                 }
                             ]
                         }
@@ -68,7 +68,7 @@ class HookScriptTests(unittest.TestCase):
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": f'node "{hooks_dir / "caveman-mode-tracker.js"}"',
+                                    "command": f'node "{hooks_dir / "layman-mode-tracker.js"}"',
                                 }
                             ]
                         }
@@ -83,22 +83,22 @@ class HookScriptTests(unittest.TestCase):
 
             updated = json.loads((claude_dir / "settings.json").read_text())
             self.assertIn("statusLine", updated)
-            self.assertIn(str(hooks_dir / "caveman-statusline.sh"), updated["statusLine"]["command"])
+            self.assertIn(str(hooks_dir / "layman-statusline.sh"), updated["statusLine"]["command"])
 
     def test_uninstall_preserves_custom_statusline(self):
-        with tempfile.TemporaryDirectory(prefix="caveman-hooks-uninstall-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="layman-hooks-uninstall-") as tmp:
             home = Path(tmp)
             claude_dir = home / ".claude"
             hooks_dir = claude_dir / "hooks"
             hooks_dir.mkdir(parents=True)
 
-            for name in ("caveman-activate.js", "caveman-mode-tracker.js", "caveman-statusline.sh"):
+            for name in ("layman-activate.js", "layman-mode-tracker.js", "layman-statusline.sh"):
                 (hooks_dir / name).write_text("")
 
             settings = {
                 "statusLine": {
                     "type": "command",
-                    "command": "bash /tmp/custom-status-with-caveman.sh",
+                    "command": "bash /tmp/custom-status-with-layman.sh",
                 },
                 "hooks": {
                     "SessionStart": [
@@ -106,7 +106,7 @@ class HookScriptTests(unittest.TestCase):
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": f'node "{hooks_dir / "caveman-activate.js"}"',
+                                    "command": f'node "{hooks_dir / "layman-activate.js"}"',
                                 }
                             ]
                         }
@@ -116,7 +116,7 @@ class HookScriptTests(unittest.TestCase):
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": f'node "{hooks_dir / "caveman-mode-tracker.js"}"',
+                                    "command": f'node "{hooks_dir / "layman-mode-tracker.js"}"',
                                 }
                             ]
                         }
@@ -130,12 +130,12 @@ class HookScriptTests(unittest.TestCase):
             updated = json.loads((claude_dir / "settings.json").read_text())
             self.assertEqual(
                 updated["statusLine"]["command"],
-                "bash /tmp/custom-status-with-caveman.sh",
+                "bash /tmp/custom-status-with-layman.sh",
             )
             self.assertNotIn("hooks", updated)
 
     def test_activate_does_not_nudge_when_custom_statusline_exists(self):
-        with tempfile.TemporaryDirectory(prefix="caveman-hooks-activate-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="layman-hooks-activate-") as tmp:
             home = Path(tmp)
             claude_dir = home / ".claude"
             claude_dir.mkdir(parents=True)
@@ -151,10 +151,10 @@ class HookScriptTests(unittest.TestCase):
                 + "\n"
             )
 
-            result = self.run_cmd(["node", "hooks/caveman-activate.js"], home)
+            result = self.run_cmd(["node", "hooks/layman-activate.js"], home)
 
             self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
-            self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
+            self.assertEqual((claude_dir / ".layman-active").read_text(), "summary")
 
 
 if __name__ == "__main__":

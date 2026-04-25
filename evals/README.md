@@ -1,8 +1,7 @@
 # Evals
 
-Measures real token compression of caveman skills by running the same
-prompts through Claude Code under three conditions and comparing the
-generated output token counts.
+Measures how Layman changes real Claude Code output by running the same
+prompts under three conditions and comparing generated response length.
 
 ## The three arms
 
@@ -13,9 +12,9 @@ generated output token counts.
 | `<skill>` | `Answer concisely.\n\n{SKILL.md}` |
 
 The honest delta for any skill is **`<skill>` vs `__terse__`** — i.e.
-how much the skill itself adds on top of a plain "be terse" instruction.
+how much the skill itself adds on top of a plain "be concise" instruction.
 Comparing a skill to the no-system-prompt baseline conflates the skill
-with the generic terseness ask, which is what an earlier version of
+with the generic concision ask, which is what an earlier version of
 this harness did and is why its numbers were inflated.
 
 ## Why this design
@@ -25,7 +24,7 @@ this harness did and is why its numbers were inflated.
 - **Snapshot committed to git** so CI runs are deterministic and free,
   and so any change to the numbers is reviewable as a diff.
 - **Control arm** isolates the skill's contribution from the generic
-  "be terse" effect.
+  "be concise" effect.
 
 ## Files
 
@@ -49,7 +48,7 @@ This calls Claude once per prompt × (N skills + 2 control arms). Use
 a small model to keep it cheap:
 
 ```bash
-CAVEMAN_EVAL_MODEL=claude-haiku-4-5 uv run python evals/llm_run.py
+LAYMAN_EVAL_MODEL=claude-haiku-4-5 uv run python evals/llm_run.py
 ```
 
 ## Read the snapshot (no LLM, no API key, runs in CI)
@@ -69,11 +68,11 @@ picks up every skill directory automatically.
 
 ## What this does NOT measure
 
-- **Fidelity** — does the compressed answer preserve the technical
-  claims? A skill that replies `k` to everything would score −99% and
-  "win". A future v2 could add a judge-model rubric.
+- **Understanding** — does the answer help a non-technical reader know
+  what happened and what to check next? A future v2 should add a
+  judge-model rubric for clarity and usefulness.
 - **Latency or cost** — out of scope. Note that skills add input tokens
-  on every call, so output savings are not the full economic picture.
+  on every call, so output length is not the full economic picture.
 - **Cross-model behavior** — only the model used to generate the
   snapshot is measured.
 - **Exact Claude tokens** — `tiktoken o200k_base` is OpenAI's BPE and is
