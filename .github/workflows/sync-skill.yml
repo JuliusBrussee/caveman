@@ -32,10 +32,63 @@ jobs:
       - name: Sync SKILL.md copies
         run: |
           cp skills/caveman/SKILL.md caveman/SKILL.md
-          cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
           cp skills/caveman/SKILL.md .cursor/skills/caveman/SKILL.md
           mkdir -p .windsurf/skills/caveman
           cp skills/caveman/SKILL.md .windsurf/skills/caveman/SKILL.md
+
+          cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("plugins/caveman/skills/caveman/SKILL.md")
+          text = path.read_text()
+          text = text.replace("/caveman", "$caveman")
+          path.write_text(text)
+          PY
+
+      - name: Sync Codex-only skill copies
+        run: |
+          mkdir -p \
+            plugins/caveman/skills/caveman-commit \
+            plugins/caveman/skills/caveman-review \
+            plugins/caveman/skills/caveman-help
+
+          cp skills/caveman-commit/SKILL.md plugins/caveman/skills/caveman-commit/SKILL.md
+          cp skills/caveman-review/SKILL.md plugins/caveman/skills/caveman-review/SKILL.md
+          cp skills/caveman-help/SKILL.md plugins/caveman/skills/caveman-help/SKILL.md
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              "plugins/caveman/skills/caveman-commit/SKILL.md": [
+                  ("/caveman-commit", "$caveman-commit"),
+              ],
+              "plugins/caveman/skills/caveman-review/SKILL.md": [
+                  ("/caveman-review", "$caveman-review"),
+              ],
+              "plugins/caveman/skills/caveman-help/SKILL.md": [
+                  ("/caveman-help", "$caveman-help"),
+                  ("/caveman:compress", "$caveman-compress"),
+                  ("/caveman-commit", "$caveman-commit"),
+                  ("/caveman-review", "$caveman-review"),
+                  ("| `/caveman lite` |", "| `$caveman lite` |"),
+                  ("| `/caveman` |", "| `$caveman` |"),
+                  ("| `/caveman ultra` |", "| `$caveman ultra` |"),
+                  ("| `/caveman wenyan-lite` |", "| `$caveman wenyan-lite` |"),
+                  ("| `/caveman wenyan` |", "| `$caveman wenyan` |"),
+                  ("| `/caveman wenyan-ultra` |", "| `$caveman wenyan-ultra` |"),
+                  ("Resume anytime with `/caveman`.", "Resume anytime with `$caveman`."),
+              ],
+          }
+
+          for filename, pairs in replacements.items():
+              path = Path(filename)
+              text = path.read_text()
+              for old, new in pairs:
+                  text = text.replace(old, new)
+              path.write_text(text)
+          PY
 
       - name: Sync compress skill
         run: |
@@ -50,15 +103,19 @@ jobs:
 
       - name: Sync compress skill to plugin
         run: |
-          # Copy SKILL.md and patch name + process instructions for plugin context
-          cp caveman-compress/SKILL.md plugins/caveman/skills/compress/SKILL.md
-          sed -i 's/^name: caveman-compress$/name: compress/' plugins/caveman/skills/compress/SKILL.md
-          sed -i "s|The compression scripts live in \`caveman-compress/scripts/\` (adjacent to this SKILL.md). If the path is not immediately available, search for \`caveman-compress/scripts/__main__.py\`.|This SKILL.md lives alongside \`scripts/\` in the same directory. Find that directory.|" plugins/caveman/skills/compress/SKILL.md
-          sed -i 's|cd caveman-compress && python3|cd <directory_containing_this_SKILL.md> \&\& python3|' plugins/caveman/skills/compress/SKILL.md
+          # Copy SKILL.md and patch trigger + process instructions for Codex context
+          rm -rf plugins/caveman/skills/compress
+          mkdir -p plugins/caveman/skills/caveman-compress
+          cp caveman-compress/SKILL.md plugins/caveman/skills/caveman-compress/SKILL.md
+          sed -i "s|The compression scripts live in \`caveman-compress/scripts/\` (adjacent to this SKILL.md). If the path is not immediately available, search for \`caveman-compress/scripts/__main__.py\`.|This SKILL.md lives alongside \`scripts/\` in the same directory. Find that directory.|" plugins/caveman/skills/caveman-compress/SKILL.md
+          sed -i 's|/caveman:compress|$caveman-compress|g' plugins/caveman/skills/caveman-compress/SKILL.md
+          sed -i 's|- call Claude to compress|- call Codex to compress|' plugins/caveman/skills/caveman-compress/SKILL.md
+          sed -i 's|- if errors: cherry-pick fix with Claude (targeted fixes only, no recompression)|- if errors: cherry-pick fix with Codex (targeted fixes only, no recompression)|' plugins/caveman/skills/caveman-compress/SKILL.md
+          sed -i 's|cd caveman-compress && python3|cd <directory_containing_this_SKILL.md> \&\& CAVEMAN_PROVIDER=codex python3|' plugins/caveman/skills/caveman-compress/SKILL.md
           # Copy scripts verbatim
-          rm -rf plugins/caveman/skills/compress/scripts
-          cp -r caveman-compress/scripts plugins/caveman/skills/compress/scripts
-          rm -rf plugins/caveman/skills/compress/scripts/__pycache__
+          rm -rf plugins/caveman/skills/caveman-compress/scripts
+          cp -r caveman-compress/scripts plugins/caveman/skills/caveman-compress/scripts
+          rm -rf plugins/caveman/skills/caveman-compress/scripts/__pycache__
 
       - name: Rebuild caveman.skill ZIP
         run: cd skills && zip -r ../caveman.skill caveman/
@@ -87,8 +144,11 @@ jobs:
           git add \
             caveman/SKILL.md \
             skills/compress/ \
-            plugins/caveman/skills/compress/ \
             plugins/caveman/skills/caveman/SKILL.md \
+            plugins/caveman/skills/caveman-commit/ \
+            plugins/caveman/skills/caveman-review/ \
+            plugins/caveman/skills/caveman-help/ \
+            plugins/caveman/skills/caveman-compress/ \
             .cursor/skills/caveman/SKILL.md \
             .windsurf/skills/caveman/SKILL.md \
             caveman.skill \

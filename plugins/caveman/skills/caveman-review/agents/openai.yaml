@@ -1,0 +1,4 @@
+interface:
+  display_name: "Caveman Review"
+  short_description: "Review code in terse one-line findings with location, problem, fix."
+  default_prompt: "Use $caveman-review to review the current changes and return one-line findings only."

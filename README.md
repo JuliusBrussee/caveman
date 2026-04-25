@@ -134,7 +134,7 @@ Pick your agent. One command. Done.
 | Agent | Install |
 |-------|---------|
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` |
-| **Codex** | Clone repo → `/plugins` → Search "Caveman" → Install |
+| **Codex** | `codex plugin marketplace add JuliusBrussee/caveman` → Plugins → Install "Caveman" |
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
@@ -146,24 +146,24 @@ Install once. Use in every session for that install target after that. One rock.
 
 ### What You Get
 
-Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
+Auto-activation is built in for Claude Code, Codex, and Gemini CLI. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
 
 | Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
 |---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|
 | Caveman mode | Y | Y | Y | Y | Y | Y | Y |
 | Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² |
-| `/caveman` command | Y | Y¹ | Y | — | — | — | — |
+| `/caveman` / `$caveman` command | Y | Y¹ | Y | — | — | — | — |
 | Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — |
 | Statusline badge | Y⁴ | — | — | — | — | — | — |
-| caveman-commit | Y | — | Y | Y | Y | Y | Y |
-| caveman-review | Y | — | Y | Y | Y | Y | Y |
+| caveman-commit | Y | Y | Y | Y | Y | Y | Y |
+| caveman-review | Y | Y | Y | Y | Y | Y | Y |
 | caveman-compress | Y | Y | Y | Y | Y | Y | Y |
-| caveman-help | Y | — | Y | Y | Y | Y | Y |
+| caveman-help | Y | Y | Y | Y | Y | Y | Y |
 
 > [!NOTE]
-> Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
+> Auto-activation works differently per agent: Claude Code uses SessionStart hooks, Codex ships plugin hooks plus this repo's `.codex/hooks.json` dogfood fallback, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
 >
-> ¹ Codex uses `$caveman` syntax, not `/caveman`. This repo ships `.codex/hooks.json`, so caveman auto-starts when you run Codex inside this repo. The installed plugin itself gives you `$caveman`; copy the same hook into another repo if you want always-on behavior there too. caveman-commit and caveman-review are not in the Codex plugin bundle — use the SKILL.md files directly.
+> ¹ Codex uses `$caveman` syntax, not `/caveman`. The installed plugin bundles SessionStart/UserPromptSubmit hooks, so caveman auto-starts in any repo on current Codex builds. This repo also ships `.codex/hooks.json` as a fallback dogfood setup that points at the same plugin scripts.
 > ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
 > ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
 > ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
@@ -203,20 +203,16 @@ Uninstall: `bash hooks/uninstall.sh` or `powershell -File hooks\uninstall.ps1`
 <summary><strong>Codex — full details</strong></summary>
 
 **macOS / Linux:**
-1. Clone repo → Open Codex in the repo directory → `/plugins` → Search "Caveman" → Install
-2. Repo-local auto-start is already wired by `.codex/hooks.json` + `.codex/config.toml`
+1. Run `codex plugin marketplace add JuliusBrussee/caveman`
+2. Open Codex → Plugins → Install "Caveman"
+3. Use `$caveman`, `$caveman-review`, `$caveman-help`, or `$caveman-compress`
 
 **Windows:**
-1. Enable symlinks first: `git config --global core.symlinks true` (requires Developer Mode or admin)
-2. Clone repo → Open VS Code → Codex Settings → Plugins → find "Caveman" under local marketplace → Install → Reload Window
-3. Codex hooks are currently disabled on Windows, so use `$caveman` to start manually
+1. Run `codex plugin marketplace add JuliusBrussee/caveman`
+2. Open Codex → Plugins → Install "Caveman"
+3. Use `$caveman`, `$caveman-review`, `$caveman-help`, or `$caveman-compress`
 
-This repo also ships `.codex/hooks.json` and enables hooks in `.codex/config.toml`, so caveman auto-activates while you run Codex inside this repo on macOS/Linux. The installed plugin gives you `$caveman`; if you want always-on behavior in other repos too, copy the same `SessionStart` hook there and enable:
-
-```toml
-[features]
-codex_hooks = true
-```
+The installed Codex plugin now bundles the caveman hooks directly, so auto-start is not limited to this repo. This repo still ships `.codex/hooks.json` + `.codex/config.toml` as a local fallback/dogfood setup that points at the same plugin scripts.
 
 </details>
 
@@ -310,9 +306,9 @@ Stop with: "stop caveman" or "normal mode"
 
 | Level | Trigger | What it do |
 |-------|---------|------------|
-| **Lite** | `/caveman lite` | Drop filler, keep grammar. Professional but no fluff |
-| **Full** | `/caveman full` | Default caveman. Drop articles, fragments, full grunt |
-| **Ultra** | `/caveman ultra` | Maximum compression. Telegraphic. Abbreviate everything |
+| **Lite** | `/caveman lite` or `$caveman lite` | Drop filler, keep grammar. Professional but no fluff |
+| **Full** | `/caveman full` or `$caveman full` | Default caveman. Drop articles, fragments, full grunt |
+| **Ultra** | `/caveman ultra` or `$caveman ultra` | Maximum compression. Telegraphic. Abbreviate everything |
 
 ### 文言文 (Wenyan) Mode
 
@@ -320,9 +316,9 @@ Classical Chinese literary compression — same technical accuracy, but in the m
 
 | Level | Trigger | What it do |
 |-------|---------|------------|
-| **Wenyan-Lite** | `/caveman wenyan-lite` | Semi-classical. Grammar intact, filler gone |
-| **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness |
-| **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget |
+| **Wenyan-Lite** | `/caveman wenyan-lite` or `$caveman wenyan-lite` | Semi-classical. Grammar intact, filler gone |
+| **Wenyan-Full** | `/caveman wenyan` or `$caveman wenyan` | Full 文言文. Maximum classical terseness |
+| **Wenyan-Ultra** | `/caveman wenyan-ultra` or `$caveman wenyan-ultra` | Extreme. Ancient scholar on a budget |
 
 Level stick until you change it or session end.
 
@@ -330,19 +326,19 @@ Level stick until you change it or session end.
 
 ### caveman-commit
 
-`/caveman-commit` — terse commit messages. Conventional Commits. ≤50 char subject. Why over what.
+`/caveman-commit` or Codex `$caveman-commit` — terse commit messages. Conventional Commits. ≤50 char subject. Why over what.
 
 ### caveman-review
 
-`/caveman-review` — one-line PR comments: `L42: 🔴 bug: user null. Add guard.` No throat-clearing.
+`/caveman-review` or Codex `$caveman-review` — one-line PR comments: `L42: 🔴 bug: user null. Add guard.` No throat-clearing.
 
 ### caveman-help
 
-`/caveman-help` — quick-reference card. All modes, skills, commands, one command away.
+`/caveman-help` or Codex `$caveman-help` — quick-reference card. All modes, skills, commands, one command away.
 
 ### caveman-compress
 
-`/caveman:compress <filepath>` — caveman make Claude *speak* with fewer tokens. **Compress** make Claude *read* fewer tokens.
+`/caveman:compress <filepath>` or Codex `$caveman-compress <filepath>` — caveman make Claude *speak* with fewer tokens. **Compress** make Claude *read* fewer tokens.
 
 Your `CLAUDE.md` loads on **every session start**. Caveman Compress rewrites memory files into caveman-speak so Claude reads less — without you losing the human-readable original.
 

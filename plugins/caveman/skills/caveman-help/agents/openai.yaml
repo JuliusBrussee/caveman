@@ -1,0 +1,4 @@
+interface:
+  display_name: "Caveman Help"
+  short_description: "Show the caveman quick-reference card for modes, skills, and commands."
+  default_prompt: "Use $caveman-help to show the quick-reference card without changing the active mode."
