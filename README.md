@@ -273,7 +273,17 @@ Uninstall: `npx skills remove caveman`
 
 > **Windows note:** `npx skills` uses symlinks by default. If symlinks fail, add `--copy`: `npx skills add JuliusBrussee/caveman --copy`
 
-**Important:** These agents don't have a hook system, so caveman won't auto-start. Say `/caveman` or "talk like caveman" to activate each session.
+**Important:** Most agents don't have a hook system, so caveman won't auto-start. Say `/caveman` or "talk like caveman" to activate each session.
+
+**OpenCode exception:** OpenCode supports plugins. Install the caveman plugin for automatic activation:
+
+```bash
+# Clone the repo and copy the plugin
+git clone https://github.com/JuliusBrussee/caveman.git
+cp caveman/plugins/caveman/.opencode-plugin/caveman.js ~/.config/opencode/plugins/
+```
+
+The plugin uses `session.start` and `event` hooks to inject caveman rules automatically — no AGENTS.md editing needed. Mode persists across sessions via `~/.config/opencode/.caveman-mode`.
 
 **Want it always on?** Paste this into your agent's system prompt or rules file — caveman will be active from the first message, every session:
 
@@ -289,7 +299,8 @@ Code/commits/PRs: normal. Off: "stop caveman" / "normal mode".
 Where to put it:
 | Agent | File |
 |-------|------|
-| opencode | `.config/opencode/AGENTS.md` |
+| opencode | Plugin: `~/.config/opencode/plugins/caveman.js` (auto-activation) |
+| opencode (fallback) | `.config/opencode/AGENTS.md` (manual paste) |
 | Roo | `.roo/rules/caveman.md` |
 | Amp | your workspace system prompt |
 | Others | your agent's system prompt or rules file |
