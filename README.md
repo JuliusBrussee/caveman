@@ -132,7 +132,7 @@ Pick your agent. One command. Done.
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
 | **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
-| **opencode** | Clone repo → add `.opencode-plugin/` dir to `opencode.json` `plugin` array |
+| **opencode** | Add `github:JuliusBrussee/caveman` to `opencode.json` `plugin` array |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
 | **Any other** | `npx skills add JuliusBrussee/caveman` |
 
@@ -146,7 +146,7 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 |---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|:--------:|
 | Caveman mode | Y | Y | Y | Y | Y | Y | Y | Y |
 | Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² | Y⁵ |
-| `/caveman` command | Y | Y¹ | Y | — | — | — | — | Y⁵ |
+| `/caveman` command | Y | Y¹ | Y | — | — | — | — | —⁵ |
 | Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — | Y⁵ |
 | Statusline badge | Y⁴ | — | — | — | — | — | — | — |
 | caveman-commit | Y | — | Y | Y | Y | Y | Y | Y |
@@ -161,7 +161,7 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 > ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
 > ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
 > ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
-> ⁵ Via the native opencode plugin (server + TUI). Enable/disable/level commands work per-session. Subagent sessions auto-use ultra.
+> ⁵ opencode installs as a native plugin via `plugin: ["github:JuliusBrussee/caveman"]`, auto-activates every session, and uses `/enable_caveman`, `/disable_caveman`, and `/caveman_level` instead of `/caveman`.
 
 <details>
 <summary><strong>Claude Code — full details</strong></summary>
@@ -252,30 +252,15 @@ Copilot works with Chat, Edits, and Coding Agent.
 <details>
 <summary><strong>opencode — full details</strong></summary>
 
-Clone the repo, then add the plugin directory to your opencode config:
-
-```bash
-git clone https://github.com/JuliusBrussee/caveman
-```
-
-Add to `~/.config/opencode/opencode.json`:
+Add the repo package spec to your opencode config:
 
 ```json
 {
-  "plugin": [
-    "/path/to/caveman/plugins/caveman/.opencode-plugin"
-  ]
+  "plugin": ["github:JuliusBrussee/caveman"]
 }
 ```
 
-opencode reads the package exports and loads both server + TUI entrypoints automatically.
-
-Auto-activates every session (full mode by default). Subagent sessions auto-use ultra.
-
-TUI commands (via `/` command palette):
-- `/enable_caveman` — enable for current session
-- `/disable_caveman` — disable for current session
-- `/caveman_level` — switch lite / full / ultra
+opencode installs via Bun and loads the server + TUI from the root package exports.
 
 </details>
 
