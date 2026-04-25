@@ -1,27 +1,118 @@
+<p align="center">
+  <img src="https://em-content.zobj.net/source/apple/391/brain_1f9e0.png" width="120" />
+</p>
+
 <h1 align="center">Layman</h1>
+
+<p align="center">
+  <strong>Now anyone can code, for real.</strong>
+</p>
 
 <p align="center">
   <strong>🧠 why read big AI dump when simple words do trick — Claude Code / Codex skill that turns agent work into plain-English summaries anyone can understand</strong>
 </p>
 
 <p align="center">
-  <a href="#why-layman">Why Layman</a> ·
+  <a href="https://github.com/vamsi920/layman/stargazers"><img src="https://img.shields.io/github/stars/vamsi920/layman?style=flat&color=9b7b34" alt="Stars"></a>
+  <a href="https://github.com/vamsi920/layman/commits/main"><img src="https://img.shields.io/github/last-commit/vamsi920/layman?style=flat" alt="Last Commit"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/vamsi920/layman?style=flat" alt="License"></a>
+  <a href="https://github.com/JuliusBrussee/caveman"><img src="https://img.shields.io/badge/built%20on-caveman-245a41?style=flat" alt="Built on Caveman"></a>
+</p>
+
+<p align="center">
   <a href="#before--after">Before / After</a> ·
+  <a href="#install">Install</a> ·
   <a href="#modes">Modes</a> ·
-  <a href="#install">Install</a>
+  <a href="#commands">Commands</a> ·
+  <a href="#why-layman">Why Layman</a>
+</p>
+
+<p align="center">
+  <strong>Caveman saves tokens. Layman saves understanding.</strong><br />
+  Built on top of <a href="https://github.com/JuliusBrussee/caveman">Caveman</a>, so you still get the brevity modes too.
 </p>
 
 ---
 
-AI coding agents can now build real software. The hard part is understanding what they just did.
+AI coding agents can now ship real product work. The weak point is the handoff.
 
-**Layman saves understanding. Brief Mode saves tokens.**
+Layman takes the giant technical dump at the end of a task and turns it into something a founder, PM, designer, student, or tired engineer can scan in seconds. And when you want pure token savings instead, Layman still gives you the Caveman-style brief modes.
 
-Layman is a Claude Code / Codex skill that turns completed agent work into short, calm, plain-English summaries. It is built for founders, PMs, designers, students, and developers who do not want a giant technical dump after every task.
+## Before / After
 
-Layman also includes token-saving brief modes for people who want ultra-short technical responses.
+<table>
+<tr>
+<td width="50%">
 
-## Quick Install
+### 😵 Raw agent dump
+
+> "Implemented auth form validation by adding schema-level checks, normalizing server responses, refactoring the submit handler, adding guard clauses for undefined API payloads, and updating related fixtures and tests."
+
+</td>
+<td width="50%">
+
+### 🧠 Layman Summary
+
+> **Done:** Fixed the login form, added clearer errors, and stopped the page from crashing.
+>
+> **Why it matters:** Users now understand what went wrong instead of seeing a broken screen.
+>
+> **What changed:** The form checks bad input before submit and safely handles bad server responses.
+>
+> **Check this:** Try logging in with a wrong password, then with a normal account.
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 🤖 Engineer-only handoff
+
+> "Adjusted retry logic in billing webhook processing, patched null-state handling, and updated queue idempotency checks."
+
+</td>
+<td width="50%">
+
+### 👀 Founder-friendly handoff
+
+> **Done:** Made failed billing retries more reliable.
+>
+> **Why it matters:** Failed payments are less likely to get stuck silently.
+>
+> **Check this:** Trigger a failed payment and confirm the retry shows up once.
+
+</td>
+</tr>
+</table>
+
+**Same work. Less confusion. Better follow-up.**
+
+### Still want fewer tokens?
+
+Layman is built on top of Caveman, so the brevity side is still here:
+
+```txt
+/layman brief
+/layman lite
+/layman full
+/layman ultra
+/layman wenyan
+```
+
+```txt
+┌──────────────────────────────────────────────┐
+│  UNDERSTANDING SAVED     ████████ big time   │
+│  TOKEN-SAVING MODES      ████████ included   │
+│  INSTALL                 █              easy │
+│  NON-TECH FRIENDLY       ████████ yes        │
+└──────────────────────────────────────────────┘
+```
+
+## Install
+
+Pick your agent. One command. Done.
+
+### Quick Install
 
 ```bash
 # Claude Code plugin
@@ -30,6 +121,9 @@ claude plugin install layman@layman
 
 # Claude Code standalone hooks
 bash <(curl -s https://raw.githubusercontent.com/vamsi920/layman/main/hooks/install.sh)
+
+# Windows PowerShell
+irm https://raw.githubusercontent.com/vamsi920/layman/main/hooks/install.ps1 | iex
 
 # Gemini CLI
 gemini extensions install https://github.com/vamsi920/layman
@@ -40,55 +134,34 @@ npx skills add vamsi920/layman -a cursor
 npx skills add vamsi920/layman -a windsurf
 ```
 
-## Why Layman
+| Agent | Install |
+|-------|---------|
+| **Claude Code** | `claude plugin marketplace add vamsi920/layman && claude plugin install layman@layman` |
+| **Claude Code hooks** | `bash <(curl -s https://raw.githubusercontent.com/vamsi920/layman/main/hooks/install.sh)` |
+| **Codex** | Clone repo → `/plugins` → Search `Layman` → Install |
+| **Gemini CLI** | `gemini extensions install https://github.com/vamsi920/layman` |
+| **Cursor** | `npx skills add vamsi920/layman -a cursor` |
+| **Windsurf** | `npx skills add vamsi920/layman -a windsurf` |
+| **Copilot** | `npx skills add vamsi920/layman -a github-copilot` |
+| **Cline** | `npx skills add vamsi920/layman -a cline` |
+| **Any other agent** | `npx skills add vamsi920/layman` |
 
-When an AI agent finishes work, the final response often reads like a build log: file names, implementation details, test commands, warnings, and jargon all mixed together.
+## What You Get
 
-Layman changes the handoff into something useful:
-
-- **What got done** — the actual outcome
-- **Why it matters** — the user or product impact
-- **What changed** — the important technical change, in simple words
-- **What to check next** — the next practical verification step
-- **Warnings** — only when something important needs attention
-
-The goal is not to make answers babyish. The goal is to make coding work understandable.
-
-## Before / After
-
-### Before
-
-```txt
-Implemented auth form validation by adding schema-level checks, normalizing server responses,
-refactoring the submit handler, and updating the error-state rendering path. Also added
-guard clauses for undefined API payloads and adjusted test fixtures.
-```
-
-### After
-
-```txt
-Layman Summary
-
-Done:
-- Fixed the login form
-- Added clearer error messages
-- Protected the page from bad server responses
-
-Why it matters:
-Users now see what went wrong instead of hitting a confusing broken screen.
-
-What changed:
-The form checks the email and password before sending them, then shows a clear message if the server rejects the login.
-
-Check this:
-Try logging in with a wrong email and a weak password.
-```
+| Feature | Why it matters |
+|---------|----------------|
+| **Layman Summary Mode** | Clear final handoff: what got done, why it matters, what changed, and what to check next |
+| **Layman Explain Mode** | Slightly deeper plain-English explanation when the user wants more context |
+| **Brief / Lite / Full / Ultra / Wenyan** | Caveman-style brevity modes for token savings and faster scanning |
+| **layman-commit** | Clear Conventional Commit messages |
+| **layman-review** | Clear, actionable review comments |
+| **layman:compress** | Compress long Markdown memory files while preserving important facts |
 
 ## Modes
 
-### Layman Summary Mode
+### 1. Summary
 
-Default mode. Use this after completing coding work.
+Default mode. Best for completed work.
 
 ```txt
 Layman Summary
@@ -108,11 +181,11 @@ Check this:
 Try signing up with a wrong email and a weak password.
 ```
 
-Add a `Warning:` section only if there is a real risk, missing test, migration step, or manual follow-up.
+Use `Warning:` only when there is a real risk, missing test, migration, or manual follow-up.
 
-### Layman Explain Mode
+### 2. Explain
 
-Use this when the user asks for more context. It stays plain-English but adds a little more detail and explains necessary technical terms.
+Same plain-English goal, but with a bit more context.
 
 ```txt
 Layman Explain
@@ -133,47 +206,64 @@ Check this:
 Try the signup flow with a bad email, a weak password, and a normal valid account.
 ```
 
-### Layman Brief Mode
+### 3. Brief
 
-Use this when the goal is token-saving brevity instead of plain-English handoff summaries.
+This is the Caveman side inside Layman. Use it when the goal is fewer tokens, not a founder-friendly handoff.
 
-```txt
-/layman brief
-/layman lite
-/layman ultra
-/layman wenyan
-```
+**Pick your level:**
 
-Example:
+<table>
+<tr>
+<td width="25%">
 
-```txt
-Bug in auth middleware. Token expiry check uses `<` not `<=`. Fix:
-```
+#### 🪶 Lite
 
-Use `normal mode` to turn it off.
+> "The login bug came from the expiry check. The code used `<` instead of `<=`."
 
-## Tone Rules
+</td>
+<td width="25%">
 
-- Use simple, calm, human language.
-- Keep important technical terms when they matter.
-- Explain a term briefly when a non-technical reader may need it.
-- Do not hide risks, missing tests, migrations, or manual steps.
-- Do not over-explain.
-- Do not talk down to the reader.
-- Keep the summary short enough to scan.
+#### 🪨 Full
 
-## Install
+> "Expiry check wrong. Use `<=`."
 
-| Agent | Install |
-|-------|---------|
-| **Claude Code** | `claude plugin marketplace add vamsi920/layman && claude plugin install layman@layman` |
-| **Codex** | Clone repo → `/plugins` → Search `Layman` → Install |
-| **Gemini CLI** | `gemini extensions install https://github.com/vamsi920/layman` |
-| **Cursor** | `npx skills add vamsi920/layman -a cursor` |
-| **Windsurf** | `npx skills add vamsi920/layman -a windsurf` |
-| **Copilot** | `npx skills add vamsi920/layman -a github-copilot` |
-| **Cline** | `npx skills add vamsi920/layman -a cline` |
-| **Any other agent** | `npx skills add vamsi920/layman` |
+</td>
+<td width="25%">
+
+#### 🔥 Ultra
+
+> "Expiry `<=` bug. Fix."
+
+</td>
+<td width="25%">
+
+#### 📜 Wenyan
+
+> "驗期判失，當用 `<=`。"
+
+</td>
+</tr>
+</table>
+
+Use `normal mode` or `stop layman` to turn Layman off.
+
+## Why Layman
+
+AI can write the code now. The real bottleneck is the handoff.
+
+Layman is for:
+
+- founders who need to know what shipped without reading implementation noise
+- product and design people reviewing AI work
+- developers who want shorter, cleaner summaries after long tasks
+- teams that still need warnings, risks, and verification steps kept honest
+
+Layman does not try to make technical work childish. It keeps the important terms when needed. It just removes the dump.
+
+And because it is built on top of Caveman, it does two jobs in one repo:
+
+- **Layman Summary / Explain** when the goal is understanding
+- **Layman Brief modes** when the goal is token savings
 
 ## Commands
 
@@ -191,8 +281,6 @@ Use `normal mode` to turn it off.
 | `/layman-review` | Generate clear, actionable review comments |
 | `/layman:compress <file>` | Simplify long Markdown memory files while preserving facts |
 
-Say `stop layman` or `normal mode` to turn it off.
-
 ## Want It Always On?
 
 Add this to your agent rules or system prompt:
@@ -208,15 +296,9 @@ Include:
 - Warning, only if needed
 
 Use simple plain English. Keep important technical terms when needed. Do not be babyish, insulting, vague, or overly long.
+
+If the user asks for brevity instead, switch to Layman Brief mode.
 ```
-
-## Who It Helps
-
-- Non-technical founders who need to understand what shipped
-- Product teams reviewing AI-generated work
-- Developers who want cleaner handoffs
-- Students learning from agent output
-- Anyone using Claude Code or Codex to build software
 
 ## Development
 
@@ -229,10 +311,10 @@ python3 -m unittest tests/test_hooks.py
 
 Main files:
 
-- `skills/layman/SKILL.md` — core Layman behavior
-- `rules/layman-activate.md` — always-on rule text for repo integrations
-- `hooks/` — Claude Code activation, mode tracking, and statusline hooks
-- `plugins/layman/` — Codex plugin package
+- `skills/layman/SKILL.md` - core Layman behavior
+- `rules/layman-activate.md` - always-on rule text for repo integrations
+- `hooks/` - Claude Code activation, mode tracking, and statusline hooks
+- `plugins/layman/` - Codex plugin package
 
 ## License
 
