@@ -132,7 +132,7 @@ Pick your agent. One command. Done.
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
 | **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
-| **opencode** | Clone repo → add `.opencode-plugin/` path to `opencode.json` `plugin` array |
+| **opencode** | Clone repo → add `.opencode-plugin/` dir to `opencode.json` `plugin` array |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
 | **Any other** | `npx skills add JuliusBrussee/caveman` |
 
@@ -252,7 +252,7 @@ Copilot works with Chat, Edits, and Coding Agent.
 <details>
 <summary><strong>opencode — full details</strong></summary>
 
-Clone the repo, then add the plugin paths to your opencode config:
+Clone the repo, then add the plugin directory to your opencode config:
 
 ```bash
 git clone https://github.com/JuliusBrussee/caveman
@@ -263,20 +263,12 @@ Add to `~/.config/opencode/opencode.json`:
 ```json
 {
   "plugin": [
-    "/path/to/caveman/plugins/caveman/.opencode-plugin/server.ts"
+    "/path/to/caveman/plugins/caveman/.opencode-plugin"
   ]
 }
 ```
 
-Add to `~/.config/opencode/tui.json`:
-
-```json
-{
-  "plugin": [
-    "/path/to/caveman/plugins/caveman/.opencode-plugin/tui.ts"
-  ]
-}
-```
+opencode reads the package exports and loads both server + TUI entrypoints automatically.
 
 Auto-activates every session (full mode by default). Subagent sessions auto-use ultra.
 
