@@ -9,11 +9,25 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, extractLevelRules } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
+
+// Emit as canonical SessionStart hookSpecificOutput. Plain stdout from a
+// SessionStart hook is also injected as additionalContext by Claude Code, but
+// the structured form makes the contract explicit and is forward-compatible
+// with stricter hook validation. Wrap once at the bottom — never partway
+// through, since the statusline nudge concatenates onto `output`.
+function emit(text) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: text,
+    },
+  }));
+}
 
 const mode = getDefaultMode();
 
@@ -40,7 +54,7 @@ safeWriteFlag(flagPath, mode);
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 if (INDEPENDENT_MODES.has(mode)) {
-  process.stdout.write('CAVEMAN MODE ACTIVE — level: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill.');
+  emit('CAVEMAN MODE ACTIVE — level: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill.');
   process.exit(0);
 }
 
@@ -60,35 +74,8 @@ try {
 let output;
 
 if (skillContent) {
-  // Strip YAML frontmatter
-  const body = skillContent.replace(/^---[\s\S]*?---\s*/, '');
-
-  // Filter intensity table: keep header rows + only the active level's row
-  const filtered = body.split('\n').reduce((acc, line) => {
-    // Intensity table rows start with | **level** |
-    const tableRowMatch = line.match(/^\|\s*\*\*(\S+?)\*\*\s*\|/);
-    if (tableRowMatch) {
-      // Keep only the active level's row (and always keep header/separator)
-      if (tableRowMatch[1] === modeLabel) {
-        acc.push(line);
-      }
-      return acc;
-    }
-
-    // Example lines start with "- level:" — keep only lines matching active level
-    const exampleMatch = line.match(/^- (\S+?):\s/);
-    if (exampleMatch) {
-      if (exampleMatch[1] === modeLabel) {
-        acc.push(line);
-      }
-      return acc;
-    }
-
-    acc.push(line);
-    return acc;
-  }, []);
-
-  output = 'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' + filtered.join('\n');
+  output = 'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' +
+    extractLevelRules(skillContent, modeLabel);
 } else {
   // Fallback when SKILL.md is not found (standalone hook install without skills dir).
   // This is the minimum viable ruleset — better than nothing.
@@ -105,9 +92,11 @@ if (skillContent) {
     'Not: "Sure! I\'d be happy to help you with that. The issue you\'re experiencing is likely caused by..."\n' +
     'Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"\n\n' +
     '## Auto-Clarity\n\n' +
-    'Drop caveman for: security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread, user asks to clarify or repeats question. Resume caveman after clear part done.\n\n' +
+    'Drop caveman for: security warnings, irreversible action confirmations, irreversible multi-command shell sequences where order ambiguity risks data loss, user asks to clarify or repeats question. Resume caveman after clear part done. ' +
+    'Plan mode is NOT a clarity exception — plan documents are read at leisure, fragment style does not risk data loss. Stay caveman.\n\n' +
     '## Boundaries\n\n' +
-    'Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.';
+    'Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end. ' +
+    'Plan mode: chat-side replies stay caveman. Plan-document prose stays caveman. Structured sections (steps, file paths, commands, code blocks) write normal — same boundary as code/commits/PRs.';
 }
 
 // 3. Detect missing statusline config — nudge Claude to help set it up
@@ -140,4 +129,4 @@ try {
   // Silent fail — don't block session start over statusline detection
 }
 
-process.stdout.write(output);
+emit(output);
