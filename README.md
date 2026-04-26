@@ -141,6 +141,7 @@ Pick your agent. One command. Done.
 | **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
 | **Any other** | `npx skills add JuliusBrussee/caveman` |
+| **M365 Copilot agent / Gemini Gem** | Paste the [hosted-agent snippet](#m365-copilot-agents--gemini-gems) into the agent's instructions |
 
 Install once. Use in every session for that install target after that. One rock. That it.
 
@@ -285,6 +286,32 @@ Pattern: [thing] [action] [reason]. [next step].
 ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift.
 Code/commits/PRs: normal. Off: "stop caveman" / "normal mode".
 ```
+
+</details>
+
+<details id="m365-copilot-agents--gemini-gems">
+<summary><strong>M365 Copilot agents / Gemini Gems — full details</strong></summary>
+
+Hosted assistants like a **Microsoft 365 Copilot agent** (Copilot Studio / agent builder) or a **Gemini Gem** can't run hooks, install skills, or read local files — but they can fetch a URL. Point them at the SKILL.md so they pull the canonical caveman ruleset on every session and stay in sync with the upstream repo.
+
+Paste this into the agent's instructions / Gem prompt:
+
+```
+Read the caveman skill below and follow it for every response in this conversation:
+- Use FULL mode unless the user explicitly switches it (lite / ultra / wenyan).
+- Do NOT echo the SKILL.md contents back to the user.
+- Apply the rules to your own output; keep responses professional and on-task.
+- Code, commands, file paths, URLs, and quoted errors are preserved exactly.
+
+READ: https://github.com/JuliusBrussee/caveman/blob/main/skills/caveman/SKILL.md
+```
+
+**Why this is good for hosted agents:**
+
+- **M365 Copilot agents** — long emails, Teams chats, and doc summaries return ~75% fewer tokens. The agent gets to the action item faster, replies smarter, drops the filler.
+- **Gemini Gems** — Gems often dump verbose Markdown; caveman makes them surface the core meaning and the next step instead of the full essay.
+
+Switching modes inside the conversation: tell the assistant `use caveman lite`, `use caveman ultra`, or `use caveman wenyan` and it'll re-read the corresponding intensity row from SKILL.md. Say `stop caveman` / `normal mode` to revert.
 
 Where to put it:
 | Agent | File |
