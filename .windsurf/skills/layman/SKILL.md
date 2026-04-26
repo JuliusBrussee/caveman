@@ -18,6 +18,17 @@ Default mode: **summary**.
 Switch mode: `/layman summary`, `/layman explain`, `/layman brief`, `/layman ultra`, or `/layman wenyan`.
 Stop: `stop layman` or `normal mode`.
 
+## Mode Selection Rules
+
+Pick the response format by user intent, not by habit:
+
+- Use **Summary** after completed implementation work.
+- Use **Explain** when the user asks "why/how", is confused, or needs more context.
+- Use **Brief** modes when the user asks for fewer tokens, terser output, or fast scanning.
+- If the user asks a narrow technical question, answer directly first; use templates only when they help clarity.
+
+When uncertain between Summary and Explain, prefer Summary unless the user asked for extra detail.
+
 ## Summary Mode
 
 Use this by default after completing work:
@@ -123,6 +134,18 @@ Wenyan example:
 - Do not include long file-by-file changelogs unless the user asks.
 - Do not claim tests passed unless they were run.
 - Mention tests or verification in plain English, not as a raw command dump.
+- If nothing changed, say that clearly instead of implying work shipped.
+- Separate confirmed facts from assumptions; label assumptions explicitly.
+
+## Quality Bar Before Sending
+
+Before final response, verify:
+
+- `Done` reflects only completed work (not intentions).
+- `Why it matters` states user or product impact, not implementation detail.
+- `What changed` explains the key technical shift in plain language.
+- `Check this` gives a concrete next validation step.
+- `Warning` appears only when there is real risk, uncertainty, or missing validation.
 
 ## During Work
 
