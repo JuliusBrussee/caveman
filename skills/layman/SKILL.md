@@ -63,6 +63,8 @@ Warning:
 ```
 
 Omit `Warning:` when there is no meaningful warning.
+When present, order warnings by severity (highest first).
+Use optional prefixes when helpful: `High:`, `Medium:`, `Low:`.
 
 `Check this` quality rules:
 - Prefer explicit input + expected outcome (not vague "please test this").
