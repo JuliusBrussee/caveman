@@ -5,6 +5,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   type CavemanMode,
+  defaultMode,
   normalizeMode,
   readState,
   writeState,
@@ -37,12 +38,15 @@ function readSkill(): string | undefined {
 
 function filteredSkill(mode: CavemanMode): string {
   const skill = readSkill()
+  const modeLabel = mode === "wenyan-full" ? "wenyan" : mode
   if (!skill) {
     return [
+      `CAVEMAN MODE ACTIVE — level: ${modeLabel}`,
+      "",
       "Respond terse like smart caveman. All technical substance stay. Only fluff die.",
       "",
       "## Persistence",
-      `ACTIVE EVERY RESPONSE. Current level: ${mode}. Off only: \"stop caveman\" / \"normal mode\".`,
+      `ACTIVE EVERY RESPONSE. Current level: ${modeLabel}. Off only: \"stop caveman\" / \"normal mode\".`,
       "",
       "## Rules",
       "Drop articles/filler/pleasantries/hedging. Fragments OK. Technical terms exact. Code blocks unchanged. Errors quoted exact.",
@@ -55,7 +59,6 @@ function filteredSkill(mode: CavemanMode): string {
     ].join("\n")
   }
 
-  const modeLabel = mode === "wenyan-full" ? "wenyan" : mode
   const lines = skill.split("\n")
   const filtered = lines.filter((line) => {
     const tableMatch = line.match(/^\| \*\*(.*?)\*\* \|/)
@@ -67,7 +70,7 @@ function filteredSkill(mode: CavemanMode): string {
     return true
   })
 
-  return `CAVEMAN MODE ACTIVE - level: ${modeLabel}\n\n${filtered.join("\n")}`
+  return `CAVEMAN MODE ACTIVE — level: ${modeLabel}\n\n${filtered.join("\n")}`
 }
 
 function activationContext(): string[] {
@@ -116,6 +119,19 @@ function eventUserText(event: unknown): string {
   return ""
 }
 
+function partText(part: unknown): string {
+  if (!part || typeof part !== "object") return ""
+  const record = part as Record<string, unknown>
+  if (record.type === "text" && typeof record.text === "string") return record.text
+  if (record.type === "subtask" && typeof record.prompt === "string") return record.prompt
+  return textFromUnknown(part)
+}
+
+function partsText(parts: unknown): string {
+  if (!Array.isArray(parts)) return ""
+  return parts.map(partText).filter(Boolean).join("\n")
+}
+
 function updateModeFromText(text: string): void {
   const lower = text.trim().toLowerCase()
   if (!lower) return
@@ -140,8 +156,13 @@ function updateModeFromText(text: string): void {
   if (!explicit && !natural) return
 
   const requestedMode = explicit ? commandModeFromText(explicit[1]) : undefined
-  const fallbackMode = readState().mode
+  const fallbackMode = defaultMode()
   const mode = requestedMode && requestedMode !== "off" ? requestedMode : fallbackMode
+
+  if (mode === "off") {
+    writeState({ enabled: false, mode: readState().mode })
+    return
+  }
 
   writeState({ enabled: true, mode })
 }
@@ -151,6 +172,10 @@ export const server: Plugin = async () => {
 
   return {
     "session.start": async () => ({ context: activationContext() }),
+
+    "chat.message": async (_input, output) => {
+      updateModeFromText(partsText(output.parts))
+    },
 
     "command.execute.before": async (input) => {
       updateModeFromText(`/${input.command} ${input.arguments}`)
@@ -166,6 +191,14 @@ export const server: Plugin = async () => {
     ) => {
       const [context] = activationContext()
       if (context) output.system?.push(context)
+    },
+
+    "experimental.session.compacting": async (
+      _input: unknown,
+      output: { context?: string[] },
+    ) => {
+      const [context] = activationContext()
+      if (context) output.context?.push(context)
     },
   }
 }

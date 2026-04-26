@@ -224,7 +224,7 @@ codex_hooks = true
 <details>
 <summary><strong>OpenCode — full details</strong></summary>
 
-OpenCode installs package plugins with Bun and stores them in your OpenCode config.
+OpenCode installs npm package plugins with Bun and caches them in OpenCode's package cache.
 
 ```bash
 opencode plugin caveman-opencode
@@ -234,12 +234,15 @@ Restart OpenCode after install.
 
 What plugin does:
 - Injects caveman instructions on session start
+- Reinforces caveman instructions in chat system context and compaction
 - Adds native OpenCode commands: `/caveman`, `/enable_caveman`, `/disable_caveman`
 - Tracks text triggers like `/caveman lite`, `/caveman full`, `/caveman ultra`, `/caveman wenyan`, and `/caveman off` when OpenCode passes them through
 - Tracks natural language triggers like "talk like caveman", "less tokens", "stop caveman", and "normal mode"
-- Persists mode in `~/.local/state/opencode/caveman-mode.json`
-- Reads `CAVEMAN_DEFAULT_MODE` or `~/.config/caveman/config.json` with `defaultMode` when present
+- Persists mode in `${XDG_STATE_HOME:-~/.local/state}/opencode/caveman-mode.json`
+- Reads `CAVEMAN_DEFAULT_MODE` or `${XDG_CONFIG_HOME:-~/.config}/caveman/config.json` with `defaultMode` when present
 - Reads bundled or installed skill text when present, with fallback rules built in
+
+Relative `XDG_STATE_HOME` and `XDG_CONFIG_HOME` values are ignored per XDG fallback rules.
 
 For local development before package publication, point OpenCode at this repo's package or plugin files from your OpenCode config.
 

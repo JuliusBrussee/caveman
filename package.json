@@ -4,6 +4,9 @@
   "description": "Caveman mode for OpenCode. Cut filler, keep technical accuracy.",
   "type": "module",
   "main": "./plugins/caveman/.opencode-plugin/server.ts",
+  "scripts": {
+    "test:opencode": "bun test tests/opencode-plugin.test.ts"
+  },
   "exports": {
     ".": "./plugins/caveman/.opencode-plugin/server.ts",
     "./server": "./plugins/caveman/.opencode-plugin/server.ts",

@@ -37,14 +37,22 @@ const VALID_MODES = new Set<CavemanMode>([
 ])
 
 const home = homedir()
-const stateDir = process.env.XDG_STATE_HOME
-  ? path.join(process.env.XDG_STATE_HOME, "opencode")
-  : path.join(home, ".local/state/opencode")
+function xdgBaseDir(value: string | undefined, fallback: string): string {
+  return value && path.isAbsolute(value) ? value : fallback
+}
+
+const stateDir = path.join(
+  xdgBaseDir(process.env.XDG_STATE_HOME, path.join(home, ".local/state")),
+  "opencode",
+)
+// OpenCode keeps richer JSON state separate from Claude's plain .caveman-active flag.
 const statePath = path.join(stateDir, "caveman-mode.json")
 
-const configPath = process.env.XDG_CONFIG_HOME
-  ? path.join(process.env.XDG_CONFIG_HOME, "caveman", "config.json")
-  : path.join(home, ".config", "caveman", "config.json")
+const configPath = path.join(
+  xdgBaseDir(process.env.XDG_CONFIG_HOME, path.join(home, ".config")),
+  "caveman",
+  "config.json",
+)
 
 export function normalizeMode(value: unknown): CavemanMode | "off" | undefined {
   if (typeof value !== "string") return undefined
@@ -58,7 +66,7 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function defaultMode(): CavemanMode | "off" {
+export function defaultMode(): CavemanMode | "off" {
   const envMode = normalizeMode(process.env.CAVEMAN_DEFAULT_MODE)
   if (envMode) return envMode
 
