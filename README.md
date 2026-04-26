@@ -1,32 +1,15 @@
-<p align="center">
-  <span style="font-size: 84px;">🪵</span>
-</p>
+🪵
 
-<h1 align="center">Layman</h1>
+# Layman
 
-<p align="center">
-  <strong>Make AI coding output instantly understandable.</strong>
-</p>
+**Make AI coding output instantly understandable.**
 
-<p align="center">
-  <strong>🪵 Built on Caveman speed. Upgraded for real-world clarity.</strong><br />
-  Turn giant technical agent dumps into short, plain-English handoffs people actually read.
-</p>
+**🪵 Built on Caveman speed. Upgraded for real-world clarity.**  
+Turn giant technical agent dumps into short, plain-English handoffs people actually read.
 
-<p align="center">
-  <a href="https://github.com/vamsi920/layman/stargazers"><img src="https://img.shields.io/github/stars/vamsi920/layman?style=for-the-badge&color=f59e0b" alt="Stars"></a>
-  <a href="https://github.com/vamsi920/layman/commits/main"><img src="https://img.shields.io/github/last-commit/vamsi920/layman?style=for-the-badge&color=10b981" alt="Last Commit"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/vamsi920/layman?style=for-the-badge&color=6366f1" alt="License"></a>
-  <a href="https://github.com/JuliusBrussee/caveman"><img src="https://img.shields.io/badge/powered%20by-caveman-245a41?style=for-the-badge" alt="Powered by Caveman"></a>
-</p>
 
-<p align="center">
-  <a href="#before--after">Before / After</a> ·
-  <a href="#install-in-60-seconds">Install</a> ·
-  <a href="#results-you-can-expect">Results</a> ·
-  <a href="#modes">Modes</a> ·
-  <a href="#commands">Commands</a>
-</p>
+
+[Before / After](#before--after) · [Install](#install-in-60-seconds) · [Results](#results-you-can-expect) · [Modes](#modes) · [Commands](#commands)
 
 ---
 
@@ -44,11 +27,18 @@ Layman makes the handoff clear in seconds:
 
 And yes, you still get Caveman-style brevity modes for token savings.
 
+## Best use cases
+
+Layman is strongest when code is done but communication is weak:
+
+- **Solo builder to users**: turn technical changelogs into user-facing release notes
+- **Founder to team**: explain AI agent work to non-engineers fast
+- **Engineer handoff**: make PR or task completion updates easier to scan
+- **Support/internal ops**: convert bug-fix details into safe customer messages
+- **Agency/freelance delivery**: send clear client updates without jargon
+
 ## Before / After
 
-<table>
-<tr>
-<td width="50%">
 
 ### 🔴 Before (noise overload)
 
@@ -68,8 +58,7 @@ Actionability ▒▒▒▒▒▒    30%
 Readability   ▒▒▒▒▒     25%
 ```
 
-</td>
-<td width="50%">
+
 
 ### 🟢 After (Layman Summary)
 
@@ -100,10 +89,7 @@ Actionability ██████████  95%
 Readability   ██████████  90%
 ```
 
-</td>
-</tr>
-<tr>
-<td width="50%">
+
 
 ### 🟠 Before (engineer-only billing note)
 
@@ -115,8 +101,7 @@ guard in event consumer to prevent duplicate mutation on at-least-once
 delivery and updated telemetry labels for capture-failure branch.
 ```
 
-</td>
-<td width="50%">
+
 
 ### 🔵 After (founder-friendly billing note)
 
@@ -133,9 +118,7 @@ Trigger one failed payment and replay the same webhook event. You
 should still see one safe billing outcome.
 ```
 
-</td>
-</tr>
-</table>
+
 
 **Same code changes. Way better understanding.**
 
@@ -165,17 +148,19 @@ npx skills add vamsi920/layman -a cursor
 npx skills add vamsi920/layman -a windsurf
 ```
 
-| Agent | Install |
-|-------|---------|
-| **Claude Code** | `claude plugin marketplace add vamsi920/layman && claude plugin install layman@layman` |
+
+| Agent                 | Install                                                                                   |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| **Claude Code**       | `claude plugin marketplace add vamsi920/layman && claude plugin install layman@layman`    |
 | **Claude Code hooks** | `bash <(curl -s https://raw.githubusercontent.com/vamsi920/layman/main/hooks/install.sh)` |
-| **Codex** | Clone repo -> `/plugins` -> Search `Layman` -> Install |
-| **Gemini CLI** | `gemini extensions install https://github.com/vamsi920/layman` |
-| **Cursor** | `npx skills add vamsi920/layman -a cursor` |
-| **Windsurf** | `npx skills add vamsi920/layman -a windsurf` |
-| **Copilot** | `npx skills add vamsi920/layman -a github-copilot` |
-| **Cline** | `npx skills add vamsi920/layman -a cline` |
-| **Any other agent** | `npx skills add vamsi920/layman` |
+| **Codex**             | Clone repo -> `/plugins` -> Search `Layman` -> Install                                    |
+| **Gemini CLI**        | `gemini extensions install https://github.com/vamsi920/layman`                            |
+| **Cursor**            | `npx skills add vamsi920/layman -a cursor`                                                |
+| **Windsurf**          | `npx skills add vamsi920/layman -a windsurf`                                              |
+| **Copilot**           | `npx skills add vamsi920/layman -a github-copilot`                                        |
+| **Cline**             | `npx skills add vamsi920/layman -a cline`                                                 |
+| **Any other agent**   | `npx skills add vamsi920/layman`                                                          |
+
 
 ## Results you can expect
 
@@ -246,56 +231,59 @@ Use when you want fewer tokens, faster scanning.
 /layman wenyan
 ```
 
-<table>
-<tr>
-<td width="25%">
 
 #### Lite
 
 `Expiry check used "<" instead of "<=".`
 
-</td>
-<td width="25%">
+
 
 #### Full
 
 `Expiry check wrong. Use "<=".`
 
-</td>
-<td width="25%">
+
 
 #### Ultra
 
 `Expiry "<=" bug. Fix.`
 
-</td>
-<td width="25%">
+
 
 #### Wenyan
 
 `验期判失，当用 <=。`
 
-</td>
-</tr>
-</table>
+
 
 Use `normal mode` or `stop layman` to turn it off.
 
+## Use it in a real workflow
+
+1. Let your coding agent finish implementation.
+2. Ask for `/layman` (or set it as default once).
+3. Paste the handoff directly into Slack, Linear, Notion, or email.
+4. Validate the single `Check this` step before merge/release.
+
+The goal is not prettier text. The goal is faster alignment with fewer follow-up questions.
+
 ## Commands
 
-| Command | What it does |
-|---------|--------------|
-| `/layman` | Turn on Layman Summary mode |
-| `/layman summary` | Use the default summary handoff |
-| `/layman explain` | Use more detailed plain-English explanation |
-| `/layman brief` | Turn on short technical responses |
-| `/layman lite` | Turn on light brevity |
-| `/layman full` | Turn on stronger brevity |
-| `/layman ultra` | Turn on maximum compression |
-| `/layman wenyan` | Turn on classical Chinese terse mode |
-| `/layman-commit` | Generate clear Conventional Commit messages |
-| `/layman-review` | Generate clear actionable review comments |
+
+| Command                   | What it does                                               |
+| ------------------------- | ---------------------------------------------------------- |
+| `/layman`                 | Turn on Layman Summary mode                                |
+| `/layman summary`         | Use the default summary handoff                            |
+| `/layman explain`         | Use more detailed plain-English explanation                |
+| `/layman brief`           | Turn on short technical responses                          |
+| `/layman lite`            | Turn on light brevity                                      |
+| `/layman full`            | Turn on stronger brevity                                   |
+| `/layman ultra`           | Turn on maximum compression                                |
+| `/layman wenyan`          | Turn on classical Chinese terse mode                       |
+| `/layman-commit`          | Generate clear Conventional Commit messages                |
+| `/layman-review`          | Generate clear actionable review comments                  |
 | `/layman:compress <file>` | Simplify long Markdown memory files while preserving facts |
+
 
 ## Keep it always on
 
