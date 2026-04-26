@@ -64,6 +64,13 @@ Warning:
 
 Omit `Warning:` when there is no meaningful warning.
 
+Use-case defaults:
+- **Bug fix**: name the broken behavior, user impact, and one repro check.
+- **Feature**: name the new capability, target user, and success check.
+- **Refactor**: name what became safer/faster/cleaner and what behavior is unchanged.
+- **Security fix**: state threat reduced and any manual follow-up required.
+- **Docs/ops only**: state that runtime behavior is unchanged.
+
 ## Explain Mode
 
 Use this when the user asks for more context, says `/layman explain`, or seems confused:
