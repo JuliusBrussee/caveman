@@ -5,10 +5,10 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag, readFlag } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, readFlag, getFlagPath } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const flagPath = path.join(claudeDir, '.caveman-active');
+const globalFlagPath = path.join(claudeDir, '.caveman-active');
 
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
@@ -16,6 +16,11 @@ process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
     const prompt = (data.prompt || '').trim().toLowerCase();
+    // Scope the flag file to the current Claude Code session so concurrent
+    // sessions running with different caveman levels don't clobber each
+    // other. Falls back to the global path if session_id is missing.
+    const sessionId = typeof data.session_id === 'string' ? data.session_id : null;
+    const flagPath = getFlagPath(claudeDir, sessionId);
 
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
     // "talk like caveman"). README tells users they can say these, but the hook
@@ -26,6 +31,7 @@ process.stdin.on('end', () => {
         const mode = getDefaultMode();
         if (mode !== 'off') {
           safeWriteFlag(flagPath, mode);
+          if (sessionId) safeWriteFlag(globalFlagPath, mode);
         }
       }
     }
@@ -55,8 +61,10 @@ process.stdin.on('end', () => {
 
       if (mode && mode !== 'off') {
         safeWriteFlag(flagPath, mode);
+        if (sessionId) safeWriteFlag(globalFlagPath, mode);
       } else if (mode === 'off') {
         try { fs.unlinkSync(flagPath); } catch (e) {}
+        if (sessionId) { try { fs.unlinkSync(globalFlagPath); } catch (e) {} }
       }
     }
 
@@ -65,6 +73,7 @@ process.stdin.on('end', () => {
         /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
         /\bnormal mode\b/i.test(prompt)) {
       try { fs.unlinkSync(flagPath); } catch (e) {}
+      if (sessionId) { try { fs.unlinkSync(globalFlagPath); } catch (e) {} }
     }
 
     // Per-turn reinforcement: emit a structured reminder when caveman is active.

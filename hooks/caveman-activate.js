@@ -9,13 +9,39 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, getFlagPath, cleanupStaleFlags } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
 const mode = getDefaultMode();
+
+// SessionStart hook stdin carries session_id (Claude Code hook protocol).
+// Read it synchronously — the hook's stdout is what becomes the session
+// context, so we must finish parsing before writing output. If stdin is
+// empty (older Claude Code versions, manual invocation), session_id is null
+// and we fall back to the global flag path.
+function readStdinSync() {
+  try {
+    return fs.readFileSync(0, 'utf8');
+  } catch (e) { return ''; }
+}
+
+let sessionId = null;
+try {
+  const raw = readStdinSync();
+  if (raw) {
+    const data = JSON.parse(raw);
+    if (data && typeof data.session_id === 'string') sessionId = data.session_id;
+  }
+} catch (e) { /* silent — fall back to global flag */ }
+
+const flagPath = getFlagPath(claudeDir, sessionId);
+const globalFlagPath = path.join(claudeDir, '.caveman-active');
+
+// Cleanup per-session flags older than 24h so abandoned sessions don't
+// accumulate in ~/.claude/.
+cleanupStaleFlags(claudeDir, 24 * 60 * 60 * 1000);
 
 // "off" mode — skip activation entirely, don't write flag or emit rules
 if (mode === 'off') {
@@ -24,8 +50,12 @@ if (mode === 'off') {
   process.exit(0);
 }
 
-// 1. Write flag file (symlink-safe)
+// 1. Write flag file (symlink-safe). Per-session if session_id was provided,
+// global otherwise. Also mirror to the global path when we have a session
+// scope so legacy statusline configs that don't pass session_id keep showing
+// the most recent mode rather than nothing.
 safeWriteFlag(flagPath, mode);
+if (sessionId) safeWriteFlag(globalFlagPath, mode);
 
 // 2. Emit full caveman ruleset, filtered to the active intensity level.
 //    The old 2-sentence summary was too weak — models drifted back to verbose

@@ -151,4 +151,55 @@ function readFlag(flagPath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag };
+// Per-session flag path resolution.
+// Concurrent Claude Code sessions running with different caveman levels used
+// to clobber each other through the single global flag file. Session A in
+// `ultra` and session B in `lite` would race and the later writer won.
+//
+// Claude Code injects `session_id` (UUID-like) into hook stdin. Scoping the
+// flag by session — `.caveman-active-<session_id>` — gives each session its
+// own state. The global `.caveman-active` is preserved as a fallback for
+// callers that have no session_id (older statusline configs, ad-hoc scripts).
+//
+// `sessionId` is sanitized to [a-zA-Z0-9-] before being joined into the path
+// to block traversal attempts via attacker-controlled stdin.
+function sanitizeSessionId(sessionId) {
+  if (typeof sessionId !== 'string') return null;
+  const cleaned = sessionId.replace(/[^a-zA-Z0-9-]/g, '');
+  if (!cleaned || cleaned.length > 128) return null;
+  return cleaned;
+}
+
+function getFlagPath(claudeDir, sessionId) {
+  const safe = sanitizeSessionId(sessionId);
+  if (safe) return path.join(claudeDir, '.caveman-active-' + safe);
+  return path.join(claudeDir, '.caveman-active');
+}
+
+// Best-effort cleanup of stale per-session flag files older than maxAgeMs.
+// Sessions that exit without explicit teardown (terminal closed, crash, kill)
+// leave their flag behind; without this, ~/.claude/ slowly fills with
+// abandoned state. Runs from SessionStart so it never delays user-facing work.
+function cleanupStaleFlags(claudeDir, maxAgeMs) {
+  try {
+    const entries = fs.readdirSync(claudeDir);
+    const now = Date.now();
+    for (const name of entries) {
+      if (!name.startsWith('.caveman-active-')) continue;
+      const full = path.join(claudeDir, name);
+      try {
+        const st = fs.lstatSync(full);
+        if (st.isSymbolicLink() || !st.isFile()) continue;
+        if (now - st.mtimeMs > maxAgeMs) {
+          fs.unlinkSync(full);
+        }
+      } catch (e) { /* skip */ }
+    }
+  } catch (e) { /* silent */ }
+}
+
+module.exports = {
+  getDefaultMode, getConfigDir, getConfigPath, VALID_MODES,
+  safeWriteFlag, readFlag,
+  sanitizeSessionId, getFlagPath, cleanupStaleFlags
+};
