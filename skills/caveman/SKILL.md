@@ -3,7 +3,8 @@ name: caveman
 description: >
   Ultra-compressed communication mode. Cuts token usage ~75% by speaking like caveman
   while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra,
-  wenyan-lite, wenyan-full, wenyan-ultra.
+  wenyan-lite, wenyan-full, wenyan-ultra,
+  hangeul-lite, hangeul-full, hangeul-ultra.
   Use when user says "caveman mode", "talk like caveman", "use caveman", "less tokens",
   "be brief", or invokes /caveman. Also auto-triggers when token efficiency is requested.
 ---
@@ -35,6 +36,9 @@ Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 | **wenyan-lite** | Semi-classical. Drop filler/hedging but keep grammar structure, classical register |
 | **wenyan-full** | Maximum classical terseness. Fully 文言文. 80-90% character reduction. Classical sentence patterns, verbs precede objects, subjects often omitted, classical particles (之/乃/為/其) |
 | **wenyan-ultra** | Extreme abbreviation while keeping classical Chinese feel. Maximum compression, ultra terse |
+| **hangeul-lite** | Drop filler/hedging/pleasantries. Keep honorifics (~합니다). Professional Korean |
+| **hangeul-full** | 반말 (drop honorifics), drop particles (은/는/이/가), noun endings (~함/됨), fragments OK |
+| **hangeul-ultra** | Symbols for connectives (→), English tech terms, max abbreviation. One word when enough |
 
 Example — "Why React component re-render?"
 - lite: "Your component re-renders because you create a new object reference each render. Wrap it in `useMemo`."
@@ -43,6 +47,9 @@ Example — "Why React component re-render?"
 - wenyan-lite: "組件頻重繪，以每繪新生對象參照故。以 useMemo 包之。"
 - wenyan-full: "物出新參照，致重繪。useMemo .Wrap之。"
 - wenyan-ultra: "新參照→重繪。useMemo Wrap。"
+- hangeul-lite: "매 렌더마다 새 객체 참조가 생성됩니다. useMemo로 감싸세요."
+- hangeul-full: "매 렌더 새 객체 참조 생성. useMemo 쓰면 됨."
+- hangeul-ultra: "새 객체 ref → 리렌더링. useMemo."
 
 Example — "Explain database connection pooling."
 - lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."
@@ -50,6 +57,12 @@ Example — "Explain database connection pooling."
 - ultra: "Pool = reuse DB conn. Skip handshake → fast under load."
 - wenyan-full: "池reuse open connection。不每req新開。skip handshake overhead。"
 - wenyan-ultra: "池reuse conn。skip handshake → fast。"
+- hangeul-ultra: "Pool = DB 연결 재사용. 핸드셰이크 skip → 부하↓."
+
+## Language Rules
+
+Non-English modes (wenyan-*, hangeul-*) load language-specific rules
+via the hook. English users never see them.
 
 ## Auto-Clarity
 

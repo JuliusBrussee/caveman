@@ -79,32 +79,39 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 
 <table>
 <tr>
-<td width="25%">
+<td width="20%">
 
 #### 🪶 Lite
 
 > "Your component re-renders because you create a new object reference each render. Inline object props fail shallow comparison every time. Wrap it in `useMemo`."
 
 </td>
-<td width="25%">
+<td width="20%">
 
 #### 🪨 Full
 
 > "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
 
 </td>
-<td width="25%">
+<td width="20%">
 
 #### 🔥 Ultra
 
 > "Inline obj prop → new ref → re-render. `useMemo`."
 
 </td>
-<td width="25%">
+<td width="20%">
 
 #### 📜 文言文
 
 > "物出新參照，致重繪。useMemo Wrap之。"
+
+</td>
+<td width="20%">
+
+#### 🇰🇷 Hangeul
+
+> "새 객체 ref → 리렌더링. useMemo."
 
 </td>
 </tr>
@@ -387,6 +394,26 @@ Real token counts from the Claude API ([reproduce it yourself](benchmarks/)):
 
 *Range: 22%–87% savings across prompts.*
 <!-- BENCHMARK-TABLE-END -->
+
+### Korean (Hangeul) Mode
+
+Caveman speak Korean too. On 3 Korean technical prompts (DeepSeek v4-pro, forced Korean responses):
+
+<!-- BENCHMARK-KO-START -->
+| Prompt | Baseline (KO) | Caveman Ultra | Hangeul Ultra |
+|--------|--------------:|-------------:|--------------:|
+| React re-render | 1,311 | 660 | 300 |
+| TCP vs UDP | 1,078 | 639 | 344 |
+| git rebase vs merge | 2,169 | 353 | 582 |
+| **Average** | **1,519** | **550** | **408** |
+
+*Baseline: normal Korean. Caveman Ultra: English rules applied, still Korean.*
+*Hangeul Ultra: Korean-specific rules. 73% savings vs baseline. Extra 26% vs English caveman rules alone.*
+<!-- BENCHMARK-KO-END -->
+
+> **Why hangeul mode matters:** Caveman ultra's rules (drop "a"/"the"/"be", short English synonyms) are useless for Korean. Hangeul mode uses Korean-specific compression: honorific drop (~합니다→~함), particle drop (은/는/이/가), noun endings, connective symbols. Result: 26% ADDITIONAL token savings beyond caveman ultra alone.
+>
+> Hangeul mode: `/caveman hangeul` (or `korean`, `ko`). Same 3 levels: lite/full/ultra. English users unaffected — Korean rules load via hook only when hangeul mode is active.
 
 > [!IMPORTANT]
 > Caveman only affects output tokens — thinking/reasoning tokens are untouched. Caveman no make brain smaller. Caveman make *mouth* smaller. Biggest win is **readability and speed**, cost savings are a bonus.
