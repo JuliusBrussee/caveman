@@ -3,7 +3,12 @@
 Caveman Compress CLI
 
 Usage:
-    caveman <filepath>
+    caveman [--no-backup] <filepath>
+
+Flags:
+    --no-backup    Skip writing `<file>.original.md` next to the input.
+                   Useful for low-stakes, version-controlled files where
+                   git already provides the rollback path.
 """
 
 import sys
@@ -14,15 +19,21 @@ from .detect import detect_file_type, should_compress
 
 
 def print_usage():
-    print("Usage: caveman <filepath>")
+    print("Usage: caveman [--no-backup] <filepath>")
 
 
 def main():
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    no_backup = False
+    if "--no-backup" in args:
+        no_backup = True
+        args = [a for a in args if a != "--no-backup"]
+
+    if len(args) != 1:
         print_usage()
         sys.exit(1)
 
-    filepath = Path(sys.argv[1])
+    filepath = Path(args[0])
 
     # Check file exists
     if not filepath.exists():
@@ -48,13 +59,16 @@ def main():
     print("Starting caveman compression...\n")
 
     try:
-        success = compress_file(filepath)
+        success = compress_file(filepath, no_backup=no_backup)
 
         if success:
             print("\nCompression completed successfully")
-            backup_path = filepath.with_name(filepath.stem + ".original.md")
             print(f"Compressed: {filepath}")
-            print(f"Original:   {backup_path}")
+            if not no_backup:
+                backup_path = filepath.with_name(filepath.stem + ".original.md")
+                print(f"Original:   {backup_path}")
+            else:
+                print("Original:   (skipped, --no-backup)")
             sys.exit(0)
         else:
             print("\n❌ Compression failed after retries")
