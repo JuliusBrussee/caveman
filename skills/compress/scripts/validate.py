@@ -6,6 +6,14 @@ URL_REGEX = re.compile(r"https?://[^\s)]+")
 FENCE_OPEN_REGEX = re.compile(r"^(\s{0,3})(`{3,}|~{3,})(.*)$")
 HEADING_REGEX = re.compile(r"^(#{1,6})\s+(.*)", re.MULTILINE)
 BULLET_REGEX = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
+# Inline code span. Greedy on the inside, but bounded by a single line —
+# matches CommonMark single-backtick inline code, which is what the
+# compress prompt promises to preserve. Multi-backtick wrappers
+# (`` `code with backticks` ``) are intentionally not handled here:
+# they're rare in caveman-compress targets (CLAUDE.md / memory files)
+# and conservatively under-matching is safer than greedy spans that
+# accidentally bridge two different inline runs.
+INLINE_CODE_REGEX = re.compile(r"`([^`\n]+)`")
 
 # crude but effective path detection
 # Requires either a path prefix (./ ../ / or drive letter) or a slash/backslash within the match
@@ -81,6 +89,27 @@ def extract_code_blocks(text):
     return blocks
 
 
+def _strip_fenced_blocks(text: str) -> str:
+    """Return text with fenced code blocks removed.
+
+    Inline-code validation must not double-count backtick runs that live
+    inside a fenced block — those are already covered by
+    `validate_code_blocks`, and a shell snippet containing a `\\`` literal
+    inside a fenced block would otherwise generate spurious inline
+    mismatches.
+    """
+    blocks = extract_code_blocks(text)
+    out = text
+    for block in blocks:
+        out = out.replace(block, "", 1)
+    return out
+
+
+def extract_inline_code(text):
+    """Return ordered list of inline code spans outside fenced blocks."""
+    return INLINE_CODE_REGEX.findall(_strip_fenced_blocks(text))
+
+
 def extract_urls(text):
     return set(URL_REGEX.findall(text))
 
@@ -113,6 +142,30 @@ def validate_code_blocks(orig, comp, result):
 
     if c1 != c2:
         result.add_error("Code blocks not preserved exactly")
+
+
+def validate_inline_code(orig, comp, result):
+    """Inline backtick spans are part of the preservation contract.
+
+    `caveman-compress` promises to preserve commands, env vars, file
+    paths, and other technical content inside inline backticks exactly
+    (see SKILL.md / README.md). Without this check, the validator could
+    print "Validation passed" while `npm install` had been rewritten to
+    `yarn install` — silent drift on memory files (#112).
+    """
+    i1 = extract_inline_code(orig)
+    i2 = extract_inline_code(comp)
+
+    if i1 != i2:
+        # Surface a small diff sample so the failing span is obvious in
+        # the log without dumping the entire file.
+        s1, s2 = set(i1), set(i2)
+        lost = sorted(s1 - s2)[:5]
+        added = sorted(s2 - s1)[:5]
+        result.add_error(
+            "Inline code not preserved exactly: "
+            f"lost={lost} added={added}"
+        )
 
 
 def validate_urls(orig, comp, result):
@@ -155,6 +208,7 @@ def validate(original_path: Path, compressed_path: Path) -> ValidationResult:
 
     validate_headings(orig, comp, result)
     validate_code_blocks(orig, comp, result)
+    validate_inline_code(orig, comp, result)
     validate_urls(orig, comp, result)
     validate_paths(orig, comp, result)
     validate_bullets(orig, comp, result)
