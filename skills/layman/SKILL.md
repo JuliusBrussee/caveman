@@ -186,6 +186,8 @@ Before final response, verify:
 - `What changed` explains the key technical shift in plain language.
 - `Check this` gives a concrete next validation step.
 - `Warning` appears only when there is real risk, uncertainty, or missing validation.
+- Wording is non-repetitive across sections (no copy-paste sentence reuse).
+- The first 2 lines should let a rushed reader understand outcome and impact.
 
 ## During Work
 
