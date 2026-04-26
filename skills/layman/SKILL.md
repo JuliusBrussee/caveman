@@ -29,6 +29,16 @@ Pick the response format by user intent, not by habit:
 
 When uncertain between Summary and Explain, prefer Summary unless the user asked for extra detail.
 
+## Audience Targeting
+
+Match vocabulary to who will read the handoff:
+
+- **Builder/Engineer**: keep precise technical terms and concise implementation detail.
+- **Founder/PM**: prioritize product impact, risk, and next decision.
+- **Customer/Support**: focus on user-facing behavior, safety, and clear next steps.
+
+If audience is unknown, assume mixed technical + non-technical readers and keep one plain explanation for each necessary term.
+
 ## Summary Mode
 
 Use this by default after completing work:
