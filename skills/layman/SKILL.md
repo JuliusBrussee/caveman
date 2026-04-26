@@ -28,6 +28,7 @@ Pick the response format by user intent, not by habit:
 - If the user asks a narrow technical question, answer directly first; use templates only when they help clarity.
 
 When uncertain between Summary and Explain, prefer Summary unless the user asked for extra detail.
+If essential context is missing, ask at most one focused clarifying question before applying a template.
 
 ## Audience Targeting
 
