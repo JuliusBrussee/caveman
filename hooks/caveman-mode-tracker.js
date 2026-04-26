@@ -131,6 +131,11 @@ process.stdin.on('end', () => {
           "hedging (~것 같습니다). Fragments OK. " +
           "Use 반말. Drop particles (은/는/이/가) when clear. " +
           "Code/commits/security: write normal.";
+      } else if (activeMode.startsWith('wenyan')) {
+        reminder = "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+          "Use Classical Chinese (文言文). Maximum terseness. " +
+          "Classical sentence patterns. Verbs before objects. " +
+          "Code/commits/security: write normal.";
       }
 
       process.stdout.write(JSON.stringify({

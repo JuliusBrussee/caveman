@@ -61,10 +61,8 @@ Example — "Explain database connection pooling."
 
 ## Language Rules
 
-When a non-English intensity level is active (wenyan-*, hangeul-*),
-the hook loads language-specific compression rules from `rules/<lang>-compression.md`.
-These rules replace the English Rules section above for that mode.
-English users see no language rules in their system prompt.
+Non-English modes (wenyan-*, hangeul-*) load language-specific rules
+via the hook. English users never see them.
 
 ## Auto-Clarity
 
