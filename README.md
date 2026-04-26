@@ -79,32 +79,39 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 
 <table>
 <tr>
-<td width="25%">
+<td width="20%">
 
 #### 🪶 Lite
 
 > "Your component re-renders because you create a new object reference each render. Inline object props fail shallow comparison every time. Wrap it in `useMemo`."
 
 </td>
-<td width="25%">
+<td width="20%">
 
 #### 🪨 Full
 
 > "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
 
 </td>
-<td width="25%">
+<td width="20%">
 
 #### 🔥 Ultra
 
 > "Inline obj prop → new ref → re-render. `useMemo`."
 
 </td>
-<td width="25%">
+<td width="20%">
 
 #### 📜 文言文
 
 > "物出新參照，致重繪。useMemo Wrap之。"
+
+</td>
+<td width="20%">
+
+#### 🇰🇷 Hangeul
+
+> "새 객체 ref → 리렌더링. useMemo."
 
 </td>
 </tr>

@@ -44,20 +44,30 @@ if (INDEPENDENT_MODES.has(mode)) {
   process.exit(0);
 }
 
-// Resolve the canonical label for aliases
+// Resolve canonical labels.
+// Flag file stores short names (wenyan, hangeul) for statusline readability.
+// We expand to canonical full names for the system prompt label.
 let modeLabel = mode;
 if (mode === 'wenyan') modeLabel = 'wenyan-full';
 if (mode === 'hangeul' || mode === 'korean' || mode === 'ko') modeLabel = 'hangeul-full';
 
 // Read SKILL.md — the single source of truth for caveman behavior.
-// Plugin installs: __dirname = <plugin_root>/hooks/, SKILL.md at <plugin_root>/skills/caveman/SKILL.md
-// Standalone installs: __dirname = $CLAUDE_CONFIG_DIR/hooks/, SKILL.md won't exist — falls back to hardcoded rules.
+// Multiple lookup paths to handle plugin installs, cloned repos, and standalone installs.
 let skillContent = '';
 try {
   skillContent = fs.readFileSync(
     path.join(__dirname, '..', 'skills', 'caveman', 'SKILL.md'), 'utf8'
   );
-} catch (e) { /* standalone install — will use fallback below */ }
+} catch (e) { /* plugin install — will try other paths below */ }
+
+// For standalone + cloned repo: also try repo-root-relative path
+if (!skillContent) {
+  try {
+    skillContent = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'skills', 'caveman', 'SKILL.md'), 'utf8'
+    );
+  } catch (e) { /* still not found — will use fallback below */ }
+}
 
 let output;
 
@@ -91,25 +101,6 @@ if (skillContent) {
   }, []);
 
   output = 'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' + filtered.join('\n');
-
-  // Load language-specific compression rules (hook-based injection).
-  // These are NOT in SKILL.md — English users never see them.
-  // Only the active language mode's rules are loaded.
-  if (modeLabel.startsWith('hangeul')) {
-    const rulesDir = path.join(__dirname, '..', 'rules');
-    const langRulesPath = path.join(rulesDir, 'hangeul-compression.md');
-    try {
-      const langRules = fs.readFileSync(langRulesPath, 'utf8');
-      output += '\n\n' + langRules;
-    } catch (e) { /* silent — rules file optional for standalone installs */ }
-  } else if (modeLabel.startsWith('wenyan')) {
-    const rulesDir = path.join(__dirname, '..', 'rules');
-    const langRulesPath = path.join(rulesDir, 'wenyan-compression.md');
-    try {
-      const langRules = fs.readFileSync(langRulesPath, 'utf8');
-      output += '\n\n' + langRules;
-    } catch (e) { /* silent */ }
-  }
 } else {
   // Fallback when SKILL.md is not found (standalone hook install without skills dir).
   // This is the minimum viable ruleset — better than nothing.
@@ -129,6 +120,48 @@ if (skillContent) {
     'Drop caveman for: security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread, user asks to clarify or repeats question. Resume caveman after clear part done.\n\n' +
     '## Boundaries\n\n' +
     'Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.';
+}
+
+// Load language-specific compression rules (hook-based injection).
+// Runs AFTER the main output construction — applies to BOTH plugin install
+// and standalone fallback paths. English users: this block is skipped.
+// Multiple rulesDir tries: plugin (<plugin_root>/rules), cloned repo (<repo>/rules),
+// standalone hooks dir (<claude_config>/hooks/../rules).
+const resolveRulesDir = () => {
+  for (const rel of ['..', '../..']) {
+    const candidate = path.join(__dirname, rel, 'rules');
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch (e) { /* ignore */ }
+  }
+  return path.join(__dirname, '..', 'rules'); // default, will fail silently
+};
+
+if (modeLabel.startsWith('hangeul')) {
+  const rulesDir = resolveRulesDir();
+  const langRulesPath = path.join(rulesDir, 'hangeul-compression.md');
+  try {
+    const langRules = fs.readFileSync(langRulesPath, 'utf8');
+    output += '\n\n' + langRules;
+  } catch (e) {
+    // Fallback: inline minimal Korean rules for standalone installs
+    output += '\n\n# Korean Compression Rules (minimal)\n' +
+      'ACTIVE ONLY when `/caveman hangeul` (or `korean`, `ko`) is set.\n' +
+      'Drop filler (사실/그냥/진짜/기본적으로), pleasantries (~드리겠습니다), hedging (~것 같습니다). ' +
+      'Use 반말. Drop particles (은/는/이/가). Use noun endings (~함/~됨). Fragments OK.\n';
+  }
+} else if (modeLabel.startsWith('wenyan')) {
+  const rulesDir = resolveRulesDir();
+  const langRulesPath = path.join(rulesDir, 'wenyan-compression.md');
+  try {
+    const langRules = fs.readFileSync(langRulesPath, 'utf8');
+    output += '\n\n' + langRules;
+  } catch (e) {
+    // Fallback: inline minimal wenyan rules for standalone installs
+    output += '\n\n# Classical Chinese Rules (minimal)\n' +
+      'Respond in Classical Chinese (文言文). Maximum terseness. ' +
+      'Classical sentence patterns. Verbs precede objects. Subjects often omitted.\n';
+  }
 }
 
 // 3. Detect missing statusline config — nudge Claude to help set it up

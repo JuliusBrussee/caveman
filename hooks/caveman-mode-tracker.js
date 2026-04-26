@@ -48,10 +48,10 @@ process.stdin.on('end', () => {
         if (arg === 'lite') mode = 'lite';
         else if (arg === 'ultra') mode = 'ultra';
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
-        else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
+        else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan-full';
         else if (arg === 'wenyan-ultra') mode = 'wenyan-ultra';
         else if (arg === 'hangeul-lite') mode = 'hangeul-lite';
-        else if (arg === 'hangeul' || arg === 'hangeul-full' || arg === 'korean' || arg === 'ko') mode = 'hangeul';
+        else if (arg === 'hangeul' || arg === 'hangeul-full' || arg === 'korean' || arg === 'ko') mode = 'hangeul-full';
         else if (arg === 'hangeul-ultra') mode = 'hangeul-ultra';
         else mode = getDefaultMode();
       }
@@ -93,6 +93,11 @@ process.stdin.on('end', () => {
           "Drop filler (사실/그냥/진짜), pleasantries (~드리겠습니다), " +
           "hedging (~것 같습니다). Fragments OK. " +
           "Use 반말. Drop particles (은/는/이/가) when clear. " +
+          "Code/commits/security: write normal.";
+      } else if (activeMode.startsWith('wenyan')) {
+        reminder = "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+          "Use Classical Chinese (文言文). Maximum terseness. " +
+          "Classical sentence patterns. Verbs before objects. " +
           "Code/commits/security: write normal.";
       }
 
