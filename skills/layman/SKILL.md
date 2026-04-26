@@ -105,6 +105,14 @@ Warning:
 ```
 
 Omit `Terms:` if no technical term needs explanation. Omit `Warning:` when none exists.
+If work is blocked or partial, add:
+
+```txt
+What is blocked:
+<one-line blocker>
+```
+
+Then provide the next practical unblock step under `Check this`.
 
 ## Brief Modes
 
