@@ -96,6 +96,12 @@ Omit `Terms:` if no technical term needs explanation. Omit `Warning:` when none 
 
 Use these when the user wants token-saving brevity instead of a handoff summary.
 
+Length targets:
+- **Summary**: usually 120-220 words.
+- **Explain**: usually 160-320 words.
+- **Brief/Lite**: 1-4 short lines.
+- **Ultra/Wenyan**: 1-2 compressed lines unless safety needs more context.
+
 Triggers:
 - `/layman brief` or `/layman full`
 - `/layman lite`
