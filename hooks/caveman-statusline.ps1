@@ -1,6 +1,35 @@
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }
-$Flag = Join-Path $ClaudeDir ".caveman-active"
-if (-not (Test-Path $Flag)) { exit 0 }
+$GlobalFlag = Join-Path $ClaudeDir ".caveman-active"
+
+# Claude Code pipes session JSON to statusline scripts on stdin. Pull the
+# session_id and prefer the per-session flag so concurrent sessions in
+# different caveman levels each see their own badge. Sanitize aggressively
+# — anything we splice into a path needs to be safe.
+$SessionId = ""
+try {
+    if (-not [Console]::IsInputRedirected) {
+        # No stdin — manual invocation. Skip session lookup.
+    } else {
+        $StdinRaw = [Console]::In.ReadToEnd()
+        if ($StdinRaw) {
+            $Parsed = $StdinRaw | ConvertFrom-Json -ErrorAction Stop
+            if ($Parsed.session_id) {
+                $Cleaned = ($Parsed.session_id -replace '[^a-zA-Z0-9-]', '')
+                if ($Cleaned.Length -gt 0 -and $Cleaned.Length -le 128) {
+                    $SessionId = $Cleaned
+                }
+            }
+        }
+    }
+} catch { }
+
+$Flag = $null
+if ($SessionId) {
+    $Candidate = Join-Path $ClaudeDir ".caveman-active-$SessionId"
+    if (Test-Path $Candidate) { $Flag = $Candidate }
+}
+if (-not $Flag -and (Test-Path $GlobalFlag)) { $Flag = $GlobalFlag }
+if (-not $Flag) { exit 0 }
 
 # Refuse reparse points (symlinks / junctions) and oversized files. Without
 # this, a local attacker could point the flag at a secret file and have the

@@ -9,20 +9,25 @@ If you installed caveman standalone (without the plugin), you can use `bash hook
 ### `caveman-activate.js` — SessionStart hook
 
 - Runs once when Claude Code starts
-- Writes `full` to `~/.claude/.caveman-active` (flag file)
+- Writes the active mode to a per-session flag `~/.claude/.caveman-active-<session_id>` (and mirrors to the global `~/.claude/.caveman-active` for legacy readers)
 - Emits caveman rules as hidden SessionStart context
+- Cleans up per-session flag files older than 24h
 - Detects missing statusline config and emits setup nudge (Claude will offer to help)
 
 ### `caveman-mode-tracker.js` — UserPromptSubmit hook
 
 - Fires on every user prompt, checks for `/caveman` commands
-- Writes the active mode to the flag file when a caveman command is detected
+- Writes the active mode to the per-session flag (falls back to global if `session_id` is unavailable)
 - Supports: `full`, `lite`, `ultra`, `wenyan`, `wenyan-lite`, `wenyan-ultra`, `commit`, `review`, `compress`
 
 ### `caveman-statusline.sh` / `caveman-statusline.ps1` — Statusline badge script
 
-- Reads `~/.claude/.caveman-active` and outputs a colored badge
-- Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc.
+- Parses `session_id` from stdin JSON, reads the per-session flag, falls back to `~/.claude/.caveman-active`
+- Outputs a colored badge: `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc.
+
+## Concurrent Sessions
+
+Multiple Claude Code sessions running side-by-side (e.g. terminal A in `ultra`, terminal B in `lite`) used to clobber each other through a single global flag file. Each session now gets its own flag at `~/.claude/.caveman-active-<session_id>`, scoped via the `session_id` Claude Code sends on hook stdin. The global `.caveman-active` is still written and read as a fallback so older statusline configs (or scripts that don't pipe stdin to the statusline command) keep working.
 
 ## Statusline Badge
 
