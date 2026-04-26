@@ -135,7 +135,7 @@ Pick your agent. One command. Done.
 |-------|---------|
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` |
 | **Codex** | Clone repo → `/plugins` → Search "Caveman" → Install |
-| **OpenCode** | Copy `.opencode/plugins/caveman.ts` + `.opencode/command/caveman.md` to `~/.config/opencode/` |
+| **OpenCode** | `opencode plugin caveman-opencode` |
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
@@ -224,23 +224,24 @@ codex_hooks = true
 <details>
 <summary><strong>OpenCode — full details</strong></summary>
 
-OpenCode loads local plugins from `~/.config/opencode/plugins/` and commands from `~/.config/opencode/command/`.
+OpenCode installs package plugins with Bun and stores them in your OpenCode config.
 
 ```bash
-mkdir -p ~/.config/opencode/plugins ~/.config/opencode/command
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/.opencode/plugins/caveman.ts -o ~/.config/opencode/plugins/caveman.ts
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/.opencode/command/caveman.md -o ~/.config/opencode/command/caveman.md
+opencode plugin caveman-opencode
 ```
 
 Restart OpenCode after install.
 
 What plugin does:
 - Injects caveman instructions on session start
-- Tracks `/caveman`, `/caveman lite`, `/caveman full`, `/caveman ultra`, `/caveman wenyan`, and `/caveman off`
+- Adds native OpenCode commands: `/caveman`, `/enable_caveman`, `/disable_caveman`
+- Tracks text triggers like `/caveman lite`, `/caveman full`, `/caveman ultra`, `/caveman wenyan`, and `/caveman off` when OpenCode passes them through
 - Tracks natural language triggers like "talk like caveman", "less tokens", "stop caveman", and "normal mode"
 - Persists mode in `~/.local/state/opencode/caveman-mode.json`
 - Reads `CAVEMAN_DEFAULT_MODE` or `~/.config/caveman/config.json` with `defaultMode` when present
-- Reads installed skill text from `~/.agents/skills/caveman/SKILL.md` or `~/.config/opencode/skills/caveman/SKILL.md` when present
+- Reads bundled or installed skill text when present, with fallback rules built in
+
+For local development before package publication, point OpenCode at this repo's package or plugin files from your OpenCode config.
 
 </details>
 

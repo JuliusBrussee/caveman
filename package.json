@@ -1,0 +1,30 @@
+{
+  "name": "caveman-opencode",
+  "version": "0.1.0",
+  "description": "Caveman mode for OpenCode. Cut filler, keep technical accuracy.",
+  "type": "module",
+  "main": "./plugins/caveman/.opencode-plugin/server.ts",
+  "exports": {
+    ".": "./plugins/caveman/.opencode-plugin/server.ts",
+    "./server": "./plugins/caveman/.opencode-plugin/server.ts",
+    "./tui": "./plugins/caveman/.opencode-plugin/tui.ts"
+  },
+  "author": {
+    "name": "Julius Brussee",
+    "url": "https://github.com/JuliusBrussee"
+  },
+  "homepage": "https://github.com/JuliusBrussee/caveman",
+  "repository": "https://github.com/JuliusBrussee/caveman",
+  "license": "MIT",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "caveman",
+    "brevity",
+    "productivity"
+  ],
+  "files": [
+    "plugins/caveman/.opencode-plugin",
+    "skills/caveman/SKILL.md"
+  ]
+}
