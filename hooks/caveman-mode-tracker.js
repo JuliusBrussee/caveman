@@ -45,7 +45,8 @@ process.stdin.on('end', () => {
       } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
         mode = 'compress';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
-        if (arg === 'lite') mode = 'lite';
+        if (arg === 'stop' || arg === 'off') mode = 'off';
+        else if (arg === 'lite') mode = 'lite';
         else if (arg === 'ultra') mode = 'ultra';
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
