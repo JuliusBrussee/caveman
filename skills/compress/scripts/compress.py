@@ -152,7 +152,7 @@ Return ONLY the fixed compressed file. No explanation.
 # ---------- Core Logic ----------
 
 
-def compress_file(filepath: Path) -> bool:
+def compress_file(filepath: Path, no_backup: bool = False) -> bool:
     # Resolve and validate path
     filepath = filepath.resolve()
     MAX_FILE_SIZE = 500_000  # 500KB
@@ -180,14 +180,28 @@ def compress_file(filepath: Path) -> bool:
         return False
 
     original_text = filepath.read_text(errors="ignore")
-    backup_path = filepath.with_name(filepath.stem + ".original.md")
 
-    # Check if backup already exists to prevent accidental overwriting
-    if backup_path.exists():
-        print(f"⚠️ Backup file already exists: {backup_path}")
-        print("The original backup may contain important content.")
-        print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
-        return False
+    # When no_backup is True, route the "backup" (needed by validate() to
+    # diff against the compressed file) through a tempfile that lives
+    # outside the user's working directory and is removed at the end.
+    # The user's directory stays clean — no `.original.md` left behind.
+    if no_backup:
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".original.md", delete=False, encoding="utf-8"
+        )
+        tmp.write(original_text)
+        tmp.close()
+        backup_path = Path(tmp.name)
+    else:
+        backup_path = filepath.with_name(filepath.stem + ".original.md")
+
+        # Check if backup already exists to prevent accidental overwriting
+        if backup_path.exists():
+            print(f"⚠️ Backup file already exists: {backup_path}")
+            print("The original backup may contain important content.")
+            print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
+            return False
 
     # Step 1: Compress
     print("Compressing with Claude...")
@@ -223,5 +237,11 @@ def compress_file(filepath: Path) -> bool:
             build_fix_prompt(original_text, compressed, result.errors)
         )
         filepath.write_text(compressed)
+
+    # When the user opted out of keeping a backup file, drop the tempfile
+    # we used during validation. On the default path this is a real
+    # `.original.md` next to the input — leave it for the user.
+    if no_backup:
+        backup_path.unlink(missing_ok=True)
 
     return True
