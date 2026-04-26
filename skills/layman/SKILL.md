@@ -64,6 +64,11 @@ Warning:
 
 Omit `Warning:` when there is no meaningful warning.
 
+`Check this` quality rules:
+- Prefer explicit input + expected outcome (not vague "please test this").
+- Include one happy-path check and one edge/failure-path check when relevant.
+- If you could not run tests, include one practical manual verification step.
+
 Use-case defaults:
 - **Bug fix**: name the broken behavior, user impact, and one repro check.
 - **Feature**: name the new capability, target user, and success check.
