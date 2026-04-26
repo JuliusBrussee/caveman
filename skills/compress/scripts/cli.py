@@ -7,6 +7,20 @@ Usage:
 """
 
 import sys
+
+# Force UTF-8 on stdout/stderr before any code can print. Without this,
+# Windows consoles default to cp1252 and the ❌ glyphs in error/validation
+# branches raise UnicodeEncodeError, which masks the real error and leaves
+# the user with a half-compressed file. `errors='replace'` keeps the
+# program running even if the host terminal can't render a code point.
+for _stream in (sys.stdout, sys.stderr):
+    reconfigure = getattr(_stream, "reconfigure", None)
+    if callable(reconfigure):
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 from pathlib import Path
 
 from .compress import compress_file
