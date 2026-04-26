@@ -174,6 +174,7 @@ Wenyan example:
 - Mention tests or verification in plain English, not as a raw command dump.
 - If nothing changed, say that clearly instead of implying work shipped.
 - Separate confirmed facts from assumptions; label assumptions explicitly.
+- Do not fabricate root causes; use wording like "likely", "appears", or "not yet confirmed" when evidence is incomplete.
 
 ## Quality Bar Before Sending
 
