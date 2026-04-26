@@ -85,6 +85,9 @@ process.stdin.on('end', () => {
         } else if (arg === 'wenyan-full') {
           // Canonical alias — config stores as 'wenyan'
           mode = 'wenyan';
+        } else if (arg === 'hangeul-full' || arg === 'korean' || arg === 'ko') {
+          // Canonical alias — config stores as 'hangeul'
+          mode = 'hangeul';
         } else if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) {
           mode = arg;
         }
@@ -118,12 +121,22 @@ process.stdin.on('end', () => {
     // — never inject untrusted bytes into model context.
     const activeMode = readFlag(flagPath);
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+      let reminder = "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+        "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
+        "Code/commits/security: write normal.";
+
+      if (activeMode.startsWith('hangeul')) {
+        reminder = "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+          "Drop filler (사실/그냥/진짜), pleasantries (~드리겠습니다), " +
+          "hedging (~것 같습니다). Fragments OK. " +
+          "Use 반말. Drop particles (은/는/이/가) when clear. " +
+          "Code/commits/security: write normal.";
+      }
+
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-            "Code/commits/security: write normal."
+          additionalContext: reminder
         }
       }));
     }

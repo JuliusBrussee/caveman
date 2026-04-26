@@ -44,8 +44,10 @@ if (INDEPENDENT_MODES.has(mode)) {
   process.exit(0);
 }
 
-// Resolve the canonical label for wenyan alias
-const modeLabel = mode === 'wenyan' ? 'wenyan-full' : mode;
+// Resolve the canonical label for aliases
+let modeLabel = mode;
+if (mode === 'wenyan') modeLabel = 'wenyan-full';
+if (mode === 'hangeul' || mode === 'korean' || mode === 'ko') modeLabel = 'hangeul-full';
 
 // Read SKILL.md — the single source of truth for caveman behavior.
 // Plugin installs: __dirname = <plugin_root>/hooks/, SKILL.md at <plugin_root>/skills/caveman/SKILL.md
@@ -89,6 +91,25 @@ if (skillContent) {
   }, []);
 
   output = 'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' + filtered.join('\n');
+
+  // Load language-specific compression rules (hook-based injection).
+  // These are NOT in SKILL.md — English users never see them.
+  // Only the active language mode's rules are loaded.
+  if (modeLabel.startsWith('hangeul')) {
+    const rulesDir = path.join(__dirname, '..', 'rules');
+    const langRulesPath = path.join(rulesDir, 'hangeul-compression.md');
+    try {
+      const langRules = fs.readFileSync(langRulesPath, 'utf8');
+      output += '\n\n' + langRules;
+    } catch (e) { /* silent — rules file optional for standalone installs */ }
+  } else if (modeLabel.startsWith('wenyan')) {
+    const rulesDir = path.join(__dirname, '..', 'rules');
+    const langRulesPath = path.join(rulesDir, 'wenyan-compression.md');
+    try {
+      const langRules = fs.readFileSync(langRulesPath, 'utf8');
+      output += '\n\n' + langRules;
+    } catch (e) { /* silent */ }
+  }
 } else {
   // Fallback when SKILL.md is not found (standalone hook install without skills dir).
   // This is the minimum viable ruleset — better than nothing.
