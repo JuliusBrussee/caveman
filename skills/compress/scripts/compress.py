@@ -182,6 +182,15 @@ def compress_file(filepath: Path) -> bool:
     original_text = filepath.read_text(errors="ignore")
     backup_path = filepath.with_name(filepath.stem + ".original.md")
 
+    # Refuse to "compress" an empty file. Without this, an empty input would
+    # round-trip through Claude and produce an empty backup + empty target,
+    # silently destroying nothing of value but reporting "success" — which
+    # earlier masked the real bug from #237 where users saw an empty backup
+    # and assumed a data-loss bug.
+    if not original_text.strip():
+        print("❌ Refusing to compress: file is empty or whitespace-only.")
+        return False
+
     # Check if backup already exists to prevent accidental overwriting
     if backup_path.exists():
         print(f"⚠️ Backup file already exists: {backup_path}")
@@ -193,8 +202,37 @@ def compress_file(filepath: Path) -> bool:
     print("Compressing with Claude...")
     compressed = call_claude(build_compress_prompt(original_text))
 
-    # Save original as backup, write compressed to original path
+    # Defensive checks before any write touches disk. The bug in #237 had
+    # users seeing an empty backup file and an unchanged input, with the
+    # script still printing "Compression completed successfully" — i.e.
+    # silent data loss masked by a green path. The right answer is to bail
+    # loudly *before* the writes happen rather than try to clean up after.
+    if compressed is None or not compressed.strip():
+        print("❌ Compression aborted: Claude returned an empty response.")
+        print("   Original file is untouched (no backup created).")
+        return False
+
+    if compressed.strip() == original_text.strip():
+        print("❌ Compression aborted: output is identical to input.")
+        print("   Likely causes: Claude refused, returned the prompt verbatim, or the file is")
+        print("   already in caveman form. Original file is untouched (no backup created).")
+        return False
+
+    # Save original as backup, write compressed to original path. Re-read the
+    # backup we just wrote and compare against the in-memory original_text:
+    # if they don't match, the filesystem dropped bytes (encoding mismatch,
+    # disk full, antivirus quarantine on Windows). Roll back rather than
+    # leave the user with a corrupt backup and a compressed primary.
     backup_path.write_text(original_text)
+    backup_readback = backup_path.read_text(errors="ignore")
+    if backup_readback != original_text:
+        print(f"❌ Backup write verification failed: {backup_path}")
+        print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
+        try:
+            backup_path.unlink()
+        except OSError:
+            pass
+        return False
     filepath.write_text(compressed)
 
     # Step 2: Validate + Retry
