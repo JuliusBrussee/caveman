@@ -32,7 +32,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin, Codex plugin, and OpenCode plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
 
 Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
 
@@ -135,6 +135,7 @@ Pick your agent. One command. Done.
 |-------|---------|
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` |
 | **Codex** | Clone repo → `/plugins` → Search "Caveman" → Install |
+| **OpenCode** | Copy `.opencode/plugins/caveman.ts` + `.opencode/command/caveman.md` to `~/.config/opencode/` |
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
@@ -146,22 +147,22 @@ Install once. Use in every session for that install target after that. One rock.
 
 ### What You Get
 
-Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
+Auto-activation is built in for Claude Code, OpenCode, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
 
-| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
-|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|
-| Caveman mode | Y | Y | Y | Y | Y | Y | Y |
-| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² |
-| `/caveman` command | Y | Y¹ | Y | — | — | — | — |
-| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — |
-| Statusline badge | Y⁴ | — | — | — | — | — | — |
-| caveman-commit | Y | — | Y | Y | Y | Y | Y |
-| caveman-review | Y | — | Y | Y | Y | Y | Y |
-| caveman-compress | Y | Y | Y | Y | Y | Y | Y |
-| caveman-help | Y | — | Y | Y | Y | Y | Y |
+| Feature | Claude Code | Codex | OpenCode | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
+|---------|:-----------:|:-----:|:--------:|:----------:|:------:|:--------:|:-----:|:-------:|
+| Caveman mode | Y | Y | Y | Y | Y | Y | Y | Y |
+| Auto-activate every session | Y | Y¹ | Y | Y | —² | —² | —² | —² |
+| `/caveman` command | Y | Y¹ | Y | Y | — | — | — | — |
+| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y | Y³ | Y³ | — | — |
+| Statusline badge | Y⁴ | — | — | — | — | — | — | — |
+| caveman-commit | Y | — | — | Y | Y | Y | Y | Y |
+| caveman-review | Y | — | — | Y | Y | Y | Y | Y |
+| caveman-compress | Y | Y | — | Y | Y | Y | Y | Y |
+| caveman-help | Y | — | — | Y | Y | Y | Y | Y |
 
 > [!NOTE]
-> Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
+> Auto-activation works differently per agent: Claude Code uses SessionStart hooks, OpenCode uses a plugin, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
 >
 > ¹ Codex uses `$caveman` syntax, not `/caveman`. This repo ships `.codex/hooks.json`, so caveman auto-starts when you run Codex inside this repo. The installed plugin itself gives you `$caveman`; copy the same hook into another repo if you want always-on behavior there too. caveman-commit and caveman-review are not in the Codex plugin bundle — use the SKILL.md files directly.
 > ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
@@ -221,6 +222,29 @@ codex_hooks = true
 </details>
 
 <details>
+<summary><strong>OpenCode — full details</strong></summary>
+
+OpenCode loads local plugins from `~/.config/opencode/plugins/` and commands from `~/.config/opencode/command/`.
+
+```bash
+mkdir -p ~/.config/opencode/plugins ~/.config/opencode/command
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/.opencode/plugins/caveman.ts -o ~/.config/opencode/plugins/caveman.ts
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/.opencode/command/caveman.md -o ~/.config/opencode/command/caveman.md
+```
+
+Restart OpenCode after install.
+
+What plugin does:
+- Injects caveman instructions on session start
+- Tracks `/caveman`, `/caveman lite`, `/caveman full`, `/caveman ultra`, `/caveman wenyan`, and `/caveman off`
+- Tracks natural language triggers like "talk like caveman", "less tokens", "stop caveman", and "normal mode"
+- Persists mode in `~/.local/state/opencode/caveman-mode.json`
+- Reads `CAVEMAN_DEFAULT_MODE` or `~/.config/caveman/config.json` with `defaultMode` when present
+- Reads installed skill text from `~/.agents/skills/caveman/SKILL.md` or `~/.config/opencode/skills/caveman/SKILL.md` when present
+
+</details>
+
+<details>
 <summary><strong>Gemini CLI — full details</strong></summary>
 
 ```bash
@@ -255,7 +279,7 @@ Copilot works with Chat, Edits, and Coding Agent.
 </details>
 
 <details>
-<summary><strong>Any other agent (opencode, Roo, Amp, Goose, Kiro, and 40+ more)</strong></summary>
+<summary><strong>Any other agent (Roo, Amp, Goose, Kiro, and 40+ more)</strong></summary>
 
 [npx skills](https://github.com/vercel-labs/skills) supports 40+ agents:
 
@@ -289,7 +313,6 @@ Code/commits/PRs: normal. Off: "stop caveman" / "normal mode".
 Where to put it:
 | Agent | File |
 |-------|------|
-| opencode | `.config/opencode/AGENTS.md` |
 | Roo | `.roo/rules/caveman.md` |
 | Amp | your workspace system prompt |
 | Others | your agent's system prompt or rules file |
