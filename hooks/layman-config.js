@@ -15,6 +15,7 @@ const os = require('os');
 
 const VALID_MODES = [
   'off', 'summary', 'explain',
+  'brief',
   'lite', 'full', 'ultra',
   'wenyan-lite', 'wenyan', 'wenyan-full', 'wenyan-ultra',
   'commit', 'review', 'compress'

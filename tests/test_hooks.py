@@ -156,6 +156,52 @@ class HookScriptTests(unittest.TestCase):
             self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
             self.assertEqual((claude_dir / ".layman-active").read_text(), "summary")
 
+    def test_activate_respects_brief_default_mode(self):
+        with tempfile.TemporaryDirectory(prefix="layman-hooks-brief-default-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+
+            result = self.run_cmd(
+                ["node", "hooks/layman-activate.js"],
+                home,
+            )
+            self.assertIn("LAYMAN MODE ACTIVE", result.stdout)
+
+            brief_result = subprocess.run(
+                ["node", "hooks/layman-activate.js"],
+                cwd=REPO_ROOT,
+                env={
+                    **os.environ,
+                    "HOME": str(home),
+                    "USERPROFILE": str(home),
+                    "LAYMAN_DEFAULT_MODE": "brief",
+                },
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertIn("mode: brief", brief_result.stdout)
+            self.assertEqual((claude_dir / ".layman-active").read_text(), "brief")
+
+    def test_mode_tracker_writes_wenyan_full_exactly(self):
+        with tempfile.TemporaryDirectory(prefix="layman-hooks-wenyan-full-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+
+            subprocess.run(
+                ["node", "hooks/layman-mode-tracker.js"],
+                cwd=REPO_ROOT,
+                env={**os.environ, "HOME": str(home), "USERPROFILE": str(home)},
+                text=True,
+                input='{"prompt":"/layman wenyan-full"}',
+                capture_output=True,
+                check=True,
+            )
+
+            self.assertEqual((claude_dir / ".layman-active").read_text(), "wenyan-full")
+
 
 if __name__ == "__main__":
     unittest.main()
