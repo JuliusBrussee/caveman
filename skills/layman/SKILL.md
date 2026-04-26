@@ -191,6 +191,7 @@ Before final response, verify:
 During active coding, normal concise engineering updates are fine. Summary Mode mainly controls the final handoff after work is done. Brief modes control every response until changed.
 
 If the user asks a direct technical question instead of requesting completed work, answer directly in plain English. Do not force the summary template unless it helps.
+When continuing a multi-step task, start with one short continuity line about what changed since the previous step.
 
 ## Examples
 
