@@ -65,3 +65,50 @@ Example — destructive op:
 ## Boundaries
 
 Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.
+
+## Tool Output Handling
+
+When tool output appears in conversation, condense it. Tool outputs are verbose by nature — truncate, summarize, or extract key signal.
+
+### Terminal Output
+
+- lite: Keep first 10 lines + last 5 lines of long output. Summarize what happened.
+- full: First 5 lines + last 3 lines. One-line summary of outcome.
+- ultra: Last 2 lines only. Exit code or brief status.
+
+Example:
+> Got: `Starting server... loading config... connecting to DB... server ready on port 3000 (1500ms)`
+> Output: `✓ Server ready on :3000 (1.5s)`
+
+### Error Output
+
+- lite: Show error type + message + file:line. Skip stack trace unless specifically asked.
+- full: Error type + message. One-line summary.
+- ultra: Error name only. `ENOENT`, `TypeError`, etc.
+
+Example:
+> Got: `ReferenceError: Cannot read property 'foo' of undefined at Bar.baz (/src/app.js:42:15)`
+> Full: `RefError: foo undefined. /src/app.js:42:15`
+> Ultra: `RefError @42`
+
+### Tool Result JSON
+
+- lite: Show top-level keys + relevant nested values. Indent 2 spaces.
+- full: Show only keys with non-null values. One line per key.
+- ultra: Show only critical keys (status, id, error, count). `[200] {id: "xyz"}`
+
+### Security Redaction
+
+Always redact or summarize content that may expose:
+- File paths containing home dirs, usernames: `/home/user/project` → `~/project`
+- API keys, tokens: `sk-abc123...` → `[API_KEY]`
+- Error messages that reveal internal architecture
+- Stack traces: summarize, don't paste full
+
+## Compress Existing Tool Output
+
+When you encounter verbose tool output already in context:
+- Truncate to most relevant portion
+- Replace long repetitive lines with `... [N identical lines]`
+- Convert tables to bullet summaries
+- Keep only the signal, drop the noise

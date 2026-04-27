@@ -2,7 +2,8 @@
 # caveman — one-command hook installer for Claude Code
 # Installs: SessionStart hook (auto-load rules) + UserPromptSubmit hook (mode tracking)
 # Usage: bash hooks/install.sh
-#   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.sh)
+#   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.6.0/hooks/install.sh)
+#          For added safety, inspect first: curl -o install.sh <URL>; less install.sh; bash install.sh
 #   or:  bash hooks/install.sh --force   (re-install over existing hooks)
 set -e
 
@@ -35,9 +36,9 @@ fi
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
-REPO_URL="https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks"
+REPO_URL="https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.6.0/hooks"
 
-HOOK_FILES=("package.json" "caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-statusline.sh")
+HOOK_FILES=("package.json" "caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-statusline.sh" "caveman-tool-output.js")
 
 # Resolve source — works from repo clone or curl pipe
 SCRIPT_DIR=""
@@ -150,7 +151,7 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
     });
   }
 
-  // UserPromptSubmit — track mode changes when user types /caveman commands
+// UserPromptSubmit — track mode changes when user types /caveman commands
   if (!settings.hooks.UserPromptSubmit) settings.hooks.UserPromptSubmit = [];
   const hasPrompt = settings.hooks.UserPromptSubmit.some(e =>
     e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
@@ -159,9 +160,25 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
     settings.hooks.UserPromptSubmit.push({
       hooks: [{
         type: 'command',
-        command: 'node \"' + hooksDir + '/caveman-mode-tracker.js\"',
+        command: 'node "' + hooksDir + '/caveman-mode-tracker.js"',
         timeout: 5,
         statusMessage: 'Tracking caveman mode...'
+      }]
+    });
+  }
+
+  // ToolResult — post-process tool outputs to condense and redact
+  if (!settings.hooks.ToolResult) settings.hooks.ToolResult = [];
+  const hasToolResult = settings.hooks.ToolResult.some(e =>
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-tool-output'))
+  );
+  if (!hasToolResult) {
+    settings.hooks.ToolResult.push({
+      hooks: [{
+        type: 'command',
+        command: 'node "' + hooksDir + '/caveman-tool-output.js"',
+        timeout: 10,
+        statusMessage: 'Compressing tool output...'
       }]
     });
   }

@@ -3,7 +3,9 @@
 # Usage: powershell -ExecutionPolicy Bypass -File hooks\install.ps1
 #   or:  powershell -ExecutionPolicy Bypass -File hooks\install.ps1 -Force
 #   or (remote, no -Force support via pipe):
-#        irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.ps1 | iex
+#        irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.6.0/hooks/install.ps1 | iex
+#          For added safety, inspect first:
+#          Invoke-WebRequest -Uri "..." -OutFile install.ps1; Get-Content install.ps1; Run manually
 #   Note: irm ... | iex cannot pass -Force. For force reinstall, save the file and run with -File.
 param(
     [switch]$Force
@@ -22,9 +24,9 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
 $HooksDir = Join-Path $ClaudeDir "hooks"
 $Settings = Join-Path $ClaudeDir "settings.json"
-$RepoUrl = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks"
+$RepoUrl = "https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.6.0/hooks"
 
-$HookFiles = @("package.json", "caveman-config.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-statusline.sh", "caveman-statusline.ps1")
+$HookFiles = @("package.json", "caveman-config.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-statusline.sh", "caveman-statusline.ps1", "caveman-tool-output.js")
 
 # Resolve source — works from repo clone or remote
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
@@ -90,7 +92,23 @@ if (-not (Test-Path $HooksDir)) {
     New-Item -ItemType Directory -Path $HooksDir -Force | Out-Null
 }
 
-# 2. Copy or download hook files
+# 2. Copy or download hook files (with SHA-256 integrity verification)
+$TempDir = if ($env:TEMP) { $env:TEMP } else { "/tmp" }
+$ChecksumsFile = Join-Path $TempDir "caveman-checksums-$(Get-Date -Format 'yyyyMMddHHmmss').tmp"
+
+$DownloadChecksums = $false
+if (-not $ScriptDir) {
+    $DownloadChecksums = $true
+}
+
+if ($DownloadChecksums) {
+    try {
+        Invoke-WebRequest -Uri "$RepoUrl/checksums.sha256" -OutFile $ChecksumsFile -UseBasicParsing
+    } catch {
+        Write-Host "WARNING: Could not download checksums file. Proceeding without integrity verification." -ForegroundColor Yellow
+    }
+}
+
 foreach ($hook in $HookFiles) {
     $dest = Join-Path $HooksDir $hook
     $localSource = if ($ScriptDir) { Join-Path $ScriptDir $hook } else { $null }
@@ -99,8 +117,34 @@ foreach ($hook in $HookFiles) {
         Copy-Item $localSource $dest -Force
     } else {
         Invoke-WebRequest -Uri "$RepoUrl/$hook" -OutFile $dest -UseBasicParsing
+
+        if ($DownloadChecksums -and (Test-Path $ChecksumsFile)) {
+            $expectedHash = $null
+            try {
+                $checksumContent = Get-Content $ChecksumsFile -Raw
+                $matchedLine = $checksumContent -split "`n" | Where-Object { $_ -match $hook.Replace('.', '\.') } | Select-Object -First 1
+                if ($matchedLine -match '^([a-fA-F0-9]{64})\s+\S+' ) {
+                    $expectedHash = $matches[1]
+                }
+            } catch {}
+
+            if ($expectedHash) {
+                $actualHash = (Get-FileHash -Path $dest -Algorithm SHA256).Hash.ToLower()
+                if ($actualHash -ne $expectedHash.ToLower()) {
+                    Remove-Item $dest -Force -ErrorAction SilentlyContinue
+                    Write-Host "ERROR: Integrity check failed for $hook" -ForegroundColor Red
+                    Write-Host "  Expected: $expectedHash" -ForegroundColor Red
+                    Write-Host "  Actual:   $actualHash" -ForegroundColor Red
+                    exit 1
+                }
+            }
+        }
     }
     Write-Host "  Installed: $dest"
+}
+
+if (Test-Path $ChecksumsFile) {
+    Remove-Item $ChecksumsFile -Force -ErrorAction SilentlyContinue
 }
 
 # 3. Wire hooks + statusline into settings.json (idempotent)
@@ -153,6 +197,22 @@ if (!hasPrompt) {
       command: 'node "' + hooksDir + '/caveman-mode-tracker.js"',
       timeout: 5,
       statusMessage: 'Tracking caveman mode...'
+    }]
+  });
+}
+
+// ToolResult - post-process tool outputs to condense and redact
+if (!settings.hooks.ToolResult) settings.hooks.ToolResult = [];
+const hasToolResult = settings.hooks.ToolResult.some(e =>
+  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-tool-output'))
+);
+if (!hasToolResult) {
+  settings.hooks.ToolResult.push({
+    hooks: [{
+      type: 'command',
+      command: 'node "' + hooksDir + '/caveman-tool-output.js"',
+      timeout: 10,
+      statusMessage: 'Compressing tool output...'
     }]
   });
 }

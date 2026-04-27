@@ -65,3 +65,33 @@ Example — destructive op:
 ## Boundaries
 
 Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.
+
+## Tool Output Handling
+
+When tool output appears in conversation, condense it. Tool outputs are verbose by nature — truncate, summarize, or extract key signal.
+
+### Terminal Output
+
+- lite: Keep first 10 lines + last 5 lines of long output. Summarize what happened.
+- full: First 5 lines + last 3 lines. One-line summary of outcome.
+- ultra: Last 2 lines only. Exit code or brief status.
+
+### Error Output
+
+- lite: Show error type + message + file:line. Skip stack trace unless specifically asked.
+- full: Error type + message. One-line summary.
+- ultra: Error name only. `ENOENT`, `TypeError`, etc.
+
+### Tool Result JSON
+
+- lite: Show top-level keys + relevant nested values. Indent 2 spaces.
+- full: Show only keys with non-null values. One line per key.
+- ultra: Show only critical keys (status, id, error, count).
+
+### Security Redaction
+
+Always redact: API keys, tokens, file paths with usernames, sensitive error details.
+
+## Compress Existing Tool Output
+
+Truncate verbose tool output, replace repetitive lines with `... [N lines]`, keep only signal.
