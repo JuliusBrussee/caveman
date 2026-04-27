@@ -211,6 +211,40 @@ Uninstall: `bash hooks/uninstall.sh` or `powershell -File hooks\uninstall.ps1`
 2. Clone repo → Open VS Code → Codex Settings → Plugins → find "Caveman" under local marketplace → Install → Reload Window
 3. Codex hooks are currently disabled on Windows, so use `$caveman` to start manually
 
+**Windows native app quick start:**
+
+If the Codex native app does not show Caveman in Plugins, or `$caveman` does not resolve after reload, use one of these fallbacks:
+
+**No install, current thread only:**
+
+```text
+Use caveman mode for this conversation.
+
+Terse like smart caveman. Keep technical substance exact. Cut filler, pleasantries, hedging. Fragments OK. Short synonyms. Code blocks unchanged. Errors quoted exact. Pattern: [thing] [action] [reason]. [next step]. Stop only when I say "normal mode" or "stop caveman".
+```
+
+**Direct local skill install:**
+
+```powershell
+$repo = "$env:USERPROFILE\Codex\caveman"
+New-Item -ItemType Directory (Split-Path $repo) -Force
+git clone https://github.com/JuliusBrussee/caveman.git $repo
+New-Item -ItemType Directory "$env:USERPROFILE\.codex\skills\caveman" -Force
+Copy-Item "$repo\plugins\caveman\skills\caveman\SKILL.md" "$env:USERPROFILE\.codex\skills\caveman\SKILL.md" -Force
+```
+
+Restart Codex and start a new thread, then invoke the skill by attaching it:
+
+```text
+[$caveman](C:\Users\<you>\.codex\skills\caveman\SKILL.md)
+```
+
+Or ask normally:
+
+```text
+Use caveman mode.
+```
+
 This repo also ships `.codex/hooks.json` and enables hooks in `.codex/config.toml`, so caveman auto-activates while you run Codex inside this repo on macOS/Linux. The installed plugin gives you `$caveman`; if you want always-on behavior in other repos too, copy the same `SessionStart` hook there and enable:
 
 ```toml
