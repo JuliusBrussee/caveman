@@ -1,0 +1,2 @@
+description = "Show token usage and estimated savings for the current session"
+prompt = "Run caveman-stats and display the output."
