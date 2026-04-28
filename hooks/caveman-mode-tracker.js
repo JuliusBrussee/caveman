@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { execFileSync } = require('child_process');
 const { getDefaultMode, safeWriteFlag, readFlag } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
@@ -28,6 +29,25 @@ process.stdin.on('end', () => {
           safeWriteFlag(flagPath, mode);
         }
       }
+    }
+
+    if (prompt === '/caveman-stats' || prompt === '/caveman:caveman-stats') {
+      try {
+        const statsPath = path.join(__dirname, 'caveman-stats.js');
+        const args = [statsPath];
+        if (data.transcript_path) args.push('--session-file', data.transcript_path);
+        const output = execFileSync(process.execPath, args, {
+          encoding: 'utf8',
+          timeout: 5000
+        });
+        process.stdout.write(JSON.stringify({ decision: 'block', reason: output.trim() }));
+      } catch (e) {
+        process.stdout.write(JSON.stringify({
+          decision: 'block',
+          reason: 'caveman-stats: could not run stats script.\nTry manually: node hooks/caveman-stats.js'
+        }));
+      }
+      process.exit(2);
     }
 
     // Match /caveman commands
