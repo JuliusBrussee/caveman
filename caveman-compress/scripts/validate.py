@@ -93,6 +93,12 @@ def count_bullets(text):
     return len(BULLET_REGEX.findall(text))
 
 
+def extract_inline_codes(text):
+    text_without_fences = re.sub(r"^```[\s\S]*?^```", "", text, flags=re.MULTILINE)
+    text_without_fences = re.sub(r"^~~~[\s\S]*?^~~~", "", text_without_fences, flags=re.MULTILINE)
+    return re.findall(r"`([^`]+)`", text_without_fences)
+
+
 # ---------- Validators ----------
 
 
@@ -144,6 +150,19 @@ def validate_bullets(orig, comp, result):
         result.add_warning(f"Bullet count changed too much: {b1} -> {b2}")
 
 
+def validate_inline_codes(orig, comp, result):
+    c1 = extract_inline_codes(orig)
+    c2 = extract_inline_codes(comp)
+
+    if set(c1) != set(c2):
+        lost = set(c1) - set(c2)
+        added = set(c2) - set(c1)
+        if lost:
+            result.add_error(f"Inline code lost: {lost}")
+        if added:
+            result.add_warning(f"Inline code added: {added}")
+
+
 # ---------- Main ----------
 
 
@@ -158,6 +177,7 @@ def validate(original_path: Path, compressed_path: Path) -> ValidationResult:
     validate_urls(orig, comp, result)
     validate_paths(orig, comp, result)
     validate_bullets(orig, comp, result)
+    validate_inline_codes(orig, comp, result)
 
     return result
 
