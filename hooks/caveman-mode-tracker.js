@@ -45,12 +45,27 @@ process.stdin.on('end', () => {
       } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
         mode = 'compress';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
-        if (arg === 'lite') mode = 'lite';
+        if (arg === '') mode = getDefaultMode();
+        else if (arg === 'lite') mode = 'lite';
+        else if (arg === 'full') mode = 'full';
         else if (arg === 'ultra') mode = 'ultra';
         else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
         else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
         else if (arg === 'wenyan-ultra') mode = 'wenyan-ultra';
-        else mode = getDefaultMode();
+        else if (arg === 'off') mode = 'off';
+        else {
+          // Unknown arg: fail loud with usage info, leave flag file untouched.
+          // Silently substituting the default surprised users who guessed
+          // reasonable phrasings like /caveman off — they got no signal that
+          // their input was unrecognised and assumed it had worked.
+          process.stderr.write(
+            "caveman: unknown arg '" + arg + "'. " +
+            "Usage: /caveman [lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra|off]. " +
+            "Plain-English alternatives: 'stop caveman' or 'normal mode'.\n"
+          );
+          // mode stays null — flag file is not modified, per-turn reinforcement
+          // (further down) still fires for the current active mode.
+        }
       }
 
       if (mode && mode !== 'off') {
