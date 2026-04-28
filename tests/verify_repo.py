@@ -73,21 +73,32 @@ def _frontmatter_description(path: Path) -> str:
 
     description_lines: list[str] = []
     collecting = False
+    block_indent: int | None = None
     for line in lines[1:]:
         if line == "---":
             break
         if collecting:
-            if line.startswith((" ", "\t")):
-                description_lines.append(line.strip())
+            stripped = line.strip()
+            if not stripped:
+                description_lines.append("")
                 continue
-            break
+            indent = len(line) - len(line.lstrip(" \t"))
+            if block_indent is None:
+                if indent == 0:
+                    break
+                block_indent = indent
+            elif indent < block_indent:
+                break
+            description_lines.append(stripped)
+            continue
         if line.startswith("description:"):
             value = line.split(":", 1)[1].strip()
-            if value in {">", "|"}:
+            # Folded (>) and literal (|) block scalars, with optional chomping (-/+).
+            if value and value[0] in ("|", ">"):
                 collecting = True
                 continue
             return value.strip("'\"")
-    return " ".join(description_lines)
+    return " ".join(part for part in description_lines if part)
 
 
 def verify_skill_frontmatter_upload_compatibility() -> None:
