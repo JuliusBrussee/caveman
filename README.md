@@ -134,6 +134,7 @@ Pick your agent. One command. Done.
 | Agent | Install |
 |-------|---------|
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` |
+| **OpenClaw** | `openclaw skills install caveman` |
 | **Codex** | Clone repo → `/plugins` → Search "Caveman" → Install |
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
