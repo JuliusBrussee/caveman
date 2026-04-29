@@ -1,0 +1,5 @@
+{
+  "name": "caveman",
+  "version": "1.0.0",
+  "description": "Ultra-compressed communication mode. Cuts ~75% of output tokens while keeping full technical accuracy."
+}

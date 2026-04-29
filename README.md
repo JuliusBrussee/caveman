@@ -140,6 +140,7 @@ Pick your agent. One command. Done.
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
 | **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
+| **Kimi CLI** | `git clone https://github.com/JuliusBrussee/caveman /tmp/caveman && kimi plugin install /tmp/caveman/plugins/caveman-kimi` |
 | **Any other** | `npx skills add JuliusBrussee/caveman` |
 
 Install once. Use in every session for that install target after that. One rock. That it.
@@ -148,17 +149,17 @@ Install once. Use in every session for that install target after that. One rock.
 
 Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
 
-| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
-|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|
-| Caveman mode | Y | Y | Y | Y | Y | Y | Y |
-| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² |
-| `/caveman` command | Y | Y¹ | Y | — | — | — | — |
-| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — |
-| Statusline badge | Y⁴ | — | — | — | — | — | — |
-| caveman-commit | Y | — | Y | Y | Y | Y | Y |
-| caveman-review | Y | — | Y | Y | Y | Y | Y |
-| caveman-compress | Y | Y | Y | Y | Y | Y | Y |
-| caveman-help | Y | — | Y | Y | Y | Y | Y |
+| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot | Kimi CLI |
+|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|:--------:|
+| Caveman mode | Y | Y | Y | Y | Y | Y | Y | Y |
+| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² | Y⁵ |
+| `/caveman` command | Y | Y¹ | Y | — | — | — | — | — |
+| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — | Y³ |
+| Statusline badge | Y⁴ | — | — | — | — | — | — | — |
+| caveman-commit | Y | — | Y | Y | Y | Y | Y | — |
+| caveman-review | Y | — | Y | Y | Y | Y | Y | — |
+| caveman-compress | Y | Y | Y | Y | Y | Y | Y | — |
+| caveman-help | Y | — | Y | Y | Y | Y | Y | — |
 
 > [!NOTE]
 > Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
@@ -167,6 +168,7 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 > ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
 > ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
 > ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
+> ⁵ Kimi CLI auto-discovers `SKILL.md` bundled with the plugin on startup — no slash command needed. Sub-skills (commit/review/compress/help) are not bundled in the Kimi plugin yet.
 
 <details>
 <summary><strong>Claude Code — full details</strong></summary>
@@ -251,6 +253,24 @@ Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
 Uninstall: `npx skills remove caveman`
 
 Copilot works with Chat, Edits, and Coding Agent.
+
+</details>
+
+<details>
+<summary><strong>Kimi CLI — full details</strong></summary>
+
+[Kimi Code CLI](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/plugins.html) plugins live in `~/.kimi/plugins/<name>/`. The repo ships a Kimi-compatible plugin at `plugins/caveman-kimi/` with `plugin.json` + `SKILL.md`. Kimi auto-discovers the `SKILL.md` on every startup, so caveman activates without a slash command.
+
+```bash
+git clone https://github.com/JuliusBrussee/caveman /tmp/caveman
+kimi plugin install /tmp/caveman/plugins/caveman-kimi
+```
+
+Verify: `kimi plugin list` should show `caveman`. Inspect: `kimi plugin info caveman`. Remove: `kimi plugin remove caveman`.
+
+The `kimi plugin install <git-url>` shortcut expects `plugin.json` at the repo root, which this repo does not have (it ships multiple plugin formats). Path-based install above is the supported route.
+
+Sub-skills (caveman-commit, caveman-review, caveman-compress, caveman-help) are not yet bundled in the Kimi plugin — Kimi's `tools` array would be the right slot for slash-command equivalents, contributions welcome.
 
 </details>
 
