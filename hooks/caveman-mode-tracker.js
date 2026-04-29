@@ -5,7 +5,11 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag, readFlag } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = require('./caveman-config');
+
+// Modes handled by their own slash commands (/caveman-commit, etc.) — not
+// selectable via /caveman <arg>.
+const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -45,12 +49,18 @@ process.stdin.on('end', () => {
       } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
         mode = 'compress';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
-        if (arg === 'lite') mode = 'lite';
-        else if (arg === 'ultra') mode = 'ultra';
-        else if (arg === 'wenyan-lite') mode = 'wenyan-lite';
-        else if (arg === 'wenyan' || arg === 'wenyan-full') mode = 'wenyan';
-        else if (arg === 'wenyan-ultra') mode = 'wenyan-ultra';
-        else mode = getDefaultMode();
+        // Bare /caveman → activate at configured default
+        if (!arg) {
+          mode = getDefaultMode();
+        } else if (arg === 'off' || arg === 'stop' || arg === 'disable') {
+          mode = 'off';
+        } else if (arg === 'wenyan-full') {
+          // Canonical alias — config stores as 'wenyan'
+          mode = 'wenyan';
+        } else if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) {
+          mode = arg;
+        }
+        // Unknown arg → mode stays null, flag untouched (no silent overwrite)
       }
 
       if (mode && mode !== 'off') {
@@ -78,7 +88,6 @@ process.stdin.on('end', () => {
     // If the flag is missing, corrupted, oversized, or a symlink pointing at
     // something like ~/.ssh/id_rsa, readFlag returns null and we emit nothing
     // — never inject untrusted bytes into model context.
-    const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
     const activeMode = readFlag(flagPath);
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
       process.stdout.write(JSON.stringify({
