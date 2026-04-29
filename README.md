@@ -23,6 +23,13 @@
   <a href="#evals">Evals</a>
 </p>
 
+<p align="center">
+  <strong>🪨 Caveman Ecosystem</strong> &nbsp;·&nbsp;
+  <strong>caveman</strong> <em>talk less</em> <sub>(you are here)</sub> &nbsp;·&nbsp;
+  <a href="https://github.com/JuliusBrussee/cavemem">cavemem</a> <em>remember more</em> &nbsp;·&nbsp;
+  <a href="https://github.com/JuliusBrussee/cavekit">cavekit</a> <em>build better</em>
+</p>
+
 ---
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
@@ -198,12 +205,19 @@ Uninstall: `bash hooks/uninstall.sh` or `powershell -File hooks\uninstall.ps1`
 
 **macOS / Linux:**
 1. Clone repo → Open Codex in the repo directory → `/plugins` → Search "Caveman" → Install
+2. Repo-local auto-start is already wired by `.codex/hooks.json` + `.codex/config.toml`
 
 **Windows:**
 1. Enable symlinks first: `git config --global core.symlinks true` (requires Developer Mode or admin)
 2. Clone repo → Open VS Code → Codex Settings → Plugins → find "Caveman" under local marketplace → Install → Reload Window
+3. Codex hooks are currently disabled on Windows, so use `$caveman` to start manually
 
-This repo also ships `.codex/hooks.json`, so caveman auto-activates while you run Codex inside this repo. The installed plugin gives you `$caveman`; if you want always-on behavior in other repos too, add the same SessionStart hook there.
+This repo also ships `.codex/hooks.json` and enables hooks in `.codex/config.toml`, so caveman auto-activates while you run Codex inside this repo on macOS/Linux. The installed plugin gives you `$caveman`; if you want always-on behavior in other repos too, copy the same `SessionStart` hook there and enable:
+
+```toml
+[features]
+codex_hooks = true
+```
 
 </details>
 
@@ -315,15 +329,21 @@ Level stick until you change it or session end.
 
 ## Caveman Skills
 
-| Skill | What it do | Trigger |
-|-------|-----------|---------|
-| **caveman-commit** | Terse commit messages. Conventional Commits. ≤50 char subject. Why over what. | `/caveman-commit` |
-| **caveman-review** | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` No throat-clearing. | `/caveman-review` |
-| **caveman-help** | Quick-reference card. All modes, skills, commands, one command away. | `/caveman-help` |
+### caveman-commit
+
+`/caveman-commit` — terse commit messages. Conventional Commits. ≤50 char subject. Why over what.
+
+### caveman-review
+
+`/caveman-review` — one-line PR comments: `L42: 🔴 bug: user null. Add guard.` No throat-clearing.
+
+### caveman-help
+
+`/caveman-help` — quick-reference card. All modes, skills, commands, one command away.
 
 ### caveman-compress
 
-Caveman make Claude *speak* with fewer tokens. **Compress** make Claude *read* fewer tokens.
+`/caveman:compress <filepath>` — caveman make Claude *speak* with fewer tokens. **Compress** make Claude *read* fewer tokens.
 
 Your `CLAUDE.md` loads on **every session start**. Caveman Compress rewrites memory files into caveman-speak so Claude reads less — without you losing the human-readable original.
 
@@ -394,9 +414,20 @@ If caveman save you mass token, mass money — leave mass star. ⭐
 
 [![Star History Chart](https://api.star-history.com/svg?repos=JuliusBrussee/caveman&type=Date)](https://star-history.com/#JuliusBrussee/caveman&Date)
 
+## 🪨 The Caveman Ecosystem
+
+Three tools. One philosophy: **agent do more with less**.
+
+| Repo | What | One-liner |
+|------|------|-----------|
+| [**caveman**](https://github.com/JuliusBrussee/caveman) *(you are here)* | Output compression skill | *why use many token when few do trick* — ~75% fewer output tokens across Claude Code, Cursor, Gemini, Codex |
+| [**cavemem**](https://github.com/JuliusBrussee/cavemem) | Cross-agent persistent memory | *why agent forget when agent can remember* — compressed SQLite + MCP, local by default |
+| [**cavekit**](https://github.com/JuliusBrussee/cavekit) | Spec-driven autonomous build loop | *why agent guess when agent can know* — natural language → kits → parallel build → verified |
+
+They compose: **cavekit** orchestrates the build, **caveman** compresses what the agent *says*, **cavemem** compresses what the agent *remembers*. Install one, some, or all — each stands alone.
+
 ## Also by Julius Brussee
 
-- **[Cavekit](https://github.com/JuliusBrussee/cavekit)** — specification-driven development for Claude Code. Caveman language → specs → parallel builds → working software.
 - **[Revu](https://github.com/JuliusBrussee/revu-swift)** — local-first macOS study app with FSRS spaced repetition, decks, exams, and study guides. [revu.cards](https://revu.cards)
 
 ## License

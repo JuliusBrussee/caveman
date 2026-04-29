@@ -1,1 +1,0 @@
-../caveman-compress/SKILL.md

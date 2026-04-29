@@ -19,12 +19,12 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-$ClaudeDir = Join-Path $env:USERPROFILE ".claude"
+$ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
 $HooksDir = Join-Path $ClaudeDir "hooks"
 $Settings = Join-Path $ClaudeDir "settings.json"
 $RepoUrl = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks"
 
-$HookFiles = @("caveman-config.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-statusline.sh", "caveman-statusline.ps1")
+$HookFiles = @("package.json", "caveman-config.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-statusline.sh", "caveman-statusline.ps1")
 
 # Resolve source — works from repo clone or remote
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { $null }

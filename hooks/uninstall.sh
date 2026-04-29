@@ -5,12 +5,12 @@
 #   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/uninstall.sh)
 set -e
 
-CLAUDE_DIR="$HOME/.claude"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
 FLAG_FILE="$CLAUDE_DIR/.caveman-active"
 
-HOOK_FILES=("caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-statusline.sh")
+HOOK_FILES=("package.json" "caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-statusline.sh")
 
 # Detect if caveman is installed as a plugin (check plugin cache)
 PLUGIN_INSTALLED=0
