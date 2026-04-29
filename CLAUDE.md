@@ -47,6 +47,7 @@ Overwritten by CI on push to main when sources change. Edits here lost.
 | `.cursor/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
 | `.windsurf/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
 | `caveman.skill` | ZIP of `skills/caveman/` directory |
+| `plugins/caveman-kimi/SKILL.md` | `skills/caveman/SKILL.md` |
 | `.clinerules/caveman.md` | `rules/caveman-activate.md` |
 | `.github/copilot-instructions.md` | `rules/caveman-activate.md` |
 | `.cursor/rules/caveman.mdc` | `rules/caveman-activate.md` + Cursor frontmatter |
@@ -172,6 +173,7 @@ How caveman reaches each agent type:
 | Windsurf | `.windsurf/rules/caveman.md` with `trigger: always_on` | Yes — always-on rule |
 | Cline | `.clinerules/caveman.md` (auto-discovered) | Yes — Cline injects all .clinerules files |
 | Copilot | `.github/copilot-instructions.md` + `AGENTS.md` | Yes — repo-wide instructions |
+| Kimi CLI | Plugin in `plugins/caveman-kimi/` (`plugin.json` + `SKILL.md`), installed via `kimi plugin install <path>` | Yes — Kimi auto-discovers bundled `SKILL.md` on startup |
 | Others | `npx skills add JuliusBrussee/caveman` | No — user must say `/caveman` each session |
 
 For agents without hook systems, minimal always-on snippet lives in README under "Want it always on?" — keep current with `rules/caveman-activate.md`.

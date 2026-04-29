@@ -36,6 +36,8 @@ jobs:
           cp skills/caveman/SKILL.md .cursor/skills/caveman/SKILL.md
           mkdir -p .windsurf/skills/caveman
           cp skills/caveman/SKILL.md .windsurf/skills/caveman/SKILL.md
+          mkdir -p plugins/caveman-kimi
+          cp skills/caveman/SKILL.md plugins/caveman-kimi/SKILL.md
 
       - name: Sync compress skill
         run: |
@@ -91,6 +93,7 @@ jobs:
             plugins/caveman/skills/caveman/SKILL.md \
             .cursor/skills/caveman/SKILL.md \
             .windsurf/skills/caveman/SKILL.md \
+            plugins/caveman-kimi/SKILL.md \
             caveman.skill \
             .clinerules/caveman.md \
             .github/copilot-instructions.md \
