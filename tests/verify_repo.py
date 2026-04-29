@@ -225,7 +225,7 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home)},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate.stdout, "activation output missing caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate.stdout, "activation output missing caveman banner")
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "activation should stay quiet when custom statusline exists")
         ensure((claude_dir / ".caveman-active").read_text() == "full", "activation flag should default to full")
 
@@ -234,14 +234,14 @@ def verify_hook_install_flow() -> None:
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "ultra"},
         )
-        ensure("CAVEMAN MODE ACTIVE." in activate_custom.stdout, "activation with custom default missing banner")
+        ensure("CAVEMAN MODE ACTIVE" in activate_custom.stdout, "activation with custom default missing banner")
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra")
         # Test "off" mode — activation skipped, flag removed
         activate_off = run(
             ["node", "hooks/caveman-activate.js"],
             env={"HOME": str(home), "CAVEMAN_DEFAULT_MODE": "off"},
         )
-        ensure("CAVEMAN MODE ACTIVE." not in activate_off.stdout, "off mode should not emit caveman banner")
+        ensure("CAVEMAN MODE ACTIVE" not in activate_off.stdout, "off mode should not emit caveman banner")
         ensure(not (claude_dir / ".caveman-active").exists(), "off mode should remove flag file")
 
         # Test mode tracker with /caveman when default is off — should NOT write flag
@@ -274,8 +274,106 @@ def verify_hook_install_flow() -> None:
             capture_output=True,
             check=True,
         )
-        ensure(ultra_prompt.stdout == "", "mode tracker should stay silent")
+        ultra_payload = json.loads(ultra_prompt.stdout)
+        ensure("hookSpecificOutput" in ultra_payload, "mode tracker should emit hookSpecificOutput payload")
+        ensure(
+            ultra_payload["hookSpecificOutput"].get("hookEventName") == "UserPromptSubmit",
+            "mode tracker should label UserPromptSubmit output",
+        )
+        ensure(
+            "CAVEMAN MODE ACTIVE (ultra)" in ultra_payload["hookSpecificOutput"].get("additionalContext", ""),
+            "mode tracker reinforcement output missing",
+        )
         ensure((claude_dir / ".caveman-active").read_text() == "ultra", "mode tracker did not record ultra")
+
+        compress_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"/caveman:compress CLAUDE.md"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(compress_prompt.stdout == "", "independent compress mode should not emit reinforcement output")
+        ensure((claude_dir / ".caveman-active").read_text() == "compress", "/caveman:compress should record compress mode")
+
+        try:
+            os.unlink(claude_dir / ".caveman-active")
+        except FileNotFoundError:
+            pass
+
+        less_tokens_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"less tokens please"}',
+            capture_output=True,
+            check=True,
+        )
+        less_tokens_payload = json.loads(less_tokens_prompt.stdout)
+        ensure((claude_dir / ".caveman-active").read_text() == "full", '"less tokens please" should reactivate default caveman mode')
+        ensure(
+            "CAVEMAN MODE ACTIVE (full)" in less_tokens_payload["hookSpecificOutput"].get("additionalContext", ""),
+            '"less tokens please" should emit reinforcement output for default mode',
+        )
+
+        talk_like_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"talk like caveman"}',
+            capture_output=True,
+            check=True,
+        )
+        talk_like_payload = json.loads(talk_like_prompt.stdout)
+        ensure((claude_dir / ".caveman-active").read_text() == "full", '"talk like caveman" should activate default caveman mode')
+        ensure(
+            "CAVEMAN MODE ACTIVE (full)" in talk_like_payload["hookSpecificOutput"].get("additionalContext", ""),
+            '"talk like caveman" should emit reinforcement output',
+        )
+
+        wenyan_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"/caveman wenyan-full"}',
+            capture_output=True,
+            check=True,
+        )
+        wenyan_payload = json.loads(wenyan_prompt.stdout)
+        ensure((claude_dir / ".caveman-active").read_text() == "wenyan", '"/caveman wenyan-full" should map to wenyan mode')
+        ensure(
+            "CAVEMAN MODE ACTIVE (wenyan)" in wenyan_payload["hookSpecificOutput"].get("additionalContext", ""),
+            '"/caveman wenyan-full" should emit wenyan reinforcement output',
+        )
+
+        commit_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"/caveman-commit"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(commit_prompt.stdout == "", "commit mode should not emit reinforcement output")
+        ensure((claude_dir / ".caveman-active").read_text() == "commit", '"/caveman-commit" should record commit mode')
+
+        review_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, "HOME": str(home)},
+            text=True,
+            input='{"prompt":"/caveman-review"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(review_prompt.stdout == "", "review mode should not emit reinforcement output")
+        ensure((claude_dir / ".caveman-active").read_text() == "review", '"/caveman-review" should record review mode')
 
         subprocess.run(
             ["node", "hooks/caveman-mode-tracker.js"],
