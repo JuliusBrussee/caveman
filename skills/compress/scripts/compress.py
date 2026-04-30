@@ -182,46 +182,59 @@ def compress_file(filepath: Path) -> bool:
     original_text = filepath.read_text(errors="ignore")
     backup_path = filepath.with_name(filepath.stem + ".original.md")
 
-    # Check if backup already exists to prevent accidental overwriting
-    if backup_path.exists():
-        print(f"⚠️ Backup file already exists: {backup_path}")
-        print("The original backup may contain important content.")
-        print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
-        return False
+    # First-original wins: if a canonical backup already exists, keep it untouched
+    # and re-compress in place. Avoids backup proliferation on repeat runs while
+    # preserving the true original across multiple compress/fix cycles.
+    backup_pre_existed = backup_path.exists()
+    if backup_pre_existed:
+        print(f"ℹ️  Existing canonical backup found: {backup_path}")
+        print("Keeping it; recompressing in place without creating a duplicate backup.")
 
     # Step 1: Compress
     print("Compressing with Claude...")
     compressed = call_claude(build_compress_prompt(original_text))
 
-    # Save original as backup, write compressed to original path
-    backup_path.write_text(original_text)
+    # Save original as backup ONLY if no canonical backup exists yet
+    if not backup_pre_existed:
+        backup_path.write_text(original_text)
     filepath.write_text(compressed)
 
     # Step 2: Validate + Retry
-    for attempt in range(MAX_RETRIES):
-        print(f"\nValidation attempt {attempt + 1}")
+    try:
+        for attempt in range(MAX_RETRIES):
+            print(f"\nValidation attempt {attempt + 1}")
 
-        result = validate(backup_path, filepath)
+            result = validate(backup_path, filepath)
 
-        if result.is_valid:
-            print("Validation passed")
-            break
+            if result.is_valid:
+                print("Validation passed")
+                break
 
-        print("❌ Validation failed:")
-        for err in result.errors:
-            print(f"   - {err}")
+            print("❌ Validation failed:")
+            for err in result.errors:
+                print(f"   - {err}")
 
-        if attempt == MAX_RETRIES - 1:
-            # Restore original on failure
-            filepath.write_text(original_text)
+            if attempt == MAX_RETRIES - 1:
+                # Restore this-run's pre-compress state on failure
+                filepath.write_text(original_text)
+                # Only remove the backup if WE created it this run; preserve canonical
+                if not backup_pre_existed:
+                    backup_path.unlink(missing_ok=True)
+                print("❌ Failed after retries — original restored")
+                return False
+
+            print("Fixing with Claude...")
+            compressed = call_claude(
+                build_fix_prompt(original_text, compressed, result.errors)
+            )
+            filepath.write_text(compressed)
+
+    except Exception:
+        # Always restore this-run's pre-compress state if anything goes wrong
+        filepath.write_text(original_text)
+        # Only remove the backup if WE created it this run; preserve canonical
+        if not backup_pre_existed:
             backup_path.unlink(missing_ok=True)
-            print("❌ Failed after retries — original restored")
-            return False
-
-        print("Fixing with Claude...")
-        compressed = call_claude(
-            build_fix_prompt(original_text, compressed, result.errors)
-        )
-        filepath.write_text(compressed)
+        raise
 
     return True
