@@ -156,6 +156,37 @@ class HookScriptTests(unittest.TestCase):
             self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
             self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
 
+    def test_activate_uses_xdg_config_default_mode(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-config-") as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            xdg = root / "xdg"
+            claude_dir = home / ".claude"
+            config_dir = xdg / "caveman"
+
+            claude_dir.mkdir(parents=True)
+            config_dir.mkdir(parents=True)
+            (config_dir / "config.json").write_text(
+                json.dumps({"defaultMode": "ultra"}) + "\n"
+            )
+
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["USERPROFILE"] = str(home)
+            env["XDG_CONFIG_HOME"] = str(xdg)
+
+            result = subprocess.run(
+                ["node", "hooks/caveman-activate.js"],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+
+            self.assertIn("CAVEMAN MODE ACTIVE", result.stdout)
+            self.assertEqual((claude_dir / ".caveman-active").read_text(), "ultra")
+
 
 if __name__ == "__main__":
     unittest.main()

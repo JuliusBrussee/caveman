@@ -15,8 +15,10 @@ If you installed caveman standalone (without the plugin), you can use `bash hook
 
 ### `caveman-mode-tracker.js` — UserPromptSubmit hook
 
-- Fires on every user prompt, checks for `/caveman` commands
-- Writes the active mode to the flag file when a caveman command is detected
+- Fires on every user prompt
+- Detects `/caveman` commands plus natural-language activation/deactivation phrases like `talk like caveman`, `caveman mode`, `less tokens please`, `stop caveman`, and `normal mode`
+- Writes the active mode to the flag file when caveman is activated or switched
+- Emits structured `hookSpecificOutput` JSON with per-turn caveman reinforcement while standard caveman modes are active
 - Supports: `full`, `lite`, `ultra`, `wenyan`, `wenyan-lite`, `wenyan-ultra`, `commit`, `review`, `compress`
 
 ### `caveman-statusline.sh` / `caveman-statusline.ps1` — Statusline badge script
@@ -56,21 +58,7 @@ If you already have a custom statusline, caveman does not overwrite it and Claud
 
 Replace the path with the actual script location (e.g. `~/.claude/hooks/` for standalone installs, or the plugin install directory for plugin installs).
 
-**Custom statusline:** If you already have a statusline script, add this snippet to it:
-
-```bash
-caveman_text=""
-caveman_flag="$HOME/.claude/.caveman-active"
-if [ -f "$caveman_flag" ]; then
-  caveman_mode=$(cat "$caveman_flag" 2>/dev/null)
-  if [ "$caveman_mode" = "full" ] || [ -z "$caveman_mode" ]; then
-    caveman_text=$'\033[38;5;172m[CAVEMAN]\033[0m'
-  else
-    caveman_suffix=$(echo "$caveman_mode" | tr '[:lower:]' '[:upper:]')
-    caveman_text=$'\033[38;5;172m[CAVEMAN:'"${caveman_suffix}"$']\033[0m'
-  fi
-fi
-```
+**Custom statusline:** Prefer calling the shipped `caveman-statusline.sh` / `caveman-statusline.ps1` from your existing statusline script so you inherit future fixes. If you must inline the logic, copy it from the current script in this repo or plugin install directory rather than using an older snippet.
 
 Badge examples:
 - `/caveman` → `[CAVEMAN]`

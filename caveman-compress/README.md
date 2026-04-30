@@ -10,7 +10,7 @@
 
 ---
 
-A Claude Code skill that compresses your project memory files (`CLAUDE.md`, todos, preferences) into caveman format — so every session loads fewer tokens automatically.
+A caveman skill/tool that compresses your project memory files (`CLAUDE.md`, todos, preferences) into caveman format — so compatible agents load fewer tokens on each session.
 
 Claude read `CLAUDE.md` on every session start. If file big, cost big. Caveman make file small. Cost go down forever.
 
@@ -71,7 +71,7 @@ All validations passed ✅ — headings, code blocks, URLs, file paths preserved
 
 ## Install
 
-Compress is built in with the `caveman` plugin. Install `caveman` once, then use `/caveman:compress`.
+Compress ships with `caveman`. Depending on agent surface, use `/caveman-compress` or the alias `/caveman:compress`.
 
 If you need local files, the compress skill lives at:
 
@@ -84,14 +84,16 @@ caveman-compress/
 ## Usage
 
 ```
-/caveman:compress <filepath>
+/caveman-compress <filepath>
+# alias: /caveman:compress <filepath>
 ```
 
 Examples:
 ```
-/caveman:compress CLAUDE.md
-/caveman:compress docs/preferences.md
-/caveman:compress todos.md
+/caveman-compress CLAUDE.md
+/caveman-compress docs/preferences.md
+/caveman-compress todos.md
+# alias still works: /caveman:compress ...
 ```
 
 ### What files work

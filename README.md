@@ -32,7 +32,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and an optional [compression tool](#caveman-compress) for memory/context files that averages **~46% fewer input tokens** in the included examples.
 
 Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
 
@@ -173,6 +173,9 @@ Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Code
 
 The plugin install gives you skills + auto-loading hooks. If no custom `statusLine` is configured, Caveman nudges Claude to offer badge setup on first session.
 
+- SessionStart hook activates caveman and injects the rules as hidden context
+- UserPromptSubmit hook reinforces caveman instructions on each prompt while standard caveman modes are active, reducing drift
+
 ```bash
 claude plugin marketplace add JuliusBrussee/caveman
 claude plugin install caveman@caveman
@@ -233,6 +236,8 @@ Auto-activates via `GEMINI.md` context file. Also ships custom Gemini commands:
 - `/caveman` — switch intensity level (lite/full/ultra/wenyan)
 - `/caveman-commit` — generate terse commit message
 - `/caveman-review` — one-line code review
+- `/caveman-compress` — compress a memory/context file
+- `/caveman-help` — quick-reference card
 
 </details>
 
@@ -273,7 +278,7 @@ Uninstall: `npx skills remove caveman`
 
 > **Windows note:** `npx skills` uses symlinks by default. If symlinks fail, add `--copy`: `npx skills add JuliusBrussee/caveman --copy`
 
-**Important:** These agents don't have a hook system, so caveman won't auto-start. Say `/caveman` or "talk like caveman" to activate each session.
+**Important:** These agents don't have a hook system, so caveman won't auto-start. Use your agent's caveman command each session, like `/caveman` or Codex `$caveman`. Natural-language triggers like "talk like caveman" may work, but are not guaranteed outside hook-based installs.
 
 **Want it always on?** Paste this into your agent's system prompt or rules file — caveman will be active from the first message, every session:
 
@@ -299,10 +304,10 @@ Where to put it:
 ## Usage
 
 Trigger with:
-- `/caveman` or Codex `$caveman`
-- "talk like caveman"
-- "caveman mode"
-- "less tokens please"
+- Claude/Gemini: `/caveman`
+- Codex: `$caveman`
+- Claude hook installs also support natural-language activation: "talk like caveman", "caveman mode", or "less tokens please".
+- `less tokens please` activates the configured default caveman mode.
 
 Stop with: "stop caveman" or "normal mode"
 
@@ -321,7 +326,7 @@ Classical Chinese literary compression — same technical accuracy, but in the m
 | Level | Trigger | What it do |
 |-------|---------|------------|
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Semi-classical. Grammar intact, filler gone |
-| **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness |
+| **Wenyan-Full** | `/caveman wenyan` or `/caveman wenyan-full` | Full 文言文. Maximum classical terseness |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget |
 
 Level stick until you change it or session end.
@@ -342,12 +347,13 @@ Level stick until you change it or session end.
 
 ### caveman-compress
 
-`/caveman:compress <filepath>` — caveman make Claude *speak* with fewer tokens. **Compress** make Claude *read* fewer tokens.
+`/caveman-compress <filepath>` or alias `/caveman:compress <filepath>` — caveman make Claude *speak* with fewer tokens. **Compress** make Claude *read* fewer tokens.
 
 Your `CLAUDE.md` loads on **every session start**. Caveman Compress rewrites memory files into caveman-speak so Claude reads less — without you losing the human-readable original.
 
 ```
-/caveman:compress CLAUDE.md
+/caveman-compress CLAUDE.md
+# alias: /caveman:compress CLAUDE.md
 ```
 
 ```

@@ -21,7 +21,8 @@ process.stdin.on('end', () => {
     // "talk like caveman"). README tells users they can say these, but the hook
     // only matched /caveman commands — flag file and statusline stayed out of sync.
     if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-        /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
+        /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt) ||
+        /\bless tokens please\b/i.test(prompt)) {
       if (!/\b(stop|disable|turn off|deactivate)\b/i.test(prompt)) {
         const mode = getDefaultMode();
         if (mode !== 'off') {
@@ -42,7 +43,7 @@ process.stdin.on('end', () => {
         mode = 'commit';
       } else if (cmd === '/caveman-review') {
         mode = 'review';
-      } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
+      } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress' || cmd === '/caveman:compress') {
         mode = 'compress';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
         if (arg === 'lite') mode = 'lite';
