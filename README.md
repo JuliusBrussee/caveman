@@ -32,7 +32,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~75% of output tokens** while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin and Codex plugin that makes agent talk like caveman — cutting **~50% of output tokens** (median, range −0% to −88% across the [evals snapshot](evals/snapshots/results.json)) while keeping full technical accuracy. Now with [文言文 mode](#文言文-wenyan-mode), [terse commits](#caveman-commit), [one-line code reviews](#caveman-review), and a [compression tool](#caveman-compress) that cuts **~46% of input tokens** every session.
 
 Based on the viral observation that caveman-speak dramatically reduces LLM token usage without losing technical substance. So we made it a one-line install.
 
@@ -73,7 +73,7 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 </tr>
 </table>
 
-**Same fix. 75% less word. Brain still big.**
+**Same fix. ~50% less word. Brain still big.**
 
 **Pick your level of grunt:**
 
@@ -114,7 +114,7 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 
 ```
 ┌─────────────────────────────────────┐
-│  TOKENS SAVED          ████████ 75% │
+│  TOKENS SAVED          █████░░░ 50% │
 │  TECHNICAL ACCURACY    ████████ 100%│
 │  SPEED INCREASE        ████████ ~3x │
 │  VIBES                 ████████ OOG │
@@ -448,7 +448,7 @@ A March 2026 paper ["Brevity Constraints Reverse Performance Hierarchies in Lang
 
 ## Evals
 
-Caveman not just claim 75%. Caveman **prove** it.
+Caveman not just claim ~50%. Caveman **prove** it.
 
 The `evals/` directory has a three-arm eval harness that measures real token compression against a proper control — not just "verbose vs skill" but "terse vs skill". Because comparing caveman to verbose Claude conflate the skill with generic terseness. That cheating. Caveman not cheat.
 
@@ -472,7 +472,7 @@ Three tools. One philosophy: **agent do more with less**.
 
 | Repo | What | One-liner |
 |------|------|-----------|
-| [**caveman**](https://github.com/JuliusBrussee/caveman) *(you are here)* | Output compression skill | *why use many token when few do trick* — ~75% fewer output tokens across Claude Code, Cursor, Gemini, Codex |
+| [**caveman**](https://github.com/JuliusBrussee/caveman) *(you are here)* | Output compression skill | *why use many token when few do trick* — ~50% fewer output tokens (median) across Claude Code, Cursor, Gemini, Codex |
 | [**cavemem**](https://github.com/JuliusBrussee/cavemem) | Cross-agent persistent memory | *why agent forget when agent can remember* — compressed SQLite + MCP, local by default |
 | [**cavekit**](https://github.com/JuliusBrussee/cavekit) | Spec-driven autonomous build loop | *why agent guess when agent can know* — natural language → kits → parallel build → verified |
 
