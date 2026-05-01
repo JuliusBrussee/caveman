@@ -205,6 +205,14 @@ def verify_powershell_static() -> None:
         "install.ps1 missing PowerShell statusline command",
     )
     ensure("[CAVEMAN" in statusline_text, "caveman-statusline.ps1 missing badge output")
+    ensure(
+        "CAVEMAN_BADGE_COMPACT" in statusline_text,
+        "caveman-statusline.ps1 missing CAVEMAN_BADGE_COMPACT env var gate",
+    )
+    ensure(
+        "[C]" in statusline_text and "[C:WU]" in statusline_text,
+        "caveman-statusline.ps1 missing compact badge mappings",
+    )
 
     print("Windows install path statically wired")
 
