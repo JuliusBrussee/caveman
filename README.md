@@ -24,6 +24,12 @@
 </p>
 
 <p align="center">
+  <a href="README_FR.md">Français</a> •
+  <a href="README_ES.md">Español</a> •
+  <a href="README_RU.md">Русский</a> •
+  <a href="README_IT.md">Italiano</a> •
+  <a href="README_ZH.md">中文</a> •
+  <a href="README_CAVEMAN.md">🪨 Caveman</a>
   <strong>🪨 Caveman Ecosystem</strong> &nbsp;·&nbsp;
   <strong>caveman</strong> <em>talk less</em> <sub>(you are here)</sub> &nbsp;·&nbsp;
   <a href="https://github.com/JuliusBrussee/cavemem">cavemem</a> <em>remember more</em> &nbsp;·&nbsp;
