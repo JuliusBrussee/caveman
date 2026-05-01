@@ -182,6 +182,7 @@ Uninstall: disable the Claude plugin, `gemini extensions uninstall caveman`, or 
 | Statusline badge | Y | — | — | — | — | — |
 | caveman-commit / caveman-review | Y | — | Y | Y | Y | Y |
 | caveman-compress / caveman-help | Y | Y³ | Y | Y | Y | Y |
+| caveman-th | Y | Y³ | Y | Y | Y | Y |
 | caveman-stats | Y | — | — | — | — | — |
 | cavecrew (subagents) | Y | — | — | — | — | — |
 
@@ -227,6 +228,7 @@ Level stick until you change it or session end.
 | `/caveman-commit` | Terse commit messages. Conventional Commits, ≤50 char subject. Why over what. |
 | `/caveman-review` | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` No throat-clearing. |
 | `/caveman-help` | Quick-reference card. All modes, skills, commands. |
+| `caveman-th` | Thai caveman skill. Short Thai fragments, English technical terms preserved. |
 | `/caveman-stats` | Real session token usage + estimated savings + USD. Lifetime aggregation via `--all`, time window via `--since 7d`, tweetable line via `--share`. Reads the Claude Code session JSONL directly, no model-side guessing. Claude Code only. |
 | `/caveman:compress <file>` | Rewrites a memory file (e.g. `CLAUDE.md`) into caveman-speak. Saves backup as `<file>.original.md`. Cuts ~46% of *input* tokens every session start. Code/URLs/paths preserved byte-for-byte. |
 | `cavecrew-investigator/builder/reviewer` | Caveman subagents for Claude Code. Subagent tool-output gets injected back into main context — these emit ~60% fewer tokens than vanilla `Explore` / reviewer agents, so main context lasts longer across long sessions. Investigator (read-only locator, haiku), builder (1-2 file surgical edit, refuses 3+), reviewer (one-line findings, haiku). |
