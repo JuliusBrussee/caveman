@@ -27,6 +27,26 @@ case "$MODE" in
   *) exit 0 ;;
 esac
 
+# Opt-in compact badge: CAVEMAN_BADGE_COMPACT=1 → [C] / [C:L] / [C:U] / etc.
+# Useful for ccstatusline-style dense statuslines where [CAVEMAN] is too long.
+# Default (env unset or any other value) → existing verbose output unchanged.
+# Compact mode also skips the savings suffix to keep the badge tight.
+if [ "${CAVEMAN_BADGE_COMPACT:-0}" = "1" ]; then
+  # Whitelist above rejects empty MODE, so no empty arm needed here.
+  case "$MODE" in
+    full) printf '\033[38;5;172m[C]\033[0m' ;;
+    lite) printf '\033[38;5;172m[C:L]\033[0m' ;;
+    ultra) printf '\033[38;5;172m[C:U]\033[0m' ;;
+    wenyan-lite) printf '\033[38;5;172m[C:WL]\033[0m' ;;
+    wenyan|wenyan-full) printf '\033[38;5;172m[C:W]\033[0m' ;;
+    wenyan-ultra) printf '\033[38;5;172m[C:WU]\033[0m' ;;
+    commit) printf '\033[38;5;172m[C:CM]\033[0m' ;;
+    review) printf '\033[38;5;172m[C:RV]\033[0m' ;;
+    compress) printf '\033[38;5;172m[C:CP]\033[0m' ;;
+  esac
+  exit 0
+fi
+
 if [ -z "$MODE" ] || [ "$MODE" = "full" ]; then
   printf '\033[38;5;172m[CAVEMAN]\033[0m'
 else

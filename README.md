@@ -231,7 +231,7 @@ Level stick until you change it or session end.
 | `/caveman:compress <file>` | Rewrites a memory file (e.g. `CLAUDE.md`) into caveman-speak. Saves backup as `<file>.original.md`. Cuts ~46% of *input* tokens every session start. Code/URLs/paths preserved byte-for-byte. |
 | `cavecrew-investigator/builder/reviewer` | Caveman subagents for Claude Code. Subagent tool-output gets injected back into main context — these emit ~60% fewer tokens than vanilla `Explore` / reviewer agents, so main context lasts longer across long sessions. Investigator (read-only locator, haiku), builder (1-2 file surgical edit, refuses 3+), reviewer (one-line findings, haiku). |
 
-**Statusline savings badge** — on by default. After your first `/caveman-stats` run the statusline appends `[CAVEMAN] ⛏ 12.4k` (lifetime tokens saved) and updates every time `/caveman-stats` runs. Don't want it? Set `CAVEMAN_STATUSLINE_SAVINGS=0` to silence.
+**Statusline savings badge** — on by default. After your first `/caveman-stats` run the statusline appends `[CAVEMAN] ⛏ 12.4k` (lifetime tokens saved) and updates every time `/caveman-stats` runs. Don't want it? Set `CAVEMAN_STATUSLINE_SAVINGS=0` to silence. Cramped statusline (e.g. ccstatusline)? Set `CAVEMAN_BADGE_COMPACT=1` for the short form: `[C]` / `[C:L]` / `[C:U]` / `[C:WL]` / `[C:W]` / `[C:WU]` / `[C:CM]` / `[C:RV]` / `[C:CP]`.
 
 ### caveman-compress receipts
 
