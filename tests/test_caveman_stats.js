@@ -430,6 +430,82 @@ test('statusline.sh strips control bytes from suffix', (tmp) => {
   assert.doesNotMatch(out, /\x1b\[31m/);
 });
 
+test('statusline.sh renders compact badge when CAVEMAN_BADGE_COMPACT=1', (tmp) => {
+  if (process.platform === 'win32') return;
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  // Map mode → expected compact badge body. Verbose [CAVEMAN…] must NOT appear.
+  const cases = [
+    ['full', '[C]'],
+    ['lite', '[C:L]'],
+    ['ultra', '[C:U]'],
+    ['wenyan-lite', '[C:WL]'],
+    ['wenyan', '[C:W]'],
+    ['wenyan-full', '[C:W]'],
+    ['wenyan-ultra', '[C:WU]'],
+    ['commit', '[C:CM]'],
+    ['review', '[C:RV]'],
+    ['compress', '[C:CP]'],
+  ];
+  for (const [mode, badge] of cases) {
+    fs.writeFileSync(path.join(claudeDir, '.caveman-active'), mode);
+    const out = execFileSync('bash', [path.join(ROOT, 'hooks', 'caveman-statusline.sh')], {
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_BADGE_COMPACT: '1' },
+    });
+    assert.ok(out.includes(badge), `mode=${mode} expected ${badge}, got ${JSON.stringify(out)}`);
+    assert.ok(!out.includes('[CAVEMAN'), `mode=${mode} compact output leaked verbose token: ${JSON.stringify(out)}`);
+  }
+});
+
+test('statusline.sh keeps verbose badge when CAVEMAN_BADGE_COMPACT is unset or not "1"', (tmp) => {
+  if (process.platform === 'win32') return;
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+
+  // Default (env unset) → verbose.
+  const envUnset = { ...process.env, CLAUDE_CONFIG_DIR: claudeDir };
+  delete envUnset.CAVEMAN_BADGE_COMPACT;
+  const outUnset = execFileSync('bash', [path.join(ROOT, 'hooks', 'caveman-statusline.sh')], {
+    encoding: 'utf8', env: envUnset,
+  });
+  assert.match(outUnset, /\[CAVEMAN\]/);
+
+  // CAVEMAN_BADGE_COMPACT=0 → verbose (only "1" opts in).
+  const out0 = execFileSync('bash', [path.join(ROOT, 'hooks', 'caveman-statusline.sh')], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_BADGE_COMPACT: '0' },
+  });
+  assert.match(out0, /\[CAVEMAN\]/);
+
+  // CAVEMAN_BADGE_COMPACT=true → verbose (string match must be exact "1").
+  const outTrue = execFileSync('bash', [path.join(ROOT, 'hooks', 'caveman-statusline.sh')], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_BADGE_COMPACT: 'true' },
+  });
+  assert.match(outTrue, /\[CAVEMAN\]/);
+});
+
+test('statusline.sh compact mode skips savings suffix', (tmp) => {
+  if (process.platform === 'win32') return;
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-statusline-suffix'), '⛏ 2.8k');
+  const out = execFileSync('bash', [path.join(ROOT, 'hooks', 'caveman-statusline.sh')], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeDir,
+      CAVEMAN_BADGE_COMPACT: '1',
+      CAVEMAN_STATUSLINE_SAVINGS: '1',
+    },
+  });
+  assert.match(out, /\[C\]/);
+  assert.doesNotMatch(out, /⛏/);
+});
+
 test('appendFlag is symlink-safe (refuses symlinked target)', (tmp) => {
   if (process.platform === 'win32') return; // symlink semantics differ
   const { appendFlag } = require(path.join(ROOT, 'hooks', 'caveman-config.js'));

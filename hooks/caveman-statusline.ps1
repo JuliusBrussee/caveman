@@ -31,6 +31,27 @@ $Valid = @('off','lite','full','ultra','wenyan-lite','wenyan','wenyan-full','wen
 if (-not ($Valid -contains $Mode)) { exit 0 }
 
 $Esc = [char]27
+
+# Opt-in compact badge: CAVEMAN_BADGE_COMPACT=1 → [C] / [C:L] / [C:U] / etc.
+# Useful for ccstatusline-style dense statuslines where [CAVEMAN] is too long.
+# Default (env unset or any other value) → existing verbose output unchanged.
+# Compact mode also skips the savings suffix to keep the badge tight.
+if ($env:CAVEMAN_BADGE_COMPACT -eq "1") {
+    switch ($Mode) {
+        { $_ -eq "full" -or [string]::IsNullOrEmpty($_) } { [Console]::Write("${Esc}[38;5;172m[C]${Esc}[0m") }
+        "lite"         { [Console]::Write("${Esc}[38;5;172m[C:L]${Esc}[0m") }
+        "ultra"        { [Console]::Write("${Esc}[38;5;172m[C:U]${Esc}[0m") }
+        "wenyan-lite"  { [Console]::Write("${Esc}[38;5;172m[C:WL]${Esc}[0m") }
+        "wenyan"       { [Console]::Write("${Esc}[38;5;172m[C:W]${Esc}[0m") }
+        "wenyan-full"  { [Console]::Write("${Esc}[38;5;172m[C:W]${Esc}[0m") }
+        "wenyan-ultra" { [Console]::Write("${Esc}[38;5;172m[C:WU]${Esc}[0m") }
+        "commit"       { [Console]::Write("${Esc}[38;5;172m[C:CM]${Esc}[0m") }
+        "review"       { [Console]::Write("${Esc}[38;5;172m[C:RV]${Esc}[0m") }
+        "compress"     { [Console]::Write("${Esc}[38;5;172m[C:CP]${Esc}[0m") }
+    }
+    exit 0
+}
+
 if ([string]::IsNullOrEmpty($Mode) -or $Mode -eq "full") {
     [Console]::Write("${Esc}[38;5;172m[CAVEMAN]${Esc}[0m")
 } else {
