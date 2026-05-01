@@ -8,7 +8,7 @@ Usage:
 
 import os
 import re
-import subprocess
+
 from pathlib import Path
 from typing import List
 
@@ -73,12 +73,11 @@ MAX_RETRIES = 2
 
 
 def call_claude(prompt: str) -> str:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if api_key:
+    if os.environ.get("ANTHROPIC_API_KEY"):
         try:
             import anthropic
 
-            client = anthropic.Anthropic(api_key=api_key)
+            client = anthropic.Anthropic()
             msg = client.messages.create(
                 model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
                 max_tokens=8192,
@@ -86,19 +85,14 @@ def call_claude(prompt: str) -> str:
             )
             return strip_llm_wrapper(msg.content[0].text.strip())
         except ImportError:
-            pass  # anthropic not installed, fall back to CLI
-    # Fallback: use claude CLI (handles desktop auth)
-    try:
-        result = subprocess.run(
-            ["claude", "--print"],
-            input=prompt,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        return strip_llm_wrapper(result.stdout.strip())
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Claude call failed:\n{e.stderr}")
+            raise RuntimeError(
+                "The 'anthropic' package is not installed. "
+                "Run: pip install anthropic"
+            )
+    raise RuntimeError(
+        "ANTHROPIC_API_KEY is not set. "
+        "Export it as an environment variable to use this feature."
+    )
 
 
 def build_compress_prompt(original: str) -> str:
