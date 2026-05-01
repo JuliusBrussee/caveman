@@ -37,8 +37,9 @@ $Esc = [char]27
 # Default (env unset or any other value) → existing verbose output unchanged.
 # Compact mode also skips the savings suffix to keep the badge tight.
 if ($env:CAVEMAN_BADGE_COMPACT -eq "1") {
+    # Whitelist above rejects empty $Mode, so no empty arm needed here.
     switch ($Mode) {
-        { $_ -eq "full" -or [string]::IsNullOrEmpty($_) } { [Console]::Write("${Esc}[38;5;172m[C]${Esc}[0m") }
+        "full"         { [Console]::Write("${Esc}[38;5;172m[C]${Esc}[0m") }
         "lite"         { [Console]::Write("${Esc}[38;5;172m[C:L]${Esc}[0m") }
         "ultra"        { [Console]::Write("${Esc}[38;5;172m[C:U]${Esc}[0m") }
         "wenyan-lite"  { [Console]::Write("${Esc}[38;5;172m[C:WL]${Esc}[0m") }
