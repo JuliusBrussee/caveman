@@ -20,7 +20,8 @@
   <a href="#intensity-levels">Levels</a> •
   <a href="#caveman-skills">Skills</a> •
   <a href="#benchmarks">Benchmarks</a> •
-  <a href="#evals">Evals</a>
+  <a href="#evals">Evals</a> •
+  <a href="https://juliusbrussee.github.io/caveman/">Website</a>
 </p>
 
 <p align="center">
@@ -459,6 +460,12 @@ uv run python evals/llm_run.py
 # Read results (no API key, runs offline)
 uv run --with tiktoken python evals/measure.py
 ```
+
+## Website
+
+The project also has a GitHub Pages site with a browseable overview, intensity-level demos, and quick links — handy for sharing without dropping someone into a 400-line README:
+
+[**juliusbrussee.github.io/caveman**](https://juliusbrussee.github.io/caveman/)
 
 ## Star This Repo
 
