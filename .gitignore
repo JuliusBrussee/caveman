@@ -9,3 +9,4 @@ caveman-compress.md
 evals/snapshots/*.html
 evals/snapshots/*.png
 context/refs/research-brief-caveman-code-efficiency.md
+.private/

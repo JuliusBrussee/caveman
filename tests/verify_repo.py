@@ -67,6 +67,39 @@ def shell_path(path: Path) -> str:
     return str(path).replace("\\", "/") if os.name == "nt" else str(path)
 
 
+def usable_bash() -> str | None:
+    candidates = [bash] if (bash := shutil.which("bash")) is not None else []
+    if os.name == "nt":
+        candidates.extend(
+            [
+                r"C:\Program Files\Git\bin\bash.exe",
+                r"C:\Program Files\Git\usr\bin\bash.exe",
+                r"C:\Program Files (x86)\Git\bin\bash.exe",
+                r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
+            ]
+        )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen or not Path(candidate).exists():
+            continue
+        seen.add(candidate)
+        try:
+            result = subprocess.run(
+                [candidate, "--version"],
+                cwd=ROOT,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+        except OSError:
+            continue
+        if result.returncode == 0:
+            return candidate
+    return None
+
+
 def _frontmatter_description(path: Path) -> str:
     lines = path.read_text(encoding="utf-8").splitlines()
     ensure(lines and lines[0] == "---", f"{path} missing YAML frontmatter")
@@ -176,9 +209,11 @@ def verify_manifests_and_syntax() -> None:
     run(["node", "--check", "hooks/caveman-config.js"])
     run(["node", "--check", "hooks/caveman-activate.js"])
     run(["node", "--check", "hooks/caveman-mode-tracker.js"])
-    run(["bash", "-n", "hooks/install.sh"])
-    run(["bash", "-n", "hooks/uninstall.sh"])
-    run(["bash", "-n", "hooks/caveman-statusline.sh"])
+    bash = usable_bash()
+    if bash is not None:
+        run([bash, "-n", "hooks/install.sh"])
+        run([bash, "-n", "hooks/uninstall.sh"])
+        run([bash, "-n", "hooks/caveman-statusline.sh"])
 
     # Ensure install/uninstall scripts include caveman-config.js
     install_sh = (ROOT / "hooks/install.sh").read_text(encoding="utf-8")
@@ -186,7 +221,10 @@ def verify_manifests_and_syntax() -> None:
     ensure("caveman-config.js" in install_sh, "install.sh missing caveman-config.js")
     ensure("caveman-config.js" in uninstall_sh, "uninstall.sh missing caveman-config.js")
 
-    print("JSON manifests and JS/bash syntax OK")
+    if bash is not None:
+        print("JSON manifests and JS/bash syntax OK")
+    else:
+        print("JSON manifests and JS syntax OK; bash syntax skipped (usable bash not found)")
 
 
 def verify_powershell_static() -> None:
@@ -241,7 +279,7 @@ def verify_compress_cli() -> None:
     section("Compress CLI")
 
     skip_result = run(
-        ["python3", "-m", "scripts", "../hooks/install.sh"],
+        [sys.executable, "-m", "scripts", "../hooks/install.sh"],
         cwd=ROOT / "caveman-compress",
         check=False,
     )
@@ -253,7 +291,7 @@ def verify_compress_cli() -> None:
     )
 
     missing_result = run(
-        ["python3", "-m", "scripts", "../does-not-exist.md"],
+        [sys.executable, "-m", "scripts", "../does-not-exist.md"],
         cwd=ROOT / "caveman-compress",
         check=False,
     )
@@ -267,7 +305,10 @@ def verify_hook_install_flow() -> None:
     section("Claude Hook Flow")
 
     ensure(shutil.which("node") is not None, "node is required for hook verification")
-    ensure(shutil.which("bash") is not None, "bash is required for hook verification")
+    bash = usable_bash()
+    if bash is None:
+        print("Skipping Unix hook install/uninstall flow; usable bash not found")
+        return
 
     with tempfile.TemporaryDirectory(prefix="caveman-verify-") as temp_root:
         temp_root_path = Path(temp_root)
@@ -282,7 +323,7 @@ def verify_hook_install_flow() -> None:
         (claude_dir / "settings.json").write_text(json.dumps(existing_settings, indent=2) + "\n")
         hook_env = {"HOME": shell_path(home), "CLAUDE_CONFIG_DIR": shell_path(claude_dir)}
 
-        run(["bash", "hooks/install.sh"], env=hook_env)
+        run([bash, "hooks/install.sh"], env=hook_env)
 
         settings = read_json(claude_dir / "settings.json")
         hooks = settings["hooks"]
@@ -332,11 +373,44 @@ def verify_hook_install_flow() -> None:
         # Reset back to full for subsequent tests
         (claude_dir / ".caveman-active").write_text("full")
 
-        run(
+        generic_prompt = subprocess.run(
             ["node", "hooks/caveman-mode-tracker.js"],
-            env=hook_env,
+            cwd=ROOT,
+            env={**os.environ, **hook_env},
+            text=True,
+            encoding="utf-8",
+            input='{"prompt":"status check"}',
+            capture_output=True,
             check=True,
         )
+        ensure(
+            "CAVEMAN MODE ACTIVE (full)" in generic_prompt.stdout,
+            "mode tracker should reinforce active full mode on normal prompts",
+        )
+
+        full_prompt = subprocess.run(
+            ["node", "hooks/caveman-mode-tracker.js"],
+            cwd=ROOT,
+            env={**os.environ, **hook_env},
+            text=True,
+            encoding="utf-8",
+            input='{"prompt":"/caveman full"}',
+            capture_output=True,
+            check=True,
+        )
+        ensure(
+            "CAVEMAN MODE ACTIVE (full)" in full_prompt.stdout,
+            "mode tracker should emit full-mode reinforcement",
+        )
+        ensure(
+            "No tool narration" in full_prompt.stdout and "error dumps" in full_prompt.stdout,
+            "mode tracker should prevent verbose tool narration and error dumps for full mode",
+        )
+        ensure(
+            "Standard acronyms OK" in full_prompt.stdout and "no invented/ambiguous abbreviations" in full_prompt.stdout,
+            "mode tracker should prevent ambiguous abbreviation drift for full mode",
+        )
+        ensure((claude_dir / ".caveman-active").read_text(encoding="utf-8") == "full", "mode tracker did not record full")
 
         ultra_prompt = subprocess.run(
             ["node", "hooks/caveman-mode-tracker.js"],
@@ -368,15 +442,15 @@ def verify_hook_install_flow() -> None:
 
         (claude_dir / ".caveman-active").write_text("wenyan-ultra")
         statusline = run(
-            ["bash", "hooks/caveman-statusline.sh"],
+            [bash, "hooks/caveman-statusline.sh"],
             env=hook_env,
         )
         ensure("[CAVEMAN:WENYAN-ULTRA]" in statusline.stdout, "statusline badge output mismatch")
 
-        reinstall = run(["bash", "hooks/install.sh"], env=hook_env)
+        reinstall = run([bash, "hooks/install.sh"], env=hook_env)
         ensure("Nothing to do" in reinstall.stdout, "install.sh should be idempotent")
 
-        run(["bash", "hooks/uninstall.sh"], env=hook_env)
+        run([bash, "hooks/uninstall.sh"], env=hook_env)
         settings_after = read_json(claude_dir / "settings.json")
         ensure(settings_after == existing_settings, "uninstall.sh did not restore non-caveman settings")
         ensure(not (claude_dir / ".caveman-active").exists(), "uninstall.sh should remove flag file")
@@ -385,12 +459,12 @@ def verify_hook_install_flow() -> None:
         home = Path(temp_root) / "home"
         claude_dir = home / ".claude"
         hook_env = {"HOME": shell_path(home), "CLAUDE_CONFIG_DIR": shell_path(claude_dir)}
-        run(["bash", "hooks/install.sh"], env=hook_env)
+        run([bash, "hooks/install.sh"], env=hook_env)
         settings = read_json(claude_dir / "settings.json")
         ensure("statusLine" in settings, "fresh install should configure statusline")
         activate = run(["node", "hooks/caveman-activate.js"], env=hook_env)
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "fresh install should not nudge for statusline")
-        run(["bash", "hooks/uninstall.sh"], env=hook_env)
+        run([bash, "hooks/uninstall.sh"], env=hook_env)
         ensure(read_json(claude_dir / "settings.json") == {}, "fresh uninstall should leave empty settings")
 
     print("Claude hook install/uninstall flow OK")

@@ -100,7 +100,7 @@ if (skillContent) {
     'Current level: **' + modeLabel + '**. Switch: `/caveman lite|full|ultra`.\n\n' +
     '## Rules\n\n' +
     'Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. ' +
-    'Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Technical terms exact. Code blocks unchanged. Errors quoted exact.\n\n' +
+    'Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). No tool narration/tables/emoji/error dumps unless asked. Long logs/errors: quote shortest decisive phrase. Standard acronyms OK; no invented/ambiguous abbreviations. Technical terms exact. Code blocks unchanged. Errors quoted exact.\n\n' +
     'Pattern: `[thing] [action] [reason]. [next step].`\n\n' +
     'Not: "Sure! I\'d be happy to help you with that. The issue you\'re experiencing is likely caused by..."\n' +
     'Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"\n\n' +
