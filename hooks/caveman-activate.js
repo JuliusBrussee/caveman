@@ -125,11 +125,17 @@ if (skillContent) {
 // Load language-specific compression rules (hook-based injection).
 // Runs AFTER the main output construction — applies to BOTH plugin install
 // and standalone fallback paths. English users: this block is skipped.
-// Multiple rulesDir tries: plugin (<plugin_root>/rules), cloned repo (<repo>/rules),
-// standalone hooks dir (<claude_config>/hooks/../rules).
+// Multiple rulesDir tries: plugin (<plugin_root>/rules), nested plugin copies,
+// cloned repo (<repo>/rules), standalone hooks dir (<claude_config>/hooks/../rules).
 const resolveRulesDir = () => {
-  for (const rel of ['..', '../..']) {
-    const candidate = path.join(__dirname, rel, 'rules');
+  const candidates = [];
+  if (process.env.CLAUDE_PLUGIN_ROOT) {
+    candidates.push(path.join(process.env.CLAUDE_PLUGIN_ROOT, 'rules'));
+  }
+  for (const rel of ['..', '../..', '../../..']) {
+    candidates.push(path.join(__dirname, rel, 'rules'));
+  }
+  for (const candidate of candidates) {
     try {
       if (fs.existsSync(candidate)) return candidate;
     } catch (e) { /* ignore */ }

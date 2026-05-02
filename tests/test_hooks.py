@@ -195,6 +195,34 @@ class HookScriptTests(unittest.TestCase):
 
             self.assertIn("[CAVEMAN:HANGEUL-FULL]", result.stdout)
 
+    def test_activate_finds_rules_from_nested_plugin_copy(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-plugin-rules-") as tmp:
+            root = Path(tmp) / "repo"
+            hooks_dir = root / "plugins" / "caveman" / "hooks"
+            skill_dir = root / "plugins" / "caveman" / "skills" / "caveman"
+            rules_dir = root / "rules"
+            claude_dir = root / ".claude"
+            hooks_dir.mkdir(parents=True)
+            skill_dir.mkdir(parents=True)
+            rules_dir.mkdir(parents=True)
+            claude_dir.mkdir(parents=True)
+
+            for name in ("caveman-activate.js", "caveman-config.js"):
+                (hooks_dir / name).write_text((REPO_ROOT / "hooks" / name).read_text())
+            (skill_dir / "SKILL.md").write_text((REPO_ROOT / "skills" / "caveman" / "SKILL.md").read_text())
+            (rules_dir / "hangeul-compression.md").write_text(
+                (REPO_ROOT / "rules" / "hangeul-compression.md").read_text()
+            )
+
+            result = self.run_cmd_with_env(
+                ["node", str(hooks_dir / "caveman-activate.js")],
+                root,
+                {"CLAUDE_CONFIG_DIR": str(claude_dir), "CAVEMAN_DEFAULT_MODE": "hangeul"},
+            )
+
+            self.assertIn("# Korean Compression Rules", result.stdout)
+            self.assertNotIn("# Korean Compression Rules (minimal)", result.stdout)
+
     def test_tracker_accepts_documented_compress_command(self):
         with tempfile.TemporaryDirectory(prefix="caveman-hooks-compress-") as tmp:
             home = Path(tmp)
