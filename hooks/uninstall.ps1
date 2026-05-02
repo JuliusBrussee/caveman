@@ -8,10 +8,12 @@ $ErrorActionPreference = "Stop"
 
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
 $HooksDir = Join-Path $ClaudeDir "hooks"
+$RulesDir = Join-Path $ClaudeDir "rules"
 $Settings = Join-Path $ClaudeDir "settings.json"
 $FlagFile = Join-Path $ClaudeDir ".caveman-active"
 
 $HookFiles = @("package.json", "caveman-config.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1")
+$RuleFiles = @("hangeul-compression.md", "wenyan-compression.md")
 
 # Detect if caveman is installed as a plugin
 $PluginInstalled = $false
@@ -48,6 +50,15 @@ foreach ($hook in $HookFiles) {
 
 if ($RemovedFiles -eq 0) {
     Write-Host "  No hook files found in $HooksDir"
+}
+
+# Remove standalone language rule files
+foreach ($rule in $RuleFiles) {
+    $path = Join-Path $RulesDir $rule
+    if (Test-Path $path) {
+        Remove-Item $path -Force
+        Write-Host "  Removed: $path"
+    }
 }
 
 # 2. Remove caveman entries from settings.json (idempotent)

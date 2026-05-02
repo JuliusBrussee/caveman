@@ -25,8 +25,13 @@ process.stdin.on('end', () => {
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
     // "talk like caveman"). README tells users they can say these, but the hook
     // only matched /caveman commands — flag file and statusline stayed out of sync.
-    if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-        /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
+    const wantsActivation =
+      /\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
+      /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt);
+    const negatesActivation =
+      /\b(don't|dont|do not|never|not|no)\b.{0,40}\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
+      /\bcaveman\b.{0,40}\b(don't|dont|do not|never|not|no)\b.{0,40}\b(mode|activate|enable|turn on|start)\b/i.test(prompt);
+    if (wantsActivation && !negatesActivation) {
       if (!/\b(stop|disable|turn off|deactivate)\b/i.test(prompt)) {
         const mode = getDefaultMode();
         if (mode !== 'off') {
@@ -74,7 +79,7 @@ process.stdin.on('end', () => {
         mode = 'commit';
       } else if (cmd === '/caveman-review') {
         mode = 'review';
-      } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
+      } else if (cmd === '/caveman-compress' || cmd === '/caveman:compress' || cmd === '/caveman:caveman-compress') {
         mode = 'compress';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
         // Bare /caveman → activate at configured default
