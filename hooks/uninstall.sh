@@ -7,10 +7,12 @@ set -e
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
+RULES_DIR="$CLAUDE_DIR/rules"
 SETTINGS="$CLAUDE_DIR/settings.json"
 FLAG_FILE="$CLAUDE_DIR/.caveman-active"
 
 HOOK_FILES=("package.json" "caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh")
+RULE_FILES=("hangeul-compression.md" "wenyan-compression.md")
 
 # Detect if caveman is installed as a plugin (check plugin cache)
 PLUGIN_INSTALLED=0
@@ -46,6 +48,14 @@ done
 if [ "$REMOVED_FILES" -eq 0 ]; then
   echo "  No hook files found in $HOOKS_DIR"
 fi
+
+# Remove standalone language rule files
+for rule in "${RULE_FILES[@]}"; do
+  if [ -f "$RULES_DIR/$rule" ]; then
+    rm "$RULES_DIR/$rule"
+    echo "  Removed: $RULES_DIR/$rule"
+  fi
+done
 
 # 2. Remove caveman entries from settings.json (idempotent)
 if [ -f "$SETTINGS" ]; then

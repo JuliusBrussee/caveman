@@ -34,10 +34,14 @@ fi
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
+RULES_DIR="$CLAUDE_DIR/rules"
 SETTINGS="$CLAUDE_DIR/settings.json"
-REPO_URL="https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks"
+REPO_ROOT_URL="https://raw.githubusercontent.com/JuliusBrussee/caveman/main"
+HOOKS_REPO_URL="$REPO_ROOT_URL/hooks"
+RULES_REPO_URL="$REPO_ROOT_URL/rules"
 
 HOOK_FILES=("package.json" "caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh")
+RULE_FILES=("hangeul-compression.md" "wenyan-compression.md")
 
 # Resolve source — works from repo clone or curl pipe
 SCRIPT_DIR=""
@@ -57,6 +61,14 @@ if [ "$FORCE" -eq 0 ]; then
       break
     fi
   done
+  if [ "$ALL_FILES_PRESENT" -eq 1 ]; then
+    for rule in "${RULE_FILES[@]}"; do
+      if [ ! -f "$RULES_DIR/$rule" ]; then
+        ALL_FILES_PRESENT=0
+        break
+      fi
+    done
+  fi
 
   HOOKS_WIRED=0
   HAS_STATUSLINE=0
@@ -101,17 +113,33 @@ else
   echo "Installing caveman hooks..."
 fi
 
-# 1. Ensure hooks dir exists
+# 1. Ensure install dirs exist
 mkdir -p "$HOOKS_DIR"
+mkdir -p "$RULES_DIR"
 
 # 2. Copy or download hook files
 for hook in "${HOOK_FILES[@]}"; do
   if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$hook" ]; then
     cp "$SCRIPT_DIR/$hook" "$HOOKS_DIR/$hook"
   else
-    curl -fsSL "$REPO_URL/$hook" -o "$HOOKS_DIR/$hook"
+    curl -fsSL "$HOOKS_REPO_URL/$hook" -o "$HOOKS_DIR/$hook"
   fi
   echo "  Installed: $HOOKS_DIR/$hook"
+done
+
+# 2b. Copy or download language rule files. caveman-activate.js resolves these
+# at hooks/../rules, which is $CLAUDE_DIR/rules for standalone installs.
+for rule in "${RULE_FILES[@]}"; do
+  local_rule=""
+  if [ -n "$SCRIPT_DIR" ]; then
+    local_rule="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd)/rules/$rule"
+  fi
+  if [ -n "$local_rule" ] && [ -f "$local_rule" ]; then
+    cp "$local_rule" "$RULES_DIR/$rule"
+  else
+    curl -fsSL "$RULES_REPO_URL/$rule" -o "$RULES_DIR/$rule"
+  fi
+  echo "  Installed: $RULES_DIR/$rule"
 done
 
 # Make statusline script executable

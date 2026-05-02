@@ -21,10 +21,14 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
 $HooksDir = Join-Path $ClaudeDir "hooks"
+$RulesDir = Join-Path $ClaudeDir "rules"
 $Settings = Join-Path $ClaudeDir "settings.json"
-$RepoUrl = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks"
+$RepoRootUrl = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main"
+$HooksRepoUrl = "$RepoRootUrl/hooks"
+$RulesRepoUrl = "$RepoRootUrl/rules"
 
 $HookFiles = @("package.json", "caveman-config.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1")
+$RuleFiles = @("hangeul-compression.md", "wenyan-compression.md")
 
 # Resolve source — works from repo clone or remote
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
@@ -38,6 +42,14 @@ if (-not $Force) {
         if (-not (Test-Path (Join-Path $HooksDir $hook))) {
             $AllFilesPresent = $false
             break
+        }
+    }
+    if ($AllFilesPresent) {
+        foreach ($rule in $RuleFiles) {
+            if (-not (Test-Path (Join-Path $RulesDir $rule))) {
+                $AllFilesPresent = $false
+                break
+            }
         }
     }
 
@@ -85,9 +97,12 @@ if ($Force -and (Test-Path (Join-Path $HooksDir "caveman-activate.js"))) {
     Write-Host "Installing caveman hooks..."
 }
 
-# 1. Ensure hooks dir exists
+# 1. Ensure install dirs exist
 if (-not (Test-Path $HooksDir)) {
     New-Item -ItemType Directory -Path $HooksDir -Force | Out-Null
+}
+if (-not (Test-Path $RulesDir)) {
+    New-Item -ItemType Directory -Path $RulesDir -Force | Out-Null
 }
 
 # 2. Copy or download hook files
@@ -98,7 +113,21 @@ foreach ($hook in $HookFiles) {
     if ($localSource -and (Test-Path $localSource)) {
         Copy-Item $localSource $dest -Force
     } else {
-        Invoke-WebRequest -Uri "$RepoUrl/$hook" -OutFile $dest -UseBasicParsing
+        Invoke-WebRequest -Uri "$HooksRepoUrl/$hook" -OutFile $dest -UseBasicParsing
+    }
+    Write-Host "  Installed: $dest"
+}
+
+# 2b. Copy or download language rule files. caveman-activate.js resolves these
+# at hooks/../rules, which is $ClaudeDir/rules for standalone installs.
+foreach ($rule in $RuleFiles) {
+    $dest = Join-Path $RulesDir $rule
+    $localSource = if ($ScriptDir) { Join-Path (Split-Path $ScriptDir -Parent) "rules/$rule" } else { $null }
+
+    if ($localSource -and (Test-Path $localSource)) {
+        Copy-Item $localSource $dest -Force
+    } else {
+        Invoke-WebRequest -Uri "$RulesRepoUrl/$rule" -OutFile $dest -UseBasicParsing
     }
     Write-Host "  Installed: $dest"
 }

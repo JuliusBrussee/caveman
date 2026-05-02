@@ -25,8 +25,13 @@ process.stdin.on('end', () => {
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
     // "talk like caveman"). README tells users they can say these, but the hook
     // only matched /caveman commands — flag file and statusline stayed out of sync.
-    if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-        /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
+    const wantsActivation =
+      /\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
+      /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt);
+    const negatesActivation =
+      /\b(don't|dont|do not|never|not|no)\b.{0,40}\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
+      /\bcaveman\b.{0,40}\b(don't|dont|do not|never|not|no)\b.{0,40}\b(mode|activate|enable|turn on|start)\b/i.test(prompt);
+    if (wantsActivation && !negatesActivation) {
       if (!/\b(stop|disable|turn off|deactivate)\b/i.test(prompt)) {
         const mode = getDefaultMode();
         if (mode !== 'off') {
@@ -74,7 +79,7 @@ process.stdin.on('end', () => {
         mode = 'commit';
       } else if (cmd === '/caveman-review') {
         mode = 'review';
-      } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
+      } else if (cmd === '/caveman-compress' || cmd === '/caveman:compress' || cmd === '/caveman:caveman-compress') {
         mode = 'compress';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
         // Bare /caveman → activate at configured default
@@ -85,6 +90,9 @@ process.stdin.on('end', () => {
         } else if (arg === 'wenyan-full') {
           // Canonical alias — config stores as 'wenyan'
           mode = 'wenyan';
+        } else if (arg === 'hangeul-full' || arg === 'korean' || arg === 'ko') {
+          // Canonical alias — config stores as 'hangeul'
+          mode = 'hangeul';
         } else if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) {
           mode = arg;
         }
@@ -118,12 +126,27 @@ process.stdin.on('end', () => {
     // — never inject untrusted bytes into model context.
     const activeMode = readFlag(flagPath);
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+      let reminder = "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+        "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
+        "Code/commits/security: write normal.";
+
+      if (activeMode.startsWith('hangeul')) {
+        reminder = "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+          "Drop filler (사실/그냥/진짜), pleasantries (~드리겠습니다), " +
+          "hedging (~것 같습니다). Fragments OK. " +
+          "Use 반말. Drop particles (은/는/이/가) when clear. " +
+          "Code/commits/security: write normal.";
+      } else if (activeMode.startsWith('wenyan')) {
+        reminder = "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+          "Use Classical Chinese (文言文). Maximum terseness. " +
+          "Classical sentence patterns. Verbs before objects. " +
+          "Code/commits/security: write normal.";
+      }
+
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-            "Code/commits/security: write normal."
+          additionalContext: reminder
         }
       }));
     }
