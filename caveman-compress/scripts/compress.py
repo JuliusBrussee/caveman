@@ -56,6 +56,14 @@ def is_sensitive_path(filepath: Path) -> bool:
     return any(tok in lower for tok in SENSITIVE_NAME_TOKENS)
 
 
+NOCOMPRESS_REGEX = re.compile(
+    r"<!--\s*nocompress\s*-->(.*?)<!--\s*/nocompress\s*-->",
+    re.DOTALL | re.IGNORECASE,
+)
+
+PLACEHOLDER = "<!--NOCOMPRESS_{index}-->"
+
+
 def strip_llm_wrapper(text: str) -> str:
     """Strip outer ```markdown ... ``` fence when it wraps the entire output."""
     m = OUTER_FENCE_REGEX.match(text)
@@ -67,6 +75,32 @@ from .detect import should_compress
 from .validate import validate
 
 MAX_RETRIES = 2
+
+
+# ---------- Nocompress Helpers ----------
+
+
+def extract_nocompress(text: str) -> tuple[str, list[str]]:
+    """Replace <!-- nocompress -->...<!-- /nocompress --> blocks with placeholders.
+
+    Returns (text_with_placeholders, list_of_extracted_regions).
+    The extracted regions are spliced back verbatim after compression so Claude
+    never sees them — guaranteeing exact preservation regardless of content.
+    """
+    regions: list[str] = []
+
+    def replace(m: re.Match) -> str:
+        regions.append(m.group(0))
+        return PLACEHOLDER.format(index=len(regions) - 1)
+
+    return NOCOMPRESS_REGEX.sub(replace, text), regions
+
+
+def restore_nocompress(text: str, regions: list[str]) -> str:
+    """Splice extracted nocompress regions back by placeholder index."""
+    for i, region in enumerate(regions):
+        text = text.replace(PLACEHOLDER.format(index=i), region)
+    return text
 
 
 # ---------- Claude Calls ----------
@@ -108,12 +142,15 @@ Compress this markdown into caveman format.
 STRICT RULES:
 - Do NOT modify anything inside ``` code blocks
 - Do NOT modify anything inside inline backticks
+- Do NOT add new ``` fences around content that is not already fenced — even if it looks like code or JSON
+- Do NOT create or promote text to markdown headings — only preserve existing # headings exactly as-is
+- Do NOT convert XML-like tags (e.g. <section>, <foo>) into headings or any other markdown structure — leave them as plain text
 - Preserve ALL URLs exactly
-- Preserve ALL headings exactly
+- Preserve ALL headings exactly (do not add, remove, or reword any heading)
 - Preserve file paths and commands
 - Return ONLY the compressed markdown body — do NOT wrap the entire output in a ```markdown fence or any other fence. Inner code blocks from the original stay as-is; do not add a new outer fence around the whole file.
 
-Only compress natural language.
+Only compress natural language prose. Never restructure, add formatting, or improve organization.
 
 TEXT:
 {original}
@@ -193,9 +230,13 @@ def compress_file(filepath: Path) -> bool:
         print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
         return False
 
-    # Step 1: Compress
+    # Step 1: Extract nocompress regions, compress the rest
+    sendable, nocompress_regions = extract_nocompress(original_text)
+    if nocompress_regions:
+        print(f"  ({len(nocompress_regions)} nocompress region(s) preserved verbatim)")
     print("Compressing with Claude...")
-    compressed = call_claude(build_compress_prompt(original_text))
+    compressed_partial = call_claude(build_compress_prompt(sendable))
+    compressed = restore_nocompress(compressed_partial, nocompress_regions)
 
     if compressed is None or not compressed.strip():
         print("❌ Compression aborted: Claude returned an empty response.")
@@ -246,9 +287,11 @@ def compress_file(filepath: Path) -> bool:
             return False
 
         print("Fixing with Claude...")
-        compressed = call_claude(
-            build_fix_prompt(original_text, compressed, result.errors)
+        fixed_partial = call_claude(
+            build_fix_prompt(sendable, compressed_partial, result.errors)
         )
+        compressed_partial = fixed_partial
+        compressed = restore_nocompress(compressed_partial, nocompress_regions)
         filepath.write_text(compressed)
 
     return True

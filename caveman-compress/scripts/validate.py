@@ -3,10 +3,14 @@ import re
 from collections import Counter
 from pathlib import Path
 
-URL_REGEX = re.compile(r"https?://[^\s)]+")
+URL_REGEX = re.compile(r"https?://[^\s)`]+")
 FENCE_OPEN_REGEX = re.compile(r"^(\s{0,3})(`{3,}|~{3,})(.*)$")
 HEADING_REGEX = re.compile(r"^(#{1,6})\s+(.*)", re.MULTILINE)
 BULLET_REGEX = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
+NOCOMPRESS_REGEX = re.compile(
+    r"<!--\s*nocompress\s*-->.*?<!--\s*/nocompress\s*-->",
+    re.DOTALL | re.IGNORECASE,
+)
 
 # crude but effective path detection
 # Requires either a path prefix (./ ../ / or drive letter) or a slash/backslash within the match
@@ -29,6 +33,11 @@ class ValidationResult:
 
 def read_file(path: Path) -> str:
     return path.read_text(errors="ignore")
+
+
+def strip_nocompress(text: str) -> str:
+    """Remove nocompress regions before validation so they don't skew checks."""
+    return NOCOMPRESS_REGEX.sub("", text)
 
 
 # ---------- Extractors ----------
@@ -173,8 +182,8 @@ def validate_inline_codes(orig, comp, result):
 def validate(original_path: Path, compressed_path: Path) -> ValidationResult:
     result = ValidationResult()
 
-    orig = read_file(original_path)
-    comp = read_file(compressed_path)
+    orig = strip_nocompress(read_file(original_path))
+    comp = strip_nocompress(read_file(compressed_path))
 
     validate_headings(orig, comp, result)
     validate_code_blocks(orig, comp, result)
