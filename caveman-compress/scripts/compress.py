@@ -42,6 +42,8 @@ SENSITIVE_NAME_TOKENS = (
     "apikey", "accesskey", "token", "privatekey",
 )
 
+_DOC_EXTENSIONS = frozenset({".md", ".txt", ".rst", ".markdown"})
+
 
 def is_sensitive_path(filepath: Path) -> bool:
     """Heuristic denylist for files that must never be shipped to a third-party API."""
@@ -53,6 +55,8 @@ def is_sensitive_path(filepath: Path) -> bool:
         return True
     # Normalize separators so "api-key" and "api_key" both match "apikey".
     lower = re.sub(r"[_\-\s.]", "", name.lower())
+    if filepath.suffix.lower() in _DOC_EXTENSIONS:
+        return any(tok in lower for tok in SENSITIVE_NAME_TOKENS)
     return any(tok in lower for tok in SENSITIVE_NAME_TOKENS)
 
 
