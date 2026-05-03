@@ -38,11 +38,11 @@ def main():
 
     # Check file exists
     if not filepath.exists():
-        print(f"❌ File not found: {filepath}")
+        print(f"[ERROR] File not found: {filepath}")
         sys.exit(1)
 
     if not filepath.is_file():
-        print(f"❌ Not a file: {filepath}")
+        print(f"[ERROR] Not a file: {filepath}")
         sys.exit(1)
 
     filepath = filepath.resolve()
@@ -69,7 +69,7 @@ def main():
             print(f"Original:   {backup_path}")
             sys.exit(0)
         else:
-            print("\n❌ Compression failed after retries")
+            print("\n[ERROR] Compression failed after retries")
             sys.exit(2)
 
     except KeyboardInterrupt:
@@ -77,7 +77,7 @@ def main():
         sys.exit(130)
 
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\n[ERROR] Error: {e}")
         sys.exit(1)
 
 

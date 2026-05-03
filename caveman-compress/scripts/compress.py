@@ -188,7 +188,7 @@ def compress_file(filepath: Path) -> bool:
 
     # Check if backup already exists to prevent accidental overwriting
     if backup_path.exists():
-        print(f"⚠️ Backup file already exists: {backup_path}")
+        print(f"[WARNING] Backup file already exists: {backup_path}")
         print("The original backup may contain important content.")
         print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
         return False
@@ -234,7 +234,7 @@ def compress_file(filepath: Path) -> bool:
             print("Validation passed")
             break
 
-        print("❌ Validation failed:")
+        print("[ERROR] Validation failed:")
         for err in result.errors:
             print(f"   - {err}")
 
@@ -242,7 +242,7 @@ def compress_file(filepath: Path) -> bool:
             # Restore original on failure
             filepath.write_text(original_text)
             backup_path.unlink(missing_ok=True)
-            print("❌ Failed after retries — original restored")
+            print("[ERROR] Failed after retries — original restored")
             return False
 
         print("Fixing with Claude...")
