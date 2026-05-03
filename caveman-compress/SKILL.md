@@ -70,22 +70,9 @@ cd caveman-compress && python3 -m scripts <absolute_filepath>
 - Merge redundant bullets that say the same thing differently
 - Keep one example where multiple examples show the same pattern
 
-CRITICAL RULE:
-Anything inside ``` ... ``` must be copied EXACTLY.
-Do not:
-- remove comments
-- remove spacing
-- reorder lines
-- shorten commands
-- simplify anything
-
-Inline code (`...`) must be preserved EXACTLY.
-Do not modify anything inside backticks.
-
-If file contains code blocks:
-- Treat code blocks as read-only regions
-- Only compress text outside them
-- Do not merge sections around code
+CRITICAL: Code blocks (``` ```) copy EXACTLY — no edits, reordering, or simplification.
+Inline code (`...`) preserved EXACTLY.
+Code blocks = read-only regions. Compress only text outside them.
 
 ## Pattern
 
@@ -94,12 +81,6 @@ Original:
 
 Compressed:
 > Run tests before push to main. Catch bugs early, prevent broken prod deploys.
-
-Original:
-> The application uses a microservices architecture with the following components. The API gateway handles all incoming requests and routes them to the appropriate service. The authentication service is responsible for managing user sessions and JWT tokens.
-
-Compressed:
-> Microservices architecture. API gateway route all requests to services. Auth service manage user sessions + JWT tokens.
 
 ## Boundaries
 
