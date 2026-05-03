@@ -95,8 +95,9 @@ def count_bullets(text):
 
 
 def extract_inline_codes(text):
-    text_without_fences = re.sub(r"^```[\s\S]*?^```", "", text, flags=re.MULTILINE)
-    text_without_fences = re.sub(r"^~~~[\s\S]*?^~~~", "", text_without_fences, flags=re.MULTILINE)
+    text_without_fences = text
+    for block in extract_code_blocks(text):
+        text_without_fences = text_without_fences.replace(block, "")
     return re.findall(r"`([^`]+)`", text_without_fences)
 
 
@@ -151,20 +152,22 @@ def validate_bullets(orig, comp, result):
         result.add_warning(f"Bullet count changed too much: {b1} -> {b2}")
 
 
+def _format_inline_counts(counter):
+    parts = []
+    for code in sorted(counter):
+        count = counter[code]
+        label = f"{code} ({count})" if count > 1 else code
+        parts.append(label)
+    return ", ".join(parts)
+
+
 def validate_inline_codes(orig, comp, result):
     c1 = Counter(extract_inline_codes(orig))
     c2 = Counter(extract_inline_codes(comp))
+    lost = c1 - c2
 
-    if c1 != c2:
-        lost = set(c1.keys()) - set(c2.keys())
-        added = set(c2.keys()) - set(c1.keys())
-        for code, count in c1.items():
-            if code in c2 and c2[code] < count:
-                lost.add(f"{code} (lost {count - c2[code]} of {count} occurrences)")
-        if lost:
-            result.add_error(f"Inline code lost: {lost}")
-        if added:
-            result.add_warning(f"Inline code added: {added}")
+    if lost:
+        result.add_error(f"Inline code lost: {_format_inline_counts(lost)}")
 
 
 # ---------- Main ----------
