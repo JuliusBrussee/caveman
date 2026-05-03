@@ -3,7 +3,17 @@ import re
 from collections import Counter
 from pathlib import Path
 
-URL_REGEX = re.compile(r"https?://[^\s)]+")
+# Match URL but do NOT consume trailing prose punctuation (. , ; : ! ? >).
+# Without this lookahead, "see https://example.com." captures the trailing
+# period; when the LLM correctly strips prose punctuation during compression,
+# the validator flags URL-missing (expected 'example.com.' not found, even
+# though 'example.com' is present).
+#
+# Non-greedy body + lookahead that permits zero-or-more prose-punct chars
+# followed by whitespace, closing paren, or end-of-string. Internal '.' in
+# domains and paths is preserved because the lookahead requires a terminator
+# after any stripped punctuation.
+URL_REGEX = re.compile(r"https?://[^\s)]+?(?=[\.,;:!?>]*(?:[\s)]|\Z))")
 FENCE_OPEN_REGEX = re.compile(r"^(\s{0,3})(`{3,}|~{3,})(.*)$")
 HEADING_REGEX = re.compile(r"^(#{1,6})\s+(.*)", re.MULTILINE)
 BULLET_REGEX = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
