@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 # Extensions that are natural language and compressible
-COMPRESSIBLE_EXTENSIONS = {".md", ".txt", ".markdown", ".rst"}
+COMPRESSIBLE_EXTENSIONS = {".md", ".txt", ".markdown", ".rst", ".typ", ".typst", ".tex"}
 
 # Extensions that are code/config and should be skipped
 SKIP_EXTENSIONS = {

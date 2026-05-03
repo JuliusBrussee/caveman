@@ -4,7 +4,7 @@ description: >
   Compress natural language memory files (CLAUDE.md, todos, preferences) into caveman format
   to save input tokens. Preserves all technical substance, code, URLs, and structure.
   Compressed version overwrites the original file. Human-readable backup saved as FILE.original.md.
-  Trigger: /caveman:compress <filepath> or "compress memory file"
+  Trigger: /caveman:compress FILEPATH or "compress memory file"
 ---
 
 # Caveman Compress
@@ -103,7 +103,7 @@ Compressed:
 
 ## Boundaries
 
-- ONLY compress natural language files (.md, .txt, extensionless)
+- ONLY compress natural language files (.md, .txt, .typ, .typst, .tex, extensionless)
 - NEVER modify: .py, .js, .ts, .json, .yaml, .yml, .toml, .env, .lock, .css, .html, .xml, .sql, .sh
 - If file has mixed content (prose + code), compress ONLY the prose sections
 - If unsure whether something is code or prose, leave it unchanged

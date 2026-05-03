@@ -33,3 +33,18 @@ else
   SUFFIX=$(printf '%s' "$MODE" | tr '[:lower:]' '[:upper:]')
   printf '\033[38;5;172m[CAVEMAN:%s]\033[0m' "$SUFFIX"
 fi
+
+# Savings suffix: on by default. Opt out via CAVEMAN_STATUSLINE_SAVINGS=0.
+# Reads a pre-rendered string written by caveman-stats.js so we don't shell out
+# to node on every keystroke. Refuses symlinks and strips control bytes —
+# same hardening as the flag file (a local attacker could plant a file with
+# ANSI escape codes otherwise). Until /caveman-stats has run at least once,
+# the suffix file is absent and nothing is rendered — so the default is safe
+# for fresh installs (no fake number, no crash).
+if [ "${CAVEMAN_STATUSLINE_SAVINGS:-1}" != "0" ]; then
+  SAVINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-statusline-suffix"
+  if [ -f "$SAVINGS_FILE" ] && [ ! -L "$SAVINGS_FILE" ]; then
+    SAVINGS=$(head -c 64 "$SAVINGS_FILE" 2>/dev/null | tr -d '\000-\037')
+    [ -n "$SAVINGS" ] && printf ' \033[38;5;172m%s\033[0m' "$SAVINGS"
+  fi
+fi

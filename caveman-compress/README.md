@@ -98,7 +98,7 @@ Examples:
 
 | Type | Compress? |
 |------|-----------|
-| `.md`, `.txt`, `.rst` | ✅ Yes |
+| `.md`, `.txt`, `.rst`, `.typ`, `.typst`, `.tex` | ✅ Yes |
 | Extensionless natural language | ✅ Yes |
 | `.py`, `.js`, `.ts`, `.json`, `.yaml` | ❌ Skip (code/config) |
 | `*.original.md` | ❌ Skip (backup files) |

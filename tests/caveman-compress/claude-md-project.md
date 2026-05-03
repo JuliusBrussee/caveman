@@ -32,7 +32,7 @@ Pattern: controller-service-repository.
 * services contain business logic
 * repositories manage DB access
 
-Structure:
+Structure under `server/src/`:
 
 * `server/src/controllers/` — route handlers + validation
 * `server/src/services/` — business logic
@@ -95,7 +95,7 @@ Short-lived feature branches → PR → merge to `main`.
 Branch format: `<type>/<ticket-id>-<short-description>`
 Example: `feat/TF-123-add-slack-integration`
 
-Commits: Conventional Commits
+Commits: Conventional Commits — `type(scope): description`
 Types: feat, fix, refactor, test, docs, chore, perf
 
 Rules:
