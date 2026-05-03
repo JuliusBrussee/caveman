@@ -2,10 +2,8 @@ import unittest
 import tempfile
 from pathlib import Path
 import sys
-import os
 
 CAVEMAN_COMPRESS = Path(__file__).parent.parent / "caveman-compress"
-os.chdir(CAVEMAN_COMPRESS)
 sys.path.insert(0, str(CAVEMAN_COMPRESS))
 
 from scripts.compress import is_sensitive_path
