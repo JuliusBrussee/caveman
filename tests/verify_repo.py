@@ -16,6 +16,41 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def resolve_bash() -> str:
+    """Prefer Git Bash on Windows; WSL bash does not handle Windows paths here."""
+    candidates: list[Path] = []
+    if override := os.environ.get("CAVEMAN_BASH"):
+        candidates.append(Path(override))
+    if os.name == "nt":
+        candidates.extend(
+            [
+                Path(r"C:\Program Files\Git\bin\bash.exe"),
+                Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
+            ]
+        )
+    if found := shutil.which("bash"):
+        found_path = Path(found)
+        if os.name != "nt" or not is_wsl_bash(found_path):
+            candidates.append(found_path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return "bash"
+
+
+def is_wsl_bash(path: Path) -> bool:
+    normalized = str(path).lower().replace("/", "\\")
+    return (
+        normalized.endswith(r"\windows\system32\bash.exe")
+        or normalized.endswith(r"\microsoft\windowsapps\bash.exe")
+        or r"\windowsapps\bash.exe" in normalized
+    )
+
+
+BASH = resolve_bash()
+
+
 class CheckFailure(RuntimeError):
     pass
 
@@ -176,9 +211,9 @@ def verify_manifests_and_syntax() -> None:
     run(["node", "--check", "hooks/caveman-config.js"])
     run(["node", "--check", "hooks/caveman-activate.js"])
     run(["node", "--check", "hooks/caveman-mode-tracker.js"])
-    run(["bash", "-n", "hooks/install.sh"])
-    run(["bash", "-n", "hooks/uninstall.sh"])
-    run(["bash", "-n", "hooks/caveman-statusline.sh"])
+    run([BASH, "-n", "hooks/install.sh"])
+    run([BASH, "-n", "hooks/uninstall.sh"])
+    run([BASH, "-n", "hooks/caveman-statusline.sh"])
 
     # Ensure install/uninstall scripts include caveman-config.js
     install_sh = (ROOT / "hooks/install.sh").read_text(encoding="utf-8")
@@ -267,7 +302,7 @@ def verify_hook_install_flow() -> None:
     section("Claude Hook Flow")
 
     ensure(shutil.which("node") is not None, "node is required for hook verification")
-    ensure(shutil.which("bash") is not None, "bash is required for hook verification")
+    ensure(Path(BASH).exists() or shutil.which(BASH) is not None, "bash is required for hook verification")
 
     with tempfile.TemporaryDirectory(prefix="caveman-verify-") as temp_root:
         temp_root_path = Path(temp_root)
@@ -282,7 +317,7 @@ def verify_hook_install_flow() -> None:
         (claude_dir / "settings.json").write_text(json.dumps(existing_settings, indent=2) + "\n")
         hook_env = {"HOME": shell_path(home), "CLAUDE_CONFIG_DIR": shell_path(claude_dir)}
 
-        run(["bash", "hooks/install.sh"], env=hook_env)
+        run([BASH, "hooks/install.sh"], env=hook_env)
 
         settings = read_json(claude_dir / "settings.json")
         hooks = settings["hooks"]
@@ -368,15 +403,15 @@ def verify_hook_install_flow() -> None:
 
         (claude_dir / ".caveman-active").write_text("wenyan-ultra")
         statusline = run(
-            ["bash", "hooks/caveman-statusline.sh"],
+            [BASH, "hooks/caveman-statusline.sh"],
             env=hook_env,
         )
         ensure("[CAVEMAN:WENYAN-ULTRA]" in statusline.stdout, "statusline badge output mismatch")
 
-        reinstall = run(["bash", "hooks/install.sh"], env=hook_env)
+        reinstall = run([BASH, "hooks/install.sh"], env=hook_env)
         ensure("Nothing to do" in reinstall.stdout, "install.sh should be idempotent")
 
-        run(["bash", "hooks/uninstall.sh"], env=hook_env)
+        run([BASH, "hooks/uninstall.sh"], env=hook_env)
         settings_after = read_json(claude_dir / "settings.json")
         ensure(settings_after == existing_settings, "uninstall.sh did not restore non-caveman settings")
         ensure(not (claude_dir / ".caveman-active").exists(), "uninstall.sh should remove flag file")
@@ -385,12 +420,12 @@ def verify_hook_install_flow() -> None:
         home = Path(temp_root) / "home"
         claude_dir = home / ".claude"
         hook_env = {"HOME": shell_path(home), "CLAUDE_CONFIG_DIR": shell_path(claude_dir)}
-        run(["bash", "hooks/install.sh"], env=hook_env)
+        run([BASH, "hooks/install.sh"], env=hook_env)
         settings = read_json(claude_dir / "settings.json")
         ensure("statusLine" in settings, "fresh install should configure statusline")
         activate = run(["node", "hooks/caveman-activate.js"], env=hook_env)
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "fresh install should not nudge for statusline")
-        run(["bash", "hooks/uninstall.sh"], env=hook_env)
+        run([BASH, "hooks/uninstall.sh"], env=hook_env)
         ensure(read_json(claude_dir / "settings.json") == {}, "fresh uninstall should leave empty settings")
 
     print("Claude hook install/uninstall flow OK")
