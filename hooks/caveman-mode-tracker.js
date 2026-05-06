@@ -110,20 +110,34 @@ process.stdin.on('end', () => {
     // when other plugins inject competing style instructions every turn.
     // This keeps caveman visible in the model's attention on every user message.
     //
+    // Per-mode wording matters: a generic "drop articles, fragments OK" hint
+    // pulls wenyan-* modes back toward English-style caveman after several
+    // turns. Each mode's reinforcement restates that mode's core rule so the
+    // model's attention re-anchors to the right style every turn.
+    //
     // Skip independent modes (commit, review, compress) — they have their own
     // skill behavior and the base caveman rules would conflict.
     // readFlag enforces symlink-safe read + size cap + VALID_MODES whitelist.
     // If the flag is missing, corrupted, oversized, or a symlink pointing at
     // something like ~/.ssh/id_rsa, readFlag returns null and we emit nothing
     // — never inject untrusted bytes into model context.
+    const MODE_REINFORCEMENT = {
+      'lite': "Drop filler/hedging/pleasantries. Keep articles + full sentences. Professional but tight.",
+      'full': "Drop articles/filler/pleasantries/hedging. Fragments OK. Short synonyms.",
+      'ultra': "Abbreviate prose words (DB/auth/config/req/res/fn/impl). Strip conjunctions. Arrows for causality (X → Y). One word when one word enough. Never abbreviate code symbols, API names, error strings.",
+      'wenyan-lite': "Semi-classical Chinese. Drop filler/hedging, keep grammar structure, classical register.",
+      'wenyan': "Full classical Chinese (文言文). 80-90% character reduction. Verbs precede objects, subjects often omitted, classical particles (之/乃/為/其).",
+      'wenyan-full': "Full classical Chinese (文言文). 80-90% character reduction. Verbs precede objects, subjects often omitted, classical particles (之/乃/為/其).",
+      'wenyan-ultra': "Extreme classical Chinese compression. Maximum terseness while keeping classical feel."
+    };
     const activeMode = readFlag(flagPath);
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+      const modeRules = MODE_REINFORCEMENT[activeMode] || MODE_REINFORCEMENT['full'];
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-            "Code/commits/security: write normal."
+          additionalContext: "CAVEMAN MODE ACTIVE — level: " + activeMode + ". " +
+            modeRules + " Code/commits/security: write normal."
         }
       }));
     }
