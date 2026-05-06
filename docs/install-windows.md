@@ -31,6 +31,28 @@ $marketplace | ConvertTo-Json -Depth 10 | Set-Content -Path $MarketplaceFile -En
 
 Verify: `Test-Path "$PluginSkillDir\SKILL.md"` should print `True`. Restart Claude Code, then run `/caveman` to confirm the skill loads.
 
+## Contributor checkout
+
+This repo includes Bash scripts used by local verification and CI. They must stay LF-terminated on Windows; CRLF makes Bash fail with errors like `syntax error near unexpected token $'do\r'`.
+
+Fresh clone recommended:
+
+```powershell
+git config --global core.autocrlf false
+git clone https://github.com/JuliusBrussee/caveman.git
+```
+
+For an existing checkout that already has CRLF shell scripts, save your local work first, then re-clone after changing the setting. If you cannot re-clone, refresh the affected shell scripts only after committing or stashing your edits.
+
+```powershell
+git config --global core.autocrlf false
+git ls-files --eol *.sh
+```
+
+The repo's `.gitattributes` pins `*.sh`, `*.bash`, and `*.zsh` to LF for future checkouts.
+
+For local hook verification, install Git for Windows and use Git Bash. WSL's `bash.exe` can be first on PATH, but it may not see Windows `node.exe` or Windows-style temp paths. The verification runner prefers Git Bash automatically when it is installed; set `CAVEMAN_BASH` to a specific `bash.exe` path if you need to override it.
+
 ## Codex on Windows
 
 1. Enable symlinks first: `git config --global core.symlinks true` (requires Developer Mode or admin).

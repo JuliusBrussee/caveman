@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Shell scripts must stay LF even when contributors use core.autocrlf=true on Windows.
+*.sh text eol=lf
+*.bash text eol=lf
+*.zsh text eol=lf
