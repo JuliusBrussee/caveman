@@ -15,7 +15,29 @@ const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.cla
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
-const mode = getDefaultMode();
+// Determine preferred language: CAVEMAN_LANG env var > settings.caveman.lang > 'en'
+let prefLang = 'en';
+try {
+  const envLang = (process.env.CAVEMAN_LANG || '').trim().toLowerCase();
+  if (envLang === 'ru' || envLang === 'en') {
+    prefLang = envLang;
+  } else if (!envLang) {
+    if (fs.existsSync(settingsPath)) {
+      const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      const cl = s && s.caveman && s.caveman.lang;
+      if (cl === 'ru' || cl === 'en') prefLang = cl;
+    }
+  }
+} catch (e) { /* silent */ }
+
+// Resolve the base mode, then apply language preference
+let mode = getDefaultMode();
+
+// If mode is a generic English mode and preferred language is Russian, map to ru-* equivalent
+if (prefLang === 'ru' && !mode.startsWith('ru-') && !['off', 'commit', 'review', 'compress', 'wenyan', 'wenyan-lite', 'wenyan-full', 'wenyan-ultra'].includes(mode)) {
+  const map = { 'full': 'ru-full', 'lite': 'ru-lite', 'ultra': 'ru-ultra' };
+  mode = map[mode] || 'ru-full';
+}
 
 // "off" mode — skip activation entirely, don't write flag or emit rules
 if (mode === 'off') {
@@ -57,6 +79,16 @@ try {
   );
 } catch (e) { /* standalone install — will use fallback below */ }
 
+// For ru-* modes, also load the detailed Russian rules file
+let russianRules = '';
+if (modeLabel.startsWith('ru-')) {
+  try {
+    russianRules = fs.readFileSync(
+      path.join(__dirname, '..', 'skills', 'caveman', 'russian-rules.md'), 'utf8'
+    );
+  } catch (e) { /* standalone install — russian rules in fallback below */ }
+}
+
 let output;
 
 if (skillContent) {
@@ -88,26 +120,50 @@ if (skillContent) {
     return acc;
   }, []);
 
-  output = 'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' + filtered.join('\n');
+  const banner = modeLabel.startsWith('ru-')
+    ? 'CAVEMAN-RU MODE ACTIVE — level: ' + modeLabel
+    : 'CAVEMAN MODE ACTIVE — level: ' + modeLabel;
+  output = banner + '\n\n' + filtered.join('\n');
+  if (russianRules) {
+    output += '\n\n' + russianRules;
+  }
 } else {
   // Fallback when SKILL.md is not found (standalone hook install without skills dir).
   // This is the minimum viable ruleset — better than nothing.
-  output =
-    'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' +
-    'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
-    '## Persistence\n\n' +
-    'ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. Still active if unsure. Off only: "stop caveman" / "normal mode".\n\n' +
-    'Current level: **' + modeLabel + '**. Switch: `/caveman lite|full|ultra`.\n\n' +
-    '## Rules\n\n' +
-    'Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. ' +
-    'Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Technical terms exact. Code blocks unchanged. Errors quoted exact.\n\n' +
-    'Pattern: `[thing] [action] [reason]. [next step].`\n\n' +
-    'Not: "Sure! I\'d be happy to help you with that. The issue you\'re experiencing is likely caused by..."\n' +
-    'Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"\n\n' +
-    '## Auto-Clarity\n\n' +
-    'Drop caveman for: security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread, user asks to clarify or repeats question. Resume caveman after clear part done.\n\n' +
-    '## Boundaries\n\n' +
-    'Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.';
+  if (modeLabel.startsWith('ru-')) {
+    output =
+      'CAVEMAN-RU MODE ACTIVE — level: ' + modeLabel + '\n\n' +
+      'Отвечай сжато, как умный пещерный человек по-русски. Технический смысл сохраняется полностью. Режется только вода.\n\n' +
+      '## Персистентность\n\n' +
+      'АКТИВНО В КАЖДОМ ОТВЕТЕ. Не откатывать. Выключение: «stop caveman» / «normal mode» / «обычный режим».\n\n' +
+      'Уровень: **' + modeLabel + '**. Переключение: `/caveman ru-lite|ru-full|ru-ultra|ru-notes`.\n\n' +
+      '## Инварианты\n\n' +
+      'Код, команды, URL, пути, имена API/функций/классов — не сокращать, не переводить, не транслитерировать.\n\n' +
+      '## Правила\n\n' +
+      'Резать: вводные, вежливые обёртки, паразитные конструкции, дублирование мысли, смягчения.\n' +
+      'Шаблон: `[что] [действие] [причина]. [следующий шаг].`\n\n' +
+      '## Автоматическая ясность\n\n' +
+      'Отключить сжатие: предупреждения безопасности, необратимые действия, пользователь запутался. После — вернуться.\n\n' +
+      '## Границы\n\n' +
+      'Код/коммиты/PR — нормально. Уровень держится до смены или конца сессии.';
+  } else {
+    output =
+      'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' +
+      'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
+      '## Persistence\n\n' +
+      'ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. Still active if unsure. Off only: "stop caveman" / "normal mode" / "обычный режим".\n\n' +
+      'Current level: **' + modeLabel + '**. Switch: `/caveman lite|full|ultra|ru|ru-lite|ru-full|ru-ultra|ru-notes`.\n\n' +
+      '## Rules\n\n' +
+      'Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. ' +
+      'Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Technical terms exact. Code blocks unchanged. Errors quoted exact.\n\n' +
+      'Pattern: `[thing] [action] [reason]. [next step].`\n\n' +
+      'Not: "Sure! I\'d be happy to help you with that. The issue you\'re experiencing is likely caused by..."\n' +
+      'Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"\n\n' +
+      '## Auto-Clarity\n\n' +
+      'Drop caveman for: security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread, user asks to clarify or repeats question. Resume caveman after clear part done.\n\n' +
+      '## Boundaries\n\n' +
+      'Code/commits/PRs: write normal. "stop caveman" or "normal mode" or "обычный режим": revert. Level persist until changed or session end.';
+  }
 }
 
 // 3. Detect missing statusline config — nudge Claude to help set it up
