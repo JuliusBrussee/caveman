@@ -301,7 +301,7 @@ PROVIDER_MECHS=(
   "npx skills add (crush)" "npx skills add (devin)" "npx skills add (droid)"
   "npx skills add (forgecode)" "npx skills add (goose)" "npx skills add (iflow-cli)"
   "npx skills add (junie)" "npx skills add (kiro-cli)" "npx skills add (mistral-vibe)"
-  "npx skills add (openhands)" "npx skills add (opencode)" "npx skills add (qwen-code)"
+  "npx skills add (openhands)" "copy skills to ~/.agents/skills" "npx skills add (qwen-code)"
   "npx skills add (qoder)" "npx skills add (rovodev)" "npx skills add (tabnine-cli)"
   "npx skills add (trae)" "npx skills add (warp)" "npx skills add (replit)"
   "npx skills add (antigravity)"
@@ -557,6 +557,81 @@ EOF
   return 0
 }
 
+install_opencode() {
+  DETECTED_COUNT=$((DETECTED_COUNT + 1))
+  say "→ opencode detected"
+
+  local SKILLS_DIR="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
+  local CAVEMAN_SKILLS=(caveman caveman-commit caveman-review caveman-help caveman-stats cavecrew compress)
+  local installed_count=0
+  local skipped_count=0
+
+  if [ ! -d "$SKILLS_DIR" ]; then
+    if [ "$DRY" = 1 ]; then
+      note "  would create: $SKILLS_DIR"
+    else
+      mkdir -p "$SKILLS_DIR"
+    fi
+  fi
+
+  for skill in "${CAVEMAN_SKILLS[@]}"; do
+    local target="$SKILLS_DIR/$skill"
+
+    if [ -d "$target" ] && [ "$FORCE" = 0 ]; then
+      note "  $skill already installed (use --force to overwrite)"
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+
+    if [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/skills/$skill" ]; then
+      if [ "$DRY" = 1 ]; then
+        note "  would copy: $REPO_ROOT/skills/$skill → $target"
+      else
+        rm -rf "$target"
+        cp -R "$REPO_ROOT/skills/$skill" "$target"
+      fi
+    else
+      if ! has curl; then
+        warn "  curl required to fetch $skill remotely"
+        continue
+      fi
+      if [ "$DRY" = 1 ]; then
+        note "  would download: $RAW_BASE/skills/$skill/SKILL.md → $target/SKILL.md"
+      else
+        rm -rf "$target"
+        mkdir -p "$target"
+        if curl -fsSL "$RAW_BASE/skills/$skill/SKILL.md" -o "$target/SKILL.md" 2>/dev/null; then
+          : # success
+        else
+          warn "    failed to download $skill/SKILL.md"
+          rm -rf "$target"
+          continue
+        fi
+        # Download subdirectories for skills that have them (compress/scripts)
+        if [ "$skill" = "compress" ]; then
+          mkdir -p "$target/scripts"
+          for sub in __init__.py __main__.py benchmark.py cli.py compress.py detect.py validate.py; do
+            curl -fsSL "$RAW_BASE/skills/compress/scripts/$sub" -o "$target/scripts/$sub" 2>/dev/null || true
+          done
+        fi
+      fi
+    fi
+
+    installed_count=$((installed_count + 1))
+  done
+
+  if [ "$installed_count" -gt 0 ]; then
+    record_installed "opencode"
+    ok "  installed $installed_count skills to $SKILLS_DIR"
+  elif [ "$skipped_count" -eq "${#CAVEMAN_SKILLS[@]}" ]; then
+    record_skipped "opencode" "all skills already installed"
+  fi
+
+  note "  skills active immediately. No CLI restart needed."
+  echo
+  return 0
+}
+
 install_gemini() {
   DETECTED_COUNT=$((DETECTED_COUNT + 1))
   say "→ Gemini CLI detected"
@@ -626,6 +701,11 @@ if want claude && detect_match "command:claude"; then
   install_claude
 fi
 
+# opencode: native skills install (no npx skills fallback).
+if want opencode && detect_match "command:opencode||file:$HOME/.config/opencode/AGENTS.md"; then
+  install_opencode
+fi
+
 # Gemini.
 if want gemini && detect_match "command:gemini"; then
   install_gemini
@@ -661,7 +741,6 @@ SKILLS_AGENTS=(
   "kiro|Kiro CLI|kiro-cli|command:kiro||dir:$HOME/.kiro"
   "mistral|Mistral Vibe|mistral-vibe|command:mistral||dir:$HOME/.vibe"
   "openhands|OpenHands|openhands|command:openhands||dir:$HOME/.openhands"
-  "opencode|opencode|opencode|command:opencode||file:$HOME/.config/opencode/AGENTS.md"
   "qwen|Qwen Code|qwen-code|command:qwen||dir:$HOME/.qwen"
   "qoder|Qoder|qoder|dir:$HOME/.qoder"
   "rovodev|Atlassian Rovo Dev|rovodev|command:rovodev||dir:$HOME/.rovodev"
