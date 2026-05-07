@@ -50,6 +50,9 @@ const AGENTS = [
   { id: 'agents',   file: 'AGENTS.md',
     frontmatter: '',
     mode: 'append' },
+  { id: 'opencode', file: 'AGENTS.md',
+    frontmatter: '',
+    mode: 'append' },
 ];
 
 function loadRuleBody() {

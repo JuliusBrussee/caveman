@@ -312,7 +312,7 @@ $Providers = @(
   @{ id='kiro';        label='Kiro CLI';           profile='kiro-cli';     detect="command:kiro||dir:$HOME\.kiro"; soft=0 },
   @{ id='mistral';     label='Mistral Vibe';       profile='mistral-vibe'; detect="command:mistral||dir:$HOME\.vibe"; soft=0 },
   @{ id='openhands';   label='OpenHands';          profile='openhands';    detect="command:openhands||dir:$HOME\.openhands"; soft=0 },
-  @{ id='opencode';    label='opencode';           profile='opencode';     detect="command:opencode||file:$HOME\.config\opencode\AGENTS.md"; soft=0 },
+  @{ id='opencode';    label='opencode';           profile='';             detect="command:opencode||file:$HOME\.config\opencode\AGENTS.md"; soft=0 },
   @{ id='qwen';        label='Qwen Code';          profile='qwen-code';    detect="command:qwen||dir:$HOME\.qwen"; soft=0 },
   @{ id='qoder';       label='Qoder';              profile='qoder';        detect="dir:$HOME\.qoder"; soft=1 },
   @{ id='rovodev';     label='Atlassian Rovo Dev'; profile='rovodev';      detect="command:rovodev||dir:$HOME\.rovodev"; soft=0 },
@@ -502,6 +502,87 @@ function Install-Gemini {
   Write-Host ""
 }
 
+function Install-Opencode {
+  $script:DetectedCount++
+  Say "→ opencode detected"
+
+  $skillsDir = if ($env:AGENTS_SKILLS_DIR) { $env:AGENTS_SKILLS_DIR } else { Join-Path $HOME ".agents\skills" }
+  $cavemanSkills = @("caveman", "caveman-commit", "caveman-review", "caveman-help", "caveman-stats", "cavecrew", "compress")
+  $installedCount = 0
+  $skippedCount = 0
+
+  if (-not (Test-Path $skillsDir)) {
+    if ($DryRun) {
+      Note "  would create: $skillsDir"
+    } else {
+      New-Item -ItemType Directory -Path $skillsDir -Force | Out-Null
+    }
+  }
+
+  foreach ($skill in $cavemanSkills) {
+    $target = Join-Path $skillsDir $skill
+
+    if ((Test-Path $target) -and (-not $Force)) {
+      Note "  $skill already installed (use -Force to overwrite)"
+      $skippedCount++
+      continue
+    }
+
+    if ($RepoRoot -and (Test-Path (Join-Path $RepoRoot "skills\$skill"))) {
+      if ($DryRun) {
+        Note "  would copy: $(Join-Path $RepoRoot "skills\$skill") → $target"
+      } else {
+        if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+        Copy-Item -Path (Join-Path $RepoRoot "skills\$skill") -Destination $target -Recurse -Force
+      }
+    } else {
+      if (-not (Has-Cmd "curl")) {
+        Warn "  curl required to fetch $skill remotely"
+        continue
+      }
+      if ($DryRun) {
+        Note "  would download: $RawBase/skills/$skill/SKILL.md → $target\SKILL.md"
+      } else {
+        if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+        try {
+          Invoke-WebRequest -Uri "$RawBase/skills/$skill/SKILL.md" -OutFile (Join-Path $target "SKILL.md") -UseBasicParsing -ErrorAction Stop
+        } catch {
+          Warn "    failed to download $skill/SKILL.md"
+          if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+          continue
+        }
+        # Download subdirectories for skills that have them (compress/scripts)
+        if ($skill -eq "compress") {
+          $scriptsDir = Join-Path $target "scripts"
+          New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+          $subs = @("__init__.py", "__main__.py", "benchmark.py", "cli.py", "compress.py", "detect.py", "validate.py")
+          foreach ($sub in $subs) {
+            try {
+              Invoke-WebRequest -Uri "$RawBase/skills/compress/scripts/$sub" -OutFile (Join-Path $scriptsDir $sub) -UseBasicParsing -ErrorAction Stop
+            } catch {
+              # Silently skip missing sub-files
+            }
+          }
+        }
+      }
+    }
+
+    $installedCount++
+  }
+
+  if ($installedCount -gt 0) {
+    Record-Installed "opencode"
+    Ok "  installed $installedCount skills to $skillsDir"
+  } elseif ($skippedCount -eq $cavemanSkills.Count) {
+    Record-Skipped "opencode" "all skills already installed"
+  }
+
+  Note "  skills active immediately. No CLI restart needed."
+  Write-Host ""
+  return
+}
+
 function Install-ViaSkills {
   param([string]$id, [string]$label, [string]$profile)
   $script:DetectedCount++
@@ -526,9 +607,10 @@ foreach ($p in $Providers) {
   if (-not (Want $p.id)) { continue }
   if (-not (Resolve-DetectSpec $p.detect)) { continue }
   switch ($p.id) {
-    'claude' { Install-Claude }
-    'gemini' { Install-Gemini }
-    default  { Install-ViaSkills $p.id $p.label $p.profile }
+    'claude'   { Install-Claude }
+    'gemini'   { Install-Gemini }
+    'opencode' { Install-Opencode }
+    default    { Install-ViaSkills $p.id $p.label $p.profile }
   }
 }
 
