@@ -1,0 +1,2 @@
+description = "Compress error messages and stack traces into caveman format"
+prompt = "Parse the error output. Extract root cause file, line, error type. Output: <file>:L<line>: <error>. <cause>. <fix>. Collapse framework frames. Keep user code only."

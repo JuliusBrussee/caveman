@@ -129,6 +129,50 @@ Based on the viral observation that caveman-speak dramatically reduces LLM token
 
 ## Install
 
+Pick your agent. One command. Done.
+
+| Agent | Install |
+|-------|---------|
+| **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` |
+| **Codex** | Clone repo → `/plugins` → Search "Caveman" → Install |
+| **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` |
+| **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
+| **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
+| **Copilot** | `npx skills add JuliusBrussee/caveman -a github-copilot` |
+| **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
+| **Any other** | `npx skills add JuliusBrussee/caveman` |
+
+Install once. Use in every session for that install target after that. One rock. That it.
+
+### What You Get
+
+Auto-activation is built in for Claude Code, Gemini CLI, and the repo-local Codex setup below. `npx skills add` installs the skill for other agents, but does **not** install repo rule/instruction files, so Caveman does not auto-start there unless you add the always-on snippet below.
+
+| Feature | Claude Code | Codex | Gemini CLI | Cursor | Windsurf | Cline | Copilot |
+|---------|:-----------:|:-----:|:----------:|:------:|:--------:|:-----:|:-------:|
+| Caveman mode | Y | Y | Y | Y | Y | Y | Y |
+| Auto-activate every session | Y | Y¹ | Y | —² | —² | —² | —² |
+| `/caveman` command | Y | Y¹ | Y | — | — | — | — |
+| Mode switching (lite/full/ultra) | Y | Y¹ | Y | Y³ | Y³ | — | — |
+| Statusline badge | Y⁴ | — | — | — | — | — | — |
+| caveman-commit | Y | — | Y | Y | Y | Y | Y |
+| caveman-review | Y | — | Y | Y | Y | Y | Y |
+| caveman-compress | Y | Y | Y | Y | Y | Y | Y |
+| caveman-help | Y | — | Y | Y | Y | Y | Y |
+| caveman-error | Y | — | Y | Y | Y | Y | Y |
+
+> [!NOTE]
+> Auto-activation works differently per agent: Claude Code uses SessionStart hooks, this repo's Codex dogfood setup uses `.codex/hooks.json`, Gemini uses context files. Cursor/Windsurf/Cline/Copilot can be made always-on, but `npx skills add` installs only the skill, not the repo rule/instruction files.
+>
+> ¹ Codex uses `$caveman` syntax, not `/caveman`. This repo ships `.codex/hooks.json`, so caveman auto-starts when you run Codex inside this repo. The installed plugin itself gives you `$caveman`; copy the same hook into another repo if you want always-on behavior there too. caveman-commit and caveman-review are not in the Codex plugin bundle — use the SKILL.md files directly.
+> ² Add the "Want it always on?" snippet below to those agents' system prompt or rule file if you want session-start activation.
+> ³ Cursor and Windsurf receive the full SKILL.md with all intensity levels. Mode switching works on-demand via the skill; no slash command.
+> ⁴ Available in Claude Code, but plugin install only nudges setup. Standalone `install.sh` / `install.ps1` configures it automatically when no custom `statusLine` exists.
+
+<details>
+<summary><strong>Claude Code — full details</strong></summary>
+
+The plugin install gives you skills + auto-loading hooks. If no custom `statusLine` is configured, Caveman nudges Claude to offer badge setup on first session.
 **One line. Detect every agent. Install for each.**
 
 ```bash
@@ -233,6 +277,26 @@ Level stick until you change it or session end.
 
 **Statusline savings badge** — on by default. After your first `/caveman-stats` run the statusline appends `[CAVEMAN] ⛏ 12.4k` (lifetime tokens saved) and updates every time `/caveman-stats` runs. Don't want it? Set `CAVEMAN_STATUSLINE_SAVINGS=0` to silence.
 
+`/caveman-help` — quick-reference card. All modes, skills, commands, one command away.
+
+### caveman-error
+
+`/caveman-error` — compress stack traces and errors into terse one-liners. Cuts 70-90% tokens while preserving root cause and fix.
+
+### caveman-compress
+
+`/caveman:compress <filepath>` — caveman make Claude *speak* with fewer tokens. **Compress** make Claude *read* fewer tokens.
+
+Your `CLAUDE.md` loads on **every session start**. Caveman Compress rewrites memory files into caveman-speak so Claude reads less — without you losing the human-readable original.
+
+```
+/caveman:compress CLAUDE.md
+```
+
+```
+CLAUDE.md          ← compressed (Claude reads this every session — fewer tokens)
+CLAUDE.original.md ← human-readable backup (you read and edit this)
+```
 ### caveman-compress receipts
 
 | File | Original | Compressed | Saved |
