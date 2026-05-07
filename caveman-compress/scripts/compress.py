@@ -182,6 +182,10 @@ def compress_file(filepath: Path) -> bool:
     original_text = filepath.read_text(errors="ignore")
     backup_path = filepath.with_name(filepath.stem + ".original.md")
 
+    if not original_text.strip():
+        print("❌ Refusing to compress: file is empty or whitespace-only.")
+        return False
+
     # Check if backup already exists to prevent accidental overwriting
     if backup_path.exists():
         print(f"⚠️ Backup file already exists: {backup_path}")
@@ -193,8 +197,31 @@ def compress_file(filepath: Path) -> bool:
     print("Compressing with Claude...")
     compressed = call_claude(build_compress_prompt(original_text))
 
-    # Save original as backup, write compressed to original path
+    if compressed is None or not compressed.strip():
+        print("❌ Compression aborted: Claude returned an empty response.")
+        print("   Original file is untouched (no backup created).")
+        return False
+
+    if compressed.strip() == original_text.strip():
+        print("❌ Compression aborted: output is identical to input.")
+        print("   Likely causes: Claude refused, returned the prompt verbatim, or the file is")
+        print("   already in caveman form. Original file is untouched (no backup created).")
+        return False
+
+    # Save original as backup, then verify the backup readback before
+    # touching the input file. If the filesystem dropped bytes (encoding,
+    # antivirus, disk full), unlink the bad backup and abort instead of
+    # leaving the user with a corrupt backup + compressed primary.
     backup_path.write_text(original_text)
+    backup_readback = backup_path.read_text(errors="ignore")
+    if backup_readback != original_text:
+        print(f"❌ Backup write verification failed: {backup_path}")
+        print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
+        try:
+            backup_path.unlink()
+        except OSError:
+            pass
+        return False
     filepath.write_text(compressed)
 
     # Step 2: Validate + Retry

@@ -69,7 +69,7 @@ const createTask = async (payload: CreateTaskPayload, token: string) => {
 };
 ```
 
-Response includes: `id`, `createdAt`, `status="todo"`.
+Response includes: `id`, `createdAt`, `status` (default `"todo"`).
 
 ## Error Handling
 
