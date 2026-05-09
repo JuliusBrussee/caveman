@@ -17,6 +17,7 @@
 <p align="center">
   <a href="#before--after">Before/After</a> •
   <a href="#install">Install</a> •
+  <a href="#opencode">OpenCode</a> •
   <a href="#intensity-levels">Levels</a> •
   <a href="#caveman-skills">Skills</a> •
   <a href="#benchmarks">Benchmarks</a> •
@@ -170,6 +171,28 @@ By default the installer wires Claude Code's hooks + statusline + stats badge an
 Standalone Claude Code hooks (without plugin): `bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.sh)`. Windows: `irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.ps1 | iex`. Manual fallback for stubborn Windows envs lives in [`docs/install-windows.md`](docs/install-windows.md).
 
 Uninstall: disable the Claude plugin, `gemini extensions uninstall caveman`, or `npx skills remove caveman`.
+
+### OpenCode
+
+OpenCode uses the same `npx skills` path as the other skills-based agents, but it helps to spell the exact command out:
+
+```bash
+# install just for OpenCode
+./install.sh --only opencode
+
+# or install directly through npx skills
+npx skills add JuliusBrussee/caveman -a opencode
+```
+
+If OpenCode is already on your machine, `install.sh` auto-detects it via the `opencode` command or `~/.config/opencode/AGENTS.md`.
+
+Once installed in OpenCode:
+
+- say `caveman mode` or `talk like caveman` to turn it on
+- say `caveman ultra` or `caveman lite` to change intensity
+- say `normal mode` or `stop caveman` to turn it off
+
+Want repo-level auto-start too? Run `./install.sh --only opencode --with-init` in the repo so caveman also writes `AGENTS.md`.
 
 ### What You Get
 
