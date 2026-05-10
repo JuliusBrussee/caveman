@@ -7,7 +7,6 @@ on:
       - skills/caveman/SKILL.md
       - skills/cavecrew/SKILL.md
       - agents/cavecrew-*.md
-      - rules/caveman-activate.md
       - skills/caveman-compress/SKILL.md
       - skills/caveman-compress/scripts/**
 
@@ -33,11 +32,7 @@ jobs:
 
       - name: Sync SKILL.md copies
         run: |
-          cp skills/caveman/SKILL.md caveman/SKILL.md
           cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
-          cp skills/caveman/SKILL.md .cursor/skills/caveman/SKILL.md
-          mkdir -p .windsurf/skills/caveman
-          cp skills/caveman/SKILL.md .windsurf/skills/caveman/SKILL.md
 
       - name: Sync caveman-compress skill to plugin
         run: |
@@ -59,29 +54,9 @@ jobs:
       - name: Rebuild caveman.skill ZIP
         run: mkdir -p dist && cd skills && zip -r ../dist/caveman.skill caveman/
 
-      - name: Sync auto-activation rules
-        run: |
-          BODY="rules/caveman-activate.md"
-
-          # Cline + Copilot — no frontmatter, direct copy
-          mkdir -p .clinerules .github
-          cp "$BODY" .clinerules/caveman.md
-          cp "$BODY" .github/copilot-instructions.md
-
-          # Cursor — needs alwaysApply frontmatter
-          mkdir -p .cursor/rules
-          printf '%s\n' '---' 'description: "Caveman mode — terse communication, ~75% fewer tokens, full technical accuracy"' 'alwaysApply: true' '---' '' > .cursor/rules/caveman.mdc
-          cat "$BODY" >> .cursor/rules/caveman.mdc
-
-          # Windsurf — needs always_on frontmatter
-          mkdir -p .windsurf/rules
-          printf '%s\n' '---' 'trigger: always_on' '---' '' > .windsurf/rules/caveman.md
-          cat "$BODY" >> .windsurf/rules/caveman.md
-
       - name: Commit and push if changed
         run: |
           git add \
-            caveman/SKILL.md \
             skills/caveman-compress/ \
             plugins/caveman/skills/caveman-compress/ \
             plugins/caveman/skills/caveman/SKILL.md \
@@ -89,13 +64,7 @@ jobs:
             plugins/caveman/agents/cavecrew-investigator.md \
             plugins/caveman/agents/cavecrew-builder.md \
             plugins/caveman/agents/cavecrew-reviewer.md \
-            .cursor/skills/caveman/SKILL.md \
-            .windsurf/skills/caveman/SKILL.md \
-            dist/caveman.skill \
-            .clinerules/caveman.md \
-            .github/copilot-instructions.md \
-            .cursor/rules/caveman.mdc \
-            .windsurf/rules/caveman.md
+            dist/caveman.skill
           git diff --staged --quiet && exit 0
-          git commit -m "chore: sync SKILL.md copies and auto-activation rules [skip ci]"
+          git commit -m "chore: sync SKILL.md copies [skip ci]"
           git push
