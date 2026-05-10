@@ -69,6 +69,10 @@ function parseArgs(argv) {
       case '--uninstall': case '-u': opts.uninstall = true; break;
       case '--non-interactive': opts.nonInteractive = true; break;
       case '-h': case '--help': opts.help = true; break;
+      // POSIX end-of-options marker. Older curl|bash flows pipe `-- --only foo`
+      // through npx; some npx versions forward the literal `--`. Accept and
+      // ignore so we never regress on the headline install command.
+      case '--': break;
       case '--only': {
         const v = argv[++i];
         if (!v) die('error: --only requires an argument');

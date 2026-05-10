@@ -99,6 +99,13 @@ test('--config-dir expands ~ to home directory', async () => {
   }
 });
 
+test('bare -- (POSIX end-of-options) is accepted and ignored', () => {
+  // Regression: npx forwarded `--` from `curl|bash -- --only openclaw` to the
+  // package, and parseArgs rejected it as an unknown flag. Now we accept it.
+  const r = run('--', '--only', 'claude', '--non-interactive', '--dry-run', '--config-dir', '/tmp/__cm_dashdash');
+  assert.equal(r.status, 0);
+});
+
 test('--help discloses --config-dir scope', () => {
   const r = run('--help');
   assert.equal(r.status, 0);

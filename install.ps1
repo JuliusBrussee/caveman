@@ -55,5 +55,8 @@ if (-not $npx) {
   exit 1
 }
 
-& npx -y "github:$Repo" -- @Args
+# Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
+# package, and a literal `--` was tripping bin/install.js's parseArgs as an
+# unknown flag.
+& npx -y "github:$Repo" @Args
 exit $LASTEXITCODE
