@@ -22,6 +22,7 @@ const child_process = require('child_process');
 const readline = require('readline');
 
 const SETTINGS = require('./lib/settings');
+const OPENCLAW = require('./lib/openclaw');
 
 const REPO = 'JuliusBrussee/caveman';
 const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
@@ -147,6 +148,7 @@ const PROVIDERS = [
   { id: 'claude',     label: 'Claude Code',         mech: 'claude plugin install',         detect: 'command:claude' },
   { id: 'gemini',     label: 'Gemini CLI',          mech: 'gemini extensions install',     detect: 'command:gemini' },
   { id: 'opencode',   label: 'opencode',            mech: 'native opencode plugin',        detect: 'command:opencode' },
+  { id: 'openclaw',   label: 'OpenClaw',            mech: 'workspace skill + SOUL.md',     detect: 'command:openclaw||dir:$HOME/.openclaw/workspace' },
   { id: 'codex',      label: 'Codex CLI',           mech: 'npx skills add (codex)',        detect: 'command:codex',           profile: 'codex' },
 
   // IDE / VS Code-family — extension probes are precise. Cursor/Windsurf also
@@ -602,6 +604,37 @@ function installOpencode(ctx) {
   process.stdout.write('\n');
 }
 
+// ── OpenClaw native install ───────────────────────────────────────────────
+// Drops skills/caveman/ into the OpenClaw workspace and appends a small
+// auto-injected bootstrap block to the workspace SOUL.md. Always-on behavior
+// comes from SOUL.md (auto-injected each turn); the skill folder makes
+// caveman discoverable via `openclaw skills list`. See bin/lib/openclaw.js
+// for the actual file writes.
+function installOpenclaw(ctx) {
+  const { say, note, warn, opts, repoRoot, results } = ctx;
+  results.detected++;
+  say('→ OpenClaw detected');
+
+  const log = {
+    write: (s) => process.stdout.write(s),
+    note: (s) => note(s),
+    warn: (s) => warn(s),
+  };
+
+  const r = OPENCLAW.installOpenclaw({
+    workspace: process.env.OPENCLAW_WORKSPACE || undefined,
+    repoRoot,
+    dryRun: opts.dryRun,
+    force: opts.force,
+    log,
+  });
+
+  if (r.ok) results.installed.push('openclaw');
+  else results.failed.push(['openclaw', r.reason || 'install failed']);
+
+  process.stdout.write('\n');
+}
+
 // ── Hooks installer ────────────────────────────────────────────────────────
 // Replaces src/hooks/install.sh + src/hooks/install.ps1.
 function installHooks(ctx) {
@@ -880,6 +913,19 @@ function uninstall(ctx) {
     if (fs.existsSync(ocFlag) && !opts.dryRun) { try { fs.unlinkSync(ocFlag); } catch (_) {} }
   }
 
+  // OpenClaw native install — strip skill folder + SOUL.md marker block.
+  // Probed by the skill folder we own; if absent, skip silently.
+  const ocwWs = process.env.OPENCLAW_WORKSPACE || path.join(os.homedir(), '.openclaw', 'workspace');
+  if (fs.existsSync(path.join(ocwWs, 'skills', 'caveman')) || fs.existsSync(path.join(ocwWs, 'SOUL.md'))) {
+    const log = {
+      write: (s) => process.stdout.write(s),
+      note: (s) => note(s),
+      warn: (s) => warn(s),
+    };
+    const r = OPENCLAW.uninstallOpenclaw({ workspace: ocwWs, dryRun: opts.dryRun, log });
+    if (r.touched) ok('  pruned caveman entries from OpenClaw workspace');
+  }
+
   // Flag file
   const flag = path.join(configDir, '.caveman-active');
   if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
@@ -1013,10 +1059,16 @@ async function main() {
   for (const prov of PROVIDERS) {
     if (!want(prov.id)) continue;
     if (prov.soft && !explicit(prov.id)) continue;
-    if (!detectMatch(prov.detect)) continue;
+    // Auto-detect mode: skip providers we can't see. With --only <id> the user
+    // is explicitly opting in, so trust them and let the per-provider installer
+    // bail itself if its preconditions aren't met (e.g. opencode bails when
+    // no repo clone is available; openclaw bails when the workspace dir is
+    // missing without --force).
+    if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
     if (prov.id === 'claude')   { installClaude(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
+    if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
     if (prov.profile)           { installViaSkills(ctx, prov); continue; }
   }
 

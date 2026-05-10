@@ -78,7 +78,7 @@ Pick your level of grunt — `lite` (drop filler), `full` (default caveman), `ul
 
 ## Install
 
-**One line. Detect every agent. Install for each.**
+One line. Find every agent. Install for each.
 
 ```bash
 # macOS / Linux / WSL / Git Bash
@@ -88,27 +88,12 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.
 irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
 ```
 
-Detects 30+ agents, runs each one's native install, skips what you not have. Safe to re-run.
+~30 seconds. Skip agent you no have. Safe to re-run.
 
-**Manual install, top agents:**
+**Trigger:** type `/caveman` or say "talk like caveman". Stop with "normal mode".
 
-| Agent | Command |
-|---|---|
-| **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` |
-| **Codex** | `npx skills add JuliusBrussee/caveman -a codex` |
-| **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` |
-| **opencode** | `npx -y github:JuliusBrussee/caveman -- --only opencode` |
-| **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
-| **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
-| **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
-
-See [**INSTALL.md**](./INSTALL.md) for 25+ more agents (Copilot, Continue, Roo, Augment, Goose, Junie, Trae, Warp, Tabnine, Mistral, Qwen, Devin, Droid, Replit, Antigravity, …) and all installer flags.
-
-**Trigger it:**
-
-- `/caveman` (or Codex `$caveman`)
-- "talk like caveman" / "caveman mode" / "less tokens please"
-- Stop with: "stop caveman" / "normal mode"
+One agent only, manual command, or any of 30+ other agents → [**INSTALL.md**](./INSTALL.md).
+Install break? Open agent, say *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent fix own brain.
 
 ## What You Get
 
@@ -174,17 +159,31 @@ A March 2026 paper ["Brevity Constraints Reverse Performance Hierarchies in Lang
 
 Maintainer detail (hook architecture, file ownership, CI sync) live in [CLAUDE.md](./CLAUDE.md).
 
-## Want It Always On?
+## Lobster, Meet Rock 🦞🪨
 
-For agents without hook system (Cursor, Windsurf, Cline, Copilot, etc.), drop a rule file:
+[**OpenClaw**](https://openclaw.ai) the self-host gateway. One box, many agent inside (Claude Code, Codex, Pi, OpenCode), wired to your Slack / Discord / iMessage / Telegram / whatever. Tagline: *"The lobster way."* Lobster strong. Lobster smart. Lobster also talk a lot.
+
+Caveman teach lobster brevity:
 
 ```bash
-# In your repo root
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/rules/caveman-activate.md \
-  > .cursor/rules/caveman.mdc   # or .windsurf/rules/, .clinerules/, .github/copilot-instructions.md
+npx -y github:JuliusBrussee/caveman -- --only openclaw
 ```
 
-Or run `install.sh --with-init` and we drop them in for you. Full list of rule-file targets in [INSTALL.md](./INSTALL.md#always-on-rules).
+Two thing happen, no more:
+
+1. **Skill drop** at `~/.openclaw/workspace/skills/caveman/SKILL.md` — spec-correct frontmatter (`version`, `always: true`), discoverable by `openclaw skills list`. Skill not auto-inject (OpenClaw load skill on demand) — that why we also do step 2.
+2. **SOUL.md nudge.** Tiny marker-fenced block appended to `~/.openclaw/workspace/SOUL.md`. OpenClaw inject SOUL.md into *every* turn under "Project Context" (12K-per-file, 60K total — block well under). Lobster terse from message one. No `/caveman` per session. No nag.
+
+```
+~/.openclaw/workspace/
+├── skills/caveman/SKILL.md   ← full ruleset, on-demand load
+└── SOUL.md                    ← <!-- caveman-begin --> ... <!-- caveman-end -->
+                                  ↑ auto-inject every turn
+```
+
+Custom workspace path? `OPENCLAW_WORKSPACE=/your/path` before the command. Uninstall: same one-liner with `--uninstall` — skill folder gone, SOUL.md block ripped out cleanly, your other workspace content stay untouched. Idempotent re-runs (frontmatter not double-prepended, marker block not duplicated).
+
+Lobster claw still sharp. Lobster mouth now small. Brain still big.
 
 ## Caveman Ecosystem
 

@@ -34,6 +34,16 @@ Boundaries: code/commits/PRs written normal.
 
 const SENTINEL = 'Respond terse like smart caveman';
 
+// OpenClaw is a global workspace tool (not per-repo) and needs two write
+// targets — a skill folder + a SOUL.md bootstrap block. The shared helper
+// lives at bin/lib/openclaw.js; we require it lazily so caveman-init.js
+// keeps working when run standalone (curl|node) without the helper on disk.
+function loadOpenclawHelper() {
+  try {
+    return require(path.join(__dirname, '..', '..', 'bin', 'lib', 'openclaw.js'));
+  } catch (_) { return null; }
+}
+
 const AGENTS = [
   { id: 'cursor',   file: '.cursor/rules/caveman.mdc',
     frontmatter: '---\ndescription: "Caveman mode — terse communication, ~75% fewer tokens, full technical accuracy"\nalwaysApply: true\n---\n\n',
@@ -53,6 +63,11 @@ const AGENTS = [
   { id: 'agents',   file: 'AGENTS.md',
     frontmatter: '',
     mode: 'append' },
+  // OpenClaw — global workspace install, not per-repo. The `installer`
+  // callback escape hatch bypasses the file/frontmatter/mode triple and
+  // hands off to the shared helper. `description` is what `--help` prints.
+  { id: 'openclaw', description: '~/.openclaw/workspace/{skills/caveman/, SOUL.md}',
+    installer: 'openclaw' },
 ];
 
 function loadRuleBody() {
@@ -65,6 +80,9 @@ function loadRuleBody() {
 }
 
 function processAgent(agent, targetDir, ruleBody, opts) {
+  if (agent.installer === 'openclaw') {
+    return processOpenclaw(opts);
+  }
   const fullPath = path.join(targetDir, agent.file);
   const exists = fs.existsSync(fullPath);
 
@@ -99,6 +117,35 @@ function processAgent(agent, targetDir, ruleBody, opts) {
   return { status: 'skipped-exists', label: '?' };
 }
 
+function processOpenclaw(opts) {
+  const helper = loadOpenclawHelper();
+  if (!helper) {
+    return {
+      status: 'unsupported-standalone',
+      label: 'x',
+      detail: '~/.openclaw/workspace (helper unavailable in standalone curl|node mode — use `npx -y github:JuliusBrussee/caveman -- --only openclaw`)',
+    };
+  }
+  const repoRoot = path.resolve(__dirname, '..', '..');
+  const log = {
+    write: (_) => {},
+    note: (_) => {},
+    warn: (_) => {},
+  };
+  const r = helper.installOpenclaw({
+    workspace: process.env.OPENCLAW_WORKSPACE || undefined,
+    repoRoot,
+    dryRun: opts.dryRun,
+    force: opts.force,
+    log,
+  });
+  if (!r.ok) {
+    return { status: 'skipped-' + (r.reason || 'failed'), label: '?', detail: helper.resolveWorkspace ? helper.resolveWorkspace() : '~/.openclaw/workspace' };
+  }
+  if (r.dryRun) return { status: 'would-add', label: '+', detail: helper.resolveWorkspace() };
+  return { status: 'installed', label: '+', detail: helper.resolveWorkspace() };
+}
+
 function parseArgs(argv) {
   const opts = { dryRun: false, force: false, only: null, target: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
@@ -120,7 +167,7 @@ Usage: caveman-init.js [target-dir] [--dry-run] [--force] [--only <agent>]
 Defaults to current working directory. Idempotent — safe to re-run.
 
 Targets installed:
-${AGENTS.map(a => `  ${a.id.padEnd(10)} ${a.file}`).join('\n')}
+${AGENTS.map(a => `  ${a.id.padEnd(10)} ${a.file || a.description || ''}`).join('\n')}
 
 Flags:
   --dry-run   show what would change, do not write
@@ -141,8 +188,9 @@ function main() {
   for (const agent of AGENTS) {
     if (opts.only && opts.only !== agent.id) continue;
     const result = processAgent(agent, opts.target, ruleBody, opts);
-    console.log(`  ${result.label} ${agent.file} (${result.status})`);
-    if (result.status === 'added') counts.added++;
+    const target = agent.file || result.detail || agent.description || agent.id;
+    console.log(`  ${result.label} ${target} (${result.status})`);
+    if (result.status === 'added' || result.status === 'installed' || result.status === 'would-add') counts.added++;
     else if (result.status === 'appended') counts.appended++;
     else if (result.status === 'overwritten') counts.overwritten++;
     else counts.skipped++;

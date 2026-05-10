@@ -40,6 +40,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` | Yes |
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` | Yes |
 | **opencode** | `node bin/install.js --only opencode` *(or `npx -y github:JuliusBrussee/caveman -- --only opencode`)* | Yes (plugin + AGENTS.md) |
+| **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
 | **Codex CLI** | `npx skills add JuliusBrussee/caveman -a codex` | Yes (in this repo via `.codex/`) |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` | Yes (rule file) |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` | Yes (rule file) |
@@ -110,6 +111,21 @@ Useful flags:
 | `--force` | Re-run even if already installed. |
 | `--uninstall` | Remove everything. See below. |
 
+## Always-on rules
+
+For agents without a hook system (Cursor, Windsurf, Cline, Copilot, and friends), the always-on path is a static rule file. Two ways:
+
+```bash
+# Drop rule files into the current repo
+node bin/install.js --with-init
+
+# Or pull the rule body straight in (manual)
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/rules/caveman-activate.md \
+  > .cursor/rules/caveman.mdc   # or .windsurf/rules/caveman.md, .clinerules/caveman.md, .github/copilot-instructions.md
+```
+
+`--with-init` writes the rule into every supported per-agent location it can detect (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `AGENTS.md`). Single source: [`src/rules/caveman-activate.md`](src/rules/caveman-activate.md).
+
 ## Verify
 
 After install, three quick checks:
@@ -156,6 +172,16 @@ What it does **not** remove:
 - Per-repo rule files written by `--with-init` (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `AGENTS.md`). Delete by hand if you want.
 
 ## Troubleshooting
+
+**"Install script broke. What now?"**
+
+Open your agent in this repo and say:
+
+> "Read CLAUDE.md and INSTALL.md. Install caveman for me."
+
+Agent read repo. Agent run install. Caveman make agent talk less — agent first job is install caveman to talk less. Snake eat tail.
+
+Still broken? [Open an issue](https://github.com/JuliusBrussee/caveman/issues).
 
 **"I ran the installer but Claude Code isn't talking caveman."**
 

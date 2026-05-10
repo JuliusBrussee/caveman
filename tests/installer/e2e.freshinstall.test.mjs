@@ -234,6 +234,145 @@ test('install tolerates JSONC settings.json (comments + trailing commas)', { ski
   }
 });
 
+// ── Tests: OpenClaw workspace install (always run, no real OpenClaw needed)
+// installOpenclaw writes plain files into a workspace dir we point at via
+// OPENCLAW_WORKSPACE — no network, no external CLI, no plugin install. Safe
+// to run on every CI box.
+
+const SKILL_BODY_SRC = path.join(REPO_ROOT, 'skills', 'caveman', 'SKILL.md');
+
+test('openclaw install writes skill folder + SOUL.md bootstrap', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  try {
+    const r = spawnSync('node', [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
+      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+
+    // 1. Skill body written with merged frontmatter.
+    const skillFile = path.join(ws, 'skills', 'caveman', 'SKILL.md');
+    assert.ok(fs.existsSync(skillFile), 'skill SKILL.md missing');
+    const skillRaw = fs.readFileSync(skillFile, 'utf8');
+    assert.match(skillRaw, /^---\n/, 'skill missing frontmatter');
+    assert.match(skillRaw, /\nversion:\s*\d+\.\d+\.\d+/, 'skill missing version frontmatter');
+    assert.match(skillRaw, /\nalways:\s*true/, 'skill missing always: true frontmatter');
+
+    // Body after the merged frontmatter must match the source body.
+    const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+    const srcRaw = fs.readFileSync(SKILL_BODY_SRC, 'utf8');
+    const srcBody = helper.splitFrontmatter(srcRaw).body;
+    const installedBody = helper.splitFrontmatter(skillRaw).body;
+    assert.equal(installedBody, srcBody, 'installed skill body diverged from source');
+
+    // 2. SOUL.md has marker block.
+    const soul = path.join(ws, 'SOUL.md');
+    assert.ok(fs.existsSync(soul), 'SOUL.md missing');
+    const soulRaw = fs.readFileSync(soul, 'utf8');
+    assert.match(soulRaw, /<!-- caveman-begin -->/, 'SOUL.md missing begin marker');
+    assert.match(soulRaw, /<!-- caveman-end -->/, 'SOUL.md missing end marker');
+    assert.match(soulRaw, /Respond terse like smart caveman/, 'SOUL.md missing sentinel');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw install is idempotent: skill frontmatter not double-prepended, SOUL.md has one marker block', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  try {
+    const env = { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' };
+    const args = ['--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir];
+    spawnSync('node', [INSTALLER, ...args], { env, encoding: 'utf8' });
+    spawnSync('node', [INSTALLER, ...args], { env, encoding: 'utf8' });
+
+    const skillRaw = fs.readFileSync(path.join(ws, 'skills', 'caveman', 'SKILL.md'), 'utf8');
+    // version key should appear exactly once (idempotent merge).
+    const versionMatches = skillRaw.match(/^version:/gm) || [];
+    assert.equal(versionMatches.length, 1, `expected 1 version key after re-run, got ${versionMatches.length}`);
+    const alwaysMatches = skillRaw.match(/^always:/gm) || [];
+    assert.equal(alwaysMatches.length, 1, `expected 1 always key after re-run, got ${alwaysMatches.length}`);
+
+    const soulRaw = fs.readFileSync(path.join(ws, 'SOUL.md'), 'utf8');
+    const beginMatches = soulRaw.match(/<!-- caveman-begin -->/g) || [];
+    assert.equal(beginMatches.length, 1, `expected 1 marker block after re-run, got ${beginMatches.length}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw install preserves user content in SOUL.md (append, not overwrite)', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  const userContent = '# my workspace\n\nfoo bar baz\n';
+  fs.writeFileSync(path.join(ws, 'SOUL.md'), userContent);
+  try {
+    spawnSync('node', [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
+      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    const soulRaw = fs.readFileSync(path.join(ws, 'SOUL.md'), 'utf8');
+    assert.match(soulRaw, /# my workspace/, 'user heading wiped during install');
+    assert.match(soulRaw, /foo bar baz/, 'user content wiped during install');
+    assert.match(soulRaw, /<!-- caveman-begin -->/, 'caveman block not appended');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw uninstall removes skill folder + strips SOUL.md block, preserving user content', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  const userContent = '# my workspace\n\nfoo bar baz\n';
+  fs.writeFileSync(path.join(ws, 'SOUL.md'), userContent);
+  try {
+    const env = { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' };
+    spawnSync('node', [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], { env, encoding: 'utf8' });
+
+    // Strip claude/gemini from PATH so uninstall doesn't touch real plugins.
+    const cleanPath = pathWithout(['claude', 'gemini']);
+    const r = spawnSync('node', [INSTALLER, '--uninstall', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
+      env: { ...env, PATH: cleanPath },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `uninstall argv error: ${r.stderr}`);
+
+    assert.equal(fs.existsSync(path.join(ws, 'skills', 'caveman')), false, 'skill folder should be removed');
+    const soulAfter = fs.readFileSync(path.join(ws, 'SOUL.md'), 'utf8');
+    assert.doesNotMatch(soulAfter, /<!-- caveman-begin -->/, 'caveman block survived uninstall');
+    assert.doesNotMatch(soulAfter, /<!-- caveman-end -->/, 'caveman end marker survived uninstall');
+    assert.match(soulAfter, /# my workspace/, 'user heading wiped during uninstall');
+    assert.match(soulAfter, /foo bar baz/, 'user content wiped during uninstall');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('caveman-init.js --only openclaw routes through the same helper', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  try {
+    const initScript = path.join(REPO_ROOT, 'src', 'tools', 'caveman-init.js');
+    const r = spawnSync('node', [initScript, dir, '--only', 'openclaw'], {
+      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.equal(r.status, 0, `caveman-init failed: ${r.stderr || r.stdout}`);
+    assert.ok(fs.existsSync(path.join(ws, 'skills', 'caveman', 'SKILL.md')), 'skill missing via init route');
+    assert.ok(fs.existsSync(path.join(ws, 'SOUL.md')), 'SOUL.md missing via init route');
+    const soulRaw = fs.readFileSync(path.join(ws, 'SOUL.md'), 'utf8');
+    assert.match(soulRaw, /Respond terse like smart caveman/, 'sentinel missing via init route');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Test: idempotent re-add at the lib level (always runs, no claude needed)
 // This guards the addCommandHook idempotency promise without spawning a real
 // install — even on machines with no `claude` CLI we want this assertion.
