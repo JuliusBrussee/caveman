@@ -39,6 +39,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 |---|---|:-:|
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` | Yes |
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` | Yes |
+| **opencode** | `node bin/install.js --only opencode` *(or `npx -y github:JuliusBrussee/caveman -- --only opencode`)* | Yes (plugin + AGENTS.md) |
 | **Codex CLI** | `npx skills add JuliusBrussee/caveman -a codex` | Yes (in this repo via `.codex/`) |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` | Yes (rule file) |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` | Yes (rule file) |
@@ -60,7 +61,6 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Kiro CLI** | `npx skills add JuliusBrussee/caveman -a kiro-cli` | No |
 | **Mistral Vibe** | `npx skills add JuliusBrussee/caveman -a mistral-vibe` | No |
 | **OpenHands** | `npx skills add JuliusBrussee/caveman -a openhands` | No |
-| **opencode** | `npx skills add JuliusBrussee/caveman -a opencode` | No |
 | **Qwen Code** | `npx skills add JuliusBrussee/caveman -a qwen-code` | No |
 | **Atlassian Rovo Dev** | `npx skills add JuliusBrussee/caveman -a rovodev` | No |
 | **Tabnine CLI** | `npx skills add JuliusBrussee/caveman -a tabnine-cli` | No |

@@ -146,6 +146,7 @@ function checkNodeVersion() {
 const PROVIDERS = [
   { id: 'claude',     label: 'Claude Code',         mech: 'claude plugin install',         detect: 'command:claude' },
   { id: 'gemini',     label: 'Gemini CLI',          mech: 'gemini extensions install',     detect: 'command:gemini' },
+  { id: 'opencode',   label: 'opencode',            mech: 'native opencode plugin',        detect: 'command:opencode' },
   { id: 'codex',      label: 'Codex CLI',           mech: 'npx skills add (codex)',        detect: 'command:codex',           profile: 'codex' },
 
   // IDE / VS Code-family — extension probes are precise. Cursor/Windsurf also
@@ -179,7 +180,6 @@ const PROVIDERS = [
   { id: 'kiro',       label: 'Kiro CLI',            mech: 'npx skills add (kiro-cli)',     detect: 'command:kiro', profile: 'kiro-cli' },
   { id: 'mistral',    label: 'Mistral Vibe',        mech: 'npx skills add (mistral-vibe)', detect: 'command:mistral', profile: 'mistral-vibe' },
   { id: 'openhands',  label: 'OpenHands',           mech: 'npx skills add (openhands)',    detect: 'command:openhands', profile: 'openhands' },
-  { id: 'opencode',   label: 'opencode',            mech: 'npx skills add (opencode)',     detect: 'command:opencode', profile: 'opencode' },
   { id: 'qwen',       label: 'Qwen Code',           mech: 'npx skills add (qwen-code)',    detect: 'command:qwen', profile: 'qwen-code' },
   { id: 'rovodev',    label: 'Atlassian Rovo Dev',  mech: 'npx skills add (rovodev)',      detect: 'command:rovodev', profile: 'rovodev' },
   { id: 'tabnine',    label: 'Tabnine CLI',         mech: 'npx skills add (tabnine-cli)',  detect: 'command:tabnine', profile: 'tabnine-cli' },
@@ -437,6 +437,171 @@ function installViaSkills(ctx, prov) {
   process.stdout.write('\n');
 }
 
+// ── opencode native install ───────────────────────────────────────────────
+// Drops the in-repo plugin (src/plugins/opencode/) plus skills, agents,
+// commands, and an AGENTS.md ruleset into ~/.config/opencode/. Patches
+// opencode.json with a "plugin" array entry. Mirrors the Claude Code hook
+// architecture as closely as opencode allows — only the statusline is missing
+// (opencode's TUI exposes no plugin-writable badge).
+const OPENCODE_SKILL_DIRS  = ['caveman', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
+const OPENCODE_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
+const OPENCODE_COMMAND_FILES = ['caveman.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md'];
+const OPENCODE_PLUGIN_REL = './plugins/caveman/plugin.js';
+const OPENCODE_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
+
+function opencodeConfigDir() {
+  if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
+  if (IS_WIN) return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'opencode');
+  return path.join(os.homedir(), '.config', 'opencode');
+}
+
+function copyDirRecursive(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, entry.name);
+    const d = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyDirRecursive(s, d);
+    else if (entry.isFile()) fs.copyFileSync(s, d);
+  }
+}
+
+function installOpencode(ctx) {
+  const { say, note, warn, opts, repoRoot, results } = ctx;
+  results.detected++;
+  say('→ opencode detected');
+
+  if (!repoRoot) {
+    warn('  opencode native install requires a local clone of the caveman repo.');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only opencode');
+    results.failed.push(['opencode', 'native install requires local repo clone']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  const dir = opencodeConfigDir();
+  const pluginDir   = path.join(dir, 'plugins', 'caveman');
+  const commandsDir = path.join(dir, 'commands');
+  const agentsDir   = path.join(dir, 'agents');
+  const skillsDir   = path.join(dir, 'skills');
+  const opencodeJson = path.join(dir, 'opencode.json');
+  const agentsMd     = path.join(dir, 'AGENTS.md');
+
+  if (opts.dryRun) {
+    note(`  would mkdir ${pluginDir}/, ${commandsDir}/, ${agentsDir}/, ${skillsDir}/`);
+    note(`  would copy plugin.js + package.json + caveman-config.cjs into ${pluginDir}/`);
+    note(`  would copy ${OPENCODE_COMMAND_FILES.length} command files into ${commandsDir}/`);
+    note(`  would copy ${OPENCODE_AGENT_FILES.length} cavecrew agents into ${agentsDir}/`);
+    note(`  would copy ${OPENCODE_SKILL_DIRS.length} skill dirs into ${skillsDir}/`);
+    note(`  would patch ${opencodeJson} with "plugin" entry${opts.withMcpShrink ? ' + caveman-shrink MCP' : ''}`);
+    note(`  would write Tier-3 ruleset to ${agentsMd}`);
+    results.installed.push('opencode');
+    process.stdout.write('\n');
+    return;
+  }
+
+  try {
+    // 1. Plugin dir — copy plugin.js, package.json, caveman-config.js (sibling).
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const pluginSrc = path.join(repoRoot, 'src', 'plugins', 'opencode');
+    fs.copyFileSync(path.join(pluginSrc, 'plugin.js'),    path.join(pluginDir, 'plugin.js'));
+    fs.copyFileSync(path.join(pluginSrc, 'package.json'), path.join(pluginDir, 'package.json'));
+    // Renamed to .cjs because the plugin dir is "type": "module" — a bare .js
+    // sibling would be loaded as ESM and break the plugin's require() bridge.
+    fs.copyFileSync(
+      path.join(repoRoot, 'src', 'hooks', 'caveman-config.js'),
+      path.join(pluginDir, 'caveman-config.cjs'),
+    );
+    process.stdout.write(`  installed: ${pluginDir}\n`);
+
+    // 2. Commands.
+    fs.mkdirSync(commandsDir, { recursive: true });
+    const cmdSrcDir = path.join(pluginSrc, 'commands');
+    for (const f of OPENCODE_COMMAND_FILES) {
+      const src = path.join(cmdSrcDir, f);
+      const dest = path.join(commandsDir, f);
+      if (fs.existsSync(dest) && !opts.force) { note(`  skipped ${dest} (exists; --force to overwrite)`); continue; }
+      fs.copyFileSync(src, dest);
+      process.stdout.write(`  installed: ${dest}\n`);
+    }
+
+    // 3. Subagents.
+    fs.mkdirSync(agentsDir, { recursive: true });
+    const agentSrcDir = path.join(repoRoot, 'agents');
+    for (const f of OPENCODE_AGENT_FILES) {
+      const src = path.join(agentSrcDir, f);
+      const dest = path.join(agentsDir, f);
+      if (!fs.existsSync(src)) continue;
+      if (fs.existsSync(dest) && !opts.force) { note(`  skipped ${dest} (exists; --force to overwrite)`); continue; }
+      fs.copyFileSync(src, dest);
+      process.stdout.write(`  installed: ${dest}\n`);
+    }
+
+    // 4. Skills — opencode auto-discovers SKILL.md from ~/.config/opencode/skills/.
+    fs.mkdirSync(skillsDir, { recursive: true });
+    const skillSrcDir = path.join(repoRoot, 'skills');
+    for (const name of OPENCODE_SKILL_DIRS) {
+      const src = path.join(skillSrcDir, name);
+      const dest = path.join(skillsDir, name);
+      if (!fs.existsSync(src)) continue;
+      if (fs.existsSync(dest) && !opts.force) { note(`  skipped ${dest}/ (exists; --force to overwrite)`); continue; }
+      copyDirRecursive(src, dest);
+      process.stdout.write(`  installed: ${dest}/\n`);
+    }
+
+    // 5. AGENTS.md — Tier-3 always-on ruleset. Append-with-sentinel so we
+    //    don't clobber a user-authored AGENTS.md.
+    const ruleBody = fs.readFileSync(path.join(repoRoot, 'src', 'rules', 'caveman-activate.md'), 'utf8').trimEnd() + '\n';
+    if (fs.existsSync(agentsMd)) {
+      const existing = fs.readFileSync(agentsMd, 'utf8');
+      if (!existing.includes(OPENCODE_AGENTS_MD_SENTINEL)) {
+        const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
+        fs.writeFileSync(agentsMd, existing + sep + ruleBody, { mode: 0o644 });
+        process.stdout.write(`  appended caveman ruleset to ${agentsMd}\n`);
+      } else {
+        note(`  ${agentsMd} already contains caveman ruleset`);
+      }
+    } else {
+      fs.writeFileSync(agentsMd, ruleBody, { mode: 0o644 });
+      process.stdout.write(`  installed: ${agentsMd}\n`);
+    }
+
+    // 6. opencode.json — add plugin entry; optional caveman-shrink MCP.
+    let cfg = SETTINGS.readSettings(opencodeJson);
+    if (cfg === null) {
+      warn(`  ${opencodeJson} unparseable; will not touch it. Edit manually then re-run.`);
+      results.failed.push(['opencode', 'opencode.json unparseable']);
+      process.stdout.write('\n');
+      return;
+    }
+    if (fs.existsSync(opencodeJson)) {
+      try { fs.copyFileSync(opencodeJson, opencodeJson + '.bak'); } catch (_) {}
+    }
+    if (!Array.isArray(cfg.plugin)) cfg.plugin = [];
+    if (!cfg.plugin.includes(OPENCODE_PLUGIN_REL)) {
+      cfg.plugin.push(OPENCODE_PLUGIN_REL);
+    }
+    if (opts.withMcpShrink) {
+      if (!cfg.mcp || typeof cfg.mcp !== 'object') cfg.mcp = {};
+      if (!cfg.mcp['caveman-shrink']) {
+        cfg.mcp['caveman-shrink'] = {
+          type: 'local',
+          command: ['npx', '-y', MCP_SHRINK_PKG],
+          enabled: true,
+        };
+        process.stdout.write('  registered caveman-shrink MCP server\n');
+      }
+    }
+    SETTINGS.writeSettings(opencodeJson, cfg);
+    process.stdout.write(`  patched: ${opencodeJson}\n`);
+
+    results.installed.push('opencode');
+  } catch (e) {
+    warn('  opencode install failed: ' + (e && e.message || e));
+    results.failed.push(['opencode', (e && e.message) || 'unknown error']);
+  }
+  process.stdout.write('\n');
+}
+
 // ── Hooks installer ────────────────────────────────────────────────────────
 // Replaces src/hooks/install.sh + src/hooks/install.ps1.
 function installHooks(ctx) {
@@ -659,6 +824,62 @@ function uninstall(ctx) {
     runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], null, opts.dryRun);
   }
 
+  // opencode native install — strip plugin entry, MCP entry, and our files.
+  // Probed by the existence of the plugin dir we own; if absent, skip silently.
+  const ocDir = opencodeConfigDir();
+  const ocPluginDir = path.join(ocDir, 'plugins', 'caveman');
+  if (fs.existsSync(ocPluginDir)) {
+    const ocJson = path.join(ocDir, 'opencode.json');
+    if (fs.existsSync(ocJson)) {
+      const cfg = SETTINGS.readSettings(ocJson);
+      if (cfg) {
+        if (Array.isArray(cfg.plugin)) {
+          cfg.plugin = cfg.plugin.filter(p => p !== OPENCODE_PLUGIN_REL);
+          if (cfg.plugin.length === 0) delete cfg.plugin;
+        }
+        if (cfg.mcp && typeof cfg.mcp === 'object' && cfg.mcp['caveman-shrink']) {
+          delete cfg.mcp['caveman-shrink'];
+          if (Object.keys(cfg.mcp).length === 0) delete cfg.mcp;
+        }
+        if (!opts.dryRun) SETTINGS.writeSettings(ocJson, cfg);
+        ok(`  pruned caveman entries from ${ocJson}`);
+      }
+    }
+    if (!opts.dryRun) { try { fs.rmSync(ocPluginDir, { recursive: true, force: true }); } catch (_) {} }
+    note(`  removed ${ocPluginDir}`);
+    // Commands, agents, skills — only files matching our manifest (don't
+    // sweep the parent dirs; user may have other entries there).
+    for (const f of OPENCODE_COMMAND_FILES) {
+      const p = path.join(ocDir, 'commands', f);
+      if (fs.existsSync(p) && !opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
+    }
+    for (const f of OPENCODE_AGENT_FILES) {
+      const p = path.join(ocDir, 'agents', f);
+      if (fs.existsSync(p) && !opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
+    }
+    for (const name of OPENCODE_SKILL_DIRS) {
+      const p = path.join(ocDir, 'skills', name);
+      if (fs.existsSync(p) && !opts.dryRun) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+    }
+    // AGENTS.md — only remove if our sentinel is the entire content (we
+    // wrote it) or strip our block from a mixed file.
+    const ocAgentsMd = path.join(ocDir, 'AGENTS.md');
+    if (fs.existsSync(ocAgentsMd)) {
+      const body = fs.readFileSync(ocAgentsMd, 'utf8');
+      if (body.includes(OPENCODE_AGENTS_MD_SENTINEL)) {
+        if (body.trim() === '' || body.trim().startsWith(OPENCODE_AGENTS_MD_SENTINEL)) {
+          if (!opts.dryRun) { try { fs.unlinkSync(ocAgentsMd); } catch (_) {} }
+          note(`  removed ${ocAgentsMd}`);
+        } else {
+          note(`  left ${ocAgentsMd} in place (mixed content — strip caveman block manually)`);
+        }
+      }
+    }
+    // opencode flag file
+    const ocFlag = path.join(ocDir, '.caveman-active');
+    if (fs.existsSync(ocFlag) && !opts.dryRun) { try { fs.unlinkSync(ocFlag); } catch (_) {} }
+  }
+
   // Flag file
   const flag = path.join(configDir, '.caveman-active');
   if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
@@ -795,6 +1016,7 @@ async function main() {
     if (!detectMatch(prov.detect)) continue;
     if (prov.id === 'claude')   { installClaude(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
+    if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.profile)           { installViaSkills(ctx, prov); continue; }
   }
 

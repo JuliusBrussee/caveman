@@ -97,6 +97,7 @@ Detects 30+ agents, runs each one's native install, skips what you not have. Saf
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` |
 | **Codex** | `npx skills add JuliusBrussee/caveman -a codex` |
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` |
+| **opencode** | `npx -y github:JuliusBrussee/caveman -- --only opencode` |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` |
