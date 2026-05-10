@@ -244,7 +244,7 @@ Level stick until you change it or session end.
 | `mixed-with-code.md` | 888 | 560 | **36.9%** |
 | **Average** | **898** | **481** | **46%** |
 
-Full docs: [caveman-compress README](caveman-compress/README.md). [Snyk false-positive note](./caveman-compress/SECURITY.md).
+Full docs: [caveman-compress README](skills/caveman-compress/README.md). [Snyk false-positive note](./skills/caveman-compress/SECURITY.md).
 
 ## caveman-shrink (MCP middleware)
 

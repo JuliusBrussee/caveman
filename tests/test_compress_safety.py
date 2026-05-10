@@ -15,9 +15,9 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "skills" / "caveman-compress"))
 
-from skills.compress.scripts import compress as compress_mod  # noqa: E402
+from scripts import compress as compress_mod  # noqa: E402
 
 
 class CompressSafetyTests(unittest.TestCase):
