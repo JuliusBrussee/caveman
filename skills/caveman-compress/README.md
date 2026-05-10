@@ -17,7 +17,7 @@ Claude read `CLAUDE.md` on every session start. If file big, cost big. Caveman m
 ## What It Do
 
 ```
-/caveman:compress CLAUDE.md
+/caveman-compress CLAUDE.md
 ```
 
 ```
@@ -71,7 +71,7 @@ All validations passed ✅ — headings, code blocks, URLs, file paths preserved
 
 ## Install
 
-Compress is built in with the `caveman` plugin. Install `caveman` once, then use `/caveman:compress`.
+Compress is built in with the `caveman` plugin. Install `caveman` once, then use `/caveman-compress`.
 
 If you need local files, the compress skill lives at:
 
@@ -84,14 +84,14 @@ caveman-compress/
 ## Usage
 
 ```
-/caveman:compress <filepath>
+/caveman-compress <filepath>
 ```
 
 Examples:
 ```
-/caveman:compress CLAUDE.md
-/caveman:compress docs/preferences.md
-/caveman:compress todos.md
+/caveman-compress CLAUDE.md
+/caveman-compress docs/preferences.md
+/caveman-compress todos.md
 ```
 
 ### What files work
@@ -106,7 +106,7 @@ Examples:
 ## How It Work
 
 ```
-/caveman:compress CLAUDE.md
+/caveman-compress CLAUDE.md
         ↓
 detect file type        (no tokens)
         ↓

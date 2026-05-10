@@ -83,7 +83,7 @@ caveman/
 | File | What it controls |
 |------|-----------------|
 | `skills/caveman/SKILL.md` | Caveman behavior: intensity levels, rules, wenyan mode, auto-clarity, persistence. Only file to edit for behavior changes. |
-| `src/rules/caveman-activate.md` | Always-on auto-activation rule body. Consumed by `src/tools/caveman-init.js` when a user runs `npx caveman --only <agent>`. Edit here, not in any per-agent rule copy. |
+| `src/rules/caveman-activate.md` | Always-on auto-activation rule body. Consumed by `src/tools/caveman-init.js` when a user runs `npx caveman --with-init` (per-repo IDE rule files). Edit here, not in any per-agent rule copy. |
 | `src/rules/caveman-openclaw-bootstrap.md` | Marker-fenced bootstrap snippet appended to `~/.openclaw/workspace/SOUL.md` by `bin/lib/openclaw.js`. Drives always-on caveman through the OpenClaw gateway. Must include the SENTINEL `Respond terse like smart caveman` and stay well under OpenClaw's 12K-per-bootstrap-file cap. |
 | `bin/lib/openclaw.js` | OpenClaw install/uninstall helper. Frontmatter merge (`version`, `always: true`), SOUL.md marker append/strip, idempotent. Shared by `bin/install.js` and `src/tools/caveman-init.js`. |
 | `skills/caveman-commit/SKILL.md` | Caveman commit message behavior. Fully independent skill. |
@@ -99,7 +99,9 @@ caveman/
 
 ### Auto-generated / auto-synced — do not edit directly
 
-We removed the agent-specific dotdir mirrors at the repo root (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`, root `caveman/SKILL.md`). They were never read by the installer — only used to self-apply caveman to this repo when a maintainer opened it in Cursor/Windsurf/Cline. Devs who want caveman in their editor while editing this repo should run `npx caveman --only <agent>` once. The installer generates per-user agent rule files from `src/rules/caveman-activate.md` via `src/tools/caveman-init.js`.
+We removed the agent-specific dotdir mirrors at the repo root (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`, root `caveman/SKILL.md`). They were never read by the installer — only used to self-apply caveman to this repo when a maintainer opened it in Cursor/Windsurf/Cline. Devs who want caveman in their editor while editing this repo should run `npx caveman --with-init` once (writes per-repo rule files from `src/rules/caveman-activate.md` via `src/tools/caveman-init.js`). For per-user installs through the upstream skills CLI, `npx caveman --only <agent>` runs `npx skills add ... -a <profile>`.
+
+A handful of dotdir leftovers (`.junie/`, `.kiro/`, `.roo/`, `.agents/`) still hold a stale `cavecrew/SKILL.md` mirror from before the cleanup. They aren't read by anything in the current install path; remove on sight, no migration needed.
 
 What's left is the Claude Code plugin distribution (required by the plugin loader) and the release ZIP.
 
@@ -111,7 +113,7 @@ What's left is the Claude Code plugin distribution (required by the plugin loade
 | `plugins/caveman/agents/cavecrew-*.md` | `agents/cavecrew-*.md` |
 | `dist/caveman.skill` | ZIP of `skills/caveman/` directory (gitignored; rebuilt by CI on release) |
 
-Skills not in this table (`caveman-commit`, `caveman-review`, `caveman-help`, `caveman-stats`) are not mirrored into the Claude Code plugin distribution. They reach Claude Code through the standalone hook + skill install path, and reach other agents via `npx skills add`.
+Skills not in this table (`caveman-commit`, `caveman-review`, `caveman-help`, `caveman-stats`) are not mirrored into the Claude Code plugin distribution by CI. They reach Claude Code through the standalone hook + skill install path, and reach other agents via `npx skills add`. A `plugins/caveman/skills/caveman-stats/` directory is currently checked in as a hand-committed copy; the sync workflow does not touch it, so don't rely on edits there to propagate.
 
 ---
 
@@ -172,7 +174,7 @@ Reads JSON from stdin. Three responsibilities:
 - `/caveman` → configured default (see `caveman-config.js`, defaults to `full`)
 - `/caveman lite` → `lite`
 - `/caveman ultra` → `ultra`
-- `/caveman wenyan` or `/caveman wenyan-full` → `wenyan`
+- `/caveman wenyan` or `/caveman wenyan-full` → `wenyan` (alias) / `wenyan-full`
 - `/caveman wenyan-lite` → `wenyan-lite`
 - `/caveman wenyan-ultra` → `wenyan-ultra`
 - `/caveman-commit` → `commit`
@@ -242,10 +244,10 @@ How caveman reaches each agent type:
 | Gemini CLI | Extension with `GEMINI.md` context file | Yes — context file loads every session |
 | opencode | Native plugin (`src/plugins/opencode/`) copied into `~/.config/opencode/plugins/caveman/` + `AGENTS.md` ruleset + skills/agents/commands directories. Plugin uses `session.created` and `tui.prompt.append` lifecycle hooks. No statusline (opencode TUI exposes no plugin-writable badge). | Yes — `session.created` writes flag, `AGENTS.md` carries always-on ruleset |
 | OpenClaw | Workspace skill at `~/.openclaw/workspace/skills/caveman/SKILL.md` (frontmatter merged with `version` + `always: true`) plus a marker-fenced bootstrap block in `~/.openclaw/workspace/SOUL.md`. Both writes go through `bin/lib/openclaw.js`; workspace path is overridable via `OPENCLAW_WORKSPACE`. | Yes — SOUL.md is auto-injected each turn under "Project Context" (subject to OpenClaw's 12K-per-file / 60K-total bootstrap caps) |
-| Cursor | Per-user `.cursor/rules/caveman.mdc` written by `src/tools/caveman-init.js` | Yes — always-on rule (after `npx caveman --only cursor`) |
-| Windsurf | Per-user `.windsurf/rules/caveman.md` written by `src/tools/caveman-init.js` | Yes — always-on rule (after `npx caveman --only windsurf`) |
-| Cline | Per-user `.clinerules/caveman.md` written by `src/tools/caveman-init.js` | Yes — Cline auto-discovers `.clinerules/` |
-| Copilot | Per-user `.github/copilot-instructions.md` written by `src/tools/caveman-init.js` + `AGENTS.md` | Yes — repo-wide instructions |
+| Cursor | `npx skills add ... -a cursor` (default via `--only cursor`) writes the upstream skill profile; per-repo `.cursor/rules/caveman.mdc` via `--with-init` (calls `src/tools/caveman-init.js`) | Yes — always-on rule |
+| Windsurf | `npx skills add ... -a windsurf` (default via `--only windsurf`); per-repo `.windsurf/rules/caveman.md` via `--with-init` | Yes — always-on rule |
+| Cline | `npx skills add ... -a cline` (default via `--only cline`); per-repo `.clinerules/caveman.md` via `--with-init` | Yes — Cline auto-discovers `.clinerules/` |
+| Copilot | `npx skills add ... -a github-copilot` (soft probe — pass `--only copilot`); per-repo `.github/copilot-instructions.md` + `AGENTS.md` via `--with-init` | Yes — repo-wide instructions |
 | Others (Junie, Trae, Warp, Tabnine, Mistral, Qwen, Devin, Droid, ForgeCode, Bob, Crush, iFlow, OpenHands, Qoder, Rovo Dev, Replit, Antigravity, …) | `npx skills add JuliusBrussee/caveman -a <profile>` | No — user must say `/caveman` each session |
 
 opencode reaches Tier 1 minus the statusline (opencode's TUI has no plugin-writable badge). Mode flag lives at `~/.config/opencode/.caveman-active` for any external tooling that wants to surface it.

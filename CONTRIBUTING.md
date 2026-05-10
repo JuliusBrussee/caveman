@@ -58,13 +58,12 @@ on every push to `main`.
 | Path | Rebuilt from |
 |------|--------------|
 | `plugins/caveman/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
-| `plugins/caveman/skills/caveman-commit/SKILL.md` | `skills/caveman-commit/SKILL.md` |
-| `plugins/caveman/skills/caveman-review/SKILL.md` | `skills/caveman-review/SKILL.md` |
-| `plugins/caveman/skills/caveman-compress/SKILL.md` | `skills/caveman-compress/SKILL.md` |
+| `plugins/caveman/skills/caveman-compress/{SKILL.md, scripts/}` | `skills/caveman-compress/{SKILL.md, scripts/}` |
 | `plugins/caveman/skills/cavecrew/SKILL.md` | `skills/cavecrew/SKILL.md` |
 | `plugins/caveman/agents/cavecrew-*.md` | `agents/cavecrew-*.md` |
-| `dist/caveman.skill` | ZIP of `skills/caveman/` |
-| `.codex-plugin/plugin.json` (inside any plugin distribution) | generated at package time |
+| `dist/caveman.skill` | ZIP of `skills/caveman/` (gitignored; rebuilt by CI on each push to `main`) |
+
+`caveman-commit`, `caveman-review`, `caveman-help`, and `caveman-stats` are **not** mirrored under `plugins/caveman/skills/` by CI. Claude Code reaches them through the standalone hook + skill install path and `npx skills` carries them to other agents. If you see `plugins/caveman/skills/caveman-stats/` checked in, treat it as a legacy hand-committed copy — the workflow in `.github/workflows/sync-skill.yml` does not touch it.
 
 When in doubt: if the file lives under `plugins/`, `dist/`, or any agent
 dotdir mirror, it's a build artifact. Edit the top-level source instead.

@@ -78,7 +78,7 @@ function parseArgs(argv) {
       case '--config-dir': {
         const v = argv[++i];
         if (!v || v.startsWith('--')) die('error: --config-dir requires a path');
-        opts.configDir = v;
+        opts.configDir = expandHome(v);
         break;
       }
       default:
@@ -90,6 +90,16 @@ function parseArgs(argv) {
   if (opts.minimal) { opts.withHooks = false; opts.withInit = false; opts.withMcpShrink = false; }
   if (opts.withHooks === 'auto') opts.withHooks = true;
   if (opts.withMcpShrink === 'auto') opts.withMcpShrink = true;
+  // Validate --only ids against the provider matrix. PROVIDERS is defined later
+  // in the file but is in scope by the time this function runs.
+  if (opts.only.length) {
+    const knownIds = new Set(PROVIDERS.map(p => p.id));
+    for (const id of opts.only) {
+      if (!knownIds.has(id)) {
+        die(`error: unknown agent: ${id}\n  see 'caveman --list' for valid ids`);
+      }
+    }
+  }
   return opts;
 }
 
@@ -202,8 +212,6 @@ const PROVIDERS = [
 
 // ── Detection ─────────────────────────────────────────────────────────────
 function hasCmd(cmd) {
-  const which = process.platform === 'win32' ? 'where' : 'command';
-  const args  = process.platform === 'win32' ? [cmd]   : ['-v', cmd];
   try {
     if (process.platform === 'win32') {
       const r = child_process.spawnSync('where', [cmd], { stdio: 'ignore' });
@@ -212,8 +220,6 @@ function hasCmd(cmd) {
     const r = child_process.spawnSync('sh', ['-c', `command -v ${shellEscape(cmd)}`], { stdio: 'ignore' });
     return r.status === 0;
   } catch (_) { return false; }
-  // unreachable; satisfy linters
-  void which; void args;
 }
 
 function shellEscape(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
@@ -369,7 +375,7 @@ function absoluteNodePath() {
 }
 
 // ── Per-provider installers ────────────────────────────────────────────────
-function installClaude(ctx) {
+async function installClaude(ctx) {
   const { say, note, warn, ok, opts, results } = ctx;
   results.detected++;
   say('→ Claude Code detected');
@@ -392,7 +398,7 @@ function installClaude(ctx) {
 
   if (opts.withHooks) {
     say('  → installing hooks (--with-hooks)');
-    const r = installHooks(ctx);
+    const r = await installHooks(ctx);
     if (r === 'ok') results.installed.push('claude-hooks');
     else if (r === 'skip') results.skipped.push(['claude-hooks', 'already wired']);
     else results.failed.push(['claude-hooks', r]);
@@ -450,6 +456,11 @@ const OPENCODE_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md',
 const OPENCODE_COMMAND_FILES = ['caveman.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md'];
 const OPENCODE_PLUGIN_REL = './plugins/caveman/plugin.js';
 const OPENCODE_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
+// Marker fence for the opencode AGENTS.md ruleset block. Same convention as
+// bin/lib/openclaw.js for SOUL.md — lets us strip our block cleanly even when
+// the user has authored content above AND below it.
+const OPENCODE_AGENTS_MD_BEGIN = '<!-- caveman-begin -->';
+const OPENCODE_AGENTS_MD_END = '<!-- caveman-end -->';
 
 function opencodeConfigDir() {
   if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
@@ -503,16 +514,25 @@ function installOpencode(ctx) {
 
   try {
     // 1. Plugin dir — copy plugin.js, package.json, caveman-config.js (sibling).
+    //    Same `--force` semantic as commands/agents/skills below: re-runs leave
+    //    user edits to plugin.js alone unless --force is passed.
     fs.mkdirSync(pluginDir, { recursive: true });
     const pluginSrc = path.join(repoRoot, 'src', 'plugins', 'opencode');
-    fs.copyFileSync(path.join(pluginSrc, 'plugin.js'),    path.join(pluginDir, 'plugin.js'));
-    fs.copyFileSync(path.join(pluginSrc, 'package.json'), path.join(pluginDir, 'package.json'));
-    // Renamed to .cjs because the plugin dir is "type": "module" — a bare .js
-    // sibling would be loaded as ESM and break the plugin's require() bridge.
-    fs.copyFileSync(
-      path.join(repoRoot, 'src', 'hooks', 'caveman-config.js'),
-      path.join(pluginDir, 'caveman-config.cjs'),
-    );
+    const pluginPayload = [
+      [path.join(pluginSrc, 'plugin.js'),    path.join(pluginDir, 'plugin.js')],
+      [path.join(pluginSrc, 'package.json'), path.join(pluginDir, 'package.json')],
+      // Renamed to .cjs because the plugin dir is "type": "module" — a bare .js
+      // sibling would be loaded as ESM and break the plugin's require() bridge.
+      [path.join(repoRoot, 'src', 'hooks', 'caveman-config.js'),
+       path.join(pluginDir, 'caveman-config.cjs')],
+    ];
+    for (const [src, dest] of pluginPayload) {
+      if (fs.existsSync(dest) && !opts.force) {
+        note(`  skipped ${dest} (exists; --force to overwrite)`);
+        continue;
+      }
+      fs.copyFileSync(src, dest);
+    }
     process.stdout.write(`  installed: ${pluginDir}\n`);
 
     // 2. Commands.
@@ -550,20 +570,36 @@ function installOpencode(ctx) {
       process.stdout.write(`  installed: ${dest}/\n`);
     }
 
-    // 5. AGENTS.md — Tier-3 always-on ruleset. Append-with-sentinel so we
-    //    don't clobber a user-authored AGENTS.md.
+    // 5. AGENTS.md — Tier-3 always-on ruleset. Wrapped in begin/end markers so
+    //    a later --uninstall can strip our block cleanly even if the user has
+    //    authored content above AND below it. Idempotency check uses the begin
+    //    marker (the legacy sentinel still matches old installs).
     const ruleBody = fs.readFileSync(path.join(repoRoot, 'src', 'rules', 'caveman-activate.md'), 'utf8').trimEnd() + '\n';
+    const fencedBlock = `${OPENCODE_AGENTS_MD_BEGIN}\n${ruleBody}${OPENCODE_AGENTS_MD_END}\n`;
     if (fs.existsSync(agentsMd)) {
       const existing = fs.readFileSync(agentsMd, 'utf8');
-      if (!existing.includes(OPENCODE_AGENTS_MD_SENTINEL)) {
-        const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
-        fs.writeFileSync(agentsMd, existing + sep + ruleBody, { mode: 0o644 });
-        process.stdout.write(`  appended caveman ruleset to ${agentsMd}\n`);
-      } else {
+      const alreadyFenced = existing.includes(OPENCODE_AGENTS_MD_BEGIN)
+        && existing.includes(OPENCODE_AGENTS_MD_END);
+      const alreadyByLegacySentinel = !alreadyFenced && existing.includes(OPENCODE_AGENTS_MD_SENTINEL);
+      if (alreadyFenced) {
         note(`  ${agentsMd} already contains caveman ruleset`);
+      } else if (alreadyByLegacySentinel) {
+        note(`  ${agentsMd} contains a legacy (un-fenced) caveman block — leaving as-is`);
+        note('  re-run with --force to replace it with a fenced block');
+        if (opts.force) {
+          // Replace the entire file with a clean fenced version. The legacy
+          // path didn't fence, so we can't isolate the block — full rewrite is
+          // the only safe option under --force.
+          fs.writeFileSync(agentsMd, fencedBlock, { mode: 0o644 });
+          process.stdout.write(`  rewrote ${agentsMd} with fenced caveman block\n`);
+        }
+      } else {
+        const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
+        fs.writeFileSync(agentsMd, existing + sep + fencedBlock, { mode: 0o644 });
+        process.stdout.write(`  appended caveman ruleset to ${agentsMd}\n`);
       }
     } else {
-      fs.writeFileSync(agentsMd, ruleBody, { mode: 0o644 });
+      fs.writeFileSync(agentsMd, fencedBlock, { mode: 0o644 });
       process.stdout.write(`  installed: ${agentsMd}\n`);
     }
 
@@ -575,8 +611,11 @@ function installOpencode(ctx) {
       process.stdout.write('\n');
       return;
     }
-    if (fs.existsSync(opencodeJson)) {
-      try { fs.copyFileSync(opencodeJson, opencodeJson + '.bak'); } catch (_) {}
+    // Preserve the original on first install only — repeat installs would
+    // otherwise overwrite the only known-good copy with an already-merged file.
+    const opencodeBak = opencodeJson + '.bak';
+    if (fs.existsSync(opencodeJson) && !fs.existsSync(opencodeBak)) {
+      try { fs.copyFileSync(opencodeJson, opencodeBak); } catch (_) {}
     }
     if (!Array.isArray(cfg.plugin)) cfg.plugin = [];
     if (!cfg.plugin.includes(OPENCODE_PLUGIN_REL)) {
@@ -637,7 +676,7 @@ function installOpenclaw(ctx) {
 
 // ── Hooks installer ────────────────────────────────────────────────────────
 // Replaces src/hooks/install.sh + src/hooks/install.ps1.
-function installHooks(ctx) {
+async function installHooks(ctx) {
   const { note, warn, opts, repoRoot, configDir } = ctx;
   const hooksDir = path.join(configDir, 'hooks');
   const settingsPath = path.join(configDir, 'settings.json');
@@ -658,7 +697,7 @@ function installHooks(ctx) {
     if (sourceDir && fs.existsSync(path.join(sourceDir, f))) {
       fs.copyFileSync(path.join(sourceDir, f), dest);
     } else {
-      try { downloadTo(`${HOOKS_REMOTE}/${f}`, dest); }
+      try { await downloadTo(`${HOOKS_REMOTE}/${f}`, dest); }
       catch (e) { return `download ${f} failed: ${e.message}`; }
     }
     process.stdout.write(`  installed: ${dest}\n`);
@@ -673,9 +712,12 @@ function installHooks(ctx) {
     warn('  settings.json unparseable; will not touch it. Edit manually then re-run.');
     return 'settings.json unparseable';
   }
-  // Backup once per install run
-  if (fs.existsSync(settingsPath)) {
-    try { fs.copyFileSync(settingsPath, settingsPath + '.bak'); } catch (_) {}
+  // Backup once, preserved across reinstalls. Without the !fs.existsSync(bak)
+  // guard, the second install would overwrite the only known-good copy with
+  // the already-merged file, destroying recovery.
+  const bak = settingsPath + '.bak';
+  if (fs.existsSync(settingsPath) && !fs.existsSync(bak)) {
+    try { fs.copyFileSync(settingsPath, bak); } catch (_) {}
   }
 
   const node = absoluteNodePath();
@@ -758,7 +800,7 @@ function installMcpShrink(ctx) {
 }
 
 // ── Init writers (per-repo rule files) ────────────────────────────────────
-function runInit(ctx) {
+async function runInit(ctx) {
   const { note, warn, opts, repoRoot } = ctx;
   const local = repoRoot && path.join(repoRoot, 'src/tools/caveman-init.js');
   const args = [process.cwd()];
@@ -775,7 +817,7 @@ function runInit(ctx) {
   }
   try {
     const tmp = path.join(os.tmpdir(), `caveman-init-${process.pid}.js`);
-    downloadTo(INIT_SCRIPT_URL, tmp);
+    await downloadTo(INIT_SCRIPT_URL, tmp);
     const r = child_process.spawnSync(absoluteNodePath(), [tmp, ...args], { stdio: 'inherit' });
     try { fs.unlinkSync(tmp); } catch (_) {}
     return (r.status || 0) === 0;
@@ -846,15 +888,34 @@ function uninstall(ctx) {
     // Don't rmdir hooksDir — other plugins may use it.
   }
 
-  // Plugin uninstall on Claude
+  // Plugin uninstall on Claude. Probe `plugin list` first so a re-run on a
+  // machine where caveman was never installed (or was already removed) doesn't
+  // print "Plugin not installed" stderr noise.
   if (hasCmd('claude')) {
-    const r = runSpawn('claude', ['plugin', 'uninstall', 'caveman@caveman'], null, opts.dryRun);
-    if ((r.status || 0) === 0) ok('  removed claude plugin');
+    const probe = captureSpawn('claude', ['plugin', 'list']);
+    if (probe.status === 0 && /caveman/i.test(probe.stdout || '')) {
+      const r = runSpawn('claude', ['plugin', 'uninstall', 'caveman@caveman'], null, opts.dryRun);
+      if ((r.status || 0) === 0) ok('  removed claude plugin');
+    } else {
+      note('  claude plugin not installed — skipping');
+    }
+
+    // caveman-shrink MCP — only run if `claude mcp` subcommand exists. Tolerate
+    // non-zero exit (server may have never been registered).
+    const mcpHelp = captureSpawn('claude', ['mcp', '--help']);
+    if (mcpHelp.status === 0) {
+      runSpawn('claude', ['mcp', 'remove', 'caveman-shrink'], null, opts.dryRun);
+    }
   }
 
-  // Gemini extension
+  // Gemini extension. Same idempotency probe as claude.
   if (hasCmd('gemini')) {
-    runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], null, opts.dryRun);
+    const probe = captureSpawn('gemini', ['extensions', 'list']);
+    if (probe.status === 0 && /caveman/i.test(probe.stdout || '')) {
+      runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], null, opts.dryRun);
+    } else {
+      note('  gemini extension not installed — skipping');
+    }
   }
 
   // opencode native install — strip plugin entry, MCP entry, and our files.
@@ -894,17 +955,35 @@ function uninstall(ctx) {
       const p = path.join(ocDir, 'skills', name);
       if (fs.existsSync(p) && !opts.dryRun) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
     }
-    // AGENTS.md — only remove if our sentinel is the entire content (we
-    // wrote it) or strip our block from a mixed file.
+    // AGENTS.md — strip the fenced caveman block (preserves user content
+    // above and below). If the file is empty after the strip, remove it.
+    // Falls back to legacy unfenced-sentinel handling for installs that
+    // pre-date the marker fence.
     const ocAgentsMd = path.join(ocDir, 'AGENTS.md');
     if (fs.existsSync(ocAgentsMd)) {
       const body = fs.readFileSync(ocAgentsMd, 'utf8');
-      if (body.includes(OPENCODE_AGENTS_MD_SENTINEL)) {
+      const begin = body.indexOf(OPENCODE_AGENTS_MD_BEGIN);
+      const end = body.indexOf(OPENCODE_AGENTS_MD_END);
+      if (begin !== -1 && end !== -1 && end > begin) {
+        const before = body.slice(0, begin).replace(/\n+$/, '\n');
+        const after = body.slice(end + OPENCODE_AGENTS_MD_END.length).replace(/^\n+/, '\n');
+        let next = (before + after).trimEnd();
+        next = next ? next + '\n' : '';
+        if (!opts.dryRun) {
+          if (next === '') {
+            try { fs.unlinkSync(ocAgentsMd); } catch (_) {}
+          } else {
+            fs.writeFileSync(ocAgentsMd, next, { mode: 0o644 });
+          }
+        }
+        note(next === '' ? `  removed ${ocAgentsMd}` : `  stripped caveman block from ${ocAgentsMd}`);
+      } else if (body.includes(OPENCODE_AGENTS_MD_SENTINEL)) {
+        // Legacy install (no marker fence). Remove only if the file is ours.
         if (body.trim() === '' || body.trim().startsWith(OPENCODE_AGENTS_MD_SENTINEL)) {
           if (!opts.dryRun) { try { fs.unlinkSync(ocAgentsMd); } catch (_) {} }
           note(`  removed ${ocAgentsMd}`);
         } else {
-          note(`  left ${ocAgentsMd} in place (mixed content — strip caveman block manually)`);
+          note(`  left ${ocAgentsMd} in place (legacy mixed content — strip caveman block manually)`);
         }
       }
     }
@@ -985,6 +1064,7 @@ FLAGS
   --dry-run             Print what would run, do nothing.
   --force               Re-run even if a target reports already installed.
   --only <agent>        Install only for the named agent. Repeatable.
+                        See --list for valid ids.
   --skip-skills         Don't run the npx-skills auto-detect fallback.
   --all                 Turn on hooks + init + mcp-shrink.
   --minimal             Just the plugin/extension install.
@@ -995,7 +1075,11 @@ FLAGS
   --with-mcp-shrink     Claude Code: register caveman-shrink MCP proxy. (Default ON.)
   --no-mcp-shrink       Skip MCP shrink.
   --uninstall, -u       Remove caveman from this machine.
-  --config-dir <path>   Use this dir as Claude config dir (default: \$CLAUDE_CONFIG_DIR or ~/.claude).
+  --config-dir <path>   Claude Code config dir for hook files + settings.json.
+                        Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT
+                        scope \`claude plugin install\`, \`gemini extensions
+                        install\`, opencode (XDG_CONFIG_HOME), or openclaw
+                        (OPENCLAW_WORKSPACE) — those use their own paths.
   --non-interactive     Never prompt; use defaults. (Auto when stdin is not a TTY.)
   --list                Print provider matrix and exit.
   --no-color            Disable ANSI colors.
@@ -1065,7 +1149,7 @@ async function main() {
     // no repo clone is available; openclaw bails when the workspace dir is
     // missing without --force).
     if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
-    if (prov.id === 'claude')   { installClaude(ctx); continue; }
+    if (prov.id === 'claude')   { await installClaude(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
@@ -1084,8 +1168,8 @@ async function main() {
   // Per-repo init
   if (opts.withInit) {
     ctx.say(`→ writing per-repo IDE rule files into ${process.cwd()} (--with-init)`);
-    if (runInit(ctx)) ctx.results.installed.push(`caveman-init (${process.cwd()})`);
-    else              ctx.results.failed.push(['caveman-init', 'src/tools/caveman-init.js failed']);
+    if (await runInit(ctx)) ctx.results.installed.push(`caveman-init (${process.cwd()})`);
+    else                    ctx.results.failed.push(['caveman-init', 'src/tools/caveman-init.js failed']);
     process.stdout.write('\n');
   } else if (ctx.results.installed.length || ctx.results.skipped.length) {
     ctx.note('  tip: re-run inside a repo with --all (or --with-init) to also write per-repo');

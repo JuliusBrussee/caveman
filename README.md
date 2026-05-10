@@ -84,11 +84,11 @@ One line. Find every agent. Install for each.
 # macOS / Linux / WSL / Git Bash
 curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash
 
-# Windows (PowerShell)
+# Windows (PowerShell 5.1+)
 irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
 ```
 
-~30 seconds. Skip agent you no have. Safe to re-run.
+~30 seconds. Needs Node ≥18. Skip agent you no have. Safe to re-run.
 
 **Trigger:** type `/caveman` or say "talk like caveman". Stop with "normal mode".
 
@@ -103,7 +103,7 @@ Install break? Open agent, say *"Read CLAUDE.md and INSTALL.md, install caveman 
 | `/caveman-commit` | Conventional Commit messages, ≤50 char subject. Why over what. |
 | `/caveman-review` | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` |
 | `/caveman-stats` | Real session token usage + lifetime savings + USD. Tweetable line via `--share`. |
-| `/caveman:compress <file>` | Rewrite memory file (e.g. `CLAUDE.md`) into caveman-speak. Cuts ~46% input tokens every session. Code/URLs/paths byte-preserved. |
+| `/caveman-compress <file>` | Rewrite memory file (e.g. `CLAUDE.md`) into caveman-speak. Cuts ~46% input tokens every session. Code/URLs/paths byte-preserved. |
 | `caveman-shrink` | MCP middleware. Wraps any MCP server, compresses tool descriptions. [npm](https://www.npmjs.com/package/caveman-shrink). |
 | `cavecrew-*` | Caveman subagents (investigator/builder/reviewer). ~60% fewer tokens than vanilla, main context lasts longer. |
 
@@ -163,9 +163,13 @@ Maintainer detail (hook architecture, file ownership, CI sync) live in [CLAUDE.m
 
 [**OpenClaw**](https://openclaw.ai) the self-host gateway. One box, many agent inside (Claude Code, Codex, Pi, OpenCode), wired to your Slack / Discord / iMessage / Telegram / whatever. Tagline: *"The lobster way."* Lobster strong. Lobster smart. Lobster also talk a lot.
 
-Caveman teach lobster brevity:
+Caveman teach lobster brevity — same canonical installer, scoped to one agent:
 
 ```bash
+# macOS / Linux / WSL
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --only openclaw
+
+# Windows (PowerShell): no Node? install Node ≥18 first, then
 npx -y github:JuliusBrussee/caveman -- --only openclaw
 ```
 

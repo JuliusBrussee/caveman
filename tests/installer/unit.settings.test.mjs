@@ -113,6 +113,17 @@ test('hasCavemanHook detects via substring', () => {
   assert.equal(SETTINGS.hasCavemanHook(s, 'UserPromptSubmit'), false);
 });
 
+test('removeCavemanHooks tolerates malformed hook event values without throwing', () => {
+  // Pre-fix bug: settings.hooks.SessionStart = "oops" (string, not array)
+  // would crash on .filter(...) inside the filter loop. Fix delegates to
+  // validateHookFields first + adds Array.isArray guard.
+  const s = { hooks: { SessionStart: "oops", UserPromptSubmit: { not: 'an array either' } } };
+  let removed;
+  assert.doesNotThrow(() => { removed = SETTINGS.removeCavemanHooks(s, 'caveman'); });
+  assert.equal(removed, 0);
+  assert.equal(s.hooks, undefined);
+});
+
 test('removeCavemanHooks strips by marker and cleans empties', () => {
   const s = {
     hooks: {

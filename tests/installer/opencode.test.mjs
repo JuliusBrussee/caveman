@@ -79,7 +79,12 @@ test('opencode fresh install drops plugin, commands, agents, skills, AGENTS.md, 
       assert.ok(fs.existsSync(path.join(ocDir, 'skills', name, 'SKILL.md')), `skill ${name}/SKILL.md missing`);
     }
     assert.ok(fs.existsSync(path.join(ocDir, 'AGENTS.md')), 'AGENTS.md missing');
-    assert.match(fs.readFileSync(path.join(ocDir, 'AGENTS.md'), 'utf8'), /Respond terse like smart caveman/);
+    const agentsBody = fs.readFileSync(path.join(ocDir, 'AGENTS.md'), 'utf8');
+    assert.match(agentsBody, /Respond terse like smart caveman/);
+    // Block must be wrapped in begin/end markers so uninstall can isolate it
+    // from user-authored content above and below.
+    assert.match(agentsBody, /<!-- caveman-begin -->/);
+    assert.match(agentsBody, /<!-- caveman-end -->/);
 
     const cfgPath = path.join(ocDir, 'opencode.json');
     assert.ok(fs.existsSync(cfgPath), 'opencode.json missing');
@@ -111,6 +116,71 @@ test('opencode idempotent install does not duplicate plugin entries', () => {
     const agentsMd = fs.readFileSync(path.join(xdg, 'opencode', 'AGENTS.md'), 'utf8');
     const sentinelCount = (agentsMd.match(/Respond terse like smart caveman/g) || []).length;
     assert.equal(sentinelCount, 1, `expected 1 sentinel, got ${sentinelCount}`);
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+// ── 2b. Plugin payload not overwritten on re-install (without --force) ────
+test('opencode re-install preserves user edits to plugin.js without --force', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    const r1 = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r1.status, 2);
+
+    const pluginPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'plugin.js');
+    const tweak = '\n// USER-TWEAK-DO-NOT-OVERWRITE\n';
+    fs.appendFileSync(pluginPath, tweak);
+    const beforeBytes = fs.readFileSync(pluginPath, 'utf8');
+
+    const r2 = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r2.status, 2);
+
+    const afterBytes = fs.readFileSync(pluginPath, 'utf8');
+    assert.equal(afterBytes, beforeBytes, 'second install should not overwrite plugin.js without --force');
+    assert.match(afterBytes, /USER-TWEAK-DO-NOT-OVERWRITE/);
+
+    // With --force, the file should be replaced (no tweak afterward).
+    const r3 = runInstaller(['--only', 'opencode', '--force'], env);
+    assert.notEqual(r3.status, 2);
+    const forced = fs.readFileSync(pluginPath, 'utf8');
+    assert.doesNotMatch(forced, /USER-TWEAK-DO-NOT-OVERWRITE/, '--force should overwrite plugin.js');
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+// ── 2c. AGENTS.md fence preserves user content above and below ───────────
+test('opencode uninstall strips fenced AGENTS.md block, preserving user prefix and suffix', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    const r1 = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r1.status, 2);
+
+    const agentsMd = path.join(xdg, 'opencode', 'AGENTS.md');
+    const installed = fs.readFileSync(agentsMd, 'utf8');
+    // Sandwich the caveman block between user prefix and suffix.
+    const userPrefix = '# my project\n\nuse 2-space indent.\n\n';
+    const userSuffix = '\n## extra\n\nkeep PRs small.\n';
+    fs.writeFileSync(agentsMd, userPrefix + installed.trimEnd() + '\n' + userSuffix);
+
+    const r2 = runInstaller(['--uninstall'], env);
+    assert.notEqual(r2.status, 2);
+
+    const after = fs.readFileSync(agentsMd, 'utf8');
+    assert.doesNotMatch(after, /<!-- caveman-begin -->/, 'caveman block should be stripped');
+    assert.doesNotMatch(after, /<!-- caveman-end -->/, 'caveman end marker should be stripped');
+    assert.doesNotMatch(after, /Respond terse like smart caveman/, 'caveman body should be stripped');
+    assert.match(after, /# my project/, 'user prefix should survive');
+    assert.match(after, /use 2-space indent/, 'user prefix body should survive');
+    assert.match(after, /## extra/, 'user suffix should survive');
+    assert.match(after, /keep PRs small/, 'user suffix body should survive');
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });
