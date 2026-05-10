@@ -1,8 +1,8 @@
 #!/bin/bash
 # caveman — uninstaller for the SessionStart + UserPromptSubmit hooks
 # Removes: hook files in ~/.claude/hooks, settings.json entries, and the flag file
-# Usage: bash hooks/uninstall.sh
-#   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/uninstall.sh)
+# Usage: bash src/hooks/uninstall.sh
+#   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks/uninstall.sh)
 set -e
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"

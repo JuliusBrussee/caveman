@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Tests for tools/caveman-init.js — fixture-based.
+// Tests for src/tools/caveman-init.js — fixture-based.
 // Run: node tests/test_caveman_init.js
 
 const fs = require('fs');
@@ -9,7 +9,7 @@ const assert = require('assert');
 const { execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const INIT = path.join(ROOT, 'tools', 'caveman-init.js');
+const INIT = path.join(ROOT, 'src', 'tools', 'caveman-init.js');
 
 let passed = 0;
 let failed = 0;

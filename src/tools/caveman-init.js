@@ -3,8 +3,8 @@
 // repo for every IDE agent we support. Idempotent. Safe to re-run.
 //
 // Usage:
-//   node tools/caveman-init.js [target-dir] [--dry-run] [--force] [--only <agent>]
-//   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/tools/caveman-init.js | node - [args]
+//   node src/tools/caveman-init.js [target-dir] [--dry-run] [--force] [--only <agent>]
+//   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/tools/caveman-init.js | node - [args]
 //
 // Without args, runs in cwd. Generates the rule files for Cursor, Windsurf,
 // Cline, Copilot, and AGENTS.md. Does NOT modify CLAUDE.md or compress
@@ -13,8 +13,8 @@
 const fs = require('fs');
 const path = require('path');
 
-// Embedded so the tool works standalone (npx-style) without the rules/ dir.
-// Mirrors rules/caveman-activate.md verbatim — keep these in sync.
+// Embedded so the tool works standalone (npx-style) without the src/rules/ dir.
+// Mirrors src/rules/caveman-activate.md verbatim — keep these in sync.
 const RULE_BODY = `Respond terse like smart caveman. All technical substance stay. Only fluff die.
 
 Rules:

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // caveman — unified cross-platform installer.
 //
-// One Node script replaces the old install.sh + install.ps1 + hooks/install.sh
-// + hooks/install.ps1 quartet. Single source of truth. Works on macOS, Linux,
+// One Node script replaces the old install.sh + install.ps1 + src/hooks/install.sh
+// + src/hooks/install.ps1 quartet. Single source of truth. Works on macOS, Linux,
 // and Windows (PowerShell or cmd) without any of the bash/PS1 quoting bugs
 // that previously broke the JSON merge step (issue #249).
 //
@@ -25,8 +25,8 @@ const SETTINGS = require('./lib/settings');
 
 const REPO = 'JuliusBrussee/caveman';
 const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
-const HOOKS_REMOTE = `${RAW_BASE}/hooks`;
-const INIT_SCRIPT_URL = `${RAW_BASE}/tools/caveman-init.js`;
+const HOOKS_REMOTE = `${RAW_BASE}/src/hooks`;
+const INIT_SCRIPT_URL = `${RAW_BASE}/src/tools/caveman-init.js`;
 const MCP_SHRINK_PKG = 'caveman-shrink';
 // Hook files to copy. Statusline ships in both .sh (macOS/Linux) and .ps1
 // (Windows) flavors — copy both regardless of host OS so a roaming
@@ -317,7 +317,7 @@ function detectRepoRoot() {
   // bin/install.js sits at <repo>/bin/install.js. Walk up one.
   const here = path.dirname(__filename);
   const root = path.resolve(here, '..');
-  if (fs.existsSync(path.join(root, 'hooks')) &&
+  if (fs.existsSync(path.join(root, 'src', 'hooks')) &&
       fs.existsSync(path.join(root, 'agents')) &&
       fs.existsSync(path.join(root, 'skills'))) {
     return root;
@@ -438,12 +438,12 @@ function installViaSkills(ctx, prov) {
 }
 
 // ── Hooks installer ────────────────────────────────────────────────────────
-// Replaces hooks/install.sh + hooks/install.ps1.
+// Replaces src/hooks/install.sh + src/hooks/install.ps1.
 function installHooks(ctx) {
   const { note, warn, opts, repoRoot, configDir } = ctx;
   const hooksDir = path.join(configDir, 'hooks');
   const settingsPath = path.join(configDir, 'settings.json');
-  const sourceDir = repoRoot ? path.join(repoRoot, 'hooks') : null;
+  const sourceDir = repoRoot ? path.join(repoRoot, 'src', 'hooks') : null;
 
   if (opts.dryRun) {
     note(`  would mkdir -p ${hooksDir}`);
@@ -521,7 +521,7 @@ function installHooks(ctx) {
       process.stdout.write('  statusline badge already configured.\n');
     } else {
       process.stdout.write('  NOTE: existing statusline detected — caveman badge NOT added.\n');
-      process.stdout.write('        See hooks/README.md to add the badge to your existing statusline.\n');
+      process.stdout.write('        See src/hooks/README.md to add the badge to your existing statusline.\n');
     }
   }
 
@@ -547,13 +547,13 @@ function installMcpShrink(ctx) {
   const help = captureSpawn('claude', ['mcp', '--help']);
   if (help.status !== 0) {
     note("    'claude mcp add' not available on this CLI. Add the snippet from");
-    note('    hooks/README.md to your Claude Code MCP config manually.');
+    note('    src/hooks/README.md to your Claude Code MCP config manually.');
     return { kind: 'skip', why: 'manual config required' };
   }
   const r = runSpawn('claude', ['mcp', 'add', 'caveman-shrink', '--', 'npx', '-y', MCP_SHRINK_PKG], null, opts.dryRun);
   if ((r.status || 0) === 0) {
     note('    registered. Wrap an upstream by editing the mcpServers entry — see:');
-    note(`    https://github.com/${REPO}/tree/main/mcp-servers/caveman-shrink`);
+    note(`    https://github.com/${REPO}/tree/main/src/mcp-servers/caveman-shrink`);
     return { kind: 'ok' };
   }
   return { kind: 'fail', why: 'claude mcp add failed' };
@@ -562,7 +562,7 @@ function installMcpShrink(ctx) {
 // ── Init writers (per-repo rule files) ────────────────────────────────────
 function runInit(ctx) {
   const { note, warn, opts, repoRoot } = ctx;
-  const local = repoRoot && path.join(repoRoot, 'tools/caveman-init.js');
+  const local = repoRoot && path.join(repoRoot, 'src/tools/caveman-init.js');
   const args = [process.cwd()];
   if (opts.dryRun) args.push('--dry-run');
   if (opts.force)  args.push('--force');
@@ -811,7 +811,7 @@ async function main() {
   if (opts.withInit) {
     ctx.say(`→ writing per-repo IDE rule files into ${process.cwd()} (--with-init)`);
     if (runInit(ctx)) ctx.results.installed.push(`caveman-init (${process.cwd()})`);
-    else              ctx.results.failed.push(['caveman-init', 'tools/caveman-init.js failed']);
+    else              ctx.results.failed.push(['caveman-init', 'src/tools/caveman-init.js failed']);
     process.stdout.write('\n');
   } else if (ctx.results.installed.length || ctx.results.skipped.length) {
     ctx.note('  tip: re-run inside a repo with --all (or --with-init) to also write per-repo');

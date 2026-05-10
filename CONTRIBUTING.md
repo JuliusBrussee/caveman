@@ -38,12 +38,12 @@ copies live under `plugins/caveman/` and similar mirror dirs — those are
 | Caveman quick-reference card | `skills/caveman-help/SKILL.md` |
 | Cavecrew decision guide (when to delegate to subagents) | `skills/cavecrew/SKILL.md` |
 | cavecrew subagent definitions | `agents/cavecrew-investigator.md`, `agents/cavecrew-builder.md`, `agents/cavecrew-reviewer.md` |
-| Auto-activation rule body (Cursor/Windsurf/Cline/Copilot) | `rules/caveman-activate.md` |
+| Auto-activation rule body (Cursor/Windsurf/Cline/Copilot) | `src/rules/caveman-activate.md` |
 | Add support for a new agent | `bin/install.js` (PROVIDERS array) |
-| Per-repo init script (drops rule files into a user's repo) | `tools/caveman-init.js` |
-| Claude Code hooks | `hooks/caveman-activate.js`, `hooks/caveman-mode-tracker.js`, `hooks/caveman-config.js`, `hooks/caveman-statusline.sh`, `hooks/caveman-statusline.ps1` |
+| Per-repo init script (drops rule files into a user's repo) | `src/tools/caveman-init.js` |
+| Claude Code hooks | `src/hooks/caveman-activate.js`, `src/hooks/caveman-mode-tracker.js`, `src/hooks/caveman-config.js`, `src/hooks/caveman-statusline.sh`, `src/hooks/caveman-statusline.ps1` |
 | Settings.json read/write helpers | `bin/lib/settings.js` |
-| MCP shrink server | `mcp-servers/caveman-shrink/` |
+| MCP shrink server | `src/mcp-servers/caveman-shrink/` |
 
 That's it. Every other markdown file with `SKILL.md` in the path is a copy.
 
@@ -174,10 +174,10 @@ PR descriptions don't need to be long. Caveman style fine. Just say what change,
 
 A handful of invariants that have bitten us before. Keep them.
 
-- **Hooks must silent-fail on filesystem errors.** A `try/catch` that swallows the error is correct here. A hook that throws blocks Claude Code session start — that's user-facing breakage. See existing patterns in `hooks/caveman-activate.js`.
+- **Hooks must silent-fail on filesystem errors.** A `try/catch` that swallows the error is correct here. A hook that throws blocks Claude Code session start — that's user-facing breakage. See existing patterns in `src/hooks/caveman-activate.js`.
 - **Settings.json reads and writes go through `bin/lib/settings.js`.** It tolerates JSONC comments. Direct `JSON.parse` on a user's `settings.json` will crash on a single `// comment`.
 - **Validate hook entries before writing.** Use `validateHookFields()` in `bin/lib/settings.js`. Claude Code's Zod schema silently discards the **entire** `settings.json` on a single bad hook entry — one malformed write poisons the user's whole config.
-- **Symlink-safe flag writes via `safeWriteFlag()`** in `hooks/caveman-config.js`. The flag file lives at a predictable path under `$CLAUDE_CONFIG_DIR/`; without `O_NOFOLLOW` and a parent-symlink check, a local attacker can clobber any file the user can write.
+- **Symlink-safe flag writes via `safeWriteFlag()`** in `src/hooks/caveman-config.js`. The flag file lives at a predictable path under `$CLAUDE_CONFIG_DIR/`; without `O_NOFOLLOW` and a parent-symlink check, a local attacker can clobber any file the user can write.
 - **Honor `CLAUDE_CONFIG_DIR`.** Hooks, the installer, and the statusline scripts must respect it — never hardcode `~/.claude`.
 - **`install.sh` and `install.ps1` at the repo root are 30-line shims** that delegate to `bin/install.js`. Don't re-add per-OS install logic to them. Quoting bugs that way lie.
 
@@ -186,7 +186,7 @@ A handful of invariants that have bitten us before. Keep them.
 ## Ideas
 
 See [issues labeled `good first issue`](../../issues?q=label%3A%22good+first+issue%22)
-for starter tasks. Or grep `TODO` / `FIXME` in `hooks/`, `bin/`, `tools/` —
+for starter tasks. Or grep `TODO` / `FIXME` in `src/hooks/`, `bin/`, `src/tools/` —
 each one is a real lead.
 
 Caveman like contribution. You bring rock, caveman put rock in pile. Pile

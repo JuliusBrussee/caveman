@@ -32,7 +32,7 @@ class HookScriptTests(unittest.TestCase):
             (hooks_dir / "caveman-activate.js").write_text("")
             (hooks_dir / "caveman-mode-tracker.js").write_text("")
 
-            self.run_cmd(["bash", "hooks/install.sh"], home)
+            self.run_cmd(["bash", "src/hooks/install.sh"], home)
 
             statusline = hooks_dir / "caveman-statusline.sh"
             self.assertTrue(statusline.exists(), "upgrade should install statusline script")
@@ -77,7 +77,7 @@ class HookScriptTests(unittest.TestCase):
             }
             (claude_dir / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
 
-            result = self.run_cmd(["bash", "hooks/install.sh"], home)
+            result = self.run_cmd(["bash", "src/hooks/install.sh"], home)
 
             self.assertNotIn("Nothing to do", result.stdout)
 
@@ -125,7 +125,7 @@ class HookScriptTests(unittest.TestCase):
             }
             (claude_dir / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
 
-            self.run_cmd(["bash", "hooks/uninstall.sh"], home)
+            self.run_cmd(["bash", "src/hooks/uninstall.sh"], home)
 
             updated = json.loads((claude_dir / "settings.json").read_text())
             self.assertEqual(
@@ -151,7 +151,7 @@ class HookScriptTests(unittest.TestCase):
                 + "\n"
             )
 
-            result = self.run_cmd(["node", "hooks/caveman-activate.js"], home)
+            result = self.run_cmd(["node", "src/hooks/caveman-activate.js"], home)
 
             self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
             self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")

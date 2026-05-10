@@ -1,7 +1,7 @@
 # caveman — uninstaller for the SessionStart + UserPromptSubmit hooks (Windows PowerShell)
 # Removes: hook files in ~/.claude/hooks, settings.json entries, and the flag file
-# Usage: powershell -ExecutionPolicy Bypass -File hooks\uninstall.ps1
-#   or:  irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/uninstall.ps1 | iex
+# Usage: powershell -ExecutionPolicy Bypass -File src\hooks\uninstall.ps1
+#   or:  irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks/uninstall.ps1 | iex
 param()
 
 $ErrorActionPreference = "Stop"

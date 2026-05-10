@@ -179,7 +179,7 @@ For agents without hook system (Cursor, Windsurf, Cline, Copilot, etc.), drop a 
 
 ```bash
 # In your repo root
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/rules/caveman-activate.md \
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/rules/caveman-activate.md \
   > .cursor/rules/caveman.mdc   # or .windsurf/rules/, .clinerules/, .github/copilot-instructions.md
 ```
 

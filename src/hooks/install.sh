@@ -1,9 +1,9 @@
 #!/bin/bash
 # caveman — one-command hook installer for Claude Code
 # Installs: SessionStart hook (auto-load rules) + UserPromptSubmit hook (mode tracking)
-# Usage: bash hooks/install.sh
-#   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.sh)
-#   or:  bash hooks/install.sh --force   (re-install over existing hooks)
+# Usage: bash src/hooks/install.sh
+#   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks/install.sh)
+#   or:  bash src/hooks/install.sh --force   (re-install over existing hooks)
 set -e
 
 FORCE=0
@@ -85,7 +85,7 @@ if [ "$FORCE" -eq 0 ]; then
   if [ "$ALL_FILES_PRESENT" -eq 1 ] && [ "$HOOKS_WIRED" -eq 1 ] && [ "$HAS_STATUSLINE" -eq 1 ]; then
     ALREADY_INSTALLED=1
     echo "Caveman hooks already installed in $HOOKS_DIR"
-    echo "  Re-run with --force to overwrite: bash hooks/install.sh --force"
+    echo "  Re-run with --force to overwrite: bash src/hooks/install.sh --force"
     echo ""
   fi
 fi
@@ -181,7 +181,7 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
       console.log('  Statusline badge already configured.');
     } else {
       console.log('  NOTE: Existing statusline detected — caveman badge NOT added.');
-      console.log('        See hooks/README.md to add the badge to your existing statusline.');
+      console.log('        See src/hooks/README.md to add the badge to your existing statusline.');
     }
   }
 

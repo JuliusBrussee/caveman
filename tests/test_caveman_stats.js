@@ -9,8 +9,8 @@ const assert = require('assert');
 const { execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const STATS = path.join(ROOT, 'hooks', 'caveman-stats.js');
-const TRACKER = path.join(ROOT, 'hooks', 'caveman-mode-tracker.js');
+const STATS = path.join(ROOT, 'src', 'hooks', 'caveman-stats.js');
+const TRACKER = path.join(ROOT, 'src', 'hooks', 'caveman-mode-tracker.js');
 
 let passed = 0;
 let failed = 0;
@@ -159,7 +159,7 @@ test('omits USD line when model is unknown', (tmp) => {
 });
 
 test('priceForModel matches by prefix across point releases', () => {
-  const { priceForModel } = require(path.join(ROOT, 'hooks', 'caveman-stats.js'));
+  const { priceForModel } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
   assert.strictEqual(priceForModel('claude-opus-4-7'), 75.00);
   assert.strictEqual(priceForModel('claude-opus-4-20250101'), 75.00);
   assert.strictEqual(priceForModel('claude-sonnet-4-7-20260315'), 15.00);
@@ -170,7 +170,7 @@ test('priceForModel matches by prefix across point releases', () => {
 });
 
 test('formatStats handles empty session gracefully', () => {
-  const { formatStats } = require(path.join(ROOT, 'hooks', 'caveman-stats.js'));
+  const { formatStats } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
   const out = formatStats({ outputTokens: 0, cacheReadTokens: 0, turns: 0, mode: 'full', model: null });
   assert.match(out, /No conversation yet/);
 });
@@ -323,7 +323,7 @@ test('omits memory line when no compressed pairs exist', (tmp) => {
 });
 
 test('skips pairs where compressed is not actually smaller', (tmp) => {
-  const { findCompressedPairs } = require(path.join(ROOT, 'hooks', 'caveman-stats.js'));
+  const { findCompressedPairs } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
   fs.writeFileSync(path.join(tmp, 'foo.original.md'), 'small');
   fs.writeFileSync(path.join(tmp, 'foo.md'), 'this is actually larger somehow');
   const pairs = findCompressedPairs([tmp]);
@@ -348,7 +348,7 @@ test('writes statusline suffix file after a stats run', (tmp) => {
 });
 
 test('humanizeTokens formats small/medium/large correctly', () => {
-  const { humanizeTokens } = require(path.join(ROOT, 'hooks', 'caveman-stats.js'));
+  const { humanizeTokens } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
   assert.strictEqual(humanizeTokens(0), '0');
   assert.strictEqual(humanizeTokens(42), '42');
   assert.strictEqual(humanizeTokens(2786), '2.8k');
@@ -361,7 +361,7 @@ test('statusline.sh appends savings when CAVEMAN_STATUSLINE_SAVINGS=1', (tmp) =>
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
   fs.writeFileSync(path.join(claudeDir, '.caveman-statusline-suffix'), '⛏ 2.8k');
-  const out = execFileSync('bash', [path.join(ROOT, 'hooks', 'caveman-statusline.sh')], {
+  const out = execFileSync('bash', [path.join(ROOT, 'src', 'hooks', 'caveman-statusline.sh')], {
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_STATUSLINE_SAVINGS: '1' },
   });
@@ -377,7 +377,7 @@ test('statusline.sh renders savings by default when env var is unset', (tmp) => 
   fs.writeFileSync(path.join(claudeDir, '.caveman-statusline-suffix'), '⛏ 2.8k');
   const env = { ...process.env, CLAUDE_CONFIG_DIR: claudeDir };
   delete env.CAVEMAN_STATUSLINE_SAVINGS;
-  const out = execFileSync('bash', [path.join(ROOT, 'hooks', 'caveman-statusline.sh')], {
+  const out = execFileSync('bash', [path.join(ROOT, 'src', 'hooks', 'caveman-statusline.sh')], {
     encoding: 'utf8', env,
   });
   assert.match(out, /\[CAVEMAN\]/);
@@ -390,7 +390,7 @@ test('statusline.sh omits savings when CAVEMAN_STATUSLINE_SAVINGS=0', (tmp) => {
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
   fs.writeFileSync(path.join(claudeDir, '.caveman-statusline-suffix'), '⛏ 2.8k');
-  const out = execFileSync('bash', [path.join(ROOT, 'hooks', 'caveman-statusline.sh')], {
+  const out = execFileSync('bash', [path.join(ROOT, 'src', 'hooks', 'caveman-statusline.sh')], {
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_STATUSLINE_SAVINGS: '0' },
   });
@@ -407,7 +407,7 @@ test('statusline.sh omits savings when suffix file is missing (fresh install)', 
   // /caveman-stats has run. Default-on must NOT fabricate a number.
   const env = { ...process.env, CLAUDE_CONFIG_DIR: claudeDir };
   delete env.CAVEMAN_STATUSLINE_SAVINGS;
-  const out = execFileSync('bash', [path.join(ROOT, 'hooks', 'caveman-statusline.sh')], {
+  const out = execFileSync('bash', [path.join(ROOT, 'src', 'hooks', 'caveman-statusline.sh')], {
     encoding: 'utf8', env,
   });
   assert.match(out, /\[CAVEMAN\]/);
@@ -421,7 +421,7 @@ test('statusline.sh strips control bytes from suffix', (tmp) => {
   fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
   // Plant a malicious suffix with ANSI escape (control byte \x1b).
   fs.writeFileSync(path.join(claudeDir, '.caveman-statusline-suffix'), '\x1b[31mEVIL');
-  const out = execFileSync('bash', [path.join(ROOT, 'hooks', 'caveman-statusline.sh')], {
+  const out = execFileSync('bash', [path.join(ROOT, 'src', 'hooks', 'caveman-statusline.sh')], {
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_STATUSLINE_SAVINGS: '1' },
   });
@@ -432,7 +432,7 @@ test('statusline.sh strips control bytes from suffix', (tmp) => {
 
 test('appendFlag is symlink-safe (refuses symlinked target)', (tmp) => {
   if (process.platform === 'win32') return; // symlink semantics differ
-  const { appendFlag } = require(path.join(ROOT, 'hooks', 'caveman-config.js'));
+  const { appendFlag } = require(path.join(ROOT, 'src', 'hooks', 'caveman-config.js'));
   const target = path.join(tmp, 'real-target');
   fs.writeFileSync(target, 'do-not-clobber\n');
   const linkPath = path.join(tmp, 'history.jsonl');

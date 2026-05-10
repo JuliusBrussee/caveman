@@ -1,9 +1,9 @@
 # caveman — one-command hook installer for Claude Code (Windows PowerShell)
 # Installs: SessionStart hook (auto-load rules) + UserPromptSubmit hook (mode tracking)
-# Usage: powershell -ExecutionPolicy Bypass -File hooks\install.ps1
-#   or:  powershell -ExecutionPolicy Bypass -File hooks\install.ps1 -Force
+# Usage: powershell -ExecutionPolicy Bypass -File src\hooks\install.ps1
+#   or:  powershell -ExecutionPolicy Bypass -File src\hooks\install.ps1 -Force
 #   or (remote, no -Force support via pipe):
-#        irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.ps1 | iex
+#        irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks/install.ps1 | iex
 #   Note: irm ... | iex cannot pass -Force. For force reinstall, save the file and run with -File.
 param(
     [switch]$Force
@@ -172,7 +172,7 @@ if (!settings.statusLine) {
     console.log('  Statusline badge already configured.');
   } else {
     console.log('  NOTE: Existing statusline detected - caveman badge NOT added.');
-    console.log('        See hooks/README.md to add the badge to your existing statusline.');
+    console.log('        See src/hooks/README.md to add the badge to your existing statusline.');
   }
 }
 

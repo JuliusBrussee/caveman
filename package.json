@@ -23,11 +23,9 @@
   },
   "files": [
     "bin/",
-    "hooks/",
+    "src/",
     "agents/",
     "skills/",
-    "rules/",
-    "tools/",
     "plugins/",
     "commands/",
     "dist/caveman.skill",
