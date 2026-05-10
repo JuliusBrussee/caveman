@@ -71,7 +71,7 @@ jobs:
           cp agents/cavecrew-reviewer.md plugins/caveman/agents/cavecrew-reviewer.md
 
       - name: Rebuild caveman.skill ZIP
-        run: cd skills && zip -r ../caveman.skill caveman/
+        run: mkdir -p dist && cd skills && zip -r ../dist/caveman.skill caveman/
 
       - name: Sync auto-activation rules
         run: |
@@ -105,7 +105,7 @@ jobs:
             plugins/caveman/agents/cavecrew-reviewer.md \
             .cursor/skills/caveman/SKILL.md \
             .windsurf/skills/caveman/SKILL.md \
-            caveman.skill \
+            dist/caveman.skill \
             .clinerules/caveman.md \
             .github/copilot-instructions.md \
             .cursor/rules/caveman.mdc \

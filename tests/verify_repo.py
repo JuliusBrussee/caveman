@@ -148,7 +148,7 @@ def verify_synced_files() -> None:
             f"Rule copy mismatch: {copy}",
         )
 
-    with zipfile.ZipFile(ROOT / "caveman.skill") as archive:
+    with zipfile.ZipFile(ROOT / "dist" / "caveman.skill") as archive:
         ensure("caveman/SKILL.md" in archive.namelist(), "caveman.skill missing caveman/SKILL.md")
         ensure(
             archive.read("caveman/SKILL.md").decode("utf-8")
