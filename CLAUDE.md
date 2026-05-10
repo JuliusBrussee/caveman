@@ -23,6 +23,57 @@ Caveman makes AI coding agents respond in compressed caveman-style prose — cut
 
 ---
 
+## What lives where
+
+Post-cleanup layout. Sources of truth at the top, distribution mirrors below, build outputs in `dist/`, human docs alongside each skill.
+
+```
+caveman/
+├── README.md                    # Front door (product pitch)
+├── INSTALL.md                   # Per-agent install commands
+├── CONTRIBUTING.md              # Dev guide
+├── CLAUDE.md                    # This file (maintainer instructions)
+├── AGENTS.md / GEMINI.md        # Autodiscovery files (must stay at root)
+│
+├── install.sh / install.ps1     # 30-line shims → bin/install.js
+│
+├── bin/                         # Unified installer
+│   ├── install.js               # Single source for all 30+ agents (PROVIDERS array)
+│   └── lib/settings.js          # JSONC-tolerant settings.json reader/writer
+│
+├── skills/                      # ALL skills, single source of truth
+│   ├── caveman/{SKILL.md, README.md}
+│   ├── caveman-commit/{SKILL.md, README.md}
+│   ├── caveman-review/{SKILL.md, README.md}
+│   ├── caveman-help/{SKILL.md, README.md}
+│   ├── caveman-stats/{SKILL.md, README.md}
+│   ├── caveman-compress/{SKILL.md, README.md, scripts/}
+│   └── cavecrew/{SKILL.md, README.md}
+│
+├── agents/                      # cavecrew subagents (single source)
+├── hooks/                       # Claude Code hooks (installer reads here)
+├── rules/                       # Auto-activation rule body (single source)
+├── tools/                       # caveman-init.js (per-repo rule writer)
+├── mcp-servers/caveman-shrink/  # npm-published MCP middleware
+├── commands/                    # Codex/Gemini TOML command stubs
+│
+├── .claude-plugin/              # Claude Code plugin manifest (REQUIRED at root)
+├── plugins/caveman/             # Claude Code plugin distribution (CI-mirrored)
+│   ├── skills/                  # ← from skills/
+│   └── agents/                  # ← from agents/
+│
+├── dist/                        # Build artifacts (gitignored)
+│   └── caveman.skill            # ZIP of skills/caveman/, rebuilt by CI
+│
+├── tests/                       # All tests (Node + Python)
+├── benchmarks/                  # Real token measurements through Claude API
+├── evals/                       # Three-arm eval harness
+├── docs/                        # User-facing docs site
+└── .github/workflows/           # CI sync
+```
+
+---
+
 ## File structure and what owns what
 
 ### Single source of truth files — edit only these
@@ -30,11 +81,11 @@ Caveman makes AI coding agents respond in compressed caveman-style prose — cut
 | File | What it controls |
 |------|-----------------|
 | `skills/caveman/SKILL.md` | Caveman behavior: intensity levels, rules, wenyan mode, auto-clarity, persistence. Only file to edit for behavior changes. |
-| `rules/caveman-activate.md` | Always-on auto-activation rule body. CI injects into Cursor, Windsurf, Cline, Copilot rule files. Edit here, not agent-specific copies. |
+| `rules/caveman-activate.md` | Always-on auto-activation rule body. Consumed by `tools/caveman-init.js` when a user runs `npx caveman --only <agent>`. Edit here, not in any per-agent rule copy. |
 | `skills/caveman-commit/SKILL.md` | Caveman commit message behavior. Fully independent skill. |
 | `skills/caveman-review/SKILL.md` | Caveman code review behavior. Fully independent skill. |
 | `skills/caveman-help/SKILL.md` | Quick-reference card. One-shot display, not a persistent mode. |
-| `caveman-compress/SKILL.md` | Compress sub-skill behavior. |
+| `skills/caveman-compress/SKILL.md` | Compress sub-skill behavior. |
 | `skills/cavecrew/SKILL.md` | Cavecrew decision guide — when to delegate to caveman subagents vs vanilla. Edit only here. |
 | `agents/cavecrew-investigator.md` | Read-only locator subagent (haiku). Output contract: `path:line — symbol — note`. |
 | `agents/cavecrew-builder.md` | Surgical 1-2 file editor subagent. Refuses 3+ file scope. |
@@ -42,35 +93,36 @@ Caveman makes AI coding agents respond in compressed caveman-style prose — cut
 
 ### Auto-generated / auto-synced — do not edit directly
 
-Overwritten by CI on push to main when sources change. Edits here lost.
+We removed the agent-specific dotdir mirrors at the repo root (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`, root `caveman/SKILL.md`). They were never read by the installer — only used to self-apply caveman to this repo when a maintainer opened it in Cursor/Windsurf/Cline. Devs who want caveman in their editor while editing this repo should run `npx caveman --only <agent>` once. The installer generates per-user agent rule files from `rules/caveman-activate.md` via `tools/caveman-init.js`.
+
+What's left is the Claude Code plugin distribution (required by the plugin loader) and the release ZIP.
 
 | File | Synced from |
 |------|-------------|
-| `caveman/SKILL.md` | `skills/caveman/SKILL.md` |
 | `plugins/caveman/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
-| `.cursor/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
-| `.windsurf/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
-| `caveman.skill` | ZIP of `skills/caveman/` directory |
-| `.clinerules/caveman.md` | `rules/caveman-activate.md` |
-| `.github/copilot-instructions.md` | `rules/caveman-activate.md` |
-| `.cursor/rules/caveman.mdc` | `rules/caveman-activate.md` + Cursor frontmatter |
-| `.windsurf/rules/caveman.md` | `rules/caveman-activate.md` + Windsurf frontmatter |
+| `plugins/caveman/skills/caveman-compress/SKILL.md` (+ `scripts/`) | `skills/caveman-compress/SKILL.md` (+ `scripts/`) |
 | `plugins/caveman/skills/cavecrew/SKILL.md` | `skills/cavecrew/SKILL.md` |
 | `plugins/caveman/agents/cavecrew-*.md` | `agents/cavecrew-*.md` |
+| `dist/caveman.skill` | ZIP of `skills/caveman/` directory (gitignored; rebuilt by CI on release) |
+
+Skills not in this table (`caveman-commit`, `caveman-review`, `caveman-help`, `caveman-stats`) are not mirrored into the Claude Code plugin distribution. They reach Claude Code through the standalone hook + skill install path, and reach other agents via `npx skills add`.
 
 ---
 
 ## CI sync workflow
 
-`.github/workflows/sync-skill.yml` triggers on main push when `skills/caveman/SKILL.md` or `rules/caveman-activate.md` changes.
+`.github/workflows/sync-skill.yml` triggers on main push when `skills/**/SKILL.md`, `agents/cavecrew-*.md`, or `rules/caveman-activate.md` changes.
 
 What it does:
-1. Copies `skills/caveman/SKILL.md` to all agent-specific SKILL.md locations
-2. Rebuilds `caveman.skill` as a ZIP of `skills/caveman/`
-3. Rebuilds all agent rule files from `rules/caveman-activate.md`, prepending agent-specific frontmatter (Cursor needs `alwaysApply: true`, Windsurf needs `trigger: always_on`)
-4. Commits and pushes with `[skip ci]` to avoid loops
+1. Copies `skills/caveman/SKILL.md` and `skills/cavecrew/SKILL.md` into their `plugins/caveman/skills/<name>/` mirrors so the Claude Code plugin loader sees the latest behavior.
+2. Copies `skills/caveman-compress/SKILL.md` and its `scripts/` into `plugins/caveman/skills/caveman-compress/`.
+3. Copies `agents/cavecrew-*.md` into `plugins/caveman/agents/`.
+4. Rebuilds `dist/caveman.skill` (ZIP of `skills/caveman/`) for the release artifact.
+5. Commits and pushes with `[skip ci]` to avoid loops.
 
 CI bot commits as `github-actions[bot]`. After PR merge, wait for workflow before declaring release complete.
+
+The old steps that mirrored SKILL.md and rules into root dotdirs (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`) are gone — those mirrors no longer exist. The old `caveman-compress/` → `skills/compress/` rename-on-sync is also gone now that compress lives at `skills/caveman-compress/`.
 
 ---
 
@@ -139,15 +191,19 @@ Configured in `settings.json` under `statusLine.command`. PowerShell counterpart
 
 **Plugin install** — hooks wired automatically by plugin system.
 
-**Standalone install** — `hooks/install.sh` (macOS/Linux) or `hooks/install.ps1` (Windows) copies hook files into `~/.claude/hooks/` and patches `~/.claude/settings.json` to register SessionStart and UserPromptSubmit hooks plus statusline.
+**Standalone install** — `bin/install.js` (the unified Node installer) copies hook files into `$CLAUDE_CONFIG_DIR/hooks/` and merges SessionStart + UserPromptSubmit + statusline into `settings.json`. Uses the JSONC-tolerant helpers in `bin/lib/settings.js` so a commented `settings.json` no longer crashes the merge. Defensive `validateHookFields` runs before every write to prevent a single malformed hook from poisoning the entire file (Claude Code Zod silently discards the whole `settings.json` on schema mismatch).
 
-**Uninstall** — `hooks/uninstall.sh` / `hooks/uninstall.ps1` removes hook files and patches settings.json.
+The `install.sh` / `install.ps1` shims at the repo root delegate to `bin/install.js` via `node` (local clone) or `npx -y github:JuliusBrussee/caveman` (curl|bash). No legacy fallback path remains — earlier `install.sh.legacy` / `install.ps1.legacy` files were removed.
+
+**Uninstall** — `npx -y github:JuliusBrussee/caveman -- --uninstall` (or `node bin/install.js --uninstall` from a clone). Strips caveman hook entries from `settings.json` via substring marker `caveman`, deletes hook files, and removes the Claude plugin / Gemini extension. Skill installs done via `npx skills add` must be removed via the IDE's skill manager (we don't track them).
 
 ---
 
 ## Skill system
 
 Skills = Markdown files with YAML frontmatter consumed by Claude Code's skill/plugin system and by `npx skills` for other agents.
+
+Each skill has a human-facing `README.md` alongside the LLM-facing `SKILL.md`. The README explains what the skill does for users browsing GitHub; the SKILL.md is the prompt body the agent loads. Don't merge them — different audiences, different formats.
 
 ### Intensity levels
 
@@ -159,7 +215,9 @@ Caveman drops to normal prose for: security warnings, irreversible action confir
 
 ### caveman-compress
 
-Sub-skill in `caveman-compress/SKILL.md`. Takes file path, compresses prose to caveman style, writes to original path, saves backup at `<filename>.original.md`. Validates headings, code blocks, URLs, file paths, commands preserved. Retries up to 2 times on failure with targeted patches only. Requires Python 3.10+.
+Sub-skill in `skills/caveman-compress/SKILL.md`. Takes file path, compresses prose to caveman style, writes to original path, saves backup at `<filename>.original.md`. Validates headings, code blocks, URLs, file paths, commands preserved. Retries up to 2 times on failure with targeted patches only. Requires Python 3.10+.
+
+The slash command is `/caveman-compress` everywhere — same name in plugin and standalone install. CI no longer renames the directory on sync (the old `caveman-compress/` → `skills/compress/` sed rename is gone now that the source lives at `skills/caveman-compress/`).
 
 ### caveman-commit / caveman-review
 
@@ -176,19 +234,19 @@ How caveman reaches each agent type:
 | Claude Code | Plugin (hooks + skills) or standalone hooks | Yes — SessionStart hook injects rules |
 | Codex | Plugin in `plugins/caveman/` plus repo `.codex/hooks.json` and `.codex/config.toml` | Yes on macOS/Linux — SessionStart hook |
 | Gemini CLI | Extension with `GEMINI.md` context file | Yes — context file loads every session |
-| Cursor | `.cursor/rules/caveman.mdc` with `alwaysApply: true` | Yes — always-on rule |
-| Windsurf | `.windsurf/rules/caveman.md` with `trigger: always_on` | Yes — always-on rule |
-| Cline | `.clinerules/caveman.md` (auto-discovered) | Yes — Cline injects all .clinerules files |
-| Copilot | `.github/copilot-instructions.md` + `AGENTS.md` | Yes — repo-wide instructions |
+| Cursor | Per-user `.cursor/rules/caveman.mdc` written by `tools/caveman-init.js` | Yes — always-on rule (after `npx caveman --only cursor`) |
+| Windsurf | Per-user `.windsurf/rules/caveman.md` written by `tools/caveman-init.js` | Yes — always-on rule (after `npx caveman --only windsurf`) |
+| Cline | Per-user `.clinerules/caveman.md` written by `tools/caveman-init.js` | Yes — Cline auto-discovers `.clinerules/` |
+| Copilot | Per-user `.github/copilot-instructions.md` written by `tools/caveman-init.js` + `AGENTS.md` | Yes — repo-wide instructions |
 | Others (Junie, Trae, Warp, Tabnine, Mistral, Qwen, Devin, Droid, ForgeCode, Bob, Crush, iFlow, OpenHands, Qoder, Rovo Dev, Replit, Antigravity, …) | `npx skills add JuliusBrussee/caveman -a <profile>` | No — user must say `/caveman` each session |
 
-For agents without hook systems, minimal always-on snippet lives in README under "Want it always on?" — keep current with `rules/caveman-activate.md`.
+For agents without hook systems, the always-on snippet lives in `INSTALL.md`'s "Want it always on?" section — keep current with `rules/caveman-activate.md`.
 
-**Adding a new agent.** When extending `install.sh` / `install.ps1`:
+**Adding a new agent.** Edit the `PROVIDERS` array in `bin/install.js` — single source of truth, no more bash/PS1 dual-source drift. Each entry has `id`, `label`, `mech`, `detect` (clause spec like `command:foo||dir:$HOME/x`), optional `profile` (vercel-labs/skills slug), optional `soft: true` (config-dir-only detection).
 
 1. The profile slug must exist in upstream [vercel-labs/skills](https://github.com/vercel-labs/skills). Verify against the README before merging — wrong slugs cause `npx skills add` to fail at runtime, not at install-script load.
-2. `install.ps1` is **not** auto-generated. It is a parallel source of truth, hand-kept in sync with `install.sh`. Any new agent row must land in both: `install.sh`'s `PROVIDER_*` arrays + `SKILLS_AGENTS` table, and `install.ps1`'s `$Providers` array. Run `bash install.sh --list` and `pwsh install.ps1 -List` and confirm the two outputs agree.
-3. Soft probes (config-dir-only) are fine but tag them with `PROVIDER_SOFT=1` (sh) / `soft=1` (ps1). They render with `(soft)` in `--list` so users know detection is best-effort.
+2. Run `node bin/install.js --list` to confirm the new row renders correctly.
+3. Soft probes (config-dir-only) are fine but tag them with `soft: true`. They render with `(soft)` in `--list` so users know detection is best-effort.
 
 ---
 
@@ -219,11 +277,16 @@ To reproduce: `uv run python benchmarks/run.py` (needs `ANTHROPIC_API_KEY` in `.
 
 ## Key rules for agents working here
 
-- Edit `skills/caveman/SKILL.md` for behavior changes. Never edit synced copies.
-- Edit `rules/caveman-activate.md` for auto-activation rule changes. Never edit agent-specific rule copies.
+- Edit `skills/<name>/SKILL.md` for behavior changes. Never edit synced copies under `plugins/caveman/skills/`.
+- Edit `rules/caveman-activate.md` for auto-activation rule changes. Never edit any per-agent rule copy a user has on their machine.
+- Per-skill human docs live in `skills/<name>/README.md`. The LLM-facing body is in `SKILL.md`. Don't merge them — different audiences.
+- Build artifacts go in `dist/`. Never check files into `dist/` manually — CI rebuilds them on push, and `dist/` is gitignored.
 - README most important file for user-facing impact. Optimize for non-technical readers. Preserve caveman voice.
+- `INSTALL.md` is the per-agent install reference. Keep the install table in `README.md` short and link out to `INSTALL.md` for the full matrix.
 - Benchmark and eval numbers must be real. Never fabricate or estimate.
 - CI workflow commits back to main after merge. Account for when checking branch state.
 - Hook files must silent-fail on all filesystem errors. Never let hook crash block session start.
 - Any new flag file write must go through `safeWriteFlag()` in `caveman-config.js`. Direct `fs.writeFileSync` on predictable user-owned paths reopens the symlink-clobber attack surface.
-- Hooks must respect `CLAUDE_CONFIG_DIR` env var, not hardcode `~/.claude`. Same for `install.sh` / `install.ps1` / statusline scripts.
+- Hooks must respect `CLAUDE_CONFIG_DIR` env var, not hardcode `~/.claude`. Same for `bin/install.js` / statusline scripts.
+- `bin/install.js` is the only installer source. `install.sh` / `install.ps1` at repo root are 30-line shims that delegate to it. Never re-add per-OS install logic to the shims — that's how we got the Windows quoting bug (#249).
+- Any settings.json read in installer or hooks must go through `bin/lib/settings.js` `readSettings()` so JSONC comments don't crash the merge. Any settings.json write must run through `validateHookFields()` first.
