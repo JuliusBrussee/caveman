@@ -36,7 +36,7 @@ fi
 
 # If we're inside the repo clone, run the local installer directly — saves
 # the npx round-trip and keeps offline installs working.
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || here=""
+here="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd)" || here=""
 if [ -n "$here" ] && [ -f "$here/bin/install.js" ]; then
   exec node "$here/bin/install.js" "$@"
 fi
@@ -47,4 +47,8 @@ if ! command -v npx >/dev/null 2>&1; then
   exit 1
 fi
 
-exec npx -y "github:$REPO" -- "$@"
+if [ $# -gt 0 ]; then
+  exec npx -y "github:$REPO" -- "$@"
+else
+  exec npx -y "github:$REPO"
+fi
