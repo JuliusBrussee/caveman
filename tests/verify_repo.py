@@ -109,7 +109,7 @@ def verify_skill_frontmatter_upload_compatibility() -> None:
         ROOT / "skills/caveman-commit/SKILL.md",
         ROOT / "skills/caveman-help/SKILL.md",
         ROOT / "skills/caveman-review/SKILL.md",
-        ROOT / "caveman-compress/SKILL.md",
+        ROOT / "skills/caveman-compress/SKILL.md",
     ]
     for path in skill_paths:
         description = _frontmatter_description(path)
@@ -210,7 +210,7 @@ def verify_powershell_static() -> None:
 
 
 def load_compress_modules():
-    sys.path.insert(0, str(ROOT / "caveman-compress"))
+    sys.path.insert(0, str(ROOT / "skills/caveman-compress"))
     import scripts.benchmark  # noqa: F401
     import scripts.cli as cli
     import scripts.compress  # noqa: F401
@@ -241,8 +241,8 @@ def verify_compress_cli() -> None:
     section("Compress CLI")
 
     skip_result = run(
-        ["python3", "-m", "scripts", "../hooks/install.sh"],
-        cwd=ROOT / "caveman-compress",
+        ["python3", "-m", "scripts", "../../hooks/install.sh"],
+        cwd=ROOT / "skills/caveman-compress",
         check=False,
     )
     ensure(skip_result.returncode == 0, "compress CLI skip path should exit 0")
@@ -253,8 +253,8 @@ def verify_compress_cli() -> None:
     )
 
     missing_result = run(
-        ["python3", "-m", "scripts", "../does-not-exist.md"],
-        cwd=ROOT / "caveman-compress",
+        ["python3", "-m", "scripts", "../../does-not-exist.md"],
+        cwd=ROOT / "skills/caveman-compress",
         check=False,
     )
     ensure(missing_result.returncode == 1, "compress CLI missing-file path should exit 1")
