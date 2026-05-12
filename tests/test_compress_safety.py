@@ -80,6 +80,54 @@ class CompressSafetyTests(unittest.TestCase):
             backup = Path(tmp) / "task.original.md"
             self.assertEqual(backup.read_text(), original)
 
+    def test_no_backup_skips_companion_file_on_success(self):
+        """--no-backup must not leave `.original.md` next to the input."""
+        with tempfile.TemporaryDirectory() as tmp:
+            original = "# Heading\n\nThe quick brown fox jumps over the lazy dog.\n"
+            compressed = "# Heading\n\nFox jump dog.\n"
+            path = self._file_with(Path(tmp), original)
+            with mock.patch.object(compress_mod, "call_claude", return_value=compressed), \
+                 mock.patch.object(compress_mod, "validate") as v:
+                v.return_value = mock.Mock(is_valid=True, errors=[], warnings=[])
+                ok = compress_mod.compress_file(path, no_backup=True)
+            self.assertTrue(ok)
+            self.assertEqual(path.read_text(), compressed)
+            self.assertFalse(
+                (Path(tmp) / "task.original.md").exists(),
+                "no_backup=True must NOT leave .original.md next to the input",
+            )
+
+    def test_no_backup_cleans_tempfile_when_call_claude_raises(self):
+        """--no-backup must not orphan the tempfile on exception.
+
+        Reviewer flagged: when no_backup=True, an exception during the
+        Claude call / validation / write leaves the NamedTemporaryFile
+        behind in /tmp. The cleanup must live in finally so it runs on
+        every exit path, including unexpected exceptions.
+        """
+        captured: list[Path] = []
+        real_named_tempfile = tempfile.NamedTemporaryFile
+
+        def spy_named_tempfile(*args, **kwargs):
+            handle = real_named_tempfile(*args, **kwargs)
+            captured.append(Path(handle.name))
+            return handle
+
+        with tempfile.TemporaryDirectory() as tmp:
+            original = "# Heading\n\nProse to compress.\n"
+            path = self._file_with(Path(tmp), original)
+            with mock.patch.object(compress_mod, "call_claude",
+                                   side_effect=RuntimeError("network exploded")), \
+                 mock.patch("tempfile.NamedTemporaryFile", side_effect=spy_named_tempfile):
+                with self.assertRaises(RuntimeError):
+                    compress_mod.compress_file(path, no_backup=True)
+
+        self.assertEqual(len(captured), 1, "expected exactly one tempfile to be created")
+        self.assertFalse(
+            captured[0].exists(),
+            f"tempfile {captured[0]} must be unlinked even when call_claude raises",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

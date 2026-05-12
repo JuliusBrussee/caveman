@@ -152,7 +152,7 @@ Return ONLY the fixed compressed file. No explanation.
 # ---------- Core Logic ----------
 
 
-def compress_file(filepath: Path) -> bool:
+def compress_file(filepath: Path, no_backup: bool = False) -> bool:
     # Resolve and validate path
     filepath = filepath.resolve()
     MAX_FILE_SIZE = 500_000  # 500KB
@@ -180,75 +180,100 @@ def compress_file(filepath: Path) -> bool:
         return False
 
     original_text = filepath.read_text(errors="ignore")
-    backup_path = filepath.with_name(filepath.stem + ".original.md")
 
     if not original_text.strip():
         print("❌ Refusing to compress: file is empty or whitespace-only.")
         return False
 
-    # Check if backup already exists to prevent accidental overwriting
-    if backup_path.exists():
-        print(f"⚠️ Backup file already exists: {backup_path}")
-        print("The original backup may contain important content.")
-        print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
-        return False
-
-    # Step 1: Compress
-    print("Compressing with Claude...")
-    compressed = call_claude(build_compress_prompt(original_text))
-
-    if compressed is None or not compressed.strip():
-        print("❌ Compression aborted: Claude returned an empty response.")
-        print("   Original file is untouched (no backup created).")
-        return False
-
-    if compressed.strip() == original_text.strip():
-        print("❌ Compression aborted: output is identical to input.")
-        print("   Likely causes: Claude refused, returned the prompt verbatim, or the file is")
-        print("   already in caveman form. Original file is untouched (no backup created).")
-        return False
-
-    # Save original as backup, then verify the backup readback before
-    # touching the input file. If the filesystem dropped bytes (encoding,
-    # antivirus, disk full), unlink the bad backup and abort instead of
-    # leaving the user with a corrupt backup + compressed primary.
-    backup_path.write_text(original_text)
-    backup_readback = backup_path.read_text(errors="ignore")
-    if backup_readback != original_text:
-        print(f"❌ Backup write verification failed: {backup_path}")
-        print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
-        try:
-            backup_path.unlink()
-        except OSError:
-            pass
-        return False
-    filepath.write_text(compressed)
-
-    # Step 2: Validate + Retry
-    for attempt in range(MAX_RETRIES):
-        print(f"\nValidation attempt {attempt + 1}")
-
-        result = validate(backup_path, filepath)
-
-        if result.is_valid:
-            print("Validation passed")
-            break
-
-        print("❌ Validation failed:")
-        for err in result.errors:
-            print(f"   - {err}")
-
-        if attempt == MAX_RETRIES - 1:
-            # Restore original on failure
-            filepath.write_text(original_text)
-            backup_path.unlink(missing_ok=True)
-            print("❌ Failed after retries — original restored")
+    # When no_backup is True, the backup file validate() needs to diff against
+    # is routed through a tempfile outside the user's working directory. The
+    # tempfile is cleaned up in finally below regardless of how compress_file
+    # exits (success, validation failure, or unexpected exception), so an
+    # exception during Claude calls / writes / validation can never orphan it.
+    if no_backup:
+        import tempfile
+        tmp_fd = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".original.md", delete=False, encoding="utf-8"
+        )
+        tmp_fd.close()
+        backup_path = Path(tmp_fd.name)
+    else:
+        backup_path = filepath.with_name(filepath.stem + ".original.md")
+        # Check if backup already exists to prevent accidental overwriting
+        if backup_path.exists():
+            print(f"⚠️ Backup file already exists: {backup_path}")
+            print("The original backup may contain important content.")
+            print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
             return False
 
-        print("Fixing with Claude...")
-        compressed = call_claude(
-            build_fix_prompt(original_text, compressed, result.errors)
-        )
+    try:
+        # Step 1: Compress
+        print("Compressing with Claude...")
+        compressed = call_claude(build_compress_prompt(original_text))
+
+        if compressed is None or not compressed.strip():
+            print("❌ Compression aborted: Claude returned an empty response.")
+            print("   Original file is untouched (no backup created).")
+            return False
+
+        if compressed.strip() == original_text.strip():
+            print("❌ Compression aborted: output is identical to input.")
+            print("   Likely causes: Claude refused, returned the prompt verbatim, or the file is")
+            print("   already in caveman form. Original file is untouched (no backup created).")
+            return False
+
+        # Save original as backup, then verify the backup readback before
+        # touching the input file. If the filesystem dropped bytes (encoding,
+        # antivirus, disk full), unlink the bad backup and abort instead of
+        # leaving the user with a corrupt backup + compressed primary.
+        backup_path.write_text(original_text)
+        backup_readback = backup_path.read_text(errors="ignore")
+        if backup_readback != original_text:
+            print(f"❌ Backup write verification failed: {backup_path}")
+            print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
+            try:
+                backup_path.unlink()
+            except OSError:
+                pass
+            return False
         filepath.write_text(compressed)
 
-    return True
+        # Step 2: Validate + Retry
+        for attempt in range(MAX_RETRIES):
+            print(f"\nValidation attempt {attempt + 1}")
+
+            result = validate(backup_path, filepath)
+
+            if result.is_valid:
+                print("Validation passed")
+                break
+
+            print("❌ Validation failed:")
+            for err in result.errors:
+                print(f"   - {err}")
+
+            if attempt == MAX_RETRIES - 1:
+                # Restore original on failure
+                filepath.write_text(original_text)
+                if not no_backup:
+                    backup_path.unlink(missing_ok=True)
+                print("❌ Failed after retries — original restored")
+                return False
+
+            print("Fixing with Claude...")
+            compressed = call_claude(
+                build_fix_prompt(original_text, compressed, result.errors)
+            )
+            filepath.write_text(compressed)
+
+        return True
+    finally:
+        # When --no-backup is set, never leave the tempfile behind — not on
+        # success, not on validation failure, not on an unexpected exception
+        # from call_claude or filesystem writes. The default path leaves
+        # `.original.md` next to the input on success (the user wants it).
+        if no_backup:
+            try:
+                backup_path.unlink(missing_ok=True)
+            except OSError:
+                pass
