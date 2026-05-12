@@ -156,6 +156,36 @@ class HookScriptTests(unittest.TestCase):
             self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
             self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
 
+    def test_mode_tracker_accepts_axon(self):
+        """`/caveman axon` writes 'axon' to the flag file.
+
+        Without 'axon' in the VALID_MODES whitelist (caveman-config.js),
+        the tracker silently rejects the arg and leaves the flag untouched —
+        the user-visible bug behind issue #53.
+        """
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-axon-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["USERPROFILE"] = str(home)
+            env["CLAUDE_CONFIG_DIR"] = str(claude_dir)
+
+            subprocess.run(
+                ["node", "src/hooks/caveman-mode-tracker.js"],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                input='{"prompt":"/caveman axon"}',
+                capture_output=True,
+                check=True,
+            )
+
+            flag = claude_dir / ".caveman-active"
+            self.assertTrue(flag.exists(), "/caveman axon must write the flag file")
+            self.assertEqual(flag.read_text().strip(), "axon")
+
 
 if __name__ == "__main__":
     unittest.main()
