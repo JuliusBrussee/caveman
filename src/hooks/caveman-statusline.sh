@@ -8,7 +8,28 @@
 # Plugin users: Claude will offer to set this up on first session.
 # Standalone users: install.sh wires this automatically.
 
-FLAG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-active"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+GLOBAL_FLAG="$CLAUDE_DIR/.caveman-active"
+FLAG="$GLOBAL_FLAG"
+
+# Per-session flag: Claude Code pipes the hook event JSON on stdin. When
+# session_id is available AND jq is present, prefer the per-session flag so
+# concurrent sessions don't clobber each other's mode (issue #184). If
+# anything is missing — no stdin, no jq, malformed JSON — fall back to the
+# global flag, which the activate/tracker hooks also mirror on every write.
+if [ -t 0 ]; then
+  : # interactive shell — no JSON on stdin
+else
+  if command -v jq >/dev/null 2>&1; then
+    SESSION_ID=$(jq -r '.session_id // empty' 2>/dev/null | tr -cd 'a-zA-Z0-9-' | head -c 64)
+    if [ -n "$SESSION_ID" ]; then
+      PER_SESSION="$CLAUDE_DIR/.caveman-active-$SESSION_ID"
+      if [ -f "$PER_SESSION" ] && [ ! -L "$PER_SESSION" ]; then
+        FLAG="$PER_SESSION"
+      fi
+    fi
+  fi
+fi
 
 # Refuse symlinks — a local attacker could point the flag at ~/.ssh/id_rsa and
 # have the statusline render its bytes (including ANSI escape sequences) to

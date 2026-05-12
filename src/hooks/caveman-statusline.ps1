@@ -1,5 +1,36 @@
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }
-$Flag = Join-Path $ClaudeDir ".caveman-active"
+$GlobalFlag = Join-Path $ClaudeDir ".caveman-active"
+$Flag = $GlobalFlag
+
+# Per-session flag (issue #184): when Claude Code pipes the hook event JSON on
+# stdin, extract session_id and prefer the per-session flag so concurrent
+# sessions don't clobber each other's mode. Fall back to the global flag if
+# stdin is empty, JSON is malformed, or session_id is missing.
+if (-not [Console]::IsInputRedirected) {
+    # interactive shell — no JSON on stdin
+} else {
+    try {
+        $StdinJson = [Console]::In.ReadToEnd()
+        if ($StdinJson) {
+            $Event = $StdinJson | ConvertFrom-Json -ErrorAction Stop
+            $RawSid = $Event.session_id
+            if ($RawSid) {
+                $SessionId = ($RawSid -replace '[^a-zA-Z0-9-]', '')
+                if ($SessionId.Length -gt 64) { $SessionId = $SessionId.Substring(0, 64) }
+                if ($SessionId.Length -gt 0) {
+                    $PerSession = Join-Path $ClaudeDir ".caveman-active-$SessionId"
+                    if (Test-Path $PerSession) {
+                        $PerItem = Get-Item -LiteralPath $PerSession -Force -ErrorAction Stop
+                        if (-not ($PerItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                            $Flag = $PerSession
+                        }
+                    }
+                }
+            }
+        }
+    } catch {}
+}
+
 if (-not (Test-Path $Flag)) { exit 0 }
 
 # Refuse reparse points (symlinks / junctions) and oversized files. Without

@@ -9,23 +9,63 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag } = require('./caveman-config');
+const {
+  getDefaultMode, safeWriteFlag, getFlagPath, cleanupStaleFlags,
+} = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const flagPath = path.join(claudeDir, '.caveman-active');
+const globalFlagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
+
+// Read SessionStart stdin to extract session_id from the hook event JSON.
+// Use readFileSync(fd=0) ONLY when stdin is not an interactive TTY. An
+// interactive TTY would block forever waiting for input (reviewer concern
+// on the original PR). In Claude Code hook context, stdin is piped JSON
+// and closed by the parent, so the read returns immediately. In a manual
+// invocation from a shell with no pipe, stdin.isTTY is true and we skip
+// the read entirely — falling back to the global (per-user) flag.
+function readSessionIdFromStdin() {
+  try {
+    if (process.stdin.isTTY) return null;
+    const raw = fs.readFileSync(0, 'utf8');
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    return (data && typeof data.session_id === 'string') ? data.session_id : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+const sessionId = readSessionIdFromStdin();
+const flagPath = getFlagPath(claudeDir, sessionId);
 
 const mode = getDefaultMode();
 
-// "off" mode — skip activation entirely, don't write flag or emit rules
+// "off" mode — skip activation, delete BOTH the per-session AND the global
+// flag so a legacy statusline that reads only the global path doesn't display
+// stale caveman state (reviewer concern on the original PR).
 if (mode === 'off') {
   try { fs.unlinkSync(flagPath); } catch (e) {}
+  if (flagPath !== globalFlagPath) {
+    try { fs.unlinkSync(globalFlagPath); } catch (e) {}
+  }
   process.stdout.write('OK');
   process.exit(0);
 }
 
-// 1. Write flag file (symlink-safe)
+// Clean up flag files older than 24h. Abandoned sessions (terminal closed
+// without graceful exit) would otherwise accumulate one .caveman-active-<id>
+// per orphaned session. Best-effort, never blocks SessionStart.
+cleanupStaleFlags(claudeDir, 24);
+
+// 1. Write flag file (symlink-safe). Mirror to the global flag too so any
+// statusline that doesn't get session_id on stdin (older Claude Code, custom
+// integrations, the PowerShell statusline when jq-equivalent isn't available)
+// still shows the active mode.
 safeWriteFlag(flagPath, mode);
+if (flagPath !== globalFlagPath) {
+  safeWriteFlag(globalFlagPath, mode);
+}
 
 // 2. Emit full caveman ruleset, filtered to the active intensity level.
 //    The old 2-sentence summary was too weak — models drifted back to verbose

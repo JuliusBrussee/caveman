@@ -271,4 +271,47 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
+// Strip session_id to a safe filename component before joining it into a path.
+// Claude Code session_id is documented as a uuid, but we never want to trust
+// a path-segment value from untrusted input — keep only [a-zA-Z0-9-] and cap
+// the length so an attacker can't traverse out of the flag dir.
+function sanitizeSessionId(raw) {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw.replace(/[^a-zA-Z0-9-]/g, '');
+  if (!cleaned) return null;
+  return cleaned.slice(0, 64);
+}
+
+// Build the flag path for a given session. When sessionId is falsy, returns
+// the legacy global flag path. Concurrent sessions get distinct files so they
+// don't clobber each other's mode (issue #184).
+function getFlagPath(claudeDir, sessionId) {
+  const sid = sanitizeSessionId(sessionId);
+  const name = sid ? `.caveman-active-${sid}` : '.caveman-active';
+  return path.join(claudeDir, name);
+}
+
+// Remove .caveman-active-* files older than ageHours. Called from SessionStart
+// so abandoned sessions (closed terminal without graceful exit) don't accumulate
+// forever. Silent-fails on any filesystem error — this is best-effort cleanup.
+function cleanupStaleFlags(claudeDir, ageHours = 24) {
+  try {
+    const cutoff = Date.now() - ageHours * 3600 * 1000;
+    const entries = fs.readdirSync(claudeDir);
+    for (const name of entries) {
+      if (!name.startsWith('.caveman-active-')) continue;
+      const p = path.join(claudeDir, name);
+      try {
+        const st = fs.lstatSync(p);
+        if (!st.isFile()) continue;
+        if (st.mtimeMs < cutoff) fs.unlinkSync(p);
+      } catch (e) { /* skip this entry */ }
+    }
+  } catch (e) { /* dir missing or unreadable — best-effort */ }
+}
+
+module.exports = {
+  getDefaultMode, getConfigDir, getConfigPath, VALID_MODES,
+  safeWriteFlag, readFlag, appendFlag, readHistory,
+  sanitizeSessionId, getFlagPath, cleanupStaleFlags,
+};
