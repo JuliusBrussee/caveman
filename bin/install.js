@@ -443,7 +443,14 @@ function installViaSkills(ctx, prov) {
   const { say, opts, results } = ctx;
   results.detected++;
   say(`→ ${prov.label} detected`);
-  const r = runSpawn('npx', ['-y', 'skills', 'add', REPO, '-a', prov.profile], null, opts.dryRun);
+  // --yes --all: skip the upstream skill-selection TUI and confirmation prompts.
+  // Without these, `curl|bash` (no TTY on stdin) renders an empty checkbox list
+  // the user can't interact with, then exits 0 with zero skills installed —
+  // and our installer happily reports success. See issue #370.
+  // We've already decided which agent to install for via auto-detect / --only;
+  // making the user re-select 7 skills inside skills CLI would be redundant.
+  const args = ['-y', 'skills', 'add', REPO, '-a', prov.profile, '--yes', '--all'];
+  const r = runSpawn('npx', args, null, opts.dryRun);
   if ((r.status || 0) === 0) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
   process.stdout.write('\n');
@@ -1163,7 +1170,9 @@ async function main() {
   // Auto-detect fallback if nothing matched
   if (!opts.skipSkills && opts.only.length === 0 && ctx.results.detected === 0) {
     ctx.say('→ no known agents detected — running npx-skills auto-detect fallback');
-    const r = runSpawn('npx', ['-y', 'skills', 'add', REPO], null, opts.dryRun);
+    // --yes --all for the same reason as installViaSkills above (issue #370):
+    // skip the interactive skill picker so curl|bash actually installs.
+    const r = runSpawn('npx', ['-y', 'skills', 'add', REPO, '--yes', '--all'], null, opts.dryRun);
     if ((r.status || 0) === 0) ctx.results.installed.push('skills-auto');
     else ctx.results.failed.push(['skills-auto', 'npx skills add (auto) failed']);
     process.stdout.write('\n');
