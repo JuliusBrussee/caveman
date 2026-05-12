@@ -134,6 +134,43 @@ class HookScriptTests(unittest.TestCase):
             )
             self.assertNotIn("hooks", updated)
 
+    def test_caveman_translate_preserves_existing_mode(self):
+        """`/caveman-translate` must NOT overwrite the active mode flag.
+
+        Translate is a one-shot skill, not a mode. Earlier designs that
+        wrote 'translate' to the flag file left the statusline stuck on
+        [CAVEMAN:TRANSLATE] after the skill ran and lost the user's prior
+        intensity (e.g. wenyan-ultra). The tracker must let translate
+        pass through without touching the flag.
+        """
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-translate-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+            flag = claude_dir / ".caveman-active"
+            flag.write_text("wenyan-ultra")
+
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["USERPROFILE"] = str(home)
+            env["CLAUDE_CONFIG_DIR"] = str(claude_dir)
+
+            subprocess.run(
+                ["node", "src/hooks/caveman-mode-tracker.js"],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                input='{"prompt":"/caveman-translate"}',
+                capture_output=True,
+                check=True,
+            )
+
+            self.assertEqual(
+                flag.read_text().strip(),
+                "wenyan-ultra",
+                "translate must not clobber the active mode flag",
+            )
+
     def test_activate_does_not_nudge_when_custom_statusline_exists(self):
         with tempfile.TemporaryDirectory(prefix="caveman-hooks-activate-") as tmp:
             home = Path(tmp)
