@@ -271,4 +271,50 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
+// Detects sdk-cli (and other non-interactive) sessions so the hooks can skip
+// injecting caveman context. External tools (e.g. CodexBar) spawn sdk-cli
+// sessions to probe Claude — if caveman rules leak in, their parsing breaks.
+//
+// Uses the guaranteed `session_id` field from the hook stdin payload to look
+// up the corresponding `$CLAUDE_CONFIG_DIR/sessions/<pid>.json` record and
+// read its `entrypoint`. Scans newest-first and short-circuits on match so
+// typical cases touch one file regardless of sessions/ size.
+//
+// Returns false (= fall through, inject normally) when:
+//   - session_id is absent,
+//   - sessions/ is unreadable,
+//   - no session file matches the id (theoretical race at first SessionStart,
+//     not observed in practice — sessions/<pid>.json is written before hooks
+//     fire).
+function isNonInteractiveSession(data, claudeDir) {
+  const sessionId = data && data.session_id;
+  if (!sessionId) return false;
+
+  const sessionsDir = path.join(claudeDir, 'sessions');
+  let entries;
+  try {
+    entries = fs.readdirSync(sessionsDir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => {
+        const full = path.join(sessionsDir, f);
+        let mtime = 0;
+        try { mtime = fs.statSync(full).mtimeMs; } catch (e) {}
+        return { full, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch (e) {
+    return false;
+  }
+
+  for (const { full } of entries) {
+    try {
+      const sess = JSON.parse(fs.readFileSync(full, 'utf8'));
+      if (sess.sessionId === sessionId) {
+        return sess.entrypoint !== 'cli';
+      }
+    } catch (e) { /* skip */ }
+  }
+  return false;
+}
+
+module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory, isNonInteractiveSession };

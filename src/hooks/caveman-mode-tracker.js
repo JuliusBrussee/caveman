@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
-const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES, isNonInteractiveSession } = require('./caveman-config');
 
 // Modes handled by their own slash commands (/caveman-commit, etc.) — not
 // selectable via /caveman <arg>.
@@ -20,6 +20,13 @@ process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
+
+    // Skip hook entirely for non-interactive sessions (e.g. sdk-cli probes from CodexBar).
+    if (isNonInteractiveSession(data, claudeDir)) {
+      process.stdout.write('{}');
+      return;
+    }
+
     const prompt = (data.prompt || '').trim().toLowerCase();
 
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
