@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # caveman — one-command hook installer for Claude Code
 # Installs: SessionStart hook (auto-load rules) + UserPromptSubmit hook (mode tracking)
 # Usage: bash src/hooks/install.sh
