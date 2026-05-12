@@ -19,16 +19,27 @@ const settingsPath = path.join(claudeDir, 'settings.json');
 // If entrypoint is not "cli" (e.g. sdk-cli probe from CodexBar), skip all
 // injection so the probing tool sees a clean response.
 //
-// Per Claude Code hooks spec, stdin is reliably closed after the JSON is
-// delivered. When invoked manually (TTY attached), no JSON is coming — skip
-// the read entirely instead of hanging.
+// Per Claude Code hooks spec, stdin is normally closed after the JSON is
+// delivered. Some launchers leave the pipe open, so fall back quickly instead
+// of blocking session startup.
 if (process.stdin.isTTY) {
   activate('');
 } else {
   let stdinBuf = '';
+  let activated = false;
+  const activateOnce = raw => {
+    if (activated) return;
+    activated = true;
+    clearTimeout(fallback);
+    process.stdin.removeAllListeners('data');
+    process.stdin.removeAllListeners('end');
+    process.stdin.pause();
+    activate(raw);
+  };
+  const fallback = setTimeout(() => { activateOnce(''); }, 200);
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { stdinBuf += chunk; });
-  process.stdin.on('end', () => { activate(stdinBuf); });
+  process.stdin.on('end', () => { activateOnce(stdinBuf); });
 }
 
 function activate(raw) {
