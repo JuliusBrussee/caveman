@@ -183,6 +183,22 @@ def verify_manifests_and_syntax() -> None:
     ensure("caveman-config.js" in install_sh, "install.sh missing caveman-config.js")
     ensure("caveman-config.js" in uninstall_sh, "uninstall.sh missing caveman-config.js")
 
+    # Shell scripts must use #!/usr/bin/env bash, not #!/bin/bash. On NixOS,
+    # some BSD-derived systems, and minimal containers, bash is not at
+    # /bin/bash and the hard-coded path makes the installer fail at exec time.
+    portable_shebang = "#!/usr/bin/env bash"
+    shell_scripts = [
+        ROOT / "src/hooks/install.sh",
+        ROOT / "src/hooks/uninstall.sh",
+        ROOT / "src/hooks/caveman-statusline.sh",
+    ]
+    for script in shell_scripts:
+        first_line = script.read_text(encoding="utf-8").splitlines()[0]
+        ensure(
+            first_line == portable_shebang,
+            f"{script} must use portable shebang '{portable_shebang}', got '{first_line}'",
+        )
+
     print("JSON manifests and JS/bash syntax OK")
 
 
