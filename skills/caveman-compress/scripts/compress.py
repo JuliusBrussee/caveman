@@ -8,19 +8,23 @@ Usage:
 
 import os
 import re
+import shlex
+import shutil
 import subprocess
+import sys
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 OUTER_FENCE_REGEX = re.compile(
     r"\A\s*(`{3,}|~{3,})[^\n]*\n(.*)\n\1\s*\Z", re.DOTALL
 )
 
 # Filenames and paths that almost certainly hold secrets or PII. Compressing
-# them ships raw bytes to the Anthropic API — a third-party data boundary that
-# developers on sensitive codebases cannot cross. detect.py already skips .env
-# by extension, but credentials.md / secrets.txt / ~/.aws/credentials would
-# slip through the natural-language filter. This is a hard refuse before read.
+# them ships raw bytes to the Claude service (via `claude -p`) — a third-party
+# data boundary that developers on sensitive codebases cannot cross. detect.py
+# already skips .env by extension, but credentials.md / secrets.txt /
+# ~/.aws/credentials would slip through the natural-language filter. This is
+# a hard refuse before read.
 SENSITIVE_BASENAME_REGEX = re.compile(
     r"(?ix)^("
     r"\.env(\..+)?"
@@ -70,35 +74,181 @@ MAX_RETRIES = 2
 
 
 # ---------- Claude Calls ----------
+#
+# All requests route through the local `claude -p` CLI. Same wire shape as the
+# OpenClaw Claude Code Bridge (https://github.com/minz/openclaw-claude-code-bridge
+# — `oc-webchat`), which is itself the documented non-interactive invocation
+# pattern for Claude Code. Benefits over the previous Anthropic API path:
+#
+#   * Reuses the user's existing Claude Code login. No ANTHROPIC_API_KEY
+#     required, no separate billing surface.
+#   * Honors the user's configured model and auth — same one their editor uses.
+#   * Eliminates the `anthropic` Python dependency at runtime.
+#
+# Mirrors the bridge's safety defaults: auto-detect binary across PATH and
+# known install dirs, strip API-key env vars when in cli-login auth mode,
+# strip nested `CLAUDE_CODE_*` so a child invocation cannot recurse into the
+# parent's session state, disable slash-command interpretation (the prompt
+# body may legitimately contain `/office-hours` etc. as literal text), and
+# use `shell=False` to avoid shell metacharacter parsing.
+
+
+_PRESERVED_CLAUDE_CODE_ENV = frozenset({
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+})
+
+
+def detect_claude_bin(configured: str = "claude", auto_detect: bool = True) -> str:
+    """Resolve the `claude` binary path.
+
+    Search order matches the OpenClaw bridge so behavior is identical for
+    users who run both: configured value → PATH → known per-OS install dirs.
+    """
+    expanded = os.path.expanduser(configured or "claude")
+    if not auto_detect or expanded != "claude":
+        return expanded
+
+    found = shutil.which("claude")
+    if found:
+        return found
+
+    home = Path.home()
+    if sys.platform == "win32":
+        candidates = [
+            home / "AppData" / "Roaming" / "npm" / "claude.cmd",
+            home / "AppData" / "Roaming" / "npm" / "claude",
+        ]
+    else:
+        candidates = [
+            home / ".local" / "bin" / "claude",
+            home / ".npm-global" / "bin" / "claude",
+            Path("/usr/local/bin/claude"),
+            Path("/opt/homebrew/bin/claude"),
+        ]
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return expanded
+
+
+def sanitize_env(base_env: Dict[str, str], auth_mode: str = "cli-login") -> Dict[str, str]:
+    """Strip env that would steer the child off the user's CLI login.
+
+    `cli-login` (default): drop ANTHROPIC_* credentials so the child must use
+    the local Claude Code session.  `inherit`: leave them in place (advanced
+    use only — e.g. running compress against a different account in CI).
+
+    Always strips nested CLAUDE_CODE_* (except the OAuth/provider toggles)
+    so a recursive invocation can't poison the child with the parent's
+    session-scoped state. Same rule the bridge applies.
+    """
+    env = dict(base_env)
+
+    if auth_mode == "cli-login":
+        for key in (
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BEDROCK_BASE_URL",
+            "ANTHROPIC_VERTEX_BASE_URL",
+        ):
+            env.pop(key, None)
+
+    for key in list(env.keys()):
+        if key == "CLAUDECODE":
+            del env[key]
+        elif key.startswith("CLAUDE_CODE_") and key not in _PRESERVED_CLAUDE_CODE_ENV:
+            del env[key]
+
+    return env
 
 
 def call_claude(prompt: str) -> str:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if api_key:
-        try:
-            import anthropic
+    """Send `prompt` to Claude via the local `claude -p` CLI.
 
-            client = anthropic.Anthropic(api_key=api_key)
-            msg = client.messages.create(
-                model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
-                max_tokens=8192,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return strip_llm_wrapper(msg.content[0].text.strip())
-        except ImportError:
-            pass  # anthropic not installed, fall back to CLI
-    # Fallback: use claude CLI (handles desktop auth)
+    All wire-shape knobs are env-driven. No model/binary is hardcoded.
+
+      CAVEMAN_CLAUDE_BIN          Binary name or absolute path. Default: 'claude'.
+      CAVEMAN_CLAUDE_AUTO_DETECT  '0' disables PATH/install-dir auto-detect.
+                                  Default: enabled.
+      CAVEMAN_AUTH_MODE           'cli-login' (default) strips ANTHROPIC_* env.
+                                  Set to 'inherit' to keep them (advanced).
+      CAVEMAN_MODEL               Forwarded as `--model <value>`. Default: unset
+                                  (CLI picks the user's configured default).
+      CAVEMAN_PERMISSION_MODE     Forwarded as `--permission-mode`. Default: 'plan'.
+      CAVEMAN_MAX_TURNS           Forwarded as `--max-turns <n>` only if set
+                                  (flag is not present in all CLI versions).
+      CAVEMAN_CLAUDE_ARGS         Extra args, shell-quoted. Default: ''.
+      CAVEMAN_TIMEOUT_SEC         Subprocess timeout in seconds. Default: 900.
+    """
+    bin_path = detect_claude_bin(
+        os.environ.get("CAVEMAN_CLAUDE_BIN", "claude"),
+        os.environ.get("CAVEMAN_CLAUDE_AUTO_DETECT", "1") != "0",
+    )
+    auth_mode = os.environ.get("CAVEMAN_AUTH_MODE", "cli-login")
+    model = os.environ.get("CAVEMAN_MODEL", "").strip()
+    permission_mode = os.environ.get("CAVEMAN_PERMISSION_MODE", "plan")
+    extra = shlex.split(os.environ.get("CAVEMAN_CLAUDE_ARGS", ""))
+
+    def _int_env(name: str, default: int, lo: int = 1) -> int:
+        try:
+            value = int(os.environ.get(name, str(default)))
+        except ValueError:
+            return default
+        return max(lo, value)
+
+    timeout = _int_env("CAVEMAN_TIMEOUT_SEC", 900, lo=10)
+    max_turns_raw = os.environ.get("CAVEMAN_MAX_TURNS", "").strip()
+
+    args: List[str] = [bin_path]
+    if model:
+        args += ["--model", model]
+    args += ["--permission-mode", permission_mode]
+    if max_turns_raw:
+        # --max-turns is only present on newer CLI builds; pass only if the
+        # user explicitly requested a cap.
+        try:
+            args += ["--max-turns", str(max(1, int(max_turns_raw)))]
+        except ValueError:
+            pass
+    # Prompt body may legitimately contain `/office-hours`, `/ship`, etc. as
+    # literal slugs (e.g. a CLAUDE.md describing slash-command triggers). The
+    # CLI would otherwise interpret those at the start of a turn.
+    args.append("--disable-slash-commands")
+    args += extra
+    # Positional prompt — same shape as the OpenClaw bridge. The CLI also
+    # accepts prompts via stdin, but positional avoids stdin-edge-case bugs
+    # on Windows shells.
+    args += ["-p", prompt]
+
     try:
         result = subprocess.run(
-            ["claude", "--print"],
-            input=prompt,
+            args,
+            env=sanitize_env(dict(os.environ), auth_mode),
             text=True,
             capture_output=True,
             check=True,
+            timeout=timeout,
+            shell=False,
         )
-        return strip_llm_wrapper(result.stdout.strip())
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"claude CLI not found (looked for '{bin_path}'). "
+            "Install Claude Code from https://claude.com/claude-code or set "
+            "CAVEMAN_CLAUDE_BIN to the absolute path of the binary."
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"`claude -p` timed out after {timeout}s. "
+            "Raise CAVEMAN_TIMEOUT_SEC for large files."
+        )
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Claude call failed:\n{e.stderr}")
+        raise RuntimeError(f"`claude -p` failed (exit {e.returncode}):\n{e.stderr}")
+
+    return strip_llm_wrapper(result.stdout.strip())
 
 
 def build_compress_prompt(original: str) -> str:
@@ -162,14 +312,15 @@ def compress_file(filepath: Path) -> bool:
         raise ValueError(f"File too large to compress safely (max 500KB): {filepath}")
 
     # Refuse files that look like they contain secrets or PII. Compressing ships
-    # the raw bytes to the Anthropic API — a third-party boundary — so we fail
-    # loudly rather than silently exfiltrate credentials or keys. Override is
-    # intentional: the user must rename the file if the heuristic is wrong.
+    # the raw bytes through `claude -p` to the Claude service — still a
+    # third-party boundary — so we fail loudly rather than silently exfiltrate
+    # credentials or keys. Override is intentional: the user must rename the
+    # file if the heuristic is wrong.
     if is_sensitive_path(filepath):
         raise ValueError(
             f"Refusing to compress {filepath}: filename looks sensitive "
             "(credentials, keys, secrets, or known private paths). "
-            "Compression sends file contents to the Anthropic API. "
+            "Compression sends file contents to the Claude service via `claude -p`. "
             "Rename the file if this is a false positive."
         )
 
