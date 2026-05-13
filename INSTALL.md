@@ -60,7 +60,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Block Goose** | `npx skills add JuliusBrussee/caveman -a goose` | No |
 | **iFlow CLI** | `npx skills add JuliusBrussee/caveman -a iflow-cli` | No |
 | **Kiro CLI** | `npx skills add JuliusBrussee/caveman -a kiro-cli` | No |
-| **Kimi Code CLI** | `kimi plugin install https://github.com/JuliusBrussee/caveman/plugins/caveman-kimi` | Yes — auto-discovers plugin skill from `~/.kimi/plugins/` on startup. Alternative: `npx skills add JuliusBrussee/caveman -a kimi-cli` |
+| **Kimi Code CLI** | `kimi plugin install https://github.com/JuliusBrussee/caveman/plugins/caveman-kimi` or `npx skills add JuliusBrussee/caveman -a kimi-cli` | Yes — plugin skill auto-discovers from `~/.kimi/plugins/`; skills path auto-discovers from `~/.agents/skills/` |
 | **Mistral Vibe** | `npx skills add JuliusBrussee/caveman -a mistral-vibe` | No |
 | **OpenHands** | `npx skills add JuliusBrussee/caveman -a openhands` | No |
 | **Qwen Code** | `npx skills add JuliusBrussee/caveman -a qwen-code` | No |
@@ -151,9 +151,15 @@ Open Claude Code, type `/caveman`. Response should be terse fragments — "Got i
 
 **2a. Talk to Kimi Code CLI.**
 
-Open Kimi, say "talk like caveman". Response should drop filler and use fragments. Or type `/skill:caveman` to explicitly load it. Kimi auto-discovers the plugin skill from `~/.kimi/plugins/` on startup when installed via `kimi plugin install`.
+Open Kimi, say "talk like caveman". Response should drop filler and use fragments. Or type `/skill:caveman` to explicitly load it.
 
-For the skills path (all 7 skills separately):
+Install via native plugin (main caveman skill, auto-discovered from `~/.kimi/plugins/`):
+
+```bash
+kimi plugin install https://github.com/JuliusBrussee/caveman/plugins/caveman-kimi
+```
+
+Or install the full 7-skill suite via skills CLI (auto-discovered from `~/.agents/skills/`):
 
 ```bash
 npx skills add JuliusBrussee/caveman -a kimi-cli
