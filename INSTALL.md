@@ -149,28 +149,6 @@ You should see ~30 rows. Detected agents are marked. Anything you wanted but isn
 
 Open Claude Code, type `/caveman`. Response should be terse fragments — "Got it. Caveman mode on." or similar. Try a real question: "What is closures in JS?" — answer should drop articles and read like grunts.
 
-**2a. Talk to Kimi Code CLI.**
-
-Open Kimi, say "talk like caveman". Response should drop filler and use fragments. Or type `/skill:caveman` to explicitly load it.
-
-Install via native plugin (main caveman skill, auto-discovered from `~/.kimi/plugins/`):
-
-```bash
-kimi plugin install https://github.com/JuliusBrussee/caveman/plugins/caveman-kimi
-```
-
-Or install the full 7-skill suite via skills CLI (auto-discovered from `~/.agents/skills/`):
-
-```bash
-npx skills add JuliusBrussee/caveman -a kimi-cli
-```
-
-For the brand-native priority path (highest skill priority in Kimi), copy skills to `~/.kimi/skills/`:
-
-```bash
-mkdir -p ~/.kimi/skills && cp -r ~/.agents/skills/caveman* ~/.kimi/skills/
-```
-
 **3. Check the flag file.**
 
 ```bash
