@@ -36,7 +36,7 @@ if (process.stdin.isTTY) {
     process.stdin.pause();
     activate(raw);
   };
-  const fallback = setTimeout(() => { activateOnce(''); }, 200);
+  const fallback = setTimeout(() => { activateOnce(stdinBuf); }, 200);
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { stdinBuf += chunk; });
   process.stdin.on('end', () => { activateOnce(stdinBuf); });
