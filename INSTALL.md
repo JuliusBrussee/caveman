@@ -60,6 +60,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Block Goose** | `npx skills add JuliusBrussee/caveman -a goose` | No |
 | **iFlow CLI** | `npx skills add JuliusBrussee/caveman -a iflow-cli` | No |
 | **Kiro CLI** | `npx skills add JuliusBrussee/caveman -a kiro-cli` | No |
+| **Kimi Code CLI** | `npx skills add JuliusBrussee/caveman -a kimi-cli` | Yes — auto-discovers from `~/.agents/skills/` and `~/.kimi/skills/` on startup |
 | **Mistral Vibe** | `npx skills add JuliusBrussee/caveman -a mistral-vibe` | No |
 | **OpenHands** | `npx skills add JuliusBrussee/caveman -a openhands` | No |
 | **Qwen Code** | `npx skills add JuliusBrussee/caveman -a qwen-code` | No |
@@ -147,6 +148,16 @@ You should see ~30 rows. Detected agents are marked. Anything you wanted but isn
 **2. Talk to Claude Code.**
 
 Open Claude Code, type `/caveman`. Response should be terse fragments — "Got it. Caveman mode on." or similar. Try a real question: "What is closures in JS?" — answer should drop articles and read like grunts.
+
+**2a. Talk to Kimi Code CLI.**
+
+Open Kimi, say "talk like caveman". Response should drop filler and use fragments. Or type `/skill:caveman` to explicitly load it. Kimi auto-discovers the skill on startup when installed via `npx skills add -a kimi-cli`.
+
+For the brand-native path (highest skill priority in Kimi), copy skills to `~/.kimi/skills/`:
+
+```bash
+mkdir -p ~/.kimi/skills && cp -r ~/.agents/skills/caveman* ~/.kimi/skills/
+```
 
 **3. Check the flag file.**
 

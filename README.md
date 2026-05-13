@@ -24,7 +24,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (also Codex, Gemini, Cursor, Windsurf, Cline, Copilot, 30+ more) that makes agent talk like caveman — cuts **~75% of output tokens**, keeps full technical accuracy. Brain still big. Mouth small.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (also Codex, Gemini, Kimi, Cursor, Windsurf, Cline, Copilot, 30+ more) that makes agent talk like caveman — cuts **~75% of output tokens**, keeps full technical accuracy. Brain still big. Mouth small.
 
 ## Before / After
 
@@ -109,7 +109,7 @@ Install break? Open agent, say *"Read CLAUDE.md and INSTALL.md, install caveman 
 
 **Statusline badge** — Claude Code shows `[CAVEMAN] ⛏ 12.4k` (lifetime tokens saved). Updates every `/caveman-stats` run. Set `CAVEMAN_STATUSLINE_SAVINGS=0` to silence.
 
-Auto-activate every session: Claude Code, Codex, Gemini (built-in). Cursor / Windsurf / Cline / Copilot get always-on rule files via `--with-init`. Other agents trigger with `/caveman` per session. Full feature matrix in [INSTALL.md](./INSTALL.md#what-you-get).
+Auto-activate every session: Claude Code, Codex, Gemini (built-in). Kimi auto-discovers skills from `~/.agents/skills/` on startup. Cursor / Windsurf / Cline / Copilot get always-on rule files via `--with-init`. Other agents trigger with `/caveman` per session. Full feature matrix in [INSTALL.md](./INSTALL.md#what-you-get).
 
 ## Benchmarks
 
@@ -188,6 +188,24 @@ Two thing happen, no more:
 Custom workspace path? `OPENCLAW_WORKSPACE=/your/path` before the command. Uninstall: same one-liner with `--uninstall` — skill folder gone, SOUL.md block ripped out cleanly, your other workspace content stay untouched. Idempotent re-runs (frontmatter not double-prepended, marker block not duplicated).
 
 Lobster claw still sharp. Lobster mouth now small. Brain still big.
+
+## Kimi Code CLI 🌙
+
+[Kimi Code CLI](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/skills.html) discovers skills from `~/.agents/skills/` (and `~/.kimi/skills/`) on every startup — no slash command needed.
+
+```bash
+npx skills add JuliusBrussee/caveman -a kimi-cli
+```
+
+Installs all 7 caveman skills (caveman, cavecrew, caveman-commit, caveman-review, caveman-compress, caveman-help, caveman-stats). Kimi injects them into the system prompt automatically.
+
+For the brand-native path (highest priority in Kimi's skill resolution), copy them to `~/.kimi/skills/` after install:
+
+```bash
+mkdir -p ~/.kimi/skills && cp -r ~/.agents/skills/caveman* ~/.kimi/skills/
+```
+
+> **Why no Kimi plugin?** Kimi's plugin system uses `plugin.json` + executable `tools[]` — it's for scripts the AI can invoke, not for communication-mode guidance. Skills (via `SKILL.md`) are the correct native mechanism for caveman's use case. Same path as Codex, Cursor, Windsurf, Cline, and 20+ other agents.
 
 ## Caveman Ecosystem
 
