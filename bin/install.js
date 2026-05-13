@@ -194,7 +194,7 @@ const PROVIDERS = [
   { id: 'goose',      label: 'Block Goose',         mech: 'npx skills add (goose)',        detect: 'command:goose', profile: 'goose' },
   { id: 'iflow',      label: 'iFlow CLI',           mech: 'npx skills add (iflow-cli)',    detect: 'command:iflow', profile: 'iflow-cli' },
   { id: 'kiro',       label: 'Kiro CLI',            mech: 'npx skills add (kiro-cli)',     detect: 'command:kiro', profile: 'kiro-cli' },
-  { id: 'kimi',       label: 'Kimi Code CLI',       mech: 'npx skills add (kimi-cli)',     detect: 'command:kimi', profile: 'kimi-cli' },
+  { id: 'kimi',       label: 'Kimi Code CLI',       mech: 'kimi plugin install',           detect: 'command:kimi' },
   { id: 'mistral',    label: 'Mistral Vibe',        mech: 'npx skills add (mistral-vibe)', detect: 'command:mistral', profile: 'mistral-vibe' },
   { id: 'openhands',  label: 'OpenHands',           mech: 'npx skills add (openhands)',    detect: 'command:openhands', profile: 'openhands' },
   { id: 'qwen',       label: 'Qwen Code',           mech: 'npx skills add (qwen-code)',    detect: 'command:qwen', profile: 'qwen-code' },
@@ -437,6 +437,37 @@ function installGemini(ctx) {
   const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`], null, opts.dryRun);
   if ((r.status || 0) === 0) results.installed.push('gemini');
   else results.failed.push(['gemini', 'gemini extensions install failed']);
+  process.stdout.write('\n');
+}
+
+function installKimi(ctx) {
+  const { say, note, opts, results } = ctx;
+  results.detected++;
+  say('→ Kimi Code CLI detected');
+
+  // 1. Native plugin install (bundled main caveman skill)
+  let pluginInstalled = false;
+  if (!opts.force) {
+    const r = captureSpawn('kimi', ['plugin', 'list']);
+    if (r.status === 0 && /caveman/i.test(r.stdout || '')) {
+      note('  caveman plugin already installed (use --force to reinstall)');
+      results.skipped.push(['kimi', 'plugin already installed']);
+      pluginInstalled = true;
+    }
+  }
+  if (!pluginInstalled) {
+    const r = runSpawn('kimi', ['plugin', 'install', `https://github.com/${REPO}/plugins/caveman-kimi`], null, opts.dryRun);
+    if ((r.status || 0) === 0) results.installed.push('kimi');
+    else results.failed.push(['kimi', 'kimi plugin install failed']);
+  }
+
+  // 2. Full skill suite via npx skills add (all 7 skills to ~/.agents/skills/)
+  say('  → installing full skill suite via npx skills add');
+  const args = ['-y', 'skills', 'add', REPO, '-a', 'kimi-cli', '--yes', '--all'];
+  const r = runSpawn('npx', args, null, opts.dryRun);
+  if ((r.status || 0) === 0) results.installed.push('kimi-skills');
+  else results.failed.push(['kimi-skills', 'npx skills add failed']);
+
   process.stdout.write('\n');
 }
 
@@ -1163,6 +1194,7 @@ async function main() {
     if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
     if (prov.id === 'claude')   { await installClaude(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
+    if (prov.id === 'kimi')     { installKimi(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
     if (prov.profile)           { installViaSkills(ctx, prov); continue; }
