@@ -106,6 +106,59 @@ test('bare -- (POSIX end-of-options) is accepted and ignored', () => {
   assert.equal(r.status, 0);
 });
 
+test('bare --with-mcp-shrink (no upstream) exits 2 with hint', () => {
+  // Regression for issue where --with-mcp-shrink registered a stub MCP entry
+  // that crashed on every Claude Code startup. caveman-shrink is a proxy and
+  // requires an upstream command — we now refuse the bare flag.
+  const r = run('--with-mcp-shrink', '--non-interactive', '--dry-run');
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /requires an upstream command/);
+  assert.match(r.stderr, /server-filesystem/);
+});
+
+test('--with-mcp-shrink followed by another flag (no value) exits 2', () => {
+  // The next-token form must distinguish "no value" from "value happens to
+  // start with --". A user typing `--with-mcp-shrink --dry-run` clearly
+  // forgot the upstream; refuse.
+  const r = run('--with-mcp-shrink', '--dry-run', '--non-interactive');
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /requires an upstream command/);
+});
+
+test('--with-mcp-shrink="<cmd>" registers wrapping that upstream', () => {
+  const r = run(
+    '--with-mcp-shrink=npx @modelcontextprotocol/server-filesystem /tmp',
+    '--only', 'claude', '--dry-run', '--non-interactive',
+    '--config-dir', '/tmp/__cm_shrink_test'
+  );
+  assert.equal(r.status, 0);
+  // Dry-run only emits the planned `claude mcp add` line if claude is
+  // detected on PATH. Skip the positive assertion otherwise.
+  if (/Claude Code detected/.test(r.stdout)) {
+    assert.match(r.stdout, /claude mcp add caveman-shrink .* npx -y caveman-shrink npx @modelcontextprotocol\/server-filesystem \/tmp/);
+  }
+});
+
+test('--with-mcp-shrink "<cmd>" (space-separated) also accepted', () => {
+  const r = run(
+    '--with-mcp-shrink', 'npx @modelcontextprotocol/server-filesystem /tmp',
+    '--only', 'claude', '--dry-run', '--non-interactive',
+    '--config-dir', '/tmp/__cm_shrink_space'
+  );
+  assert.equal(r.status, 0);
+  if (/Claude Code detected/.test(r.stdout)) {
+    assert.match(r.stdout, /caveman-shrink npx @modelcontextprotocol\/server-filesystem \/tmp/);
+  }
+});
+
+test('--all does NOT auto-enable mcp-shrink (no sensible default upstream)', () => {
+  const r = run('--all', '--only', 'claude', '--dry-run', '--non-interactive', '--config-dir', '/tmp/__cm_all_no_shrink');
+  assert.equal(r.status, 0);
+  // Whether or not claude is on PATH, the wiring banner should not appear
+  // because withMcpShrink stays false under --all alone.
+  assert.doesNotMatch(r.stdout, /wiring caveman-shrink MCP proxy/);
+});
+
 test('--help discloses --config-dir scope', () => {
   const r = run('--help');
   assert.equal(r.status, 0);
