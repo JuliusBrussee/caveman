@@ -47,16 +47,8 @@ const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = config;
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 function opencodeConfigDir() {
-  if (process.env.XDG_CONFIG_HOME) {
-    return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
-  }
-  if (process.platform === 'win32') {
-    return path.join(
-      process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
-      'opencode'
-    );
-  }
-  return path.join(os.homedir(), '.config', 'opencode');
+  if (process.env.XDG_CONFIG_HOME) return join(process.env.XDG_CONFIG_HOME, 'opencode');
+  return join(os.homedir(), '.config', 'opencode');
 }
 
 const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
