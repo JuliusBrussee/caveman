@@ -2,5 +2,15 @@
   "name": "caveman",
   "description": "Ultra-compressed communication mode. Cuts ~75% of tokens while keeping full technical accuracy by speaking like a caveman.",
   "version": "1.0.1",
-  "contextFileName": "GEMINI.md"
+  "contextFileName": "GEMINI.md",
+  "hooks": {
+    "SessionStart": [
+      {
+        "name": "Gemini Compatibility Patch",
+        "type": "command",
+        "command": "node ${extensionPath}/scripts/gemini-patch.js \"${extensionPath}\"",
+        "description": "Patches agent tool names for Gemini CLI compatibility."
+      }
+    ]
+  }
 }

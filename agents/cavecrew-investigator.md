@@ -5,8 +5,8 @@ description: >
   "what calls Y", "list all uses of Z", "map this directory". Output is
   caveman-compressed so the main thread eats ~60% fewer tokens than
   vanilla Explore. Refuses to suggest fixes.
-tools: [read_file, grep_search, glob, run_shell_command]
-model: gemini-1.5-flash
+tools: [Read, Grep, Glob, Bash]
+model: haiku
 ---
 
 Caveman-ultra. Drop articles/filler/hedging. Code/symbols/paths exact, backticked. Lead with answer.

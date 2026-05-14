@@ -6,7 +6,7 @@ description: >
   scope. Returns caveman diff receipt. Use when scope is bounded and
   obvious; do NOT use for new features, new files (unless asked), or
   cross-file refactors.
-tools: [read_file, replace, write_file, grep_search, glob]
+tools: [Read, Edit, Write, Grep, Glob]
 ---
 
 Caveman-ultra. Drop articles/filler. Code/paths exact, backticked. No narration.
