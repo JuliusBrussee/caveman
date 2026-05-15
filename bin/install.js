@@ -443,13 +443,17 @@ function installViaSkills(ctx, prov) {
   const { say, opts, results } = ctx;
   results.detected++;
   say(`→ ${prov.label} detected`);
-  // --yes --all: skip the upstream skill-selection TUI and confirmation prompts.
-  // Without these, `curl|bash` (no TTY on stdin) renders an empty checkbox list
-  // the user can't interact with, then exits 0 with zero skills installed —
-  // and our installer happily reports success. See issue #370.
-  // We've already decided which agent to install for via auto-detect / --only;
-  // making the user re-select 7 skills inside skills CLI would be redundant.
-  const args = ['-y', 'skills', 'add', REPO, '-a', prov.profile, '--yes', '--all'];
+  // --skill '*' --yes: skip the upstream skill-selection TUI and confirmation
+  // prompts. Without --skill, `curl|bash` (no TTY on stdin) renders an empty
+  // checkbox list the user can't interact with, then exits 0 with zero skills
+  // installed — and our installer happily reports success. See issue #370.
+  //
+  // We pass `--skill '*'` rather than `--all` because the upstream `skills` CLI
+  // interprets `--all` as "all skills from the source to *all* agents", which
+  // ignores the `-a prov.profile` selection and writes every skill through
+  // every agent adapter (see issue #389). `--skill '*' -a <agent>` is the
+  // documented form for "install every skill into a specific agent".
+  const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
   const r = runSpawn('npx', args, null, opts.dryRun);
   if ((r.status || 0) === 0) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
