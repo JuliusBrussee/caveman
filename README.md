@@ -191,15 +191,16 @@ Lobster claw still sharp. Lobster mouth now small. Brain still big.
 
 ## Caveman Ecosystem
 
-Three tools. One philosophy: **agent do more with less**.
+Four tools. One philosophy: **agent do more with less**.
 
 | Repo | What |
 |------|------|
 | [**caveman**](https://github.com/JuliusBrussee/caveman) *(you here)* | Output compression — *why use many token when few do trick* |
 | [**cavemem**](https://github.com/JuliusBrussee/cavemem) | Cross-agent memory — *why agent forget when agent can remember* |
 | [**cavekit**](https://github.com/JuliusBrussee/cavekit) | Spec-driven build loop — *why agent guess when agent can know* |
+| [**cavegemma**](https://github.com/JuliusBrussee/finetune-caveman) | Gemma 4 31B fine-tuned on caveman pairs — *why prompt every turn when weight remember* |
 
-Compose: cavekit drive build, caveman compress what agent *say*, cavemem compress what agent *remember*. One rock. Two rock. Three rock. That it.
+Compose: cavekit drive build, caveman compress what agent *say*, cavemem compress what agent *remember*, cavegemma bake compression into weight. One rock. Two rock. Three rock. Four rock. That it.
 
 ## Links
 
