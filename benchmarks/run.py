@@ -1,17 +1,30 @@
 #!/usr/bin/env python3
-"""Benchmark caveman vs normal Claude output token counts."""
+"""Benchmark caveman vs normal Claude output token counts.
+
+Two modes:
+  API mode (default): calls api.anthropic.com via the Anthropic SDK; requires
+    ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN for bearer-token auth). Token
+    counts are exact values returned by the API.
+  CLI mode (--cli): calls the `claude` CLI via subprocess; works with a
+    claude.ai subscription, no API key needed. Token counts are tiktoken
+    (o200k_base) approximations — accurate enough for relative savings
+    comparisons, but absolute numbers will differ slightly from API mode.
+"""
 
 import argparse
+import functools
 import hashlib
 import json
 import os
 import statistics
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import anthropic
+from tqdm.auto import tqdm
 
 # Load .env.local from repo root if it exists
 _env_file = Path(__file__).parent.parent / ".env.local"
@@ -49,58 +62,86 @@ def sha256_file(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def call_api(client, model, system, prompt, max_retries=3):
+def _retry(fn, *, catch, msg_fn=str, max_retries=3):
     delays = [5, 10, 20]
     for attempt in range(max_retries + 1):
         try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=4096,
-                temperature=0,
-                system=system,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-                "text": response.content[0].text,
-                "stop_reason": response.stop_reason,
-            }
-        except anthropic.RateLimitError:
+            return fn()
+        except catch as e:
             if attempt < max_retries:
                 delay = delays[min(attempt, len(delays) - 1)]
-                print(f"  Rate limited, retrying in {delay}s...", file=sys.stderr)
+                print(f"  Retrying in {delay}s: {msg_fn(e)}", file=sys.stderr)
                 time.sleep(delay)
             else:
                 raise
 
 
-def run_benchmarks(client, model, prompts, caveman_system, trials):
-    results = []
-    total = len(prompts)
-
-    for i, prompt_entry in enumerate(prompts, 1):
-        pid = prompt_entry["id"]
-        prompt_text = prompt_entry["prompt"]
-        entry = {
-            "id": pid,
-            "category": prompt_entry["category"],
-            "prompt": prompt_text,
-            "normal": [],
-            "caveman": [],
+def call_api(client, model, system, prompt, max_retries=3):
+    def _call():
+        response = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            temperature=0,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "text": response.content[0].text,
+            "stop_reason": response.stop_reason,
         }
+    return _retry(_call, catch=anthropic.RateLimitError, msg_fn=lambda _: "rate limited", max_retries=max_retries)
 
-        for mode, system in [("normal", NORMAL_SYSTEM), ("caveman", caveman_system)]:
-            for t in range(1, trials + 1):
-                print(
-                    f"  [{i}/{total}] {pid} | {mode} | trial {t}/{trials}",
-                    file=sys.stderr,
-                )
-                result = call_api(client, model, system, prompt_text)
-                entry[mode].append(result)
-                time.sleep(0.5)
 
-        results.append(entry)
+def call_cli(model, system, prompt, max_retries=3):
+    try:
+        import tiktoken
+    except ImportError:
+        print("ERROR: tiktoken required for CLI mode: pip install tiktoken", file=sys.stderr)
+        sys.exit(1)
+    cmd = ["claude", "-p", "--system-prompt", system, "--model", model, prompt]
+    text = _retry(
+        lambda: subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip(),
+        catch=subprocess.CalledProcessError,
+        msg_fn=lambda e: e.stderr.strip(),
+        max_retries=max_retries,
+    )
+    enc = tiktoken.get_encoding("o200k_base")
+    return {
+        "input_tokens": len(enc.encode(system + "\n\n" + prompt)),
+        "output_tokens": len(enc.encode(text)),
+        "text": text,
+        "stop_reason": "end_turn",
+    }
+
+
+def run_benchmarks(caller, model, prompts, caveman_system, trials):
+    results = []
+    total_calls = len(prompts) * 2 * trials
+
+    with tqdm(total=total_calls, unit="call", file=sys.stderr) as bar:
+        for prompt_entry in prompts:
+            pid = prompt_entry["id"]
+            prompt_text = prompt_entry["prompt"]
+            entry = {
+                "id": pid,
+                "category": prompt_entry["category"],
+                "prompt": prompt_text,
+                "normal": [],
+                "caveman": [],
+            }
+
+            for mode, system in [("normal", NORMAL_SYSTEM), ("caveman", caveman_system)]:
+                for t in range(1, trials + 1):
+                    bar.set_description(f"{pid} | {mode} | t{t}")
+                    result = caller(model, system, prompt_text)
+                    entry[mode].append(result)
+                    bar.set_postfix(out=result["output_tokens"])
+                    bar.update(1)
+                    time.sleep(0.5)
+
+            results.append(entry)
 
     return results
 
@@ -242,6 +283,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Print config, no API calls")
     parser.add_argument("--update-readme", action="store_true", help="Update README.md benchmark table")
     parser.add_argument("--model", default="claude-sonnet-4-20250514", help="Model to use")
+    parser.add_argument("--cli", action="store_true", help="Use claude CLI (subscription mode); token counts are tiktoken approximations")
     args = parser.parse_args()
 
     prompts = load_prompts()
@@ -253,13 +295,20 @@ def main():
     caveman_system = load_caveman_system()
     skill_hash = sha256_file(SKILL_PATH)
 
-    client = anthropic.Anthropic()
+    if args.cli:
+        caller = call_cli
+        print("Mode: claude CLI (subscription — token counts are tiktoken approximations)", file=sys.stderr)
+    else:
+        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        client = anthropic.Anthropic(auth_token=auth_token) if auth_token else anthropic.Anthropic()
+        caller = functools.partial(call_api, client)
+        print("Mode: Anthropic API", file=sys.stderr)
 
     print(f"Running benchmarks: {len(prompts)} prompts x 2 modes x {args.trials} trials", file=sys.stderr)
     print(f"Model: {args.model}", file=sys.stderr)
     print(file=sys.stderr)
 
-    results = run_benchmarks(client, args.model, prompts, caveman_system, args.trials)
+    results = run_benchmarks(caller, args.model, prompts, caveman_system, args.trials)
     rows, summary = compute_stats(results)
     table_md = format_table(rows, summary)
 
