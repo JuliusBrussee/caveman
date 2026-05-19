@@ -1,0 +1,2 @@
+description = "Scaffold a new Caveman-compatible skill (SKILL.md + optional command TOML)"
+prompt = "Create a new Caveman skill named {{args}}. Scaffold skills/<name>/SKILL.md with correct frontmatter, activation contract, Rules, Examples, Auto-Clarity, and Boundaries sections. If the skill needs a slash command, also scaffold commands/<name>.toml. Output files ready to commit. No prose preamble."
