@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "caveman",
+  "description": "Ultra-compressed communication mode for CodeBuddy Code. Cuts ~75% of tokens while keeping full technical accuracy.",
+  "owner": {
+    "name": "Julius Brussee",
+    "url": "https://github.com/JuliusBrussee"
+  },
+  "plugins": [
+    {
+      "name": "caveman",
+      "description": "Talk like caveman. Cut ~75% tokens. Keep all technical accuracy.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

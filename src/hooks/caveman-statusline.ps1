@@ -1,5 +1,14 @@
-$ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }
-$Flag = Join-Path $ClaudeDir ".caveman-active"
+# Detect CodeBuddy vs Claude config dir
+if ($env:CODEBUDDY_CONFIG_DIR) {
+    $ConfigDir = $env:CODEBUDDY_CONFIG_DIR
+} elseif ($env:CODEBUDDY_PLUGIN_ROOT) {
+    $ConfigDir = Join-Path $HOME ".codebuddy"
+} elseif ($env:CLAUDE_CONFIG_DIR) {
+    $ConfigDir = $env:CLAUDE_CONFIG_DIR
+} else {
+    $ConfigDir = Join-Path $HOME ".claude"
+}
+$Flag = Join-Path $ConfigDir ".caveman-active"
 if (-not (Test-Path $Flag)) { exit 0 }
 
 # Refuse reparse points (symlinks / junctions) and oversized files. Without
@@ -44,7 +53,7 @@ if ([string]::IsNullOrEmpty($Mode) -or $Mode -eq "full") {
 # /caveman-stats has run at least once, the suffix file is absent and nothing
 # is rendered — safe default for fresh installs.
 if ($env:CAVEMAN_STATUSLINE_SAVINGS -ne "0") {
-    $SavingsFile = Join-Path $ClaudeDir ".caveman-statusline-suffix"
+    $SavingsFile = Join-Path $ConfigDir ".caveman-statusline-suffix"
     if (Test-Path $SavingsFile) {
         try {
             $SavingsItem = Get-Item -LiteralPath $SavingsFile -Force -ErrorAction Stop
