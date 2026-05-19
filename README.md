@@ -159,6 +159,42 @@ A March 2026 paper ["Brevity Constraints Reverse Performance Hierarchies in Lang
 
 Maintainer detail (hook architecture, file ownership, CI sync) live in [CLAUDE.md](./CLAUDE.md).
 
+## Project-Scope Gating
+
+Sometimes caveman activate global. User want caveman only some project. Add file or config — caveman skip activation that CWD only. Global default not change.
+
+**Marker files (cheapest path)** — drop zero-byte file in project root:
+
+```bash
+# In project where you want caveman OFF:
+touch .caveman-disable
+
+# Or, with global default=off, opt one project IN:
+touch .caveman-enable
+```
+
+**Env var (single session)**:
+
+```bash
+CAVEMAN_PROJECT_SCOPE=disabled claude   # this session only
+```
+
+**Config-driven allow / deny lists** (`~/.config/caveman/config.json`):
+
+```json
+{
+  "defaultMode": "full",
+  "projectScope": {
+    "deny":  ["/Users/me/work/client-xyz"],
+    "allow": ["/Users/me/code/flow", "/Users/me/code/api"]
+  }
+}
+```
+
+Resolution order (first match wins): `.caveman-disable` marker → `.caveman-enable` marker → `CAVEMAN_PROJECT_SCOPE` env → config `deny[]` prefix match → config `allow[]` prefix match (when `allow` set, anything not in it is denied) → global default. Path prefixes resolve symlinks so `/tmp` ↔ `/private/tmp` style setups Just Work.
+
+When disabled, caveman hook exit early with `OK (project-scope disabled)` — no flag file written, no ruleset emitted, no compression that CWD. Session behave like caveman not installed.
+
 ## Lobster, Meet Rock 🦞🪨
 
 [**OpenClaw**](https://openclaw.ai) the self-host gateway. One box, many agent inside (Claude Code, Codex, Pi, OpenCode), wired to your Slack / Discord / iMessage / Telegram / whatever. Tagline: *"The lobster way."* Lobster strong. Lobster smart. Lobster also talk a lot.

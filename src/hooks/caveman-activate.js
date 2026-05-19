@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag } = require('./caveman-config');
+const { getDefaultMode, getProjectScope, safeWriteFlag } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -21,6 +21,23 @@ const mode = getDefaultMode();
 if (mode === 'off') {
   try { fs.unlinkSync(flagPath); } catch (e) {}
   process.stdout.write('OK');
+  process.exit(0);
+}
+
+// Project-scope gating — caveman fires globally by default, but the user may
+// opt specific projects out (or, with an allowlist, opt specific projects in).
+//
+// Resolution: .caveman-disable / .caveman-enable marker files in CWD,
+// CAVEMAN_PROJECT_SCOPE env var, or config.json projectScope.allow/deny lists.
+// See getProjectScope() in caveman-config.js for the full precedence chain.
+//
+// When 'disabled', behave the same way as global 'off' mode: clear the flag,
+// don't emit the ruleset. This stops caveman from compressing responses in
+// the current session without changing the user's global default.
+const projectScope = getProjectScope(process.cwd());
+if (projectScope === 'disabled') {
+  try { fs.unlinkSync(flagPath); } catch (e) {}
+  process.stdout.write('OK (project-scope disabled)');
   process.exit(0);
 }
 
