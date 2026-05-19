@@ -202,6 +202,18 @@ Four tools. One philosophy: **agent do more with less**.
 
 Compose: cavekit drive build, caveman compress what agent *say*, cavemem compress what agent *remember*, cavegemma bake compression into weight. One rock. Two rock. Three rock. Four rock. That it.
 
+## Atlas Cloud
+
+<p align="center">
+  <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=caveman">
+    <img src="./docs/assets/atlas-cloud.png" alt="Atlas Cloud" width="220" />
+  </a>
+</p>
+
+<p align="center">
+  Atlas Cloud provides OpenAI-compatible AI infrastructure for teams shipping production workloads.
+</p>
+
 ## Links
 
 - [INSTALL.md](./INSTALL.md) — full install matrix, all flags, per-agent detail
