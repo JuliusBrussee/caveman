@@ -159,6 +159,51 @@ class ProjectScopeTests(unittest.TestCase):
             r_other = run_activate(cwd=other, home=home, env_extra=env_extra)
             self.assertEqual(r_other.stdout, "OK (project-scope disabled)")
 
+    def test_global_off_plus_enable_marker_activates(self):
+        # The canonical "allowlist mode": user flips global default to off so
+        # caveman is silent everywhere, then drops .caveman-enable markers in
+        # projects where they want it. Without this, the .caveman-enable
+        # marker is useless — the global 'off' branch fires first.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            cwd = Path(tmp) / "cwd"
+            cwd.mkdir()
+            (cwd / ".caveman-enable").write_text("")
+
+            # Flip global default to off via config file.
+            config_dir = home / ".config" / "caveman"
+            config_dir.mkdir(parents=True)
+            (config_dir / "config.json").write_text(json.dumps({"defaultMode": "off"}))
+
+            env_extra = {
+                "XDG_CONFIG_HOME": str(home / ".config"),
+                # Drop the test's default CAVEMAN_DEFAULT_MODE so config.json wins.
+                "CAVEMAN_DEFAULT_MODE": "",
+            }
+
+            result = run_activate(cwd=cwd, home=home, env_extra=env_extra)
+            self.assertIn("CAVEMAN MODE ACTIVE", result.stdout)
+
+    def test_global_off_without_marker_stays_silent(self):
+        # Counterpart to the above: same global off config, but no marker →
+        # silent. This is the failure mode the reorder fixes.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            cwd = Path(tmp) / "cwd"
+            cwd.mkdir()
+
+            config_dir = home / ".config" / "caveman"
+            config_dir.mkdir(parents=True)
+            (config_dir / "config.json").write_text(json.dumps({"defaultMode": "off"}))
+
+            env_extra = {
+                "XDG_CONFIG_HOME": str(home / ".config"),
+                "CAVEMAN_DEFAULT_MODE": "",
+            }
+
+            result = run_activate(cwd=cwd, home=home, env_extra=env_extra)
+            self.assertEqual(result.stdout, "OK")
+
 
 if __name__ == "__main__":
     unittest.main()
