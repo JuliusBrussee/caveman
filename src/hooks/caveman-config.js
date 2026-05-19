@@ -58,6 +58,88 @@ function getDefaultMode() {
   return 'full';
 }
 
+// Project-scope gating — decides whether caveman should activate in a given CWD.
+//
+// Caveman's SessionStart hook fires globally on every Claude Code session,
+// which means caveman behavior leaks into projects the user never intended
+// (a random repo opened for read-only browsing, an unrelated client project,
+// non-coding work). This function lets callers opt projects in or out without
+// flipping the global mode.
+//
+// Resolution order (first match wins):
+//   1. CWD/.caveman-disable file exists → 'disabled'
+//   2. CWD/.caveman-enable  file exists → 'enabled'
+//   3. CAVEMAN_PROJECT_SCOPE env var ('disabled' | 'enabled') → that value
+//   4. config.projectScope.deny[] contains a path prefix of CWD → 'disabled'
+//   5. config.projectScope.allow[] exists AND no entry is a path prefix of CWD → 'disabled'
+//      (allowlist mode: when allow is set, only listed dirs are enabled)
+//   6. config.projectScope.allow[] contains a path prefix of CWD → 'enabled'
+//   7. Otherwise → 'inherit' (use the global default from getDefaultMode())
+//
+// Returns one of: 'disabled' | 'enabled' | 'inherit'
+//
+// The marker files are zero-byte sentinels. Path checks use case-sensitive
+// prefix matching with normalized path separators. Errors fall through to
+// 'inherit' silently — project-scope is a convenience, not a security boundary.
+function getProjectScope(cwd) {
+  if (!cwd || typeof cwd !== 'string') return 'inherit';
+
+  // 1 + 2: marker files in CWD (cheapest check, runs first)
+  try {
+    if (fs.existsSync(path.join(cwd, '.caveman-disable'))) return 'disabled';
+  } catch (e) { /* ignore */ }
+  try {
+    if (fs.existsSync(path.join(cwd, '.caveman-enable'))) return 'enabled';
+  } catch (e) { /* ignore */ }
+
+  // 3: env var override (covers ad-hoc disable for a single session)
+  const envScope = process.env.CAVEMAN_PROJECT_SCOPE;
+  if (envScope === 'disabled' || envScope === 'enabled') return envScope;
+
+  // 4 + 5 + 6: config-driven allow/deny lists. Resolve through symlinks so
+  // macOS /tmp → /private/tmp (and similar setups) don't produce false misses.
+  try {
+    const configPath = getConfigPath();
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const ps = config.projectScope || {};
+    const normalizedCwd = safeRealpath(cwd);
+
+    if (Array.isArray(ps.deny)) {
+      for (const entry of ps.deny) {
+        if (typeof entry !== 'string') continue;
+        if (isPathPrefix(safeRealpath(entry), normalizedCwd)) return 'disabled';
+      }
+    }
+
+    if (Array.isArray(ps.allow) && ps.allow.length > 0) {
+      for (const entry of ps.allow) {
+        if (typeof entry !== 'string') continue;
+        if (isPathPrefix(safeRealpath(entry), normalizedCwd)) return 'enabled';
+      }
+      // Allowlist set but CWD not in it → disabled
+      return 'disabled';
+    }
+  } catch (e) { /* fall through */ }
+
+  return 'inherit';
+}
+
+function isPathPrefix(prefix, target) {
+  if (prefix === target) return true;
+  return target.startsWith(prefix + path.sep);
+}
+
+// Resolve through symlinks to a canonical path. Falls back to path.resolve()
+// for non-existent paths (e.g. allowlist entries the user typed before the
+// directory exists). Never throws.
+function safeRealpath(p) {
+  try {
+    return fs.realpathSync(p);
+  } catch (e) {
+    return path.resolve(p);
+  }
+}
+
 // Symlink-safe flag file write.
 // Uses O_NOFOLLOW where available, writes atomically via temp + rename with
 // 0600 permissions. Protects against local attackers replacing the predictable
@@ -271,4 +353,4 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
+module.exports = { getDefaultMode, getProjectScope, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };

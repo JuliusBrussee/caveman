@@ -9,15 +9,40 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag } = require('./caveman-config');
+const { getDefaultMode, getProjectScope, safeWriteFlag } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
-const mode = getDefaultMode();
+let mode = getDefaultMode();
 
-// "off" mode — skip activation entirely, don't write flag or emit rules
+// Project-scope gating — caveman fires globally by default, but the user may
+// opt specific projects out (or, with an allowlist, opt specific projects in).
+//
+// Resolution: .caveman-disable / .caveman-enable marker files in CWD,
+// CAVEMAN_PROJECT_SCOPE env var, or config.json projectScope.allow/deny lists.
+// See getProjectScope() in caveman-config.js for the full precedence chain.
+//
+// Checked BEFORE the global 'off' branch so that an explicit per-project
+// enable can override a global default of 'off' (allowlist mode). When
+// scope is 'enabled' but the global default is 'off', promote mode to
+// 'full' — the user explicitly opted this project in, so we need SOME
+// active mode.
+const projectScope = getProjectScope(process.cwd());
+
+if (projectScope === 'disabled') {
+  try { fs.unlinkSync(flagPath); } catch (e) {}
+  process.stdout.write('OK (project-scope disabled)');
+  process.exit(0);
+}
+
+if (projectScope === 'enabled' && mode === 'off') {
+  mode = 'full';
+}
+
+// "off" mode — skip activation entirely, don't write flag or emit rules.
+// Only reached when scope is 'inherit' AND global default is 'off'.
 if (mode === 'off') {
   try { fs.unlinkSync(flagPath); } catch (e) {}
   process.stdout.write('OK');
