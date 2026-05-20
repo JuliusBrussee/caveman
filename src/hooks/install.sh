@@ -189,6 +189,9 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
   console.log('  Hooks wired in settings.json');
 "
 
+# Remove the backup now that the merge succeeded
+rm -f "$SETTINGS.bak"
+
 echo ""
 echo "Done! Restart Claude Code to activate."
 echo ""

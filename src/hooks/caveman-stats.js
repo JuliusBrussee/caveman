@@ -52,9 +52,12 @@ function findRecentSession(claudeDir) {
   catch { return null; }
 
   let best = null;
+  let visited = 0;
+  const MAX_ENTRIES = 10_000;
   const stack = entries.map(e => path.join(projectsDir, e.name));
-  while (stack.length) {
+  while (stack.length && visited < MAX_ENTRIES) {
     const p = stack.pop();
+    visited++;
     let st;
     try { st = fs.statSync(p); } catch { continue; }
     if (st.isDirectory()) {

@@ -15,9 +15,14 @@ const os = require('os');
 
 const VALID_MODES = [
   'off', 'lite', 'full', 'ultra',
-  'wenyan-lite', 'wenyan', 'wenyan-full', 'wenyan-ultra',
+  'wenyan-lite', 'wenyan', 'wenyan-ultra',
   'commit', 'review', 'compress'
 ];
+
+// Modes handled by their own slash commands (/caveman-commit, etc.) — not
+// selectable via /caveman <arg>. Exported so activate + mode-tracker share
+// the same definition rather than each maintaining a local copy.
+const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 function getConfigDir() {
   if (process.env.XDG_CONFIG_HOME) {
@@ -249,8 +254,10 @@ function appendFlag(filePath, line) {
 }
 
 // Symlink-safe history read. Returns lines (untrimmed) or empty array on any
-// anomaly. Caller is responsible for parsing JSON. Does NOT enforce a size cap
-// the way readFlag does — history is expected to grow with use.
+// anomaly. Caller is responsible for parsing JSON.
+// Capped at MAX_HISTORY_BYTES to prevent an oversized file from causing OOM.
+const MAX_HISTORY_BYTES = 10 * 1024 * 1024; // 10 MB
+
 function readHistory(filePath) {
   try {
     const st = fs.lstatSync(filePath);
@@ -261,7 +268,11 @@ function readHistory(filePath) {
     let raw;
     try {
       fd = fs.openSync(filePath, flags);
-      raw = fs.readFileSync(fd, 'utf8');
+      // Read up to the cap; anything beyond is silently truncated.
+      const readSize = Math.min(st.size, MAX_HISTORY_BYTES);
+      const buf = Buffer.alloc(readSize);
+      const n = fs.readSync(fd, buf, 0, readSize, 0);
+      raw = buf.slice(0, n).toString('utf8');
     } finally {
       if (fd !== undefined) fs.closeSync(fd);
     }
@@ -271,4 +282,4 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
+module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, INDEPENDENT_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
