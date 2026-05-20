@@ -6,14 +6,30 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
-const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = require('./caveman-config');
+const {
+  getDefaultMode, safeWriteFlag, readFlag, VALID_MODES, getFlagPath,
+} = require('./caveman-config');
 
 // Modes handled by their own slash commands (/caveman-commit, etc.) — not
 // selectable via /caveman <arg>.
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const flagPath = path.join(claudeDir, '.caveman-active');
+const globalFlagPath = path.join(claudeDir, '.caveman-active');
+// flagPath is rebound below once we've parsed session_id from the hook stdin.
+let flagPath = globalFlagPath;
+
+function writeMode(p, content) {
+  safeWriteFlag(p, content);
+  if (p !== globalFlagPath) safeWriteFlag(globalFlagPath, content);
+}
+
+function clearMode(p) {
+  try { fs.unlinkSync(p); } catch (e) {}
+  if (p !== globalFlagPath) {
+    try { fs.unlinkSync(globalFlagPath); } catch (e) {}
+  }
+}
 
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
@@ -21,6 +37,12 @@ process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
     const prompt = (data.prompt || '').trim().toLowerCase();
+
+    // Scope the flag file to this session (issue #184). Without a session_id
+    // (older Claude Code, manual invocation), fall back to the global flag.
+    if (data && typeof data.session_id === 'string') {
+      flagPath = getFlagPath(claudeDir, data.session_id);
+    }
 
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
     // "talk like caveman"). README tells users they can say these, but the hook
@@ -30,7 +52,7 @@ process.stdin.on('end', () => {
       if (!/\b(stop|disable|turn off|deactivate)\b/i.test(prompt)) {
         const mode = getDefaultMode();
         if (mode !== 'off') {
-          safeWriteFlag(flagPath, mode);
+          writeMode(flagPath, mode);
         }
       }
     }
@@ -92,9 +114,9 @@ process.stdin.on('end', () => {
       }
 
       if (mode && mode !== 'off') {
-        safeWriteFlag(flagPath, mode);
+        writeMode(flagPath, mode);
       } else if (mode === 'off') {
-        try { fs.unlinkSync(flagPath); } catch (e) {}
+        clearMode(flagPath);
       }
     }
 
@@ -102,7 +124,7 @@ process.stdin.on('end', () => {
     if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
         /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
         /\bnormal mode\b/i.test(prompt)) {
-      try { fs.unlinkSync(flagPath); } catch (e) {}
+      clearMode(flagPath);
     }
 
     // Per-turn reinforcement: emit a structured reminder when caveman is active.
