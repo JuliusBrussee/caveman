@@ -1,0 +1,10 @@
+{
+  "SessionStart": [
+    {
+      "name": "Gemini Compatibility Patch",
+      "type": "command",
+      "command": "node ${extensionPath}/scripts/gemini-patch.js \"${extensionPath}\"",
+      "description": "Patches agent tool names for Gemini CLI compatibility."
+    }
+  ]
+}
