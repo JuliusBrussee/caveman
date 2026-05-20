@@ -9,12 +9,54 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, isNonInteractiveSession } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
+// SessionStart hooks receive {session_id, transcript_path, source, ...} on stdin.
+// If entrypoint is not "cli" (e.g. sdk-cli probe from CodexBar), skip all
+// injection so the probing tool sees a clean response.
+//
+// Per Claude Code hooks spec, stdin is normally closed after the JSON is
+// delivered. Some launchers leave the pipe open, so fall back quickly instead
+// of blocking session startup.
+if (process.stdin.isTTY) {
+  activate('');
+} else {
+  let stdinBuf = '';
+  let activated = false;
+  const activateOnce = raw => {
+    if (activated) return;
+    activated = true;
+    clearTimeout(fallback);
+    process.stdin.removeAllListeners('data');
+    process.stdin.removeAllListeners('end');
+    process.stdin.pause();
+    activate(raw);
+  };
+  const fallback = setTimeout(() => { activateOnce(stdinBuf); }, 200);
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => { stdinBuf += chunk; });
+  process.stdin.on('end', () => { activateOnce(stdinBuf); });
+}
+
+function activate(raw) {
+  let data = {};
+  try {
+    if (raw && raw.trim()) data = JSON.parse(raw.trim());
+  } catch (e) { /* not JSON — fall through */ }
+
+  if (isNonInteractiveSession(data, claudeDir)) {
+    process.stdout.write('OK');
+    process.exit(0);
+  }
+
+  run();
+}
+
+function run() {
 const mode = getDefaultMode();
 
 // "off" mode — skip activation entirely, don't write flag or emit rules
@@ -141,3 +183,4 @@ try {
 }
 
 process.stdout.write(output);
+} // end run()

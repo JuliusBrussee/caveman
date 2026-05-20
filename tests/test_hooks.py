@@ -156,6 +156,86 @@ class HookScriptTests(unittest.TestCase):
             self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
             self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
 
+    def test_activate_falls_back_when_stdin_stays_open(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-open-stdin-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["USERPROFILE"] = str(home)
+
+            proc = subprocess.Popen(
+                ["node", "src/hooks/caveman-activate.js"],
+                cwd=REPO_ROOT,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                proc.wait(timeout=2)
+                stdout = proc.stdout.read()
+                stderr = proc.stderr.read()
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                self.fail("activate hook hung with open stdin pipe")
+            finally:
+                if proc.stdin:
+                    proc.stdin.close()
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
+
+            self.assertEqual(proc.returncode, 0, stderr)
+            self.assertIn("CAVEMAN MODE ACTIVE", stdout)
+            self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
+
+    def test_activate_fallback_uses_buffered_stdin(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-open-json-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            sessions_dir = claude_dir / "sessions"
+            sessions_dir.mkdir(parents=True)
+            (sessions_dir / "123.json").write_text(
+                json.dumps({"sessionId": "sdk-probe", "entrypoint": "sdk-cli"}) + "\n"
+            )
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["USERPROFILE"] = str(home)
+
+            proc = subprocess.Popen(
+                ["node", "src/hooks/caveman-activate.js"],
+                cwd=REPO_ROOT,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                proc.stdin.write(json.dumps({"session_id": "sdk-probe"}))
+                proc.stdin.flush()
+                proc.wait(timeout=2)
+                stdout = proc.stdout.read()
+                stderr = proc.stderr.read()
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                self.fail("activate hook hung with buffered open stdin pipe")
+            finally:
+                if proc.stdin:
+                    proc.stdin.close()
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
+
+            self.assertEqual(proc.returncode, 0, stderr)
+            self.assertEqual(stdout, "OK")
+            self.assertFalse((claude_dir / ".caveman-active").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
