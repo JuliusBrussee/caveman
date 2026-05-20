@@ -36,6 +36,15 @@ function getConfigPath() {
   return path.join(getConfigDir(), 'config.json');
 }
 
+// Resolve the agent-specific config dir (e.g. ~/.claude or ~/.codebuddy).
+// Detection: if CODEBUDDY_PLUGIN_ROOT or CODEBUDDY_CONFIG_DIR is set, we're
+// running under CodeBuddy Code. Otherwise, default to Claude Code paths.
+function getAgentConfigDir() {
+  if (process.env.CODEBUDDY_CONFIG_DIR) return process.env.CODEBUDDY_CONFIG_DIR;
+  if (process.env.CODEBUDDY_PLUGIN_ROOT) return path.join(os.homedir(), '.codebuddy');
+  return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+}
+
 function getDefaultMode() {
   // 1. Environment variable (highest priority)
   const envMode = process.env.CAVEMAN_DEFAULT_MODE;
@@ -271,4 +280,4 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
+module.exports = { getDefaultMode, getConfigDir, getConfigPath, getAgentConfigDir, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };

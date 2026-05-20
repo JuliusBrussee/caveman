@@ -20,9 +20,9 @@ irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | i
 
 What it does:
 
-- Auto-detects every supported agent installed on your machine (Claude Code, Cursor, Codex, etc.).
+- Auto-detects every supported agent installed on your machine (Claude Code, CodeBuddy Code, Cursor, Codex, etc.).
 - For each one, runs that agent's native install path (plugin / extension / rule file / `npx skills add`).
-- Wires Claude Code hooks, statusline badge, and the `caveman-shrink` MCP middleware on top.
+- Wires Claude Code / CodeBuddy Code hooks, statusline badge, and the `caveman-shrink` MCP middleware on top.
 - Skips anything you don't have. Safe to re-run. ~30 seconds end-to-end.
 
 Want to preview before installing? Use `--dry-run`:
@@ -38,6 +38,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | Agent | Install command | Auto-activates? |
 |---|---|:-:|
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` | Yes |
+| **CodeBuddy Code** | `codebuddy plugin marketplace add JuliusBrussee/caveman && codebuddy plugin install caveman@caveman` | Yes |
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` | Yes |
 | **opencode** | `node bin/install.js --only opencode` *(or `npx -y github:JuliusBrussee/caveman -- --only opencode`)* | Yes (plugin + AGENTS.md) |
 | **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
@@ -108,9 +109,9 @@ Useful flags:
 | `--with-init` | Drop always-on rule files into the current repo (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`) and, if OpenClaw is on the box, append the bootstrap block to `~/.openclaw/workspace/SOUL.md`. |
 | `--with-mcp-shrink` | Register `caveman-shrink` MCP proxy. **On by default.** |
 | `--no-mcp-shrink` | Skip MCP-shrink registration. |
-| `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code hook installer. (Default: on.) |
+| `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code / CodeBuddy Code hook installer. (Default: on.) |
 | `--skip-skills` | Don't run the npx-skills auto-detect fallback when nothing else matched. |
-| `--config-dir <path>` | Claude Code config dir for hook files + `settings.json`. **Does NOT scope** `claude plugin install`, `gemini extensions install`, opencode (`XDG_CONFIG_HOME`), or openclaw (`OPENCLAW_WORKSPACE`) — those use their own paths. Default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. `~` is expanded. |
+| `--config-dir <path>` | Claude Code config dir for hook files + `settings.json`. **Does NOT scope** `claude plugin install`, `gemini extensions install`, opencode (`XDG_CONFIG_HOME`), or openclaw (`OPENCLAW_WORKSPACE`) — those use their own paths. Default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. CodeBuddy Code uses `$CODEBUDDY_CONFIG_DIR` or `~/.codebuddy`. `~` is expanded. |
 | `--non-interactive` | Never prompt; use defaults. (Auto when stdin is not a TTY.) |
 | `--no-color` | Disable ANSI colors. |
 | `--list` | Print full agent matrix and exit. |
@@ -168,8 +169,10 @@ npx -y github:JuliusBrussee/caveman -- --uninstall
 What it removes:
 
 - Caveman hook entries from `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/`; matched by the substring `caveman`).
-- Hook files in `$CLAUDE_CONFIG_DIR/hooks/` (`caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, `caveman-statusline.{sh,ps1}`, plus the dir's `package.json` marker).
-- The Claude Code plugin and the Gemini CLI extension (if installed).
+- Caveman hook entries from `$CODEBUDDY_CONFIG_DIR/settings.json` (default `~/.codebuddy/`).
+- Hook files in `$CLAUDE_CONFIG_DIR/hooks/` and `$CODEBUDDY_CONFIG_DIR/hooks/` (`caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, `caveman-statusline.{sh,ps1}`, plus the dir's `package.json` marker).
+- The Claude Code plugin, the CodeBuddy Code plugin, and the Gemini CLI extension (if installed).
+- The `caveman-shrink` MCP proxy registration (Claude Code and CodeBuddy Code).
 - The opencode native plugin (`~/.config/opencode/plugins/caveman/`, the `plugin` and `mcp.caveman-shrink` entries from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file).
 - The OpenClaw workspace skill folder and the marker-fenced block from `~/.openclaw/workspace/SOUL.md` (when present).
 - The `.caveman-active` flag file.
@@ -191,12 +194,12 @@ Agent read repo. Agent run install. Caveman make agent talk less — agent first
 
 Still broken? [Open an issue](https://github.com/JuliusBrussee/caveman/issues).
 
-**"I ran the installer but Claude Code isn't talking caveman."**
+**"I ran the installer but Claude Code / CodeBuddy Code isn't talking caveman."**
 
-1. Run `node bin/install.js --list` — confirm `claude` is on the detected list. If not, `claude` isn't on `PATH`. Fix that first.
-2. Open `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/settings.json`) and look for `"hooks"` containing `caveman-activate.js` and `caveman-mode-tracker.js`. If missing, re-run with `--force`.
-3. Check `$CLAUDE_CONFIG_DIR/.caveman-active` exists with content `full`. If not, the SessionStart hook silent-failed — check `$CLAUDE_CONFIG_DIR/hooks/` for the JS files and try `node $CLAUDE_CONFIG_DIR/hooks/caveman-activate.js < /dev/null` to see if it errors.
-4. Restart Claude Code. The SessionStart hook only fires on session start, not mid-session.
+1. Run `node bin/install.js --list` — confirm `claude` or `codebuddy` is on the detected list. If not, the binary isn't on `PATH`. Fix that first.
+2. Open `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/settings.json`) or `$CODEBUDDY_CONFIG_DIR/settings.json` (default `~/.codebuddy/settings.json`) and look for `"hooks"` containing `caveman-activate.js` and `caveman-mode-tracker.js`. If missing, re-run with `--force`.
+3. Check `$CLAUDE_CONFIG_DIR/.caveman-active` (or `$CODEBUDDY_CONFIG_DIR/.caveman-active`) exists with content `full`. If not, the SessionStart hook silent-failed — check the `hooks/` dir for the JS files and try `node <hooks-dir>/caveman-activate.js < /dev/null` to see if it errors.
+4. Restart the agent. The SessionStart hook only fires on session start, not mid-session.
 
 **"Hooks failing on Windows."**
 
@@ -215,7 +218,7 @@ The installer uses a JSONC-tolerant parser (`bin/lib/settings.js`) so comments a
 
 **"I'm in a managed env where I can't install hooks."**
 
-Use the rule-file-only path. Hooks are Claude Code-specific; everything else works via static rule files:
+Use the rule-file-only path. Hooks are Claude Code / CodeBuddy Code-specific; everything else works via static rule files:
 
 ```bash
 # Just install for one agent, no Claude hooks
@@ -236,11 +239,12 @@ The profile slug must exist in [vercel-labs/skills](https://github.com/vercel-la
 The installer doesn't phone home. It writes to:
 
 - `$CLAUDE_CONFIG_DIR` (default `~/.claude/`) — hooks, flag file, `settings.json` merge.
+- `$CODEBUDDY_CONFIG_DIR` (default `~/.codebuddy/`) — same as above for CodeBuddy Code.
 - Each agent's own config location — Cursor's `.cursor/rules/`, Windsurf's `.windsurf/rules/`, opencode's `~/.config/opencode/`, etc.
 - Your current working directory (only with `--with-init`) — repo-local rule files.
 - `~/.openclaw/workspace/` (only with `--only openclaw` or `--with-init` when OpenClaw is detected) — the one `--with-init` side-effect outside the cwd.
 
-No telemetry. No analytics. The installer's own code makes no network calls. Network requests do happen indirectly through the per-agent CLIs it shells out to — `claude plugin marketplace add`, `claude plugin install`, `gemini extensions install`, `npm view caveman-shrink`, and `npx -y skills add`. Each fetches from its own registry (Anthropic / GitHub / npm). Source: [`bin/install.js`](bin/install.js).
+No telemetry. No analytics. The installer's own code makes no network calls. Network requests do happen indirectly through the per-agent CLIs it shells out to — `claude plugin marketplace add`, `codebuddy plugin marketplace add`, `claude plugin install`, `codebuddy plugin install`, `gemini extensions install`, `npm view caveman-shrink`, and `npx -y skills add`. Each fetches from its own registry (Anthropic / GitHub / npm). Source: [`bin/install.js`](bin/install.js).
 
 ---
 
