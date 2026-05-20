@@ -73,6 +73,18 @@ MAX_RETRIES = 2
 
 
 def call_claude(prompt: str) -> str:
+    """Send a prompt to Claude.
+
+    Prefers the Anthropic SDK when ANTHROPIC_API_KEY is set; otherwise falls
+    back to the ``claude --print`` CLI (which handles desktop auth).
+
+    On Windows the CLI subprocess decoding defaults to the system codepage
+    (cp1251 / cp1252) and crashes on UTF-8 output — see issue #152. Pinning
+    ``encoding="utf-8"`` with ``errors="replace"`` matches the CLI's actual
+    native I/O and prevents the UnicodeDecodeError before validation can
+    report. Windows users with non-ASCII content can also set
+    ``ANTHROPIC_API_KEY`` to route through the SDK and skip the subprocess.
+    """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if api_key:
         try:
@@ -95,6 +107,8 @@ def call_claude(prompt: str) -> str:
             text=True,
             capture_output=True,
             check=True,
+            encoding="utf-8",
+            errors="replace",
         )
         return strip_llm_wrapper(result.stdout.strip())
     except subprocess.CalledProcessError as e:
