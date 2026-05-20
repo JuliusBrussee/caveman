@@ -90,9 +90,14 @@ function parseArgs(argv) {
     }
   }
   if (opts.all && opts.minimal) die('error: --all and --minimal are mutually exclusive');
-  if (opts.all) { opts.withHooks = true; opts.withInit = true; opts.withMcpShrink = true; }
+  // --all / --minimal set the explicit knobs they imply. We deliberately leave
+  // opts.withHooks at 'auto' for --all so installClaude() can detect when the
+  // Claude Code plugin manifest already wires SessionStart + UserPromptSubmit
+  // and skip the standalone settings.json wiring — duplicate registration
+  // makes both hooks fire twice per event (issue #392). Users who want the
+  // standalone wiring on top of the plugin can still pass --with-hooks.
+  if (opts.all) { opts.withInit = true; opts.withMcpShrink = true; }
   if (opts.minimal) { opts.withHooks = false; opts.withInit = false; opts.withMcpShrink = false; }
-  if (opts.withHooks === 'auto') opts.withHooks = true;
   if (opts.withMcpShrink === 'auto') opts.withMcpShrink = true;
   // Validate --only ids against the provider matrix. PROVIDERS is defined later
   // in the file but is in scope by the time this function runs.
@@ -390,18 +395,55 @@ async function installClaude(ctx) {
     const r = captureSpawn('claude', ['plugin', 'list']);
     if (r.status === 0 && /caveman/i.test(r.stdout || '')) alreadyInstalled = true;
   }
+  let pluginInstallSucceeded = false;
   if (alreadyInstalled) {
     note('  caveman plugin already installed (use --force to reinstall)');
     results.skipped.push(['claude', 'plugin already installed']);
+    pluginInstallSucceeded = true;
   } else {
     const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', REPO], null, opts.dryRun);
     const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], null, opts.dryRun);
-    if ((r1.status || 0) === 0 && (r2.status || 0) === 0) results.installed.push('claude');
-    else results.failed.push(['claude', 'claude plugin install failed']);
+    if ((r1.status || 0) === 0 && (r2.status || 0) === 0) {
+      results.installed.push('claude');
+      pluginInstallSucceeded = true;
+    } else {
+      results.failed.push(['claude', 'claude plugin install failed']);
+    }
   }
 
-  if (opts.withHooks) {
-    say('  → installing hooks (--with-hooks)');
+  // Hook wiring decision matrix:
+  //   --no-hooks            → opts.withHooks === false           → skip
+  //   --with-hooks          → opts.withHooks === true            → wire (warn if duplicate)
+  //   default / --all       → opts.withHooks === 'auto'          → wire only if plugin install failed
+  //
+  // The plugin manifest at plugins/caveman/.claude-plugin/plugin.json already
+  // wires SessionStart + UserPromptSubmit when the plugin install succeeds.
+  // Wiring the same hooks again into settings.json makes both fire every event
+  // (issue #392 — two CAVEMAN MODE ACTIVE blocks per session start, two
+  // UserPromptSubmit reinforcement lines per turn). Skip the duplicate.
+  let shouldWireHooks;
+  if (opts.withHooks === false) {
+    shouldWireHooks = false;
+  } else if (opts.withHooks === true) {
+    shouldWireHooks = true;
+    if (pluginInstallSucceeded) {
+      warn('  --with-hooks wires hooks in settings.json alongside the plugin manifest.');
+      warn('  Both will fire on every event. Pass --no-hooks to keep only the plugin path.');
+    }
+  } else {
+    // 'auto'
+    shouldWireHooks = !pluginInstallSucceeded;
+    if (!shouldWireHooks) {
+      note('  hooks: plugin manifest handles SessionStart + UserPromptSubmit');
+      note('  (pass --with-hooks to also wire standalone hooks in settings.json)');
+      results.skipped.push(['claude-hooks', 'plugin manifest handles hooks']);
+    } else {
+      note('  hooks: plugin install did not succeed; falling back to standalone wiring');
+    }
+  }
+
+  if (shouldWireHooks) {
+    say('  → installing hooks');
     const r = await installHooks(ctx);
     if (r === 'ok') results.installed.push('claude-hooks');
     else if (r === 'skip') results.skipped.push(['claude-hooks', 'already wired']);
