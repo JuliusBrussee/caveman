@@ -1,22 +1,29 @@
 // caveman — opencode plugin
 //
-// Mirrors the Claude Code SessionStart + UserPromptSubmit hook pair using
-// opencode's lifecycle hook system. Bun ESM module; loads the existing
-// security-hardened helpers from caveman-config.js via createRequire so the
-// symlink-safe flag-write code lives in one place.
+// Provides dynamic caveman mode tracking for opencode:
+// - Writes the mode flag on plugin initialization (session start)
+// - Parses user messages for /caveman commands and natural-language toggles
+// - Injects per-turn reinforcement into the system prompt
 //
 // Layout once installed:
 //   ~/.config/opencode/plugins/caveman/
 //   ├── package.json
 //   ├── plugin.js              ← this file
-//   └── caveman-config.js      ← copied sibling of src/hooks/caveman-config.js
+//   └── caveman-config.cjs     ← copied sibling of src/hooks/caveman-config.js
 //
-// Always-on caveman ruleset is provided separately via
-// ~/.config/opencode/AGENTS.md (Tier-3 base) so this plugin only handles
-// dynamic state — flag writes, slash-command parsing, natural-language
-// activation, and per-prompt reinforcement. opencode's `session.created`
-// payload doesn't expose a documented system-prompt-injection return, so we
-// don't try to emit ruleset content here.
+// The always-on caveman ruleset is provided separately via
+// ~/.config/opencode/AGENTS.md (Tier-3 base). This plugin handles dynamic
+// state only: flag writes, slash-command parsing, natural-language
+// activation, and per-turn reinforcement.
+//
+// Hook mapping (opencode >=1.15.x):
+//   - Plugin factory: session initialization (runs once at load)
+//   - chat.message: intercept user prompts for mode changes
+//   - experimental.chat.system.transform: inject reinforcement per-turn
+//
+// Note: opencode does NOT support 'session.created' or 'tui.prompt.append'
+// as named plugin hooks. Those exist as internal bus events only. See:
+// https://github.com/JuliusBrussee/caveman/issues/418
 
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +44,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 // either way.
 function loadConfig() {
   try { return require(join(here, 'caveman-config.cjs')); }
-  catch (_) { return require(join(here, '..', '..', 'hooks', 'caveman-config.js')); }
+  catch (e) {
+    if (e.code !== 'MODULE_NOT_FOUND') throw e;
+    return require(join(here, '..', '..', 'hooks', 'caveman-config.js'));
+  }
 }
 const config = loadConfig();
 
@@ -122,33 +132,42 @@ function applyModeChange(mode) {
   safeWriteFlag(flagPath, mode);
 }
 
-export const CavemanPlugin = async (_ctx) => ({
-  'session.created': async () => {
-    const mode = getDefaultMode();
-    if (mode === 'off') {
-      try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
-      return;
-    }
+export const CavemanPlugin = async (_ctx) => {
+  // Initialize flag at plugin load time (equivalent to session start).
+  // The factory runs once per opencode session — this is the correct place
+  // for session-init logic since opencode does not expose a 'session.created'
+  // hook to plugins.
+  const mode = getDefaultMode();
+  if (mode === 'off') {
+    try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
+  } else {
     safeWriteFlag(flagPath, mode);
-  },
+  }
 
-  // opencode's TUI prompt-append hook fires before the prompt is sent to the
-  // model. We use it for two things: react to mode-changing prompts (slash
-  // commands + natural language), and append a one-line reinforcement when
-  // caveman is active so the model can't drift mid-session. Returning an
-  // object with `append` is the documented way to inject prompt content.
-  'tui.prompt.append': async (input) => {
-    const promptText = (input && (input.prompt || input.text)) || '';
+  return {
+    // Intercept user messages to detect /caveman commands and
+    // natural-language mode toggles. opencode fires chat.message with
+    // (input, output) where output.parts contains the message text parts.
+    'chat.message': async (_input, output) => {
+      if (!output || !output.parts) return;
+      for (const part of output.parts) {
+        if (part && part.type === 'text' && part.text) {
+          const change = parseModeChange(part.text);
+          if (change) applyModeChange(change);
+        }
+      }
+    },
 
-    const change = parseModeChange(promptText);
-    if (change) applyModeChange(change);
-
-    const active = readFlag(flagPath);
-    if (active && !INDEPENDENT_MODES.has(active)) {
-      return { append: reinforcementLine(active) };
-    }
-    return undefined;
-  },
-});
+    // Inject reinforcement line into system prompt when caveman is active.
+    // This fires before every LLM call via plugin.trigger(), ensuring the
+    // model stays in mode even across long sessions.
+    'experimental.chat.system.transform': async (_input, output) => {
+      const active = readFlag(flagPath);
+      if (active && !INDEPENDENT_MODES.has(active)) {
+        output.system.push(reinforcementLine(active));
+      }
+    },
+  };
+};
 
 export default CavemanPlugin;

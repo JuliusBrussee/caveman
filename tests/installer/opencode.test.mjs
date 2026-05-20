@@ -248,7 +248,7 @@ test('opencode uninstall removes plugin dir, command/agent/skill files, prunes o
 });
 
 // ── 5. Plugin smoke: load installed plugin.js, fire fake hooks ────────────
-test('opencode plugin handles /caveman ultra and stop caveman via tui.prompt.append', async () => {
+test('opencode plugin handles /caveman ultra and stop caveman via chat.message', async () => {
   const xdg = freshTmpDir();
   const shimDir = shimOpencode();
   try {
@@ -264,22 +264,29 @@ test('opencode plugin handles /caveman ultra and stop caveman via tui.prompt.app
 
     const mod = await import(pathToFileURL(pluginPath).href);
     const factory = mod.default || mod.CavemanPlugin;
+
+    // Factory initializes the flag (equivalent to session start)
     const handlers = await factory({});
-
-    // Slash command activates ultra
-    const out1 = await handlers['tui.prompt.append']({ prompt: '/caveman ultra' });
-    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultra');
-    assert.ok(out1 && typeof out1.append === 'string', 'expected reinforcement append');
-    assert.match(out1.append, /CAVEMAN MODE ACTIVE \(ultra\)/);
-
-    // Natural-language deactivation removes flag
-    const out2 = await handlers['tui.prompt.append']({ prompt: 'stop caveman please' });
-    assert.equal(fs.existsSync(flagPath), false, 'flag should be deleted after deactivation');
-    assert.equal(out2, undefined, 'no reinforcement when flag absent');
-
-    // session.created writes default mode
-    await handlers['session.created']();
     assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full');
+
+    // Slash command activates ultra via chat.message
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultra');
+
+    // System transform injects reinforcement when active
+    const system = { system: [] };
+    await handlers['experimental.chat.system.transform']({}, system);
+    assert.ok(system.system.length > 0, 'expected system prompt injection');
+    assert.match(system.system[0], /CAVEMAN MODE ACTIVE \(ultra\)/);
+
+    // Natural-language deactivation removes flag via chat.message
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: 'stop caveman please' }] });
+    assert.equal(fs.existsSync(flagPath), false, 'flag should be deleted after deactivation');
+
+    // System transform does not inject when inactive
+    const system2 = { system: [] };
+    await handlers['experimental.chat.system.transform']({}, system2);
+    assert.equal(system2.system.length, 0, 'no injection when inactive');
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });
