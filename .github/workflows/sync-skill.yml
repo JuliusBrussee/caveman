@@ -34,6 +34,11 @@ jobs:
         run: |
           cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
 
+      - name: Sync Kiro native skill
+        run: |
+          mkdir -p .kiro/skills/caveman
+          cp skills/caveman/SKILL.md .kiro/skills/caveman/SKILL.md
+
       - name: Sync caveman-compress skill to plugin
         run: |
           # Plugin distribution mirrors source verbatim — no rename, no sed.
@@ -64,6 +69,7 @@ jobs:
             plugins/caveman/agents/cavecrew-investigator.md \
             plugins/caveman/agents/cavecrew-builder.md \
             plugins/caveman/agents/cavecrew-reviewer.md \
+            .kiro/skills/caveman/SKILL.md \
             dist/caveman.skill
           git diff --staged --quiet && exit 0
           git commit -m "chore: sync SKILL.md copies [skip ci]"

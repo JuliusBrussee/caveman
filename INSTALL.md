@@ -59,7 +59,9 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **ForgeCode** | `npx skills add JuliusBrussee/caveman -a forgecode` | No |
 | **Block Goose** | `npx skills add JuliusBrussee/caveman -a goose` | No |
 | **iFlow CLI** | `npx skills add JuliusBrussee/caveman -a iflow-cli` | No |
+| **Kiro (native)** | Copy `.kiro/skills/caveman/SKILL.md` + `.kiro/steering/caveman.md` to your repo | Yes (always-on steering) |
 | **Kiro CLI** | `npx skills add JuliusBrussee/caveman -a kiro-cli` | No |
+| **Amazon Q** | Copy `.amazonq/rules/caveman.md` to your repo | Yes (always-on rule) |
 | **Mistral Vibe** | `npx skills add JuliusBrussee/caveman -a mistral-vibe` | No |
 | **OpenHands** | `npx skills add JuliusBrussee/caveman -a openhands` | No |
 | **Qwen Code** | `npx skills add JuliusBrussee/caveman -a qwen-code` | No |
