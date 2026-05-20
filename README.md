@@ -26,17 +26,6 @@
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (also Codex, Gemini, Cursor, Windsurf, Cline, Copilot, 30+ more) that makes agent talk like caveman — cuts **~75% of output tokens**, keeps full technical accuracy. Brain still big. Mouth small.
 
-> [!IMPORTANT]
-> ### 🪨 New: caveman now a whole coding agent — **caveman-code**
->
-> This skill compress what agent *say*. **caveman-code** compress *everything* — full terminal coding agent, **~2× fewer tokens than Codex**, 20+ providers, plan mode, autopilot loop, MIT.
->
-> ```bash
-> npm install -g @juliusbrussee/caveman-code
-> ```
->
-> **[→ Try caveman-code now](https://github.com/JuliusBrussee/caveman-code)** — same brain, half the token, whole agent.
-
 ## Before / After
 
 <table>
@@ -86,6 +75,22 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (al
 ```
 
 Pick your level of grunt — `lite` (drop filler), `full` (default caveman), `ultra` (telegraphic), or `wenyan` (classical Chinese, even shorter). One command switch. Cost go down forever.
+
+<table align="center">
+<tr><td>
+
+### <img src="docs/assets/dancing-rock.svg" width="22" height="22" alt="rock"/> Like this trick? Now get whole agent — **caveman-code**
+
+This skill shrink what agent **say**. **[caveman-code](https://github.com/JuliusBrussee/caveman-code)** shrink **everything** — full terminal coding agent, caveman top to bottom. **~2× fewer tokens than Codex** on identical tasks. 20+ providers · plan mode · autopilot goal loop · MIT.
+
+```bash
+npm install -g @juliusbrussee/caveman-code
+```
+
+[**▶ Try caveman-code now →**](https://github.com/JuliusBrussee/caveman-code) — *why use many token when whole agent save*
+
+</td></tr>
+</table>
 
 ## Install
 
