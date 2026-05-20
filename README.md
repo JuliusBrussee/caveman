@@ -26,6 +26,17 @@
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (also Codex, Gemini, Cursor, Windsurf, Cline, Copilot, 30+ more) that makes agent talk like caveman — cuts **~75% of output tokens**, keeps full technical accuracy. Brain still big. Mouth small.
 
+> [!IMPORTANT]
+> ### 🪨 New: caveman now a whole coding agent — **caveman-code**
+>
+> This skill compress what agent *say*. **caveman-code** compress *everything* — full terminal coding agent, **~2× fewer tokens than Codex**, 20+ providers, plan mode, autopilot loop, MIT.
+>
+> ```bash
+> npm install -g @juliusbrussee/caveman-code
+> ```
+>
+> **[→ Try caveman-code now](https://github.com/JuliusBrussee/caveman-code)** — same brain, half the token, whole agent.
+
 ## Before / After
 
 <table>
@@ -39,7 +50,7 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (al
 </td>
 <td width="50%">
 
-### 🪨 Caveman Claude (19 tokens)
+### <img src="docs/assets/dancing-rock.svg" width="20" height="20" alt="rock"/> Caveman Claude (19 tokens)
 
 > "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
 
@@ -55,7 +66,7 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (al
 </td>
 <td>
 
-### 🪨 Caveman Claude
+### <img src="docs/assets/dancing-rock.svg" width="20" height="20" alt="rock"/> Caveman Claude
 
 > "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 
@@ -159,7 +170,7 @@ A March 2026 paper ["Brevity Constraints Reverse Performance Hierarchies in Lang
 
 Maintainer detail (hook architecture, file ownership, CI sync) live in [CLAUDE.md](./CLAUDE.md).
 
-## Lobster, Meet Rock 🦞🪨
+## Lobster, Meet Rock 🦞 <img src="docs/assets/dancing-rock.svg" width="22" height="22" alt="rock"/>
 
 [**OpenClaw**](https://openclaw.ai) the self-host gateway. One box, many agent inside (Claude Code, Codex, Pi, OpenCode), wired to your Slack / Discord / iMessage / Telegram / whatever. Tagline: *"The lobster way."* Lobster strong. Lobster smart. Lobster also talk a lot.
 
@@ -191,16 +202,17 @@ Lobster claw still sharp. Lobster mouth now small. Brain still big.
 
 ## Caveman Ecosystem
 
-Four tools. One philosophy: **agent do more with less**.
+Five tools. One philosophy: **agent do more with less**.
 
 | Repo | What |
 |------|------|
 | [**caveman**](https://github.com/JuliusBrussee/caveman) *(you here)* | Output compression — *why use many token when few do trick* |
+| [**caveman-code**](https://github.com/JuliusBrussee/caveman-code) | Whole terminal coding agent — *why use many token when whole agent can save* |
 | [**cavemem**](https://github.com/JuliusBrussee/cavemem) | Cross-agent memory — *why agent forget when agent can remember* |
 | [**cavekit**](https://github.com/JuliusBrussee/cavekit) | Spec-driven build loop — *why agent guess when agent can know* |
 | [**cavegemma**](https://github.com/JuliusBrussee/finetune-caveman) | Gemma 4 31B fine-tuned on caveman pairs — *why prompt every turn when weight remember* |
 
-Compose: cavekit drive build, caveman compress what agent *say*, cavemem compress what agent *remember*, cavegemma bake compression into weight. One rock. Two rock. Three rock. Four rock. That it.
+Compose: cavekit drive build, caveman compress what agent *say*, cavemem compress what agent *remember*, cavegemma bake compression into weight, caveman-code ship it all as one terminal agent. One rock. Two rock. Three rock. Four rock. Five rock. That it.
 
 ## Links
 
