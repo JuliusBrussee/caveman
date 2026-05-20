@@ -46,13 +46,27 @@ const HOOK_FILES = [
 function parseArgs(argv) {
   const opts = {
     dryRun: false, force: false, skipSkills: false,
-    withHooks: 'auto', withInit: false, withMcpShrink: 'auto',
+    withHooks: 'auto', withInit: false, withMcpShrink: false,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
     configDir: null, help: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    // --with-mcp-shrink=<upstream cmd>  (handled before the switch so the
+    // GNU-style =value form is recognized). Bare --with-mcp-shrink falls
+    // through to the switch and is rejected — caveman-shrink is a proxy
+    // and a stub registration just lands the user in a broken-MCP loop.
+    if (a.startsWith('--with-mcp-shrink=')) {
+      const raw = a.slice('--with-mcp-shrink='.length);
+      const tokens = raw.trim().split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) {
+        die('error: --with-mcp-shrink requires an upstream command\n' +
+            '  example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /path"');
+      }
+      opts.withMcpShrink = tokens;
+      continue;
+    }
     switch (a) {
       case '--dry-run': opts.dryRun = true; break;
       case '--force': opts.force = true; break;
@@ -60,7 +74,23 @@ function parseArgs(argv) {
       case '--with-hooks': opts.withHooks = true; break;
       case '--no-hooks': opts.withHooks = false; break;
       case '--with-init': opts.withInit = true; break;
-      case '--with-mcp-shrink': opts.withMcpShrink = true; break;
+      case '--with-mcp-shrink': {
+        const v = argv[i + 1];
+        if (v && !v.startsWith('--')) {
+          i++;
+          const tokens = v.trim().split(/\s+/).filter(Boolean);
+          if (tokens.length === 0) {
+            die('error: --with-mcp-shrink requires an upstream command\n' +
+                '  example: --with-mcp-shrink "npx @modelcontextprotocol/server-filesystem /path"');
+          }
+          opts.withMcpShrink = tokens;
+        } else {
+          die('error: --with-mcp-shrink requires an upstream command — caveman-shrink\n' +
+              '  is a proxy and exits immediately without one. Pass the upstream:\n' +
+              '  --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /path"');
+        }
+        break;
+      }
       case '--no-mcp-shrink': opts.withMcpShrink = false; break;
       case '--all': opts.all = true; break;
       case '--minimal': opts.minimal = true; break;
@@ -90,10 +120,12 @@ function parseArgs(argv) {
     }
   }
   if (opts.all && opts.minimal) die('error: --all and --minimal are mutually exclusive');
-  if (opts.all) { opts.withHooks = true; opts.withInit = true; opts.withMcpShrink = true; }
+  // --all does not touch withMcpShrink. caveman-shrink needs an upstream
+  // command, so there's no sensible "everything on" default. Users opt in
+  // explicitly with --with-mcp-shrink="<upstream cmd>".
+  if (opts.all) { opts.withHooks = true; opts.withInit = true; }
   if (opts.minimal) { opts.withHooks = false; opts.withInit = false; opts.withMcpShrink = false; }
   if (opts.withHooks === 'auto') opts.withHooks = true;
-  if (opts.withMcpShrink === 'auto') opts.withMcpShrink = true;
   // Validate --only ids against the provider matrix. PROVIDERS is defined later
   // in the file but is in scope by the time this function runs.
   if (opts.only.length) {
@@ -633,14 +665,17 @@ function installOpencode(ctx) {
       cfg.plugin.push(OPENCODE_PLUGIN_REL);
     }
     if (opts.withMcpShrink) {
+      // opts.withMcpShrink is the array of upstream-cmd tokens parseArgs
+      // produced. caveman-shrink is a proxy — it crashes without an upstream,
+      // so we always wire one through.
       if (!cfg.mcp || typeof cfg.mcp !== 'object') cfg.mcp = {};
       if (!cfg.mcp['caveman-shrink']) {
         cfg.mcp['caveman-shrink'] = {
           type: 'local',
-          command: ['npx', '-y', MCP_SHRINK_PKG],
+          command: ['npx', '-y', MCP_SHRINK_PKG, ...opts.withMcpShrink],
           enabled: true,
         };
-        process.stdout.write('  registered caveman-shrink MCP server\n');
+        process.stdout.write(`  registered caveman-shrink MCP server (wraps: ${opts.withMcpShrink.join(' ')})\n`);
       }
     }
     SETTINGS.writeSettings(opencodeJson, cfg);
@@ -801,10 +836,21 @@ function installMcpShrink(ctx) {
     note('    src/hooks/README.md to your Claude Code MCP config manually.');
     return { kind: 'skip', why: 'manual config required' };
   }
-  const r = runSpawn('claude', ['mcp', 'add', 'caveman-shrink', '--', 'npx', '-y', MCP_SHRINK_PKG], null, opts.dryRun);
+  // opts.withMcpShrink is always an array of upstream-cmd tokens by the
+  // time we get here; parseArgs rejects bare --with-mcp-shrink. The proxy
+  // gets `npx -y caveman-shrink <upstream tokens...>` so it has something
+  // to wrap.
+  const upstream = opts.withMcpShrink;
+  const r = runSpawn(
+    'claude',
+    ['mcp', 'add', 'caveman-shrink', '--', 'npx', '-y', MCP_SHRINK_PKG, ...upstream],
+    null, opts.dryRun
+  );
   if ((r.status || 0) === 0) {
-    note('    registered. Wrap an upstream by editing the mcpServers entry — see:');
-    note(`    https://github.com/${REPO}/tree/main/src/mcp-servers/caveman-shrink`);
+    note(`    registered, wrapping: ${upstream.join(' ')}`);
+    note(`    Edit ~/.claude.json mcpServers["caveman-shrink"] to change the upstream,`);
+    note('    or `claude mcp remove caveman-shrink` to drop it.');
+    note(`    Docs: https://github.com/${REPO}/tree/main/src/mcp-servers/caveman-shrink`);
     return { kind: 'ok' };
   }
   return { kind: 'fail', why: 'claude mcp add failed' };
@@ -1055,8 +1101,9 @@ function printList(noColor) {
     process.stdout.write(`  ${pad(p.id, 13)} ${pad(p.label, 22)} ${p.mech}${tag}\n`);
   }
   process.stdout.write('\n');
-  process.stdout.write(c.dim('  Defaults: --with-hooks ON, --with-mcp-shrink ON, --with-init OFF.\n'));
-  process.stdout.write(c.dim('  --all turns all three on, --minimal turns all three off.\n'));
+  process.stdout.write(c.dim('  Defaults: --with-hooks ON, --with-init OFF, --with-mcp-shrink OFF.\n'));
+  process.stdout.write(c.dim('  --all = hooks + init (mcp-shrink needs an upstream — opt in explicitly).\n'));
+  process.stdout.write(c.dim('  --minimal turns hooks + init + mcp-shrink off.\n'));
 }
 
 function pad(s, n) { s = String(s); return s + ' '.repeat(Math.max(0, n - s.length)); }
@@ -1077,14 +1124,20 @@ FLAGS
   --only <agent>        Install only for the named agent. Repeatable.
                         See --list for valid ids.
   --skip-skills         Don't run the npx-skills auto-detect fallback.
-  --all                 Turn on hooks + init + mcp-shrink.
+  --all                 Turn on hooks + init. (mcp-shrink needs an upstream;
+                        pass --with-mcp-shrink="<cmd>" to add it.)
   --minimal             Just the plugin/extension install.
   --with-hooks          Claude Code: install SessionStart/UserPromptSubmit hooks
                         + statusline badge. (Default ON.)
   --no-hooks            Skip the hooks installer.
   --with-init           Write per-repo IDE rule files into \$PWD.
-  --with-mcp-shrink     Claude Code: register caveman-shrink MCP proxy. (Default ON.)
-  --no-mcp-shrink       Skip MCP shrink.
+  --with-mcp-shrink="<upstream cmd>"
+                        Claude Code (and opencode): register caveman-shrink MCP
+                        proxy wrapping the given upstream. Default OFF.
+                        caveman-shrink crashes without an upstream, so a value
+                        is required. The value is whitespace-tokenized.
+                        Example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"
+  --no-mcp-shrink       Skip MCP shrink. (Default.)
   --uninstall, -u       Remove caveman from this machine.
   --config-dir <path>   Claude Code config dir for hook files + settings.json.
                         Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT
