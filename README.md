@@ -19,7 +19,8 @@
   <a href="#install">Install</a> •
   <a href="#what-you-get">What You Get</a> •
   <a href="#benchmarks">Benchmarks</a> •
-  <a href="./INSTALL.md">Full install guide</a>
+  <a href="./INSTALL.md">Full install guide</a> •
+  <a href="https://juliusbrussee.github.io/caveman/">Website</a>
 </p>
 
 ---
