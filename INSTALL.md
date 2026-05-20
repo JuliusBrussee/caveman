@@ -60,6 +60,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Block Goose** | `npx skills add JuliusBrussee/caveman -a goose` | No |
 | **iFlow CLI** | `npx skills add JuliusBrussee/caveman -a iflow-cli` | No |
 | **Kiro CLI** | `npx skills add JuliusBrussee/caveman -a kiro-cli` | No |
+| **Kimi Code CLI** | `kimi plugin install https://github.com/JuliusBrussee/caveman/plugins/caveman-kimi` or `npx skills add JuliusBrussee/caveman -a kimi-cli` | Yes |
 | **Mistral Vibe** | `npx skills add JuliusBrussee/caveman -a mistral-vibe` | No |
 | **OpenHands** | `npx skills add JuliusBrussee/caveman -a openhands` | No |
 | **Qwen Code** | `npx skills add JuliusBrussee/caveman -a qwen-code` | No |
