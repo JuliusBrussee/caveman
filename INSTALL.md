@@ -76,7 +76,18 @@ If you want to install for one agent (or want to know exactly what command runs 
 
 For "auto-activates? No" agents, type `/caveman` once per session (or use natural-language triggers like "talk like caveman", "caveman mode").
 
-Full agent matrix (with detection rules) is in `bin/install.js` under the `PROVIDERS` array.
+**Finding a profile slug for `npx skills add ... -a <profile>`?** Either read the table above, or print the live matrix from the installer:
+
+```bash
+# Either of these works (install.sh / install.ps1 are thin shims that
+# forward all flags to bin/install.js):
+bash install.sh --list             # macOS / Linux / WSL, from a local clone
+pwsh install.ps1 --list            # Windows / PowerShell, from a local clone
+node bin/install.js --list         # any platform, from a local clone
+npx -y github:JuliusBrussee/caveman -- --list   # no clone needed
+```
+
+Each row prints the agent id, profile slug (where applicable), and whether it was auto-detected on your machine. Full agent matrix (with detection rules) is also defined in `bin/install.js` under the `PROVIDERS` array.
 
 ## Manual install (no `curl | bash`)
 
