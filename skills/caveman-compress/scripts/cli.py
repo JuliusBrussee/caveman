@@ -64,7 +64,8 @@ def main():
 
         if success:
             print("\nCompression completed successfully")
-            backup_path = filepath.with_name(filepath.stem + ".original.md")
+            _backup_dir = Path.home() / ".local" / "share" / "caveman-compress" / "backups" / filepath.parent.name
+            backup_path = _backup_dir / (filepath.stem + ".original.md")
             print(f"Compressed: {filepath}")
             print(f"Original:   {backup_path}")
             sys.exit(0)

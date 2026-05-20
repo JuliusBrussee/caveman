@@ -180,7 +180,11 @@ def compress_file(filepath: Path) -> bool:
         return False
 
     original_text = filepath.read_text(errors="ignore")
-    backup_path = filepath.with_name(filepath.stem + ".original.md")
+    # Store backup outside the source directory so auto-loaders (e.g. Claude
+    # Code rules/, opencode instructions/) don't pick it up as a live file.
+    _backup_dir = Path.home() / ".local" / "share" / "caveman-compress" / "backups" / filepath.parent.name
+    _backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = _backup_dir / (filepath.stem + ".original.md")
 
     if not original_text.strip():
         print("❌ Refusing to compress: file is empty or whitespace-only.")
