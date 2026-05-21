@@ -2,7 +2,7 @@
   <img src="https://em-content.zobj.net/source/apple/391/rock_1faa8.png" width="120" />
 </p>
 
-<h1 align="center">caveman</h1>
+<h1 align="center">caveman app</h1>
 
 <p align="center">
   <strong>why use many token when few do trick</strong>
