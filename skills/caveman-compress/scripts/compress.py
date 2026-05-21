@@ -16,6 +16,27 @@ OUTER_FENCE_REGEX = re.compile(
     r"\A\s*(`{3,}|~{3,})[^\n]*\n(.*)\n\1\s*\Z", re.DOTALL
 )
 
+# YAML frontmatter: starts at file start with --- on its own line, ends with --- on its own line.
+# Captures the entire block (including delimiters and trailing newline) and the body after.
+FRONTMATTER_REGEX = re.compile(
+    r"\A(---\r?\n.*?\r?\n---\r?\n)(.*)", re.DOTALL
+)
+
+
+def split_frontmatter(text: str) -> tuple[str, str]:
+    """Split YAML frontmatter from body. Returns (frontmatter, body).
+
+    Memory files (and many other markdown docs) start with a YAML frontmatter
+    block delimited by `---` lines. The compression LLM has a habit of stripping
+    or rewriting these despite preserve-structure rules in the prompt — so we
+    surgically remove the frontmatter before compression and prepend it back
+    verbatim to the output. Files without frontmatter pass through unchanged.
+    """
+    m = FRONTMATTER_REGEX.match(text)
+    if m:
+        return m.group(1), m.group(2)
+    return "", text
+
 # Filenames and paths that almost certainly hold secrets or PII. Compressing
 # them ships raw bytes to the Anthropic API — a third-party data boundary that
 # developers on sensitive codebases cannot cross. detect.py already skips .env
@@ -193,20 +214,34 @@ def compress_file(filepath: Path) -> bool:
         print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
         return False
 
-    # Step 1: Compress
-    print("Compressing with Claude...")
-    compressed = call_claude(build_compress_prompt(original_text))
+    # Split YAML frontmatter off before compression. Claude tends to strip or
+    # rewrite frontmatter despite preserve-structure rules; we keep it verbatim
+    # by removing it from the input and re-prepending it to the output.
+    frontmatter, body = split_frontmatter(original_text)
+    if frontmatter:
+        print(f"Detected YAML frontmatter ({len(frontmatter)} chars) — preserving verbatim")
 
-    if compressed is None or not compressed.strip():
+    if not body.strip():
+        print("❌ Refusing to compress: body is empty after frontmatter removal.")
+        return False
+
+    # Step 1: Compress (body only, frontmatter excluded)
+    print("Compressing with Claude...")
+    compressed_body = call_claude(build_compress_prompt(body))
+
+    if compressed_body is None or not compressed_body.strip():
         print("❌ Compression aborted: Claude returned an empty response.")
         print("   Original file is untouched (no backup created).")
         return False
 
-    if compressed.strip() == original_text.strip():
+    if compressed_body.strip() == body.strip():
         print("❌ Compression aborted: output is identical to input.")
         print("   Likely causes: Claude refused, returned the prompt verbatim, or the file is")
         print("   already in caveman form. Original file is untouched (no backup created).")
         return False
+
+    # Reassemble: frontmatter + compressed body
+    compressed = frontmatter + compressed_body
 
     # Save original as backup, then verify the backup readback before
     # touching the input file. If the filesystem dropped bytes (encoding,
