@@ -24,7 +24,7 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (also Codex, Gemini, Cursor, Windsurf, Cline, Copilot, 30+ more) that makes agent talk like caveman — cuts **~75% of output tokens**, keeps full technical accuracy. Brain still big. Mouth small.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (also Codex, Gemini, Cursor, Windsurf, Cline, Copilot, 30+ more) that makes agent talk like caveman — cuts **~50% of output tokens** (median across the [evals snapshot](evals/snapshots/results.json), range 0% to 88%), keeps full technical accuracy. Brain still big. Mouth small.
 
 ## Before / After
 
@@ -63,11 +63,11 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (al
 </tr>
 </table>
 
-**Same fix. 75% less word. Brain still big.**
+**Same fix. ~50% less word (median). Brain still big.**
 
 ```
 ┌─────────────────────────────────────┐
-│  TOKENS SAVED          ████████ 75% │
+│  TOKENS SAVED          █████░░░ 50% │
 │  TECHNICAL ACCURACY    ████████ 100%│
 │  SPEED INCREASE        ████████ ~3x │
 │  VIBES                 ████████ OOG │
