@@ -132,6 +132,24 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/rule
 
 `--with-init` writes the rule into every supported per-agent location it can detect (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`). It also installs the OpenClaw workspace bootstrap (skill folder + SOUL.md marker block) when `~/.openclaw/workspace/` exists. Single source: [`src/rules/caveman-activate.md`](src/rules/caveman-activate.md).
 
+## Hosted agents (M365 Copilot agents, Gemini Gems)
+
+Hosted assistants like a **Microsoft 365 Copilot agent** (Copilot Studio / agent builder) or a **Gemini Gem** can't run hooks, install skills, or read local files — but they can fetch a URL. Point them at the canonical SKILL.md so they pull the upstream caveman ruleset every session.
+
+Paste this into the agent's instructions / Gem prompt:
+
+```
+Read the caveman skill below and follow it for every response in this conversation:
+- Use FULL mode unless the user explicitly switches it (lite / ultra / wenyan).
+- Do NOT echo the SKILL.md contents back to the user.
+- Apply the rules to your own output; keep responses professional and on-task.
+- Code, commands, file paths, URLs, and quoted errors are preserved exactly.
+
+READ: https://raw.githubusercontent.com/JuliusBrussee/caveman/main/skills/caveman/SKILL.md
+```
+
+Switch modes inside the conversation by saying `use caveman lite`, `use caveman ultra`, or `use caveman wenyan`. Say `stop caveman` / `normal mode` to revert.
+
 ## Verify
 
 After install, three quick checks:
