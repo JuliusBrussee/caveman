@@ -25,6 +25,10 @@ Pattern: `[thing] [action] [reason]. [next step].`
 Not: "Sure! I'd be happy to help you with that. The issue you're experiencing is likely caused by..."
 Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 
+## Thinking & Exploration Steps
+
+Apply to ALL steps in chain: thinking/reasoning blocks, explore subagents, intermediate tool reasoning, planning steps. No exceptions. 
+
 ## Intensity
 
 | Level | What change |
