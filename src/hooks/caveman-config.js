@@ -3,11 +3,17 @@
 //
 // Resolution order for default mode:
 //   1. CAVEMAN_DEFAULT_MODE environment variable
-//   2. Config file defaultMode field:
+//   2. Repo-local config (checked-in, per-project default):
+//      - <cwd>/.caveman/config.json
+//      - <cwd>/.caveman.json
+//      Walks up from process.cwd() to the nearest ancestor containing one of
+//      these (stops at filesystem root). Lets a team pin a project's default
+//      mode without polluting every contributor's user-level config or env.
+//   3. User config file defaultMode field:
 //      - $XDG_CONFIG_HOME/caveman/config.json (any platform, if set)
 //      - ~/.config/caveman/config.json (macOS / Linux fallback)
 //      - %APPDATA%\caveman\config.json (Windows fallback)
-//   3. 'full'
+//   4. 'full'
 
 const fs = require('fs');
 const path = require('path');
@@ -36,6 +42,51 @@ function getConfigPath() {
   return path.join(getConfigDir(), 'config.json');
 }
 
+// Walk up from `start` looking for a repo-local caveman config. Returns the
+// absolute path of the first match, or null. Stops at the filesystem root.
+// Candidates per dir (first wins): .caveman/config.json, .caveman.json.
+//
+// Bounded to 64 levels to defend against symlink cycles on pathological mounts.
+function findRepoConfigPath(start) {
+  try {
+    let dir = path.resolve(start || process.cwd());
+    const candidates = ['.caveman/config.json', '.caveman.json'];
+    for (let i = 0; i < 64; i++) {
+      for (const rel of candidates) {
+        const p = path.join(dir, rel);
+        try {
+          const st = fs.lstatSync(p);
+          // Refuse symlinks — symmetric with safeWriteFlag/readFlag policy.
+          if (st.isSymbolicLink() || !st.isFile()) continue;
+          return p;
+        } catch (e) {
+          // not present, try next candidate
+        }
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) return null;
+      dir = parent;
+    }
+  } catch (e) {
+    // Defensive: any cwd / fs failure → no repo config
+  }
+  return null;
+}
+
+function readModeFromConfigFile(configPath) {
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const config = JSON.parse(raw);
+    if (config && config.defaultMode &&
+        VALID_MODES.includes(String(config.defaultMode).toLowerCase())) {
+      return String(config.defaultMode).toLowerCase();
+    }
+  } catch (e) {
+    // Missing / unreadable / invalid JSON → caller falls through
+  }
+  return null;
+}
+
 function getDefaultMode() {
   // 1. Environment variable (highest priority)
   const envMode = process.env.CAVEMAN_DEFAULT_MODE;
@@ -43,18 +94,18 @@ function getDefaultMode() {
     return envMode.toLowerCase();
   }
 
-  // 2. Config file
-  try {
-    const configPath = getConfigPath();
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    if (config.defaultMode && VALID_MODES.includes(config.defaultMode.toLowerCase())) {
-      return config.defaultMode.toLowerCase();
-    }
-  } catch (e) {
-    // Config file doesn't exist or is invalid — fall through
+  // 2. Repo-local config (checked-in, per-project default)
+  const repoConfigPath = findRepoConfigPath(process.cwd());
+  if (repoConfigPath) {
+    const repoMode = readModeFromConfigFile(repoConfigPath);
+    if (repoMode) return repoMode;
   }
 
-  // 3. Default
+  // 3. User config file
+  const userMode = readModeFromConfigFile(getConfigPath());
+  if (userMode) return userMode;
+
+  // 4. Default
   return 'full';
 }
 
@@ -271,4 +322,4 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
+module.exports = { getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };

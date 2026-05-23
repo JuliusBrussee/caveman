@@ -45,14 +45,20 @@ Default mode = `full`. Change it:
 export CAVEMAN_DEFAULT_MODE=ultra
 ```
 
-**Config file** (`~/.config/caveman/config.json`):
+**Repo-local config** (checked-in per-project default — `<repo>/.caveman/config.json` or `<repo>/.caveman.json`):
+```json
+{ "defaultMode": "lite" }
+```
+Walks up from `cwd` to find the nearest one, so any subdir of the repo picks it up. Useful for pinning a project's default mode without polluting every contributor's env or user config.
+
+**User config file** (`~/.config/caveman/config.json` — or `$XDG_CONFIG_HOME/caveman/config.json` / `%APPDATA%\caveman\config.json`):
 ```json
 { "defaultMode": "lite" }
 ```
 
 Set `"off"` to disable auto-activation on session start. User can still activate manually with `/caveman`.
 
-Resolution: env var > config file > `full`.
+Resolution: env var > repo-local config > user config > `full`.
 
 ## More
 
