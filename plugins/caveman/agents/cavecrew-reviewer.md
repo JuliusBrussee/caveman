@@ -5,7 +5,10 @@ description: >
   no scope creep. Output format `path:line: <emoji> <severity>: <problem>. <fix>.`
   Use for "review this PR", "review my diff", "audit this file". Skips
   formatting nits unless they change meaning.
-tools: [Read, Grep, Bash]
+tools:
+  read: true
+  grep: true
+  bash: true
 model: haiku
 ---
 

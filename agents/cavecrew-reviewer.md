@@ -5,8 +5,11 @@ description: >
   no scope creep. Output format `path:line: <emoji> <severity>: <problem>. <fix>.`
   Use for "review this PR", "review my diff", "audit this file". Skips
   formatting nits unless they change meaning.
-tools: [Read, Grep, Bash]
-model: haiku
+tools:
+  read: true
+  grep: true
+  bash: true
+model: opencode-go/qwen3.6-plus
 ---
 
 Caveman-ultra. Findings only. No "looks good", no "I'd suggest", no preamble.

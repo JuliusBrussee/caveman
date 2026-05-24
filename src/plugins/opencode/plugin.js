@@ -1,9 +1,9 @@
 // caveman — opencode plugin
 //
-// Mirrors the Claude Code SessionStart + UserPromptSubmit hook pair using
-// opencode's lifecycle hook system. Bun ESM module; loads the existing
-// security-hardened helpers from caveman-config.js via createRequire so the
-// symlink-safe flag-write code lives in one place.
+// Uses opencode-native hook names (not Claude Code).
+//   event                  → session.created / session.deleted
+//   command.execute.before → /caveman /caveman-stats flag writes
+//   experimental.chat.system.transform → reinforcement injection
 //
 // Layout once installed:
 //   ~/.config/opencode/plugins/caveman/
@@ -13,10 +13,7 @@
 //
 // Always-on caveman ruleset is provided separately via
 // ~/.config/opencode/AGENTS.md (Tier-3 base) so this plugin only handles
-// dynamic state — flag writes, slash-command parsing, natural-language
-// activation, and per-prompt reinforcement. opencode's `session.created`
-// payload doesn't expose a documented system-prompt-injection return, so we
-// don't try to emit ruleset content here.
+// dynamic state — flag writes, slash-command interception, session tracking.
 
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -28,22 +25,14 @@ import path from 'node:path';
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 
-// When installed: caveman-config.cjs sits next to plugin.js (copied by
-// bin/install.js, renamed to .cjs because this directory's package.json
-// declares "type": "module" — bare .js would be loaded as ESM and break
-// require()). When loaded from the source tree (tests, dev): fall back
-// to the canonical src/hooks/caveman-config.js, which lives in a directory
-// whose own package.json pins "type": "commonjs". One source of truth
-// either way.
 function loadConfig() {
   try { return require(join(here, 'caveman-config.cjs')); }
   catch (_) { return require(join(here, '..', '..', 'hooks', 'caveman-config.js')); }
 }
 const config = loadConfig();
 
-const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = config;
+const { getDefaultMode, safeWriteFlag, readFlag, appendFlag, readHistory, VALID_MODES } = config;
 
-// Modes handled by independent skills — not selectable via /caveman <arg>.
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 function opencodeConfigDir() {
@@ -60,6 +49,8 @@ function opencodeConfigDir() {
 }
 
 const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
+const historyPath = path.join(opencodeConfigDir(), '.caveman-history.jsonl');
+let sessionStartTime = null;
 
 function reinforcementLine(mode) {
   return 'CAVEMAN MODE ACTIVE (' + mode + '). ' +
@@ -67,87 +58,116 @@ function reinforcementLine(mode) {
     'Code/commits/security: write normal.';
 }
 
-// Parse a prompt for slash-command activation or natural-language toggles.
-// Returns the new mode to write, the literal string 'off' to deactivate, or
-// null when the prompt doesn't change state. Mirrors caveman-mode-tracker.js.
-function parseModeChange(promptRaw) {
-  const prompt = (promptRaw || '').trim().toLowerCase();
-  if (!prompt) return null;
-
-  // Natural-language deactivation — checked before activation so "stop talking
-  // like caveman" doesn't trip the activation regex.
-  if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
-      /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
-      /\bnormal mode\b/i.test(prompt)) {
-    return 'off';
-  }
-
-  // Natural-language activation
-  if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-      /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
-    const mode = getDefaultMode();
-    return mode === 'off' ? null : mode;
-  }
-
-  // Slash-command parsing — opencode also expands command files, but if the
-  // user types the literal slash command we still want to flip the flag.
-  if (prompt.startsWith('/caveman')) {
-    const parts = prompt.split(/\s+/);
-    const cmd = parts[0];
-    const arg = parts[1] || '';
-
-    if (cmd === '/caveman-commit')   return 'commit';
-    if (cmd === '/caveman-review')   return 'review';
-    if (cmd === '/caveman-compress') return 'compress';
-
-    if (cmd === '/caveman') {
-      if (!arg)                                     return getDefaultMode();
-      if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
-      if (arg === 'wenyan-full')                    return 'wenyan';
-      if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return arg;
-      // Unknown arg — leave flag alone. No silent overwrite.
-      return null;
-    }
-  }
-
+// Parse /caveman <arg> for flag file writes.
+// Called from command.execute.before to keep flag in sync with command files.
+function parseCavemanCommand(args) {
+  const arg = (args || '').trim().toLowerCase();
+  if (!arg) return getDefaultMode();
+  if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
+  if (arg === 'wenyan-full') return 'wenyan';
+  if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return arg;
   return null;
 }
 
-function applyModeChange(mode) {
-  if (!mode) return;
-  if (mode === 'off') {
-    try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
-    return;
+function computeStatsSummary() {
+  const history = readHistory(historyPath);
+  if (!history || history.length === 0) {
+    return 'No caveman sessions recorded yet.';
   }
-  safeWriteFlag(flagPath, mode);
+
+  let totalDuration = 0;
+  const modeCounts = {};
+  let lastEntry = null;
+
+  for (const line of history) {
+    try {
+      const entry = JSON.parse(line);
+      totalDuration += entry.duration || 0;
+      const m = entry.mode || 'off';
+      modeCounts[m] = (modeCounts[m] || 0) + 1;
+      lastEntry = entry;
+    } catch {}
+  }
+
+  const totalMinutes = Math.round(totalDuration / 60);
+  const estTokensSaved = Math.round(totalDuration * 0.75);
+  const sorted = Object.entries(modeCounts).sort((a, b) => b[1] - a[1]);
+  const mostUsed = sorted.length > 0 ? sorted[0] : null;
+
+  const lines = [
+    '=== CAVEMAN STATS ===',
+    'Sessions: ' + history.length,
+    'Total time: ' + totalMinutes + 'min',
+    'Est. tokens saved: ~' + estTokensSaved.toLocaleString(),
+  ];
+  if (mostUsed) {
+    lines.push('Most used: ' + mostUsed[0] + ' (' + mostUsed[1] + 'x)');
+  }
+  if (lastEntry) {
+    const lastMin = Math.round((lastEntry.duration || 0) / 60);
+    lines.push('Last session: ' + lastMin + 'min (' + (lastEntry.mode || 'off') + ')');
+  }
+  lines.push('====================');
+  return lines.join('\n');
 }
 
 export const CavemanPlugin = async (_ctx) => ({
-  'session.created': async () => {
-    const mode = getDefaultMode();
-    if (mode === 'off') {
-      try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
+  // Session lifecycle: opencode exposes session.created and session.deleted
+  // via the generic event hook with event.type discrimination.
+  event: async ({ event }) => {
+    if (event.type === 'session.created') {
+      sessionStartTime = Date.now();
+      const mode = getDefaultMode();
+      if (mode === 'off') {
+        try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
+        return;
+      }
+      safeWriteFlag(flagPath, mode);
       return;
     }
-    safeWriteFlag(flagPath, mode);
+
+    if (event.type === 'session.deleted') {
+      if (sessionStartTime) {
+        const duration = Math.round((Date.now() - sessionStartTime) / 1000);
+        const mode = readFlag(flagPath) || 'off';
+        const entry = JSON.stringify({
+          time: new Date().toISOString(),
+          duration,
+          mode,
+        });
+        try { appendFlag(historyPath, entry); } catch (e) {}
+        sessionStartTime = null;
+      }
+      return;
+    }
   },
 
-  // opencode's TUI prompt-append hook fires before the prompt is sent to the
-  // model. We use it for two things: react to mode-changing prompts (slash
-  // commands + natural language), and append a one-line reinforcement when
-  // caveman is active so the model can't drift mid-session. Returning an
-  // object with `append` is the documented way to inject prompt content.
-  'tui.prompt.append': async (input) => {
-    const promptText = (input && (input.prompt || input.text)) || '';
+  // Slash command interception: write/remove flag file so
+  // experimental.chat.system.transform knows the current mode.
+  // Command files (caveman.md, caveman-stats.md, etc.) handle the text output.
+  'command.execute.before': async (input) => {
+    const cmd = (input.command || '').trim().toLowerCase();
+    const mode = cmd === '/caveman' ? parseCavemanCommand(input.arguments || '')
+      : cmd === '/caveman-commit' ? 'commit'
+      : cmd === '/caveman-review' ? 'review'
+      : cmd === '/caveman-compress' ? 'compress'
+      : null;
+    if (mode === 'off') {
+      try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
+    } else if (mode) {
+      safeWriteFlag(flagPath, mode);
+    }
+  },
 
-    const change = parseModeChange(promptText);
-    if (change) applyModeChange(change);
-
+  // Reinforcement: inject caveman reminder into system prompt on each turn.
+  // The command files handle the verbose instructions; this keeps the mode
+  // reminder visible when the flag is active.
+  'experimental.chat.system.transform': async (_input, output) => {
     const active = readFlag(flagPath);
     if (active && !INDEPENDENT_MODES.has(active)) {
-      return { append: reinforcementLine(active) };
+      output.system = output.system || [];
+      output.system.push(reinforcementLine(active));
     }
-    return undefined;
   },
 });
 
