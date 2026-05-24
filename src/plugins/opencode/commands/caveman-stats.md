@@ -1,9 +1,12 @@
 ---
 description: Show caveman lifetime token-savings stats
 ---
-Show caveman stats — total tokens saved, sessions, most-used mode.
+Read ~/.config/opencode/.caveman-history.jsonl (JSONL, one JSON object per session).
+Compute and display as a table:
+- Sessions: line count
+- Total time: sum of duration fields (seconds), shown in minutes
+- Est. tokens saved: sum(duration) × 0.75
+- Most-used mode: mode with highest count
+- Last session: most recent entry's duration (min) + mode
 
-Stats are pre-computed by the plugin and injected into this prompt. Present
-them to the user as a short table or bullet list. The plugin tracks session
-duration and mode in `~/.config/opencode/.caveman-history.jsonl`. The
-estimate is ~0.75 tokens saved per second of caveman session time.
+Return as markdown table only.
