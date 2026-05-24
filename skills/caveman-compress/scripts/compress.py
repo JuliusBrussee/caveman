@@ -8,6 +8,7 @@ Usage:
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import List
@@ -87,10 +88,15 @@ def call_claude(prompt: str) -> str:
             return strip_llm_wrapper(msg.content[0].text.strip())
         except ImportError:
             pass  # anthropic not installed, fall back to CLI
-    # Fallback: use claude CLI (handles desktop auth)
+    # Fallback: use claude CLI (handles desktop auth).
+    # Resolve binary via shutil.which so Windows .cmd/.bat shims (e.g.
+    # %APPDATA%\npm\claude.CMD) work without shell=True. On POSIX,
+    # shutil.which returns the same absolute path as the implicit lookup,
+    # so this is a no-op there.
+    claude_bin = shutil.which("claude") or "claude"
     try:
         result = subprocess.run(
-            ["claude", "--print"],
+            [claude_bin, "--print"],
             input=prompt,
             text=True,
             capture_output=True,
