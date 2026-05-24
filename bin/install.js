@@ -630,7 +630,15 @@ function installOpencode(ctx) {
       try { fs.copyFileSync(opencodeJson, opencodeBak); } catch (_) {}
     }
     if (!Array.isArray(cfg.plugin)) cfg.plugin = [];
-    if (!cfg.plugin.includes(OPENCODE_PLUGIN_REL)) {
+    // Accept either the canonical relative form or any path that ends with
+    // the plugin filename — handles absolute paths, symlinked config dirs, and
+    // platform-specific path separators on Windows.
+    const pluginSuffix = 'plugins' + path.sep + 'caveman' + path.sep + 'plugin.js';
+    const alreadyAdded = cfg.plugin.some(p =>
+      p === OPENCODE_PLUGIN_REL || p.endsWith(pluginSuffix) ||
+      p.endsWith('plugins/caveman/plugin.js') // unix fallback
+    );
+    if (!alreadyAdded) {
       cfg.plugin.push(OPENCODE_PLUGIN_REL);
     }
     if (opts.withMcpShrink) {
@@ -940,7 +948,12 @@ function uninstall(ctx) {
       const cfg = SETTINGS.readSettings(ocJson);
       if (cfg) {
         if (Array.isArray(cfg.plugin)) {
-          cfg.plugin = cfg.plugin.filter(p => p !== OPENCODE_PLUGIN_REL);
+          const suffix = 'plugins/caveman/plugin.js';
+          cfg.plugin = cfg.plugin.filter(p =>
+            p !== OPENCODE_PLUGIN_REL &&
+            !p.endsWith(suffix) &&
+            !p.endsWith('plugins' + path.sep + 'caveman' + path.sep + 'plugin.js')
+          );
           if (cfg.plugin.length === 0) delete cfg.plugin;
         }
         if (cfg.mcp && typeof cfg.mcp === 'object' && cfg.mcp['caveman-shrink']) {
