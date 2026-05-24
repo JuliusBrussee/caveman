@@ -552,6 +552,7 @@ function installOpencode(ctx) {
     for (const f of OPENCODE_COMMAND_FILES) {
       const src = path.join(cmdSrcDir, f);
       const dest = path.join(commandsDir, f);
+      if (!fs.existsSync(src)) continue;
       if (fs.existsSync(dest) && !opts.force) { note(`  skipped ${dest} (exists; --force to overwrite)`); continue; }
       fs.copyFileSync(src, dest);
       process.stdout.write(`  installed: ${dest}\n`);
