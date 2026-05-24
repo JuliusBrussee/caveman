@@ -449,7 +449,7 @@ function installViaSkills(ctx, prov) {
   // and our installer happily reports success. See issue #370.
   // We've already decided which agent to install for via auto-detect / --only;
   // making the user re-select 7 skills inside skills CLI would be redundant.
-  const args = ['-y', 'skills', 'add', REPO, '-a', prov.profile, '--yes', '--all'];
+  const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
   const r = runSpawn('npx', args, null, opts.dryRun);
   if ((r.status || 0) === 0) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
