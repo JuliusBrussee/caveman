@@ -22,12 +22,20 @@ to `caveman-config.cjs` because this directory is `"type": "module"`) into
 - `session.created` → writes the configured default mode to
   `~/.config/opencode/.caveman-active` via the same `safeWriteFlag` helper
   Claude Code uses (O_NOFOLLOW, atomic temp+rename, 0600 perms, symlink
-  refusal, ownership check).
-- `tui.prompt.append` → flips the flag in response to `/caveman[ <level>]`,
-  `/caveman-commit`, `/caveman-review`, `/caveman-compress`, and natural
-  language ("turn on caveman", "stop caveman", "normal mode"). When a
-  non-independent mode is active, appends a one-line reinforcement to keep
-  caveman in the model's attention each turn.
+  refusal, ownership check). Also records the session start timestamp for
+  duration tracking.
+- `session.deleted` → logs session duration and active mode to
+  `~/.config/opencode/.caveman-history.jsonl` via the symlink-safe
+  `appendFlag` helper. Accumulates a lifetime history of caveman usage.
+- `tui.prompt.append` → three responsibilities:
+  1. Intercepts `/caveman-stats` and injects computed lifetime stats
+     (session count, total time, estimated tokens saved, most-used mode)
+     directly into the prompt context so the model renders them inline.
+  2. Flips the flag in response to `/caveman[ <level>]`,
+     `/caveman-commit`, `/caveman-review`, `/caveman-compress`, and
+     natural language ("turn on caveman", "stop caveman", "normal mode").
+  3. When a non-independent mode is active, appends a one-line
+     reinforcement to keep caveman in the model's attention each turn.
 
 ## What it does NOT do
 
@@ -38,6 +46,11 @@ to `caveman-config.cjs` because this directory is `"type": "module"`) into
   don't expose a return shape for that. The always-on caveman ruleset comes
   from `~/.config/opencode/AGENTS.md` (also written by the installer) so
   the rules load even when the plugin runtime is broken.
+- **No USD cost estimates.** Unlike the Claude Code `caveman-stats.js` hook,
+  the opencode plugin's `/caveman-stats` uses a simplified duration-based
+  estimate (tokens ≈ 0.75/sec) rather than parsing session JSONL. Install
+  `opencode-claude-hooks` and configure a `SessionEnd` hook to bridge the
+  full Claude Code stats pipeline if you need precise token-level tracking.
 
 ## Why no separate npm package
 

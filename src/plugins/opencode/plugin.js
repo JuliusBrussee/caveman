@@ -41,7 +41,7 @@ function loadConfig() {
 }
 const config = loadConfig();
 
-const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = config;
+const { getDefaultMode, safeWriteFlag, readFlag, appendFlag, readHistory, VALID_MODES } = config;
 
 // Modes handled by independent skills — not selectable via /caveman <arg>.
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
@@ -60,6 +60,8 @@ function opencodeConfigDir() {
 }
 
 const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
+const historyPath = path.join(opencodeConfigDir(), '.caveman-history.jsonl');
+let sessionStartTime = null;
 
 function reinforcementLine(mode) {
   return 'CAVEMAN MODE ACTIVE (' + mode + '). ' +
@@ -122,8 +124,51 @@ function applyModeChange(mode) {
   safeWriteFlag(flagPath, mode);
 }
 
+function computeStatsSummary() {
+  const history = readHistory(historyPath);
+  if (!history || history.length === 0) {
+    return 'No caveman sessions recorded yet.';
+  }
+
+  let totalDuration = 0;
+  const modeCounts = {};
+  let lastEntry = null;
+
+  for (const line of history) {
+    try {
+      const entry = JSON.parse(line);
+      totalDuration += entry.duration || 0;
+      const m = entry.mode || 'off';
+      modeCounts[m] = (modeCounts[m] || 0) + 1;
+      lastEntry = entry;
+    } catch {}
+  }
+
+  const totalMinutes = Math.round(totalDuration / 60);
+  const estTokensSaved = Math.round(totalDuration * 0.75);
+  const sorted = Object.entries(modeCounts).sort((a, b) => b[1] - a[1]);
+  const mostUsed = sorted.length > 0 ? sorted[0] : null;
+
+  const lines = [
+    '=== CAVEMAN STATS ===',
+    'Sessions: ' + history.length,
+    'Total time: ' + totalMinutes + 'min',
+    'Est. tokens saved: ~' + estTokensSaved.toLocaleString(),
+  ];
+  if (mostUsed) {
+    lines.push('Most used: ' + mostUsed[0] + ' (' + mostUsed[1] + 'x)');
+  }
+  if (lastEntry) {
+    const lastMin = Math.round((lastEntry.duration || 0) / 60);
+    lines.push('Last session: ' + lastMin + 'min (' + (lastEntry.mode || 'off') + ')');
+  }
+  lines.push('====================');
+  return lines.join('\n');
+}
+
 export const CavemanPlugin = async (_ctx) => ({
   'session.created': async () => {
+    sessionStartTime = Date.now();
     const mode = getDefaultMode();
     if (mode === 'off') {
       try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
@@ -132,13 +177,34 @@ export const CavemanPlugin = async (_ctx) => ({
     safeWriteFlag(flagPath, mode);
   },
 
+  'session.deleted': async () => {
+    if (sessionStartTime) {
+      const duration = Math.round((Date.now() - sessionStartTime) / 1000);
+      const mode = readFlag(flagPath) || 'off';
+      const entry = JSON.stringify({
+        time: new Date().toISOString(),
+        duration,
+        mode,
+      });
+      try { appendFlag(historyPath, entry); } catch (e) {}
+      sessionStartTime = null;
+    }
+  },
+
   // opencode's TUI prompt-append hook fires before the prompt is sent to the
-  // model. We use it for two things: react to mode-changing prompts (slash
-  // commands + natural language), and append a one-line reinforcement when
-  // caveman is active so the model can't drift mid-session. Returning an
-  // object with `append` is the documented way to inject prompt content.
+  // model. We use it for three things: react to mode-changing prompts (slash
+  // commands + natural language), intercept /caveman-stats to inject stats
+  // into the prompt, and append a one-line reinforcement when caveman is
+  // active so the model can't drift mid-session. Returning an object with
+  // `append` adds text that the model sees immediately.
   'tui.prompt.append': async (input) => {
     const promptText = (input && (input.prompt || input.text)) || '';
+
+    // Intercept /caveman-stats — inject computed stats into prompt context
+    // so the model can render them inline.
+    if (/^\/caveman-stats\b/.test(promptText.trim().toLowerCase())) {
+      return { append: computeStatsSummary() };
+    }
 
     const change = parseModeChange(promptText);
     if (change) applyModeChange(change);
