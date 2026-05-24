@@ -2,7 +2,8 @@
 name: cavecrew
 description: >
   Decision guide for delegating to caveman-style subagents. Tells the main
-  thread WHEN to spawn `cavecrew-investigator` (locate code), `cavecrew-builder`
+  thread WHEN to spawn `cavecrew-investigator` (fast lookup),
+  `cavecrew-investigator-deep` (complex trace), `cavecrew-builder`
   (1-2 file edit), or `cavecrew-reviewer` (diff review) instead of doing the
   work inline or using vanilla `Explore`. Subagent output is caveman-compressed
   so the tool-result injected back into main context is ~60% smaller — main
@@ -11,13 +12,18 @@ description: >
   "save context", "compressed agent output".
 ---
 
-Cavecrew = three subagent presets that emit caveman output. Same job as Anthropic defaults (`Explore`, edit-style agents, reviewer); difference is the tool-result they return is compressed, so main context shrinks per delegation.
+Cavecrew = subagent presets that emit caveman output. Same job as Anthropic defaults (`Explore`, edit-style agents, reviewer); difference is the tool-result they return is compressed, so main context shrinks per delegation.
+
+## Two-tier investigator
+
+`cavecrew-investigator` (fast, qwen3.6-plus) for simple lookups. `cavecrew-investigator-deep` (deep, sonnet-4-5) for cross-module tracing. Always try fast first. Escalate when results ambiguous or task requires architecture understanding. Fast investigator appends `ESCALATE:` flag when deep tier needed. See `docs/ELASTIC_AGENTS.md` for full pattern.
 
 ## When to use cavecrew vs alternatives
 
 | Task | Use |
 |---|---|
 | "Where is X defined / what calls Y / list uses of Z" | `cavecrew-investigator` |
+| Same but ambiguous / cross-module / architecture | `cavecrew-investigator-deep` |
 | Same but you also want suggestions/architecture commentary | `Explore` (vanilla) |
 | Surgical edit, ≤2 files, scope obvious | `cavecrew-builder` |
 | New feature / 3+ files / cross-cutting refactor | Main thread or `feature-dev:code-architect` |
@@ -42,6 +48,15 @@ What main thread can rely on per agent:
 totals: <counts>.
 ```
 Or `No match.` Always file-path-first, line-number-attached, backticked symbols. Safe to grep with `path:\d+`.
+If ambiguous → appends `ESCALATE: spawn cavecrew-investigator-deep for thorough analysis`.
+
+**`cavecrew-investigator-deep`**
+```
+<Header>:
+- path:line — `symbol` — note with context (≤12 words)
+totals: <counts>.
+```
+Same format as fast tier but includes architecture notes (chains, flows, interfaces). Longer notes, deeper tracing.
 
 **`cavecrew-builder`**
 ```
@@ -60,9 +75,10 @@ Or `No issues.` Findings sorted file → line ascending.
 ## Chaining patterns
 
 **Locate → fix → verify** (most common):
-1. `cavecrew-investigator` returns site list.
-2. Main thread picks 1-2 sites, hands paths to `cavecrew-builder`.
-3. `cavecrew-reviewer` audits the diff.
+1. `cavecrew-investigator` returns site list (fast tier).
+2. If ambiguous → `cavecrew-investigator-deep` traces deeper.
+3. Main thread picks 1-2 sites, hands paths to `cavecrew-builder`.
+4. `cavecrew-reviewer` audits the diff.
 
 **Parallel scout** (when investigation is broad):
 Spawn 2-3 `cavecrew-investigator` calls in one message (different angles: defs vs callers vs tests). Aggregate in main thread.
@@ -76,6 +92,7 @@ Skip investigator. Hand exact path:line to `cavecrew-builder` directly.
 - Don't chain `cavecrew-investigator → cavecrew-builder` for a 5-file refactor. Builder will return `too-big.` and you'll have wasted a turn.
 - Don't ask `cavecrew-reviewer` for "general feedback" — it returns findings only, no architecture opinions. Use `Code Reviewer` for that.
 - Don't expect prose. Cavecrew output is structured, sometimes terse to the point of cryptic. If a human will read it directly, paraphrase.
+- Don't skip fast tier for simple lookups. Deep model costs ~30× more. Try fast first, escalate only when needed.
 
 ## Auto-clarity (inherited)
 

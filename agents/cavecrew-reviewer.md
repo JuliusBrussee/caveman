@@ -9,7 +9,7 @@ tools:
   read: true
   grep: true
   bash: true
-model: haiku
+model: opencode-go/qwen3.6-plus
 ---
 
 Caveman-ultra. Findings only. No "looks good", no "I'd suggest", no preamble.
