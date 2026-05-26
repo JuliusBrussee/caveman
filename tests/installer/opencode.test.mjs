@@ -277,9 +277,45 @@ test('opencode plugin handles /caveman ultra and stop caveman via tui.prompt.app
     assert.equal(fs.existsSync(flagPath), false, 'flag should be deleted after deactivation');
     assert.equal(out2, undefined, 'no reinforcement when flag absent');
 
-    // session.created writes default mode
-    await handlers['session.created']();
+    // session.created (via opencode >= 1.15 `event` dispatcher) writes default mode
+    assert.equal(typeof handlers.event, 'function', 'event handler missing');
+    assert.equal(handlers['session.created'], undefined, 'direct session.created key must not be used (silently ignored in opencode >= 1.15)');
+    await handlers.event({ event: { type: 'session.created' } });
     assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full');
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+// ── 6. `event` dispatcher ignores unrelated event types ───────────────────
+test('opencode event handler dispatches session.created and ignores other event types', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    const r = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r.status, 2);
+
+    const pluginPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'plugin.js');
+    const flagPath = path.join(xdg, 'opencode', '.caveman-active');
+    process.env.XDG_CONFIG_HOME = xdg;
+
+    const mod = await import(pathToFileURL(pluginPath).href + '?v=event-dispatch');
+    const factory = mod.default || mod.CavemanPlugin;
+    const handlers = await factory({});
+
+    // Unrelated event types must NOT write the flag.
+    await handlers.event({ event: { type: 'session.idle' } });
+    assert.equal(fs.existsSync(flagPath), false, 'unrelated event type must not write flag');
+    await handlers.event({ event: { type: 'message.completed' } });
+    assert.equal(fs.existsSync(flagPath), false, 'unrelated event type must not write flag');
+    await handlers.event({});
+    assert.equal(fs.existsSync(flagPath), false, 'missing event payload must not write flag');
+
+    // session.created must write the flag.
+    await handlers.event({ event: { type: 'session.created' } });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full', 'session.created event must write flag');
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });

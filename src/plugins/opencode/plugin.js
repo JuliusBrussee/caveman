@@ -122,14 +122,23 @@ function applyModeChange(mode) {
   safeWriteFlag(flagPath, mode);
 }
 
+// Session-start logic — extracted so the `event` dispatcher (opencode >= 1.15)
+// and any direct-key fallback share one implementation.
+function handleSessionCreated() {
+  const mode = getDefaultMode();
+  if (mode === 'off') {
+    try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
+    return;
+  }
+  safeWriteFlag(flagPath, mode);
+}
+
 export const CavemanPlugin = async (_ctx) => ({
-  'session.created': async () => {
-    const mode = getDefaultMode();
-    if (mode === 'off') {
-      try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
-      return;
-    }
-    safeWriteFlag(flagPath, mode);
+  // opencode >= 1.15 dispatches session/lifecycle events through a single
+  // `event` handler; the older direct top-level `'session.created'` key is
+  // silently ignored. See https://opencode.ai/docs/plugins#events.
+  event: async ({ event }) => {
+    if (event && event.type === 'session.created') handleSessionCreated();
   },
 
   // opencode's TUI prompt-append hook fires before the prompt is sent to the
