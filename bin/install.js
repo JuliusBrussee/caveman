@@ -23,6 +23,7 @@ const readline = require('readline');
 
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
+const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
 
 const REPO = 'JuliusBrussee/caveman';
 const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
@@ -557,7 +558,11 @@ function installOpencode(ctx) {
       process.stdout.write(`  installed: ${dest}\n`);
     }
 
-    // 3. Subagents.
+    // 3. Subagents. Source files target Claude Code's schema (`tools: [...]`
+    //    YAML array); OpenCode rejects that form and refuses to boot until the
+    //    file is removed. Strip the `tools:` line on copy — OpenCode falls back
+    //    to its default tool set, and subagent prompts already self-restrict in
+    //    the body. Issue 386.
     fs.mkdirSync(agentsDir, { recursive: true });
     const agentSrcDir = path.join(repoRoot, 'agents');
     for (const f of OPENCODE_AGENT_FILES) {
@@ -565,7 +570,7 @@ function installOpencode(ctx) {
       const dest = path.join(agentsDir, f);
       if (!fs.existsSync(src)) continue;
       if (fs.existsSync(dest) && !opts.force) { note(`  skipped ${dest} (exists; --force to overwrite)`); continue; }
-      fs.copyFileSync(src, dest);
+      fs.writeFileSync(dest, stripOpencodeAgentTools(fs.readFileSync(src, 'utf8')));
       process.stdout.write(`  installed: ${dest}\n`);
     }
 
