@@ -293,4 +293,16 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getExplicitActivationLevel, MANUAL_DEFAULT_LEVEL, getConfigDir, getConfigPath, VALID_MODES, VALID_DEFAULT_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
+module.exports = {
+  getDefaultMode,
+  getExplicitActivationLevel,
+  MANUAL_DEFAULT_LEVEL,
+  getConfigDir,
+  getConfigPath,
+  VALID_MODES,
+  VALID_DEFAULT_MODES,
+  safeWriteFlag,
+  readFlag,
+  appendFlag,
+  readHistory,
+};

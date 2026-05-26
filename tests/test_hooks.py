@@ -226,6 +226,42 @@ class ManualModeTests(unittest.TestCase):
                 "bare /caveman under off must remain a no-op (unchanged behavior)",
             )
 
+    def test_nl_activation_activates_full_under_manual(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-manual-nl-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            self.run_hook(
+                "src/hooks/caveman-mode-tracker.js",
+                home,
+                default_mode="manual",
+                stdin=json.dumps({"prompt": "talk like caveman"}),
+            )
+
+            flag = home / ".claude" / ".caveman-active"
+            self.assertTrue(
+                flag.exists(),
+                "natural-language activation under manual must activate",
+            )
+            self.assertEqual(flag.read_text().strip(), "full")
+
+    def test_nl_activation_is_noop_under_off(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-off-nl-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            self.run_hook(
+                "src/hooks/caveman-mode-tracker.js",
+                home,
+                default_mode="off",
+                stdin=json.dumps({"prompt": "talk like caveman"}),
+            )
+
+            self.assertFalse(
+                (home / ".claude" / ".caveman-active").exists(),
+                "natural-language activation under off must remain a no-op",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
