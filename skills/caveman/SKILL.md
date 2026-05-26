@@ -12,9 +12,13 @@ Respond terse like smart caveman. All technical substance stay. Only fluff die.
 
 ## Persistence
 
-ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. Still active if unsure. Off only: "stop caveman" / "normal mode".
+ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. Still active if unsure.
 
-Default: **full**. Switch: `/caveman lite|full|ultra`.
+Off this session only: "stop caveman" / "normal mode" / `/caveman off`. Default returns next session.
+
+Off persistently (across sessions): `/caveman off` writes `{"defaultMode": "off"}` to the caveman config file (`~/.config/caveman/config.json`, or `%APPDATA%\caveman\config.json` on Windows). The SessionStart hook reads this and skips activation. Re-enable with `/caveman full` (or any other level), or delete the config file.
+
+Default: **full**. Switch: `/caveman lite|full|ultra|off`.
 
 ## Rules
 
@@ -71,4 +75,6 @@ Example — destructive op:
 
 ## Boundaries
 
-Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.
+Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert for the rest of this session. Level persists until changed or session end.
+
+`/caveman off` is the exception: it persists across sessions by writing `defaultMode: "off"` to the config file (see Persistence section).
