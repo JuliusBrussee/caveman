@@ -19,6 +19,17 @@ const VALID_MODES = [
   'commit', 'review', 'compress'
 ];
 
+// Valid values for the `defaultMode` CONFIG field. Superset of VALID_MODES plus
+// the 'manual' policy: SessionStart does NOT auto-activate, but an explicit bare
+// /caveman (or natural-language activation) still turns caveman on at
+// MANUAL_DEFAULT_LEVEL. Kept separate from VALID_MODES so 'manual' can never
+// become a flag-file value or a selectable `/caveman <arg>` intensity level.
+const VALID_DEFAULT_MODES = VALID_MODES.concat(['manual']);
+
+// Intensity level used for an EXPLICIT activation when the default policy is
+// 'manual'. Ensures bare /caveman is never a silent no-op for manual users.
+const MANUAL_DEFAULT_LEVEL = 'full';
+
 function getConfigDir() {
   if (process.env.XDG_CONFIG_HOME) {
     return path.join(process.env.XDG_CONFIG_HOME, 'caveman');
@@ -39,7 +50,7 @@ function getConfigPath() {
 function getDefaultMode() {
   // 1. Environment variable (highest priority)
   const envMode = process.env.CAVEMAN_DEFAULT_MODE;
-  if (envMode && VALID_MODES.includes(envMode.toLowerCase())) {
+  if (envMode && VALID_DEFAULT_MODES.includes(envMode.toLowerCase())) {
     return envMode.toLowerCase();
   }
 
@@ -47,7 +58,7 @@ function getDefaultMode() {
   try {
     const configPath = getConfigPath();
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    if (config.defaultMode && VALID_MODES.includes(config.defaultMode.toLowerCase())) {
+    if (config.defaultMode && VALID_DEFAULT_MODES.includes(config.defaultMode.toLowerCase())) {
       return config.defaultMode.toLowerCase();
     }
   } catch (e) {
@@ -56,6 +67,17 @@ function getDefaultMode() {
 
   // 3. Default
   return 'full';
+}
+
+// Resolve the intensity level for an EXPLICIT activation (bare /caveman, or
+// natural-language "talk like caveman"). Under the 'manual' policy this returns
+// MANUAL_DEFAULT_LEVEL so explicit activation always does something. 'off' is
+// intentionally passed through unchanged so its existing no-op behavior on
+// explicit activation is preserved.
+function getExplicitActivationLevel() {
+  const def = getDefaultMode();
+  if (def === 'manual') return MANUAL_DEFAULT_LEVEL;
+  return def;
 }
 
 // Symlink-safe flag file write.
@@ -271,4 +293,16 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
+module.exports = {
+  getDefaultMode,
+  getExplicitActivationLevel,
+  MANUAL_DEFAULT_LEVEL,
+  getConfigDir,
+  getConfigPath,
+  VALID_MODES,
+  VALID_DEFAULT_MODES,
+  safeWriteFlag,
+  readFlag,
+  appendFlag,
+  readHistory,
+};

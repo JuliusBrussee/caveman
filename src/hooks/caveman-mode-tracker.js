@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
-const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = require('./caveman-config');
+const { getExplicitActivationLevel, safeWriteFlag, readFlag, VALID_MODES } = require('./caveman-config');
 
 // Modes handled by their own slash commands (/caveman-commit, etc.) — not
 // selectable via /caveman <arg>.
@@ -28,7 +28,10 @@ process.stdin.on('end', () => {
     if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
         /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
       if (!/\b(stop|disable|turn off|deactivate)\b/i.test(prompt)) {
-        const mode = getDefaultMode();
+        // Explicit activation: under 'manual' this resolves to a concrete level
+        // instead of the non-activating policy value, so "talk like caveman"
+        // works even when auto-activation is disabled. 'off' still no-ops.
+        const mode = getExplicitActivationLevel();
         if (mode !== 'off') {
           safeWriteFlag(flagPath, mode);
         }
@@ -77,9 +80,11 @@ process.stdin.on('end', () => {
       } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
         mode = 'compress';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
-        // Bare /caveman → activate at configured default
+        // Bare /caveman → activate at configured default. Under 'manual' this
+        // resolves to MANUAL_DEFAULT_LEVEL so opt-in users get a real activation
+        // instead of a no-op; 'off' is preserved (resolves to 'off' → unlink).
         if (!arg) {
-          mode = getDefaultMode();
+          mode = getExplicitActivationLevel();
         } else if (arg === 'off' || arg === 'stop' || arg === 'disable') {
           mode = 'off';
         } else if (arg === 'wenyan-full') {
