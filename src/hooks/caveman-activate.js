@@ -17,8 +17,10 @@ const settingsPath = path.join(claudeDir, 'settings.json');
 
 const mode = getDefaultMode();
 
-// "off" mode — skip activation entirely, don't write flag or emit rules
-if (mode === 'off') {
+// "off" / "manual" — skip auto-activation at session start: don't write flag
+// or emit rules. The two differ only in caveman-mode-tracker.js, where an
+// explicit /caveman still activates under 'manual' but stays a no-op under 'off'.
+if (mode === 'off' || mode === 'manual') {
   try { fs.unlinkSync(flagPath); } catch (e) {}
   process.stdout.write('OK');
   process.exit(0);

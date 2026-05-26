@@ -157,5 +157,75 @@ class HookScriptTests(unittest.TestCase):
             self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
 
 
+class ManualModeTests(unittest.TestCase):
+    """defaultMode 'manual': SessionStart must not auto-activate, but an explicit
+    bare /caveman must still activate (at MANUAL_DEFAULT_LEVEL = 'full'). 'off'
+    behavior must remain a no-op on explicit activation."""
+
+    def run_hook(self, script, home, default_mode=None, stdin=None):
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+        env["USERPROFILE"] = str(home)
+        if default_mode is not None:
+            env["CAVEMAN_DEFAULT_MODE"] = default_mode
+        return subprocess.run(
+            ["node", script],
+            cwd=REPO_ROOT,
+            env=env,
+            input=stdin,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+    def test_activate_manual_does_not_auto_activate(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-manual-activate-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            result = self.run_hook(
+                "src/hooks/caveman-activate.js", home, default_mode="manual"
+            )
+
+            self.assertEqual(result.stdout, "OK")
+            self.assertFalse(
+                (home / ".claude" / ".caveman-active").exists(),
+                "manual mode must not write the active flag at session start",
+            )
+
+    def test_bare_caveman_activates_full_under_manual(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-manual-tracker-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            self.run_hook(
+                "src/hooks/caveman-mode-tracker.js",
+                home,
+                default_mode="manual",
+                stdin=json.dumps({"prompt": "/caveman"}),
+            )
+
+            flag = home / ".claude" / ".caveman-active"
+            self.assertTrue(flag.exists(), "bare /caveman under manual must activate")
+            self.assertEqual(flag.read_text().strip(), "full")
+
+    def test_bare_caveman_is_noop_under_off(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-off-tracker-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            self.run_hook(
+                "src/hooks/caveman-mode-tracker.js",
+                home,
+                default_mode="off",
+                stdin=json.dumps({"prompt": "/caveman"}),
+            )
+
+            self.assertFalse(
+                (home / ".claude" / ".caveman-active").exists(),
+                "bare /caveman under off must remain a no-op (unchanged behavior)",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
