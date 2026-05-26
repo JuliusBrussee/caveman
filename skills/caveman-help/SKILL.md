@@ -36,6 +36,10 @@ Mode stick until changed or session end.
 
 Say "stop caveman" or "normal mode". Resume anytime with `/caveman`.
 
+## Language
+
+Keep user's language by default. Compress style, not language. Technical terms, code, commands, and exact error strings stay exact unless user asks for translation.
+
 ## Configure Default Mode
 
 Default mode = `full`. Change it:
