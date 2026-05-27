@@ -633,15 +633,8 @@ function installOpencode(ctx) {
       cfg.plugin.push(OPENCODE_PLUGIN_REL);
     }
     if (opts.withMcpShrink) {
-      if (!cfg.mcp || typeof cfg.mcp !== 'object') cfg.mcp = {};
-      if (!cfg.mcp['caveman-shrink']) {
-        cfg.mcp['caveman-shrink'] = {
-          type: 'local',
-          command: ['npx', '-y', MCP_SHRINK_PKG],
-          enabled: true,
-        };
-        process.stdout.write('  registered caveman-shrink MCP server\n');
-      }
+      process.stdout.write('  installed caveman-shrink package (needs manual MCP wrapping)\n');
+      process.stdout.write(`  see: https://github.com/${REPO}/tree/main/src/mcp-servers/caveman-shrink\n`);
     }
     SETTINGS.writeSettings(opencodeJson, cfg);
     process.stdout.write(`  patched: ${opencodeJson}\n`);
@@ -801,13 +794,9 @@ function installMcpShrink(ctx) {
     note('    src/hooks/README.md to your Claude Code MCP config manually.');
     return { kind: 'skip', why: 'manual config required' };
   }
-  const r = runSpawn('claude', ['mcp', 'add', 'caveman-shrink', '--', 'npx', '-y', MCP_SHRINK_PKG], null, opts.dryRun);
-  if ((r.status || 0) === 0) {
-    note('    registered. Wrap an upstream by editing the mcpServers entry — see:');
-    note(`    https://github.com/${REPO}/tree/main/src/mcp-servers/caveman-shrink`);
-    return { kind: 'ok' };
-  }
-  return { kind: 'fail', why: 'claude mcp add failed' };
+  note('    installed caveman-shrink package (needs manual MCP wrapping).');
+  note(`    see: https://github.com/${REPO}/tree/main/src/mcp-servers/caveman-shrink`);
+  return { kind: 'ok' };
 }
 
 // ── Init writers (per-repo rule files) ────────────────────────────────────
