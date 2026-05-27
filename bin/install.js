@@ -475,7 +475,6 @@ const OPENCODE_AGENTS_MD_END = '<!-- caveman-end -->';
 
 function opencodeConfigDir() {
   if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
-  if (IS_WIN) return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'opencode');
   return path.join(os.homedir(), '.config', 'opencode');
 }
 
