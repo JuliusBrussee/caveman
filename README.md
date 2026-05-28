@@ -76,6 +76,8 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (al
 
 Pick your level of grunt — `lite` (drop filler), `full` (default caveman), `ultra` (telegraphic), or `wenyan` (classical Chinese, even shorter). One command switch. Cost go down forever.
 
+**Speak Korean?** Caveman follow your language now. Write Korean, get caveman Korean back — natural short form (음슴체), not broken grunt. Technical word stay English so nothing lost in translate. Same levels, every language.
+
 <table align="center">
 <tr><td>
 
@@ -115,7 +117,7 @@ Install break? Open agent, say *"Read CLAUDE.md and INSTALL.md, install caveman 
 
 | Skill | What |
 |---|---|
-| `/caveman [lite\|full\|ultra\|wenyan]` | Compress every reply. Levels stick until session end. |
+| `/caveman [lite\|full\|ultra\|wenyan]` | Compress every reply. Follows your language (Korean too). Levels stick until session end. |
 | `/caveman-commit` | Conventional Commit messages, ≤50 char subject. Why over what. |
 | `/caveman-review` | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` |
 | `/caveman-stats` | Real session token usage + lifetime savings + USD. Tweetable line via `--share`. |
