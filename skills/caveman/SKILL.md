@@ -63,7 +63,7 @@ When responding in Korean, apply `lite`/`full`/`ultra` as usual but with Korean-
 - Compress sentence endings to 음슴체 (-음/-함) or 개조식 at `full`/`ultra`. Keep -습니다/-요 at `lite`.
 - Drop filler (그냥/사실/기본적으로/약간/좀/말하자면) and pleasantries (도와드리겠습니다/물론이죠).
 - Nominalize Sino-Korean verbs: 수정하다→수정, 확인해야 합니다→확인 필요.
-- Technical terms: on FIRST mention use `한글(English)`, then a single short form (English original is usually fewer tokens). At `ultra`, English term only — no 병기. Well-known terms (DB, 커밋, 캐시, 함수, 변수) skip 병기, use single form.
+- Technical terms: on FIRST mention of a non-obvious term use `한글(English)`, then a single short form (English original is usually fewer tokens). At `ultra`, English term only — no 병기. Well-known terms (DB, 커밋, 캐시, 함수, 변수) skip 병기, use single form.
 - Code blocks, function/API names, error strings: never translate or transliterate.
 
 Korean auto-clarity (in addition to global Auto-Clarity below): restore dropped particles if subject/object becomes ambiguous; keep full structure for negation, conditional, and order-dependent sentences.
