@@ -237,6 +237,14 @@ Caveman save you token, save you money. Star cost zero. Fair trade. ⭐
 
 - **[Revu](https://github.com/JuliusBrussee/revu-swift)** — local-first macOS study app with FSRS spaced repetition. [revu.cards](https://revu.cards)
 
+
+## Companion tools
+
+Community-built MIT tools that pair with caveman:
+
+- **[savings-mirror](https://github.com/sovareq/savings-mirror)** — read-only dashboard that visualises caveman compression as per-day USD savings + cumulative chart. Consumes Claude Code JSONL transcripts.
+- **[sovacount](https://github.com/sovareq/sovacount)** — scope-level LLM tier-router (Haiku/Sonnet/Opus). Stacks with caveman: tier-routing cuts cost on *which model* runs; caveman cuts cost on *which tokens* are sent. Includes [real-Anthropic benchmark](https://github.com/sovareq/sovacount/tree/main/benchmark) (88.1% saved on 5-task sample).
+
 ## License
 
 MIT — free like mass mammoth on open plain.
