@@ -400,6 +400,29 @@ async function installClaude(ctx) {
     else results.failed.push(['claude', 'claude plugin install failed']);
   }
 
+  // Self-heal: drop managed settings.json hook/statusLine entries whose target
+  // script no longer exists. Migrating an old manual install to the plugin
+  // disables the local ~/.claude/hooks/caveman-*.js scripts but leaves the
+  // settings.json entries pointing at them, so Claude Code crashes every
+  // SessionStart / UserPromptSubmit with `loader:1478 — Cannot find module
+  // …caveman-activate.js` (issue #471). Runs unconditionally (independent of
+  // the hook-wiring decision) so it repairs an already-dirty config even when
+  // we then skip standalone wiring because the plugin manifest handles hooks.
+  {
+    const settingsPath = path.join(SETTINGS.claudeConfigDir(), 'settings.json');
+    const settings = SETTINGS.readSettings(settingsPath);
+    if (settings) {
+      const pruned = SETTINGS.pruneOrphanedManagedHooks(settings, SETTINGS.claudeConfigDir());
+      if (pruned > 0) {
+        note(`  removed ${pruned} orphaned caveman hook entr${pruned === 1 ? 'y' : 'ies'} from settings.json (target script missing)`);
+        if (!opts.dryRun) {
+          SETTINGS.validateHookFields(settings);
+          SETTINGS.writeSettings(settingsPath, settings);
+        }
+      }
+    }
+  }
+
   if (opts.withHooks) {
     say('  → installing hooks (--with-hooks)');
     const r = await installHooks(ctx);
