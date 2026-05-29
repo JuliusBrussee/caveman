@@ -230,23 +230,38 @@ function pruneOrphanedManagedHooks(settings, configDir) {
   const baseDir = configDir || claudeConfigDir();
   let removed = 0;
 
-  // Pull the first token that ends in a managed basename out of a command
-  // string. Handles: `node "/a/x.js"`, `"/abs/node" "/a/x.js"`, `bash /a/x.sh`.
-  const managedAlt = [...MANAGED_HOOK_BASENAMES]
-    .map(b => b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .join('|');
-  const reManaged = new RegExp(`(?:"([^"]*(?:${managedAlt}))"|'([^']*(?:${managedAlt}))'|(\\S*(?:${managedAlt})))`);
+  // Split a command into shell-ish tokens, honoring single/double quotes so a
+  // path containing spaces survives intact. Good enough for hook commands we
+  // generate (`node "/a/x.js"`, `"/abs/node" "/a/x.js"`, `bash /a/x.sh`); not
+  // a full shell parser.
+  const tokenize = (command) => {
+    const out = [];
+    const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+    let m;
+    while ((m = re.exec(command)) !== null) out.push(m[1] ?? m[2] ?? m[3]);
+    return out;
+  };
 
+  // A command is a missing managed target iff some token's BASENAME exactly
+  // equals a managed script (exact match — not substring — so a user hook like
+  // `mycaveman-activate.js` is never touched) and that resolved path is absent.
+  // Relative paths resolve against configDir; honors CLAUDE_CONFIG_DIR. Wrapped
+  // so a malformed command or fs error never throws out of the prune pass.
   const targetMissing = (command) => {
-    const m = reManaged.exec(command);
-    if (!m) return false; // not a managed-script command — leave it alone
-    let scriptPath = m[1] || m[2] || m[3];
-    if (!scriptPath) return false;
-    if (!path.isAbsolute(scriptPath)) scriptPath = path.join(baseDir, scriptPath);
-    return !fs.existsSync(scriptPath);
+    try {
+      for (const tok of tokenize(command)) {
+        if (!tok || typeof tok !== 'string') continue;
+        if (!MANAGED_HOOK_BASENAMES.has(path.basename(tok))) continue;
+        const scriptPath = path.isAbsolute(tok) ? tok : path.join(baseDir, tok);
+        return !fs.existsSync(scriptPath);
+      }
+    } catch (_) { /* silent-fail: never block install on a parse/fs hiccup */ }
+    return false;
   };
 
   if (settings.hooks && typeof settings.hooks === 'object') {
+    // Normalize malformed shapes first so the filter below only sees valid
+    // entries (and a poisoned settings.json can't survive the rewrite).
     validateHookFields(settings);
   }
   if (settings.hooks && typeof settings.hooks === 'object') {
@@ -254,7 +269,7 @@ function pruneOrphanedManagedHooks(settings, configDir) {
       if (!Array.isArray(settings.hooks[ev])) { delete settings.hooks[ev]; continue; }
       const before = settings.hooks[ev].length;
       settings.hooks[ev] = settings.hooks[ev].filter(entry => {
-        if (!entry || !Array.isArray(entry.hooks)) return true;
+        if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return true;
         return !entry.hooks.some(h => h && typeof h.command === 'string' && targetMissing(h.command));
       });
       removed += before - settings.hooks[ev].length;

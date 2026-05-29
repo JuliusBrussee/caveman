@@ -238,6 +238,33 @@ test('pruneOrphanedManagedHooks resolves relative target against configDir', () 
   assert.equal(s.hooks, undefined);
 });
 
+test('pruneOrphanedManagedHooks does NOT match a user script whose name merely contains a managed basename', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        // basename is "mycaveman-activate.js" — not an exact managed basename
+        { type: 'command', command: 'node /no/such/dir/mycaveman-activate.js' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 0);
+  assert.equal(s.hooks.SessionStart[0].hooks.length, 1);
+});
+
+test('pruneOrphanedManagedHooks handles quoted paths containing spaces', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: '"/opt/node/bin/node" "/no such dir/caveman-activate.js"' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
+});
+
 test('pruneOrphanedManagedHooks drops orphaned managed statusLine', () => {
   const s = {
     statusLine: { type: 'command', command: 'bash /no/such/dir/caveman-statusline.sh' },
