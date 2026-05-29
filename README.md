@@ -242,8 +242,8 @@ Caveman save you token, save you money. Star cost zero. Fair trade. ⭐
 
 Community-built MIT tools that pair with caveman:
 
-- **[savings-mirror](https://github.com/sovareq/savings-mirror)** — read-only dashboard that visualises caveman compression as per-day USD savings + cumulative chart. Consumes Claude Code JSONL transcripts.
-- **[sovacount](https://github.com/sovareq/sovacount)** — scope-level LLM tier-router (Haiku/Sonnet/Opus). Stacks with caveman: tier-routing cuts cost on *which model* runs; caveman cuts cost on *which tokens* are sent. Includes [real-Anthropic benchmark](https://github.com/sovareq/sovacount/tree/main/benchmark) (88.1% saved on 5-task sample).
+- **[savings-mirror](https://github.com/sovareq/savings-mirror)** — read-only Rust dashboard. Parses `~/.claude/projects/**/*.jsonl` and shows per-day / 7-day / cumulative / per-mode caveman savings. Auto-detects Anthropic API vs Pro/Max subscription billing and switches metric: USD against the public price table (API) or tokens-saved + 5h/7d cap utilization (subscription). No telemetry, no write-back.
+- **[sovacount](https://github.com/sovareq/sovacount)** — scope-level LLM tier-router (Haiku/Sonnet/Opus). Stacks with caveman: tier-routing cuts cost on *which model* runs; caveman cuts cost on *which tokens* are sent. Includes [real-Anthropic benchmark](https://github.com/sovareq/sovacount/tree/main/benchmark) — 88.1% saved on a 5-task sample (raw data + methodology committed, reproducible).
 
 ## License
 
