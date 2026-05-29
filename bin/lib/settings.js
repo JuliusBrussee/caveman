@@ -207,6 +207,74 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
   return rewritten;
 }
 
+// ── pruneOrphanedManagedHooks ─────────────────────────────────────────────
+// Remove managed hook entries whose target script no longer exists on disk.
+//
+// Migrating an old manual install (settings.json hooks → ~/.claude/hooks/
+// caveman-*.js) to the Claude Code plugin disables/renames those local
+// scripts (e.g. caveman-activate.js → caveman-activate.js.disabled) but
+// leaves the settings.json entries pointing at the now-missing file. Claude
+// Code then runs `node <missing>` every SessionStart / UserPromptSubmit and
+// crashes with `node:…/loader:1478 — Cannot find module …caveman-activate.js`
+// (issue #471). rewriteLegacyManagedHookCommands can't help — it only matches
+// the bare-node shape and these orphans are usually absolute-node — and
+// removeCavemanHooks runs only on uninstall.
+//
+// We extract the script path from any managed-looking command (bare- or
+// absolute-node, quoted or not), resolve it relative to dir if not absolute,
+// and drop the hook only when its target is genuinely absent. A managed hook
+// whose script still exists is left untouched, so this is safe to run on
+// every install.
+function pruneOrphanedManagedHooks(settings, configDir) {
+  if (!settings || typeof settings !== 'object') return 0;
+  const baseDir = configDir || claudeConfigDir();
+  let removed = 0;
+
+  // Pull the first token that ends in a managed basename out of a command
+  // string. Handles: `node "/a/x.js"`, `"/abs/node" "/a/x.js"`, `bash /a/x.sh`.
+  const managedAlt = [...MANAGED_HOOK_BASENAMES]
+    .map(b => b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  const reManaged = new RegExp(`(?:"([^"]*(?:${managedAlt}))"|'([^']*(?:${managedAlt}))'|(\\S*(?:${managedAlt})))`);
+
+  const targetMissing = (command) => {
+    const m = reManaged.exec(command);
+    if (!m) return false; // not a managed-script command — leave it alone
+    let scriptPath = m[1] || m[2] || m[3];
+    if (!scriptPath) return false;
+    if (!path.isAbsolute(scriptPath)) scriptPath = path.join(baseDir, scriptPath);
+    return !fs.existsSync(scriptPath);
+  };
+
+  if (settings.hooks && typeof settings.hooks === 'object') {
+    validateHookFields(settings);
+  }
+  if (settings.hooks && typeof settings.hooks === 'object') {
+    for (const ev of Object.keys(settings.hooks)) {
+      if (!Array.isArray(settings.hooks[ev])) { delete settings.hooks[ev]; continue; }
+      const before = settings.hooks[ev].length;
+      settings.hooks[ev] = settings.hooks[ev].filter(entry => {
+        if (!entry || !Array.isArray(entry.hooks)) return true;
+        return !entry.hooks.some(h => h && typeof h.command === 'string' && targetMissing(h.command));
+      });
+      removed += before - settings.hooks[ev].length;
+      if (settings.hooks[ev].length === 0) delete settings.hooks[ev];
+    }
+    if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+  }
+
+  // statusLine lives outside settings.hooks. A managed statusline command
+  // pointing at a missing script leaves a blank statusline (cosmetic, exits
+  // clean) but is still stale — drop it so Claude Code falls back to default.
+  if (settings.statusLine && typeof settings.statusLine.command === 'string'
+      && targetMissing(settings.statusLine.command)) {
+    delete settings.statusLine;
+    removed++;
+  }
+
+  return removed;
+}
+
 // ── claudeConfigDir ───────────────────────────────────────────────────────
 function claudeConfigDir() {
   if (process.env.CLAUDE_CONFIG_DIR) return process.env.CLAUDE_CONFIG_DIR;
@@ -222,6 +290,7 @@ module.exports = {
   addCommandHook,
   removeCavemanHooks,
   rewriteLegacyManagedHookCommands,
+  pruneOrphanedManagedHooks,
   claudeConfigDir,
   MANAGED_HOOK_BASENAMES,
 };
