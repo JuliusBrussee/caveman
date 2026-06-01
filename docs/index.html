@@ -417,7 +417,17 @@ cliInput.addEventListener('keydown', (e) => {
     const val = cliInput.value.trim();
     const row = document.createElement('div');
     row.className = 'term-line';
-    row.innerHTML = `<span class="term-accent">❯</span> ${val}`;
+
+    // SECURITY FIX: Create DOM elements safely to prevent XSS
+    const prompt = document.createElement('span');
+    prompt.className = 'term-accent';
+    prompt.textContent = '❯';
+
+    const commandText = document.createElement('span');
+    commandText.textContent = ` ${val}`; // textContent automatically escapes HTML
+
+    row.appendChild(prompt);
+    row.appendChild(commandText);
     cliInput.parentElement.before(row);
     
     const res = document.createElement('div');
