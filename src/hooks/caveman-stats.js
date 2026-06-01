@@ -22,13 +22,20 @@ const COMPRESSION = { 'full': 0.65 };
 // Match by model id prefix so this stays correct across point releases
 // (e.g. claude-sonnet-4-20250514, claude-sonnet-4-7). Update from
 // https://www.anthropic.com/pricing if a release changes the tier.
+// Most-specific prefixes MUST come first — priceForModel returns the first match.
 const MODEL_OUTPUT_PRICE_PER_M = [
-  ['claude-opus-4',     75.00],
-  ['claude-sonnet-4',   15.00],
-  ['claude-haiku-4',     4.00],
-  ['claude-3-5-sonnet', 15.00],
-  ['claude-3-5-haiku',   4.00],
-  ['claude-3-opus',     75.00],
+  // Legacy Opus 4.0 / 4.1 (pre-4.5) billed at the old $75/M output tier,
+  // including the dated ids (e.g. claude-opus-4-20250514).
+  ['claude-opus-4-0',    75.00],
+  ['claude-opus-4-1',    75.00],
+  ['claude-opus-4-2025', 75.00],
+  // Opus 4.5–4.8 dropped to $25/M output (rate card held since 4.5).
+  ['claude-opus-4',      25.00],
+  ['claude-sonnet-4',    15.00],
+  ['claude-haiku-4',      5.00],   // Haiku 4.5 = $5/M output
+  ['claude-3-5-sonnet',  15.00],
+  ['claude-3-5-haiku',    4.00],
+  ['claude-3-opus',      75.00],
 ];
 
 function priceForModel(model) {
@@ -324,7 +331,7 @@ function main() {
     // Routed through safeWriteFlag — the suffix path is predictable and
     // user-owned, same symlink-clobber surface as the .caveman-active flag.
     const agg = aggregateHistory(historyPath, null);
-    const suffix = agg.estSavedTokens > 0 ? `⛏ ${humanizeTokens(agg.estSavedTokens)}` : '';
+    const suffix = agg.estSavedTokens > 0 ? `⛏  ${humanizeTokens(agg.estSavedTokens)}` : '';
     safeWriteFlag(path.join(claudeDir, '.caveman-statusline-suffix'), suffix);
   }
 
