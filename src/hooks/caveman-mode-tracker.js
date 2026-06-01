@@ -25,8 +25,11 @@ process.stdin.on('end', () => {
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
     // "talk like caveman"). README tells users they can say these, but the hook
     // only matched /caveman commands — flag file and statusline stayed out of sync.
+    // Also recognize brevity requests ("less tokens", "be brief/terse", "fewer
+    // tokens", "shorter answers") — README promises these trigger caveman too.
     if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-        /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
+        /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt) ||
+        /\b(less tokens|fewer tokens|be brief|be terse|shorter answers)\b/i.test(prompt)) {
       if (!/\b(stop|disable|turn off|deactivate)\b/i.test(prompt)) {
         const mode = getDefaultMode();
         if (mode !== 'off') {
