@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 .venv/
 .env.local
-caveman-compress.md
 **/.DS_Store
 .claude/worktrees/
 evals/snapshots/*.html
