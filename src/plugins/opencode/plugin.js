@@ -64,7 +64,7 @@ const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
 function reinforcementLine(mode) {
   return 'CAVEMAN MODE ACTIVE (' + mode + '). ' +
     'Drop articles/filler/pleasantries/hedging. Fragments OK. ' +
-    'Code/commits/security: write normal.';
+    'Code/commits/security/issue+PR+MR titles+descriptions: write normal prose.';
 }
 
 // Parse a prompt for slash-command activation or natural-language toggles.

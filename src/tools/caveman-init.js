@@ -29,7 +29,7 @@ Stop: "stop caveman" or "normal mode"
 
 Auto-Clarity: drop caveman for security warnings, irreversible actions, user confused. Resume after.
 
-Boundaries: code/commits/PRs written normal.
+Boundaries: code/commits/issue+PR+MR titles+descriptions written in normal prose.
 `;
 
 const SENTINEL = 'Respond terse like smart caveman';
