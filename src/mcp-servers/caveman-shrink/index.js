@@ -40,9 +40,9 @@ const debug = process.env.CAVEMAN_SHRINK_DEBUG === '1';
 const fields = (process.env.CAVEMAN_SHRINK_FIELDS || 'description')
   .split(',').map(s => s.trim()).filter(Boolean);
 
-const upstream = spawn(args[0], args.slice(1), {
-  stdio: ['pipe', 'pipe', 'inherit'],
-});
+const { getSpawnOptions } = require('./spawn-options');
+
+const upstream = spawn(args[0], args.slice(1), getSpawnOptions());
 
 upstream.on('error', err => {
   process.stderr.write(`caveman-shrink: failed to spawn upstream: ${err.message}\n`);

@@ -9,6 +9,9 @@ const ROOT = path.resolve(__dirname, '..');
 const { compress, compressDescriptionsInPlace } = require(
   path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink', 'compress.js')
 );
+const { getSpawnOptions } = require(
+  path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink', 'spawn-options.js')
+);
 
 let passed = 0;
 let failed = 0;
@@ -121,6 +124,35 @@ test('compressDescriptionsInPlace skips non-string description fields', () => {
   // Should not throw.
   compressDescriptionsInPlace(obj, ['description']);
   assert.deepStrictEqual(obj.description, { not: 'a string' });
+});
+
+// spawn-options: upstream MCP child process spawn flags.
+// Confirms shell:true on Windows (so npx and other .cmd shims resolve) and
+// shell:false on POSIX.
+
+test('win32 enables shell so npx and .cmd shims resolve', () => {
+  const opts = getSpawnOptions('win32');
+  assert.equal(opts.shell, true);
+  assert.equal(opts.windowsHide, true);
+  assert.deepEqual(opts.stdio, ['pipe', 'pipe', 'inherit']);
+});
+
+test('linux keeps shell off to avoid argv quoting surprises', () => {
+  const opts = getSpawnOptions('linux');
+  assert.equal(opts.shell, false);
+  assert.deepEqual(opts.stdio, ['pipe', 'pipe', 'inherit']);
+});
+
+test('darwin keeps shell off', () => {
+  const opts = getSpawnOptions('darwin');
+  assert.equal(opts.shell, false);
+});
+
+test('defaults to current platform when no arg passed', () => {
+  const opts = getSpawnOptions();
+  assert.equal(opts.shell, process.platform === 'win32');
+  assert.equal(opts.windowsHide, true);
+  assert.deepEqual(opts.stdio, ['pipe', 'pipe', 'inherit']);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
