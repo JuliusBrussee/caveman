@@ -17,7 +17,7 @@
 [CmdletBinding()]
 param(
   [Parameter(ValueFromRemainingArguments = $true)]
-  [string[]]$Args
+  [string[]]$InstallerArgs
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,7 +44,7 @@ if ($nodeMajor -lt 18) {
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $local = Join-Path $here "bin/install.js"
 if (Test-Path $local) {
-  & node $local @Args
+  & node $local @InstallerArgs
   exit $LASTEXITCODE
 }
 
@@ -58,5 +58,5 @@ if (-not $npx) {
 # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
 # package, and a literal `--` was tripping bin/install.js's parseArgs as an
 # unknown flag.
-& npx -y "github:$Repo" @Args
+& npx -y "github:$Repo" @InstallerArgs
 exit $LASTEXITCODE
