@@ -15,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.
 **Windows (PowerShell 5.1+)**
 
 ```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
+$f = "$env:TEMP\caveman-install.ps1"; irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 -OutFile $f; & $f; Remove-Item $f
 ```
 
 What it does:
@@ -202,7 +202,11 @@ Still broken? [Open an issue](https://github.com/JuliusBrussee/caveman/issues).
 
 - Use `install.ps1`, not `install.sh`. Git Bash works for the shell version, but the hook side wires PowerShell counterparts (`caveman-statusline.ps1`).
 - PowerShell 5.1 minimum. Check with `$PSVersionTable.PSVersion`.
-- If `irm | iex` blocks on execution policy: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` for the install session, then re-run.
+- **Do NOT use `irm ... | iex`** — it fails with _"Cannot overwrite variable Args"_ because `$Args` is a PowerShell automatic variable that can't be reassigned inside `Invoke-Expression`. Use the download-then-run method instead:
+  ```powershell
+  $f = "$env:TEMP\caveman-install.ps1"; irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 -OutFile $f; & $f; Remove-Item $f
+  ```
+- If execution policy blocks the script: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` for the install session, then re-run.
 - Long-running issues: see `docs/install-windows.md` in the repo for manual fallback.
 
 **"My `settings.json` got mangled."**

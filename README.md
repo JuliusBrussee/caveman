@@ -101,7 +101,7 @@ One line. Find every agent. Install for each.
 curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash
 
 # Windows (PowerShell 5.1+)
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
+$f = "$env:TEMP\caveman-install.ps1"; irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 -OutFile $f; & $f; Remove-Item $f
 ```
 
 ~30 seconds. Needs Node ≥18. Skip agent you no have. Safe to re-run.

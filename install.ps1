@@ -3,8 +3,8 @@
 # Thin wrapper around bin/install.js (the unified Node installer). Every flag
 # you'd pass to bin/install.js can be passed here; we just forward them.
 #
-# One-line install:
-#   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
+# One-line install (download-then-run to avoid Invoke-Expression scope issues):
+#   $f = "$env:TEMP\caveman-install.ps1"; irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 -OutFile $f; & $f; Remove-Item $f
 #
 # Local clone:
 #   pwsh install.ps1 [flags]
@@ -13,11 +13,16 @@
 # truth and constantly drifted (issue #249 was a `node -e "..."` quoting bug
 # that silently dropped the JSON merge step on every Windows install). One
 # Node script works everywhere without quoting bugs.
+#
+# NOTE: The parameter is named $InstallArgs (not $Args) because $Args is a
+# PowerShell automatic variable. Using $Args in param() causes
+# "Cannot overwrite variable Args" when the script is piped to
+# Invoke-Expression (irm ... | iex).
 
 [CmdletBinding()]
 param(
   [Parameter(ValueFromRemainingArguments = $true)]
-  [string[]]$Args
+  [string[]]$InstallArgs
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,7 +49,7 @@ if ($nodeMajor -lt 18) {
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $local = Join-Path $here "bin/install.js"
 if (Test-Path $local) {
-  & node $local @Args
+  & node $local @InstallArgs
   exit $LASTEXITCODE
 }
 
@@ -58,5 +63,5 @@ if (-not $npx) {
 # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
 # package, and a literal `--` was tripping bin/install.js's parseArgs as an
 # unknown flag.
-& npx -y "github:$Repo" @Args
+& npx -y "github:$Repo" @InstallArgs
 exit $LASTEXITCODE
