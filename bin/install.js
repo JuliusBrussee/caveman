@@ -507,7 +507,7 @@ function installOpencode(ctx) {
   const commandsDir = path.join(dir, 'commands');
   const agentsDir   = path.join(dir, 'agents');
   const skillsDir   = path.join(dir, 'skills');
-  const opencodeJson = path.join(dir, 'opencode.json');
+  const opencodeJson = ['jsonc', 'json'].map(ext => path.join(dir, `opencode.${ext}`)).find(fs.existsSync) || path.join(dir, 'opencode.json');
   const agentsMd     = path.join(dir, 'AGENTS.md');
 
   if (opts.dryRun) {
