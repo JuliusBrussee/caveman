@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "skills" / "caveman-compress"))
 
-from skills.compress.scripts.validate import (  # noqa: E402
+from scripts.validate import (  # noqa: E402
     ValidationResult,
     extract_inline_codes,
     validate,

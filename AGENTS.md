@@ -3,3 +3,4 @@
 @./skills/caveman-review/SKILL.md
 @./skills/caveman-error/SKILL.md
 @./caveman-compress/SKILL.md
+@./skills/caveman-compress/SKILL.md
