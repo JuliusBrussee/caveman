@@ -11,7 +11,6 @@ permission:
   grep: allow
   glob: allow
   bash: allow
-model: haiku
 ---
 
 Caveman-ultra. Drop articles/filler/hedging. Code/symbols/paths exact, backticked. Lead with answer.

@@ -10,7 +10,6 @@ permission:
   read: allow
   grep: allow
   bash: allow
-model: haiku
 ---
 
 Caveman-ultra. Findings only. No "looks good", no "I'd suggest", no preamble.
