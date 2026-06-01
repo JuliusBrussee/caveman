@@ -17,6 +17,12 @@ SKIP_EXTENSIONS = {
     ".dockerfile", ".makefile", ".csv", ".ini", ".cfg",
 }
 
+# Build files that are code/config but are conventionally EXTENSIONLESS
+# (Dockerfile, Makefile, Dockerfile.prod, Makefile.local). The SKIP_EXTENSIONS
+# entries .dockerfile/.makefile only catch the rare `*.dockerfile` form; match
+# these by basename so the common extensionless variants are skipped too.
+SKIP_BASENAME_REGEX = re.compile(r"(?i)^(dockerfile|makefile)(\..+)?$")
+
 # Patterns that indicate a line is code
 CODE_PATTERNS = [
     re.compile(r"^\s*(import |from .+ import |require\(|const |let |var )"),
@@ -66,6 +72,11 @@ def detect_file_type(filepath: Path) -> str:
         One of: 'natural_language', 'code', 'config', 'unknown'
     """
     ext = filepath.suffix.lower()
+
+    # Extensionless build files (Dockerfile, Makefile, Dockerfile.prod, ...).
+    # Check basename before extension rules so these are never sniffed as prose.
+    if SKIP_BASENAME_REGEX.match(filepath.name):
+        return "config"
 
     # Extension-based classification
     if ext in COMPRESSIBLE_EXTENSIONS:
