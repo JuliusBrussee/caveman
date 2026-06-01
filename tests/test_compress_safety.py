@@ -8,6 +8,7 @@ output is empty or identical to the input, and a backup-write that drops
 bytes is detected before the input is overwritten.
 """
 
+import os
 import sys
 import tempfile
 import unittest
@@ -67,7 +68,11 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
     def test_real_compression_writes_backup_and_target(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        # Isolate the backup data dir to a temp location so the out-of-tree
+        # backup (issue #420) never lands in the developer's real home dir.
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
             original = "# Heading\n\nThe quick brown fox jumps over the lazy dog.\n"
             compressed = "# Heading\n\nFox jump dog.\n"
             path = self._file_with(Path(tmp), original)
@@ -77,8 +82,11 @@ class CompressSafetyTests(unittest.TestCase):
                 ok = compress_mod.compress_file(path)
             self.assertTrue(ok)
             self.assertEqual(path.read_text(), compressed)
-            backup = Path(tmp) / "task.original.md"
+            # Backups now live OUTSIDE the source dir (issue #420), under a
+            # platform-aware data dir mirroring the source parent name.
+            backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
             self.assertEqual(backup.read_text(), original)
+            self.assertFalse((Path(tmp) / "task.original.md").exists())
 
 
 if __name__ == "__main__":
