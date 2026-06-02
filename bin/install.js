@@ -380,7 +380,7 @@ function absoluteNodePath() {
 
 // ── Per-provider installers ────────────────────────────────────────────────
 async function installClaude(ctx) {
-  const { say, note, warn, ok, opts, results } = ctx;
+  const { say, note, warn, ok, opts, results, configDir } = ctx;
   results.detected++;
   say('→ Claude Code detected');
 
@@ -398,6 +398,23 @@ async function installClaude(ctx) {
     const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], null, opts.dryRun);
     if ((r1.status || 0) === 0 && (r2.status || 0) === 0) results.installed.push('claude');
     else results.failed.push(['claude', 'claude plugin install failed']);
+  }
+
+  // Prune settings.json entries for managed scripts that no longer exist on
+  // disk. Common after migrating from standalone hooks to the plugin (issue
+  // #471): the plugin system takes over hook delivery but old settings.json
+  // entries remain, causing "Cannot find module" noise every session.
+  if (!opts.dryRun) {
+    const settingsPath = path.join(configDir, 'settings.json');
+    const settings = SETTINGS.readSettings(settingsPath);
+    if (settings) {
+      const pruned = SETTINGS.pruneDeadHookFiles(settings);
+      if (pruned > 0) {
+        SETTINGS.validateHookFields(settings);
+        SETTINGS.writeSettings(settingsPath, settings);
+        note(`  removed ${pruned} orphaned hook entr${pruned === 1 ? 'y' : 'ies'} from settings.json`);
+      }
+    }
   }
 
   if (opts.withHooks) {
@@ -736,7 +753,13 @@ async function installHooks(ctx) {
   const tracker  = path.join(hooksDir, 'caveman-mode-tracker.js');
   const statusline = path.join(hooksDir, 'caveman-statusline.sh');
 
-  // Migrate any legacy bare-`node` invocations of our managed scripts.
+  // Remove any entries whose managed script files no longer exist on disk
+  // before rewriting/adding ours — keeps settings.json clean across reinstalls
+  // and node-upgrade scenarios.
+  SETTINGS.pruneDeadHookFiles(settings);
+
+  // Migrate stale node invocations (bare `node`, old absolute paths) to the
+  // current node binary. Handles Homebrew, nvm, and other non-PATH installs.
   SETTINGS.rewriteLegacyManagedHookCommands(settings, node);
 
   SETTINGS.addCommandHook(settings, 'SessionStart', {
