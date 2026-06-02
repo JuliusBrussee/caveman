@@ -173,12 +173,29 @@ function removeCavemanHooks(settings, marker = 'caveman') {
   return removed;
 }
 
+// ── extractManagedScriptPath ──────────────────────────────────────────────
+// Parse the script path from any node hook command variant:
+//   node /path/to/script.js          (bare node, unquoted)
+//   node "/path/to/script.js"        (bare node, quoted)
+//   /abs/path/node /path/script.js   (absolute node, unquoted)
+//   "/abs/path/node" "/path/script"  (absolute node, both quoted)
+// Returns the script path string, or null if the command can't be parsed.
+function extractManagedScriptPath(command) {
+  if (typeof command !== 'string') return null;
+  const m = command.match(
+    /^(?:"[^"]*"|'[^']*'|\S+)\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/
+  );
+  return m ? (m[1] || m[2] || m[3]) : null;
+}
+
 // ── rewriteLegacyManagedHookCommands ──────────────────────────────────────
-// Walk every hook command. If it's a bare `node /path/to/<managed>.js` (no
-// absolute node path) and the basename is one of ours, rewrite to use
-// `absoluteNode` so GUI launchers with minimal PATH still find Node. Only
-// touches commands matching the exact bare-node shape — won't false-positive
-// on user-authored hooks that just happen to mention "caveman".
+// Walk every hook command. If it references one of our managed scripts but
+// uses a stale or bare node executable, rewrite to use `absoluteNode` so
+// GUI launchers with minimal PATH still find Node, and so upgraded Node
+// installations don't leave stale absolute paths behind.
+//
+// Handles bare `node`, absolute paths (e.g. from Homebrew or nvm), and
+// quoted variants. Skips commands already using the target node binary.
 const MANAGED_HOOK_BASENAMES = new Set([
   'caveman-activate.js',
   'caveman-mode-tracker.js',
@@ -188,23 +205,54 @@ const MANAGED_HOOK_BASENAMES = new Set([
 function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
   if (!settings || !settings.hooks || !absoluteNode) return 0;
   let rewritten = 0;
-  const reBare = /^node\s+("([^"]+)"|'([^']+)'|(\S+))\s*$/;
+  const canonical_node = `"${absoluteNode}"`;
   for (const ev of Object.keys(settings.hooks)) {
     for (const entry of settings.hooks[ev]) {
       if (!entry || !Array.isArray(entry.hooks)) continue;
       for (const h of entry.hooks) {
         if (!h || typeof h.command !== 'string') continue;
-        const m = reBare.exec(h.command);
-        if (!m) continue;
-        const scriptPath = m[2] || m[3] || m[4];
-        const basename = path.basename(scriptPath);
-        if (!MANAGED_HOOK_BASENAMES.has(basename)) continue;
-        h.command = `"${absoluteNode}" "${scriptPath}"`;
+        const scriptPath = extractManagedScriptPath(h.command);
+        if (!scriptPath) continue;
+        if (!MANAGED_HOOK_BASENAMES.has(path.basename(scriptPath))) continue;
+        const canonical = `${canonical_node} "${scriptPath}"`;
+        if (h.command.trim() === canonical) continue;
+        h.command = canonical;
         rewritten++;
       }
     }
   }
   return rewritten;
+}
+
+// ── pruneDeadHookFiles ────────────────────────────────────────────────────
+// Remove hook entries whose managed script files no longer exist on disk.
+// Self-heals orphaned settings.json entries left behind when a user switches
+// from standalone hook install to the plugin install path (issue #471).
+// Only touches entries referencing one of our MANAGED_HOOK_BASENAMES — never
+// removes user-authored hooks, even if their files are missing.
+function pruneDeadHookFiles(settings) {
+  if (!settings || !settings.hooks) return 0;
+  let removed = 0;
+  for (const ev of Object.keys(settings.hooks)) {
+    const arr = settings.hooks[ev];
+    if (!Array.isArray(arr)) continue;
+    const before = arr.length;
+    settings.hooks[ev] = arr.filter(entry => {
+      if (!entry || !Array.isArray(entry.hooks)) return true;
+      entry.hooks = entry.hooks.filter(h => {
+        if (!h || typeof h.command !== 'string') return true;
+        const scriptPath = extractManagedScriptPath(h.command);
+        if (!scriptPath) return true;
+        if (!MANAGED_HOOK_BASENAMES.has(path.basename(scriptPath))) return true;
+        return fs.existsSync(scriptPath);
+      });
+      return entry.hooks.length > 0;
+    });
+    removed += before - settings.hooks[ev].length;
+    if (settings.hooks[ev].length === 0) delete settings.hooks[ev];
+  }
+  if (settings.hooks && Object.keys(settings.hooks).length === 0) delete settings.hooks;
+  return removed;
 }
 
 // ── claudeConfigDir ───────────────────────────────────────────────────────
@@ -222,6 +270,7 @@ module.exports = {
   addCommandHook,
   removeCavemanHooks,
   rewriteLegacyManagedHookCommands,
+  pruneDeadHookFiles,
   claudeConfigDir,
   MANAGED_HOOK_BASENAMES,
 };
