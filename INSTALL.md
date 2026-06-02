@@ -106,7 +106,7 @@ Useful flags:
 | `--only <id>` | One agent only. Repeatable: `--only claude --only cursor`. |
 | `--dry-run` | Print every command. Write nothing. |
 | `--with-init` | Drop always-on rule files into the current repo (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`) and, if OpenClaw is on the box, append the bootstrap block to `~/.openclaw/workspace/SOUL.md`. |
-| `--with-mcp-shrink` | Register `caveman-shrink` MCP proxy. **On by default.** |
+| `--with-mcp-shrink` | Register `caveman-shrink` MCP proxy for Claude Code. **On by default.** OpenCode must wrap MCP servers manually. |
 | `--no-mcp-shrink` | Skip MCP-shrink registration. |
 | `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code hook installer. (Default: on.) |
 | `--skip-skills` | Don't run the npx-skills auto-detect fallback when nothing else matched. |
@@ -170,7 +170,7 @@ What it removes:
 - Caveman hook entries from `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/`; matched by the substring `caveman`).
 - Hook files in `$CLAUDE_CONFIG_DIR/hooks/` (`caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, `caveman-statusline.{sh,ps1}`, plus the dir's `package.json` marker).
 - The Claude Code plugin and the Gemini CLI extension (if installed).
-- The opencode native plugin (`~/.config/opencode/plugins/caveman/`, the `plugin` and `mcp.caveman-shrink` entries from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file).
+- The opencode native plugin (`~/.config/opencode/plugins/caveman/`, the `plugin` entry from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file). Old `mcp.caveman-shrink` entries are pruned if present.
 - The OpenClaw workspace skill folder and the marker-fenced block from `~/.openclaw/workspace/SOUL.md` (when present).
 - The `.caveman-active` flag file.
 
@@ -190,6 +190,33 @@ Open your agent in this repo and say:
 Agent read repo. Agent run install. Caveman make agent talk less — agent first job is install caveman to talk less. Snake eat tail.
 
 Still broken? [Open an issue](https://github.com/JuliusBrussee/caveman/issues).
+
+**"I want `caveman-shrink` in OpenCode."**
+
+OpenCode install no longer auto-registers `caveman-shrink`. Add a manual MCP
+entry that wraps specific upstream servers:
+
+```json
+{
+  "mcp": {
+    "filesystem-shrink": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "caveman-shrink",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/absolute/path/to/project"
+      ],
+      "enabled": true
+    }
+  }
+}
+```
+
+Pattern: `caveman-shrink <upstream-command> [...args]`.
 
 **"I ran the installer but Claude Code isn't talking caveman."**
 

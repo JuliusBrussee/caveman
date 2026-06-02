@@ -41,7 +41,7 @@ function shimOpencode() {
 }
 
 function runInstaller(args, env) {
-  return spawnSync('node', [INSTALLER, ...args, '--non-interactive', '--no-mcp-shrink'], {
+  return spawnSync('node', [INSTALLER, ...args, '--non-interactive'], {
     env, encoding: 'utf8',
   });
 }
@@ -91,6 +91,7 @@ test('opencode fresh install drops plugin, commands, agents, skills, AGENTS.md, 
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     assert.ok(Array.isArray(cfg.plugin), 'opencode.json missing plugin array');
     assert.ok(cfg.plugin.includes('./plugins/caveman/plugin.js'), 'plugin entry missing');
+    assert.equal(cfg.mcp?.['caveman-shrink'], undefined, 'opencode install should not auto-register caveman-shrink');
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });

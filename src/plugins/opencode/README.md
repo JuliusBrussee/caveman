@@ -17,6 +17,34 @@ to `caveman-config.cjs` because this directory is `"type": "module"`) into
 `~/.config/opencode/plugins/caveman/` and patches `opencode.json` with a
 `"plugin"` array entry.
 
+It does **not** auto-register `caveman-shrink` as an OpenCode MCP server.
+That startup path is currently broken upstream in caveman, so wrap specific MCP
+servers manually if you want shrink behavior in OpenCode.
+
+Example `opencode.json` entry:
+
+```json
+{
+  "mcp": {
+    "filesystem-shrink": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "caveman-shrink",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/absolute/path/to/project"
+      ],
+      "enabled": true
+    }
+  }
+}
+```
+
+Pattern: `caveman-shrink <upstream-command> [...args]`.
+
 ## What it does
 
 - `session.created` → writes the configured default mode to

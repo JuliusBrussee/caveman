@@ -475,7 +475,6 @@ const OPENCODE_AGENTS_MD_END = '<!-- caveman-end -->';
 
 function opencodeConfigDir() {
   if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
-  if (IS_WIN) return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'opencode');
   return path.join(os.homedir(), '.config', 'opencode');
 }
 
@@ -516,7 +515,10 @@ function installOpencode(ctx) {
     note(`  would copy ${OPENCODE_COMMAND_FILES.length} command files into ${commandsDir}/`);
     note(`  would copy ${OPENCODE_AGENT_FILES.length} cavecrew agents into ${agentsDir}/`);
     note(`  would copy ${OPENCODE_SKILL_DIRS.length} skill dirs into ${skillsDir}/`);
-    note(`  would patch ${opencodeJson} with "plugin" entry${opts.withMcpShrink ? ' + caveman-shrink MCP' : ''}`);
+    note(`  would patch ${opencodeJson} with "plugin" entry`);
+    if (opts.withMcpShrink) {
+      note('  would not auto-register caveman-shrink for opencode; wrap specific MCP servers manually');
+    }
     note(`  would write Tier-3 ruleset to ${agentsMd}`);
     results.installed.push('opencode');
     process.stdout.write('\n');
@@ -614,7 +616,8 @@ function installOpencode(ctx) {
       process.stdout.write(`  installed: ${agentsMd}\n`);
     }
 
-    // 6. opencode.json — add plugin entry; optional caveman-shrink MCP.
+    // 6. opencode.json — add plugin entry only. caveman-shrink stays manual for
+    //    opencode because the standalone MCP registration has broken startup.
     let cfg = SETTINGS.readSettings(opencodeJson);
     if (cfg === null) {
       warn(`  ${opencodeJson} unparseable; will not touch it. Edit manually then re-run.`);
@@ -632,19 +635,11 @@ function installOpencode(ctx) {
     if (!cfg.plugin.includes(OPENCODE_PLUGIN_REL)) {
       cfg.plugin.push(OPENCODE_PLUGIN_REL);
     }
-    if (opts.withMcpShrink) {
-      if (!cfg.mcp || typeof cfg.mcp !== 'object') cfg.mcp = {};
-      if (!cfg.mcp['caveman-shrink']) {
-        cfg.mcp['caveman-shrink'] = {
-          type: 'local',
-          command: ['npx', '-y', MCP_SHRINK_PKG],
-          enabled: true,
-        };
-        process.stdout.write('  registered caveman-shrink MCP server\n');
-      }
-    }
     SETTINGS.writeSettings(opencodeJson, cfg);
     process.stdout.write(`  patched: ${opencodeJson}\n`);
+    if (opts.withMcpShrink) {
+      note('  caveman-shrink not auto-registered for opencode; wrap MCP servers manually if wanted');
+    }
 
     results.installed.push('opencode');
   } catch (e) {
