@@ -74,6 +74,10 @@ test('opencode fresh install drops plugin, commands, agents, skills, AGENTS.md, 
     }
     for (const f of ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md']) {
       assert.ok(fs.existsSync(path.join(ocDir, 'agents', f)), `agent ${f} missing`);
+      const body = fs.readFileSync(path.join(ocDir, 'agents', f), 'utf8');
+      assert.doesNotMatch(body, /^tools:/m, `${f} should not use deprecated tools frontmatter`);
+      assert.match(body, /^mode: subagent$/m, `${f} should declare subagent mode`);
+      assert.match(body, /^permission:$/m, `${f} should use OpenCode permission frontmatter`);
     }
     for (const name of ['caveman', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew']) {
       assert.ok(fs.existsSync(path.join(ocDir, 'skills', name, 'SKILL.md')), `skill ${name}/SKILL.md missing`);
