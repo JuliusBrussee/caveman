@@ -123,5 +123,29 @@ test('compressDescriptionsInPlace skips non-string description fields', () => {
   assert.deepStrictEqual(obj.description, { not: 'a string' });
 });
 
+test('preserves enum values inside parens (nested sentinel restoration — #444)', () => {
+  // Path pattern matches "STARTER/BUSINESS" first (sentinel 0).
+  // Function-call pattern then matches "type ( 0 )" (sentinel 1).
+  // Single-pass restore replaces " 1 " with "type ( 0 )" but leaves the
+  // inner " 0 " unrestored — model sees "( 0 )" instead of the enum.
+  const cases = [
+    { in: 'plan type (STARTER/BUSINESS)',   needle: 'STARTER/BUSINESS' },
+    { in: 'user role (ADMIN/MEMBER/GUEST)', needle: 'ADMIN/MEMBER/GUEST' },
+    { in: 'user plan (Free/Pro/Business)',  needle: 'Free/Pro/Business' },
+  ];
+  for (const c of cases) {
+    const { compressed } = compress(c.in);
+    assert.ok(
+      compressed.includes(c.needle),
+      `nested sentinel leaked: expected "${c.needle}" in output, got "${compressed}"`
+    );
+    assert.doesNotMatch(
+      compressed,
+      / \d+ /,
+      `unrestored sentinel " N " left in output: "${compressed}"`
+    );
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
