@@ -28,7 +28,7 @@ let failed = 0;
 function runHook(mode) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-activate-test-'));
   try {
-    return execFileSync('node', [HOOK], {
+    return execFileSync(process.execPath, [HOOK], {
       encoding: 'utf8',
       env: { ...process.env, CAVEMAN_DEFAULT_MODE: mode, CLAUDE_CONFIG_DIR: tmp },
     });

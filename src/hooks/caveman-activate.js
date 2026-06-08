@@ -53,9 +53,11 @@ const modeLabel = mode === 'wenyan' ? 'wenyan-full' : mode;
 // Standalone installs:                __dirname = $CLAUDE_CONFIG_DIR/hooks/, SKILL.md won't exist — falls back to hardcoded rules.
 let skillContent = '';
 const skillCandidates = [
-  path.join(__dirname, '..', '..', 'skills', 'caveman', 'SKILL.md'), // src/hooks/ → plugin root (current layout)
   path.join(__dirname, '..', 'skills', 'caveman', 'SKILL.md'),       // hooks/ → plugin root (legacy layout)
 ];
+if (path.basename(path.dirname(__dirname)) === 'src') {
+  skillCandidates.unshift(path.join(__dirname, '..', '..', 'skills', 'caveman', 'SKILL.md')); // src/hooks/ → plugin root (current layout)
+}
 for (const candidate of skillCandidates) {
   try { skillContent = fs.readFileSync(candidate, 'utf8'); break; } catch (e) {}
 }
