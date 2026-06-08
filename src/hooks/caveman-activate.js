@@ -48,14 +48,26 @@ if (INDEPENDENT_MODES.has(mode)) {
 const modeLabel = mode === 'wenyan' ? 'wenyan-full' : mode;
 
 // Read SKILL.md — the single source of truth for caveman behavior.
-// Plugin installs: __dirname = <plugin_root>/hooks/, SKILL.md at <plugin_root>/skills/caveman/SKILL.md
-// Standalone installs: __dirname = $CLAUDE_CONFIG_DIR/hooks/, SKILL.md won't exist — falls back to hardcoded rules.
+// Plugin layout: hook at <plugin_root>/src/hooks/, SKILL.md two levels up at
+// <plugin_root>/skills/caveman/SKILL.md.
+// Legacy/flat layout: hook one level below skills/.
+// Standalone installs ($CLAUDE_CONFIG_DIR/hooks/) ship no SKILL.md — both
+// probes miss and fall through to the hardcoded fallback below.
 let skillContent = '';
-try {
-  skillContent = fs.readFileSync(
-    path.join(__dirname, '..', 'skills', 'caveman', 'SKILL.md'), 'utf8'
-  );
-} catch (e) { /* standalone install — will use fallback below */ }
+const skillRoots = [];
+if (path.basename(__dirname) === 'hooks' && path.basename(path.dirname(__dirname)) === 'src') {
+  skillRoots.push(['..', '..', 'skills']);
+}
+skillRoots.push(['..', 'skills']);
+
+for (const rel of skillRoots) {
+  try {
+    skillContent = fs.readFileSync(
+      path.join(__dirname, ...rel, 'caveman', 'SKILL.md'), 'utf8'
+    );
+    break;
+  } catch (e) { /* try next candidate layout */ }
+}
 
 let output;
 

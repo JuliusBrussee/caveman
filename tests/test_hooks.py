@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -155,6 +156,76 @@ class HookScriptTests(unittest.TestCase):
 
             self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
             self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
+
+    def test_activate_loads_skill_from_plugin_src_layout(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-plugin-layout-") as tmp:
+            plugin_root = Path(tmp) / "plugin"
+            hooks_dir = plugin_root / "src" / "hooks"
+            skill_dir = plugin_root / "skills" / "caveman"
+            claude_dir = Path(tmp) / ".claude"
+            unrelated_cwd = Path(tmp) / "cwd"
+            unrelated_skill_dir = unrelated_cwd / "skills" / "caveman"
+
+            hooks_dir.mkdir(parents=True)
+            skill_dir.mkdir(parents=True)
+            claude_dir.mkdir()
+            unrelated_skill_dir.mkdir(parents=True)
+
+            for name in ("caveman-activate.js", "caveman-config.js", "package.json"):
+                shutil.copy2(REPO_ROOT / "src" / "hooks" / name, hooks_dir / name)
+            shutil.copy2(REPO_ROOT / "skills" / "caveman" / "SKILL.md", skill_dir / "SKILL.md")
+            (unrelated_skill_dir / "SKILL.md").write_text("SENTINEL CWD SKILL\n")
+
+            env = os.environ.copy()
+            env["CAVEMAN_DEFAULT_MODE"] = "full"
+            env["CLAUDE_CONFIG_DIR"] = str(claude_dir)
+            env["HOME"] = str(Path(tmp) / "home")
+            env["USERPROFILE"] = str(Path(tmp) / "home")
+
+            result = subprocess.run(
+                ["node", str(hooks_dir / "caveman-activate.js")],
+                cwd=unrelated_cwd,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+
+            self.assertIn("## Intensity", result.stdout)
+            self.assertNotIn("Current level:", result.stdout)
+            self.assertNotIn("SENTINEL CWD SKILL", result.stdout)
+
+    def test_activate_standalone_layout_does_not_read_home_skills(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-standalone-layout-") as tmp:
+            home = Path(tmp) / "home"
+            claude_dir = home / ".claude"
+            hooks_dir = claude_dir / "hooks"
+            home_skill_dir = home / "skills" / "caveman"
+
+            hooks_dir.mkdir(parents=True)
+            home_skill_dir.mkdir(parents=True)
+
+            for name in ("caveman-activate.js", "caveman-config.js", "package.json"):
+                shutil.copy2(REPO_ROOT / "src" / "hooks" / name, hooks_dir / name)
+            (home_skill_dir / "SKILL.md").write_text("SENTINEL HOME SKILL\n")
+
+            env = os.environ.copy()
+            env["CAVEMAN_DEFAULT_MODE"] = "full"
+            env["CLAUDE_CONFIG_DIR"] = str(claude_dir)
+            env["HOME"] = str(home)
+            env["USERPROFILE"] = str(home)
+
+            result = subprocess.run(
+                ["node", str(hooks_dir / "caveman-activate.js")],
+                cwd=home,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+
+            self.assertIn("Current level:", result.stdout)
+            self.assertNotIn("SENTINEL HOME SKILL", result.stdout)
 
 
 if __name__ == "__main__":
