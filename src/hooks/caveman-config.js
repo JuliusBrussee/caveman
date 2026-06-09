@@ -42,6 +42,11 @@ function getConfigPath() {
 function getAgentConfigDir() {
   if (process.env.CODEBUDDY_CONFIG_DIR) return process.env.CODEBUDDY_CONFIG_DIR;
   if (process.env.CODEBUDDY_PLUGIN_ROOT) return path.join(os.homedir(), '.codebuddy');
+  // Fallback: detect from hook install path — if running from ~/.codebuddy/hooks/,
+  // we're under CodeBuddy Code even without env vars (standalone hook install via
+  // settings.json absolute path). Without this, the flag gets written to ~/.claude
+  // while statusline reads ~/.codebuddy — a silent split-brain bug.
+  if (__dirname.includes('.codebuddy')) return path.join(os.homedir(), '.codebuddy');
   return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 }
 
