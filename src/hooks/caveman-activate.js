@@ -9,9 +9,9 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, getAgentConfigDir } = require('./caveman-config');
 
-const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+const claudeDir = getAgentConfigDir();
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 

@@ -1,0 +1,34 @@
+{
+  "name": "caveman",
+  "description": "Ultra-compressed communication mode. Cuts ~75% of tokens while keeping full technical accuracy by speaking like a caveman.",
+  "author": {
+    "name": "Julius Brussee",
+    "url": "https://github.com/JuliusBrussee"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/src/hooks/caveman-activate.js\"",
+            "timeout": 5,
+            "statusMessage": "Loading caveman mode..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CODEBUDDY_PLUGIN_ROOT}/src/hooks/caveman-mode-tracker.js\"",
+            "timeout": 5,
+            "statusMessage": "Tracking caveman mode..."
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -16,9 +16,9 @@ Caveman like simple. Small focused PR > big rewrite.
 
 The repo distributes one skill (caveman) plus a handful of sub-skills
 (caveman-commit, caveman-review, caveman-compress, cavecrew-*) to many
-agents through different distribution mechanisms (Claude Code plugin, Codex
-plugin, Gemini extension, Cursor/Windsurf/Cline rule files, `npx skills` for
-the long tail). A single Node installer at `bin/install.js` detects which
+agents through different distribution mechanisms (Claude Code plugin, CodeBuddy
+Code plugin, Codex plugin, Gemini extension, Cursor/Windsurf/Cline rule files,
+`npx skills` for the long tail). A single Node installer at `bin/install.js` detects which
 agents are on the user's machine and installs the right thing for each.
 
 Sources of truth live at the **top level** of the repo. Agent-specific

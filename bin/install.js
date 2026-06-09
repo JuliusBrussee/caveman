@@ -160,6 +160,7 @@ function checkNodeVersion() {
 // just because some other tool created `~/.foo` along the way.
 const PROVIDERS = [
   { id: 'claude',     label: 'Claude Code',         mech: 'claude plugin install',         detect: 'command:claude' },
+  { id: 'codebuddy',  label: 'CodeBuddy Code',      mech: 'codebuddy plugin install',      detect: 'command:codebuddy' },
   { id: 'gemini',     label: 'Gemini CLI',          mech: 'gemini extensions install',     detect: 'command:gemini' },
   { id: 'opencode',   label: 'opencode',            mech: 'native opencode plugin',        detect: 'command:opencode' },
   { id: 'openclaw',   label: 'OpenClaw',            mech: 'workspace skill + SOUL.md',     detect: 'command:openclaw||dir:$HOME/.openclaw/workspace' },
@@ -414,6 +415,51 @@ async function installClaude(ctx) {
     if (r.kind === 'ok')   results.installed.push('caveman-shrink');
     if (r.kind === 'skip') results.skipped.push(['caveman-shrink', r.why]);
     if (r.kind === 'fail') results.failed.push(['caveman-shrink', r.why]);
+  }
+
+  process.stdout.write('\n');
+}
+
+// ── CodeBuddy Code install ────────────────────────────────────────────────
+// Mirrors installClaude() exactly — same plugin CLI shape, same hook
+// architecture, same settings.json format. Config dir: ~/.codebuddy
+// (CODEBUDDY_CONFIG_DIR override supported). Plugin root env:
+// CODEBUDDY_PLUGIN_ROOT (analogous to CLAUDE_PLUGIN_ROOT).
+async function installCodebuddy(ctx) {
+  const { say, note, warn, ok, opts, results } = ctx;
+  results.detected++;
+  say('→ CodeBuddy Code detected');
+
+  // Plugin install (idempotent unless --force)
+  let alreadyInstalled = false;
+  if (!opts.force) {
+    const r = captureSpawn('codebuddy', ['plugin', 'list']);
+    if (r.status === 0 && /caveman/i.test(r.stdout || '')) alreadyInstalled = true;
+  }
+  if (alreadyInstalled) {
+    note('  caveman plugin already installed (use --force to reinstall)');
+    results.skipped.push(['codebuddy', 'plugin already installed']);
+  } else {
+    const r1 = runSpawn('codebuddy', ['plugin', 'marketplace', 'add', REPO], null, opts.dryRun);
+    const r2 = runSpawn('codebuddy', ['plugin', 'install', 'caveman@caveman'], null, opts.dryRun);
+    if ((r1.status || 0) === 0 && (r2.status || 0) === 0) results.installed.push('codebuddy');
+    else results.failed.push(['codebuddy', 'codebuddy plugin install failed']);
+  }
+
+  if (opts.withHooks) {
+    say('  → installing hooks (--with-hooks)');
+    const r = await installHooks(ctx, 'codebuddy');
+    if (r === 'ok') results.installed.push('codebuddy-hooks');
+    else if (r === 'skip') results.skipped.push(['codebuddy-hooks', 'already wired']);
+    else results.failed.push(['codebuddy-hooks', r]);
+  }
+
+  if (opts.withMcpShrink) {
+    say('  → wiring caveman-shrink MCP proxy (--with-mcp-shrink)');
+    const r = installMcpShrink(ctx, 'codebuddy');
+    if (r.kind === 'ok')   results.installed.push('caveman-shrink-codebuddy');
+    if (r.kind === 'skip') results.skipped.push(['caveman-shrink-codebuddy', r.why]);
+    if (r.kind === 'fail') results.failed.push(['caveman-shrink-codebuddy', r.why]);
   }
 
   process.stdout.write('\n');
@@ -687,8 +733,13 @@ function installOpenclaw(ctx) {
 
 // ── Hooks installer ────────────────────────────────────────────────────────
 // Replaces src/hooks/install.sh + src/hooks/install.ps1.
-async function installHooks(ctx) {
-  const { note, warn, opts, repoRoot, configDir } = ctx;
+// Optional `provider` param: 'claude' (default) or 'codebuddy'. Controls which
+// config dir receives the hooks + settings.json merge.
+async function installHooks(ctx, provider) {
+  const { note, warn, opts, repoRoot } = ctx;
+  const configDir = provider === 'codebuddy'
+    ? (process.env.CODEBUDDY_CONFIG_DIR || path.join(os.homedir(), '.codebuddy'))
+    : ctx.configDir;
   const hooksDir = path.join(configDir, 'hooks');
   const settingsPath = path.join(configDir, 'settings.json');
   const sourceDir = repoRoot ? path.join(repoRoot, 'src', 'hooks') : null;
@@ -785,8 +836,11 @@ async function installHooks(ctx) {
 }
 
 // ── MCP shrink wiring ─────────────────────────────────────────────────────
-function installMcpShrink(ctx) {
+// Optional `provider` param: 'claude' (default) or 'codebuddy'. Controls which
+// CLI binary is used for `mcp add`.
+function installMcpShrink(ctx, provider) {
   const { note, warn, opts } = ctx;
+  const cli = provider === 'codebuddy' ? 'codebuddy' : 'claude';
   // Probe npm first — registry outage = clean skip with manual snippet.
   const probe = captureSpawn('npm', ['view', MCP_SHRINK_PKG, 'name']);
   if (probe.status !== 0) {
@@ -794,20 +848,20 @@ function installMcpShrink(ctx) {
     note('    Skipping registration. Re-run --with-mcp-shrink when the registry is reachable.');
     return { kind: 'skip', why: 'npm registry probe failed' };
   }
-  // Detect modern `claude mcp add`
-  const help = captureSpawn('claude', ['mcp', '--help']);
+  // Detect modern `<cli> mcp add`
+  const help = captureSpawn(cli, ['mcp', '--help']);
   if (help.status !== 0) {
-    note("    'claude mcp add' not available on this CLI. Add the snippet from");
-    note('    src/hooks/README.md to your Claude Code MCP config manually.');
+    note(`    '${cli} mcp add' not available on this CLI. Add the snippet from`);
+    note(`    src/hooks/README.md to your ${provider === 'codebuddy' ? 'CodeBuddy Code' : 'Claude Code'} MCP config manually.`);
     return { kind: 'skip', why: 'manual config required' };
   }
-  const r = runSpawn('claude', ['mcp', 'add', 'caveman-shrink', '--', 'npx', '-y', MCP_SHRINK_PKG], null, opts.dryRun);
+  const r = runSpawn(cli, ['mcp', 'add', 'caveman-shrink', '--', 'npx', '-y', MCP_SHRINK_PKG], null, opts.dryRun);
   if ((r.status || 0) === 0) {
     note('    registered. Wrap an upstream by editing the mcpServers entry — see:');
     note(`    https://github.com/${REPO}/tree/main/src/mcp-servers/caveman-shrink`);
     return { kind: 'ok' };
   }
-  return { kind: 'fail', why: 'claude mcp add failed' };
+  return { kind: 'fail', why: `${cli} mcp add failed` };
 }
 
 // ── Init writers (per-repo rule files) ────────────────────────────────────
@@ -916,6 +970,48 @@ function uninstall(ctx) {
     const mcpHelp = captureSpawn('claude', ['mcp', '--help']);
     if (mcpHelp.status === 0) {
       runSpawn('claude', ['mcp', 'remove', 'caveman-shrink'], null, opts.dryRun);
+    }
+  }
+
+  // Plugin uninstall on CodeBuddy Code — mirrors Claude logic above.
+  if (hasCmd('codebuddy')) {
+    const probe = captureSpawn('codebuddy', ['plugin', 'list']);
+    if (probe.status === 0 && /caveman/i.test(probe.stdout || '')) {
+      const r = runSpawn('codebuddy', ['plugin', 'uninstall', 'caveman@caveman'], null, opts.dryRun);
+      if ((r.status || 0) === 0) ok('  removed codebuddy plugin');
+    } else {
+      note('  codebuddy plugin not installed — skipping');
+    }
+
+    const mcpHelp = captureSpawn('codebuddy', ['mcp', '--help']);
+    if (mcpHelp.status === 0) {
+      runSpawn('codebuddy', ['mcp', 'remove', 'caveman-shrink'], null, opts.dryRun);
+    }
+  }
+
+  // CodeBuddy hooks — remove from ~/.codebuddy/settings.json + hook files.
+  const codebuddyConfigDir = process.env.CODEBUDDY_CONFIG_DIR || path.join(os.homedir(), '.codebuddy');
+  const cbSettingsPath = path.join(codebuddyConfigDir, 'settings.json');
+  const cbHooksDir = path.join(codebuddyConfigDir, 'hooks');
+  if (fs.existsSync(cbSettingsPath)) {
+    const settings = SETTINGS.readSettings(cbSettingsPath);
+    if (settings) {
+      const removed = SETTINGS.removeCavemanHooks(settings, 'caveman');
+      if (settings.statusLine) {
+        const cmd = typeof settings.statusLine === 'string' ? settings.statusLine : (settings.statusLine.command || '');
+        if (cmd.includes('caveman-statusline')) delete settings.statusLine;
+      }
+      SETTINGS.validateHookFields(settings);
+      if (!opts.dryRun) SETTINGS.writeSettings(cbSettingsPath, settings);
+      ok(`  removed ${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from codebuddy settings.json`);
+    }
+  }
+  if (fs.existsSync(cbHooksDir)) {
+    for (const f of HOOK_FILES) {
+      const p = path.join(cbHooksDir, f);
+      if (!fs.existsSync(p)) continue;
+      if (!opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
+      note(`  removed ${p}`);
     }
   }
 
@@ -1079,18 +1175,21 @@ FLAGS
   --skip-skills         Don't run the npx-skills auto-detect fallback.
   --all                 Turn on hooks + init + mcp-shrink.
   --minimal             Just the plugin/extension install.
-  --with-hooks          Claude Code: install SessionStart/UserPromptSubmit hooks
-                        + statusline badge. (Default ON.)
+  --with-hooks          Claude Code / CodeBuddy Code: install SessionStart/
+                        UserPromptSubmit hooks + statusline badge. (Default ON.)
   --no-hooks            Skip the hooks installer.
   --with-init           Write per-repo IDE rule files into \$PWD.
-  --with-mcp-shrink     Claude Code: register caveman-shrink MCP proxy. (Default ON.)
+  --with-mcp-shrink     Claude Code / CodeBuddy Code: register caveman-shrink
+                        MCP proxy. (Default ON.)
   --no-mcp-shrink       Skip MCP shrink.
   --uninstall, -u       Remove caveman from this machine.
   --config-dir <path>   Claude Code config dir for hook files + settings.json.
-                        Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT
-                        scope \`claude plugin install\`, \`gemini extensions
-                        install\`, opencode (XDG_CONFIG_HOME), or openclaw
-                        (OPENCLAW_WORKSPACE) — those use their own paths.
+                        Default: \$CLAUDE_CONFIG_DIR or ~/.claude. CodeBuddy
+                        uses \$CODEBUDDY_CONFIG_DIR or ~/.codebuddy. Does NOT
+                        scope \`claude/codebuddy plugin install\`, \`gemini
+                        extensions install\`, opencode (XDG_CONFIG_HOME), or
+                        openclaw (OPENCLAW_WORKSPACE) — those use their own
+                        paths.
   --non-interactive     Never prompt; use defaults. (Auto when stdin is not a TTY.)
   --list                Print provider matrix and exit.
   --no-color            Disable ANSI colors.
@@ -1161,6 +1260,7 @@ async function main() {
     // missing without --force).
     if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
     if (prov.id === 'claude')   { await installClaude(ctx); continue; }
+    if (prov.id === 'codebuddy') { await installCodebuddy(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }

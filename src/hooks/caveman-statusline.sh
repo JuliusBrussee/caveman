@@ -1,14 +1,23 @@
 #!/bin/bash
-# caveman — statusline badge script for Claude Code
+# caveman — statusline badge script for Claude Code / CodeBuddy Code
 # Reads the caveman mode flag file and outputs a colored badge.
 #
-# Usage in ~/.claude/settings.json:
+# Usage in ~/.claude/settings.json or ~/.codebuddy/settings.json:
 #   "statusLine": { "type": "command", "command": "bash /path/to/caveman-statusline.sh" }
 #
-# Plugin users: Claude will offer to set this up on first session.
+# Plugin users: the agent will offer to set this up on first session.
 # Standalone users: install.sh wires this automatically.
 
-FLAG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-active"
+# Detect CodeBuddy vs Claude config dir
+if [ -n "$CODEBUDDY_CONFIG_DIR" ]; then
+  CONFIG_DIR="$CODEBUDDY_CONFIG_DIR"
+elif [ -n "$CODEBUDDY_PLUGIN_ROOT" ]; then
+  CONFIG_DIR="$HOME/.codebuddy"
+else
+  CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+fi
+
+FLAG="$CONFIG_DIR/.caveman-active"
 
 # Refuse symlinks — a local attacker could point the flag at ~/.ssh/id_rsa and
 # have the statusline render its bytes (including ANSI escape sequences) to
@@ -42,7 +51,7 @@ fi
 # the suffix file is absent and nothing is rendered — so the default is safe
 # for fresh installs (no fake number, no crash).
 if [ "${CAVEMAN_STATUSLINE_SAVINGS:-1}" != "0" ]; then
-  SAVINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-statusline-suffix"
+  SAVINGS_FILE="$CONFIG_DIR/.caveman-statusline-suffix"
   if [ -f "$SAVINGS_FILE" ] && [ ! -L "$SAVINGS_FILE" ]; then
     SAVINGS=$(head -c 64 "$SAVINGS_FILE" 2>/dev/null | tr -d '\000-\037')
     [ -n "$SAVINGS" ] && printf ' \033[38;5;172m%s\033[0m' "$SAVINGS"
