@@ -489,6 +489,56 @@ function copyDirRecursive(src, dest) {
   }
 }
 
+function opencodeAgentFrontmatter(body) {
+  // OpenCode currently expects agent tool access as `permission`, not Claude's
+  // `tools: [Read, Grep, ...]` frontmatter. Convert only the installed copies;
+  // source agents stay Claude-compatible.
+  const conversions = [
+    {
+      from: 'tools: [Read, Edit, Write, Grep, Glob]',
+      to: [
+        'mode: subagent',
+        'permission:',
+        '  read: allow',
+        '  edit: allow',
+        '  grep: allow',
+        '  glob: allow',
+        '  bash: deny',
+      ].join('\n'),
+    },
+    {
+      from: 'tools: [Read, Grep, Glob, Bash]',
+      to: [
+        'mode: subagent',
+        'permission:',
+        '  read: allow',
+        '  edit: deny',
+        '  grep: allow',
+        '  glob: allow',
+        '  bash: allow',
+      ].join('\n'),
+    },
+    {
+      from: 'tools: [Read, Grep, Bash]',
+      to: [
+        'mode: subagent',
+        'permission:',
+        '  read: allow',
+        '  edit: deny',
+        '  grep: allow',
+        '  bash: allow',
+      ].join('\n'),
+    },
+  ];
+
+  let out = body;
+  for (const { from, to } of conversions) {
+    out = out.replace(from, to);
+  }
+  out = out.replace(/^model: haiku\n/m, '');
+  return out;
+}
+
 function installOpencode(ctx) {
   const { say, note, warn, opts, repoRoot, results } = ctx;
   results.detected++;
@@ -565,7 +615,7 @@ function installOpencode(ctx) {
       const dest = path.join(agentsDir, f);
       if (!fs.existsSync(src)) continue;
       if (fs.existsSync(dest) && !opts.force) { note(`  skipped ${dest} (exists; --force to overwrite)`); continue; }
-      fs.copyFileSync(src, dest);
+      fs.writeFileSync(dest, opencodeAgentFrontmatter(fs.readFileSync(src, 'utf8')), { mode: 0o644 });
       process.stdout.write(`  installed: ${dest}\n`);
     }
 
@@ -633,15 +683,8 @@ function installOpencode(ctx) {
       cfg.plugin.push(OPENCODE_PLUGIN_REL);
     }
     if (opts.withMcpShrink) {
-      if (!cfg.mcp || typeof cfg.mcp !== 'object') cfg.mcp = {};
-      if (!cfg.mcp['caveman-shrink']) {
-        cfg.mcp['caveman-shrink'] = {
-          type: 'local',
-          command: ['npx', '-y', MCP_SHRINK_PKG],
-          enabled: true,
-        };
-        process.stdout.write('  registered caveman-shrink MCP server\n');
-      }
+      note('  skipped caveman-shrink MCP registration for opencode: caveman-shrink wraps an upstream MCP command, so it cannot be registered standalone.');
+      note(`  See https://github.com/${REPO}/tree/main/src/mcp-servers/caveman-shrink for manual wrapper config.`);
     }
     SETTINGS.writeSettings(opencodeJson, cfg);
     process.stdout.write(`  patched: ${opencodeJson}\n`);
