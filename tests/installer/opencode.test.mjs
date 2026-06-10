@@ -40,8 +40,11 @@ function shimOpencode() {
   return dir;
 }
 
-function runInstaller(args, env) {
-  return spawnSync('node', [INSTALLER, ...args, '--non-interactive', '--no-mcp-shrink'], {
+function runInstaller(args, env, options = {}) {
+  const { noMcpShrink = true } = options;
+  const installerArgs = [INSTALLER, ...args, '--non-interactive'];
+  if (noMcpShrink) installerArgs.push('--no-mcp-shrink');
+  return spawnSync('node', installerArgs, {
     env, encoding: 'utf8',
   });
 }
@@ -120,6 +123,23 @@ test('opencode idempotent install does not duplicate plugin entries', () => {
     const agentsMd = fs.readFileSync(path.join(xdg, 'opencode', 'AGENTS.md'), 'utf8');
     const sentinelCount = (agentsMd.match(/Respond terse like smart caveman/g) || []).length;
     assert.equal(sentinelCount, 1, `expected 1 sentinel, got ${sentinelCount}`);
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+test('opencode install does not register caveman-shrink without an upstream MCP command', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    const r = runInstaller(['--only', 'opencode', '--with-mcp-shrink'], env, { noMcpShrink: false });
+    assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);
+
+    const cfg = JSON.parse(fs.readFileSync(path.join(xdg, 'opencode', 'opencode.json'), 'utf8'));
+    assert.ok(!cfg.mcp || !cfg.mcp['caveman-shrink'], 'caveman-shrink requires an upstream command and should not be registered standalone');
+    assert.match(r.stdout, /skipped caveman-shrink MCP registration for opencode/);
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });

@@ -683,15 +683,8 @@ function installOpencode(ctx) {
       cfg.plugin.push(OPENCODE_PLUGIN_REL);
     }
     if (opts.withMcpShrink) {
-      if (!cfg.mcp || typeof cfg.mcp !== 'object') cfg.mcp = {};
-      if (!cfg.mcp['caveman-shrink']) {
-        cfg.mcp['caveman-shrink'] = {
-          type: 'local',
-          command: ['npx', '-y', MCP_SHRINK_PKG],
-          enabled: true,
-        };
-        process.stdout.write('  registered caveman-shrink MCP server\n');
-      }
+      note('  skipped caveman-shrink MCP registration for opencode: caveman-shrink wraps an upstream MCP command, so it cannot be registered standalone.');
+      note(`  See https://github.com/${REPO}/tree/main/src/mcp-servers/caveman-shrink for manual wrapper config.`);
     }
     SETTINGS.writeSettings(opencodeJson, cfg);
     process.stdout.write(`  patched: ${opencodeJson}\n`);
