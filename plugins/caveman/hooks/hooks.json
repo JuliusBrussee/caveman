@@ -1,0 +1,31 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/scripts/caveman-codex-hook.js\" SessionStart",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\scripts\\caveman-codex-hook.js\" SessionStart",
+            "timeout": 5,
+            "statusMessage": "Loading caveman mode"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/scripts/caveman-codex-hook.js\" UserPromptSubmit",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\scripts\\caveman-codex-hook.js\" UserPromptSubmit",
+            "timeout": 5,
+            "statusMessage": "Tracking caveman mode"
+          }
+        ]
+      }
+    ]
+  }
+}

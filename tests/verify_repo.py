@@ -154,6 +154,31 @@ def verify_synced_files() -> None:
     print("Synced copies, caveman.skill zip, and installer entrypoints OK")
 
 
+def verify_package_contents() -> None:
+    section("Package Contents")
+
+    result = run(["npm", "pack", "--dry-run", "--json"])
+    packages = json.loads(result.stdout)
+    ensure(isinstance(packages, list) and packages, "npm pack returned no package metadata")
+
+    paths = {entry["path"] for entry in packages[0].get("files", [])}
+    required = {
+        "bin/install.js",
+        "skills/caveman/SKILL.md",
+        "skills/caveman-compress/scripts/cli.py",
+        "plugins/caveman/scripts/caveman-codex-hook.js",
+        "plugins/caveman/hooks/hooks.json",
+    }
+    missing = sorted(required - paths)
+    ensure(not missing, f"npm package missing required files: {', '.join(missing)}")
+    ensure(
+        not any("__pycache__" in path or path.endswith(".pyc") for path in paths),
+        "npm package includes Python cache files",
+    )
+
+    print("npm package includes root skills, Codex hook files, and no Python caches")
+
+
 def verify_manifests_and_syntax() -> None:
     section("Manifests And Syntax")
 
@@ -163,6 +188,7 @@ def verify_manifests_and_syntax() -> None:
         ROOT / ".codex/hooks.json",
         ROOT / "gemini-extension.json",
         ROOT / "plugins/caveman/.codex-plugin/plugin.json",
+        ROOT / "plugins/caveman/hooks/hooks.json",
     ]
     for path in manifest_paths:
         read_json(path)
@@ -170,6 +196,7 @@ def verify_manifests_and_syntax() -> None:
     run(["node", "--check", "src/hooks/caveman-config.js"])
     run(["node", "--check", "src/hooks/caveman-activate.js"])
     run(["node", "--check", "src/hooks/caveman-mode-tracker.js"])
+    run(["node", "--check", "plugins/caveman/scripts/caveman-codex-hook.js"])
     run(["node", "--check", "bin/install.js"])
     run(["node", "--check", "bin/lib/settings.js"])
     run(["bash", "-n", "src/hooks/install.sh"])
@@ -237,7 +264,7 @@ def verify_compress_cli() -> None:
     section("Compress CLI")
 
     skip_result = run(
-        ["python3", "-m", "scripts", "../../src/hooks/install.sh"],
+        ["python3", "-m", "scripts", str(ROOT / "src/hooks/install.sh")],
         cwd=ROOT / "skills/caveman-compress",
         check=False,
     )
@@ -249,7 +276,7 @@ def verify_compress_cli() -> None:
     )
 
     missing_result = run(
-        ["python3", "-m", "scripts", "../../does-not-exist.md"],
+        ["python3", "-m", "scripts", str(ROOT / "does-not-exist.md")],
         cwd=ROOT / "skills/caveman-compress",
         check=False,
     )
@@ -392,15 +419,26 @@ def verify_hook_install_flow() -> None:
     print("Claude hook install/uninstall flow OK")
 
 
+def verify_codex_hook_flow() -> None:
+    section("Codex Hook Flow")
+
+    ensure(shutil.which("node") is not None, "node is required for Codex hook verification")
+    run(["python3", "-m", "unittest", "tests.test_codex_hooks"])
+
+    print("Codex hook activation, mode tracking, and stats flow OK")
+
+
 def main() -> int:
     checks = [
         verify_skill_frontmatter_upload_compatibility,
         verify_synced_files,
+        verify_package_contents,
         verify_manifests_and_syntax,
         verify_powershell_static,
         verify_compress_fixtures,
         verify_compress_cli,
         verify_hook_install_flow,
+        verify_codex_hook_flow,
     ]
 
     try:

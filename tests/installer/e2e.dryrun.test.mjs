@@ -39,6 +39,33 @@ test('dry-run --only claude prints plan and writes nothing', () => {
   assert.equal(fs.existsSync(path.join(cfg, 'hooks')), false);
 });
 
+test('dry-run --only codex prints native hook plan and writes nothing', () => {
+  const cfg = freshTmpDir();
+  const r = spawnSync('node', [INSTALLER,
+    '--dry-run', '--only', 'codex', '--skip-skills', '--no-mcp-shrink', '--non-interactive',
+    '--config-dir', cfg,
+  ], { encoding: 'utf8', env: { ...process.env, CODEX_HOME: cfg } });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /Codex CLI detected/);
+  assert.match(r.stdout, /would mkdir -p .*\/hooks/);
+  assert.match(r.stdout, /would install .*caveman-codex-hook\.js/);
+  assert.match(r.stdout, /would merge SessionStart \+ UserPromptSubmit into .*\/hooks\.json/);
+  assert.equal(fs.existsSync(path.join(cfg, 'hooks.json')), false);
+  assert.equal(fs.existsSync(path.join(cfg, 'hooks')), false);
+});
+
+test('dry-run --only codex installs skills and hooks by default', () => {
+  const cfg = freshTmpDir();
+  const r = spawnSync('node', [INSTALLER,
+    '--dry-run', '--only', 'codex', '--no-mcp-shrink', '--non-interactive',
+    '--config-dir', cfg,
+  ], { encoding: 'utf8', env: { ...process.env, CODEX_HOME: cfg } });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /Codex CLI detected/);
+  assert.match(r.stdout, /would run: npx -y skills add JuliusBrussee\/caveman -a codex --yes --all/);
+  assert.match(r.stdout, /would merge SessionStart \+ UserPromptSubmit into .*\/hooks\.json/);
+});
+
 test('dry-run --uninstall does not delete files', () => {
   const cfg = freshTmpDir();
   // Seed a fake installation

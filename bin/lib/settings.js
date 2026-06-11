@@ -150,7 +150,8 @@ function addCommandHook(settings, event, opts) {
 }
 
 // ── removeCavemanHooks ────────────────────────────────────────────────────
-// Strip every entry whose any hook command mentions `marker`. Empties events.
+// Strip every hook command mentioning `marker`. Preserve non-caveman hooks even
+// when they share the same event entry. Empties events.
 // Tolerates malformed pre-existing settings (non-array hook lists, foreign
 // shapes) — those get dropped by validateHookFields first so we never call
 // .length / .filter on a non-array.
@@ -161,12 +162,15 @@ function removeCavemanHooks(settings, marker = 'caveman') {
   let removed = 0;
   for (const ev of Object.keys(settings.hooks)) {
     if (!Array.isArray(settings.hooks[ev])) { delete settings.hooks[ev]; continue; }
-    const before = settings.hooks[ev].length;
     settings.hooks[ev] = settings.hooks[ev].filter(entry => {
       if (!entry || !Array.isArray(entry.hooks)) return true;
-      return !entry.hooks.some(h => h && typeof h.command === 'string' && h.command.includes(marker));
+      const before = entry.hooks.length;
+      entry.hooks = entry.hooks.filter(h =>
+        !(h && typeof h.command === 'string' && h.command.includes(marker))
+      );
+      removed += before - entry.hooks.length;
+      return entry.hooks.length > 0;
     });
-    removed += before - settings.hooks[ev].length;
     if (settings.hooks[ev].length === 0) delete settings.hooks[ev];
   }
   if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
