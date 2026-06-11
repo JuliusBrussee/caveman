@@ -130,17 +130,67 @@ function safeWriteFlag(flagPath, content) {
     const tempPath = path.join(realFlagDir, `.caveman-active.${process.pid}.${Date.now()}`);
     const O_NOFOLLOW = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
     const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW;
-    let fd;
+    // On Windows, renameSync over an existing file fails with EPERM/EBUSY when
+    // another process holds the target open (statusline read, concurrent hook).
+    // Without the cleanup below, every failed rename leaks one temp file.
+    let renamed = false;
     try {
-      fd = fs.openSync(tempPath, flags, 0o600);
-      fs.writeSync(fd, String(content));
-      try { fs.fchmodSync(fd, 0o600); } catch (e) { /* best-effort on Windows */ }
+      let fd;
+      try {
+        fd = fs.openSync(tempPath, flags, 0o600);
+        fs.writeSync(fd, String(content));
+        try { fs.fchmodSync(fd, 0o600); } catch (e) { /* best-effort on Windows */ }
+      } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+      }
+      fs.renameSync(tempPath, realFlagPath);
+      renamed = true;
     } finally {
-      if (fd !== undefined) fs.closeSync(fd);
+      if (!renamed) {
+        try { fs.unlinkSync(tempPath); } catch (e) { /* best-effort */ }
+      }
     }
-    fs.renameSync(tempPath, realFlagPath);
   } catch (e) {
     // Silent fail — flag is best-effort
+  }
+}
+
+// Sweep orphaned safeWriteFlag temp files (.caveman-active.<pid>.<timestamp>)
+// left behind by failed renames in older versions or hard crashes mid-write.
+// Deletes a temp only when its owning PID is dead (and the file is >60s old,
+// so an in-flight write is never touched) or the file is older than 24h.
+// Never matches the live flag file (.caveman-active has no suffix).
+const TEMP_RE = /^\.caveman-active\.(\d+)\.(\d+)$/;
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM'; // exists but not ours — treat as alive
+  }
+}
+
+function sweepOrphanTemps(flagDir) {
+  try {
+    const now = Date.now();
+    for (const name of fs.readdirSync(flagDir)) {
+      const m = TEMP_RE.exec(name);
+      if (!m) continue;
+      const pid = parseInt(m[1], 10);
+      const ts = parseInt(m[2], 10);
+      const age = now - ts;
+      const stale = age > 24 * 60 * 60 * 1000 ||
+                    (age > 60 * 1000 && !pidAlive(pid));
+      if (!stale) continue;
+      const p = path.join(flagDir, name);
+      try {
+        if (!fs.lstatSync(p).isFile()) continue; // skip symlinks/dirs
+        fs.unlinkSync(p);
+      } catch (e) { /* best-effort */ }
+    }
+  } catch (e) {
+    // Silent fail — sweep is best-effort
   }
 }
 
@@ -271,4 +321,4 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
+module.exports = { getDefaultMode, getConfigDir, getConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory, sweepOrphanTemps };
