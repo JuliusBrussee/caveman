@@ -3,7 +3,7 @@
 Caveman Compress CLI
 
 Usage:
-    caveman <filepath>
+    python3 -m scripts <filepath>
 """
 
 import sys
@@ -26,7 +26,7 @@ from .detect import detect_file_type, should_compress
 
 
 def print_usage():
-    print("Usage: caveman <filepath>")
+    print("Usage: python3 -m scripts <filepath>")
 
 
 def main():

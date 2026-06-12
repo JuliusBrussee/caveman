@@ -87,7 +87,7 @@ Rules:
 * Mock external services
 * Do NOT mock DB in integration tests
 
-## Git Workflow
+### Git Workflow
 
 Trunk-based development.
 Short-lived feature branches → PR → merge to `main`.

@@ -60,8 +60,12 @@ def main():
     # Walk up four dirs: scripts → caveman-compress → skills → repo_root.
     tests_dir = Path(__file__).resolve().parents[3] / "tests" / "caveman-compress"
     if not tests_dir.exists():
-        print(f"❌ Tests dir not found: {tests_dir}")
-        sys.exit(1)
+        # Glob mode is an optional helper that benchmarks the bundled fixtures.
+        # When they are absent (e.g. running from an install copy without the
+        # repo's tests/ tree), degrade gracefully instead of failing.
+        print(f"Note: fixtures dir not found, skipping benchmark: {tests_dir}")
+        print("Pass an original/compressed file pair to benchmark directly.")
+        return
 
     rows = []
     for orig in sorted(tests_dir.glob("*.original.md")):
