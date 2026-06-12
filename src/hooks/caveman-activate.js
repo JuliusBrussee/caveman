@@ -107,7 +107,7 @@ if (skillContent) {
     '## Auto-Clarity\n\n' +
     'Drop caveman for: security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread, user asks to clarify or repeats question. Resume caveman after clear part done.\n\n' +
     '## Boundaries\n\n' +
-    'Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.';
+    'Code/commits/issue+PR+MR titles+descriptions: write normal prose. "stop caveman" or "normal mode": revert. Level persist until changed or session end.';
 }
 
 // 3. Detect missing statusline config — nudge Claude to help set it up
