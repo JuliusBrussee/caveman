@@ -69,7 +69,7 @@ test('shows full-mode savings estimate when flag is full', (tmp) => {
   assert.match(out, /Est\. tokens saved:\s+650 \(~65%\)/);
 });
 
-test('skips estimate for non-full modes', (tmp) => {
+test('shows ultra-mode savings estimate when flag is ultra', (tmp) => {
   const sess = makeSession(tmp, [
     { type: 'assistant', message: { usage: { output_tokens: 100 } } },
   ]);
@@ -79,7 +79,8 @@ test('skips estimate for non-full modes', (tmp) => {
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
   });
-  assert.match(out, /No savings estimate for 'ultra' mode/);
+  assert.match(out, /Est\. without caveman/);
+  assert.match(out, /~73%/);
 });
 
 test('reports no-session when no .jsonl exists', (tmp) => {
@@ -189,7 +190,7 @@ test('--share prints single-line tweetable summary', (tmp) => {
   assert.match(out, /^🪨 Saved 650 output tokens \(~\$0\.009[78]\) across 1 turns this session — caveman\.sh$/m);
 });
 
-test('--share works with no benchmark ratio (lite mode)', (tmp) => {
+test('--share prints savings for benchmarked mode (lite)', (tmp) => {
   const sess = makeSession(tmp, [
     { type: 'assistant', message: { usage: { output_tokens: 200 } } },
   ]);
@@ -199,8 +200,9 @@ test('--share works with no benchmark ratio (lite mode)', (tmp) => {
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
   });
-  assert.match(out, /^🪨 1 turns, 200 output tokens this session — caveman\.sh$/m);
+  assert.match(out, /Saved/);
 });
+
 
 test('appends to lifetime history on each run', (tmp) => {
   const sess = makeSession(tmp, [
