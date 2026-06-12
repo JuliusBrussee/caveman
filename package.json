@@ -29,6 +29,8 @@
     "plugins/",
     "commands/",
     "dist/caveman.skill",
+    "!**/__pycache__/**",
+    "!**/*.pyc",
     "README.md",
     "LICENSE"
   ]

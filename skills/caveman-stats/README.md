@@ -4,7 +4,7 @@ Real session token receipts. No AI estimation.
 
 ## What it does
 
-Reads the current Claude Code session log directly and reports actual input/output token usage plus estimated savings versus a non-caveman baseline. Numbers come from the JSONL session log on disk — the model itself does not compute or estimate them. Output is injected by the `caveman-mode-tracker` hook, which intercepts `/caveman-stats` and returns the formatted stats as a blocked-decision reason.
+Reads the current Claude Code or Codex session log directly and reports actual input/output token usage plus estimated savings versus a non-caveman baseline. Numbers come from the JSONL session log on disk — the model itself does not compute or estimate them. Output is injected by the runtime hook, which intercepts `/caveman-stats` and returns the formatted stats as a blocked-decision reason.
 
 Each run also writes a lifetime-savings suffix file used by the statusline badge (`⛏ 12.4k`).
 

@@ -140,6 +140,23 @@ test('removeCavemanHooks strips by marker and cleans empties', () => {
   assert.equal(s.hooks.UserPromptSubmit, undefined);
 });
 
+test('removeCavemanHooks preserves user hooks sharing an entry', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: 'echo user-owned-hook' },
+        { type: 'command', command: 'node /abs/hooks/caveman-codex-hook.js SessionStart' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.removeCavemanHooks(s, 'caveman-codex-hook.js');
+  assert.equal(removed, 1);
+  assert.equal(s.hooks.SessionStart.length, 1);
+  assert.deepEqual(s.hooks.SessionStart[0].hooks, [
+    { type: 'command', command: 'echo user-owned-hook' },
+  ]);
+});
+
 test('rewriteLegacyManagedHookCommands rewrites bare-node managed scripts', () => {
   const s = {
     hooks: {

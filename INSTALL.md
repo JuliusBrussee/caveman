@@ -24,7 +24,7 @@ What it does:
 
 - Auto-detects every supported agent installed on your machine (Claude Code, Cursor, Codex, etc.).
 - For each one, runs that agent's native install path (plugin / extension / rule file / `npx skills add`).
-- Wires Claude Code hooks and statusline badge on top. (`caveman-shrink` MCP middleware is opt-in via `--with-mcp-shrink` — see flag table below.)
+- Wires Claude Code and Codex hooks, plus the Claude Code statusline badge. (`caveman-shrink` MCP middleware is opt-in via `--with-mcp-shrink` — see flag table below.)
 - Skips anything you don't have. Safe to re-run. ~30 seconds end-to-end.
 
 Want to preview before installing? Use `--dry-run`:
@@ -43,7 +43,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` | Yes |
 | **opencode** | `node bin/install.js --only opencode` *(or `npx -y github:JuliusBrussee/caveman -- --only opencode`)* | Yes (plugin + AGENTS.md) |
 | **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
-| **Codex CLI** | `npx skills add JuliusBrussee/caveman -a codex` | Per-session: `/caveman` |
+| **Codex CLI** | `npx -y github:JuliusBrussee/caveman -- --only codex` | Yes (`hooks.json`) |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` | Per-session by default; `--with-init` for an always-on rule file |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` | Per-session by default; `--with-init` for an always-on rule file |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` | Per-session by default; `--with-init` for an always-on rule file |
@@ -121,9 +121,9 @@ Useful flags:
 | `--with-init` | Drop always-on rule files into the current repo (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`) and, if OpenClaw is on the box, append the bootstrap block to `~/.openclaw/workspace/SOUL.md`. |
 | `--with-mcp-shrink="<upstream cmd>"` | Register `caveman-shrink` MCP proxy wrapping the given upstream MCP server. **Off by default.** A value is required — caveman-shrink is a proxy and exits immediately without one. Example: `--with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"`. The value is split on whitespace; for paths-with-spaces, install via `node bin/install.js` from a clone or edit `~/.claude.json` after a stub install. |
 | `--no-mcp-shrink` | Skip MCP-shrink registration. (Default.) |
-| `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code hook installer. (Default: on.) |
+| `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code and Codex hook installers. (Default: on.) |
 | `--skip-skills` | Don't run the npx-skills auto-detect fallback when nothing else matched. |
-| `--config-dir <path>` | Claude Code config dir for hook files + `settings.json`. **Does NOT scope** `claude plugin install`, `gemini extensions install`, opencode (`XDG_CONFIG_HOME`), or openclaw (`OPENCLAW_WORKSPACE`) — those use their own paths. Default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. `~` is expanded. |
+| `--config-dir <path>` | Hook config dir override. Claude writes hook files + `settings.json`; Codex writes hook files + `hooks.json`. **Does NOT scope** `claude plugin install`, `gemini extensions install`, opencode (`XDG_CONFIG_HOME`), or openclaw (`OPENCLAW_WORKSPACE`) — those use their own paths. Defaults: `$CLAUDE_CONFIG_DIR` or `~/.claude` for Claude; `$CODEX_HOME` or `~/.codex` for Codex. `~` is expanded. |
 | `--non-interactive` | Never prompt; use defaults. (Auto when stdin is not a TTY.) |
 | `--no-color` | Disable ANSI colors. |
 | `--list` | Print full agent matrix and exit. |
@@ -157,7 +157,7 @@ node bin/install.js --list
 
 You should see ~30 rows. Detected agents are marked. Anything you wanted but isn't marked → not detected (likely the binary isn't on `PATH`).
 
-**2. Talk to Claude Code.**
+**2. Talk to Claude Code or Codex.**
 
 Open Claude Code, type `/caveman`. Response should be terse fragments — "Got it. Caveman mode on." or similar. Try a real question: "What is closures in JS?" — answer should drop articles and read like grunts.
 
@@ -166,6 +166,9 @@ Open Claude Code, type `/caveman`. Response should be terse fragments — "Got i
 ```bash
 cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-active"
 # expected output: full
+
+cat "${XDG_CONFIG_HOME:-$HOME/.config}/caveman/active-mode"
+# expected output after Codex hook activation: full
 ```
 
 If it's missing or empty, the SessionStart hook didn't fire. See troubleshooting below.
@@ -182,6 +185,7 @@ What it removes:
 
 - Caveman hook entries from `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/`; matched by the substring `caveman`).
 - Hook files in `$CLAUDE_CONFIG_DIR/hooks/` (`caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, `caveman-statusline.{sh,ps1}`, plus the dir's `package.json` marker).
+- Codex hook entries from `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`) and `$CODEX_HOME/hooks/caveman-codex-hook.js`.
 - The Claude Code plugin and the Gemini CLI extension (if installed).
 - The opencode native plugin (`~/.config/opencode/plugins/caveman/`, the `plugin` and `mcp.caveman-shrink` entries from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file).
 - The OpenClaw workspace skill folder and the marker-fenced block from `~/.openclaw/workspace/SOUL.md` (when present).
@@ -211,6 +215,12 @@ Still broken? [Open an issue](https://github.com/JuliusBrussee/caveman/issues).
 3. Check `$CLAUDE_CONFIG_DIR/.caveman-active` exists with content `full`. If not, the SessionStart hook silent-failed — check `$CLAUDE_CONFIG_DIR/hooks/` for the JS files and try `node $CLAUDE_CONFIG_DIR/hooks/caveman-activate.js < /dev/null` to see if it errors.
 4. Restart Claude Code. The SessionStart hook only fires on session start, not mid-session.
 
+**"I ran the installer but Codex isn't talking caveman."**
+
+1. Run `node bin/install.js --list` — confirm `codex` is on the detected list. If not, `codex` isn't on `PATH`.
+2. Open `${CODEX_HOME:-$HOME/.codex}/hooks.json` and look for `"hooks"` containing `caveman-codex-hook.js`. If missing, re-run with `--only codex --force`.
+3. Check `${XDG_CONFIG_HOME:-$HOME/.config}/caveman/active-mode` after starting a new Codex session. Expected content: `full`.
+
 **"Hooks failing on Windows."**
 
 - Use `install.ps1`, not `install.sh`. Git Bash works for the shell version, but the hook side wires PowerShell counterparts (`caveman-statusline.ps1`).
@@ -228,7 +238,7 @@ The installer uses a JSONC-tolerant parser (`bin/lib/settings.js`) so comments a
 
 **"I'm in a managed env where I can't install hooks."**
 
-Use the rule-file-only path. Hooks are Claude Code-specific; everything else works via static rule files:
+Use the rule-file-only path. Hooks are Claude Code/Codex-specific; everything else works via static rule files:
 
 ```bash
 # Just install for one agent, no Claude hooks
@@ -249,6 +259,7 @@ The profile slug must exist in [vercel-labs/skills](https://github.com/vercel-la
 The installer doesn't phone home. It writes to:
 
 - `$CLAUDE_CONFIG_DIR` (default `~/.claude/`) — hooks, flag file, `settings.json` merge.
+- `$CODEX_HOME` (default `~/.codex/`) — Codex hook file and `hooks.json` merge.
 - Each agent's own config location — Cursor's `.cursor/rules/`, Windsurf's `.windsurf/rules/`, opencode's `~/.config/opencode/`, etc.
 - Your current working directory (only with `--with-init`) — repo-local rule files.
 - `~/.openclaw/workspace/` (only with `--only openclaw` or `--with-init` when OpenClaw is detected) — the one `--with-init` side-effect outside the cwd.

@@ -173,8 +173,8 @@ A March 2026 paper ["Brevity Constraints Reverse Performance Hierarchies in Lang
 
 1. Install drop skill file in agent.
 2. Skill tell agent: drop filler, keep substance, use fragments.
-3. For Claude Code, hook also write tiny flag file each session — agent see flag, talk caveman from message one. No need say `/caveman`.
-4. Stats command read Claude Code session log, count tokens saved, write number to statusline.
+3. For Claude Code and Codex, hook also write tiny flag file each session — agent see flag, talk caveman from message one. No need say `/caveman`.
+4. Stats command read Claude Code or Codex session log, count tokens saved, write number to statusline when agent supports one.
 5. Caveman-compress sub-skill rewrite memory files (CLAUDE.md, project notes) so each session start with smaller context. Save tokens forever, not just one reply.
 
 Maintainer detail (hook architecture, file ownership, CI sync) live in [CLAUDE.md](./CLAUDE.md).

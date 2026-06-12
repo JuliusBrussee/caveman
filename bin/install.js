@@ -50,6 +50,8 @@ const HOOK_FILES = [
   'caveman-statusline.sh',
   'caveman-statusline.ps1',
 ];
+const CODEX_HOOK_FILE = 'caveman-codex-hook.js';
+const CODEX_HOOK_REMOTE = `${RAW_BASE}/plugins/caveman/scripts/${CODEX_HOOK_FILE}`;
 
 // ── Argv ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
@@ -207,7 +209,7 @@ const PROVIDERS = [
   { id: 'gemini',     label: 'Gemini CLI',          mech: 'gemini extensions install',     detect: 'command:gemini' },
   { id: 'opencode',   label: 'opencode',            mech: 'native opencode plugin',        detect: 'command:opencode' },
   { id: 'openclaw',   label: 'OpenClaw',            mech: 'workspace skill + SOUL.md',     detect: 'command:openclaw||dir:$HOME/.openclaw/workspace' },
-  { id: 'codex',      label: 'Codex CLI',           mech: 'npx skills add (codex)',        detect: 'command:codex',           profile: 'codex' },
+  { id: 'codex',      label: 'Codex CLI',           mech: 'npx skills add + native hooks', detect: 'command:codex',           profile: 'codex' },
 
   // IDE / VS Code-family — extension probes are precise. Cursor/Windsurf also
   // ship CLI binaries; we drop the dir fallback because the dir lingers after
@@ -557,6 +559,31 @@ function installViaSkills(ctx, prov) {
   const r = runSpawn('npx', args, null, opts.dryRun);
   if ((r.status || 0) === 0) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
+  process.stdout.write('\n');
+}
+
+async function installCodex(ctx) {
+  const { say, note, opts, results } = ctx;
+  results.detected++;
+  say('→ Codex CLI detected');
+
+  if (opts.skipSkills) {
+    note('  skipping npx skills install (--skip-skills)');
+  } else {
+    const args = ['-y', 'skills', 'add', REPO, '-a', 'codex', '--yes', '--all'];
+    const r = runSpawn('npx', args, null, opts.dryRun);
+    if ((r.status || 0) === 0) results.installed.push('codex');
+    else results.failed.push(['codex', 'npx skills add (codex) failed']);
+  }
+
+  if (opts.withHooks) {
+    say('  → installing native Codex hooks (--with-hooks)');
+    const r = await installCodexHooks(ctx);
+    if (r === 'ok') results.installed.push('codex-hooks');
+    else if (r === 'skip') results.skipped.push(['codex-hooks', 'already wired']);
+    else results.failed.push(['codex-hooks', r]);
+  }
+
   process.stdout.write('\n');
 }
 
@@ -916,6 +943,102 @@ async function installHooks(ctx) {
   return 'ok';
 }
 
+async function installCodexHooks(ctx) {
+  const { note, warn, opts, repoRoot } = ctx;
+  const codexHome = codexConfigDir(opts);
+  const hooksDir = path.join(codexHome, 'hooks');
+  const hooksJsonPath = path.join(codexHome, 'hooks.json');
+  const scriptDest = path.join(hooksDir, CODEX_HOOK_FILE);
+  const scriptSource = repoRoot ? path.join(repoRoot, 'plugins', 'caveman', 'scripts', CODEX_HOOK_FILE) : null;
+
+  if (opts.dryRun) {
+    note(`  would mkdir -p ${hooksDir}`);
+    note(`  would install ${scriptDest}`);
+    note(`  would merge SessionStart + UserPromptSubmit into ${hooksJsonPath}`);
+    return 'ok';
+  }
+
+  fs.mkdirSync(hooksDir, { recursive: true });
+  if (scriptSource && fs.existsSync(scriptSource)) {
+    fs.copyFileSync(scriptSource, scriptDest);
+  } else {
+    try { await downloadTo(CODEX_HOOK_REMOTE, scriptDest); }
+    catch (e) { return `download ${CODEX_HOOK_FILE} failed: ${e.message}`; }
+  }
+  process.stdout.write(`  installed: ${scriptDest}\n`);
+
+  let config = SETTINGS.readSettings(hooksJsonPath);
+  if (config === null) {
+    warn('  hooks.json unparseable; will not touch it. Edit manually then re-run.');
+    return 'hooks.json unparseable';
+  }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) config = {};
+
+  const bak = hooksJsonPath + '.bak';
+  if (fs.existsSync(hooksJsonPath) && !fs.existsSync(bak)) {
+    try { fs.copyFileSync(hooksJsonPath, bak); } catch (_) {}
+  }
+
+  const node = absoluteNodePath();
+  addCodexCommandHook(config, 'SessionStart', {
+    command: `"${node}" "${scriptDest}" SessionStart`,
+    marker: CODEX_HOOK_FILE,
+    matcher: 'startup|resume|clear|compact',
+    timeout: 5,
+    statusMessage: 'Loading caveman mode',
+  });
+  addCodexCommandHook(config, 'UserPromptSubmit', {
+    command: `"${node}" "${scriptDest}" UserPromptSubmit`,
+    marker: CODEX_HOOK_FILE,
+    timeout: 5,
+    statusMessage: 'Tracking caveman mode',
+  });
+
+  SETTINGS.validateHookFields(config);
+  SETTINGS.writeSettings(hooksJsonPath, config);
+  process.stdout.write(`  hooks wired in ${hooksJsonPath}\n`);
+  return 'ok';
+}
+
+function addCodexCommandHook(config, event, opts) {
+  if (!config.hooks || typeof config.hooks !== 'object') config.hooks = {};
+  if (!Array.isArray(config.hooks[event])) config.hooks[event] = [];
+  const marker = opts.marker || opts.command;
+  const exists = config.hooks[event].some(entry =>
+    entry && Array.isArray(entry.hooks) &&
+    entry.hooks.some(h => h && typeof h.command === 'string' && h.command.includes(marker))
+  );
+  if (exists) return false;
+
+  const hook = { type: 'command', command: opts.command };
+  if (typeof opts.timeout === 'number') hook.timeout = opts.timeout;
+  if (typeof opts.statusMessage === 'string') hook.statusMessage = opts.statusMessage;
+
+  const entry = { hooks: [hook] };
+  if (typeof opts.matcher === 'string') entry.matcher = opts.matcher;
+  config.hooks[event].push(entry);
+  return true;
+}
+
+function codexConfigDir(opts = {}) {
+  if (opts.configDir) return opts.configDir;
+  if (process.env.CODEX_HOME) return process.env.CODEX_HOME;
+  return path.join(os.homedir(), '.codex');
+}
+
+function cavemanConfigDir() {
+  if (process.env.XDG_CONFIG_HOME) {
+    return path.join(process.env.XDG_CONFIG_HOME, 'caveman');
+  }
+  if (process.platform === 'win32') {
+    return path.join(
+      process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+      'caveman'
+    );
+  }
+  return path.join(os.homedir(), '.config', 'caveman');
+}
+
 // ── MCP shrink wiring ─────────────────────────────────────────────────────
 function installMcpShrink(ctx) {
   const { note, warn, opts } = ctx;
@@ -1071,6 +1194,8 @@ function uninstall(ctx) {
     // Don't rmdir hooksDir — other plugins may use it.
   }
 
+  uninstallCodexHooks(ctx);
+
   // Plugin uninstall on Claude. Probe `plugin list` first so a re-run on a
   // machine where caveman was never installed (or was already removed) doesn't
   // print "Plugin not installed" stderr noise.
@@ -1192,10 +1317,46 @@ function uninstall(ctx) {
   const flag = path.join(configDir, '.caveman-active');
   if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
 
+  const codexFlag = path.join(cavemanConfigDir(), 'active-mode');
+  if (fs.existsSync(codexFlag) && !opts.dryRun) { try { fs.unlinkSync(codexFlag); } catch (_) {} }
+
   process.stdout.write('\n');
   ok('uninstall done.');
   ok('npx-skills installs (Cursor/Windsurf/etc.) — remove via your IDE\'s skill manager');
   ok('per-repo init files (.cursor/, .windsurf/, AGENTS.md) — remove with your editor');
+}
+
+function uninstallCodexHooks(ctx) {
+  const { note, warn, ok, opts } = ctx;
+  const codexHome = codexConfigDir(opts);
+  const hooksDir = path.join(codexHome, 'hooks');
+  const hooksJsonPath = path.join(codexHome, 'hooks.json');
+  const hookScript = path.join(hooksDir, CODEX_HOOK_FILE);
+
+  if (fs.existsSync(hooksJsonPath)) {
+    const config = SETTINGS.readSettings(hooksJsonPath);
+    if (config) {
+      const removed = SETTINGS.removeCavemanHooks(config, CODEX_HOOK_FILE);
+      if (removed > 0) {
+        SETTINGS.validateHookFields(config);
+        if (!opts.dryRun) {
+          const bak = hooksJsonPath + '.bak';
+          if (!fs.existsSync(bak)) {
+            try { fs.copyFileSync(hooksJsonPath, bak); } catch (_) {}
+          }
+          SETTINGS.writeSettings(hooksJsonPath, config);
+        }
+      }
+      ok(`  removed ${removed} Codex caveman hook entr${removed === 1 ? 'y' : 'ies'} from hooks.json`);
+    } else {
+      warn('  hooks.json unparseable; leaving Codex hooks in place.');
+    }
+  }
+
+  if (fs.existsSync(hookScript)) {
+    if (!opts.dryRun) { try { fs.unlinkSync(hookScript); } catch (_) {} }
+    note(`  removed ${hookScript}`);
+  }
 }
 
 // ── Interactive prompt (TTY-only) ─────────────────────────────────────────
@@ -1253,8 +1414,8 @@ FLAGS
   --all                 Turn on hooks + init. (mcp-shrink needs an upstream;
                         pass --with-mcp-shrink="<cmd>" to add it.)
   --minimal             Just the plugin/extension install.
-  --with-hooks          Claude Code: install SessionStart/UserPromptSubmit hooks
-                        + statusline badge. (Default ON.)
+  --with-hooks          Claude Code + Codex: install SessionStart/UserPromptSubmit
+                        hooks. Claude also gets statusline badge. (Default ON.)
   --no-hooks            Skip the hooks installer.
   --with-init           Write per-repo IDE rule files into \$PWD.
   --with-mcp-shrink="<upstream cmd>"
@@ -1265,11 +1426,13 @@ FLAGS
                         Example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"
   --no-mcp-shrink       Skip MCP shrink. (Default.)
   --uninstall, -u       Remove caveman from this machine.
-  --config-dir <path>   Claude Code config dir for hook files + settings.json.
-                        Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT
-                        scope \`claude plugin install\`, \`gemini extensions
-                        install\`, opencode (XDG_CONFIG_HOME), or openclaw
-                        (OPENCLAW_WORKSPACE) — those use their own paths.
+  --config-dir <path>   Hook config dir override. Claude writes settings.json;
+                        Codex writes hooks.json. Defaults: \$CLAUDE_CONFIG_DIR
+                        or ~/.claude for Claude; \$CODEX_HOME or ~/.codex for
+                        Codex. Does NOT scope \`claude plugin install\`,
+                        \`gemini extensions install\`, opencode
+                        (XDG_CONFIG_HOME), or openclaw (OPENCLAW_WORKSPACE) —
+                        those use their own paths.
   --non-interactive     Never prompt; use defaults. (Auto when stdin is not a TTY.)
   --list                Print provider matrix and exit.
   --no-color            Disable ANSI colors.
@@ -1340,6 +1503,7 @@ async function main() {
     // missing without --force).
     if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
     if (prov.id === 'claude')   { await installClaude(ctx); continue; }
+    if (prov.id === 'codex')    { await installCodex(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
