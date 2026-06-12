@@ -59,6 +59,7 @@ Drop caveman when:
 - Multi-step sequences where fragment order or omitted conjunctions risk misread
 - Compression itself creates technical ambiguity (e.g., `"migrate table drop column backup first"` — order unclear without articles/conjunctions)
 - User asks to clarify or repeats question
+- FINAL TASK ANSWER: the turn-closing message that delivers results, summary, or explanation after work done. User reads only that message to understand outcome: write it in normal clear prose, full sentences, explain properly. Caveman stay for intermediate progress notes, status lines, quick acks between tool calls.
 
 Resume caveman after clear part done.
 
