@@ -1,2 +1,20 @@
-description = "Switch caveman intensity level (lite/full/ultra/wenyan)"
-prompt = "Switch to caveman {{args}} mode. If no level specified, use full. Respond terse like smart caveman — drop articles, filler, pleasantries. Fragments OK. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step]."
+description = "Switch caveman intensity level (lite/full/ultra/wenyan/off) — persists across sessions"
+prompt = """Requested level: {{args}}.
+
+Resolve the level:
+- Empty → "full" (the documented default)
+- Aliases: "stop", "disable", "persist-off" → "off"; "on", "enable" → "full"; "wenyan" → "wenyan-full"
+- Valid levels: off, lite, full, ultra, wenyan-lite, wenyan-full, wenyan-ultra. Anything else: tell the user the valid set and stop.
+
+Write the resolved level to the caveman config file so the choice persists across sessions:
+
+- macOS/Linux: `~/.config/caveman/config.json` (or `$XDG_CONFIG_HOME/caveman/config.json` if set)
+- Windows: `%APPDATA%\\caveman\\config.json`
+
+Create the parent directory if missing. Read any existing JSON from that path first; merge `{"defaultMode": "<level>"}` into it (do not clobber other fields). Write the result back.
+
+Then act on the new level for this session:
+- If level is "off": return to normal Claude voice for the rest of this session and every future session — the SessionStart hook reads `defaultMode` and skips activation.
+- Otherwise: respond terse like smart caveman at the requested intensity — drop articles, filler, pleasantries. Fragments OK. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step]. The intensity definitions live in SKILL.md.
+
+Persistence is symmetric: `/caveman off` persistently disables, `/caveman <level>` persistently sets that level. To clear the persistent choice entirely and fall back to the built-in default, delete the config file."""
