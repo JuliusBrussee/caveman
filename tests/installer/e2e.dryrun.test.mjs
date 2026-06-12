@@ -39,6 +39,25 @@ test('dry-run --only claude prints plan and writes nothing', () => {
   assert.equal(fs.existsSync(path.join(cfg, 'hooks')), false);
 });
 
+test('dry-run --only kimi prints plugin + skills plan and writes nothing', () => {
+  const cfg = freshTmpDir();
+  const r = spawnSync('node', [INSTALLER,
+    '--dry-run', '--only', 'kimi', '--non-interactive',
+    '--config-dir', cfg,
+  ], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfg } });
+  assert.equal(r.status, 0);
+  // Only fires if `kimi` is on PATH on the test runner. If not, this assertion
+  // is a no-op (the installer just prints "nothing detected" and exits 0).
+  if (/Kimi Code CLI detected/.test(r.stdout)) {
+    assert.match(r.stdout, /would run: kimi plugin install/);
+    assert.match(r.stdout, /would run: npx -y skills add/);
+    assert.match(r.stdout, /kimi-cli/);
+    assert.match(r.stdout, /• kimi\n.*• kimi-skills/s);
+  }
+  // Nothing should have been written.
+  assert.equal(fs.existsSync(path.join(cfg, 'settings.json')), false);
+});
+
 test('dry-run --uninstall does not delete files', () => {
   const cfg = freshTmpDir();
   // Seed a fake installation

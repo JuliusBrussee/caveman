@@ -30,6 +30,7 @@ test('--list prints provider matrix', () => {
   assert.match(r.stdout, /caveman provider matrix/);
   assert.match(r.stdout, /claude\b/);
   assert.match(r.stdout, /gemini\b/);
+  assert.match(r.stdout, /kimi\b/);
   assert.match(r.stdout, /antigravity\b.*\(soft\)/);
 });
 

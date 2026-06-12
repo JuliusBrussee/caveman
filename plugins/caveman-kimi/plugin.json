@@ -1,0 +1,5 @@
+{
+  "name": "caveman",
+  "version": "0.1.0",
+  "description": "Ultra-compressed communication mode for Kimi Code CLI. Cuts ~75% of tokens while keeping full technical accuracy."
+}
