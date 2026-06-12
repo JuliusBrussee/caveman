@@ -167,6 +167,113 @@ test('rewriteLegacyManagedHookCommands ignores already-absolute node commands', 
   assert.equal(n, 0);
 });
 
+test('pruneOrphanedManagedHooks removes managed hook whose target is missing (absolute-node)', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: '"/opt/node/bin/node" "/no/such/dir/caveman-activate.js"' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
+});
+
+test('pruneOrphanedManagedHooks removes orphan bare-node managed hook', () => {
+  const s = {
+    hooks: {
+      UserPromptSubmit: [{ hooks: [
+        { type: 'command', command: 'node /no/such/dir/caveman-mode-tracker.js' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
+});
+
+test('pruneOrphanedManagedHooks keeps managed hook whose target exists', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-prune-'));
+  const script = path.join(dir, 'caveman-activate.js');
+  fs.writeFileSync(script, '// real');
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: `"/opt/node/bin/node" "${script}"` },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, dir);
+  assert.equal(removed, 0);
+  assert.equal(s.hooks.SessionStart.length, 1);
+});
+
+test('pruneOrphanedManagedHooks leaves non-managed hooks alone even if missing', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: 'node /no/such/dir/some-user-hook.js' },
+        { type: 'command', command: '[ -n "$SUPERSET_HOME_DIR" ] && "$SUPERSET_HOME_DIR/hooks/notify.sh" || true' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 0);
+  assert.equal(s.hooks.SessionStart[0].hooks.length, 2);
+});
+
+test('pruneOrphanedManagedHooks resolves relative target against configDir', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-prune-rel-'));
+  // hooks/caveman-activate.js intentionally NOT created → missing
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: 'node hooks/caveman-activate.js' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, dir);
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
+});
+
+test('pruneOrphanedManagedHooks does NOT match a user script whose name merely contains a managed basename', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        // basename is "mycaveman-activate.js" — not an exact managed basename
+        { type: 'command', command: 'node /no/such/dir/mycaveman-activate.js' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 0);
+  assert.equal(s.hooks.SessionStart[0].hooks.length, 1);
+});
+
+test('pruneOrphanedManagedHooks handles quoted paths containing spaces', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: '"/opt/node/bin/node" "/no such dir/caveman-activate.js"' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
+});
+
+test('pruneOrphanedManagedHooks drops orphaned managed statusLine', () => {
+  const s = {
+    statusLine: { type: 'command', command: 'bash /no/such/dir/caveman-statusline.sh' },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 1);
+  assert.equal(s.statusLine, undefined);
+});
+
 test('claudeConfigDir honors CLAUDE_CONFIG_DIR env', () => {
   const orig = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = '/tmp/__cm_test_cfg';
