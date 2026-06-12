@@ -33,7 +33,7 @@ const REPO = 'JuliusBrussee/caveman';
 // the new tag on every release (CI release step) AFTER regenerating
 // src/hooks/checksums.sha256 so the integrity manifest matches the ref.
 // Overridable via CAVEMAN_REF for testing against a branch.
-const PINNED_REF = process.env.CAVEMAN_REF || 'v1.8.2';
+const PINNED_REF = process.env.CAVEMAN_REF || 'v1.9.0';
 const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/${PINNED_REF}`;
 const HOOKS_REMOTE = `${RAW_BASE}/src/hooks`;
 const INIT_SCRIPT_URL = `${RAW_BASE}/src/tools/caveman-init.js`;
