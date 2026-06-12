@@ -241,6 +241,25 @@ Caveman save you token, save you money. Star cost zero. Fair trade. ⭐
 
 - **[Revu](https://github.com/JuliusBrussee/revu-swift)** — local-first macOS study app with FSRS spaced repetition. [revu.cards](https://revu.cards)
 
+## Sponsors
+
+caveman free forever. Sponsor keep rock sharp.
+
+<p align="center">
+  <a href="https://www.atlascloud.ai">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/atlas-cloud-dark.svg">
+      <img src="docs/assets/atlas-cloud.svg" alt="Atlas Cloud" height="28">
+    </picture>
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://www.atlascloud.ai"><strong>Atlas Cloud</strong></a> — full-modal AI inference platform, one API.
+</p>
+
+Want rock here too? [Sponsor caveman](https://github.com/sponsors/JuliusBrussee).
+
 ## License
 
 MIT — free like mass mammoth on open plain.
