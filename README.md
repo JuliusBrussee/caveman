@@ -223,6 +223,24 @@ Five tools. One philosophy: **agent do more with less**.
 
 Compose: cavekit drive build, caveman compress what agent *say*, cavemem compress what agent *remember*, cavegemma bake compression into weight, caveman-code ship it all as one terminal agent. One rock. Two rock. Three rock. Four rock. Five rock. That it.
 
+## More Skill From Same Cave
+
+Caveman has siblings. [**JuliusBrussee/skills**](https://github.com/JuliusBrussee/skills) — five skills, one install, works in Claude Code, Cursor, Gemini, Cline, Copilot, 40+ agents:
+
+| Skill | What |
+|------|------|
+| [**caveman**](https://github.com/JuliusBrussee/skills/tree/main/skills/caveman) | This one. Speak less, say more. |
+| [**grill-me**](https://github.com/JuliusBrussee/skills/tree/main/skills/grill-me) | Agent grill your plan *before* you build wrong thing. Checks how much you know first — no condescend, no coddle. |
+| [**interface-kit**](https://github.com/JuliusBrussee/skills/tree/main/skills/interface-kit) | Build UI that look good, load fast, work for everyone. |
+| [**junior-to-senior**](https://github.com/JuliusBrussee/skills/tree/main/skills/junior-to-senior) | Adversarial review pass. Junior output go in, senior output come out. |
+| [**loop-factory**](https://github.com/JuliusBrussee/skills/tree/main/skills/loop-factory) | Spec-driven task loop — inbox → active → archive, review gate between. |
+
+```bash
+npx skills@latest add JuliusBrussee/skills
+```
+
+One command. Five skill. Cave well stocked.
+
 ## Links
 
 - [INSTALL.md](./INSTALL.md) — full install matrix, all flags, per-agent detail
