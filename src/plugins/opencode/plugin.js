@@ -36,26 +36,36 @@
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { existsSync, unlinkSync } from 'node:fs';
+import { existsSync, unlinkSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 
 // When installed: caveman-config.cjs sits next to plugin.js (copied by
 // bin/install.js, renamed to .cjs because this directory's package.json
-// declares "type": "module" — bare .js would be loaded as ESM and break
-// require()). When loaded from the source tree (tests, dev): fall back
-// to the canonical src/hooks/caveman-config.js, which lives in a directory
-// whose own package.json pins "type": "commonjs". One source of truth
-// either way.
+// declares "type": "module" — bare .js would be loaded as ESM). When loaded
+// from the source tree (tests, dev): fall back to the canonical
+// src/hooks/caveman-config.js, which lives in a directory whose own
+// package.json pins "type": "commonjs". One source of truth either way.
+//
+// Loaded by evaluating the file as CommonJS by hand, NOT via the module
+// loader: opencode runs plugins inside a compiled Bun binary where
+// require() of on-disk files is rejected ("require() async module is
+// unsupported") and await import() of a CJS file yields an empty namespace —
+// both silently break the plugin (#418 follow-up). createRequire() still
+// resolves node BUILT-INS fine in the compiled binary, which is all
+// caveman-config needs (fs/path/os).
 function loadConfig() {
-  try { return require(join(here, 'caveman-config.cjs')); }
-  catch (e) {
-    if (e.code !== 'MODULE_NOT_FOUND') throw e;
-    return require(join(here, '..', '..', 'hooks', 'caveman-config.js'));
-  }
+  const installed = join(here, 'caveman-config.cjs');
+  const dev = join(here, '..', '..', 'hooks', 'caveman-config.js');
+  const target = existsSync(installed) ? installed : dev;
+  const code = readFileSync(target, 'utf8').replace(/^#![^\n]*\n/, '');
+  const mod = { exports: {} };
+  new Function('module', 'exports', 'require', '__dirname', '__filename', code)(
+    mod, mod.exports, createRequire(import.meta.url), dirname(target), target
+  );
+  return mod.exports;
 }
 const config = loadConfig();
 
@@ -87,7 +97,13 @@ function reinforcementLine(mode) {
 // Returns the new mode to write, the literal string 'off' to deactivate, or
 // null when the prompt doesn't change state. Mirrors caveman-mode-tracker.js.
 function parseModeChange(promptRaw) {
-  const prompt = (promptRaw || '').trim().toLowerCase();
+  let prompt = (promptRaw || '').trim();
+  // opencode's non-interactive `run` path delivers the message wrapped in
+  // literal quote characters ("/caveman ultra"\n) — unwrap symmetric quotes
+  // so the slash-command branch still matches.
+  const wrapped = /^(["'`])([\s\S]*)\1$/.exec(prompt);
+  if (wrapped) prompt = wrapped[2].trim();
+  prompt = prompt.toLowerCase();
   if (!prompt) return null;
 
   // Natural-language deactivation — checked before activation so "stop talking
@@ -96,6 +112,21 @@ function parseModeChange(promptRaw) {
       /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
       /\bnormal mode\b/i.test(prompt)) {
     return 'off';
+  }
+
+  // Expanded /caveman command template. opencode replaces a typed
+  // "/caveman <level>" with the command file's body ("Activate caveman
+  // mode: $ARGUMENTS ...") before chat.message fires, so the literal
+  // slash-command branch below never sees it — recover the level argument
+  // from the template's first line instead. Must run before the generic
+  // NL-activation match, which would swallow it and drop the level.
+  const tpl = /^activate caveman mode:[ \t]*(\S*)/.exec(prompt);
+  if (tpl) {
+    const arg = tpl[1] || '';
+    if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
+    if (arg === 'wenyan-full') return 'wenyan';
+    if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return arg;
+    return getDefaultMode();
   }
 
   // Natural-language activation
@@ -150,9 +181,17 @@ function handleSessionCreated() {
   safeWriteFlag(flagPath, mode);
 }
 
-export const CavemanPlugin = async (_ctx) => ({
-  // opencode >= 1.15 dispatches session/lifecycle events through a single
-  // `event` handler keyed on event.type; the older direct top-level
+export const CavemanPlugin = async (_ctx) => {
+  // Assert the flag at plugin load as well: in one-shot `opencode run` the
+  // first session.created publishes before plugin event dispatch is wired,
+  // so the event handler alone misses it. The factory-time write covers that
+  // race; the event handler re-asserts on every later session in long-lived
+  // TUI processes.
+  handleSessionCreated();
+
+  return {
+  // opencode dispatches session/lifecycle events through a single `event`
+  // handler keyed on event.type; the older direct top-level
   // 'session.created' key is silently ignored. Routing session-init through
   // here means the flag is rewritten on every new session, not just once when
   // the plugin module loads. See https://opencode.ai/docs/plugins#events.
@@ -184,6 +223,7 @@ export const CavemanPlugin = async (_ctx) => ({
       output.system.push(reinforcementLine(active));
     }
   },
-});
+  };
+};
 
 export default CavemanPlugin;
