@@ -59,11 +59,15 @@ def call_api(client, model, system, prompt, max_retries=3):
                 temperature=0,
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
+                thinking={"type": "disabled"},
             )
             return {
                 "input_tokens": response.usage.input_tokens,
                 "output_tokens": response.usage.output_tokens,
-                "text": response.content[0].text,
+                "text": "".join(
+                    block.text for block in response.content
+                    if block.type == "text"
+                ),
                 "stop_reason": response.stop_reason,
             }
         except anthropic.RateLimitError:
@@ -242,6 +246,9 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Print config, no API calls")
     parser.add_argument("--update-readme", action="store_true", help="Update README.md benchmark table")
     parser.add_argument("--model", default="claude-sonnet-4-20250514", help="Model to use")
+    parser.add_argument("--mode", default="full", help="Caveman intensity level (default: full)")
+    parser.add_argument("--base-url", default=os.environ.get("ANTHROPIC_BASE_URL"), help="API base URL")
+    parser.add_argument("--api-key", default=None, help="API key (defaults to ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN env var)")
     args = parser.parse_args()
 
     prompts = load_prompts()
@@ -251,9 +258,19 @@ def main():
         return
 
     caveman_system = load_caveman_system()
+    if args.mode != "full":
+        caveman_system = caveman_system.replace(
+            "Default: **full**", f"Default: **{args.mode}**"
+        )
     skill_hash = sha256_file(SKILL_PATH)
 
-    client = anthropic.Anthropic()
+    client_kwargs = {}
+    if args.base_url:
+        client_kwargs["base_url"] = args.base_url
+    api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    if api_key:
+        client_kwargs["api_key"] = api_key
+    client = anthropic.Anthropic(**client_kwargs)
 
     print(f"Running benchmarks: {len(prompts)} prompts x 2 modes x {args.trials} trials", file=sys.stderr)
     print(f"Model: {args.model}", file=sys.stderr)
