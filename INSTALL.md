@@ -73,6 +73,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **JetBrains Junie** *(soft probe)* | `npx skills add JuliusBrussee/caveman -a junie` | No |
 | **Qoder** *(soft probe)* | `npx skills add JuliusBrussee/caveman -a qoder` | No |
 | **Google Antigravity** *(soft probe)* | `npx skills add JuliusBrussee/caveman -a antigravity` | No |
+| **Hermes Agent** | See [Hermes-specific install](#hermes-agent) below | Per-session: natural language |
 
 "Soft probe" = installer won't auto-detect these without `--only <id>` because there's no reliable always-on signal (Copilot subscription state is auth-gated; the others have no CLI / config-dir-only). Pass the flag when you want them.
 
@@ -254,6 +255,29 @@ The installer doesn't phone home. It writes to:
 - `~/.openclaw/workspace/` (only with `--only openclaw` or `--with-init` when OpenClaw is detected) — the one `--with-init` side-effect outside the cwd.
 
 No telemetry. No analytics. The installer's own code makes no network calls. Network requests do happen indirectly through the per-agent CLIs it shells out to — `claude plugin marketplace add`, `claude plugin install`, `gemini extensions install`, `npm view caveman-shrink`, and `npx -y skills add`. Each fetches from its own registry (Anthropic / GitHub / npm). Source: [`bin/install.js`](bin/install.js).
+
+## Hermes Agent
+
+Hermes Agent uses its own **skill** system — pure `SKILL.md` files loaded via `/skill <name>`. No Node.js, no plugin marketplace, no hooks.
+
+```bash
+# Install from the adaptation repo
+hermes skills install \
+  https://raw.githubusercontent.com/hehongxi/caveman-hermes-adaptation/main/skills/caveman/SKILL.md \
+  --name caveman
+
+# Load in session
+# => /skill caveman
+
+# Start chat with pre-loaded skills
+hermes -s caveman chat
+```
+
+**Activation:** Say "caveman mode", "原始人模式", or "省token" in session.
+**Exit:** Say "停止 caveman" or "正常模式".
+**Levels:** `lite` / `full` (default) / `ultra` / `wenyan`.
+
+Other skills in the Hermes family — `caveman-commit`, `caveman-review`, `caveman-compress` — can be installed the same way from the adaptation repo.
 
 ---
 
