@@ -32,6 +32,26 @@ Locate → fix → verify (most common):
 
 Parallel scout: spawn 2-3 `cavecrew-investigator` calls in one message with different angles (defs, callers, tests). Aggregate in main.
 
+## Model overrides
+
+By default, `cavecrew-reviewer` and `cavecrew-investigator` pin `model: haiku` in their frontmatter; `cavecrew-builder` has no `model:` line (uses the API session default). Set env vars in your shell before launching Claude Code to override per-agent:
+
+| Env var | Agent |
+|---|---|
+| `CAVECREW_REVIEWER_MODEL` | `cavecrew-reviewer` |
+| `CAVECREW_BUILDER_MODEL` | `cavecrew-builder` |
+| `CAVECREW_INVESTIGATOR_MODEL` | `cavecrew-investigator` |
+
+Example — run reviewer on sonnet, keep others on default:
+
+```sh
+export CAVECREW_REVIEWER_MODEL=sonnet
+```
+
+Use the same model name strings you'd use in any Claude Code agent frontmatter (e.g. `haiku`, `sonnet`, `opus`).
+
+Overrides patch only the `model:` line in the installed agent's frontmatter; the prompt body is untouched and keeps receiving upstream updates. Plugin installs only — standalone hook installs have no local agent files to patch. Unset or blank = no change. The patch persists in the installed file until the plugin is updated or reinstalled.
+
 ## See also
 
 - [`SKILL.md`](./SKILL.md) — full decision matrix and output contracts

@@ -15,6 +15,13 @@ const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.cla
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
+// Apply per-agent model overrides from env vars before emitting rules.
+// Best-effort: any error is swallowed so SessionStart is never blocked.
+try {
+  const { applyOverrides, resolvePluginRoot } = require('./cavecrew-model-overrides');
+  applyOverrides(resolvePluginRoot(__dirname));
+} catch (e) {}
+
 const mode = getDefaultMode();
 
 // "off" mode — skip activation entirely, don't write flag or emit rules
