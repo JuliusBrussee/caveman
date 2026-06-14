@@ -229,8 +229,8 @@ const PROVIDERS = [
   // CLI agents — require the binary. The `||dir:~/.foo` fallbacks were the
   // main source of false positives (warp, kiro, junie etc. leave config dirs
   // behind on uninstall).
-    { id: 'hermes',     label: 'Hermes Agent',        mech: 'npx skills add (hermes)',       detect: 'command:hermes',        profile: 'hermes' },
-    { id: 'aider-desk', label: 'Aider Desk',          mech: 'npx skills add (aider-desk)',   detect: 'command:aider', profile: 'aider-desk' },
+  { id: 'hermes',     label: 'Hermes Agent',        mech: 'native hermes skills copy',     detect: 'command:hermes' },
+  { id: 'aider-desk', label: 'Aider Desk',          mech: 'npx skills add (aider-desk)',   detect: 'command:aider', profile: 'aider-desk' },
   { id: 'amp',        label: 'Sourcegraph Amp',     mech: 'npx skills add (amp)',          detect: 'command:amp',             profile: 'amp' },
   { id: 'bob',        label: 'IBM Bob',             mech: 'npx skills add (bob)',          detect: 'command:bob', profile: 'bob' },
   { id: 'crush',      label: 'Crush',               mech: 'npx skills add (crush)',        detect: 'command:crush', profile: 'crush' },
@@ -1399,11 +1399,11 @@ async function main() {
     // missing without --force).
     if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
     if (prov.id === 'claude')   { await installClaude(ctx); continue; }
-      if (prov.id === 'gemini')   { installGemini(ctx); continue; }
-      if (prov.id === 'opencode') { installOpencode(ctx); continue; }
-      if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
-      if (prov.id === 'hermes')   { installHermes(ctx); continue; }
-      if (prov.profile)           { installViaSkills(ctx, prov); continue; }
+    if (prov.id === 'gemini')   { installGemini(ctx); continue; }
+    if (prov.id === 'opencode') { installOpencode(ctx); continue; }
+    if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
+    if (prov.id === 'hermes')   { installHermes(ctx); continue; }
+    if (prov.profile)           { installViaSkills(ctx, prov); continue; }
   }
 
   // Auto-detect fallback if nothing matched
