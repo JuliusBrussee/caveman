@@ -49,6 +49,7 @@ const HOOK_FILES = [
   'caveman-stats.js',
   'caveman-statusline.sh',
   'caveman-statusline.ps1',
+  'cavecrew-model-overrides.js',
 ];
 
 // ── Argv ───────────────────────────────────────────────────────────────────
