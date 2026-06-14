@@ -96,6 +96,9 @@ caveman/
 | `agents/cavecrew-reviewer.md` | Diff/file reviewer subagent (haiku). One-line findings with severity emoji. |
 | `src/plugins/opencode/plugin.js` | opencode native plugin. ESM Bun module — `session.created` writes flag, `tui.prompt.append` parses slash/natural-language activation and appends per-prompt reinforcement. Reuses `caveman-config.js` via `createRequire`. |
 | `src/plugins/opencode/commands/*.md` | Six opencode slash-command prompt templates (`/caveman`, `/caveman-{commit,review,compress,stats,help}`). |
+| `lib/caveman-mode-parser.mjs` | Shared mode/command parsing logic (ESM) for the Copilot CLI extension. CI syncs a copy into `.github/extensions/caveman/parser.mjs`. |
+| `lib/caveman-config.js` | Default-mode config resolver for the Copilot CLI extension. CI syncs a copy into `.github/extensions/caveman/config.js`. Self-contained — does NOT feed `src/hooks/` (Claude hooks own their own config). |
+| `scripts/install-copilot-extension.mjs` | Canonical installer for copying/updating the native Copilot CLI extension into another repo or the user-wide Copilot extensions dir. |
 
 ### Auto-generated / auto-synced — do not edit directly
 
@@ -112,6 +115,9 @@ What's left is the Claude Code plugin distribution (required by the plugin loade
 | `plugins/caveman/skills/cavecrew/SKILL.md` | `skills/cavecrew/SKILL.md` |
 | `plugins/caveman/agents/cavecrew-*.md` | `agents/cavecrew-*.md` |
 | `dist/caveman.skill` | ZIP of `skills/caveman/` directory (gitignored; rebuilt by CI on release) |
+| `.github/extensions/caveman/rules.mjs` | All `skills/*/SKILL.md` + `skills/caveman-compress/SKILL.md` bundled as ESM exports |
+| `.github/extensions/caveman/parser.mjs` | `lib/caveman-mode-parser.mjs` |
+| `.github/extensions/caveman/config.js` | `lib/caveman-config.js` |
 
 Skills not in this table (`caveman-commit`, `caveman-review`, `caveman-help`, `caveman-stats`) are not mirrored into the Claude Code plugin distribution by CI. They reach Claude Code through the standalone hook + skill install path, and reach other agents via `npx skills add`. A `plugins/caveman/skills/caveman-stats/` directory is currently checked in as a hand-committed copy; the sync workflow does not touch it, so don't rely on edits there to propagate.
 
@@ -242,6 +248,7 @@ How caveman reaches each agent type:
 |-------|-----------|----------------|
 | Claude Code | Plugin (hooks + skills) or standalone hooks | Yes — SessionStart hook injects rules |
 | Codex | Plugin in `plugins/caveman/` plus repo `.codex/hooks.json` and `.codex/config.toml` | Yes on macOS/Linux — SessionStart hook |
+| Copilot CLI | Native extension in `.github/extensions/caveman/`, installed via `scripts/install-copilot-extension.*` | Yes — onSessionStart hook injects rules |
 | Gemini CLI | Extension with `GEMINI.md` context file | Yes — context file loads every session |
 | opencode | Native plugin (`src/plugins/opencode/`) copied into `~/.config/opencode/plugins/caveman/` + `AGENTS.md` ruleset + skills/agents/commands directories. Plugin uses `session.created` and `tui.prompt.append` lifecycle hooks. No statusline (opencode TUI exposes no plugin-writable badge). | Yes — `session.created` writes flag, `AGENTS.md` carries always-on ruleset |
 | OpenClaw | Workspace skill at `~/.openclaw/workspace/skills/caveman/SKILL.md` (frontmatter merged with `version` + `always: true`) plus a marker-fenced bootstrap block in `~/.openclaw/workspace/SOUL.md`. Both writes go through `bin/lib/openclaw.js`; workspace path is overridable via `OPENCLAW_WORKSPACE`. | Yes — SOUL.md is auto-injected each turn under "Project Context" (subject to OpenClaw's 12K-per-file / 60K-total bootstrap caps) |

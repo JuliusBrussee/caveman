@@ -9,6 +9,11 @@ on:
       - agents/cavecrew-*.md
       - skills/caveman-compress/SKILL.md
       - skills/caveman-compress/scripts/**
+      - skills/caveman-commit/SKILL.md
+      - skills/caveman-review/SKILL.md
+      - skills/caveman-help/SKILL.md
+      - lib/caveman-mode-parser.mjs
+      - lib/caveman-config.js
 
 concurrency:
   group: sync-skill
@@ -54,6 +59,56 @@ jobs:
       - name: Rebuild caveman.skill ZIP
         run: mkdir -p dist && cd skills && zip -r ../dist/caveman.skill caveman/
 
+      - name: Sync Copilot CLI extension bundled files
+        run: |
+          mkdir -p .github/extensions/caveman
+
+          # Sync parser + config resolver from canonical lib/ sources
+          cp lib/caveman-mode-parser.mjs .github/extensions/caveman/parser.mjs
+          cp lib/caveman-config.js .github/extensions/caveman/config.js
+
+          # Regenerate rules.mjs from source SKILL.md files
+          python3 - <<'PYEOF'
+          import json, os, re
+
+          skills = {
+              "CAVEMAN_SKILL": "skills/caveman/SKILL.md",
+              "CAVEMAN_COMMIT_SKILL": "skills/caveman-commit/SKILL.md",
+              "CAVEMAN_REVIEW_SKILL": "skills/caveman-review/SKILL.md",
+              "CAVEMAN_HELP_SKILL": "skills/caveman-help/SKILL.md",
+              "CAVEMAN_COMPRESS_SKILL": "skills/caveman-compress/SKILL.md",
+          }
+
+          lines = [
+              "// caveman — bundled SKILL.md rules for Copilot CLI extension",
+              "//",
+              "// AUTO-GENERATED from skills/ source files by CI.",
+              "// Do NOT edit directly — edit source SKILL.md files instead.",
+              "//",
+              "// When developing in the caveman repo itself, the extension reads",
+              "// workspace SKILL.md files at runtime (dev override). This bundled",
+              "// copy is the fallback for external installs.",
+              "",
+          ]
+
+          def strip_frontmatter(text):
+              """Remove YAML frontmatter (--- ... ---) from SKILL.md content."""
+              return re.sub(r'^---[\s\S]*?---\s*', '', text)
+
+          for name, path in skills.items():
+              if os.path.exists(path):
+                  with open(path) as f:
+                      content = strip_frontmatter(f.read())
+                  escaped = json.dumps(content)
+                  lines.append(f"export const {name} = {escaped};")
+              else:
+                  lines.append(f"export const {name} = '';  // source not found: {path}")
+              lines.append("")
+
+          with open(".github/extensions/caveman/rules.mjs", "w") as f:
+              f.write("\n".join(lines))
+          PYEOF
+
       - name: Commit and push if changed
         run: |
           git add \
@@ -64,7 +119,10 @@ jobs:
             plugins/caveman/agents/cavecrew-investigator.md \
             plugins/caveman/agents/cavecrew-builder.md \
             plugins/caveman/agents/cavecrew-reviewer.md \
-            dist/caveman.skill
+            dist/caveman.skill \
+            .github/extensions/caveman/config.js \
+            .github/extensions/caveman/rules.mjs \
+            .github/extensions/caveman/parser.mjs
           git diff --staged --quiet && exit 0
           git commit -m "chore: sync SKILL.md copies [skip ci]"
           git push

@@ -392,6 +392,51 @@ def verify_hook_install_flow() -> None:
     print("Claude hook install/uninstall flow OK")
 
 
+def verify_copilot_extension() -> None:
+    section("Copilot CLI Extension")
+
+    ext_dir = ROOT / ".github" / "extensions" / "caveman"
+    required = [
+        ext_dir / "extension.mjs",
+        ext_dir / "parser.mjs",
+        ext_dir / "config.js",
+        ext_dir / "rules.mjs",
+    ]
+    for path in required:
+        ensure(path.exists(), f"Copilot extension file missing: {path}")
+
+    lib_parser = ROOT / "lib" / "caveman-mode-parser.mjs"
+    lib_config = ROOT / "lib" / "caveman-config.js"
+    ensure(lib_parser.exists(), "lib/caveman-mode-parser.mjs missing — Copilot parser source")
+    ensure(lib_config.exists(), "lib/caveman-config.js missing — Copilot config source")
+
+    # Bundled extension copies must match their canonical lib/ sources.
+    ensure(
+        (ext_dir / "parser.mjs").read_text(encoding="utf-8")
+        == lib_parser.read_text(encoding="utf-8"),
+        "parser.mjs out of sync with lib/caveman-mode-parser.mjs",
+    )
+    ensure(
+        (ext_dir / "config.js").read_text(encoding="utf-8")
+        == lib_config.read_text(encoding="utf-8"),
+        "config.js out of sync with lib/caveman-config.js",
+    )
+
+    # Syntax-check the extension JS/MJS surfaces.
+    run(["node", "--check", str(ext_dir / "parser.mjs")])
+    run(["node", "--check", str(ext_dir / "config.js")])
+    run(["node", "--check", str(ext_dir / "rules.mjs")])
+    run(["node", "--check", str(lib_parser)])
+    run(["node", "--check", str(lib_config)])
+
+    # Installer entrypoint must exist and parse.
+    installer = ROOT / "scripts" / "install-copilot-extension.mjs"
+    ensure(installer.exists(), "scripts/install-copilot-extension.mjs missing")
+    run(["node", "--check", str(installer)])
+
+    print("Copilot CLI extension files, sync, and syntax OK")
+
+
 def main() -> int:
     checks = [
         verify_skill_frontmatter_upload_compatibility,
@@ -401,6 +446,7 @@ def main() -> int:
         verify_compress_fixtures,
         verify_compress_cli,
         verify_hook_install_flow,
+        verify_copilot_extension,
     ]
 
     try:
