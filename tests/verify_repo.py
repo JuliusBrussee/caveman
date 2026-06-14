@@ -158,7 +158,6 @@ def verify_manifests_and_syntax() -> None:
     section("Manifests And Syntax")
 
     manifest_paths = [
-        ROOT / ".agents/plugins/marketplace.json",
         ROOT / ".claude-plugin/plugin.json",
         ROOT / ".claude-plugin/marketplace.json",
         ROOT / ".codex/hooks.json",

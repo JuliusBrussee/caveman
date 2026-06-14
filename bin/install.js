@@ -20,12 +20,21 @@ const os = require('os');
 const path = require('path');
 const child_process = require('child_process');
 const readline = require('readline');
+const crypto = require('crypto');
 
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
+const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
 
 const REPO = 'JuliusBrussee/caveman';
-const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
+// Pin remote fetches to an immutable release tag, not the moving `main`
+// branch (issue #261). A push to main must never silently change what a
+// curl|bash / detached-script install downloads and executes. Bump this to
+// the new tag on every release (CI release step) AFTER regenerating
+// src/hooks/checksums.sha256 so the integrity manifest matches the ref.
+// Overridable via CAVEMAN_REF for testing against a branch.
+const PINNED_REF = process.env.CAVEMAN_REF || 'v1.9.0';
+const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/${PINNED_REF}`;
 const HOOKS_REMOTE = `${RAW_BASE}/src/hooks`;
 const INIT_SCRIPT_URL = `${RAW_BASE}/src/tools/caveman-init.js`;
 const MCP_SHRINK_PKG = 'caveman-shrink';
@@ -46,13 +55,27 @@ const HOOK_FILES = [
 function parseArgs(argv) {
   const opts = {
     dryRun: false, force: false, skipSkills: false,
-    withHooks: 'auto', withInit: false, withMcpShrink: 'auto',
+    withHooks: 'auto', withInit: false, withMcpShrink: false,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
     configDir: null, help: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    // --with-mcp-shrink=<upstream cmd>  (handled before the switch so the
+    // GNU-style =value form is recognized). Bare --with-mcp-shrink falls
+    // through to the switch and is rejected — caveman-shrink is a proxy
+    // and a stub registration just lands the user in a broken-MCP loop (#474).
+    if (a.startsWith('--with-mcp-shrink=')) {
+      const raw = a.slice('--with-mcp-shrink='.length);
+      const tokens = raw.trim().split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) {
+        die('error: --with-mcp-shrink requires an upstream command\n' +
+            '  example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /path"');
+      }
+      opts.withMcpShrink = tokens;
+      continue;
+    }
     switch (a) {
       case '--dry-run': opts.dryRun = true; break;
       case '--force': opts.force = true; break;
@@ -60,7 +83,23 @@ function parseArgs(argv) {
       case '--with-hooks': opts.withHooks = true; break;
       case '--no-hooks': opts.withHooks = false; break;
       case '--with-init': opts.withInit = true; break;
-      case '--with-mcp-shrink': opts.withMcpShrink = true; break;
+      case '--with-mcp-shrink': {
+        const v = argv[i + 1];
+        if (v && !v.startsWith('--')) {
+          i++;
+          const tokens = v.trim().split(/\s+/).filter(Boolean);
+          if (tokens.length === 0) {
+            die('error: --with-mcp-shrink requires an upstream command\n' +
+                '  example: --with-mcp-shrink "npx @modelcontextprotocol/server-filesystem /path"');
+          }
+          opts.withMcpShrink = tokens;
+        } else {
+          die('error: --with-mcp-shrink requires an upstream command — caveman-shrink\n' +
+              '  is a proxy and exits immediately without one. Pass the upstream:\n' +
+              '  --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /path"');
+        }
+        break;
+      }
       case '--no-mcp-shrink': opts.withMcpShrink = false; break;
       case '--all': opts.all = true; break;
       case '--minimal': opts.minimal = true; break;
@@ -90,10 +129,15 @@ function parseArgs(argv) {
     }
   }
   if (opts.all && opts.minimal) die('error: --all and --minimal are mutually exclusive');
-  if (opts.all) { opts.withHooks = true; opts.withInit = true; opts.withMcpShrink = true; }
+  // --all turns on per-repo init only. It deliberately does NOT force:
+  //   • withHooks — left at 'auto' so installClaude() can skip standalone
+  //     settings.json wiring when the plugin manifest already wires the hooks
+  //     (duplicate registration fires both per event — issue #392).
+  //   • withMcpShrink — caveman-shrink is a proxy that needs an upstream
+  //     command, so there's no sensible "everything on" default (issue #474).
+  //     Opt in explicitly with --with-mcp-shrink="<upstream cmd>".
+  if (opts.all) { opts.withInit = true; }
   if (opts.minimal) { opts.withHooks = false; opts.withInit = false; opts.withMcpShrink = false; }
-  if (opts.withHooks === 'auto') opts.withHooks = true;
-  if (opts.withMcpShrink === 'auto') opts.withMcpShrink = true;
   // Validate --only ids against the provider matrix. PROVIDERS is defined later
   // in the file but is in scope by the time this function runs.
   if (opts.only.length) {
@@ -176,10 +220,10 @@ const PROVIDERS = [
   { id: 'roo',        label: 'Roo Code',            mech: 'npx skills add (roo)',          detect: 'vscode-ext:roo||vscode-ext:rooveterinaryinc.roo-cline||cursor-ext:roo', profile: 'roo' },
   { id: 'augment',    label: 'Augment Code',        mech: 'npx skills add (augment)',      detect: 'vscode-ext:augment||jetbrains-plugin:augment', profile: 'augment' },
 
-  // GitHub Copilot — `gh` (GitHub CLI) is on most dev machines but isn't
-  // Copilot. There's no reliable always-on Copilot probe (subscription state
-  // is auth-gated). Mark soft → opt-in via --only copilot.
-  { id: 'copilot',    label: 'GitHub Copilot',      mech: 'npx skills add (github-copilot)', detect: 'command:copilot', profile: 'github-copilot', soft: true },
+  // GitHub Copilot: detected via VS Code / Cursor extension dirs (no `gh` CLI
+  // needed). The old `command:copilot` soft probe never fired for most users
+  // because Copilot ships as an editor extension, not a CLI (issue #336).
+  { id: 'copilot',    label: 'GitHub Copilot',      mech: 'npx skills add (github-copilot)', detect: 'vscode-ext:github.copilot||vscode-ext:github.copilot-chat||cursor-ext:github.copilot', profile: 'github-copilot' },
 
   // CLI agents — require the binary. The `||dir:~/.foo` fallbacks were the
   // main source of false positives (warp, kiro, junie etc. leave config dirs
@@ -380,7 +424,7 @@ function absoluteNodePath() {
 
 // ── Per-provider installers ────────────────────────────────────────────────
 async function installClaude(ctx) {
-  const { say, note, warn, ok, opts, results } = ctx;
+  const { say, note, warn, ok, opts, results, configDir } = ctx;
   results.detected++;
   say('→ Claude Code detected');
 
@@ -390,18 +434,74 @@ async function installClaude(ctx) {
     const r = captureSpawn('claude', ['plugin', 'list']);
     if (r.status === 0 && /caveman/i.test(r.stdout || '')) alreadyInstalled = true;
   }
+  let pluginInstallSucceeded = false;
   if (alreadyInstalled) {
     note('  caveman plugin already installed (use --force to reinstall)');
     results.skipped.push(['claude', 'plugin already installed']);
+    pluginInstallSucceeded = true;
   } else {
     const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', REPO], null, opts.dryRun);
     const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], null, opts.dryRun);
-    if ((r1.status || 0) === 0 && (r2.status || 0) === 0) results.installed.push('claude');
-    else results.failed.push(['claude', 'claude plugin install failed']);
+    if ((r1.status || 0) === 0 && (r2.status || 0) === 0) {
+      results.installed.push('claude');
+      pluginInstallSucceeded = true;
+    } else {
+      results.failed.push(['claude', 'claude plugin install failed']);
+    }
   }
 
-  if (opts.withHooks) {
-    say('  → installing hooks (--with-hooks)');
+  // Self-heal: drop managed settings.json hook/statusLine entries whose target
+  // script no longer exists (issue #471). Migrating an old manual install to
+  // the plugin leaves settings.json pointing at removed ~/.claude/hooks/
+  // caveman-*.js scripts, so Claude Code crashes every SessionStart /
+  // UserPromptSubmit with `loader:1478 — Cannot find module …`. Runs
+  // unconditionally so it repairs an already-dirty config even when we then
+  // skip standalone wiring because the plugin manifest handles hooks.
+  {
+    const settingsPath = path.join(configDir, 'settings.json');
+    const settings = SETTINGS.readSettings(settingsPath);
+    if (settings) {
+      const pruned = SETTINGS.pruneOrphanedManagedHooks(settings, configDir);
+      if (pruned > 0) {
+        note(`  removed ${pruned} orphaned caveman hook entr${pruned === 1 ? 'y' : 'ies'} from settings.json (target script missing)`);
+        if (!opts.dryRun) {
+          SETTINGS.validateHookFields(settings);
+          SETTINGS.writeSettings(settingsPath, settings);
+        }
+      }
+    }
+  }
+
+  // Hook wiring decision matrix (issue #392 — avoid double-firing):
+  //   --no-hooks       → skip
+  //   --with-hooks     → wire (warn if the plugin manifest also wires them)
+  //   default / --all  → wire only if the plugin install did NOT succeed.
+  // The plugin manifest already wires SessionStart + UserPromptSubmit when the
+  // plugin install succeeds; wiring them again in settings.json fires both per
+  // event (two CAVEMAN MODE blocks, two reinforcement lines).
+  let shouldWireHooks;
+  if (opts.withHooks === false) {
+    shouldWireHooks = false;
+  } else if (opts.withHooks === true) {
+    shouldWireHooks = true;
+    if (pluginInstallSucceeded) {
+      warn('  --with-hooks wires hooks in settings.json alongside the plugin manifest.');
+      warn('  Both will fire on every event. Pass --no-hooks to keep only the plugin path.');
+    }
+  } else {
+    // 'auto'
+    shouldWireHooks = !pluginInstallSucceeded;
+    if (!shouldWireHooks) {
+      note('  hooks: plugin manifest handles SessionStart + UserPromptSubmit');
+      note('  (pass --with-hooks to also wire standalone hooks in settings.json)');
+      results.skipped.push(['claude-hooks', 'plugin manifest handles hooks']);
+    } else {
+      note('  hooks: plugin install did not succeed; falling back to standalone wiring');
+    }
+  }
+
+  if (shouldWireHooks) {
+    say('  → installing hooks');
     const r = await installHooks(ctx);
     if (r === 'ok') results.installed.push('claude-hooks');
     else if (r === 'skip') results.skipped.push(['claude-hooks', 'already wired']);
@@ -443,13 +543,17 @@ function installViaSkills(ctx, prov) {
   const { say, opts, results } = ctx;
   results.detected++;
   say(`→ ${prov.label} detected`);
-  // --yes --all: skip the upstream skill-selection TUI and confirmation prompts.
-  // Without these, `curl|bash` (no TTY on stdin) renders an empty checkbox list
-  // the user can't interact with, then exits 0 with zero skills installed —
-  // and our installer happily reports success. See issue #370.
-  // We've already decided which agent to install for via auto-detect / --only;
-  // making the user re-select 7 skills inside skills CLI would be redundant.
-  const args = ['-y', 'skills', 'add', REPO, '-a', prov.profile, '--yes', '--all'];
+  // --skill '*' --yes: skip the upstream skill-selection TUI and confirmation
+  // prompts. Without --skill, `curl|bash` (no TTY on stdin) renders an empty
+  // checkbox list the user can't interact with, then exits 0 with zero skills
+  // installed — and our installer happily reports success. See issue #370.
+  //
+  // We pass `--skill '*'` rather than `--all` because the upstream `skills` CLI
+  // interprets `--all` as "all skills from the source to *all* agents", which
+  // ignores the `-a prov.profile` selection and writes every skill through
+  // every agent adapter (see issue #389). `--skill '*' -a <agent>` is the
+  // documented form for "install every skill into a specific agent".
+  const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
   const r = runSpawn('npx', args, null, opts.dryRun);
   if ((r.status || 0) === 0) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
@@ -474,8 +578,9 @@ const OPENCODE_AGENTS_MD_BEGIN = '<!-- caveman-begin -->';
 const OPENCODE_AGENTS_MD_END = '<!-- caveman-end -->';
 
 function opencodeConfigDir() {
+  // opencode uses ~/.config/opencode on every platform (on Windows that's
+  // %USERPROFILE%\.config\opencode via os.homedir()), NOT %APPDATA% (#376).
   if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
-  if (IS_WIN) return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'opencode');
   return path.join(os.homedir(), '.config', 'opencode');
 }
 
@@ -552,12 +657,17 @@ function installOpencode(ctx) {
     for (const f of OPENCODE_COMMAND_FILES) {
       const src = path.join(cmdSrcDir, f);
       const dest = path.join(commandsDir, f);
+      if (!fs.existsSync(src)) continue; // defense-in-depth: skip a missing command file rather than crash (#434)
       if (fs.existsSync(dest) && !opts.force) { note(`  skipped ${dest} (exists; --force to overwrite)`); continue; }
       fs.copyFileSync(src, dest);
       process.stdout.write(`  installed: ${dest}\n`);
     }
 
-    // 3. Subagents.
+    // 3. Subagents. Source files target Claude Code's schema (`tools: [...]`
+    //    YAML array); opencode rejects that form and refuses to boot until the
+    //    file is removed. Strip the `tools:` line on copy — opencode falls back
+    //    to its default tool set, and subagent prompts already self-restrict in
+    //    the body. Issue #386.
     fs.mkdirSync(agentsDir, { recursive: true });
     const agentSrcDir = path.join(repoRoot, 'agents');
     for (const f of OPENCODE_AGENT_FILES) {
@@ -565,7 +675,7 @@ function installOpencode(ctx) {
       const dest = path.join(agentsDir, f);
       if (!fs.existsSync(src)) continue;
       if (fs.existsSync(dest) && !opts.force) { note(`  skipped ${dest} (exists; --force to overwrite)`); continue; }
-      fs.copyFileSync(src, dest);
+      fs.writeFileSync(dest, stripOpencodeAgentTools(fs.readFileSync(src, 'utf8')));
       process.stdout.write(`  installed: ${dest}\n`);
     }
 
@@ -633,14 +743,17 @@ function installOpencode(ctx) {
       cfg.plugin.push(OPENCODE_PLUGIN_REL);
     }
     if (opts.withMcpShrink) {
+      // opts.withMcpShrink is the array of upstream-cmd tokens parseArgs
+      // produced. caveman-shrink is a proxy — it crashes without an upstream,
+      // so we always wire one through.
       if (!cfg.mcp || typeof cfg.mcp !== 'object') cfg.mcp = {};
       if (!cfg.mcp['caveman-shrink']) {
         cfg.mcp['caveman-shrink'] = {
           type: 'local',
-          command: ['npx', '-y', MCP_SHRINK_PKG],
+          command: ['npx', '-y', MCP_SHRINK_PKG, ...opts.withMcpShrink],
           enabled: true,
         };
-        process.stdout.write('  registered caveman-shrink MCP server\n');
+        process.stdout.write(`  registered caveman-shrink MCP server (wraps: ${opts.withMcpShrink.join(' ')})\n`);
       }
     }
     SETTINGS.writeSettings(opencodeJson, cfg);
@@ -703,6 +816,12 @@ async function installHooks(ctx) {
   fs.mkdirSync(hooksDir, { recursive: true });
 
   // Copy or download each hook file. Local-clone-first for offline installs.
+  // Downloaded files (the rare detached-script / curl fallback) are verified
+  // against the SHA-256 manifest published at the pinned release ref (#262);
+  // a mismatch aborts before the file is wired into settings.json. Local
+  // copies are trusted — they come from the same package as this script.
+  let checksums; // undefined = not yet loaded; null = unavailable for this ref
+  let warnedNoChecksums = false;
   for (const f of HOOK_FILES) {
     const dest = path.join(hooksDir, f);
     if (sourceDir && fs.existsSync(path.join(sourceDir, f))) {
@@ -710,6 +829,19 @@ async function installHooks(ctx) {
     } else {
       try { await downloadTo(`${HOOKS_REMOTE}/${f}`, dest); }
       catch (e) { return `download ${f} failed: ${e.message}`; }
+      if (checksums === undefined) checksums = await loadRemoteHookChecksums();
+      if (checksums) {
+        const want = checksums.get(f);
+        const got = sha256File(dest);
+        if (!want || want !== got) {
+          try { fs.unlinkSync(dest); } catch (_) {}
+          return `integrity check failed for ${f} (expected ${want || '<not in manifest>'}, got ${got}) — ` +
+                 `refusing to install a hook that doesn't match pinned release ${PINNED_REF}`;
+        }
+      } else if (!warnedNoChecksums) {
+        warnedNoChecksums = true;
+        warn(`  note: no integrity manifest at ${PINNED_REF} — downloaded hooks installed unverified.`);
+      }
     }
     process.stdout.write(`  installed: ${dest}\n`);
   }
@@ -801,10 +933,21 @@ function installMcpShrink(ctx) {
     note('    src/hooks/README.md to your Claude Code MCP config manually.');
     return { kind: 'skip', why: 'manual config required' };
   }
-  const r = runSpawn('claude', ['mcp', 'add', 'caveman-shrink', '--', 'npx', '-y', MCP_SHRINK_PKG], null, opts.dryRun);
+  // opts.withMcpShrink is always an array of upstream-cmd tokens by the
+  // time we get here; parseArgs rejects bare --with-mcp-shrink. The proxy
+  // gets `npx -y caveman-shrink <upstream tokens...>` so it has something
+  // to wrap.
+  const upstream = opts.withMcpShrink;
+  const r = runSpawn(
+    'claude',
+    ['mcp', 'add', 'caveman-shrink', '--', 'npx', '-y', MCP_SHRINK_PKG, ...upstream],
+    null, opts.dryRun
+  );
   if ((r.status || 0) === 0) {
-    note('    registered. Wrap an upstream by editing the mcpServers entry — see:');
-    note(`    https://github.com/${REPO}/tree/main/src/mcp-servers/caveman-shrink`);
+    note(`    registered, wrapping: ${upstream.join(' ')}`);
+    note(`    Edit ~/.claude.json mcpServers["caveman-shrink"] to change the upstream,`);
+    note('    or `claude mcp remove caveman-shrink` to drop it.');
+    note(`    Docs: https://github.com/${REPO}/tree/main/src/mcp-servers/caveman-shrink`);
     return { kind: 'ok' };
   }
   return { kind: 'fail', why: 'claude mcp add failed' };
@@ -862,6 +1005,35 @@ function downloadTo(url, dest) {
     });
     req.on('error', reject);
   });
+}
+
+// ── Integrity verification for downloaded hooks (#262) ─────────────────────
+function sha256File(p) {
+  return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+}
+
+// Download + parse the hook integrity manifest from the pinned release ref.
+// Returns Map<basename, sha256hex>, or null when the manifest is unavailable
+// (release tags older than this feature predate it) — the caller treats null
+// as "cannot verify" and warns rather than aborting, for back-compat. Parses
+// the standard `sha256sum` text format: "<64-hex>  <path>" (two spaces, or
+// " *<path>" binary marker).
+async function loadRemoteHookChecksums() {
+  const tmp = path.join(os.tmpdir(), `caveman-checksums-${process.pid}-${Date.now()}.sha256`);
+  try {
+    await downloadTo(`${HOOKS_REMOTE}/checksums.sha256`, tmp);
+    const txt = fs.readFileSync(tmp, 'utf8');
+    const map = new Map();
+    for (const line of txt.split('\n')) {
+      const m = line.trim().match(/^([0-9a-fA-F]{64})\s+\*?(.+)$/);
+      if (m) map.set(path.basename(m[2].trim()), m[1].toLowerCase());
+    }
+    return map.size ? map : null;
+  } catch (_) {
+    return null;
+  } finally {
+    try { fs.unlinkSync(tmp); } catch (_) { /* best effort */ }
+  }
 }
 
 // ── Uninstall ─────────────────────────────────────────────────────────────
@@ -1055,8 +1227,9 @@ function printList(noColor) {
     process.stdout.write(`  ${pad(p.id, 13)} ${pad(p.label, 22)} ${p.mech}${tag}\n`);
   }
   process.stdout.write('\n');
-  process.stdout.write(c.dim('  Defaults: --with-hooks ON, --with-mcp-shrink ON, --with-init OFF.\n'));
-  process.stdout.write(c.dim('  --all turns all three on, --minimal turns all three off.\n'));
+  process.stdout.write(c.dim('  Defaults: --with-hooks ON, --with-init OFF, --with-mcp-shrink OFF.\n'));
+  process.stdout.write(c.dim('  --all = hooks + init (mcp-shrink needs an upstream — opt in explicitly).\n'));
+  process.stdout.write(c.dim('  --minimal turns hooks + init + mcp-shrink off.\n'));
 }
 
 function pad(s, n) { s = String(s); return s + ' '.repeat(Math.max(0, n - s.length)); }
@@ -1077,14 +1250,20 @@ FLAGS
   --only <agent>        Install only for the named agent. Repeatable.
                         See --list for valid ids.
   --skip-skills         Don't run the npx-skills auto-detect fallback.
-  --all                 Turn on hooks + init + mcp-shrink.
+  --all                 Turn on hooks + init. (mcp-shrink needs an upstream;
+                        pass --with-mcp-shrink="<cmd>" to add it.)
   --minimal             Just the plugin/extension install.
   --with-hooks          Claude Code: install SessionStart/UserPromptSubmit hooks
                         + statusline badge. (Default ON.)
   --no-hooks            Skip the hooks installer.
   --with-init           Write per-repo IDE rule files into \$PWD.
-  --with-mcp-shrink     Claude Code: register caveman-shrink MCP proxy. (Default ON.)
-  --no-mcp-shrink       Skip MCP shrink.
+  --with-mcp-shrink="<upstream cmd>"
+                        Claude Code (and opencode): register caveman-shrink MCP
+                        proxy wrapping the given upstream. Default OFF.
+                        caveman-shrink crashes without an upstream, so a value
+                        is required. The value is whitespace-tokenized.
+                        Example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"
+  --no-mcp-shrink       Skip MCP shrink. (Default.)
   --uninstall, -u       Remove caveman from this machine.
   --config-dir <path>   Claude Code config dir for hook files + settings.json.
                         Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT

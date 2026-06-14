@@ -16,8 +16,10 @@
 //     strip those out of PATH in the uninstall test so the user's real
 //     plugin/extension state is never touched.
 //   - The plugin install step makes a network call (clones the marketplace).
-//     We tolerate failure there — only the hook/settings assertions matter
-//     because the hooks-installer runs regardless of plugin-install status.
+//     We tolerate failure there — only the hook/settings assertions matter.
+//     Since #392/#393, default install wires standalone hooks ONLY when the
+//     plugin install fails (to avoid double-firing), so these tests pass
+//     --with-hooks to force the standalone wiring path deterministically.
 //   - Each fresh-install case spawns a real `claude plugin install` (~300MB
 //     of git clone). Run the test runner with `--test-concurrency=1` to
 //     avoid OOM on memory-constrained CI runners.
@@ -98,9 +100,9 @@ function cavemanHookCommands(settings, event, marker) {
 test('fresh install populates hooks dir and settings.json (skipped without `claude` CLI)', { skip: !hasClaudeCli() && 'claude CLI not on PATH; the claude provider is the only path that wires hooks' }, () => {
   const dir = freshTmpDir();
   try {
-    const r = runInstaller(['--only', 'claude'], dir);
-    // The plugin install step may fail (network, auth) but the hooks step
-    // runs regardless. We only require the hooks-side state.
+    const r = runInstaller(['--only', 'claude', '--with-hooks'], dir);
+    // The plugin install step may fail (network, auth); --with-hooks forces
+    // the standalone hook wiring regardless. We only require the hooks-side state.
     assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
 
     const hooks = path.join(dir, 'hooks');
@@ -131,9 +133,9 @@ test('fresh install populates hooks dir and settings.json (skipped without `clau
 test('idempotent install does not duplicate hook entries (skipped without `claude` CLI)', { skip: !hasClaudeCli() && 'claude CLI not on PATH' }, () => {
   const dir = freshTmpDir();
   try {
-    const r1 = runInstaller(['--only', 'claude'], dir);
+    const r1 = runInstaller(['--only', 'claude', '--with-hooks'], dir);
     assert.notEqual(r1.status, 2, `first install argv error: ${r1.stderr}`);
-    const r2 = runInstaller(['--only', 'claude'], dir);
+    const r2 = runInstaller(['--only', 'claude', '--with-hooks'], dir);
     assert.notEqual(r2.status, 2, `second install argv error: ${r2.stderr}`);
 
     const settings = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
@@ -160,7 +162,7 @@ test('uninstall strips caveman hooks but preserves user-authored ones (skipped w
       },
     }, null, 2));
 
-    const r1 = runInstaller(['--only', 'claude'], dir);
+    const r1 = runInstaller(['--only', 'claude', '--with-hooks'], dir);
     assert.notEqual(r1.status, 2, `install argv error: ${r1.stderr}`);
 
     // Strip claude/gemini from PATH for uninstall so we don't touch the user's
@@ -215,7 +217,7 @@ test('install tolerates JSONC settings.json (comments + trailing commas)', { ski
 }
 `);
 
-    const r = runInstaller(['--only', 'claude'], dir);
+    const r = runInstaller(['--only', 'claude', '--with-hooks'], dir);
     assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
 
     // After install, settings.json must be strict-JSON parseable.

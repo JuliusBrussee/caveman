@@ -160,10 +160,12 @@ test('omits USD line when model is unknown', (tmp) => {
 
 test('priceForModel matches by prefix across point releases', () => {
   const { priceForModel } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
-  assert.strictEqual(priceForModel('claude-opus-4-7'), 75.00);
+  assert.strictEqual(priceForModel('claude-opus-4-7'), 25.00);
+  assert.strictEqual(priceForModel('claude-opus-4-8'), 25.00);
   assert.strictEqual(priceForModel('claude-opus-4-20250101'), 75.00);
+  assert.strictEqual(priceForModel('claude-opus-4-1-20250805'), 75.00);
   assert.strictEqual(priceForModel('claude-sonnet-4-7-20260315'), 15.00);
-  assert.strictEqual(priceForModel('claude-haiku-4-5'), 4.00);
+  assert.strictEqual(priceForModel('claude-haiku-4-5'), 5.00);
   assert.strictEqual(priceForModel('claude-3-5-sonnet-20241022'), 15.00);
   assert.strictEqual(priceForModel(null), null);
   assert.strictEqual(priceForModel('gpt-4'), null);
@@ -342,9 +344,9 @@ test('writes statusline suffix file after a stats run', (tmp) => {
   });
   const suffixPath = path.join(claudeDir, '.caveman-statusline-suffix');
   assert.ok(fs.existsSync(suffixPath));
-  // 1500 / 0.35 = 4286, saved = 2786 → "⛏ 2.8k"
+  // 1500 / 0.35 = 4286, saved = 2786 → "⛏  2.8k" (two spaces after ⛏, #459)
   const suffix = fs.readFileSync(suffixPath, 'utf8');
-  assert.match(suffix, /^⛏ 2\.8k$/);
+  assert.match(suffix, /^⛏  2\.8k$/);
 });
 
 test('humanizeTokens formats small/medium/large correctly', () => {
