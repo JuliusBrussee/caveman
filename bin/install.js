@@ -25,6 +25,7 @@ const crypto = require('crypto');
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
 const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
+const { mapGeminiAgentFrontmatter } = require('./lib/gemini-agent');
 
 const REPO = 'JuliusBrussee/caveman';
 // Pin remote fetches to an immutable release tag, not the moving `main`
@@ -534,9 +535,45 @@ function installGemini(ctx) {
     }
   }
   const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`], null, opts.dryRun);
-  if ((r.status || 0) === 0) results.installed.push('gemini');
-  else results.failed.push(['gemini', 'gemini extensions install failed']);
+  if ((r.status || 0) === 0) {
+    results.installed.push('gemini');
+    patchGeminiAgents(ctx);
+  } else results.failed.push(['gemini', 'gemini extensions install failed']);
   process.stdout.write('\n');
+}
+
+// Gemini loads the cavecrew subagents from the hardcoded `<ext>/agents/` path
+// with Claude Code tool names, which it rejects ("Invalid tool name") so the
+// agents fail to load. The source files must stay Claude-canonical (shared with
+// the Claude plugin), so we rewrite the *installed copy* to Gemini's tool ids —
+// mirroring the opencode install path. See lib/gemini-agent.js, issues
+// #373/#473/#492.
+const GEMINI_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
+
+function patchGeminiAgents(ctx) {
+  const { note, opts } = ctx;
+  if (opts.dryRun) {
+    note(`  would rewrite ${GEMINI_AGENT_FILES.length} cavecrew agents to Gemini tool names`);
+    return;
+  }
+  const agentsDir = path.join(os.homedir(), '.gemini', 'extensions', 'caveman', 'agents');
+  if (!fs.existsSync(agentsDir)) {
+    note('  cavecrew agents: install dir not found — skipping Gemini tool-name fix');
+    return;
+  }
+  let patched = 0;
+  for (const f of GEMINI_AGENT_FILES) {
+    const p = path.join(agentsDir, f);
+    if (!fs.existsSync(p)) continue;
+    try {
+      const before = fs.readFileSync(p, 'utf8');
+      const after = mapGeminiAgentFrontmatter(before);
+      if (after !== before) { fs.writeFileSync(p, after); patched++; }
+    } catch (e) {
+      note(`  cavecrew agent ${f}: could not rewrite (${e.message})`);
+    }
+  }
+  if (patched) note(`  rewrote ${patched} cavecrew agent(s) to Gemini tool names (#473)`);
 }
 
 function installViaSkills(ctx, prov) {
