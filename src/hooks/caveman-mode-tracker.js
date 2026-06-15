@@ -119,16 +119,28 @@ process.stdin.on('end', () => {
     // If the flag is missing, corrupted, oversized, or a symlink pointing at
     // something like ~/.ssh/id_rsa, readFlag returns null and we emit nothing
     // — never inject untrusted bytes into model context.
-    const activeMode = readFlag(flagPath);
-    if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
-      process.stdout.write(JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "UserPromptSubmit",
-          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-            "Code/commits/security: write normal."
-        }
-      }));
+    // Honor an explicit "off" default (env CAVEMAN_DEFAULT_MODE=off or config
+    // defaultMode=off) in the per-turn reinforcement, not just at SessionStart.
+    // The flag file is global (~/.caveman-active), so a session in another repo
+    // can leave it set to a non-off mode; without this check that stale global
+    // flag bleeds into repos/sessions that explicitly opted out, re-injecting
+    // "CAVEMAN MODE ACTIVE" every turn. getDefaultMode() reads the per-context
+    // env/config first, so an off default both suppresses the reminder and
+    // clears the stale flag.
+    if (getDefaultMode() === 'off') {
+      try { fs.unlinkSync(flagPath); } catch (e) {}
+    } else {
+      const activeMode = readFlag(flagPath);
+      if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+        process.stdout.write(JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "UserPromptSubmit",
+            additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+              "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
+              "Code/commits/security: write normal."
+          }
+        }));
+      }
     }
   } catch (e) {
     // Silent fail
