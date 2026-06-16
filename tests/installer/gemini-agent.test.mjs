@@ -23,9 +23,10 @@ import { createRequire } from 'node:module';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const requireCjs = createRequire(import.meta.url);
-const { mapGeminiAgentFrontmatter, TOOL_MAP } = requireCjs(
+const { mapGeminiAgentFrontmatter, TOOL_MAP, geminiExtAgentsDir } = requireCjs(
   path.join(REPO_ROOT, 'bin', 'lib', 'gemini-agent.js'),
 );
+const osmod = requireCjs('os');
 
 const SHIPPED_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
 
@@ -162,6 +163,34 @@ test('all shipped cavecrew agent files become Gemini-valid after transform (GREE
     const bodyOut = out.replace(/^---\n[\s\S]*?\n---\n/, '');
     const bodyIn = src.replace(/^---\n[\s\S]*?\n---\n/, '');
     assert.equal(bodyOut, bodyIn, `${f}: body must be byte-identical`);
+  }
+});
+
+// ── GEMINI_CLI_HOME override (issue #530 codex review) ────────────────────
+test('geminiExtAgentsDir honors GEMINI_CLI_HOME env', () => {
+  const orig = process.env.GEMINI_CLI_HOME;
+  process.env.GEMINI_CLI_HOME = '/tmp/__cm_gemini_home';
+  try {
+    assert.equal(
+      geminiExtAgentsDir(),
+      path.join('/tmp/__cm_gemini_home', '.gemini', 'extensions', 'caveman', 'agents'),
+    );
+  } finally {
+    if (orig === undefined) delete process.env.GEMINI_CLI_HOME;
+    else process.env.GEMINI_CLI_HOME = orig;
+  }
+});
+
+test('geminiExtAgentsDir falls back to os.homedir() when GEMINI_CLI_HOME unset', () => {
+  const orig = process.env.GEMINI_CLI_HOME;
+  delete process.env.GEMINI_CLI_HOME;
+  try {
+    assert.equal(
+      geminiExtAgentsDir(),
+      path.join(osmod.homedir(), '.gemini', 'extensions', 'caveman', 'agents'),
+    );
+  } finally {
+    if (orig !== undefined) process.env.GEMINI_CLI_HOME = orig;
   }
 });
 

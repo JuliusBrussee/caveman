@@ -25,7 +25,7 @@ const crypto = require('crypto');
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
 const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
-const { mapGeminiAgentFrontmatter } = require('./lib/gemini-agent');
+const { mapGeminiAgentFrontmatter, geminiExtAgentsDir } = require('./lib/gemini-agent');
 
 const REPO = 'JuliusBrussee/caveman';
 // Pin remote fetches to an immutable release tag, not the moving `main`
@@ -529,6 +529,11 @@ function installGemini(ctx) {
     const r = captureSpawn('gemini', ['extensions', 'list']);
     if (r.status === 0 && /caveman/i.test(r.stdout || '')) {
       note('  caveman extension already installed (use --force to reinstall)');
+      // Still rewrite the installed agents to Gemini tool ids: upgraders who
+      // installed before the #473 fix have the broken Claude tool names on
+      // disk and would never get the fix without --force. The rewrite is
+      // idempotent (only writes when the frontmatter actually changes).
+      patchGeminiAgents(ctx);
       results.skipped.push(['gemini', 'extension already installed']);
       process.stdout.write('\n');
       return;
@@ -556,7 +561,9 @@ function patchGeminiAgents(ctx) {
     note(`  would rewrite ${GEMINI_AGENT_FILES.length} cavecrew agents to Gemini tool names`);
     return;
   }
-  const agentsDir = path.join(os.homedir(), '.gemini', 'extensions', 'caveman', 'agents');
+  // Honors GEMINI_CLI_HOME (see lib/gemini-agent.js) so the rewrite finds the
+  // install dir under that override instead of silently skipping the fix.
+  const agentsDir = geminiExtAgentsDir();
   if (!fs.existsSync(agentsDir)) {
     note('  cavecrew agents: install dir not found — skipping Gemini tool-name fix');
     return;

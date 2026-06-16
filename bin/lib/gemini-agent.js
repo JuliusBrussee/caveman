@@ -1,5 +1,8 @@
 'use strict';
 
+const os = require('os');
+const path = require('path');
+
 // Rewrite a Claude-Code-style subagent frontmatter into Gemini CLI's schema.
 //
 // The Gemini extension loader reads agents from a hardcoded
@@ -84,4 +87,21 @@ function mapGeminiAgentFrontmatter(content) {
   return FRONTMATTER_FENCE + out.join('\n') + rest;
 }
 
-module.exports = { mapGeminiAgentFrontmatter, mapToolName, TOOL_MAP, MODEL_MAP };
+// Resolve the installed cavecrew agents directory. Gemini resolves its
+// extension storage from GEMINI_CLI_HOME when set (its homedir() returns that
+// env value, then ExtensionStorage.getUserExtensionsDir() builds on it), and
+// falls back to the real home otherwise. Hard-coding os.homedir() would miss
+// the install dir under that override and silently skip the tool-name fix.
+// Mirrors SETTINGS.claudeConfigDir's CLAUDE_CONFIG_DIR handling.
+function geminiExtAgentsDir() {
+  const home = process.env.GEMINI_CLI_HOME || os.homedir();
+  return path.join(home, '.gemini', 'extensions', 'caveman', 'agents');
+}
+
+module.exports = {
+  mapGeminiAgentFrontmatter,
+  mapToolName,
+  geminiExtAgentsDir,
+  TOOL_MAP,
+  MODEL_MAP,
+};
