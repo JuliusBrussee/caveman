@@ -76,7 +76,7 @@ def detect_file_type(filepath: Path) -> str:
     # Extensionless files (like CLAUDE.md, TODO) — check content
     if not ext:
         try:
-            text = filepath.read_text(errors="ignore")
+            text = filepath.read_text(encoding="utf-8", errors="replace")
         except (OSError, PermissionError):
             return "unknown"
 
