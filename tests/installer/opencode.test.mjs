@@ -290,8 +290,8 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     // opencode expands "/caveman <level>" into the command template before
     // chat.message fires — the level must be recovered from the expanded text.
     await handlers['chat.message']({}, { parts: [{ type: 'text', text:
-      'Activate caveman mode: wenyan-lite\n\nIf no level given, use full. If "off", deactivate.' }] });
-    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'wenyan-lite');
+      'Activate caveman mode: legacy-lite\n\nIf no level given, use full. If "off", deactivate.' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full', 'unknown expanded level should fall back to default');
     await handlers['chat.message']({}, { parts: [{ type: 'text', text:
       'Activate caveman mode: off\n\nIf no level given, use full. If "off", deactivate.' }] });
     assert.equal(fs.existsSync(flagPath), false, 'expanded template with off should delete the flag');

@@ -12,3 +12,7 @@ context/refs/research-brief-caveman-code-efficiency.md
 # Build artifacts
 dist/*
 !dist/caveman.skill
+
+.github/agents/
+.github/skills/
+.github/copilot-*.md

@@ -124,7 +124,6 @@ function parseModeChange(promptRaw) {
   if (tpl) {
     const arg = tpl[1] || '';
     if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
-    if (arg === 'wenyan-full') return 'wenyan';
     if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return arg;
     return getDefaultMode();
   }
@@ -150,7 +149,6 @@ function parseModeChange(promptRaw) {
     if (cmd === '/caveman') {
       if (!arg)                                     return getDefaultMode();
       if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
-      if (arg === 'wenyan-full')                    return 'wenyan';
       if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return arg;
       // Unknown arg — leave flag alone. No silent overwrite.
       return null;

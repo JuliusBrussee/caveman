@@ -74,7 +74,7 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (al
 └─────────────────────────────────────┘
 ```
 
-Pick your level of grunt — `lite` (drop filler), `full` (default caveman), `ultra` (telegraphic), or `wenyan` (classical Chinese, even shorter). One command switch. Cost go down forever.
+Pick your level of grunt — `lite` (drop filler), `full` (default caveman), `ultra` (telegraphic), `super-compress` (extra-aggressive), or `silence` (minimum viable answer). One command switch. Cost go down forever.
 
 **Speak your tongue.** Caveman keep your language. You write Portuguese, caveman grunt Portuguese. Spanish, French, same. Compress the *style*, not the language. Code, command, error string stay exact.
 
@@ -119,7 +119,7 @@ Install break? Open agent, say *"Read CLAUDE.md and INSTALL.md, install caveman 
 
 | Skill | What |
 |---|---|
-| `/caveman [lite\|full\|ultra\|wenyan]` | Compress every reply. Levels stick until session end. |
+| `/caveman [lite\|full\|ultra\|super-compress\|silence]` | Compress every reply. Levels stick until session end. |
 | `/caveman-commit` | Conventional Commit messages, ≤50 char subject. Why over what. |
 | `/caveman-review` | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` |
 | `/caveman-stats` | Real session token usage + lifetime savings + USD. Tweetable line via `--share`. |

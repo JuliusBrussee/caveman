@@ -21,7 +21,8 @@ Modes:
   /caveman              full (default)
   /caveman lite         lighter
   /caveman ultra        extreme
-  /caveman wenyan       classical Chinese
+  /caveman super-compress extra-aggressive
+  /caveman silence      minimum viable answer
 
 Skills:
   /caveman-commit       terse Conventional Commits

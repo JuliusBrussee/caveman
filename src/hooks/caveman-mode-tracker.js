@@ -85,9 +85,6 @@ process.stdin.on('end', () => {
           mode = getDefaultMode();
         } else if (arg === 'off' || arg === 'stop' || arg === 'disable') {
           mode = 'off';
-        } else if (arg === 'wenyan-full') {
-          // Canonical alias — config stores as 'wenyan'
-          mode = 'wenyan';
         } else if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) {
           mode = arg;
         }

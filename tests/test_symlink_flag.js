@@ -81,11 +81,11 @@ test('safeWriteFlag then readFlag round-trip through symlink', (tmp) => {
   fs.symlinkSync(realDir, symlinkDir);
 
   const flagPath = path.join(symlinkDir, '.caveman-active');
-  safeWriteFlag(flagPath, 'wenyan-ultra');
+  safeWriteFlag(flagPath, 'silence');
 
   // Read back through the same symlink path
   const result = readFlag(flagPath);
-  assert.strictEqual(result, 'wenyan-ultra');
+  assert.strictEqual(result, 'silence');
 });
 
 test('refuses flag file that is itself a symlink (even through symlinked parent)', (tmp) => {

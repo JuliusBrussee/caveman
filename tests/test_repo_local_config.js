@@ -78,11 +78,11 @@ test('.caveman/config.json wins over .caveman.json at same level', (tmp) => {
 test('walks up from nested cwd to find repo config', (tmp) => {
   fs.mkdirSync(path.join(tmp, '.caveman'));
   fs.writeFileSync(path.join(tmp, '.caveman', 'config.json'),
-    JSON.stringify({ defaultMode: 'wenyan-lite' }));
+    JSON.stringify({ defaultMode: 'super-compress' }));
   const nested = path.join(tmp, 'a', 'b', 'c');
   fs.mkdirSync(nested, { recursive: true });
   process.chdir(nested);
-  assert.strictEqual(getDefaultMode(), 'wenyan-lite');
+  assert.strictEqual(getDefaultMode(), 'super-compress');
 });
 
 test('env var beats repo-local config', (tmp) => {

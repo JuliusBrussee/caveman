@@ -7,7 +7,7 @@ The full ruleset and intensity levels live in this workspace's caveman skill:
 
   skills/caveman/SKILL.md
 
-Default intensity: `full`. Switch with `/caveman lite|full|ultra|wenyan`.
+Default intensity: `full`. Switch with `/caveman lite|full|ultra|super-compress|silence`.
 Stop with: "stop caveman" / "normal mode" / "deactivate caveman".
 
 Auto-Clarity: drop caveman for security warnings, irreversible action

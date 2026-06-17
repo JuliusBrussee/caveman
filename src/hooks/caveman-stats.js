@@ -14,8 +14,8 @@ const { readFlag, appendFlag, readHistory, safeWriteFlag } = require('./caveman-
 
 // Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
 // 10 tasks, sonnet-4-20250514). Only 'full' has measured data; lite / ultra /
-// wenyan modes show no estimate until benchmarked. Add an entry here when a new
-// run is committed.
+// super-compress / silence modes show no estimate until benchmarked. Add an
+// entry here when a new run is committed.
 const COMPRESSION = { 'full': 0.65 };
 
 // Approximate Anthropic public output-token pricing, USD per million.

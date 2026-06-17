@@ -39,7 +39,11 @@ this harness did and is why its numbers were inflated.
 - `snapshots/results.json` — committed source of truth, regenerated only
   when SKILL.md files or prompts change.
 
-## Refresh the snapshot (requires `claude` CLI logged in)
+## Refresh the snapshot
+
+Provider par defaut: `claude` CLI.
+
+### Avec Claude CLI
 
 ```bash
 uv run python evals/llm_run.py
@@ -51,6 +55,16 @@ a small model to keep it cheap:
 ```bash
 CAVEMAN_EVAL_MODEL=claude-haiku-4-5 uv run python evals/llm_run.py
 ```
+
+### Avec Copilot CLI
+
+Si tu n'utilises pas Claude CLI, tu peux lancer le meme runner avec Copilot CLI:
+
+```bash
+CAVEMAN_EVAL_PROVIDER=copilot CAVEMAN_EVAL_MODEL=gpt-5.3-codex uv run python evals/llm_run.py
+```
+
+Le runner mappe les trois arms (`__baseline__`, `__terse__`, `<skill>`) vers des prompts Copilot equivalentes.
 
 ## Read the snapshot (no LLM, no API key, runs in CI)
 

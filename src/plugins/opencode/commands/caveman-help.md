@@ -8,7 +8,8 @@ Show the caveman quick-reference card.
 | `/caveman` | Activate at default level (full) |
 | `/caveman lite` | Light compression — ~30% tokens dropped |
 | `/caveman ultra` | Maximum compression |
-| `/caveman wenyan[-lite\|-ultra]` | Classical Chinese compression |
+| `/caveman super-compress` | Extra-aggressive compression |
+| `/caveman silence` | Minimal-response mode |
 | `/caveman off` | Deactivate |
 | `/caveman-commit` | Terse commit message |
 | `/caveman-review` | One-line review findings |
