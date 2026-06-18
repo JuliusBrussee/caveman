@@ -6,14 +6,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
-const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, readFlag, getFlagPath, getGlobalFlagPath, safeUnlinkFlag, VALID_MODES } = require('./caveman-config');
 
 // Modes handled by their own slash commands (/caveman-commit, etc.) — not
 // selectable via /caveman <arg>.
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const flagPath = path.join(claudeDir, '.caveman-active');
 
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
@@ -21,6 +20,9 @@ process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
     const prompt = (data.prompt || '').trim().toLowerCase();
+    const sessionId = data.session_id || null;
+    const flagPath = getFlagPath(claudeDir, sessionId);
+    const globalFlagPath = getGlobalFlagPath(claudeDir);
 
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
     // "talk like caveman"). README tells users they can say these, but the hook
@@ -97,7 +99,8 @@ process.stdin.on('end', () => {
       if (mode && mode !== 'off') {
         safeWriteFlag(flagPath, mode);
       } else if (mode === 'off') {
-        try { fs.unlinkSync(flagPath); } catch (e) {}
+        safeUnlinkFlag(flagPath);
+        safeUnlinkFlag(globalFlagPath);
       }
     }
 
@@ -105,20 +108,12 @@ process.stdin.on('end', () => {
     if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
         /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
         /\bnormal mode\b/i.test(prompt)) {
-      try { fs.unlinkSync(flagPath); } catch (e) {}
+      safeUnlinkFlag(flagPath);
+      safeUnlinkFlag(globalFlagPath);
     }
 
     // Per-turn reinforcement: emit a structured reminder when caveman is active.
-    // The SessionStart hook injects the full ruleset once, but models lose it
-    // when other plugins inject competing style instructions every turn.
-    // This keeps caveman visible in the model's attention on every user message.
-    //
-    // Skip independent modes (commit, review, compress) — they have their own
-    // skill behavior and the base caveman rules would conflict.
     // readFlag enforces symlink-safe read + size cap + VALID_MODES whitelist.
-    // If the flag is missing, corrupted, oversized, or a symlink pointing at
-    // something like ~/.ssh/id_rsa, readFlag returns null and we emit nothing
-    // — never inject untrusted bytes into model context.
     const activeMode = readFlag(flagPath);
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
       process.stdout.write(JSON.stringify({

@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { readFlag, appendFlag, readHistory, safeWriteFlag } = require('./caveman-config');
+const { readFlag, appendFlag, readHistory, safeWriteFlag, getFlagPath } = require('./caveman-config');
 
 // Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
 // 10 tasks, sonnet-4-20250514). Only 'full' has measured data; lite / ultra /
@@ -308,7 +308,10 @@ function main() {
   }
 
   const parsed = parseSession(sessionFile);
-  const mode = readFlag(path.join(claudeDir, '.caveman-active'));
+  // Read per-session flag — prefer env var (reliable UUID), fall back to filename
+  const sessionIdForFlag = process.env.CLAUDE_CODE_SESSION_ID
+    || path.basename(sessionFile, '.jsonl');
+  const mode = readFlag(getFlagPath(claudeDir, sessionIdForFlag));
 
   // Append a snapshot of this session's totals to the lifetime log. Multiple
   // /caveman-stats calls in one session emit multiple lines for the same
