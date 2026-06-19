@@ -1,5 +1,6 @@
 {
   "name": "caveman",
+  "version": "1.9.0",
   "description": "Ultra-compressed communication mode. Cuts ~75% of tokens while keeping full technical accuracy by speaking like a caveman.",
   "author": {
     "name": "Julius Brussee",
