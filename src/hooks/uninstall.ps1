@@ -118,10 +118,16 @@ console.log('  Removed ' + removed + ' caveman hook entries from settings.json')
     }
 }
 
-# 3. Remove flag file
+# 3. Remove flag files (global + per-session)
 if (Test-Path $FlagFile) {
     Remove-Item $FlagFile -Force
     Write-Host "  Removed: $FlagFile"
+}
+Get-ChildItem -Path $ClaudeDir -Filter ".caveman-active-*" -File -ErrorAction SilentlyContinue | Where-Object {
+    -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+} | ForEach-Object {
+    Remove-Item $_.FullName -Force
+    Write-Host "  Removed: $($_.FullName)"
 }
 
 Write-Host ""

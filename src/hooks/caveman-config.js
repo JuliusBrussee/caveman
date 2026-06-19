@@ -322,4 +322,69 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
+// Validate session ID as UUID format. Returns lowercase UUID or null.
+// Claude Code session IDs are UUIDs (hex + hyphens). Non-UUID input
+// returns null, causing callers to fall back to the global flag path.
+function sanitizeSessionId(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+    return null;
+  }
+  return raw.toLowerCase();
+}
+
+// Returns the flag file path for a given session. Per-session when a valid
+// session ID is provided, global otherwise.
+function getFlagPath(claudeDir, sessionId) {
+  const sanitized = sanitizeSessionId(sessionId);
+  if (sanitized) {
+    return path.join(claudeDir, `.caveman-active-${sanitized}`);
+  }
+  return path.join(claudeDir, '.caveman-active');
+}
+
+// Returns the global (non-session-specific) flag path.
+function getGlobalFlagPath(claudeDir) {
+  return path.join(claudeDir, '.caveman-active');
+}
+
+// Symlink-safe flag file removal. Refuses to unlink symlinks.
+function safeUnlinkFlag(flagPath) {
+  try {
+    const st = fs.lstatSync(flagPath);
+    if (st.isSymbolicLink()) return;
+    fs.unlinkSync(flagPath);
+  } catch (e) {
+    // Silent fail — ENOENT or permission errors are fine
+  }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// Best-effort cleanup of stale per-session flag files older than maxAge ms.
+// Uses withFileTypes + symlink refusal. Only deletes UUID-suffixed files.
+function cleanupStaleFlagFiles(claudeDir, maxAgeMs) {
+  try {
+    const entries = fs.readdirSync(claudeDir, { withFileTypes: true });
+    const prefix = '.caveman-active-';
+    const now = Date.now();
+    for (const entry of entries) {
+      if (!entry.name.startsWith(prefix)) continue;
+      if (entry.isSymbolicLink()) continue;
+      if (!entry.isFile()) continue;
+      const suffix = entry.name.slice(prefix.length);
+      if (!UUID_RE.test(suffix)) continue;
+      const fullPath = path.join(claudeDir, entry.name);
+      try {
+        const st = fs.statSync(fullPath);
+        if (now - st.mtimeMs > maxAgeMs) {
+          fs.unlinkSync(fullPath);
+        }
+      } catch (e) { /* best-effort */ }
+    }
+  } catch (e) {
+    // Silent fail
+  }
+}
+
+module.exports = { getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory, sanitizeSessionId, getFlagPath, getGlobalFlagPath, safeUnlinkFlag, cleanupStaleFlagFiles };

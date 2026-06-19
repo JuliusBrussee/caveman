@@ -1,6 +1,18 @@
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }
-$Flag = Join-Path $ClaudeDir ".caveman-active"
+
+# Per-session flag via CLAUDE_CODE_SESSION_ID env var (set by Claude Code).
+# Falls back to global flag if env var absent or per-session file doesn't exist.
+$Flag = $null
+if ($env:CLAUDE_CODE_SESSION_ID -match '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+    $SessionFlag = Join-Path $ClaudeDir ".caveman-active-$($env:CLAUDE_CODE_SESSION_ID)"
+    if ((Test-Path $SessionFlag) -and -not ((Get-Item -LiteralPath $SessionFlag -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        $Flag = $SessionFlag
+    }
+}
+if (-not $Flag) {
+    $Flag = Join-Path $ClaudeDir ".caveman-active"
+}
 if (-not (Test-Path $Flag)) { exit 0 }
 
 # Refuse reparse points (symlinks / junctions) and oversized files. Without

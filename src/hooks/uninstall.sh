@@ -113,11 +113,14 @@ if [ -f "$SETTINGS.bak" ]; then
   echo "  Removed: $SETTINGS.bak"
 fi
 
-# 4. Remove flag file
+# 4. Remove flag files (global + per-session)
 if [ -f "$FLAG_FILE" ]; then
   rm "$FLAG_FILE"
   echo "  Removed: $FLAG_FILE"
 fi
+for f in "$CLAUDE_DIR"/.caveman-active-*; do
+  [ -f "$f" ] && [ ! -L "$f" ] && rm "$f" && echo "  Removed: $f"
+done
 
 echo ""
 echo "Done! Restart Claude Code to complete the uninstall."

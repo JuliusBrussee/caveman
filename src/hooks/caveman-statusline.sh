@@ -8,7 +8,20 @@
 # Plugin users: Claude will offer to set this up on first session.
 # Standalone users: install.sh wires this automatically.
 
-FLAG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-active"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+
+# Per-session flag via CLAUDE_CODE_SESSION_ID env var (set by Claude Code).
+# Falls back to global flag if env var absent or per-session file doesn't exist.
+FLAG=""
+if [[ "$CLAUDE_CODE_SESSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+  SESSION_FLAG="$CLAUDE_DIR/.caveman-active-$CLAUDE_CODE_SESSION_ID"
+  if [ -f "$SESSION_FLAG" ] && [ ! -L "$SESSION_FLAG" ]; then
+    FLAG="$SESSION_FLAG"
+  fi
+fi
+if [ -z "$FLAG" ]; then
+  FLAG="$CLAUDE_DIR/.caveman-active"
+fi
 
 # Refuse symlinks — a local attacker could point the flag at ~/.ssh/id_rsa and
 # have the statusline render its bytes (including ANSI escape sequences) to
@@ -42,7 +55,7 @@ fi
 # the suffix file is absent and nothing is rendered — so the default is safe
 # for fresh installs (no fake number, no crash).
 if [ "${CAVEMAN_STATUSLINE_SAVINGS:-1}" != "0" ]; then
-  SAVINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-statusline-suffix"
+  SAVINGS_FILE="$CLAUDE_DIR/.caveman-statusline-suffix"
   if [ -f "$SAVINGS_FILE" ] && [ ! -L "$SAVINGS_FILE" ]; then
     SAVINGS=$(head -c 64 "$SAVINGS_FILE" 2>/dev/null | tr -d '\000-\037')
     [ -n "$SAVINGS" ] && printf ' \033[38;5;172m%s\033[0m' "$SAVINGS"
