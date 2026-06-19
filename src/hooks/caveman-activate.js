@@ -101,6 +101,7 @@ if (skillContent) {
     '## Rules\n\n' +
     'Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. ' +
     'Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Technical terms exact. Code blocks unchanged. Errors quoted exact.\n\n' +
+    'Reply in user\'s dominant language — compress the style, not the language. No forced English openings. Keep technical terms, code, API names, CLI commands, error strings verbatim.\n\n' +
     'Pattern: `[thing] [action] [reason]. [next step].`\n\n' +
     'Not: "Sure! I\'d be happy to help you with that. The issue you\'re experiencing is likely caused by..."\n' +
     'Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"\n\n' +
