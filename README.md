@@ -207,6 +207,36 @@ Two thing happen, no more:
 
 Custom workspace path? `OPENCLAW_WORKSPACE=/your/path` before the command. Uninstall: same one-liner with `--uninstall` — skill folder gone, SOUL.md block ripped out cleanly, your other workspace content stay untouched. Idempotent re-runs (frontmatter not double-prepended, marker block not duplicated).
 
+---
+
+[**Hermes Agent**](https://github.com/nousresearch/hermes-agent) the personal AI agent. Run across CLI, Telegram, Discord, Slack, and 20+ platforms. Skill-based system, persistent memory, subagent delegation. Tagline: *"The messenger way."* Hermes versatile. Hermes everywhere.
+
+Caveman teach messenger brevity — same canonical installer, scoped to one agent:
+
+```bash
+# macOS / Linux / WSL
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --only hermes
+
+# Windows (PowerShell): no Node? install Node >=18 first, then
+npx -y github:JuliusBrussee/caveman -- --only hermes
+```
+
+Two thing happen, no more:
+
+1. **Skill drop** at `~/.hermes/skills/productivity/caveman/SKILL.md` — full ruleset, discoverable by Hermes skill loader. Skill load on-demand when user mention caveman.
+2. **Memory nudge.** Tiny marker-fenced block written to `~/.hermes/memories/caveman`. Hermes auto-inject memory entries into *every* turn. Agent terse from message one. No `/caveman` per session. No nag.
+
+```
+~/.hermes/
+├── skills/productivity/caveman/SKILL.md  ← full ruleset, on-demand load
+└── memories/caveman                       ← <!-- caveman-begin --> ... <!-- caveman-end -->
+                                              ↑ auto-inject every turn
+```
+
+Custom home path? `HERMES_HOME=/your/path` before the command. Uninstall: same one-liner with `--uninstall` — skill folder gone, memory block ripped out cleanly, your other content stay untouched. Idempotent re-runs (marker block not duplicated).
+
+---
+
 Lobster claw still sharp. Lobster mouth now small. Brain still big.
 
 ## Caveman Ecosystem
