@@ -24,6 +24,7 @@ const crypto = require('crypto');
 
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
+const HERMES = require('./lib/hermes');
 const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
 
 const REPO = 'JuliusBrussee/caveman';
@@ -207,6 +208,7 @@ const PROVIDERS = [
   { id: 'gemini',     label: 'Gemini CLI',          mech: 'gemini extensions install',     detect: 'command:gemini' },
   { id: 'opencode',   label: 'opencode',            mech: 'native opencode plugin',        detect: 'command:opencode' },
   { id: 'openclaw',   label: 'OpenClaw',            mech: 'workspace skill + SOUL.md',     detect: 'command:openclaw||dir:$HOME/.openclaw/workspace' },
+  { id: 'hermes',     label: 'Hermes Agent',        mech: 'skill + memory bootstrap',      detect: 'command:hermes||dir:$HOME/.hermes' },
   { id: 'codex',      label: 'Codex CLI',           mech: 'npx skills add (codex)',        detect: 'command:codex',           profile: 'codex' },
 
   // IDE / VS Code-family — extension probes are precise. Cursor/Windsurf also
@@ -798,6 +800,37 @@ function installOpenclaw(ctx) {
   process.stdout.write('\n');
 }
 
+// ── Hermes Agent native install ──────────────────────────────────────────
+// Drops skills/caveman/SKILL.md into the Hermes skills directory and writes
+// a small always-on bootstrap to ~/.hermes/memories/caveman. Hermes auto-
+// injects memory entries every turn, so this drives always-on behavior —
+// similar to OpenClaw's SOUL.md approach. See bin/lib/hermes.js for the
+// actual file writes.
+function installHermes(ctx) {
+  const { say, note, warn, opts, repoRoot, results } = ctx;
+  results.detected++;
+  say('→ Hermes Agent detected');
+
+  const log = {
+    write: (s) => process.stdout.write(s),
+    note: (s) => note(s),
+    warn: (s) => warn(s),
+  };
+
+  const r = HERMES.installHermes({
+    hermesHome: process.env.HERMES_HOME || undefined,
+    repoRoot,
+    dryRun: opts.dryRun,
+    force: opts.force,
+    log,
+  });
+
+  if (r.ok) results.installed.push('hermes');
+  else results.failed.push(['hermes', r.reason || 'install failed']);
+
+  process.stdout.write('\n');
+}
+
 // ── Hooks installer ────────────────────────────────────────────────────────
 // Replaces src/hooks/install.sh + src/hooks/install.ps1.
 async function installHooks(ctx) {
@@ -1188,6 +1221,18 @@ function uninstall(ctx) {
     if (r.touched) ok('  pruned caveman entries from OpenClaw workspace');
   }
 
+  // Hermes Agent
+  const hermesHome = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes');
+  if (fs.existsSync(hermesHome)) {
+    const log = {
+      write: (s) => process.stdout.write(s),
+      note: (s) => note(s),
+      warn: (s) => warn(s),
+    };
+    const r = HERMES.uninstallHermes({ hermesHome, dryRun: opts.dryRun, log });
+    if (r.touched) ok('  pruned caveman entries from Hermes Agent');
+  }
+
   // Flag file
   const flag = path.join(configDir, '.caveman-active');
   if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
@@ -1343,6 +1388,7 @@ async function main() {
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
+    if (prov.id === 'hermes')   { installHermes(ctx);   continue; }
     if (prov.profile)           { installViaSkills(ctx, prov); continue; }
   }
 
