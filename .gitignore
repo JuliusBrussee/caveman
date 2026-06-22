@@ -5,6 +5,7 @@ __pycache__/
 .env.local
 **/.DS_Store
 .claude/worktrees/
+.worktrees/
 evals/snapshots/*.html
 evals/snapshots/*.png
 context/refs/research-brief-caveman-code-efficiency.md

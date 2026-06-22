@@ -43,6 +43,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` | Yes |
 | **opencode** | `node bin/install.js --only opencode` *(or `npx -y github:JuliusBrussee/caveman -- --only opencode`)* | Yes (plugin + AGENTS.md) |
 | **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
+| **pi-coding-agent** | `node bin/install.js --only pi` *(or `npx -y github:JuliusBrussee/caveman -- --only pi`)* | Yes (skills pack + AGENTS.md) |
 | **Codex CLI** | `npx skills add JuliusBrussee/caveman -a codex` | Per-session: `/caveman` |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` | Per-session by default; `--with-init` for an always-on rule file |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` | Per-session by default; `--with-init` for an always-on rule file |

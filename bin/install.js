@@ -207,6 +207,13 @@ const PROVIDERS = [
   { id: 'gemini',     label: 'Gemini CLI',          mech: 'gemini extensions install',     detect: 'command:gemini' },
   { id: 'opencode',   label: 'opencode',            mech: 'native opencode plugin',        detect: 'command:opencode' },
   { id: 'openclaw',   label: 'OpenClaw',            mech: 'workspace skill + SOUL.md',     detect: 'command:openclaw||dir:$HOME/.openclaw/workspace' },
+  // pi-coding-agent (earendil-works) — discovers skills from
+  // ~/.pi/agent/skills/<pack>/SKILL.md and reads ~/.pi/agent/AGENTS.md as
+  // always-on rules. No `npx skills add` integration; install path is a
+  // single symlink to the repo's `skills/` folder plus a fenced ruleset
+  // block in AGENTS.md. Detection probes the binary OR the config dir —
+  // either is enough signal that the user has pi installed.
+  { id: 'pi',         label: 'pi-coding-agent',     mech: 'skills pack in ~/.pi/agent/skills + AGENTS.md', detect: 'command:pi||dir:$HOME/.pi/agent' },
   { id: 'codex',      label: 'Codex CLI',           mech: 'npx skills add (codex)',        detect: 'command:codex',           profile: 'codex' },
 
   // IDE / VS Code-family — extension probes are precise. Cursor/Windsurf also
@@ -594,6 +601,24 @@ function copyDirRecursive(src, dest) {
   }
 }
 
+function piPackLooksManaged(dir) {
+  return OPENCODE_SKILL_DIRS.every(name => fs.existsSync(path.join(dir, name, 'SKILL.md')));
+}
+
+function symlinkPointsTo(linkPath, expectedTarget) {
+  const raw = fs.readlinkSync(linkPath);
+  const resolved = path.resolve(path.dirname(linkPath), raw);
+  return path.resolve(resolved) === path.resolve(expectedTarget);
+}
+
+function installPiSkillsPayload(mode, sourceDir, destPath) {
+  if (mode === 'symlink') {
+    fs.symlinkSync(sourceDir, destPath, 'dir');
+  } else {
+    copyDirRecursive(sourceDir, destPath);
+  }
+}
+
 function installOpencode(ctx) {
   const { say, note, warn, opts, repoRoot, results } = ctx;
   results.detected++;
@@ -795,6 +820,151 @@ function installOpenclaw(ctx) {
   if (r.ok) results.installed.push('openclaw');
   else results.failed.push(['openclaw', r.reason || 'install failed']);
 
+  process.stdout.write('\n');
+}
+
+// pi-coding-agent (earendil-works) — native install.
+// Pi discovers skills from `~/.pi/agent/skills/<pack>/SKILL.md` and reads
+// `~/.pi/agent/AGENTS.md` as always-on rules. No `npx skills add` integration
+// exists upstream — install is a symlink for git checkouts, a copy for
+// package/npx installs, plus a fenced ruleset block. Re-runs are idempotent:
+// the skills pack is recreated only if missing or
+// dangling, and the AGENTS.md block is detected via the same marker fence
+// the opencode installer uses (re-using OPENCODE_AGENTS_MD_BEGIN/END so a
+// later --uninstall can strip our block cleanly).
+function installPi(ctx) {
+  const { say, note, warn, opts, repoRoot, results } = ctx;
+  results.detected++;
+  say('→ pi-coding-agent detected');
+
+  if (!repoRoot) {
+    warn('  pi install requires a local clone or package copy of the caveman repo.');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only pi');
+    results.failed.push(['pi', 'native install requires local repo/package root']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  const home = os.homedir();
+  const piAgentDir = path.join(home, '.pi', 'agent');
+  const piSkillsDir = path.join(piAgentDir, 'skills');
+  const packName = 'caveman';
+  const linkPath = path.join(piSkillsDir, packName);
+  const linkTarget = path.join(repoRoot, 'skills');
+  // Local git checkouts get a symlink so `git pull` updates installed skills.
+  // Package/npx installs have no durable checkout, so copy the skills pack
+  // instead of leaving ~/.pi pointing at a cache/temp directory.
+  const installMode = fs.existsSync(path.join(repoRoot, '.git')) ? 'symlink' : 'copy';
+
+  const agentsMd = path.join(piAgentDir, 'AGENTS.md');
+
+  if (opts.dryRun) {
+    note(`  would mkdir -p ${piSkillsDir}`);
+    note(installMode === 'symlink'
+      ? `  would symlink ${linkPath} -> ${linkTarget}`
+      : `  would copy ${linkTarget}/ -> ${linkPath}/`);
+    note(`  would append caveman ruleset (fenced) to ${agentsMd} (creating if absent)`);
+    results.installed.push('pi');
+    process.stdout.write('\n');
+    return;
+  }
+
+  try {
+    // 1. Skills payload: symlink for git checkouts, copy for package/npx.
+    fs.mkdirSync(piSkillsDir, { recursive: true });
+    const installPayload = (verb) => {
+      installPiSkillsPayload(installMode, linkTarget, linkPath);
+      process.stdout.write(installMode === 'symlink'
+        ? `  ${verb}: ${linkPath} -> ${linkTarget}\n`
+        : `  ${verb}: ${linkPath}/\n`);
+    };
+
+    let existing = null;
+    try { existing = fs.lstatSync(linkPath); } catch (_) { existing = null; }
+    if (existing) {
+      if (existing.isSymbolicLink()) {
+        if (installMode === 'symlink' && symlinkPointsTo(linkPath, linkTarget)) {
+          if (opts.force) {
+            fs.unlinkSync(linkPath);
+            installPayload('re-symlinked');
+          } else {
+            note(`  ${linkPath} already points at ${linkTarget} (use --force to replace)`);
+          }
+        } else if (opts.force) {
+          fs.unlinkSync(linkPath);
+          installPayload(installMode === 'symlink' ? 're-symlinked' : 'replaced symlink with copied pack');
+        } else {
+          let raw = '<unknown>';
+          try { raw = fs.readlinkSync(linkPath); } catch (_) {}
+          warn(`  ${linkPath} points elsewhere (${raw}) — refusing to overwrite (use --force to replace)`);
+          results.failed.push(['pi', `${linkPath} points elsewhere; use --force`]);
+          process.stdout.write('\n');
+          return;
+        }
+      } else if (existing.isDirectory()) {
+        if (piPackLooksManaged(linkPath)) {
+          if (opts.force) {
+            fs.rmSync(linkPath, { recursive: true, force: true });
+            installPayload(installMode === 'symlink' ? 'replaced copied pack with symlink' : 're-copied');
+          } else {
+            note(`  ${linkPath} already contains a caveman skills pack (use --force to replace)`);
+          }
+        } else if (opts.force) {
+          fs.rmSync(linkPath, { recursive: true, force: true });
+          installPayload(installMode === 'symlink' ? 'replaced directory with symlink' : 'replaced directory with copied pack');
+        } else {
+          warn(`  ${linkPath} exists as a real directory — refusing to overwrite (use --force to replace)`);
+          results.failed.push(['pi', `${linkPath} is a real directory; use --force`]);
+          process.stdout.write('\n');
+          return;
+        }
+      } else {
+        warn(`  ${linkPath} exists and is not a directory/symlink — refusing to touch`);
+        results.failed.push(['pi', `${linkPath} is not a directory/symlink`]);
+        process.stdout.write('\n');
+        return;
+      }
+    } else {
+      installPayload(installMode === 'symlink' ? 'symlinked' : 'copied');
+    }
+
+    // 2. AGENTS.md — append a fenced caveman block. Idempotency mirrors the
+    //    opencode path exactly: BEGIN + END markers allow --uninstall to
+    //    strip just our block even when the user has authored content
+    //    above and below it.
+    const ruleBody = fs.readFileSync(path.join(repoRoot, 'src', 'rules', 'caveman-activate.md'), 'utf8').trimEnd() + '\n';
+    const fencedBlock = `${OPENCODE_AGENTS_MD_BEGIN}\n${ruleBody}${OPENCODE_AGENTS_MD_END}\n`;
+    fs.mkdirSync(piAgentDir, { recursive: true });
+    if (fs.existsSync(agentsMd)) {
+      const existingBody = fs.readFileSync(agentsMd, 'utf8');
+      const alreadyFenced = existingBody.includes(OPENCODE_AGENTS_MD_BEGIN)
+        && existingBody.includes(OPENCODE_AGENTS_MD_END);
+      if (alreadyFenced) {
+        note(`  ${agentsMd} already contains the caveman ruleset`);
+      } else if (existingBody.includes(OPENCODE_AGENTS_MD_SENTINEL)) {
+        note(`  ${agentsMd} contains a legacy (un-fenced) caveman block — leaving as-is`);
+        note('  re-run with --force to replace it with a fenced block');
+        if (opts.force) {
+          // Legacy path didn't fence, so we can't isolate the block — full
+          // rewrite is the only safe option under --force.
+          fs.writeFileSync(agentsMd, fencedBlock, { mode: 0o644 });
+          process.stdout.write(`  rewrote ${agentsMd} with fenced caveman block\n`);
+        }
+      } else {
+        const sep = existingBody.endsWith('\n\n') ? '' : (existingBody.endsWith('\n') ? '\n' : '\n\n');
+        fs.writeFileSync(agentsMd, existingBody + sep + fencedBlock, { mode: 0o644 });
+        process.stdout.write(`  appended caveman ruleset to ${agentsMd}\n`);
+      }
+    } else {
+      fs.writeFileSync(agentsMd, fencedBlock, { mode: 0o644 });
+      process.stdout.write(`  installed: ${agentsMd}\n`);
+    }
+
+    results.installed.push('pi');
+  } catch (e) {
+    warn('  pi install failed: ' + (e && e.message || e));
+    results.failed.push(['pi', (e && e.message) || 'unknown error']);
+  }
   process.stdout.write('\n');
 }
 
@@ -1188,6 +1358,60 @@ function uninstall(ctx) {
     if (r.touched) ok('  pruned caveman entries from OpenClaw workspace');
   }
 
+  // pi-coding-agent native install — remove the skills payload and strip
+  // the fenced caveman block from ~/.pi/agent/AGENTS.md. Only remove the
+  // payload when the AGENTS marker proves caveman installed it; this avoids
+  // deleting a user-authored ~/.pi/agent/skills/caveman symlink/dir that just
+  // happens to share the same name.
+  const piHome = os.homedir();
+  const piPack = path.join(piHome, '.pi', 'agent', 'skills', 'caveman');
+  const piAgentsMd = path.join(piHome, '.pi', 'agent', 'AGENTS.md');
+  const piMdPresent = (() => {
+    if (!fs.existsSync(piAgentsMd)) return false;
+    const body = fs.readFileSync(piAgentsMd, 'utf8');
+    return body.includes(OPENCODE_AGENTS_MD_BEGIN) && body.includes(OPENCODE_AGENTS_MD_END);
+  })();
+  const piPackKind = (() => {
+    try {
+      const st = fs.lstatSync(piPack);
+      if (st.isSymbolicLink()) return 'symlink';
+      if (st.isDirectory() && piPackLooksManaged(piPack)) return 'copied-pack';
+    } catch (_) {}
+    return null;
+  })();
+
+  if (piMdPresent && piPackKind) {
+    if (!opts.dryRun) {
+      try {
+        if (piPackKind === 'symlink') fs.unlinkSync(piPack);
+        else fs.rmSync(piPack, { recursive: true, force: true });
+      } catch (_) {}
+    }
+    note(`  removed ${piPack}`);
+  } else if (piPackKind && !piMdPresent) {
+    note(`  left ${piPack} in place (no caveman AGENTS.md marker found)`);
+  }
+
+  if (piMdPresent) {
+    const body = fs.readFileSync(piAgentsMd, 'utf8');
+    const begin = body.indexOf(OPENCODE_AGENTS_MD_BEGIN);
+    const end = body.indexOf(OPENCODE_AGENTS_MD_END);
+    if (begin !== -1 && end !== -1 && end > begin) {
+      const before = body.slice(0, begin).replace(/\n+$/, '\n');
+      const after = body.slice(end + OPENCODE_AGENTS_MD_END.length).replace(/^\n+/, '\n');
+      let next = (before + after).trimEnd();
+      next = next ? next + '\n' : '';
+      if (!opts.dryRun) {
+        if (next === '') {
+          try { fs.unlinkSync(piAgentsMd); } catch (_) {}
+        } else {
+          fs.writeFileSync(piAgentsMd, next, { mode: 0o644 });
+        }
+      }
+      note(next === '' ? `  removed ${piAgentsMd}` : `  stripped caveman block from ${piAgentsMd}`);
+    }
+  }
+
   // Flag file
   const flag = path.join(configDir, '.caveman-active');
   if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
@@ -1343,6 +1567,7 @@ async function main() {
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
+    if (prov.id === 'pi')       { installPi(ctx); continue; }
     if (prov.profile)           { installViaSkills(ctx, prov); continue; }
   }
 
