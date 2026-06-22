@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "./hooks/caveman-session-start.js"
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "./hooks/caveman-prompt-submit.js"
+      }
+    ]
+  }
+}

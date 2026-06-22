@@ -105,6 +105,14 @@ npx -y github:JuliusBrussee/caveman -- --uninstall
 node bin/install.js --uninstall
 ```
 
+## Cursor (CLI + IDE)
+
+Cursor uses a separate user hook surface at `~/.cursor/hooks.json`. See [`cursor/README.md`](cursor/README.md) for the adapter layout and install/uninstall notes. The unified installer wires these when you run:
+
+```bash
+node bin/install.js --only cursor
+```
+
 Or manually:
 1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, and `caveman-statusline.{sh,ps1}`.
 2. Remove the SessionStart, UserPromptSubmit, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
