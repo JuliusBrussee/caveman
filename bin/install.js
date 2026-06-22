@@ -24,6 +24,7 @@ const crypto = require('crypto');
 
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
+const CURSOR = require('./lib/cursor');
 const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
 
 const REPO = 'JuliusBrussee/caveman';
@@ -540,7 +541,7 @@ function installGemini(ctx) {
 }
 
 function installViaSkills(ctx, prov) {
-  const { say, opts, results } = ctx;
+  const { say, note, opts, results, repoRoot } = ctx;
   results.detected++;
   say(`→ ${prov.label} detected`);
   // --skill '*' --yes: skip the upstream skill-selection TUI and confirmation
@@ -555,8 +556,20 @@ function installViaSkills(ctx, prov) {
   // documented form for "install every skill into a specific agent".
   const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
   const r = runSpawn('npx', args, null, opts.dryRun);
-  if ((r.status || 0) === 0) results.installed.push(prov.id);
-  else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
+  if ((r.status || 0) === 0) {
+    results.installed.push(prov.id);
+    if (prov.id === 'cursor' && opts.withHooks !== false) {
+      say('  → installing Cursor hooks (~/.cursor/hooks.json)');
+      const hookResult = CURSOR.installCursorHooks({
+        repoRoot,
+        dryRun: opts.dryRun,
+        log: { note: (s) => note(s) },
+      });
+      if (hookResult.kind === 'ok') results.installed.push('cursor-hooks');
+      else if (hookResult.kind === 'skip') results.skipped.push(['cursor-hooks', hookResult.why || 'already wired']);
+      else results.failed.push(['cursor-hooks', hookResult.why || 'install failed']);
+    }
+  } else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
   process.stdout.write('\n');
 }
 
@@ -1188,6 +1201,9 @@ function uninstall(ctx) {
     if (r.touched) ok('  pruned caveman entries from OpenClaw workspace');
   }
 
+  // Cursor user hooks (~/.cursor/hooks.json + adapters).
+  CURSOR.uninstallCursorHooks({ dryRun: opts.dryRun, log: { note: (s) => note(s) } });
+
   // Flag file
   const flag = path.join(configDir, '.caveman-active');
   if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
@@ -1253,8 +1269,9 @@ FLAGS
   --all                 Turn on hooks + init. (mcp-shrink needs an upstream;
                         pass --with-mcp-shrink="<cmd>" to add it.)
   --minimal             Just the plugin/extension install.
-  --with-hooks          Claude Code: install SessionStart/UserPromptSubmit hooks
-                        + statusline badge. (Default ON.)
+  --with-hooks          Claude Code: SessionStart/UserPromptSubmit hooks +
+                        statusline badge. Cursor: ~/.cursor/hooks.json +
+                        CLI statusLine when absent. (Default ON.)
   --no-hooks            Skip the hooks installer.
   --with-init           Write per-repo IDE rule files into \$PWD.
   --with-mcp-shrink="<upstream cmd>"
