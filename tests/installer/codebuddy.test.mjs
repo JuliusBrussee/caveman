@@ -1,4 +1,4 @@
-// CodeBuddy Code installer — dry-run, fresh install, uninstall, --list.
+// CodeBuddy installer — dry-run, fresh install, uninstall, --list.
 //
 // Detection of codebuddy is gated behind `command -v codebuddy`, so we prepend
 // a tmpdir with a no-op `codebuddy` shim to PATH. The shim also handles
@@ -61,7 +61,7 @@ test('--list shows codebuddy in provider matrix', () => {
   });
   assert.equal(r.status, 0);
   assert.match(r.stdout, /codebuddy/);
-  assert.match(r.stdout, /CodeBuddy Code/);
+  assert.match(r.stdout, /CodeBuddy/);
   assert.match(r.stdout, /codebuddy plugin install/);
 });
 
@@ -75,7 +75,7 @@ test('dry-run --only codebuddy shows codebuddy-specific actions', () => {
       NO_COLOR: '1',
     });
     assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);
-    assert.match(r.stdout, /CodeBuddy Code detected/);
+    assert.match(r.stdout, /CodeBuddy detected/);
     assert.match(r.stdout, /would run: codebuddy plugin marketplace add/);
     assert.match(r.stdout, /would run: codebuddy plugin install caveman@caveman/);
     assert.match(r.stdout, /\.codebuddy\/hooks/);

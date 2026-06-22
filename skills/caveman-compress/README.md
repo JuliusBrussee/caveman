@@ -55,7 +55,7 @@ All validations passed ✅ — headings, code blocks, URLs, file paths preserved
 </td>
 <td width="50%">
 
-### 🪨 Caveman (285 tokens)
+### <img src="../../docs/assets/dancing-rock.svg" width="20" height="20" alt="rock"/> Caveman (285 tokens)
 
 > "Prefer TypeScript strict mode always. No `any` unless unavoidable — comment why if used. Proper types catch bugs early."
 

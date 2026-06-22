@@ -1,4 +1,5 @@
 # Detect CodeBuddy vs Claude config dir
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 if ($env:CODEBUDDY_CONFIG_DIR) {
     $ConfigDir = $env:CODEBUDDY_CONFIG_DIR
 } elseif ($env:CODEBUDDY_PLUGIN_ROOT) {
@@ -59,7 +60,7 @@ if ($env:CAVEMAN_STATUSLINE_SAVINGS -ne "0") {
             $SavingsItem = Get-Item -LiteralPath $SavingsFile -Force -ErrorAction Stop
             if (-not ($SavingsItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and
                 $SavingsItem.Length -le 64) {
-                $Savings = (Get-Content -LiteralPath $SavingsFile -Raw -ErrorAction Stop).TrimEnd()
+                $Savings = (Get-Content -LiteralPath $SavingsFile -Encoding UTF8 -Raw -ErrorAction Stop).TrimEnd()
                 $Savings = ($Savings -replace '[\x00-\x1F]', '')
                 if ($Savings.Length -gt 0) {
                     [Console]::Write(" ${Esc}[38;5;172m$Savings${Esc}[0m")

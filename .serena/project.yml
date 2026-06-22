@@ -1,0 +1,133 @@
+# the name by which the project can be referenced within Serena
+project_name: "caveman"
+
+
+# list of languages for which language servers are started; choose from:
+#   al                  angular             ansible             bash                clojure
+#   cpp                 cpp_ccls            crystal             csharp              csharp_omnisharp
+#   dart                elixir              elm                 erlang              fortran
+#   fsharp              go                  groovy              haskell             haxe
+#   hlsl                html                java                json                julia
+#   kotlin              lean4               lua                 luau                markdown
+#   matlab              msl                 nix                 ocaml               pascal
+#   perl                php                 php_phpactor        powershell          python
+#   python_jedi         python_ty           r                   rego                ruby
+#   ruby_solargraph     rust                scala               scss                solidity
+#   svelte              swift               systemverilog       terraform           toml
+#   typescript          typescript_vts      vue                 yaml                zig
+#   (This list may be outdated. For the current list, see values of Language enum here:
+#   https://github.com/oraios/serena/blob/main/src/solidlsp/ls_config.py
+#   For some languages, there are alternative language servers, e.g. csharp_omnisharp, ruby_solargraph.)
+# Note:
+#   - For C, use cpp
+#   - For JavaScript, use typescript
+#   - For Angular projects, use angular (subsumes typescript+html; requires `npm install` in the project root)
+#   - For Svelte projects, use svelte (subsumes typescript/javascript for .svelte projects; requires npm)
+#   - For SCSS / Sass / plain CSS, use scss (some-sass-language-server handles all three)
+#   - For Free Pascal/Lazarus, use pascal
+# Special requirements:
+#   Some languages require additional setup/installations.
+#   See here for details: https://oraios.github.io/serena/01-about/020_programming-languages.html#language-servers
+# When using multiple languages, the first language server that supports a given file will be used for that file.
+# The first language is the default language and the respective language server will be used as a fallback.
+# Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
+languages:
+- python
+
+# the encoding used by text files in the project
+# For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
+encoding: "utf-8"
+
+# line ending convention to use when writing source files.
+# Possible values: unset (use global setting), "lf", "crlf", or "native" (platform default)
+# This does not affect Serena's own files (e.g. memories and configuration files), which always use native line endings.
+line_ending:
+
+# The language backend to use for this project.
+# If not set, the global setting from serena_config.yml is used.
+# Valid values: LSP, JetBrains
+# Note: the backend is fixed at startup. If a project with a different backend
+# is activated post-init, an error will be returned.
+language_backend:
+
+# whether to use project's .gitignore files to ignore files
+ignore_all_files_in_gitignore: true
+
+# advanced configuration option allowing to configure language server-specific options.
+# Maps the language key to the options.
+# Have a look at the docstring of the constructors of the LS implementations within solidlsp (e.g., for C# or PHP) to see which options are available.
+# No documentation on options means no options are available.
+ls_specific_settings: {}
+
+# list of additional workspace folder paths for cross-package reference support (e.g. in monorepos).
+# Paths can be absolute or relative to the project root.
+# Each folder is registered as an LSP workspace folder, enabling language servers to discover
+# symbols and references across package boundaries.
+# Currently supported for: TypeScript.
+# Example:
+#   additional_workspace_folders:
+#     - ../sibling-package
+#     - ../shared-lib
+additional_workspace_folders: []
+
+# list of additional paths to ignore in this project.
+# Same syntax as gitignore, so you can use * and **.
+# Note: global ignored_paths from serena_config.yml are also applied additively.
+ignored_paths: []
+
+# whether the project is in read-only mode
+# If set to true, all editing tools will be disabled and attempts to use them will result in an error
+# Added on 2025-04-18
+read_only: false
+
+# list of tool names to exclude.
+# This extends the existing exclusions (e.g. from the global configuration)
+# Find the list of tools here: https://oraios.github.io/serena/01-about/035_tools.html
+excluded_tools: []
+
+# list of tools to include that would otherwise be disabled (particularly optional tools that are disabled by default).
+# This extends the existing inclusions (e.g. from the global configuration).
+# Find the list of tools here: https://oraios.github.io/serena/01-about/035_tools.html
+included_optional_tools: []
+
+# fixed set of tools to use as the base tool set (if non-empty), replacing Serena's default set of tools.
+# This cannot be combined with non-empty excluded_tools or included_optional_tools.
+# Find the list of tools here: https://oraios.github.io/serena/01-about/035_tools.html
+fixed_tools: []
+
+# list of mode names that are to be activated by default, overriding the setting in the global configuration.
+# The full set of modes to be activated is base_modes (from global config) + default_modes + added_modes.
+# If the setting is undefined/empty, the default_modes from the global configuration (serena_config.yml) apply.
+# Otherwise, this overrides the setting from the global configuration (serena_config.yml).
+# Therefore, you can set this to [] if you do not want the default modes defined in the global config to apply
+# for this project.
+# This setting can, in turn, be overridden by CLI parameters (--mode).
+# See https://oraios.github.io/serena/02-usage/050_configuration.html#modes
+default_modes:
+
+# list of mode names to be activated additionally for this project, e.g. ["query-projects"]
+# The full set of modes to be activated is base_modes (from global config) + default_modes + added_modes.
+# See https://oraios.github.io/serena/02-usage/050_configuration.html#modes
+added_modes:
+
+# initial prompt for the project. It will always be given to the LLM upon activating the project
+# (contrary to the memories, which are loaded on demand).
+initial_prompt: ""
+
+# time budget (seconds) per tool call for the retrieval of additional symbol information
+# such as docstrings or parameter information.
+# This overrides the corresponding setting in the global configuration; see the documentation there.
+# If null or missing, use the setting from the global configuration.
+symbol_info_budget:
+
+# list of regex patterns which, when matched, mark a memory entry as read‑only.
+# Extends the list from the global configuration, merging the two lists.
+read_only_memory_patterns: []
+
+# list of regex patterns for memories to completely ignore.
+# Matching memories will not appear in list_memories or activate_project output
+# and cannot be accessed via read_memory or write_memory.
+# To access ignored memory files, use the read_file tool on the raw file path.
+# Extends the list from the global configuration, merging the two lists.
+# Example: ["_archive/.*", "_episodes/.*"]
+ignored_memory_patterns: []

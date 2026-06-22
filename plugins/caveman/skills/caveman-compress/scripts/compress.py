@@ -8,13 +8,36 @@ Usage:
 
 import os
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import List
 
 OUTER_FENCE_REGEX = re.compile(
     r"\A\s*(`{3,}|~{3,})[^\n]*\n(.*)\n\1\s*\Z", re.DOTALL
 )
+
+# YAML frontmatter: starts at file start with --- on its own line, ends with --- on its own line.
+# Captures the entire block (including delimiters and trailing newline) and the body after.
+FRONTMATTER_REGEX = re.compile(
+    r"\A(---\r?\n.*?\r?\n---\r?\n)(.*)", re.DOTALL
+)
+
+
+def split_frontmatter(text: str):
+    """Split YAML frontmatter from body. Returns (frontmatter, body).
+
+    Memory files (and many other markdown docs) start with a YAML frontmatter
+    block delimited by `---` lines. The compression LLM has a habit of stripping
+    or rewriting these despite preserve-structure rules in the prompt — so we
+    surgically remove the frontmatter before compression and prepend it back
+    verbatim to the output. Files without frontmatter pass through unchanged.
+    """
+    m = FRONTMATTER_REGEX.match(text)
+    if m:
+        return m.group(1), m.group(2)
+    return "", text
 
 # Filenames and paths that almost certainly hold secrets or PII. Compressing
 # them ships raw bytes to the Anthropic API — a third-party data boundary that
@@ -41,6 +64,30 @@ SENSITIVE_NAME_TOKENS = (
     "secret", "credential", "password", "passwd",
     "apikey", "accesskey", "token", "privatekey",
 )
+
+
+def backup_dir_for(filepath: Path) -> Path:
+    """Resolve the out-of-tree backup directory for a given source file.
+
+    Backups must live OUTSIDE the source directory so skill auto-loaders
+    (Claude Code rules/, opencode instructions/, etc.) stop re-ingesting the
+    `.original.md` copies as live files. Base dir is platform-aware:
+      - Windows: %LOCALAPPDATA%\\caveman-compress\\backups
+      - else:    $XDG_DATA_HOME/caveman-compress/backups if set,
+                 else ~/.local/share/caveman-compress/backups
+
+    The source file's parent-dir name is mirrored under the base to reduce
+    cross-project collisions (e.g. two `task.md` files in different repos).
+    """
+    if os.name == "nt" or sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+        base = base / "caveman-compress" / "backups"
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME")
+        base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+        base = base / "caveman-compress" / "backups"
+    return base / filepath.parent.name
 
 
 def is_sensitive_path(filepath: Path) -> bool:
@@ -73,6 +120,18 @@ MAX_RETRIES = 2
 
 
 def call_claude(prompt: str) -> str:
+    """Send a prompt to Claude.
+
+    Prefers the Anthropic SDK when ANTHROPIC_API_KEY is set; otherwise falls
+    back to the ``claude --print`` CLI (which handles desktop auth).
+
+    On Windows the CLI subprocess decoding defaults to the system codepage
+    (cp1251 / cp1252) and crashes on UTF-8 output — see issue #152. Pinning
+    ``encoding="utf-8"`` with ``errors="replace"`` matches the CLI's actual
+    native I/O and prevents the UnicodeDecodeError before validation can
+    report. Windows users with non-ASCII content can also set
+    ``ANTHROPIC_API_KEY`` to route through the SDK and skip the subprocess.
+    """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if api_key:
         try:
@@ -87,14 +146,22 @@ def call_claude(prompt: str) -> str:
             return strip_llm_wrapper(msg.content[0].text.strip())
         except ImportError:
             pass  # anthropic not installed, fall back to CLI
-    # Fallback: use claude CLI (handles desktop auth)
+    # Fallback: use claude CLI (handles desktop auth).
+    # Resolve binary via shutil.which so Windows .cmd/.bat shims (e.g.
+    # %APPDATA%\npm\claude.CMD) work without shell=True. On POSIX,
+    # shutil.which returns the same absolute path as the implicit lookup,
+    # so this is a no-op there. Falls back to bare "claude" if not found
+    # on PATH so subprocess raises a clear FileNotFoundError.
+    claude_bin = shutil.which("claude") or "claude"
     try:
         result = subprocess.run(
-            ["claude", "--print"],
+            [claude_bin, "--print"],
             input=prompt,
             text=True,
             capture_output=True,
             check=True,
+            encoding="utf-8",
+            errors="replace",
         )
         return strip_llm_wrapper(result.stdout.strip())
     except subprocess.CalledProcessError as e:
@@ -180,7 +247,12 @@ def compress_file(filepath: Path) -> bool:
         return False
 
     original_text = filepath.read_text(errors="ignore")
-    backup_path = filepath.with_name(filepath.stem + ".original.md")
+    # Store backup outside the source directory so skill auto-loaders don't
+    # re-ingest the `.original.md` copy as a live file. Mirror the source's
+    # parent-dir name + stem under a platform-aware base to reduce collisions.
+    backup_dir = backup_dir_for(filepath)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / (filepath.stem + ".original.md")
 
     if not original_text.strip():
         print("❌ Refusing to compress: file is empty or whitespace-only.")
@@ -193,20 +265,36 @@ def compress_file(filepath: Path) -> bool:
         print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
         return False
 
-    # Step 1: Compress
-    print("Compressing with Claude...")
-    compressed = call_claude(build_compress_prompt(original_text))
+    # Split YAML frontmatter off before compression. Claude tends to strip or
+    # rewrite frontmatter despite preserve-structure rules; we keep it verbatim
+    # by removing it from the input and re-prepending it to the output.
+    frontmatter, body = split_frontmatter(original_text)
+    if frontmatter:
+        print(f"Detected YAML frontmatter ({len(frontmatter)} chars) — preserving verbatim")
 
-    if compressed is None or not compressed.strip():
+    if not body.strip():
+        print("❌ Refusing to compress: body is empty after frontmatter removal.")
+        return False
+
+    # Step 1: Compress (body only, frontmatter excluded)
+    print("Compressing with Claude...")
+    compressed_body = call_claude(build_compress_prompt(body))
+
+    if compressed_body is None or not compressed_body.strip():
         print("❌ Compression aborted: Claude returned an empty response.")
         print("   Original file is untouched (no backup created).")
         return False
 
-    if compressed.strip() == original_text.strip():
+    # Compare the BODY (not the whole file) — frontmatter is preserved verbatim
+    # and would never change, so identity must be judged on the compressible part.
+    if compressed_body.strip() == body.strip():
         print("❌ Compression aborted: output is identical to input.")
         print("   Likely causes: Claude refused, returned the prompt verbatim, or the file is")
         print("   already in caveman form. Original file is untouched (no backup created).")
         return False
+
+    # Reassemble: frontmatter (verbatim) + compressed body
+    compressed = frontmatter + compressed_body
 
     # Save original as backup, then verify the backup readback before
     # touching the input file. If the filesystem dropped bytes (encoding,

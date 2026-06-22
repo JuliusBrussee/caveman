@@ -1,5 +1,5 @@
 #!/bin/bash
-# caveman — statusline badge script for Claude Code / CodeBuddy Code
+# caveman — statusline badge script for Claude Code / CodeBuddy
 # Reads the caveman mode flag file and outputs a colored badge.
 #
 # Usage in ~/.claude/settings.json or ~/.codebuddy/settings.json:

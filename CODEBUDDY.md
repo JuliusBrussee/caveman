@@ -19,7 +19,7 @@ README = product front door. Non-technical people read it to decide if caveman w
 
 ## Project overview
 
-Caveman makes AI coding agents respond in compressed caveman-style prose — cuts ~65-75% output tokens, full technical accuracy. Ships as Claude Code plugin, CodeBuddy Code plugin, Codex plugin, Gemini CLI extension, agent rule files for Cursor, Windsurf, Cline, Copilot, 40+ others via `npx skills`.
+Caveman makes AI coding agents respond in compressed caveman-style prose — cuts ~65-75% output tokens, full technical accuracy. Ships as Claude Code plugin, CodeBuddy plugin, Codex plugin, Gemini CLI extension, agent rule files for Cursor, Windsurf, Cline, Copilot, 40+ others via `npx skills`.
 
 ---
 
@@ -33,7 +33,7 @@ caveman/
 ├── INSTALL.md                   # Per-agent install commands
 ├── CONTRIBUTING.md              # Dev guide
 ├── CLAUDE.md                    # Claude Code maintainer instructions
-├── CODEBUDDY.md                 # This file (CodeBuddy Code maintainer instructions)
+├── CODEBUDDY.md                 # This file (CodeBuddy maintainer instructions)
 ├── AGENTS.md / GEMINI.md        # Autodiscovery files (must stay at root)
 │
 ├── install.sh / install.ps1     # 30-line shims → bin/install.js
@@ -55,13 +55,13 @@ caveman/
 ├── commands/                    # Codex/Gemini TOML command stubs (root for plugin auto-discovery)
 │
 ├── src/                         # Internal source — not auto-discovered by plugin
-│   ├── hooks/                   # Claude Code / CodeBuddy Code hooks (installer reads here)
+│   ├── hooks/                   # Claude Code / CodeBuddy hooks (installer reads here)
 │   ├── rules/                   # Auto-activation rule body (single source)
 │   ├── tools/                   # caveman-init.js (per-repo rule writer)
 │   └── mcp-servers/             # caveman-shrink npm-published MCP middleware
 │
 ├── .claude-plugin/              # Claude Code plugin manifest (REQUIRED at root)
-├── .codebuddy-plugin/           # CodeBuddy Code plugin manifest (REQUIRED at root)
+├── .codebuddy-plugin/           # CodeBuddy plugin manifest (REQUIRED at root)
 ├── plugins/caveman/             # Claude Code plugin distribution (CI-mirrored)
 │   ├── skills/                  # ← from skills/
 │   └── agents/                  # ← from agents/
@@ -78,7 +78,7 @@ caveman/
 
 ---
 
-## Hook system (CodeBuddy Code)
+## Hook system (CodeBuddy)
 
 Identical to Claude Code hooks. Three hooks in `src/hooks/` plus a `caveman-config.js` shared module and a `package.json` CommonJS marker. Communicate via flag file at `$CODEBUDDY_CONFIG_DIR/.caveman-active` (falls back to `~/.codebuddy/.caveman-active`).
 

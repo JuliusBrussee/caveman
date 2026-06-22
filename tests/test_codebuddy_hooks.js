@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Tests for CodeBuddy Code hook support — verifies that all hook scripts
+// Tests for CodeBuddy hook support — verifies that all hook scripts
 // correctly use ~/.codebuddy when CODEBUDDY_CONFIG_DIR or CODEBUDDY_PLUGIN_ROOT
 // environment variables are set.
 //
@@ -42,7 +42,7 @@ function codebuddyEnv(tmp, extra = {}) {
   return env;
 }
 
-console.log('CodeBuddy Code hooks tests\n');
+console.log('CodeBuddy hooks tests\n');
 
 // ── getAgentConfigDir priority tests ─────────────────────────────────────
 
