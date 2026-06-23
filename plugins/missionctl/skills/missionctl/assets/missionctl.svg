@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="480" height="480" role="img" aria-label="missionctl signal">
+  <title>missionctl</title>
+  <rect width="480" height="480" rx="96" fill="#0d1b2a"/>
+  <rect x="232" y="232" width="16" height="150" rx="8" fill="#e0e1dd"/>
+  <circle cx="240" cy="232" r="26" fill="#41a7ff"/>
+  <path d="M196 196 A 62 62 0 0 0 196 268" fill="none" stroke="#e0e1dd" stroke-width="14" stroke-linecap="round"/>
+  <path d="M160 160 A 113 113 0 0 0 160 304" fill="none" stroke="#7ac4ff" stroke-width="14" stroke-linecap="round"/>
+  <path d="M284 196 A 62 62 0 0 1 284 268" fill="none" stroke="#e0e1dd" stroke-width="14" stroke-linecap="round"/>
+  <path d="M320 160 A 113 113 0 0 1 320 304" fill="none" stroke="#7ac4ff" stroke-width="14" stroke-linecap="round"/>
+</svg>

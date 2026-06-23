@@ -1,0 +1,30 @@
+{
+  "name": "missionctl-shrink",
+  "version": "0.1.0",
+  "description": "MCP proxy that compresses prose fields (tool descriptions, etc.) using missionctl rules. Same accuracy, fewer context tokens.",
+  "license": "MIT",
+  "homepage": "https://github.com/dnl-re/missionctl",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dnl-re/missionctl.git",
+    "directory": "src/mcp-servers/missionctl-shrink"
+  },
+  "author": "dnl-re",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "missionctl",
+    "proxy",
+    "tokens"
+  ],
+  "main": "compress.js",
+  "bin": {
+    "missionctl-shrink": "index.js"
+  },
+  "files": [
+    "index.js",
+    "compress.js",
+    "README.md"
+  ]
+}

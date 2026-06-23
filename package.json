@@ -1,19 +1,22 @@
 {
-  "name": "caveman-installer",
+  "name": "missionctl-installer",
   "version": "0.1.0",
-  "description": "Caveman installer — detects your AI coding agents and installs caveman for each one.",
+  "description": "missionctl installer — detects your AI coding agents and installs missionctl for each one.",
   "license": "MIT",
-  "author": "Julius Brussee",
-  "homepage": "https://github.com/JuliusBrussee/caveman",
+  "author": "dnl-re",
+  "contributors": [
+    "Julius Brussee (original author of caveman, https://github.com/JuliusBrussee)"
+  ],
+  "homepage": "https://github.com/dnl-re/missionctl",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/JuliusBrussee/caveman.git"
+    "url": "git+https://github.com/dnl-re/missionctl.git"
   },
   "bugs": {
-    "url": "https://github.com/JuliusBrussee/caveman/issues"
+    "url": "https://github.com/dnl-re/missionctl/issues"
   },
   "bin": {
-    "caveman": "./bin/install.js"
+    "missionctl": "./bin/install.js"
   },
   "engines": {
     "node": ">=18"
@@ -28,7 +31,7 @@
     "skills/",
     "plugins/",
     "commands/",
-    "dist/caveman.skill",
+    "dist/missionctl.skill",
     "README.md",
     "LICENSE"
   ]

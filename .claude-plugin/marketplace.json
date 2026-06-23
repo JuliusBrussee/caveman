@@ -1,15 +1,15 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "caveman",
+  "name": "missionctl",
   "description": "Ultra-compressed communication mode for Claude Code. Cuts ~75% of tokens while keeping full technical accuracy.",
   "owner": {
-    "name": "Julius Brussee",
-    "url": "https://github.com/JuliusBrussee"
+    "name": "dnl-re",
+    "url": "https://github.com/dnl-re"
   },
   "plugins": [
     {
-      "name": "caveman",
-      "description": "Talk like caveman. Cut ~75% tokens. Keep all technical accuracy.",
+      "name": "missionctl",
+      "description": "Calm operational brevity. Cut ~75% tokens. Keep all technical accuracy.",
       "source": "./",
       "category": "productivity"
     }

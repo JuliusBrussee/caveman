@@ -21,7 +21,7 @@ Requires:
 Run: uv run python evals/llm_run.py
 
 Environment:
-  CAVEMAN_EVAL_MODEL  optional --model flag value passed through to claude
+  MISSIONCTL_EVAL_MODEL  optional --model flag value passed through to claude
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def run_claude(prompt: str, system: str | None = None) -> str:
     cmd = ["claude", "-p"]
     if system:
         cmd += ["--system-prompt", system]
-    if model := os.environ.get("CAVEMAN_EVAL_MODEL"):
+    if model := os.environ.get("MISSIONCTL_EVAL_MODEL"):
         cmd += ["--model", model]
     cmd.append(prompt)
     out = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -74,7 +74,7 @@ def main() -> None:
         "metadata": {
             "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "claude_cli_version": claude_version(),
-            "model": os.environ.get("CAVEMAN_EVAL_MODEL", "default"),
+            "model": os.environ.get("MISSIONCTL_EVAL_MODEL", "default"),
             "n_prompts": len(prompts),
             "terse_prefix": TERSE_PREFIX,
         },

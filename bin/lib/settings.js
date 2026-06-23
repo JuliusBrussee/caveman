@@ -1,7 +1,7 @@
-// caveman — JSONC-tolerant settings.json read/write + defensive hook validation.
+// missionctl — JSONC-tolerant settings.json read/write + defensive hook validation.
 //
 // Lifted in spirit from gsd-build/get-shit-done's stripJsonComments + readSettings.
-// Reused by bin/install.js and (optionally) by hooks/caveman-activate.js so a
+// Reused by bin/install.js and (optionally) by hooks/missionctl-activate.js so a
 // commented settings.json no longer crashes the installer or the runtime hooks.
 //
 // Public API:
@@ -9,9 +9,9 @@
 //   writeSettings(path, obj)       → atomic write with newline
 //   stripJsonComments(src)         → string with // and /* */ stripped (string-aware)
 //   validateHookFields(settings)   → mutates: drops malformed hook entries
-//   hasCavemanHook(settings, ev)   → idempotency probe
+//   hasmissionctlHook(settings, ev)   → idempotency probe
 //   addCommandHook(settings, ev, opts) → no-op if substring marker already present
-//   removeCavemanHooks(settings)   → uninstall helper
+//   removemissionctlHooks(settings)   → uninstall helper
 //
 // Pure stdlib, CommonJS, Node ≥14.
 
@@ -71,14 +71,14 @@ function readSettings(p) {
   let raw;
   try { raw = fs.readFileSync(p, 'utf8'); }
   catch (e) {
-    process.stderr.write(`caveman: cannot read ${p}: ${e.message}\n`);
+    process.stderr.write(`missionctl: cannot read ${p}: ${e.message}\n`);
     return null;
   }
   if (!raw.trim()) return {};
   try { return JSON.parse(raw); } catch (_) { /* fall through to JSONC */ }
   try { return JSON.parse(stripJsonComments(raw)); }
   catch (e) {
-    process.stderr.write(`caveman: warning — ${p} is not valid JSON or JSONC: ${e.message}\n`);
+    process.stderr.write(`missionctl: warning — ${p} is not valid JSON or JSONC: ${e.message}\n`);
     return null;
   }
 }
@@ -124,7 +124,7 @@ function validateHookFields(settings) {
 }
 
 // ── Idempotency probe ──────────────────────────────────────────────────────
-function hasCavemanHook(settings, event, marker = 'caveman') {
+function hasmissionctlHook(settings, event, marker = 'missionctl') {
   const arr = settings && settings.hooks && settings.hooks[event];
   if (!Array.isArray(arr)) return false;
   return arr.some(e =>
@@ -141,7 +141,7 @@ function addCommandHook(settings, event, opts) {
   if (!settings.hooks) settings.hooks = {};
   if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   const marker = opts.marker || opts.command;
-  if (hasCavemanHook(settings, event, marker)) return false;
+  if (hasmissionctlHook(settings, event, marker)) return false;
   const hook = { type: 'command', command: opts.command };
   if (typeof opts.timeout === 'number') hook.timeout = opts.timeout;
   if (typeof opts.statusMessage === 'string') hook.statusMessage = opts.statusMessage;
@@ -149,12 +149,12 @@ function addCommandHook(settings, event, opts) {
   return true;
 }
 
-// ── removeCavemanHooks ────────────────────────────────────────────────────
+// ── removemissionctlHooks ────────────────────────────────────────────────────
 // Strip every entry whose any hook command mentions `marker`. Empties events.
 // Tolerates malformed pre-existing settings (non-array hook lists, foreign
 // shapes) — those get dropped by validateHookFields first so we never call
 // .length / .filter on a non-array.
-function removeCavemanHooks(settings, marker = 'caveman') {
+function removemissionctlHooks(settings, marker = 'missionctl') {
   if (!settings || !settings.hooks) return 0;
   validateHookFields(settings);
   if (!settings.hooks) return 0; // validate may have deleted the whole tree
@@ -178,12 +178,12 @@ function removeCavemanHooks(settings, marker = 'caveman') {
 // absolute node path) and the basename is one of ours, rewrite to use
 // `absoluteNode` so GUI launchers with minimal PATH still find Node. Only
 // touches commands matching the exact bare-node shape — won't false-positive
-// on user-authored hooks that just happen to mention "caveman".
+// on user-authored hooks that just happen to mention "missionctl".
 const MANAGED_HOOK_BASENAMES = new Set([
-  'caveman-activate.js',
-  'caveman-mode-tracker.js',
-  'caveman-stats.js',
-  'caveman-statusline.sh',
+  'missionctl-activate.js',
+  'missionctl-mode-tracker.js',
+  'missionctl-stats.js',
+  'missionctl-statusline.sh',
 ]);
 function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
   if (!settings || !settings.hooks || !absoluteNode) return 0;
@@ -211,13 +211,13 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
 // Remove managed hook entries whose target script no longer exists on disk.
 //
 // Migrating an old manual install (settings.json hooks → ~/.claude/hooks/
-// caveman-*.js) to the Claude Code plugin disables/renames those local
+// missionctl-*.js) to the Claude Code plugin disables/renames those local
 // scripts but leaves the settings.json entries pointing at the now-missing
 // file. Claude Code then runs `node <missing>` every SessionStart /
 // UserPromptSubmit and crashes with `node:…/loader:1478 — Cannot find module
-// …caveman-activate.js` (issue #471). rewriteLegacyManagedHookCommands can't
+// …missionctl-activate.js` (issue #471). rewriteLegacyManagedHookCommands can't
 // help — it only matches the bare-node shape and these orphans are usually
-// absolute-node — and removeCavemanHooks runs only on uninstall.
+// absolute-node — and removemissionctlHooks runs only on uninstall.
 //
 // We extract the script path from any managed-looking command (bare- or
 // absolute-node, quoted or not), resolve it relative to dir if not absolute,
@@ -243,7 +243,7 @@ function pruneOrphanedManagedHooks(settings, configDir) {
 
   // A command is a missing managed target iff some token's BASENAME exactly
   // equals a managed script (exact match — not substring — so a user hook like
-  // `mycaveman-activate.js` is never touched) and that resolved path is absent.
+  // `mymissionctl-activate.js` is never touched) and that resolved path is absent.
   // Relative paths resolve against configDir; honors CLAUDE_CONFIG_DIR. Wrapped
   // so a malformed command or fs error never throws out of the prune pass.
   const targetMissing = (command) => {
@@ -300,9 +300,9 @@ module.exports = {
   readSettings,
   writeSettings,
   validateHookFields,
-  hasCavemanHook,
+  hasmissionctlHook,
   addCommandHook,
-  removeCavemanHooks,
+  removemissionctlHooks,
   rewriteLegacyManagedHookCommands,
   pruneOrphanedManagedHooks,
   claudeConfigDir,

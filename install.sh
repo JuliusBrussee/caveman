@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# caveman — installer shim.
+# missionctl — installer shim.
 #
 # Thin wrapper around bin/install.js (the unified Node installer). Every flag
 # you'd pass to bin/install.js can be passed here; we just forward them.
 #
 # One-line install:
-#   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --all
+#   curl -fsSL https://raw.githubusercontent.com/dnl-re/missionctl/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/dnl-re/missionctl/main/install.sh | bash -s -- --all
 #
 # Local clone:
 #   bash install.sh [flags]
@@ -17,11 +17,11 @@
 
 set -euo pipefail
 
-REPO="JuliusBrussee/caveman"
+REPO="dnl-re/missionctl"
 
 # Require Node ≥18. nvm is a common path; print a hint if missing.
 if ! command -v node >/dev/null 2>&1; then
-  echo "caveman: Node.js (≥18) required. Install:" >&2
+  echo "missionctl: Node.js (≥18) required. Install:" >&2
   echo "  macOS:  brew install node" >&2
   echo "  Linux:  see https://nodejs.org or use nvm (https://github.com/nvm-sh/nvm)" >&2
   exit 1
@@ -29,7 +29,7 @@ fi
 
 NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
 if [ "$NODE_MAJOR" -lt 18 ]; then
-  echo "caveman: Node $NODE_MAJOR too old. Need Node ≥18." >&2
+  echo "missionctl: Node $NODE_MAJOR too old. Need Node ≥18." >&2
   echo "  Upgrade: https://nodejs.org" >&2
   exit 1
 fi
@@ -47,7 +47,7 @@ fi
 # already forwards trailing args to the package, and a literal `--` tripped
 # bin/install.js's parseArgs as an unknown flag.
 if ! command -v npx >/dev/null 2>&1; then
-  echo "caveman: npx required (ships with Node ≥18). Reinstall Node.js." >&2
+  echo "missionctl: npx required (ships with Node ≥18). Reinstall Node.js." >&2
   exit 1
 fi
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Tests for src/mcp-servers/caveman-shrink/compress.js — pure-Node prose compressor.
+// Tests for src/mcp-servers/missionctl-shrink/compress.js — pure-Node prose compressor.
 // Run: node tests/test_mcp_shrink.js
 
 const path = require('path');
@@ -7,10 +7,10 @@ const assert = require('assert');
 
 const ROOT = path.resolve(__dirname, '..');
 const { compress, compressDescriptionsInPlace } = require(
-  path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink', 'compress.js')
+  path.join(ROOT, 'src', 'mcp-servers', 'missionctl-shrink', 'compress.js')
 );
 const { getSpawnOptions } = require(
-  path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink', 'spawn-options.js')
+  path.join(ROOT, 'src', 'mcp-servers', 'missionctl-shrink', 'spawn-options.js')
 );
 
 let passed = 0;

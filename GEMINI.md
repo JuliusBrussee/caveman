@@ -1,4 +1,4 @@
-@./skills/caveman/SKILL.md
-@./skills/caveman-commit/SKILL.md
-@./skills/caveman-review/SKILL.md
-@./skills/caveman-compress/SKILL.md
+@./skills/missionctl/SKILL.md
+@./skills/missionctl-commit/SKILL.md
+@./skills/missionctl-review/SKILL.md
+@./skills/missionctl-compress/SKILL.md

@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "skills" / "caveman-compress"))
+sys.path.insert(0, str(REPO_ROOT / "skills" / "missionctl-compress"))
 
 from scripts import compress as compress_mod  # noqa: E402
 

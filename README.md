@@ -1,17 +1,17 @@
 <p align="center">
-  <img src="https://em-content.zobj.net/source/apple/391/rock_1faa8.png" width="120" />
+  <img src="docs/assets/signal.svg" width="96" height="96" alt="missionctl"/>
 </p>
 
-<h1 align="center">caveman</h1>
+<h1 align="center">missionctl</h1>
 
 <p align="center">
-  <strong>why use many token when few do trick</strong>
+  <strong>less chatter. full signal.</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/JuliusBrussee/caveman/stargazers"><img src="https://img.shields.io/github/stars/JuliusBrussee/caveman?style=flat&color=yellow" alt="Stars"></a>
-  <a href="https://github.com/JuliusBrussee/caveman/commits/main"><img src="https://img.shields.io/github/last-commit/JuliusBrussee/caveman?style=flat" alt="Last Commit"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/JuliusBrussee/caveman?style=flat" alt="License"></a>
+  <a href="https://github.com/dnl-re/missionctl/stargazers"><img src="https://img.shields.io/github/stars/dnl-re/missionctl?style=flat&color=yellow" alt="Stars"></a>
+  <a href="https://github.com/dnl-re/missionctl/commits/main"><img src="https://img.shields.io/github/last-commit/dnl-re/missionctl?style=flat" alt="Last Commit"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/dnl-re/missionctl?style=flat" alt="License"></a>
 </p>
 
 <p align="center">
@@ -19,12 +19,18 @@
   <a href="#install">Install</a> •
   <a href="#what-you-get">What You Get</a> •
   <a href="#benchmarks">Benchmarks</a> •
+  <a href="#credits">Credits</a> •
   <a href="./INSTALL.md">Full install guide</a>
 </p>
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (also Codex, Gemini, Cursor, Windsurf, Cline, Copilot, 30+ more) that makes agent talk like caveman — cuts **~75% of output tokens**, keeps full technical accuracy. Brain still big. Mouth small.
+> **missionctl is a respectful fork of [caveman](https://github.com/JuliusBrussee/caveman) by Julius Brussee.**
+> Caveman proved that AI agents can communicate far more efficiently while preserving technical accuracy.
+> missionctl keeps that core idea and changes only the framing — from caveman-style speech to calm
+> operational brevity. See [Credits](#credits). Huge thanks to Julius for the original project.
+
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (also Codex, Gemini, Cursor, Windsurf, Cline, Copilot, 30+ more) that puts agents into operational-brevity mode — cuts **~75% of output tokens**, keeps full technical accuracy. Full signal. Less chatter.
 
 ## Before / After
 
@@ -39,7 +45,7 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (al
 </td>
 <td width="50%">
 
-### <img src="docs/assets/dancing-rock.svg" width="20" height="20" alt="rock"/> Caveman Claude (19 tokens)
+### <img src="docs/assets/signal.svg" width="20" height="20" alt="missionctl"/> missionctl (19 tokens)
 
 > "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
 
@@ -55,46 +61,30 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (al
 </td>
 <td>
 
-### <img src="docs/assets/dancing-rock.svg" width="20" height="20" alt="rock"/> Caveman Claude
+### <img src="docs/assets/signal.svg" width="20" height="20" alt="missionctl"/> missionctl
 
-> "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
+> "Bug in auth middleware. Token-expiry check uses `<`, not `<=`. Fix:"
 
 </td>
 </tr>
 </table>
 
-**Same fix. 75% less word. Brain still big.**
+**Same fix. 75% fewer words. Full signal.**
 
 ```
 ┌─────────────────────────────────────┐
 │  TOKENS SAVED          ████████ 75% │
 │  TECHNICAL ACCURACY    ████████ 100%│
 │  SPEED INCREASE        ████████ ~3x │
-│  VIBES                 ████████ OOG │
+│  SIGNAL                ████████ FULL│
 └─────────────────────────────────────┘
 ```
 
-Pick your level of grunt — `lite` (drop filler), `full` (default caveman), `ultra` (telegraphic), or `wenyan` (classical Chinese, even shorter). One command switch. Cost go down forever.
+Pick your brevity level — `lite` (drop filler), `full` (default operational brevity), `ultra` (telegraphic), or `wenyan` (classical Chinese, even shorter). One command to switch. Token cost stays low.
 
-**Speak your tongue.** Caveman keep your language. You write Portuguese, caveman grunt Portuguese. Spanish, French, same. Compress the *style*, not the language. Code, command, error string stay exact.
+**Speak your tongue.** missionctl keeps your language. Write Portuguese, get compressed Portuguese. Spanish, French, same. Compress the *style*, not the language. Code, commands, error strings stay exact.
 
 > "Novo ref de objeto cada render. Prop inline = novo ref = re-render. Envolva com `useMemo`."
-
-<table align="center">
-<tr><td>
-
-### <img src="docs/assets/dancing-rock.svg" width="22" height="22" alt="rock"/> Like this trick? Now get whole agent — **caveman-code**
-
-This skill shrink what agent **say**. **[caveman-code](https://github.com/JuliusBrussee/caveman-code)** shrink **everything** — full terminal coding agent, caveman top to bottom. **~2× fewer tokens than Codex** on identical tasks. 20+ providers · plan mode · autopilot goal loop · MIT.
-
-```bash
-npm install -g @juliusbrussee/caveman-code
-```
-
-[**▶ Try caveman-code now →**](https://github.com/JuliusBrussee/caveman-code) — *why use many token when whole agent save*
-
-</td></tr>
-</table>
 
 ## Install
 
@@ -102,41 +92,41 @@ One line. Find every agent. Install for each.
 
 ```bash
 # macOS / Linux / WSL / Git Bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/dnl-re/missionctl/main/install.sh | bash
 
 # Windows (PowerShell 5.1+)
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/dnl-re/missionctl/main/install.ps1 | iex
 ```
 
-~30 seconds. Needs Node ≥18. Skip agent you no have. Safe to re-run.
+~30 seconds. Needs Node ≥18. Skips agents you don't have. Safe to re-run.
 
-**Trigger:** type `/caveman` or say "talk like caveman". Stop with "normal mode".
+**Trigger:** type `/missionctl` or say "operational brevity mode". Stop with "normal mode".
 
 One agent only, manual command, or any of 30+ other agents → [**INSTALL.md**](./INSTALL.md).
-Install break? Open agent, say *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent fix own brain.
+Install breaks? Open your agent, say *"Read CLAUDE.md and INSTALL.md, install missionctl for me."*
 
 ## What You Get
 
 | Skill | What |
 |---|---|
-| `/caveman [lite\|full\|ultra\|wenyan]` | Compress every reply. Levels stick until session end. |
-| `/caveman-commit` | Conventional Commit messages, ≤50 char subject. Why over what. |
-| `/caveman-review` | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` |
-| `/caveman-stats` | Real session token usage + lifetime savings + USD. Tweetable line via `--share`. |
-| `/caveman-compress <file>` | Rewrite memory file (e.g. `CLAUDE.md`) into caveman-speak. Cuts ~46% input tokens every session. Code/URLs/paths byte-preserved. |
-| `caveman-shrink` | MCP middleware. Wraps any MCP server, compresses tool descriptions. [npm](https://www.npmjs.com/package/caveman-shrink). |
-| `cavecrew-*` | Caveman subagents (investigator/builder/reviewer). ~60% fewer tokens than vanilla, main context lasts longer. |
+| `/missionctl [lite\|full\|ultra\|wenyan]` | Compress every reply. Levels stick until session end. |
+| `/missionctl-commit` | Conventional Commit messages, ≤50 char subject. Why over what. |
+| `/missionctl-review` | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` |
+| `/missionctl-stats` | Real session token usage + lifetime savings + USD. Shareable line via `--share`. |
+| `/missionctl-compress <file>` | Rewrite a memory file (e.g. `CLAUDE.md`) into compressed form. Cuts ~46% input tokens every session. Code/URLs/paths byte-preserved. |
+| `missionctl-shrink` | MCP middleware. Wraps any MCP server, compresses tool descriptions. [npm](https://www.npmjs.com/package/missionctl-shrink). |
+| `missioncrew-*` | Compressed subagents (investigator/builder/reviewer). ~60% fewer tokens than vanilla, main context lasts longer. |
 
-**Statusline badge** — Claude Code shows `[CAVEMAN] ⛏ 12.4k` (lifetime tokens saved). Updates every `/caveman-stats` run. Set `CAVEMAN_STATUSLINE_SAVINGS=0` to silence.
+**Statusline badge** — Claude Code shows `[missionctl] 📡 12.4k` (lifetime tokens saved). Updates every `/missionctl-stats` run. Set `MISSIONCTL_STATUSLINE_SAVINGS=0` to silence.
 
-Auto-activate every session: Claude Code, Codex, Gemini (built-in). Cursor / Windsurf / Cline / Copilot get always-on rule files via `--with-init`. Other agents trigger with `/caveman` per session. Full feature matrix in [INSTALL.md](./INSTALL.md#what-you-get).
+Auto-activate every session: Claude Code, Codex, Gemini (built-in). Cursor / Windsurf / Cline / Copilot get always-on rule files via `--with-init`. Other agents trigger with `/missionctl` per session. Full feature matrix in [INSTALL.md](./INSTALL.md#what-you-get).
 
 ## Benchmarks
 
 Real token counts from the Claude API. Average **65% output reduction** across 10 prompts (range 22-87%).
 
 <!-- BENCHMARK-TABLE-START -->
-| Task | Normal | Caveman | Saved |
+| Task | Normal | missionctl | Saved |
 |------|-------:|--------:|------:|
 | Explain React re-render bug | 1180 | 159 | 87% |
 | Fix auth middleware token expiry | 704 | 121 | 83% |
@@ -151,9 +141,9 @@ Real token counts from the Claude API. Average **65% output reduction** across 1
 | **Average** | **1214** | **294** | **65%** |
 <!-- BENCHMARK-TABLE-END -->
 
-Raw data and reproduction script: [`benchmarks/`](./benchmarks/). Three-arm eval harness (baseline / terse / skill) lives in [`evals/`](./evals/) — caveman compared against `Answer concisely.` not against verbose default, so the delta is honest.
+Raw data and reproduction script: [`benchmarks/`](./benchmarks/). Three-arm eval harness (baseline / terse / skill) lives in [`evals/`](./evals/) — missionctl is compared against `Answer concisely.` not against the verbose default, so the delta is honest.
 
-**caveman-compress receipts** (real memory files):
+**missionctl-compress receipts** (real memory files):
 
 | File | Original | Compressed | Saved |
 |---|---:|---:|---:|
@@ -165,119 +155,81 @@ Raw data and reproduction script: [`benchmarks/`](./benchmarks/). Three-arm eval
 | **Average** | **898** | **481** | **46%** |
 
 > [!IMPORTANT]
-> Caveman only affects output tokens — thinking/reasoning tokens untouched. Caveman no make brain smaller. Caveman make *mouth* smaller. Biggest win is **readability and speed**, cost savings a bonus.
+> missionctl only affects output tokens — thinking/reasoning tokens are untouched. It makes the *output* shorter, not the reasoning weaker. The biggest win is **readability and speed**; cost savings are a bonus.
 
-A March 2026 paper ["Brevity Constraints Reverse Performance Hierarchies in Language Models"](https://arxiv.org/abs/2604.00025) found that constraining large models to brief responses **improved accuracy by 26 points** on certain benchmarks. Verbose not always better. Sometimes less word = more correct.
+A March 2026 paper ["Brevity Constraints Reverse Performance Hierarchies in Language Models"](https://arxiv.org/abs/2604.00025) found that constraining large models to brief responses **improved accuracy by 26 points** on certain benchmarks. Verbose isn't always better. Sometimes fewer words = more correct.
 
-## How It Work
+## How It Works
 
-1. Install drop skill file in agent.
-2. Skill tell agent: drop filler, keep substance, use fragments.
-3. For Claude Code, hook also write tiny flag file each session — agent see flag, talk caveman from message one. No need say `/caveman`.
-4. Stats command read Claude Code session log, count tokens saved, write number to statusline.
-5. Caveman-compress sub-skill rewrite memory files (CLAUDE.md, project notes) so each session start with smaller context. Save tokens forever, not just one reply.
+1. Install drops a skill file into your agent.
+2. The skill tells the agent: drop filler, keep substance, use fragments.
+3. For Claude Code, a hook also writes a tiny flag file each session — the agent sees the flag and stays brief from message one. No need to type `/missionctl`.
+4. The stats command reads the Claude Code session log, counts tokens saved, and writes the number to the statusline.
+5. The compress sub-skill rewrites memory files (CLAUDE.md, project notes) so each session starts with a smaller context. Saves tokens every session, not just one reply.
 
-Maintainer detail (hook architecture, file ownership, CI sync) live in [CLAUDE.md](./CLAUDE.md).
+Maintainer details (hook architecture, file ownership, CI sync) live in [CLAUDE.md](./CLAUDE.md).
 
-## Lobster, Meet Rock 🦞 <img src="docs/assets/dancing-rock.svg" width="22" height="22" alt="rock"/>
+## OpenClaw
 
-[**OpenClaw**](https://openclaw.ai) the self-host gateway. One box, many agent inside (Claude Code, Codex, Pi, OpenCode), wired to your Slack / Discord / iMessage / Telegram / whatever. Tagline: *"The lobster way."* Lobster strong. Lobster smart. Lobster also talk a lot.
-
-Caveman teach lobster brevity — same canonical installer, scoped to one agent:
+[**OpenClaw**](https://openclaw.ai) is a self-hosted gateway running many agents in one box (Claude Code, Codex, Pi, OpenCode), wired to Slack / Discord / iMessage / Telegram. missionctl installs into it with the same canonical installer, scoped to one agent:
 
 ```bash
 # macOS / Linux / WSL
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --only openclaw
+curl -fsSL https://raw.githubusercontent.com/dnl-re/missionctl/main/install.sh | bash -s -- --only openclaw
 
 # Windows (PowerShell): no Node? install Node ≥18 first, then
-npx -y github:JuliusBrussee/caveman -- --only openclaw
+npx -y github:dnl-re/missionctl -- --only openclaw
 ```
 
-Two thing happen, no more:
+Two things happen, no more:
 
-1. **Skill drop** at `~/.openclaw/workspace/skills/caveman/SKILL.md` — spec-correct frontmatter (`version`, `always: true`), discoverable by `openclaw skills list`. Skill not auto-inject (OpenClaw load skill on demand) — that why we also do step 2.
-2. **SOUL.md nudge.** Tiny marker-fenced block appended to `~/.openclaw/workspace/SOUL.md`. OpenClaw inject SOUL.md into *every* turn under "Project Context" (12K-per-file, 60K total — block well under). Lobster terse from message one. No `/caveman` per session. No nag.
+1. **Skill drop** at `~/.openclaw/workspace/skills/missionctl/SKILL.md` — spec-correct frontmatter (`version`, `always: true`), discoverable by `openclaw skills list`.
+2. **SOUL.md nudge.** A small marker-fenced block appended to `~/.openclaw/workspace/SOUL.md`, which OpenClaw injects into every turn under "Project Context". Brief from message one, no `/missionctl` per session.
 
 ```
 ~/.openclaw/workspace/
-├── skills/caveman/SKILL.md   ← full ruleset, on-demand load
-└── SOUL.md                    ← <!-- caveman-begin --> ... <!-- caveman-end -->
-                                  ↑ auto-inject every turn
+├── skills/missionctl/SKILL.md   ← full ruleset, on-demand load
+└── SOUL.md                      ← <!-- missionctl-begin --> ... <!-- missionctl-end -->
+                                   ↑ auto-injected every turn
 ```
 
-Custom workspace path? `OPENCLAW_WORKSPACE=/your/path` before the command. Uninstall: same one-liner with `--uninstall` — skill folder gone, SOUL.md block ripped out cleanly, your other workspace content stay untouched. Idempotent re-runs (frontmatter not double-prepended, marker block not duplicated).
+Custom workspace path? Set `OPENCLAW_WORKSPACE=/your/path` before the command. Uninstall: same one-liner with `--uninstall`. Idempotent re-runs.
 
-Lobster claw still sharp. Lobster mouth now small. Brain still big.
+## Credits
 
-## Caveman Ecosystem
+missionctl is a respectful fork of [**caveman**](https://github.com/JuliusBrussee/caveman) by **Julius Brussee**.
+Caveman proved that AI agents can communicate far more efficiently while preserving technical accuracy.
+missionctl keeps that core idea and the original implementation pattern, and changes only the framing:
+from caveman-style speech to calm operational brevity. The compression concept, architecture, hooks,
+and skill design all originate with caveman. **Huge thanks to Julius for the original project.**
 
-Five tools. One philosophy: **agent do more with less**.
+If you want the original caveman experience and its wider ecosystem (caveman-code, cavemem, cavekit,
+and more), go support the upstream project: <https://github.com/JuliusBrussee/caveman>.
 
-| Repo | What |
-|------|------|
-| [**caveman**](https://github.com/JuliusBrussee/caveman) *(you here)* | Output compression — *why use many token when few do trick* |
-| [**caveman-code**](https://github.com/JuliusBrussee/caveman-code) | Whole terminal coding agent — *why use many token when whole agent can save* |
-| [**cavemem**](https://github.com/JuliusBrussee/cavemem) | Cross-agent memory — *why agent forget when agent can remember* |
-| [**cavekit**](https://github.com/JuliusBrussee/cavekit) | Spec-driven build loop — *why agent guess when agent can know* |
-| [**cavegemma**](https://github.com/JuliusBrussee/finetune-caveman) | Gemma 4 31B fine-tuned on caveman pairs — *why prompt every turn when weight remember* |
+## Migration from caveman
 
-Compose: cavekit drive build, caveman compress what agent *say*, cavemem compress what agent *remember*, cavegemma bake compression into weight, caveman-code ship it all as one terminal agent. One rock. Two rock. Three rock. Four rock. Five rock. That it.
+If you're moving from caveman, the mapping is mechanical:
 
-## More Skill From Same Cave
+| caveman | missionctl |
+|---|---|
+| `/caveman [lite\|full\|ultra]` | `/missionctl [lite\|full\|ultra]` |
+| `/caveman-commit` · `/caveman-review` · `/caveman-stats` · `/caveman-compress` | `/missionctl-commit` · `/missionctl-review` · `/missionctl-stats` · `/missionctl-compress` |
+| `caveman-shrink` (MCP) | `missionctl-shrink` |
+| `cavecrew-*` subagents | `missioncrew-*` subagents |
+| `~/.config/caveman/config.json` | `~/.config/missionctl/config.json` |
+| `.caveman-active` / `.caveman-history.jsonl` flags | `.missionctl-active` / `.missionctl-history.jsonl` |
+| `CAVEMAN_DEFAULT_MODE`, `CAVEMAN_SHRINK_*`, `CAVEMAN_STATUSLINE_SAVINGS` | `MISSIONCTL_DEFAULT_MODE`, `MISSIONCTL_SHRINK_*`, `MISSIONCTL_STATUSLINE_SAVINGS` |
 
-Caveman has siblings. [**JuliusBrussee/skills**](https://github.com/JuliusBrussee/skills) — five skills, one install, works in Claude Code, Cursor, Gemini, Cline, Copilot, 40+ agents:
-
-| Skill | What |
-|------|------|
-| [**caveman**](https://github.com/JuliusBrussee/skills/tree/main/skills/caveman) | This one. Speak less, say more. |
-| [**grill-me**](https://github.com/JuliusBrussee/skills/tree/main/skills/grill-me) | Agent grill your plan *before* you build wrong thing. Checks how much you know first — no condescend, no coddle. |
-| [**interface-kit**](https://github.com/JuliusBrussee/skills/tree/main/skills/interface-kit) | Build UI that look good, load fast, work for everyone. |
-| [**junior-to-senior**](https://github.com/JuliusBrussee/skills/tree/main/skills/junior-to-senior) | Adversarial review pass. Junior output go in, senior output come out. |
-| [**loop-factory**](https://github.com/JuliusBrussee/skills/tree/main/skills/loop-factory) | Spec-driven task loop — inbox → active → archive, review gate between. |
-
-```bash
-npx skills@latest add JuliusBrussee/skills
-```
-
-One command. Five skill. Cave well stocked.
+Mode names (`lite`, `full`, `ultra`, `wenyan-*`) are unchanged. Behavior is unchanged — only the framing and names differ.
 
 ## Links
 
 - [INSTALL.md](./INSTALL.md) — full install matrix, all flags, per-agent detail
-- [CONTRIBUTING.md](./CONTRIBUTING.md) — how to send patch
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — how to send a patch
 - [CLAUDE.md](./CLAUDE.md) — maintainer guide (file ownership, hook architecture, CI)
 - [docs/](./docs/) — extra guides (Windows install, etc.)
-- [Issues](https://github.com/JuliusBrussee/caveman/issues) — bug, feature, weird behavior
-
-## Star This Repo
-
-Caveman save you token, save you money. Star cost zero. Fair trade. ⭐
-
-[![Star History Chart](https://api.star-history.com/svg?repos=JuliusBrussee/caveman&type=Date)](https://star-history.com/#JuliusBrussee/caveman&Date)
-
-## Also by Julius Brussee
-
-- **[Revu](https://github.com/JuliusBrussee/revu-swift)** — local-first macOS study app with FSRS spaced repetition. [revu.cards](https://revu.cards)
-
-## Sponsors
-
-caveman free forever. Sponsor keep rock sharp.
-
-<p align="center">
-  <a href="https://www.atlascloud.ai">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/atlas-cloud-dark.svg">
-      <img src="docs/assets/atlas-cloud.svg" alt="Atlas Cloud" height="28">
-    </picture>
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://www.atlascloud.ai"><strong>Atlas Cloud</strong></a> — full-modal AI inference platform, one API.
-</p>
-
-Want rock here too? [Sponsor caveman](https://github.com/sponsors/JuliusBrussee).
+- [Issues](https://github.com/dnl-re/missionctl/issues) — bugs, features, weird behavior
 
 ## License
 
-MIT — free like mass mammoth on open plain.
+MIT. See [LICENSE](LICENSE) — copyright is retained for both the original caveman author and the missionctl fork.

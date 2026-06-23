@@ -4,11 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - skills/caveman/SKILL.md
-      - skills/cavecrew/SKILL.md
-      - agents/cavecrew-*.md
-      - skills/caveman-compress/SKILL.md
-      - skills/caveman-compress/scripts/**
+      - skills/missionctl/SKILL.md
+      - skills/missioncrew/SKILL.md
+      - agents/missioncrew-*.md
+      - skills/missionctl-compress/SKILL.md
+      - skills/missionctl-compress/scripts/**
 
 concurrency:
   group: sync-skill
@@ -32,39 +32,39 @@ jobs:
 
       - name: Sync SKILL.md copies
         run: |
-          cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
+          cp skills/missionctl/SKILL.md plugins/missionctl/skills/missionctl/SKILL.md
 
-      - name: Sync caveman-compress skill to plugin
+      - name: Sync missionctl-compress skill to plugin
         run: |
           # Plugin distribution mirrors source verbatim — no rename, no sed.
-          mkdir -p plugins/caveman/skills/caveman-compress
-          cp skills/caveman-compress/SKILL.md plugins/caveman/skills/caveman-compress/SKILL.md
-          rm -rf plugins/caveman/skills/caveman-compress/scripts
-          cp -r skills/caveman-compress/scripts plugins/caveman/skills/caveman-compress/scripts
-          rm -rf plugins/caveman/skills/caveman-compress/scripts/__pycache__
+          mkdir -p plugins/missionctl/skills/missionctl-compress
+          cp skills/missionctl-compress/SKILL.md plugins/missionctl/skills/missionctl-compress/SKILL.md
+          rm -rf plugins/missionctl/skills/missionctl-compress/scripts
+          cp -r skills/missionctl-compress/scripts plugins/missionctl/skills/missionctl-compress/scripts
+          rm -rf plugins/missionctl/skills/missionctl-compress/scripts/__pycache__
 
-      - name: Sync cavecrew skill + agents to plugin
+      - name: Sync missioncrew skill + agents to plugin
         run: |
-          mkdir -p plugins/caveman/skills/cavecrew plugins/caveman/agents
-          cp skills/cavecrew/SKILL.md plugins/caveman/skills/cavecrew/SKILL.md
-          cp agents/cavecrew-investigator.md plugins/caveman/agents/cavecrew-investigator.md
-          cp agents/cavecrew-builder.md plugins/caveman/agents/cavecrew-builder.md
-          cp agents/cavecrew-reviewer.md plugins/caveman/agents/cavecrew-reviewer.md
+          mkdir -p plugins/missionctl/skills/missioncrew plugins/missionctl/agents
+          cp skills/missioncrew/SKILL.md plugins/missionctl/skills/missioncrew/SKILL.md
+          cp agents/missioncrew-investigator.md plugins/missionctl/agents/missioncrew-investigator.md
+          cp agents/missioncrew-builder.md plugins/missionctl/agents/missioncrew-builder.md
+          cp agents/missioncrew-reviewer.md plugins/missionctl/agents/missioncrew-reviewer.md
 
-      - name: Rebuild caveman.skill ZIP
-        run: mkdir -p dist && cd skills && zip -r ../dist/caveman.skill caveman/
+      - name: Rebuild missionctl.skill ZIP
+        run: mkdir -p dist && cd skills && zip -r ../dist/missionctl.skill missionctl/
 
       - name: Commit and push if changed
         run: |
           git add \
-            skills/caveman-compress/ \
-            plugins/caveman/skills/caveman-compress/ \
-            plugins/caveman/skills/caveman/SKILL.md \
-            plugins/caveman/skills/cavecrew/SKILL.md \
-            plugins/caveman/agents/cavecrew-investigator.md \
-            plugins/caveman/agents/cavecrew-builder.md \
-            plugins/caveman/agents/cavecrew-reviewer.md \
-            dist/caveman.skill
+            skills/missionctl-compress/ \
+            plugins/missionctl/skills/missionctl-compress/ \
+            plugins/missionctl/skills/missionctl/SKILL.md \
+            plugins/missionctl/skills/missioncrew/SKILL.md \
+            plugins/missionctl/agents/missioncrew-investigator.md \
+            plugins/missionctl/agents/missioncrew-builder.md \
+            plugins/missionctl/agents/missioncrew-reviewer.md \
+            dist/missionctl.skill
           git diff --staged --quiet && exit 0
           git commit -m "chore: sync SKILL.md copies [skip ci]"
           git push

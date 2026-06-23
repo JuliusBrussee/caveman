@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Caveman | Lithic Token Compression</title>
+<title>missionctl | Token Compression for AI Agents</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -33,7 +33,7 @@ body {
   background-color: var(--bg); color: var(--text-primary);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   overflow-x: hidden; -webkit-font-smoothing: antialiased; letter-spacing: -0.02em;
-  cursor: url("assets/dancing-rock-32.png") 16 16, auto;
+  cursor: url("assets/signal-32.png") 16 16, auto;
 }
 
 ::selection { background: var(--text-primary); color: var(--bg); }
@@ -213,16 +213,16 @@ body {
 
 <section class="hero container">
   <div class="reveal">
-    <a href="https://github.com/JuliusBrussee/caveman" target="_blank" class="hero-repo">
+    <a href="https://github.com/dnl-re/missionctl" target="_blank" class="hero-repo">
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-      JuliusBrussee / caveman
+      dnl-re / missionctl
     </a>
-    <h1>Few tokens.<br>Do trick.</h1>
-    <p class="hero-subtitle">A semantic constraint engine for Claude Code & Codex. Forces agentic communication into minimal-token lithic structures. Retain 100% technical accuracy while destroying up to 87% of output latency.</p>
+    <h1>Less chatter.<br>Full signal.</h1>
+    <p class="hero-subtitle">A semantic constraint engine for Claude Code & Codex. Forces agentic communication into minimal-token structures. Retains 100% technical accuracy while cutting up to 87% of output.</p>
     
     <div class="cli-install">
       <span class="cli-prefix">❯</span>
-      <span class="cli-code">npx skills add JuliusBrussee/caveman</span>
+      <span class="cli-code">npx skills add dnl-re/missionctl</span>
       <button class="cli-btn" onclick="copyInstall(this)">Copy</button>
     </div>
   </div>
@@ -235,8 +235,8 @@ body {
 
 <section class="section container reveal">
   <span class="section-badge">01 // Compression Matrix</span>
-  <h2 class="section-title">The Lithic Payload Diff</h2>
-  <p class="section-desc">Visualize the exact tokens purged by the Caveman protocol. Technical imperatives are retained; conversational padding is annihilated.</p>
+  <h2 class="section-title">The Token Payload Diff</h2>
+  <p class="section-desc">Visualize the exact tokens removed by missionctl. Technical imperatives are retained; conversational padding is cut.</p>
 
   <div class="diff-container">
     <div class="diff-header">
@@ -248,7 +248,7 @@ body {
     </div>
     <div class="diff-toggle">
       <button class="toggle-btn active" onclick="setDiffMode('diff', this)">View Diff</button>
-      <button class="toggle-btn" onclick="setDiffMode('caveman', this)">Output Only</button>
+      <button class="toggle-btn" onclick="setDiffMode('missionctl', this)">Output Only</button>
     </div>
   </div>
 </section>
@@ -305,17 +305,17 @@ body {
     <div class="bento-box bento-large">
       <div class="bento-icon">💀</div>
       <div class="bento-title">Pleasantry Annihilation</div>
-      <div class="bento-desc">Standard LLMs waste compute on sycophantic hedging: "I'd be happy to help," or "It might be worth considering." Caveman protocol identifies and destroys these patterns at the generation layer.</div>
+      <div class="bento-desc">Standard LLMs waste compute on sycophantic hedging: "I'd be happy to help," or "It might be worth considering." missionctl identifies and removes these patterns at the generation layer.</div>
     </div>
     <div class="bento-box">
       <div class="bento-icon">✍️</div>
       <div class="bento-title">Code Preservation</div>
-      <div class="bento-desc">Code blocks, Git commits, and PR descriptions bypass the lithic filter. Caveman writes normal code.</div>
+      <div class="bento-desc">Code blocks, Git commits, and PR descriptions bypass the compression filter. missionctl writes normal code.</div>
     </div>
     <div class="bento-box">
       <div class="bento-icon">🧠</div>
       <div class="bento-title">Nomenclature Integrity</div>
-      <div class="bento-desc">Technical jargon is retained precisely. "Polymorphism" remains "polymorphism." Caveman not stupid. Caveman efficient.</div>
+      <div class="bento-desc">Technical jargon is retained precisely. "Polymorphism" remains "polymorphism." missionctl not stupid. missionctl efficient.</div>
     </div>
     <div class="bento-box bento-large">
       <div class="bento-icon">🔬</div>
@@ -336,10 +336,10 @@ body {
     <div class="term-body" id="termBody">
       <div class="term-line">System ready. Establishing connection to Claude Code Env...</div>
       <div class="term-line">Installing plugins via marketplace...</div>
-      <div class="term-line term-accent">claude plugin install caveman@caveman</div>
-      <div class="term-line" style="margin-top: 16px;">Trigger the protocol:</div>
-      <div class="term-line term-accent">/caveman</div>
-      <div class="term-line">Me ready.</div>
+      <div class="term-line term-accent">claude plugin install missionctl@missionctl</div>
+      <div class="term-line" style="margin-top: 16px;">Trigger it:</div>
+      <div class="term-line term-accent">/missionctl</div>
+      <div class="term-line">Ready.</div>
       
       <div class="term-input-row">
         <span class="term-accent">❯</span>
@@ -364,7 +364,7 @@ document.addEventListener('mousemove', (e) => {
 // --- Marquee Population ---
 const items = [
   { k: "TOKENS_SAVED", v: "75%" }, { k: "ACCURACY", v: "100%" },
-  { k: "LATENCY_DROP", v: "3x" }, { k: "VIBES", v: "OOG" },
+  { k: "LATENCY_DROP", v: "3x" }, { k: "SIGNAL", v: "FULL" },
   { k: "PRICE", v: "$0.00" }, { k: "DEPENDENCIES", v: "NONE" }
 ];
 const track = document.getElementById('marqueeTrack');
@@ -373,7 +373,7 @@ track.innerHTML = marqueeHTML;
 
 // --- Copy Install ---
 function copyInstall(btn) {
-  navigator.clipboard.writeText('npx skills add JuliusBrussee/caveman');
+  navigator.clipboard.writeText('npx skills add dnl-re/missionctl');
   btn.textContent = 'Copied';
   btn.style.background = 'var(--accent)';
   btn.style.color = '#000';
@@ -433,8 +433,8 @@ cliInput.addEventListener('keydown', (e) => {
     const res = document.createElement('div');
     res.className = 'term-line';
     res.style.color = 'var(--text-tertiary)';
-    if (val.toLowerCase() === 'help') res.textContent = "Commands: npx skills add JuliusBrussee/caveman";
-    else res.textContent = "Input received. Caveman processing... Done. Few words used.";
+    if (val.toLowerCase() === 'help') res.textContent = "Commands: npx skills add dnl-re/missionctl";
+    else res.textContent = "Input received. missionctl processing... Done. Compressed.";
     
     cliInput.parentElement.before(res);
     cliInput.value = '';

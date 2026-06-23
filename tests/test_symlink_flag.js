@@ -10,13 +10,13 @@ const path = require('path');
 const os = require('os');
 const assert = require('assert');
 
-const { safeWriteFlag, readFlag, VALID_MODES } = require('../src/hooks/caveman-config');
+const { safeWriteFlag, readFlag, VALID_MODES } = require('../src/hooks/missionctl-config');
 
 let passed = 0;
 let failed = 0;
 
 function test(name, fn) {
-  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-symlink-test-'));
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'missionctl-symlink-test-'));
   try {
     fn(tmpBase);
     passed++;
@@ -37,7 +37,7 @@ console.log('safeWriteFlag + readFlag symlink tests\n');
 test('writes flag in normal (non-symlinked) directory', (tmp) => {
   const flagDir = path.join(tmp, 'claude-config');
   fs.mkdirSync(flagDir, { recursive: true });
-  const flagPath = path.join(flagDir, '.caveman-active');
+  const flagPath = path.join(flagDir, '.missionctl-active');
 
   safeWriteFlag(flagPath, 'full');
 
@@ -51,11 +51,11 @@ test('writes flag when parent directory is a symlink owned by current user', (tm
   const symlinkDir = path.join(tmp, 'claude-symlink');
   fs.symlinkSync(realDir, symlinkDir);
 
-  const flagPath = path.join(symlinkDir, '.caveman-active');
+  const flagPath = path.join(symlinkDir, '.missionctl-active');
   safeWriteFlag(flagPath, 'ultra');
 
   // Flag should exist in the real directory
-  const realFlagPath = path.join(realDir, '.caveman-active');
+  const realFlagPath = path.join(realDir, '.missionctl-active');
   assert.strictEqual(fs.existsSync(realFlagPath), true, 'flag file should exist in resolved dir');
   assert.strictEqual(fs.readFileSync(realFlagPath, 'utf8'), 'ultra');
 });
@@ -67,10 +67,10 @@ test('readFlag works through symlinked parent directory', (tmp) => {
   fs.symlinkSync(realDir, symlinkDir);
 
   // Write directly to real path, then read through symlink path
-  const realFlagPath = path.join(realDir, '.caveman-active');
+  const realFlagPath = path.join(realDir, '.missionctl-active');
   fs.writeFileSync(realFlagPath, 'lite', { mode: 0o600 });
 
-  const result = readFlag(path.join(symlinkDir, '.caveman-active'));
+  const result = readFlag(path.join(symlinkDir, '.missionctl-active'));
   assert.strictEqual(result, 'lite');
 });
 
@@ -80,7 +80,7 @@ test('safeWriteFlag then readFlag round-trip through symlink', (tmp) => {
   const symlinkDir = path.join(tmp, 'link-config');
   fs.symlinkSync(realDir, symlinkDir);
 
-  const flagPath = path.join(symlinkDir, '.caveman-active');
+  const flagPath = path.join(symlinkDir, '.missionctl-active');
   safeWriteFlag(flagPath, 'wenyan-ultra');
 
   // Read back through the same symlink path
@@ -97,11 +97,11 @@ test('refuses flag file that is itself a symlink (even through symlinked parent)
   // Create a symlink at the flag file location pointing to some other file
   const decoyFile = path.join(tmp, 'decoy.txt');
   fs.writeFileSync(decoyFile, 'ATTACK');
-  const realFlagPath = path.join(realDir, '.caveman-active');
+  const realFlagPath = path.join(realDir, '.missionctl-active');
   fs.symlinkSync(decoyFile, realFlagPath);
 
   // safeWriteFlag should refuse (flag file is a symlink)
-  safeWriteFlag(path.join(symlinkDir, '.caveman-active'), 'full');
+  safeWriteFlag(path.join(symlinkDir, '.missionctl-active'), 'full');
   // The decoy should NOT have been overwritten
   assert.strictEqual(fs.readFileSync(decoyFile, 'utf8'), 'ATTACK');
 });
@@ -112,9 +112,9 @@ test('readFlag refuses flag file that is a symlink', (tmp) => {
 
   const secretFile = path.join(tmp, 'secret.txt');
   fs.writeFileSync(secretFile, 'SSH_PRIVATE_KEY_CONTENT');
-  fs.symlinkSync(secretFile, path.join(realDir, '.caveman-active'));
+  fs.symlinkSync(secretFile, path.join(realDir, '.missionctl-active'));
 
-  const result = readFlag(path.join(realDir, '.caveman-active'));
+  const result = readFlag(path.join(realDir, '.missionctl-active'));
   assert.strictEqual(result, null, 'should refuse symlinked flag file');
 });
 
@@ -126,9 +126,9 @@ test('flag file permissions are 0600 when written through symlink', (tmp) => {
   const symlinkDir = path.join(tmp, 'link-config');
   fs.symlinkSync(realDir, symlinkDir);
 
-  safeWriteFlag(path.join(symlinkDir, '.caveman-active'), 'full');
+  safeWriteFlag(path.join(symlinkDir, '.missionctl-active'), 'full');
 
-  const realFlagPath = path.join(realDir, '.caveman-active');
+  const realFlagPath = path.join(realDir, '.missionctl-active');
   const stat = fs.statSync(realFlagPath);
   const mode = stat.mode & 0o777;
   assert.strictEqual(mode, 0o600, `expected 0600, got 0${mode.toString(8)}`);
@@ -140,7 +140,7 @@ test('overwrites existing flag through symlinked parent', (tmp) => {
   const symlinkDir = path.join(tmp, 'link-config');
   fs.symlinkSync(realDir, symlinkDir);
 
-  const flagPath = path.join(symlinkDir, '.caveman-active');
+  const flagPath = path.join(symlinkDir, '.missionctl-active');
 
   safeWriteFlag(flagPath, 'lite');
   assert.strictEqual(readFlag(flagPath), 'lite');
@@ -151,7 +151,7 @@ test('overwrites existing flag through symlinked parent', (tmp) => {
 
 test('creates parent directory via mkdirSync even when it does not exist yet', (tmp) => {
   const flagDir = path.join(tmp, 'nonexistent', 'nested');
-  const flagPath = path.join(flagDir, '.caveman-active');
+  const flagPath = path.join(flagDir, '.missionctl-active');
 
   safeWriteFlag(flagPath, 'full');
 
@@ -168,11 +168,11 @@ test('symlink to nonexistent target silently fails', (tmp) => {
     return;
   }
 
-  const flagPath = path.join(symlinkDir, '.caveman-active');
+  const flagPath = path.join(symlinkDir, '.missionctl-active');
   // Should not throw
   safeWriteFlag(flagPath, 'full');
   // Flag should not exist (target doesn't exist)
-  assert.strictEqual(fs.existsSync(path.join(symlinkDir, '.caveman-active')), false);
+  assert.strictEqual(fs.existsSync(path.join(symlinkDir, '.missionctl-active')), false);
 });
 
 test('all valid modes round-trip through symlinked parent', (tmp) => {
@@ -181,7 +181,7 @@ test('all valid modes round-trip through symlinked parent', (tmp) => {
   const symlinkDir = path.join(tmp, 'link-config');
   fs.symlinkSync(realDir, symlinkDir);
 
-  const flagPath = path.join(symlinkDir, '.caveman-active');
+  const flagPath = path.join(symlinkDir, '.missionctl-active');
 
   for (const mode of VALID_MODES) {
     safeWriteFlag(flagPath, mode);
@@ -196,7 +196,7 @@ test('safeWriteFlag no longer has blanket symlink parent refusal', (tmp) => {
   // Verify the old pattern "if (fs.lstatSync(flagDir).isSymbolicLink()) return;"
   // without ownership check is no longer present
   const source = fs.readFileSync(
-    path.join(__dirname, '..', 'src', 'hooks', 'caveman-config.js'), 'utf8'
+    path.join(__dirname, '..', 'src', 'hooks', 'missionctl-config.js'), 'utf8'
   );
 
   // The old pattern: check isSymbolicLink on flagDir and immediately return

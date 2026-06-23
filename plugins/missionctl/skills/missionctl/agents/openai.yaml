@@ -1,0 +1,6 @@
+interface:
+  display_name: "missionctl"
+  short_description: "Calm operational brevity. Cut filler. Keep technical accuracy."
+  icon_small: "./assets/missionctl-small.svg"
+  icon_large: "./assets/missionctl.svg"
+  default_prompt: "Use $missionctl to answer briefly, cut filler, and preserve exact technical substance."

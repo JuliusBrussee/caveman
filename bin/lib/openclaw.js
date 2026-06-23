@@ -1,4 +1,4 @@
-// caveman → OpenClaw install / uninstall helper.
+// missionctl → OpenClaw install / uninstall helper.
 //
 // OpenClaw is a self-hosted gateway that orchestrates Claude Code, Codex,
 // Pi, OpenCode, and others. It has its own workspace + skills system at
@@ -8,8 +8,8 @@
 // ARE injected each turn under "Project Context", subject to a 12K-per-file
 // and 60K-total cap.
 //
-// To make caveman always-on through OpenClaw, we do two writes:
-//   1. Drop a copy of skills/caveman/SKILL.md into <workspace>/skills/caveman/
+// To make missionctl always-on through OpenClaw, we do two writes:
+//   1. Drop a copy of skills/missionctl/SKILL.md into <workspace>/skills/missionctl/
 //      with OpenClaw-required frontmatter (`version`, `always: true`) merged
 //      in. Makes the skill discoverable via `openclaw skills list` and lets
 //      the orchestrated agent `read` it on demand.
@@ -26,10 +26,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const SKILL_NAME = 'caveman';
+const SKILL_NAME = 'missionctl';
 const SKILL_VERSION = '1.0.0';
-const MARK_BEGIN = '<!-- caveman-begin -->';
-const MARK_END = '<!-- caveman-end -->';
+const MARK_BEGIN = '<!-- missionctl-begin -->';
+const MARK_END = '<!-- missionctl-end -->';
 const SOUL_FILE = 'SOUL.md';
 
 function resolveWorkspace(env = process.env) {
@@ -44,7 +44,7 @@ function readIfExists(p) {
 // ── Frontmatter helpers ───────────────────────────────────────────────────
 // Lightweight YAML merge — we only need to insert `version` and `always` if
 // they're absent. Avoids pulling in a YAML dep for a job this small. The
-// caveman SKILL.md uses block-scalar `description: >`, which a naive split
+// missionctl SKILL.md uses block-scalar `description: >`, which a naive split
 // would mangle — but since we're only ever appending top-level keys (never
 // editing existing ones), a string-prepend after the leading `---\n` is safe.
 
@@ -81,26 +81,26 @@ function mergeOpenclawFrontmatter(src) {
 // ── Bootstrap snippet load ────────────────────────────────────────────────
 function loadBootstrapSnippet(repoRoot) {
   if (repoRoot) {
-    const p = path.join(repoRoot, 'src', 'rules', 'caveman-openclaw-bootstrap.md');
+    const p = path.join(repoRoot, 'src', 'rules', 'missionctl-openclaw-bootstrap.md');
     const body = readIfExists(p);
     if (body) return body.endsWith('\n') ? body : body + '\n';
   }
   // Standalone fallback (curl|node case where there's no repo on disk).
-  // Keep this in sync with src/rules/caveman-openclaw-bootstrap.md.
+  // Keep this in sync with src/rules/missionctl-openclaw-bootstrap.md.
   return [
     MARK_BEGIN,
-    '## Caveman mode (always on)',
+    '## missionctl mode (always on)',
     '',
-    'Respond terse like smart caveman. All technical substance stay. Only fluff die.',
+    'Respond with calm operational brevity. Keep all technical substance. Cut only filler.',
     '',
-    "The full ruleset and intensity levels live in this workspace's caveman skill:",
+    "The full ruleset and intensity levels live in this workspace's missionctl skill:",
     '',
-    '  skills/caveman/SKILL.md',
+    '  skills/missionctl/SKILL.md',
     '',
-    'Default intensity: `full`. Switch with `/caveman lite|full|ultra|wenyan`.',
-    'Stop with: "stop caveman" / "normal mode" / "deactivate caveman".',
+    'Default intensity: `full`. Switch with `/missionctl lite|full|ultra|wenyan`.',
+    'Stop with: "stop missionctl" / "normal mode" / "deactivate missionctl".',
     '',
-    'Auto-Clarity: drop caveman for security warnings, irreversible action',
+    'Auto-Clarity: drop brevity for security warnings, irreversible action',
     'confirmations, multi-step sequences where fragments risk misread, or when',
     'user is confused or repeating. Resume after.',
     '',
@@ -112,7 +112,7 @@ function loadBootstrapSnippet(repoRoot) {
 
 function loadSkillBody(repoRoot) {
   if (!repoRoot) return null;
-  return readIfExists(path.join(repoRoot, 'skills', 'caveman', 'SKILL.md'));
+  return readIfExists(path.join(repoRoot, 'skills', 'missionctl', 'SKILL.md'));
 }
 
 // ── SOUL.md marker-block append/strip ─────────────────────────────────────
@@ -159,8 +159,8 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
   const ws = workspace || resolveWorkspace();
   const skillBody = loadSkillBody(repoRoot);
   if (!skillBody) {
-    log.warn('  openclaw install requires the caveman repo on disk (skills/caveman/SKILL.md missing).');
-    log.note('  Re-run from a clone or via `npx -y github:JuliusBrussee/caveman -- --only openclaw`.');
+    log.warn('  openclaw install requires the missionctl repo on disk (skills/missionctl/SKILL.md missing).');
+    log.note('  Re-run from a clone or via `npx -y github:dnl-re/missionctl -- --only openclaw`.');
     return { ok: false, reason: 'repo not available' };
   }
   const snippet = loadBootstrapSnippet(repoRoot);
@@ -180,7 +180,7 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
 
   if (dryRun) {
     log.note(`  would write ${skillFile} (with version/always frontmatter)`);
-    log.note(`  would ${fs.existsSync(soulFile) ? 'append to' : 'create'} ${soulFile} (caveman bootstrap block)`);
+    log.note(`  would ${fs.existsSync(soulFile) ? 'append to' : 'create'} ${soulFile} (missionctl bootstrap block)`);
     return { ok: true, dryRun: true };
   }
 
@@ -191,7 +191,7 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
 
   const soul = appendBootstrapToSoul(soulFile, snippet);
   if (soul.changed) log.write(`  wrote bootstrap block to ${soulFile}\n`);
-  else log.note(`  ${soulFile} already contains caveman bootstrap`);
+  else log.note(`  ${soulFile} already contains missionctl bootstrap`);
 
   return { ok: true };
 }
@@ -215,12 +215,12 @@ function uninstallOpenclaw({ workspace, dryRun = false, log = noopLog() } = {}) 
 
   if (fs.existsSync(soulFile)) {
     if (dryRun) {
-      log.note(`  would strip caveman block from ${soulFile}`);
+      log.note(`  would strip missionctl block from ${soulFile}`);
       touched = true;
     } else {
       const r = stripBootstrapFromSoul(soulFile);
       if (r.changed) {
-        log.note(r.removed ? `  removed ${soulFile}` : `  stripped caveman block from ${soulFile}`);
+        log.note(r.removed ? `  removed ${soulFile}` : `  stripped missionctl block from ${soulFile}`);
         touched = true;
       }
     }

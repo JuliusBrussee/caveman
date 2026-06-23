@@ -1,21 +1,21 @@
-// caveman — opencode plugin
+// missionctl — opencode plugin
 //
-// Provides dynamic caveman mode tracking for opencode:
+// Provides dynamic missionctl mode tracking for opencode:
 // - Writes the mode flag on each session start (via the `event` dispatcher)
-// - Parses user messages for /caveman commands and natural-language toggles
+// - Parses user messages for /missionctl commands and natural-language toggles
 // - Injects per-turn reinforcement into the system prompt
 //
 // Bun ESM module; loads the existing security-hardened helpers from
-// caveman-config.js via createRequire so the symlink-safe flag-write code
+// missionctl-config.js via createRequire so the symlink-safe flag-write code
 // lives in one place.
 //
 // Layout once installed:
-//   ~/.config/opencode/plugins/caveman/
+//   ~/.config/opencode/plugins/missionctl/
 //   ├── package.json
 //   ├── plugin.js              ← this file
-//   └── caveman-config.cjs     ← copied sibling of src/hooks/caveman-config.js
+//   └── missionctl-config.cjs     ← copied sibling of src/hooks/missionctl-config.js
 //
-// The always-on caveman ruleset is provided separately via
+// The always-on missionctl ruleset is provided separately via
 // ~/.config/opencode/AGENTS.md (Tier-3 base). This plugin handles dynamic
 // state only: flag writes, slash-command parsing, natural-language
 // activation, and per-turn reinforcement.
@@ -30,8 +30,8 @@
 // as named plugin-hook keys. 'session.created' is an event *type* dispatched
 // through the single `event` handler; the old direct-key handlers were
 // silently ignored. See:
-// https://github.com/JuliusBrussee/caveman/issues/418
-// https://github.com/JuliusBrussee/caveman/issues/421
+// https://github.com/dnl-re/missionctl/issues/418
+// https://github.com/dnl-re/missionctl/issues/421
 
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -42,11 +42,11 @@ import path from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-// When installed: caveman-config.cjs sits next to plugin.js (copied by
+// When installed: missionctl-config.cjs sits next to plugin.js (copied by
 // bin/install.js, renamed to .cjs because this directory's package.json
 // declares "type": "module" — bare .js would be loaded as ESM). When loaded
 // from the source tree (tests, dev): fall back to the canonical
-// src/hooks/caveman-config.js, which lives in a directory whose own
+// src/hooks/missionctl-config.js, which lives in a directory whose own
 // package.json pins "type": "commonjs". One source of truth either way.
 //
 // Loaded by evaluating the file as CommonJS by hand, NOT via the module
@@ -55,10 +55,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 // unsupported") and await import() of a CJS file yields an empty namespace —
 // both silently break the plugin (#418 follow-up). createRequire() still
 // resolves node BUILT-INS fine in the compiled binary, which is all
-// caveman-config needs (fs/path/os).
+// missionctl-config needs (fs/path/os).
 function loadConfig() {
-  const installed = join(here, 'caveman-config.cjs');
-  const dev = join(here, '..', '..', 'hooks', 'caveman-config.js');
+  const installed = join(here, 'missionctl-config.cjs');
+  const dev = join(here, '..', '..', 'hooks', 'missionctl-config.js');
   const target = existsSync(installed) ? installed : dev;
   const code = readFileSync(target, 'utf8').replace(/^#![^\n]*\n/, '');
   const mod = { exports: {} };
@@ -71,7 +71,7 @@ const config = loadConfig();
 
 const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = config;
 
-// Modes handled by independent skills — not selectable via /caveman <arg>.
+// Modes handled by independent skills — not selectable via /missionctl <arg>.
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 // opencode resolves its config dir from $XDG_CONFIG_HOME, else ~/.config/opencode
@@ -85,21 +85,21 @@ function opencodeConfigDir() {
   return path.join(os.homedir(), '.config', 'opencode');
 }
 
-const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
+const flagPath = path.join(opencodeConfigDir(), '.missionctl-active');
 
 function reinforcementLine(mode) {
-  return 'CAVEMAN MODE ACTIVE (' + mode + '). ' +
+  return 'missionctl active (' + mode + '). ' +
     'Drop articles/filler/pleasantries/hedging. Fragments OK. ' +
     'Code/commits/security: write normal.';
 }
 
 // Parse a prompt for slash-command activation or natural-language toggles.
 // Returns the new mode to write, the literal string 'off' to deactivate, or
-// null when the prompt doesn't change state. Mirrors caveman-mode-tracker.js.
+// null when the prompt doesn't change state. Mirrors missionctl-mode-tracker.js.
 function parseModeChange(promptRaw) {
   let prompt = (promptRaw || '').trim();
   // opencode's non-interactive `run` path delivers the message wrapped in
-  // literal quote characters ("/caveman ultra"\n) — unwrap symmetric quotes
+  // literal quote characters ("/missionctl ultra"\n) — unwrap symmetric quotes
   // so the slash-command branch still matches.
   const wrapped = /^(["'`])([\s\S]*)\1$/.exec(prompt);
   if (wrapped) prompt = wrapped[2].trim();
@@ -107,20 +107,20 @@ function parseModeChange(promptRaw) {
   if (!prompt) return null;
 
   // Natural-language deactivation — checked before activation so "stop talking
-  // like caveman" doesn't trip the activation regex.
-  if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
-      /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
+  // like missionctl" doesn't trip the activation regex.
+  if (/\b(stop|disable|deactivate|turn off)\b.*\bmissionctl\b/i.test(prompt) ||
+      /\bmissionctl\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
       /\bnormal mode\b/i.test(prompt)) {
     return 'off';
   }
 
-  // Expanded /caveman command template. opencode replaces a typed
-  // "/caveman <level>" with the command file's body ("Activate caveman
+  // Expanded /missionctl command template. opencode replaces a typed
+  // "/missionctl <level>" with the command file's body ("Activate missionctl
   // mode: $ARGUMENTS ...") before chat.message fires, so the literal
   // slash-command branch below never sees it — recover the level argument
   // from the template's first line instead. Must run before the generic
   // NL-activation match, which would swallow it and drop the level.
-  const tpl = /^activate caveman mode:[ \t]*(\S*)/.exec(prompt);
+  const tpl = /^activate missionctl mode:[ \t]*(\S*)/.exec(prompt);
   if (tpl) {
     const arg = tpl[1] || '';
     if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
@@ -130,24 +130,24 @@ function parseModeChange(promptRaw) {
   }
 
   // Natural-language activation
-  if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-      /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
+  if (/\b(activate|enable|turn on|start|talk like)\b.*\bmissionctl\b/i.test(prompt) ||
+      /\bmissionctl\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
     const mode = getDefaultMode();
     return mode === 'off' ? null : mode;
   }
 
   // Slash-command parsing — opencode also expands command files, but if the
   // user types the literal slash command we still want to flip the flag.
-  if (prompt.startsWith('/caveman')) {
+  if (prompt.startsWith('/missionctl')) {
     const parts = prompt.split(/\s+/);
     const cmd = parts[0];
     const arg = parts[1] || '';
 
-    if (cmd === '/caveman-commit')   return 'commit';
-    if (cmd === '/caveman-review')   return 'review';
-    if (cmd === '/caveman-compress') return 'compress';
+    if (cmd === '/missionctl-commit')   return 'commit';
+    if (cmd === '/missionctl-review')   return 'review';
+    if (cmd === '/missionctl-compress') return 'compress';
 
-    if (cmd === '/caveman') {
+    if (cmd === '/missionctl') {
       if (!arg)                                     return getDefaultMode();
       if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
       if (arg === 'wenyan-full')                    return 'wenyan';
@@ -181,7 +181,7 @@ function handleSessionCreated() {
   safeWriteFlag(flagPath, mode);
 }
 
-export const CavemanPlugin = async (_ctx) => {
+export const MissionctlPlugin = async (_ctx) => {
   // Assert the flag at plugin load as well: in one-shot `opencode run` the
   // first session.created publishes before plugin event dispatch is wired,
   // so the event handler alone misses it. The factory-time write covers that
@@ -199,7 +199,7 @@ export const CavemanPlugin = async (_ctx) => {
     if (event && event.type === 'session.created') handleSessionCreated();
   },
 
-  // Intercept user messages to detect /caveman commands and natural-language
+  // Intercept user messages to detect /missionctl commands and natural-language
   // mode toggles. opencode fires chat.message with (input, output) where
   // output.parts is the array of message parts; text parts carry .text.
   // Return value is ignored — state changes happen via the flag file.
@@ -213,7 +213,7 @@ export const CavemanPlugin = async (_ctx) => {
     }
   },
 
-  // Inject the reinforcement line into the system prompt when caveman is
+  // Inject the reinforcement line into the system prompt when missionctl is
   // active. opencode calls this before every LLM request and expects the hook
   // to mutate output.system (a string[]); the return value is discarded.
   'experimental.chat.system.transform': async (_input, output) => {
@@ -226,4 +226,4 @@ export const CavemanPlugin = async (_ctx) => {
   };
 };
 
-export default CavemanPlugin;
+export default MissionctlPlugin;

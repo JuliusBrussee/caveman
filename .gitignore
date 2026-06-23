@@ -7,8 +7,8 @@ __pycache__/
 .claude/worktrees/
 evals/snapshots/*.html
 evals/snapshots/*.png
-context/refs/research-brief-caveman-code-efficiency.md
+context/refs/research-brief-missionctl-code-efficiency.md
 
 # Build artifacts
 dist/*
-!dist/caveman.skill
+!dist/missionctl.skill

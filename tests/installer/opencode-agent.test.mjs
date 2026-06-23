@@ -1,9 +1,9 @@
 // Subagent frontmatter sanitizer for opencode (issue #386).
 //
 // opencode rejects the YAML array form `tools: [Read, Grep, Bash]` that
-// Claude Code accepts. Copying agents/cavecrew-*.md verbatim into
+// Claude Code accepts. Copying agents/missioncrew-*.md verbatim into
 // ~/.config/opencode/agents/ broke opencode startup with:
-//   Configuration is invalid at .../cavecrew-reviewer.md
+//   Configuration is invalid at .../missioncrew-reviewer.md
 //   ↳ Expected object | undefined, got ["Read","Grep","Bash"] tools
 //
 // Fix: strip the `tools:` field on copy. These tests prove the helper
@@ -22,7 +22,7 @@ const REPO_ROOT = path.resolve(HERE, '..', '..');
 const requireCjs = createRequire(import.meta.url);
 const { stripOpencodeAgentTools } = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'opencode-agent.js'));
 
-const SHIPPED_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
+const SHIPPED_AGENT_FILES = ['missioncrew-investigator.md', 'missioncrew-builder.md', 'missioncrew-reviewer.md'];
 
 function frontmatter(content) {
   const m = content.match(/^---\n([\s\S]*?)\n---\n/);
@@ -74,7 +74,7 @@ body
 // ── Folded `description: >` block must NOT be eaten ──────────────────────
 test('preserves folded `description: >` continuation lines when `tools:` follows', () => {
   const src = `---
-name: cavecrew-reviewer
+name: missioncrew-reviewer
 description: >
   Diff/branch/file reviewer. One line per finding, severity-tagged, no praise,
   no scope creep. Output format \`path:line: <emoji> <severity>: <problem>. <fix>.\`
@@ -117,10 +117,10 @@ test('non-string input returns unchanged', () => {
 });
 
 // ── Real shipped agent files: every one must transform to opencode-safe ──
-// This is the RED-state proof: each `agents/cavecrew-*.md` in the repo today
+// This is the RED-state proof: each `agents/missioncrew-*.md` in the repo today
 // contains the offending `tools: [...]` form, which is what broke opencode
 // startup in the reported bug. After transform, the field is gone.
-test('all shipped cavecrew agent files contain offending tools array (RED proof)', () => {
+test('all shipped missioncrew agent files contain offending tools array (RED proof)', () => {
   for (const f of SHIPPED_AGENT_FILES) {
     const src = fs.readFileSync(path.join(REPO_ROOT, 'agents', f), 'utf8');
     const fm = frontmatter(src);
@@ -128,14 +128,14 @@ test('all shipped cavecrew agent files contain offending tools array (RED proof)
   }
 });
 
-test('all shipped cavecrew agent files become opencode-safe after transform (GREEN proof)', () => {
+test('all shipped missioncrew agent files become opencode-safe after transform (GREEN proof)', () => {
   for (const f of SHIPPED_AGENT_FILES) {
     const src = fs.readFileSync(path.join(REPO_ROOT, 'agents', f), 'utf8');
     const out = stripOpencodeAgentTools(src);
     const fm = frontmatter(out);
 
     assert.doesNotMatch(fm, /^tools:/m, `${f}: tools field still present after transform`);
-    assert.match(fm, /^name: cavecrew-/m, `${f}: name field preserved`);
+    assert.match(fm, /^name: missioncrew-/m, `${f}: name field preserved`);
     assert.match(fm, /^description:/m, `${f}: description field preserved`);
 
     const bodyOut = out.replace(/^---\n[\s\S]*?\n---\n/, '');
