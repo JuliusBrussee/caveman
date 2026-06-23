@@ -58,7 +58,7 @@ function parseArgs(argv) {
     withHooks: 'auto', withInit: false, withMcpShrink: false,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
-    configDir: null, help: false,
+    configDir: null, help: false, repoScope: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -83,6 +83,7 @@ function parseArgs(argv) {
       case '--with-hooks': opts.withHooks = true; break;
       case '--no-hooks': opts.withHooks = false; break;
       case '--with-init': opts.withInit = true; break;
+      case '--repo': opts.repoScope = true; break;
       case '--with-mcp-shrink': {
         const v = argv[i + 1];
         if (v && !v.startsWith('--')) {
@@ -219,6 +220,14 @@ const PROVIDERS = [
   { id: 'kilo',       label: 'Kilo Code',           mech: 'npx skills add (kilo)',         detect: 'vscode-ext:kilocode', profile: 'kilo' },
   { id: 'roo',        label: 'Roo Code',            mech: 'npx skills add (roo)',          detect: 'vscode-ext:roo||vscode-ext:rooveterinaryinc.roo-cline||cursor-ext:roo', profile: 'roo' },
   { id: 'augment',    label: 'Augment Code',        mech: 'npx skills add (augment)',      detect: 'vscode-ext:augment||jetbrains-plugin:augment', profile: 'augment' },
+
+  // GitHub Copilot CLI (the `copilot` binary, npm @github/copilot). Unlike the
+  // editor extension, the CLI supports a full hook system (sessionStart etc.),
+  // so we install user-level hooks into ~/.copilot/hooks/ for always-on caveman
+  // — no manual /caveman each session. Handled by installCopilotCli (no profile,
+  // so it never routes through npx skills). Listed before the extension-based
+  // `copilot` entry so `--only copilot-cli` is unambiguous.
+  { id: 'copilot-cli', label: 'GitHub Copilot CLI',   mech: 'hooks (~/.copilot/hooks)',       detect: 'command:copilot||dir:$HOME/.copilot' },
 
   // GitHub Copilot: detected via VS Code / Cursor extension dirs (no `gh` CLI
   // needed). The old `command:copilot` soft probe never fired for most users
@@ -379,6 +388,23 @@ function detectRepoRoot() {
     return root;
   }
   return null;
+}
+
+// Resolve the *target* repository root for a repo-scoped install — the user's
+// current project, NOT the caveman clone. Walks up from `start` (default cwd)
+// looking for a `.git` dir/file. Falls back to `start` when no repo is found,
+// so `--repo` still works in a plain (non-git) directory. Bounded to 64 levels.
+function findTargetRepoRoot(start) {
+  let dir = path.resolve(start || process.cwd());
+  for (let i = 0; i < 64; i++) {
+    try {
+      if (fs.existsSync(path.join(dir, '.git'))) return dir;
+    } catch (_) { /* keep walking */ }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return path.resolve(start || process.cwd());
 }
 
 // ── Run helpers ────────────────────────────────────────────────────────────
@@ -916,6 +942,236 @@ async function installHooks(ctx) {
   return 'ok';
 }
 
+// ── GitHub Copilot CLI hooks ──────────────────────────────────────────────
+// The Copilot CLI binary supports a hook system analogous to Claude Code's,
+// but with a different contract: hooks live as JSON files in ~/.copilot/hooks/
+// (or $COPILOT_HOME/hooks/), and a sessionStart hook injects context by writing
+// { "additionalContext": "..." } to stdout. userPromptSubmitted output is NOT
+// processed, so that hook is side-effect only (persists the mode flag).
+//
+// See: https://docs.github.com/en/copilot/reference/hooks-reference
+const COPILOT_HOOK_SCRIPTS = [
+  'caveman-config.js',
+  'caveman-copilot-activate.js',
+  'caveman-copilot-mode-tracker.js',
+];
+
+// Agent Skills installed for Copilot CLI (personal ~/.copilot/skills/ or repo
+// .github/skills/). Copilot loads these automatically when relevant to a prompt.
+// caveman-stats is intentionally omitted — its SKILL.md describes a Claude-only
+// hook mechanism that does not apply to Copilot CLI.
+const COPILOT_SKILLS = [
+  'caveman',
+  'caveman-commit',
+  'caveman-review',
+  'caveman-compress',
+  'caveman-help',
+];
+
+function copilotHomeDir() {
+  return process.env.COPILOT_HOME || path.join(os.homedir(), '.copilot');
+}
+
+// Copy the caveman Agent Skills from the local clone into a skills base dir
+// (e.g. ~/.copilot/skills or <repo>/.github/skills). Requires a local clone —
+// skills are multi-file folders we don't download piecemeal. Returns the list of
+// skill names installed.
+function installCopilotSkills(ctx, skillsBaseDir) {
+  const { note, opts, repoRoot } = ctx;
+  const installed = [];
+  if (!repoRoot) {
+    note('  skills: skipped (needs a local caveman clone; hooks still installed)');
+    return installed;
+  }
+  for (const name of COPILOT_SKILLS) {
+    const src = path.join(repoRoot, 'skills', name);
+    if (!fs.existsSync(path.join(src, 'SKILL.md'))) continue;
+    const dest = path.join(skillsBaseDir, name);
+    if (opts.dryRun) { note(`  would install skill ${dest}`); installed.push(name); continue; }
+    try {
+      copyDirRecursive(src, dest);
+      installed.push(name);
+      process.stdout.write(`  installed skill: ${dest}\n`);
+    } catch (e) {
+      note(`  skill ${name} failed: ${e.message}`);
+    }
+  }
+  return installed;
+}
+
+async function installCopilotCli(ctx) {
+  const { say, note, warn, opts, repoRoot, results } = ctx;
+  results.detected++;
+  const repoScope = !!opts.repoScope;
+  say(`→ GitHub Copilot CLI detected${repoScope ? ' (repo-scoped install)' : ''}`);
+
+  // Scope-specific layout:
+  //   user: scripts live directly in $COPILOT_HOME/hooks/, caveman.json there too.
+  //   repo: scripts live in <repo>/.github/hooks/caveman/, caveman.json one level
+  //         up at <repo>/.github/hooks/ (where Copilot CLI looks for repo hooks).
+  let hooksDir, scriptsDir, configFile, label;
+  if (repoScope) {
+    const target = findTargetRepoRoot(process.cwd());
+    hooksDir = path.join(target, '.github', 'hooks');
+    scriptsDir = path.join(hooksDir, 'caveman');
+    configFile = path.join(hooksDir, 'caveman.json');
+    label = `repo ${target}`;
+  } else {
+    hooksDir = path.join(copilotHomeDir(), 'hooks');
+    scriptsDir = hooksDir;
+    configFile = path.join(hooksDir, 'caveman.json');
+    label = copilotHomeDir();
+  }
+  const skillDest = path.join(scriptsDir, 'caveman-skill.md');
+  const sourceDir = repoRoot ? path.join(repoRoot, 'src', 'hooks') : null;
+  const skillSource = repoRoot ? path.join(repoRoot, 'skills', 'caveman', 'SKILL.md') : null;
+
+  // Agent Skills base dir: personal ~/.copilot/skills/ (user scope) or
+  // <repo>/.github/skills/ (repo scope). Copilot CLI auto-loads these.
+  const skillsBaseDir = repoScope
+    ? path.join(findTargetRepoRoot(process.cwd()), '.github', 'skills')
+    : path.join(copilotHomeDir(), 'skills');
+
+  // Idempotency: skip only when hooks AND skills are already present.
+  if (!opts.force) {
+    const hooksPresent = fs.existsSync(configFile) &&
+      COPILOT_HOOK_SCRIPTS.every(f => fs.existsSync(path.join(scriptsDir, f)));
+    const skillsPresent = !repoRoot ||
+      COPILOT_SKILLS.every(n => fs.existsSync(path.join(skillsBaseDir, n, 'SKILL.md')));
+    if (hooksPresent && skillsPresent) {
+      note(`  caveman Copilot CLI hooks + skills already installed in ${label} (use --force to reinstall)`);
+      results.skipped.push(['copilot-cli', 'already installed']);
+      process.stdout.write('\n');
+      return;
+    }
+  }
+
+  if (opts.dryRun) {
+    note(`  would mkdir -p ${scriptsDir}`);
+    for (const f of COPILOT_HOOK_SCRIPTS) note(`  would install ${path.join(scriptsDir, f)}`);
+    note(`  would install ${skillDest}`);
+    note(`  would write ${configFile} (sessionStart + userPromptSubmitted hooks)`);
+    installCopilotSkills(ctx, skillsBaseDir);
+    if (repoScope) note('  (commit .github/hooks/ and .github/skills/ to share caveman with your team)');
+    results.installed.push('copilot-cli');
+    process.stdout.write('\n');
+    return;
+  }
+
+  try {
+    fs.mkdirSync(scriptsDir, { recursive: true });
+
+    // Copy hook scripts (local clone preferred; download fallback otherwise).
+    for (const f of COPILOT_HOOK_SCRIPTS) {
+      const dest = path.join(scriptsDir, f);
+      if (sourceDir && fs.existsSync(path.join(sourceDir, f))) {
+        fs.copyFileSync(path.join(sourceDir, f), dest);
+      } else {
+        try { await downloadTo(`${HOOKS_REMOTE}/${f}`, dest); }
+        catch (e) {
+          results.failed.push(['copilot-cli', `download ${f} failed: ${e.message}`]);
+          process.stdout.write('\n');
+          return;
+        }
+      }
+      process.stdout.write(`  installed: ${dest}\n`);
+    }
+
+    // Copy the full SKILL.md next to the scripts so the sessionStart hook injects
+    // the complete ruleset (buildRuleset resolves caveman-skill.md via __dirname)
+    // instead of the hardcoded fallback.
+    let haveSkill = false;
+    if (skillSource && fs.existsSync(skillSource)) {
+      fs.copyFileSync(skillSource, skillDest);
+      haveSkill = true;
+      process.stdout.write(`  installed: ${skillDest}\n`);
+    } else {
+      try {
+        await downloadTo(`${RAW_BASE}/skills/caveman/SKILL.md`, skillDest);
+        haveSkill = true;
+        process.stdout.write(`  installed: ${skillDest}\n`);
+      } catch (e) {
+        note('  note: could not fetch SKILL.md — hook will use built-in fallback ruleset');
+      }
+    }
+
+    // Build the hook config. Repo-scoped configs are committable, so they must be
+    // portable: bare `node` (on PATH) + repo-relative script paths + cwd at repo
+    // root. User-scoped configs are machine-local, so they bake in the absolute
+    // node path and absolute script paths (no PATH dependency).
+    let config;
+    if (repoScope) {
+      const rel = (f) => `.github/hooks/caveman/${f}`;
+      const entry = (f) => ({
+        type: 'command',
+        // bare `node` works in both bash and PowerShell when node is on PATH.
+        command: `node "${rel(f)}"`,
+        cwd: '.',
+        // Keep the runtime mode flag repo-local (resolved against cwd = repo
+        // root) instead of the global ~/.copilot/.caveman-active.
+        env: { CAVEMAN_FLAG_DIR: '.github/hooks/caveman' },
+        timeoutSec: 5,
+      });
+      config = {
+        version: 1,
+        hooks: {
+          sessionStart: [entry('caveman-copilot-activate.js')],
+          userPromptSubmitted: [entry('caveman-copilot-mode-tracker.js')],
+        },
+      };
+    } else {
+      const node = absoluteNodePath();
+      const entry = (f) => {
+        const script = path.join(scriptsDir, f);
+        const e = {
+          type: 'command',
+          bash: `"${node}" "${script}"`,
+          powershell: `& "${node}" "${script}"`,
+          timeoutSec: 5,
+        };
+        if (haveSkill) e.env = { CAVEMAN_SKILL_PATH: skillDest };
+        return e;
+      };
+      config = {
+        version: 1,
+        hooks: {
+          sessionStart: [entry('caveman-copilot-activate.js')],
+          userPromptSubmitted: [entry('caveman-copilot-mode-tracker.js')],
+        },
+      };
+    }
+
+    // Back up an existing caveman.json once before overwrite.
+    if (fs.existsSync(configFile) && !fs.existsSync(configFile + '.bak')) {
+      try { fs.copyFileSync(configFile, configFile + '.bak'); } catch (_) {}
+    }
+    fs.writeFileSync(configFile, JSON.stringify(config, null, 2) + '\n');
+    process.stdout.write(`  hooks wired in ${configFile}\n`);
+
+    // Repo scope: keep the runtime mode flag out of git (it lives next to the
+    // committed scripts but is per-user state).
+    if (repoScope) {
+      try { fs.writeFileSync(path.join(scriptsDir, '.gitignore'), '.caveman-active\n'); } catch (_) {}
+    }
+
+    // Install the Agent Skills so Copilot CLI can load caveman / caveman-commit /
+    // caveman-review / caveman-compress / caveman-help when relevant.
+    const skills = installCopilotSkills(ctx, skillsBaseDir);
+    if (skills.length) process.stdout.write(`  installed ${skills.length} skill${skills.length === 1 ? '' : 's'}: ${skills.join(', ')}\n`);
+
+    if (repoScope) {
+      note('  repo-scoped: commit .github/hooks/ + .github/skills/ to share; requires `node` on PATH');
+      note('  caveman activates only inside this repo. Restart Copilot CLI here.');
+    } else {
+      note('  restart Copilot CLI to activate (hooks load at CLI start; skills auto-load when relevant)');
+    }
+    results.installed.push('copilot-cli');
+  } catch (e) {
+    results.failed.push(['copilot-cli', `install failed: ${e.message}`]);
+  }
+  process.stdout.write('\n');
+}
+
 // ── MCP shrink wiring ─────────────────────────────────────────────────────
 function installMcpShrink(ctx) {
   const { note, warn, opts } = ctx;
@@ -1069,6 +1325,73 @@ function uninstall(ctx) {
       note(`  removed ${p}`);
     }
     // Don't rmdir hooksDir — other plugins may use it.
+  }
+
+  // GitHub Copilot CLI hooks: remove ~/.copilot/hooks/caveman.json, the copied
+  // scripts, the SKILL.md copy, the mode flag, and any backup we wrote.
+  {
+    const copilotHooksDir = path.join(copilotHomeDir(), 'hooks');
+    const copilotFlag = path.join(copilotHomeDir(), '.caveman-active');
+    const copilotFiles = [
+      ...COPILOT_HOOK_SCRIPTS,
+      'caveman.json',
+      'caveman.json.bak',
+      'caveman-skill.md',
+    ].map(f => path.join(copilotHooksDir, f));
+    copilotFiles.push(copilotFlag);
+    let removedCopilot = 0;
+    for (const p of copilotFiles) {
+      if (!fs.existsSync(p)) continue;
+      if (!opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
+      note(`  removed ${p}`);
+      removedCopilot++;
+    }
+    if (removedCopilot) ok(`  removed ${removedCopilot} Copilot CLI hook file${removedCopilot === 1 ? '' : 's'}`);
+    // Don't rmdir ~/.copilot/hooks — Copilot CLI / other hooks may use it.
+
+    // Personal Agent Skills under ~/.copilot/skills/<name>/
+    const personalSkillsDir = path.join(copilotHomeDir(), 'skills');
+    let removedSkills = 0;
+    for (const name of COPILOT_SKILLS) {
+      const d = path.join(personalSkillsDir, name);
+      if (!fs.existsSync(d)) continue;
+      if (!opts.dryRun) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} }
+      note(`  removed ${d}`);
+      removedSkills++;
+    }
+    if (removedSkills) ok(`  removed ${removedSkills} Copilot CLI skill${removedSkills === 1 ? '' : 's'}`);
+  }
+
+  // Repo-scoped Copilot CLI hooks: with --uninstall --repo, strip the committed
+  // .github/hooks/caveman.json + .github/hooks/caveman/ from the current repo.
+  if (opts.repoScope) {
+    const target = findTargetRepoRoot(process.cwd());
+    const repoHooksDir = path.join(target, '.github', 'hooks');
+    const repoConfig = path.join(repoHooksDir, 'caveman.json');
+    const repoScriptsDir = path.join(repoHooksDir, 'caveman');
+    let removedRepo = 0;
+    for (const p of [repoConfig, repoConfig + '.bak']) {
+      if (!fs.existsSync(p)) continue;
+      if (!opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
+      note(`  removed ${p}`);
+      removedRepo++;
+    }
+    if (fs.existsSync(repoScriptsDir)) {
+      if (!opts.dryRun) { try { fs.rmSync(repoScriptsDir, { recursive: true, force: true }); } catch (_) {} }
+      note(`  removed ${repoScriptsDir}`);
+      removedRepo++;
+    }
+    // Repo-scoped Agent Skills under <repo>/.github/skills/<name>/
+    const repoSkillsDir = path.join(target, '.github', 'skills');
+    for (const name of COPILOT_SKILLS) {
+      const d = path.join(repoSkillsDir, name);
+      if (!fs.existsSync(d)) continue;
+      if (!opts.dryRun) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} }
+      note(`  removed ${d}`);
+      removedRepo++;
+    }
+    if (removedRepo) ok(`  removed repo-scoped Copilot CLI hooks + skills from ${target}`);
+    else note(`  no repo-scoped Copilot CLI hooks found in ${target}`);
   }
 
   // Plugin uninstall on Claude. Probe `plugin list` first so a re-run on a
@@ -1257,6 +1580,9 @@ FLAGS
                         + statusline badge. (Default ON.)
   --no-hooks            Skip the hooks installer.
   --with-init           Write per-repo IDE rule files into \$PWD.
+  --repo                Copilot CLI only: install repo-scoped hooks into
+                        <repo>/.github/hooks/ instead of ~/.copilot/hooks/.
+                        Self-contained + committable. Use with --only copilot-cli.
   --with-mcp-shrink="<upstream cmd>"
                         Claude Code (and opencode): register caveman-shrink MCP
                         proxy wrapping the given upstream. Default OFF.
@@ -1343,6 +1669,7 @@ async function main() {
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
+    if (prov.id === 'copilot-cli') { await installCopilotCli(ctx); continue; }
     if (prov.profile)           { installViaSkills(ctx, prov); continue; }
   }
 

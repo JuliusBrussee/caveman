@@ -43,11 +43,12 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` | Yes |
 | **opencode** | `node bin/install.js --only opencode` *(or `npx -y github:JuliusBrussee/caveman -- --only opencode`)* | Yes (plugin + AGENTS.md) |
 | **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
+| **GitHub Copilot CLI** | `npx -y github:JuliusBrussee/caveman -- --only copilot-cli` | Yes (sessionStart hook in `~/.copilot/hooks/`) |
 | **Codex CLI** | `npx skills add JuliusBrussee/caveman -a codex` | Per-session: `/caveman` |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` | Per-session by default; `--with-init` for an always-on rule file |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` | Per-session by default; `--with-init` for an always-on rule file |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` | Per-session by default; `--with-init` for an always-on rule file |
-| **GitHub Copilot** *(soft probe)* | `npx -y github:JuliusBrussee/caveman -- --only copilot --with-init` | Repo-wide instructions via `--with-init` |
+| **GitHub Copilot** *(editor extension, soft probe)* | `npx -y github:JuliusBrussee/caveman -- --only copilot --with-init` | Repo-wide instructions via `--with-init` |
 | **Continue** | `npx skills add JuliusBrussee/caveman -a continue` | No — say `/caveman` |
 | **Kilo Code** | `npx skills add JuliusBrussee/caveman -a kilo` | No |
 | **Roo Code** | `npx skills add JuliusBrussee/caveman -a roo` | No |
@@ -75,6 +76,19 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Google Antigravity** *(soft probe)* | `npx skills add JuliusBrussee/caveman -a antigravity` | No |
 
 "Soft probe" = installer won't auto-detect these without `--only <id>` because there's no reliable always-on signal (Copilot subscription state is auth-gated; the others have no CLI / config-dir-only). Pass the flag when you want them.
+
+**Two GitHub Copilot rows, on purpose.** `copilot-cli` targets the **Copilot CLI** (`copilot` binary) and installs (1) a real hook into `~/.copilot/hooks/caveman.json` — its `sessionStart` hook injects the caveman ruleset every session, so caveman is on automatically (no `/caveman` needed) — and (2) the caveman **Agent Skills** into `~/.copilot/skills/` (caveman, caveman-commit, caveman-review, caveman-compress, caveman-help), which Copilot CLI auto-loads when relevant to your prompt. Mode picks (`/caveman ultra`, "stop caveman") persist across sessions via the flag at `~/.copilot/.caveman-active`. The `copilot` row targets the **editor extension** (VS Code / Cursor), which has no hook system — it gets repo-wide instructions via `--with-init`. Install whichever you use; both is fine.
+
+> **Note on `/caveman` in the CLI.** Copilot CLI doesn't support prompt files (the `/command` mechanism — see GitHub's [customization cheat sheet](https://docs.github.com/en/copilot/reference/customization-cheat-sheet)), but because caveman installs a **skill** named `caveman`, typing `/caveman` (or `/caveman ultra`) invokes that skill. The `userPromptSubmitted` hook reads Copilot's skill-invocation rewrite and persists the chosen mode to the flag, so `/caveman ultra` switches the level. Caveman is also always-on via the `sessionStart` hook, and "stop caveman" / "normal mode" deactivate it. For a `--repo` install the mode flag is stored repo-locally (under `.github/hooks/caveman/`, gitignored), not in your global `~/.copilot`.
+
+**Repo-only (not global) Copilot CLI install.** Add `--repo` to scope the hooks to one project instead of your whole user account:
+
+```bash
+cd /path/to/your/project
+npx -y github:JuliusBrussee/caveman -- --only copilot-cli --repo
+```
+
+This writes a **committable** `<repo>/.github/hooks/caveman.json` plus self-contained scripts under `<repo>/.github/hooks/caveman/` — caveman activates only when you run Copilot CLI inside that repo, and nothing touches `~/.copilot`. Commit `.github/hooks/` to share caveman with your team. Requires `node` on `PATH`. Remove with `--uninstall --repo` from the same repo.
 
 For "auto-activates? No" agents, type `/caveman` once per session (or use natural-language triggers like "talk like caveman", "caveman mode").
 

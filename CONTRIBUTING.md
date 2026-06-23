@@ -126,6 +126,9 @@ python3 -m unittest tests.test_compress_safety
 # Per-repo init tests
 node tests/test_caveman_init.js
 
+# Copilot CLI hook tests
+node tests/test_copilot_hooks.js
+
 # Flag-file symlink-safety tests
 node tests/test_symlink_flag.js
 ```
