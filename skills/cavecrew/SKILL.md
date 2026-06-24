@@ -1,15 +1,36 @@
 ---
 name: cavecrew
 description: >
-  Decision guide for delegating to caveman-style subagents. Tells the main
-  thread WHEN to spawn `cavecrew-investigator` (locate code), `cavecrew-builder`
-  (1-2 file edit), or `cavecrew-reviewer` (diff review) instead of doing the
-  work inline or using vanilla `Explore`. Subagent output is caveman-compressed
-  so the tool-result injected back into main context is ~60% smaller — main
-  context lasts longer across long sessions.
-  Trigger: "delegate to subagent", "use cavecrew", "spawn investigator/builder/reviewer",
-  "save context", "compressed agent output".
+  [DEPRECATED/RETIRED] Cavecrew is no longer an active part of the Amalgam ecosystem. 
+  Amalgam Conductor now owns all orchestration, task classification, and workflow sequencing. 
+  Task routing must use specialized domain experts (Ponytail, Clockwork Meister, etc.) 
+  instead of generic cavecrew-investigator/builder/reviewer. This file is preserved 
+  only as historical documentation.
+slug: cavecrew
 ---
+
+> [!WARNING]
+> **RETIRED AND DEPRECATED**
+> Cavecrew is obsolete. It is no longer an active part of the Amalgam ecosystem. Amalgam Conductor is now the only orchestration layer. Do not route any future tasks to Cavecrew. Task routing must use domain specialists instead of generic subagents like `cavecrew-investigator`, `cavecrew-builder`, or `cavecrew-reviewer`.
+
+## Replacement Routing Matrix
+
+Instead of generic subagents, Amalgam Conductor now sequences tasks using these domain experts:
+
+* **Bug fixes** -> `Ponytail`
+* **Architecture** -> `Clockwork Meister`
+* **Database and persistence** -> `Meister Chronicler`
+* **Security and privacy** -> `Cipher Meister`
+* **UI/UX** -> `Cloak Meister`
+* **QA and release gates** -> `Acme Overseer`
+* **Documentation** -> `Scribe Meister`
+* **Diagrams** -> `Meister Weaver`
+* **Chaos and resilience scenarios** -> `Hidden Dagger`
+* **Output compression** -> `Caveman protocol`
+
+---
+
+*The following content is preserved strictly for historical documentation of the obsolete orchestration model.*
 
 Cavecrew = three subagent presets that emit caveman output. Same job as Anthropic defaults (`Explore`, edit-style agents, reviewer); difference is the tool-result they return is compressed, so main context shrinks per delegation.
 
