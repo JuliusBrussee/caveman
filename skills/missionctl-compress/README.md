@@ -1,20 +1,20 @@
 <p align="center">
-  <img src="https://em-content.zobj.net/source/apple/391/rock_1faa8.png" width="80" />
+  <img src="../../docs/assets/signal.svg" width="80" />
 </p>
 
 <h1 align="center">missionctl-compress</h1>
 
 <p align="center">
-  <strong>shrink memory file. save token every session.</strong>
+  <strong>shrink memory files. save tokens every session.</strong>
 </p>
 
 ---
 
 A Claude Code skill that compresses your project memory files (`CLAUDE.md`, todos, preferences) into missionctl format — so every session loads fewer tokens automatically.
 
-Claude read `CLAUDE.md` on every session start. If file big, cost big. missionctl make file small. Token cost stays low.
+Claude reads `CLAUDE.md` on every session start. Big file, big cost. missionctl shrinks it. Token cost stays low.
 
-## What It Do
+## What It Does
 
 ```
 /missionctl-compress CLAUDE.md
@@ -103,7 +103,7 @@ Examples:
 | `.py`, `.js`, `.ts`, `.json`, `.yaml` | ❌ Skip (code/config) |
 | `*.original.md` | ❌ Skip (backup files) |
 
-## How It Work
+## How It Works
 
 ```
 /missionctl-compress CLAUDE.md
@@ -128,7 +128,7 @@ Only two things use tokens: initial compression + targeted fix if validation fai
 
 ## What Is Preserved
 
-missionctl compress natural language. It never touch:
+missionctl compresses natural language. Never touches:
 
 - Code blocks (` ``` ` fenced or indented)
 - Inline code (`` `backtick content` ``)
@@ -140,11 +140,11 @@ missionctl compress natural language. It never touch:
 - Tables (structure preserved, cell text compressed)
 - Dates, version numbers, numeric values
 
-## Why This Matter
+## Why This Matters
 
 `CLAUDE.md` loads on **every session start**. A 1000-token project memory file costs tokens every single time you open a project. Over 100 sessions that's 100,000 tokens of overhead — just for context you already wrote.
 
-missionctl cut that by ~46% on average. Same instructions. Same accuracy. Less waste.
+missionctl cuts that by ~46% on average. Same instructions. Same accuracy. Less waste.
 
 ```
 ┌────────────────────────────────────────────┐

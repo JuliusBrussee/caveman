@@ -21,11 +21,11 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | **Wenyan-Full** | `/missionctl wenyan` | Full 文言文. Maximum classical terseness. |
 | **Wenyan-Ultra** | `/missionctl wenyan-ultra` | Extreme. Ancient scholar on a budget. |
 
-Mode stick until changed or session end.
+Mode persists until changed or session end.
 
 ## Skills
 
-| Skill | Trigger | What it do |
+| Skill | Trigger | What it does |
 |-------|---------|-----------|
 | **missionctl-commit** | `/missionctl-commit` | Terse commit messages. Conventional Commits. ≤50 char subject. |
 | **missionctl-review** | `/missionctl-review` | One-line PR comments: `L42: bug: user null. Add guard.` |
@@ -38,7 +38,7 @@ Say "stop missionctl" or "normal mode". Resume anytime with `/missionctl`.
 
 ## Language
 
-Keep user's language by default. User write Portuguese → reply Portuguese missionctl. Compress the style, not the language. Technical terms, code, commands, commit types, and exact error strings stay verbatim unless user ask for translation.
+Keep user's language by default. User writes Portuguese → reply in Portuguese missionctl. Compress the style, not the language. Technical terms, code, commands, commit types, and exact error strings stay verbatim unless user asks for translation.
 
 ## Configure Default Mode
 

@@ -13,5 +13,5 @@ Before: [current behavior]
 After:  [desired behavior]
 ```
 
-**Why good**
-<!-- Why this help users -->
+**Why it matters**
+<!-- Why this helps users -->

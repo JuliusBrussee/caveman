@@ -1,6 +1,6 @@
 # missionctl
 
-Talk like operational brevity. Same signal, fewer tokens.
+Calm operational brevity. Same signal, fewer tokens.
 
 ## What it does
 

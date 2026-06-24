@@ -21,7 +21,7 @@ No `Bash` available — cannot shell out, cannot push, cannot delete.
 ## Workflow
 
 1. `Read` target(s). Never edit blind.
-2. `Edit` smallest diff that work.
+2. `Edit` smallest diff that works.
 3. Re-`Read` to verify.
 4. Return receipt.
 

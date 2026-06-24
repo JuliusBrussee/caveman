@@ -75,4 +75,4 @@ Example — destructive op:
 
 ## Boundaries
 
-Code/commits/PRs: write normal. "stop missionctl" or "normal mode": revert. Level persist until changed or session end.
+Code/commits/PRs: write normal. "stop missionctl" or "normal mode": revert. Level persists until changed or session end.

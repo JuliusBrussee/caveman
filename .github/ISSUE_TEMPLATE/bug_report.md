@@ -1,11 +1,11 @@
 ---
 name: Bug report
-about: missionctl speak wrong or break
+about: missionctl output is wrong or it breaks
 labels: bug
 ---
 
-**What happen**
-<!-- What missionctl do wrong -->
+**What happened**
+<!-- What missionctl did wrong -->
 
 **Expected**
 <!-- What missionctl should do -->
