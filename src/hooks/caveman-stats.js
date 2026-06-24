@@ -405,22 +405,34 @@ function main() {
     return;
   }
 
-  // Session source priority:
-  //   1. explicit --session-file
+  // Session source candidates, in priority order:
+  //   1. explicit --session-file (the hook passes the harness transcript_path)
   //   2. desktop host-loop audit.jsonl derived from cwd (exact current session)
   //   3. whichever of {CLI projects transcript, newest desktop audit} is newer
-  // (3) lets CLI and desktop installs both work: on the CLI the projects/*.jsonl
-  // is freshest; on the desktop app the audit.jsonl is.
-  const sessionFile = sessionFileArg
-    || auditFromCwd()
-    || newerFile(findRecentSession(claudeDir), newestDesktopAudit());
+  // We try each in turn and KEEP the first that actually has turns. This is
+  // important on the desktop app: the harness passes a transcript_path that may
+  // point at an empty / not-yet-written file (the live session isn't flushed to
+  // disk), which would otherwise short-circuit to "No conversation yet" and
+  // hide the real per-turn usage that lives in audit.jsonl. Falling through on
+  // a zero-turn candidate makes discovery kick in regardless.
+  const candidates = [
+    sessionFileArg,
+    auditFromCwd(),
+    newerFile(findRecentSession(claudeDir), newestDesktopAudit()),
+  ].filter(Boolean);
+
+  let sessionFile = null;
+  let parsed = { outputTokens: 0, cacheReadTokens: 0, turns: 0, model: null, sessionId: null };
+  for (const c of candidates) {
+    const p = parseSession(c);
+    if (!sessionFile) sessionFile = c;          // remember first, even if empty
+    if (p.turns > 0) { sessionFile = c; parsed = p; break; }  // prefer one with data
+  }
 
   if (!sessionFile) {
     process.stderr.write('caveman-stats: no Claude Code session found.\n');
     process.exit(1);
   }
-
-  const parsed = parseSession(sessionFile);
   const mode = readFlag(path.join(claudeDir, '.caveman-active'));
 
   // Append a snapshot of this session's totals to the lifetime log. Multiple
