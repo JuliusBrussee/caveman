@@ -1,0 +1,40 @@
+{
+  "name": "caveman",
+  "version": "1.9.0",
+  "description": "Ultra-compressed communication mode. Cut filler. Keep technical accuracy.",
+  "author": {
+    "name": "Julius Brussee",
+    "url": "https://github.com/JuliusBrussee"
+  },
+  "homepage": "https://github.com/JuliusBrussee/caveman",
+  "repository": "https://github.com/JuliusBrussee/caveman",
+  "license": "MIT",
+  "keywords": [
+    "productivity",
+    "communication",
+    "brevity",
+    "writing"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/claude-codex-hooks.json",
+  "interface": {
+    "displayName": "Caveman",
+    "shortDescription": "Talk like caveman. Cut filler. Keep technical accuracy.",
+    "longDescription": "Ultra-compressed communication mode. Cuts ~75% of tokens while keeping full technical accuracy by speaking like a caveman.",
+    "developerName": "Julius Brussee",
+    "category": "Productivity",
+    "capabilities": [
+      "Instructions",
+      "Lifecycle hooks"
+    ],
+    "websiteURL": "https://github.com/JuliusBrussee/caveman",
+    "privacyPolicyURL": "https://github.com/JuliusBrussee/caveman/blob/main/README.md",
+    "termsOfServiceURL": "https://github.com/JuliusBrussee/caveman/blob/main/LICENSE",
+    "defaultPrompt": [
+      "Use caveman mode. Cut filler. Keep technical accuracy.",
+      "Talk like caveman.",
+      "Activate /caveman mode."
+    ],
+    "brandColor": "#6B7280"
+  }
+}
