@@ -54,6 +54,29 @@ function formatUsd(amount) {
 
 function findRecentSession(claudeDir) {
   const projectsDir = path.join(claudeDir, 'projects');
+
+  // Session dirs are flat (UUID.jsonl files directly inside project slug dir).
+  // Try CWD-scoped project first so multi-project setups don't bleed across.
+  // CWD slug: /home/dave → -home-dave  (replace every / with -)
+  function newestInDir(dir) {
+    let names;
+    try { names = fs.readdirSync(dir); } catch { return null; }
+    let best = null;
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue;
+      const p = path.join(dir, name);
+      let st;
+      try { st = fs.statSync(p); } catch { continue; }
+      if (!best || st.mtimeMs > best.mtime) best = { file: p, mtime: st.mtimeMs };
+    }
+    return best ? best.file : null;
+  }
+
+  const cwdSlug = process.cwd().replace(/\//g, '-');
+  const cwdResult = newestInDir(path.join(projectsDir, cwdSlug));
+  if (cwdResult) return cwdResult;
+
+  // Fall back: global walk (original behaviour, covers non-standard CWDs)
   let entries;
   try { entries = fs.readdirSync(projectsDir, { withFileTypes: true }); }
   catch { return null; }
