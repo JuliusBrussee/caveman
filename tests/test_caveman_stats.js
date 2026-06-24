@@ -88,11 +88,55 @@ test('reports no-session when no .jsonl exists', (tmp) => {
   try {
     execFileSync(process.execPath, [STATS], {
       encoding: 'utf8',
-      env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(tmp, '.claude') },
+      // Isolate BOTH session sources: the CLI projects dir (CLAUDE_CONFIG_DIR)
+      // and the desktop app audit logs (CLAUDE_DESKTOP_DIR) — point the latter
+      // at an empty tmp dir so the real ~/.config/Claude isn't scanned.
+      env: {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: path.join(tmp, '.claude'),
+        CLAUDE_DESKTOP_DIR: path.join(tmp, 'desktop-empty'),
+      },
     });
   } catch (e) { err = e; }
   assert.ok(err, 'should exit non-zero');
   assert.match(err.stderr, /no Claude Code session found/);
+});
+
+test('parses desktop audit.jsonl: sums result entries, ignores assistant snapshots', (tmp) => {
+  const { parseSession } = require(STATS);
+  const audit = path.join(tmp, 'audit.jsonl');
+  fs.writeFileSync(audit, [
+    // streaming snapshots — must NOT be summed (would add ~3)
+    { type: 'assistant', message: { usage: { output_tokens: 1, cache_read_input_tokens: 10 } } },
+    { type: 'assistant', message: { usage: { output_tokens: 1, cache_read_input_tokens: 10 } } },
+    // two completed runs — these are authoritative
+    { type: 'result', subtype: 'success', num_turns: 3, session_id: 'cli-abc',
+      usage: { output_tokens: 5000, cache_read_input_tokens: 800000 },
+      modelUsage: { 'claude-opus-4-8[1m]': { outputTokens: 5000 } } },
+    { type: 'result', subtype: 'error_during_execution', num_turns: 2, session_id: 'cli-abc',
+      usage: { output_tokens: 681, cache_read_input_tokens: 83239 },
+      modelUsage: { 'claude-opus-4-8[1m]': { outputTokens: 681 } } },
+  ].map(l => JSON.stringify(l)).join('\n'));
+
+  const p = parseSession(audit);
+  assert.strictEqual(p.outputTokens, 5681, 'sums result output_tokens only');
+  assert.strictEqual(p.cacheReadTokens, 883239, 'sums result cache_read');
+  assert.strictEqual(p.turns, 5, 'sums num_turns across runs incl. error run');
+  assert.strictEqual(p.model, 'claude-opus-4-8', 'derives model from modelUsage, strips [1m]');
+  assert.strictEqual(p.sessionId, 'cli-abc', 'carries result session_id for history keying');
+});
+
+test('CLI transcript parsing unchanged (no result entries)', (tmp) => {
+  const { parseSession } = require(STATS);
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { model: 'claude-sonnet-4-6', usage: { output_tokens: 100, cache_read_input_tokens: 200 } } },
+    { type: 'assistant', message: { model: 'claude-sonnet-4-6', usage: { output_tokens: 50, cache_read_input_tokens: 0 } } },
+  ]);
+  const p = parseSession(sess);
+  assert.strictEqual(p.outputTokens, 150);
+  assert.strictEqual(p.turns, 2);
+  assert.strictEqual(p.model, 'claude-sonnet-4-6');
+  assert.strictEqual(p.sessionId, null);
 });
 
 test('mode tracker handles /caveman-stats with decision block', (tmp) => {
