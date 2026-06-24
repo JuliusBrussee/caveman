@@ -40,8 +40,11 @@ const MODEL_OUTPUT_PRICE_PER_M = [
 
 function priceForModel(model) {
   if (!model) return null;
+  // Desktop audit logs tag ids with a context-window marker, e.g.
+  // "claude-opus-4-8[1m]". Strip it before prefix-matching the rate card.
+  const id = model.replace(/\[[^\]]*\]\s*$/, '');
   for (const [prefix, price] of MODEL_OUTPUT_PRICE_PER_M) {
-    if (model.startsWith(prefix)) return price;
+    if (id.startsWith(prefix)) return price;
   }
   return null;
 }
@@ -54,6 +57,29 @@ function formatUsd(amount) {
 
 function findRecentSession(claudeDir) {
   const projectsDir = path.join(claudeDir, 'projects');
+
+  // Session dirs are flat (UUID.jsonl files directly inside project slug dir).
+  // Try CWD-scoped project first so multi-project setups don't bleed across.
+  // CWD slug: /home/dave → -home-dave  (replace every / with -)
+  function newestInDir(dir) {
+    let names;
+    try { names = fs.readdirSync(dir); } catch { return null; }
+    let best = null;
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue;
+      const p = path.join(dir, name);
+      let st;
+      try { st = fs.statSync(p); } catch { continue; }
+      if (!best || st.mtimeMs > best.mtime) best = { file: p, mtime: st.mtimeMs };
+    }
+    return best ? best.file : null;
+  }
+
+  const cwdSlug = process.cwd().replace(/\//g, '-');
+  const cwdResult = newestInDir(path.join(projectsDir, cwdSlug));
+  if (cwdResult) return cwdResult;
+
+  // Fall back: global walk (original behaviour, covers non-standard CWDs)
   let entries;
   try { entries = fs.readdirSync(projectsDir, { withFileTypes: true }); }
   catch { return null; }
@@ -75,20 +101,99 @@ function findRecentSession(claudeDir) {
   return best ? best.file : null;
 }
 
+// ── Claude desktop app (Electron) session logs ───────────────────────────
+// The desktop "host loop" does NOT write the CLI's
+//   ~/.claude/projects/<slug>/<uuid>.jsonl
+// transcript. It writes a live, per-turn audit log at
+//   ~/.config/Claude/local-agent-mode-sessions/<acct>/<space>/local_<id>/audit.jsonl
+// Each audit.jsonl holds one or more type=="result" entries carrying
+// cumulative usage for that run; parseSession() prefers them.
+function desktopSessionsRoot() {
+  const base = process.env.CLAUDE_DESKTOP_DIR || path.join(os.homedir(), '.config', 'Claude');
+  return path.join(base, 'local-agent-mode-sessions');
+}
+
+// Exact current-session match: the host loop runs with cwd inside the session
+// dir (typically .../local_<id>/outputs), so the active audit.jsonl is the
+// nearest local_<id>/audit.jsonl walking up from cwd. No mtime guessing.
+function auditFromCwd() {
+  let dir = process.cwd();
+  for (let depth = 0; depth < 8 && dir && dir !== path.dirname(dir); depth++) {
+    if (path.basename(dir).startsWith('local_')) {
+      const candidate = path.join(dir, 'audit.jsonl');
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch {}
+    }
+    dir = path.dirname(dir);
+  }
+  return null;
+}
+
+// Newest audit.jsonl by mtime across all desktop sessions — a recency signal
+// for when cwd doesn't resolve (the session you're prompting in has the most
+// recently written audit log).
+function newestDesktopAudit(root) {
+  let best = null;
+  const stack = [root || desktopSessionsRoot()];
+  while (stack.length) {
+    const p = stack.pop();
+    let st;
+    try { st = fs.statSync(p); } catch { continue; }
+    if (st.isDirectory()) {
+      try { for (const c of fs.readdirSync(p)) stack.push(path.join(p, c)); } catch {}
+    } else if (path.basename(p) === 'audit.jsonl' && (!best || st.mtimeMs > best.mtime)) {
+      best = { file: p, mtime: st.mtimeMs };
+    }
+  }
+  return best ? best.file : null;
+}
+
+// Return whichever of two paths has the newer mtime (nulls ignored). Lets the
+// CLI vs desktop source be chosen by recency without hardcoding a winner.
+function newerFile(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const m = f => { try { return fs.statSync(f).mtimeMs; } catch { return -1; } };
+  return m(a) >= m(b) ? a : b;
+}
+
 function parseSession(filePath) {
   let raw;
   try { raw = fs.readFileSync(filePath, 'utf8'); }
-  catch { return { outputTokens: 0, cacheReadTokens: 0, turns: 0, model: null }; }
+  catch { return { outputTokens: 0, cacheReadTokens: 0, turns: 0, model: null, sessionId: null }; }
 
-  let outputTokens = 0;
-  let cacheReadTokens = 0;
-  let turns = 0;
-  let model = null;
+  const entries = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
-    if (entry.type !== 'assistant' || !entry.message) continue;
+    try { entries.push(JSON.parse(line)); } catch {}
+  }
+
+  // Desktop audit.jsonl: sum the type=="result" entries. They carry cumulative
+  // per-run usage; the interleaved type=="assistant" entries are streaming
+  // snapshots (output_tokens≈1) and would badly undercount if summed. A file
+  // can hold 1–83 result entries (one per prompt→completion run in the
+  // session) — sum them all. Error runs still carry usage, so keep them.
+  const results = entries.filter(e => e && e.type === 'result' && e.usage);
+  if (results.length) {
+    let outputTokens = 0, cacheReadTokens = 0, turns = 0, model = null, sessionId = null;
+    for (const e of results) {
+      outputTokens    += e.usage.output_tokens           || 0;
+      cacheReadTokens += e.usage.cache_read_input_tokens || 0;
+      turns           += e.num_turns || 1;
+      if (e.session_id) sessionId = e.session_id;
+      // No top-level model on result entries — derive from modelUsage keys
+      // (e.g. "claude-opus-4-8[1m]"); strip the context-window marker.
+      if (!model && e.modelUsage && typeof e.modelUsage === 'object') {
+        const k = Object.keys(e.modelUsage)[0];
+        if (k) model = k.replace(/\[[^\]]*\]\s*$/, '');
+      }
+    }
+    return { outputTokens, cacheReadTokens, turns, model, sessionId };
+  }
+
+  // CLI transcript: sum type=="assistant" message.usage.
+  let outputTokens = 0, cacheReadTokens = 0, turns = 0, model = null;
+  for (const entry of entries) {
+    if (!entry || entry.type !== 'assistant' || !entry.message) continue;
     const usage = entry.message.usage;
     if (!usage) continue;
     outputTokens    += usage.output_tokens           || 0;
@@ -96,7 +201,7 @@ function parseSession(filePath) {
     turns++;
     if (!model && entry.message.model) model = entry.message.model;
   }
-  return { outputTokens, cacheReadTokens, turns, model };
+  return { outputTokens, cacheReadTokens, turns, model, sessionId: null };
 }
 
 // Detect *.original.md / *.md pairs left behind by caveman-compress. The
@@ -300,14 +405,34 @@ function main() {
     return;
   }
 
-  const sessionFile = sessionFileArg || findRecentSession(claudeDir);
+  // Session source candidates, in priority order:
+  //   1. explicit --session-file (the hook passes the harness transcript_path)
+  //   2. desktop host-loop audit.jsonl derived from cwd (exact current session)
+  //   3. whichever of {CLI projects transcript, newest desktop audit} is newer
+  // We try each in turn and KEEP the first that actually has turns. This is
+  // important on the desktop app: the harness passes a transcript_path that may
+  // point at an empty / not-yet-written file (the live session isn't flushed to
+  // disk), which would otherwise short-circuit to "No conversation yet" and
+  // hide the real per-turn usage that lives in audit.jsonl. Falling through on
+  // a zero-turn candidate makes discovery kick in regardless.
+  const candidates = [
+    sessionFileArg,
+    auditFromCwd(),
+    newerFile(findRecentSession(claudeDir), newestDesktopAudit()),
+  ].filter(Boolean);
+
+  let sessionFile = null;
+  let parsed = { outputTokens: 0, cacheReadTokens: 0, turns: 0, model: null, sessionId: null };
+  for (const c of candidates) {
+    const p = parseSession(c);
+    if (!sessionFile) sessionFile = c;          // remember first, even if empty
+    if (p.turns > 0) { sessionFile = c; parsed = p; break; }  // prefer one with data
+  }
 
   if (!sessionFile) {
     process.stderr.write('caveman-stats: no Claude Code session found.\n');
     process.exit(1);
   }
-
-  const parsed = parseSession(sessionFile);
   const mode = readFlag(path.join(claudeDir, '.caveman-active'));
 
   // Append a snapshot of this session's totals to the lifetime log. Multiple
@@ -315,7 +440,10 @@ function main() {
   // session_id; aggregateHistory keeps only the latest per session_id.
   if (parsed.turns > 0) {
     const { estSavedTokens, estSavedUsd } = deriveSavings({ ...parsed, mode });
-    const sessionId = path.basename(sessionFile, '.jsonl');
+    // Desktop audit files are all named "audit.jsonl" — basename would collapse
+    // every desktop session to one history id. Use the result entry's
+    // session_id when present; fall back to the CLI's <uuid>.jsonl basename.
+    const sessionId = parsed.sessionId || path.basename(sessionFile, '.jsonl');
     appendFlag(historyPath, JSON.stringify({
       ts: Date.now(),
       session_id: sessionId,
@@ -350,4 +478,5 @@ module.exports = {
   formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
   parseSession, priceForModel, formatUsd, COMPRESSION, MODEL_OUTPUT_PRICE_PER_M,
   findCompressedPairs, summarizeCompressed, humanizeTokens,
+  findRecentSession, auditFromCwd, newestDesktopAudit, newerFile, desktopSessionsRoot,
 };
