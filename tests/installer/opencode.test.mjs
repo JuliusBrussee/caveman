@@ -247,10 +247,16 @@ test('opencode uninstall removes plugin dir, command/agent/skill files, prunes o
   }
 });
 
-// ── 5. Plugin smoke: load installed plugin.js, fire fake hooks ────────────
-test('opencode plugin handles /caveman ultra and stop caveman via tui.prompt.append', async () => {
+// ── 5. Plugin smoke: load installed plugin.js, fire the real opencode hooks ──
+// opencode (>= 1.15) has no `tui.prompt.append` or top-level `session.created`
+// plugin-hook keys (#418/#421). The plugin now uses `chat.message` for mode
+// parsing, `experimental.chat.system.transform` for reinforcement, and the
+// `event` dispatcher (filtering event.type === 'session.created') for session
+// init. This test drives those real hooks.
+test('opencode plugin handles /caveman ultra, stop caveman, and session init via real hooks', async () => {
   const xdg = freshTmpDir();
   const shimDir = shimOpencode();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
   try {
     const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
     const r = runInstaller(['--only', 'opencode'], env);
@@ -259,28 +265,73 @@ test('opencode plugin handles /caveman ultra and stop caveman via tui.prompt.app
     const pluginPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'plugin.js');
     const flagPath = path.join(xdg, 'opencode', '.caveman-active');
 
-    // Set XDG_CONFIG_HOME for the plugin so flagPath resolves to our temp dir.
+    // Set XDG_CONFIG_HOME so the plugin's flagPath resolves to our temp dir,
+    // and pin the default mode so session-init is deterministic regardless of
+    // any ambient user/repo-local caveman config.
     process.env.XDG_CONFIG_HOME = xdg;
+    process.env.CAVEMAN_DEFAULT_MODE = 'full';
 
     const mod = await import(pathToFileURL(pluginPath).href);
     const factory = mod.default || mod.CavemanPlugin;
     const handlers = await factory({});
 
-    // Slash command activates ultra
-    const out1 = await handlers['tui.prompt.append']({ prompt: '/caveman ultra' });
+    // The dead direct-key hooks must NOT be registered.
+    assert.equal(handlers['tui.prompt.append'], undefined, 'tui.prompt.append should not exist');
+    assert.equal(handlers['session.created'], undefined, 'session.created direct key should not exist');
+    assert.equal(typeof handlers.event, 'function', 'event dispatcher should be a function');
+    assert.equal(typeof handlers['chat.message'], 'function', 'chat.message should be a function');
+    assert.equal(typeof handlers['experimental.chat.system.transform'], 'function',
+      'system.transform should be a function');
+
+    // Slash command in a chat.message text part activates ultra.
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
     assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultra');
-    assert.ok(out1 && typeof out1.append === 'string', 'expected reinforcement append');
-    assert.match(out1.append, /CAVEMAN MODE ACTIVE \(ultra\)/);
 
-    // Natural-language deactivation removes flag
-    const out2 = await handlers['tui.prompt.append']({ prompt: 'stop caveman please' });
+    // opencode expands "/caveman <level>" into the command template before
+    // chat.message fires — the level must be recovered from the expanded text.
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text:
+      'Activate caveman mode: wenyan-lite\n\nIf no level given, use full. If "off", deactivate.' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'wenyan-lite');
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text:
+      'Activate caveman mode: off\n\nIf no level given, use full. If "off", deactivate.' }] });
+    assert.equal(fs.existsSync(flagPath), false, 'expanded template with off should delete the flag');
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text:
+      'Activate caveman mode: \n\nIf no level given, use full. If "off", deactivate.' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full', 'expanded template without level uses default');
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultra');
+
+    // opencode's non-interactive `run` path wraps the message in literal
+    // quotes ("/caveman lite"\n) — the parser must unwrap them.
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '"/caveman lite"\n' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'lite');
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultra');
+
+    // system.transform injects the reinforcement line while active.
+    const sys1 = { system: [] };
+    await handlers['experimental.chat.system.transform']({}, sys1);
+    assert.equal(sys1.system.length, 1, 'expected one reinforcement line');
+    assert.match(sys1.system[0], /CAVEMAN MODE ACTIVE \(ultra\)/);
+
+    // Natural-language deactivation removes the flag.
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: 'stop caveman please' }] });
     assert.equal(fs.existsSync(flagPath), false, 'flag should be deleted after deactivation');
-    assert.equal(out2, undefined, 'no reinforcement when flag absent');
 
-    // session.created writes default mode
-    await handlers['session.created']();
+    // No reinforcement injected when inactive.
+    const sys2 = { system: [] };
+    await handlers['experimental.chat.system.transform']({}, sys2);
+    assert.equal(sys2.system.length, 0, 'no reinforcement when flag absent');
+
+    // The `event` dispatcher writes the default mode on session.created, and
+    // ignores unrelated event types.
+    await handlers.event({ event: { type: 'session.idle' } });
+    assert.equal(fs.existsSync(flagPath), false, 'non-session.created event must not write the flag');
+    await handlers.event({ event: { type: 'session.created' } });
     assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full');
   } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });
   }

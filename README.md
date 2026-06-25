@@ -76,6 +76,10 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (al
 
 Pick your level of grunt — `lite` (drop filler), `full` (default caveman), `ultra` (telegraphic), or `wenyan` (classical Chinese, even shorter). One command switch. Cost go down forever.
 
+**Speak your tongue.** Caveman keep your language. You write Portuguese, caveman grunt Portuguese. Spanish, French, same. Compress the *style*, not the language. Code, command, error string stay exact.
+
+> "Novo ref de objeto cada render. Prop inline = novo ref = re-render. Envolva com `useMemo`."
+
 <table align="center">
 <tr><td>
 
@@ -219,6 +223,24 @@ Five tools. One philosophy: **agent do more with less**.
 
 Compose: cavekit drive build, caveman compress what agent *say*, cavemem compress what agent *remember*, cavegemma bake compression into weight, caveman-code ship it all as one terminal agent. One rock. Two rock. Three rock. Four rock. Five rock. That it.
 
+## More Skill From Same Cave
+
+Caveman has siblings. [**JuliusBrussee/skills**](https://github.com/JuliusBrussee/skills) — five skills, one install, works in Claude Code, Cursor, Gemini, Cline, Copilot, 40+ agents:
+
+| Skill | What |
+|------|------|
+| [**caveman**](https://github.com/JuliusBrussee/skills/tree/main/skills/caveman) | This one. Speak less, say more. |
+| [**grill-me**](https://github.com/JuliusBrussee/skills/tree/main/skills/grill-me) | Agent grill your plan *before* you build wrong thing. Checks how much you know first — no condescend, no coddle. |
+| [**interface-kit**](https://github.com/JuliusBrussee/skills/tree/main/skills/interface-kit) | Build UI that look good, load fast, work for everyone. |
+| [**junior-to-senior**](https://github.com/JuliusBrussee/skills/tree/main/skills/junior-to-senior) | Adversarial review pass. Junior output go in, senior output come out. |
+| [**loop-factory**](https://github.com/JuliusBrussee/skills/tree/main/skills/loop-factory) | Spec-driven task loop — inbox → active → archive, review gate between. |
+
+```bash
+npx skills@latest add JuliusBrussee/skills
+```
+
+One command. Five skill. Cave well stocked.
+
 ## Links
 
 - [INSTALL.md](./INSTALL.md) — full install matrix, all flags, per-agent detail
@@ -236,6 +258,25 @@ Caveman save you token, save you money. Star cost zero. Fair trade. ⭐
 ## Also by Julius Brussee
 
 - **[Revu](https://github.com/JuliusBrussee/revu-swift)** — local-first macOS study app with FSRS spaced repetition. [revu.cards](https://revu.cards)
+
+## Sponsors
+
+caveman free forever. Sponsor keep rock sharp.
+
+<p align="center">
+  <a href="https://www.atlascloud.ai">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/atlas-cloud-dark.svg">
+      <img src="docs/assets/atlas-cloud.svg" alt="Atlas Cloud" height="28">
+    </picture>
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://www.atlascloud.ai"><strong>Atlas Cloud</strong></a> — full-modal AI inference platform, one API.
+</p>
+
+Want rock here too? [Sponsor caveman](https://github.com/sponsors/JuliusBrussee).
 
 ## License
 

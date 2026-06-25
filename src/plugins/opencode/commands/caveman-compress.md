@@ -1,7 +1,15 @@
 ---
-description: Compress natural language memory files into caveman format
+description: Compress a markdown/text file into caveman format to save tokens
 ---
-Compress natural language memory files (CLAUDE.md, todos, preferences) into caveman format to save input tokens.
-Preserves all technical substance, code, URLs, and structure.
+Compress the file at: $ARGUMENTS
 
-Use the `caveman-compress` skill.
+Run the `caveman-compress` skill against the given filepath. The skill rewrites
+prose into terse caveman style — drops articles, filler, hedging — while
+preserving code blocks, inline code, URLs, file paths, commands, and markdown
+structure exactly. Original is backed up as `<file>.original.md` before
+overwrite.
+
+Only compress natural-language files (`.md`, `.txt`, `.typ`, `.tex`,
+extensionless). Refuse source/config files (`.py`, `.js`, `.ts`, `.json`,
+`.yaml`, `.toml`, `.sh`, etc.). Never compress an existing `*.original.md`
+backup.
