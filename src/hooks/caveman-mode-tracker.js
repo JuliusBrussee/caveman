@@ -17,6 +17,42 @@ const flagPath = path.join(claudeDir, '.caveman-active');
 // Remembers the prose mode active before a one-shot independent mode
 // (/caveman-commit etc.) so the next ordinary prompt can restore it (#599).
 const prevPath = path.join(claudeDir, '.caveman-active.prev');
+const settingsPath = path.join(claudeDir, 'settings.json');
+
+// Known token-compression plugins that inject competing style instructions.
+// When detected, caveman reduces its per-turn injection to avoid contradictory
+// instructions confusing the model. The SessionStart full ruleset is unchanged.
+const COMPRESSION_PLUGIN_IDS = ['ponytail', 'grill-me', 'grilling'];
+
+// Check if any known compression plugin is registered in settings.json.
+// Returns true if a conflict is found, false otherwise.
+function detectCompressionConflict(settingsFile) {
+  try {
+    if (!fs.existsSync(settingsFile)) return false;
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    // Check installed_plugins for known compression plugin keys
+    const installed = settings.installed_plugins;
+    if (installed && typeof installed === 'object') {
+      for (const key of Object.keys(installed)) {
+        for (const id of COMPRESSION_PLUGIN_IDS) {
+          if (key.toLowerCase().includes(id)) return true;
+        }
+      }
+    }
+    // Check permissions for plugin-scoped keys (e.g. "ponytail@ponytail": true)
+    const permissions = settings.permissions;
+    if (permissions && typeof permissions === 'object') {
+      for (const key of Object.keys(permissions)) {
+        for (const id of COMPRESSION_PLUGIN_IDS) {
+          if (key.toLowerCase().includes(id)) return true;
+        }
+      }
+    }
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
 
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
@@ -190,13 +226,22 @@ process.stdin.on('end', () => {
       }
     }
 
+    // Conflict detection: if another token-compression plugin is active (ponytail,
+    // grill-me, etc.), reduce to a minimal one-liner instead of the full reminder
+    // to avoid injecting contradictory style instructions that confuse the model.
+    // Detect conflicts by checking settings.json for registered compression plugins.
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+      const hasCompressionConflict = detectCompressionConflict(settingsPath);
+      const context = hasCompressionConflict
+        ? 'CAVEMAN MODE ACTIVE (' + activeMode + ') — reduced injection (another compression plugin detected). ' +
+          'Caveman rules still apply per SessionStart injection.'
+        : 'CAVEMAN MODE ACTIVE (' + activeMode + '). ' +
+          'Drop articles/filler/pleasantries/hedging. Fragments OK. ' +
+          'Code/commits/security: write normal.';
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-            "Code/commits/security: write normal."
+          additionalContext: context
         }
       }));
     }
