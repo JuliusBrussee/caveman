@@ -34,6 +34,12 @@ If you installed caveman standalone (without the plugin), the unified Node insta
 - Deterministic + fail-open: same input → same bytes (so the cache stays warm); any error passes the original result through unchanged. JSON-ish results are never touched.
 - **Not wired by the plugin** (avoids a per-tool-call hook spawn for everyone). Opt in, then enable at runtime — see "Trim oversized tool results" below.
 
+> **Known limitation (Claude Code, verified 2026-06): this hook currently has ~no real-world effect.** Two reasons, both confirmed empirically with a logging wrapper on a live session:
+> 1. **Claude Code does not apply a string `updatedToolOutput` when the `tool_response` is a structured object** — and every built-in tool returns an object: Bash `{stdout, stderr, interrupted, …}`, Read `{type, file}`, Grep `{mode, content, numLines, …}`, Glob likewise. The hook fires, extracts the text, trims it, and emits a valid `updatedToolOutput` string, but Claude Code shows the original result unchanged. So it is a no-op for all four matched tools.
+> 2. **Claude Code already persists oversized results natively** — a large result (~30KB threshold) is written to disk and replaced with a ~2KB preview, more aggressively than this hook would trim. So even the big cases are already handled.
+>
+> The code is correct and unit-tested; the limitation is in the PostToolUse API surface, not the hook. It is left OFF by default. Re-evaluate if a future Claude Code honors `updatedToolOutput` for object results (then the hook would need to return the object shape with the text field trimmed, not a string).
+
 ## Statusline Badge
 
 The statusline badge shows which caveman mode is active directly in your Claude Code status bar.
