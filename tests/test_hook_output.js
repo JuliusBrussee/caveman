@@ -137,5 +137,15 @@ test('nudge fires even on an off-cadence turn', (tmp) => {
   assert.ok(ctx && ctx.includes('cavecrew-investigator'), 'off-cadence locate prompt should still nudge');
 });
 
+test('/caveman auto activates the opt-in auto intensity mode', (tmp) => {
+  runHook('caveman-activate.js', tmp); // flag = full
+  runHook('caveman-mode-tracker.js', tmp, { prompt: '/caveman auto' });
+  assert.strictEqual(
+    fs.readFileSync(path.join(tmp, '.caveman-active'), 'utf8'),
+    'auto',
+    '/caveman auto should write the auto flag'
+  );
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
