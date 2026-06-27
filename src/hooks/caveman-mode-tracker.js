@@ -34,6 +34,12 @@ function readTurnCount(p) {
   } catch (e) { return 0; }
 }
 
+// Multi-site locate verbs — tightly scoped so a trivial one-line lookup doesn't
+// trip it. When one appears, the per-turn nudge suggests delegating to
+// cavecrew-investigator so the verbose Grep/Read stays OUT of main context and
+// only a ~60%-smaller path:line map returns. Tested against the lowercased prompt.
+const INVESTIGATE_RE = /\b(where (is|are|does)|what calls|who calls|find all|list (all )?(uses|usages|references|callers|occurrences)|all (uses|usages|references|callers)|map (this |the )?(dir|directory|codebase|repo)|trace (the )?(call|flow))\b/;
+
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
@@ -153,13 +159,28 @@ process.stdin.on('end', () => {
       // byte-identical and keeps hitting the prompt cache.
       const turn = readTurnCount(turnPath) + 1;
       safeWriteFlag(turnPath, String(turn));
+
+      // Assemble the per-turn context from independent, byte-stable segments:
+      //   - reinforcement: cadence-gated (turns 1, 1+N, ...) or on (re)activation
+      //   - locate nudge:  only on investigation-shaped prompts
+      // Each segment is a constant string (no per-turn-varying token), so the
+      // tail stays cache-friendly.
+      const segments = [];
       if (modeSetThisTurn || turn % REINFORCE_EVERY === 1) {
+        segments.push("CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+          "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
+          "Code/commits/security: write normal.");
+      }
+      if (INVESTIGATE_RE.test(prompt)) {
+        segments.push("Locate task — prefer spawning cavecrew-investigator over " +
+          "inline Grep/Read (keeps the verbose search out of main context); skip " +
+          "only for a single known-file one-liner.");
+      }
+      if (segments.length) {
         process.stdout.write(JSON.stringify({
           hookSpecificOutput: {
             hookEventName: "UserPromptSubmit",
-            additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-              "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-              "Code/commits/security: write normal."
+            additionalContext: segments.join(" "),
           }
         }));
       }

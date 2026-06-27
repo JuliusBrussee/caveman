@@ -26,6 +26,7 @@ Group with one-word header when 3+ rows: `Defs:` / `Refs:` / `Callers:` / `Tests
 Single hit → one line, no header.
 Zero hits → `No match.`
 Last line → totals: `2 defs, 5 refs.` (omit if 0 or 1).
+Cap: max 25 rows. More → top 25 by relevance, then final line `+N more — narrow query` so main thread knows results were capped and can re-query. Never dump 200 rows back.
 
 ## Tools
 

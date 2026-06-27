@@ -31,6 +31,7 @@ totals: 1🔴 1🟡 1❓
 
 Zero findings → `No issues.`
 File order, ascending line numbers within file.
+Cap: max 25 findings. More → 25 highest-severity first (🔴 before 🟡 before 🔵), then final line `+N more — re-run scoped` so the rest isn't silently dropped.
 
 ## Boundaries
 

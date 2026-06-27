@@ -114,5 +114,28 @@ test('statusline nudge is one-shot: present first session, absent after', (tmp) 
   assert.ok(!second.includes('STATUSLINE SETUP NEEDED'), 'second session must NOT re-nudge');
 });
 
+test('locate-shaped prompt emits the cavecrew delegation nudge', (tmp) => {
+  runHook('caveman-activate.js', tmp);
+  const out = runHook('caveman-mode-tracker.js', tmp, { prompt: 'where is safeWriteFlag defined?' });
+  const ctx = emittedReinforcement(out);
+  assert.ok(ctx && ctx.includes('cavecrew-investigator'), 'investigation prompt should nudge delegation');
+});
+
+test('non-locate prompt does not emit the nudge', (tmp) => {
+  runHook('caveman-activate.js', tmp);
+  const out = runHook('caveman-mode-tracker.js', tmp, { prompt: 'refactor this function please' });
+  const ctx = emittedReinforcement(out) || '';
+  assert.ok(!ctx.includes('cavecrew-investigator'), 'non-locate prompt must not nudge');
+});
+
+test('nudge fires even on an off-cadence turn', (tmp) => {
+  runHook('caveman-activate.js', tmp);                       // turn 0
+  runHook('caveman-mode-tracker.js', tmp, { prompt: 'hi' }); // turn 1 (reinforces)
+  // turn 2 is normally silent; a locate prompt must still surface the nudge
+  const out = runHook('caveman-mode-tracker.js', tmp, { prompt: 'list all uses of foo' });
+  const ctx = emittedReinforcement(out);
+  assert.ok(ctx && ctx.includes('cavecrew-investigator'), 'off-cadence locate prompt should still nudge');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

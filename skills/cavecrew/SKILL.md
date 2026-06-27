@@ -27,6 +27,8 @@ Cavecrew = three subagent presets that emit caveman output. Same job as Anthropi
 
 Rule of thumb: **if you'd want the subagent's output in 1/3 the tokens, pick cavecrew. If you'd want prose, pick vanilla.**
 
+**Default for multi-site locate** ("where is X", "what calls Y", "list uses of Z", "map this dir", "find all …"): spawn `cavecrew-investigator` instead of inline `Grep`/`Read`. The verbose search then runs in the subagent and never enters main context — only a ~60%-smaller `path:line` map returns. Skip the delegation only for a single known-file one-liner you can answer in one `Read`.
+
 ## Why this exists (the real win)
 
 Subagent tool results get injected into main context verbatim. A vanilla `Explore` that returns 2k tokens of prose costs 2k tokens of main-context budget every time. The same finding from `cavecrew-investigator` returns ~700 tokens. Across 20 delegations in one session that's the difference between context exhaustion and finishing the task.
@@ -41,7 +43,7 @@ What main thread can rely on per agent:
 - path:line — `symbol` — short note
 totals: <counts>.
 ```
-Or `No match.` Always file-path-first, line-number-attached, backticked symbols. Safe to grep with `path:\d+`.
+Or `No match.` Always file-path-first, line-number-attached, backticked symbols. Safe to grep with `path:\d+`. Capped at 25 rows; a `+N more — narrow query` final line signals more exist.
 
 **`cavecrew-builder`**
 ```
