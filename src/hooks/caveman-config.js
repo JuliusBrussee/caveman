@@ -178,18 +178,49 @@ function safeWriteFlag(flagPath, content) {
       if (e.code !== 'ENOENT') return;
     }
 
-    const tempPath = path.join(realFlagDir, `.caveman-active.${process.pid}.${Date.now()}`);
-    const O_NOFOLLOW = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
-    const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW;
-    let fd;
+    // Atomic publish via temp + rename. tempPath is hoisted to this scope so the
+    // finally below can ALWAYS remove it. On Windows, renameSync onto an existing
+    // target throws EPERM/EBUSY/EEXIST/EACCES when a concurrent session or the
+    // statusline holds the flag open without FILE_SHARE_DELETE; the old code left
+    // the temp file orphaned on every such miss (dozens accumulated in ~/.claude
+    // under the multi-session Claude desktop app). The retry rides out brief lock
+    // contention; the finally guarantees no litter regardless of outcome.
+    let tempPath = null;
     try {
-      fd = fs.openSync(tempPath, flags, 0o600);
-      fs.writeSync(fd, String(content));
-      try { fs.fchmodSync(fd, 0o600); } catch (e) { /* best-effort on Windows */ }
+      tempPath = path.join(realFlagDir, `.caveman-active.${process.pid}.${Date.now()}`);
+      const O_NOFOLLOW = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+      const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW;
+      let fd;
+      try {
+        fd = fs.openSync(tempPath, flags, 0o600);
+        fs.writeSync(fd, String(content));
+        try { fs.fchmodSync(fd, 0o600); } catch (e) { /* best-effort on Windows */ }
+      } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+      }
+
+      // Retry brief lock contention. Non-lock errors propagate to the outer
+      // catch. Concurrent writers publish the same mode value, so a missed write
+      // is harmless — the only defect we must prevent is the orphaned temp file.
+      let renamed = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          fs.renameSync(tempPath, realFlagPath);
+          renamed = true;
+          break;
+        } catch (e) {
+          const transient = e.code === 'EPERM' || e.code === 'EBUSY' ||
+                            e.code === 'EEXIST' || e.code === 'EACCES';
+          if (!transient) throw e;
+        }
+      }
+      if (!renamed && debug) {
+        process.stderr.write('[caveman] safeWriteFlag: rename contended; flag not updated this write\n');
+      }
     } finally {
-      if (fd !== undefined) fs.closeSync(fd);
+      // Never leave the temp file behind, even when rename never succeeded.
+      if (tempPath) { try { fs.unlinkSync(tempPath); } catch (e) { /* renamed or already gone */ } }
     }
-    fs.renameSync(tempPath, realFlagPath);
   } catch (e) {
     // Silent fail — flag is best-effort
   }
