@@ -26,6 +26,14 @@ If you installed caveman standalone (without the plugin), the unified Node insta
 - Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc.
 - Appends the lifetime savings suffix `⛏ 12.4k` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` (written by `caveman-stats.js` on each `/caveman-stats` run; absent until the first run, so fresh installs render no fake number). Opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`.
 
+### `caveman-trim-tool-result.js` — PostToolUse hook (opt-in, OFF by default)
+
+- Trims oversized built-in tool results (`Read`/`Bash`/`Grep`/`Glob`) **before they enter context**, where they would otherwise be re-sent every later turn (input tokens dominate the weekly limit in agentic use).
+- Uses the public PostToolUse `updatedToolOutput` field to replace the result the model sees.
+- Lossless first: strips ANSI/terminal noise, carriage-return progress redraws, trailing whitespace, blank-line runs. Only when still huge does it keep head + tail and drop the middle, with a marker telling the model to re-run the tool for the full output.
+- Deterministic + fail-open: same input → same bytes (so the cache stays warm); any error passes the original result through unchanged. JSON-ish results are never touched.
+- **Not wired by the plugin** (avoids a per-tool-call hook spawn for everyone). Opt in, then enable at runtime — see "Trim oversized tool results" below.
+
 ## Statusline Badge
 
 The statusline badge shows which caveman mode is active directly in your Claude Code status bar.
@@ -81,6 +89,46 @@ Badge examples:
 - `/caveman-commit` → `[CAVEMAN:COMMIT]`
 - `/caveman-review` → `[CAVEMAN:REVIEW]`
 
+## Trim oversized tool results (opt-in)
+
+Two steps — wire the hook, then enable it at runtime. It is wired into
+`settings.json` independently of the plugin (the plugin does not register
+`PostToolUse`), so it never double-fires.
+
+**Wire it** (standalone installer):
+
+```bash
+node bin/install.js --only claude --with-trim
+# or curl-pipe: npx -y github:JuliusBrussee/caveman -- --only claude --with-trim
+```
+
+**Or wire it manually** in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Read|Bash|Grep|Glob",
+        "hooks": [
+          { "type": "command", "command": "node \"/path/to/hooks/caveman-trim-tool-result.js\"", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Enable at runtime** — the hook is inert until you set:
+
+```bash
+export CAVEMAN_TRIM_TOOL_RESULTS=1
+# optional: raise/lower the size at which it kicks in (chars, default 8000)
+export CAVEMAN_TRIM_THRESHOLD=8000
+```
+
+Leave the variable unset to keep it fully off (the hook exits immediately).
+
 ## How It Works
 
 ```
@@ -106,6 +154,6 @@ node bin/install.js --uninstall
 ```
 
 Or manually:
-1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, and `caveman-statusline.{sh,ps1}`.
-2. Remove the SessionStart, UserPromptSubmit, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
+1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, `caveman-trim-tool-result.js`, and `caveman-statusline.{sh,ps1}`.
+2. Remove the SessionStart, UserPromptSubmit, PostToolUse, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
 3. Delete `$CLAUDE_CONFIG_DIR/.caveman-active` (and `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if you ran `/caveman-stats`).

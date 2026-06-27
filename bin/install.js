@@ -49,6 +49,7 @@ const HOOK_FILES = [
   'caveman-stats.js',
   'caveman-statusline.sh',
   'caveman-statusline.ps1',
+  'caveman-trim-tool-result.js',
 ];
 
 // ── Argv ───────────────────────────────────────────────────────────────────
@@ -56,6 +57,7 @@ function parseArgs(argv) {
   const opts = {
     dryRun: false, force: false, skipSkills: false,
     withHooks: 'auto', withInit: false, withMcpShrink: false,
+    withTrim: false,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
     configDir: null, help: false,
@@ -101,6 +103,11 @@ function parseArgs(argv) {
         break;
       }
       case '--no-mcp-shrink': opts.withMcpShrink = false; break;
+      // Opt-in PostToolUse hook that trims oversized built-in tool results
+      // (Read/Bash/Grep/Glob) before they enter context. Wired into settings.json
+      // independently of the plugin (which doesn't register PostToolUse), so it
+      // never double-fires. Inert until CAVEMAN_TRIM_TOOL_RESULTS=1 at runtime.
+      case '--with-trim': opts.withTrim = true; break;
       case '--all': opts.all = true; break;
       case '--minimal': opts.minimal = true; break;
       case '--list': opts.listOnly = true; break;
@@ -514,6 +521,10 @@ async function installClaude(ctx) {
     if (r.kind === 'ok')   results.installed.push('caveman-shrink');
     if (r.kind === 'skip') results.skipped.push(['caveman-shrink', r.why]);
     if (r.kind === 'fail') results.failed.push(['caveman-shrink', r.why]);
+  }
+
+  if (opts.withTrim) {
+    await wireTrimHook(ctx);
   }
 
   process.stdout.write('\n');
@@ -951,6 +962,62 @@ function installMcpShrink(ctx) {
     return { kind: 'ok' };
   }
   return { kind: 'fail', why: 'claude mcp add failed' };
+}
+
+// ── PostToolUse trim hook wiring (--with-trim) ────────────────────────────
+// Installs the self-contained caveman-trim-tool-result.js into the hooks dir
+// and registers a PostToolUse(Read|Bash|Grep|Glob) entry in settings.json.
+// Independent of the SessionStart/UserPromptSubmit wiring decision — the plugin
+// manifest does NOT register PostToolUse, so this never double-fires. The hook
+// is inert until the user sets CAVEMAN_TRIM_TOOL_RESULTS=1, so wiring it is safe
+// even though it spawns per matched tool call once enabled.
+async function wireTrimHook(ctx) {
+  const { say, note, warn, opts, repoRoot, configDir, results } = ctx;
+  say('  → wiring PostToolUse trim hook (--with-trim)');
+  const hooksDir = path.join(configDir, 'hooks');
+  const settingsPath = path.join(configDir, 'settings.json');
+  const dest = path.join(hooksDir, 'caveman-trim-tool-result.js');
+
+  if (opts.dryRun) {
+    note(`  would install ${dest}`);
+    note('  would wire PostToolUse matcher Read|Bash|Grep|Glob in settings.json');
+    note('  (inert until CAVEMAN_TRIM_TOOL_RESULTS=1)');
+    results.installed.push('caveman-trim');
+    return;
+  }
+
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const src = repoRoot ? path.join(repoRoot, 'src', 'hooks', 'caveman-trim-tool-result.js') : null;
+  try {
+    if (src && fs.existsSync(src)) fs.copyFileSync(src, dest);
+    else await downloadTo(`${HOOKS_REMOTE}/caveman-trim-tool-result.js`, dest);
+  } catch (e) {
+    warn(`  trim hook copy failed: ${e.message}`);
+    results.failed.push(['caveman-trim', `copy failed: ${e.message}`]);
+    return;
+  }
+
+  const settings = SETTINGS.readSettings(settingsPath);
+  if (settings === null) {
+    warn('  settings.json unparseable; skipping trim wiring.');
+    results.failed.push(['caveman-trim', 'settings.json unparseable']);
+    return;
+  }
+  const node = absoluteNodePath();
+  const added = SETTINGS.addCommandHook(settings, 'PostToolUse', {
+    command: `"${node}" "${dest}"`,
+    marker: 'caveman-trim-tool-result',
+    matcher: 'Read|Bash|Grep|Glob',
+    timeout: 10,
+    statusMessage: 'Trimming tool result...',
+  });
+  SETTINGS.validateHookFields(settings);
+  SETTINGS.writeSettings(settingsPath, settings);
+  note(added
+    ? '  PostToolUse trim hook wired (OFF until CAVEMAN_TRIM_TOOL_RESULTS=1)'
+    : '  PostToolUse trim hook already wired');
+  note('  enable at runtime: set CAVEMAN_TRIM_TOOL_RESULTS=1');
+  results.installed.push('caveman-trim');
 }
 
 // ── Init writers (per-repo rule files) ────────────────────────────────────
