@@ -190,6 +190,7 @@ const MANAGED_HOOK_BASENAMES = new Set([
   'caveman-stats.js',
   'caveman-statusline.sh',
   'caveman-trim-tool-result.js',
+  'caveman-bound-tool-input.js',
 ]);
 function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
   if (!settings || !settings.hooks || !absoluteNode) return 0;

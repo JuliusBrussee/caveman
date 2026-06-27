@@ -50,6 +50,7 @@ const HOOK_FILES = [
   'caveman-statusline.sh',
   'caveman-statusline.ps1',
   'caveman-trim-tool-result.js',
+  'caveman-bound-tool-input.js',
 ];
 
 // ── Argv ───────────────────────────────────────────────────────────────────
@@ -58,6 +59,7 @@ function parseArgs(argv) {
     dryRun: false, force: false, skipSkills: false,
     withHooks: 'auto', withInit: false, withMcpShrink: false,
     withTrim: false,
+    withBound: false,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
     configDir: null, help: false,
@@ -108,6 +110,11 @@ function parseArgs(argv) {
       // independently of the plugin (which doesn't register PostToolUse), so it
       // never double-fires. Inert until CAVEMAN_TRIM_TOOL_RESULTS=1 at runtime.
       case '--with-trim': opts.withTrim = true; break;
+      // Opt-in PreToolUse hook that caps oversized built-in tool INPUT at the
+      // source (Read limit / Grep head_limit). Unlike --with-trim this one
+      // actually takes effect — Claude Code applies PreToolUse updatedInput to
+      // the real tool call. Inert until CAVEMAN_BOUND_TOOL_INPUT=1.
+      case '--with-bound': opts.withBound = true; break;
       case '--all': opts.all = true; break;
       case '--minimal': opts.minimal = true; break;
       case '--list': opts.listOnly = true; break;
@@ -525,6 +532,10 @@ async function installClaude(ctx) {
 
   if (opts.withTrim) {
     await wireTrimHook(ctx);
+  }
+
+  if (opts.withBound) {
+    await wireBoundHook(ctx);
   }
 
   process.stdout.write('\n');
@@ -1018,6 +1029,62 @@ async function wireTrimHook(ctx) {
     : '  PostToolUse trim hook already wired');
   note('  enable at runtime: set CAVEMAN_TRIM_TOOL_RESULTS=1');
   results.installed.push('caveman-trim');
+}
+
+// ── PreToolUse input-bounding hook wiring (--with-bound) ──────────────────────
+// Installs caveman-bound-tool-input.js and registers a PreToolUse(Read|Grep)
+// entry. Independent of the plugin (no PostToolUse/PreToolUse from the manifest),
+// so it never double-fires. Inert until CAVEMAN_BOUND_TOOL_INPUT=1. Unlike the
+// trim hook, this one actually works: Claude Code applies a PreToolUse
+// updatedInput to the real tool call (verified), so capping a Read's `limit`
+// shrinks the result at the source — where the input-dominated weekly limit lives.
+async function wireBoundHook(ctx) {
+  const { say, note, warn, opts, repoRoot, configDir, results } = ctx;
+  say('  → wiring PreToolUse input-bounding hook (--with-bound)');
+  const hooksDir = path.join(configDir, 'hooks');
+  const settingsPath = path.join(configDir, 'settings.json');
+  const dest = path.join(hooksDir, 'caveman-bound-tool-input.js');
+
+  if (opts.dryRun) {
+    note(`  would install ${dest}`);
+    note('  would wire PreToolUse matcher Read|Grep in settings.json');
+    note('  (inert until CAVEMAN_BOUND_TOOL_INPUT=1)');
+    results.installed.push('caveman-bound');
+    return;
+  }
+
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const src = repoRoot ? path.join(repoRoot, 'src', 'hooks', 'caveman-bound-tool-input.js') : null;
+  try {
+    if (src && fs.existsSync(src)) fs.copyFileSync(src, dest);
+    else await downloadTo(`${HOOKS_REMOTE}/caveman-bound-tool-input.js`, dest);
+  } catch (e) {
+    warn(`  bound hook copy failed: ${e.message}`);
+    results.failed.push(['caveman-bound', `copy failed: ${e.message}`]);
+    return;
+  }
+
+  const settings = SETTINGS.readSettings(settingsPath);
+  if (settings === null) {
+    warn('  settings.json unparseable; skipping bound wiring.');
+    results.failed.push(['caveman-bound', 'settings.json unparseable']);
+    return;
+  }
+  const node = absoluteNodePath();
+  const added = SETTINGS.addCommandHook(settings, 'PreToolUse', {
+    command: `"${node}" "${dest}"`,
+    marker: 'caveman-bound-tool-input',
+    matcher: 'Read|Grep',
+    timeout: 5,
+    statusMessage: 'Bounding tool input...',
+  });
+  SETTINGS.validateHookFields(settings);
+  SETTINGS.writeSettings(settingsPath, settings);
+  note(added
+    ? '  PreToolUse bound hook wired (OFF until CAVEMAN_BOUND_TOOL_INPUT=1)'
+    : '  PreToolUse bound hook already wired');
+  note('  enable at runtime: set CAVEMAN_BOUND_TOOL_INPUT=1');
+  results.installed.push('caveman-bound');
 }
 
 // ── Init writers (per-repo rule files) ────────────────────────────────────

@@ -40,6 +40,21 @@ If you installed caveman standalone (without the plugin), the unified Node insta
 >
 > The code is correct and unit-tested; the limitation is in the PostToolUse API surface, not the hook. It is left OFF by default. Re-evaluate if a future Claude Code honors `updatedToolOutput` for object results (then the hook would need to return the object shape with the text field trimmed, not a string).
 
+### `caveman-bound-tool-input.js` — PreToolUse hook (opt-in, the one that works)
+
+Where the trim hook fails (PostToolUse can't replace built-in results), this one succeeds: Claude Code **does** apply a PreToolUse `updatedInput` to the real tool call (verified live — injecting a `limit` into a Read capped the result). So instead of shrinking the result *after* it's produced, it caps it *at the source*, before it ever costs context, an API call, or a cache write.
+
+- **Read** — injects a `limit` when the model didn't set one. An unbounded Read has **no** native size protection (its `maxResultSizeChars` is `Infinity`), so a huge file dumps fully into context — the single biggest input leak. Cap default 2000 lines (`CAVEMAN_BOUND_READ_LIMIT`).
+- **Grep** — reins in an explicitly oversized `head_limit` (`CAVEMAN_BOUND_GREP_HEAD`, default 1000).
+- Only **adds/lowers** a bound — never overrides a smaller explicit value (respects the model's intent). Spreads the original input (Read's input is a strict object). Fail-open.
+- OFF by default; wire with `--with-bound`, enable with `CAVEMAN_BOUND_TOOL_INPUT=1`. Not wired by the plugin.
+
+```bash
+node bin/install.js --only claude --with-bound      # wire the PreToolUse(Read|Grep) hook
+export CAVEMAN_BOUND_TOOL_INPUT=1                    # enable (or set in settings.json "env")
+# optional: export CAVEMAN_BOUND_READ_LIMIT=1500
+```
+
 ## Statusline Badge
 
 The statusline badge shows which caveman mode is active directly in your Claude Code status bar.
