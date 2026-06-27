@@ -161,9 +161,9 @@ def main() -> None:
     for k, v in res["metrics"].items():
         print(f"  {k}: {v}")
     if res["passed"]:
-        print("\n✓ ACCEPT — saves tokens and holds correctness.")
+        print("\nACCEPT: saves tokens and holds correctness.")
         sys.exit(0)
-    print("\n✗ REJECT:")
+    print("\nREJECT:")
     for r in res["reasons"]:
         print(f"  - {r}")
     sys.exit(1)

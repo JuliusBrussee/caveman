@@ -1,0 +1,177 @@
+{
+  "metadata": {
+    "generated_at": "2026-06-27T19:57:51.092Z",
+    "judge_model": "claude-opus-4-8 (inline judgment; judge.py claude -p path returned 401 in this env)",
+    "runs": 1,
+    "source_snapshot": "results.json",
+    "note": "Baseline fidelity for the committed results.json caveman arm. Facts judged by Opus inline; verbatim invariants checked deterministically. Regenerate with evals/judge.py once claude -p auth is available."
+  },
+  "fidelity": {
+    "caveman": {
+      "Why does my React component re-render every time the parent updates?": {
+        "risk": "normal",
+        "fidelity": 100,
+        "facts": [
+          {
+            "fact": "Explains that a child component re-renders by default when its parent re-renders, regardless of whether its own props changed.",
+            "pass": true
+          },
+          {
+            "fact": "Recommends memoization (React.memo, and/or useMemo/useCallback for object/function props) to skip unnecessary child re-renders.",
+            "pass": true
+          }
+        ],
+        "verbatim_ok": true,
+        "verbatim_missing": []
+      },
+      "Explain database connection pooling.": {
+        "risk": "normal",
+        "fidelity": 100,
+        "facts": [
+          {
+            "fact": "States that a connection pool maintains a set of reusable already-open database connections.",
+            "pass": true
+          },
+          {
+            "fact": "Explains it avoids the cost of opening and tearing down a new connection for every request (handshake/setup overhead).",
+            "pass": true
+          }
+        ],
+        "verbatim_ok": true,
+        "verbatim_missing": []
+      },
+      "What's the difference between TCP and UDP?": {
+        "risk": "normal",
+        "fidelity": 100,
+        "facts": [
+          {
+            "fact": "States TCP is connection-oriented and reliable: ordered delivery, acknowledgements, retransmission.",
+            "pass": true
+          },
+          {
+            "fact": "States UDP is connectionless and unreliable (no delivery or ordering guarantee) but has lower overhead/latency.",
+            "pass": true
+          }
+        ],
+        "verbatim_ok": true,
+        "verbatim_missing": []
+      },
+      "How do I fix a memory leak in a long-running Node.js process?": {
+        "risk": "normal",
+        "fidelity": 100,
+        "facts": [
+          {
+            "fact": "Recommends diagnosing with heap snapshots or a heap profiler (e.g. --inspect / Chrome DevTools, clinic, heapdump) to find retained objects.",
+            "pass": true
+          },
+          {
+            "fact": "Names at least one common leak source: unbounded caches/collections, un-removed event listeners, closures holding references, or dangling timers.",
+            "pass": true
+          }
+        ],
+        "verbatim_ok": true,
+        "verbatim_missing": []
+      },
+      "What does the SQL EXPLAIN command tell me?": {
+        "risk": "normal",
+        "fidelity": 100,
+        "facts": [
+          {
+            "fact": "States EXPLAIN shows the query execution plan the database will use.",
+            "pass": true
+          },
+          {
+            "fact": "Mentions it reveals access methods such as index usage vs full/sequential scan, join order, and/or cost/row estimates.",
+            "pass": true
+          }
+        ],
+        "verbatim_ok": true,
+        "verbatim_missing": []
+      },
+      "How does a hash table handle collisions?": {
+        "risk": "normal",
+        "fidelity": 100,
+        "facts": [
+          {
+            "fact": "Describes separate chaining: colliding entries stored together at the slot (e.g. a linked list/bucket).",
+            "pass": true
+          },
+          {
+            "fact": "Describes open addressing / probing: finding another slot (e.g. linear/quadratic probing or double hashing).",
+            "pass": true
+          }
+        ],
+        "verbatim_ok": true,
+        "verbatim_missing": []
+      },
+      "Why am I getting CORS errors in my browser console?": {
+        "risk": "normal",
+        "fidelity": 100,
+        "facts": [
+          {
+            "fact": "Explains CORS errors come from the browser's same-origin policy: the server did not return the required Access-Control-Allow-Origin header for the cross-origin request.",
+            "pass": true
+          },
+          {
+            "fact": "States the fix is server-side: configure the server to send the appropriate CORS headers (and handle the preflight OPTIONS request where needed).",
+            "pass": true
+          }
+        ],
+        "verbatim_ok": true,
+        "verbatim_missing": []
+      },
+      "What's the point of using a debouncer on a search input?": {
+        "risk": "normal",
+        "fidelity": 100,
+        "facts": [
+          {
+            "fact": "Explains debouncing delays the action until the user stops typing for a set interval, collapsing rapid events into one.",
+            "pass": true
+          },
+          {
+            "fact": "States the benefit: avoids firing a request/computation on every keystroke, reducing load and wasted work.",
+            "pass": true
+          }
+        ],
+        "verbatim_ok": true,
+        "verbatim_missing": []
+      },
+      "How does git rebase differ from git merge?": {
+        "risk": "high",
+        "fidelity": 100,
+        "facts": [
+          {
+            "fact": "States merge creates a merge commit and preserves the original branch history/topology.",
+            "pass": true
+          },
+          {
+            "fact": "States rebase re-applies commits onto a new base, producing a linear history and rewriting commit hashes.",
+            "pass": true
+          },
+          {
+            "fact": "Warns that rebase rewrites history and should not be used on commits already pushed to a shared branch.",
+            "pass": true
+          }
+        ],
+        "verbatim_ok": true,
+        "verbatim_missing": []
+      },
+      "When should I use a queue vs a topic in messaging systems?": {
+        "risk": "normal",
+        "fidelity": 100,
+        "facts": [
+          {
+            "fact": "States a queue delivers each message to a single consumer (point-to-point / competing consumers / work distribution).",
+            "pass": true
+          },
+          {
+            "fact": "States a topic broadcasts each message to multiple subscribers (publish-subscribe / fan-out).",
+            "pass": true
+          }
+        ],
+        "verbatim_ok": true,
+        "verbatim_missing": []
+      }
+    }
+  }
+}
