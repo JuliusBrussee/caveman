@@ -460,5 +460,31 @@ test('mode tracker forwards --share to stats script', (tmp) => {
   assert.match(parsed.reason, /^🪨 Saved 650 output tokens/);
 });
 
+test('shows the input/output token split when usage has input data', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: {
+      output_tokens: 100, input_tokens: 300,
+      cache_creation_input_tokens: 100, cache_read_input_tokens: 500,
+    } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // input total = 300 + 100 + 500 = 900, output = 100, total = 1000 → 90% / 10%
+  assert.match(out, /Token split this session/);
+  assert.match(out, /Input \(context, replayed each turn\):\s+900\s+\(90%\)/);
+  assert.match(out, /Output \(what caveman compresses\):\s+100\s+\(10%\)/);
+});
+
+test('omits the split when usage has no input data (backward compatible)', () => {
+  const { formatStats } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
+  const out = formatStats({ outputTokens: 100, cacheReadTokens: 0, turns: 1, mode: 'full', model: null });
+  assert.doesNotMatch(out, /Token split/);
+  assert.match(out, /Output tokens:\s+100/);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
