@@ -14,6 +14,25 @@ const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
+const turnPath = path.join(claudeDir, '.caveman-turn');
+
+// Emit the per-turn reinforcement on turns 1, 1+N, 1+2N, ... (plus any turn that
+// just (re)activated the mode). N=3 keeps the drift anchor while cutting the
+// fixed INPUT tax of reminding on every single turn — over a long session that
+// tax can outweigh the output caveman saves.
+const REINFORCE_EVERY = 3;
+
+// Best-effort read of the turn counter. Symlink-refusing + size-capped, symmetric
+// with readFlag. Returns 0 on any anomaly. The value is only used for modulo math
+// and is never injected into model context, so a plain bounded parse is safe.
+function readTurnCount(p) {
+  try {
+    const st = fs.lstatSync(p);
+    if (st.isSymbolicLink() || !st.isFile() || st.size > 16) return 0;
+    const n = parseInt(fs.readFileSync(p, 'utf8').trim(), 10);
+    return Number.isFinite(n) && n >= 0 && n < 1e9 ? n : 0;
+  } catch (e) { return 0; }
+}
 
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
@@ -21,6 +40,10 @@ process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
     const prompt = (data.prompt || '').trim().toLowerCase();
+
+    // True when this turn's prompt (re)activated or switched the mode — forces a
+    // reinforcement emit regardless of the every-Nth-turn cadence below.
+    let modeSetThisTurn = false;
 
     // Natural language activation (e.g. "activate caveman", "turn on caveman mode",
     // "talk like caveman"). README tells users they can say these, but the hook
@@ -34,6 +57,7 @@ process.stdin.on('end', () => {
         const mode = getDefaultMode();
         if (mode !== 'off') {
           safeWriteFlag(flagPath, mode);
+          modeSetThisTurn = true;
         }
       }
     }
@@ -96,6 +120,7 @@ process.stdin.on('end', () => {
 
       if (mode && mode !== 'off') {
         safeWriteFlag(flagPath, mode);
+        modeSetThisTurn = true;
       } else if (mode === 'off') {
         try { fs.unlinkSync(flagPath); } catch (e) {}
       }
@@ -121,14 +146,23 @@ process.stdin.on('end', () => {
     // — never inject untrusted bytes into model context.
     const activeMode = readFlag(flagPath);
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
-      process.stdout.write(JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "UserPromptSubmit",
-          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-            "Code/commits/security: write normal."
-        }
-      }));
+      // Reinforcement is an attention anchor, not the source of truth — the full
+      // ruleset is injected once at SessionStart. Emit on turns 1, 1+N, 1+2N, ...
+      // plus any turn that just (re)activated the mode, instead of every turn.
+      // The counter lives in a SEPARATE flag file, so the injected string stays
+      // byte-identical and keeps hitting the prompt cache.
+      const turn = readTurnCount(turnPath) + 1;
+      safeWriteFlag(turnPath, String(turn));
+      if (modeSetThisTurn || turn % REINFORCE_EVERY === 1) {
+        process.stdout.write(JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "UserPromptSubmit",
+            additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+              "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
+              "Code/commits/security: write normal."
+          }
+        }));
+      }
     }
   } catch (e) {
     // Silent fail
