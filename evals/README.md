@@ -88,11 +88,13 @@ tokens AND stays correct**.
 facts a correct answer must contain, a `risk` class, and `verbatim` tokens that
 must survive compression verbatim (e.g. `TCP`, `EXPLAIN`, `rebase`).
 
-**2. Score fidelity** (writes `snapshots/fidelity.json`):
+**2. Score fidelity** (writes `snapshots/fidelity.json`) — pure stdlib, no `uv`
+needed; requires the authenticated `claude` CLI on PATH (Windows: `claude.exe`'s
+bin dir, e.g. `…\node_modules\@anthropic-ai\claude-code\bin`):
 
 ```bash
-uv run python evals/judge.py            # all arms
-uv run python evals/judge.py --runs 3   # majority vote per fact (lower judge variance)
+python evals/judge.py            # all arms
+python evals/judge.py --runs 3   # majority vote per fact (lower judge variance)
 ```
 
 Each answer gets `fidelity = passed_facts / total_facts * 100` from an LLM judge
@@ -104,7 +106,8 @@ regenerate `results.json` + `fidelity.json` into a candidate dir for the
 proposed SKILL change, then:
 
 ```bash
-uv run --with tiktoken python evals/gate.py \
+python -m pip install tiktoken      # gate.py and measure.py need it (or: uv run --with tiktoken)
+python evals/gate.py \
     --baseline evals/snapshots --candidate evals/snapshots-candidate --arm caveman
 ```
 

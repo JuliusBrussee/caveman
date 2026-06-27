@@ -21,13 +21,15 @@ written to snapshots/fidelity.json:
 The token gate (gate.py) is meaningless without this — together they enforce
 "saves tokens AND stays correct".
 
-Run:  uv run python evals/judge.py                 # judge every arm
-      uv run python evals/judge.py --arm caveman   # one arm
-      uv run python evals/judge.py --runs 3        # majority vote per fact
+Run:  python evals/judge.py                 # judge every arm
+      python evals/judge.py --arm caveman   # one arm
+      python evals/judge.py --runs 3        # majority vote per fact
 
 Env:  CAVEMAN_JUDGE_MODEL  optional --model passed through to `claude`
 
-Requires the authenticated `claude` CLI on PATH (same dependency as llm_run.py).
+Pure stdlib — no `uv`/pyproject needed. Requires the authenticated `claude` CLI
+on PATH (same dependency as llm_run.py). On Windows the CLI is often a `.cmd`
+shim; run_claude resolves it so subprocess can launch it without a shell.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ import datetime as dt
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections import Counter
@@ -77,8 +80,22 @@ def build_judge_prompt(question: str, answer: str, facts: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _claude_argv():
+    # Resolve the `claude` CLI to something subprocess can launch WITHOUT a shell.
+    # On Windows the CLI is commonly a .cmd/.bat shim (npm), which CreateProcess
+    # cannot execute directly — route those through cmd.exe. A real .exe (which
+    # shutil.which prefers via PATHEXT) launches as-is. Falls back to the bare
+    # name so subprocess raises a clear "not found" when claude isn't on PATH.
+    exe = shutil.which("claude")
+    if not exe:
+        return ["claude"]
+    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+        return ["cmd", "/c", exe]
+    return [exe]
+
+
 def run_claude(prompt: str, system: str) -> str:
-    cmd = ["claude", "-p", "--system-prompt", system]
+    cmd = _claude_argv() + ["-p", "--system-prompt", system]
     if model := os.environ.get("CAVEMAN_JUDGE_MODEL"):
         cmd += ["--model", model]
     cmd.append(prompt)
