@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "_comment": "Fidelity rubrics for evals/judge.py. One entry per prompt in en.txt, keyed by exact prompt text. `facts` are binary technical claims a correct answer MUST contain (graded by an LLM judge). `verbatim` are tokens that must appear literally in the answer (deterministic check, no judge). `risk` selects the tolerance band in evals/gate.py: 'high' = zero fidelity loss / zero verbatim miss allowed (compression here is historically dangerous).",
+  "rubrics": [
+    {
+      "prompt": "Why does my React component re-render every time the parent updates?",
+      "risk": "normal",
+      "facts": [
+        "Explains that a child component re-renders by default when its parent re-renders, regardless of whether its own props changed.",
+        "Recommends memoization (React.memo, and/or useMemo/useCallback for object/function props) to skip unnecessary child re-renders."
+      ],
+      "verbatim": ["memo"]
+    },
+    {
+      "prompt": "Explain database connection pooling.",
+      "risk": "normal",
+      "facts": [
+        "States that a connection pool maintains a set of reusable already-open database connections.",
+        "Explains it avoids the cost of opening and tearing down a new connection for every request (handshake/setup overhead)."
+      ],
+      "verbatim": []
+    },
+    {
+      "prompt": "What's the difference between TCP and UDP?",
+      "risk": "normal",
+      "facts": [
+        "States TCP is connection-oriented and reliable: ordered delivery, acknowledgements, retransmission.",
+        "States UDP is connectionless and unreliable (no delivery or ordering guarantee) but has lower overhead/latency."
+      ],
+      "verbatim": ["TCP", "UDP"]
+    },
+    {
+      "prompt": "How do I fix a memory leak in a long-running Node.js process?",
+      "risk": "normal",
+      "facts": [
+        "Recommends diagnosing with heap snapshots or a heap profiler (e.g. --inspect / Chrome DevTools, clinic, heapdump) to find retained objects.",
+        "Names at least one common leak source: unbounded caches/collections, un-removed event listeners, closures holding references, or dangling timers."
+      ],
+      "verbatim": []
+    },
+    {
+      "prompt": "What does the SQL EXPLAIN command tell me?",
+      "risk": "normal",
+      "facts": [
+        "States EXPLAIN shows the query execution plan the database will use.",
+        "Mentions it reveals access methods such as index usage vs full/sequential scan, join order, and/or cost/row estimates."
+      ],
+      "verbatim": ["EXPLAIN"]
+    },
+    {
+      "prompt": "How does a hash table handle collisions?",
+      "risk": "normal",
+      "facts": [
+        "Describes separate chaining: colliding entries stored together at the slot (e.g. a linked list/bucket).",
+        "Describes open addressing / probing: finding another slot (e.g. linear/quadratic probing or double hashing)."
+      ],
+      "verbatim": []
+    },
+    {
+      "prompt": "Why am I getting CORS errors in my browser console?",
+      "risk": "normal",
+      "facts": [
+        "Explains CORS errors come from the browser's same-origin policy: the server did not return the required Access-Control-Allow-Origin header for the cross-origin request.",
+        "States the fix is server-side: configure the server to send the appropriate CORS headers (and handle the preflight OPTIONS request where needed)."
+      ],
+      "verbatim": ["CORS"]
+    },
+    {
+      "prompt": "What's the point of using a debouncer on a search input?",
+      "risk": "normal",
+      "facts": [
+        "Explains debouncing delays the action until the user stops typing for a set interval, collapsing rapid events into one.",
+        "States the benefit: avoids firing a request/computation on every keystroke, reducing load and wasted work."
+      ],
+      "verbatim": []
+    },
+    {
+      "prompt": "How does git rebase differ from git merge?",
+      "risk": "high",
+      "facts": [
+        "States merge creates a merge commit and preserves the original branch history/topology.",
+        "States rebase re-applies commits onto a new base, producing a linear history and rewriting commit hashes.",
+        "Warns that rebase rewrites history and should not be used on commits already pushed to a shared branch."
+      ],
+      "verbatim": ["rebase", "merge"]
+    },
+    {
+      "prompt": "When should I use a queue vs a topic in messaging systems?",
+      "risk": "normal",
+      "facts": [
+        "States a queue delivers each message to a single consumer (point-to-point / competing consumers / work distribution).",
+        "States a topic broadcasts each message to multiple subscribers (publish-subscribe / fan-out)."
+      ],
+      "verbatim": []
+    }
+  ]
+}
