@@ -14,7 +14,7 @@ const assert = require('assert');
 const { spawnSync } = require('child_process');
 
 const HOOK = path.join(__dirname, '..', 'src', 'hooks', 'caveman-trim-tool-result.js');
-const { transform, stripNoise } = require('../src/hooks/caveman-trim-tool-result');
+const { transform, stripNoise, extractText } = require('../src/hooks/caveman-trim-tool-result');
 
 let passed = 0;
 let failed = 0;
@@ -109,8 +109,9 @@ test('returns null when there is nothing worth trimming', () => {
 
 const BIG = bigLines(2000); // > default 8000-char threshold
 
-test('disabled by default: no output even on a big Bash result', () => {
-  const out = runHook({ tool_name: 'Bash', tool_response: BIG }, {});
+test('disabled: no output unless CAVEMAN_TRIM_TOOL_RESULTS=1', () => {
+  // Explicitly clear the var — the dev's own shell may have it set.
+  const out = runHook({ tool_name: 'Bash', tool_response: BIG }, { CAVEMAN_TRIM_TOOL_RESULTS: '' });
   assert.strictEqual(out.trim(), '', 'must do nothing unless CAVEMAN_TRIM_TOOL_RESULTS=1');
 });
 
@@ -131,9 +132,29 @@ test('enabled but result below threshold: passthrough', () => {
   assert.strictEqual(out.trim(), '');
 });
 
-test('enabled but non-string tool_response: passthrough (no corruption)', () => {
-  const out = runHook({ tool_name: 'Bash', tool_response: { stdout: BIG } }, { CAVEMAN_TRIM_TOOL_RESULTS: '1' });
+test('enabled: trims a Bash object result {stdout,stderr} (the real shape)', () => {
+  const out = runHook(
+    { tool_name: 'Bash', tool_response: { stdout: BIG, stderr: 'oops failed', interrupted: false } },
+    { CAVEMAN_TRIM_TOOL_RESULTS: '1' }
+  );
+  const updated = updatedOutput(out);
+  assert.ok(updated && updated.length < BIG.length, 'should trim the stdout field');
+  assert.ok(updated.includes('line 0') && updated.includes('line 1999'), 'keeps both ends');
+  assert.ok(updated.includes('[stderr] oops failed'), 'preserves a short stderr tail');
+});
+
+test('object tool_response with no text field: passthrough', () => {
+  const out = runHook({ tool_name: 'Bash', tool_response: { isImage: true, foo: 1 } }, { CAVEMAN_TRIM_TOOL_RESULTS: '1' });
   assert.strictEqual(out.trim(), '');
+});
+
+test('extractText pulls stdout from a Bash object, passes a plain string through', () => {
+  assert.strictEqual(extractText('hello').text, 'hello');
+  const ex = extractText({ stdout: 'big output', stderr: 'err' });
+  assert.strictEqual(ex.text, 'big output');
+  assert.strictEqual(ex.rebuild('TRIMMED'), 'TRIMMED\n[stderr] err');
+  assert.strictEqual(extractText({ isImage: true }), null);
+  assert.strictEqual(extractText(42), null);
 });
 
 test('malformed stdin: fails open (no output, no crash)', () => {

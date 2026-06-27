@@ -92,6 +92,28 @@ function resolveThreshold() {
 
 const TRIMMABLE_TOOLS = new Set(['Read', 'Bash', 'Grep', 'Glob']);
 
+// Pull the trimmable text out of a tool_response. Built-in tools differ in shape:
+//   Bash         -> { stdout, stderr, interrupted, ... }  (object — the common case)
+//   Read/Grep/Glob -> a plain string, or an object with a text field
+// Returns { text, rebuild } where rebuild(trimmedText) is the string handed back
+// as updatedToolOutput (the documented replacement form), or null when there is
+// no plain text to trim. The earlier version only handled a string tool_response,
+// so it was a silent no-op for Bash — the very tool with the biggest outputs.
+function extractText(resp) {
+  if (typeof resp === 'string') return { text: resp, rebuild: (t) => t };
+  if (resp && typeof resp === 'object') {
+    if (typeof resp.stdout === 'string') {
+      const stderr = typeof resp.stderr === 'string' ? resp.stderr.trim() : '';
+      // Keep a short stderr tail so an error line isn't lost when stdout is trimmed.
+      return { text: resp.stdout, rebuild: (t) => stderr ? `${t}\n[stderr] ${stderr.slice(0, 800)}` : t };
+    }
+    for (const k of ['output', 'content', 'text', 'result']) {
+      if (typeof resp[k] === 'string') return { text: resp[k], rebuild: (t) => t };
+    }
+  }
+  return null;
+}
+
 function main() {
   // Fast path: do nothing (not even read stdin) unless explicitly enabled.
   if (process.env.CAVEMAN_TRIM_TOOL_RESULTS !== '1') return;
@@ -102,16 +124,16 @@ function main() {
     try {
       const data = JSON.parse(input);
       if (!TRIMMABLE_TOOLS.has(data.tool_name)) return;
-      const resp = data.tool_response;
-      if (typeof resp !== 'string') return;          // only plain-string results
+      const ex = extractText(data.tool_response);
+      if (!ex) return;                               // no plain text to trim
       const threshold = resolveThreshold();
-      if (resp.length < threshold) return;           // small enough — leave it
-      const trimmed = transform(resp, threshold);
+      if (ex.text.length < threshold) return;        // small enough — leave it
+      const trimmed = transform(ex.text, threshold);
       if (trimmed == null) return;                   // structured / no gain
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: 'PostToolUse',
-          updatedToolOutput: trimmed,
+          updatedToolOutput: ex.rebuild(trimmed),
         },
       }));
     } catch (e) {
@@ -122,4 +144,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { transform, stripNoise, elide, DEFAULT_THRESHOLD, TRIMMABLE_TOOLS };
+module.exports = { transform, stripNoise, elide, extractText, DEFAULT_THRESHOLD, TRIMMABLE_TOOLS };
