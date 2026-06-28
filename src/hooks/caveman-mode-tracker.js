@@ -15,6 +15,15 @@ const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
 const turnPath = path.join(claudeDir, '.caveman-turn');
+const ctxPath = path.join(claudeDir, '.caveman-ctx');
+
+// Session-cost guard thresholds (current context size, in tokens). The weekly
+// limit is dominated by cache_read — the entire conversation context is re-sent
+// EVERY turn — so a long session that never resets is the real burn (a 17k-turn
+// session re-sending a ~500K context = billions of cache_read tokens). When the
+// context crosses these, nudge the model to suggest /clear or a fresh session.
+const CTX_SOFT = 180000;
+const CTX_HARD = 320000;
 
 // Emit the per-turn reinforcement on turns 1, 1+N, 1+2N, ... (plus any turn that
 // just (re)activated the mode). N=3 keeps the drift anchor while cutting the
@@ -32,6 +41,39 @@ function readTurnCount(p) {
     const n = parseInt(fs.readFileSync(p, 'utf8').trim(), 10);
     return Number.isFinite(n) && n >= 0 && n < 1e9 ? n : 0;
   } catch (e) { return 0; }
+}
+
+function humanizeTok(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return Math.round(n / 1e3) + 'K';
+  return String(n);
+}
+
+// Estimate the current session context size = the prompt size of the most recent
+// API turn (input + cache_creation + cache_read ≈ what gets re-sent next turn).
+// Reads only the TAIL of the transcript so it stays fast even on a multi-MB,
+// thousands-of-turns session. Returns 0 on any anomaly (no guard that turn).
+function readContextSize(transcriptPath) {
+  if (!transcriptPath || typeof transcriptPath !== 'string') return 0;
+  try {
+    const st = fs.statSync(transcriptPath);
+    const readLen = Math.min(st.size, 262144); // last 256KB
+    const fd = fs.openSync(transcriptPath, 'r');
+    const buf = Buffer.alloc(readLen);
+    fs.readSync(fd, buf, 0, readLen, st.size - readLen);
+    fs.closeSync(fd);
+    const lines = buf.toString('utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line || line.indexOf('"usage"') === -1) continue;
+      let e;
+      try { e = JSON.parse(line); } catch (_) { continue; }
+      const u = e && e.message && e.message.usage;
+      if (!u) continue;
+      return (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+    }
+  } catch (e) { /* fall through */ }
+  return 0;
 }
 
 // Multi-site locate verbs — tightly scoped so a trivial one-line lookup doesn't
@@ -160,11 +202,17 @@ process.stdin.on('end', () => {
       const turn = readTurnCount(turnPath) + 1;
       safeWriteFlag(turnPath, String(turn));
 
-      // Assemble the per-turn context from independent, byte-stable segments:
+      // Session-cost meter: record the live context size so the statusline can
+      // surface it — the user sees the session ballooning and can /clear before
+      // it becomes a 17k-turn marathon. Written every turn; cheap tail read.
+      const ctx = readContextSize(data.transcript_path);
+      if (ctx > 0) safeWriteFlag(ctxPath, humanizeTok(ctx));
+
+      // Assemble the per-turn context from independent segments:
       //   - reinforcement: cadence-gated (turns 1, 1+N, ...) or on (re)activation
       //   - locate nudge:  only on investigation-shaped prompts
-      // Each segment is a constant string (no per-turn-varying token), so the
-      // tail stays cache-friendly.
+      //   - session-cost guard: only when the context is large, emitted
+      //     periodically (not every turn) so it never spams.
       const segments = [];
       if (modeSetThisTurn || turn % REINFORCE_EVERY === 1) {
         segments.push("CAVEMAN MODE ACTIVE (" + activeMode + "). " +
@@ -175,6 +223,16 @@ process.stdin.on('end', () => {
         segments.push("Locate task — prefer spawning cavecrew-investigator over " +
           "inline Grep/Read (keeps the verbose search out of main context); skip " +
           "only for a single known-file one-liner.");
+      }
+      if (ctx >= CTX_HARD && turn % 20 === 0) {
+        segments.push("SESSION COST WARNING: this conversation's context is ~" +
+          humanizeTok(ctx) + " tokens, re-sent on EVERY turn (cache_read compounds " +
+          "— the dominant driver of weekly token usage). Tell the user to run " +
+          "/clear or start a fresh session for the next task.");
+      } else if (ctx >= CTX_SOFT && turn % 50 === 0) {
+        segments.push("Session context is ~" + humanizeTok(ctx) + " tokens and " +
+          "growing; every turn re-sends it. Suggest wrapping up this task and " +
+          "/clear-ing before the next one.");
       }
       if (segments.length) {
         process.stdout.write(JSON.stringify({

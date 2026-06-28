@@ -60,3 +60,31 @@ if ($env:CAVEMAN_STATUSLINE_SAVINGS -ne "0") {
         } catch {}
     }
 }
+
+# Context meter: live session context size, written every turn by the
+# mode-tracker hook. Color-coded (green/yellow/red) so the user SEES the session
+# ballooning and can /clear before it becomes a marathon re-sending a huge
+# context on every turn (the dominant driver of weekly token usage). Same
+# hardening as the flag: refuse reparse points, cap length, whitelist chars.
+$CtxFile = Join-Path $ClaudeDir ".caveman-ctx"
+if (Test-Path $CtxFile) {
+    try {
+        $CtxItem = Get-Item -LiteralPath $CtxFile -Force -ErrorAction Stop
+        if (-not ($CtxItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and
+            $CtxItem.Length -le 16) {
+            $Ctx = (Get-Content -LiteralPath $CtxFile -TotalCount 1 -ErrorAction Stop)
+            if ($null -ne $Ctx) { $Ctx = ([string]$Ctx).Trim() }
+            $Ctx = ($Ctx -replace '[^0-9.KMkm]', '')
+            if ($Ctx -match '^[0-9]+(\.[0-9]+)?[KMkm]?$') {
+                $Num = [double]($Ctx -replace '[KMkm]', '')
+                if ($Ctx -match '[Mm]$') { $Tok = $Num * 1000000 }
+                elseif ($Ctx -match '[Kk]$') { $Tok = $Num * 1000 }
+                else { $Tok = $Num }
+                if ($Tok -ge 320000) { $CtxColor = '38;5;167' }      # red
+                elseif ($Tok -ge 180000) { $CtxColor = '38;5;179' }  # yellow
+                else { $CtxColor = '38;5;71' }                       # green
+                [Console]::Write(" ${Esc}[${CtxColor}mctx $Ctx${Esc}[0m")
+            }
+        }
+    } catch {}
+}

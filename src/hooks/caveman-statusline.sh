@@ -48,3 +48,23 @@ if [ "${CAVEMAN_STATUSLINE_SAVINGS:-1}" != "0" ]; then
     [ -n "$SAVINGS" ] && printf ' \033[38;5;172m%s\033[0m' "$SAVINGS"
   fi
 fi
+
+# Context meter: live session context size, written every turn by the
+# mode-tracker hook. Color-coded (green/yellow/red) so the user SEES the session
+# ballooning and can /clear before it becomes a marathon re-sending a huge
+# context on every turn (the dominant driver of weekly token usage). Same
+# hardening as the flag file: refuse symlinks, cap the read, whitelist chars.
+CTX_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-ctx"
+if [ -f "$CTX_FILE" ] && [ ! -L "$CTX_FILE" ]; then
+  CTX=$(head -c 16 "$CTX_FILE" 2>/dev/null | tr -d '\n\r' | tr -cd '0-9.KMkm')
+  if printf '%s' "$CTX" | grep -Eq '^[0-9]+(\.[0-9]+)?[KMkm]?$'; then
+    NUM=$(printf '%s' "$CTX" | tr -d 'KMkm')
+    case "$CTX" in
+      *[Mm]) TOK=$(awk "BEGIN{print $NUM*1000000}") ;;
+      *[Kk]) TOK=$(awk "BEGIN{print $NUM*1000}") ;;
+      *)     TOK="$NUM" ;;
+    esac
+    CTX_COLOR=$(awk "BEGIN{ if($TOK>=320000) print \"38;5;167\"; else if($TOK>=180000) print \"38;5;179\"; else print \"38;5;71\" }")
+    printf ' \033[%smctx %s\033[0m' "$CTX_COLOR" "$CTX"
+  fi
+fi

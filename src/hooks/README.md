@@ -19,12 +19,14 @@ If you installed caveman standalone (without the plugin), the unified Node insta
 - Writes the active mode to the flag file when a caveman command is detected; deletes it on deactivation
 - Emits a small per-turn reinforcement reminder when the flag is set to a non-independent mode (`lite`/`full`/`ultra`/`wenyan*`)
 - Supports: `lite`, `full`, `ultra`, `wenyan`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`, `commit`, `review`, `compress`
+- **Session-cost meter + guard.** Reads the transcript tail each turn to estimate the live context size (input + cache_creation + cache_read of the last turn — what gets re-sent next turn), and writes a humanized value (`200K`, `1.2M`) to `$CLAUDE_CONFIG_DIR/.caveman-ctx` for the statusline. The whole context is re-sent **every turn** (cache_read), so a long session that never resets is the dominant driver of weekly token usage — a 17k-turn session re-sending a ~500K context burns billions of cache_read tokens. When the context crosses a soft (~180K) or hard (~320K) threshold, the hook periodically nudges the model to suggest `/clear` or a fresh session before the next task. The nudge is rate-limited (not every turn) so it never spams.
 
 ### `caveman-statusline.sh` / `caveman-statusline.ps1` — Statusline badge script
 
 - Reads `$CLAUDE_CONFIG_DIR/.caveman-active` (default `~/.claude/.caveman-active`) and outputs a colored badge
 - Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc.
 - Appends the lifetime savings suffix `⛏ 12.4k` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` (written by `caveman-stats.js` on each `/caveman-stats` run; absent until the first run, so fresh installs render no fake number). Opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`.
+- Appends a live **context meter** `ctx 200K` from `$CLAUDE_CONFIG_DIR/.caveman-ctx` (written by the mode-tracker hook), color-coded green/yellow/red as the session context crosses ~180K / ~320K tokens — a visible cue to `/clear` before the session balloons. Absent until the mode-tracker runs at least once. Both files are symlink-refused and content-whitelisted before rendering.
 
 ### `caveman-trim-tool-result.js` — PostToolUse hook (opt-in, OFF by default)
 
@@ -177,4 +179,4 @@ node bin/install.js --uninstall
 Or manually:
 1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, `caveman-trim-tool-result.js`, and `caveman-statusline.{sh,ps1}`.
 2. Remove the SessionStart, UserPromptSubmit, PostToolUse, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
-3. Delete `$CLAUDE_CONFIG_DIR/.caveman-active` (and `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if you ran `/caveman-stats`).
+3. Delete `$CLAUDE_CONFIG_DIR/.caveman-active` (and `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if you ran `/caveman-stats`, and `$CLAUDE_CONFIG_DIR/.caveman-ctx` / `.caveman-turn` runtime files).

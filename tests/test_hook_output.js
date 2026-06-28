@@ -147,5 +147,57 @@ test('/caveman auto activates the opt-in auto intensity mode', (tmp) => {
   );
 });
 
+// --- session-cost meter (.caveman-ctx) + graduated guard --------------------
+
+// Writes a one-line transcript whose last assistant turn reports `tok` total
+// prompt tokens (input + cache_creation + cache_read), the value the meter reads.
+function writeTranscript(tmp, tok) {
+  const p = path.join(tmp, 'transcript.jsonl');
+  const entry = {
+    type: 'assistant',
+    message: { usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: tok - 10 } },
+  };
+  fs.writeFileSync(p, JSON.stringify(entry) + '\n');
+  return p;
+}
+
+test('context meter writes humanized .caveman-ctx from the transcript tail', (tmp) => {
+  runHook('caveman-activate.js', tmp);
+  const t = writeTranscript(tmp, 200000);
+  runHook('caveman-mode-tracker.js', tmp, { prompt: 'p', transcript_path: t });
+  const ctxFile = path.join(tmp, '.caveman-ctx');
+  assert.ok(fs.existsSync(ctxFile), '.caveman-ctx should be written');
+  assert.strictEqual(fs.readFileSync(ctxFile, 'utf8'), '200K', 'should humanize 200000 → 200K');
+});
+
+test('no transcript → no .caveman-ctx (silent, no guard)', (tmp) => {
+  runHook('caveman-activate.js', tmp);
+  runHook('caveman-mode-tracker.js', tmp, { prompt: 'p' }); // no transcript_path
+  assert.ok(!fs.existsSync(path.join(tmp, '.caveman-ctx')), 'missing transcript must not write ctx');
+});
+
+test('hard guard fires at turn 20 once context exceeds the hard threshold', (tmp) => {
+  runHook('caveman-activate.js', tmp); // turn 0
+  const t = writeTranscript(tmp, 400000); // > CTX_HARD (320K)
+  let emitAt20 = '';
+  for (let i = 1; i <= 20; i++) {
+    const out = runHook('caveman-mode-tracker.js', tmp, { prompt: 'p', transcript_path: t });
+    if (i === 20) emitAt20 = emittedReinforcement(out) || '';
+  }
+  assert.ok(emitAt20.includes('SESSION COST WARNING'), `turn 20 should warn; got: ${emitAt20}`);
+  assert.ok(emitAt20.includes('/clear'), 'warning should name /clear');
+  assertNoVaryingToken(emitAt20, 'session-cost warning');
+});
+
+test('guard stays silent on off-cadence turns and below threshold', (tmp) => {
+  runHook('caveman-activate.js', tmp);
+  const small = writeTranscript(tmp, 50000); // < CTX_SOFT
+  // turn 5: not an emitting cadence (5%3=2) and below threshold → fully silent
+  let out = '';
+  for (let i = 1; i <= 5; i++) out = runHook('caveman-mode-tracker.js', tmp, { prompt: 'p', transcript_path: small });
+  const ctx = emittedReinforcement(out) || '';
+  assert.ok(!ctx.includes('SESSION COST'), 'below threshold must not warn');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
