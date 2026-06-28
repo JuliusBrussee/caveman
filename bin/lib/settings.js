@@ -145,7 +145,12 @@ function addCommandHook(settings, event, opts) {
   const hook = { type: 'command', command: opts.command };
   if (typeof opts.timeout === 'number') hook.timeout = opts.timeout;
   if (typeof opts.statusMessage === 'string') hook.statusMessage = opts.statusMessage;
-  settings.hooks[event].push({ hooks: [hook] });
+  // PostToolUse / PreToolUse scope by tool name via an optional `matcher` on the
+  // entry (validateHookFields already treats it as valid). Omitted for events
+  // that don't take one (SessionStart, UserPromptSubmit).
+  const entry = { hooks: [hook] };
+  if (typeof opts.matcher === 'string' && opts.matcher) entry.matcher = opts.matcher;
+  settings.hooks[event].push(entry);
   return true;
 }
 
@@ -184,6 +189,8 @@ const MANAGED_HOOK_BASENAMES = new Set([
   'caveman-mode-tracker.js',
   'caveman-stats.js',
   'caveman-statusline.sh',
+  'caveman-trim-tool-result.js',
+  'caveman-bound-tool-input.js',
 ]);
 function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
   if (!settings || !settings.hooks || !absoluteNode) return 0;

@@ -38,6 +38,16 @@ this harness did and is why its numbers were inflated.
   stdev across prompts.
 - `snapshots/results.json` — committed source of truth, regenerated only
   when SKILL.md files or prompts change.
+- `prompts/rubrics.json` — per-prompt **fidelity rubric**: binary facts a
+  correct answer must contain, a `risk` class, and `verbatim` invariants
+  (tokens that must appear literally).
+- `judge.py` — scores each answer for correctness against the rubrics
+  (LLM judge for facts + deterministic verbatim check), writes
+  `snapshots/fidelity.json`.
+- `gate.py` — the two-gate accept rule: baseline vs candidate, exits
+  non-zero unless tokens hold AND fidelity holds.
+- `snapshots/fidelity.json` — committed correctness snapshot (regenerated
+  by `judge.py` when SKILL.md / prompts / rubrics change).
 
 ## Refresh the snapshot (requires `claude` CLI logged in)
 
@@ -67,11 +77,59 @@ Append a line to `prompts/en.txt`, then refresh the snapshot.
 Drop a `skills/<name>/SKILL.md`, then refresh the snapshot. `llm_run.py`
 picks up every skill directory automatically.
 
+## Fidelity + the two-gate accept rule
+
+`measure.py` only counts tokens. On its own that is gameable: a skill that
+replies `k` to everything scores −99% and "wins". `judge.py` + `gate.py` add
+the missing correctness axis so an upgrade is accepted only if it **saves
+tokens AND stays correct**.
+
+**1. Author rubrics** (`prompts/rubrics.json`) — for each prompt, the binary
+facts a correct answer must contain, a `risk` class, and `verbatim` tokens that
+must survive compression verbatim (e.g. `TCP`, `EXPLAIN`, `rebase`).
+
+**2. Score fidelity** (writes `snapshots/fidelity.json`) — pure stdlib, no `uv`
+needed; requires the authenticated `claude` CLI on PATH (Windows: `claude.exe`'s
+bin dir, e.g. `…\node_modules\@anthropic-ai\claude-code\bin`):
+
+```bash
+python evals/judge.py            # all arms
+python evals/judge.py --runs 3   # majority vote per fact (lower judge variance)
+```
+
+Each answer gets `fidelity = passed_facts / total_facts * 100` from an LLM judge
+(temp 0), plus a deterministic `verbatim_ok` flag — an abbreviated `useMemo` or
+`TCP` is a correctness bug, not a style win, and is caught without the judge.
+
+**3. Gate a change** — commit the current snapshot+fidelity as the baseline,
+regenerate `results.json` + `fidelity.json` into a candidate dir for the
+proposed SKILL change, then:
+
+```bash
+python -m pip install tiktoken      # gate.py and measure.py need it (or: uv run --with tiktoken)
+python evals/gate.py \
+    --baseline evals/snapshots --candidate evals/snapshots-candidate --arm caveman
+```
+
+It exits non-zero unless **both**:
+
+- **token gate** — median savings don't regress beyond the noise floor;
+- **quality gate** — mean fidelity drop ≤ tolerance (default 2 pts), no single
+  prompt drops past its risk band's hard limit (normal 10 pts, **high 0 pts**),
+  and every verbatim invariant still holds.
+
+High-risk prompts (e.g. the git-rebase "rewrites history" warning) allow **zero**
+fidelity loss — compression there is historically dangerous. The decision logic
+is pure/offline and unit-tested in `tests/test_eval_gate.py`, whose canonical
+case asserts a "reply `k`" candidate is **rejected**.
+
+> Calibrate `--token-noise` / `--fidelity-tol` from the measured same-SKILL
+> run-to-run spread (run `llm_run.py` + `judge.py` twice unchanged) before
+> trusting the gate. Keep the committed baseline pinned to the ORIGINAL so a
+> chain of −1.9pt changes can't ratchet quality down unnoticed.
+
 ## What this does NOT measure
 
-- **Fidelity** — does the compressed answer preserve the technical
-  claims? A skill that replies `k` to everything would score −99% and
-  "win". A future v2 could add a judge-model rubric.
 - **Latency or cost** — out of scope. Note that skills add input tokens
   on every call, so output savings are not the full economic picture.
 - **Cross-model behavior** — only the model used to generate the

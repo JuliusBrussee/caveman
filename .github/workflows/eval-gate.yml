@@ -1,0 +1,38 @@
+name: eval-gate
+
+# Runs the OFFLINE half of the eval gate on any change to behavior-defining
+# files. The full token+fidelity A/B (gate.py against a freshly regenerated
+# candidate snapshot) needs the authenticated `claude` CLI and is a local
+# pre-PR step — see evals/README.md. What CI can verify without an API key:
+#   1. the gate's decision logic (tests/test_eval_gate.py — pure, no LLM)
+#   2. the committed token snapshot still measures (measure.py, offline)
+# This blocks merge if the gate logic regresses or the snapshot is unreadable.
+
+on:
+  pull_request:
+    paths:
+      - 'skills/**/SKILL.md'
+      - 'src/rules/**'
+      - 'evals/**'
+      - 'tests/test_eval_gate.py'
+  workflow_dispatch:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Gate decision-logic self-test (offline, no API)
+        run: python -m unittest tests.test_eval_gate -v
+
+      - name: Validate rubrics.json
+        run: python -c "import json; json.load(open('evals/prompts/rubrics.json', encoding='utf-8')); print('rubrics.json OK')"
+
+      - name: Token measurement on committed snapshot (offline)
+        run: |
+          python -m pip install --quiet tiktoken
+          python evals/measure.py

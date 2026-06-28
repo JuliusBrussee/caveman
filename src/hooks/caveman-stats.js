@@ -82,6 +82,8 @@ function parseSession(filePath) {
 
   let outputTokens = 0;
   let cacheReadTokens = 0;
+  let inputTokens = 0;
+  let cacheCreationTokens = 0;
   let turns = 0;
   let model = null;
   for (const line of raw.split('\n')) {
@@ -91,12 +93,14 @@ function parseSession(filePath) {
     if (entry.type !== 'assistant' || !entry.message) continue;
     const usage = entry.message.usage;
     if (!usage) continue;
-    outputTokens    += usage.output_tokens           || 0;
-    cacheReadTokens += usage.cache_read_input_tokens || 0;
+    outputTokens        += usage.output_tokens               || 0;
+    cacheReadTokens     += usage.cache_read_input_tokens      || 0;
+    inputTokens         += usage.input_tokens                 || 0;
+    cacheCreationTokens += usage.cache_creation_input_tokens  || 0;
     turns++;
     if (!model && entry.message.model) model = entry.message.model;
   }
-  return { outputTokens, cacheReadTokens, turns, model };
+  return { outputTokens, cacheReadTokens, inputTokens, cacheCreationTokens, turns, model };
 }
 
 // Detect *.original.md / *.md pairs left behind by caveman-compress. The
@@ -197,9 +201,9 @@ function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, si
   }
   const usdLine = estSavedUsd > 0 ? `Est. saved (USD):      ~${formatUsd(estSavedUsd)}\n` : '';
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
-    `Sessions:   ${sessions.toLocaleString()}\n${sep}\n` +
-    `Output tokens:         ${outputTokens.toLocaleString()}\n` +
-    `Est. tokens saved:     ${estSavedTokens.toLocaleString()}\n` +
+    `Sessions:   ${sessions.toLocaleString('en-US')}\n${sep}\n` +
+    `Output tokens:         ${outputTokens.toLocaleString('en-US')}\n` +
+    `Est. tokens saved:     ${estSavedTokens.toLocaleString('en-US')}\n` +
     usdLine + sep + '\n';
 }
 
@@ -218,13 +222,13 @@ function formatShare({ outputTokens, turns, mode, model }) {
       const amt = (estSaved / 1_000_000) * price;
       usd = ` (~${formatUsd(amt)})`;
     }
-    return `🪨 Saved ${estSaved.toLocaleString()} output tokens${usd} across ${turns} turns this session — caveman.sh`;
+    return `🪨 Saved ${estSaved.toLocaleString('en-US')} output tokens${usd} across ${turns} turns this session — caveman.sh`;
   }
-  return `🪨 ${turns} turns, ${outputTokens.toLocaleString()} output tokens this session — caveman.sh`;
+  return `🪨 ${turns} turns, ${outputTokens.toLocaleString('en-US')} output tokens this session — caveman.sh`;
 }
 
 // Pure formatter — separated from main() so tests can pass synthetic inputs.
-function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessionPath, compressed }) {
+function formatStats({ outputTokens, cacheReadTokens, inputTokens = 0, cacheCreationTokens = 0, turns, mode, model, sessionPath, compressed }) {
   const sep = '──────────────────────────────────';
   const shortPath = sessionPath && sessionPath.length > 45
     ? '...' + sessionPath.slice(-45)
@@ -250,8 +254,8 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
     } else {
       footer = 'Savings est. from benchmarks/ (mean per-task). Actual varies by task.';
     }
-    savings = `Est. without caveman:  ${estNormal.toLocaleString()}\n` +
-              `Est. tokens saved:     ${estSaved.toLocaleString()} (~${Math.round(ratio * 100)}%)\n` +
+    savings = `Est. without caveman:  ${estNormal.toLocaleString('en-US')}\n` +
+              `Est. tokens saved:     ${estSaved.toLocaleString('en-US')} (~${Math.round(ratio * 100)}%)\n` +
               usdLine.replace(/\n$/, '');
   } else if (mode && mode !== 'off') {
     savings = `No savings estimate for '${mode}' mode — only 'full' has benchmark data.`;
@@ -261,16 +265,36 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
 
   let memoryLine = '';
   if (compressed && compressed.count > 0) {
-    const tokensApprox = compressed.tokensSaved.toLocaleString();
+    const tokensApprox = compressed.tokensSaved.toLocaleString('en-US');
     memoryLine = `${sep}\nMemory compressed:     ${compressed.count} file${compressed.count === 1 ? '' : 's'}, ` +
       `~${tokensApprox} tokens saved per session start (approx)\n`;
+  }
+
+  // Honest input/output split. caveman compresses OUTPUT, but in agentic use the
+  // weekly limit is dominated by INPUT — the whole context (system prompt, tool
+  // schemas, prior prose, every tool result) is re-sent every turn. Showing the
+  // ratio reframes the win: output is the demo, input is where the budget goes.
+  let splitLine = '';
+  const inputTotal = (inputTokens || 0) + (cacheCreationTokens || 0) + (cacheReadTokens || 0);
+  const grandTotal = inputTotal + outputTokens;
+  if (inputTotal > 0 && grandTotal > 0) {
+    const outPct = Math.round((outputTokens / grandTotal) * 100);
+    const inPct = 100 - outPct;
+    splitLine =
+      `${sep}\nToken split this session:\n` +
+      `  Input (context, replayed each turn):  ${inputTotal.toLocaleString('en-US')}  (${inPct}%)\n` +
+      `  Output (what caveman compresses):     ${outputTokens.toLocaleString('en-US')}  (${outPct}%)\n` +
+      `Caveman cuts the output slice; input dominates the weekly limit — shrink it\n` +
+      `with /caveman-compress on memory files and the opt-in tool-result trim.\n`;
   }
 
   return `\nCaveman Stats\n${sep}\n` +
     (shortPath ? `Session:  ${shortPath}\n` : '') +
     `Turns:    ${turns}\n${sep}\n` +
-    `Output tokens:         ${outputTokens.toLocaleString()}\n` +
-    `Cache-read tokens:     ${cacheReadTokens.toLocaleString()}\n${sep}\n` +
+    `Output tokens:         ${outputTokens.toLocaleString('en-US')}\n` +
+    `Cache-read tokens:     ${cacheReadTokens.toLocaleString('en-US')}\n` +
+    splitLine +
+    `${sep}\n` +
     `${savings}\n` +
     memoryLine +
     (footer ? footer + '\n' : '');

@@ -2,7 +2,7 @@
 name: caveman
 description: >
   Ultra-compressed communication mode. Cuts token usage ~75% by speaking like caveman
-  while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra,
+  while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra, auto,
   wenyan-lite, wenyan-full, wenyan-ultra.
   Use when user says "caveman mode", "talk like caveman", "use caveman", "less tokens",
   "be brief", or invokes /caveman. Also auto-triggers when token efficiency is requested.
@@ -29,13 +29,26 @@ Pattern: `[thing] [action] [reason]. [next step].`
 Not: "Sure! I'd be happy to help you with that. The issue you're experiencing is likely caused by..."
 Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 
+## Agentic Loop
+
+Multi-turn tool work: every word output get re-sent as input every later turn — structural waste compound. Cut shape, not just words.
+
+- Result first. No "Let me", "I'll now", "Sure", no "Hope this help" close.
+- No recap of file just read. Name `path:line`, don't restate content.
+- Plan once. Later turns emit only delta — what changed, what next. No re-list whole plan.
+- Between tool calls: one short intent clause max ("read auth.js"). Never "Let me read X to understand Y so I can Z".
+- No re-confirm done steps. Diff and todo list already show them.
+
+Auto-Clarity override: security, irreversible action, multi-step ordered sequence → full prose, spell out order. Clarity beat brevity there.
+
 ## Intensity
 
 | Level | What change |
 |-------|------------|
 | **lite** | No filler/hedging. Keep articles + full sentences. Professional but tight |
 | **full** | Drop articles, fragments OK, short synonyms. Classic caveman. No tool-call narration, no decorative tables/emoji, no long raw error-log dumps unless asked. Standard acronyms OK; no invented abbreviations |
-| **ultra** | Abbreviate prose words (DB/auth/config/req/res/fn/impl) — prose words only, never real code symbols/function names. Strip conjunctions, arrows for causality (X → Y), one word when one word enough. Code symbols, function names, API names, error strings: never abbreviate |
+| **ultra** | Abbreviate prose words (DB/auth/config/req/res/fn/impl) — prose words only, never real code symbols/function names. Strip conjunctions, arrows for causality (X → Y), one word when one word enough. Collapse multi-sentence explanation to one causal chain; cut transition sentences; prefer one line over a small table. Code symbols, function names, API names, error strings: never abbreviate |
+| **auto** | Opt-in (`/caveman auto`). Pick the level per answer by task: trivial fact / yes-no / single lookup → ultra (bare fragments); routine explain / fix → full; design tradeoffs, security, irreversible ops, multi-step ordered sequences → full prose (Auto-Clarity wins). When unsure, pick the CLEARER level. Never abbreviate code symbols/error strings |
 | **wenyan-lite** | Semi-classical. Drop filler/hedging but keep grammar structure, classical register |
 | **wenyan-full** | Maximum classical terseness. Fully 文言文. 80-90% character reduction. Classical sentence patterns, verbs precede objects, subjects often omitted, classical particles (之/乃/為/其) |
 | **wenyan-ultra** | Extreme abbreviation while keeping classical Chinese feel. Maximum compression, ultra terse |

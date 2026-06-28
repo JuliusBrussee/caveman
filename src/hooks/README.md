@@ -19,12 +19,43 @@ If you installed caveman standalone (without the plugin), the unified Node insta
 - Writes the active mode to the flag file when a caveman command is detected; deletes it on deactivation
 - Emits a small per-turn reinforcement reminder when the flag is set to a non-independent mode (`lite`/`full`/`ultra`/`wenyan*`)
 - Supports: `lite`, `full`, `ultra`, `wenyan`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`, `commit`, `review`, `compress`
+- **Session-cost meter + guard.** Reads the transcript tail each turn to estimate the live context size (input + cache_creation + cache_read of the last turn — what gets re-sent next turn), and writes a humanized value (`200K`, `1.2M`) to `$CLAUDE_CONFIG_DIR/.caveman-ctx` for the statusline. The whole context is re-sent **every turn** (cache_read), so a long session that never resets is the dominant driver of weekly token usage — a 17k-turn session re-sending a ~500K context burns billions of cache_read tokens. When the context crosses a soft (~180K) or hard (~320K) threshold, the hook periodically nudges the model to suggest `/clear` or a fresh session before the next task. The nudge is rate-limited (not every turn) so it never spams.
 
 ### `caveman-statusline.sh` / `caveman-statusline.ps1` — Statusline badge script
 
 - Reads `$CLAUDE_CONFIG_DIR/.caveman-active` (default `~/.claude/.caveman-active`) and outputs a colored badge
 - Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc.
 - Appends the lifetime savings suffix `⛏ 12.4k` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` (written by `caveman-stats.js` on each `/caveman-stats` run; absent until the first run, so fresh installs render no fake number). Opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`.
+- Appends a live **context meter** `ctx 200K` from `$CLAUDE_CONFIG_DIR/.caveman-ctx` (written by the mode-tracker hook), color-coded green/yellow/red as the session context crosses ~180K / ~320K tokens — a visible cue to `/clear` before the session balloons. Absent until the mode-tracker runs at least once. Both files are symlink-refused and content-whitelisted before rendering.
+
+### `caveman-trim-tool-result.js` — PostToolUse hook (opt-in, OFF by default)
+
+- Trims oversized built-in tool results (`Read`/`Bash`/`Grep`/`Glob`) **before they enter context**, where they would otherwise be re-sent every later turn (input tokens dominate the weekly limit in agentic use).
+- Uses the public PostToolUse `updatedToolOutput` field to replace the result the model sees.
+- Lossless first: strips ANSI/terminal noise, carriage-return progress redraws, trailing whitespace, blank-line runs. Only when still huge does it keep head + tail and drop the middle, with a marker telling the model to re-run the tool for the full output.
+- Deterministic + fail-open: same input → same bytes (so the cache stays warm); any error passes the original result through unchanged. JSON-ish results are never touched.
+- **Not wired by the plugin** (avoids a per-tool-call hook spawn for everyone). Opt in, then enable at runtime — see "Trim oversized tool results" below.
+
+> **Known limitation (Claude Code, verified 2026-06): this hook currently has ~no real-world effect.** Two reasons, both confirmed empirically with a logging wrapper on a live session:
+> 1. **Claude Code does not apply a string `updatedToolOutput` when the `tool_response` is a structured object** — and every built-in tool returns an object: Bash `{stdout, stderr, interrupted, …}`, Read `{type, file}`, Grep `{mode, content, numLines, …}`, Glob likewise. The hook fires, extracts the text, trims it, and emits a valid `updatedToolOutput` string, but Claude Code shows the original result unchanged. So it is a no-op for all four matched tools.
+> 2. **Claude Code already persists oversized results natively** — a large result (~30KB threshold) is written to disk and replaced with a ~2KB preview, more aggressively than this hook would trim. So even the big cases are already handled.
+>
+> The code is correct and unit-tested; the limitation is in the PostToolUse API surface, not the hook. It is left OFF by default. Re-evaluate if a future Claude Code honors `updatedToolOutput` for object results (then the hook would need to return the object shape with the text field trimmed, not a string).
+
+### `caveman-bound-tool-input.js` — PreToolUse hook (opt-in, the one that works)
+
+Where the trim hook fails (PostToolUse can't replace built-in results), this one succeeds: Claude Code **does** apply a PreToolUse `updatedInput` to the real tool call (verified live — injecting a `limit` into a Read capped the result). So instead of shrinking the result *after* it's produced, it caps it *at the source*, before it ever costs context, an API call, or a cache write.
+
+- **Read** — injects a `limit` when the model didn't set one. An unbounded Read has **no** native size protection (its `maxResultSizeChars` is `Infinity`), so a huge file dumps fully into context — the single biggest input leak. Cap default 2000 lines (`CAVEMAN_BOUND_READ_LIMIT`).
+- **Grep** — reins in an explicitly oversized `head_limit` (`CAVEMAN_BOUND_GREP_HEAD`, default 1000).
+- Only **adds/lowers** a bound — never overrides a smaller explicit value (respects the model's intent). Spreads the original input (Read's input is a strict object). Fail-open.
+- OFF by default; wire with `--with-bound`, enable with `CAVEMAN_BOUND_TOOL_INPUT=1`. Not wired by the plugin.
+
+```bash
+node bin/install.js --only claude --with-bound      # wire the PreToolUse(Read|Grep) hook
+export CAVEMAN_BOUND_TOOL_INPUT=1                    # enable (or set in settings.json "env")
+# optional: export CAVEMAN_BOUND_READ_LIMIT=1500
+```
 
 ## Statusline Badge
 
@@ -81,6 +112,46 @@ Badge examples:
 - `/caveman-commit` → `[CAVEMAN:COMMIT]`
 - `/caveman-review` → `[CAVEMAN:REVIEW]`
 
+## Trim oversized tool results (opt-in)
+
+Two steps — wire the hook, then enable it at runtime. It is wired into
+`settings.json` independently of the plugin (the plugin does not register
+`PostToolUse`), so it never double-fires.
+
+**Wire it** (standalone installer):
+
+```bash
+node bin/install.js --only claude --with-trim
+# or curl-pipe: npx -y github:JuliusBrussee/caveman -- --only claude --with-trim
+```
+
+**Or wire it manually** in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Read|Bash|Grep|Glob",
+        "hooks": [
+          { "type": "command", "command": "node \"/path/to/hooks/caveman-trim-tool-result.js\"", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Enable at runtime** — the hook is inert until you set:
+
+```bash
+export CAVEMAN_TRIM_TOOL_RESULTS=1
+# optional: raise/lower the size at which it kicks in (chars, default 8000)
+export CAVEMAN_TRIM_THRESHOLD=8000
+```
+
+Leave the variable unset to keep it fully off (the hook exits immediately).
+
 ## How It Works
 
 ```
@@ -106,6 +177,6 @@ node bin/install.js --uninstall
 ```
 
 Or manually:
-1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, and `caveman-statusline.{sh,ps1}`.
-2. Remove the SessionStart, UserPromptSubmit, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
-3. Delete `$CLAUDE_CONFIG_DIR/.caveman-active` (and `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if you ran `/caveman-stats`).
+1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, `caveman-trim-tool-result.js`, and `caveman-statusline.{sh,ps1}`.
+2. Remove the SessionStart, UserPromptSubmit, PostToolUse, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
+3. Delete `$CLAUDE_CONFIG_DIR/.caveman-active` (and `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if you ran `/caveman-stats`, and `$CLAUDE_CONFIG_DIR/.caveman-ctx` / `.caveman-turn` runtime files).

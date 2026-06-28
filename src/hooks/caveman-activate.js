@@ -13,6 +13,8 @@ const { getDefaultMode, safeWriteFlag } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
+const turnPath = path.join(claudeDir, '.caveman-turn');
+const nudgedMarkerPath = path.join(claudeDir, '.caveman-nudged');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
 const mode = getDefaultMode();
@@ -26,6 +28,9 @@ if (mode === 'off') {
 
 // 1. Write flag file (symlink-safe)
 safeWriteFlag(flagPath, mode);
+// Reset the per-turn reinforcement counter so caveman-mode-tracker.js re-anchors
+// on the first turn of every new session (see REINFORCE_EVERY there).
+safeWriteFlag(turnPath, '0');
 
 // 2. Emit full caveman ruleset, filtered to the active intensity level.
 //    The old 2-sentence summary was too weak — models drifted back to verbose
@@ -120,7 +125,11 @@ try {
     }
   }
 
-  if (!hasStatusline) {
+  // One-shot: nudge about the statusline only until it's either configured or
+  // we've nudged once. Without the marker this ~90-token block was re-appended to
+  // the cached SessionStart prefix EVERY session for users who never wire up the
+  // statusline — permanent input tax. The offer stays discoverable in /caveman-help.
+  if (!hasStatusline && !fs.existsSync(nudgedMarkerPath)) {
     const isWindows = process.platform === 'win32';
     const scriptName = isWindows ? 'caveman-statusline.ps1' : 'caveman-statusline.sh';
     const scriptPath = path.join(__dirname, scriptName);
@@ -135,6 +144,8 @@ try {
       "To enable, add this to " + path.join(claudeDir, 'settings.json') + ": " +
       statusLineSnippet + " " +
       "Proactively offer to set this up for the user on first interaction.";
+    // Mark nudged so subsequent sessions don't re-pay the block. Best-effort.
+    safeWriteFlag(nudgedMarkerPath, '1');
   }
 } catch (e) {
   // Silent fail — don't block session start over statusline detection

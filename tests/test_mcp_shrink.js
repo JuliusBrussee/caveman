@@ -6,7 +6,7 @@ const path = require('path');
 const assert = require('assert');
 
 const ROOT = path.resolve(__dirname, '..');
-const { compress, compressDescriptionsInPlace } = require(
+const { compress, compressDescriptionsInPlace, stripResultText } = require(
   path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink', 'compress.js')
 );
 const { getSpawnOptions } = require(
@@ -124,6 +124,36 @@ test('compressDescriptionsInPlace skips non-string description fields', () => {
   // Should not throw.
   compressDescriptionsInPlace(obj, ['description']);
   assert.deepStrictEqual(obj.description, { not: 'a string' });
+});
+
+// stripResultText: LOSSLESS strip for opt-in tools/call result compression.
+// Must remove terminal noise but NEVER prose-compress (result data the model
+// acts on) and NEVER touch structured (JSON-ish) text.
+
+test('stripResultText removes ANSI + blank-line runs losslessly', () => {
+  assert.strictEqual(stripResultText('\x1b[31mERR\x1b[0m: boom\n\n\n\ndone'), 'ERR: boom\n\ndone');
+});
+
+test('stripResultText collapses carriage-return progress redraws to the last frame', () => {
+  assert.strictEqual(stripResultText('10%\r50%\r100% done'), '100% done');
+});
+
+test('stripResultText does NOT prose-compress result data (keeps articles/fillers)', () => {
+  // A tool result is data — caveman-speak would corrupt it. Words must survive.
+  const t = 'The user just basically owns the account';
+  assert.strictEqual(stripResultText(t), t);
+});
+
+test('stripResultText leaves JSON-ish result untouched', () => {
+  const j = '{\n  "a": 1,\n\n\n  "b": "x"\n}';
+  assert.strictEqual(stripResultText(j), j);
+  assert.strictEqual(stripResultText('[1,\n2,\n3]'), '[1,\n2,\n3]');
+});
+
+test('stripResultText is deterministic and passes through non-strings', () => {
+  const t = 'line1   \nline2\x1b[0m\n\n\n\nline3';
+  assert.strictEqual(stripResultText(t), stripResultText(t));
+  assert.strictEqual(stripResultText(42), 42);
 });
 
 // spawn-options: upstream MCP child process spawn flags.

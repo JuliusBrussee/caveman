@@ -17,6 +17,7 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | **Lite** | `/caveman lite` | Drop filler. Keep sentence structure. |
 | **Full** | `/caveman` | Drop articles, filler, pleasantries, hedging. Fragments OK. Default. |
 | **Ultra** | `/caveman ultra` | Extreme compression. Bare fragments. Tables over prose. |
+| **Auto** | `/caveman auto` | Picks lite/full/ultra per answer by complexity. Trivial → ultra, complex/security → full prose. |
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Classical Chinese style, light compression. |
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness. |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget. |
@@ -31,6 +32,16 @@ Mode stick until changed or session end.
 | **caveman-review** | `/caveman-review` | One-line PR comments: `L42: bug: user null. Add guard.` |
 | **caveman-compress** | `/caveman-compress <file>` | Compress .md files to caveman prose. Saves ~46% input tokens. |
 | **caveman-help** | `/caveman-help` | This card. |
+
+## Save input tokens (biggest lever)
+
+Caveman cut output. But in agentic coding, INPUT (whole context re-sent every turn) cost most. Biggest win: shrink files that load every turn.
+
+`/caveman-compress CLAUDE.md` — compress memory/instruction files ~46%. Pay off every turn, every session. Backup at `<file>.original.md`. Compress team memory, not brand-voice README.
+
+## Statusline badge
+
+Show `[CAVEMAN]` / `[CAVEMAN:ULTRA]` in Claude Code statusline. Enable: add `statusLine` command to `settings.json` pointing at `caveman-statusline.sh` (or `.ps1` on Windows). See `src/hooks/README.md`.
 
 ## Deactivate
 

@@ -17,17 +17,23 @@
 //   - "description" fields in tools/list, prompts/list, resources/list responses
 //   - same boundaries as caveman-compress: code, URLs, paths, identifiers preserved
 //
-// What we deliberately DON'T touch in v1:
-//   - tools/call response content (high risk of breaking downstream parsing)
+// Opt-in (CAVEMAN_SHRINK_RESULTS=1): a LOSSLESS strip of tools/call result text
+//   content (type==='text') — ANSI/terminal noise + whitespace only, never the
+//   prose compress() (that would corrupt data the model acts on). JSON-ish text
+//   is skipped. See stripResultText in compress.js.
+//
+// What we deliberately DON'T touch:
 //   - request payloads going TO the upstream server
+//   - non-text result content (images, embedded resources) and structured data
 //
 // Configuration (env vars):
-//   CAVEMAN_SHRINK_FIELDS   comma-separated extra field names to compress
-//                           (default: description)
-//   CAVEMAN_SHRINK_DEBUG=1  log compression deltas to stderr
+//   CAVEMAN_SHRINK_FIELDS    comma-separated extra field names to compress
+//                            (default: description)
+//   CAVEMAN_SHRINK_RESULTS=1 lossless-strip tools/call result text (opt-in)
+//   CAVEMAN_SHRINK_DEBUG=1   log compression deltas to stderr
 
 const { spawn } = require('child_process');
-const { compressDescriptionsInPlace, compress } = require('./compress');
+const { compressDescriptionsInPlace, compress, stripResultText } = require('./compress');
 
 const args = process.argv.slice(2);
 if (args.length === 0) {
@@ -37,6 +43,7 @@ if (args.length === 0) {
 }
 
 const debug = process.env.CAVEMAN_SHRINK_DEBUG === '1';
+const shrinkResults = process.env.CAVEMAN_SHRINK_RESULTS === '1';
 const fields = (process.env.CAVEMAN_SHRINK_FIELDS || 'description')
   .split(',').map(s => s.trim()).filter(Boolean);
 
@@ -104,6 +111,25 @@ function transformResponse(msg) {
   // Some servers stuff descriptions in nested schemas. Only walk if nothing
   // matched at the top level; avoids double-processing a tool's nested params.
   if (!compressedSomething) compressDescriptionsInPlace(r, fields);
+
+  // Opt-in: lossless-strip tools/call result text content. type==='text' only;
+  // images / embedded resources / structured (JSON-ish) text left untouched.
+  if (shrinkResults && Array.isArray(r.content)) {
+    for (const item of r.content) {
+      if (item && item.type === 'text' && typeof item.text === 'string') {
+        const before = item.text;
+        const out = stripResultText(before);
+        if (out !== before) {
+          item.text = out;
+          if (debug) {
+            process.stderr.write(
+              `[caveman-shrink] result.content text: ${before.length}→${out.length} bytes\n`
+            );
+          }
+        }
+      }
+    }
+  }
 
   return msg;
 }
