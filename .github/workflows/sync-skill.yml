@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - skills/caveman/SKILL.md
+      - skills/caveman-th/SKILL.md
       - skills/cavecrew/SKILL.md
       - agents/cavecrew-*.md
       - skills/caveman-compress/SKILL.md
@@ -33,6 +34,8 @@ jobs:
       - name: Sync SKILL.md copies
         run: |
           cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
+          mkdir -p plugins/caveman/skills/caveman-th
+          cp skills/caveman-th/SKILL.md plugins/caveman/skills/caveman-th/SKILL.md
 
       - name: Sync caveman-compress skill to plugin
         run: |
@@ -60,6 +63,7 @@ jobs:
             skills/caveman-compress/ \
             plugins/caveman/skills/caveman-compress/ \
             plugins/caveman/skills/caveman/SKILL.md \
+            plugins/caveman/skills/caveman-th/SKILL.md \
             plugins/caveman/skills/cavecrew/SKILL.md \
             plugins/caveman/agents/cavecrew-investigator.md \
             plugins/caveman/agents/cavecrew-builder.md \

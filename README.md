@@ -124,6 +124,7 @@ Install break? Open agent, say *"Read CLAUDE.md and INSTALL.md, install caveman 
 | `/caveman-review` | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` |
 | `/caveman-stats` | Real session token usage + lifetime savings + USD. Tweetable line via `--share`. |
 | `/caveman-compress <file>` | Rewrite memory file (e.g. `CLAUDE.md`) into caveman-speak. Cuts ~46% input tokens every session. Code/URLs/paths byte-preserved. |
+| `caveman-th` | Thai-specific caveman mode. Short Thai fragments, English technical terms preserved. |
 | `caveman-shrink` | MCP middleware. Wraps any MCP server, compresses tool descriptions. [npm](https://www.npmjs.com/package/caveman-shrink). |
 | `cavecrew-*` | Caveman subagents (investigator/builder/reviewer). ~60% fewer tokens than vanilla, main context lasts longer. |
 

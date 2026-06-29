@@ -27,6 +27,7 @@ Skills:
   /caveman-commit       terse Conventional Commits
   /caveman-review       one-line PR comments
   /caveman-stats        session token savings
+  caveman-th            compressed Thai replies
 
 Deactivate:
   "stop caveman" or "normal mode"

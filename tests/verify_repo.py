@@ -110,6 +110,7 @@ def verify_skill_frontmatter_upload_compatibility() -> None:
         ROOT / "skills/caveman-help/SKILL.md",
         ROOT / "skills/caveman-review/SKILL.md",
         ROOT / "skills/caveman-compress/SKILL.md",
+        ROOT / "skills/caveman-th/SKILL.md",
     ]
     for path in skill_paths:
         description = _frontmatter_description(path)
@@ -132,6 +133,16 @@ def verify_synced_files() -> None:
         ensure(
             copy.read_text(encoding="utf-8") == skill_source.read_text(encoding="utf-8"),
             f"Skill copy mismatch: {copy}",
+        )
+
+    th_skill_source = ROOT / "skills/caveman-th/SKILL.md"
+    th_skill_copies = [
+        ROOT / "plugins/caveman/skills/caveman-th/SKILL.md",
+    ]
+    for copy in th_skill_copies:
+        ensure(
+            copy.read_text(encoding="utf-8") == th_skill_source.read_text(encoding="utf-8"),
+            f"Thai skill copy mismatch: {copy}",
         )
 
     with zipfile.ZipFile(ROOT / "dist" / "caveman.skill") as archive:

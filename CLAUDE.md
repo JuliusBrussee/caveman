@@ -83,6 +83,7 @@ caveman/
 | File | What it controls |
 |------|-----------------|
 | `skills/caveman/SKILL.md` | Caveman behavior: intensity levels, rules, wenyan mode, auto-clarity, persistence. Only file to edit for behavior changes. |
+| `skills/caveman-th/SKILL.md` | Thai-specific caveman behavior: short Thai fragments, Thai filler dictionary, English technical terms preserved. |
 | `src/rules/caveman-activate.md` | Always-on auto-activation rule body. Consumed by `src/tools/caveman-init.js` when a user runs `npx caveman --with-init` (per-repo IDE rule files). Edit here, not in any per-agent rule copy. |
 | `src/rules/caveman-openclaw-bootstrap.md` | Marker-fenced bootstrap snippet appended to `~/.openclaw/workspace/SOUL.md` by `bin/lib/openclaw.js`. Drives always-on caveman through the OpenClaw gateway. Must include the SENTINEL `Respond terse like smart caveman` and stay well under OpenClaw's 12K-per-bootstrap-file cap. |
 | `bin/lib/openclaw.js` | OpenClaw install/uninstall helper. Frontmatter merge (`version`, `always: true`), SOUL.md marker append/strip, idempotent. Shared by `bin/install.js` and `src/tools/caveman-init.js`. |
@@ -108,6 +109,7 @@ What's left is the Claude Code plugin distribution (required by the plugin loade
 | File | Synced from |
 |------|-------------|
 | `plugins/caveman/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
+| `plugins/caveman/skills/caveman-th/SKILL.md` | `skills/caveman-th/SKILL.md` |
 | `plugins/caveman/skills/caveman-compress/SKILL.md` (+ `scripts/`) | `skills/caveman-compress/SKILL.md` (+ `scripts/`) |
 | `plugins/caveman/skills/cavecrew/SKILL.md` | `skills/cavecrew/SKILL.md` |
 | `plugins/caveman/agents/cavecrew-*.md` | `agents/cavecrew-*.md` |
@@ -122,7 +124,7 @@ Skills not in this table (`caveman-commit`, `caveman-review`, `caveman-help`, `c
 `.github/workflows/sync-skill.yml` triggers on main push when `skills/**/SKILL.md` or `agents/cavecrew-*.md` changes.
 
 What it does:
-1. Copies `skills/caveman/SKILL.md` and `skills/cavecrew/SKILL.md` into their `plugins/caveman/skills/<name>/` mirrors so the Claude Code plugin loader sees the latest behavior.
+1. Copies `skills/caveman/SKILL.md`, `skills/caveman-th/SKILL.md`, and `skills/cavecrew/SKILL.md` into their `plugins/caveman/skills/<name>/` mirrors so the Claude Code plugin loader sees the latest behavior.
 2. Copies `skills/caveman-compress/SKILL.md` and its `scripts/` into `plugins/caveman/skills/caveman-compress/`.
 3. Copies `agents/cavecrew-*.md` into `plugins/caveman/agents/`.
 4. Rebuilds `dist/caveman.skill` (ZIP of `skills/caveman/`) for the release artifact.
