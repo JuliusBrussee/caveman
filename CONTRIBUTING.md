@@ -32,6 +32,7 @@ copies live under `plugins/caveman/` and similar mirror dirs — those are
 | I want to change... | Edit this file |
 |---|---|
 | Caveman behavior (intensity levels, voice, rules) | `skills/caveman/SKILL.md` |
+| Thai caveman behavior | `skills/caveman-th/SKILL.md` |
 | Caveman commit-message format | `skills/caveman-commit/SKILL.md` |
 | Caveman code-review format | `skills/caveman-review/SKILL.md` |
 | Caveman compress logic | `skills/caveman-compress/SKILL.md` and `skills/caveman-compress/scripts/` |
@@ -58,6 +59,7 @@ on every push to `main`.
 | Path | Rebuilt from |
 |------|--------------|
 | `plugins/caveman/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
+| `plugins/caveman/skills/caveman-th/SKILL.md` | `skills/caveman-th/SKILL.md` |
 | `plugins/caveman/skills/caveman-compress/{SKILL.md, scripts/}` | `skills/caveman-compress/{SKILL.md, scripts/}` |
 | `plugins/caveman/skills/cavecrew/SKILL.md` | `skills/cavecrew/SKILL.md` |
 | `plugins/caveman/agents/cavecrew-*.md` | `agents/cavecrew-*.md` |
