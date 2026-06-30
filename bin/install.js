@@ -410,8 +410,9 @@ function quoteWinArg(a) {
 
 function spawnXplat(cmd, args, opts) {
   if (IS_WIN) {
-    const quoted = args.map(quoteWinArg).join(' ');
-    return child_process.spawnSync(`${cmd} ${quoted}`, [], Object.assign({ shell: true }, opts || {}));
+    // Quote the command too — Node may live at C:\Program Files\nodejs\node.exe (#461)
+    const shellCmd = [quoteWinArg(cmd), ...args.map(quoteWinArg)].join(' ');
+    return child_process.spawnSync(shellCmd, [], Object.assign({ shell: true }, opts || {}));
   }
   return child_process.spawnSync(cmd, args, opts || {});
 }
