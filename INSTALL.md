@@ -48,6 +48,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` | Per-session by default; `--with-init` for an always-on rule file |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` | Per-session by default; `--with-init` for an always-on rule file |
 | **GitHub Copilot** *(soft probe)* | `npx -y github:JuliusBrussee/caveman -- --only copilot --with-init` | Repo-wide instructions via `--with-init` |
+| **GitHub Copilot CLI** | `copilot plugin marketplace add JuliusBrussee/caveman && copilot plugin install caveman@caveman` | Per-session: `/caveman` |
 | **Continue** | `npx skills add JuliusBrussee/caveman -a continue` | No — say `/caveman` |
 | **Kilo Code** | `npx skills add JuliusBrussee/caveman -a kilo` | No |
 | **Roo Code** | `npx skills add JuliusBrussee/caveman -a roo` | No |
