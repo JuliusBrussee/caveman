@@ -19,18 +19,30 @@ set -euo pipefail
 
 REPO="JuliusBrussee/caveman"
 
-# Require Node ≥18. nvm is a common path; print a hint if missing.
-if ! command -v node >/dev/null 2>&1; then
-  echo "caveman: Node.js (≥18) required. Install:" >&2
-  echo "  macOS:  brew install node" >&2
-  echo "  Linux:  see https://nodejs.org or use nvm (https://github.com/nvm-sh/nvm)" >&2
-  exit 1
+# Resolve runtime: prefer Node ≥18, fall back to Bun.
+runtime=""
+
+if command -v node >/dev/null 2>&1; then
+  NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
+  if [ "$NODE_MAJOR" -ge 18 ]; then
+    runtime=node
+  fi
+  # If Node is too old, don't exit — fall through to the Bun probe below.
 fi
 
-NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
-if [ "$NODE_MAJOR" -lt 18 ]; then
-  echo "caveman: Node $NODE_MAJOR too old. Need Node ≥18." >&2
-  echo "  Upgrade: https://nodejs.org" >&2
+if [ -z "$runtime" ] && command -v bun >/dev/null 2>&1; then
+  runtime=bun
+fi
+
+if [ -z "$runtime" ]; then
+  if command -v node >/dev/null 2>&1; then
+    echo "caveman: Node $NODE_MAJOR too old (≥18 needed), and Bun not found. Install:" >&2
+  else
+    echo "caveman: Node.js (≥18) or Bun required. Install:" >&2
+  fi
+  echo "  macOS:  brew install node     (or brew install bun)" >&2
+  echo "  Linux:  see https://nodejs.org (or nvm: https://github.com/nvm-sh/nvm)" >&2
+  echo "         or https://bun.sh" >&2
   exit 1
 fi
 
@@ -40,15 +52,20 @@ fi
 # bare reference — default to empty so the curl-pipe path falls through cleanly.
 here="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd)" || here=""
 if [ -n "$here" ] && [ -f "$here/bin/install.js" ]; then
-  exec node "$here/bin/install.js" "$@"
+  exec $runtime "$here/bin/install.js" "$@"
 fi
 
-# Curl-pipe path: delegate to npx. We do NOT pass `--` here — npm 7+ npx
-# already forwards trailing args to the package, and a literal `--` tripped
-# bin/install.js's parseArgs as an unknown flag.
-if ! command -v npx >/dev/null 2>&1; then
-  echo "caveman: npx required (ships with Node ≥18). Reinstall Node.js." >&2
-  exit 1
+# Curl-pipe path: delegate to npx (Node) or bunx (Bun).
+if [ "$runtime" = node ]; then
+  if ! command -v npx >/dev/null 2>&1; then
+    echo "caveman: npx required (ships with Node ≥18). Reinstall Node.js." >&2
+    exit 1
+  fi
+  # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
+  # package, and a literal `--` was tripping bin/install.js's parseArgs as an
+  # unknown flag.
+  exec npx -y "github:$REPO" "$@"
+else
+  # Bun runtime: bunx is Bun's equivalent of npx.
+  exec bunx -y "github:$REPO" "$@"
 fi
-
-exec npx -y "github:$REPO" "$@"

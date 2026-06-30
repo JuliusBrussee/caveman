@@ -108,7 +108,7 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.
 irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
 ```
 
-~30 seconds. Needs Node ≥18. Skip agent you no have. Safe to re-run.
+~30 seconds. Needs Node ≥18 or Bun. Skip agent you no have. Safe to re-run.
 
 **Trigger:** type `/caveman` or say "talk like caveman". Stop with "normal mode".
 
@@ -189,7 +189,7 @@ Caveman teach lobster brevity — same canonical installer, scoped to one agent:
 # macOS / Linux / WSL
 curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --only openclaw
 
-# Windows (PowerShell): no Node? install Node ≥18 first, then
+# Windows (PowerShell): needs Node ≥18 or Bun, then
 npx -y github:JuliusBrussee/caveman -- --only openclaw
 ```
 

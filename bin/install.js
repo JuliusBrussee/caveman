@@ -183,6 +183,15 @@ function checkWslWindowsNode() {
 }
 
 function checkNodeVersion() {
+  // Bun provides full Node.js API compatibility — check minimum Bun version.
+  if (process.versions.bun) {
+    const [bmajor, bminor, bpatch] = process.versions.bun.split('.').map(Number);
+    // Need Bun >= 1.3.14
+    const tooOld = bmajor < 1 ||
+      (bmajor === 1 && (bminor < 3 || (bminor === 3 && (bpatch || 0) < 14)));
+    if (tooOld) die(`caveman: Bun ${process.versions.bun} too old. Need Bun >=1.3.14. https://bun.sh`);
+    return;
+  }
   const major = parseInt(process.versions.node.split('.')[0], 10);
   if (major < 18) die(`caveman: Node ${process.versions.node} too old. Need Node ≥18. https://nodejs.org`);
 }

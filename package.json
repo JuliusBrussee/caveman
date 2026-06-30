@@ -16,7 +16,8 @@
     "caveman": "./bin/install.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18",
+    "bun": ">=1.3.14"
   },
   "scripts": {
     "test": "node --test tests/installer/*.test.mjs"
