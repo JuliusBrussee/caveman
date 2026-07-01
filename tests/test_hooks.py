@@ -156,6 +156,19 @@ class HookScriptTests(unittest.TestCase):
             self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
             self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
 
+    def test_activate_reads_real_skill_md_not_fallback(self):
+        # Regression test: caveman-activate.js resolves SKILL.md relative to
+        # __dirname (src/hooks/), which sits two levels below the plugin
+        # root, not one. A wrong path silently fails (empty catch) and falls
+        # back to a hardcoded ruleset missing rules SKILL.md carries, e.g.
+        # "Preserve user's dominant language".
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-skillmd-") as tmp:
+            home = Path(tmp)
+
+            result = self.run_cmd(["node", "src/hooks/caveman-activate.js"], home)
+
+            self.assertIn("Preserve user's dominant language", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

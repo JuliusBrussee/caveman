@@ -48,12 +48,12 @@ if (INDEPENDENT_MODES.has(mode)) {
 const modeLabel = mode === 'wenyan' ? 'wenyan-full' : mode;
 
 // Read SKILL.md — the single source of truth for caveman behavior.
-// Plugin installs: __dirname = <plugin_root>/hooks/, SKILL.md at <plugin_root>/skills/caveman/SKILL.md
+// Plugin installs: __dirname = <plugin_root>/src/hooks/, SKILL.md at <plugin_root>/skills/caveman/SKILL.md
 // Standalone installs: __dirname = $CLAUDE_CONFIG_DIR/hooks/, SKILL.md won't exist — falls back to hardcoded rules.
 let skillContent = '';
 try {
   skillContent = fs.readFileSync(
-    path.join(__dirname, '..', 'skills', 'caveman', 'SKILL.md'), 'utf8'
+    path.join(__dirname, '..', '..', 'skills', 'caveman', 'SKILL.md'), 'utf8'
   );
 } catch (e) { /* standalone install — will use fallback below */ }
 
