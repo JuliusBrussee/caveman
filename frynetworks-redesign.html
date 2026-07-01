@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fry Networks — Redesign Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&family=Rajdhani:wght@500;600;700&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#09090b;--s0:#0e0e11;--s1:#141418;--s2:#1b1b20;--s3:#232328;
+  --b0:#202025;--b1:#2c2c33;--b2:#3c3c45;
+  --txt:#efecea;--t1:#9b9793;--t2:#5c5955;
+  --red:#e5271c;--redg:rgba(229,39,28,.12);
+  --teal:#00c49a;--tealg:rgba(0,196,154,.10);
+  --amb:#f0a500;--blu:#4a9eff;
+  --fl:'Syncopate',sans-serif;--fh:'Rajdhani',sans-serif;
+  --fb:'DM Sans',sans-serif;--fm:'IBM Plex Mono',monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--txt);font-family:var(--fb);font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+img{max-width:100%;display:block}
+
+.nav{position:fixed;top:0;left:0;right:0;z-index:100;backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);background:rgba(9,9,11,.82);border-bottom:1px solid var(--b0)}
+.nav-inner{max-width:1200px;margin:0 auto;padding:0 40px;height:64px;display:flex;align-items:center;justify-content:space-between}
+.nav-logo{display:flex;align-items:center;gap:10px;cursor:pointer}
+.nav-logo-mark{width:32px;height:32px;background:var(--red);border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:var(--fl);font-weight:700;font-size:14px;color:#fff;letter-spacing:.04em}
+.nav-logo-text{font-family:var(--fh);font-weight:700;font-size:16px;letter-spacing:.06em;color:var(--txt)}
+.nav-links{display:flex;align-items:center;gap:32px}
+.nav-links a{font-family:var(--fb);font-size:13px;font-weight:500;color:var(--t1);letter-spacing:.02em;transition:color .2s;cursor:pointer}
+.nav-links a:hover{color:var(--txt)}
+.nav-cta{font-family:var(--fh);font-weight:700;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#fff!important;background:var(--red);border:none;padding:8px 20px;border-radius:6px;cursor:pointer;transition:all .2s;display:inline-block}
+.nav-cta:hover{background:#cc2218;transform:translateY(-1px)}
+
+.hero{position:relative;min-height:100vh;display:flex;align-items:center;overflow:hidden;padding-top:64px}
+.hero-bg{position:absolute;inset:0;overflow:hidden}
+.hero-grid{position:absolute;inset:0;background-image:linear-gradient(var(--b0) 1px,transparent 1px),linear-gradient(90deg,var(--b0) 1px,transparent 1px);background-size:60px 60px;opacity:.35}
+.hero-glow-red{position:absolute;width:700px;height:700px;border-radius:50%;background:radial-gradient(circle,rgba(229,39,28,.12) 0%,transparent 70%);top:-200px;right:-100px;animation:drift-r 20s ease-in-out infinite}
+.hero-glow-teal{position:absolute;width:500px;height:500px;border-radius:50%;background:radial-gradient(circle,rgba(0,196,154,.08) 0%,transparent 70%);bottom:-100px;left:-50px;animation:drift-l 25s ease-in-out infinite}
+@keyframes drift-r{0%,100%{transform:translate(0,0)}50%{transform:translate(-40px,30px)}}
+@keyframes drift-l{0%,100%{transform:translate(0,0)}50%{transform:translate(30px,-20px)}}
+.hero-inner{position:relative;z-index:2;max-width:1200px;margin:0 auto;padding:0 40px;display:grid;grid-template-columns:1fr 420px;gap:80px;align-items:center}
+.hero-eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:var(--fm);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--teal);margin-bottom:24px;padding:6px 14px;background:var(--tealg);border:1px solid rgba(0,196,154,.18);border-radius:20px}
+.hero-eyebrow-dot{width:6px;height:6px;border-radius:50%;background:var(--teal);animation:pulse-dot 2s ease-in-out infinite}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.4}}
+.hero h1{font-family:var(--fl);font-weight:700;font-size:52px;line-height:1.05;letter-spacing:-.01em;margin-bottom:20px}
+.hero h1 em{font-style:normal;color:var(--red)}
+.hero-sub{font-size:17px;color:var(--t1);line-height:1.7;margin-bottom:36px;max-width:480px}
+.hero-actions{display:flex;gap:12px;align-items:center}
+.btn{font-family:var(--fh);font-weight:700;font-size:14px;letter-spacing:.06em;text-transform:uppercase;border:none;padding:12px 28px;border-radius:6px;cursor:pointer;transition:all .25s;display:inline-flex;align-items:center;gap:8px;text-decoration:none}
+.btn-p{color:#fff;background:var(--red)}
+.btn-p:hover{background:#cc2218;transform:translateY(-1px);box-shadow:0 8px 30px rgba(229,39,28,.25)}
+.btn-s{color:var(--txt);background:transparent;border:1px solid var(--b2)}
+.btn-s:hover{border-color:var(--t1);background:var(--s1)}
+.btn-arrow{font-size:16px;transition:transform .2s}
+.btn-p:hover .btn-arrow,.btn-s:hover .btn-arrow{transform:translateX(3px)}
+.hero-viz{position:relative;width:420px;height:420px}
+.hero-viz svg{width:100%;height:100%}
+
+.stats{position:relative;z-index:2;border-top:1px solid var(--b0);border-bottom:1px solid var(--b0);background:var(--s0)}
+.stats-inner{max-width:1200px;margin:0 auto;padding:0 40px;display:grid;grid-template-columns:repeat(4,1fr);gap:0}
+.stat{padding:40px 0;text-align:center;position:relative}
+.stat+.stat::before{content:'';position:absolute;left:0;top:20%;bottom:20%;width:1px;background:var(--b0)}
+.stat-num{font-family:var(--fl);font-weight:700;font-size:36px;letter-spacing:-.01em;color:var(--txt);margin-bottom:4px}
+.stat-num span{color:var(--red)}
+.stat-label{font-family:var(--fm);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--t2)}
+
+.section{padding:100px 0}
+.section-inner{max-width:1200px;margin:0 auto;padding:0 40px}
+.section-label{font-family:var(--fm);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--teal);margin-bottom:12px;display:flex;align-items:center;gap:10px}
+.section-label::before{content:'';width:20px;height:1.5px;background:var(--teal)}
+.section-title{font-family:var(--fh);font-weight:700;font-size:32px;letter-spacing:.04em;color:var(--txt);margin-bottom:8px}
+.section-desc{font-size:15px;color:var(--t1);max-width:520px;line-height:1.7}
+
+.eco-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:48px}
+.eco-card{background:var(--s1);border:1px solid var(--b0);border-radius:10px;padding:28px 24px;transition:all .3s;position:relative;overflow:hidden;cursor:pointer;display:block}
+.eco-card:hover{border-color:var(--b2);transform:translateY(-2px);box-shadow:0 12px 40px rgba(0,0,0,.3)}
+.eco-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--red),var(--teal));opacity:0;transition:opacity .3s}
+.eco-card:hover::before{opacity:1}
+.eco-icon{width:40px;height:40px;border-radius:8px;display:flex;align-items:center;justify-content:center;margin-bottom:16px;font-size:18px}
+.eco-icon-red{background:var(--redg);color:var(--red)}
+.eco-icon-teal{background:var(--tealg);color:var(--teal)}
+.eco-icon-amb{background:rgba(240,165,0,.1);color:var(--amb)}
+.eco-icon-blu{background:rgba(74,158,255,.1);color:var(--blu)}
+.eco-name{font-family:var(--fh);font-weight:700;font-size:16px;letter-spacing:.04em;color:var(--txt);margin-bottom:6px}
+.eco-url{font-family:var(--fm);font-size:11px;color:var(--t2);margin-bottom:10px}
+.eco-desc{font-size:13px;color:var(--t1);line-height:1.6}
+.eco-badge{display:inline-block;font-family:var(--fm);font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:4px;margin-top:10px}
+.eco-badge-new{background:var(--tealg);color:var(--teal);border:1px solid rgba(0,196,154,.2)}
+.eco-badge-fip{background:var(--redg);color:var(--red);border:1px solid rgba(229,39,28,.2)}
+
+.how{background:var(--s0);border-top:1px solid var(--b0);border-bottom:1px solid var(--b0)}
+.how-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin-top:48px;position:relative}
+.how-grid::before{content:'';position:absolute;top:28px;left:16%;right:16%;height:1px;background:linear-gradient(90deg,var(--red) 0%,var(--teal) 100%);opacity:.3}
+.how-step{text-align:center;padding:0 24px;position:relative}
+.how-num{width:56px;height:56px;border-radius:50%;border:1.5px solid var(--b2);background:var(--s1);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-family:var(--fm);font-size:14px;font-weight:500;color:var(--red);position:relative;z-index:2}
+.how-step-title{font-family:var(--fh);font-weight:700;font-size:17px;letter-spacing:.04em;color:var(--txt);margin-bottom:8px}
+.how-step-desc{font-size:13px;color:var(--t1);line-height:1.6;max-width:280px;margin:0 auto}
+
+.built-grid{display:flex;align-items:center;gap:20px;margin-top:40px;flex-wrap:wrap}
+.built-badge{display:flex;align-items:center;gap:12px;padding:14px 24px;background:var(--s1);border:1px solid var(--b0);border-radius:8px;transition:all .3s;cursor:pointer}
+.built-badge:hover{border-color:var(--b2)}
+.built-badge-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.built-badge-text{font-family:var(--fh);font-weight:600;font-size:14px;letter-spacing:.04em;color:var(--txt)}
+.built-badge-sub{font-family:var(--fm);font-size:10px;color:var(--t2);letter-spacing:.06em}
+
+.exchange-strip{display:flex;align-items:center;justify-content:center;gap:20px;margin-top:40px;flex-wrap:wrap}
+.exchange-pill{display:flex;align-items:center;gap:10px;padding:10px 22px;background:var(--s1);border:1px solid var(--b0);border-radius:6px;transition:all .3s;cursor:pointer}
+.exchange-pill:hover{border-color:var(--b2);background:var(--s2)}
+.exchange-pill img{height:24px;width:auto;object-fit:contain;filter:brightness(1.1)}
+
+.partner-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:40px}
+.partner-card{background:var(--s1);border:1px solid var(--b0);border-radius:8px;padding:20px;display:flex;align-items:center;justify-content:center;height:90px;transition:all .3s;cursor:pointer}
+.partner-card:hover{border-color:var(--b2);background:var(--s2)}
+.partner-card img{max-height:50px;max-width:140px;object-fit:contain;filter:brightness(0.85) contrast(1.05);transition:filter .3s}
+.partner-card:hover img{filter:brightness(1) contrast(1)}
+.partner-card svg{transition:opacity .3s;opacity:.7}
+.partner-card:hover svg{opacity:1}
+
+.cta-banner{position:relative;overflow:hidden}
+.cta-banner-inner{max-width:1200px;margin:0 auto;padding:0 40px}
+.cta-box{background:var(--s1);border:1px solid var(--b0);border-radius:12px;padding:60px;text-align:center;position:relative;overflow:hidden}
+.cta-box::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--red),var(--teal))}
+.cta-box-glow{position:absolute;width:400px;height:400px;border-radius:50%;background:radial-gradient(circle,rgba(229,39,28,.08) 0%,transparent 70%);top:-200px;left:50%;transform:translateX(-50%)}
+.cta-title{font-family:var(--fl);font-weight:700;font-size:28px;letter-spacing:-.005em;margin-bottom:12px;position:relative}
+.cta-desc{font-size:15px;color:var(--t1);margin-bottom:28px;position:relative}
+
+.footer{border-top:1px solid var(--b0);padding:60px 0 40px}
+.footer-inner{max-width:1200px;margin:0 auto;padding:0 40px}
+.footer-top{display:grid;grid-template-columns:280px repeat(4,1fr);gap:40px;margin-bottom:48px}
+.footer-brand{display:flex;flex-direction:column;gap:12px}
+.footer-brand-desc{font-size:13px;color:var(--t2);line-height:1.6}
+.footer-col-title{font-family:var(--fh);font-weight:700;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--t2);margin-bottom:14px}
+.footer-col a{display:block;font-size:13px;color:var(--t1);padding:4px 0;transition:color .2s;cursor:pointer}
+.footer-col a:hover{color:var(--txt)}
+.footer-bottom{border-top:1px solid var(--b0);padding-top:24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px}
+.footer-copy{font-family:var(--fm);font-size:11px;color:var(--t2);letter-spacing:.04em}
+.footer-legal-links{display:flex;gap:16px}
+.footer-legal-links a{font-size:12px;color:var(--t2);transition:color .2s;cursor:pointer}
+.footer-legal-links a:hover{color:var(--t1)}
+.footer-socials{display:flex;gap:10px}
+.footer-socials a{width:32px;height:32px;border-radius:6px;background:var(--s2);border:1px solid var(--b0);display:flex;align-items:center;justify-content:center;transition:all .2s;cursor:pointer}
+.footer-socials a:hover{border-color:var(--b2);background:var(--s3)}
+.footer-socials a svg{width:16px;height:16px;fill:var(--t2);transition:fill .2s}
+.footer-socials a:hover svg{fill:var(--t1)}
+
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--s2);border:1px solid var(--b1);border-radius:8px;padding:12px 24px;font-family:var(--fm);font-size:12px;color:var(--teal);z-index:200;opacity:0;transition:all .4s cubic-bezier(.34,1.56,.64,1);pointer-events:none;white-space:nowrap}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+@media(max-width:900px){
+  .hero-inner{grid-template-columns:1fr;gap:40px}
+  .hero h1{font-size:36px}
+  .hero-viz{display:none}
+  .stats-inner{grid-template-columns:repeat(2,1fr)}
+  .eco-grid{grid-template-columns:1fr 1fr}
+  .how-grid{grid-template-columns:1fr;gap:40px}
+  .how-grid::before{display:none}
+  .footer-top{grid-template-columns:1fr 1fr}
+}
+@media(max-width:600px){
+  .nav-links{display:none}
+  .eco-grid{grid-template-columns:1fr}
+  .stats-inner{grid-template-columns:1fr}
+  .stat+.stat::before{display:none}
+  .partner-grid{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+
+<div class="toast" id="toast"></div>
+
+<!-- NAV -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="nav-logo" data-scroll="hero">
+      <div class="nav-logo-mark">F</div>
+      <div class="nav-logo-text">Fry Networks</div>
+    </a>
+    <div class="nav-links">
+      <a data-scroll="ecosystem">Ecosystem</a>
+      <a data-scroll="how">How it works</a>
+      <a data-scroll="infrastructure">Infrastructure</a>
+      <a data-scroll="exchanges">Trade</a>
+      <a data-scroll="partners">Partners</a>
+      <a class="nav-cta" data-scroll="ecosystem">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero" id="hero">
+  <div class="hero-bg">
+    <div class="hero-grid"></div>
+    <div class="hero-glow-red"></div>
+    <div class="hero-glow-teal"></div>
+  </div>
+  <div class="hero-inner">
+    <div>
+      <div class="hero-eyebrow">
+        <span class="hero-eyebrow-dot"></span>
+        9,100+ devices online
+      </div>
+      <h1>Powering the<br><em>decentralized</em><br>edge</h1>
+      <p class="hero-sub">
+        Run the Fry Edge Miner on your hardware, contribute bandwidth, compute, and connectivity to the network,
+        and earn FRY rewards every epoch. Built on Algorand.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-p" data-scroll="ecosystem">Get started <span class="btn-arrow">→</span></a>
+        <a class="btn btn-s" data-scroll="infrastructure">Learn more <span class="btn-arrow">→</span></a>
+      </div>
+    </div>
+    <div class="hero-viz">
+      <svg viewBox="0 0 420 420" xmlns="http://www.w3.org/2000/svg">
+        <defs><radialGradient id="ng" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#e5271c" stop-opacity=".15"/><stop offset="100%" stop-color="transparent"/></radialGradient></defs>
+        <circle cx="210" cy="210" r="180" fill="url(#ng)"/>
+        <g stroke-width=".6" opacity=".5">
+          <line x1="210" y1="210" x2="310" y2="110" stroke="#e5271c"/><line x1="210" y1="210" x2="120" y2="100" stroke="#e5271c"/>
+          <line x1="210" y1="210" x2="330" y2="250" stroke="#00c49a"/><line x1="210" y1="210" x2="100" y2="280" stroke="#00c49a"/>
+          <line x1="210" y1="210" x2="280" y2="340" stroke="#e5271c"/><line x1="210" y1="210" x2="140" y2="350" stroke="#00c49a"/>
+          <line x1="310" y1="110" x2="370" y2="160" stroke="#e5271c" opacity=".3"/><line x1="120" y1="100" x2="60" y2="150" stroke="#e5271c" opacity=".3"/>
+          <line x1="330" y1="250" x2="380" y2="310" stroke="#00c49a" opacity=".3"/><line x1="100" y1="280" x2="50" y2="220" stroke="#00c49a" opacity=".3"/>
+          <line x1="310" y1="110" x2="120" y2="100" stroke="#e5271c" opacity=".2"/><line x1="330" y1="250" x2="280" y2="340" stroke="#e5271c" opacity=".2"/>
+          <line x1="100" y1="280" x2="140" y2="350" stroke="#00c49a" opacity=".2"/><line x1="370" y1="160" x2="330" y2="250" stroke="#00c49a" opacity=".15"/>
+          <line x1="60" y1="150" x2="100" y2="280" stroke="#00c49a" opacity=".15"/>
+        </g>
+        <g><circle cx="370" cy="160" r="3" fill="#e5271c" opacity=".5"/><circle cx="60" cy="150" r="3" fill="#e5271c" opacity=".5"/><circle cx="380" cy="310" r="3" fill="#00c49a" opacity=".5"/><circle cx="50" cy="220" r="3" fill="#00c49a" opacity=".5"/></g>
+        <g>
+          <circle cx="310" cy="110" r="5" fill="#e5271c" opacity=".7"><animate attributeName="opacity" values=".7;.3;.7" dur="3s" repeatCount="indefinite"/></circle>
+          <circle cx="120" cy="100" r="4.5" fill="#e5271c" opacity=".6"><animate attributeName="opacity" values=".6;.25;.6" dur="3.5s" repeatCount="indefinite"/></circle>
+          <circle cx="330" cy="250" r="5" fill="#00c49a" opacity=".7"><animate attributeName="opacity" values=".7;.3;.7" dur="4s" repeatCount="indefinite"/></circle>
+          <circle cx="100" cy="280" r="4.5" fill="#00c49a" opacity=".6"><animate attributeName="opacity" values=".6;.25;.6" dur="3.2s" repeatCount="indefinite"/></circle>
+          <circle cx="280" cy="340" r="4" fill="#e5271c" opacity=".5"><animate attributeName="opacity" values=".5;.2;.5" dur="4.5s" repeatCount="indefinite"/></circle>
+          <circle cx="140" cy="350" r="4" fill="#00c49a" opacity=".5"><animate attributeName="opacity" values=".5;.2;.5" dur="3.8s" repeatCount="indefinite"/></circle>
+        </g>
+        <circle cx="210" cy="210" r="14" fill="none" stroke="#e5271c" stroke-width=".8" opacity=".3"><animate attributeName="r" values="14;18;14" dur="4s" repeatCount="indefinite"/><animate attributeName="opacity" values=".3;.1;.3" dur="4s" repeatCount="indefinite"/></circle>
+        <circle cx="210" cy="210" r="8" fill="#e5271c" opacity=".85"><animate attributeName="opacity" values=".85;.5;.85" dur="3s" repeatCount="indefinite"/></circle>
+        <text x="210" y="178" text-anchor="middle" font-family="'IBM Plex Mono',monospace" font-size="9" fill="#5c5955" letter-spacing=".12em">EDGE NETWORK</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<div class="stats">
+  <div class="stats-inner">
+    <div class="stat"><div class="stat-num">9,100<span>+</span></div><div class="stat-label">Devices online</div></div>
+    <div class="stat"><div class="stat-num">100K<span>+</span></div><div class="stat-label">Rewards distributed</div></div>
+    <div class="stat"><div class="stat-num">300K<span>+</span></div><div class="stat-label">Connectivity checks</div></div>
+    <div class="stat"><div class="stat-num">5K<span>+</span></div><div class="stat-label">Community members</div></div>
+  </div>
+</div>
+
+<!-- ECOSYSTEM -->
+<section class="section" id="ecosystem">
+  <div class="section-inner">
+    <div class="section-label">Ecosystem</div>
+    <div class="section-title">One network, many surfaces</div>
+    <p class="section-desc">Mine at the edge, farm yields, trade NFTs, manage devices, and vote on proposals — all under one protocol.</p>
+    <div class="eco-grid">
+      <div class="eco-card" data-toast="Opens fry.farm — DeFi platform">
+        <div class="eco-icon eco-icon-red">⚡</div>
+        <div class="eco-name">Fry Farm</div><div class="eco-url">fry.farm</div>
+        <div class="eco-desc">DeFi hub — stake FRY, provide liquidity, claim epoch rewards, and manage your positions on Algorand and Voi.</div>
+      </div>
+      <div class="eco-card" data-toast="Opens fry.market — NFT marketplace">
+        <div class="eco-icon eco-icon-teal">◆</div>
+        <div class="eco-name">Fry Market</div><div class="eco-url">fry.market</div>
+        <div class="eco-desc">NFT marketplace for Algorand and Voi assets. Mint, list, bid, and trade — with built-in auction support.</div>
+      </div>
+      <div class="eco-card" data-toast="Opens dashboard.frynetworks.com">
+        <div class="eco-icon eco-icon-blu">▦</div>
+        <div class="eco-name">Dashboard</div><div class="eco-url">dashboard.frynetworks.com</div>
+        <div class="eco-desc">Register devices, monitor health, view reward history, and manage your entire fleet from one panel.</div>
+      </div>
+      <div class="eco-card" data-toast="Opens FEM download page">
+        <div class="eco-icon eco-icon-amb">⬡</div>
+        <div class="eco-name">Fry Edge Miner</div><div class="eco-url">Desktop application</div>
+        <div class="eco-desc">The single miner for the entire network. Contribute bandwidth, compute, storage, and AI workloads from your machine. Toggleable partner integrations with proportional rewards.</div>
+        <div class="eco-badge eco-badge-fip">FIP-016</div>
+      </div>
+      <div class="eco-card" data-toast="Opens vote.frynetworks.com — DAO governance">
+        <div class="eco-icon eco-icon-teal">⚖</div>
+        <div class="eco-name">DAO Governance</div><div class="eco-url">vote.frynetworks.com</div>
+        <div class="eco-desc">On-chain governance powered by FryGovernance V2. Submit and vote on proposals that shape the protocol's future.</div>
+      </div>
+      <div class="eco-card" data-toast="Opens byod.frynetworks.com — Buy BYOD licenses">
+        <div class="eco-icon eco-icon-teal">🔑</div>
+        <div class="eco-name">BYOD Licenses</div><div class="eco-url">byod.frynetworks.com</div>
+        <div class="eco-desc">Bring your own device. Purchase a license to run FEM on hardware you already own — no Fry hardware purchase required.</div>
+        <div class="eco-badge eco-badge-new">BYOD</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="section how" id="how">
+  <div class="section-inner">
+    <div class="section-label">How it works</div>
+    <div class="section-title">Three steps to earning</div>
+    <p class="section-desc">No blockchain experience required. Install the software, connect your wallet, and start earning.</p>
+    <div class="how-grid">
+      <div class="how-step"><div class="how-num">1</div><div class="how-step-title">Install FEM</div><div class="how-step-desc">Download the Fry Edge Miner, register your device on the dashboard, and connect your Algorand wallet.</div></div>
+      <div class="how-step"><div class="how-num">2</div><div class="how-step-title">Contribute to the network</div><div class="how-step-desc">FEM runs partner integrations in the background — relaying bandwidth, storing data, serving search queries, and processing AI workloads.</div></div>
+      <div class="how-step"><div class="how-num">3</div><div class="how-step-title">Earn rewards</div><div class="how-step-desc">The FryMinerRewardPool distributes FRY tokens each epoch based on your device's verified contributions and active integrations.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- BUILT ON -->
+<section class="section" id="infrastructure">
+  <div class="section-inner">
+    <div class="section-label">Infrastructure</div>
+    <div class="section-title">Built on proven foundations</div>
+    <p class="section-desc">Algorand's instant finality and low fees power every reward distribution, governance vote, and token transfer in the Fry ecosystem.</p>
+    <div class="built-grid">
+      <div class="built-badge" data-toast="Algorand — primary L1 blockchain">
+        <div class="built-badge-icon" style="background:var(--tealg)"><svg viewBox="0 0 24 24" width="24" height="24"><path d="M18.54 20H20.5L15.97 4h-2.1l-1.2 4.78L15.03 16h-3.3L8.47 4H6.4l3.54 12.07L8.5 20h2.1l1.25-4.15L13.37 20h2.07l-1.7-5.8 1.42-4.82z" fill="#00c49a"/></svg></div>
+        <div><div class="built-badge-text">Algorand</div><div class="built-badge-sub">Layer 1 — primary chain</div></div>
+      </div>
+      <div class="built-badge" data-toast="Voi Network — multi-chain expansion">
+        <div class="built-badge-icon" style="background:rgba(74,158,255,.1)"><svg viewBox="0 0 24 24" width="24" height="24"><path d="M12 3L4 21h4l4-10 4 10h4L12 3z" fill="#4a9eff"/></svg></div>
+        <div><div class="built-badge-text">Voi Network</div><div class="built-badge-sub">Multi-chain expansion</div></div>
+      </div>
+      <div class="built-badge" data-toast="Solana — cross-chain bridge (coming)">
+        <div class="built-badge-icon" style="background:rgba(148,106,255,.1)"><svg viewBox="0 0 24 24" width="24" height="24"><path d="M5 17.5h12.5l1.5-1.5H5.5L4 17.5h1zm0-5h14l1.5-1.5H6.5L5 12.5zm14-5H5L6.5 6H20.5L19 7.5z" fill="#946aff"/></svg></div>
+        <div><div class="built-badge-text">Solana</div><div class="built-badge-sub">Cross-chain bridge</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- EXCHANGES -->
+<section class="section" style="border-top:1px solid var(--b0)" id="exchanges">
+  <div class="section-inner" style="text-align:center">
+    <div class="section-label" style="justify-content:center"><span style="display:none">.</span>Listed on</div>
+    <div class="section-title" style="text-align:center">Trade FRY</div>
+    <div class="exchange-strip">
+      <div class="exchange-pill" data-toast="Opens Tinyman DEX"><img src="https://static.wixstatic.com/media/30dc3d_fe3350008ac840f180ccc88e32931272~mv2.png/v1/fill/w_200,h_83,al_c,q_85,enc_avif,quality_auto/30dc3d_fe3350008ac840f180ccc88e32931272~mv2.png" alt="Tinyman" style="height:28px"></div>
+      <div class="exchange-pill" data-toast="Opens NonKYC exchange"><img src="https://static.wixstatic.com/media/b2ad32_e85abeb4e98e4863bfe4e2f126068531~mv2.png/v1/fill/w_260,h_82,al_c,q_85,enc_avif,quality_auto/b2ad32_e85abeb4e98e4863bfe4e2f126068531~mv2.png" alt="NonKYC" style="height:28px"></div>
+      <div class="exchange-pill" data-toast="Opens BitStorage exchange"><img src="https://static.wixstatic.com/media/b2ad32_7e0789d50d6f45628c16f0525f97c187~mv2.png/v1/fill/w_240,h_48,al_c,q_85,enc_avif,quality_auto/Logo%20(11)%20(2).png" alt="BitStorage" style="height:22px"></div>
+      <div class="exchange-pill" data-toast="Opens Nestex exchange"><img src="https://static.wixstatic.com/media/b2ad32_84fad49ec567433a8e2c4afa5a60e185~mv2.png/v1/fill/w_240,h_64,al_c,q_85,enc_avif,quality_auto/nestex-wide.png" alt="Nestex" style="height:24px"></div>
+      <div class="exchange-pill" data-toast="Opens Exbitron exchange"><img src="https://static.wixstatic.com/media/b2ad32_0eec349fcdbc43a2aa8c48e5a0e2d4d6~mv2.png/v1/fill/w_240,h_64,al_c,q_85,enc_avif,quality_auto/exbitron-logo-transparent-hard-XXL-v4.png" alt="Exbitron" style="height:24px"></div>
+    </div>
+  </div>
+</section>
+
+<!-- PARTNERS -->
+<section class="section" id="partners">
+  <div class="section-inner">
+    <div class="section-label">Partners</div>
+    <div class="section-title">Building together</div>
+    <div class="partner-grid">
+      <div class="partner-card" data-toast="BitHarvest Studio"><img src="https://static.wixstatic.com/media/b2ad32_3e77cc8fdf3f454eac1cbb5e52602bfa~mv2.png/v1/fill/w_220,h_248,al_c,q_85,enc_avif,quality_auto/bhst.png" alt="BitHarvest Studio"></div>
+      <div class="partner-card" data-toast="Drop Wireless"><img src="https://static.wixstatic.com/media/b2ad32_d07a60c23cac46c696ecd015675d11e4~mv2.png/v1/fill/w_220,h_244,al_c,q_85,enc_avif,quality_auto/DropLogo50.png" alt="Drop Wireless"></div>
+      <div class="partner-card" data-toast="Moken"><img src="https://static.wixstatic.com/media/b2ad32_f12fd3ad1ca44137968d76e555a9132e~mv2.png/v1/fill/w_240,h_152,al_c,q_85,enc_avif,quality_auto/Moken%20Logo.png" alt="Moken"></div>
+      <div class="partner-card" data-toast="Helium Deploy"><img src="https://static.wixstatic.com/media/b2ad32_0632c84bbd5c421f96ba5ca8d104222d~mv2.png/v1/crop/x_0,y_0,w_232,h_70/fill/w_260,h_78,al_c,lg_1,q_85,enc_avif,quality_auto/HDlogo-on-dark.png" alt="Helium Deploy"></div>
+      <div class="partner-card" data-toast="TEA Group"><img src="https://static.wixstatic.com/media/b2ad32_de127e98be6843798b059b1838eff521~mv2.jpg/v1/fill/w_220,h_244,al_c,q_80,enc_avif,quality_auto/LOGO-TEA-DEFINITIVO_2019.jpg" alt="TEA Group"></div>
+      <div class="partner-card" data-toast="Olostep"><img src="https://static.wixstatic.com/media/b2ad32_54f68a00437e4529b7dc1b9be37da597~mv2.png/v1/fill/w_240,h_71,al_c,q_85,enc_avif,quality_auto/olostep-light.png" alt="Olostep"></div>
+      <div class="partner-card" data-toast="DIMO"><img src="https://static.wixstatic.com/media/b2ad32_9b03b0d2629b4bfb9322303c08fb8381~mv2.png/v1/fill/w_240,h_55,al_c,q_85,enc_avif,quality_auto/Full_Logo_White.png" alt="DIMO"></div>
+      <div class="partner-card" data-toast="Algorand Foundation">
+        <svg width="120" height="28" viewBox="0 0 120 28" xmlns="http://www.w3.org/2000/svg"><path d="M25.5 22H28L22 6h-2.8l-1.5 5.8L20 18h-3.8L12.5 6H9.7l4.2 14-1.7 5h2.8l1.5-5L18.5 22h2.5l-2-6.8 1.7-5.8z" fill="#9b9793"/><text x="36" y="18" font-family="'Rajdhani',sans-serif" font-weight="600" font-size="13" fill="#9b9793" letter-spacing=".03em">Algorand</text></svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA BANNER -->
+<section class="section cta-banner" id="cta">
+  <div class="cta-banner-inner">
+    <div class="cta-box">
+      <div class="cta-box-glow"></div>
+      <div class="cta-title">Ready to join the network?</div>
+      <div class="cta-desc">Install FEM, register your device, and start earning — no blockchain experience required.</div>
+      <div style="display:flex;gap:12px;justify-content:center;position:relative">
+        <a class="btn btn-p" data-scroll="ecosystem">Get started <span class="btn-arrow">→</span></a>
+        <a class="btn btn-s" data-toast="Opens Discord — discord.gg/frynetworks">Join Discord <span class="btn-arrow">→</span></a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <div class="nav-logo"><div class="nav-logo-mark">F</div><div class="nav-logo-text">Fry Networks</div></div>
+        <div class="footer-brand-desc">Decentralized physical infrastructure on Algorand. Sustainable edge computing, real rewards.</div>
+      </div>
+      <div class="footer-col">
+        <div class="footer-col-title">Products</div>
+        <a data-toast="Opens fry.farm">Fry Farm</a>
+        <a data-toast="Opens fry.market">Fry Market</a>
+        <a data-toast="Opens dashboard">Dashboard</a>
+        <a data-toast="Opens DAO">DAO</a>
+        <a data-toast="Opens BYOD store">BYOD Licenses</a>
+      </div>
+      <div class="footer-col">
+        <div class="footer-col-title">Resources</div>
+        <a data-toast="Opens whitepaper">Whitepaper</a>
+        <a data-toast="Opens litepaper">Litepaper</a>
+        <a data-toast="Opens docs.frynetworks.com">Documentation</a>
+        <a data-toast="Opens FAQ page">FAQ</a>
+        <a data-toast="Opens roadmap">Roadmap</a>
+      </div>
+      <div class="footer-col">
+        <div class="footer-col-title">Get started</div>
+        <a data-toast="Downloads FEM installer">Download FEM</a>
+        <a data-toast="Opens BYOD store">Buy BYOD license</a>
+        <a data-toast="Opens FryHub download (legacy)">FryHub (legacy)</a>
+        <a data-toast="Opens device registration">Register device</a>
+      </div>
+      <div class="footer-col">
+        <div class="footer-col-title">Company</div>
+        <a data-toast="Opens about page">About</a>
+        <a data-toast="Opens careers page">Careers</a>
+        <a data-toast="Opens brand assets repo">Brand assets</a>
+        <a data-toast="Opens partner scheduling">Partner with us</a>
+        <a data-toast="Opens affiliate portal">Affiliates</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <div class="footer-copy">© 2026 Fry Networks LLC. All rights reserved.</div>
+      <div class="footer-legal-links">
+        <a data-toast="Opens terms & conditions">Terms</a>
+        <a data-toast="Opens privacy policy">Privacy</a>
+        <a data-toast="Opens return policy">Returns</a>
+        <a data-toast="Opens warranty policy">Warranty</a>
+      </div>
+      <div class="footer-socials">
+        <a data-toast="Opens X / Twitter" title="X"><svg viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>
+        <a data-toast="Opens Discord" title="Discord"><svg viewBox="0 0 24 24"><path d="M20.317 4.37a19.791 19.791 0 00-4.885-1.515.074.074 0 00-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.617-1.25.077.077 0 00-.079-.037A19.736 19.736 0 003.677 4.37a.07.07 0 00-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 00.031.057 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 00-.041-.106 13.107 13.107 0 01-1.872-.892.077.077 0 01-.008-.128 10.2 10.2 0 00.372-.292.074.074 0 01.077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 01.078.01c.12.098.246.198.373.292a.077.077 0 01-.006.127 12.299 12.299 0 01-1.873.892.077.077 0 00-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 00.084.028 19.839 19.839 0 006.002-3.03.077.077 0 00.032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 00-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg></a>
+        <a data-toast="Opens Telegram" title="Telegram"><svg viewBox="0 0 24 24"><path d="M11.944 0A12 12 0 000 12a12 12 0 0012 12 12 12 0 0012-12A12 12 0 0012 0h-.056zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 01.171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.479.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg></a>
+        <a data-toast="Opens GitHub" title="GitHub"><svg viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a>
+        <a data-toast="Opens YouTube" title="YouTube"><svg viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 00-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 00.502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 002.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 002.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg></a>
+        <a data-toast="Opens Reddit" title="Reddit"><svg viewBox="0 0 24 24"><path d="M12 0A12 12 0 000 12a12 12 0 0012 12 12 12 0 0012-12A12 12 0 0012 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 01-2.498.056l-2.597-.547-.8 3.747c1.824.07 3.48.632 4.674 1.488.308-.309.73-.491 1.207-.491.968 0 1.754.786 1.754 1.754 0 .716-.435 1.333-1.01 1.614a3.111 3.111 0 01.042.52c0 2.694-3.13 4.87-7.004 4.87-3.874 0-7.004-2.176-7.004-4.87 0-.183.015-.366.043-.534A1.748 1.748 0 014.028 12c0-.968.786-1.754 1.754-1.754.463 0 .898.196 1.207.49 1.207-.883 2.878-1.43 4.744-1.487l.885-4.182a.342.342 0 01.14-.197.35.35 0 01.238-.042l2.906.617a1.214 1.214 0 011.108-.701zM9.25 12C8.561 12 8 12.562 8 13.25c0 .687.561 1.248 1.25 1.248.687 0 1.248-.561 1.248-1.249 0-.688-.561-1.249-1.249-1.249zm5.5 0c-.687 0-1.248.561-1.248 1.25 0 .687.561 1.248 1.249 1.248.688 0 1.249-.561 1.249-1.249 0-.687-.562-1.249-1.25-1.249zm-5.466 3.99a.327.327 0 00-.231.094.33.33 0 000 .463c.842.842 2.484.913 2.961.913.477 0 2.105-.056 2.961-.913a.361.361 0 000-.463.327.327 0 00-.462 0c-.545.533-1.684.73-2.512.73-.828 0-1.979-.196-2.512-.73a.326.326 0 00-.231-.094z"/></svg></a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var toastEl=document.getElementById('toast');
+  var toastTimer;
+
+  function showToast(msg){
+    toastEl.textContent='\u2192 '+msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer=setTimeout(function(){toastEl.classList.remove('show')},2200);
+  }
+
+  function doScroll(id){
+    var el=document.getElementById(id);
+    if(el) el.scrollIntoView({behavior:'smooth',block:'start'});
+  }
+
+  document.addEventListener('click',function(e){
+    var t=e.target.closest('[data-scroll]');
+    if(t){
+      e.preventDefault();
+      doScroll(t.getAttribute('data-scroll'));
+      return;
+    }
+    var t2=e.target.closest('[data-toast]');
+    if(t2){
+      e.preventDefault();
+      showToast(t2.getAttribute('data-toast'));
+      return;
+    }
+  });
+})();
+</script>
+</body>
+</html>
