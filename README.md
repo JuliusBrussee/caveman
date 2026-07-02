@@ -243,6 +243,7 @@ One command. Five skill. Cave well stocked.
 
 ## Links
 
+- [docs/HONEST-NUMBERS.md](./docs/HONEST-NUMBERS.md) — when caveman saves, when caveman costs, how to measure
 - [INSTALL.md](./INSTALL.md) — full install matrix, all flags, per-agent detail
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — how to send patch
 - [CLAUDE.md](./CLAUDE.md) — maintainer guide (file ownership, hook architecture, CI)
