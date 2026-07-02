@@ -10,6 +10,7 @@ const { execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const INIT = path.join(ROOT, 'src', 'tools', 'caveman-init.js');
+const COMMAND = path.join(ROOT, 'commands', 'caveman-init.toml');
 
 let passed = 0;
 let failed = 0;
@@ -39,6 +40,15 @@ function test(name, fn) {
 }
 
 console.log('caveman-init tests\n');
+
+test('slash command uses portable npx GitHub runner', () => {
+  const command = fs.readFileSync(COMMAND, 'utf8');
+  assert.match(command, /github:JuliusBrussee\/caveman/);
+  assert.match(command, /--with-init/);
+  assert.match(command, /\{\{args\}\}/);
+  assert.doesNotMatch(command, /src\/tools\/caveman-init\.js/);
+  assert.doesNotMatch(command, /node src\/tools\/caveman-init\.js/);
+});
 
 test('greenfield: creates all rule files with proper frontmatter', (tmp) => {
   runInit(tmp);
