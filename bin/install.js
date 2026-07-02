@@ -705,14 +705,36 @@ function installOpencode(ctx) {
       if (alreadyFenced) {
         note(`  ${agentsMd} already contains caveman ruleset`);
       } else if (alreadyByLegacySentinel) {
-        note(`  ${agentsMd} contains a legacy (un-fenced) caveman block — leaving as-is`);
-        note('  re-run with --force to replace it with a fenced block');
+        if (!opts.force) {
+          note(`  ${agentsMd} contains a legacy (un-fenced) caveman block — leaving as-is`);
+          note('  re-run with --force to migrate it to a fenced block');
+        }
         if (opts.force) {
-          // Replace the entire file with a clean fenced version. The legacy
-          // path didn't fence, so we can't isolate the block — full rewrite is
-          // the only safe option under --force.
-          fs.writeFileSync(agentsMd, fencedBlock, { mode: 0o644 });
-          process.stdout.write(`  rewrote ${agentsMd} with fenced caveman block\n`);
+          // Migrate, don't wipe (issue #594): the old code replaced the whole
+          // file, destroying any user-authored content around the legacy
+          // block. Back up once, then remove only the legacy block: exact
+          // match of the current rule body when possible, otherwise cut from
+          // the sentinel's paragraph start to EOF (the legacy path APPENDED
+          // the block, so user content precedes it; anything after lives on
+          // in the backup).
+          const agentsBak = agentsMd + '.bak';
+          if (!fs.existsSync(agentsBak)) {
+            try { fs.copyFileSync(agentsMd, agentsBak); } catch (_) {}
+          }
+          const bodyTrim = ruleBody.trimEnd();
+          let userPart;
+          const exact = existing.indexOf(bodyTrim);
+          if (exact !== -1) {
+            userPart = (existing.slice(0, exact) + existing.slice(exact + bodyTrim.length)).trim();
+          } else {
+            const sentinelAt = existing.indexOf(OPENCODE_AGENTS_MD_SENTINEL);
+            const cutAt = existing.lastIndexOf('\n\n', sentinelAt);
+            userPart = cutAt === -1 ? '' : existing.slice(0, cutAt).trim();
+            note(`  legacy block did not match the current ruleset — everything from the sentinel down was replaced; original kept at ${agentsBak}`);
+          }
+          const next = (userPart ? userPart + '\n\n' : '') + fencedBlock;
+          fs.writeFileSync(agentsMd, next, { mode: 0o644 });
+          process.stdout.write(`  migrated ${agentsMd} legacy block to fenced (backup: ${agentsBak})\n`);
         }
       } else {
         const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
