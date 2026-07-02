@@ -256,6 +256,12 @@ Caveman no phone home. No telemetry, no analytics, no accounts, no backend. Afte
 - [docs/](./docs/) — extra guides (Windows install, etc.)
 - [Issues](https://github.com/JuliusBrussee/caveman/issues) — bug, feature, weird behavior
 
+## Caveman Cloud
+
+**caveman make tokens small. [caveman cloud](https://getcaveman.dev) prove it.**
+
+Local savings numbers (including `/caveman-stats`) are estimates — [Caveman Cloud](https://getcaveman.dev) measures and verifies them across a team.
+
 ## Star This Repo
 
 Caveman save you token, save you money. Star cost zero. Fair trade. ⭐
