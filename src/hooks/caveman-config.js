@@ -299,6 +299,29 @@ function appendFlag(filePath, line) {
   }
 }
 
+// Mode-transition log (#601). Whenever the active-mode flag actually changes,
+// append {ts, mode, prev} to $CLAUDE_CONFIG_DIR/.caveman-mode-log.jsonl so
+// caveman-stats can attribute output tokens to the mode that was active when
+// each message was generated, instead of whatever mode the flag holds at
+// stats time. mode/prev are a VALID_MODES string or null (null = caveman off).
+// prev lets stats attribute messages that predate the first logged transition
+// of a session. No-op when the mode is unchanged; best-effort like all flag IO.
+const MODE_LOG_BASENAME = '.caveman-mode-log.jsonl';
+
+function recordModeChange(claudeDir, newMode) {
+  try {
+    const current = readFlag(path.join(claudeDir, '.caveman-active'));
+    const next = newMode || null;
+    if ((current || null) === next) return;
+    appendFlag(
+      path.join(claudeDir, MODE_LOG_BASENAME),
+      JSON.stringify({ ts: Date.now(), mode: next, prev: current || null })
+    );
+  } catch (e) {
+    // Silent fail — the log is best-effort
+  }
+}
+
 // Symlink-safe history read. Returns lines (untrimmed) or empty array on any
 // anomaly. Caller is responsible for parsing JSON. Does NOT enforce a size cap
 // the way readFlag does — history is expected to grow with use.
@@ -322,4 +345,4 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory };
+module.exports = { getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory, recordModeChange, MODE_LOG_BASENAME };

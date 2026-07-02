@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, recordModeChange } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -26,12 +26,14 @@ const mode = getDefaultMode();
 
 // "off" mode — skip activation entirely, don't write flag or emit rules
 if (mode === 'off') {
+  recordModeChange(claudeDir, null); // #601: timestamped transition log
   try { fs.unlinkSync(flagPath); } catch (e) {}
   process.stdout.write('OK');
   process.exit(0);
 }
 
 // 1. Write flag file (symlink-safe)
+recordModeChange(claudeDir, mode); // #601
 safeWriteFlag(flagPath, mode);
 
 // 2. Emit full caveman ruleset, filtered to the active intensity level.

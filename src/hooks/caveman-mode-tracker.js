@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
-const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange, VALID_MODES } = require('./caveman-config');
 
 // Modes handled by their own slash commands (/caveman-commit, etc.) — not
 // selectable via /caveman <arg>.
@@ -64,6 +64,7 @@ process.stdin.on('end', () => {
           /\b(less tokens|fewer tokens|be brief|be terse|shorter answers)\b(?!\s+(in|for|on|about|when|during|with)\b)/.test(prompt)) {
         const mode = getDefaultMode();
         if (mode !== 'off') {
+          recordModeChange(claudeDir, mode); // #601: timestamped transition log
           safeWriteFlag(flagPath, mode);
         }
       }
@@ -143,8 +144,10 @@ process.stdin.on('end', () => {
           }
           setIndependentThisTurn = true;
         }
+        recordModeChange(claudeDir, mode); // #601
         safeWriteFlag(flagPath, mode);
       } else if (mode === 'off') {
+        recordModeChange(claudeDir, null); // #601
         try { fs.unlinkSync(flagPath); } catch (e) {}
         try { fs.unlinkSync(prevPath); } catch (e) {}
       }
@@ -152,6 +155,7 @@ process.stdin.on('end', () => {
 
     // Apply deactivation detected above
     if (wantsOff) {
+      recordModeChange(claudeDir, null); // #601
       try { fs.unlinkSync(flagPath); } catch (e) {}
       try { fs.unlinkSync(prevPath); } catch (e) {}
     }
@@ -176,9 +180,11 @@ process.stdin.on('end', () => {
       const prev = readFlag(prevPath);
       try { fs.unlinkSync(prevPath); } catch (e) {}
       if (prev && !INDEPENDENT_MODES.has(prev)) {
+        recordModeChange(claudeDir, prev); // #601
         safeWriteFlag(flagPath, prev);
         activeMode = prev;
       } else {
+        recordModeChange(claudeDir, null); // #601
         try { fs.unlinkSync(flagPath); } catch (e) {}
         activeMode = null;
       }
