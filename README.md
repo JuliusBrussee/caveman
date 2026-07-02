@@ -24,7 +24,9 @@
 
 ---
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (also Codex, Gemini, Cursor, Windsurf, Cline, Copilot, 30+ more) that makes agent talk like caveman — cuts **~75% of output tokens**, keeps full technical accuracy. Brain still big. Mouth small.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (also Codex, Gemini, Cursor, Windsurf, Cline, Copilot, 30+ more) that makes agent talk like caveman — cuts **~50–65% of output tokens, measured** (65% average vs default verbose replies, ~50% median vs a plain "answer concisely" baseline — real Claude API token counts, see [Benchmarks](#benchmarks)), keeps full technical accuracy. Brain still big. Mouth small.
+
+> **Honest number warning:** caveman shrink **output** tokens only. Input tokens untouched by skill — whole-session savings smaller than the output number, and on terse tasks can be negative. Full truth: [docs/HONEST-NUMBERS.md](./docs/HONEST-NUMBERS.md).
 
 ## Before / After
 
@@ -63,15 +65,15 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill/plugin (al
 </tr>
 </table>
 
-**Same fix. 75% less word. Brain still big.**
+**Same fix. Half the word — sometimes way less. Brain still big.**
 
 ```
-┌─────────────────────────────────────┐
-│  TOKENS SAVED          ████████ 75% │
-│  TECHNICAL ACCURACY    ████████ 100%│
-│  SPEED INCREASE        ████████ ~3x │
-│  VIBES                 ████████ OOG │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│  OUTPUT TOKENS SAVED   █████  50-65% │
+│  INPUT TOKENS SAVED    ─          0% │
+│  TECHNICAL ACCURACY    ████████ 100% │
+│  VIBES                 ████████  OOG │
+└──────────────────────────────────────┘
 ```
 
 Pick your level of grunt — `lite` (drop filler), `full` (default caveman), `ultra` (telegraphic), or `wenyan` (classical Chinese, even shorter). One command switch. Cost go down forever.
@@ -133,7 +135,7 @@ Auto-activate every session: Claude Code, Codex, Gemini (built-in). Cursor / Win
 
 ## Benchmarks
 
-Real token counts from the Claude API. Average **65% output reduction** across 10 prompts (range 22-87%).
+Real token counts from the Claude API. Average **65% output reduction** across 10 prompts (range 22-87%) — measured against default (verbose) replies. Against a plain `Answer concisely.` control the median is **~50%** (committed eval snapshot in [`evals/`](./evals/), tiktoken `o200k_base`). Both numbers are output tokens only.
 
 <!-- BENCHMARK-TABLE-START -->
 | Task | Normal | Caveman | Saved |
@@ -165,7 +167,7 @@ Raw data and reproduction script: [`benchmarks/`](./benchmarks/). Three-arm eval
 | **Average** | **898** | **481** | **46%** |
 
 > [!IMPORTANT]
-> Caveman only affects output tokens — thinking/reasoning tokens untouched. Caveman no make brain smaller. Caveman make *mouth* smaller. Biggest win is **readability and speed**, cost savings a bonus.
+> Caveman only affects output tokens — input and thinking/reasoning tokens untouched. The skill itself adds ~1–1.5k input tokens per turn (the rules block), so whole-session savings are smaller than the output number, and terse workloads can come out net-negative. Caveman no make brain smaller. Caveman make *mouth* smaller. Biggest win is **readability and speed**, cost savings a bonus. When caveman wins, when caveman loses, how to measure yourself: [docs/HONEST-NUMBERS.md](./docs/HONEST-NUMBERS.md).
 
 A March 2026 paper ["Brevity Constraints Reverse Performance Hierarchies in Language Models"](https://arxiv.org/abs/2604.00025) found that constraining large models to brief responses **improved accuracy by 26 points** on certain benchmarks. Verbose not always better. Sometimes less word = more correct.
 
