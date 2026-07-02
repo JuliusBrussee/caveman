@@ -57,9 +57,38 @@ function stripJsonComments(src) {
     if (c === '/' && next === '*') { inBlock = true; i += 2; continue; }
     out += c; i++;
   }
-  // Trailing-comma sweep — only outside strings, but stripping happened above
-  // so a regex over the comment-free output is safe.
-  return out.replace(/,(\s*[}\]])/g, '$1');
+  return stripTrailingCommas(out);
+}
+
+// ── stripTrailingCommas ────────────────────────────────────────────────────
+// Remove `,` when the next non-whitespace char is `}` or `]` — but only
+// OUTSIDE strings. The old global regex ran over string contents too and
+// silently corrupted values like `"echo ,}"` → `"echo }"` (issue #595);
+// comment-stripping does not sanitize string bodies, so a string-aware scan
+// is required here as well.
+function stripTrailingCommas(src) {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  let inString = false;
+  let stringChar = '';
+  while (i < n) {
+    const c = src[i];
+    if (inString) {
+      out += c;
+      if (c === '\\') { if (i + 1 < n) { out += src[i + 1]; i += 2; continue; } }
+      if (c === stringChar) inString = false;
+      i++; continue;
+    }
+    if (c === '"' || c === "'") { inString = true; stringChar = c; out += c; i++; continue; }
+    if (c === ',') {
+      let j = i + 1;
+      while (j < n && /\s/.test(src[j])) j++;
+      if (j < n && (src[j] === '}' || src[j] === ']')) { i++; continue; } // drop the comma
+    }
+    out += c; i++;
+  }
+  return out;
 }
 
 // ── readSettings ───────────────────────────────────────────────────────────

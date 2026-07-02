@@ -22,6 +22,27 @@ test('stripJsonComments strips // line comments', () => {
   assert.equal(out.trim(), '{"a":1}');
 });
 
+test('stripJsonComments preserves ,} and ,] inside string values (issue #595)', () => {
+  // Trailing-comma removal must be string-aware: a hook command like
+  // `echo ,}` or shell brace expansion `cp file{,.bak}` must survive.
+  const src = '{"cmd": "echo ,}", // comment\n"glob": "cp file{,]x", }';
+  const parsed = JSON.parse(SETTINGS.stripJsonComments(src));
+  assert.equal(parsed.cmd, 'echo ,}');
+  assert.equal(parsed.glob, 'cp file{,]x');
+});
+
+test('stripJsonComments still removes real trailing commas after strings', () => {
+  const src = '{"a": [1, 2, 3,], "b": {"c": 1,},}';
+  const parsed = JSON.parse(SETTINGS.stripJsonComments(src));
+  assert.deepEqual(parsed, { a: [1, 2, 3], b: { c: 1 } });
+});
+
+test('stripJsonComments handles escaped quotes before ,} in strings', () => {
+  const src = '{"cmd": "say \\",}\\" done", }';
+  const parsed = JSON.parse(SETTINGS.stripJsonComments(src));
+  assert.equal(parsed.cmd, 'say ",}" done');
+});
+
 test('stripJsonComments strips /* block */ comments', () => {
   const out = SETTINGS.stripJsonComments('{/* leading */"a":1/* mid */, "b":2}');
   assert.match(out, /"a":1/);
