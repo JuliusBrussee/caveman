@@ -400,3 +400,41 @@ test('lib settings.addCommandHook is idempotent across two synthetic install pas
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Test: --force migrates a mixed legacy AGENTS.md instead of wiping it (#594)
+// The old code replaced the whole file with the fenced block whenever the
+// legacy un-fenced sentinel was present — and the installer's own hint told
+// users with mixed files to run exactly that. User content must survive.
+test('opencode: --force on legacy AGENTS.md preserves user content and takes a backup', () => {
+  const dir = freshTmpDir();
+  const xdg = path.join(dir, 'xdg');
+  const ocDir = path.join(xdg, 'opencode');
+  fs.mkdirSync(ocDir, { recursive: true });
+  const agentsMd = path.join(ocDir, 'AGENTS.md');
+  const legacyBody = fs.readFileSync(
+    path.join(REPO_ROOT, 'src', 'rules', 'caveman-activate.md'), 'utf8').trimEnd() + '\n';
+  const userRules = '# My precious user rules\n\nAlways use tabs.\n';
+  fs.writeFileSync(agentsMd, userRules + '\n' + legacyBody);
+  try {
+    const r = spawnSync('node', [INSTALLER, '--only', 'opencode', '--force', '--non-interactive', '--no-mcp-shrink', '--config-dir', path.join(dir, 'claude')], {
+      env: { ...process.env, XDG_CONFIG_HOME: xdg, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer argv error: ${r.stderr}`);
+
+    const after = fs.readFileSync(agentsMd, 'utf8');
+    assert.match(after, /My precious user rules/, 'user heading wiped by --force migration');
+    assert.match(after, /Always use tabs\./, 'user rule wiped by --force migration');
+    assert.match(after, /<!-- caveman-begin -->/, 'fenced block missing after migration');
+    assert.match(after, /<!-- caveman-end -->/, 'fence end missing after migration');
+    // Legacy un-fenced copy must be gone: sentinel appears only inside the fence.
+    const beforeFence = after.slice(0, after.indexOf('<!-- caveman-begin -->'));
+    assert.doesNotMatch(beforeFence, /Respond terse like smart caveman/,
+      'legacy un-fenced block still present above the fence');
+    assert.ok(fs.existsSync(agentsMd + '.bak'), 'backup missing after --force migration');
+    assert.match(fs.readFileSync(agentsMd + '.bak', 'utf8'), /My precious user rules/,
+      'backup does not contain the original content');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
