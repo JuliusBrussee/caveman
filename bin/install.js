@@ -418,6 +418,15 @@ function captureSpawn(cmd, args) {
   catch (_) { return { status: 1, stdout: '', stderr: '' }; }
 }
 
+// spawnSync reports a missing binary as { status: null, error }, so the old
+// `(r.status || 0) === 0` checks read ENOENT as success — a machine without
+// the `claude` CLI got "installed: claude" with nothing installed and the
+// standalone-hook fallback skipped (issue #592). Every spawn result must pass
+// through here before being treated as "it worked".
+function spawnOk(r) {
+  return !!r && !r.error && r.status === 0;
+}
+
 function absoluteNodePath() {
   return process.execPath;
 }
@@ -442,10 +451,13 @@ async function installClaude(ctx) {
   } else {
     const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', REPO], null, opts.dryRun);
     const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], null, opts.dryRun);
-    if ((r1.status || 0) === 0 && (r2.status || 0) === 0) {
+    if (spawnOk(r1) && spawnOk(r2)) {
       results.installed.push('claude');
       pluginInstallSucceeded = true;
     } else {
+      if (r1.error || r2.error) {
+        warn('  claude CLI not found on PATH (or could not be spawned)');
+      }
       results.failed.push(['claude', 'claude plugin install failed']);
     }
   }
@@ -534,7 +546,7 @@ function installGemini(ctx) {
     }
   }
   const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`], null, opts.dryRun);
-  if ((r.status || 0) === 0) results.installed.push('gemini');
+  if (spawnOk(r)) results.installed.push('gemini');
   else results.failed.push(['gemini', 'gemini extensions install failed']);
   process.stdout.write('\n');
 }
@@ -555,7 +567,7 @@ function installViaSkills(ctx, prov) {
   // documented form for "install every skill into a specific agent".
   const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
   const r = runSpawn('npx', args, null, opts.dryRun);
-  if ((r.status || 0) === 0) results.installed.push(prov.id);
+  if (spawnOk(r)) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
   process.stdout.write('\n');
 }
@@ -943,7 +955,7 @@ function installMcpShrink(ctx) {
     ['mcp', 'add', 'caveman-shrink', '--', 'npx', '-y', MCP_SHRINK_PKG, ...upstream],
     null, opts.dryRun
   );
-  if ((r.status || 0) === 0) {
+  if (spawnOk(r)) {
     note(`    registered, wrapping: ${upstream.join(' ')}`);
     note(`    Edit ~/.claude.json mcpServers["caveman-shrink"] to change the upstream,`);
     note('    or `claude mcp remove caveman-shrink` to drop it.');
@@ -962,7 +974,7 @@ async function runInit(ctx) {
   if (opts.force)  args.push('--force');
   if (local && fs.existsSync(local)) {
     const r = runSpawn(absoluteNodePath(), [local, ...args], null, opts.dryRun);
-    return (r.status || 0) === 0;
+    return spawnOk(r);
   }
   // Curl-pipe fallback
   if (opts.dryRun) {
@@ -974,7 +986,7 @@ async function runInit(ctx) {
     await downloadTo(INIT_SCRIPT_URL, tmp);
     const r = child_process.spawnSync(absoluteNodePath(), [tmp, ...args], { stdio: 'inherit' });
     try { fs.unlinkSync(tmp); } catch (_) {}
-    return (r.status || 0) === 0;
+    return spawnOk(r);
   } catch (e) {
     warn('  ' + e.message);
     return false;
@@ -1078,7 +1090,7 @@ function uninstall(ctx) {
     const probe = captureSpawn('claude', ['plugin', 'list']);
     if (probe.status === 0 && /caveman/i.test(probe.stdout || '')) {
       const r = runSpawn('claude', ['plugin', 'uninstall', 'caveman@caveman'], null, opts.dryRun);
-      if ((r.status || 0) === 0) ok('  removed claude plugin');
+      if (spawnOk(r)) ok('  removed claude plugin');
     } else {
       note('  claude plugin not installed — skipping');
     }
@@ -1352,7 +1364,7 @@ async function main() {
     // --yes --all for the same reason as installViaSkills above (issue #370):
     // skip the interactive skill picker so curl|bash actually installs.
     const r = runSpawn('npx', ['-y', 'skills', 'add', REPO, '--yes', '--all'], null, opts.dryRun);
-    if ((r.status || 0) === 0) ctx.results.installed.push('skills-auto');
+    if (spawnOk(r)) ctx.results.installed.push('skills-auto');
     else ctx.results.failed.push(['skills-auto', 'npx skills add (auto) failed']);
     process.stdout.write('\n');
   }

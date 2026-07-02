@@ -400,3 +400,38 @@ test('lib settings.addCommandHook is idempotent across two synthetic install pas
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Test: missing `claude` CLI must be a FAILURE, not silent success (#592)
+// spawnSync reports ENOENT as { status: null, error }; the old
+// `(r.status || 0) === 0` coerced that to success, so the installer printed
+// "installed: claude", skipped the standalone-hook fallback, and left the
+// machine with nothing installed. Always runs: an empty PATH guarantees the
+// claude lookup fails even on machines that do have the CLI.
+test('missing claude CLI: reports failure and falls back to standalone hook wiring', () => {
+  const dir = freshTmpDir();
+  const emptyBin = path.join(dir, 'empty-bin');
+  fs.mkdirSync(emptyBin);
+  const configDir = path.join(dir, 'claude-config');
+  try {
+    // process.execPath instead of 'node': the stripped PATH must not break
+    // the test's own ability to launch the installer.
+    const r = spawnSync(process.execPath, [
+      INSTALLER, '--only', 'claude', '--skip-skills',
+      '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink',
+    ], {
+      env: { ...process.env, PATH: emptyBin, CLAUDE_CONFIG_DIR: configDir, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    const out = (r.stdout || '') + (r.stderr || '');
+    assert.match(out, /plugin install did not succeed; falling back to standalone wiring/,
+      `fallback to standalone hooks did not trigger:\n${out}`);
+    assert.match(out, /claude plugin install failed/, 'claude was not reported as failed');
+    assert.ok(!/• claude\n/.test(out), 'claude must not be listed as installed');
+    assert.ok(fs.existsSync(path.join(configDir, 'hooks', 'caveman-activate.js')),
+      'standalone hooks were not written');
+    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    assert.ok(settings.hooks && settings.hooks.SessionStart, 'SessionStart hook not wired');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
