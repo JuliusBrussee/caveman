@@ -256,11 +256,11 @@ Caveman no phone home. No telemetry, no analytics, no accounts, no backend. Afte
 - [docs/](./docs/) — extra guides (Windows install, etc.)
 - [Issues](https://github.com/JuliusBrussee/caveman/issues) — bug, feature, weird behavior
 
-## Caveman Cloud
+## Caveman 2 (coming soon)
 
-**caveman make tokens small. [caveman cloud](https://getcaveman.dev) prove it.**
+**caveman make tokens small. caveman 2 will prove it.**
 
-Local savings numbers (including `/caveman-stats`) are estimates — [Caveman Cloud](https://getcaveman.dev) measures and verifies them across a team.
+Local savings numbers (including `/caveman-stats`) are estimates. Caveman 2 will measure and verify them across a team — [join the waitlist](https://caveman.so).
 
 ## Star This Repo
 
