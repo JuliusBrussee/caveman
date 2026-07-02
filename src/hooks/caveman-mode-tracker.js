@@ -20,6 +20,10 @@ const prevPath = path.join(claudeDir, '.caveman-active.prev');
 
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
+// Abnormal stdin close (broken pipe, parent crash) emits 'error'; without a
+// listener Node throws it as an uncaught exception and the hook exits
+// non-zero — a spurious hook failure (#538). Hooks must always exit 0.
+process.stdin.on('error', () => process.exit(0));
 process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
