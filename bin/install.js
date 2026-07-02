@@ -228,8 +228,8 @@ const PROVIDERS = [
   // CLI agents — require the binary. The `||dir:~/.foo` fallbacks were the
   // main source of false positives (warp, kiro, junie etc. leave config dirs
   // behind on uninstall).
-    { id: 'hermes',     label: 'Hermes Agent',        mech: 'npx skills add (hermes)',       detect: 'command:hermes',        profile: 'hermes' },
-    { id: 'aider-desk', label: 'Aider Desk',          mech: 'npx skills add (aider-desk)',   detect: 'command:aider', profile: 'aider-desk' },
+  { id: 'hermes',     label: 'Hermes Agent',        mech: 'native Hermes skills copy',   detect: 'command:hermes',        profile: 'hermes' },
+  { id: 'aider-desk', label: 'Aider Desk',          mech: 'npx skills add (aider-desk)',   detect: 'command:aider', profile: 'aider-desk' },
   { id: 'amp',        label: 'Sourcegraph Amp',     mech: 'npx skills add (amp)',          detect: 'command:amp',             profile: 'amp' },
   { id: 'bob',        label: 'IBM Bob',             mech: 'npx skills add (bob)',          detect: 'command:bob', profile: 'bob' },
   { id: 'crush',      label: 'Crush',               mech: 'npx skills add (crush)',        detect: 'command:crush', profile: 'crush' },
@@ -597,17 +597,26 @@ function installHermes(ctx) {
   try {
     fs.mkdirSync(skillsRoot, { recursive: true });
 
+    const missing = HERMES_SKILL_DIRS
+      .map(skillDir => path.join(repoRoot, 'skills', skillDir))
+      .filter(srcDir => !fs.existsSync(srcDir));
+    if (missing.length) {
+      for (const srcDir of missing) warn(`  skill dir not found: ${srcDir}`);
+      results.failed.push(['hermes', `missing ${missing.length} source skill dir${missing.length === 1 ? '' : 's'}`]);
+      process.stdout.write('\n');
+      return;
+    }
+
     for (const skillDir of HERMES_SKILL_DIRS) {
       const srcDir = path.join(repoRoot, 'skills', skillDir);
       const destDir = path.join(skillsRoot, skillDir);
-      if (fs.existsSync(srcDir)) {
-        // Remove existing to ensure clean copy
-        if (fs.existsSync(destDir)) fs.rmSync(destDir, { recursive: true, force: true });
-        copyDirRecursive(srcDir, destDir);
-        note(`  copied ${skillDir} → ${destDir}`);
-      } else {
-        warn(`  skill dir not found: ${srcDir}`);
+      if (fs.existsSync(destDir) && !opts.force) {
+        note(`  skipped ${destDir}/ (exists; --force to overwrite)`);
+        continue;
       }
+      if (fs.existsSync(destDir)) fs.rmSync(destDir, { recursive: true, force: true });
+      copyDirRecursive(srcDir, destDir);
+      note(`  copied ${skillDir} → ${destDir}`);
     }
 
     results.installed.push('hermes');
@@ -1233,6 +1242,17 @@ function uninstall(ctx) {
     if (fs.existsSync(ocFlag) && !opts.dryRun) { try { fs.unlinkSync(ocFlag); } catch (_) {} }
   }
 
+  // Hermes native install — remove only the skill directories this installer owns.
+  const hermesSkillsRoot = path.join(hermesConfigDir(), 'productivity');
+  if (HERMES_SKILL_DIRS.some(name => fs.existsSync(path.join(hermesSkillsRoot, name)))) {
+    for (const name of HERMES_SKILL_DIRS) {
+      const p = path.join(hermesSkillsRoot, name);
+      if (!fs.existsSync(p)) continue;
+      if (!opts.dryRun) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+      note(`  removed ${p}`);
+    }
+  }
+
   // OpenClaw native install — strip skill folder + SOUL.md marker block.
   // Probed by the skill folder we own; if absent, skip silently.
   const ocwWs = process.env.OPENCLAW_WORKSPACE || path.join(os.homedir(), '.openclaw', 'workspace');
@@ -1398,11 +1418,11 @@ async function main() {
     // missing without --force).
     if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
     if (prov.id === 'claude')   { await installClaude(ctx); continue; }
-      if (prov.id === 'gemini')   { installGemini(ctx); continue; }
-      if (prov.id === 'opencode') { installOpencode(ctx); continue; }
-      if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
-      if (prov.id === 'hermes')   { installHermes(ctx); continue; }
-      if (prov.profile)           { installViaSkills(ctx, prov); continue; }
+    if (prov.id === 'gemini')   { installGemini(ctx); continue; }
+    if (prov.id === 'opencode') { installOpencode(ctx); continue; }
+    if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
+    if (prov.id === 'hermes')   { installHermes(ctx); continue; }
+    if (prov.profile)           { installViaSkills(ctx, prov); continue; }
   }
 
   // Auto-detect fallback if nothing matched
