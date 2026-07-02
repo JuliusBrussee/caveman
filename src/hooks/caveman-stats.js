@@ -182,6 +182,21 @@ function aggregateHistory(historyPath, sinceMs) {
   return { sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd };
 }
 
+// Limit-headroom meter. Subscription users (Claude Code Pro/Max) spend a
+// 5-hour/weekly usage limit, not dollars — for them the meaningful number is
+// what share of their would-be usage caveman freed. Computed ONLY from token
+// counts we actually have: saved / (saved + used). We never assume a plan's
+// limit size (Anthropic doesn't publish token quotas), so this is a share of
+// usage, never "% of your weekly limit". Returns a rounded percent, or null
+// when there is nothing measured to divide.
+function budgetSavedPct(savedTokens, usedTokens) {
+  if (!Number.isFinite(savedTokens) || !Number.isFinite(usedTokens)) return null;
+  if (savedTokens <= 0 || usedTokens < 0) return null;
+  const total = savedTokens + usedTokens;
+  if (total <= 0) return null;
+  return Math.round((savedTokens / total) * 100);
+}
+
 function humanizeTokens(n) {
   if (!Number.isFinite(n) || n <= 0) return '0';
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
@@ -196,11 +211,15 @@ function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, si
     return `\nCaveman Stats — Lifetime${window}\n${sep}\nNo sessions logged yet — run /caveman-stats inside any session to start tracking.\n${sep}\n`;
   }
   const usdLine = estSavedUsd > 0 ? `Est. saved (USD):      ~${formatUsd(estSavedUsd)}\n` : '';
+  const pct = budgetSavedPct(estSavedTokens, outputTokens);
+  const budgetLine = pct !== null
+    ? `Est. budget saved:     ~${pct}% of tracked usage (est.)\n`
+    : '';
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
     `Sessions:   ${sessions.toLocaleString()}\n${sep}\n` +
     `Output tokens:         ${outputTokens.toLocaleString()}\n` +
     `Est. tokens saved:     ${estSavedTokens.toLocaleString()}\n` +
-    usdLine + sep + '\n';
+    budgetLine + usdLine + sep + '\n';
 }
 
 // Single-line tweetable summary. Stays human-friendly when no ratio is known.
@@ -250,9 +269,17 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
     } else {
       footer = 'Savings est. from benchmarks/ (mean per-task). Actual varies by task.';
     }
-    savings = `Est. without caveman:  ${estNormal.toLocaleString()}\n` +
+    // Limit-headroom framing for subscription (Pro/Max) users — see
+    // budgetSavedPct. USD stays above for API users.
+    const pct = budgetSavedPct(estSaved, outputTokens);
+    let budgetLine = '';
+    if (pct !== null) {
+      budgetLine = `Session budget saved:  ~${pct}% of your usage this session (est.)\n`;
+      footer += ' Budget % = est. saved / (saved + used) tokens; no plan-limit size assumed.';
+    }
+    savings = (`Est. without caveman:  ${estNormal.toLocaleString()}\n` +
               `Est. tokens saved:     ${estSaved.toLocaleString()} (~${Math.round(ratio * 100)}%)\n` +
-              usdLine.replace(/\n$/, '');
+              usdLine + budgetLine).replace(/\n$/, '');
   } else if (mode && mode !== 'off') {
     savings = `No savings estimate for '${mode}' mode — only 'full' has benchmark data.`;
   } else {
@@ -349,5 +376,5 @@ if (require.main === module) main();
 module.exports = {
   formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
   parseSession, priceForModel, formatUsd, COMPRESSION, MODEL_OUTPUT_PRICE_PER_M,
-  findCompressedPairs, summarizeCompressed, humanizeTokens,
+  findCompressedPairs, summarizeCompressed, humanizeTokens, budgetSavedPct,
 };

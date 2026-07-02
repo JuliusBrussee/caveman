@@ -460,5 +460,83 @@ test('mode tracker forwards --share to stats script', (tmp) => {
   assert.match(parsed.reason, /^🪨 Saved 650 output tokens/);
 });
 
+// ── Limit-headroom meter (subscription users spend usage limit, not $) ─────
+
+test('budgetSavedPct = saved / (saved + used), null when nothing saved', () => {
+  const { budgetSavedPct } = require(STATS);
+  assert.strictEqual(budgetSavedPct(650, 350), 65);
+  assert.strictEqual(budgetSavedPct(1, 3), 25);
+  assert.strictEqual(budgetSavedPct(0, 350), null);   // no measured savings → no claim
+  assert.strictEqual(budgetSavedPct(-5, 350), null);
+  assert.strictEqual(budgetSavedPct(650, -1), null);
+  assert.strictEqual(budgetSavedPct(NaN, 350), null);
+  assert.strictEqual(budgetSavedPct(650, Infinity), null);
+});
+
+test('shows session budget saved % (est.) alongside tokens when savings measured', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 350 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // saved 650 / (650 saved + 350 used) = 65%
+  assert.match(out, /Session budget saved:\s+~65% of your usage this session \(est\.\)/);
+  // Dollars stay for API users.
+  assert.match(out, /Est\. saved \(USD\):/);
+  // Honesty: the % must be labeled as estimate math, never a plan-limit claim.
+  assert.match(out, /no plan-limit size assumed/);
+  assert.ok(!/weekly limit|5-hour limit/i.test(out), 'must not fabricate Anthropic quota sizes');
+});
+
+test('omits budget line when no savings estimate exists (lite mode)', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 100 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'lite');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.ok(!/budget saved/i.test(out), 'no measured savings → no budget % claim');
+});
+
+test('--all lifetime output includes est. budget saved % when savings tracked', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  const history = [
+    { ts: Date.now(), session_id: 'a', output_tokens: 350, est_saved_tokens: 650, est_saved_usd: 0.01 },
+    { ts: Date.now(), session_id: 'b', output_tokens: 650, est_saved_tokens: 350, est_saved_usd: 0.005 },
+  ];
+  fs.writeFileSync(
+    path.join(claudeDir, '.caveman-history.jsonl'),
+    history.map(h => JSON.stringify(h)).join('\n') + '\n',
+  );
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // saved 1000 / (1000 saved + 1000 used) = 50%
+  assert.match(out, /Est\. budget saved:\s+~50% of tracked usage \(est\.\)/);
+});
+
+test('--all lifetime output omits budget line when nothing saved', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(claudeDir, '.caveman-history.jsonl'),
+    JSON.stringify({ ts: Date.now(), session_id: 'a', output_tokens: 350, est_saved_tokens: 0, est_saved_usd: 0 }) + '\n',
+  );
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.ok(!/budget saved/i.test(out), 'zero savings → honest zero, no % line');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
