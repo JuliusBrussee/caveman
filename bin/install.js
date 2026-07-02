@@ -415,6 +415,21 @@ function runSpawn(cmd, args, opts, dry) {
   return spawnXplat(cmd, args, Object.assign({ stdio: 'inherit' }, opts || {}));
 }
 
+// Create env with TMPDIR pointing to a temp dir inside configDir.
+// Workaround for Claude Code plugin install EXDEV bug: it tries to rename
+// from ~/.claude/plugins/cache/ to /tmp/ which fails when /tmp is on a
+// different filesystem (common on Linux). Setting TMPDIR to a directory
+// on the same filesystem as ~/.claude/ avoids the cross-device link error.
+function sameFilesystemTmpEnv(configDir) {
+  const tmpDir = path.join(configDir, 'tmp');
+  try { fs.mkdirSync(tmpDir, { recursive: true }); } catch (_) {}
+  return Object.assign({}, process.env, {
+    TMPDIR: tmpDir,  // Unix
+    TEMP: tmpDir,    // Windows
+    TMP: tmpDir,     // Windows alternate
+  });
+}
+
 function captureSpawn(cmd, args) {
   try { return spawnXplat(cmd, args, { encoding: 'utf8' }); }
   catch (_) { return { status: 1, stdout: '', stderr: '' }; }
@@ -451,8 +466,11 @@ async function installClaude(ctx) {
     results.skipped.push(['claude', 'plugin already installed']);
     pluginInstallSucceeded = true;
   } else {
-    const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', REPO], null, opts.dryRun);
-    const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], null, opts.dryRun);
+    // Use a temp dir on the same filesystem as configDir to avoid EXDEV errors
+    // when Claude Code's plugin installer tries to rename across filesystems (#585).
+    const pluginEnv = sameFilesystemTmpEnv(configDir);
+    const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', REPO], { env: pluginEnv }, opts.dryRun);
+    const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], { env: pluginEnv }, opts.dryRun);
     if (spawnOk(r1) && spawnOk(r2)) {
       results.installed.push('claude');
       pluginInstallSucceeded = true;
