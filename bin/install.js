@@ -1049,7 +1049,7 @@ function uninstall(ctx) {
   if (fs.existsSync(settingsPath)) {
     const settings = SETTINGS.readSettings(settingsPath);
     if (settings) {
-      const removed = SETTINGS.removeCavemanHooks(settings, 'caveman');
+      const removed = SETTINGS.removeCavemanHooks(settings);
       // Drop our statusline if it points at our script
       if (settings.statusLine) {
         const cmd = typeof settings.statusLine === 'string' ? settings.statusLine : (settings.statusLine.command || '');

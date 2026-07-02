@@ -149,12 +149,52 @@ function addCommandHook(settings, event, opts) {
   return true;
 }
 
+// ── Managed hook scripts ──────────────────────────────────────────────────
+// The exact script basenames this installer wires into settings.json. Every
+// helper that decides "is this hook ours?" must match against these — never
+// against a bare "caveman" substring, which also matches user-authored hooks
+// that merely mention the word in a path (issue #593).
+const MANAGED_HOOK_BASENAMES = new Set([
+  'caveman-activate.js',
+  'caveman-mode-tracker.js',
+  'caveman-stats.js',
+  'caveman-statusline.sh',
+  'caveman-statusline.ps1',
+]);
+
+// Split a command into shell-ish tokens, honoring single/double quotes so a
+// path containing spaces survives intact. Good enough for hook commands we
+// generate (`node "/a/x.js"`, `"/abs/node" "/a/x.js"`, `bash /a/x.sh`); not
+// a full shell parser.
+function tokenizeCommand(command) {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(command)) !== null) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+}
+
+// True iff some token's BASENAME exactly equals a managed script name. Exact
+// match — not substring — so `mycaveman-activate.js` or a user hook living
+// under a `caveman-notes/` directory is never treated as ours. win32.basename
+// splits on both / and \ so a settings.json written on Windows still matches
+// when processed elsewhere.
+function referencesManagedScript(command) {
+  try {
+    for (const tok of tokenizeCommand(command)) {
+      if (tok && typeof tok === 'string' && MANAGED_HOOK_BASENAMES.has(path.win32.basename(tok))) return true;
+    }
+  } catch (_) { /* malformed command — treat as not ours */ }
+  return false;
+}
+
 // ── removeCavemanHooks ────────────────────────────────────────────────────
-// Strip every entry whose any hook command mentions `marker`. Empties events.
-// Tolerates malformed pre-existing settings (non-array hook lists, foreign
-// shapes) — those get dropped by validateHookFields first so we never call
-// .length / .filter on a non-array.
-function removeCavemanHooks(settings, marker = 'caveman') {
+// Strip every entry whose any hook command targets one of our managed hook
+// scripts (exact basename match, see above). Empties events. Tolerates
+// malformed pre-existing settings (non-array hook lists, foreign shapes) —
+// those get dropped by validateHookFields first so we never call .length /
+// .filter on a non-array.
+function removeCavemanHooks(settings) {
   if (!settings || !settings.hooks) return 0;
   validateHookFields(settings);
   if (!settings.hooks) return 0; // validate may have deleted the whole tree
@@ -164,7 +204,7 @@ function removeCavemanHooks(settings, marker = 'caveman') {
     const before = settings.hooks[ev].length;
     settings.hooks[ev] = settings.hooks[ev].filter(entry => {
       if (!entry || !Array.isArray(entry.hooks)) return true;
-      return !entry.hooks.some(h => h && typeof h.command === 'string' && h.command.includes(marker));
+      return !entry.hooks.some(h => h && typeof h.command === 'string' && referencesManagedScript(h.command));
     });
     removed += before - settings.hooks[ev].length;
     if (settings.hooks[ev].length === 0) delete settings.hooks[ev];
@@ -179,12 +219,6 @@ function removeCavemanHooks(settings, marker = 'caveman') {
 // `absoluteNode` so GUI launchers with minimal PATH still find Node. Only
 // touches commands matching the exact bare-node shape — won't false-positive
 // on user-authored hooks that just happen to mention "caveman".
-const MANAGED_HOOK_BASENAMES = new Set([
-  'caveman-activate.js',
-  'caveman-mode-tracker.js',
-  'caveman-stats.js',
-  'caveman-statusline.sh',
-]);
 function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
   if (!settings || !settings.hooks || !absoluteNode) return 0;
   let rewritten = 0;
@@ -229,18 +263,6 @@ function pruneOrphanedManagedHooks(settings, configDir) {
   const baseDir = configDir || claudeConfigDir();
   let removed = 0;
 
-  // Split a command into shell-ish tokens, honoring single/double quotes so a
-  // path containing spaces survives intact. Good enough for hook commands we
-  // generate (`node "/a/x.js"`, `"/abs/node" "/a/x.js"`, `bash /a/x.sh`); not
-  // a full shell parser.
-  const tokenize = (command) => {
-    const out = [];
-    const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-    let m;
-    while ((m = re.exec(command)) !== null) out.push(m[1] ?? m[2] ?? m[3]);
-    return out;
-  };
-
   // A command is a missing managed target iff some token's BASENAME exactly
   // equals a managed script (exact match — not substring — so a user hook like
   // `mycaveman-activate.js` is never touched) and that resolved path is absent.
@@ -248,7 +270,7 @@ function pruneOrphanedManagedHooks(settings, configDir) {
   // so a malformed command or fs error never throws out of the prune pass.
   const targetMissing = (command) => {
     try {
-      for (const tok of tokenize(command)) {
+      for (const tok of tokenizeCommand(command)) {
         if (!tok || typeof tok !== 'string') continue;
         if (!MANAGED_HOOK_BASENAMES.has(path.basename(tok))) continue;
         const scriptPath = path.isAbsolute(tok) ? tok : path.join(baseDir, tok);
