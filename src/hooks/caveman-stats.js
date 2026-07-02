@@ -182,14 +182,15 @@ function aggregateHistory(historyPath, sinceMs) {
   return { sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd };
 }
 
-// Limit-headroom meter. Subscription users (Claude Code Pro/Max) spend a
-// 5-hour/weekly usage limit, not dollars — for them the meaningful number is
-// what share of their would-be usage caveman freed. Computed ONLY from token
-// counts we actually have: saved / (saved + used). We never assume a plan's
-// limit size (Anthropic doesn't publish token quotas), so this is a share of
-// usage, never "% of your weekly limit". Returns a rounded percent, or null
-// when there is nothing measured to divide.
-function budgetSavedPct(savedTokens, usedTokens) {
+// Output-reduction share: saved / (saved + used) = the fraction of the
+// would-be OUTPUT tokens that caveman avoided. That is the only ratio we can
+// honestly compute from output counts alone. It is NOT a share of session or
+// limit usage — input + cache tokens dominate agentic sessions, count against
+// Pro/Max limits, and are not reduced by caveman, so real limit relief is far
+// smaller (docs/HONEST-NUMBERS.md: session-level totals land ~14–21%, below
+// zero on terse workloads). Never label this "usage" or "budget". Returns a
+// rounded percent, or null when there is nothing measured to divide.
+function outputReductionPct(savedTokens, usedTokens) {
   if (!Number.isFinite(savedTokens) || !Number.isFinite(usedTokens)) return null;
   if (savedTokens <= 0 || usedTokens < 0) return null;
   const total = savedTokens + usedTokens;
@@ -211,9 +212,9 @@ function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, si
     return `\nCaveman Stats — Lifetime${window}\n${sep}\nNo sessions logged yet — run /caveman-stats inside any session to start tracking.\n${sep}\n`;
   }
   const usdLine = estSavedUsd > 0 ? `Est. saved (USD):      ~${formatUsd(estSavedUsd)}\n` : '';
-  const pct = budgetSavedPct(estSavedTokens, outputTokens);
+  const pct = outputReductionPct(estSavedTokens, outputTokens);
   const budgetLine = pct !== null
-    ? `Est. budget saved:     ~${pct}% of tracked usage (est.)\n`
+    ? `Est. output reduction: ~${pct}% (output tokens only, est.)\n`
     : '';
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
     `Sessions:   ${sessions.toLocaleString()}\n${sep}\n` +
@@ -269,17 +270,16 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
     } else {
       footer = 'Savings est. from benchmarks/ (mean per-task). Actual varies by task.';
     }
-    // Limit-headroom framing for subscription (Pro/Max) users — see
-    // budgetSavedPct. USD stays above for API users.
-    const pct = budgetSavedPct(estSaved, outputTokens);
-    let budgetLine = '';
-    if (pct !== null) {
-      budgetLine = `Session budget saved:  ~${pct}% of your usage this session (est.)\n`;
-      footer += ' Budget % = est. saved / (saved + used) tokens; no plan-limit size assumed.';
-    }
+    // No "% of your usage/budget" line here on purpose: from output tokens
+    // alone the only computable ratio is the output reduction already shown
+    // on the line above, and input + cache tokens (which dominate agentic
+    // sessions and count against Pro/Max limits) are untouched by caveman —
+    // any session-usage % would overstate real limit relief. See
+    // docs/HONEST-NUMBERS.md.
+    footer += ' Reduction is of output tokens only; input/cache usage is unchanged.';
     savings = (`Est. without caveman:  ${estNormal.toLocaleString()}\n` +
-              `Est. tokens saved:     ${estSaved.toLocaleString()} (~${Math.round(ratio * 100)}%)\n` +
-              usdLine + budgetLine).replace(/\n$/, '');
+              `Est. tokens saved:     ${estSaved.toLocaleString()} (~${Math.round(ratio * 100)}% of output)\n` +
+              usdLine).replace(/\n$/, '');
   } else if (mode && mode !== 'off') {
     savings = `No savings estimate for '${mode}' mode — only 'full' has benchmark data.`;
   } else {
@@ -376,5 +376,5 @@ if (require.main === module) main();
 module.exports = {
   formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
   parseSession, priceForModel, formatUsd, COMPRESSION, MODEL_OUTPUT_PRICE_PER_M,
-  findCompressedPairs, summarizeCompressed, humanizeTokens, budgetSavedPct,
+  findCompressedPairs, summarizeCompressed, humanizeTokens, outputReductionPct,
 };

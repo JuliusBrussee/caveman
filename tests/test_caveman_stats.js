@@ -66,7 +66,7 @@ test('shows full-mode savings estimate when flag is full', (tmp) => {
   });
   // 350 / 0.35 = 1000, saved = 650, ~65%
   assert.match(out, /Est\. without caveman:\s+1,000/);
-  assert.match(out, /Est\. tokens saved:\s+650 \(~65%\)/);
+  assert.match(out, /Est\. tokens saved:\s+650 \(~65% of output\)/);
 });
 
 test('skips estimate for non-full modes', (tmp) => {
@@ -154,7 +154,7 @@ test('omits USD line when model is unknown', (tmp) => {
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
   });
   // Token estimate still appears, USD line does not.
-  assert.match(out, /Est\. tokens saved:\s+650 \(~65%\)/);
+  assert.match(out, /Est\. tokens saved:\s+650 \(~65% of output\)/);
   assert.doesNotMatch(out, /Est\. saved \(USD\)/);
 });
 
@@ -460,20 +460,23 @@ test('mode tracker forwards --share to stats script', (tmp) => {
   assert.match(parsed.reason, /^🪨 Saved 650 output tokens/);
 });
 
-// ── Limit-headroom meter (subscription users spend usage limit, not $) ─────
+// ── Output-reduction share (never a "usage"/"budget" claim) ────────────────
+// saved/(saved+used) from output tokens is the OUTPUT reduction — input and
+// cache tokens dominate real sessions and are untouched, so printing it as a
+// share of usage/budget would overstate limit relief (docs/HONEST-NUMBERS.md).
 
-test('budgetSavedPct = saved / (saved + used), null when nothing saved', () => {
-  const { budgetSavedPct } = require(STATS);
-  assert.strictEqual(budgetSavedPct(650, 350), 65);
-  assert.strictEqual(budgetSavedPct(1, 3), 25);
-  assert.strictEqual(budgetSavedPct(0, 350), null);   // no measured savings → no claim
-  assert.strictEqual(budgetSavedPct(-5, 350), null);
-  assert.strictEqual(budgetSavedPct(650, -1), null);
-  assert.strictEqual(budgetSavedPct(NaN, 350), null);
-  assert.strictEqual(budgetSavedPct(650, Infinity), null);
+test('outputReductionPct = saved / (saved + used), null when nothing saved', () => {
+  const { outputReductionPct } = require(STATS);
+  assert.strictEqual(outputReductionPct(650, 350), 65);
+  assert.strictEqual(outputReductionPct(1, 3), 25);
+  assert.strictEqual(outputReductionPct(0, 350), null);   // no measured savings → no claim
+  assert.strictEqual(outputReductionPct(-5, 350), null);
+  assert.strictEqual(outputReductionPct(650, -1), null);
+  assert.strictEqual(outputReductionPct(NaN, 350), null);
+  assert.strictEqual(outputReductionPct(650, Infinity), null);
 });
 
-test('shows session budget saved % (est.) alongside tokens when savings measured', (tmp) => {
+test('session view never claims a % of usage/budget — only output reduction', (tmp) => {
   const sess = makeSession(tmp, [
     { type: 'assistant', message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 350 } } },
   ]);
@@ -483,29 +486,18 @@ test('shows session budget saved % (est.) alongside tokens when savings measured
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
   });
-  // saved 650 / (650 saved + 350 used) = 65%
-  assert.match(out, /Session budget saved:\s+~65% of your usage this session \(est\.\)/);
+  // The reduction is labeled as output-only, never a share of session usage.
+  assert.match(out, /Est\. tokens saved:\s+650 \(~65% of output\)/);
+  assert.ok(!/budget|of your usage|of tracked usage/i.test(out),
+    'must not relabel output reduction as a usage/budget share');
   // Dollars stay for API users.
   assert.match(out, /Est\. saved \(USD\):/);
-  // Honesty: the % must be labeled as estimate math, never a plan-limit claim.
-  assert.match(out, /no plan-limit size assumed/);
+  // Footer must state the reduction excludes input/cache usage.
+  assert.match(out, /output tokens only; input\/cache usage is unchanged/);
   assert.ok(!/weekly limit|5-hour limit/i.test(out), 'must not fabricate Anthropic quota sizes');
 });
 
-test('omits budget line when no savings estimate exists (lite mode)', (tmp) => {
-  const sess = makeSession(tmp, [
-    { type: 'assistant', message: { usage: { output_tokens: 100 } } },
-  ]);
-  const claudeDir = path.join(tmp, '.claude');
-  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'lite');
-  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
-    encoding: 'utf8',
-    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
-  });
-  assert.ok(!/budget saved/i.test(out), 'no measured savings → no budget % claim');
-});
-
-test('--all lifetime output includes est. budget saved % when savings tracked', (tmp) => {
+test('--all lifetime output labels the % as output reduction, not usage', (tmp) => {
   const claudeDir = path.join(tmp, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
   const history = [
@@ -520,11 +512,13 @@ test('--all lifetime output includes est. budget saved % when savings tracked', 
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
   });
-  // saved 1000 / (1000 saved + 1000 used) = 50%
-  assert.match(out, /Est\. budget saved:\s+~50% of tracked usage \(est\.\)/);
+  // saved 1000 / (1000 saved + 1000 used-output) = 50% of would-be output
+  assert.match(out, /Est\. output reduction:\s+~50% \(output tokens only, est\.\)/);
+  assert.ok(!/budget|of your usage|of tracked usage/i.test(out),
+    'must not relabel output reduction as a usage/budget share');
 });
 
-test('--all lifetime output omits budget line when nothing saved', (tmp) => {
+test('--all lifetime output omits reduction line when nothing saved', (tmp) => {
   const claudeDir = path.join(tmp, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(
@@ -535,7 +529,7 @@ test('--all lifetime output omits budget line when nothing saved', (tmp) => {
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
   });
-  assert.ok(!/budget saved/i.test(out), 'zero savings → honest zero, no % line');
+  assert.ok(!/output reduction|budget/i.test(out), 'zero savings → honest zero, no % line');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
