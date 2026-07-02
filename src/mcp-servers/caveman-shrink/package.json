@@ -1,6 +1,6 @@
 {
   "name": "caveman-shrink",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP proxy that compresses prose fields (tool descriptions, etc.) using caveman rules. Same accuracy, fewer context tokens.",
   "license": "MIT",
   "homepage": "https://github.com/JuliusBrussee/caveman",
@@ -25,6 +25,7 @@
   "files": [
     "index.js",
     "compress.js",
-    "README.md"
+    "README.md",
+    "spawn-options.js"
   ]
 }
