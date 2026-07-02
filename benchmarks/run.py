@@ -13,14 +13,23 @@ from pathlib import Path
 
 import anthropic
 
-# Load .env.local from repo root if it exists
+# The only env var this benchmark needs: the anthropic SDK reads it in
+# anthropic.Anthropic(). Read it — and ONLY it — from repo-root .env.local.
+# Deliberately narrow (issue #528): the old loader setdefault'ed EVERY key in
+# .env.local into os.environ, which security scanners rightly flag as an
+# exfiltration surface. Nothing else from the file is ever read or exported.
+_API_KEY_VAR = "ANTHROPIC_API_KEY"
+
 _env_file = Path(__file__).parent.parent / ".env.local"
-if _env_file.exists():
+if _API_KEY_VAR not in os.environ and _env_file.exists():
     for line in _env_file.read_text().splitlines():
         line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
+        if line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() == _API_KEY_VAR:
+            os.environ.setdefault(_API_KEY_VAR, value.strip())
+            break
 
 SCRIPT_VERSION = "1.0.0"
 SCRIPT_DIR = Path(__file__).parent
