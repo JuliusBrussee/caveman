@@ -201,6 +201,10 @@ function main() {
   if (opts.dryRun) console.log('(dry run — no files were written)');
 }
 
-if (require.main === module) main();
+// Run when executed directly AND when piped via `curl … | node -` (the
+// documented standalone path, #603): under stdin execution require.main is
+// undefined and module.id is '[stdin]', so the classic guard alone silently
+// no-ops with exit code 0 — the worst kind of failure.
+if (require.main === module || (!require.main && module.id === '[stdin]')) main();
 
 module.exports = { processAgent, loadRuleBody, AGENTS, SENTINEL, RULE_BODY };
