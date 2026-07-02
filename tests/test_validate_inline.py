@@ -41,6 +41,22 @@ More text with `inline3`.
     def test_empty(self):
         self.assertEqual(extract_inline_codes("no backticks here"), [])
 
+    def test_indented_fence_not_leaked_as_inline_code(self):
+        # Regression: the old extractor stripped fences with a column-0-anchored
+        # regex, so a fence indented under a list item was invisible to it and
+        # its content got scanned as if it were plain text, mis-pairing
+        # backticks across the fence into garbage tokens instead of finding
+        # the real inline code below it.
+        text = (
+            "- Step one:\n"
+            "  ```sh\n"
+            "  echo `not real inline code, just backticked shell text`\n"
+            "  ```\n"
+            "- Step two: real inline code here: `kubectl get pods`\n"
+        )
+        result = extract_inline_codes(text)
+        self.assertEqual(result, ["kubectl get pods"])
+
 
 class TestValidateInlineCodes(unittest.TestCase):
     def test_match(self):

@@ -3,7 +3,7 @@ name: caveman-compress
 description: >
   Compress natural language memory files (CLAUDE.md, todos, preferences) into caveman format
   to save input tokens. Preserves all technical substance, code, URLs, and structure.
-  Compressed version overwrites the original file. Human-readable backup saved as FILE.original.md.
+  Compressed version overwrites the original file. Original backed up out-of-tree (see backup path below).
   Trigger: /caveman-compress FILEPATH or "compress memory file"
 ---
 
@@ -11,7 +11,7 @@ description: >
 
 ## Purpose
 
-Compress natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Human-readable backup saved as `<filename>.original.md`.
+Compress natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Original is backed up out-of-tree as `<filename>.original.md` under a platform-aware data dir (`$XDG_DATA_HOME/caveman-compress/backups/...` or `%LOCALAPPDATA%\caveman-compress\backups\...`), not beside the source file — this keeps skill/rule auto-loaders from re-ingesting the backup as a live file.
 
 ## Trigger
 
@@ -27,7 +27,12 @@ python3 -m scripts <absolute_filepath>
 
 3. The CLI will:
 - detect file type (no tokens)
-- call Claude to compress
+- mechanically mask fenced code blocks and inline `code` spans with opaque placeholder
+  tokens before sending anything to Claude — this is automatic and needs no model action;
+  it exists so code can't be mangled during compression, only spliced back verbatim after
+- call Claude to compress (it sees prose + placeholders, never the real code)
+- splice the real code back in by placeholder; abort with no changes if a placeholder was
+  dropped, duplicated, or altered (fail closed — never guess where code belonged)
 - validate output (no tokens)
 - if errors: cherry-pick fix with Claude (targeted fixes only, no recompression)
 - retry up to 2 times
@@ -107,5 +112,5 @@ Compressed:
 - NEVER modify: .py, .js, .ts, .json, .yaml, .yml, .toml, .env, .lock, .css, .html, .xml, .sql, .sh
 - If file has mixed content (prose + code), compress ONLY the prose sections
 - If unsure whether something is code or prose, leave it unchanged
-- Original file is backed up as FILE.original.md before overwriting
+- Original file is backed up as `<filename>.original.md` (out-of-tree, see backup path above) before overwriting
 - Never compress FILE.original.md (skip it)

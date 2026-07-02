@@ -111,9 +111,98 @@ def strip_llm_wrapper(text: str) -> str:
     return text
 
 from .detect import should_compress
-from .validate import validate
+from .validate import extract_code_blocks, validate
 
 MAX_RETRIES = 2
+
+# ---------- Code masking ----------
+#
+# Preserve-code was previously enforced only by asking the (non-deterministic)
+# compression model nicely, then catching violations after the fact with a
+# byte-exact validator. That validator is correct and stays as-is, but a model
+# instruction is not a guarantee — see issues #112 / #588. Masking fenced
+# blocks and inline code with opaque placeholders *before* the model call
+# makes preservation structural: the model never sees the real code, so it
+# cannot mangle it, and the validator's code checks become un-failable by
+# construction (the spliced-back text is byte-identical to the original).
+#
+# Delimiters are U+27E6/U+27E7 (mathematical white square brackets): no
+# markdown-active ASCII inside them (no backtick, underscore, bracket, angle
+# bracket), no interior whitespace for a whitespace-normalizing compressor to
+# collapse or split, and they don't occur in ordinary prose or code — so a
+# stray token found in the model's output can only be one we inserted.
+PLACEHOLDER_PREFIX = "⟦CVMN-CODE-"
+PLACEHOLDER_SUFFIX = "⟧"
+PLACEHOLDER_REGEX = re.compile(
+    re.escape(PLACEHOLDER_PREFIX) + r"(\d+)" + re.escape(PLACEHOLDER_SUFFIX)
+)
+
+
+class PlaceholderIntegrityError(RuntimeError):
+    """Raised when the model dropped, duplicated, or altered a mask token.
+
+    A missing/altered placeholder means the model already rewrote the prose
+    around it — there's no reliable way to guess where the code belonged, so
+    callers must fail closed (abort before backup/write) rather than splice a
+    partial or best-guess result.
+    """
+
+
+def _placeholder(i: int) -> str:
+    return f"{PLACEHOLDER_PREFIX}{i}{PLACEHOLDER_SUFFIX}"
+
+
+def mask_code(body: str):
+    """Replace fenced blocks, then inline `code` spans, with placeholders.
+
+    Returns (masked_body, fragments) where fragments[i] is the verbatim
+    original text (fences/backticks included) for placeholder i. Fenced
+    blocks are masked first so inline code that happens to live inside a
+    fence is never separately (double-)masked — by the time the inline pass
+    runs, fenced regions have already been replaced with tokens.
+    """
+    fragments: List[str] = []
+    masked = body
+
+    for block in extract_code_blocks(body):
+        idx = len(fragments)
+        fragments.append(block)
+        # Block placeholders live on their own line so a restored fence
+        # starts at column 0 as CommonMark expects.
+        masked = masked.replace(block, f"\n{_placeholder(idx)}\n", 1)
+
+    def _mask_inline(m: "re.Match") -> str:
+        idx = len(fragments)
+        fragments.append(m.group(0))
+        return _placeholder(idx)
+
+    masked = re.sub(r"`([^`\n]+)`", _mask_inline, masked)
+    return masked, fragments
+
+
+def unmask_code(text: str, fragments: List[str]) -> str:
+    """Splice fragments back by index; fail closed on any integrity mismatch."""
+    found = [int(n) for n in PLACEHOLDER_REGEX.findall(text)]
+    expected = set(range(len(fragments)))
+    if set(found) != expected or len(found) != len(fragments):
+        missing = expected - set(found)
+        unexpected = set(found) - expected
+        dupes = {n for n in found if found.count(n) > 1}
+        detail = ", ".join(
+            filter(
+                None,
+                [
+                    f"missing={sorted(missing)}" if missing else "",
+                    f"unexpected={sorted(unexpected)}" if unexpected else "",
+                    f"duplicated={sorted(dupes)}" if dupes else "",
+                ],
+            )
+        )
+        raise PlaceholderIntegrityError(
+            f"Placeholder integrity check failed ({detail}). The model likely "
+            "dropped, duplicated, or altered a masked code token."
+        )
+    return PLACEHOLDER_REGEX.sub(lambda m: fragments[int(m.group(1))], text)
 
 
 # ---------- Claude Calls ----------
@@ -173,6 +262,9 @@ def build_compress_prompt(original: str) -> str:
 Compress this markdown into caveman format.
 
 STRICT RULES:
+- The text may contain opaque placeholder tokens like ⟦CVMN-CODE-3⟧. Copy each
+  one EXACTLY once, in place — never edit, split, translate, reorder, wrap, or
+  delete a placeholder token.
 - Do NOT modify anything inside ``` code blocks
 - Do NOT modify anything inside inline backticks
 - Preserve ALL URLs exactly
@@ -276,12 +368,31 @@ def compress_file(filepath: Path) -> bool:
         print("❌ Refusing to compress: body is empty after frontmatter removal.")
         return False
 
-    # Step 1: Compress (body only, frontmatter excluded)
-    print("Compressing with Claude...")
-    compressed_body = call_claude(build_compress_prompt(body))
+    # Step 1: Mask code, then compress (body only, frontmatter excluded).
+    # If the sentinel already appears in the source (vanishingly unlikely,
+    # but possible on a file about caveman-compress itself), skip masking
+    # rather than risk colliding with real placeholders — fall back to the
+    # prompt-only preserve-code instructions for this file.
+    if PLACEHOLDER_PREFIX in body:
+        print("⚠️ Mask sentinel already present in source — skipping code masking for this file.")
+        masked_body, fragments = body, []
+    else:
+        masked_body, fragments = mask_code(body)
+        if fragments:
+            print(f"Masked {len(fragments)} code fragment(s) before compression")
 
-    if compressed_body is None or not compressed_body.strip():
+    print("Compressing with Claude...")
+    compressed_masked = call_claude(build_compress_prompt(masked_body))
+
+    if compressed_masked is None or not compressed_masked.strip():
         print("❌ Compression aborted: Claude returned an empty response.")
+        print("   Original file is untouched (no backup created).")
+        return False
+
+    try:
+        compressed_body = unmask_code(compressed_masked, fragments)
+    except PlaceholderIntegrityError as e:
+        print(f"❌ Compression aborted: {e}")
         print("   Original file is untouched (no backup created).")
         return False
 
