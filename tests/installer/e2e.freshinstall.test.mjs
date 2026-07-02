@@ -400,3 +400,84 @@ test('lib settings.addCommandHook is idempotent across two synthetic install pas
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Tests: SOUL.md marker damage tolerance (#596) ──────────────────────────
+// A stray/truncated marker used to chain into data loss: append added a
+// second block, then strip cut from the FIRST begin to the FIRST end —
+// spanning all user content in between. These drive the helper directly.
+test('openclaw: truncated begin marker does not eat user content (issue #596 chain)', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const soul = path.join(dir, 'SOUL.md');
+  try {
+    // Begin marker with no end (interrupted write), then user content.
+    fs.writeFileSync(soul, helper.MARK_BEGIN + '\n\nUSER IMPORTANT CONTENT\n');
+    const snippet = helper.loadBootstrapSnippet(REPO_ROOT);
+
+    const a = helper.appendBootstrapToSoul(soul, snippet);
+    assert.equal(a.changed, true);
+    const afterAppend = fs.readFileSync(soul, 'utf8');
+    assert.match(afterAppend, /USER IMPORTANT CONTENT/, 'user content lost during repair-append');
+    assert.equal(afterAppend.split(helper.MARK_BEGIN).length - 1, 1, 'repair must leave exactly one begin marker');
+
+    const s = helper.stripBootstrapFromSoul(soul);
+    assert.equal(s.changed, true);
+    assert.equal(s.removed, undefined, 'file with user content must not be deleted');
+    const afterStrip = fs.readFileSync(soul, 'utf8');
+    assert.match(afterStrip, /USER IMPORTANT CONTENT/, 'user content deleted by strip — the #596 data loss');
+    assert.doesNotMatch(afterStrip, /caveman-begin/, 'marker survived strip');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw: strip removes multiple blocks pairwise, keeping user content between them', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const soul = path.join(dir, 'SOUL.md');
+  try {
+    const block = helper.MARK_BEGIN + '\nrules v1\n' + helper.MARK_END;
+    fs.writeFileSync(soul, block + '\n\nUSER KEEP ME\n\n' + block + '\n');
+    const s = helper.stripBootstrapFromSoul(soul);
+    assert.equal(s.changed, true);
+    const after = fs.readFileSync(soul, 'utf8');
+    assert.match(after, /USER KEEP ME/, 'user content between blocks deleted');
+    assert.doesNotMatch(after, /caveman-(begin|end)/, 'markers survived');
+    assert.doesNotMatch(after, /rules v1/, 'block bodies survived');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw: orphan end marker stripped without touching content', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const soul = path.join(dir, 'SOUL.md');
+  try {
+    fs.writeFileSync(soul, 'before\n' + helper.MARK_END + '\nafter\n');
+    const s = helper.stripBootstrapFromSoul(soul);
+    assert.equal(s.changed, true);
+    const after = fs.readFileSync(soul, 'utf8');
+    assert.match(after, /before/);
+    assert.match(after, /after/);
+    assert.doesNotMatch(after, /caveman-end/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw: append on a well-formed block stays a no-op', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const soul = path.join(dir, 'SOUL.md');
+  try {
+    const snippet = helper.loadBootstrapSnippet(REPO_ROOT);
+    helper.appendBootstrapToSoul(soul, snippet);
+    const first = fs.readFileSync(soul, 'utf8');
+    const again = helper.appendBootstrapToSoul(soul, snippet);
+    assert.equal(again.changed, false);
+    assert.equal(fs.readFileSync(soul, 'utf8'), first, 'no-op append must not modify the file');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -116,33 +116,76 @@ function loadSkillBody(repoRoot) {
 }
 
 // ── SOUL.md marker-block append/strip ─────────────────────────────────────
+//
+// Damage tolerance (#596): a stray or truncated marker (interrupted write,
+// partial user edit) used to chain into data loss — append saw "no complete
+// block" and added a SECOND block; strip then cut from the FIRST begin to the
+// FIRST end, which spanned all user content between the stray marker and the
+// appended block. The scan below pairs each begin with the nearest end BEFORE
+// the next begin; an unpaired marker is removed as just the marker itself,
+// never as a span over user content.
+
+function stripAllBootstrapBlocks(text) {
+  let result = '';
+  let found = false;
+  let i = 0;
+  while (i < text.length) {
+    const b = text.indexOf(MARK_BEGIN, i);
+    if (b === -1) { result += text.slice(i); break; }
+    result += text.slice(i, b);
+    found = true;
+    const nextB = text.indexOf(MARK_BEGIN, b + MARK_BEGIN.length);
+    const e = text.indexOf(MARK_END, b + MARK_BEGIN.length);
+    if (e !== -1 && (nextB === -1 || e < nextB)) {
+      i = e + MARK_END.length; // well-formed block — drop begin..end inclusive
+    } else {
+      i = b + MARK_BEGIN.length; // orphan begin — drop only the marker itself
+    }
+    // Collapse the blank-line scar around the cut (same cosmetic rule the
+    // old single-cut code applied): keep at most one newline on each side.
+    result = result.replace(/\n+$/, '\n');
+    const lead = /^\n+/.exec(text.slice(i));
+    if (lead) i += lead[0].length - (result ? 1 : 0);
+  }
+  // Orphan end markers (begin already gone or never written) — drop marker only.
+  while (result.includes(MARK_END)) { found = true; result = result.replace(MARK_END, ''); }
+  return { next: result, found };
+}
+
 function appendBootstrapToSoul(soulPath, snippet) {
   const existing = readIfExists(soulPath);
-  if (existing && existing.includes(MARK_BEGIN) && existing.includes(MARK_END)) {
-    return { changed: false, reason: 'already present' };
+  const count = (s, sub) => s.split(sub).length - 1;
+  let base = existing;
+  let repaired = false;
+  if (existing) {
+    const nb = count(existing, MARK_BEGIN);
+    const ne = count(existing, MARK_END);
+    if (nb === 1 && ne === 1 && existing.indexOf(MARK_END) > existing.indexOf(MARK_BEGIN)) {
+      return { changed: false, reason: 'already present' };
+    }
+    if (nb > 0 || ne > 0) {
+      // Damaged markers — strip them safely first, then append one clean block.
+      base = stripAllBootstrapBlocks(existing).next;
+      repaired = true;
+    }
   }
   let next;
-  if (existing && existing.length) {
-    const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
-    next = existing + sep + snippet;
+  if (base && base.length) {
+    const sep = base.endsWith('\n\n') ? '' : (base.endsWith('\n') ? '\n' : '\n\n');
+    next = base + sep + snippet;
   } else {
     next = snippet;
   }
   fs.writeFileSync(soulPath, next, { mode: 0o644 });
-  return { changed: true };
+  return repaired ? { changed: true, repaired: true } : { changed: true };
 }
 
 function stripBootstrapFromSoul(soulPath) {
   const existing = readIfExists(soulPath);
   if (!existing) return { changed: false, reason: 'no SOUL.md' };
-  const begin = existing.indexOf(MARK_BEGIN);
-  const end = existing.indexOf(MARK_END);
-  if (begin === -1 || end === -1 || end <= begin) return { changed: false, reason: 'no marker block' };
-  const before = existing.slice(0, begin);
-  const after = existing.slice(end + MARK_END.length);
-  // Collapse adjacent blank lines around the cut so we don't leave a triple
-  // newline scar from `\n\n<begin>...\n<end>\n\n`.
-  let next = (before.replace(/\n+$/, '\n') + after.replace(/^\n+/, '\n')).trimEnd();
+  const { next: stripped, found } = stripAllBootstrapBlocks(existing);
+  if (!found) return { changed: false, reason: 'no marker block' };
+  let next = stripped.trimEnd();
   next = next ? next + '\n' : '';
   if (next === '') {
     // SOUL.md only contained our block — remove the file so OpenClaw doesn't
