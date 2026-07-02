@@ -254,7 +254,7 @@ The installer doesn't phone home. It writes to:
 - Your current working directory (only with `--with-init`) — repo-local rule files.
 - `~/.openclaw/workspace/` (only with `--only openclaw` or `--with-init` when OpenClaw is detected) — the one `--with-init` side-effect outside the cwd.
 
-No telemetry. No analytics. The installer's own code makes no network calls. Network requests do happen indirectly through the per-agent CLIs it shells out to — `claude plugin marketplace add`, `claude plugin install`, `gemini extensions install`, `npm view caveman-shrink`, and `npx -y skills add`. Each fetches from its own registry (Anthropic / GitHub / npm). Source: [`bin/install.js`](bin/install.js).
+No telemetry. No analytics. Run from a clone or via npx, the installer's own code makes no network calls — files are copied locally. One exception: run detached from any checkout (the rare curl-fallback path), it downloads the hook files from raw.githubusercontent.com pinned to an immutable release tag and verifies each against a SHA-256 manifest before wiring anything. Network requests also happen indirectly through the per-agent CLIs it shells out to — `claude plugin marketplace add`, `claude plugin install`, `gemini extensions install`, `npm view caveman-shrink`, and `npx -y skills add`. Each fetches from its own registry (Anthropic / GitHub / npm). Source: [`bin/install.js`](bin/install.js). After install: zero network calls, ever — full statement in [SECURITY.md](./SECURITY.md#privacy--telemetry).
 
 ---
 

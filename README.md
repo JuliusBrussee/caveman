@@ -243,6 +243,10 @@ npx skills@latest add JuliusBrussee/skills
 
 One command. Five skill. Cave well stocked.
 
+## Privacy
+
+Caveman no phone home. No telemetry, no analytics, no accounts, no backend. After install, zero network calls — skill is a prompt, hooks are local scripts, `/caveman-stats` reads your session log on your disk. Install-time fetches (GitHub + your agents' own registries) and scanner-warning explanations: [SECURITY.md](./SECURITY.md#privacy--telemetry).
+
 ## Links
 
 - [docs/HONEST-NUMBERS.md](./docs/HONEST-NUMBERS.md) — when caveman saves, when caveman costs, how to measure
