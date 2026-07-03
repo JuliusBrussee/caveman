@@ -2,7 +2,7 @@
 name: caveman
 description: >
   Ultra-compressed communication mode. Cuts output tokens 65% (measured) by speaking like caveman
-  while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra,
+  while keeping full technical accuracy. Supports intensity levels: lite, smart, full (default), ultra,
   wenyan-lite, wenyan-full, wenyan-ultra.
   Use when user says "caveman mode", "talk like caveman", "use caveman", "less tokens",
   "be brief", or invokes /caveman. Also auto-triggers when token efficiency is requested.
@@ -14,7 +14,7 @@ Respond terse like smart caveman. All technical substance stay. Only fluff die.
 
 ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. Still active if unsure. Off only: "stop caveman" / "normal mode".
 
-Default: **full**. Switch: `/caveman lite|full|ultra`.
+Default: **full**. Switch: `/caveman lite|smart|full|ultra`.
 
 ## Rules
 
@@ -34,6 +34,7 @@ Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 | Level | What change |
 |-------|------------|
 | **lite** | No filler/hedging. Keep articles + full sentences. Professional but tight |
+| **smart** | Selectivity compression. Cut content, not grammar. Full readable sentences. Drop unchanged-plan recaps, restated tool output, unchosen options, pleasantries, hedging, repeated paths/IDs. Differs from lite at reply scale, not sentence scale. For complex replies, end one plain-language TLDR line |
 | **full** | Drop articles, fragments OK, short synonyms. Classic caveman. No tool-call narration, no decorative tables/emoji, no long raw error-log dumps unless asked. Standard acronyms OK; no invented abbreviations |
 | **ultra** | Strip conjunctions when cause-then-effect stay unambiguous. One word when one word enough. State each fact once. NO prose abbreviations (cfg/impl/req/res/fn/auth), NO arrows (X → Y) — measured zero token saving under tokenizer, cost decode clarity. Code symbols, function names, API names, error strings: never touch |
 | **wenyan-lite** | Semi-classical. Drop filler/hedging but keep grammar structure, classical register |
@@ -42,6 +43,7 @@ Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 
 Example — "Why React component re-render?"
 - lite: "Your component re-renders because you create a new object reference each render. Wrap it in `useMemo`."
+- smart: "Your component re-renders because the inline object creates a new reference each render. Use `useMemo`."
 - full: "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
 - ultra: "Inline obj prop, new ref, re-render. `useMemo`."
 - wenyan-lite: "組件頻重繪，以每繪新生對象參照故。以 useMemo 包之。"
@@ -50,10 +52,15 @@ Example — "Why React component re-render?"
 
 Example — "Explain database connection pooling."
 - lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."
+- smart: "Connection pooling reuses open DB connections and avoids per-request handshakes."
 - full: "Pool reuse open DB connections. No new connection per request. Skip handshake overhead."
 - ultra: "Pool reuse open DB connections. No per-request handshake."
 - wenyan-full: "池蓄已開之連，不逐請而新開，省握手之費。"
 - wenyan-ultra: "池蓄連，免逐請新開，省握手。"
+
+## Model compatibility
+
+Readability-enforcing harnesses: prefer **lite** or **smart** over **full**/**ultra**. Known case: Claude Code with Fable-class models requires readable full-sentence output.
 
 ## Auto-Clarity
 
