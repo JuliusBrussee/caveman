@@ -1407,13 +1407,118 @@ EXAMPLES
   npx -y github:JuliusBrussee/caveman -- --all               # all the trimmings
   npx -y github:JuliusBrussee/caveman -- --only claude --no-mcp-shrink
   npx -y github:JuliusBrussee/caveman -- --uninstall
+  npx -y github:JuliusBrussee/caveman -- config show     # mode resolution
+  npx -y github:JuliusBrussee/caveman -- config set intensity ultra
+  npx -y github:JuliusBrussee/caveman -- config set mode full --project
 
   Issues: https://github.com/${REPO}/issues
 `);
 }
 
+// ── `caveman config` subcommand ────────────────────────────────────────────
+// CLI sugar over the config files the hooks already read:
+//   caveman config show                 resolution chain + effective mode
+//   caveman config get <key>            effective value
+//   caveman config set <key> <value>    user scope (--project → repo scope)
+//   caveman config unset <key>          remove key from chosen scope
+// Keys: defaultMode (aliases: mode, intensity). Values validated against
+// VALID_MODES so a typo can't silently break activation.
+function loadHookConfig() {
+  try { return require(path.join(__dirname, '..', 'src', 'hooks', 'caveman-config')); }
+  catch (_) { return null; }
+}
+
+const CONFIG_KEY_ALIASES = { mode: 'defaultMode', intensity: 'defaultMode', defaultmode: 'defaultMode' };
+
+function runConfigCommand(args) {
+  const hookCfg = loadHookConfig();
+  if (!hookCfg) {
+    process.stderr.write('caveman config: cannot load src/hooks/caveman-config.js (run from the caveman package)\n');
+    return 2;
+  }
+  const { VALID_MODES, getConfigPath, findRepoConfigPath, getDefaultMode } = hookCfg;
+
+  const project = args.includes('--project');
+  const rest = args.filter(a => a !== '--project');
+  const verb = rest[0];
+
+  const userPath = getConfigPath();
+  const repoPath = findRepoConfigPath(process.cwd());
+  // set/unset --project: update the nearest checked-in config if one exists,
+  // else create ./.caveman/config.json in the current directory.
+  const projectPath = repoPath || path.join(process.cwd(), '.caveman', 'config.json');
+  const targetPath = project ? projectPath : userPath;
+
+  const readJson = (p) => {
+    const parsed = SETTINGS.readSettings(p);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  };
+
+  const resolveKey = (k) => {
+    const key = CONFIG_KEY_ALIASES[String(k || '').toLowerCase()];
+    if (!key) {
+      process.stderr.write(`caveman config: unknown key '${k}'. Known keys: defaultMode (aliases: mode, intensity)\n`);
+      return null;
+    }
+    return key;
+  };
+
+  if (verb === 'show') {
+    const env = process.env.CAVEMAN_DEFAULT_MODE || null;
+    const repoCfg = repoPath ? readJson(repoPath) : null;
+    const userCfg = readJson(userPath);
+    process.stdout.write('caveman config resolution (first match wins):\n');
+    process.stdout.write(`  1. env CAVEMAN_DEFAULT_MODE: ${env || '(not set)'}\n`);
+    process.stdout.write(`  2. repo config ${repoPath || '(none found walking up from cwd)'}: ${repoCfg && repoCfg.defaultMode ? repoCfg.defaultMode : '(no defaultMode)'}\n`);
+    process.stdout.write(`  3. user config ${userPath}${fs.existsSync(userPath) ? '' : ' (absent)'}: ${userCfg.defaultMode || '(no defaultMode)'}\n`);
+    process.stdout.write('  4. built-in default: full\n');
+    process.stdout.write(`Effective mode: ${getDefaultMode()}\n`);
+    return 0;
+  }
+
+  if (verb === 'get') {
+    const key = resolveKey(rest[1]);
+    if (!key) return 2;
+    process.stdout.write(getDefaultMode() + '\n');
+    return 0;
+  }
+
+  if (verb === 'set') {
+    const key = resolveKey(rest[1]);
+    if (!key) return 2;
+    const value = String(rest[2] || '').toLowerCase();
+    if (!VALID_MODES.includes(value)) {
+      process.stderr.write(`caveman config: invalid mode '${rest[2] || ''}'. Valid: ${VALID_MODES.join(', ')}\n`);
+      return 2;
+    }
+    const cfg = readJson(targetPath);
+    cfg[key] = value;
+    SETTINGS.writeSettings(targetPath, cfg);
+    process.stdout.write(`set ${key}=${value} in ${targetPath}\n`);
+    return 0;
+  }
+
+  if (verb === 'unset') {
+    const key = resolveKey(rest[1]);
+    if (!key) return 2;
+    if (!fs.existsSync(targetPath)) { process.stdout.write(`nothing to unset — ${targetPath} absent\n`); return 0; }
+    const cfg = readJson(targetPath);
+    if (!(key in cfg)) { process.stdout.write(`nothing to unset — ${key} not in ${targetPath}\n`); return 0; }
+    delete cfg[key];
+    SETTINGS.writeSettings(targetPath, cfg);
+    process.stdout.write(`unset ${key} in ${targetPath}\n`);
+    return 0;
+  }
+
+  process.stderr.write('Usage: caveman config <show|get|set|unset> [key] [value] [--project]\n');
+  return 2;
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 async function main() {
+  if (process.argv[2] === 'config') {
+    return runConfigCommand(process.argv.slice(3));
+  }
   const opts = parseArgs(process.argv.slice(2));
   const c = makeChalk(opts.noColor);
   if (opts.help) { printHelp(); return 0; }
