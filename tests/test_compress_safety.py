@@ -88,6 +88,36 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertEqual(backup.read_text(), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
+    def test_utf8_glyphs_preserved_in_roundtrip(self):
+        """Regression: explicit encoding="utf-8" in compress.py prevents
+        cp1252 crashes on Windows when files contain Unicode glyphs like
+        ✅/❌ or other non-Latin-1 characters. This test verifies that a
+        file with mixed Unicode content survives a compression roundtrip
+        without encoding corruption."""
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            original = (
+                "# Status ✅\n\n"
+                "The build passed ✅ — all 12 tests green.\n"
+                "Café résumé naïve façade ❌ not yet merged.\n"
+                "Emoji range: 🪨 🦊 🔥\n"
+            )
+            compressed = "# Status ✅\n\nBuild passed ✅. Café résumé not merged ❌.\n"
+            path = self._file_with(Path(tmp), original)
+            with mock.patch.object(compress_mod, "call_claude", return_value=compressed), \
+                 mock.patch.object(compress_mod, "validate") as v:
+                v.return_value = mock.Mock(is_valid=True, errors=[], warnings=[])
+                ok = compress_mod.compress_file(path)
+            self.assertTrue(ok)
+            # Read back — encoding must survive the roundtrip.
+            roundtripped = path.read_text(encoding="utf-8")
+            self.assertEqual(roundtripped, compressed)
+            # Backup must also be intact.
+            backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
+            self.assertEqual(backup.read_text(encoding="utf-8"), original)
+            self.assertFalse((Path(tmp) / "task.original.md").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

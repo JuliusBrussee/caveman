@@ -174,3 +174,25 @@ test('--help discloses --config-dir scope', () => {
   assert.match(collapsed, /XDG_CONFIG_HOME/);
   assert.match(collapsed, /OPENCLAW_WORKSPACE/);
 });
+
+test('--help discloses Bun runtime support', () => {
+  // Regression: the PR adds Bun as a supported runtime for the installer
+  // (Node ≥18 is preferred, Bun ≥1.3.14 is the fallback). The help output
+  // should mention Bun so users know it's supported.
+  const r = run('--help');
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /Bun/);
+  assert.match(r.stdout, /bun/);
+});
+
+test('installer detects running on Node and does not crash on Bun version probe', () => {
+  // The checkNodeVersion() function probes process.versions.bun first and
+  // falls back to Node. On a Node runtime, this should exit 0 with no Bun
+  // version error. On Bun, it should also exit cleanly (Bun ≥1.3.14).
+  const r = run('--dry-run', '--non-interactive', '--config-dir', '/tmp/__cm_bun_probe');
+  // The installer should exit 0 (not crash with a Bun version mismatch error).
+  assert.equal(r.status, 0);
+  // Should NOT print a Bun-too-old error.
+  assert.doesNotMatch(r.stderr, /Bun .* too old/);
+  assert.doesNotMatch(r.stdout, /Bun .* too old/);
+});
