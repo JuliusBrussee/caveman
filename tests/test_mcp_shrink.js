@@ -30,6 +30,28 @@ function test(name, fn) {
 
 console.log('mcp-shrink compress tests\n');
 
+// ── Packaging guard (issue #597) ──────────────────────────────────────────
+// Every relative require() reachable from the published entry points must be
+// listed in package.json "files", or `npm publish` ships a package that
+// crashes on launch (spawn-options.js was missing from the 0.1.0 file list).
+test('package.json files[] covers all relative requires of shipped js', () => {
+  const fs = require('fs');
+  const pkgDir = path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink');
+  const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+  const shipped = new Set(pkg.files);
+  for (const f of pkg.files.filter(f => f.endsWith('.js'))) {
+    const src = fs.readFileSync(path.join(pkgDir, f), 'utf8');
+    const re = /require\(\s*['"]\.\/([^'"]+)['"]\s*\)/g;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      const dep = m[1].endsWith('.js') ? m[1] : m[1] + '.js';
+      assert.ok(shipped.has(dep),
+        `${f} requires ./${dep} but package.json files[] does not ship it`);
+    }
+  }
+});
+
+
 test('drops articles', () => {
   const { compressed } = compress('The user is the owner of an account');
   assert.match(compressed, /User is owner of account/i);
