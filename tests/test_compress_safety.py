@@ -91,3 +91,61 @@ class CompressSafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Utf8AtomicWriteTests(unittest.TestCase):
+    """Regression tests for issue #533 — cp1252 write crash truncated live file."""
+
+    def test_write_text_atomic_utf8_bytes_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "unicode.md"
+            text = "# Arrows\n\nA → B — C ✓ 中文\n"
+            compress_mod.write_text_atomic(path, text)
+            self.assertEqual(path.read_bytes().decode("utf-8"), text)
+
+    def test_write_text_atomic_failure_leaves_destination_untouched(self):
+        # Path.write_text truncates before encoding, so an encode error used to
+        # zero the file. The atomic writer must fail WITHOUT touching it.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "keep.md"
+            path.write_text("precious content", encoding="utf-8")
+            with self.assertRaises(UnicodeEncodeError):
+                compress_mod.write_text_atomic(path, "bad \ud800 surrogate")
+            self.assertEqual(path.read_text(encoding="utf-8"), "precious content")
+            leftovers = [p for p in Path(tmp).iterdir() if p.name != "keep.md"]
+            self.assertEqual(leftovers, [], "temp file must not leak on failure")
+
+    def test_unicode_content_round_trips_through_compression(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            original = "# Título\n\nFlow: A → B — depois C. Ünïcödé everywhere ✓\n"
+            compressed = "# Título\n\nA → B — C. ✓\n"
+            path = Path(tmp) / "task.md"
+            path.write_text(original, encoding="utf-8")
+            with mock.patch.object(compress_mod, "call_claude", return_value=compressed), \
+                 mock.patch.object(compress_mod, "validate") as v:
+                v.return_value = mock.Mock(is_valid=True, errors=[], warnings=[])
+                ok = compress_mod.compress_file(path)
+            self.assertTrue(ok)
+            self.assertEqual(path.read_bytes().decode("utf-8"), compressed)
+            backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
+            self.assertEqual(backup.read_bytes().decode("utf-8"), original)
+
+    def test_fix_retry_none_output_restores_original(self):
+        # call_claude returning None/empty during the fix-retry loop used to
+        # crash Path.write_text AFTER truncating the live file.
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            original = "# Heading\n\nProse to compress with → unicode.\n"
+            path = Path(tmp) / "task.md"
+            path.write_text(original, encoding="utf-8")
+            invalid = mock.Mock(is_valid=False, errors=["broken"], warnings=[])
+            with mock.patch.object(compress_mod, "call_claude",
+                                   side_effect=["# H\n\nBad output.\n", None, None]), \
+                 mock.patch.object(compress_mod, "validate", return_value=invalid):
+                ok = compress_mod.compress_file(path)
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), original,
+                             "original must be restored after failed retries")
