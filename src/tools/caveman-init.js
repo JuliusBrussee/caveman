@@ -46,7 +46,7 @@ function loadOpenclawHelper() {
 
 const AGENTS = [
   { id: 'cursor',   file: '.cursor/rules/caveman.mdc',
-    frontmatter: '---\ndescription: "Caveman mode — terse communication, ~50-65% fewer output tokens (measured), full technical accuracy"\nalwaysApply: true\n---\n\n',
+    frontmatter: '---\ndescription: "Caveman mode — terse communication, 65% fewer output tokens (measured), full technical accuracy"\nalwaysApply: true\n---\n\n',
     mode: 'replace' },
   { id: 'windsurf', file: '.windsurf/rules/caveman.md',
     frontmatter: '---\ntrigger: always_on\n---\n\n',

@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "caveman",
-  "description": "Ultra-compressed communication mode for Claude Code. Cuts ~50-65% of output tokens (measured) while keeping full technical accuracy.",
+  "description": "Ultra-compressed communication mode for Claude Code. Cuts 65% of output tokens (measured) while keeping full technical accuracy.",
   "owner": {
     "name": "Julius Brussee",
     "url": "https://github.com/JuliusBrussee"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "caveman",
-      "description": "Talk like caveman. Cut ~50-65% output tokens (measured). Keep all technical accuracy.",
+      "description": "Talk like caveman. Cut 65% output tokens (measured). Keep all technical accuracy.",
       "source": "./",
       "category": "productivity"
     }

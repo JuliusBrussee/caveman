@@ -8,7 +8,7 @@
 
 <p align="center">
   Make your AI coding agent talk like a caveman.<br>
-  Same answers, <strong>~50–65% fewer output tokens</strong>. Brain still big. Mouth small.
+  Same answers, <strong>65% fewer output tokens</strong>. Brain still big. Mouth small.
 </p>
 
 <p align="center">
@@ -69,7 +69,7 @@ Same fix. Third of the words. Nothing technical lost.
 
 ```
 ┌────────────────────────────────────────────┐
-│   output tokens saved   █████████    50–65% │
+│   output tokens saved   █████████       65% │
 │   input tokens saved    ░░░░░░░░░         0% │
 │   technical accuracy    █████████      100% │
 │   vibes                 █████████       OOG │
@@ -151,7 +151,7 @@ Six levels. Switch anytime with `/caveman <level>`. Level sticks until you chang
 
 ## Benchmarks
 
-Real token counts from the Claude API. Average **65% output reduction** across 10 prompts (range 22–87%), measured against default verbose replies. Against a plain `Answer concisely.` control, the median is **~50%**. Both are output tokens only, and both are committed and reproducible in [`benchmarks/`](./benchmarks/) and [`evals/`](./evals/).
+Real token counts from the Claude API. Average **65% output reduction** across 10 prompts (range 22–87%), measured against default verbose replies. Output tokens only, committed and reproducible in [`benchmarks/`](./benchmarks/) and [`evals/`](./evals/).
 
 <!-- BENCHMARK-TABLE-START -->
 | Task | Normal | Caveman | Saved |

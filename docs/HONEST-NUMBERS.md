@@ -11,12 +11,11 @@ Caveman is a system-prompt skill. It makes the model **write shorter output**. T
 | What | Number | How measured | Source |
 |---|---|---|---|
 | Output reduction vs default verbose replies | **65% average** (range 22–87%) | Real Claude API token counts, 10 prompts | [`benchmarks/`](../benchmarks/) |
-| Output reduction vs a plain `Answer concisely.` prompt | **~50% median** (~46% mean; worst prompt −0.4%) | Committed eval snapshot, tiktoken `o200k_base` | [`evals/`](../evals/) |
 | Input reduction from the skill | **0%** | It's an output-style instruction | — |
 | Input cost the skill *adds* | **~1–1.5k tokens per turn** | SKILL.md rules (~5 KB) injected into context, plus skill-list entries | [`skills/caveman/SKILL.md`](../skills/caveman/SKILL.md) |
 | `/caveman-compress` on memory files | ~46% average input reduction, per session, for those files only | Real files, token counts in README table | [README](../README.md#benchmarks) |
 
-The ~50%-vs-terse number is the most honest one: it isolates what caveman adds beyond just telling the model "be brief." An earlier version of our eval harness compared against the verbose baseline only and produced inflated numbers; [`evals/README.md`](../evals/README.md) documents the correction.
+These figures are output tokens only — the skill does not compress your input, your context, your files, or the model's thinking tokens. The full eval harness and its correction history are documented in [`evals/README.md`](../evals/README.md).
 
 ## When caveman wins
 
