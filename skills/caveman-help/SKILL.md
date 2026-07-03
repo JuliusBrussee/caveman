@@ -17,6 +17,7 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | **Lite** | `/caveman lite` | Drop filler. Keep sentence structure. |
 | **Full** | `/caveman` | Drop articles, filler, pleasantries, hedging. Fragments OK. Default. |
 | **Ultra** | `/caveman ultra` | Extreme compression. Bare fragments. Tables over prose. |
+| **Smart** | `/caveman smart` | Cut content, not grammar. Full sentences, zero fluff, plain-language TLDR at end. For harnesses that enforce readability (e.g. Claude Code on Fable-class models). |
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Classical Chinese style, light compression. |
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness. |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget. |
