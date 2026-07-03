@@ -29,6 +29,8 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -45,8 +47,10 @@ def run_claude(prompt: str, system: str | None = None) -> str:
     if system:
         cmd += ["--system-prompt", system]
     if model := os.environ.get("CAVEMAN_EVAL_MODEL"):
-        cmd += ["--model", model]
-    cmd.append(prompt)
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", model):
+            raise ValueError(f"Invalid model name: {model!r}")
+        cmd += ["--model", shlex.quote(model)]
+    cmd += ["--", prompt]
     out = subprocess.run(cmd, capture_output=True, text=True, check=True)
     return out.stdout.strip()
 
