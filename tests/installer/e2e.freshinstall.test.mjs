@@ -554,3 +554,34 @@ test('missing claude CLI: reports failure and falls back to standalone hook wiri
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Test: uninstall removes caveman state files (issue #635) ────────────────
+// The hooks/stats write five state files into $CLAUDE_CONFIG_DIR. Uninstall
+// must remove the ephemeral four (a stale mode-log poisons #601 attribution
+// on reinstall; a stale suffix resurrects the old lifetime badge; a set
+// .caveman-active re-arms caveman immediately) and keep the lifetime history.
+test('uninstall removes state files, keeps lifetime history', () => {
+  const dir = freshTmpDir();
+  const emptyBin = path.join(dir, 'empty-bin');
+  fs.mkdirSync(emptyBin);
+  const cfg = path.join(dir, 'cfg');
+  fs.mkdirSync(path.join(cfg, 'hooks'), { recursive: true });
+  const state = ['.caveman-active', '.caveman-active.prev', '.caveman-mode-log.jsonl', '.caveman-statusline-suffix'];
+  for (const f of state) fs.writeFileSync(path.join(cfg, f), 'x');
+  fs.writeFileSync(path.join(cfg, '.caveman-history.jsonl'), '{"ts":1}\n');
+  fs.writeFileSync(path.join(cfg, 'hooks', 'caveman-activate.js'), '');
+  try {
+    const r = spawnSync(process.execPath, [
+      INSTALLER, '--uninstall', '--non-interactive', '--config-dir', cfg,
+    ], { env: { ...process.env, PATH: emptyBin, CLAUDE_CONFIG_DIR: cfg, NO_COLOR: '1' }, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    for (const f of state) {
+      assert.equal(fs.existsSync(path.join(cfg, f)), false, `${f} should be removed by uninstall`);
+    }
+    assert.ok(fs.existsSync(path.join(cfg, '.caveman-history.jsonl')), 'lifetime history must be kept');
+    assert.match(r.stdout, /kept .*caveman-history\.jsonl/);
+    assert.equal(fs.existsSync(path.join(cfg, 'hooks', 'caveman-activate.js')), false, 'hook file should be removed');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

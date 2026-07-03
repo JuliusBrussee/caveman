@@ -1182,6 +1182,24 @@ function uninstall(ctx) {
     // Don't rmdir hooksDir — other plugins may use it.
   }
 
+  // State files the hooks/stats own (issue #635). Left behind, they poison a
+  // later reinstall: .caveman-mode-log.jsonl feeds stale transition rows into
+  // the #601 attribution, .caveman-statusline-suffix resurrects the old
+  // lifetime badge, and a set .caveman-active re-arms caveman immediately.
+  // .caveman-history.jsonl stays — it's the user's lifetime stats record —
+  // with a note so the choice is visible.
+  const STATE_FILES = ['.caveman-active', '.caveman-active.prev', '.caveman-mode-log.jsonl', '.caveman-statusline-suffix'];
+  for (const f of STATE_FILES) {
+    const p = path.join(configDir, f);
+    if (!fs.existsSync(p)) continue;
+    if (!opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
+    note(`  removed ${p}`);
+  }
+  const historyPath = path.join(configDir, '.caveman-history.jsonl');
+  if (fs.existsSync(historyPath)) {
+    note(`  kept ${historyPath} (lifetime stats) — delete manually if unwanted`);
+  }
+
   // Plugin uninstall on Claude. Probe `plugin list` first so a re-run on a
   // machine where caveman was never installed (or was already removed) doesn't
   // print "Plugin not installed" stderr noise.
@@ -1315,9 +1333,7 @@ function uninstall(ctx) {
     if (prunedHermes) ok('  pruned caveman skills from Hermes');
   }
 
-  // Flag file
-  const flag = path.join(configDir, '.caveman-active');
-  if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
+  // .caveman-active is handled with the other state files above (issue #635).
 
   process.stdout.write('\n');
   ok('uninstall done.');
