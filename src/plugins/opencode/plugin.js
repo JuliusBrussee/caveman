@@ -69,10 +69,7 @@ function loadConfig() {
 }
 const config = loadConfig();
 
-const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = config;
-
-// Modes handled by independent skills — not selectable via /caveman <arg>.
-const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
+const { getDefaultMode, safeWriteFlag, readFlag } = config;
 
 // opencode resolves its config dir from $XDG_CONFIG_HOME, else ~/.config/opencode
 // on every platform — including Windows, where it uses %USERPROFILE%\.config\opencode
@@ -93,72 +90,19 @@ function reinforcementLine(mode) {
     'Code/commits/security: write normal.';
 }
 
-// Parse a prompt for slash-command activation or natural-language toggles.
-// Returns the new mode to write, the literal string 'off' to deactivate, or
-// null when the prompt doesn't change state. Mirrors caveman-mode-tracker.js.
-function parseModeChange(promptRaw) {
-  let prompt = (promptRaw || '').trim();
-  // opencode's non-interactive `run` path delivers the message wrapped in
-  // literal quote characters ("/caveman ultra"\n) — unwrap symmetric quotes
-  // so the slash-command branch still matches.
-  const wrapped = /^(["'`])([\s\S]*)\1$/.exec(prompt);
-  if (wrapped) prompt = wrapped[2].trim();
-  prompt = prompt.toLowerCase();
-  if (!prompt) return null;
-
-  // Natural-language deactivation — checked before activation so "stop talking
-  // like caveman" doesn't trip the activation regex.
-  if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
-      /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
-      /\bnormal mode\b/i.test(prompt)) {
-    return 'off';
-  }
-
-  // Expanded /caveman command template. opencode replaces a typed
-  // "/caveman <level>" with the command file's body ("Activate caveman
-  // mode: $ARGUMENTS ...") before chat.message fires, so the literal
-  // slash-command branch below never sees it — recover the level argument
-  // from the template's first line instead. Must run before the generic
-  // NL-activation match, which would swallow it and drop the level.
-  const tpl = /^activate caveman mode:[ \t]*(\S*)/.exec(prompt);
-  if (tpl) {
-    const arg = tpl[1] || '';
-    if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
-    if (arg === 'wenyan-full') return 'wenyan';
-    if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return arg;
-    return getDefaultMode();
-  }
-
-  // Natural-language activation
-  if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-      /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
-    const mode = getDefaultMode();
-    return mode === 'off' ? null : mode;
-  }
-
-  // Slash-command parsing — opencode also expands command files, but if the
-  // user types the literal slash command we still want to flip the flag.
-  if (prompt.startsWith('/caveman')) {
-    const parts = prompt.split(/\s+/);
-    const cmd = parts[0];
-    const arg = parts[1] || '';
-
-    if (cmd === '/caveman-commit')   return 'commit';
-    if (cmd === '/caveman-review')   return 'review';
-    if (cmd === '/caveman-compress') return 'compress';
-
-    if (cmd === '/caveman') {
-      if (!arg)                                     return getDefaultMode();
-      if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
-      if (arg === 'wenyan-full')                    return 'wenyan';
-      if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return arg;
-      // Unknown arg — leave flag alone. No silent overwrite.
-      return null;
-    }
-  }
-
-  return null;
+// Load shared parser using the same manual-eval approach as loadConfig().
+function loadParse() {
+  const installed = join(here, 'caveman-parse.cjs');
+  const dev = join(here, '..', '..', 'hooks', 'caveman-parse.js');
+  const target = existsSync(installed) ? installed : dev;
+  const code = readFileSync(target, 'utf8').replace(/^#![^\n]*\n/, '');
+  const mod = { exports: {} };
+  new Function('module', 'exports', 'require', '__dirname', '__filename', code)(
+    mod, mod.exports, createRequire(target), dirname(target), target
+  );
+  return mod.exports;
 }
+const { parseModeChange, INDEPENDENT_MODES } = loadParse();
 
 function applyModeChange(mode) {
   if (!mode) return;

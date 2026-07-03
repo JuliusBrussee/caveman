@@ -44,6 +44,7 @@ const MCP_SHRINK_PKG = 'caveman-shrink';
 const HOOK_FILES = [
   'package.json',
   'caveman-config.js',
+  'caveman-parse.js',
   'caveman-activate.js',
   'caveman-mode-tracker.js',
   'caveman-stats.js',
@@ -641,6 +642,8 @@ function installOpencode(ctx) {
       // sibling would be loaded as ESM and break the plugin's require() bridge.
       [path.join(repoRoot, 'src', 'hooks', 'caveman-config.js'),
        path.join(pluginDir, 'caveman-config.cjs')],
+      [path.join(repoRoot, 'src', 'hooks', 'caveman-parse.js'),
+       path.join(pluginDir, 'caveman-parse.cjs')],
     ];
     for (const [src, dest] of pluginPayload) {
       if (fs.existsSync(dest) && !opts.force) {
