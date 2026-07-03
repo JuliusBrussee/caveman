@@ -78,8 +78,10 @@ test('dry-run --only codebuddy shows codebuddy-specific actions', () => {
     assert.match(r.stdout, /CodeBuddy detected/);
     assert.match(r.stdout, /would run: codebuddy plugin marketplace add/);
     assert.match(r.stdout, /would run: codebuddy plugin install caveman@caveman/);
-    assert.match(r.stdout, /\.codebuddy\/hooks/);
-    assert.match(r.stdout, /\.codebuddy\/settings\.json/);
+    // Plugin install succeeds (shim reports success) → standalone hooks skipped
+    // to avoid double-firing (issue #392). Verify skip message present.
+    assert.match(r.stdout, /plugin manifest handles SessionStart \+ UserPromptSubmit/);
+    assert.match(r.stdout, /codebuddy-hooks — plugin manifest handles hooks/);
   } finally {
     fs.rmSync(shimDir, { recursive: true, force: true });
   }

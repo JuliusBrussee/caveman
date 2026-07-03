@@ -526,7 +526,7 @@ async function installClaude(ctx) {
 // (CODEBUDDY_CONFIG_DIR override supported). Plugin root env:
 // CODEBUDDY_PLUGIN_ROOT (analogous to CLAUDE_PLUGIN_ROOT).
 async function installCodebuddy(ctx) {
-  const { say, note, warn, ok, opts, results } = ctx;
+  const { say, note, warn, ok, opts, results, configDir } = ctx;
   results.detected++;
   say('→ CodeBuddy detected');
 
@@ -536,18 +536,71 @@ async function installCodebuddy(ctx) {
     const r = captureSpawn('codebuddy', ['plugin', 'list']);
     if (r.status === 0 && /caveman/i.test(r.stdout || '')) alreadyInstalled = true;
   }
+  let pluginInstallSucceeded = false;
   if (alreadyInstalled) {
     note('  caveman plugin already installed (use --force to reinstall)');
     results.skipped.push(['codebuddy', 'plugin already installed']);
+    pluginInstallSucceeded = true;
   } else {
     const r1 = runSpawn('codebuddy', ['plugin', 'marketplace', 'add', REPO], null, opts.dryRun);
     const r2 = runSpawn('codebuddy', ['plugin', 'install', 'caveman@caveman'], null, opts.dryRun);
-    if ((r1.status || 0) === 0 && (r2.status || 0) === 0) results.installed.push('codebuddy');
-    else results.failed.push(['codebuddy', 'codebuddy plugin install failed']);
+    if ((r1.status || 0) === 0 && (r2.status || 0) === 0) {
+      results.installed.push('codebuddy');
+      pluginInstallSucceeded = true;
+    } else {
+      results.failed.push(['codebuddy', 'codebuddy plugin install failed']);
+    }
   }
 
-  if (opts.withHooks) {
-    say('  → installing hooks (--with-hooks)');
+  // Self-heal: drop managed settings.json hook/statusLine entries whose target
+  // script no longer exists (issue #471). ctx.configDir defaults to ~/.claude,
+  // so resolve the CodeBuddy config dir explicitly (mirrors installHooks()).
+  {
+    const cbConfigDir = process.env.CODEBUDDY_CONFIG_DIR || path.join(os.homedir(), '.codebuddy');
+    const settingsPath = path.join(cbConfigDir, 'settings.json');
+    const settings = SETTINGS.readSettings(settingsPath);
+    if (settings) {
+      const pruned = SETTINGS.pruneOrphanedManagedHooks(settings, cbConfigDir);
+      if (pruned > 0) {
+        note(`  removed ${pruned} orphaned caveman hook entr${pruned === 1 ? 'y' : 'ies'} from settings.json (target script missing)`);
+        if (!opts.dryRun) {
+          SETTINGS.validateHookFields(settings);
+          SETTINGS.writeSettings(settingsPath, settings);
+        }
+      }
+    }
+  }
+
+  // Hook wiring decision matrix (issue #392 — avoid double-firing):
+  //   --no-hooks       → skip
+  //   --with-hooks     → wire (warn if the plugin manifest also wires them)
+  //   default / --all  → wire only if the plugin install did NOT succeed.
+  // The plugin manifest already wires SessionStart + UserPromptSubmit when the
+  // plugin install succeeds; wiring them again in settings.json fires both per
+  // event (two CAVEMAN MODE blocks, two reinforcement lines).
+  let shouldWireHooks;
+  if (opts.withHooks === false) {
+    shouldWireHooks = false;
+  } else if (opts.withHooks === true) {
+    shouldWireHooks = true;
+    if (pluginInstallSucceeded) {
+      warn('  --with-hooks wires hooks in settings.json alongside the plugin manifest.');
+      warn('  Both will fire on every event. Pass --no-hooks to keep only the plugin path.');
+    }
+  } else {
+    // 'auto'
+    shouldWireHooks = !pluginInstallSucceeded;
+    if (!shouldWireHooks) {
+      note('  hooks: plugin manifest handles SessionStart + UserPromptSubmit');
+      note('  (pass --with-hooks to also wire standalone hooks in settings.json)');
+      results.skipped.push(['codebuddy-hooks', 'plugin manifest handles hooks']);
+    } else {
+      note('  hooks: plugin install did not succeed; falling back to standalone wiring');
+    }
+  }
+
+  if (shouldWireHooks) {
+    say('  → installing hooks');
     const r = await installHooks(ctx, 'codebuddy');
     if (r === 'ok') results.installed.push('codebuddy-hooks');
     else if (r === 'skip') results.skipped.push(['codebuddy-hooks', 'already wired']);
