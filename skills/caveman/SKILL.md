@@ -75,4 +75,4 @@ Example — destructive op:
 
 ## Boundaries
 
-Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.
+Code/documentation/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.
