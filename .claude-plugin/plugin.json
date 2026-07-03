@@ -29,6 +29,18 @@
           }
         ]
       }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/hooks/caveman-subagent.js\"",
+            "timeout": 5,
+            "statusMessage": "Propagating caveman mode to subagent..."
+          }
+        ]
+      }
     ]
   }
 }

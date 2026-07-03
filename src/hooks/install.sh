@@ -37,7 +37,7 @@ HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
 REPO_URL="https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks"
 
-HOOK_FILES=("package.json" "caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh")
+HOOK_FILES=("package.json" "caveman-config.js" "caveman-activate.js" "caveman-subagent.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh")
 
 # Resolve source — works from repo clone or curl pipe
 SCRIPT_DIR=""
@@ -150,6 +150,22 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
     });
   }
 
+  // SubagentStart — propagate caveman rules into Task-spawned subagents
+  if (!settings.hooks.SubagentStart) settings.hooks.SubagentStart = [];
+  const hasSubagent = settings.hooks.SubagentStart.some(e =>
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+  );
+  if (!hasSubagent) {
+    settings.hooks.SubagentStart.push({
+      hooks: [{
+        type: 'command',
+        command: 'node \"' + hooksDir + '/caveman-subagent.js\"',
+        timeout: 5,
+        statusMessage: 'Propagating caveman mode to subagent...'
+      }]
+    });
+  }
+
   // UserPromptSubmit — track mode changes when user types /caveman commands
   if (!settings.hooks.UserPromptSubmit) settings.hooks.UserPromptSubmit = [];
   const hasPrompt = settings.hooks.UserPromptSubmit.some(e =>
@@ -194,6 +210,7 @@ echo "Done! Restart Claude Code to activate."
 echo ""
 echo "What's installed:"
 echo "  - SessionStart hook: auto-loads caveman rules every session"
+echo "  - SubagentStart hook: propagates caveman rules into Task-spawned subagents"
 echo "  - Mode tracker hook: updates statusline badge when you switch modes"
 echo "    (/caveman lite, /caveman ultra, /caveman-commit, etc.)"
 echo "  - Statusline badge: shows [CAVEMAN] or [CAVEMAN:ULTRA] etc."

@@ -45,6 +45,7 @@ const HOOK_FILES = [
   'package.json',
   'caveman-config.js',
   'caveman-activate.js',
+  'caveman-subagent.js',
   'caveman-mode-tracker.js',
   'caveman-stats.js',
   'caveman-statusline.sh',
@@ -864,8 +865,9 @@ async function installHooks(ctx) {
   }
 
   const node = absoluteNodePath();
-  const activate = path.join(hooksDir, 'caveman-activate.js');
-  const tracker  = path.join(hooksDir, 'caveman-mode-tracker.js');
+  const activate  = path.join(hooksDir, 'caveman-activate.js');
+  const subagent  = path.join(hooksDir, 'caveman-subagent.js');
+  const tracker   = path.join(hooksDir, 'caveman-mode-tracker.js');
   const statusline = path.join(hooksDir, 'caveman-statusline.sh');
 
   // Migrate any legacy bare-`node` invocations of our managed scripts.
@@ -876,6 +878,13 @@ async function installHooks(ctx) {
     marker: 'caveman-activate',
     timeout: 5,
     statusMessage: 'Loading caveman mode...',
+  });
+
+  SETTINGS.addCommandHook(settings, 'SubagentStart', {
+    command: `"${node}" "${subagent}"`,
+    marker: 'caveman-subagent',
+    timeout: 5,
+    statusMessage: 'Propagating caveman mode to subagent...',
   });
 
   SETTINGS.addCommandHook(settings, 'UserPromptSubmit', {
