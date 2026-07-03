@@ -41,9 +41,10 @@ process.stdin.on('end', () => {
     // /caveman-stats [--share] — block the prompt and inject stats output as
     // the hook's reason. The script reads the active session log, so we pass
     // transcript_path through when Claude Code provides it.
-    const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
+      const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
     if (statsMatch) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
+      let context;
       try {
         const statsPath = path.join(__dirname, 'caveman-stats.js');
         const argv = [statsPath];
@@ -55,13 +56,19 @@ process.stdin.on('end', () => {
           argv.push('--since', tailArgs[sinceIdx + 1]);
         }
         const out = execFileSync(process.execPath, argv, { encoding: 'utf8', timeout: 5000 });
-        process.stdout.write(JSON.stringify({ decision: 'block', reason: out.trim() }));
+        context = 'The user ran /caveman-stats. Print the following stats block ' +
+          'VERBATIM inside a code block. Do not summarize, reformat, or add ' +
+          'commentary (this overrides any active brevity/caveman style):\n\n' + out.trim();
       } catch (e) {
-        process.stdout.write(JSON.stringify({
-          decision: 'block',
-          reason: 'caveman-stats: could not run stats script.\nTry manually: node hooks/caveman-stats.js'
-        }));
+        context = 'The user ran /caveman-stats but the stats script failed. ' +
+          'Tell them to run it manually: node hooks/caveman-stats.js';
       }
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: context
+        }
+      }));
       return;
     }
 
