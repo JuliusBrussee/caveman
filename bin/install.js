@@ -972,6 +972,21 @@ async function runInit(ctx) {
   try {
     const tmp = path.join(os.tmpdir(), `caveman-init-${process.pid}.js`);
     await downloadTo(INIT_SCRIPT_URL, tmp);
+    // Verify integrity before executing — same pattern as hook file downloads
+    // (#262). caveman-init.js is fetched from the pinned release ref and runs
+    // with the user's node, so a tampered download must be caught here.
+    const checksums = await loadRemoteHookChecksums();
+    if (checksums) {
+      const want = checksums.get('caveman-init.js');
+      const got  = sha256File(tmp);
+      if (!want || want !== got) {
+        try { fs.unlinkSync(tmp); } catch (_) {}
+        warn(`  integrity check failed for caveman-init.js (expected ${want || '<not in manifest>'}, got ${got}) — refusing to execute`);
+        return false;
+      }
+    } else {
+      warn(`  note: no integrity manifest at ${PINNED_REF} — caveman-init.js executed unverified`);
+    }
     const r = child_process.spawnSync(absoluteNodePath(), [tmp, ...args], { stdio: 'inherit' });
     try { fs.unlinkSync(tmp); } catch (_) {}
     return (r.status || 0) === 0;
