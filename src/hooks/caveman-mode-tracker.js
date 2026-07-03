@@ -19,9 +19,10 @@ process.stdin.on('end', () => {
     const data = JSON.parse(input);
     const prompt = (data.prompt || '').trim().toLowerCase();
 
-    // /caveman-stats [--share] — block the prompt and inject stats output as
-    // the hook's reason. The script reads the active session log, so we pass
-    // transcript_path through when Claude Code provides it.
+    // /caveman-stats [--share] — run the stats script and inject its output
+    // via additionalContext so both terminal and macOS app render it.
+    // The script reads the active session log, so we pass transcript_path
+    // through when Claude Code provides it.
     const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
     if (statsMatch) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
@@ -41,8 +42,9 @@ process.stdin.on('end', () => {
           'VERBATIM inside a code block. Do not summarize, reformat, or add ' +
           'commentary (this overrides any active brevity/caveman style):\n\n' + out.trim();
       } catch (e) {
-        context = 'The user ran /caveman-stats but the stats script failed. ' +
-          'Tell them to run it manually: node hooks/caveman-stats.js';
+        const detail = e.message ? ': ' + e.message : '';
+        context = 'The user ran /caveman-stats but the stats script failed' +
+          detail + '. Tell them to run it manually: node hooks/caveman-stats.js';
       }
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
