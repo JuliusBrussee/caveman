@@ -75,29 +75,62 @@ function findRecentSession(claudeDir) {
   return best ? best.file : null;
 }
 
+// A transcript 'user' entry is a real typed prompt only if it carries text —
+// tool results also arrive as type:'user' but their content is tool_result
+// blocks, and hook-injected lines are marked isMeta. Anything else would
+// inflate the turns-per-prompt ratio.
+function isUserPrompt(entry) {
+  if (!entry || entry.type !== 'user' || !entry.message || entry.isMeta) return false;
+  const content = entry.message.content;
+  if (typeof content === 'string') return content.trim().length > 0;
+  if (Array.isArray(content)) return content.some(b => b && b.type === 'text');
+  return false;
+}
+
 function parseSession(filePath) {
+  const empty = {
+    outputTokens: 0, inputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0,
+    turns: 0, userPrompts: 0, model: null,
+  };
   let raw;
   try { raw = fs.readFileSync(filePath, 'utf8'); }
-  catch { return { outputTokens: 0, cacheReadTokens: 0, turns: 0, model: null }; }
+  catch { return empty; }
 
-  let outputTokens = 0;
-  let cacheReadTokens = 0;
-  let turns = 0;
-  let model = null;
+  const acc = { ...empty };
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
+    if (isUserPrompt(entry)) { acc.userPrompts++; continue; }
     if (entry.type !== 'assistant' || !entry.message) continue;
     const usage = entry.message.usage;
     if (!usage) continue;
-    outputTokens    += usage.output_tokens           || 0;
-    cacheReadTokens += usage.cache_read_input_tokens || 0;
-    turns++;
-    if (!model && entry.message.model) model = entry.message.model;
+    acc.outputTokens        += usage.output_tokens               || 0;
+    acc.inputTokens         += usage.input_tokens                || 0;
+    acc.cacheCreationTokens += usage.cache_creation_input_tokens || 0;
+    acc.cacheReadTokens     += usage.cache_read_input_tokens     || 0;
+    acc.turns++;
+    if (!acc.model && entry.message.model) acc.model = entry.message.model;
   }
-  return { outputTokens, cacheReadTokens, turns, model };
+  return acc;
 }
+
+// Fraction of all input tokens served from the prompt cache (billed ~0.1x).
+// Returns null when the transcript carries no input-side usage at all.
+function cacheHitRate({ inputTokens = 0, cacheCreationTokens = 0, cacheReadTokens = 0 }) {
+  const total = inputTokens + cacheCreationTokens + cacheReadTokens;
+  if (total <= 0) return null;
+  return cacheReadTokens / total;
+}
+
+// Warn thresholds for the cache-invalidator heuristic. Multi-turn sessions
+// re-send the whole history, so healthy sessions read mostly from cache; a
+// low rate deep into a session is the fingerprint of a silent invalidator
+// (dynamic text early in the prompt, a changing tool set, another plugin
+// injecting varying context). First turns are always cache misses, so short
+// sessions are exempt.
+const CACHE_WARN_MIN_TURNS = 5;
+const CACHE_WARN_BELOW = 0.4;
 
 // Detect *.original.md / *.md pairs left behind by caveman-compress. The
 // presence of a *.original.md backup means the *.md sibling is a compressed
@@ -174,12 +207,22 @@ function aggregateHistory(historyPath, sinceMs) {
     if (!prev || (entry.ts || 0) >= (prev.ts || 0)) latestPerSession.set(id, entry);
   }
   let outputTokens = 0, estSavedTokens = 0, estSavedUsd = 0;
+  let inputTokens = 0, cacheCreationTokens = 0, cacheReadTokens = 0;
+  let userPrompts = 0, assistantTurns = 0;
   for (const e of latestPerSession.values()) {
-    outputTokens   += e.output_tokens     || 0;
-    estSavedTokens += e.est_saved_tokens  || 0;
-    estSavedUsd    += e.est_saved_usd     || 0;
+    outputTokens        += e.output_tokens       || 0;
+    estSavedTokens      += e.est_saved_tokens    || 0;
+    estSavedUsd         += e.est_saved_usd       || 0;
+    inputTokens         += e.input_tokens        || 0;
+    cacheCreationTokens += e.cache_create_tokens || 0;
+    cacheReadTokens     += e.cache_read_tokens   || 0;
+    userPrompts         += e.user_prompts        || 0;
+    assistantTurns      += e.assistant_turns     || 0;
   }
-  return { sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd };
+  return {
+    sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd,
+    inputTokens, cacheCreationTokens, cacheReadTokens, userPrompts, assistantTurns,
+  };
 }
 
 function humanizeTokens(n) {
@@ -189,18 +232,26 @@ function humanizeTokens(n) {
   return String(Math.round(n));
 }
 
-function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, since }) {
+function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, since,
+                         inputTokens = 0, cacheCreationTokens = 0, cacheReadTokens = 0,
+                         userPrompts = 0, assistantTurns = 0 }) {
   const sep = '──────────────────────────────────';
   const window = since ? ` (last ${since})` : '';
   if (sessions === 0) {
     return `\nCaveman Stats — Lifetime${window}\n${sep}\nNo sessions logged yet — run /caveman-stats inside any session to start tracking.\n${sep}\n`;
   }
   const usdLine = estSavedUsd > 0 ? `Est. saved (USD):      ~${formatUsd(estSavedUsd)}\n` : '';
+  // Older history entries predate cache/turn tracking — only render these
+  // lines when at least one snapshot carried the fields.
+  const hitRate = cacheHitRate({ inputTokens, cacheCreationTokens, cacheReadTokens });
+  const cacheLine = hitRate !== null ? `Cache hit rate:        ${Math.round(hitRate * 100)}%\n` : '';
+  const turnsLine = userPrompts > 0 && assistantTurns > 0
+    ? `Turns per prompt:      ${(assistantTurns / userPrompts).toFixed(1)}\n` : '';
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
     `Sessions:   ${sessions.toLocaleString()}\n${sep}\n` +
     `Output tokens:         ${outputTokens.toLocaleString()}\n` +
     `Est. tokens saved:     ${estSavedTokens.toLocaleString()}\n` +
-    usdLine + sep + '\n';
+    usdLine + cacheLine + turnsLine + sep + '\n';
 }
 
 // Single-line tweetable summary. Stays human-friendly when no ratio is known.
@@ -224,7 +275,8 @@ function formatShare({ outputTokens, turns, mode, model }) {
 }
 
 // Pure formatter — separated from main() so tests can pass synthetic inputs.
-function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessionPath, compressed }) {
+function formatStats({ outputTokens, inputTokens = 0, cacheCreationTokens = 0, cacheReadTokens = 0,
+                       turns, userPrompts = 0, mode, model, sessionPath, compressed }) {
   const sep = '──────────────────────────────────';
   const shortPath = sessionPath && sessionPath.length > 45
     ? '...' + sessionPath.slice(-45)
@@ -232,6 +284,41 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
 
   if (turns === 0) {
     return `\nCaveman Stats\n${sep}\nNo conversation yet — stats available after first response.\n${sep}\n`;
+  }
+
+  // Turns line: show the round-trip ratio when we can tell prompts apart.
+  // A ratio that creeps up over time is the over-compression fingerprint —
+  // truncated context forcing the model into extra round trips costs more
+  // than the truncation saved.
+  let turnsLine = `Turns:    ${turns}`;
+  if (userPrompts > 0) {
+    const perPrompt = (turns / userPrompts).toFixed(1);
+    turnsLine = `Turns:    ${turns} assistant / ${userPrompts} prompt${userPrompts === 1 ? '' : 's'} (${perPrompt} per prompt)`;
+  }
+
+  // Input-side economy: cached reads bill at ~0.1x, so the hit rate is the
+  // one number that says whether the biggest input stream is being paid for
+  // once or every turn.
+  const hitRate = cacheHitRate({ inputTokens, cacheCreationTokens, cacheReadTokens });
+  let inputLines = '';
+  if (hitRate !== null) {
+    inputLines =
+      `Input tokens:          ${inputTokens.toLocaleString()} uncached · ` +
+      `${cacheCreationTokens.toLocaleString()} cache-write · ` +
+      `${cacheReadTokens.toLocaleString()} cache-read\n` +
+      `Cache hit rate:        ${Math.round(hitRate * 100)}%\n`;
+  } else {
+    inputLines = `Cache-read tokens:     ${cacheReadTokens.toLocaleString()}\n`;
+  }
+
+  let cacheWarning = '';
+  if (hitRate !== null && turns >= CACHE_WARN_MIN_TURNS && hitRate < CACHE_WARN_BELOW) {
+    cacheWarning =
+      `⚠ Cache hit rate low for a ${turns}-turn session. Likely cause: something\n` +
+      `  changes the prompt prefix every turn (timestamp in system prompt or a\n` +
+      `  hook, changing tool set, another plugin injecting varying context).\n` +
+      `  Cached input bills at ~0.1x — fixing this usually saves more than any\n` +
+      `  compression. See docs/token-economy.md.\n`;
   }
 
   const ratio = COMPRESSION[mode] != null ? COMPRESSION[mode] : null;
@@ -268,9 +355,11 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
 
   return `\nCaveman Stats\n${sep}\n` +
     (shortPath ? `Session:  ${shortPath}\n` : '') +
-    `Turns:    ${turns}\n${sep}\n` +
+    `${turnsLine}\n${sep}\n` +
     `Output tokens:         ${outputTokens.toLocaleString()}\n` +
-    `Cache-read tokens:     ${cacheReadTokens.toLocaleString()}\n${sep}\n` +
+    inputLines +
+    cacheWarning +
+    `${sep}\n` +
     `${savings}\n` +
     memoryLine +
     (footer ? footer + '\n' : '');
@@ -324,6 +413,11 @@ function main() {
       output_tokens: parsed.outputTokens,
       est_saved_tokens: estSavedTokens,
       est_saved_usd: estSavedUsd,
+      input_tokens: parsed.inputTokens,
+      cache_create_tokens: parsed.cacheCreationTokens,
+      cache_read_tokens: parsed.cacheReadTokens,
+      user_prompts: parsed.userPrompts,
+      assistant_turns: parsed.turns,
     }));
 
     // Statusline suffix: tiny pre-rendered string the shell statusline can
@@ -350,4 +444,5 @@ module.exports = {
   formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
   parseSession, priceForModel, formatUsd, COMPRESSION, MODEL_OUTPUT_PRICE_PER_M,
   findCompressedPairs, summarizeCompressed, humanizeTokens,
+  isUserPrompt, cacheHitRate, CACHE_WARN_MIN_TURNS, CACHE_WARN_BELOW,
 };

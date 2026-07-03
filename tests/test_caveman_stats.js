@@ -49,9 +49,85 @@ test('reads --session-file directly and sums output tokens', (tmp) => {
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(tmp, '.claude') },
   });
-  assert.match(out, /Turns:\s+2/);
+  assert.match(out, /Turns:\s+2 assistant \/ 1 prompt \(2\.0 per prompt\)/);
   assert.match(out, /Output tokens:\s+150/);
-  assert.match(out, /Cache-read tokens:\s+250/);
+  assert.match(out, /250 cache-read/);
+  assert.match(out, /Cache hit rate:\s+100%/);
+});
+
+test('reports input breakdown and cache hit rate', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'user', message: { content: [{ type: 'text', text: 'do the thing' }] } },
+    { type: 'assistant', message: { usage: {
+      output_tokens: 100, input_tokens: 500, cache_creation_input_tokens: 1500, cache_read_input_tokens: 8000 } } },
+  ]);
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(tmp, '.claude') },
+  });
+  assert.match(out, /Input tokens:\s+500 uncached · 1,500 cache-write · 8,000 cache-read/);
+  // 8000 / 10000 = 80%
+  assert.match(out, /Cache hit rate:\s+80%/);
+});
+
+test('warns on low cache hit rate in multi-turn sessions', (tmp) => {
+  // 6 turns, every one paying full input price — the invalidator fingerprint.
+  const lines = [];
+  for (let i = 0; i < 6; i++) {
+    lines.push({ type: 'assistant', message: { usage: {
+      output_tokens: 100, input_tokens: 5000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } } });
+  }
+  const sess = makeSession(tmp, lines);
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(tmp, '.claude') },
+  });
+  assert.match(out, /⚠ Cache hit rate low for a 6-turn session/);
+  assert.match(out, /docs\/token-economy\.md/);
+});
+
+test('does not warn on low hit rate in short sessions (first turns always miss)', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: {
+      output_tokens: 100, input_tokens: 5000, cache_creation_input_tokens: 2000, cache_read_input_tokens: 0 } } },
+  ]);
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(tmp, '.claude') },
+  });
+  assert.doesNotMatch(out, /⚠ Cache hit rate low/);
+});
+
+test('does not warn when hit rate is healthy', (tmp) => {
+  const lines = [];
+  for (let i = 0; i < 8; i++) {
+    lines.push({ type: 'assistant', message: { usage: {
+      output_tokens: 100, input_tokens: 200, cache_creation_input_tokens: 300, cache_read_input_tokens: 9000 } } });
+  }
+  const sess = makeSession(tmp, lines);
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(tmp, '.claude') },
+  });
+  assert.doesNotMatch(out, /⚠ Cache hit rate low/);
+});
+
+test('isUserPrompt counts typed prompts, not tool results or meta lines', () => {
+  const { isUserPrompt } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
+  assert.strictEqual(isUserPrompt({ type: 'user', message: { content: 'hello' } }), true);
+  assert.strictEqual(isUserPrompt({ type: 'user', message: { content: [{ type: 'text', text: 'hi' }] } }), true);
+  // Tool results arrive as type:'user' with tool_result blocks — not prompts.
+  assert.strictEqual(isUserPrompt({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'x' }] } }), false);
+  // Hook-injected lines are marked isMeta.
+  assert.strictEqual(isUserPrompt({ type: 'user', isMeta: true, message: { content: 'injected' } }), false);
+  assert.strictEqual(isUserPrompt({ type: 'assistant', message: { content: 'nope' } }), false);
+  assert.strictEqual(isUserPrompt({ type: 'user', message: { content: '   ' } }), false);
+});
+
+test('cacheHitRate handles empty usage', () => {
+  const { cacheHitRate } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
+  assert.strictEqual(cacheHitRate({}), null);
+  assert.strictEqual(cacheHitRate({ inputTokens: 100, cacheReadTokens: 900 }), 0.9);
 });
 
 test('shows full-mode savings estimate when flag is full', (tmp) => {
@@ -224,6 +300,56 @@ test('appends to lifetime history on each run', (tmp) => {
   assert.strictEqual(entry.est_saved_tokens, 650);
   assert.strictEqual(entry.mode, 'full');
   assert.strictEqual(entry.model, 'claude-sonnet-4-7');
+});
+
+test('history entries carry cache and turn fields', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'user', message: { content: 'go' } },
+    { type: 'assistant', message: { model: 'claude-sonnet-4-7', usage: {
+      output_tokens: 350, input_tokens: 400, cache_creation_input_tokens: 600, cache_read_input_tokens: 9000 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  const lines = fs.readFileSync(path.join(claudeDir, '.caveman-history.jsonl'), 'utf8').split('\n').filter(Boolean);
+  const entry = JSON.parse(lines[0]);
+  assert.strictEqual(entry.input_tokens, 400);
+  assert.strictEqual(entry.cache_create_tokens, 600);
+  assert.strictEqual(entry.cache_read_tokens, 9000);
+  assert.strictEqual(entry.user_prompts, 1);
+  assert.strictEqual(entry.assistant_turns, 1);
+});
+
+test('--all reports lifetime cache hit rate and turns per prompt when tracked', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-history.jsonl'), [
+    { ts: 1000, session_id: 'a', output_tokens: 100, est_saved_tokens: 185, est_saved_usd: 0.003,
+      input_tokens: 500, cache_create_tokens: 500, cache_read_tokens: 9000, user_prompts: 4, assistant_turns: 10 },
+  ].map(o => JSON.stringify(o)).join('\n') + '\n');
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // 9000 / 10000 = 90%; 10 turns / 4 prompts = 2.5
+  assert.match(out, /Cache hit rate:\s+90%/);
+  assert.match(out, /Turns per prompt:\s+2\.5/);
+});
+
+test('--all omits cache/turn lines for legacy history entries', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-history.jsonl'),
+    JSON.stringify({ ts: 1000, session_id: 'a', output_tokens: 100, est_saved_tokens: 185, est_saved_usd: 0.003 }) + '\n');
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.doesNotMatch(out, /Cache hit rate/);
+  assert.doesNotMatch(out, /Turns per prompt/);
 });
 
 test('--all aggregates latest entry per session', (tmp) => {
