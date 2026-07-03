@@ -2,6 +2,7 @@
 // Tests for src/mcp-servers/caveman-shrink/compress.js — pure-Node prose compressor.
 // Run: node tests/test_mcp_shrink.js
 
+const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 
@@ -153,6 +154,68 @@ test('defaults to current platform when no arg passed', () => {
   assert.equal(opts.shell, process.platform === 'win32');
   assert.equal(opts.windowsHide, true);
   assert.deepEqual(opts.stdio, ['pipe', 'pipe', 'inherit']);
+});
+
+test('preserves enum values inside parens (nested sentinel restoration — #444)', () => {
+  // Path pattern matches "STARTER/BUSINESS" first (sentinel 0).
+  // Function-call pattern then matches "type ( 0 )" (sentinel 1).
+  // Single-pass restore replaces " 1 " with "type ( 0 )" but leaves the
+  // inner " 0 " unrestored — model sees "( 0 )" instead of the enum.
+  const cases = [
+    { in: 'plan type (STARTER/BUSINESS)',   needle: 'STARTER/BUSINESS' },
+    { in: 'user role (ADMIN/MEMBER/GUEST)', needle: 'ADMIN/MEMBER/GUEST' },
+    { in: 'user plan (Free/Pro/Business)',  needle: 'Free/Pro/Business' },
+  ];
+  for (const c of cases) {
+    const { compressed } = compress(c.in);
+    assert.ok(
+      compressed.includes(c.needle),
+      `nested sentinel leaked: expected "${c.needle}" in output, got "${compressed}"`
+    );
+    assert.doesNotMatch(
+      compressed,
+      / \d+ /,
+      `unrestored sentinel " N " left in output: "${compressed}"`
+    );
+  }
+});
+
+// ── Packaging (#597) ────────────────────────────────────────────────────────
+// npm publish ships only what "files" lists (plus package.json/README/LICENSE,
+// which npm always includes). A local module required by a shipped entry point
+// but missing from "files" makes the published package crash with
+// MODULE_NOT_FOUND at startup — exactly what happened with spawn-options.js.
+// This static check walks every relative require reachable from the package's
+// entry points (bin + main) and fails if any resolved file is not listed.
+// The package is flat, so "files" entries are exact filenames, not globs.
+
+test('package.json "files" ships every module the entry points require (#597)', () => {
+  const pkgDir = path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink');
+  const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+  const shipped = new Set((pkg.files || []).map(f => path.normalize(f)));
+
+  const entries = [...Object.values(pkg.bin || {}), pkg.main]
+    .filter(Boolean)
+    .map(f => path.normalize(f));
+  assert.ok(entries.length > 0, 'package has no entry points to check');
+
+  const seen = new Set();
+  const queue = [...entries];
+  while (queue.length > 0) {
+    const rel = queue.pop();
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    assert.ok(
+      shipped.has(rel),
+      `"${rel}" is required by a shipped entry point but missing from package.json "files" — npm publish would ship a broken package`
+    );
+    const src = fs.readFileSync(path.join(pkgDir, rel), 'utf8');
+    for (const m of src.matchAll(/require\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g)) {
+      let dep = path.normalize(path.join(path.dirname(rel), m[1]));
+      if (!dep.endsWith('.js') && !dep.endsWith('.json')) dep += '.js';
+      queue.push(dep);
+    }
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

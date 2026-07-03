@@ -33,7 +33,7 @@ const REPO = 'JuliusBrussee/caveman';
 // the new tag on every release (CI release step) AFTER regenerating
 // src/hooks/checksums.sha256 so the integrity manifest matches the ref.
 // Overridable via CAVEMAN_REF for testing against a branch.
-const PINNED_REF = process.env.CAVEMAN_REF || 'v1.9.0';
+const PINNED_REF = process.env.CAVEMAN_REF || 'v1.9.1';
 const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/${PINNED_REF}`;
 const HOOKS_REMOTE = `${RAW_BASE}/src/hooks`;
 const INIT_SCRIPT_URL = `${RAW_BASE}/src/tools/caveman-init.js`;
@@ -49,6 +49,7 @@ const HOOK_FILES = [
   'caveman-stats.js',
   'caveman-statusline.sh',
   'caveman-statusline.ps1',
+  'cavecrew-model-overrides.js',
 ];
 
 // ── Argv ───────────────────────────────────────────────────────────────────
@@ -237,6 +238,7 @@ const PROVIDERS = [
   // CLI agents — require the binary. The `||dir:~/.foo` fallbacks were the
   // main source of false positives (warp, kiro, junie etc. leave config dirs
   // behind on uninstall).
+  { id: 'hermes',     label: 'Hermes Agent',        mech: 'native hermes skills copy',     detect: 'command:hermes' },
   { id: 'aider-desk', label: 'Aider Desk',          mech: 'npx skills add (aider-desk)',   detect: 'command:aider', profile: 'aider-desk' },
   { id: 'amp',        label: 'Sourcegraph Amp',     mech: 'npx skills add (amp)',          detect: 'command:amp',             profile: 'amp' },
   { id: 'bob',        label: 'IBM Bob',             mech: 'npx skills add (bob)',          detect: 'command:bob', profile: 'bob' },
@@ -423,9 +425,33 @@ function runSpawn(cmd, args, opts, dry) {
   return spawnXplat(cmd, args, Object.assign({ stdio: 'inherit' }, opts || {}));
 }
 
+// Create env with TMPDIR pointing to a temp dir inside configDir.
+// Workaround for Claude Code plugin install EXDEV bug: it tries to rename
+// from ~/.claude/plugins/cache/ to /tmp/ which fails when /tmp is on a
+// different filesystem (common on Linux). Setting TMPDIR to a directory
+// on the same filesystem as ~/.claude/ avoids the cross-device link error.
+function sameFilesystemTmpEnv(configDir) {
+  const tmpDir = path.join(configDir, 'tmp');
+  try { fs.mkdirSync(tmpDir, { recursive: true }); } catch (_) {}
+  return Object.assign({}, process.env, {
+    TMPDIR: tmpDir,  // Unix
+    TEMP: tmpDir,    // Windows
+    TMP: tmpDir,     // Windows alternate
+  });
+}
+
 function captureSpawn(cmd, args) {
   try { return spawnXplat(cmd, args, { encoding: 'utf8' }); }
   catch (_) { return { status: 1, stdout: '', stderr: '' }; }
+}
+
+// spawnSync reports a missing binary as { status: null, error }, so the old
+// `(r.status || 0) === 0` checks read ENOENT as success — a machine without
+// the `claude` CLI got "installed: claude" with nothing installed and the
+// standalone-hook fallback skipped (issue #592). Every spawn result must pass
+// through here before being treated as "it worked".
+function spawnOk(r) {
+  return !!r && !r.error && r.status === 0;
 }
 
 function absoluteNodePath() {
@@ -450,12 +476,18 @@ async function installClaude(ctx) {
     results.skipped.push(['claude', 'plugin already installed']);
     pluginInstallSucceeded = true;
   } else {
-    const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', REPO], null, opts.dryRun);
-    const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], null, opts.dryRun);
-    if ((r1.status || 0) === 0 && (r2.status || 0) === 0) {
+    // Use a temp dir on the same filesystem as configDir to avoid EXDEV errors
+    // when Claude Code's plugin installer tries to rename across filesystems (#585).
+    const pluginEnv = sameFilesystemTmpEnv(configDir);
+    const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', REPO], { env: pluginEnv }, opts.dryRun);
+    const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], { env: pluginEnv }, opts.dryRun);
+    if (spawnOk(r1) && spawnOk(r2)) {
       results.installed.push('claude');
       pluginInstallSucceeded = true;
     } else {
+      if (r1.error || r2.error) {
+        warn('  claude CLI not found on PATH (or could not be spawned)');
+      }
       results.failed.push(['claude', 'claude plugin install failed']);
     }
   }
@@ -544,7 +576,7 @@ function installGemini(ctx) {
     }
   }
   const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`], null, opts.dryRun);
-  if ((r.status || 0) === 0) results.installed.push('gemini');
+  if (spawnOk(r)) results.installed.push('gemini');
   else results.failed.push(['gemini', 'gemini extensions install failed']);
   process.stdout.write('\n');
 }
@@ -565,8 +597,65 @@ function installViaSkills(ctx, prov) {
   // documented form for "install every skill into a specific agent".
   const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
   const r = runSpawn('npx', args, null, opts.dryRun);
-  if ((r.status || 0) === 0) results.installed.push(prov.id);
+  if (spawnOk(r)) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
+  process.stdout.write('\n');
+}
+
+// ── hermes native install ──────────────────────────────────────────────────
+// Drops the caveman skills into ~/.hermes/skills/productivity/ (or HERMES_HOME if set).
+const HERMES_SKILL_DIRS = ['caveman', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
+
+function hermesConfigDir() {
+  // Hermes uses ~/.hermes by default, or HERMES_HOME env var.
+  if (process.env.HERMES_HOME) return path.join(process.env.HERMES_HOME, 'skills');
+  return path.join(os.homedir(), '.hermes', 'skills');
+}
+
+function installHermes(ctx) {
+  const { say, note, warn, opts, repoRoot, results } = ctx;
+  results.detected++;
+  say('→ Hermes Agent detected');
+
+  if (!repoRoot) {
+    warn('  Hermes native install requires a local clone of the caveman repo.');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only hermes');
+    results.failed.push(['hermes', 'native install requires local repo clone']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  const skillsRoot = path.join(hermesConfigDir(), 'productivity');
+
+  if (opts.dryRun) {
+    note(`  would mkdir ${skillsRoot}/`);
+    note(`  would copy ${HERMES_SKILL_DIRS.length} skill dirs into ${skillsRoot}/`);
+    results.installed.push('hermes');
+    process.stdout.write('\n');
+    return;
+  }
+
+  try {
+    fs.mkdirSync(skillsRoot, { recursive: true });
+
+    for (const skillDir of HERMES_SKILL_DIRS) {
+      const srcDir = path.join(repoRoot, 'skills', skillDir);
+      const destDir = path.join(skillsRoot, skillDir);
+      if (fs.existsSync(srcDir)) {
+        // Remove existing to ensure clean copy
+        if (fs.existsSync(destDir)) fs.rmSync(destDir, { recursive: true, force: true });
+        copyDirRecursive(srcDir, destDir);
+        note(`  copied ${skillDir} → ${destDir}`);
+      } else {
+        warn(`  skill dir not found: ${srcDir}`);
+      }
+    }
+
+    results.installed.push('hermes');
+  } catch (err) {
+    results.failed.push(['hermes', 'copy failed: ' + err.message]);
+  }
+
   process.stdout.write('\n');
 }
 
@@ -715,14 +804,36 @@ function installOpencode(ctx) {
       if (alreadyFenced) {
         note(`  ${agentsMd} already contains caveman ruleset`);
       } else if (alreadyByLegacySentinel) {
-        note(`  ${agentsMd} contains a legacy (un-fenced) caveman block — leaving as-is`);
-        note('  re-run with --force to replace it with a fenced block');
+        if (!opts.force) {
+          note(`  ${agentsMd} contains a legacy (un-fenced) caveman block — leaving as-is`);
+          note('  re-run with --force to migrate it to a fenced block');
+        }
         if (opts.force) {
-          // Replace the entire file with a clean fenced version. The legacy
-          // path didn't fence, so we can't isolate the block — full rewrite is
-          // the only safe option under --force.
-          fs.writeFileSync(agentsMd, fencedBlock, { mode: 0o644 });
-          process.stdout.write(`  rewrote ${agentsMd} with fenced caveman block\n`);
+          // Migrate, don't wipe (issue #594): the old code replaced the whole
+          // file, destroying any user-authored content around the legacy
+          // block. Back up once, then remove only the legacy block: exact
+          // match of the current rule body when possible, otherwise cut from
+          // the sentinel's paragraph start to EOF (the legacy path APPENDED
+          // the block, so user content precedes it; anything after lives on
+          // in the backup).
+          const agentsBak = agentsMd + '.bak';
+          if (!fs.existsSync(agentsBak)) {
+            try { fs.copyFileSync(agentsMd, agentsBak); } catch (_) {}
+          }
+          const bodyTrim = ruleBody.trimEnd();
+          let userPart;
+          const exact = existing.indexOf(bodyTrim);
+          if (exact !== -1) {
+            userPart = (existing.slice(0, exact) + existing.slice(exact + bodyTrim.length)).trim();
+          } else {
+            const sentinelAt = existing.indexOf(OPENCODE_AGENTS_MD_SENTINEL);
+            const cutAt = existing.lastIndexOf('\n\n', sentinelAt);
+            userPart = cutAt === -1 ? '' : existing.slice(0, cutAt).trim();
+            note(`  legacy block did not match the current ruleset — everything from the sentinel down was replaced; original kept at ${agentsBak}`);
+          }
+          const next = (userPart ? userPart + '\n\n' : '') + fencedBlock;
+          fs.writeFileSync(agentsMd, next, { mode: 0o644 });
+          process.stdout.write(`  migrated ${agentsMd} legacy block to fenced (backup: ${agentsBak})\n`);
         }
       } else {
         const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
@@ -953,7 +1064,7 @@ function installMcpShrink(ctx) {
     ['mcp', 'add', 'caveman-shrink', '--', 'npx', '-y', MCP_SHRINK_PKG, ...upstream],
     null, opts.dryRun
   );
-  if ((r.status || 0) === 0) {
+  if (spawnOk(r)) {
     note(`    registered, wrapping: ${upstream.join(' ')}`);
     note(`    Edit ~/.claude.json mcpServers["caveman-shrink"] to change the upstream,`);
     note('    or `claude mcp remove caveman-shrink` to drop it.');
@@ -972,7 +1083,7 @@ async function runInit(ctx) {
   if (opts.force)  args.push('--force');
   if (local && fs.existsSync(local)) {
     const r = runSpawn(absoluteNodePath(), [local, ...args], null, opts.dryRun);
-    return (r.status || 0) === 0;
+    return spawnOk(r);
   }
   // Curl-pipe fallback
   if (opts.dryRun) {
@@ -984,7 +1095,7 @@ async function runInit(ctx) {
     await downloadTo(INIT_SCRIPT_URL, tmp);
     const r = child_process.spawnSync(absoluteNodePath(), [tmp, ...args], { stdio: 'inherit' });
     try { fs.unlinkSync(tmp); } catch (_) {}
-    return (r.status || 0) === 0;
+    return spawnOk(r);
   } catch (e) {
     warn('  ' + e.message);
     return false;
@@ -1059,7 +1170,7 @@ function uninstall(ctx) {
   if (fs.existsSync(settingsPath)) {
     const settings = SETTINGS.readSettings(settingsPath);
     if (settings) {
-      const removed = SETTINGS.removeCavemanHooks(settings, 'caveman');
+      const removed = SETTINGS.removeCavemanHooks(settings);
       // Drop our statusline if it points at our script
       if (settings.statusLine) {
         const cmd = typeof settings.statusLine === 'string' ? settings.statusLine : (settings.statusLine.command || '');
@@ -1088,7 +1199,7 @@ function uninstall(ctx) {
     const probe = captureSpawn('claude', ['plugin', 'list']);
     if (probe.status === 0 && /caveman/i.test(probe.stdout || '')) {
       const r = runSpawn('claude', ['plugin', 'uninstall', 'caveman@caveman'], null, opts.dryRun);
-      if ((r.status || 0) === 0) ok('  removed claude plugin');
+      if (spawnOk(r)) ok('  removed claude plugin');
     } else {
       note('  claude plugin not installed — skipping');
     }
@@ -1196,6 +1307,22 @@ function uninstall(ctx) {
     };
     const r = OPENCLAW.uninstallOpenclaw({ workspace: ocwWs, dryRun: opts.dryRun, log });
     if (r.touched) ok('  pruned caveman entries from OpenClaw workspace');
+  }
+
+  // Hermes native install — remove the skill folders installHermes copied.
+  // Honors HERMES_HOME via hermesConfigDir(); probed by the dirs we own.
+  const hermesRoot = path.join(hermesConfigDir(), 'productivity');
+  if (fs.existsSync(hermesRoot)) {
+    let prunedHermes = false;
+    for (const name of HERMES_SKILL_DIRS) {
+      const p = path.join(hermesRoot, name);
+      if (fs.existsSync(p)) {
+        if (!opts.dryRun) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+        note(`  removed ${p}`);
+        prunedHermes = true;
+      }
+    }
+    if (prunedHermes) ok('  pruned caveman skills from Hermes');
   }
 
   // Flag file
@@ -1356,6 +1483,7 @@ async function main() {
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
+    if (prov.id === 'hermes')   { installHermes(ctx); continue; }
     if (prov.profile)           { installViaSkills(ctx, prov); continue; }
   }
 
@@ -1365,7 +1493,7 @@ async function main() {
     // --yes --all for the same reason as installViaSkills above (issue #370):
     // skip the interactive skill picker so curl|bash actually installs.
     const r = runSpawn('npx', ['-y', 'skills', 'add', REPO, '--yes', '--all'], null, opts.dryRun);
-    if ((r.status || 0) === 0) ctx.results.installed.push('skills-auto');
+    if (spawnOk(r)) ctx.results.installed.push('skills-auto');
     else ctx.results.failed.push(['skills-auto', 'npx skills add (auto) failed']);
     process.stdout.write('\n');
   }
@@ -1402,6 +1530,8 @@ async function main() {
   }
   process.stdout.write('\n');
   ctx.note("  start any session and say 'caveman mode', or run /caveman in Claude Code");
+  ctx.note('  measure what caveman save you: run /caveman-stats (numbers are estimates)');
+  ctx.note('  verified team savings coming soon — join waitlist: https://caveman.so');
   ctx.note(`  uninstall: npx -y github:${REPO} -- --uninstall`);
 
   // Exit code: nonzero only if every detected agent failed

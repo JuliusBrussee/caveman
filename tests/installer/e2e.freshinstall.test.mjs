@@ -400,3 +400,157 @@ test('lib settings.addCommandHook is idempotent across two synthetic install pas
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Test: --force migrates a mixed legacy AGENTS.md instead of wiping it (#594)
+// The old code replaced the whole file with the fenced block whenever the
+// legacy un-fenced sentinel was present — and the installer's own hint told
+// users with mixed files to run exactly that. User content must survive.
+test('opencode: --force on legacy AGENTS.md preserves user content and takes a backup', () => {
+  const dir = freshTmpDir();
+  const xdg = path.join(dir, 'xdg');
+  const ocDir = path.join(xdg, 'opencode');
+  fs.mkdirSync(ocDir, { recursive: true });
+  const agentsMd = path.join(ocDir, 'AGENTS.md');
+  const legacyBody = fs.readFileSync(
+    path.join(REPO_ROOT, 'src', 'rules', 'caveman-activate.md'), 'utf8').trimEnd() + '\n';
+  const userRules = '# My precious user rules\n\nAlways use tabs.\n';
+  fs.writeFileSync(agentsMd, userRules + '\n' + legacyBody);
+  try {
+    const r = spawnSync('node', [INSTALLER, '--only', 'opencode', '--force', '--non-interactive', '--no-mcp-shrink', '--config-dir', path.join(dir, 'claude')], {
+      env: { ...process.env, XDG_CONFIG_HOME: xdg, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer argv error: ${r.stderr}`);
+
+    const after = fs.readFileSync(agentsMd, 'utf8');
+    assert.match(after, /My precious user rules/, 'user heading wiped by --force migration');
+    assert.match(after, /Always use tabs\./, 'user rule wiped by --force migration');
+    assert.match(after, /<!-- caveman-begin -->/, 'fenced block missing after migration');
+    assert.match(after, /<!-- caveman-end -->/, 'fence end missing after migration');
+    // Legacy un-fenced copy must be gone: sentinel appears only inside the fence.
+    const beforeFence = after.slice(0, after.indexOf('<!-- caveman-begin -->'));
+    assert.doesNotMatch(beforeFence, /Respond terse like smart caveman/,
+      'legacy un-fenced block still present above the fence');
+    assert.ok(fs.existsSync(agentsMd + '.bak'), 'backup missing after --force migration');
+    assert.match(fs.readFileSync(agentsMd + '.bak', 'utf8'), /My precious user rules/,
+      'backup does not contain the original content');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Tests: SOUL.md marker damage tolerance (#596) ──────────────────────────
+// A stray/truncated marker used to chain into data loss: append added a
+// second block, then strip cut from the FIRST begin to the FIRST end —
+// spanning all user content in between. These drive the helper directly.
+test('openclaw: truncated begin marker does not eat user content (issue #596 chain)', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const soul = path.join(dir, 'SOUL.md');
+  try {
+    // Begin marker with no end (interrupted write), then user content.
+    fs.writeFileSync(soul, helper.MARK_BEGIN + '\n\nUSER IMPORTANT CONTENT\n');
+    const snippet = helper.loadBootstrapSnippet(REPO_ROOT);
+
+    const a = helper.appendBootstrapToSoul(soul, snippet);
+    assert.equal(a.changed, true);
+    const afterAppend = fs.readFileSync(soul, 'utf8');
+    assert.match(afterAppend, /USER IMPORTANT CONTENT/, 'user content lost during repair-append');
+    assert.equal(afterAppend.split(helper.MARK_BEGIN).length - 1, 1, 'repair must leave exactly one begin marker');
+
+    const s = helper.stripBootstrapFromSoul(soul);
+    assert.equal(s.changed, true);
+    assert.equal(s.removed, undefined, 'file with user content must not be deleted');
+    const afterStrip = fs.readFileSync(soul, 'utf8');
+    assert.match(afterStrip, /USER IMPORTANT CONTENT/, 'user content deleted by strip — the #596 data loss');
+    assert.doesNotMatch(afterStrip, /caveman-begin/, 'marker survived strip');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw: strip removes multiple blocks pairwise, keeping user content between them', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const soul = path.join(dir, 'SOUL.md');
+  try {
+    const block = helper.MARK_BEGIN + '\nrules v1\n' + helper.MARK_END;
+    fs.writeFileSync(soul, block + '\n\nUSER KEEP ME\n\n' + block + '\n');
+    const s = helper.stripBootstrapFromSoul(soul);
+    assert.equal(s.changed, true);
+    const after = fs.readFileSync(soul, 'utf8');
+    assert.match(after, /USER KEEP ME/, 'user content between blocks deleted');
+    assert.doesNotMatch(after, /caveman-(begin|end)/, 'markers survived');
+    assert.doesNotMatch(after, /rules v1/, 'block bodies survived');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw: orphan end marker stripped without touching content', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const soul = path.join(dir, 'SOUL.md');
+  try {
+    fs.writeFileSync(soul, 'before\n' + helper.MARK_END + '\nafter\n');
+    const s = helper.stripBootstrapFromSoul(soul);
+    assert.equal(s.changed, true);
+    const after = fs.readFileSync(soul, 'utf8');
+    assert.match(after, /before/);
+    assert.match(after, /after/);
+    assert.doesNotMatch(after, /caveman-end/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw: append on a well-formed block stays a no-op', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const soul = path.join(dir, 'SOUL.md');
+  try {
+    const snippet = helper.loadBootstrapSnippet(REPO_ROOT);
+    helper.appendBootstrapToSoul(soul, snippet);
+    const first = fs.readFileSync(soul, 'utf8');
+    const again = helper.appendBootstrapToSoul(soul, snippet);
+    assert.equal(again.changed, false);
+    assert.equal(fs.readFileSync(soul, 'utf8'), first, 'no-op append must not modify the file');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Test: missing `claude` CLI must be a FAILURE, not silent success (#592)
+// spawnSync reports ENOENT as { status: null, error }; the old
+// `(r.status || 0) === 0` coerced that to success, so the installer printed
+// "installed: claude", skipped the standalone-hook fallback, and left the
+// machine with nothing installed. Always runs: an empty PATH guarantees the
+// claude lookup fails even on machines that do have the CLI.
+test('missing claude CLI: reports failure and falls back to standalone hook wiring', () => {
+  const dir = freshTmpDir();
+  const emptyBin = path.join(dir, 'empty-bin');
+  fs.mkdirSync(emptyBin);
+  const configDir = path.join(dir, 'claude-config');
+  try {
+    // process.execPath instead of 'node': the stripped PATH must not break
+    // the test's own ability to launch the installer.
+    const r = spawnSync(process.execPath, [
+      INSTALLER, '--only', 'claude', '--skip-skills',
+      '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink',
+    ], {
+      env: { ...process.env, PATH: emptyBin, CLAUDE_CONFIG_DIR: configDir, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    const out = (r.stdout || '') + (r.stderr || '');
+    assert.match(out, /plugin install did not succeed; falling back to standalone wiring/,
+      `fallback to standalone hooks did not trigger:\n${out}`);
+    assert.match(out, /claude plugin install failed/, 'claude was not reported as failed');
+    assert.ok(!/• claude\n/.test(out), 'claude must not be listed as installed');
+    assert.ok(fs.existsSync(path.join(configDir, 'hooks', 'caveman-activate.js')),
+      'standalone hooks were not written');
+    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    assert.ok(settings.hooks && settings.hooks.SessionStart, 'SessionStart hook not wired');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

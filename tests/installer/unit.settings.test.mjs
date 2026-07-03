@@ -22,6 +22,27 @@ test('stripJsonComments strips // line comments', () => {
   assert.equal(out.trim(), '{"a":1}');
 });
 
+test('stripJsonComments preserves ,} and ,] inside string values (issue #595)', () => {
+  // Trailing-comma removal must be string-aware: a hook command like
+  // `echo ,}` or shell brace expansion `cp file{,.bak}` must survive.
+  const src = '{"cmd": "echo ,}", // comment\n"glob": "cp file{,]x", }';
+  const parsed = JSON.parse(SETTINGS.stripJsonComments(src));
+  assert.equal(parsed.cmd, 'echo ,}');
+  assert.equal(parsed.glob, 'cp file{,]x');
+});
+
+test('stripJsonComments still removes real trailing commas after strings', () => {
+  const src = '{"a": [1, 2, 3,], "b": {"c": 1,},}';
+  const parsed = JSON.parse(SETTINGS.stripJsonComments(src));
+  assert.deepEqual(parsed, { a: [1, 2, 3], b: { c: 1 } });
+});
+
+test('stripJsonComments handles escaped quotes before ,} in strings', () => {
+  const src = '{"cmd": "say \\",}\\" done", }';
+  const parsed = JSON.parse(SETTINGS.stripJsonComments(src));
+  assert.equal(parsed.cmd, 'say ",}" done');
+});
+
 test('stripJsonComments strips /* block */ comments', () => {
   const out = SETTINGS.stripJsonComments('{/* leading */"a":1/* mid */, "b":2}');
   assert.match(out, /"a":1/);
@@ -119,25 +140,56 @@ test('removeCavemanHooks tolerates malformed hook event values without throwing'
   // validateHookFields first + adds Array.isArray guard.
   const s = { hooks: { SessionStart: "oops", UserPromptSubmit: { not: 'an array either' } } };
   let removed;
-  assert.doesNotThrow(() => { removed = SETTINGS.removeCavemanHooks(s, 'caveman'); });
+  assert.doesNotThrow(() => { removed = SETTINGS.removeCavemanHooks(s); });
   assert.equal(removed, 0);
   assert.equal(s.hooks, undefined);
 });
 
-test('removeCavemanHooks strips by marker and cleans empties', () => {
+test('removeCavemanHooks strips managed scripts and cleans empties', () => {
   const s = {
     hooks: {
       SessionStart: [
-        { hooks: [{ type: 'command', command: 'caveman-x' }] },
+        { hooks: [{ type: 'command', command: 'node /x/hooks/caveman-activate.js' }] },
         { hooks: [{ type: 'command', command: 'other' }] },
       ],
-      UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'caveman-y' }] }],
+      UserPromptSubmit: [{ hooks: [{ type: 'command', command: '"/usr/bin/node" "/x/hooks/caveman-mode-tracker.js"' }] }],
     },
   };
-  const removed = SETTINGS.removeCavemanHooks(s, 'caveman');
+  const removed = SETTINGS.removeCavemanHooks(s);
   assert.equal(removed, 2);
   assert.equal(s.hooks.SessionStart.length, 1);
   assert.equal(s.hooks.UserPromptSubmit, undefined);
+});
+
+test('removeCavemanHooks leaves user hooks that merely mention caveman (issue #593)', () => {
+  const s = {
+    hooks: {
+      PreToolUse: [
+        // Path contains the word "caveman" but targets a user-authored script.
+        { hooks: [{ type: 'command', command: 'node /Users/me/Projects/caveman-notes/my-hook.js' }] },
+        // Basename is a superstring of a managed name — still not ours.
+        { hooks: [{ type: 'command', command: 'node /x/mycaveman-activate.js' }] },
+      ],
+      SessionStart: [
+        { hooks: [{ type: 'command', command: '"/usr/bin/node" "/x/hooks/caveman-activate.js"' }] },
+      ],
+    },
+  };
+  const removed = SETTINGS.removeCavemanHooks(s);
+  assert.equal(removed, 1, 'only the managed SessionStart hook should be removed');
+  assert.equal(s.hooks.PreToolUse.length, 2, 'user hooks mentioning caveman must survive uninstall');
+  assert.equal(s.hooks.SessionStart, undefined);
+});
+
+test('removeCavemanHooks removes the Windows statusline-stats wiring (caveman-stats.js / .ps1)', () => {
+  const s = {
+    hooks: {
+      Stop: [{ hooks: [{ type: 'command', command: '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\.claude\\hooks\\caveman-stats.js"' }] }],
+    },
+  };
+  const removed = SETTINGS.removeCavemanHooks(s);
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
 });
 
 test('rewriteLegacyManagedHookCommands rewrites bare-node managed scripts', () => {
