@@ -97,7 +97,7 @@ function loadBootstrapSnippet(repoRoot) {
     '',
     '  skills/caveman/SKILL.md',
     '',
-    'Default intensity: `full`. Switch with `/caveman lite|full|ultra|wenyan`.',
+    'Default intensity: `full`. Switch with `/caveman lite|full|ultra|smart|wenyan`.',
     'Stop with: "stop caveman" / "normal mode" / "deactivate caveman".',
     '',
     'Auto-Clarity: drop caveman for security warnings, irreversible action',
