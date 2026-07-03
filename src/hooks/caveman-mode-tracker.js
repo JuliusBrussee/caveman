@@ -62,7 +62,7 @@ process.stdin.on('end', () => {
           /\bcaveman\s+mode\s+(on|please|now)\b/.test(prompt) ||
           /^caveman(\s+mode)?\s*[.!]*$/.test(prompt) ||
           /\b(less tokens|fewer tokens|be brief|be terse|shorter answers)\b(?!\s+(in|for|on|about|when|during|with)\b)/.test(prompt)) {
-        const mode = getDefaultMode();
+        const mode = getDefaultMode(data.cwd);
         if (mode !== 'off') {
           recordModeChange(claudeDir, mode); // #601: timestamped transition log
           safeWriteFlag(flagPath, mode);
@@ -190,7 +190,13 @@ process.stdin.on('end', () => {
       }
     }
 
-    if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+    // Also gate on directory-scoped config: the flag file is global
+    // ($CLAUDE_CONFIG_DIR/.caveman-active), so a concurrent session in another
+    // directory can write it while this session sits in a tree whose
+    // .caveman.json says defaultMode "off". Without this check that stale/
+    // foreign flag would re-inject caveman reinforcement here every prompt.
+    if (activeMode && !INDEPENDENT_MODES.has(activeMode) &&
+        getDefaultMode(data.cwd) !== 'off') {
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
