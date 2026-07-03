@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import List
 
@@ -114,6 +115,31 @@ from .detect import should_compress
 from .validate import validate
 
 MAX_RETRIES = 2
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """UTF-8 write that can never truncate or half-write the destination.
+
+    Path.write_text opens-and-truncates the target BEFORE encoding the string,
+    so on Windows (cp1252 default) a UnicodeEncodeError on characters like →
+    left the live file 0 bytes (issue #533). Encode first, write a temp file
+    in the same directory, fsync, then os.replace — atomic on POSIX and
+    Windows, and a failure at any step leaves the destination untouched.
+    """
+    data = text.encode("utf-8")
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ---------- Claude Calls ----------
@@ -246,7 +272,7 @@ def compress_file(filepath: Path) -> bool:
         print("Skipping (not natural language)")
         return False
 
-    original_text = filepath.read_text(errors="ignore")
+    original_text = filepath.read_text(encoding="utf-8", errors="ignore")
     # Store backup outside the source directory so skill auto-loaders don't
     # re-ingest the `.original.md` copy as a live file. Mirror the source's
     # parent-dir name + stem under a platform-aware base to reduce collisions.
@@ -300,8 +326,8 @@ def compress_file(filepath: Path) -> bool:
     # touching the input file. If the filesystem dropped bytes (encoding,
     # antivirus, disk full), unlink the bad backup and abort instead of
     # leaving the user with a corrupt backup + compressed primary.
-    backup_path.write_text(original_text)
-    backup_readback = backup_path.read_text(errors="ignore")
+    write_text_atomic(backup_path, original_text)
+    backup_readback = backup_path.read_text(encoding="utf-8", errors="ignore")
     if backup_readback != original_text:
         print(f"❌ Backup write verification failed: {backup_path}")
         print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
@@ -310,7 +336,7 @@ def compress_file(filepath: Path) -> bool:
         except OSError:
             pass
         return False
-    filepath.write_text(compressed)
+    write_text_atomic(filepath, compressed)
 
     # Step 2: Validate + Retry
     for attempt in range(MAX_RETRIES):
@@ -328,15 +354,21 @@ def compress_file(filepath: Path) -> bool:
 
         if attempt == MAX_RETRIES - 1:
             # Restore original on failure
-            filepath.write_text(original_text)
+            write_text_atomic(filepath, original_text)
             backup_path.unlink(missing_ok=True)
             print("❌ Failed after retries — original restored")
             return False
 
         print("Fixing with Claude...")
-        compressed = call_claude(
+        fixed = call_claude(
             build_fix_prompt(original_text, compressed, result.errors)
         )
-        filepath.write_text(compressed)
+        if fixed is None or not fixed.strip():
+            # CLI failure — keep the current attempt on disk; the next
+            # validation round re-checks it and the retry cap still applies.
+            print("   Fix attempt returned no output — retrying validation.")
+            continue
+        compressed = fixed
+        write_text_atomic(filepath, compressed)
 
     return True
