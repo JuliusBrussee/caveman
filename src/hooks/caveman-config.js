@@ -100,7 +100,6 @@ function readModeFromConfigFile(configPath) {
   }
   return null;
 }
-}
 
 function getDefaultMode() {
   // 1. Environment variable (highest priority)
