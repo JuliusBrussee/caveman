@@ -8,3 +8,4 @@ Why am I getting CORS errors in my browser console?
 What's the point of using a debouncer on a search input?
 How does git rebase differ from git merge?
 When should I use a queue vs a topic in messaging systems?
+Change one line in a long existing file: in `src/settings.ts`, replace `timeoutMs: 5000` with `timeoutMs: 7000`; answer with only the minimal patch/delta, not the full file.
