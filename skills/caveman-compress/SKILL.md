@@ -17,6 +17,10 @@ Compress natural language files (CLAUDE.md, todos, preferences) into caveman-spe
 
 `/caveman-compress <filepath>` or when user asks to compress a memory file.
 
+## Undo
+
+User asks to undo/restore/revert a compression → run `python3 -m scripts --undo <absolute_filepath>` from the directory containing this SKILL.md. Restores the file from its backup byte-exact and removes the backup (compression refuses to run while a backup exists). Errors clearly when no backup exists.
+
 ## Process
 
 1. The compression scripts live in `scripts/` (adjacent to this SKILL.md). If the path is not immediately available, search for `scripts/__main__.py` next to this SKILL.md.
