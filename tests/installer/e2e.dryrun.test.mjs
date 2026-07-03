@@ -57,3 +57,26 @@ test('dry-run --uninstall does not delete files', () => {
   assert.equal(fs.existsSync(fake), true);
   assert.equal(fs.readFileSync(path.join(cfg, 'settings.json'), 'utf8'), before);
 });
+
+// ── Test: --init-only skips every agent install (issue #603) ───────────────
+// The /caveman-init slash command shipped to Codex/Gemini users runs
+// `npx ... -- --init-only`. It must write per-repo rule files and NOTHING
+// else — no plugin installs, no npx-skills fallback, no interactive prompt.
+test('--init-only dry-run plans rule files only, no agent installs', () => {
+  const cfg = freshTmpDir();
+  const cwd = freshTmpDir();
+  const r = spawnSync('node', [INSTALLER,
+    '--init-only', '--dry-run', '--no-mcp-shrink',
+    '--config-dir', cfg,
+  ], { encoding: 'utf8', cwd, env: { ...process.env, CLAUDE_CONFIG_DIR: cfg } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /writing per-repo IDE rule files/);
+  // No provider may run — not even ones detected on this machine.
+  assert.doesNotMatch(r.stdout, /Claude Code detected/);
+  assert.doesNotMatch(r.stdout, /Gemini CLI detected/);
+  assert.doesNotMatch(r.stdout, /would run: claude plugin/);
+  assert.doesNotMatch(r.stdout, /skills add/);
+  // Dry run — nothing written anywhere.
+  assert.equal(fs.existsSync(path.join(cfg, 'settings.json')), false);
+  assert.equal(fs.readdirSync(cwd).length, 0);
+});

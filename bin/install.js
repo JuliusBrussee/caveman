@@ -55,7 +55,7 @@ const HOOK_FILES = [
 function parseArgs(argv) {
   const opts = {
     dryRun: false, force: false, skipSkills: false,
-    withHooks: 'auto', withInit: false, withMcpShrink: false,
+    withHooks: 'auto', withInit: false, initOnly: false, withMcpShrink: false,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
     configDir: null, help: false,
@@ -83,6 +83,11 @@ function parseArgs(argv) {
       case '--with-hooks': opts.withHooks = true; break;
       case '--no-hooks': opts.withHooks = false; break;
       case '--with-init': opts.withInit = true; break;
+      // Init-only mode: write per-repo rule files, skip every agent install.
+      // This is what the /caveman-init slash command shipped to Codex/Gemini
+      // users runs — a slash command must not kick off the full provider
+      // matrix as a side effect (issue #603).
+      case '--init-only': opts.initOnly = true; opts.withInit = true; break;
       case '--with-mcp-shrink': {
         const v = argv[i + 1];
         if (v && !v.startsWith('--')) {
@@ -1257,6 +1262,8 @@ FLAGS
                         + statusline badge. (Default ON.)
   --no-hooks            Skip the hooks installer.
   --with-init           Write per-repo IDE rule files into \$PWD.
+  --init-only           Only write per-repo IDE rule files; skip all agent
+                        installs. (What the /caveman-init command runs.)
   --with-mcp-shrink="<upstream cmd>"
                         Claude Code (and opencode): register caveman-shrink MCP
                         proxy wrapping the given upstream. Default OFF.
@@ -1318,7 +1325,7 @@ async function main() {
   const detected = PROVIDERS.filter(p => detectMatch(p.detect));
 
   // TTY-only multi-select prompt when no --only and no --non-interactive.
-  if (opts.only.length === 0 && !opts.nonInteractive) {
+  if (!opts.initOnly && opts.only.length === 0 && !opts.nonInteractive) {
     const picks = await promptForOnly(detected);
     if (picks) opts.only = picks;
   }
@@ -1330,7 +1337,7 @@ async function main() {
   // are auto-skipped — user must opt in via `--only <id>`. Stops the installer
   // from firing `npx skills add ...` against agents the user never installed
   // just because some other tool created `~/.foo` along the way.
-  for (const prov of PROVIDERS) {
+  for (const prov of (opts.initOnly ? [] : PROVIDERS)) {
     if (!want(prov.id)) continue;
     if (prov.soft && !explicit(prov.id)) continue;
     // Auto-detect mode: skip providers we can't see. With --only <id> the user
@@ -1347,7 +1354,7 @@ async function main() {
   }
 
   // Auto-detect fallback if nothing matched
-  if (!opts.skipSkills && opts.only.length === 0 && ctx.results.detected === 0) {
+  if (!opts.initOnly && !opts.skipSkills && opts.only.length === 0 && ctx.results.detected === 0) {
     ctx.say('→ no known agents detected — running npx-skills auto-detect fallback');
     // --yes --all for the same reason as installViaSkills above (issue #370):
     // skip the interactive skill picker so curl|bash actually installs.
