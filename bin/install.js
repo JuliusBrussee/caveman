@@ -1248,9 +1248,12 @@ function pad(s, n) { s = String(s); return s + ' '.repeat(Math.max(0, n - s.leng
 function printHelp() {
   process.stdout.write(`caveman installer — detects your agents and installs caveman for each one.
 
+Supported runtimes: Node >=18, Bun >=1.3.14
+
 USAGE
   npx -y github:JuliusBrussee/caveman -- [flags]
   node bin/install.js [flags]
+  bun bin/install.js [flags]
   bash install.sh [flags]              # shim → npx
   pwsh install.ps1 [flags]             # shim → npx
 

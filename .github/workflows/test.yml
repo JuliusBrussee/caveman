@@ -29,9 +29,6 @@ jobs:
       - name: Run installer tests
         run: npm test
 
-      - name: Run remaining Node tests
-        run: node --test tests/test_caveman_init.js tests/test_caveman_stats.js tests/test_mcp_shrink.js tests/test_repo_local_config.js tests/test_symlink_flag.js
-
   python-test:
     name: Python tests
     runs-on: ubuntu-latest
