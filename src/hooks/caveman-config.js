@@ -87,7 +87,11 @@ function readModeFromConfigFile(configPath) {
   return null;
 }
 
-function getDefaultMode() {
+// `startDir` (optional) overrides where the repo-local config walk begins.
+// Hooks that receive a per-event `cwd` on stdin (e.g. UserPromptSubmit) should
+// pass it so directory-scoped config tracks mid-session directory changes
+// instead of the hook process's spawn cwd.
+function getDefaultMode(startDir) {
   // 1. Environment variable (highest priority)
   const envMode = process.env.CAVEMAN_DEFAULT_MODE;
   if (envMode && VALID_MODES.includes(envMode.toLowerCase())) {
@@ -95,7 +99,7 @@ function getDefaultMode() {
   }
 
   // 2. Repo-local config (checked-in, per-project default)
-  const repoConfigPath = findRepoConfigPath(process.cwd());
+  const repoConfigPath = findRepoConfigPath(startDir || process.cwd());
   if (repoConfigPath) {
     const repoMode = readModeFromConfigFile(repoConfigPath);
     if (repoMode) return repoMode;
