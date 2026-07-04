@@ -196,7 +196,9 @@ process.stdin.on('end', () => {
           hookEventName: "UserPromptSubmit",
           additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
             "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-            "Code/commits/security: write normal."
+            "Code/commits/security: write normal. " +
+            "CJK (Chinese/JP/KR) + tool calls: never put CJK text right before a tool call " +
+            "(can truncate the turn) — narrate in English around tools, summarize in CJK after."
         }
       }));
     }
