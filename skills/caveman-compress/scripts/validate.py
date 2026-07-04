@@ -28,7 +28,7 @@ class ValidationResult:
 
 
 def read_file(path: Path) -> str:
-    return path.read_text(errors="ignore")
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 # ---------- Extractors ----------

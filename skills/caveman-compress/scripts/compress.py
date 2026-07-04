@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import List
 
@@ -219,6 +220,34 @@ Return ONLY the fixed compressed file. No explanation.
 # ---------- Core Logic ----------
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    """Write text to path atomically via a unique sibling temp file + rename.
+
+    Prevents truncation-to-zero-bytes when a write fails mid-way (e.g. a
+    charmap error on Windows). The rename is atomic on POSIX; on Windows it
+    is near-atomic (NTFS moves are transactional within the same volume).
+
+    Uses a uniquely-named temp file in the same directory (same filesystem,
+    required for atomic rename) rather than a fixed .tmp suffix — avoids
+    clobbering unrelated *.tmp files and handles the edge case where the
+    source path itself ends in .tmp.
+    """
+    try:
+        fd, tmp_str = tempfile.mkstemp(dir=path.parent, prefix=path.stem + ".", suffix=".tmp")
+        tmp = Path(tmp_str)
+        try:
+            os.write(fd, text.encode("utf-8"))
+        finally:
+            os.close(fd)
+        tmp.replace(path)
+    except Exception:
+        try:
+            tmp.unlink()
+        except (OSError, UnboundLocalError):
+            pass
+        raise
+
+
 def compress_file(filepath: Path) -> bool:
     # Resolve and validate path
     filepath = filepath.resolve()
@@ -246,7 +275,7 @@ def compress_file(filepath: Path) -> bool:
         print("Skipping (not natural language)")
         return False
 
-    original_text = filepath.read_text(errors="ignore")
+    original_text = filepath.read_text(encoding="utf-8", errors="replace")
     # Store backup outside the source directory so skill auto-loaders don't
     # re-ingest the `.original.md` copy as a live file. Mirror the source's
     # parent-dir name + stem under a platform-aware base to reduce collisions.
@@ -300,8 +329,8 @@ def compress_file(filepath: Path) -> bool:
     # touching the input file. If the filesystem dropped bytes (encoding,
     # antivirus, disk full), unlink the bad backup and abort instead of
     # leaving the user with a corrupt backup + compressed primary.
-    backup_path.write_text(original_text)
-    backup_readback = backup_path.read_text(errors="ignore")
+    backup_path.write_text(original_text, encoding="utf-8")
+    backup_readback = backup_path.read_text(encoding="utf-8")
     if backup_readback != original_text:
         print(f"❌ Backup write verification failed: {backup_path}")
         print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
@@ -310,7 +339,7 @@ def compress_file(filepath: Path) -> bool:
         except OSError:
             pass
         return False
-    filepath.write_text(compressed)
+    _atomic_write(filepath, compressed)
 
     # Step 2: Validate + Retry
     for attempt in range(MAX_RETRIES):
@@ -327,8 +356,9 @@ def compress_file(filepath: Path) -> bool:
             print(f"   - {err}")
 
         if attempt == MAX_RETRIES - 1:
-            # Restore original on failure
-            filepath.write_text(original_text)
+            # Restore from the verified on-disk backup atomically so a
+            # failed restore write can't leave the file truncated to 0 bytes.
+            _atomic_write(filepath, backup_path.read_text(encoding="utf-8"))
             backup_path.unlink(missing_ok=True)
             print("❌ Failed after retries — original restored")
             return False
@@ -337,6 +367,6 @@ def compress_file(filepath: Path) -> bool:
         compressed = call_claude(
             build_fix_prompt(original_text, compressed, result.errors)
         )
-        filepath.write_text(compressed)
+        _atomic_write(filepath, compressed)
 
     return True

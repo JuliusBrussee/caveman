@@ -24,7 +24,7 @@ from scripts import compress as compress_mod  # noqa: E402
 class CompressSafetyTests(unittest.TestCase):
     def _file_with(self, dirpath: Path, text: str) -> Path:
         path = dirpath / "task.md"
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         return path
 
     def test_empty_input_refused(self):
@@ -34,7 +34,7 @@ class CompressSafetyTests(unittest.TestCase):
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
             call.assert_not_called()
-            self.assertEqual(path.read_text(), "")
+            self.assertEqual(path.read_text(encoding="utf-8"), "")
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
     def test_empty_compressed_output_does_not_touch_disk(self):
@@ -44,7 +44,7 @@ class CompressSafetyTests(unittest.TestCase):
             with mock.patch.object(compress_mod, "call_claude", return_value=""):
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
-            self.assertEqual(path.read_text(), original)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
     def test_whitespace_only_compressed_output_does_not_touch_disk(self):
@@ -54,7 +54,7 @@ class CompressSafetyTests(unittest.TestCase):
             with mock.patch.object(compress_mod, "call_claude", return_value="   \n  "):
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
-            self.assertEqual(path.read_text(), original)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
     def test_identical_compressed_output_does_not_touch_disk(self):
@@ -64,7 +64,7 @@ class CompressSafetyTests(unittest.TestCase):
             with mock.patch.object(compress_mod, "call_claude", return_value=original):
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
-            self.assertEqual(path.read_text(), original)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
     def test_real_compression_writes_backup_and_target(self):
@@ -81,12 +81,35 @@ class CompressSafetyTests(unittest.TestCase):
                 v.return_value = mock.Mock(is_valid=True, errors=[], warnings=[])
                 ok = compress_mod.compress_file(path)
             self.assertTrue(ok)
-            self.assertEqual(path.read_text(), compressed)
+            self.assertEqual(path.read_text(encoding="utf-8"), compressed)
             # Backups now live OUTSIDE the source dir (issue #420), under a
             # platform-aware data dir mirroring the source parent name.
             backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
-            self.assertEqual(backup.read_text(), original)
+            self.assertEqual(backup.read_text(encoding="utf-8"), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
+
+    def test_unicode_content_round_trips_safely(self):
+        """Non-ASCII chars (→ — ≥ €) must survive read/compress/write without charmap crash."""
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            original = (
+                "# Unicode Test\n\n"
+                "Arrow → right. Em-dash — pause. Greater-or-equal ≥ ten. Euro € cost.\n"
+            )
+            compressed = (
+                "# Unicode Test\n\n"
+                "Arrow →. Em-dash —. ≥ ten. € cost.\n"
+            )
+            path = self._file_with(Path(tmp), original)
+            with mock.patch.object(compress_mod, "call_claude", return_value=compressed), \
+                 mock.patch.object(compress_mod, "validate") as v:
+                v.return_value = mock.Mock(is_valid=True, errors=[], warnings=[])
+                ok = compress_mod.compress_file(path)
+            self.assertTrue(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), compressed)
+            backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
+            self.assertEqual(backup.read_text(encoding="utf-8"), original)
 
 
 if __name__ == "__main__":
