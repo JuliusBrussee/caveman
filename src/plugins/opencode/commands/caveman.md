@@ -10,4 +10,4 @@ Fragments OK. Technical terms exact. Code unchanged.
 Pattern: [thing] [action] [reason]. [next step].
 
 Behavior persists until session ends or user says "stop caveman" / "normal mode".
-Code, commits, security warnings: write normal English.
+Code, commits, security warnings, issue/PR/MR titles and descriptions: write normal English prose.
