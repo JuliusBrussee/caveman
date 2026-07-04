@@ -134,34 +134,29 @@ Useful flags:
 
 ## pip / requirements.txt
 
-Python shop? The installer is also packaged as a pip shim (`caveman-agent`) that bundles the whole installer payload — same single source (`bin/install.js`), no separate version to drift.
-
-```bash
-pip install "caveman-agent @ git+https://github.com/JuliusBrussee/caveman"
-caveman install --non-interactive          # idempotent — safe to re-run forever
-```
-
-In `requirements.txt`:
+Python shop? Add one line and you're done:
 
 ```
+# requirements.txt
 caveman-agent @ git+https://github.com/JuliusBrussee/caveman
 ```
 
-One honest limitation: **pip has no post-install hooks** (wheels just unpack), so `pip install` alone can't wire your agents — something has to run `caveman install` once per machine. It's idempotent, so put it where your environment bootstraps and stop thinking about it:
+`pip install -r requirements.txt`, and the **first time anything Python runs** in that environment, caveman installs itself for every agent on the machine — silently, in the background, at most once. No extra command, no Makefile step.
 
-```make
-# Makefile
-setup:
-	pip install -r requirements.txt
-	caveman install --non-interactive
-```
+How: pip has no post-install hooks (wheels just unpack), so the wheel ships a tiny `.pth` bootstrap — the same site-packages mechanism editable installs use. On interpreter startup it checks a marker file (one `stat`, then it's inert forever) and, on the very first run, spawns `node bin/install.js --non-interactive` detached. The installer payload is bundled inside the wheel, so the packaged version can never drift from the repo version.
 
-```jsonc
-// .devcontainer/devcontainer.json
-{ "postCreateCommand": "pip install -r requirements.txt && caveman install --non-interactive" }
-```
+Guardrails, because startup magic must be boring:
 
-Every installer flag works through the shim (`caveman install --with-rtk --with-autoallow=dev`, `caveman uninstall`, `caveman list`). Needs Node ≥ 18 on PATH — the shim checks and says so clearly if missing. Pin a release with `@vX.Y.Z` on the git URL. (Publishing to PyPI so plain `caveman-agent` resolves is a maintainer step: `python -m build && twine upload dist/*`.)
+| Guard | Behavior |
+|---|---|
+| `CAVEMAN_NO_AUTO_INSTALL=1` | Kill switch — bootstrap never runs. Use `caveman install` manually. |
+| `CI` env var set | Skipped automatically — build machines shouldn't grow agent config as a dependency side effect. |
+| At-most-once | Atomic marker in `$CLAUDE_CONFIG_DIR` (`.caveman-pip-bootstrap`); re-runs once per version upgrade. |
+| Never blocks / never prints | Installer output goes to `$CLAUDE_CONFIG_DIR/caveman-bootstrap.log`; your program's stdout is untouched. |
+| Clean removal | `pip uninstall caveman-agent` removes the `.pth` (it's in the wheel RECORD); `caveman uninstall` removes the marker + log along with everything else. |
+| Extra flags | `CAVEMAN_AUTO_INSTALL_ARGS="--with-autoallow=dev --with-rtk"` — forwarded to the bootstrap install. |
+
+The `caveman` CLI is still there for explicit control: `caveman install --with-rtk --with-autoallow=dev`, `caveman uninstall`, `caveman list` — every installer flag forwards verbatim. Needs Node ≥ 18 on PATH (the shim says so clearly if missing; the bootstrap just waits for a future startup where Node exists). Pin a release with `@vX.Y.Z` on the git URL. Publishing to PyPI so plain `caveman-agent` resolves is a maintainer step: `python -m build && twine upload dist/*`.
 
 ## Always-on rules
 

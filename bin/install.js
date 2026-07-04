@@ -1187,6 +1187,17 @@ function uninstall(ctx) {
     // Don't rmdir hooksDir — other plugins may use it.
   }
 
+  // pip auto-bootstrap leftovers (caveman-agent package): the at-most-once
+  // marker and its log. Removing the marker means a later `pip install`
+  // re-bootstraps cleanly. The .pth itself is pip's to remove
+  // (`pip uninstall caveman-agent`) — it's in the wheel RECORD.
+  for (const f of ['.caveman-pip-bootstrap', 'caveman-bootstrap.log']) {
+    const p = path.join(configDir, f);
+    if (!fs.existsSync(p)) continue;
+    if (!opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
+    note(`  removed ${p}`);
+  }
+
   // Plugin uninstall on Claude. Probe `plugin list` first so a re-run on a
   // machine where caveman was never installed (or was already removed) doesn't
   // print "Plugin not installed" stderr noise.

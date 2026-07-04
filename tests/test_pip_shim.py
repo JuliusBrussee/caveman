@@ -89,3 +89,81 @@ def test_build_argv_mapping():
         assert build_argv([]) == []
     finally:
         sys.path.pop(0)
+
+
+# ── Auto-bootstrap (_bootstrap.py) ──────────────────────────────────────────
+# Simulate the .pth trigger by importing the module in a fresh subprocess with
+# a temp CLAUDE_CONFIG_DIR. CAVEMAN_AUTO_INSTALL_ARGS routes the spawned
+# installer into dry-run so nothing real is touched.
+
+def _bootstrap_env(tmp, **extra):
+    env = {**ENV, "CLAUDE_CONFIG_DIR": tmp,
+           "CAVEMAN_AUTO_INSTALL_ARGS": f"--dry-run --skip-skills --no-hooks --config-dir {tmp}"}
+    env.pop("CI", None)
+    env.pop("CAVEMAN_NO_AUTO_INSTALL", None)
+    env.update(extra)
+    return env
+
+
+def _import_bootstrap(env):
+    return subprocess.run(
+        [sys.executable, "-c", "import caveman_agent._bootstrap"],
+        capture_output=True, text=True, env=env, cwd=ROOT, timeout=120,
+    )
+
+
+def test_bootstrap_claims_marker_and_spawns_installer():
+    import tempfile, time
+
+    with tempfile.TemporaryDirectory() as tmp:
+        r = _import_bootstrap(_bootstrap_env(tmp))
+        assert r.returncode == 0
+        assert r.stdout == "" and r.stderr == ""  # never pollutes streams
+        marker = Path(tmp) / ".caveman-pip-bootstrap"
+        assert marker.is_file()
+        # Detached installer writes to the log; give it a moment.
+        log = Path(tmp) / "caveman-bootstrap.log"
+        for _ in range(50):
+            if log.exists() and "caveman installer" in log.read_text(errors="replace"):
+                break
+            time.sleep(0.2)
+        assert "caveman installer" in log.read_text(errors="replace")
+
+
+def test_bootstrap_is_at_most_once():
+    import tempfile, time
+
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _bootstrap_env(tmp)
+        _import_bootstrap(env)
+        log = Path(tmp) / "caveman-bootstrap.log"
+        # Wait for the spawned installer to actually finish: its last output
+        # line is the uninstall tip. More robust than watching size settle.
+        for _ in range(100):
+            if log.exists() and "uninstall:" in log.read_text(errors="replace"):
+                break
+            time.sleep(0.2)
+        done = log.read_text(errors="replace")
+        assert "uninstall:" in done, "installer never finished"
+        # Second import at the same version must not respawn.
+        _import_bootstrap(env)
+        time.sleep(2.0)
+        assert log.read_text(errors="replace") == done
+
+
+def test_bootstrap_kill_switch():
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        r = _import_bootstrap(_bootstrap_env(tmp, CAVEMAN_NO_AUTO_INSTALL="1"))
+        assert r.returncode == 0
+        assert not (Path(tmp) / ".caveman-pip-bootstrap").exists()
+
+
+def test_bootstrap_skips_ci():
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        r = _import_bootstrap(_bootstrap_env(tmp, CI="true"))
+        assert r.returncode == 0
+        assert not (Path(tmp) / ".caveman-pip-bootstrap").exists()

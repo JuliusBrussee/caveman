@@ -37,6 +37,15 @@ class BuildWithPayload(build_py):
                     'incomplete source tree? (sdist must graft bin/ src/ agents/ skills/)'
                 )
             shutil.copytree(src, os.path.join(target, d), dirs_exist_ok=True, ignore=_ignore)
+        # Auto-bootstrap .pth: a file at build_lib root lands in site-packages
+        # root, where Python's site module executes its `import` line at every
+        # interpreter startup (the editable-install mechanism). This is what
+        # makes `pip install caveman-agent` a COMPLETE install — the first
+        # Python run after install triggers the (guarded, at-most-once,
+        # background) agent setup. See python/caveman_agent/_bootstrap.py for
+        # the guards; opt out with CAVEMAN_NO_AUTO_INSTALL=1.
+        with open(os.path.join(self.build_lib, 'caveman_agent_bootstrap.pth'), 'w') as f:
+            f.write('import caveman_agent._bootstrap\n')
 
 
 setup(cmdclass={'build_py': BuildWithPayload})
