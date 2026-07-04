@@ -207,6 +207,23 @@ test('rewriteLegacyManagedHookCommands rewrites bare-node managed scripts', () =
   assert.equal(s.hooks.SessionStart[0].hooks[1].command, 'node /abs/hooks/some-user-hook.js');
 });
 
+test('rewriteLegacyManagedHookCommands tolerates malformed hook event values without throwing', () => {
+  // Same class as the removeCavemanHooks crash above: a non-array event value
+  // survives JSONC parse and used to throw "not iterable" here, killing the
+  // installer mid-run before validateHookFields ever saw the file.
+  const s = {
+    hooks: {
+      SessionStart: { hooks: [] },
+      UserPromptSubmit: 'oops',
+      Stop: [{ hooks: [{ type: 'command', command: 'node /abs/hooks/caveman-stats.js' }] }],
+    },
+  };
+  let n;
+  assert.doesNotThrow(() => { n = SETTINGS.rewriteLegacyManagedHookCommands(s, '/usr/local/bin/node'); });
+  assert.equal(n, 1, 'well-formed sibling event should still be rewritten');
+  assert.match(s.hooks.Stop[0].hooks[0].command, /"\/usr\/local\/bin\/node" "\/abs\/hooks\/caveman-stats\.js"/);
+});
+
 test('rewriteLegacyManagedHookCommands ignores already-absolute node commands', () => {
   const s = {
     hooks: {
