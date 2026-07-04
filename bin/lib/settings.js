@@ -253,6 +253,10 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
   let rewritten = 0;
   const reBare = /^node\s+("([^"]+)"|'([^']+)'|(\S+))\s*$/;
   for (const ev of Object.keys(settings.hooks)) {
+    // Malformed shape (string / object instead of array) survives JSONC parse
+    // and reaches here before validateHookFields runs — skip it rather than
+    // throw mid-install; validation cleans it up before the eventual write.
+    if (!Array.isArray(settings.hooks[ev])) continue;
     for (const entry of settings.hooks[ev]) {
       if (!entry || !Array.isArray(entry.hooks)) continue;
       for (const h of entry.hooks) {
