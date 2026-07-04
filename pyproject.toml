@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "caveman-agent"
+version = "1.9.0"
+description = "Caveman for AI coding agents, pip-installable. Cuts ~65-75% of output tokens; `caveman install` wires every agent on the machine."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+authors = [{ name = "Julius Brussee" }]
+keywords = ["llm", "tokens", "claude-code", "agent", "prompt-compression"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Code Generators",
+]
+
+[project.urls]
+Homepage = "https://github.com/JuliusBrussee/caveman"
+Issues = "https://github.com/JuliusBrussee/caveman/issues"
+
+[project.scripts]
+caveman = "caveman_agent.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "python" }
+packages = ["caveman_agent"]
+include-package-data = true

@@ -132,6 +132,37 @@ Useful flags:
 | `--force` | Re-run even if already installed. |
 | `--uninstall` | Remove everything. See below. |
 
+## pip / requirements.txt
+
+Python shop? The installer is also packaged as a pip shim (`caveman-agent`) that bundles the whole installer payload — same single source (`bin/install.js`), no separate version to drift.
+
+```bash
+pip install "caveman-agent @ git+https://github.com/JuliusBrussee/caveman"
+caveman install --non-interactive          # idempotent — safe to re-run forever
+```
+
+In `requirements.txt`:
+
+```
+caveman-agent @ git+https://github.com/JuliusBrussee/caveman
+```
+
+One honest limitation: **pip has no post-install hooks** (wheels just unpack), so `pip install` alone can't wire your agents — something has to run `caveman install` once per machine. It's idempotent, so put it where your environment bootstraps and stop thinking about it:
+
+```make
+# Makefile
+setup:
+	pip install -r requirements.txt
+	caveman install --non-interactive
+```
+
+```jsonc
+// .devcontainer/devcontainer.json
+{ "postCreateCommand": "pip install -r requirements.txt && caveman install --non-interactive" }
+```
+
+Every installer flag works through the shim (`caveman install --with-rtk --with-autoallow=dev`, `caveman uninstall`, `caveman list`). Needs Node ≥ 18 on PATH — the shim checks and says so clearly if missing. Pin a release with `@vX.Y.Z` on the git URL. (Publishing to PyPI so plain `caveman-agent` resolves is a maintainer step: `python -m build && twine upload dist/*`.)
+
 ## Always-on rules
 
 For agents without a hook system (Cursor, Windsurf, Cline, Copilot, and friends), the always-on path is a static rule file. Two ways:

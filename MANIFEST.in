@@ -1,0 +1,9 @@
+# sdist must carry the JS payload so a build-from-sdist (PyPI install path)
+# has the same trees a git checkout has. setup.py's BuildWithPayload copies
+# them into caveman_agent/_payload/ at wheel-build time.
+graft bin
+graft src
+graft agents
+graft skills
+include README.md LICENSE INSTALL.md
+global-exclude node_modules/** __pycache__/** *.pyc
