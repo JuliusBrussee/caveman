@@ -27,9 +27,24 @@ const AGENT_ENV_MAP = [
 ];
 
 // Return the plugin root directory given the hooks directory path.
-// Plugin layout: <plugin_root>/hooks/<this-file>  →  plugin root = parent of hooks dir.
-function resolvePluginRoot(hookDir) {
-  return path.resolve(hookDir, '..');
+// Two layouts exist:
+//   <plugin_root>/src/hooks/<this-file>  → plugin manifest + repo checkout (root is '../..')
+//   <config_dir>/hooks/<this-file>       → standalone install (root is '..')
+// CLAUDE_PLUGIN_ROOT (set by Claude Code when invoking plugin hooks) is
+// authoritative when present; otherwise probe for the agents/ dir instead of
+// assuming one shape — the old fixed '..' resolved plugin installs to
+// <plugin_root>/src, where agents/ never exists, so every env override was a
+// silent no-op.
+function resolvePluginRoot(hookDir, env) {
+  const envArg = env || process.env;
+  if (envArg.CLAUDE_PLUGIN_ROOT) return envArg.CLAUDE_PLUGIN_ROOT;
+  const candidates = [path.resolve(hookDir, '..'), path.resolve(hookDir, '..', '..')];
+  for (const dir of candidates) {
+    try {
+      if (fs.statSync(path.join(dir, 'agents')).isDirectory()) return dir;
+    } catch (e) { /* no agents/ here — try next candidate */ }
+  }
+  return candidates[0];
 }
 
 // Patch the YAML frontmatter of `content` to set `model: <modelValue>`.

@@ -156,10 +156,55 @@ test('CRLF builder (no model line): inserted model line uses CRLF', () => {
 
 console.log('\nresolvePluginRoot\n');
 
-test('resolves to parent of hooks dir', () => {
+test('falls back to parent of hooks dir when no layout marker exists', () => {
   const hooksDir = path.join(os.tmpdir(), 'fake-plugin', 'hooks');
-  const root = resolvePluginRoot(hooksDir);
+  const root = resolvePluginRoot(hooksDir, {});
   assert.strictEqual(path.basename(root), 'fake-plugin');
+});
+
+test('CLAUDE_PLUGIN_ROOT wins when set', () => {
+  const root = resolvePluginRoot('/anything/src/hooks', { CLAUDE_PLUGIN_ROOT: '/plugin/root' });
+  assert.strictEqual(root, '/plugin/root');
+});
+
+test('src/hooks layout (plugin manifest + repo checkout) resolves two levels up', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-srchooks-'));
+  try {
+    const hooksDir = path.join(tmp, 'src', 'hooks');
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'agents'));
+    assert.strictEqual(resolvePluginRoot(hooksDir, {}), tmp);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('hooks-at-config-dir layout (standalone install) resolves one level up', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-cfghooks-'));
+  try {
+    const hooksDir = path.join(tmp, 'hooks');
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'agents'));
+    assert.strictEqual(resolvePluginRoot(hooksDir, {}), tmp);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('end-to-end: override applies through the src/hooks layout', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-e2e-layout-'));
+  try {
+    const hooksDir = path.join(tmp, 'src', 'hooks');
+    const agentsDir = path.join(tmp, 'agents');
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.mkdirSync(agentsDir);
+    fs.writeFileSync(path.join(agentsDir, 'cavecrew-reviewer.md'), REVIEWER_FM, 'utf8');
+    applyOverrides(resolvePluginRoot(hooksDir, {}), { CAVECREW_REVIEWER_MODEL: 'sonnet' });
+    const out = fs.readFileSync(path.join(agentsDir, 'cavecrew-reviewer.md'), 'utf8');
+    assert.ok(out.includes('model: sonnet'), 'override did not reach the agent file through src/hooks layout');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 // ── applyOverrides ─────────────────────────────────────────────────────────
