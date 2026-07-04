@@ -1,0 +1,13 @@
+{
+  "_comment": "Tracked upstream versions for the automated integration pipeline (.github/workflows/upstream-watch.yml). 'policy' = the smallest semver bump that triggers integration: major | minor | patch. RTK is 0.x, where minor bumps are the breaking/major equivalent — hence policy 'minor'. Updated automatically by the watcher after each successful integration.",
+  "upstream-caveman": {
+    "repo": "JuliusBrussee/caveman",
+    "version": "v1.9.0",
+    "policy": "major"
+  },
+  "rtk": {
+    "repo": "rtk-ai/rtk",
+    "version": "v0.43.0",
+    "policy": "minor"
+  }
+}

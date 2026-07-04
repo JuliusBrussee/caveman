@@ -1,0 +1,237 @@
+# Upstream watcher — the automated half of the release story.
+#
+# Weekly (and on demand), checks the latest releases of the two upstreams in
+# .github/upstream-versions.json:
+#
+#   rtk               policy: minor  (RTK is 0.x — minor bumps are its
+#                                     breaking/major equivalent)
+#   upstream-caveman  policy: major  (only major upstream releases integrate)
+#
+# When a release meets its policy:
+#   RTK      → smoke-test the new version against our integration points
+#              (install, --version, Windows asset present, gain JSON parses),
+#              record the new version, cut a patch release.
+#   caveman  → attempt a clean merge of the upstream tag; if it merges clean
+#              AND all tests pass, record + cut a minor release. If the merge
+#              conflicts or tests fail, open an issue with the details —
+#              a diverged fork must never be auto-mangled.
+#
+# Both paths funnel into release.yml, so "integration done = new release"
+# holds by construction.
+
+name: upstream-watch
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    outputs:
+      rtk_trigger: ${{ steps.rtk.outputs.trigger }}
+      rtk_version: ${{ steps.rtk.outputs.version }}
+      caveman_trigger: ${{ steps.caveman.outputs.trigger }}
+      caveman_version: ${{ steps.caveman.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check RTK latest release
+        id: rtk
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LATEST=$(gh api repos/rtk-ai/rtk/releases/latest --jq .tag_name)
+          OUT=$(node scripts/upstream-check.js rtk "$LATEST")
+          echo "RTK latest=$LATEST → $OUT"
+          if [[ "$OUT" == trigger* ]]; then
+            echo "trigger=true" >> "$GITHUB_OUTPUT"
+            echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+          else
+            echo "trigger=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check upstream caveman latest release
+        id: caveman
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LATEST=$(gh api repos/JuliusBrussee/caveman/releases/latest --jq .tag_name 2>/dev/null \
+            || gh api repos/JuliusBrussee/caveman/tags --jq '.[0].name')
+          OUT=$(node scripts/upstream-check.js upstream-caveman "$LATEST")
+          echo "upstream caveman latest=$LATEST → $OUT"
+          if [[ "$OUT" == trigger* ]]; then
+            echo "trigger=true" >> "$GITHUB_OUTPUT"
+            echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+          else
+            echo "trigger=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  integrate-rtk:
+    needs: watch
+    if: needs.watch.outputs.rtk_trigger == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Smoke-test the new RTK against our integration points
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RTK_VERSION: ${{ needs.watch.outputs.rtk_version }}
+        run: |
+          set -euo pipefail
+          # 1. The Windows asset our installer downloads must still exist.
+          gh api "repos/rtk-ai/rtk/releases/tags/$RTK_VERSION" \
+            --jq '.assets[].name' | grep -qx 'rtk-x86_64-pc-windows-msvc.zip'
+          echo "✓ Windows asset present"
+          # 2. Install via the official script (same path our installer uses).
+          curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+          rtk --version
+          echo "✓ binary installs and runs"
+          # 3. Our stats integration must tolerate the gain JSON (empty is fine
+          #    on a fresh box — the contract is: parses, never throws).
+          GAIN=$(rtk gain --all --format json 2>/dev/null || echo '{}')
+          node -e "
+            const { extractRtkSaved } = require('./src/hooks/caveman-stats.js');
+            const v = extractRtkSaved(JSON.parse(process.argv[1] || '{}'));
+            console.log('✓ gain JSON parses; extracted:', v);
+          " "$GAIN"
+
+      - name: Record new RTK version
+        env:
+          RTK_VERSION: ${{ needs.watch.outputs.rtk_version }}
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            const p = '.github/upstream-versions.json';
+            const s = JSON.parse(fs.readFileSync(p, 'utf8'));
+            s.rtk.version = process.env.RTK_VERSION;
+            fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
+          "
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git commit -am "chore(upstream): track rtk $RTK_VERSION [skip ci]"
+          git push origin HEAD
+
+      - name: Cut release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RTK_VERSION: ${{ needs.watch.outputs.rtk_version }}
+        run: |
+          gh workflow run release.yml \
+            -f bump=patch \
+            -f reason="Integrates RTK $RTK_VERSION (smoke-tested: install, Windows asset, gain JSON)."
+
+      - name: Open issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RTK_VERSION: ${{ needs.watch.outputs.rtk_version }}
+        run: |
+          gh issue create \
+            --title "RTK $RTK_VERSION integration failed" \
+            --body "The upstream watcher found RTK $RTK_VERSION but the smoke test failed. See the workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Likely causes: Windows asset renamed, install script moved, or gain JSON shape changed (src/hooks/caveman-stats.js extractRtkSaved)."
+
+  integrate-upstream-caveman:
+    needs: [watch, integrate-rtk]
+    if: always() && needs.watch.outputs.caveman_trigger == 'true' && needs.watch.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Attempt clean merge of upstream tag
+        id: merge
+        env:
+          UPSTREAM_VERSION: ${{ needs.watch.outputs.caveman_version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/JuliusBrussee/caveman.git
+          git fetch upstream --tags
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          if git merge --no-edit "$UPSTREAM_VERSION"; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run full test suite on the merge
+        if: steps.merge.outputs.clean == 'true'
+        id: tests
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          node --test tests/installer/*.test.mjs
+          node tests/test_caveman_stats.js
+          node tests/test_caveman_expand.js
+          node tests/test_repo_local_config.js
+          node tests/test_symlink_flag.js
+          node tests/test_caveman_init.js
+          pip install --quiet pytest
+          pytest tests/test_pip_shim.py -q
+
+      - name: Record + push merge, cut release
+        if: steps.merge.outputs.clean == 'true' && steps.tests.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_VERSION: ${{ needs.watch.outputs.caveman_version }}
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            const p = '.github/upstream-versions.json';
+            const s = JSON.parse(fs.readFileSync(p, 'utf8'));
+            s['upstream-caveman'].version = process.env.UPSTREAM_VERSION;
+            fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
+          "
+          git commit -am "chore(upstream): track caveman $UPSTREAM_VERSION [skip ci]"
+          git push origin HEAD
+          gh workflow run release.yml \
+            -f bump=minor \
+            -f reason="Integrates upstream caveman $UPSTREAM_VERSION (clean merge, full test suite green)."
+
+      - name: Open issue when merge conflicts or tests fail
+        if: steps.merge.outputs.clean == 'false' || (steps.merge.outputs.clean == 'true' && steps.tests.outcome != 'success')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_VERSION: ${{ needs.watch.outputs.caveman_version }}
+        run: |
+          if [ "${{ steps.merge.outputs.clean }}" = "false" ]; then
+            WHY="the merge has conflicts with this fork's changes"
+          else
+            WHY="the merge is clean but the test suite fails on the merged tree"
+          fi
+          gh issue create \
+            --title "Upstream caveman $UPSTREAM_VERSION needs manual integration" \
+            --body "Upstream released $UPSTREAM_VERSION (meets policy=major), but $WHY. Integrate manually: \`git fetch upstream --tags && git merge $UPSTREAM_VERSION\`, resolve, run the test suites, then dispatch the release workflow with bump=minor. Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

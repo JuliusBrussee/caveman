@@ -1,0 +1,130 @@
+# Release pipeline — the single way a release gets cut, whether triggered by
+# your own development (workflow_dispatch from the Actions tab) or by the
+# upstream watcher (upstream-watch.yml runs `gh workflow run release.yml`).
+#
+# What a release is: tests green → version bumped across all sync points
+# (scripts/release-bump.js) → hook checksums regenerated → tagged commit →
+# GitHub Release with sdist+wheel attached → optional PyPI publish when a
+# PYPI_API_TOKEN secret exists.
+#
+# Pinning a release in requirements.txt:
+#   caveman-agent @ git+https://github.com/<this repo>@vX.Y.Z
+
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Semver bump for this release'
+        type: choice
+        options: [patch, minor, major]
+        default: minor
+      version:
+        description: 'Explicit version X.Y.Z (overrides bump)'
+        required: false
+      reason:
+        description: 'One-line reason (leads the release notes)'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run test suites
+        run: |
+          node --test tests/installer/*.test.mjs
+          node tests/test_caveman_stats.js
+          node tests/test_caveman_expand.js
+          node tests/test_repo_local_config.js
+          node tests/test_symlink_flag.js
+          node tests/test_caveman_init.js
+          pip install --quiet pytest
+          pytest tests/test_pip_shim.py -q
+
+      - name: Bump version across sync points
+        id: bump
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION=$(node scripts/release-bump.js --set "${{ inputs.version }}")
+          else
+            VERSION=$(node scripts/release-bump.js --bump "${{ inputs.bump }}")
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION"
+
+      - name: Regenerate hook checksum manifest
+        run: |
+          cd src/hooks
+          sha256sum package.json caveman-config.js caveman-activate.js \
+            caveman-mode-tracker.js caveman-stats.js \
+            caveman-statusline.sh caveman-statusline.ps1 > checksums.sha256
+
+      - name: Build sdist and wheel
+        run: |
+          pip install --quiet build
+          python -m build
+
+      - name: Commit, tag, push
+        run: |
+          set -euo pipefail
+          V="${{ steps.bump.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(release): v$V [skip ci]"
+          git tag "v$V"
+          git push origin HEAD --tags
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V="${{ steps.bump.outputs.version }}"
+          PREV=$(git describe --tags --abbrev=0 "v$V^" 2>/dev/null || true)
+          {
+            if [ -n "${{ inputs.reason }}" ]; then echo "${{ inputs.reason }}"; echo; fi
+            echo "## Changes"
+            if [ -n "$PREV" ]; then
+              git log --oneline --no-decorate "$PREV..v$V" | sed 's/^/- /'
+            else
+              echo "- Initial release of this fork's pipeline"
+            fi
+            echo
+            echo '## Install'
+            echo '```'
+            echo "caveman-agent @ git+https://github.com/${{ github.repository }}@v$V"
+            echo '```'
+          } > /tmp/notes.md
+          gh release create "v$V" dist/*.whl dist/*.tar.gz \
+            --title "v$V" --notes-file /tmp/notes.md
+
+      - name: Publish to PyPI (only when a token is configured)
+        if: ${{ secrets.PYPI_API_TOKEN != '' }}
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          pip install --quiet twine
+          twine upload dist/*
