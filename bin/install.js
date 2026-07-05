@@ -8,7 +8,7 @@
 //
 // Distribution:
 //   Local clone: node bin/install.js [flags]
-//   curl|bash:   delegated from install.sh shim → npx -y github:JuliusBrussee/caveman -- [flags]
+//   curl|bash:   install.sh shim → npx (default), bunx, or pnpx → this script
 //   Windows:     pwsh install.ps1 [flags] → same npx delegation
 //
 // Pure stdlib, zero npm runtime deps.
@@ -415,6 +415,36 @@ function runSpawn(cmd, args, opts, dry) {
   return spawnXplat(cmd, args, Object.assign({ stdio: 'inherit' }, opts || {}));
 }
 
+function skillsAddRunner() {
+  switch (String(process.env.CAVEMAN_PACKAGE_RUNNER || '').toLowerCase()) {
+    case 'bun':
+    case 'bunx':
+      return { cmd: 'bunx', prefixArgs: ['--bun'], label: 'bunx' };
+    case 'pnpm':
+    case 'pnpx':
+      return { cmd: 'pnpx', prefixArgs: [], label: 'pnpx' };
+    case 'node':
+    case 'npm':
+    case 'npx':
+    default:
+      return { cmd: 'npx', prefixArgs: ['-y'], label: 'npx' };
+  }
+}
+
+function skillsAddArgs(...args) {
+  const runner = skillsAddRunner();
+  return [runner.cmd, [...runner.prefixArgs, 'skills', 'add', ...args]];
+}
+
+function skillsAddFailure(scope) {
+  return `${skillsAddRunner().label} skills add (${scope}) failed`;
+}
+
+function installMechanism(prov) {
+  if (prov.profile) return `${skillsAddRunner().label} skills add (${prov.profile})`;
+  return prov.mech;
+}
+
 // Create env with TMPDIR pointing to a temp dir inside configDir.
 // Workaround for Claude Code plugin install EXDEV bug: it tries to rename
 // from ~/.claude/plugins/cache/ to /tmp/ which fails when /tmp is on a
@@ -585,10 +615,10 @@ function installViaSkills(ctx, prov) {
   // ignores the `-a prov.profile` selection and writes every skill through
   // every agent adapter (see issue #389). `--skill '*' -a <agent>` is the
   // documented form for "install every skill into a specific agent".
-  const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
-  const r = runSpawn('npx', args, null, opts.dryRun);
+  const [cmd, args] = skillsAddArgs(REPO, '--skill', '*', '-a', prov.profile, '--yes');
+  const r = runSpawn(cmd, args, null, opts.dryRun);
   if (spawnOk(r)) results.installed.push(prov.id);
-  else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
+  else results.failed.push([prov.id, skillsAddFailure(prov.profile)]);
   process.stdout.write('\n');
 }
 
@@ -1351,7 +1381,7 @@ function printList(noColor) {
   process.stdout.write(`  ${pad('--', 13)} ${pad('-----', 22)} -----------------\n`);
   for (const p of PROVIDERS) {
     const tag = p.soft ? ' (soft)' : '';
-    process.stdout.write(`  ${pad(p.id, 13)} ${pad(p.label, 22)} ${p.mech}${tag}\n`);
+    process.stdout.write(`  ${pad(p.id, 13)} ${pad(p.label, 22)} ${installMechanism(p)}${tag}\n`);
   }
   process.stdout.write('\n');
   process.stdout.write(c.dim('  Defaults: --with-hooks ON, --with-init OFF, --with-mcp-shrink OFF.\n'));
@@ -1368,7 +1398,9 @@ function printHelp() {
 USAGE
   npx -y github:JuliusBrussee/caveman -- [flags]
   node bin/install.js [flags]
-  bash install.sh [flags]              # shim → npx
+  bash install.sh [flags]              # shim → npx by default
+  bash install.sh --bun [flags]        # shim → bunx --bun
+  bash install.sh --pnpm [flags]       # shim → pnpx
   pwsh install.ps1 [flags]             # shim → npx
 
 FLAGS
@@ -1376,7 +1408,7 @@ FLAGS
   --force               Re-run even if a target reports already installed.
   --only <agent>        Install only for the named agent. Repeatable.
                         See --list for valid ids.
-  --skip-skills         Don't run the npx-skills auto-detect fallback.
+  --skip-skills         Don't run the ${skillsAddRunner().label} skills auto-detect fallback.
   --all                 Turn on hooks + init. (mcp-shrink needs an upstream;
                         pass --with-mcp-shrink="<cmd>" to add it.)
   --minimal             Just the plugin/extension install.
@@ -1476,12 +1508,13 @@ async function main() {
 
   // Auto-detect fallback if nothing matched
   if (!opts.skipSkills && opts.only.length === 0 && ctx.results.detected === 0) {
-    ctx.say('→ no known agents detected — running npx-skills auto-detect fallback');
+    ctx.say(`→ no known agents detected — running ${skillsAddRunner().label} skills auto-detect fallback`);
     // --yes --all for the same reason as installViaSkills above (issue #370):
     // skip the interactive skill picker so curl|bash actually installs.
-    const r = runSpawn('npx', ['-y', 'skills', 'add', REPO, '--yes', '--all'], null, opts.dryRun);
+    const [cmd, args] = skillsAddArgs(REPO, '--yes', '--all');
+    const r = runSpawn(cmd, args, null, opts.dryRun);
     if (spawnOk(r)) ctx.results.installed.push('skills-auto');
-    else ctx.results.failed.push(['skills-auto', 'npx skills add (auto) failed']);
+    else ctx.results.failed.push(['skills-auto', skillsAddFailure('auto')]);
     process.stdout.write('\n');
   }
 

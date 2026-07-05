@@ -92,7 +92,7 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.
 irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
 ```
 
-~30 seconds. Needs Node ≥18. Skips agents you no have. Safe to re-run.
+~30 seconds. Default path needs Node ≥18; `--bun` uses Bun instead. Skips agents you no have. Safe to re-run.
 
 > [!TIP]
 > **Turn it on:** type `/caveman` or say *"talk like caveman"*. **Turn it off:** say *"normal mode"*. On Claude Code, Codex, and Gemini it's already on from message one. No command needed.

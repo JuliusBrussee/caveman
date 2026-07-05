@@ -33,6 +33,19 @@ Want to preview before installing? Use `--dry-run`:
 curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --dry-run
 ```
 
+Prefer a different package runner for the shell shim:
+
+```bash
+# Default: Node + npx
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --node --dry-run
+
+# Bun-only path: uses bunx --bun and does not require Node
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --bun --dry-run
+
+# pnpm path: uses pnpx
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --pnpm --dry-run
+```
+
 ## Per-agent install
 
 If you want to install for one agent (or want to know exactly what command runs under the hood), use the table below. Every row also works as `--only <id>` to the unified installer.
@@ -85,6 +98,7 @@ For "auto-activates? No" agents, type `/caveman` once per session (or use natura
 # Either of these works (install.sh / install.ps1 are thin shims that
 # forward all flags to bin/install.js):
 bash install.sh --list             # macOS / Linux / WSL, from a local clone
+bash install.sh --bun --list       # same shim, run through Bun instead
 pwsh install.ps1 --list            # Windows / PowerShell, from a local clone
 node bin/install.js --list         # any platform, from a local clone
 npx -y github:JuliusBrussee/caveman -- --list   # no clone needed
@@ -130,6 +144,14 @@ Useful flags:
 | `--list` | Print full agent matrix and exit. |
 | `--force` | Re-run even if already installed. |
 | `--uninstall` | Remove everything. See below. |
+
+Shell-shim-only flags:
+
+| Flag | What |
+|---|---|
+| `--node` / `--npm` | Explicit default. Local clone runs `node bin/install.js`; curl-pipe runs `npx -y github:JuliusBrussee/caveman`. |
+| `--bun` | Local clone runs `bun bin/install.js`; curl-pipe runs `bunx --bun github:JuliusBrussee/caveman`. Node is not required. |
+| `--pnpm` | Local clone still runs `node bin/install.js`; curl-pipe runs `pnpx github:JuliusBrussee/caveman`. |
 
 ## Always-on rules
 
