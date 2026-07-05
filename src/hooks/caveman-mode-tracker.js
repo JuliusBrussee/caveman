@@ -195,6 +195,7 @@ process.stdin.on('end', () => {
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
           additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
+            "Reply in the user's language (Chinese in -> Chinese out). Caveman means terse, not English. " +
             "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
             "Code/commits/security: write normal."
         }
