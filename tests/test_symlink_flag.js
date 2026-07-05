@@ -190,6 +190,47 @@ test('all valid modes round-trip through symlinked parent', (tmp) => {
   }
 });
 
+// ---------- Windows rename-failure fallback ----------
+
+test('falls back to in-place write when rename fails (Windows EPERM) and leaves no temp file', (tmp) => {
+  const flagDir = path.join(tmp, 'claude-config');
+  fs.mkdirSync(flagDir, { recursive: true });
+  const flagPath = path.join(flagDir, '.caveman-active');
+
+  // Simulate Windows: rename over a flag file held open by another process
+  // (e.g. the statusline reading it) fails with EPERM.
+  const realRenameSync = fs.renameSync;
+  fs.renameSync = () => {
+    const err = new Error('EPERM: operation not permitted');
+    err.code = 'EPERM';
+    throw err;
+  };
+  try {
+    safeWriteFlag(flagPath, 'ultra');
+  } finally {
+    fs.renameSync = realRenameSync;
+  }
+
+  assert.strictEqual(readFlag(flagPath), 'ultra', 'flag should be written via in-place fallback');
+  const leftovers = fs.readdirSync(flagDir).filter(n => /^\.caveman-active\.\d+\.\d+$/.test(n));
+  assert.deepStrictEqual(leftovers, [], 'failed rename must not leak temp files');
+});
+
+test('sweeps orphaned temp files older than one hour, keeps fresh ones', (tmp) => {
+  const flagDir = path.join(tmp, 'claude-config');
+  fs.mkdirSync(flagDir, { recursive: true });
+
+  const oldTemp = path.join(flagDir, `.caveman-active.11111.${Date.now() - 2 * 3600000}`);
+  const freshTemp = path.join(flagDir, `.caveman-active.22222.${Date.now()}`);
+  fs.writeFileSync(oldTemp, 'full');
+  fs.writeFileSync(freshTemp, 'full');
+
+  safeWriteFlag(path.join(flagDir, '.caveman-active'), 'full');
+
+  assert.strictEqual(fs.existsSync(oldTemp), false, 'stale orphan should be swept');
+  assert.strictEqual(fs.existsSync(freshTemp), true, 'fresh temp (possible concurrent writer) must survive');
+});
+
 // ---------- Source code audit ----------
 
 test('safeWriteFlag no longer has blanket symlink parent refusal', (tmp) => {
