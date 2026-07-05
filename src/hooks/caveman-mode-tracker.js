@@ -70,9 +70,8 @@ process.stdin.on('end', () => {
       }
     }
 
-    // /caveman-stats [--share] — block the prompt and inject stats output as
-    // the hook's reason. The script reads the active session log, so we pass
-    // transcript_path through when Claude Code provides it.
+    // /caveman-stats [--share] — block the prompt and inject stats output via stderr + exit 2
+    // to ensure compatibility with Claude Code VSCode extension which doesn't render decision:block reason.
     const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
     if (statsMatch) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
@@ -87,14 +86,12 @@ process.stdin.on('end', () => {
           argv.push('--since', tailArgs[sinceIdx + 1]);
         }
         const out = execFileSync(process.execPath, argv, { encoding: 'utf8', timeout: 5000 });
-        process.stdout.write(JSON.stringify({ decision: 'block', reason: out.trim() }));
+        process.stderr.write(out.trim() + '\n');
+        process.exit(2);
       } catch (e) {
-        process.stdout.write(JSON.stringify({
-          decision: 'block',
-          reason: 'caveman-stats: could not run stats script.\nTry manually: node hooks/caveman-stats.js'
-        }));
+        process.stderr.write('caveman-stats: could not run stats script.\nTry manually: node hooks/caveman-stats.js\n');
+        process.exit(2);
       }
-      return;
     }
 
     // Match /caveman commands. Independent one-shot modes remember the prose
