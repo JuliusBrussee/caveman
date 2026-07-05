@@ -189,7 +189,32 @@ function safeWriteFlag(flagPath, content) {
     } finally {
       if (fd !== undefined) fs.closeSync(fd);
     }
-    fs.renameSync(tempPath, realFlagPath);
+    try {
+      fs.renameSync(tempPath, realFlagPath);
+    } catch (renameErr) {
+      // Windows: rename over a file held open by another process (statusline
+      // reading the flag) fails with EPERM. Fall back to an in-place write —
+      // non-atomic, but the flag is a best-effort 4-byte mode string.
+      if (debug) process.stderr.write(`[caveman] safeWriteFlag: rename failed (${renameErr.code}), falling back to in-place write\n`);
+      try {
+        const wfd = fs.openSync(realFlagPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | O_NOFOLLOW, 0o600);
+        try { fs.writeSync(wfd, String(content)); } finally { fs.closeSync(wfd); }
+      } catch (e2) { /* best-effort */ }
+      try { fs.unlinkSync(tempPath); } catch (e2) { /* best-effort */ }
+    }
+
+    // Sweep orphaned temp files left by past failed renames (crash between
+    // create and rename, or pre-fix versions that leaked on rename failure).
+    // Only files matching our exact temp pattern, older than 1 hour.
+    try {
+      const now = Date.now();
+      for (const name of fs.readdirSync(realFlagDir)) {
+        const m = /^\.caveman-active\.\d+\.(\d+)$/.exec(name);
+        if (m && now - Number(m[1]) > 3600000) {
+          try { fs.unlinkSync(path.join(realFlagDir, name)); } catch (e2) { /* best-effort */ }
+        }
+      }
+    } catch (e2) { /* best-effort */ }
   } catch (e) {
     // Silent fail — flag is best-effort
   }
