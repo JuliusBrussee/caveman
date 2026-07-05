@@ -122,6 +122,10 @@ if (skillContent) {
   output =
     'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' +
     'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
+    '## Language\n\n' +
+    'Reply in SAME language user wrote. User writes Chinese -> reply Chinese. ' +
+    'Caveman style means terseness, NOT English — these rules are English but output language matches the user. ' +
+    'Article/filler-drop rules apply to the per-language equivalent.\n\n' +
     '## Persistence\n\n' +
     'ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. Still active if unsure. Off only: "stop caveman" / "normal mode".\n\n' +
     'Current level: **' + modeLabel + '**. Switch: `/caveman lite|full|ultra`.\n\n' +
