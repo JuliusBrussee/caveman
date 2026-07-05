@@ -101,15 +101,20 @@ test('mode tracker handles /caveman-stats with decision block', (tmp) => {
   ]);
   const claudeDir = path.join(tmp, '.claude');
   fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
-  const out = execFileSync(process.execPath, [TRACKER], {
-    encoding: 'utf8',
-    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, HOME: tmp },
-    input: JSON.stringify({ prompt: '/caveman-stats', transcript_path: sess }),
-  });
-  const parsed = JSON.parse(out);
-  assert.strictEqual(parsed.decision, 'block');
-  assert.match(parsed.reason, /Caveman Stats/);
-  assert.match(parsed.reason, /Output tokens:\s+100/);
+  let err = null;
+  try {
+    execFileSync(process.execPath, [TRACKER], {
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, HOME: tmp },
+      input: JSON.stringify({ prompt: '/caveman-stats', transcript_path: sess }),
+    });
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err, 'should exit non-zero');
+  assert.strictEqual(err.status, 2);
+  assert.match(err.stderr, /Caveman Stats/);
+  assert.match(err.stderr, /Output tokens:\s+100/);
 });
 
 test('mode tracker preserves caveman flag when /caveman-stats fires', (tmp) => {
@@ -118,11 +123,15 @@ test('mode tracker preserves caveman flag when /caveman-stats fires', (tmp) => {
   ]);
   const claudeDir = path.join(tmp, '.claude');
   fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
-  execFileSync(process.execPath, [TRACKER], {
-    encoding: 'utf8',
-    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, HOME: tmp },
-    input: JSON.stringify({ prompt: '/caveman-stats', transcript_path: sess }),
-  });
+  try {
+    execFileSync(process.execPath, [TRACKER], {
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, HOME: tmp },
+      input: JSON.stringify({ prompt: '/caveman-stats', transcript_path: sess }),
+    });
+  } catch (e) {
+    // Expected to exit with code 2
+  }
   // The flag must still say 'full' — the stats command must not change mode.
   assert.strictEqual(fs.readFileSync(path.join(claudeDir, '.caveman-active'), 'utf8'), 'full');
 });
@@ -450,14 +459,19 @@ test('mode tracker forwards --share to stats script', (tmp) => {
   ]);
   const claudeDir = path.join(tmp, '.claude');
   fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
-  const out = execFileSync(process.execPath, [TRACKER], {
-    encoding: 'utf8',
-    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, HOME: tmp },
-    input: JSON.stringify({ prompt: '/caveman-stats --share', transcript_path: sess }),
-  });
-  const parsed = JSON.parse(out);
-  assert.strictEqual(parsed.decision, 'block');
-  assert.match(parsed.reason, /^🪨 Saved 650 output tokens/);
+  let err = null;
+  try {
+    execFileSync(process.execPath, [TRACKER], {
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, HOME: tmp },
+      input: JSON.stringify({ prompt: '/caveman-stats --share', transcript_path: sess }),
+    });
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err, 'should exit non-zero');
+  assert.strictEqual(err.status, 2);
+  assert.match(err.stderr, /^🪨 Saved 650 output tokens/m);
 });
 
 // ── Output-reduction share (never a "usage"/"budget" claim) ────────────────
