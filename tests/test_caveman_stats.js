@@ -66,7 +66,7 @@ test('shows full-mode savings estimate when flag is full', (tmp) => {
   });
   // 350 / 0.35 = 1000, saved = 650, ~65%
   assert.match(out, /Est\. without caveman:\s+1,000/);
-  assert.match(out, /Est\. tokens saved:\s+650 \(~65%\)/);
+  assert.match(out, /Est\. tokens saved:\s+650 \(~65% of output\)/);
 });
 
 test('skips estimate for non-full modes', (tmp) => {
@@ -154,7 +154,7 @@ test('omits USD line when model is unknown', (tmp) => {
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
   });
   // Token estimate still appears, USD line does not.
-  assert.match(out, /Est\. tokens saved:\s+650 \(~65%\)/);
+  assert.match(out, /Est\. tokens saved:\s+650 \(~65% of output\)/);
   assert.doesNotMatch(out, /Est\. saved \(USD\)/);
 });
 
@@ -458,6 +458,179 @@ test('mode tracker forwards --share to stats script', (tmp) => {
   const parsed = JSON.parse(out);
   assert.strictEqual(parsed.decision, 'block');
   assert.match(parsed.reason, /^🪨 Saved 650 output tokens/);
+});
+
+// ── Output-reduction share (never a "usage"/"budget" claim) ────────────────
+// saved/(saved+used) from output tokens is the OUTPUT reduction — input and
+// cache tokens dominate real sessions and are untouched, so printing it as a
+// share of usage/budget would overstate limit relief (docs/HONEST-NUMBERS.md).
+
+test('outputReductionPct = saved / (saved + used), null when nothing saved', () => {
+  const { outputReductionPct } = require(STATS);
+  assert.strictEqual(outputReductionPct(650, 350), 65);
+  assert.strictEqual(outputReductionPct(1, 3), 25);
+  assert.strictEqual(outputReductionPct(0, 350), null);   // no measured savings → no claim
+  assert.strictEqual(outputReductionPct(-5, 350), null);
+  assert.strictEqual(outputReductionPct(650, -1), null);
+  assert.strictEqual(outputReductionPct(NaN, 350), null);
+  assert.strictEqual(outputReductionPct(650, Infinity), null);
+});
+
+test('session view never claims a % of usage/budget — only output reduction', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 350 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // The reduction is labeled as output-only, never a share of session usage.
+  assert.match(out, /Est\. tokens saved:\s+650 \(~65% of output\)/);
+  assert.ok(!/budget|of your usage|of tracked usage/i.test(out),
+    'must not relabel output reduction as a usage/budget share');
+  // Dollars stay for API users.
+  assert.match(out, /Est\. saved \(USD\):/);
+  // Footer must state the reduction excludes input/cache usage.
+  assert.match(out, /output tokens only; input\/cache usage is unchanged/);
+  assert.ok(!/weekly limit|5-hour limit/i.test(out), 'must not fabricate Anthropic quota sizes');
+});
+
+test('--all lifetime output labels the % as output reduction, not usage', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  const history = [
+    { ts: Date.now(), session_id: 'a', output_tokens: 350, est_saved_tokens: 650, est_saved_usd: 0.01 },
+    { ts: Date.now(), session_id: 'b', output_tokens: 650, est_saved_tokens: 350, est_saved_usd: 0.005 },
+  ];
+  fs.writeFileSync(
+    path.join(claudeDir, '.caveman-history.jsonl'),
+    history.map(h => JSON.stringify(h)).join('\n') + '\n',
+  );
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // saved 1000 / (1000 saved + 1000 used-output) = 50% of would-be output
+  assert.match(out, /Est\. output reduction:\s+~50% \(output tokens only, est\.\)/);
+  assert.ok(!/budget|of your usage|of tracked usage/i.test(out),
+    'must not relabel output reduction as a usage/budget share');
+});
+
+test('--all lifetime output omits reduction line when nothing saved', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(claudeDir, '.caveman-history.jsonl'),
+    JSON.stringify({ ts: Date.now(), session_id: 'a', output_tokens: 350, est_saved_tokens: 0, est_saved_usd: 0 }) + '\n',
+  );
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.ok(!/output reduction|budget/i.test(out), 'zero savings → honest zero, no % line');
+});
+
+// ── Mid-session mode-change attribution (#601) ─────────────────────────────
+// Tokens must be attributed to the mode active WHEN each message happened,
+// via the .caveman-mode-log.jsonl transition log — never to whatever mode the
+// flag holds at stats time (which inflated savings after a late activation,
+// and zeroed them after a late deactivation).
+
+test('attributes tokens to the mode active when each message happened (#601)', (tmp) => {
+  const now = Date.now();
+  const iso = (minAgo) => new Date(now - minAgo * 60_000).toISOString();
+  // 300 verbose tokens BEFORE caveman was activated, 350 after.
+  const sess = makeSession(tmp, [
+    { type: 'assistant', timestamp: iso(60), message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 300 } } },
+    { type: 'assistant', timestamp: iso(10), message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 350 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-mode-log.jsonl'),
+    JSON.stringify({ ts: now - 30 * 60_000, mode: 'full', prev: null }) + '\n');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // Only the 350 full-mode tokens earn an estimate: 350/0.35 = 1000 → 650.
+  // The old whole-session-at-current-mode math would claim 1,207 (inflated).
+  assert.match(out, /Est\. tokens saved:\s+650\b/);
+  assert.doesNotMatch(out, /1,207/);
+  assert.match(out, /Mode changed mid-session/);
+  assert.match(out, /caveman off:\s+300 tokens \(no benchmark estimate\)/);
+  assert.match(out, /full:\s+350 tokens \(est\. 650 saved\)/);
+  // The lifetime history row records the attributed figure, not the inflated one.
+  const hist = fs.readFileSync(path.join(claudeDir, '.caveman-history.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map(l => JSON.parse(l));
+  assert.strictEqual(hist[hist.length - 1].est_saved_tokens, 650);
+});
+
+test('credits caveman spans even after mode is turned off mid-session (#601)', (tmp) => {
+  const now = Date.now();
+  const iso = (minAgo) => new Date(now - minAgo * 60_000).toISOString();
+  const sess = makeSession(tmp, [
+    { type: 'assistant', timestamp: iso(60), message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 350 } } },
+    { type: 'assistant', timestamp: iso(10), message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 200 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-mode-log.jsonl'),
+    JSON.stringify({ ts: now - 90 * 60_000, mode: 'full', prev: null }) + '\n' +
+    JSON.stringify({ ts: now - 30 * 60_000, mode: null, prev: 'full' }) + '\n');
+  // No .caveman-active flag — caveman is off at stats time. The old behavior
+  // printed "Caveman not active this session." and logged zero savings.
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.doesNotMatch(out, /Caveman not active this session/);
+  assert.match(out, /full:\s+350 tokens \(est\. 650 saved\)/);
+  assert.match(out, /Est\. tokens saved:\s+650\b/);
+});
+
+test('mode tracker logs timestamped transitions, deduping unchanged modes (#601)', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const run = (prompt) => execFileSync(process.execPath, [TRACKER], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, HOME: tmp },
+    input: JSON.stringify({ prompt }),
+  });
+  const logPath = path.join(claudeDir, '.caveman-mode-log.jsonl');
+  const rows = () => fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+
+  run('/caveman ultra');
+  run('/caveman ultra'); // unchanged — must not append a duplicate row
+  assert.strictEqual(rows().length, 1);
+  assert.strictEqual(rows()[0].mode, 'ultra');
+  assert.strictEqual(rows()[0].prev, 'full');
+  assert.ok(Number.isFinite(rows()[0].ts));
+
+  run('/caveman off'); // deactivation is a transition too
+  assert.strictEqual(rows().length, 2);
+  assert.strictEqual(rows()[1].mode, null);
+  assert.strictEqual(rows()[1].prev, 'ultra');
+});
+
+test('excludes tokens that predate a mid-session flag write with no log (#601)', (tmp) => {
+  const now = Date.now();
+  const sess = makeSession(tmp, [
+    { type: 'assistant', timestamp: new Date(now - 60 * 60_000).toISOString(), message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 350 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  // Flag written NOW (after the message), no transition log: the mode during
+  // the message is unknown. The honest number is zero — say so, don't guess.
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.match(out, /Est\. tokens saved:\s+0\b/);
+  assert.match(out, /unattributed:\s+350 tokens/);
+  assert.match(out, /excluded/);
+  assert.doesNotMatch(out, /Est\. without caveman/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -19,7 +19,7 @@ README = product front door. Non-technical people read it to decide if caveman w
 
 ## Project overview
 
-Caveman makes AI coding agents respond in compressed caveman-style prose — cuts ~65-75% output tokens, full technical accuracy. Ships as Claude Code plugin, Codex plugin, Gemini CLI extension, agent rule files for Cursor, Windsurf, Cline, Copilot, 40+ others via `npx skills`.
+Caveman makes AI coding agents respond in compressed caveman-style prose — cuts 65% output tokens (measured), full technical accuracy. Ships as Claude Code plugin, Codex plugin, Gemini CLI extension, agent rule files for Cursor, Windsurf, Cline, Copilot, 40+ others via `npx skills`.
 
 ---
 
