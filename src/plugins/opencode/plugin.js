@@ -88,9 +88,10 @@ function opencodeConfigDir() {
 const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
 
 function reinforcementLine(mode) {
-  return 'CAVEMAN MODE ACTIVE (' + mode + '). ' +
-    'Drop articles/filler/pleasantries/hedging. Fragments OK. ' +
-    'Code/commits/security: write normal.';
+  // Minimal anchor, mirrors caveman-mode-tracker.js: appended to every
+  // prompt, so extra words are re-paid on all later turns. The full ruleset
+  // comes from the always-on AGENTS.md — this only re-points attention at it.
+  return 'CAVEMAN MODE ACTIVE (' + mode + ') — session ruleset applies.';
 }
 
 // Parse a prompt for slash-command activation or natural-language toggles.

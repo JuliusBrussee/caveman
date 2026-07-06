@@ -191,12 +191,14 @@ process.stdin.on('end', () => {
     }
 
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+      // Keep this anchor minimal: it is appended to EVERY user prompt and
+      // every copy stays in the transcript, so each extra word here is paid
+      // again on all later turns. The full ruleset already came from the
+      // SessionStart hook — this line only needs to re-point attention at it.
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-            "Code/commits/security: write normal."
+          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + ") — session ruleset applies."
         }
       }));
     }
