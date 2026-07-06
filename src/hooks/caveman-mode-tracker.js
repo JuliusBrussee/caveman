@@ -12,7 +12,8 @@ const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange, VALID_MODES }
 // selectable via /caveman <arg>.
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
-const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+const claudeDir = process.env.CLAUDE_CONFIG_DIR || process.env.CODEBUDDY_CONFIG_DIR ||
+  (__dirname.includes('.codebuddy') ? path.join(os.homedir(), '.codebuddy') : path.join(os.homedir(), '.claude'));
 const flagPath = path.join(claudeDir, '.caveman-active');
 // Remembers the prose mode active before a one-shot independent mode
 // (/caveman-commit etc.) so the next ordinary prompt can restore it (#599).

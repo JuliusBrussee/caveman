@@ -11,7 +11,8 @@ const path = require('path');
 const os = require('os');
 const { getDefaultMode, safeWriteFlag, recordModeChange } = require('./caveman-config');
 
-const claudeDir = getAgentConfigDir();
+const claudeDir = process.env.CLAUDE_CONFIG_DIR || process.env.CODEBUDDY_CONFIG_DIR ||
+  (__dirname.includes('.codebuddy') ? path.join(os.homedir(), '.codebuddy') : path.join(os.homedir(), '.claude'));
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
