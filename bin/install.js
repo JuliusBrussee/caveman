@@ -1315,9 +1315,11 @@ function uninstall(ctx) {
     if (prunedHermes) ok('  pruned caveman skills from Hermes');
   }
 
-  // Flag file
-  const flag = path.join(configDir, '.caveman-active');
-  if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
+  // State files (flag + one-shot markers)
+  for (const name of ['.caveman-active', '.caveman-active.prev', '.caveman-nudge-shown']) {
+    const p = path.join(configDir, name);
+    if (fs.existsSync(p) && !opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
+  }
 
   process.stdout.write('\n');
   ok('uninstall done.');
