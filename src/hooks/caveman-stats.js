@@ -449,7 +449,8 @@ function main() {
   const sinceIdx = args.indexOf('--since');
   const sinceArg = sinceIdx !== -1 ? args[sinceIdx + 1] : null;
 
-  const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  const claudeDir = process.env.CLAUDE_CONFIG_DIR || process.env.CODEBUDDY_CONFIG_DIR ||
+    (__dirname.includes('.codebuddy') ? path.join(os.homedir(), '.codebuddy') : path.join(os.homedir(), '.claude'));
   const historyPath = path.join(claudeDir, '.caveman-history.jsonl');
 
   // Lifetime aggregation paths short-circuit before we need a live session.
