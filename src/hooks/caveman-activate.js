@@ -139,7 +139,11 @@ if (skillContent) {
     'Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.';
 }
 
-// 3. Detect missing statusline config — nudge Claude to help set it up
+// 3. Detect missing statusline config — nudge Claude to help set it up.
+//    Once only: the nudge costs ~90 tokens of session context plus a
+//    "proactively offer setup" turn. A user who declined it once should not
+//    pay that again on every future session — remember that it was shown.
+const nudgeShownPath = path.join(claudeDir, '.caveman-nudge-shown');
 try {
   let hasStatusline = false;
   if (fs.existsSync(settingsPath)) {
@@ -149,7 +153,7 @@ try {
     }
   }
 
-  if (!hasStatusline) {
+  if (!hasStatusline && !fs.existsSync(nudgeShownPath)) {
     const isWindows = process.platform === 'win32';
     const scriptName = isWindows ? 'caveman-statusline.ps1' : 'caveman-statusline.sh';
     const scriptPath = path.join(__dirname, scriptName);
@@ -164,6 +168,7 @@ try {
       "To enable, add this to " + path.join(claudeDir, 'settings.json') + ": " +
       statusLineSnippet + " " +
       "Proactively offer to set this up for the user on first interaction.";
+    safeWriteFlag(nudgeShownPath, 'shown');
   }
 } catch (e) {
   // Silent fail — don't block session start over statusline detection

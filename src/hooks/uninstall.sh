@@ -113,11 +113,13 @@ if [ -f "$SETTINGS.bak" ]; then
   echo "  Removed: $SETTINGS.bak"
 fi
 
-# 4. Remove flag file
-if [ -f "$FLAG_FILE" ]; then
-  rm "$FLAG_FILE"
-  echo "  Removed: $FLAG_FILE"
-fi
+# 4. Remove state files (flag + one-shot markers)
+for state_file in "$FLAG_FILE" "$FLAG_FILE.prev" "$CLAUDE_DIR/.caveman-nudge-shown"; do
+  if [ -f "$state_file" ]; then
+    rm "$state_file"
+    echo "  Removed: $state_file"
+  fi
+done
 
 echo ""
 echo "Done! Restart Claude Code to complete the uninstall."

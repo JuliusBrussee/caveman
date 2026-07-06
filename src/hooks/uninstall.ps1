@@ -118,10 +118,12 @@ console.log('  Removed ' + removed + ' caveman hook entries from settings.json')
     }
 }
 
-# 3. Remove flag file
-if (Test-Path $FlagFile) {
-    Remove-Item $FlagFile -Force
-    Write-Host "  Removed: $FlagFile"
+# 3. Remove state files (flag + one-shot markers)
+foreach ($StateFile in @($FlagFile, "$FlagFile.prev", (Join-Path $ClaudeDir ".caveman-nudge-shown"))) {
+    if (Test-Path $StateFile) {
+        Remove-Item $StateFile -Force
+        Write-Host "  Removed: $StateFile"
+    }
 }
 
 Write-Host ""
