@@ -132,7 +132,7 @@ Six levels. Switch anytime with `/caveman <level>`. Level sticks until you chang
 | `wenyan` | New ref every render, so wrap in `useMemo` — rendered in classical Chinese, shorter still. |
 
 > [!NOTE]
-> **Speak your tongue.** Caveman keeps your language. Write Portuguese, caveman grunt Portuguese. Spanish, French, same. It compresses the *style*, never translates. `wenyan` mode is the exception on purpose: classical Chinese packs the most meaning per token.
+> **Speak your tongue.** Caveman keeps your language. Write Spanish, French, same — caveman grunt back in it. It compresses the *style*, never translates. Portuguese is unsupported (models confuse it with Spanish); if unsure, caveman defaults to Spanish. `wenyan` mode is the exception on purpose: classical Chinese packs the most meaning per token.
 
 ## What you get
 
