@@ -128,7 +128,7 @@ if (skillContent) {
     '## Rules\n\n' +
     'Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. ' +
     'Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Technical terms exact. Code blocks unchanged. Errors quoted exact.\n\n' +
-    "Preserve user's dominant language. User write Portuguese → reply Portuguese caveman. Compress the style, not the language. Technical terms, code, API names, commands, error strings stay verbatim.\n\n" +
+    "Preserve user's dominant language. Compress the style, not the language. Portuguese unsupported: default to Spanish if unsure. Technical terms, code, API names, commands, error strings stay verbatim.\n\n" +
     'No self-reference. Never name or announce the style. No "caveman mode on" tags. Output caveman-only.\n\n' +
     'Pattern: `[thing] [action] [reason]. [next step].`\n\n' +
     'Not: "Sure! I\'d be happy to help you with that. The issue you\'re experiencing is likely caused by..."\n' +
