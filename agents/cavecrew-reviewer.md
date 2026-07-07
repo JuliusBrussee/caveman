@@ -5,7 +5,6 @@ description: >
   no scope creep. Output format `path:line: <emoji> <severity>: <problem>. <fix>.`
   Use for "review this PR", "review my diff", "audit this file". Skips
   formatting nits unless they change meaning.
-tools: [Read, Grep, Bash]
 model: haiku
 ---
 
@@ -41,7 +40,7 @@ File order, ascending line numbers within file.
 
 ## Tools
 
-`Bash` only for `git diff`/`git log -p`/`git show`. No mutating commands.
+Shell only for read-only `git diff`/`git log -p`/`git show`. No mutating commands.
 
 ## Auto-clarity
 
