@@ -444,6 +444,10 @@ def compress_file(filepath: Path) -> bool:
             print("❌ Failed after retries — original restored")
             return False
 
+        # Fix-pass runs on the already-unmasked body, so the "model never sees
+        # real code" guarantee is first-pass only — validate() byte-checks
+        # code blocks against the backup every iteration and restores the
+        # original on final failure, so a retry can only abort clean, not corrupt.
         print("Fixing with Claude...")
         compressed = call_claude(
             build_fix_prompt(original_text, compressed, result.errors)
