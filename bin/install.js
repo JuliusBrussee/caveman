@@ -184,6 +184,15 @@ function checkWslWindowsNode() {
 }
 
 function checkNodeVersion() {
+  // Bun provides full Node.js API compatibility — check minimum Bun version.
+  if (process.versions.bun) {
+    const [bmajor, bminor, bpatch] = process.versions.bun.split('.').map(Number);
+    // Need Bun >= 1.3.14
+    const tooOld = bmajor < 1 ||
+      (bmajor === 1 && (bminor < 3 || (bminor === 3 && (bpatch || 0) < 14)));
+    if (tooOld) die(`caveman: Bun ${process.versions.bun} too old. Need Bun >=1.3.14. https://bun.sh`);
+    return;
+  }
   const major = parseInt(process.versions.node.split('.')[0], 10);
   if (major < 18) die(`caveman: Node ${process.versions.node} too old. Need Node ≥18. https://nodejs.org`);
 }
@@ -403,8 +412,9 @@ function quoteWinArg(a) {
 
 function spawnXplat(cmd, args, opts) {
   if (IS_WIN) {
-    const quoted = args.map(quoteWinArg).join(' ');
-    return child_process.spawnSync(`${cmd} ${quoted}`, [], Object.assign({ shell: true }, opts || {}));
+    // Quote the command too — Node may live at C:\Program Files\nodejs\node.exe (#461)
+    const shellCmd = [quoteWinArg(cmd), ...args.map(quoteWinArg)].join(' ');
+    return child_process.spawnSync(shellCmd, [], Object.assign({ shell: true }, opts || {}));
   }
   return child_process.spawnSync(cmd, args, opts || {});
 }
@@ -1365,9 +1375,12 @@ function pad(s, n) { s = String(s); return s + ' '.repeat(Math.max(0, n - s.leng
 function printHelp() {
   process.stdout.write(`caveman installer — detects your agents and installs caveman for each one.
 
+Supported runtimes: Node >=18, Bun >=1.3.14
+
 USAGE
   npx -y github:JuliusBrussee/caveman -- [flags]
   node bin/install.js [flags]
+  bun bin/install.js [flags]
   bash install.sh [flags]              # shim → npx
   pwsh install.ps1 [flags]             # shim → npx
 

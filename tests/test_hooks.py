@@ -214,6 +214,36 @@ class HookScriptTests(unittest.TestCase):
 
             self.assertIn("PLUGIN ROOT MARKER RULESET", result.stdout)
 
+    def test_msys_path_conversion_for_hook_commands(self):
+        """Regression: plugin.json hook commands use sed to convert MSYS/MINGW
+        paths like /c/Users/foo into Windows paths like c:/Users/foo so that
+        Node can resolve them inside Git Bash on Windows."""
+        # The exact sed expression from plugin.json:
+        #   HOOK_ROOT=$(echo "${CLAUDE_PLUGIN_ROOT}" | sed 's|^/\([a-zA-Z]\)/|\1:/|')
+        msys_sed = r"""s|^/\([a-zA-Z]\)/|\1:/|"""
+
+        cases = [
+            ("/c/Users/test/path", "c:/Users/test/path"),
+            ("/d/projects/caveman", "d:/projects/caveman"),
+            ("/C/Windows/System32", "C:/Windows/System32"),
+            # Already-Windows paths pass through unchanged:
+            ("C:/Users/test/path", "C:/Users/test/path"),
+            ("D:\\Projects\\caveman", "D:\\Projects\\caveman"),
+            # Unix paths without MSYS drive-letter prefix pass through:
+            ("/home/user/project", "/home/user/project"),
+            ("/usr/local/bin", "/usr/local/bin"),
+            # Relative paths pass through:
+            ("src/hooks/caveman-activate.js", "src/hooks/caveman-activate.js"),
+        ]
+
+        for input_path, expected in cases:
+            with self.subTest(input=input_path):
+                result = subprocess.run(
+                    ["bash", "-c", f'echo "{input_path}" | sed "{msys_sed}"'],
+                    capture_output=True, text=True, check=True,
+                )
+                self.assertEqual(result.stdout.strip(), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

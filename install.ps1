@@ -29,20 +29,36 @@ function Install-Caveman {
   $ErrorActionPreference = "Stop"
   $Repo = "JuliusBrussee/caveman"
 
-  # Require Node ≥18.
+  # Resolve runtime: prefer Node ≥18, fall back to Bun.
+  $runtime = $null
+
   $node = Get-Command node -ErrorAction SilentlyContinue
-  if (-not $node) {
-    Write-Error @"
-caveman: Node.js (>=18) required. Install:
-  - winget install OpenJS.NodeJS.LTS
-  - or download from https://nodejs.org
-"@
-    exit 1
+  if ($node) {
+    $nodeMajor = [int](& node -p "process.versions.node.split('.')[0]")
+    if ($nodeMajor -ge 18) {
+      $runtime = 'node'
+    }
   }
 
-  $nodeMajor = [int](& node -p "process.versions.node.split('.')[0]")
-  if ($nodeMajor -lt 18) {
-    Write-Error "caveman: Node $nodeMajor too old. Need Node >=18. Upgrade: https://nodejs.org"
+  if (-not $runtime) {
+    $bun = Get-Command bun -ErrorAction SilentlyContinue
+    if ($bun) {
+      $runtime = 'bun'
+    }
+  }
+
+  if (-not $runtime) {
+    if ($node) {
+      Write-Error "caveman: Node $nodeMajor too old (>=18 needed), and Bun not found. Install:"
+    } else {
+      Write-Error "caveman: Node.js (>=18) or Bun required. Install:"
+    }
+    Write-Error @"
+  - Node.js: winget install OpenJS.NodeJS.LTS
+    or download from https://nodejs.org
+  - Bun:     powershell -c "irm bun.sh/install.ps1 | iex"
+    or download from https://bun.sh
+"@
     exit 1
   }
 
@@ -54,22 +70,27 @@ caveman: Node.js (>=18) required. Install:
     $here = Split-Path -Parent $PSCommandPath
     $local = Join-Path $here "bin/install.js"
     if (Test-Path $local) {
-      & node $local @InstallerArgs
+      & $runtime $local @InstallerArgs
       exit $LASTEXITCODE
     }
   }
 
-  # Curl-pipe path: delegate to npx.
-  $npx = Get-Command npx -ErrorAction SilentlyContinue
-  if (-not $npx) {
-    Write-Error "caveman: npx required (ships with Node >=18). Reinstall Node.js."
-    exit 1
-  }
+  # Curl-pipe path: delegate to npx (Node) or bunx (Bun).
+  if ($runtime -eq 'node') {
+    $npx = Get-Command npx -ErrorAction SilentlyContinue
+    if (-not $npx) {
+      Write-Error "caveman: npx required (ships with Node >=18). Reinstall Node.js."
+      exit 1
+    }
 
-  # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
-  # package, and a literal `--` was tripping bin/install.js's parseArgs as an
-  # unknown flag.
-  & npx -y "github:$Repo" @InstallerArgs
+    # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
+    # package, and a literal `--` was tripping bin/install.js's parseArgs as an
+    # unknown flag.
+    & npx -y "github:$Repo" @InstallerArgs
+  } else {
+    # Bun runtime: bunx is Bun's equivalent of npx.
+    & bunx -y "github:$Repo" @InstallerArgs
+  }
   exit $LASTEXITCODE
 }
 
