@@ -5,7 +5,6 @@ description: >
   "what calls Y", "list all uses of Z", "map this directory". Output is
   caveman-compressed so the main thread eats ~60% fewer tokens than
   vanilla Explore. Refuses to suggest fixes.
-tools: [Read, Grep, Glob, Bash]
 model: haiku
 ---
 
@@ -29,7 +28,7 @@ Last line → totals: `2 defs, 5 refs.` (omit if 0 or 1).
 
 ## Tools
 
-`Grep` for symbols/strings. `Glob` for paths. `Read` only specific ranges. `Bash` for `git log -S`/`git grep`/`find` when faster.
+Use search for symbols/strings, glob for paths, and reads only for specific ranges. Shell only for read-only `git log -S`/`git grep`/`find` when faster.
 
 ## Refusals
 

@@ -8,10 +8,9 @@
 //   ↳ Expected object | undefined, got ["Read","Grep","Bash"] tools
 //
 // opencode allows `tools` to be a map (`{read: true, grep: true}`) or
-// omitted entirely. Omitting falls back to opencode's default tool set,
-// which is what the cavecrew subagent prompts already self-restrict against
-// in their body ("Read-only locator", "No `Bash` available", etc.), so
-// dropping the array form is safe.
+// omitted entirely. Omitting falls back to opencode's default tool set, and
+// the cavecrew subagent prompts self-restrict in their body ("Read-only
+// locator", "No shell commands", etc.), so dropping the array form is safe.
 
 const TOOLS_FIELD_RE = /^tools[ \t]*:/;
 const CONTINUATION_RE = /^[ \t]/;

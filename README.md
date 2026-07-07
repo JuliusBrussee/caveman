@@ -109,7 +109,7 @@ Every agent has its own path (plugin, extension, rule file, or `npx skills add`)
 claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman
 
 # Gemini CLI extension
-gemini extensions install https://github.com/JuliusBrussee/caveman
+gemini extensions install https://github.com/JuliusBrussee/caveman --consent
 
 # Cursor / Windsurf / Cline / Codex / 30+ more, via the skills registry
 npx skills add JuliusBrussee/caveman -a cursor

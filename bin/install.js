@@ -565,7 +565,7 @@ function installGemini(ctx) {
       return;
     }
   }
-  const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`], null, opts.dryRun);
+  const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`, '--consent'], null, opts.dryRun);
   if (spawnOk(r)) results.installed.push('gemini');
   else results.failed.push(['gemini', 'gemini extensions install failed']);
   process.stdout.write('\n');
@@ -752,11 +752,10 @@ function installOpencode(ctx) {
       process.stdout.write(`  installed: ${dest}\n`);
     }
 
-    // 3. Subagents. Source files target Claude Code's schema (`tools: [...]`
-    //    YAML array); opencode rejects that form and refuses to boot until the
-    //    file is removed. Strip the `tools:` line on copy — opencode falls back
-    //    to its default tool set, and subagent prompts already self-restrict in
-    //    the body. Issue #386.
+    // 3. Subagents. Strip `tools:` defensively for legacy agent files: older
+    //    caveman releases used Claude Code's `tools: [...]` array, which made
+    //    opencode refuse to boot. Current source agents omit provider-specific
+    //    tool names so Gemini can load the extension directly too.
     fs.mkdirSync(agentsDir, { recursive: true });
     const agentSrcDir = path.join(repoRoot, 'agents');
     for (const f of OPENCODE_AGENT_FILES) {

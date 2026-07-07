@@ -1,7 +1,7 @@
 // Subagent frontmatter sanitizer for opencode (issue #386).
 //
-// opencode rejects the YAML array form `tools: [Read, Grep, Bash]` that
-// Claude Code accepts. Copying agents/cavecrew-*.md verbatim into
+// opencode rejects the YAML array form `tools: [Read, Grep, Bash]` that older
+// caveman agent files used. Copying those agents verbatim into
 // ~/.config/opencode/agents/ broke opencode startup with:
 //   Configuration is invalid at .../cavecrew-reviewer.md
 //   ↳ Expected object | undefined, got ["Read","Grep","Bash"] tools
@@ -116,15 +116,12 @@ test('non-string input returns unchanged', () => {
   assert.deepEqual(stripOpencodeAgentTools({ x: 1 }), { x: 1 });
 });
 
-// ── Real shipped agent files: every one must transform to opencode-safe ──
-// This is the RED-state proof: each `agents/cavecrew-*.md` in the repo today
-// contains the offending `tools: [...]` form, which is what broke opencode
-// startup in the reported bug. After transform, the field is gone.
-test('all shipped cavecrew agent files contain offending tools array (RED proof)', () => {
+// ── Real shipped agent files: every one must be opencode-safe ─────────────
+test('all shipped cavecrew agent files omit provider-specific tools field', () => {
   for (const f of SHIPPED_AGENT_FILES) {
     const src = fs.readFileSync(path.join(REPO_ROOT, 'agents', f), 'utf8');
     const fm = frontmatter(src);
-    assert.match(fm, /^tools:\s*\[/m, `source ${f} should contain inline array form (this is the bug)`);
+    assert.doesNotMatch(fm, /^tools:/m, `source ${f} should not contain provider-specific tools field`);
   }
 });
 

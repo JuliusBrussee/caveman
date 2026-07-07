@@ -40,7 +40,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | Agent | Install command | Auto-activates? |
 |---|---|:-:|
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` | Yes |
-| **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` | Yes |
+| **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman --consent` | Yes |
 | **opencode** | `node bin/install.js --only opencode` *(or `npx -y github:JuliusBrussee/caveman -- --only opencode`)* | Yes (plugin + AGENTS.md) |
 | **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
 | **Hermes Agent** | `npx -y github:JuliusBrussee/caveman -- --only hermes` *(or `node bin/install.js --only hermes` from a clone)* | Yes (native skills, enabled on load) |
