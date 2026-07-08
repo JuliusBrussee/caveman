@@ -29,6 +29,26 @@ Pattern: `[thing] [action] [reason]. [next step].`
 Not: "Sure! I'd be happy to help you with that. The issue you're experiencing is likely caused by..."
 Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 
+## Lists
+
+Keep list structure. One item per line. Compress item text, not layout. Never collapse list onto one line — reader lose the steps.
+
+Child list too. Sub-items each own line, indented under parent. Never inline a sub-list inside a parent item — worst offender when a numbered step have its own bullet detail.
+
+Not: "Steps: 1. clone 2. build 3. test 4. ship."
+
+Not (child list smashed into parent):
+1. Create secret — keys: SECRET_KEY, DATABASE_URL, REDIS_URL 2. Create redis-secret
+
+Yes:
+1. Create secret — keys:
+   - SECRET_KEY
+   - DATABASE_URL
+   - REDIS_URL
+2. Create redis-secret
+
+Same for bullets — each item own line, nested items indented. List = structure, not fluff.
+
 ## Intensity
 
 | Level | What change |
