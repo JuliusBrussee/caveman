@@ -29,6 +29,20 @@ Pattern: `[thing] [action] [reason]. [next step].`
 Not: "Sure! I'd be happy to help you with that. The issue you're experiencing is likely caused by..."
 Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 
+## Lists
+
+Keep list structure. One item per line. Compress item text, not layout. Never collapse list onto one line — reader lose the steps.
+
+Not: "Steps: 1. clone 2. build 3. test 4. ship."
+
+Yes:
+1. clone
+2. build
+3. test
+4. ship
+
+Same for bullets — each item own line. List = structure, not fluff.
+
 ## Intensity
 
 | Level | What change |
