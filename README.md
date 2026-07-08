@@ -95,7 +95,7 @@ irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | i
 ~30 seconds. Needs Node ≥18. Skips agents you no have. Safe to re-run.
 
 > [!TIP]
-> **Turn it on:** type `/caveman` or say *"talk like caveman"*. **Turn it off:** say *"normal mode"*. On Claude Code, Codex, and Gemini it's already on from message one. No command needed.
+> **Turn it on:** type `/caveman` or say *"talk like caveman"*. **Turn it off:** type `/caveman off` or say *"normal mode"*. On Claude Code, Codex, and Gemini it's already on from message one. No command needed.
 
 <details>
 <summary><strong>Install for one agent, or any of 30+ others</strong></summary>
@@ -132,13 +132,13 @@ Six levels. Switch anytime with `/caveman <level>`. Level sticks until you chang
 | `wenyan` | New ref every render, so wrap in `useMemo` — rendered in classical Chinese, shorter still. |
 
 > [!NOTE]
-> **Speak your tongue.** Caveman keeps your language. Write Portuguese, caveman grunt Portuguese. Spanish, French, same. It compresses the *style*, never translates. `wenyan` mode is the exception on purpose: classical Chinese packs the most meaning per token.
+> **Speak your tongue.** Caveman keeps your language. Write Portuguese, caveman grunt Portuguese. Spanish, French, same. It compresses the *style*, never translates. `wenyan` mode is the exception on purpose: classical Chinese packs the most meaning per *character* (characters, not tokens — see [Honest Numbers](docs/HONEST-NUMBERS.md)).
 
 ## What you get
 
 | Command | What it does |
 |---|---|
-| `/caveman [lite\|full\|ultra\|wenyan]` | Compress every reply. Level sticks for the session. |
+| `/caveman [lite\|full\|ultra\|wenyan-lite\|wenyan-full\|wenyan-ultra\|off]` | Compress every reply. Level sticks for the session. `wenyan` = `wenyan-full`. |
 | `/caveman-commit` | Conventional Commit messages, ≤50-char subject. Why over what. |
 | `/caveman-review` | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` |
 | `/caveman-stats` | Real session token usage, lifetime savings, USD. Tweetable line with `--share`. |
