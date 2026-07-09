@@ -169,6 +169,7 @@ from .detect import should_compress
 from .validate import validate
 
 MAX_RETRIES = 2
+BACKUP_SUFFIX = ".original.md"
 
 
 # ---------- Claude Calls ----------
@@ -307,7 +308,7 @@ def compress_file(filepath: Path) -> bool:
     # parent-dir name + stem under a platform-aware base to reduce collisions.
     backup_dir = backup_dir_for(filepath)
     backup_dir.mkdir(parents=True, exist_ok=True)
-    backup_path = backup_dir / (filepath.stem + ".original.md")
+    backup_path = backup_dir / (filepath.stem + BACKUP_SUFFIX)
 
     if not original_text.strip():
         print("❌ Refusing to compress: file is empty or whitespace-only.")
