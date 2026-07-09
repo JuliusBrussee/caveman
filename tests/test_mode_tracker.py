@@ -11,6 +11,11 @@ deactivated it.
 #599: one-shot independent modes (/caveman-commit etc.) permanently
 overwrote the active prose level, and the plugin-namespaced
 /caveman:caveman-commit|-review variants were not recognized at all.
+
+#537: Claude Code delivers slash commands as a <command-message>/
+<command-name>/<command-args> envelope, not the literal command string.
+The startsWith('/caveman') gate never matched it, so every level switch
+AND '/caveman off' from the real slash UI was a silent no-op.
 """
 
 import json
@@ -190,6 +195,71 @@ class ModeTrackerTests(unittest.TestCase):
         self.assertFalse(self.prev.exists(), "prev file must not survive deactivation")
         self.send("ordinary prompt")
         self.assertIsNone(self.flag_value(), "nothing should resurrect the mode")
+
+    # ── #537: Claude Code slash-command envelope unwrap ─────────────────
+
+    @staticmethod
+    def envelope(name, args, newlines=False):
+        sep = "\n" if newlines else ""
+        return (
+            f"<command-message>{name.lstrip('/')}</command-message>{sep}"
+            f"<command-name>{name}</command-name>{sep}"
+            f"<command-args>{args}</command-args>"
+        )
+
+    def test_envelope_one_line_switches_level(self):
+        # Envelope args=lite with preset full. Pre-fix the flag stayed
+        # 'full' and reinforcement kept naming the old level.
+        self.flag.write_text("full")
+        r = self.send(self.envelope("/caveman", "lite"))
+        self.assertEqual(self.flag_value(), "lite")
+        self.assertIn("CAVEMAN MODE ACTIVE (lite)", r.stdout)
+
+    def test_envelope_one_line_activates_without_preset(self):
+        # Envelope args=lite, no flag preset. Pre-fix the flag stayed
+        # absent — activation via the slash UI was dead.
+        self.send(self.envelope("/caveman", "lite"))
+        self.assertEqual(self.flag_value(), "lite")
+
+    def test_envelope_newline_form_switches_level(self):
+        # The exact newline-separated form from issue #537.
+        self.flag.write_text("full")
+        self.send(self.envelope("/caveman", "ultra", newlines=True))
+        self.assertEqual(self.flag_value(), "ultra")
+
+    def test_envelope_off_deactivates(self):
+        # '/caveman off' via envelope must delete the flag. Pre-fix
+        # deactivation was dead too — worse than a stuck level.
+        self.flag.write_text("full")
+        self.send(self.envelope("/caveman", "off", newlines=True))
+        self.assertIsNone(self.flag_value())
+
+    def test_envelope_stats_passthrough_does_not_touch_flag(self):
+        # /caveman-stats via envelope must reach the stats branch (block
+        # decision) and must not disturb the active level.
+        self.flag.write_text("full")
+        r = self.send(self.envelope("/caveman-stats", "", newlines=True))
+        self.assertEqual(self.flag_value(), "full")
+        self.assertIn('"decision":"block"', r.stdout)
+
+    def test_envelope_non_level_arg_does_not_flip(self):
+        # Non-level arg = task at current level; no silent flag overwrite —
+        # same contract as raw-typed '/caveman <non-level>'.
+        self.flag.write_text("ultra")
+        self.send(self.envelope("/caveman", "explain connection pooling"))
+        self.assertEqual(self.flag_value(), "ultra")
+
+    def test_raw_typed_command_still_works_after_unwrap(self):
+        # The literal path must stay intact alongside the envelope path.
+        self.send("/caveman lite")
+        self.assertEqual(self.flag_value(), "lite")
+
+    def test_foreign_command_envelope_untouched(self):
+        # A non-caveman command envelope must not be rewritten — and must
+        # not disturb the flag.
+        self.flag.write_text("full")
+        self.send(self.envelope("/commit", "fix the caveman parser", newlines=True))
+        self.assertEqual(self.flag_value(), "full")
 
 
 if __name__ == "__main__":

@@ -29,7 +29,26 @@ process.stdin.on('end', () => {
     const data = JSON.parse(input);
     // Collapse whitespace so phrase triggers still match multiline prompts —
     // every regex below sees a single-line prompt (#598).
-    const prompt = (data.prompt || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    let prompt = (data.prompt || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+    // Claude Code delivers slash commands as an envelope, not the literal
+    // command (#537):
+    //   <command-message>caveman</command-message>
+    //   <command-name>/caveman</command-name>
+    //   <command-args>ultra</command-args>
+    // (newline-separated or one-line — the collapse above normalizes both;
+    // <command-args> may be empty or absent). The startsWith('/caveman')
+    // gate below saw '<command-message>…' first, so every envelope switch —
+    // including '/caveman off' — was a silent no-op. Reconstruct
+    // '<name> <args>' and let it flow through the existing parsing (stats
+    // regex included) exactly as if the user had typed the command raw.
+    // Only /caveman* names are unwrapped: foreign commands keep the raw
+    // prompt so NL detection still sees the user's own words.
+    const envName = /<command-name>\s*(\/[^<]+?)\s*<\/command-name>/.exec(prompt);
+    if (envName && envName[1].startsWith('/caveman')) {
+      const envArgs = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(prompt);
+      prompt = (envName[1] + ' ' + (envArgs ? envArgs[1] : '')).trim();
+    }
 
     // Deactivation intent — computed FIRST so "turn caveman mode off" never
     // falls through to the activation patterns (#598: the old contiguous
