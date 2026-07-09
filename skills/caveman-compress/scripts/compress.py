@@ -9,8 +9,10 @@ Usage:
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import List
 
@@ -114,6 +116,54 @@ from .detect import should_compress
 from .validate import validate
 
 MAX_RETRIES = 2
+TEXT_ENCODING = "utf-8"
+TEXT_WRITE_MODE = "w"
+BACKUP_SUFFIX = ".original.md"
+TEMP_FILE_PREFIX = "."
+TEMP_FILE_SUFFIX = ".tmp"
+
+
+def read_text_file(path: Path) -> str:
+    return path.read_text(encoding=TEXT_ENCODING)
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    existing_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f"{TEMP_FILE_PREFIX}{path.name}.",
+        suffix=TEMP_FILE_SUFFIX,
+        dir=path.parent,
+        text=True,
+    )
+    temp_path = Path(temp_name)
+    replaced = False
+    try:
+        with os.fdopen(fd, TEXT_WRITE_MODE, encoding=TEXT_ENCODING) as handle:
+            handle.write(text)
+        if existing_mode is not None:
+            os.chmod(temp_path, existing_mode)
+        os.replace(temp_path, path)
+        replaced = True
+    finally:
+        if not replaced:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def write_primary_or_report(filepath: Path, text: str, backup_path: Path) -> bool:
+    try:
+        write_text_atomic(filepath, text)
+    except OSError as exc:
+        print(f"❌ Failed to write compressed file: {exc}")
+        print(f"   Original backup remains at: {backup_path}")
+        return False
+    except UnicodeError as exc:
+        print(f"❌ Failed to write compressed file: {exc}")
+        print(f"   Original backup remains at: {backup_path}")
+        return False
+    return True
 
 
 # ---------- Claude Calls ----------
@@ -246,13 +296,13 @@ def compress_file(filepath: Path) -> bool:
         print("Skipping (not natural language)")
         return False
 
-    original_text = filepath.read_text(errors="ignore")
+    original_text = read_text_file(filepath)
     # Store backup outside the source directory so skill auto-loaders don't
     # re-ingest the `.original.md` copy as a live file. Mirror the source's
     # parent-dir name + stem under a platform-aware base to reduce collisions.
     backup_dir = backup_dir_for(filepath)
     backup_dir.mkdir(parents=True, exist_ok=True)
-    backup_path = backup_dir / (filepath.stem + ".original.md")
+    backup_path = backup_dir / (filepath.stem + BACKUP_SUFFIX)
 
     if not original_text.strip():
         print("❌ Refusing to compress: file is empty or whitespace-only.")
@@ -300,8 +350,8 @@ def compress_file(filepath: Path) -> bool:
     # touching the input file. If the filesystem dropped bytes (encoding,
     # antivirus, disk full), unlink the bad backup and abort instead of
     # leaving the user with a corrupt backup + compressed primary.
-    backup_path.write_text(original_text)
-    backup_readback = backup_path.read_text(errors="ignore")
+    write_text_atomic(backup_path, original_text)
+    backup_readback = read_text_file(backup_path)
     if backup_readback != original_text:
         print(f"❌ Backup write verification failed: {backup_path}")
         print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
@@ -310,7 +360,8 @@ def compress_file(filepath: Path) -> bool:
         except OSError:
             pass
         return False
-    filepath.write_text(compressed)
+    if not write_primary_or_report(filepath, compressed, backup_path):
+        return False
 
     # Step 2: Validate + Retry
     for attempt in range(MAX_RETRIES):
@@ -328,7 +379,9 @@ def compress_file(filepath: Path) -> bool:
 
         if attempt == MAX_RETRIES - 1:
             # Restore original on failure
-            filepath.write_text(original_text)
+            if not write_primary_or_report(filepath, original_text, backup_path):
+                print("❌ Failed after retries — original restore failed")
+                return False
             backup_path.unlink(missing_ok=True)
             print("❌ Failed after retries — original restored")
             return False
@@ -337,6 +390,7 @@ def compress_file(filepath: Path) -> bool:
         compressed = call_claude(
             build_fix_prompt(original_text, compressed, result.errors)
         )
-        filepath.write_text(compressed)
+        if not write_primary_or_report(filepath, compressed, backup_path):
+            return False
 
     return True
