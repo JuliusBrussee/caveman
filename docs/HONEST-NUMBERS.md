@@ -17,6 +17,10 @@ Caveman is a system-prompt skill. It makes the model **write shorter output**. T
 
 These figures are output tokens only — the skill does not compress your input, your context, your files, or the model's thinking tokens. The full eval harness and its correction history are documented in [`evals/README.md`](../evals/README.md).
 
+## Wenyan: characters, not tokens
+
+The wenyan rows claim **80–90% character reduction**. Real number — for characters on screen. It is not a token number. Tokenizers price CJK text at one token or more per character, while common English words are usually one token each. So a wenyan reply that looks 5× shorter can bill the same as — or more than — an English `ultra` reply. English `ultra` is usually the cheaper mode per token. Pick wenyan because you want the classical register, not because you want a smaller bill. If you want the smaller bill: use `ultra`, and A/B it like everything else on this page.
+
 ## When caveman wins
 
 - **Long chatty outputs.** Explanations, architecture discussions, code review, docs, debugging walkthroughs — anywhere the model would write 1k+ output tokens per reply. This is where the 50–87% cuts happen.

@@ -20,6 +20,7 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Classical Chinese style, light compression. |
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness. |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget. |
+| **Off** | `/caveman off` | Deactivate. Same as "stop caveman" / "normal mode". |
 
 Mode stick until changed or session end.
 
@@ -34,7 +35,7 @@ Mode stick until changed or session end.
 
 ## Deactivate
 
-Say "stop caveman" or "normal mode". Resume anytime with `/caveman`.
+Type `/caveman off`, or say "stop caveman" / "normal mode". Resume anytime with `/caveman`.
 
 ## Language
 
