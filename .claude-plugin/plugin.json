@@ -5,6 +5,8 @@
     "name": "Julius Brussee",
     "url": "https://github.com/JuliusBrussee"
   },
+  "skills": "./skills/",
+  "commands": "./commands/",
   "hooks": {
     "SessionStart": [
       {
