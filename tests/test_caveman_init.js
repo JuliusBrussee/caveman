@@ -51,6 +51,8 @@ test('greenfield: creates all rule files with proper frontmatter', (tmp) => {
   assert.match(cline, /^Respond terse/);
   const copilot = fs.readFileSync(path.join(tmp, '.github/copilot-instructions.md'), 'utf8');
   assert.match(copilot, /Respond terse/);
+  const junie = fs.readFileSync(path.join(tmp, '.junie/guidelines.md'), 'utf8');
+  assert.match(junie, /Respond terse/);
   const agents = fs.readFileSync(path.join(tmp, 'AGENTS.md'), 'utf8');
   assert.match(agents, /Respond terse/);
   const opencode = fs.readFileSync(path.join(tmp, '.opencode/AGENTS.md'), 'utf8');
@@ -60,8 +62,8 @@ test('greenfield: creates all rule files with proper frontmatter', (tmp) => {
 test('idempotent: re-running on a clean install skips all', (tmp) => {
   runInit(tmp);
   const out = runInit(tmp);
-  // 6 repo rule files skipped-already-installed + openclaw skipped (no workspace)
-  assert.match(out, /7 skipped/);
+  // 7 repo rule files skipped-already-installed + openclaw skipped (no workspace)
+  assert.match(out, /8 skipped/);
   assert.doesNotMatch(out, /[1-9]\d* added/);
 });
 
@@ -96,7 +98,7 @@ test('--force overwrites existing rule files', (tmp) => {
 test('--dry-run: announces but writes nothing', (tmp) => {
   const out = runInit(tmp, '--dry-run');
   assert.match(out, /\(dry run\)/);
-  assert.match(out, /6 added/);
+  assert.match(out, /7 added/);
   assert.ok(!fs.existsSync(path.join(tmp, '.cursor')));
   assert.ok(!fs.existsSync(path.join(tmp, '.windsurf')));
   assert.ok(!fs.existsSync(path.join(tmp, '.clinerules')));

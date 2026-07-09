@@ -45,7 +45,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
 | **Hermes Agent** | `npx -y github:JuliusBrussee/caveman -- --only hermes` *(or `node bin/install.js --only hermes` from a clone)* | Yes (native skills, enabled on load) |
 | **Codex CLI** | `npx skills add JuliusBrussee/caveman -a codex` | Per-session: `/caveman` |
-| **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` | Per-session by default; `--with-init` for an always-on rule file |
+| **Cursor** *(IDE + `cursor-agent` CLI)* | `npx skills add JuliusBrussee/caveman -a cursor` | Per-session by default; `--with-init` for an always-on rule file |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` | Per-session by default; `--with-init` for an always-on rule file |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` | Per-session by default; `--with-init` for an always-on rule file |
 | **GitHub Copilot** *(soft probe)* | `npx -y github:JuliusBrussee/caveman -- --only copilot --with-init` | Repo-wide instructions via `--with-init` |
@@ -65,13 +65,14 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Kiro CLI** | `npx skills add JuliusBrussee/caveman -a kiro-cli` | No |
 | **Mistral Vibe** | `npx skills add JuliusBrussee/caveman -a mistral-vibe` | No |
 | **OpenHands** | `npx skills add JuliusBrussee/caveman -a openhands` | No |
+| **Pi (badlogic)** | `npx skills add JuliusBrussee/caveman -a pi` | No |
 | **Qwen Code** | `npx skills add JuliusBrussee/caveman -a qwen-code` | No |
 | **Atlassian Rovo Dev** | `npx skills add JuliusBrussee/caveman -a rovodev` | No |
 | **Tabnine CLI** | `npx skills add JuliusBrussee/caveman -a tabnine-cli` | No |
 | **Trae** | `npx skills add JuliusBrussee/caveman -a trae` | No |
 | **Warp** | `npx skills add JuliusBrussee/caveman -a warp` | No |
 | **Replit Agent** | `npx skills add JuliusBrussee/caveman -a replit` | No |
-| **JetBrains Junie** *(soft probe)* | `npx skills add JuliusBrussee/caveman -a junie` | No |
+| **JetBrains Junie** *(soft probe)* | `npx skills add JuliusBrussee/caveman -a junie` | Per-session by default; `--with-init` writes `.junie/guidelines.md` for always-on |
 | **Qoder** *(soft probe)* | `npx skills add JuliusBrussee/caveman -a qoder` | No |
 | **Google Antigravity** *(soft probe)* | `npx skills add JuliusBrussee/caveman -a antigravity` | No |
 
@@ -144,7 +145,7 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/rule
   > .cursor/rules/caveman.mdc   # or .windsurf/rules/caveman.md, .clinerules/caveman.md, .github/copilot-instructions.md
 ```
 
-`--with-init` writes the rule into every supported per-agent location it can detect (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`). It also installs the OpenClaw workspace bootstrap (skill folder + SOUL.md marker block) when `~/.openclaw/workspace/` exists. Single source: [`src/rules/caveman-activate.md`](src/rules/caveman-activate.md).
+`--with-init` writes the rule into every supported per-agent location it can detect (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.junie/guidelines.md`, `.opencode/AGENTS.md`, `AGENTS.md`). It also installs the OpenClaw workspace bootstrap (skill folder + SOUL.md marker block) when `~/.openclaw/workspace/` exists. Single source: [`src/rules/caveman-activate.md`](src/rules/caveman-activate.md).
 
 ## Verify
 

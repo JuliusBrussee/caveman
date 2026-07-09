@@ -213,7 +213,7 @@ const PROVIDERS = [
   // IDE / VS Code-family — extension probes are precise. Cursor/Windsurf also
   // ship CLI binaries; we drop the dir fallback because the dir lingers after
   // uninstall and false-positives heavily.
-  { id: 'cursor',     label: 'Cursor',              mech: 'npx skills add (cursor)',       detect: 'command:cursor||macapp:Cursor', profile: 'cursor' },
+  { id: 'cursor',     label: 'Cursor (IDE + CLI)',  mech: 'npx skills add (cursor)',       detect: 'command:cursor||command:cursor-agent||macapp:Cursor', profile: 'cursor' },
   { id: 'windsurf',   label: 'Windsurf',            mech: 'npx skills add (windsurf)',     detect: 'command:windsurf||macapp:Windsurf', profile: 'windsurf' },
   { id: 'cline',      label: 'Cline',               mech: 'npx skills add (cline)',        detect: 'vscode-ext:cline',        profile: 'cline' },
   { id: 'continue',   label: 'Continue',            mech: 'npx skills add (continue)',     detect: 'vscode-ext:continue.continue||vscode-ext:continue', profile: 'continue' },
@@ -242,6 +242,7 @@ const PROVIDERS = [
   { id: 'kiro',       label: 'Kiro CLI',            mech: 'npx skills add (kiro-cli)',     detect: 'command:kiro', profile: 'kiro-cli' },
   { id: 'mistral',    label: 'Mistral Vibe',        mech: 'npx skills add (mistral-vibe)', detect: 'command:mistral', profile: 'mistral-vibe' },
   { id: 'openhands',  label: 'OpenHands',           mech: 'npx skills add (openhands)',    detect: 'command:openhands', profile: 'openhands' },
+  { id: 'pi',         label: 'Pi (badlogic)',       mech: 'npx skills add (pi)',           detect: 'command:pi', profile: 'pi' },
   { id: 'qwen',       label: 'Qwen Code',           mech: 'npx skills add (qwen-code)',    detect: 'command:qwen', profile: 'qwen-code' },
   { id: 'rovodev',    label: 'Atlassian Rovo Dev',  mech: 'npx skills add (rovodev)',      detect: 'command:rovodev', profile: 'rovodev' },
   { id: 'tabnine',    label: 'Tabnine CLI',         mech: 'npx skills add (tabnine-cli)',  detect: 'command:tabnine', profile: 'tabnine-cli' },

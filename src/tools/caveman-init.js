@@ -7,7 +7,7 @@
 //   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/tools/caveman-init.js | node - [args]
 //
 // Without args, runs in cwd. Generates the rule files for Cursor, Windsurf,
-// Cline, Copilot, and AGENTS.md. Does NOT modify CLAUDE.md or compress
+// Cline, Copilot, Junie, and AGENTS.md. Does NOT modify CLAUDE.md or compress
 // existing memory files — that's the job of `/caveman:compress`.
 
 const fs = require('fs');
@@ -55,6 +55,9 @@ const AGENTS = [
     frontmatter: '',
     mode: 'replace' },
   { id: 'copilot',  file: '.github/copilot-instructions.md',
+    frontmatter: '',
+    mode: 'append' },
+  { id: 'junie',    file: '.junie/guidelines.md',
     frontmatter: '',
     mode: 'append' },
   { id: 'opencode', file: '.opencode/AGENTS.md',

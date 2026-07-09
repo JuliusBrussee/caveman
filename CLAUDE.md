@@ -245,11 +245,12 @@ How caveman reaches each agent type:
 | Gemini CLI | Extension with `GEMINI.md` context file | Yes — context file loads every session |
 | opencode | Native plugin (`src/plugins/opencode/`) copied into `~/.config/opencode/plugins/caveman/` + `AGENTS.md` ruleset + skills/agents/commands directories. Plugin uses `session.created` and `tui.prompt.append` lifecycle hooks. No statusline (opencode TUI exposes no plugin-writable badge). | Yes — `session.created` writes flag, `AGENTS.md` carries always-on ruleset |
 | OpenClaw | Workspace skill at `~/.openclaw/workspace/skills/caveman/SKILL.md` (frontmatter merged with `version` + `always: true`) plus a marker-fenced bootstrap block in `~/.openclaw/workspace/SOUL.md`. Both writes go through `bin/lib/openclaw.js`; workspace path is overridable via `OPENCLAW_WORKSPACE`. | Yes — SOUL.md is auto-injected each turn under "Project Context" (subject to OpenClaw's 12K-per-file / 60K-total bootstrap caps) |
-| Cursor | `npx skills add ... -a cursor` (default via `--only cursor`) writes the upstream skill profile; per-repo `.cursor/rules/caveman.mdc` via `--with-init` (calls `src/tools/caveman-init.js`) | Yes — always-on rule |
+| Cursor (IDE + `cursor-agent` CLI) | `npx skills add ... -a cursor` (default via `--only cursor`) writes the upstream skill profile; per-repo `.cursor/rules/caveman.mdc` via `--with-init` (calls `src/tools/caveman-init.js`) | Yes — always-on rule |
 | Windsurf | `npx skills add ... -a windsurf` (default via `--only windsurf`); per-repo `.windsurf/rules/caveman.md` via `--with-init` | Yes — always-on rule |
 | Cline | `npx skills add ... -a cline` (default via `--only cline`); per-repo `.clinerules/caveman.md` via `--with-init` | Yes — Cline auto-discovers `.clinerules/` |
 | Copilot | `npx skills add ... -a github-copilot` (soft probe — pass `--only copilot`); per-repo `.github/copilot-instructions.md` + `AGENTS.md` via `--with-init` | Yes — repo-wide instructions |
-| Others (Junie, Trae, Warp, Tabnine, Mistral, Qwen, Devin, Droid, ForgeCode, Bob, Crush, iFlow, OpenHands, Qoder, Rovo Dev, Replit, Antigravity, …) | `npx skills add JuliusBrussee/caveman -a <profile>` | No — user must say `/caveman` each session |
+| Junie | `npx skills add ... -a junie` (soft probe — pass `--only junie`); per-repo `.junie/guidelines.md` via `--with-init` | Yes with `--with-init` — Junie auto-loads `.junie/guidelines.md` |
+| Others (Pi, Trae, Warp, Tabnine, Mistral, Qwen, Devin, Droid, ForgeCode, Bob, Crush, iFlow, OpenHands, Qoder, Rovo Dev, Replit, Antigravity, …) | `npx skills add JuliusBrussee/caveman -a <profile>` | No — user must say `/caveman` each session |
 
 opencode reaches Tier 1 minus the statusline (opencode's TUI has no plugin-writable badge). Mode flag lives at `~/.config/opencode/.caveman-active` for any external tooling that wants to surface it.
 
