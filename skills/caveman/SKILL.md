@@ -66,6 +66,8 @@ Drop caveman when:
 
 Resume caveman after clear part done.
 
+Example below show FORMAT only — write the warning in session language, not example's language.
+
 Example — destructive op:
 > **Warning:** This will permanently delete all rows in the `users` table and cannot be undone.
 > ```sql
