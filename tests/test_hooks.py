@@ -214,6 +214,31 @@ class HookScriptTests(unittest.TestCase):
 
             self.assertIn("PLUGIN ROOT MARKER RULESET", result.stdout)
 
+    # Regression: SessionStart fires more than once per conversation (resume,
+    # context compaction). It must not stomp a mode the user already set via
+    # /caveman <level> back to the configured default on re-fire.
+    def test_activate_preserves_existing_flag_across_rerun(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-preserve-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+            (claude_dir / ".caveman-active").write_text("ultra")
+
+            result = self.run_cmd(["node", "src/hooks/caveman-activate.js"], home)
+
+            self.assertEqual((claude_dir / ".caveman-active").read_text(), "ultra")
+            self.assertIn("| **ultra** |", result.stdout)
+            self.assertNotIn("| **full** |", result.stdout)
+
+    def test_activate_writes_default_when_no_existing_flag(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-nodefault-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            self.run_cmd(["node", "src/hooks/caveman-activate.js"], home)
+
+            self.assertEqual((home / ".claude" / ".caveman-active").read_text(), "full")
+
 
 if __name__ == "__main__":
     unittest.main()

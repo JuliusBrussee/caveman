@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag, recordModeChange } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -22,19 +22,27 @@ try {
   applyOverrides(resolvePluginRoot(__dirname));
 } catch (e) {}
 
-const mode = getDefaultMode();
+// SessionStart fires more than once per conversation (resume, context
+// compaction). If a valid flag is already on disk, a mode change happened
+// via /caveman <level> or a direct edit after the last SessionStart — honor
+// it instead of stomping it back to the configured default every re-fire.
+const existingMode = readFlag(flagPath);
+const mode = existingMode || getDefaultMode();
 
 // "off" mode — skip activation entirely, don't write flag or emit rules
 if (mode === 'off') {
-  recordModeChange(claudeDir, null); // #601: timestamped transition log
+  if (!existingMode) recordModeChange(claudeDir, null); // #601: timestamped transition log
   try { fs.unlinkSync(flagPath); } catch (e) {}
   process.stdout.write('OK');
   process.exit(0);
 }
 
-// 1. Write flag file (symlink-safe)
-recordModeChange(claudeDir, mode); // #601
-safeWriteFlag(flagPath, mode);
+// 1. Write flag file (symlink-safe) — only when there's no existing valid
+// override to preserve (see above).
+if (!existingMode) {
+  recordModeChange(claudeDir, mode); // #601
+  safeWriteFlag(flagPath, mode);
+}
 
 // 2. Emit full caveman ruleset, filtered to the active intensity level.
 //    The old 2-sentence summary was too weak — models drifted back to verbose
