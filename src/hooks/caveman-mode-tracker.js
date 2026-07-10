@@ -11,6 +11,13 @@ const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange, VALID_MODES }
 // Modes handled by their own slash commands (/caveman-commit, etc.) — not
 // selectable via /caveman <arg>.
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
+const HOOK_EVENT_NAME = 'UserPromptSubmit';
+const STATS_SUCCESS_CONTEXT_PREFIX =
+  'The user ran /caveman-stats. Print the stats block below inside a code block, ' +
+  'verbatim, with no summary, reformatting, or commentary:\n\n';
+const STATS_FAILURE_CONTEXT =
+  'The user ran /caveman-stats but the stats script failed. ' +
+  'Tell them to run it manually: node hooks/caveman-stats.js';
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -70,12 +77,14 @@ process.stdin.on('end', () => {
       }
     }
 
-    // /caveman-stats [--share] — block the prompt and inject stats output as
-    // the hook's reason. The script reads the active session log, so we pass
-    // transcript_path through when Claude Code provides it.
+    // /caveman-stats [--share] — inject stats output as additional context so
+    // GUI clients render it; some clients honor decision:block but hide reason.
+    // The script reads the active session log, so we pass transcript_path
+    // through when Claude Code provides it.
     const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
     if (statsMatch) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
+      let context;
       try {
         const statsPath = path.join(__dirname, 'caveman-stats.js');
         const argv = [statsPath];
@@ -87,13 +96,16 @@ process.stdin.on('end', () => {
           argv.push('--since', tailArgs[sinceIdx + 1]);
         }
         const out = execFileSync(process.execPath, argv, { encoding: 'utf8', timeout: 5000 });
-        process.stdout.write(JSON.stringify({ decision: 'block', reason: out.trim() }));
+        context = STATS_SUCCESS_CONTEXT_PREFIX + out.trim();
       } catch (e) {
-        process.stdout.write(JSON.stringify({
-          decision: 'block',
-          reason: 'caveman-stats: could not run stats script.\nTry manually: node hooks/caveman-stats.js'
-        }));
+        context = STATS_FAILURE_CONTEXT;
       }
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: HOOK_EVENT_NAME,
+          additionalContext: context
+        }
+      }));
       return;
     }
 
@@ -193,7 +205,7 @@ process.stdin.on('end', () => {
     if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
-          hookEventName: "UserPromptSubmit",
+          hookEventName: HOOK_EVENT_NAME,
           additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
             "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
             "Code/commits/security: write normal."

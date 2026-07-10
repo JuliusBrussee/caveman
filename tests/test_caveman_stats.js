@@ -11,6 +11,7 @@ const { execFileSync } = require('child_process');
 const ROOT = path.resolve(__dirname, '..');
 const STATS = path.join(ROOT, 'src', 'hooks', 'caveman-stats.js');
 const TRACKER = path.join(ROOT, 'src', 'hooks', 'caveman-mode-tracker.js');
+const HOOK_EVENT_NAME = 'UserPromptSubmit';
 
 let passed = 0;
 let failed = 0;
@@ -95,7 +96,7 @@ test('reports no-session when no .jsonl exists', (tmp) => {
   assert.match(err.stderr, /no Claude Code session found/);
 });
 
-test('mode tracker handles /caveman-stats with decision block', (tmp) => {
+test('mode tracker handles /caveman-stats with additional context', (tmp) => {
   const sess = makeSession(tmp, [
     { type: 'assistant', message: { usage: { output_tokens: 100 } } },
   ]);
@@ -107,9 +108,12 @@ test('mode tracker handles /caveman-stats with decision block', (tmp) => {
     input: JSON.stringify({ prompt: '/caveman-stats', transcript_path: sess }),
   });
   const parsed = JSON.parse(out);
-  assert.strictEqual(parsed.decision, 'block');
-  assert.match(parsed.reason, /Caveman Stats/);
-  assert.match(parsed.reason, /Output tokens:\s+100/);
+  assert.notStrictEqual(parsed.decision, 'block');
+  assert.strictEqual(parsed.hookSpecificOutput.hookEventName, HOOK_EVENT_NAME);
+  assert.match(parsed.hookSpecificOutput.additionalContext, /inside a code block/);
+  assert.match(parsed.hookSpecificOutput.additionalContext, /no summary, reformatting, or commentary/);
+  assert.match(parsed.hookSpecificOutput.additionalContext, /Caveman Stats/);
+  assert.match(parsed.hookSpecificOutput.additionalContext, /Output tokens:\s+100/);
 });
 
 test('mode tracker preserves caveman flag when /caveman-stats fires', (tmp) => {
@@ -456,8 +460,9 @@ test('mode tracker forwards --share to stats script', (tmp) => {
     input: JSON.stringify({ prompt: '/caveman-stats --share', transcript_path: sess }),
   });
   const parsed = JSON.parse(out);
-  assert.strictEqual(parsed.decision, 'block');
-  assert.match(parsed.reason, /^🪨 Saved 650 output tokens/);
+  assert.notStrictEqual(parsed.decision, 'block');
+  assert.strictEqual(parsed.hookSpecificOutput.hookEventName, HOOK_EVENT_NAME);
+  assert.match(parsed.hookSpecificOutput.additionalContext, /🪨 Saved 650 output tokens/);
 });
 
 // ── Output-reduction share (never a "usage"/"budget" claim) ────────────────

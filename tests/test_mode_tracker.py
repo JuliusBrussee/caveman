@@ -22,6 +22,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TRACKER = REPO_ROOT / "src" / "hooks" / "caveman-mode-tracker.js"
+STATS_COMMAND = "/caveman-stats"
+HOOK_EVENT_NAME = "UserPromptSubmit"
 
 
 class ModeTrackerTests(unittest.TestCase):
@@ -35,17 +37,20 @@ class ModeTrackerTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def send(self, prompt):
+    def send(self, prompt, extra_payload=None):
         env = os.environ.copy()
         env.pop("CAVEMAN_DEFAULT_MODE", None)
         env["HOME"] = self._tmp.name
         env["USERPROFILE"] = self._tmp.name
         env["CLAUDE_CONFIG_DIR"] = str(self.claude_dir)
+        payload = {"prompt": prompt}
+        if extra_payload:
+            payload.update(extra_payload)
         return subprocess.run(
             ["node", str(TRACKER)],
             cwd=REPO_ROOT,
             env=env,
-            input=json.dumps({"prompt": prompt}),
+            input=json.dumps(payload),
             text=True,
             capture_output=True,
             check=True,
@@ -176,6 +181,22 @@ class ModeTrackerTests(unittest.TestCase):
         self.send("next prompt")  # restore
         self.send("/caveman:caveman-review")
         self.assertEqual(self.flag_value(), "review")
+
+    def test_stats_uses_additional_context_instead_of_block_reason(self):
+        transcript = self.claude_dir / "session.jsonl"
+        transcript.write_text("")
+        result = self.send(STATS_COMMAND, {"transcript_path": str(transcript)})
+        payload = json.loads(result.stdout)
+
+        self.assertNotEqual(payload.get("decision"), "block")
+        output = payload["hookSpecificOutput"]
+        self.assertEqual(output["hookEventName"], HOOK_EVENT_NAME)
+        self.assertIn("The user ran /caveman-stats.", output["additionalContext"])
+        self.assertIn("inside a code block", output["additionalContext"])
+        self.assertIn(
+            "with no summary, reformatting, or commentary",
+            output["additionalContext"],
+        )
 
     def test_no_reinforcement_during_independent_turn(self):
         self.flag.write_text("full")
