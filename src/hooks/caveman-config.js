@@ -345,4 +345,32 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory, recordModeChange, MODE_LOG_BASENAME };
+function getPropagateToSubagents() {
+  const env = process.env.CAVEMAN_PROPAGATE;
+  if (env !== undefined) {
+    return env !== '0' && env.toLowerCase() !== 'false';
+  }
+
+  const repoConfigPath = findRepoConfigPath(process.cwd());
+  if (repoConfigPath) {
+    try {
+      const raw = fs.readFileSync(repoConfigPath, 'utf8');
+      const config = JSON.parse(raw);
+      if (config && typeof config.propagateToSubagents === 'boolean') {
+        return config.propagateToSubagents;
+      }
+    } catch (e) {}
+  }
+
+  try {
+    const raw = fs.readFileSync(getConfigPath(), 'utf8');
+    const config = JSON.parse(raw);
+    if (config && typeof config.propagateToSubagents === 'boolean') {
+      return config.propagateToSubagents;
+    }
+  } catch (e) {}
+
+  return true;
+}
+
+module.exports = { getDefaultMode, getPropagateToSubagents, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory, recordModeChange, MODE_LOG_BASENAME };
