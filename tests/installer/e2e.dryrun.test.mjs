@@ -56,4 +56,84 @@ test('dry-run --uninstall does not delete files', () => {
   // File still present, settings unchanged.
   assert.equal(fs.existsSync(fake), true);
   assert.equal(fs.readFileSync(path.join(cfg, 'settings.json'), 'utf8'), before);
+  assert.match(r.stdout, /would remove 1 caveman hook entry from settings\.json/);
+  assert.doesNotMatch(r.stdout, /removed .*settings\.json/);
+});
+
+const CLAUDE_EPHEMERAL_STATE_FILES = [
+  '.caveman-active',
+  '.caveman-active.prev',
+  '.caveman-mode-log.jsonl',
+  '.caveman-statusline-suffix',
+];
+const CLAUDE_HISTORY_FILE = '.caveman-history.jsonl';
+
+test('dry-run --uninstall reports state cleanup without deleting state files', () => {
+  const cfg = freshTmpDir();
+  for (const file of [...CLAUDE_EPHEMERAL_STATE_FILES, CLAUDE_HISTORY_FILE]) {
+    fs.writeFileSync(path.join(cfg, file), 'seed\n');
+  }
+
+  const r = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--dry-run', '--non-interactive', '--config-dir', cfg],
+    { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfg, PATH: '' } });
+  assert.equal(r.status, 0, r.stderr);
+
+  for (const file of CLAUDE_EPHEMERAL_STATE_FILES) {
+    assert.equal(fs.existsSync(path.join(cfg, file)), true, `${file} should survive dry-run`);
+    assert.match(r.stdout, new RegExp(`would remove .*${file.replaceAll('.', '\\.')}`));
+  }
+  assert.equal(fs.existsSync(path.join(cfg, CLAUDE_HISTORY_FILE)), true, 'history should survive dry-run');
+  assert.match(r.stdout, /kept .*\.caveman-history\.jsonl/);
+});
+
+test('uninstall removes ephemeral Claude state but keeps lifetime history', () => {
+  const cfg = freshTmpDir();
+
+  for (const file of [...CLAUDE_EPHEMERAL_STATE_FILES, CLAUDE_HISTORY_FILE]) {
+    fs.writeFileSync(path.join(cfg, file), 'seed\n');
+  }
+
+  const r = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--non-interactive', '--config-dir', cfg],
+    { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfg, PATH: '' } });
+  assert.equal(r.status, 0, r.stderr);
+
+  for (const file of CLAUDE_EPHEMERAL_STATE_FILES) {
+    assert.equal(fs.existsSync(path.join(cfg, file)), false, `${file} should be removed`);
+    assert.match(r.stdout, new RegExp(`removed .*${file.replaceAll('.', '\\.')}`));
+  }
+  assert.equal(fs.existsSync(path.join(cfg, CLAUDE_HISTORY_FILE)), true, 'lifetime history should be preserved');
+  assert.match(r.stdout, /kept .*\.caveman-history\.jsonl/);
+});
+
+test('uninstall warns when an ephemeral state file cannot be removed', () => {
+  const cfg = freshTmpDir();
+  const blockedState = '.caveman-active';
+  const blockedPath = path.join(cfg, blockedState);
+  fs.mkdirSync(blockedPath);
+  fs.writeFileSync(path.join(cfg, CLAUDE_HISTORY_FILE), 'seed\n');
+
+  const r = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--non-interactive', '--config-dir', cfg],
+    { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfg, PATH: '' } });
+  assert.equal(r.status, 0, r.stderr);
+
+  const combinedOutput = r.stdout + r.stderr;
+  assert.match(combinedOutput, /failed to remove .*\.caveman-active/);
+  assert.doesNotMatch(combinedOutput, /removed .*\.caveman-active/);
+  assert.equal(fs.existsSync(blockedPath), true, `${blockedState} directory should remain after unlink failure`);
+  assert.equal(fs.existsSync(path.join(cfg, CLAUDE_HISTORY_FILE)), true, 'history should survive failed cleanup');
+});
+
+test('uninstall warns when a managed hook file cannot be removed', () => {
+  const cfg = freshTmpDir();
+  const blockedHook = path.join(cfg, 'hooks', 'caveman-activate.js');
+  fs.mkdirSync(blockedHook, { recursive: true });
+
+  const r = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--non-interactive', '--config-dir', cfg],
+    { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfg, PATH: '' } });
+  assert.equal(r.status, 0, r.stderr);
+
+  const combinedOutput = r.stdout + r.stderr;
+  assert.match(combinedOutput, /failed to remove .*caveman-activate\.js/);
+  assert.doesNotMatch(combinedOutput, /removed .*caveman-activate\.js/);
+  assert.equal(fs.existsSync(blockedHook), true, 'hook directory should remain after unlink failure');
 });
