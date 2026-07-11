@@ -86,12 +86,36 @@ test('hermes dry-run uninstall leaves skills in place', () => {
     runInstaller(['--only', 'hermes'], home);
     const r = runInstaller(['--uninstall', '--dry-run'], home);
     assert.notEqual(r.status, 2);
+    assert.match(r.stdout, /would remove .*skills[/\\]productivity[/\\]caveman/);
+    assert.match(r.stdout, /would prune caveman skills from Hermes/);
+    assert.doesNotMatch(r.stdout, /removed .*skills[/\\]productivity[/\\]caveman/);
+    assert.doesNotMatch(r.stdout, /pruned caveman skills from Hermes/);
 
     const prod = productivityDir(home);
     for (const name of SKILLS) {
       assert.ok(fs.existsSync(path.join(prod, name)), `${name} was deleted by a dry-run uninstall`);
     }
   } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('hermes uninstall warns when a skill folder cannot be removed', () => {
+  const home = freshHome();
+  const prod = productivityDir(home);
+  try {
+    runInstaller(['--only', 'hermes'], home);
+    const blocked = path.join(prod, 'caveman');
+    fs.chmodSync(prod, 0o555);
+
+    const r = runInstaller(['--uninstall'], home);
+    assert.notEqual(r.status, 2);
+    const combinedOutput = r.stdout + r.stderr;
+    assert.match(combinedOutput, /failed to remove .*skills[/\\]productivity[/\\]caveman/);
+    assert.doesNotMatch(combinedOutput, /removed .*skills[/\\]productivity[/\\]caveman/);
+    assert.ok(fs.existsSync(blocked), 'blocked Hermes skill should remain after failed cleanup');
+  } finally {
+    try { fs.chmodSync(prod, 0o755); } catch {}
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
