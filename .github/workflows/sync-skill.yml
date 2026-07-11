@@ -10,6 +10,10 @@ on:
       - skills/caveman-compress/SKILL.md
       - skills/caveman-compress/scripts/**
 
+# Least-privilege default; the sync job below elevates to contents: write.
+permissions:
+  contents: read
+
 concurrency:
   group: sync-skill
   cancel-in-progress: false
@@ -17,10 +21,11 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: main
 
