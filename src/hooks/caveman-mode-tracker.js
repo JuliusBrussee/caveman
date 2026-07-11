@@ -18,6 +18,21 @@ const flagPath = path.join(claudeDir, '.caveman-active');
 // (/caveman-commit etc.) so the next ordinary prompt can restore it (#599).
 const prevPath = path.join(claudeDir, '.caveman-active.prev');
 
+// Opt-in language auto-detection: env var wins, then settings.json.
+function autoDetectEnabled() {
+  const env = (process.env.CAVEMAN_AUTO_DETECT_LANG || '').trim().toLowerCase();
+  if (env === '1' || env === 'true' || env === 'yes') return true;
+  if (env === '0' || env === 'false' || env === 'no') return false;
+  try {
+    const settingsPath = path.join(claudeDir, 'settings.json');
+    if (fs.existsSync(settingsPath)) {
+      const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      return !!(s && s.caveman && s.caveman.autoDetectLanguage);
+    }
+  } catch (e) { /* silent */ }
+  return false;
+}
+
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
 // Abnormal stdin close (broken pipe, parent crash) emits 'error'; without a
@@ -43,7 +58,10 @@ process.stdin.on('end', () => {
       // switch-back verb) or with caveman context — never mid-sentence for
       // e.g. vim's normal mode ("how do I exit vim normal mode").
       /^(please\s+)?(go\s+|back\s+to\s+|switch\s+(back\s+)?to\s+|return\s+to\s+)?normal\s+mode\b/.test(prompt) ||
-      (/\bnormal\s+mode\b/.test(prompt) && /\bcaveman\b/.test(prompt));
+      (/\bnormal\s+mode\b/.test(prompt) && /\bcaveman\b/.test(prompt)) ||
+      // Russian deactivation phrases
+      /(^|\s)(обычный режим|нормальный режим)(\s|[.!]|$)/.test(prompt) ||
+      /(выключи|стоп|отключи)\s+(пещерн\S*|caveman)/.test(prompt);
 
     // Questions about caveman are not activation commands
     // ("what is caveman mode?", "does caveman lite drop articles?").
@@ -57,7 +75,16 @@ process.stdin.on('end', () => {
     // ("be brief in the summary"), which is a one-off instruction, not a
     // session-wide mode switch.
     if (!wantsOff && !isQuestion) {
-      if (/\b(activate|enable|start|turn on|use|switch to|want|give me)\b[^.]{0,40}\bcaveman\b/.test(prompt) ||
+      // Russian natural-language activation → ru-full directly
+      const ruActivate =
+        /(включи|активируй|давай)\s+пещерн/.test(prompt) ||
+        /пещерный\s+режим/.test(prompt) ||
+        /отвечай\s+как\s+пещерный/.test(prompt) ||
+        /(меньше|поменьше)\s+токенов/.test(prompt);
+      if (ruActivate) {
+        recordModeChange(claudeDir, 'ru-full'); // #601
+        safeWriteFlag(flagPath, 'ru-full');
+      } else if (/\b(activate|enable|start|turn on|use|switch to|want|give me)\b[^.]{0,40}\bcaveman\b/.test(prompt) ||
           /\btalk like\b[^.]{0,40}\bcaveman\b/.test(prompt) ||
           /\bcaveman\s+mode\s+(on|please|now)\b/.test(prompt) ||
           /^caveman(\s+mode)?\s*[.!]*$/.test(prompt) ||
@@ -118,6 +145,12 @@ process.stdin.on('end', () => {
         mode = 'review';
       } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
         mode = 'compress';
+      } else if (cmd === '/caveman-ru' || cmd === '/caveman:caveman-ru') {
+        // Russian shorthand: /caveman-ru [lite|full|ultra|notes]
+        if (arg === 'lite') mode = 'ru-lite';
+        else if (arg === 'ultra') mode = 'ru-ultra';
+        else if (arg === 'notes') mode = 'ru-notes';
+        else mode = 'ru-full';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
         // Bare /caveman → activate at configured default
         if (!arg) {
@@ -127,6 +160,9 @@ process.stdin.on('end', () => {
         } else if (arg === 'wenyan-full') {
           // Canonical alias — config stores as 'wenyan'
           mode = 'wenyan';
+        } else if (arg === 'ru') {
+          // Alias — ru defaults to ru-full
+          mode = 'ru-full';
         } else if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) {
           mode = arg;
         }
@@ -158,6 +194,35 @@ process.stdin.on('end', () => {
       recordModeChange(claudeDir, null); // #601
       try { fs.unlinkSync(flagPath); } catch (e) {}
       try { fs.unlinkSync(prevPath); } catch (e) {}
+    }
+
+    // Auto-detect prompt language (opt-in via CAVEMAN_AUTO_DETECT_LANG=1 or
+    // settings.caveman.autoDetectLanguage). A mostly-Cyrillic prompt flips a
+    // generic English mode to its ru-* twin; a mostly-Latin prompt flips back.
+    // Explicit /caveman commands this turn always win (checked via prompt).
+    if (!wantsOff && !prompt.startsWith('/caveman') && autoDetectEnabled()) {
+      const prose = (data.prompt || '')
+        .replace(/```[\s\S]*?```/g, ' ')
+        .replace(/`[^`]*`/g, ' ');
+      if (prose.length >= 15) {
+        let cyr = 0, lat = 0;
+        for (const ch of prose) {
+          if (/[а-яёА-ЯЁ]/.test(ch)) cyr++;
+          else if (/[a-zA-Z]/.test(ch)) lat++;
+        }
+        const total = cyr + lat;
+        const ratio = total === 0 ? 0 : cyr / total;
+        const current = readFlag(flagPath);
+        const EN_TO_RU = { 'full': 'ru-full', 'lite': 'ru-lite', 'ultra': 'ru-ultra' };
+        const RU_TO_EN = { 'ru-full': 'full', 'ru-lite': 'lite', 'ru-ultra': 'ultra', 'ru-notes': 'full' };
+        if (ratio >= 0.30 && current && EN_TO_RU[current]) {
+          recordModeChange(claudeDir, EN_TO_RU[current]);
+          safeWriteFlag(flagPath, EN_TO_RU[current]);
+        } else if (ratio <= 0.05 && current && RU_TO_EN[current]) {
+          recordModeChange(claudeDir, RU_TO_EN[current]);
+          safeWriteFlag(flagPath, RU_TO_EN[current]);
+        }
+      }
     }
 
     // Per-turn reinforcement: emit a structured reminder when caveman is active.

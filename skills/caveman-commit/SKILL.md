@@ -4,7 +4,8 @@ description: >
   Ultra-compressed commit message generator. Cuts noise from commit messages while preserving
   intent and reasoning. Conventional Commits format. Subject ≤50 chars, body only when "why"
   isn't obvious. Use when user says "write a commit", "commit message", "generate commit",
-  "/commit", or invokes /caveman-commit. Auto-triggers when staging changes.
+  "/commit", or invokes /caveman-commit. Russian: "напиши коммит", "сообщение коммита".
+  Auto-triggers when staging changes.
 ---
 
 Write commit messages terse and exact. Conventional Commits format. No fluff. Why over what.
@@ -63,3 +64,7 @@ Always include body for: breaking changes, security fixes, data migrations, anyt
 ## Boundaries
 
 Only generates the commit message. Does not run `git commit`, does not stage files, does not amend. Output the message as a code block ready to paste. "stop caveman-commit" or "normal mode": revert to verbose commit style.
+
+## Russian Mode
+
+When active caveman mode is `ru-*`, write commit **subject in English** (Conventional Commits stays English for tooling compatibility) but body in Russian if body is needed. For Russian compression rules, see [russian-rules.md](../caveman/russian-rules.md).

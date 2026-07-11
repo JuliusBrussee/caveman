@@ -37,6 +37,10 @@ def run(
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     merged_env = os.environ.copy()
+    # Ensure caveman language env vars don't leak from the test runner
+    merged_env.pop("CAVEMAN_LANG", None)
+    merged_env.pop("CAVEMAN_AUTO_DETECT_LANG", None)
+    merged_env.pop("CAVEMAN_DEFAULT_MODE", None)
     # Keep Python subprocess output decodable on Windows when the CLI prints Unicode.
     merged_env.setdefault("PYTHONIOENCODING", "utf-8")
     if env:
@@ -134,12 +138,28 @@ def verify_synced_files() -> None:
             f"Skill copy mismatch: {copy}",
         )
 
+    # Russian rules supplementary file must be synced to the plugin copy
+    russian_source = ROOT / "skills/caveman/russian-rules.md"
+    russian_copies = [
+        ROOT / "plugins/caveman/skills/caveman/russian-rules.md",
+    ]
+    for copy in russian_copies:
+        ensure(
+            copy.read_text(encoding="utf-8") == russian_source.read_text(encoding="utf-8"),
+            f"Russian rules copy mismatch: {copy}",
+        )
+
     with zipfile.ZipFile(ROOT / "dist" / "caveman.skill") as archive:
         ensure("caveman/SKILL.md" in archive.namelist(), "caveman.skill missing caveman/SKILL.md")
         ensure(
             archive.read("caveman/SKILL.md").decode("utf-8")
             == skill_source.read_text(encoding="utf-8"),
             "caveman.skill payload mismatch",
+        )
+        ensure("caveman/russian-rules.md" in archive.namelist(), "caveman.skill missing caveman/russian-rules.md")
+        ensure(
+            archive.read("caveman/russian-rules.md").decode("utf-8") == russian_source.read_text(),
+            "caveman.skill russian-rules.md payload mismatch",
         )
 
     ensure(

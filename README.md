@@ -121,7 +121,7 @@ npx skills add JuliusBrussee/caveman -a cursor
 
 ## Pick your grunt
 
-Six levels. Switch anytime with `/caveman <level>`. Level sticks until you change it or the session ends.
+Ten levels. Switch anytime with `/caveman <level>`. Level sticks until you change it or the session ends.
 
 | Level | Same sentence, shrunk |
 |---|---|
@@ -130,9 +130,10 @@ Six levels. Switch anytime with `/caveman <level>`. Level sticks until you chang
 | `full` *(default)* | New ref each render. Wrap object in `useMemo`. |
 | `ultra` | New ref/render. `useMemo` it. |
 | `wenyan` | New ref every render, so wrap in `useMemo` — rendered in classical Chinese, shorter still. |
+| `ru-full` | «Новый объект каждый рендер. Оберни в `useMemo`.» — compressed Russian. Sub-levels: `ru-lite` / `ru-full` / `ru-ultra` / `ru-notes` |
 
 > [!NOTE]
-> **Speak your tongue.** Caveman keeps your language. Write Portuguese, caveman grunt Portuguese. Spanish, French, same. It compresses the *style*, never translates. `wenyan` mode is the exception on purpose: classical Chinese packs the most meaning per token.
+> **Speak your tongue.** Caveman keeps your language. Write Portuguese, caveman grunt Portuguese. Spanish, French, same. It compresses the *style*, never translates. Two exceptions on purpose: `wenyan` (classical Chinese packs the most meaning per token) and `ru-*` (Russian runs long in tokens, so it gets dedicated levels with language-specific rules in [`skills/caveman/russian-rules.md`](skills/caveman/russian-rules.md)). Russian also answers to `/caveman-ru` and «пещерный режим»; switch back with «обычный режим».
 
 ## What you get
 

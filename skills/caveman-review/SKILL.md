@@ -4,7 +4,8 @@ description: >
   Ultra-compressed code review comments. Cuts noise from PR feedback while preserving
   the actionable signal. Each comment is one line: location, problem, fix. Use when user
   says "review this PR", "code review", "review the diff", "/review", or invokes
-  /caveman-review. Auto-triggers when reviewing pull requests.
+  /caveman-review. Russian: "проверь PR", "ревью кода", "проверь изменения".
+  Auto-triggers when reviewing pull requests.
 ---
 
 Write code review comments terse and actionable. One line per finding. Location, problem, fix. No throat-clearing.
@@ -53,3 +54,7 @@ Drop terse mode for: security findings (CVE-class bugs need full explanation + r
 ## Boundaries
 
 Reviews only — does not write the code fix, does not approve/request-changes, does not run linters. Output the comment(s) ready to paste into the PR. "stop caveman-review" or "normal mode": revert to verbose review style.
+
+## Russian Mode
+
+When active caveman mode is `ru-*`, write review comments in Russian. Keep the `L<line>: <severity> <problem>. <fix>.` format but use Russian prose for the problem/fix text. Code identifiers stay as-is. For Russian compression rules, see [russian-rules.md](../caveman/russian-rules.md).

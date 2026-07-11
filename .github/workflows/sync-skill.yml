@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - skills/caveman/SKILL.md
+      - skills/caveman/russian-rules.md
       - skills/cavecrew/SKILL.md
       - agents/cavecrew-*.md
       - skills/caveman-compress/SKILL.md
@@ -34,6 +35,10 @@ jobs:
         run: |
           cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
 
+      - name: Sync russian-rules.md copies
+        run: |
+          cp skills/caveman/russian-rules.md plugins/caveman/skills/caveman/russian-rules.md
+
       - name: Sync caveman-compress skill to plugin
         run: |
           # Plugin distribution mirrors source verbatim — no rename, no sed.
@@ -60,6 +65,7 @@ jobs:
             skills/caveman-compress/ \
             plugins/caveman/skills/caveman-compress/ \
             plugins/caveman/skills/caveman/SKILL.md \
+            plugins/caveman/skills/caveman/russian-rules.md \
             plugins/caveman/skills/cavecrew/SKILL.md \
             plugins/caveman/agents/cavecrew-investigator.md \
             plugins/caveman/agents/cavecrew-builder.md \
