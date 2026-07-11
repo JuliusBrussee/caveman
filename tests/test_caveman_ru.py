@@ -12,7 +12,7 @@ SKILL_DIR = REPO_ROOT / "skills" / "caveman"
 CORPUS = REPO_ROOT / "tests" / "corpus-ru" / "examples.json"
 COMMAND = REPO_ROOT / "commands" / "caveman.toml"
 EVAL_PROMPTS = REPO_ROOT / "evals" / "prompts" / "ru.txt"
-MODE_TRACKER = REPO_ROOT / "hooks" / "caveman-mode-tracker.js"
+MODE_TRACKER = REPO_ROOT / "src" / "hooks" / "caveman-mode-tracker.js"
 
 LEVELS = ["ru-lite", "ru-full", "ru-ultra", "ru-notes"]
 
@@ -51,13 +51,6 @@ class RussianCavemanAssetsTests(unittest.TestCase):
         # File must explicitly flag token-wasteful forms as forbidden
         self.assertIn("Запрещены", text)
         self.assertIn("т.к.", text)  # mentioned as forbidden example
-
-    def test_activation_rule_mentions_russian(self):
-        rule = REPO_ROOT / "rules" / "caveman-activate.md"
-        self.assertTrue(rule.exists())
-        text = rule.read_text(encoding="utf-8")
-        self.assertIn("ru-full", text)
-        self.assertIn("обычный режим", text)
 
     def test_command_toml_has_russian_levels(self):
         self.assertTrue(COMMAND.exists(), f"missing {COMMAND}")
@@ -339,9 +332,9 @@ class AutoDetectLanguageTests(unittest.TestCase):
 
 
 class SessionStartLanguageTests(unittest.TestCase):
-    """Tests for the default-language logic in hooks/caveman-activate.js."""
+    """Tests for the default-language logic in src/hooks/caveman-activate.js."""
 
-    ACTIVATE = REPO_ROOT / "hooks" / "caveman-activate.js"
+    ACTIVATE = REPO_ROOT / "src" / "hooks" / "caveman-activate.js"
 
     def _run(self, *, settings=None, env_overrides=None):
         with tempfile.TemporaryDirectory(prefix="caveman-activate-") as tmp:

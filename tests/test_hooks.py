@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -10,14 +11,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class HookScriptTests(unittest.TestCase):
-    def run_cmd(self, cmd, home):
+    def run_cmd(self, cmd, home, extra_env=None):
         env = os.environ.copy()
+        env.pop("CLAUDE_PLUGIN_ROOT", None)
         env["HOME"] = str(home)
         env["USERPROFILE"] = str(home)
         # Ensure caveman language env vars don't leak from the test runner
         env.pop("CAVEMAN_LANG", None)
         env.pop("CAVEMAN_AUTO_DETECT_LANG", None)
         env.pop("CAVEMAN_DEFAULT_MODE", None)
+        if extra_env:
+            env.update(extra_env)
         return subprocess.run(
             cmd,
             cwd=REPO_ROOT,
@@ -36,7 +40,7 @@ class HookScriptTests(unittest.TestCase):
             (hooks_dir / "caveman-activate.js").write_text("")
             (hooks_dir / "caveman-mode-tracker.js").write_text("")
 
-            self.run_cmd(["bash", "hooks/install.sh"], home)
+            self.run_cmd(["bash", "src/hooks/install.sh"], home)
 
             statusline = hooks_dir / "caveman-statusline.sh"
             self.assertTrue(statusline.exists(), "upgrade should install statusline script")
@@ -81,7 +85,7 @@ class HookScriptTests(unittest.TestCase):
             }
             (claude_dir / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
 
-            result = self.run_cmd(["bash", "hooks/install.sh"], home)
+            result = self.run_cmd(["bash", "src/hooks/install.sh"], home)
 
             self.assertNotIn("Nothing to do", result.stdout)
 
@@ -129,7 +133,7 @@ class HookScriptTests(unittest.TestCase):
             }
             (claude_dir / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
 
-            self.run_cmd(["bash", "hooks/uninstall.sh"], home)
+            self.run_cmd(["bash", "src/hooks/uninstall.sh"], home)
 
             updated = json.loads((claude_dir / "settings.json").read_text())
             self.assertEqual(
@@ -155,10 +159,64 @@ class HookScriptTests(unittest.TestCase):
                 + "\n"
             )
 
-            result = self.run_cmd(["node", "hooks/caveman-activate.js"], home)
+            result = self.run_cmd(["node", "src/hooks/caveman-activate.js"], home)
 
             self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
             self.assertEqual((claude_dir / ".caveman-active").read_text(), "full")
+
+    # Regression for #587/#589 — hook at <root>/src/hooks/ must resolve SKILL.md
+    # at <root>/skills/caveman/, not the nonexistent <root>/src/skills/.
+    def test_activate_emits_skill_md_not_fallback_from_repo_layout(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-skillpath-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+
+            result = self.run_cmd(["node", "src/hooks/caveman-activate.js"], home)
+
+            # Intensity table exists only in SKILL.md, never in the fallback
+            self.assertIn("## Intensity", result.stdout)
+            # Default mode is full — table filtered to the active level's row
+            self.assertIn("| **full** |", result.stdout)
+            self.assertNotIn("| **lite** |", result.stdout)
+
+    def test_activate_finds_skill_beside_config_dir_hooks(self):
+        # Standalone layout: hooks at $CLAUDE_CONFIG_DIR/hooks/, skill installed
+        # at $CLAUDE_CONFIG_DIR/skills/caveman/SKILL.md
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-standalone-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            hooks_dir = claude_dir / "hooks"
+            hooks_dir.mkdir(parents=True)
+            for name in ("caveman-activate.js", "caveman-config.js", "package.json"):
+                shutil.copy(REPO_ROOT / "src" / "hooks" / name, hooks_dir / name)
+            skill_dir = claude_dir / "skills" / "caveman"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: caveman\n---\nSTANDALONE MARKER RULESET\n"
+            )
+
+            result = self.run_cmd(["node", str(hooks_dir / "caveman-activate.js")], home)
+
+            self.assertIn("STANDALONE MARKER RULESET", result.stdout)
+
+    def test_activate_prefers_claude_plugin_root(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-pluginroot-") as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir(parents=True)
+            plugin_root = home / "plugin-cache"
+            skill_dir = plugin_root / "skills" / "caveman"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: caveman\n---\nPLUGIN ROOT MARKER RULESET\n"
+            )
+
+            result = self.run_cmd(
+                ["node", "src/hooks/caveman-activate.js"],
+                home,
+                extra_env={"CLAUDE_PLUGIN_ROOT": str(plugin_root)},
+            )
+
+            self.assertIn("PLUGIN ROOT MARKER RULESET", result.stdout)
 
 
 if __name__ == "__main__":

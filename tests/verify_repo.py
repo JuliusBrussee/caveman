@@ -113,7 +113,7 @@ def verify_skill_frontmatter_upload_compatibility() -> None:
         ROOT / "skills/caveman-commit/SKILL.md",
         ROOT / "skills/caveman-help/SKILL.md",
         ROOT / "skills/caveman-review/SKILL.md",
-        ROOT / "caveman-compress/SKILL.md",
+        ROOT / "skills/caveman-compress/SKILL.md",
     ]
     for path in skill_paths:
         description = _frontmatter_description(path)
@@ -128,13 +128,9 @@ def verify_skill_frontmatter_upload_compatibility() -> None:
 def verify_synced_files() -> None:
     section("Synced Files")
     skill_source = ROOT / "skills/caveman/SKILL.md"
-    rule_source = ROOT / "rules/caveman-activate.md"
 
     skill_copies = [
-        ROOT / "caveman/SKILL.md",
         ROOT / "plugins/caveman/skills/caveman/SKILL.md",
-        ROOT / ".cursor/skills/caveman/SKILL.md",
-        ROOT / ".windsurf/skills/caveman/SKILL.md",
     ]
     for copy in skill_copies:
         ensure(
@@ -142,28 +138,18 @@ def verify_synced_files() -> None:
             f"Skill copy mismatch: {copy}",
         )
 
-    # Russian rules supplementary file must be synced to all skill copy locations
+    # Russian rules supplementary file must be synced to the plugin copy
     russian_source = ROOT / "skills/caveman/russian-rules.md"
     russian_copies = [
-        ROOT / "caveman/russian-rules.md",
         ROOT / "plugins/caveman/skills/caveman/russian-rules.md",
-        ROOT / ".cursor/skills/caveman/russian-rules.md",
-        ROOT / ".windsurf/skills/caveman/russian-rules.md",
     ]
     for copy in russian_copies:
-        ensure(copy.read_text() == russian_source.read_text(), f"Russian rules copy mismatch: {copy}")
-
-    rule_copies = [
-        ROOT / ".clinerules/caveman.md",
-        ROOT / ".github/copilot-instructions.md",
-    ]
-    for copy in rule_copies:
         ensure(
-            copy.read_text(encoding="utf-8") == rule_source.read_text(encoding="utf-8"),
-            f"Rule copy mismatch: {copy}",
+            copy.read_text(encoding="utf-8") == russian_source.read_text(encoding="utf-8"),
+            f"Russian rules copy mismatch: {copy}",
         )
 
-    with zipfile.ZipFile(ROOT / "caveman.skill") as archive:
+    with zipfile.ZipFile(ROOT / "dist" / "caveman.skill") as archive:
         ensure("caveman/SKILL.md" in archive.namelist(), "caveman.skill missing caveman/SKILL.md")
         ensure(
             archive.read("caveman/SKILL.md").decode("utf-8")
@@ -176,14 +162,22 @@ def verify_synced_files() -> None:
             "caveman.skill russian-rules.md payload mismatch",
         )
 
-    print("Synced copies and caveman.skill zip OK")
+    ensure(
+        (ROOT / "bin" / "install.js").exists(),
+        "bin/install.js missing — package.json bin entry would break npx caveman",
+    )
+    ensure(
+        (ROOT / "bin" / "lib" / "settings.js").exists(),
+        "bin/lib/settings.js missing — installer would crash on JSONC settings.json",
+    )
+
+    print("Synced copies, caveman.skill zip, and installer entrypoints OK")
 
 
 def verify_manifests_and_syntax() -> None:
     section("Manifests And Syntax")
 
     manifest_paths = [
-        ROOT / ".agents/plugins/marketplace.json",
         ROOT / ".claude-plugin/plugin.json",
         ROOT / ".claude-plugin/marketplace.json",
         ROOT / ".codex/hooks.json",
@@ -193,16 +187,19 @@ def verify_manifests_and_syntax() -> None:
     for path in manifest_paths:
         read_json(path)
 
-    run(["node", "--check", "hooks/caveman-config.js"])
-    run(["node", "--check", "hooks/caveman-activate.js"])
-    run(["node", "--check", "hooks/caveman-mode-tracker.js"])
-    run(["bash", "-n", "hooks/install.sh"])
-    run(["bash", "-n", "hooks/uninstall.sh"])
-    run(["bash", "-n", "hooks/caveman-statusline.sh"])
+    run(["node", "--check", "src/hooks/caveman-config.js"])
+    run(["node", "--check", "src/hooks/caveman-activate.js"])
+    run(["node", "--check", "src/hooks/caveman-mode-tracker.js"])
+    run(["node", "--check", "src/hooks/cavecrew-model-overrides.js"])
+    run(["node", "--check", "bin/install.js"])
+    run(["node", "--check", "bin/lib/settings.js"])
+    run(["bash", "-n", "src/hooks/install.sh"])
+    run(["bash", "-n", "src/hooks/uninstall.sh"])
+    run(["bash", "-n", "src/hooks/caveman-statusline.sh"])
 
     # Ensure install/uninstall scripts include caveman-config.js
-    install_sh = (ROOT / "hooks/install.sh").read_text(encoding="utf-8")
-    uninstall_sh = (ROOT / "hooks/uninstall.sh").read_text(encoding="utf-8")
+    install_sh = (ROOT / "src/hooks/install.sh").read_text(encoding="utf-8")
+    uninstall_sh = (ROOT / "src/hooks/uninstall.sh").read_text(encoding="utf-8")
     ensure("caveman-config.js" in install_sh, "install.sh missing caveman-config.js")
     ensure("caveman-config.js" in uninstall_sh, "uninstall.sh missing caveman-config.js")
 
@@ -211,9 +208,9 @@ def verify_manifests_and_syntax() -> None:
 
 def verify_powershell_static() -> None:
     section("PowerShell Static Checks")
-    install_text = (ROOT / "hooks/install.ps1").read_text(encoding="utf-8")
-    uninstall_text = (ROOT / "hooks/uninstall.ps1").read_text(encoding="utf-8")
-    statusline_text = (ROOT / "hooks/caveman-statusline.ps1").read_text(encoding="utf-8")
+    install_text = (ROOT / "src/hooks/install.ps1").read_text(encoding="utf-8")
+    uninstall_text = (ROOT / "src/hooks/uninstall.ps1").read_text(encoding="utf-8")
+    statusline_text = (ROOT / "src/hooks/caveman-statusline.ps1").read_text(encoding="utf-8")
 
     ensure("caveman-config.js" in install_text, "install.ps1 missing caveman-config.js")
     ensure("caveman-config.js" in uninstall_text, "uninstall.ps1 missing caveman-config.js")
@@ -230,7 +227,7 @@ def verify_powershell_static() -> None:
 
 
 def load_compress_modules():
-    sys.path.insert(0, str(ROOT / "caveman-compress"))
+    sys.path.insert(0, str(ROOT / "skills/caveman-compress"))
     import scripts.benchmark  # noqa: F401
     import scripts.cli as cli
     import scripts.compress  # noqa: F401
@@ -261,8 +258,8 @@ def verify_compress_cli() -> None:
     section("Compress CLI")
 
     skip_result = run(
-        ["python3", "-m", "scripts", "../hooks/install.sh"],
-        cwd=ROOT / "caveman-compress",
+        ["python3", "-m", "scripts", "../../src/hooks/install.sh"],
+        cwd=ROOT / "skills/caveman-compress",
         check=False,
     )
     ensure(skip_result.returncode == 0, "compress CLI skip path should exit 0")
@@ -273,8 +270,8 @@ def verify_compress_cli() -> None:
     )
 
     missing_result = run(
-        ["python3", "-m", "scripts", "../does-not-exist.md"],
-        cwd=ROOT / "caveman-compress",
+        ["python3", "-m", "scripts", "../../does-not-exist.md"],
+        cwd=ROOT / "skills/caveman-compress",
         check=False,
     )
     ensure(missing_result.returncode == 1, "compress CLI missing-file path should exit 1")
@@ -302,7 +299,7 @@ def verify_hook_install_flow() -> None:
         (claude_dir / "settings.json").write_text(json.dumps(existing_settings, indent=2) + "\n")
         hook_env = {"HOME": shell_path(home), "CLAUDE_CONFIG_DIR": shell_path(claude_dir)}
 
-        run(["bash", "hooks/install.sh"], env=hook_env)
+        run(["bash", "src/hooks/install.sh"], env=hook_env)
 
         settings = read_json(claude_dir / "settings.json")
         hooks = settings["hooks"]
@@ -311,7 +308,7 @@ def verify_hook_install_flow() -> None:
         ensure("UserPromptSubmit" in hooks, "UserPromptSubmit hook missing after install")
 
         activate = run(
-            ["node", "hooks/caveman-activate.js"],
+            ["node", "src/hooks/caveman-activate.js"],
             env=hook_env,
         )
         ensure("CAVEMAN MODE ACTIVE" in activate.stdout, "activation output missing caveman banner")
@@ -320,7 +317,7 @@ def verify_hook_install_flow() -> None:
 
         # Test configurable default mode via CAVEMAN_DEFAULT_MODE env var
         activate_custom = run(
-            ["node", "hooks/caveman-activate.js"],
+            ["node", "src/hooks/caveman-activate.js"],
             env={**hook_env, "CAVEMAN_DEFAULT_MODE": "ultra"},
         )
         ensure("CAVEMAN MODE ACTIVE" in activate_custom.stdout, "activation with custom default missing banner")
@@ -328,14 +325,9 @@ def verify_hook_install_flow() -> None:
             (claude_dir / ".caveman-active").read_text(encoding="utf-8") == "ultra",
             "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra",
         )
-<<<<<<< HEAD
-        ensure("CAVEMAN MODE ACTIVE" in activate_custom.stdout, "activation with custom default missing banner")
-        ensure((claude_dir / ".caveman-active").read_text() == "ultra", "CAVEMAN_DEFAULT_MODE=ultra should set flag to ultra")
-=======
->>>>>>> upstream/main
         # Test "off" mode — activation skipped, flag removed
         activate_off = run(
-            ["node", "hooks/caveman-activate.js"],
+            ["node", "src/hooks/caveman-activate.js"],
             env={**hook_env, "CAVEMAN_DEFAULT_MODE": "off"},
         )
         ensure("CAVEMAN MODE ACTIVE" not in activate_off.stdout, "off mode should not emit caveman banner")
@@ -343,7 +335,7 @@ def verify_hook_install_flow() -> None:
 
         # Test mode tracker with /caveman when default is off — should NOT write flag
         subprocess.run(
-            ["node", "hooks/caveman-mode-tracker.js"],
+            ["node", "src/hooks/caveman-mode-tracker.js"],
             cwd=ROOT,
             env={**os.environ, **hook_env, "CAVEMAN_DEFAULT_MODE": "off"},
             text=True,
@@ -358,13 +350,13 @@ def verify_hook_install_flow() -> None:
         (claude_dir / ".caveman-active").write_text("full")
 
         run(
-            ["node", "hooks/caveman-mode-tracker.js"],
+            ["node", "src/hooks/caveman-mode-tracker.js"],
             env=hook_env,
             check=True,
         )
 
         ultra_prompt = subprocess.run(
-            ["node", "hooks/caveman-mode-tracker.js"],
+            ["node", "src/hooks/caveman-mode-tracker.js"],
             cwd=ROOT,
             env={**os.environ, **hook_env},
             text=True,
@@ -380,7 +372,7 @@ def verify_hook_install_flow() -> None:
         ensure((claude_dir / ".caveman-active").read_text(encoding="utf-8") == "ultra", "mode tracker did not record ultra")
 
         subprocess.run(
-            ["node", "hooks/caveman-mode-tracker.js"],
+            ["node", "src/hooks/caveman-mode-tracker.js"],
             cwd=ROOT,
             env={**os.environ, **hook_env},
             text=True,
@@ -393,15 +385,15 @@ def verify_hook_install_flow() -> None:
 
         (claude_dir / ".caveman-active").write_text("wenyan-ultra")
         statusline = run(
-            ["bash", "hooks/caveman-statusline.sh"],
+            ["bash", "src/hooks/caveman-statusline.sh"],
             env=hook_env,
         )
         ensure("[CAVEMAN:WENYAN-ULTRA]" in statusline.stdout, "statusline badge output mismatch")
 
-        reinstall = run(["bash", "hooks/install.sh"], env=hook_env)
+        reinstall = run(["bash", "src/hooks/install.sh"], env=hook_env)
         ensure("Nothing to do" in reinstall.stdout, "install.sh should be idempotent")
 
-        run(["bash", "hooks/uninstall.sh"], env=hook_env)
+        run(["bash", "src/hooks/uninstall.sh"], env=hook_env)
         settings_after = read_json(claude_dir / "settings.json")
         ensure(settings_after == existing_settings, "uninstall.sh did not restore non-caveman settings")
         ensure(not (claude_dir / ".caveman-active").exists(), "uninstall.sh should remove flag file")
@@ -410,12 +402,12 @@ def verify_hook_install_flow() -> None:
         home = Path(temp_root) / "home"
         claude_dir = home / ".claude"
         hook_env = {"HOME": shell_path(home), "CLAUDE_CONFIG_DIR": shell_path(claude_dir)}
-        run(["bash", "hooks/install.sh"], env=hook_env)
+        run(["bash", "src/hooks/install.sh"], env=hook_env)
         settings = read_json(claude_dir / "settings.json")
         ensure("statusLine" in settings, "fresh install should configure statusline")
-        activate = run(["node", "hooks/caveman-activate.js"], env=hook_env)
+        activate = run(["node", "src/hooks/caveman-activate.js"], env=hook_env)
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "fresh install should not nudge for statusline")
-        run(["bash", "hooks/uninstall.sh"], env=hook_env)
+        run(["bash", "src/hooks/uninstall.sh"], env=hook_env)
         ensure(read_json(claude_dir / "settings.json") == {}, "fresh uninstall should leave empty settings")
 
     print("Claude hook install/uninstall flow OK")

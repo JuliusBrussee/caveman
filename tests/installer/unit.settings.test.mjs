@@ -1,0 +1,334 @@
+// Unit tests for bin/lib/settings.js — the JSONC-tolerant settings helper.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const SETTINGS = require('../../bin/lib/settings.js');
+
+function tmpFile(name, contents) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-settings-'));
+  const p = path.join(dir, name);
+  fs.writeFileSync(p, contents);
+  return p;
+}
+
+test('stripJsonComments strips // line comments', () => {
+  const out = SETTINGS.stripJsonComments('{"a":1}// trail');
+  assert.equal(out.trim(), '{"a":1}');
+});
+
+test('stripJsonComments preserves ,} and ,] inside string values (issue #595)', () => {
+  // Trailing-comma removal must be string-aware: a hook command like
+  // `echo ,}` or shell brace expansion `cp file{,.bak}` must survive.
+  const src = '{"cmd": "echo ,}", // comment\n"glob": "cp file{,]x", }';
+  const parsed = JSON.parse(SETTINGS.stripJsonComments(src));
+  assert.equal(parsed.cmd, 'echo ,}');
+  assert.equal(parsed.glob, 'cp file{,]x');
+});
+
+test('stripJsonComments still removes real trailing commas after strings', () => {
+  const src = '{"a": [1, 2, 3,], "b": {"c": 1,},}';
+  const parsed = JSON.parse(SETTINGS.stripJsonComments(src));
+  assert.deepEqual(parsed, { a: [1, 2, 3], b: { c: 1 } });
+});
+
+test('stripJsonComments handles escaped quotes before ,} in strings', () => {
+  const src = '{"cmd": "say \\",}\\" done", }';
+  const parsed = JSON.parse(SETTINGS.stripJsonComments(src));
+  assert.equal(parsed.cmd, 'say ",}" done');
+});
+
+test('stripJsonComments strips /* block */ comments', () => {
+  const out = SETTINGS.stripJsonComments('{/* leading */"a":1/* mid */, "b":2}');
+  assert.match(out, /"a":1/);
+  assert.match(out, /"b":2/);
+  assert.doesNotMatch(out, /leading/);
+});
+
+test('stripJsonComments leaves comment-looking sequences inside strings alone', () => {
+  const out = SETTINGS.stripJsonComments('{"url":"http://example.com//path"}');
+  assert.equal(out, '{"url":"http://example.com//path"}');
+});
+
+test('stripJsonComments strips trailing commas', () => {
+  const out = SETTINGS.stripJsonComments('{"a":[1,2,3,],}');
+  assert.doesNotThrow(() => JSON.parse(out));
+});
+
+test('readSettings handles plain JSON', () => {
+  const p = tmpFile('s.json', '{"theme":"dark"}');
+  assert.deepEqual(SETTINGS.readSettings(p), { theme: 'dark' });
+});
+
+test('readSettings handles JSONC (comments + trailing commas)', () => {
+  const p = tmpFile('s.json', `// my settings
+{
+  "theme": "dark", /* mode */
+  "hooks": {},
+}`);
+  assert.deepEqual(SETTINGS.readSettings(p), { theme: 'dark', hooks: {} });
+});
+
+test('readSettings returns {} for missing file', () => {
+  assert.deepEqual(SETTINGS.readSettings('/nonexistent/path/xyz.json'), {});
+});
+
+test('readSettings returns null for unrecoverable garbage', () => {
+  const p = tmpFile('s.json', 'this is not json at all {{{');
+  assert.equal(SETTINGS.readSettings(p), null);
+});
+
+test('writeSettings round-trips with newline', () => {
+  const p = tmpFile('s.json', '');
+  SETTINGS.writeSettings(p, { a: 1 });
+  const raw = fs.readFileSync(p, 'utf8');
+  assert.equal(raw.endsWith('\n'), true);
+  assert.deepEqual(JSON.parse(raw), { a: 1 });
+});
+
+test('validateHookFields drops malformed command hook (missing command)', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: 'command' }, { type: 'command', command: 'good' }] }],
+    },
+  };
+  SETTINGS.validateHookFields(s);
+  assert.equal(s.hooks.SessionStart[0].hooks.length, 1);
+  assert.equal(s.hooks.SessionStart[0].hooks[0].command, 'good');
+});
+
+test('validateHookFields drops malformed agent hook (missing prompt)', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: 'agent' }] }],
+    },
+  };
+  SETTINGS.validateHookFields(s);
+  assert.equal(s.hooks, undefined);
+});
+
+test('validateHookFields drops empty events and empty hooks parent', () => {
+  const s = { hooks: { SessionStart: [], UserPromptSubmit: [{ hooks: [] }] } };
+  SETTINGS.validateHookFields(s);
+  assert.equal(s.hooks, undefined);
+});
+
+test('addCommandHook is idempotent on substring marker', () => {
+  const s = {};
+  const a = SETTINGS.addCommandHook(s, 'SessionStart', { command: '/abs/path/caveman-activate.js', marker: 'caveman-activate' });
+  const b = SETTINGS.addCommandHook(s, 'SessionStart', { command: '/different/abs/path/caveman-activate.js', marker: 'caveman-activate' });
+  assert.equal(a, true);
+  assert.equal(b, false);
+  assert.equal(s.hooks.SessionStart.length, 1);
+});
+
+test('hasCavemanHook detects via substring', () => {
+  const s = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'node /x/caveman-activate.js' }] }] } };
+  assert.equal(SETTINGS.hasCavemanHook(s, 'SessionStart', 'caveman-activate'), true);
+  assert.equal(SETTINGS.hasCavemanHook(s, 'SessionStart', 'gsd'), false);
+  assert.equal(SETTINGS.hasCavemanHook(s, 'UserPromptSubmit'), false);
+});
+
+test('removeCavemanHooks tolerates malformed hook event values without throwing', () => {
+  // Pre-fix bug: settings.hooks.SessionStart = "oops" (string, not array)
+  // would crash on .filter(...) inside the filter loop. Fix delegates to
+  // validateHookFields first + adds Array.isArray guard.
+  const s = { hooks: { SessionStart: "oops", UserPromptSubmit: { not: 'an array either' } } };
+  let removed;
+  assert.doesNotThrow(() => { removed = SETTINGS.removeCavemanHooks(s); });
+  assert.equal(removed, 0);
+  assert.equal(s.hooks, undefined);
+});
+
+test('removeCavemanHooks strips managed scripts and cleans empties', () => {
+  const s = {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: 'command', command: 'node /x/hooks/caveman-activate.js' }] },
+        { hooks: [{ type: 'command', command: 'other' }] },
+      ],
+      UserPromptSubmit: [{ hooks: [{ type: 'command', command: '"/usr/bin/node" "/x/hooks/caveman-mode-tracker.js"' }] }],
+    },
+  };
+  const removed = SETTINGS.removeCavemanHooks(s);
+  assert.equal(removed, 2);
+  assert.equal(s.hooks.SessionStart.length, 1);
+  assert.equal(s.hooks.UserPromptSubmit, undefined);
+});
+
+test('removeCavemanHooks leaves user hooks that merely mention caveman (issue #593)', () => {
+  const s = {
+    hooks: {
+      PreToolUse: [
+        // Path contains the word "caveman" but targets a user-authored script.
+        { hooks: [{ type: 'command', command: 'node /Users/me/Projects/caveman-notes/my-hook.js' }] },
+        // Basename is a superstring of a managed name — still not ours.
+        { hooks: [{ type: 'command', command: 'node /x/mycaveman-activate.js' }] },
+      ],
+      SessionStart: [
+        { hooks: [{ type: 'command', command: '"/usr/bin/node" "/x/hooks/caveman-activate.js"' }] },
+      ],
+    },
+  };
+  const removed = SETTINGS.removeCavemanHooks(s);
+  assert.equal(removed, 1, 'only the managed SessionStart hook should be removed');
+  assert.equal(s.hooks.PreToolUse.length, 2, 'user hooks mentioning caveman must survive uninstall');
+  assert.equal(s.hooks.SessionStart, undefined);
+});
+
+test('removeCavemanHooks removes the Windows statusline-stats wiring (caveman-stats.js / .ps1)', () => {
+  const s = {
+    hooks: {
+      Stop: [{ hooks: [{ type: 'command', command: '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\.claude\\hooks\\caveman-stats.js"' }] }],
+    },
+  };
+  const removed = SETTINGS.removeCavemanHooks(s);
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
+});
+
+test('rewriteLegacyManagedHookCommands rewrites bare-node managed scripts', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: 'node /abs/hooks/caveman-activate.js' },
+        { type: 'command', command: 'node /abs/hooks/some-user-hook.js' },
+      ] }],
+    },
+  };
+  const n = SETTINGS.rewriteLegacyManagedHookCommands(s, '/usr/local/bin/node');
+  assert.equal(n, 1);
+  assert.match(s.hooks.SessionStart[0].hooks[0].command, /"\/usr\/local\/bin\/node" "\/abs\/hooks\/caveman-activate\.js"/);
+  assert.equal(s.hooks.SessionStart[0].hooks[1].command, 'node /abs/hooks/some-user-hook.js');
+});
+
+test('rewriteLegacyManagedHookCommands ignores already-absolute node commands', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: '"/usr/local/bin/node" "/abs/hooks/caveman-activate.js"' },
+      ] }],
+    },
+  };
+  const n = SETTINGS.rewriteLegacyManagedHookCommands(s, '/somewhere/else/node');
+  assert.equal(n, 0);
+});
+
+test('pruneOrphanedManagedHooks removes managed hook whose target is missing (absolute-node)', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: '"/opt/node/bin/node" "/no/such/dir/caveman-activate.js"' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
+});
+
+test('pruneOrphanedManagedHooks removes orphan bare-node managed hook', () => {
+  const s = {
+    hooks: {
+      UserPromptSubmit: [{ hooks: [
+        { type: 'command', command: 'node /no/such/dir/caveman-mode-tracker.js' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
+});
+
+test('pruneOrphanedManagedHooks keeps managed hook whose target exists', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-prune-'));
+  const script = path.join(dir, 'caveman-activate.js');
+  fs.writeFileSync(script, '// real');
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: `"/opt/node/bin/node" "${script}"` },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, dir);
+  assert.equal(removed, 0);
+  assert.equal(s.hooks.SessionStart.length, 1);
+});
+
+test('pruneOrphanedManagedHooks leaves non-managed hooks alone even if missing', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: 'node /no/such/dir/some-user-hook.js' },
+        { type: 'command', command: '[ -n "$SUPERSET_HOME_DIR" ] && "$SUPERSET_HOME_DIR/hooks/notify.sh" || true' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 0);
+  assert.equal(s.hooks.SessionStart[0].hooks.length, 2);
+});
+
+test('pruneOrphanedManagedHooks resolves relative target against configDir', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-prune-rel-'));
+  // hooks/caveman-activate.js intentionally NOT created → missing
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: 'node hooks/caveman-activate.js' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, dir);
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
+});
+
+test('pruneOrphanedManagedHooks does NOT match a user script whose name merely contains a managed basename', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        // basename is "mycaveman-activate.js" — not an exact managed basename
+        { type: 'command', command: 'node /no/such/dir/mycaveman-activate.js' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 0);
+  assert.equal(s.hooks.SessionStart[0].hooks.length, 1);
+});
+
+test('pruneOrphanedManagedHooks handles quoted paths containing spaces', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: '"/opt/node/bin/node" "/no such dir/caveman-activate.js"' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
+});
+
+test('pruneOrphanedManagedHooks drops orphaned managed statusLine', () => {
+  const s = {
+    statusLine: { type: 'command', command: 'bash /no/such/dir/caveman-statusline.sh' },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 1);
+  assert.equal(s.statusLine, undefined);
+});
+
+test('claudeConfigDir honors CLAUDE_CONFIG_DIR env', () => {
+  const orig = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = '/tmp/__cm_test_cfg';
+  try { assert.equal(SETTINGS.claudeConfigDir(), '/tmp/__cm_test_cfg'); }
+  finally { if (orig === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = orig; }
+});

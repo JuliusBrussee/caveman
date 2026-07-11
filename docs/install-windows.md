@@ -1,6 +1,6 @@
 # Windows install fallback
 
-If `irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex` fails on Windows (issues #249, #199, #72), set up plugin-skill activation by hand. This does **not** install the standalone hooks or the statusline — for those, run `hooks/install.ps1` after this.
+If `irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex` fails on Windows (issues #249, #199, #72), set up plugin-skill activation by hand. This does **not** install the standalone hooks or the statusline — for those, run the unified Node installer afterwards: `npx -y github:JuliusBrussee/caveman -- --only claude` (or `node bin/install.js --only claude` from a clone).
 
 ```powershell
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }
@@ -8,7 +8,7 @@ $PluginSkillDir = Join-Path $ClaudeDir ".agents\plugins\caveman\skills\caveman"
 $MarketplaceDir = Join-Path $ClaudeDir ".agents\plugins"
 $MarketplaceFile = Join-Path $MarketplaceDir "marketplace.json"
 
-# Copy SKILL.md into the plugin path
+# Copy SKILL.md into the plugin path (run from a clone of the repo)
 New-Item -ItemType Directory -Path $PluginSkillDir -Force | Out-Null
 Copy-Item ".\skills\caveman\SKILL.md" "$PluginSkillDir\SKILL.md" -Force
 

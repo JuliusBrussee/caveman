@@ -10,7 +10,7 @@ const path = require('path');
 const os = require('os');
 const assert = require('assert');
 
-const { safeWriteFlag, readFlag, VALID_MODES } = require('../hooks/caveman-config');
+const { safeWriteFlag, readFlag, VALID_MODES } = require('../src/hooks/caveman-config');
 
 let passed = 0;
 let failed = 0;
@@ -196,7 +196,7 @@ test('safeWriteFlag no longer has blanket symlink parent refusal', (tmp) => {
   // Verify the old pattern "if (fs.lstatSync(flagDir).isSymbolicLink()) return;"
   // without ownership check is no longer present
   const source = fs.readFileSync(
-    path.join(__dirname, '..', 'hooks', 'caveman-config.js'), 'utf8'
+    path.join(__dirname, '..', 'src', 'hooks', 'caveman-config.js'), 'utf8'
   );
 
   // The old pattern: check isSymbolicLink on flagDir and immediately return
