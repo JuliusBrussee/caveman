@@ -51,6 +51,13 @@ const HOOK_FILES = [
   'caveman-statusline.ps1',
   'cavecrew-model-overrides.js',
 ];
+const CLAUDE_EPHEMERAL_STATE_FILES = [
+  '.caveman-active',
+  '.caveman-active.prev',
+  '.caveman-mode-log.jsonl',
+  '.caveman-statusline-suffix',
+];
+const CLAUDE_HISTORY_FILE = '.caveman-history.jsonl';
 
 // ── Argv ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
@@ -1168,7 +1175,8 @@ function uninstall(ctx) {
       }
       SETTINGS.validateHookFields(settings);
       if (!opts.dryRun) SETTINGS.writeSettings(settingsPath, settings);
-      ok(`  removed ${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`);
+      const action = opts.dryRun ? 'would remove' : 'removed';
+      ok(`  ${action} ${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`);
     }
   }
 
@@ -1176,8 +1184,16 @@ function uninstall(ctx) {
     for (const f of HOOK_FILES) {
       const p = path.join(hooksDir, f);
       if (!fs.existsSync(p)) continue;
-      if (!opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
-      note(`  removed ${p}`);
+      if (opts.dryRun) {
+        note(`  would remove ${p}`);
+        continue;
+      }
+      try {
+        fs.unlinkSync(p);
+        note(`  removed ${p}`);
+      } catch (err) {
+        warn(`  failed to remove ${p}: ${err.message || err}`);
+      }
     }
     // Don't rmdir hooksDir — other plugins may use it.
   }
@@ -1303,21 +1319,46 @@ function uninstall(ctx) {
   // Honors HERMES_HOME via hermesConfigDir(); probed by the dirs we own.
   const hermesRoot = path.join(hermesConfigDir(), 'productivity');
   if (fs.existsSync(hermesRoot)) {
-    let prunedHermes = false;
+    let hermesDirsFound = false;
+    let hermesDirsRemoved = 0;
     for (const name of HERMES_SKILL_DIRS) {
       const p = path.join(hermesRoot, name);
       if (fs.existsSync(p)) {
-        if (!opts.dryRun) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
-        note(`  removed ${p}`);
-        prunedHermes = true;
+        hermesDirsFound = true;
+        if (opts.dryRun) {
+          note(`  would remove ${p}`);
+        } else {
+          try {
+            fs.rmSync(p, { recursive: true, force: true });
+            note(`  removed ${p}`);
+            hermesDirsRemoved += 1;
+          } catch (err) {
+            warn(`  failed to remove ${p}: ${err.message || err}`);
+          }
+        }
       }
     }
-    if (prunedHermes) ok('  pruned caveman skills from Hermes');
+    if (opts.dryRun && hermesDirsFound) ok('  would prune caveman skills from Hermes');
+    if (!opts.dryRun && hermesDirsRemoved > 0) ok('  pruned caveman skills from Hermes');
   }
 
-  // Flag file
-  const flag = path.join(configDir, '.caveman-active');
-  if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
+  // Ephemeral Claude state. Keep lifetime history: it is user data.
+  for (const file of CLAUDE_EPHEMERAL_STATE_FILES) {
+    const statePath = path.join(configDir, file);
+    if (!fs.existsSync(statePath)) continue;
+    if (opts.dryRun) {
+      note(`  would remove ${statePath}`);
+      continue;
+    }
+    try {
+      fs.unlinkSync(statePath);
+      note(`  removed ${statePath}`);
+    } catch (err) {
+      warn(`  failed to remove ${statePath}: ${err.message || err}`);
+    }
+  }
+  const historyPath = path.join(configDir, CLAUDE_HISTORY_FILE);
+  if (fs.existsSync(historyPath)) note(`  kept ${historyPath} (lifetime history)`);
 
   process.stdout.write('\n');
   ok('uninstall done.');
