@@ -81,5 +81,50 @@ test('normal stdin (valid JSON + clean EOF) still exits 0', () => {
   }
 });
 
+// Guard: unattended scheduled-task runs must NOT receive caveman reinforcement,
+// even when caveman is active — otherwise the injection hijacks the task prompt
+// and a lightweight scheduled task greets ("Yo. What need?") instead of running.
+test('scheduled-task prompt emits no reinforcement while caveman active', () => {
+  const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-tracker-sched-'));
+  try {
+    // Activate caveman by planting the flag file the hook reads.
+    fs.writeFileSync(path.join(tmpConfig, '.caveman-active'), 'full');
+
+    const scheduled = spawnSync(process.execPath, [HOOK_PATH], {
+      input: JSON.stringify({
+        prompt: '<scheduled-task name="trigger-runner" file="/x/SKILL.md">\nAutomated run.',
+      }),
+      env: { ...process.env, CLAUDE_CONFIG_DIR: tmpConfig },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    assert.strictEqual(
+      scheduled.status,
+      CLEAN_EXIT,
+      `expected clean exit, got status=${scheduled.status}\nstderr: ${(scheduled.stderr || '').trim()}`
+    );
+    assert.strictEqual(
+      (scheduled.stdout || '').trim(),
+      '',
+      `scheduled-task run must emit no reinforcement, got: ${(scheduled.stdout || '').trim()}`
+    );
+
+    // Control: an ordinary prompt with the SAME active flag IS reinforced —
+    // proving the empty output above is the guard, not an inactive flag.
+    const normal = spawnSync(process.execPath, [HOOK_PATH], {
+      input: JSON.stringify({ prompt: 'fix the auth bug' }),
+      env: { ...process.env, CLAUDE_CONFIG_DIR: tmpConfig },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    assert.ok(
+      /CAVEMAN MODE ACTIVE/.test(normal.stdout || ''),
+      `control prompt should be reinforced, got: ${(normal.stdout || '').trim()}`
+    );
+  } finally {
+    fs.rmSync(tmpConfig, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -31,6 +31,14 @@ process.stdin.on('end', () => {
     // every regex below sees a single-line prompt (#598).
     const prompt = (data.prompt || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
+    // Unattended scheduled-task runs must not receive caveman styling. The
+    // per-turn reinforcement hijacks the task prompt, so a lightweight scheduled
+    // task answers with a caveman greeting ("Yo. What need?") instead of doing
+    // its job. Claude Code wraps scheduled runs in a <scheduled-task ...> marker;
+    // when present, skip all flag mutation and reinforcement. Interactive
+    // sessions are unaffected.
+    if (/<scheduled-task\b/.test(prompt)) return;
+
     // Deactivation intent — computed FIRST so "turn caveman mode off" never
     // falls through to the activation patterns (#598: the old contiguous
     // "turn off" phrasing missed the "turn X off" word order entirely, and
