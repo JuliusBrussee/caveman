@@ -33,6 +33,7 @@ fi
 
 PROTECT_HOME=${CAVEMAN_HERMETIC_PROTECT_HOME:-${HOME:?HOME is required}}
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/caveman-hermetic.XXXXXX")
+ROOT=$(cd "$ROOT" && pwd -P)
 cleanup() {
   rm -rf "$ROOT"
 }
@@ -56,7 +57,8 @@ GEMINI_CLI_HOME="$ROOT/gemini"
 OPENCODE_CONFIG_DIR="$XDG_CONFIG_HOME/opencode"
 NPM_CONFIG_CACHE="$ROOT/npm-cache"
 npm_config_cache="$NPM_CONFIG_CACHE"
-FAKE_BIN="$ROOT/bin"
+STUB_BIN="$ROOT/stub-bin"
+RUNTIME_BIN="$ROOT/runtime-bin"
 CLI_LOG="$ROOT/fake-cli.log"
 
 mkdir -p \
@@ -64,7 +66,7 @@ mkdir -p \
   "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" \
   "$OPENCLAW_WORKSPACE" "$TMPDIR" "$APPDATA" "$LOCALAPPDATA" \
   "$CODEX_HOME" "$GEMINI_CLI_HOME" "$OPENCODE_CONFIG_DIR" \
-  "$NPM_CONFIG_CACHE" "$FAKE_BIN"
+  "$NPM_CONFIG_CACHE" "$STUB_BIN" "$RUNTIME_BIN"
 
 # Seed unrelated sibling content in every mutable namespace. The post-run
 # snapshot proves broad uninstall/install paths did not sweep parent dirs.
@@ -74,20 +76,28 @@ printf 'opencode sibling\n' > "$OPENCODE_CONFIG_DIR/.hermetic-sibling"
 printf 'openclaw sibling\n' > "$OPENCLAW_WORKSPACE/.hermetic-sibling"
 printf 'home sibling\n' > "$HOME/.hermetic-sibling"
 
-cat > "$FAKE_BIN/caveman-harness-stub" <<'STUB'
+cat > "$STUB_BIN/caveman-harness-stub" <<'STUB'
 #!/bin/sh
 name=$(basename "$0")
 printf '%s\t%s\n' "$name" "$*" >> "${CAVEMAN_HERMETIC_CLI_LOG:?}"
+case "$name:$1:${2:-}" in
+  claude:plugin:list|gemini:extensions:list)
+    exit 0
+    ;;
+  claude:plugin:marketplace|claude:plugin:install|gemini:extensions:install)
+    exit 1
+    ;;
+esac
 printf 'caveman-hermetic-stub:%s\n' "$name"
 exit 0
 STUB
-chmod 700 "$FAKE_BIN/caveman-harness-stub"
+chmod 700 "$STUB_BIN/caveman-harness-stub"
 for name in claude gemini opencode openclaw hermes npm npx; do
-  ln -s caveman-harness-stub "$FAKE_BIN/$name"
+  ln -s caveman-harness-stub "$STUB_BIN/$name"
 done
-ln -s "$REAL_NODE" "$FAKE_BIN/node"
-if [[ -n "$REAL_PYTHON3" ]]; then ln -s "$REAL_PYTHON3" "$FAKE_BIN/python3"; fi
-if [[ -n "$REAL_PYTHON" ]]; then ln -s "$REAL_PYTHON" "$FAKE_BIN/python"; fi
+ln -s "$REAL_NODE" "$RUNTIME_BIN/node"
+if [[ -n "$REAL_PYTHON3" ]]; then ln -s "$REAL_PYTHON3" "$RUNTIME_BIN/python3"; fi
+if [[ -n "$REAL_PYTHON" ]]; then ln -s "$REAL_PYTHON" "$RUNTIME_BIN/python"; fi
 
 export HOME CLAUDE_CONFIG_DIR HERMES_HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME
 export OPENCLAW_WORKSPACE TMPDIR TMP TEMP APPDATA LOCALAPPDATA USERPROFILE CODEX_HOME
@@ -96,7 +106,7 @@ export CAVEMAN_HERMETIC_ROOT="$ROOT"
 export CAVEMAN_HERMETIC_CLI_LOG="$CLI_LOG"
 export CAVEMAN_HERMETIC_PROTECT_HOME="$PROTECT_HOME"
 export NO_COLOR=1 CI=1
-export PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="$STUB_BIN:$RUNTIME_BIN:/usr/bin:/bin:/usr/sbin:/sbin"
 
 snapshot="$ROOT/protected-before.json"
 "$REAL_NODE" - "$PROTECT_HOME" "$ROOT" "$snapshot" <<'NODE'
