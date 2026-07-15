@@ -22,10 +22,14 @@
     "test": "node --test tests/installer/*.test.mjs"
   },
   "files": [
+    "plugin.yaml",
+    "__init__.py",
+    "hermes_caveman/*.py",
     "bin/",
     "src/",
     "agents/",
-    "skills/",
+    "skills/**/*.md",
+    "skills/**/*.py",
     "plugins/",
     "commands/",
     "dist/caveman.skill",
