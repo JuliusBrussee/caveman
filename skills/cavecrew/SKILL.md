@@ -77,6 +77,52 @@ Skip investigator. Hand exact path:line to `cavecrew-builder` directly.
 - Don't ask `cavecrew-reviewer` for "general feedback" — it returns findings only, no architecture opinions. Use `Code Reviewer` for that.
 - Don't expect prose. Cavecrew output is structured, sometimes terse to the point of cryptic. If a human will read it directly, paraphrase.
 
+## Hermes Agent (`delegate_task`)
+
+Use this path only when running under Hermes Agent. Do not use Claude `Task` or `Explore` in the Hermes path. Every child has no parent conversation memory, so `context` must be a complete self-contained context: objective, exact scope, repository/path, evidence required, output contract, acceptance criteria, and escalation conditions.
+
+Hermes children inherit the parent model and reasoning. Current `delegate_task` has no per-call model parameter; do not imitate Claude's model labels with a private provider bridge. Set `role="leaf"` for every preset. No nested delegation.
+
+Current Hermes v0.18.2 role prompts are not capability-sandboxed. Each child inherits the parent's complete toolset. Investigator and reviewer **must not edit** by contract, but this is observed compliance, not denied capability. Parent must snapshot and compare actual files and git state before/after read-only work. Parent must verify builder edits and all external side effects; child self-report is never sufficient.
+
+For independent scouts, send them in one batch, up to 3 concurrent tasks. Do not batch dependent work.
+
+### investigator
+
+Call `delegate_task(..., role="leaf")` with this complete self-contained context:
+
+```text
+Role: cavecrew-investigator. Read-only locator. Must not edit files, git state, config, or external systems.
+Goal/scope: <exact question, repo, allowed paths>.
+Evidence: inspect current source; return path:line — `symbol` — short note. End with totals. Return `No match.` if absent.
+No fixes, architecture commentary, praise, or speculation. Compressed output only. Escalate if evidence requires a side effect.
+```
+
+### builder
+
+Call `delegate_task(..., role="leaf")` only after the parent supplies exact files and acceptance checks:
+
+```text
+Role: cavecrew-builder. Surgical edit limited to 1–2 files named by parent.
+Goal/scope: <exact change, paths, constraints, verification command>.
+Refuses 3+ files, ambiguous scope, destructive work, or missing owner decision: return `too-big.`, `ambiguous.`, or `needs-confirm.`.
+Return `<path:line-range> — <change ≤10 words>.` then `verified: <real check>`. Compressed output only.
+Do not commit, push, publish, or touch files outside scope.
+```
+
+Parent re-reads changed files, inspects diff, and runs the acceptance checks itself.
+
+### reviewer
+
+Run after implementation, using `delegate_task(..., role="leaf")` and a complete self-contained diff/revision scope:
+
+```text
+Role: cavecrew-reviewer. Read-only review. Must not edit files, git state, config, or external systems.
+Review: <exact diff/files/spec>. Findings only, sorted by severity then path/line.
+Format: `path:line: <severity>: <problem>. <fix>.` End with severity totals, or `No issues.`
+No praise, scope creep, or implementation. Compressed output only.
+```
+
 ## Auto-clarity (inherited)
 
 Subagents drop caveman → normal English for security warnings, irreversible-action confirmations, and any output where fragment ambiguity could be misread. Resume caveman after.
