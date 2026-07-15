@@ -95,7 +95,7 @@ irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | i
 ~30 seconds. Needs Node ≥18. Skips agents you no have. Safe to re-run.
 
 > [!TIP]
-> **Turn it on:** type `/caveman` or say *"talk like caveman"*. **Turn it off:** say *"normal mode"*. On Claude Code, Codex, and Gemini it's already on from message one. No command needed.
+> **Turn it on:** type `/caveman` or say *"talk like caveman"*. **Turn it off:** say *"normal mode"*. On Claude Code, Codex, Gemini, and native Hermes installs it's already on from message one. No command needed.
 
 <details>
 <summary><strong>Install for one agent, or any of 30+ others</strong></summary>
@@ -110,6 +110,9 @@ claude plugin marketplace add JuliusBrussee/caveman && claude plugin install cav
 
 # Gemini CLI extension
 gemini extensions install https://github.com/JuliusBrussee/caveman
+
+# Hermes native plugin + skills (Linux/macOS/WSL2; native Windows unsupported)
+npx -y github:JuliusBrussee/caveman -- --only hermes
 
 # Cursor / Windsurf / Cline / Codex / 30+ more, via the skills registry
 npx skills add JuliusBrussee/caveman -a cursor

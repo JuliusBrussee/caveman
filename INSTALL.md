@@ -23,7 +23,7 @@ irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | i
 What it does:
 
 - Auto-detects every supported agent installed on your machine (Claude Code, Cursor, Codex, etc.).
-- For each one, runs that agent's native install path (plugin / extension / rule file / `npx skills add`).
+- For each one, runs that agent's native install path (plugin / extension / rule file / `npx skills add`). Hermes gets a native plugin plus seven skills.
 - Wires Claude Code hooks and statusline badge on top. (`caveman-shrink` MCP middleware is opt-in via `--with-mcp-shrink` — see flag table below.)
 - Skips anything you don't have. Safe to re-run. ~30 seconds end-to-end.
 
@@ -43,7 +43,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` | Yes |
 | **opencode** | `node bin/install.js --only opencode` *(or `npx -y github:JuliusBrussee/caveman -- --only opencode`)* | Yes (plugin + AGENTS.md) |
 | **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
-| **Hermes Agent** | `npx -y github:JuliusBrussee/caveman -- --only hermes` *(or `node bin/install.js --only hermes` from a clone)* | Yes (native skills, enabled on load) |
+| **Hermes Agent** | `npx -y github:JuliusBrussee/caveman -- --only hermes` *(or `node bin/install.js --only hermes` from a clone)* | Yes (native plugin + skills; `full` by default) |
 | **Codex CLI** | `npx skills add JuliusBrussee/caveman -a codex` | Per-session: `/caveman` |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` | Per-session by default; `--with-init` for an always-on rule file |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` | Per-session by default; `--with-init` for an always-on rule file |
@@ -120,8 +120,10 @@ Useful flags:
 | `--only <id>` | One agent only. Repeatable: `--only claude --only cursor`. |
 | `--dry-run` | Print every command. Write nothing. |
 | `--with-init` | Drop always-on rule files into the current repo (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`) and, if OpenClaw is on the box, append the bootstrap block to `~/.openclaw/workspace/SOUL.md`. |
-| `--with-mcp-shrink="<upstream cmd>"` | Register `caveman-shrink` MCP proxy wrapping the given upstream MCP server. **Off by default.** A value is required — caveman-shrink is a proxy and exits immediately without one. Example: `--with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"`. The value is split on whitespace; for paths-with-spaces, install via `node bin/install.js` from a clone or edit `~/.claude.json` after a stub install. |
+| `--with-mcp-shrink="<upstream cmd>"` | Register `caveman-shrink` MCP proxy wrapping the given upstream MCP server. **Off by default.** A value is required. Quotes group argv values; the installer never executes this value through a shell. Example: `--with-mcp-shrink='npx @modelcontextprotocol/server-filesystem "/path with spaces"'`. |
 | `--no-mcp-shrink` | Skip MCP-shrink registration. (Default.) |
+| `--mcp-shrink-name <name>` | Hermes MCP server name. Default: `caveman-shrink`; use an alternate name to avoid an existing entry. |
+| `--disable` | Disable the Hermes plugin while preserving installed files and Caveman state. |
 | `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code hook installer. (Default: on.) |
 | `--skip-skills` | Don't run the npx-skills auto-detect fallback when nothing else matched. |
 | `--config-dir <path>` | Claude Code config dir for hook files + `settings.json`. **Does NOT scope** `claude plugin install`, `gemini extensions install`, opencode (`XDG_CONFIG_HOME`), or openclaw (`OPENCLAW_WORKSPACE`) — those use their own paths. Default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. `~` is expanded. |
@@ -130,6 +132,37 @@ Useful flags:
 | `--list` | Print full agent matrix and exit. |
 | `--force` | Re-run even if already installed. |
 | `--uninstall` | Remove everything. See below. |
+| `--purge-history` | With `--uninstall`, also remove regular Caveman lifetime history. Symlinks are refused. |
+
+## Hermes Agent
+
+Native Hermes integration supports Linux, macOS, and WSL2, matching Hermes Agent's supported install platforms. Native Windows fails before changing plugin files or config; use WSL2 instead.
+
+The Hermes path is a native plugin, not only a `SKILL.md` copy:
+
+```bash
+npx -y github:JuliusBrussee/caveman -- --only hermes
+hermes plugins list
+```
+
+The installer copies the plugin to `$HERMES_HOME/plugins/caveman` (default `~/.hermes/plugins/caveman`), installs all seven skills under `$HERMES_HOME/skills/productivity`, enables the plugin without built-in tool override permission, and records SHA-256/config ownership in `$HERMES_HOME/caveman/install-manifest.json`. A pre-existing or user-modified `allow_tool_override` policy is preserved exactly.
+
+Native surfaces:
+
+- `/caveman [off|lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra]` — durable mode; `full` is the default for a new install.
+- `/caveman-init` — prints the safe project-only CLI path. Run `hermes caveman init --dry-run` first, then `hermes caveman init` in the target repo.
+- `caveman_stats` — reads Hermes `SessionDB` counters and reports measured current/lifetime output attribution. Estimated savings affect output tokens only; Hermes remains the source of actual cost.
+- `caveman_prepare_compression` / `caveman_apply_compression` — revision-bound, two-stage document compression with structural validation and an out-of-tree verified backup.
+- `cavecrew` — maps investigator/builder/reviewer roles to native `delegate_task`; child model/reasoning inherit from Hermes.
+
+Optional MCP proxy:
+
+```bash
+npx -y github:JuliusBrussee/caveman -- --only hermes \
+  --with-mcp-shrink='npx @modelcontextprotocol/server-filesystem "/path with spaces"'
+```
+
+Reinstall updates unchanged owned files, preserves locally modified files, and refuses unowned/symlink collisions. `--force` backs up regular collisions before overwriting. `--disable --only hermes` keeps files and state. `--uninstall --only hermes` preflights every owned/state path, removes only unchanged owned files and ephemeral state, and retains its manifest for a safe retry if cleanup fails. Lifetime history remains unless `--purge-history` is explicit, while verified document/collision backups stay user-managed.
 
 ## Always-on rules
 
@@ -173,6 +206,17 @@ If it's missing or empty, the SessionStart hook didn't fire. See troubleshooting
 
 Statusline should show `[CAVEMAN]` (orange) at the bottom of Claude Code. After your first `/caveman-stats` run it appends a savings counter like `[CAVEMAN] ⛏ 12.4k`.
 
+For Hermes, use a disposable profile first if you are evaluating the plugin:
+
+```bash
+export HERMES_HOME="$(mktemp -d)/hermes"
+node bin/install.js --only hermes
+hermes plugins list
+unset HERMES_HOME
+```
+
+`caveman` should be enabled with three tools, three hooks, two slash commands, one CLI command, and seven skills. A normal install then uses your existing `$HERMES_HOME`.
+
 ## Uninstall
 
 ```bash
@@ -186,12 +230,14 @@ What it removes:
 - The Claude Code plugin and the Gemini CLI extension (if installed).
 - The opencode native plugin (`~/.config/opencode/plugins/caveman/`, the `plugin` and `mcp.caveman-shrink` entries from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file).
 - The OpenClaw workspace skill folder and the marker-fenced block from `~/.openclaw/workspace/SOUL.md` (when present).
+- Unchanged files owned by the Hermes Caveman manifest, exact plugin/MCP/security-policy config entries, and ephemeral mode/session/revision state. Modified files are preserved. If a managed MCP entry was modified, uninstall fails closed before changing config or files.
 - The `.caveman-active` flag file.
 
 What it does **not** remove:
 
 - Skills installed via `npx skills add` — the `skills` CLI manages those. Run `npx skills remove caveman` (or use your IDE's skill manager).
 - Per-repo rule files written by `--with-init` (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`). Delete by hand if you want.
+- Hermes lifetime attribution history, verified compression backups, and collision backups. Pass `--purge-history` only when you also want regular lifetime history removed.
 
 ## Troubleshooting
 
@@ -253,6 +299,7 @@ The installer doesn't phone home. It writes to:
 - Each agent's own config location — Cursor's `.cursor/rules/`, Windsurf's `.windsurf/rules/`, opencode's `~/.config/opencode/`, etc.
 - Your current working directory (only with `--with-init`) — repo-local rule files.
 - `~/.openclaw/workspace/` (only with `--only openclaw` or `--with-init` when OpenClaw is detected) — the one `--with-init` side-effect outside the cwd.
+- `$HERMES_HOME` (default `~/.hermes`) for the native plugin, seven skills, exact config leaves, ownership manifest, attribution state, and safety backups.
 
 No telemetry. No analytics. Run from a clone or via npx, the installer's own code makes no network calls — files are copied locally. One exception: run detached from any checkout (the rare curl-fallback path), it downloads the hook files from raw.githubusercontent.com pinned to an immutable release tag and verifies each against a SHA-256 manifest before wiring anything. Network requests also happen indirectly through the per-agent CLIs it shells out to — `claude plugin marketplace add`, `claude plugin install`, `gemini extensions install`, `npm view caveman-shrink`, and `npx -y skills add`. Each fetches from its own registry (Anthropic / GitHub / npm). Source: [`bin/install.js`](bin/install.js). After install: zero network calls, ever — full statement in [SECURITY.md](./SECURITY.md#privacy--telemetry).
 
