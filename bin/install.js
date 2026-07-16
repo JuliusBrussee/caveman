@@ -24,7 +24,7 @@ const crypto = require('crypto');
 
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
-const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
+const { stripAgentTools, stripOpencodeAgentTools } = require('./lib/opencode-agent');
 
 const REPO = 'JuliusBrussee/caveman';
 // Pin remote fetches to an immutable release tag, not the moving `main`
@@ -51,6 +51,7 @@ const HOOK_FILES = [
   'caveman-statusline.ps1',
   'cavecrew-model-overrides.js',
 ];
+const CAVECREW_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
 
 // ── Argv ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
@@ -448,6 +449,17 @@ function absoluteNodePath() {
   return process.execPath;
 }
 
+function stripInstalledAgentTools(agentsDir) {
+  for (const file of CAVECREW_AGENT_FILES) {
+    const agentPath = path.join(agentsDir, file);
+    try {
+      const content = fs.readFileSync(agentPath, 'utf8');
+      const stripped = stripAgentTools(content);
+      if (stripped !== content) fs.writeFileSync(agentPath, stripped);
+    } catch (_) {}
+  }
+}
+
 // ── Per-provider installers ────────────────────────────────────────────────
 async function installClaude(ctx) {
   const { say, note, warn, ok, opts, results, configDir } = ctx;
@@ -566,8 +578,14 @@ function installGemini(ctx) {
     }
   }
   const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`], null, opts.dryRun);
-  if (spawnOk(r)) results.installed.push('gemini');
-  else results.failed.push(['gemini', 'gemini extensions install failed']);
+  if (spawnOk(r)) {
+    results.installed.push('gemini');
+    if (!opts.dryRun) {
+      stripInstalledAgentTools(path.join(os.homedir(), '.gemini', 'extensions', 'caveman', 'agents'));
+    }
+  } else {
+    results.failed.push(['gemini', 'gemini extensions install failed']);
+  }
   process.stdout.write('\n');
 }
 
@@ -587,8 +605,16 @@ function installViaSkills(ctx, prov) {
   // documented form for "install every skill into a specific agent".
   const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
   const r = runSpawn('npx', args, null, opts.dryRun);
-  if (spawnOk(r)) results.installed.push(prov.id);
-  else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
+  if (spawnOk(r)) {
+    results.installed.push(prov.id);
+    if (!opts.dryRun && prov.id === 'antigravity') {
+      stripInstalledAgentTools(path.join(
+        os.homedir(), '.gemini', 'antigravity', 'skills', 'cavecrew', 'agents',
+      ));
+    }
+  } else {
+    results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
+  }
   process.stdout.write('\n');
 }
 
@@ -656,7 +682,7 @@ function installHermes(ctx) {
 // architecture as closely as opencode allows — only the statusline is missing
 // (opencode's TUI exposes no plugin-writable badge).
 const OPENCODE_SKILL_DIRS  = ['caveman', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
-const OPENCODE_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
+const OPENCODE_AGENT_FILES = CAVECREW_AGENT_FILES;
 const OPENCODE_COMMAND_FILES = ['caveman.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md'];
 const OPENCODE_PLUGIN_REL = './plugins/caveman/plugin.js';
 const OPENCODE_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
