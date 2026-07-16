@@ -17,20 +17,10 @@ function assertHermesPlatform(platform = process.platform) {
   }
 }
 
-function hermesHome() {
-  return path.resolve(process.env.HERMES_HOME || path.join(os.homedir(), '.hermes'));
-}
-function pluginDir() { return path.join(hermesHome(), 'plugins', PLUGIN); }
-function stateDir() { return path.join(hermesHome(), 'caveman'); }
-function manifestPath() { return path.join(stateDir(), 'install-manifest.json'); }
-function shaBytes(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
-function shaFile(file) { return shaBytes(fs.readFileSync(file)); }
-function deepEqual(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
-
-function runHermes(args) {
+function spawnHermes(args, env) {
   const result = childProcess.spawnSync('hermes', args, {
     encoding: 'utf8',
-    env: process.env,
+    env,
     windowsHide: true,
   });
   if (result.error || result.status !== 0) {
@@ -39,6 +29,28 @@ function runHermes(args) {
   }
   return result;
 }
+
+let cachedHermesHome = null;
+function hermesHome() {
+  if (cachedHermesHome) return cachedHermesHome;
+  const result = spawnHermes(['config', 'path'], process.env);
+  const lines = String(result.stdout || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const configPaths = lines.filter(line => path.isAbsolute(line) && path.basename(line) === 'config.yaml');
+  if (configPaths.length !== 1) {
+    throw new Error('Hermes config path was not reported');
+  }
+  const [configPath] = configPaths;
+  cachedHermesHome = path.dirname(path.resolve(configPath));
+  return cachedHermesHome;
+}
+function hermesEnv() { return { ...process.env, HERMES_HOME: hermesHome() }; }
+function runHermes(args) { return spawnHermes(args, hermesEnv()); }
+function pluginDir() { return path.join(hermesHome(), 'plugins', PLUGIN); }
+function stateDir() { return path.join(hermesHome(), 'caveman'); }
+function manifestPath() { return path.join(stateDir(), 'install-manifest.json'); }
+function shaBytes(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
+function shaFile(file) { return shaBytes(fs.readFileSync(file)); }
+function deepEqual(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
 
 let cachedHermesPython = null;
 function hermesPython() {
@@ -74,7 +86,7 @@ function hermesPython() {
 function runLifecycleHelper(args) {
   const result = childProcess.spawnSync(hermesPython(), [LIFECYCLE_HELPER, ...args], {
     encoding: 'utf8',
-    env: process.env,
+    env: hermesEnv(),
     windowsHide: true,
   });
   if (result.error || result.status !== 0) {

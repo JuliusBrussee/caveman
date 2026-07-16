@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const args = process.argv.slice(2);
-const home = process.env.HERMES_HOME;
-if (!home) {
-  process.stderr.write('fake-hermes: HERMES_HOME required\n');
-  process.exit(2);
+const defaultHome = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes');
+let home = defaultHome;
+if (path.basename(path.dirname(defaultHome)) !== 'profiles') {
+  try {
+    const active = fs.readFileSync(path.join(defaultHome, 'active_profile'), 'utf8').trim();
+    if (active && active !== 'default') home = path.join(defaultHome, 'profiles', active);
+  } catch {}
 }
 const configPath = path.join(home, 'config.yaml');
 const logPath = process.env.FAKE_HERMES_LOG;

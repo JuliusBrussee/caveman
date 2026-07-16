@@ -67,6 +67,20 @@ function fixture(initialConfig = { unrelated: { keep: true }, plugins: { enabled
   };
 }
 
+function stickyProfileFixture(name = 'reviewer') {
+  const f = fixture();
+  const initialConfig = config(f);
+  const defaultHome = path.join(f.env.HOME, '.hermes');
+  const namedHome = path.join(defaultHome, 'profiles', name);
+  fs.mkdirSync(namedHome, { recursive: true });
+  fs.writeFileSync(path.join(defaultHome, 'active_profile'), `${name}\n`);
+  fs.writeFileSync(path.join(namedHome, 'config.yaml'), JSON.stringify(initialConfig, null, 2) + '\n', { mode: 0o600 });
+  delete f.env.HERMES_HOME;
+  f.home = namedHome;
+  f.defaultHermesHome = defaultHome;
+  return f;
+}
+
 function run(f, args) {
   const finalArgs = [...args, '--non-interactive'];
   return spawnSync('node', [INSTALLER, ...finalArgs], { env: f.env, encoding: 'utf8', timeout: 30_000 });
@@ -131,6 +145,26 @@ test('fresh install lands and enables native plugin, seven bare skills, and a co
       assert.ok(!rel.startsWith('..'));
       assert.equal(byPath.get(rel)?.sha256, sha(file), `manifest digest missing/wrong: ${rel}`);
     }
+  } finally { f.cleanup(); }
+});
+
+test('sticky named profile keeps payload, manifest, and config lifecycle in one home', () => {
+  const f = stickyProfileFixture();
+  try {
+    const installed = install(f);
+    assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+    assertInstalled(f);
+    assert.equal(fs.existsSync(manifestPath(f)), true);
+    assert.ok(config(f).plugins.enabled.includes('caveman'));
+    assert.equal(fs.existsSync(path.join(f.defaultHermesHome, 'plugins', 'caveman')), false);
+    assert.equal(fs.existsSync(path.join(f.defaultHermesHome, 'caveman')), false);
+
+    const removed = run(f, ['--uninstall', '--only', 'hermes']);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    assert.equal(fs.existsSync(pluginDir(f)), false);
+    assert.equal(fs.existsSync(manifestPath(f)), false);
+    assert.ok(!config(f).plugins.enabled.includes('caveman'));
+    assert.equal(fs.readFileSync(path.join(f.defaultHermesHome, 'active_profile'), 'utf8'), 'reviewer\n');
   } finally { f.cleanup(); }
 });
 

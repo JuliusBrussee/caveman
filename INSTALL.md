@@ -162,7 +162,7 @@ npx -y github:JuliusBrussee/caveman -- --only hermes \
   --with-mcp-shrink='npx @modelcontextprotocol/server-filesystem "/path with spaces"'
 ```
 
-Reinstall updates unchanged owned files, preserves locally modified files, and refuses unowned/symlink collisions. An existing owned MCP proxy is preserved unless `--with-mcp-shrink` replaces it or `--no-mcp-shrink` explicitly removes it. `--force` backs up regular collisions before overwriting. `--disable --only hermes` keeps files and state. `--uninstall --only hermes` preflights every owned/state path, removes only unchanged owned files and ephemeral state, and retains its manifest for a safe retry if cleanup fails. Lifetime history remains unless `--purge-history` is explicit, while verified document/collision backups stay user-managed.
+Reinstall updates unchanged owned files, preserves locally modified files, and refuses unowned/symlink collisions. Before any file operation, the installer resolves the active profile with `hermes config path` and pins every filesystem and subprocess operation to that home. An existing owned MCP proxy is preserved unless `--with-mcp-shrink` replaces it or `--no-mcp-shrink` explicitly removes it. `--force` backs up regular collisions before overwriting. `--disable --only hermes` keeps files and state. `--uninstall --only hermes` preflights every owned/state path, removes only unchanged owned files and ephemeral state, and retains its manifest for a safe retry if cleanup fails. Lifetime history remains unless `--purge-history` is explicit, while verified document/collision backups stay user-managed.
 
 ## Always-on rules
 
