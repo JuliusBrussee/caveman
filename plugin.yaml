@@ -1,0 +1,13 @@
+name: caveman
+version: 1.0.0
+description: Native Caveman modes, statistics, compression, and project initialization for Hermes Agent.
+author: Caveman contributors
+kind: standalone
+provides_tools:
+  - caveman_stats
+  - caveman_prepare_compression
+  - caveman_apply_compression
+provides_hooks:
+  - on_session_start
+  - pre_llm_call
+  - post_llm_call

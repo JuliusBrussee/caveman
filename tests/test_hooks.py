@@ -16,6 +16,7 @@ class HookScriptTests(unittest.TestCase):
         env.pop("CLAUDE_PLUGIN_ROOT", None)
         env["HOME"] = str(home)
         env["USERPROFILE"] = str(home)
+        env["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
         if extra_env:
             env.update(extra_env)
         return subprocess.run(
