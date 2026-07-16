@@ -27,6 +27,71 @@ class HookScriptTests(unittest.TestCase):
             check=True,
         )
 
+    def test_run_hook_executes_node_with_all_arguments(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hook-runner-") as tmp:
+            home = Path(tmp)
+            script = home / "print-arguments.js"
+            script.write_text(
+                "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n"
+            )
+
+            result = self.run_cmd(
+                [
+                    str(REPO_ROOT / "src" / "hooks" / "run-hook.sh"),
+                    str(script),
+                    "first argument",
+                    "second",
+                ],
+                home,
+            )
+
+            self.assertEqual(result.stdout, '["first argument","second"]')
+
+    def test_run_hook_silently_succeeds_without_node(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hook-no-node-") as tmp:
+            home = Path(tmp)
+            empty_path = home / "empty-path"
+            empty_path.mkdir()
+
+            result = self.run_cmd(
+                ["/bin/sh", "src/hooks/run-hook.sh", "unused.js"],
+                home,
+                extra_env={"PATH": str(empty_path)},
+            )
+
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr, "")
+
+    def test_plugin_hooks_use_node_wrapper(self):
+        plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
+        expected_scripts = {
+            "SessionStart": "caveman-activate.js",
+            "UserPromptSubmit": "caveman-mode-tracker.js",
+        }
+
+        for event, script in expected_scripts.items():
+            with self.subTest(event=event):
+                command = plugin["hooks"][event][0]["hooks"][0]["command"]
+                self.assertEqual(
+                    command,
+                    'sh "${CLAUDE_PLUGIN_ROOT}/src/hooks/run-hook.sh" '
+                    f'"${{CLAUDE_PLUGIN_ROOT}}/src/hooks/{script}"',
+                )
+
+    def test_hook_shell_scripts_use_env_shebangs(self):
+        expected_interpreters = {
+            "run-hook.sh": "sh",
+            "caveman-statusline.sh": "bash",
+            "install.sh": "bash",
+            "uninstall.sh": "bash",
+        }
+
+        for name, interpreter in expected_interpreters.items():
+            with self.subTest(script=name):
+                script_path = REPO_ROOT / "src" / "hooks" / name
+                first_line = script_path.read_text().splitlines()[0]
+                self.assertEqual(first_line, f"#!/usr/bin/env {interpreter}")
+
     def test_install_upgrades_old_two_file_install(self):
         with tempfile.TemporaryDirectory(prefix="caveman-hooks-upgrade-") as tmp:
             home = Path(tmp)
