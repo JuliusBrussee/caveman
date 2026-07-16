@@ -666,6 +666,12 @@ function installHermes(ctx) {
           setMcp(name, desired);
           mcp = { name, entry: desired, previous, previousPresent };
         }
+      } else if (opts.withMcpShrink === null && oldMcp) {
+        const current = getMcp(oldMcp.name);
+        if (!deepEqual(current, oldMcp.entry)) {
+          throw new Error(`managed Hermes MCP '${oldMcp.name}' changed; refusing reinstall`);
+        }
+        mcp = oldMcp;
       } else if (oldManifest?.mcp) {
         lifecycleRemove({ mcp: oldManifest.mcp }, '');
       }

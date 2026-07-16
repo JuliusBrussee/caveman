@@ -86,7 +86,7 @@ function tokenizeArgvValue(raw) {
 function parseArgs(argv) {
   const opts = {
     dryRun: false, force: false, skipSkills: false,
-    withHooks: 'auto', withInit: false, withMcpShrink: false,
+    withHooks: 'auto', withInit: false, withMcpShrink: null,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, disable: false, purgeHistory: false,
     mcpShrinkName: 'caveman-shrink', nonInteractive: false,

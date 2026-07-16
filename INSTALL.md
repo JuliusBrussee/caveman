@@ -120,8 +120,8 @@ Useful flags:
 | `--only <id>` | One agent only. Repeatable: `--only claude --only cursor`. |
 | `--dry-run` | Print every command. Write nothing. |
 | `--with-init` | Drop always-on rule files into the current repo (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`) and, if OpenClaw is on the box, append the bootstrap block to `~/.openclaw/workspace/SOUL.md`. |
-| `--with-mcp-shrink="<upstream cmd>"` | Register `caveman-shrink` MCP proxy wrapping the given upstream MCP server. **Off by default.** A value is required. Quotes group argv values; the installer never executes this value through a shell. Example: `--with-mcp-shrink='npx @modelcontextprotocol/server-filesystem "/path with spaces"'`. |
-| `--no-mcp-shrink` | Skip MCP-shrink registration. (Default.) |
+| `--with-mcp-shrink="<upstream cmd>"` | Register `caveman-shrink` MCP proxy wrapping the given upstream MCP server. **Off by default on a fresh install.** A value is required. Quotes group argv values; the installer never executes this value through a shell. Example: `--with-mcp-shrink='npx @modelcontextprotocol/server-filesystem "/path with spaces"'`. |
+| `--no-mcp-shrink` | Skip MCP-shrink registration. On a Hermes reinstall, explicitly remove its unchanged owned MCP entry; omitting both MCP flags preserves an existing owned entry. |
 | `--mcp-shrink-name <name>` | Hermes MCP server name. Default: `caveman-shrink`; use an alternate name to avoid an existing entry. |
 | `--disable` | Disable the Hermes plugin while preserving installed files and Caveman state. |
 | `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code hook installer. (Default: on.) |
@@ -162,7 +162,7 @@ npx -y github:JuliusBrussee/caveman -- --only hermes \
   --with-mcp-shrink='npx @modelcontextprotocol/server-filesystem "/path with spaces"'
 ```
 
-Reinstall updates unchanged owned files, preserves locally modified files, and refuses unowned/symlink collisions. `--force` backs up regular collisions before overwriting. `--disable --only hermes` keeps files and state. `--uninstall --only hermes` preflights every owned/state path, removes only unchanged owned files and ephemeral state, and retains its manifest for a safe retry if cleanup fails. Lifetime history remains unless `--purge-history` is explicit, while verified document/collision backups stay user-managed.
+Reinstall updates unchanged owned files, preserves locally modified files, and refuses unowned/symlink collisions. An existing owned MCP proxy is preserved unless `--with-mcp-shrink` replaces it or `--no-mcp-shrink` explicitly removes it. `--force` backs up regular collisions before overwriting. `--disable --only hermes` keeps files and state. `--uninstall --only hermes` preflights every owned/state path, removes only unchanged owned files and ephemeral state, and retains its manifest for a safe retry if cleanup fails. Lifetime history remains unless `--purge-history` is explicit, while verified document/collision backups stay user-managed.
 
 ## Always-on rules
 

@@ -348,10 +348,11 @@ def _fenced_blocks(text: str) -> list[str]:
         if current is None:
             if match:
                 current = [line]
-                marker = match.group(1)[0]
+                marker = match.group(1)
         else:
             current.append(line)
-            if re.match(rf"^[ \t]*{re.escape(marker)}{{3,}}[ \t]*(?:\r?\n)?$", line):
+            closing = re.match(r"^[ \t]*(`+|~+)[ \t]*(?:\r?\n)?$", line)
+            if closing and closing.group(1)[0] == marker[0] and len(closing.group(1)) >= len(marker):
                 blocks.append("".join(current))
                 current = None
     if current is not None:
@@ -385,6 +386,15 @@ def _table_shape(text: str) -> list[tuple[int, bool]]:
     return result
 
 
+def _paths(text: str) -> list[str]:
+    absolute = re.findall(r"(?<![:\w])/(?:[A-Za-z0-9._~-]+/)*[A-Za-z0-9._~-]+", text)
+    relative = re.findall(
+        r"(?<![:\w/])(?:(?:\.\.?)/)*(?:[A-Za-z0-9._~-]+/)+[A-Za-z0-9._~-]+",
+        text,
+    )
+    return absolute + relative
+
+
 def _protected(text: str) -> dict[str, Any]:
     return {
         "frontmatter": _frontmatter(text),
@@ -392,7 +402,7 @@ def _protected(text: str) -> dict[str, Any]:
         "fenced code": _fenced_blocks(text),
         "inline code": Counter(_inline_code(text)),
         "urls": Counter(re.findall(r"https?://[^\s<>()\]}`]+", text)),
-        "paths": Counter(re.findall(r"(?<![:\w])/(?:[A-Za-z0-9._~-]+/)*[A-Za-z0-9._~-]+", text)),
+        "paths": Counter(_paths(text)),
         "environment": Counter(re.findall(r"\$[A-Z][A-Z0-9_]*|\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b", text)),
         "dates": Counter(re.findall(r"\b\d{4}-\d{2}-\d{2}\b", text)),
         "versions": Counter(re.findall(r"\b[vV]?\d+\.\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.-]+)?\b", text)),

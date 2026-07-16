@@ -167,6 +167,24 @@ class CompressionTests(unittest.TestCase):
                 self.assertFalse(result.is_valid, f"{label} unexpectedly valid")
                 self.assertTrue(result.errors, label)
 
+    def test_long_fence_protects_content_after_nested_shorter_fence(self):
+        original = "````text\nkeep\n```\nprotected sentence\n````\n"
+        proposed = original.replace("protected sentence", "changed sentence")
+
+        result = self.c.validate_content(original, proposed)
+
+        self.assertFalse(result.is_valid, result.errors)
+        self.assertIn("protected fenced code changed", result.errors)
+
+    def test_repo_relative_paths_are_protected(self):
+        original = "Run src/tools/caveman-init.js before docs/index.html.\n"
+        proposed = original.replace("src/tools/caveman-init.js", "src/tools/other.js")
+
+        result = self.c.validate_content(original, proposed)
+
+        self.assertFalse(result.is_valid, result.errors)
+        self.assertIn("protected paths changed", result.errors)
+
     def test_apply_validates_before_any_backup_or_source_write(self):
         path = self.write()
         prepared = self.prepare(path)

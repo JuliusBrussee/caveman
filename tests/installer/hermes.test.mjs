@@ -68,9 +68,7 @@ function fixture(initialConfig = { unrelated: { keep: true }, plugins: { enabled
 }
 
 function run(f, args) {
-  const hasMcpChoice = args.some(arg => arg === '--no-mcp-shrink' || arg === '--with-mcp-shrink' || arg.startsWith('--with-mcp-shrink='));
   const finalArgs = [...args, '--non-interactive'];
-  if (!hasMcpChoice) finalArgs.push('--no-mcp-shrink');
   return spawnSync('node', [INSTALLER, ...finalArgs], { env: f.env, encoding: 'utf8', timeout: 30_000 });
 }
 
@@ -555,6 +553,26 @@ test('Hermes MCP shrink stores argv without shell execution and preserves unrela
     assert.equal(entry.command, 'node');
     assert.equal(entry.args[0], path.join(pluginDir(f), 'src', 'mcp-servers', 'caveman-shrink', 'index.js'));
     assert.deepEqual(entry.args.slice(1), ['node', 'fixture-server', '--root', `${f.root}/path with spaces`, ';', 'touch', marker]);
+  } finally { f.cleanup(); }
+});
+
+test('reinstall preserves an owned MCP shrink unless removal is explicit', () => {
+  const f = fixture();
+  try {
+    const installed = install(f, ['--with-mcp-shrink=node upstream']);
+    assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+    const beforeConfig = config(f).mcp_servers['caveman-shrink'];
+    const beforeManifest = JSON.parse(fs.readFileSync(manifestPath(f), 'utf8')).mcp;
+
+    const preserved = install(f);
+    assert.equal(preserved.status, 0, preserved.stderr || preserved.stdout);
+    assert.deepEqual(config(f).mcp_servers['caveman-shrink'], beforeConfig);
+    assert.deepEqual(JSON.parse(fs.readFileSync(manifestPath(f), 'utf8')).mcp, beforeManifest);
+
+    const removed = install(f, ['--no-mcp-shrink']);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    assert.equal(config(f).mcp_servers['caveman-shrink'], undefined);
+    assert.equal(JSON.parse(fs.readFileSync(manifestPath(f), 'utf8')).mcp, null);
   } finally { f.cleanup(); }
 });
 
