@@ -127,19 +127,14 @@ def verify_tool_call_policy() -> None:
     skill = (ROOT / "skills/caveman/SKILL.md").read_text(encoding="utf-8")
     required_rules = [
         "No tool-call narration",
-        "safe and unambiguous",
-        "preamble, plan, progress update, or reason",
+        "when next action is safe and unambiguous, call tool directly",
+        "Do not emit a preamble, plan, progress update, or reason immediately before a tool call",
         "After a tool result, call the next tool directly",
-        "material result or a next action requiring user input",
+        "Emit only a material result or a next action requiring user input",
         "do not announce the next tool call",
-        "clarification",
-        "security or risk warning",
-        "irreversible action",
-        "ambiguity that must be resolved first",
-        "cannot override higher-priority provider or harness instructions",
-        "mechanically suppress their output",
-        "this rule governs model-authored text",
-        "only when no higher-priority instruction conflicts",
+        "Exceptions: clarification, security or risk warning, irreversible action confirmation, or ambiguity that must be resolved first",
+        "Prompt text cannot override higher-priority provider or harness instructions or mechanically suppress their output",
+        "this rule governs model-authored text only when no higher-priority instruction conflicts",
     ]
     for rule in required_rules:
         ensure(rule in skill, f"SKILL.md missing tool-call policy: {rule}")
