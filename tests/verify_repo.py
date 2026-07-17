@@ -121,6 +121,27 @@ def verify_skill_frontmatter_upload_compatibility() -> None:
     print("Skill frontmatter descriptions avoid XML-like tags")
 
 
+def verify_tool_call_policy() -> None:
+    section("Tool Call Policy")
+
+    skill = (ROOT / "skills/caveman/SKILL.md").read_text(encoding="utf-8")
+    required_rules = [
+        "No tool-call narration",
+        "safe and unambiguous",
+        "preamble, plan, progress update, or reason",
+        "material result or next action",
+        "clarification",
+        "security or risk warning",
+        "irreversible action",
+        "ambiguity that must be resolved first",
+        "Prompt text cannot mechanically suppress provider or harness output",
+    ]
+    for rule in required_rules:
+        ensure(rule in skill, f"SKILL.md missing tool-call policy: {rule}")
+
+    print("Tool-call silence policy and exceptions present")
+
+
 def verify_synced_files() -> None:
     section("Synced Files")
     skill_source = ROOT / "skills/caveman/SKILL.md"
@@ -396,6 +417,7 @@ def verify_hook_install_flow() -> None:
 def main() -> int:
     checks = [
         verify_skill_frontmatter_upload_compatibility,
+        verify_tool_call_policy,
         verify_synced_files,
         verify_manifests_and_syntax,
         verify_powershell_static,
