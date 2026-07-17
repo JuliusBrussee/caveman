@@ -129,12 +129,17 @@ def verify_tool_call_policy() -> None:
         "No tool-call narration",
         "safe and unambiguous",
         "preamble, plan, progress update, or reason",
-        "material result or next action",
+        "After a tool result, call the next tool directly",
+        "material result or a next action requiring user input",
+        "do not announce the next tool call",
         "clarification",
         "security or risk warning",
         "irreversible action",
         "ambiguity that must be resolved first",
-        "Prompt text cannot mechanically suppress provider or harness output",
+        "cannot override higher-priority provider or harness instructions",
+        "mechanically suppress their output",
+        "this rule governs model-authored text",
+        "only when no higher-priority instruction conflicts",
     ]
     for rule in required_rules:
         ensure(rule in skill, f"SKILL.md missing tool-call policy: {rule}")
