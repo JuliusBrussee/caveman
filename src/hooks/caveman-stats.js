@@ -18,6 +18,18 @@ const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_
 // run is committed.
 const COMPRESSION = { 'full': 0.65 };
 
+// Per-turn INPUT cost the skill adds: the SKILL.md rules (~5 KB ≈ ~1,250 tokens
+// at the ~4-chars/token approximation used elsewhere here) are injected into
+// context every turn, plus the per-turn reinforcement the mode tracker emits.
+// A real "net" must subtract this from the output savings — caveman is
+// net-negative when it saves less output than the rules cost (docs/HONEST-NUMBERS.md).
+// Override with CAVEMAN_RULE_OVERHEAD_TOKENS if you've measured your own setup.
+const DEFAULT_RULE_OVERHEAD_TOKENS_PER_TURN = 1250;
+function ruleOverheadPerTurn() {
+  const env = parseInt(process.env.CAVEMAN_RULE_OVERHEAD_TOKENS, 10);
+  return Number.isFinite(env) && env >= 0 ? env : DEFAULT_RULE_OVERHEAD_TOKENS_PER_TURN;
+}
+
 // Approximate Anthropic public output-token pricing, USD per million.
 // Match by model id prefix so this stays correct across point releases
 // (e.g. claude-sonnet-4-20250514, claude-sonnet-4-7). Update from
@@ -250,6 +262,26 @@ function deriveSavings({ byMode, model }) {
   return { estSavedTokens, estSavedUsd };
 }
 
+// Net token effect = output tokens saved − input tokens the rules cost. Savings
+// are OUTPUT tokens; overhead is INPUT tokens; their sum is the honest
+// whole-budget delta (docs/HONEST-NUMBERS.md frames break-even exactly so).
+function deriveNet({ estSavedTokens, turns }) {
+  const overheadTokens = Math.max(0, turns || 0) * ruleOverheadPerTurn();
+  return { overheadTokens, netTokens: (estSavedTokens || 0) - overheadTokens };
+}
+
+// Shared "rule overhead" + "net" lines for the session and lifetime views.
+function netLines({ estSavedTokens, turns }) {
+  const perTurn = ruleOverheadPerTurn();
+  const { overheadTokens, netTokens } = deriveNet({ estSavedTokens, turns });
+  const overhead = `Est. rule overhead:    ${overheadTokens.toLocaleString()} ` +
+    `(input, ~${perTurn.toLocaleString()}/turn over ${turns} turn${turns === 1 ? '' : 's'})`;
+  const net = netTokens >= 0
+    ? `Est. net:              +${netTokens.toLocaleString()} (net saving after rule overhead)`
+    : `Est. net:              ${netTokens.toLocaleString()} (caveman cost more than it saved — turn it off for this workload)`;
+  return `${overhead}\n${net}`;
+}
+
 // Parse "7d", "12h" etc. to milliseconds. Returns null on invalid input.
 function parseDuration(spec) {
   if (!spec) return null;
@@ -274,13 +306,14 @@ function aggregateHistory(historyPath, sinceMs) {
     const prev = latestPerSession.get(id);
     if (!prev || (entry.ts || 0) >= (prev.ts || 0)) latestPerSession.set(id, entry);
   }
-  let outputTokens = 0, estSavedTokens = 0, estSavedUsd = 0;
+  let outputTokens = 0, estSavedTokens = 0, estSavedUsd = 0, turns = 0;
   for (const e of latestPerSession.values()) {
     outputTokens   += e.output_tokens     || 0;
     estSavedTokens += e.est_saved_tokens  || 0;
     estSavedUsd    += e.est_saved_usd     || 0;
+    turns          += e.turns             || 0;   // older rows lack turns → 0 (overhead uncounted until re-logged)
   }
-  return { sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd };
+  return { sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd, turns };
 }
 
 // Output-reduction share: saved / (saved + used) = the fraction of the
@@ -306,7 +339,7 @@ function humanizeTokens(n) {
   return String(Math.round(n));
 }
 
-function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, since }) {
+function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, turns, since }) {
   const sep = '──────────────────────────────────';
   const window = since ? ` (last ${since})` : '';
   if (sessions === 0) {
@@ -317,11 +350,12 @@ function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, si
   const budgetLine = pct !== null
     ? `Est. output reduction: ~${pct}% (output tokens only, est.)\n`
     : '';
+  const netBlock = turns > 0 ? netLines({ estSavedTokens, turns }) + '\n' : '';
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
     `Sessions:   ${sessions.toLocaleString()}\n${sep}\n` +
     `Output tokens:         ${outputTokens.toLocaleString()}\n` +
     `Est. tokens saved:     ${estSavedTokens.toLocaleString()}\n` +
-    budgetLine + usdLine + sep + '\n';
+    netBlock + budgetLine + usdLine + sep + '\n';
 }
 
 // Single-line tweetable summary. Stays human-friendly when no ratio is known.
@@ -414,9 +448,11 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
     // any session-usage % would overstate real limit relief. See
     // docs/HONEST-NUMBERS.md.
     footer += ' Reduction is of output tokens only; input/cache usage is unchanged.';
+    footer += ` Net subtracts the rules' est. input cost (~${ruleOverheadPerTurn().toLocaleString()}/turn, docs/HONEST-NUMBERS.md).`;
     savings = (`Est. without caveman:  ${estNormal.toLocaleString()}\n` +
               `Est. tokens saved:     ${estSaved.toLocaleString()} (~${Math.round(ratio * 100)}% of output)\n` +
               usdLine).replace(/\n$/, '');
+    savings += '\n' + netLines({ estSavedTokens: estSaved, turns });
   } else if (mode && mode !== 'off') {
     savings = `No savings estimate for '${mode}' mode — only 'full' has benchmark data.`;
   } else {
@@ -501,6 +537,7 @@ function main() {
       mode: mode || null,
       model: parsed.model || null,
       output_tokens: parsed.outputTokens,
+      turns: parsed.turns,
       est_saved_tokens: estSavedTokens,
       est_saved_usd: estSavedUsd,
     }));
@@ -527,7 +564,7 @@ if (require.main === module) main();
 
 module.exports = {
   formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
-  parseSession, priceForModel, formatUsd, COMPRESSION, MODEL_OUTPUT_PRICE_PER_M,
-  findCompressedPairs, summarizeCompressed, humanizeTokens, outputReductionPct,
-  readModeLog, attributeByMode,
+  deriveNet, ruleOverheadPerTurn, parseSession, priceForModel, formatUsd, COMPRESSION,
+  MODEL_OUTPUT_PRICE_PER_M, findCompressedPairs, summarizeCompressed, humanizeTokens,
+  outputReductionPct, readModeLog, attributeByMode,
 };
