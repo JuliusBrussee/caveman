@@ -281,6 +281,76 @@ test('openclaw install writes skill folder + SOUL.md bootstrap', () => {
   }
 });
 
+test('openclaw install stamps the pinned release version, not a stale constant', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  try {
+    const r = spawnSync('node', [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
+      // CAVEMAN_REF is the sanctioned test override for PINNED_REF (see
+      // bin/install.js). Using a value distinct from the real pinned release
+      // proves the frontmatter version is threaded through at install time,
+      // not hardcoded to bin/lib/openclaw.js's SKILL_VERSION fallback.
+      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1', CAVEMAN_REF: 'v9.9.9' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+
+    const skillRaw = fs.readFileSync(path.join(ws, 'skills', 'caveman', 'SKILL.md'), 'utf8');
+    assert.match(skillRaw, /\nversion:\s*9\.9\.9\b/, 'frontmatter version should match CAVEMAN_REF (9.9.9), not a stale fallback');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw install --no-always: skill installed load-on-demand, SOUL.md untouched', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  try {
+    const r = spawnSync('node', [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--no-always', '--config-dir', dir], {
+      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+
+    // Skill still written, still versioned, but no `always: true` stamp.
+    const skillFile = path.join(ws, 'skills', 'caveman', 'SKILL.md');
+    assert.ok(fs.existsSync(skillFile), 'skill SKILL.md missing');
+    const skillRaw = fs.readFileSync(skillFile, 'utf8');
+    assert.match(skillRaw, /\nversion:\s*\d+\.\d+\.\d+/, 'skill missing version frontmatter');
+    assert.doesNotMatch(skillRaw, /\nalways:\s*true/, '--no-always should not stamp always: true');
+
+    // SOUL.md is what drives always-on injection — --no-always must not write it.
+    const soul = path.join(ws, 'SOUL.md');
+    assert.equal(fs.existsSync(soul), false, '--no-always should not create SOUL.md');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw install --no-always is idempotent and does not retroactively strip an existing SOUL.md block', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  try {
+    const env = { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' };
+    const base = ['--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir];
+
+    // First install always-on (writes SOUL.md), then re-run with --no-always.
+    // --no-always should not touch an already-present bootstrap block — it
+    // only controls whether a NEW install writes one.
+    spawnSync('node', [INSTALLER, ...base], { env, encoding: 'utf8' });
+    const r = spawnSync('node', [INSTALLER, ...base, '--force', '--no-always'], { env, encoding: 'utf8' });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+
+    const soulRaw = fs.readFileSync(path.join(ws, 'SOUL.md'), 'utf8');
+    assert.match(soulRaw, /<!-- caveman-begin -->/, '--no-always on a re-run should not strip an existing bootstrap block');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('openclaw install is idempotent: skill frontmatter not double-prepended, SOUL.md has one marker block', () => {
   const dir = freshTmpDir();
   const ws = path.join(dir, 'ws');

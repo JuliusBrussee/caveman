@@ -59,7 +59,7 @@ function parseArgs(argv) {
     withHooks: 'auto', withInit: false, withMcpShrink: false,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
-    configDir: null, help: false,
+    configDir: null, help: false, openclawAlways: true,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -102,6 +102,7 @@ function parseArgs(argv) {
         break;
       }
       case '--no-mcp-shrink': opts.withMcpShrink = false; break;
+      case '--no-always': opts.openclawAlways = false; break;
       case '--all': opts.all = true; break;
       case '--minimal': opts.minimal = true; break;
       case '--list': opts.listOnly = true; break;
@@ -882,8 +883,10 @@ function installOpencode(ctx) {
 // Drops skills/caveman/ into the OpenClaw workspace and appends a small
 // auto-injected bootstrap block to the workspace SOUL.md. Always-on behavior
 // comes from SOUL.md (auto-injected each turn); the skill folder makes
-// caveman discoverable via `openclaw skills list`. See bin/lib/openclaw.js
-// for the actual file writes.
+// caveman discoverable via `openclaw skills list`. Pass --no-always to skip
+// the SOUL.md write (and the `always: true` frontmatter stamp) and install
+// the skill as load-on-demand only. See bin/lib/openclaw.js for the actual
+// file writes.
 function installOpenclaw(ctx) {
   const { say, note, warn, opts, repoRoot, results } = ctx;
   results.detected++;
@@ -900,6 +903,8 @@ function installOpenclaw(ctx) {
     repoRoot,
     dryRun: opts.dryRun,
     force: opts.force,
+    version: PINNED_REF.replace(/^v/, ''),
+    always: opts.openclawAlways,
     log,
   });
 
@@ -1391,6 +1396,9 @@ FLAGS
                         is required. The value is whitespace-tokenized.
                         Example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"
   --no-mcp-shrink       Skip MCP shrink. (Default.)
+  --no-always           OpenClaw: install the skill as load-on-demand only —
+                        skip the SOUL.md bootstrap write and the
+                        \`always: true\` frontmatter stamp. (Default: always-on.)
   --uninstall, -u       Remove caveman from this machine.
   --config-dir <path>   Claude Code config dir for hook files + settings.json.
                         Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT

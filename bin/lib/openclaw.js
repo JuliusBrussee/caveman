@@ -17,6 +17,17 @@
 //      pointing the agent at the skill. SOUL.md is auto-injected each turn,
 //      so this is what actually drives always-on behavior.
 //
+// Pass `always: false` (bin/install.js: --no-always) to opt out of both the
+// `always: true` frontmatter stamp and the SOUL.md write — the skill is then
+// only step 1: dropped into the workspace and discoverable via
+// `openclaw skills list`, loaded by the model on demand instead of injected
+// every turn.
+//
+// `version` defaults to SKILL_VERSION below (a static fallback) but should be
+// passed explicitly by callers that know the real release — bin/install.js
+// passes its PINNED_REF so `openclaw skills list` reports the version that
+// was actually installed instead of a stale constant.
+//
 // Idempotent on both writes. Uninstall removes the skill folder and strips
 // the marker block from SOUL.md while preserving any user-authored content.
 
@@ -27,6 +38,9 @@ const os = require('os');
 const path = require('path');
 
 const SKILL_NAME = 'caveman';
+// Fallback only — used when a caller doesn't pass an explicit `version`
+// (e.g. src/tools/caveman-init.js). bin/install.js's npx/CLI path always
+// passes its own PINNED_REF instead of relying on this.
 const SKILL_VERSION = '1.0.0';
 const MARK_BEGIN = '<!-- caveman-begin -->';
 const MARK_END = '<!-- caveman-end -->';
@@ -67,12 +81,12 @@ function frontmatterHasKey(fm, key) {
   return re.test(fm);
 }
 
-function mergeOpenclawFrontmatter(src) {
+function mergeOpenclawFrontmatter(src, { version = SKILL_VERSION, always = true } = {}) {
   const { frontmatter, body } = splitFrontmatter(src);
   const additions = [];
   if (!frontmatterHasKey(frontmatter, 'name')) additions.push(`name: ${SKILL_NAME}`);
-  if (!frontmatterHasKey(frontmatter, 'version')) additions.push(`version: ${SKILL_VERSION}`);
-  if (!frontmatterHasKey(frontmatter, 'always')) additions.push('always: true');
+  if (!frontmatterHasKey(frontmatter, 'version')) additions.push(`version: ${version}`);
+  if (always && !frontmatterHasKey(frontmatter, 'always')) additions.push('always: true');
   if (additions.length === 0 && frontmatter) return src;
   const fmBody = (frontmatter ? frontmatter.trimEnd() + '\n' : '') + additions.join('\n') + (additions.length ? '\n' : '');
   return '---\n' + fmBody + '---\n' + body;
@@ -198,7 +212,7 @@ function stripBootstrapFromSoul(soulPath) {
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
-function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, log = noopLog() } = {}) {
+function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, version, always = true, log = noopLog() } = {}) {
   const ws = workspace || resolveWorkspace();
   const skillBody = loadSkillBody(repoRoot);
   if (!skillBody) {
@@ -206,7 +220,7 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
     log.note('  Re-run from a clone or via `npx -y github:JuliusBrussee/caveman -- --only openclaw`.');
     return { ok: false, reason: 'repo not available' };
   }
-  const snippet = loadBootstrapSnippet(repoRoot);
+  const snippet = always ? loadBootstrapSnippet(repoRoot) : null;
 
   if (!fs.existsSync(ws)) {
     if (!force) {
@@ -222,15 +236,24 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
   const soulFile = path.join(ws, SOUL_FILE);
 
   if (dryRun) {
-    log.note(`  would write ${skillFile} (with version/always frontmatter)`);
-    log.note(`  would ${fs.existsSync(soulFile) ? 'append to' : 'create'} ${soulFile} (caveman bootstrap block)`);
+    log.note(`  would write ${skillFile} (with ${always ? 'version/always' : 'version-only'} frontmatter)`);
+    if (always) {
+      log.note(`  would ${fs.existsSync(soulFile) ? 'append to' : 'create'} ${soulFile} (caveman bootstrap block)`);
+    } else {
+      log.note(`  would NOT touch ${soulFile} (--no-always: skill installed on-demand only)`);
+    }
     return { ok: true, dryRun: true };
   }
 
   fs.mkdirSync(skillDir, { recursive: true });
-  const merged = mergeOpenclawFrontmatter(skillBody);
+  const merged = mergeOpenclawFrontmatter(skillBody, { version, always });
   fs.writeFileSync(skillFile, merged, { mode: 0o644 });
   log.write(`  installed: ${skillFile}\n`);
+
+  if (!always) {
+    log.note(`  skipped ${soulFile} (--no-always: skill discoverable via \`openclaw skills list\`, loaded on demand)`);
+    return { ok: true };
+  }
 
   const soul = appendBootstrapToSoul(soulFile, snippet);
   if (soul.changed) log.write(`  wrote bootstrap block to ${soulFile}\n`);
