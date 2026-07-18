@@ -221,6 +221,7 @@ test('appends to lifetime history on each run', (tmp) => {
   const entry = JSON.parse(lines[0]);
   assert.strictEqual(entry.session_id, 's');
   assert.strictEqual(entry.output_tokens, 350);
+  assert.strictEqual(entry.turns, 1);
   assert.strictEqual(entry.est_saved_tokens, 650);
   assert.strictEqual(entry.mode, 'full');
   assert.strictEqual(entry.model, 'claude-sonnet-4-7');
@@ -631,6 +632,119 @@ test('excludes tokens that predate a mid-session flag write with no log (#601)',
   assert.match(out, /unattributed:\s+350 tokens/);
   assert.match(out, /excluded/);
   assert.doesNotMatch(out, /Est\. without caveman/);
+});
+
+// ── Rule-injection overhead + net (reveals the net-negative regime, #145) ──
+// Gross output savings alone can never show when caveman costs more than it
+// saves. Net subtracts the per-turn rule-injection input cost.
+
+test('session shows rule overhead and a positive net on a large reply', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 1500 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // 1500/0.35 = 4286, saved 2786; overhead 1250×1; net = +1536.
+  assert.match(out, /Est\. rule overhead:\s+1,250 \(input, ~1,250\/turn over 1 turn\)/);
+  assert.match(out, /Est\. net:\s+\+1,536 \(net saving after rule overhead\)/);
+});
+
+test('session shows a NEGATIVE net and says turn it off on a small reply (#145)', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 100 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // 100/0.35 = 286, saved 186; overhead 1250; net = -1064.
+  assert.match(out, /Est\. net:\s+-1,064/);
+  assert.match(out, /caveman cost more than it saved/);
+  assert.match(out, /turn it off for this workload/);
+});
+
+test('overhead scales with CAVEMAN_RULE_OVERHEAD_TOKENS override', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 1500 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_RULE_OVERHEAD_TOKENS: '500' },
+  });
+  // overhead 500×1; net = 2786 - 500 = +2286.
+  assert.match(out, /Est\. rule overhead:\s+500 \(input, ~500\/turn over 1 turn\)/);
+  assert.match(out, /Est\. net:\s+\+2,286/);
+});
+
+test('does not fabricate a net when tokens are unattributed (no guessing)', (tmp) => {
+  const now = Date.now();
+  const sess = makeSession(tmp, [
+    { type: 'assistant', timestamp: new Date(now - 60 * 60_000).toISOString(), message: { usage: { output_tokens: 350 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  // Flag written now, no transition log → mode during the message is unknown.
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.match(out, /unattributed:\s+350 tokens/);
+  assert.doesNotMatch(out, /Est\. net:/);   // no savings basis → no net claim
+});
+
+test('lifetime view nets aggregated turns against savings', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  const histPath = path.join(claudeDir, '.caveman-history.jsonl');
+  fs.writeFileSync(histPath, [
+    { ts: 1000, session_id: 'a', mode: 'full', output_tokens: 1500, est_saved_tokens: 2786, est_saved_usd: 0, turns: 1 },
+    { ts: 2000, session_id: 'b', mode: 'full', output_tokens: 100,  est_saved_tokens: 186,  est_saved_usd: 0, turns: 1 },
+  ].map(o => JSON.stringify(o)).join('\n') + '\n');
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // saved 2972, overhead 1250×2 = 2500, net = +472.
+  assert.match(out, /Est\. tokens saved:\s+2,972/);
+  assert.match(out, /Est\. rule overhead:\s+2,500 \(input, ~1,250\/turn over 2 turns\)/);
+  assert.match(out, /Est\. net:\s+\+472/);
+});
+
+test('lifetime view omits net for legacy rows without turn data', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-history.jsonl'),
+    JSON.stringify({ ts: 1000, session_id: 'a', mode: 'full', output_tokens: 350, est_saved_tokens: 650, est_saved_usd: 0 }) + '\n');
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.doesNotMatch(out, /Est\. net:/);   // no turns logged → can't compute overhead honestly
+});
+
+test('deriveNet and ruleOverheadPerTurn: default and env override', () => {
+  const { deriveNet, ruleOverheadPerTurn } = require(STATS);
+  const saved = process.env.CAVEMAN_RULE_OVERHEAD_TOKENS;
+  try {
+    delete process.env.CAVEMAN_RULE_OVERHEAD_TOKENS;
+    assert.strictEqual(ruleOverheadPerTurn(), 1250);
+    assert.deepStrictEqual(deriveNet({ estSavedTokens: 2786, turns: 1 }), { overheadTokens: 1250, netTokens: 1536 });
+    process.env.CAVEMAN_RULE_OVERHEAD_TOKENS = '500';
+    assert.strictEqual(ruleOverheadPerTurn(), 500);
+    process.env.CAVEMAN_RULE_OVERHEAD_TOKENS = 'garbage';
+    assert.strictEqual(ruleOverheadPerTurn(), 1250);
+  } finally {
+    if (saved === undefined) delete process.env.CAVEMAN_RULE_OVERHEAD_TOKENS;
+    else process.env.CAVEMAN_RULE_OVERHEAD_TOKENS = saved;
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
