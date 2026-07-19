@@ -1,5 +1,8 @@
 name: Sync SKILL.md and rules
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 on:
   push:
     branches: [main]
