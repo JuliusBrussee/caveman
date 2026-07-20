@@ -2,7 +2,7 @@
 
 These hooks are **bundled with the caveman plugin** and activate automatically when the plugin is installed. No manual setup required.
 
-If you installed caveman standalone (without the plugin), the unified Node installer at `bin/install.js` wires them into your `settings.json` for you — run `node bin/install.js --only claude` from a clone, or `npx -y github:JuliusBrussee/caveman -- --only claude` for the curl-pipe path.
+If you installed caveman standalone (without the plugin), the unified Node installer at `cli/install.js` wires them into your `settings.json` for you — run `node cli/install.js --only claude` from a clone, or `npx -y github:JuliusBrussee/caveman -- --only claude` for the curl-pipe path.
 
 ## What's Included
 
@@ -34,7 +34,7 @@ The statusline badge shows which caveman mode is active directly in your Claude 
 
 If you already have a custom statusline, caveman does not overwrite it and Claude stays quiet. Add the badge snippet to your existing script instead.
 
-**Standalone users:** the unified installer (`bin/install.js`, invoked by the `install.sh` / `install.ps1` shims at the repo root) wires the statusline automatically if you do not already have a custom statusline. If you do, the installer leaves it alone and prints the merge note.
+**Standalone users:** the unified installer (`cli/install.js`, invoked by the `install.sh` / `install.ps1` shims at the repo root) wires the statusline automatically if you do not already have a custom statusline. If you do, the installer leaves it alone and prints the merge note.
 
 **Manual setup:** If you need to configure it yourself, add one of these to `~/.claude/settings.json`:
 
@@ -102,7 +102,7 @@ If installed via the standalone Node installer:
 ```bash
 npx -y github:JuliusBrussee/caveman -- --uninstall
 # or, from a clone:
-node bin/install.js --uninstall
+node cli/install.js --uninstall
 ```
 
 Or manually:

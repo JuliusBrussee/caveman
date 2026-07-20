@@ -35,9 +35,9 @@ import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
-const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
+const INSTALLER = path.join(REPO_ROOT, 'cli', 'install.js');
 const requireCjs = createRequire(import.meta.url);
-const SETTINGS = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'settings.js'));
+const SETTINGS = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'settings.js'));
 
 function freshTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-freshinstall-'));
@@ -71,7 +71,7 @@ function runInstaller(args, configDir, extraEnv = {}) {
 }
 
 function hasClaudeCli() {
-  // We can't import bin/install.js's hasCmd directly (CJS, not exported), but
+  // We can't import cli/install.js's hasCmd directly (CJS, not exported), but
   // a plain `command -v` / `where` shell-out is equivalent for this purpose.
   if (process.platform === 'win32') {
     return spawnSync('where', ['claude'], { stdio: 'ignore' }).status === 0;
@@ -204,7 +204,7 @@ test('uninstall strips caveman hooks but preserves user-authored ones (skipped w
 
 // ── Test: settings.json with JSONC comments doesn't crash (#249) ───────────
 // Regression guard: the installer used to crash here because JSON.parse can't
-// eat // or /* */. bin/lib/settings.js now strips them before merging.
+// eat // or /* */. cli/lib/settings.js now strips them before merging.
 test('install tolerates JSONC settings.json (comments + trailing commas)', { skip: !hasClaudeCli() && 'claude CLI not on PATH' }, () => {
   const dir = freshTmpDir();
   try {
@@ -263,7 +263,7 @@ test('openclaw install writes skill folder + SOUL.md bootstrap', () => {
     assert.match(skillRaw, /\nalways:\s*true/, 'skill missing always: true frontmatter');
 
     // Body after the merged frontmatter must match the source body.
-    const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+    const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
     const srcRaw = fs.readFileSync(SKILL_BODY_SRC, 'utf8');
     const srcBody = helper.splitFrontmatter(srcRaw).body;
     const installedBody = helper.splitFrontmatter(skillRaw).body;
@@ -444,7 +444,7 @@ test('opencode: --force on legacy AGENTS.md preserves user content and takes a b
 // second block, then strip cut from the FIRST begin to the FIRST end —
 // spanning all user content in between. These drive the helper directly.
 test('openclaw: truncated begin marker does not eat user content (issue #596 chain)', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {
@@ -470,7 +470,7 @@ test('openclaw: truncated begin marker does not eat user content (issue #596 cha
 });
 
 test('openclaw: strip removes multiple blocks pairwise, keeping user content between them', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {
@@ -488,7 +488,7 @@ test('openclaw: strip removes multiple blocks pairwise, keeping user content bet
 });
 
 test('openclaw: orphan end marker stripped without touching content', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {
@@ -505,7 +505,7 @@ test('openclaw: orphan end marker stripped without touching content', () => {
 });
 
 test('openclaw: append on a well-formed block stays a no-op', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {

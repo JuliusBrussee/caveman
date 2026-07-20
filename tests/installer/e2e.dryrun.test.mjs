@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const INSTALLER = path.resolve(HERE, '..', '..', 'bin', 'install.js');
+const INSTALLER = path.resolve(HERE, '..', '..', 'cli', 'install.js');
 
 function freshTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'cm-dryrun-'));

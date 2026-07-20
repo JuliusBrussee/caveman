@@ -1,4 +1,4 @@
-// Unit tests for the argv parser embedded in bin/install.js.
+// Unit tests for the argv parser embedded in cli/install.js.
 // We don't import parseArgs (it's not exported) — instead we shell out to the
 // installer with --help / --list / unknown flags and assert the framing.
 // For deeper coverage of flag-resolution semantics, exec --dry-run --list and
@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const INSTALLER = path.resolve(HERE, '..', '..', 'bin', 'install.js');
+const INSTALLER = path.resolve(HERE, '..', '..', 'cli', 'install.js');
 
 function run(...args) {
   return spawnSync('node', [INSTALLER, ...args], { encoding: 'utf8' });
