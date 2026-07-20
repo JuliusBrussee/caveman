@@ -43,7 +43,7 @@ import path from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 
 // When installed: caveman-config.cjs sits next to plugin.js (copied by
-// bin/install.js, renamed to .cjs because this directory's package.json
+// cli/install.js, renamed to .cjs because this directory's package.json
 // declares "type": "module" — bare .js would be loaded as ESM). When loaded
 // from the source tree (tests, dev): fall back to the canonical
 // src/hooks/caveman-config.js, which lives in a directory whose own

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # caveman — installer shim.
 #
-# Thin wrapper around bin/install.js (the unified Node installer). Every flag
-# you'd pass to bin/install.js can be passed here; we just forward them.
+# Thin wrapper around cli/install.js (the unified Node installer). Every flag
+# you'd pass to cli/install.js can be passed here; we just forward them.
 #
 # One-line install:
 #   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash
@@ -39,13 +39,13 @@ fi
 # when bash is invoked from stdin (curl | bash), and `set -u` would trip on a
 # bare reference — default to empty so the curl-pipe path falls through cleanly.
 here="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd)" || here=""
-if [ -n "$here" ] && [ -f "$here/bin/install.js" ]; then
-  exec node "$here/bin/install.js" "$@"
+if [ -n "$here" ] && [ -f "$here/cli/install.js" ]; then
+  exec node "$here/cli/install.js" "$@"
 fi
 
 # Curl-pipe path: delegate to npx. We do NOT pass `--` here — npm 7+ npx
 # already forwards trailing args to the package, and a literal `--` tripped
-# bin/install.js's parseArgs as an unknown flag.
+# cli/install.js's parseArgs as an unknown flag.
 if ! command -v npx >/dev/null 2>&1; then
   echo "caveman: npx required (ships with Node ≥18). Reinstall Node.js." >&2
   exit 1

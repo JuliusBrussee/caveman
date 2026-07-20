@@ -16,9 +16,9 @@ import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
-const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
+const INSTALLER = path.join(REPO_ROOT, 'cli', 'install.js');
 const requireCjs = createRequire(import.meta.url);
-const SETTINGS = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'settings.js'));
+const SETTINGS = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'settings.js'));
 
 const IS_WIN = process.platform === 'win32';
 

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const SETTINGS = require('../../bin/lib/settings.js');
+const SETTINGS = require('../../cli/lib/settings.js');
 
 function tmpFile(name, contents) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-settings-'));

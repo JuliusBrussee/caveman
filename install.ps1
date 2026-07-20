@@ -1,7 +1,7 @@
 # caveman — installer shim (Windows / PowerShell).
 #
-# Thin wrapper around bin/install.js (the unified Node installer). Every flag
-# you'd pass to bin/install.js can be passed here; we just forward them.
+# Thin wrapper around cli/install.js (the unified Node installer). Every flag
+# you'd pass to cli/install.js can be passed here; we just forward them.
 #
 # One-line install:
 #   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
@@ -52,7 +52,7 @@ caveman: Node.js (>=18) required. Install:
   # because it is null" crash.
   if ($PSCommandPath) {
     $here = Split-Path -Parent $PSCommandPath
-    $local = Join-Path $here "bin/install.js"
+    $local = Join-Path $here "cli/install.js"
     if (Test-Path $local) {
       & node $local @InstallerArgs
       exit $LASTEXITCODE
@@ -67,7 +67,7 @@ caveman: Node.js (>=18) required. Install:
   }
 
   # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
-  # package, and a literal `--` was tripping bin/install.js's parseArgs as an
+  # package, and a literal `--` was tripping cli/install.js's parseArgs as an
   # unknown flag.
   & npx -y "github:$Repo" @InstallerArgs
   exit $LASTEXITCODE

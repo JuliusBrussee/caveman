@@ -20,7 +20,7 @@ import { createRequire } from 'node:module';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const requireCjs = createRequire(import.meta.url);
-const { stripOpencodeAgentTools } = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'opencode-agent.js'));
+const { stripOpencodeAgentTools } = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'opencode-agent.js'));
 
 const SHIPPED_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
 

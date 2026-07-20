@@ -7,7 +7,7 @@
 // that previously broke the JSON merge step (issue #249).
 //
 // Distribution:
-//   Local clone: node bin/install.js [flags]
+//   Local clone: node cli/install.js [flags]
 //   curl|bash:   delegated from install.sh shim → npx -y github:JuliusBrussee/caveman -- [flags]
 //   Windows:     pwsh install.ps1 [flags] → same npx delegation
 //
@@ -372,7 +372,7 @@ function safeStat(p, method) {
 
 // ── Repo root resolution ───────────────────────────────────────────────────
 function detectRepoRoot() {
-  // bin/install.js sits at <repo>/bin/install.js. Walk up one.
+  // cli/install.js sits at <repo>/cli/install.js. Walk up one.
   const here = path.dirname(__filename);
   const root = path.resolve(here, '..');
   if (fs.existsSync(path.join(root, 'src', 'hooks')) &&
@@ -609,7 +609,7 @@ function installHermes(ctx) {
 
   if (!repoRoot) {
     warn('  Hermes native install requires a local clone of the caveman repo.');
-    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only hermes');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node cli/install.js --only hermes');
     results.failed.push(['hermes', 'native install requires local repo clone']);
     process.stdout.write('\n');
     return;
@@ -661,7 +661,7 @@ const OPENCODE_COMMAND_FILES = ['caveman.md', 'caveman-commit.md', 'caveman-revi
 const OPENCODE_PLUGIN_REL = './plugins/caveman/plugin.js';
 const OPENCODE_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
 // Marker fence for the opencode AGENTS.md ruleset block. Same convention as
-// bin/lib/openclaw.js for SOUL.md — lets us strip our block cleanly even when
+// cli/lib/openclaw.js for SOUL.md — lets us strip our block cleanly even when
 // the user has authored content above AND below it.
 const OPENCODE_AGENTS_MD_BEGIN = '<!-- caveman-begin -->';
 const OPENCODE_AGENTS_MD_END = '<!-- caveman-end -->';
@@ -690,7 +690,7 @@ function installOpencode(ctx) {
 
   if (!repoRoot) {
     warn('  opencode native install requires a local clone of the caveman repo.');
-    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only opencode');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node cli/install.js --only opencode');
     results.failed.push(['opencode', 'native install requires local repo clone']);
     process.stdout.write('\n');
     return;
@@ -882,7 +882,7 @@ function installOpencode(ctx) {
 // Drops skills/caveman/ into the OpenClaw workspace and appends a small
 // auto-injected bootstrap block to the workspace SOUL.md. Always-on behavior
 // comes from SOUL.md (auto-injected each turn); the skill folder makes
-// caveman discoverable via `openclaw skills list`. See bin/lib/openclaw.js
+// caveman discoverable via `openclaw skills list`. See cli/lib/openclaw.js
 // for the actual file writes.
 function installOpenclaw(ctx) {
   const { say, note, warn, opts, repoRoot, results } = ctx;
@@ -1367,7 +1367,7 @@ function printHelp() {
 
 USAGE
   npx -y github:JuliusBrussee/caveman -- [flags]
-  node bin/install.js [flags]
+  node cli/install.js [flags]
   bash install.sh [flags]              # shim → npx
   pwsh install.ps1 [flags]             # shim → npx
 
