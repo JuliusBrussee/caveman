@@ -394,7 +394,7 @@ const IS_WIN = process.platform === 'win32';
 
 function quoteWinArg(a) {
   if (!IS_WIN) return a;
-  if (a === '' || /[\s"]/.test(a)) {
+  if (a === '' || /[\s"&|^<>%()]/.test(a)) {
     // Standard CommandLineToArgvW escaping
     return '"' + String(a).replace(/\\(?=\\*"|$)/g, '\\\\').replace(/"/g, '\\"') + '"';
   }
