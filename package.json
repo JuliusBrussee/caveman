@@ -13,7 +13,7 @@
     "url": "https://github.com/JuliusBrussee/caveman/issues"
   },
   "bin": {
-    "caveman": "./bin/install.js"
+    "caveman": "./cli/install.js"
   },
   "engines": {
     "node": ">=18"
@@ -22,7 +22,7 @@
     "test": "node --test tests/installer/*.test.mjs"
   },
   "files": [
-    "bin/",
+    "cli/",
     "src/",
     "agents/",
     "skills/",

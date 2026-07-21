@@ -18,7 +18,7 @@ The repo distributes one skill (caveman) plus a handful of sub-skills
 (caveman-commit, caveman-review, caveman-compress, cavecrew-*) to many
 agents through different distribution mechanisms (Claude Code plugin, Codex
 plugin, Gemini extension, Cursor/Windsurf/Cline rule files, `npx skills` for
-the long tail). A single Node installer at `bin/install.js` detects which
+the long tail). A single Node installer at `cli/install.js` detects which
 agents are on the user's machine and installs the right thing for each.
 
 Sources of truth live at the **top level** of the repo. Agent-specific
@@ -39,10 +39,10 @@ copies live under `plugins/caveman/` and similar mirror dirs — those are
 | Cavecrew decision guide (when to delegate to subagents) | `skills/cavecrew/SKILL.md` |
 | cavecrew subagent definitions | `agents/cavecrew-investigator.md`, `agents/cavecrew-builder.md`, `agents/cavecrew-reviewer.md` |
 | Auto-activation rule body (Cursor/Windsurf/Cline/Copilot) | `src/rules/caveman-activate.md` |
-| Add support for a new agent | `bin/install.js` (PROVIDERS array) |
+| Add support for a new agent | `cli/install.js` (PROVIDERS array) |
 | Per-repo init script (drops rule files into a user's repo) | `src/tools/caveman-init.js` |
 | Claude Code hooks | `src/hooks/caveman-activate.js`, `src/hooks/caveman-mode-tracker.js`, `src/hooks/caveman-config.js`, `src/hooks/caveman-statusline.sh`, `src/hooks/caveman-statusline.ps1` |
-| Settings.json read/write helpers | `bin/lib/settings.js` |
+| Settings.json read/write helpers | `cli/lib/settings.js` |
 | MCP shrink server | `src/mcp-servers/caveman-shrink/` |
 
 That's it. Every other markdown file with `SKILL.md` in the path is a copy.
@@ -72,7 +72,7 @@ dotdir mirror, it's a build artifact. Edit the top-level source instead.
 
 ## Adding a new agent
 
-The unified Node installer at `bin/install.js` is the **single source of
+The unified Node installer at `cli/install.js` is the **single source of
 truth** for the supported-agent list. The README and `INSTALL.md` install
 tables mirror it by hand — bash and PowerShell shims at the repo root just
 delegate to it.
@@ -80,16 +80,16 @@ delegate to it.
 1. Confirm the agent has a distribution path. Either:
    - it has a profile slug in upstream [vercel-labs/skills](https://github.com/vercel-labs/skills) (most common), or
    - it has a native plugin / extension / rule-file mechanism we can target.
-2. Append a row to the `PROVIDERS` array in `bin/install.js`. Each row needs:
+2. Append a row to the `PROVIDERS` array in `cli/install.js`. Each row needs:
    - `id` — short kebab-case identifier (e.g. `windsurf`)
    - `label` — human display name (e.g. `Windsurf`)
    - `mech` — distribution mechanism (`plugin`, `extension`, `rules-file`, `skills-cli`, …)
    - `detect` — clause spec like `command:foo||dir:$HOME/x` describing how to detect the agent
    - `profile` — the vercel-labs/skills slug, if applicable
    - `soft: true` — set when detection is config-dir-only (best-effort)
-3. Run `node bin/install.js --list` and confirm the new row renders correctly. Soft probes should show as `(soft)`.
+3. Run `node cli/install.js --list` and confirm the new row renders correctly. Soft probes should show as `(soft)`.
 4. Add a row to the install tables in `README.md` and `INSTALL.md`.
-5. No CI changes needed — the workflow re-reads `bin/install.js` automatically.
+5. No CI changes needed — the workflow re-reads `cli/install.js` automatically.
 
 Bad slug? `npx skills add` fails at install **runtime**, not at install-script
 load. Always verify the slug against the vercel-labs/skills README before
@@ -174,18 +174,18 @@ PR descriptions don't need to be long. Caveman style fine. Just say what change,
 A handful of invariants that have bitten us before. Keep them.
 
 - **Hooks must silent-fail on filesystem errors.** A `try/catch` that swallows the error is correct here. A hook that throws blocks Claude Code session start — that's user-facing breakage. See existing patterns in `src/hooks/caveman-activate.js`.
-- **Settings.json reads and writes go through `bin/lib/settings.js`.** It tolerates JSONC comments. Direct `JSON.parse` on a user's `settings.json` will crash on a single `// comment`.
-- **Validate hook entries before writing.** Use `validateHookFields()` in `bin/lib/settings.js`. Claude Code's Zod schema silently discards the **entire** `settings.json` on a single bad hook entry — one malformed write poisons the user's whole config.
+- **Settings.json reads and writes go through `cli/lib/settings.js`.** It tolerates JSONC comments. Direct `JSON.parse` on a user's `settings.json` will crash on a single `// comment`.
+- **Validate hook entries before writing.** Use `validateHookFields()` in `cli/lib/settings.js`. Claude Code's Zod schema silently discards the **entire** `settings.json` on a single bad hook entry — one malformed write poisons the user's whole config.
 - **Symlink-safe flag writes via `safeWriteFlag()`** in `src/hooks/caveman-config.js`. The flag file lives at a predictable path under `$CLAUDE_CONFIG_DIR/`; without `O_NOFOLLOW` and a parent-symlink check, a local attacker can clobber any file the user can write.
 - **Honor `CLAUDE_CONFIG_DIR`.** Hooks, the installer, and the statusline scripts must respect it — never hardcode `~/.claude`.
-- **`install.sh` and `install.ps1` at the repo root are 30-line shims** that delegate to `bin/install.js`. Don't re-add per-OS install logic to them. Quoting bugs that way lie.
+- **`install.sh` and `install.ps1` at the repo root are 30-line shims** that delegate to `cli/install.js`. Don't re-add per-OS install logic to them. Quoting bugs that way lie.
 
 ---
 
 ## Ideas
 
 See [issues labeled `good first issue`](../../issues?q=label%3A%22good+first+issue%22)
-for starter tasks. Or grep `TODO` / `FIXME` in `src/hooks/`, `bin/`, `src/tools/` —
+for starter tasks. Or grep `TODO` / `FIXME` in `src/hooks/`, `cli/`, `src/tools/` —
 each one is a real lead.
 
 Caveman like contribution. You bring rock, caveman put rock in pile. Pile

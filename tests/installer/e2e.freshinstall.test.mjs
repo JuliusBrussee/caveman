@@ -35,9 +35,9 @@ import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
-const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
+const INSTALLER = path.join(REPO_ROOT, 'cli', 'install.js');
 const requireCjs = createRequire(import.meta.url);
-const SETTINGS = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'settings.js'));
+const SETTINGS = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'settings.js'));
 
 function freshTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-freshinstall-'));
@@ -71,7 +71,7 @@ function runInstaller(args, configDir, extraEnv = {}) {
 }
 
 function hasClaudeCli() {
-  // We can't import bin/install.js's hasCmd directly (CJS, not exported), but
+  // We can't import cli/install.js's hasCmd directly (CJS, not exported), but
   // a plain `command -v` / `where` shell-out is equivalent for this purpose.
   if (process.platform === 'win32') {
     return spawnSync('where', ['claude'], { stdio: 'ignore' }).status === 0;
@@ -202,9 +202,75 @@ test('uninstall strips caveman hooks but preserves user-authored ones (skipped w
   }
 });
 
+// ── Test: uninstall removes stale per-session state, keeps lifetime history (#635) ──
+// Pre-fix, uninstall only ever removed `.caveman-active`, leaving
+// `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`,
+// and `.caveman-nudge-shown` behind forever. `.caveman-history.jsonl` is the
+// user's lifetime savings ledger and must be kept (with a "kept" note), not
+// treated as stale state. Runs unconditionally — no `claude` CLI needed, this
+// only exercises the file-cleanup part of uninstall.
+test('uninstall removes stale per-session state files but keeps lifetime history', () => {
+  const dir = freshTmpDir();
+  try {
+    const staleFiles = [
+      '.caveman-active',
+      '.caveman-active.prev',
+      '.caveman-mode-log.jsonl',
+      '.caveman-statusline-suffix',
+      '.caveman-nudge-shown',
+    ];
+    for (const f of staleFiles) fs.writeFileSync(path.join(dir, f), 'x');
+    const historyPath = path.join(dir, '.caveman-history.jsonl');
+    fs.writeFileSync(historyPath, '{"ts":1}\n');
+
+    const cleanPath = pathWithout(['claude', 'gemini']);
+    const r = runInstaller(['--uninstall'], dir, { PATH: cleanPath });
+    assert.notEqual(r.status, 2, `uninstall argv error: ${r.stderr}`);
+
+    for (const f of staleFiles) {
+      assert.equal(fs.existsSync(path.join(dir, f)), false, `${f} should be removed by uninstall`);
+    }
+    assert.ok(fs.existsSync(historyPath), '.caveman-history.jsonl must survive uninstall');
+    assert.match(r.stdout, /kept .*caveman-history\.jsonl.*lifetime history/,
+      'uninstall must explain why lifetime history was kept');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Test: uninstall --dry-run is honest (doesn't claim removal, doesn't delete) ──
+test('uninstall --dry-run reports "would remove" and deletes nothing', () => {
+  const dir = freshTmpDir();
+  const hooksDir = path.join(dir, 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  try {
+    fs.writeFileSync(path.join(dir, '.caveman-active'), 'full');
+    fs.writeFileSync(path.join(dir, '.caveman-mode-log.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(hooksDir, 'caveman-activate.js'), '// stub\n');
+
+    const cleanPath = pathWithout(['claude', 'gemini']);
+    const r = runInstaller(['--uninstall', '--dry-run'], dir, { PATH: cleanPath });
+    assert.notEqual(r.status, 2, `uninstall dry-run argv error: ${r.stderr}`);
+
+    // Nothing actually deleted under --dry-run.
+    assert.ok(fs.existsSync(path.join(dir, '.caveman-active')), 'dry-run must not delete .caveman-active');
+    assert.ok(fs.existsSync(path.join(dir, '.caveman-mode-log.jsonl')), 'dry-run must not delete .caveman-mode-log.jsonl');
+    assert.ok(fs.existsSync(path.join(hooksDir, 'caveman-activate.js')), 'dry-run must not delete hook files');
+
+    // Every per-file line for our files says "would remove", never a bare "removed".
+    const lines = r.stdout.split('\n').filter(l => /caveman-active\b|caveman-mode-log\.jsonl|caveman-activate\.js/.test(l));
+    assert.ok(lines.length > 0, 'expected at least one reported line for the seeded files');
+    for (const line of lines) {
+      assert.match(line, /would remove/, `dry-run line must say "would remove", got: ${line}`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Test: settings.json with JSONC comments doesn't crash (#249) ───────────
 // Regression guard: the installer used to crash here because JSON.parse can't
-// eat // or /* */. bin/lib/settings.js now strips them before merging.
+// eat // or /* */. cli/lib/settings.js now strips them before merging.
 test('install tolerates JSONC settings.json (comments + trailing commas)', { skip: !hasClaudeCli() && 'claude CLI not on PATH' }, () => {
   const dir = freshTmpDir();
   try {
@@ -263,7 +329,7 @@ test('openclaw install writes skill folder + SOUL.md bootstrap', () => {
     assert.match(skillRaw, /\nalways:\s*true/, 'skill missing always: true frontmatter');
 
     // Body after the merged frontmatter must match the source body.
-    const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+    const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
     const srcRaw = fs.readFileSync(SKILL_BODY_SRC, 'utf8');
     const srcBody = helper.splitFrontmatter(srcRaw).body;
     const installedBody = helper.splitFrontmatter(skillRaw).body;
@@ -276,6 +342,64 @@ test('openclaw install writes skill folder + SOUL.md bootstrap', () => {
     assert.match(soulRaw, /<!-- caveman-begin -->/, 'SOUL.md missing begin marker');
     assert.match(soulRaw, /<!-- caveman-end -->/, 'SOUL.md missing end marker');
     assert.match(soulRaw, /Respond terse like smart caveman/, 'SOUL.md missing sentinel');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw install stamps the skill version from PINNED_REF, not a hardcoded 1.0.0', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  try {
+    const r = spawnSync('node', [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
+      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+
+    const { OPENCLAW_SKILL_VERSION } = requireCjs(INSTALLER);
+    const skillRaw = fs.readFileSync(path.join(ws, 'skills', 'caveman', 'SKILL.md'), 'utf8');
+    assert.match(skillRaw, new RegExp(`\\nversion:\\s*${OPENCLAW_SKILL_VERSION.replace(/\./g, '\\.')}\\b`),
+      `expected version: ${OPENCLAW_SKILL_VERSION} threaded from PINNED_REF`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw --no-always skips `always: true` frontmatter and the SOUL.md bootstrap append', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  try {
+    const r = spawnSync('node', [INSTALLER, '--only', 'openclaw', '--no-always', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
+      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+
+    const skillRaw = fs.readFileSync(path.join(ws, 'skills', 'caveman', 'SKILL.md'), 'utf8');
+    assert.doesNotMatch(skillRaw, /\nalways:\s*true/, '--no-always must omit the always: true frontmatter key');
+    assert.match(skillRaw, /\nversion:\s*\d+\.\d+\.\d+/, '--no-always must still stamp a version key');
+    assert.equal(fs.existsSync(path.join(ws, 'SOUL.md')), false, '--no-always must not create/append SOUL.md');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw default (no flag) behavior is unchanged: always: true + SOUL.md still written', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  try {
+    const r = spawnSync('node', [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
+      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+    const skillRaw = fs.readFileSync(path.join(ws, 'skills', 'caveman', 'SKILL.md'), 'utf8');
+    assert.match(skillRaw, /\nalways:\s*true/, 'default install must still set always: true');
+    assert.ok(fs.existsSync(path.join(ws, 'SOUL.md')), 'default install must still write SOUL.md');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -439,12 +563,33 @@ test('opencode: --force on legacy AGENTS.md preserves user content and takes a b
   }
 });
 
+// ── Tests: mergeOpenclawFrontmatter version/always opts (lib-level, direct) ──
+test('mergeOpenclawFrontmatter: custom version opt overrides the SKILL_VERSION fallback', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
+  const out = helper.mergeOpenclawFrontmatter('---\ndescription: x\n---\nbody\n', { version: '1.9.1' });
+  assert.match(out, /\nversion: 1\.9\.1\n/);
+  assert.match(out, /\nalways: true\n/, 'always defaults to true when opts.always is omitted');
+});
+
+test('mergeOpenclawFrontmatter: no opts falls back to SKILL_VERSION (default behavior unchanged)', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
+  const out = helper.mergeOpenclawFrontmatter('---\ndescription: x\n---\nbody\n');
+  assert.match(out, new RegExp(`\\nversion: ${helper.SKILL_VERSION.replace(/\./g, '\\.')}\\n`));
+});
+
+test('mergeOpenclawFrontmatter: always:false omits the always key entirely', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
+  const out = helper.mergeOpenclawFrontmatter('---\ndescription: x\n---\nbody\n', { version: '2.0.0', always: false });
+  assert.match(out, /\nversion: 2\.0\.0\n/);
+  assert.doesNotMatch(out, /always:/);
+});
+
 // ── Tests: SOUL.md marker damage tolerance (#596) ──────────────────────────
 // A stray/truncated marker used to chain into data loss: append added a
 // second block, then strip cut from the FIRST begin to the FIRST end —
 // spanning all user content in between. These drive the helper directly.
 test('openclaw: truncated begin marker does not eat user content (issue #596 chain)', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {
@@ -470,7 +615,7 @@ test('openclaw: truncated begin marker does not eat user content (issue #596 cha
 });
 
 test('openclaw: strip removes multiple blocks pairwise, keeping user content between them', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {
@@ -488,7 +633,7 @@ test('openclaw: strip removes multiple blocks pairwise, keeping user content bet
 });
 
 test('openclaw: orphan end marker stripped without touching content', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {
@@ -505,7 +650,7 @@ test('openclaw: orphan end marker stripped without touching content', () => {
 });
 
 test('openclaw: append on a well-formed block stays a no-op', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'cli', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {

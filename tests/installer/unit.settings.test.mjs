@@ -1,4 +1,4 @@
-// Unit tests for bin/lib/settings.js — the JSONC-tolerant settings helper.
+// Unit tests for cli/lib/settings.js — the JSONC-tolerant settings helper.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +8,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const SETTINGS = require('../../bin/lib/settings.js');
+const SETTINGS = require('../../cli/lib/settings.js');
 
 function tmpFile(name, contents) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-settings-'));
@@ -190,6 +190,18 @@ test('removeCavemanHooks removes the Windows statusline-stats wiring (caveman-st
   const removed = SETTINGS.removeCavemanHooks(s);
   assert.equal(removed, 1);
   assert.equal(s.hooks, undefined);
+});
+
+test('rewriteLegacyManagedHookCommands tolerates malformed hook event values without throwing', () => {
+  // installHooks calls this BEFORE validateHookFields, so a hook event value
+  // that survives JSONC parse as an object/string (not an array) must not
+  // throw here — pre-fix, `for (const entry of settings.hooks[ev])` blew up
+  // with a TypeError on a non-iterable object, killing the installer mid-run.
+  // Mirror of the guard removeCavemanHooks already has.
+  const s = { hooks: { SessionStart: { not: 'an array' }, UserPromptSubmit: 'oops' } };
+  let n;
+  assert.doesNotThrow(() => { n = SETTINGS.rewriteLegacyManagedHookCommands(s, '/usr/local/bin/node'); });
+  assert.equal(n, 0);
 });
 
 test('rewriteLegacyManagedHookCommands rewrites bare-node managed scripts', () => {

@@ -1,2 +1,5 @@
 [features]
+# Both keys: codex-cli renamed codex_hooks → hooks; old versions (<=0.120.0)
+# silently ignore unknown keys, so shipping both activates on either (#617).
 hooks = true
+codex_hooks = true

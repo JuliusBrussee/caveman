@@ -36,11 +36,11 @@ const SENTINEL = 'Respond terse like smart caveman';
 
 // OpenClaw is a global workspace tool (not per-repo) and needs two write
 // targets — a skill folder + a SOUL.md bootstrap block. The shared helper
-// lives at bin/lib/openclaw.js; we require it lazily so caveman-init.js
+// lives at cli/lib/openclaw.js; we require it lazily so caveman-init.js
 // keeps working when run standalone (curl|node) without the helper on disk.
 function loadOpenclawHelper() {
   try {
-    return require(path.join(__dirname, '..', '..', 'bin', 'lib', 'openclaw.js'));
+    return require(path.join(__dirname, '..', '..', 'cli', 'lib', 'openclaw.js'));
   } catch (_) { return null; }
 }
 

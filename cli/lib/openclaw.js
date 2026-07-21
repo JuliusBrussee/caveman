@@ -67,12 +67,20 @@ function frontmatterHasKey(fm, key) {
   return re.test(fm);
 }
 
-function mergeOpenclawFrontmatter(src) {
+// `opts.version` defaults to SKILL_VERSION (the '1.0.0' fallback) when the
+// caller doesn't have a better one on hand — cli/install.js threads through
+// PINNED_REF (its release-tag source of truth) instead so the two never
+// drift. `opts.always` defaults to true (existing behavior); pass `false`
+// (from --no-always) to omit the `always: true` key entirely — the skill
+// then loads on demand instead of always-on.
+function mergeOpenclawFrontmatter(src, opts = {}) {
+  const version = opts.version || SKILL_VERSION;
+  const always = opts.always !== false;
   const { frontmatter, body } = splitFrontmatter(src);
   const additions = [];
   if (!frontmatterHasKey(frontmatter, 'name')) additions.push(`name: ${SKILL_NAME}`);
-  if (!frontmatterHasKey(frontmatter, 'version')) additions.push(`version: ${SKILL_VERSION}`);
-  if (!frontmatterHasKey(frontmatter, 'always')) additions.push('always: true');
+  if (!frontmatterHasKey(frontmatter, 'version')) additions.push(`version: ${version}`);
+  if (always && !frontmatterHasKey(frontmatter, 'always')) additions.push('always: true');
   if (additions.length === 0 && frontmatter) return src;
   const fmBody = (frontmatter ? frontmatter.trimEnd() + '\n' : '') + additions.join('\n') + (additions.length ? '\n' : '');
   return '---\n' + fmBody + '---\n' + body;
@@ -198,7 +206,12 @@ function stripBootstrapFromSoul(soulPath) {
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
-function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, log = noopLog() } = {}) {
+// `version` — bare semver stamped into the skill frontmatter; defaults to
+//   SKILL_VERSION if the caller doesn't pass one (see mergeOpenclawFrontmatter).
+// `always` — default true (existing behavior). Pass false (--no-always) to
+//   skip the `always: true` frontmatter key AND the SOUL.md bootstrap append,
+//   so the skill installs load-on-demand instead of always-on.
+function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, log = noopLog(), version, always = true } = {}) {
   const ws = workspace || resolveWorkspace();
   const skillBody = loadSkillBody(repoRoot);
   if (!skillBody) {
@@ -222,19 +235,27 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
   const soulFile = path.join(ws, SOUL_FILE);
 
   if (dryRun) {
-    log.note(`  would write ${skillFile} (with version/always frontmatter)`);
-    log.note(`  would ${fs.existsSync(soulFile) ? 'append to' : 'create'} ${soulFile} (caveman bootstrap block)`);
+    log.note(`  would write ${skillFile} (with version${always ? '/always' : ''} frontmatter)`);
+    if (always) {
+      log.note(`  would ${fs.existsSync(soulFile) ? 'append to' : 'create'} ${soulFile} (caveman bootstrap block)`);
+    } else {
+      log.note('  --no-always: would skip SOUL.md bootstrap append (skill loads on demand)');
+    }
     return { ok: true, dryRun: true };
   }
 
   fs.mkdirSync(skillDir, { recursive: true });
-  const merged = mergeOpenclawFrontmatter(skillBody);
+  const merged = mergeOpenclawFrontmatter(skillBody, { version, always });
   fs.writeFileSync(skillFile, merged, { mode: 0o644 });
   log.write(`  installed: ${skillFile}\n`);
 
-  const soul = appendBootstrapToSoul(soulFile, snippet);
-  if (soul.changed) log.write(`  wrote bootstrap block to ${soulFile}\n`);
-  else log.note(`  ${soulFile} already contains caveman bootstrap`);
+  if (always) {
+    const soul = appendBootstrapToSoul(soulFile, snippet);
+    if (soul.changed) log.write(`  wrote bootstrap block to ${soulFile}\n`);
+    else log.note(`  ${soulFile} already contains caveman bootstrap`);
+  } else {
+    log.note('  --no-always: skipped SOUL.md bootstrap append (skill loads on demand via `openclaw skills list`)');
+  }
 
   return { ok: true };
 }

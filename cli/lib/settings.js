@@ -1,7 +1,7 @@
 // caveman — JSONC-tolerant settings.json read/write + defensive hook validation.
 //
 // Lifted in spirit from gsd-build/get-shit-done's stripJsonComments + readSettings.
-// Reused by bin/install.js and (optionally) by hooks/caveman-activate.js so a
+// Reused by cli/install.js and (optionally) by hooks/caveman-activate.js so a
 // commented settings.json no longer crashes the installer or the runtime hooks.
 //
 // Public API:
@@ -253,6 +253,13 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
   let rewritten = 0;
   const reBare = /^node\s+("([^"]+)"|'([^']+)'|(\S+))\s*$/;
   for (const ev of Object.keys(settings.hooks)) {
+    // A hook event value that is an object/string (not an array) survives
+    // JSONC parse untouched — this runs BEFORE validateHookFields in
+    // installHooks, so it must tolerate malformed input itself rather than
+    // assume the array shape. Pre-fix, `for...of` on a non-iterable object
+    // threw a TypeError here and killed the installer mid-run (mirrors the
+    // guard removeCavemanHooks already has).
+    if (!Array.isArray(settings.hooks[ev])) continue;
     for (const entry of settings.hooks[ev]) {
       if (!entry || !Array.isArray(entry.hooks)) continue;
       for (const h of entry.hooks) {

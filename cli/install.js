@@ -7,7 +7,7 @@
 // that previously broke the JSON merge step (issue #249).
 //
 // Distribution:
-//   Local clone: node bin/install.js [flags]
+//   Local clone: node cli/install.js [flags]
 //   curl|bash:   delegated from install.sh shim → npx -y github:JuliusBrussee/caveman -- [flags]
 //   Windows:     pwsh install.ps1 [flags] → same npx delegation
 //
@@ -34,6 +34,10 @@ const REPO = 'JuliusBrussee/caveman';
 // src/hooks/checksums.sha256 so the integrity manifest matches the ref.
 // Overridable via CAVEMAN_REF for testing against a branch.
 const PINNED_REF = process.env.CAVEMAN_REF || 'v1.9.1';
+// OpenClaw skill frontmatter wants a bare semver, not a `v`-prefixed tag —
+// derive it from PINNED_REF so the two never drift (was hardcoded separately
+// in cli/lib/openclaw.js as '1.0.0').
+const OPENCLAW_SKILL_VERSION = PINNED_REF.replace(/^v/, '');
 const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/${PINNED_REF}`;
 const HOOKS_REMOTE = `${RAW_BASE}/src/hooks`;
 const INIT_SCRIPT_URL = `${RAW_BASE}/src/tools/caveman-init.js`;
@@ -44,6 +48,7 @@ const MCP_SHRINK_PKG = 'caveman-shrink';
 const HOOK_FILES = [
   'package.json',
   'caveman-config.js',
+  'caveman-parse.js',
   'caveman-activate.js',
   'caveman-mode-tracker.js',
   'caveman-stats.js',
@@ -59,7 +64,7 @@ function parseArgs(argv) {
     withHooks: 'auto', withInit: false, withMcpShrink: false,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
-    configDir: null, help: false,
+    configDir: null, help: false, always: true,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -84,6 +89,10 @@ function parseArgs(argv) {
       case '--with-hooks': opts.withHooks = true; break;
       case '--no-hooks': opts.withHooks = false; break;
       case '--with-init': opts.withInit = true; break;
+      // OpenClaw only. Skips `always: true` frontmatter + the SOUL.md
+      // bootstrap append — the skill installs load-on-demand instead of
+      // always-on. Default (no flag) behavior is unchanged.
+      case '--no-always': opts.always = false; break;
       case '--with-mcp-shrink': {
         const v = argv[i + 1];
         if (v && !v.startsWith('--')) {
@@ -372,7 +381,7 @@ function safeStat(p, method) {
 
 // ── Repo root resolution ───────────────────────────────────────────────────
 function detectRepoRoot() {
-  // bin/install.js sits at <repo>/bin/install.js. Walk up one.
+  // cli/install.js sits at <repo>/cli/install.js. Walk up one.
   const here = path.dirname(__filename);
   const root = path.resolve(here, '..');
   if (fs.existsSync(path.join(root, 'src', 'hooks')) &&
@@ -392,13 +401,26 @@ function detectRepoRoot() {
 // args with spaces need quoting; we quote them defensively below.
 const IS_WIN = process.platform === 'win32';
 
-function quoteWinArg(a) {
-  if (!IS_WIN) return a;
-  if (a === '' || /[\s"]/.test(a)) {
-    // Standard CommandLineToArgvW escaping
+// Trigger on whitespace/quote (CommandLineToArgvW escaping needed) OR any
+// cmd.exe metacharacter (& | ^ < > % ( )) — spawnXplat runs the assembled
+// string through `shell: true`, so an unquoted metacharacter in an
+// attacker-influenced arg (e.g. --with-mcp-shrink value, --with-init cwd)
+// reaches cmd.exe and can chain a second command. Split out from quoteWinArg
+// (which is IS_WIN-gated) and exported unconditionally so tests/installer/
+// can exercise the quoting decision on any host platform, not just Windows.
+function winQuoteIfNeeded(a) {
+  if (a === '' || /[\s"&|^<>%()]/.test(a)) {
+    // Standard CommandLineToArgvW escaping. Residual: cmd.exe still expands
+    // %VAR% (and ! under delayed expansion) inside double quotes — env
+    // expansion, not command chaining; accepted for these install-time args.
     return '"' + String(a).replace(/\\(?=\\*"|$)/g, '\\\\').replace(/"/g, '\\"') + '"';
   }
   return a;
+}
+
+function quoteWinArg(a) {
+  if (!IS_WIN) return a;
+  return winQuoteIfNeeded(a);
 }
 
 function spawnXplat(cmd, args, opts) {
@@ -565,7 +587,10 @@ function installGemini(ctx) {
       return;
     }
   }
-  const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`], null, opts.dryRun);
+  // --consent: without it, `gemini extensions install` prints a security
+  // confirmation prompt and blocks forever on a piped/non-interactive install
+  // (issue #676) — there's no stdin to answer it from a curl|bash run.
+  const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`, '--consent'], null, opts.dryRun);
   if (spawnOk(r)) results.installed.push('gemini');
   else results.failed.push(['gemini', 'gemini extensions install failed']);
   process.stdout.write('\n');
@@ -609,7 +634,7 @@ function installHermes(ctx) {
 
   if (!repoRoot) {
     warn('  Hermes native install requires a local clone of the caveman repo.');
-    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only hermes');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node cli/install.js --only hermes');
     results.failed.push(['hermes', 'native install requires local repo clone']);
     process.stdout.write('\n');
     return;
@@ -661,7 +686,7 @@ const OPENCODE_COMMAND_FILES = ['caveman.md', 'caveman-commit.md', 'caveman-revi
 const OPENCODE_PLUGIN_REL = './plugins/caveman/plugin.js';
 const OPENCODE_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
 // Marker fence for the opencode AGENTS.md ruleset block. Same convention as
-// bin/lib/openclaw.js for SOUL.md — lets us strip our block cleanly even when
+// cli/lib/openclaw.js for SOUL.md — lets us strip our block cleanly even when
 // the user has authored content above AND below it.
 const OPENCODE_AGENTS_MD_BEGIN = '<!-- caveman-begin -->';
 const OPENCODE_AGENTS_MD_END = '<!-- caveman-end -->';
@@ -690,7 +715,7 @@ function installOpencode(ctx) {
 
   if (!repoRoot) {
     warn('  opencode native install requires a local clone of the caveman repo.');
-    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only opencode');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node cli/install.js --only opencode');
     results.failed.push(['opencode', 'native install requires local repo clone']);
     process.stdout.write('\n');
     return;
@@ -706,7 +731,7 @@ function installOpencode(ctx) {
 
   if (opts.dryRun) {
     note(`  would mkdir ${pluginDir}/, ${commandsDir}/, ${agentsDir}/, ${skillsDir}/`);
-    note(`  would copy plugin.js + package.json + caveman-config.cjs into ${pluginDir}/`);
+    note(`  would copy plugin.js + package.json + caveman-config.cjs + caveman-parse.cjs into ${pluginDir}/`);
     note(`  would copy ${OPENCODE_COMMAND_FILES.length} command files into ${commandsDir}/`);
     note(`  would copy ${OPENCODE_AGENT_FILES.length} cavecrew agents into ${agentsDir}/`);
     note(`  would copy ${OPENCODE_SKILL_DIRS.length} skill dirs into ${skillsDir}/`);
@@ -730,6 +755,12 @@ function installOpencode(ctx) {
       // sibling would be loaded as ESM and break the plugin's require() bridge.
       [path.join(repoRoot, 'src', 'hooks', 'caveman-config.js'),
        path.join(pluginDir, 'caveman-config.cjs')],
+      // Shared mode-change parser consumed by both caveman-mode-tracker.js and
+      // plugin.js's own tui.prompt.append handler. Same .cjs rename reason —
+      // and caveman-parse.js's own require('./caveman-config') resolves fine
+      // since both land as siblings in pluginDir.
+      [path.join(repoRoot, 'src', 'hooks', 'caveman-parse.js'),
+       path.join(pluginDir, 'caveman-parse.cjs')],
     ];
     for (const [src, dest] of pluginPayload) {
       if (fs.existsSync(dest) && !opts.force) {
@@ -882,7 +913,7 @@ function installOpencode(ctx) {
 // Drops skills/caveman/ into the OpenClaw workspace and appends a small
 // auto-injected bootstrap block to the workspace SOUL.md. Always-on behavior
 // comes from SOUL.md (auto-injected each turn); the skill folder makes
-// caveman discoverable via `openclaw skills list`. See bin/lib/openclaw.js
+// caveman discoverable via `openclaw skills list`. See cli/lib/openclaw.js
 // for the actual file writes.
 function installOpenclaw(ctx) {
   const { say, note, warn, opts, repoRoot, results } = ctx;
@@ -900,6 +931,8 @@ function installOpenclaw(ctx) {
     repoRoot,
     dryRun: opts.dryRun,
     force: opts.force,
+    version: OPENCLAW_SKILL_VERSION,
+    always: opts.always,
     log,
   });
 
@@ -1176,8 +1209,12 @@ function uninstall(ctx) {
     for (const f of HOOK_FILES) {
       const p = path.join(hooksDir, f);
       if (!fs.existsSync(p)) continue;
-      if (!opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
-      note(`  removed ${p}`);
+      if (opts.dryRun) {
+        note(`  would remove ${p}`);
+      } else {
+        try { fs.unlinkSync(p); } catch (_) {}
+        note(`  removed ${p}`);
+      }
     }
     // Don't rmdir hooksDir — other plugins may use it.
   }
@@ -1315,9 +1352,32 @@ function uninstall(ctx) {
     if (prunedHermes) ok('  pruned caveman skills from Hermes');
   }
 
-  // Flag file
-  const flag = path.join(configDir, '.caveman-active');
-  if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
+  // Flag + per-session state files. `.caveman-active` is the live mode flag;
+  // the rest are cumulative state the mode-tracker/stats/activate hooks write
+  // (issue #635 — uninstall only ever cleaned the flag, leaving these behind
+  // forever). `.caveman-history.jsonl` is the user's lifetime savings ledger —
+  // deliberately KEPT, not stale state; note it so the user knows it's there.
+  const STATE_FILES_TO_REMOVE = [
+    '.caveman-active',
+    '.caveman-active.prev',
+    '.caveman-mode-log.jsonl',
+    '.caveman-statusline-suffix',
+    '.caveman-nudge-shown',
+  ];
+  for (const f of STATE_FILES_TO_REMOVE) {
+    const p = path.join(configDir, f);
+    if (!fs.existsSync(p)) continue;
+    if (opts.dryRun) {
+      note(`  would remove ${p}`);
+    } else {
+      try { fs.unlinkSync(p); } catch (_) {}
+      note(`  removed ${p}`);
+    }
+  }
+  const historyPath = path.join(configDir, '.caveman-history.jsonl');
+  if (fs.existsSync(historyPath)) {
+    note(`  kept ${historyPath} (lifetime history — delete manually if unwanted)`);
+  }
 
   process.stdout.write('\n');
   ok('uninstall done.');
@@ -1367,7 +1427,7 @@ function printHelp() {
 
 USAGE
   npx -y github:JuliusBrussee/caveman -- [flags]
-  node bin/install.js [flags]
+  node cli/install.js [flags]
   bash install.sh [flags]              # shim → npx
   pwsh install.ps1 [flags]             # shim → npx
 
@@ -1384,6 +1444,9 @@ FLAGS
                         + statusline badge. (Default ON.)
   --no-hooks            Skip the hooks installer.
   --with-init           Write per-repo IDE rule files into \$PWD.
+  --no-always           OpenClaw only: skip \`always: true\` frontmatter and the
+                        SOUL.md bootstrap append — skill loads on demand instead
+                        of always-on. (Default: always-on.)
   --with-mcp-shrink="<upstream cmd>"
                         Claude Code (and opencode): register caveman-shrink MCP
                         proxy wrapping the given upstream. Default OFF.
@@ -1526,5 +1589,12 @@ async function main() {
   return 0;
 }
 
-main().then(code => process.exit(code || 0))
-      .catch(err => { process.stderr.write((err && err.stack || String(err)) + '\n'); process.exit(1); });
+// Guard so `require()`-ing this file for unit tests (see tests/installer/)
+// doesn't also run the installer as a side effect — only run main() when
+// invoked directly as a script (bin entry, `node cli/install.js`, npx).
+if (require.main === module) {
+  main().then(code => process.exit(code || 0))
+        .catch(err => { process.stderr.write((err && err.stack || String(err)) + '\n'); process.exit(1); });
+}
+
+module.exports = { winQuoteIfNeeded, OPENCLAW_SKILL_VERSION };

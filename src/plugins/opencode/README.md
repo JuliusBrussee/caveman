@@ -11,7 +11,7 @@ opencode's `session.created` + `tui.prompt.append` lifecycle hooks.
 | `package.json` | Marks the directory as ESM so Bun loads `plugin.js` correctly. |
 | `commands/*.md` | Six slash-command prompt templates (`/caveman`, `/caveman-commit`, …). |
 
-The installer (`bin/install.js --only opencode`) copies these alongside
+The installer (`cli/install.js --only opencode`) copies these alongside
 `src/hooks/caveman-config.js` (for the symlink-safe flag-write helpers, renamed
 to `caveman-config.cjs` because this directory is `"type": "module"`) into
 `~/.config/opencode/plugins/caveman/` and patches `opencode.json` with a
