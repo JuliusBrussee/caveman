@@ -18,6 +18,21 @@ const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_
 // run is committed.
 const COMPRESSION = { 'full': 0.65 };
 
+// Per-turn INPUT cost the rules add: SKILL.md (~5 KB) is injected into
+// context, plus the per-turn reinforcement the mode tracker emits. This is
+// the ~1-1.5k/turn figure docs/HONEST-NUMBERS.md admits and #145/#677 flag as
+// hidden — gross output savings alone can look great while the session is
+// still net-negative. 1250 sits mid-range; override with
+// CAVEMAN_RULE_OVERHEAD_TOKENS if you've measured your own setup.
+const DEFAULT_RULE_OVERHEAD_TOKENS_PER_TURN = 1250;
+
+function ruleOverheadPerTurn() {
+  const raw = process.env.CAVEMAN_RULE_OVERHEAD_TOKENS;
+  if (raw === undefined) return DEFAULT_RULE_OVERHEAD_TOKENS_PER_TURN;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_RULE_OVERHEAD_TOKENS_PER_TURN;
+}
+
 // Approximate Anthropic public output-token pricing, USD per million.
 // Match by model id prefix so this stays correct across point releases
 // (e.g. claude-sonnet-4-20250514, claude-sonnet-4-7). Update from
@@ -250,6 +265,28 @@ function deriveSavings({ byMode, model }) {
   return { estSavedTokens, estSavedUsd };
 }
 
+// Net token effect = output tokens saved minus the input tokens the rules
+// cost. Savings are OUTPUT tokens, overhead is INPUT tokens — different
+// buckets, but summing them is the only honest whole-budget delta (see
+// docs/HONEST-NUMBERS.md). Never called with an unattributed savings figure —
+// callers only invoke this where mode attribution and turn counts both exist.
+function deriveNet({ estSavedTokens, turns }) {
+  const overheadTokens = Math.max(0, turns || 0) * ruleOverheadPerTurn();
+  return { overheadTokens, netTokens: (estSavedTokens || 0) - overheadTokens };
+}
+
+// Shared "rule overhead" + "net" lines for the session and lifetime views.
+function netLines({ estSavedTokens, turns }) {
+  const perTurn = ruleOverheadPerTurn();
+  const { overheadTokens, netTokens } = deriveNet({ estSavedTokens, turns });
+  const overhead = `Est. rule overhead:    ${overheadTokens.toLocaleString()} ` +
+    `(input, ~${perTurn.toLocaleString()}/turn over ${turns} turn${turns === 1 ? '' : 's'})`;
+  const net = netTokens >= 0
+    ? `Est. net:              +${netTokens.toLocaleString()} (net saving after rule overhead)`
+    : `Est. net:              ${netTokens.toLocaleString()} (caveman cost more than it saved for this workload — consider turning it off)`;
+  return `${overhead}\n${net}`;
+}
+
 // Parse "7d", "12h" etc. to milliseconds. Returns null on invalid input.
 function parseDuration(spec) {
   if (!spec) return null;
@@ -275,12 +312,22 @@ function aggregateHistory(historyPath, sinceMs) {
     if (!prev || (entry.ts || 0) >= (prev.ts || 0)) latestPerSession.set(id, entry);
   }
   let outputTokens = 0, estSavedTokens = 0, estSavedUsd = 0;
+  // Net (rule-overhead) figures only ever sum rows that actually logged a
+  // turn count. Legacy history rows predate #145's `turns` field — folding
+  // their savings into a net computed from someone else's turns would either
+  // over- or under-state the overhead, so they're excluded from net entirely
+  // (they still count toward the plain gross totals above, unchanged).
+  let netSavedTokens = 0, netTurns = 0;
   for (const e of latestPerSession.values()) {
     outputTokens   += e.output_tokens     || 0;
     estSavedTokens += e.est_saved_tokens  || 0;
     estSavedUsd    += e.est_saved_usd     || 0;
+    if (e.turns != null) {
+      netSavedTokens += e.est_saved_tokens || 0;
+      netTurns       += e.turns            || 0;
+    }
   }
-  return { sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd };
+  return { sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd, netSavedTokens, netTurns };
 }
 
 // Output-reduction share: saved / (saved + used) = the fraction of the
@@ -306,7 +353,7 @@ function humanizeTokens(n) {
   return String(Math.round(n));
 }
 
-function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, since }) {
+function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, netSavedTokens, netTurns, since }) {
   const sep = '──────────────────────────────────';
   const window = since ? ` (last ${since})` : '';
   if (sessions === 0) {
@@ -317,11 +364,14 @@ function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, si
   const budgetLine = pct !== null
     ? `Est. output reduction: ~${pct}% (output tokens only, est.)\n`
     : '';
+  // Only sessions that logged a turn count feed the net figure (older rows
+  // predate #145) — omit rather than understate the overhead.
+  const netBlock = netTurns > 0 ? netLines({ estSavedTokens: netSavedTokens, turns: netTurns }) + '\n' : '';
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
     `Sessions:   ${sessions.toLocaleString()}\n${sep}\n` +
     `Output tokens:         ${outputTokens.toLocaleString()}\n` +
     `Est. tokens saved:     ${estSavedTokens.toLocaleString()}\n` +
-    budgetLine + usdLine + sep + '\n';
+    netBlock + budgetLine + usdLine + sep + '\n';
 }
 
 // Single-line tweetable summary. Stays human-friendly when no ratio is known.
@@ -414,9 +464,15 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
     // any session-usage % would overstate real limit relief. See
     // docs/HONEST-NUMBERS.md.
     footer += ' Reduction is of output tokens only; input/cache usage is unchanged.';
+    footer += ` Net subtracts the rules' est. input cost (~${ruleOverheadPerTurn().toLocaleString()}/turn — docs/HONEST-NUMBERS.md).`;
     savings = (`Est. without caveman:  ${estNormal.toLocaleString()}\n` +
               `Est. tokens saved:     ${estSaved.toLocaleString()} (~${Math.round(ratio * 100)}% of output)\n` +
               usdLine).replace(/\n$/, '');
+    // Net only makes sense where the savings figure above is unambiguous: a
+    // single benchmarked mode ran the whole span (uniform) with a known turn
+    // count. Mixed-mode or partially-unattributed spans (the !uniform branch
+    // above) intentionally get no net line rather than a guessed one.
+    if (turns > 0) savings += '\n' + netLines({ estSavedTokens: estSaved, turns });
   } else if (mode && mode !== 'off') {
     savings = `No savings estimate for '${mode}' mode — only 'full' has benchmark data.`;
   } else {
@@ -501,6 +557,7 @@ function main() {
       mode: mode || null,
       model: parsed.model || null,
       output_tokens: parsed.outputTokens,
+      turns: parsed.turns,
       est_saved_tokens: estSavedTokens,
       est_saved_usd: estSavedUsd,
     }));
@@ -527,7 +584,7 @@ if (require.main === module) main();
 
 module.exports = {
   formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
-  parseSession, priceForModel, formatUsd, COMPRESSION, MODEL_OUTPUT_PRICE_PER_M,
-  findCompressedPairs, summarizeCompressed, humanizeTokens, outputReductionPct,
-  readModeLog, attributeByMode,
+  deriveNet, ruleOverheadPerTurn, parseSession, priceForModel, formatUsd, COMPRESSION,
+  MODEL_OUTPUT_PRICE_PER_M, findCompressedPairs, summarizeCompressed, humanizeTokens,
+  outputReductionPct, readModeLog, attributeByMode,
 };
