@@ -8,12 +8,11 @@
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
-const { getDefaultMode, safeWriteFlag, recordModeChange } = require('./caveman-config');
+const { getDefaultMode, getAgentConfigDir, isCodexHook, safeWriteFlag, recordModeChange } = require('./caveman-config');
 
-const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const flagPath = path.join(claudeDir, '.caveman-active');
-const settingsPath = path.join(claudeDir, 'settings.json');
+const agentDir = getAgentConfigDir();
+const flagPath = path.join(agentDir, '.caveman-active');
+const settingsPath = path.join(agentDir, 'settings.json');
 
 // Apply per-agent model overrides from env vars before emitting rules.
 // Best-effort: any error is swallowed so SessionStart is never blocked.
@@ -26,14 +25,14 @@ const mode = getDefaultMode();
 
 // "off" mode — skip activation entirely, don't write flag or emit rules
 if (mode === 'off') {
-  recordModeChange(claudeDir, null); // #601: timestamped transition log
+  recordModeChange(agentDir, null); // #601: timestamped transition log
   try { fs.unlinkSync(flagPath); } catch (e) {}
-  process.stdout.write('OK');
+  if (!isCodexHook()) process.stdout.write('OK');
   process.exit(0);
 }
 
 // 1. Write flag file (symlink-safe)
-recordModeChange(claudeDir, mode); // #601
+recordModeChange(agentDir, mode); // #601
 safeWriteFlag(flagPath, mode);
 
 // 2. Emit full caveman ruleset, filtered to the active intensity level.
@@ -68,6 +67,9 @@ const modeLabel = mode === 'wenyan' ? 'wenyan-full' : mode;
 //      $CLAUDE_CONFIG_DIR/hooks/ and the skill at $CLAUDE_CONFIG_DIR/skills/caveman/.
 // All misses fall through to the hardcoded fallback ruleset below.
 const skillCandidates = [];
+if (process.env.PLUGIN_ROOT) {
+  skillCandidates.push(path.join(process.env.PLUGIN_ROOT, 'skills', 'caveman', 'SKILL.md'));
+}
 if (process.env.CLAUDE_PLUGIN_ROOT) {
   skillCandidates.push(path.join(process.env.CLAUDE_PLUGIN_ROOT, 'skills', 'caveman', 'SKILL.md'));
 }
@@ -140,33 +142,44 @@ if (skillContent) {
 }
 
 // 3. Detect missing statusline config — nudge Claude to help set it up
-try {
-  let hasStatusline = false;
-  if (fs.existsSync(settingsPath)) {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    if (settings.statusLine) {
-      hasStatusline = true;
+if (!isCodexHook()) {
+  try {
+    let hasStatusline = false;
+    if (fs.existsSync(settingsPath)) {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      if (settings.statusLine) {
+        hasStatusline = true;
+      }
     }
-  }
 
-  if (!hasStatusline) {
-    const isWindows = process.platform === 'win32';
-    const scriptName = isWindows ? 'caveman-statusline.ps1' : 'caveman-statusline.sh';
-    const scriptPath = path.join(__dirname, scriptName);
-    const command = isWindows
-      ? `powershell -ExecutionPolicy Bypass -File "${scriptPath}"`
-      : `bash "${scriptPath}"`;
-    const statusLineSnippet =
-      '"statusLine": { "type": "command", "command": ' + JSON.stringify(command) + ' }';
-    output += "\n\n" +
-      "STATUSLINE SETUP NEEDED: The caveman plugin includes a statusline badge showing active mode " +
-      "(e.g. [CAVEMAN], [CAVEMAN:ULTRA]). It is not configured yet. " +
-      "To enable, add this to " + path.join(claudeDir, 'settings.json') + ": " +
-      statusLineSnippet + " " +
-      "Proactively offer to set this up for the user on first interaction.";
+    if (!hasStatusline) {
+      const isWindows = process.platform === 'win32';
+      const scriptName = isWindows ? 'caveman-statusline.ps1' : 'caveman-statusline.sh';
+      const scriptPath = path.join(__dirname, scriptName);
+      const command = isWindows
+        ? `powershell -ExecutionPolicy Bypass -File "${scriptPath}"`
+        : `bash "${scriptPath}"`;
+      const statusLineSnippet =
+        '"statusLine": { "type": "command", "command": ' + JSON.stringify(command) + ' }';
+      output += "\n\n" +
+        "STATUSLINE SETUP NEEDED: The caveman plugin includes a statusline badge showing active mode " +
+        "(e.g. [CAVEMAN], [CAVEMAN:ULTRA]). It is not configured yet. " +
+        "To enable, add this to " + path.join(agentDir, 'settings.json') + ": " +
+        statusLineSnippet + " " +
+        "Proactively offer to set this up for the user on first interaction.";
+    }
+  } catch (e) {
+    // Silent fail — don't block session start over statusline detection
   }
-} catch (e) {
-  // Silent fail — don't block session start over statusline detection
 }
 
-process.stdout.write(output);
+if (isCodexHook()) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: output
+    }
+  }));
+} else {
+  process.stdout.write(output);
+}

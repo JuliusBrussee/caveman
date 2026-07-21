@@ -30,7 +30,16 @@ test('--list prints provider matrix', () => {
   assert.match(r.stdout, /caveman provider matrix/);
   assert.match(r.stdout, /claude\b/);
   assert.match(r.stdout, /gemini\b/);
+  assert.match(r.stdout, /codex\b.*codex plugin install/);
   assert.match(r.stdout, /antigravity\b.*\(soft\)/);
+});
+
+test('Codex dry-run installs marketplace plugin, not standalone skill', () => {
+  const r = run('--dry-run', '--force', '--only', 'codex', '--non-interactive');
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /would run: codex plugin marketplace add JuliusBrussee\/caveman/);
+  assert.match(r.stdout, /would run: codex plugin add caveman@caveman/);
+  assert.doesNotMatch(r.stdout, /skills add .* -a codex/);
 });
 
 test('unknown flag exits 2 with error', () => {

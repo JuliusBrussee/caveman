@@ -25,6 +25,20 @@ const VALID_MODES = [
   'commit', 'review', 'compress'
 ];
 
+// Codex plugin hooks set PLUGIN_ROOT. Claude Code sets CLAUDE_PLUGIN_ROOT but
+// not PLUGIN_ROOT, so this is a stable way to keep each agent's state in its
+// own config directory while preserving Claude compatibility.
+function isCodexHook() {
+  return process.env.CAVEMAN_AGENT === 'codex' || Boolean(process.env.PLUGIN_ROOT);
+}
+
+function getAgentConfigDir() {
+  if (isCodexHook()) {
+    return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  }
+  return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+}
+
 function getConfigDir() {
   if (process.env.XDG_CONFIG_HOME) {
     return path.join(process.env.XDG_CONFIG_HOME, 'caveman');
@@ -345,4 +359,4 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory, recordModeChange, MODE_LOG_BASENAME };
+module.exports = { getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, getAgentConfigDir, isCodexHook, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory, recordModeChange, MODE_LOG_BASENAME };
