@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Installer test suite
+        run: npm test
+      - name: Standalone hook/tool tests
+        run: |
+          for f in tests/test_*.js; do
+            echo "== $f"
+            node "$f"
+          done
+
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # Several python tests shell out to node for hook checks — don't rely
+      # on the runner image happening to ship it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Python test suite
+        run: python -m unittest discover -s tests -v
