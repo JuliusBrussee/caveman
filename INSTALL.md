@@ -48,7 +48,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` | Per-session by default; `--with-init` for an always-on rule file |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` | Per-session by default; `--with-init` for an always-on rule file |
 | **GitHub Copilot** *(soft probe)* | `npx -y github:JuliusBrussee/caveman -- --only copilot --with-init` | Repo-wide instructions via `--with-init` |
-| **GitHub Copilot CLI** | `copilot plugin marketplace add JuliusBrussee/caveman && copilot plugin install caveman@caveman` | Per-session: `/caveman` |
+| **GitHub Copilot CLI** | `copilot plugin marketplace add JuliusBrussee/caveman && copilot plugin install caveman@caveman` | Per-session: `/caveman`; `--with-init` writes `.github/copilot/settings.json` to auto-enable it repo-wide |
 | **Continue** | `npx skills add JuliusBrussee/caveman -a continue` | No — say `/caveman` |
 | **Kilo Code** | `npx skills add JuliusBrussee/caveman -a kilo` | No |
 | **Roo Code** | `npx skills add JuliusBrussee/caveman -a roo` | No |
@@ -119,7 +119,7 @@ Useful flags:
 | `--minimal` | Plugin / extension only. No hooks, no MCP shrink, no per-repo rules. |
 | `--only <id>` | One agent only. Repeatable: `--only claude --only cursor`. |
 | `--dry-run` | Print every command. Write nothing. |
-| `--with-init` | Drop always-on rule files into the current repo (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`) and, if OpenClaw is on the box, append the bootstrap block to `~/.openclaw/workspace/SOUL.md`. |
+| `--with-init` | Drop always-on rule files into the current repo (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`, `.github/copilot/settings.json`, `.opencode/AGENTS.md`, `AGENTS.md`) and, if OpenClaw is on the box, append the bootstrap block to `~/.openclaw/workspace/SOUL.md`. |
 | `--with-mcp-shrink="<upstream cmd>"` | Register `caveman-shrink` MCP proxy wrapping the given upstream MCP server. **Off by default.** A value is required — caveman-shrink is a proxy and exits immediately without one. Example: `--with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"`. The value is split on whitespace; for paths-with-spaces, install via `node bin/install.js` from a clone or edit `~/.claude.json` after a stub install. |
 | `--no-mcp-shrink` | Skip MCP-shrink registration. (Default.) |
 | `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code hook installer. (Default: on.) |
@@ -144,7 +144,7 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/rule
   > .cursor/rules/caveman.mdc   # or .windsurf/rules/caveman.md, .clinerules/caveman.md, .github/copilot-instructions.md
 ```
 
-`--with-init` writes the rule into every supported per-agent location it can detect (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`). It also installs the OpenClaw workspace bootstrap (skill folder + SOUL.md marker block) when `~/.openclaw/workspace/` exists. Single source: [`src/rules/caveman-activate.md`](src/rules/caveman-activate.md).
+`--with-init` writes the rule into every supported per-agent location it can detect (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`). For the Copilot CLI it also writes `.github/copilot/settings.json`, which registers the caveman marketplace and flips `enabledPlugins` so the CLI auto-installs and enables the native plugin repo-wide (existing keys are merged, never clobbered). It also installs the OpenClaw workspace bootstrap (skill folder + SOUL.md marker block) when `~/.openclaw/workspace/` exists. Single source: [`src/rules/caveman-activate.md`](src/rules/caveman-activate.md).
 
 ## Verify
 
@@ -191,7 +191,7 @@ What it removes:
 What it does **not** remove:
 
 - Skills installed via `npx skills add` — the `skills` CLI manages those. Run `npx skills remove caveman` (or use your IDE's skill manager).
-- Per-repo rule files written by `--with-init` (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`). Delete by hand if you want.
+- Per-repo rule files written by `--with-init` (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.github/copilot/settings.json`, `.opencode/AGENTS.md`, `AGENTS.md`). Delete by hand if you want (for `.github/copilot/settings.json`, drop the `caveman` marketplace entry and the `caveman@caveman` enabledPlugins key, or delete the file if caveman is all it holds).
 
 ## Troubleshooting
 

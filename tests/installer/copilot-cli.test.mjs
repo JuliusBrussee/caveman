@@ -123,6 +123,34 @@ test('copilot-cli install is idempotent when the plugin is already present', () 
   }
 });
 
+// ── Repo-wide activation (--with-init writes .github/copilot/settings.json) ──
+
+test('--with-init writes .github/copilot/settings.json for repo-wide activation', () => {
+  // Drives the real installer through the --with-init path (which shells to
+  // src/tools/caveman-init.js) in a throwaway cwd. --force + the shim keep the
+  // provider dispatch offline; we assert the repo-level settings file that makes
+  // Copilot CLI auto-install + auto-enable caveman for everyone in the repo.
+  const shim = shimCopilot();
+  const { env, cleanup } = isolatedEnv({ PATH: pathWith(shim) });
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-copilot-repo-'));
+  try {
+    const r = spawnSync('node',
+      [INSTALLER, '--only', 'copilot-cli', '--with-init', '--force', '--non-interactive', '--no-mcp-shrink'],
+      { cwd, env, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    const p = path.join(cwd, '.github', 'copilot', 'settings.json');
+    assert.ok(fs.existsSync(p), `expected ${p} to be written`);
+    const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+    assert.deepEqual(cfg.extraKnownMarketplaces.caveman.source,
+      { source: 'github', repo: 'JuliusBrussee/caveman' });
+    assert.equal(cfg.enabledPlugins['caveman@caveman'], true);
+  } finally {
+    cleanup();
+    fs.rmSync(shim, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 // ── Uninstall ────────────────────────────────────────────────────────────────
 
 test('uninstall removes the copilot-cli plugin when present', () => {
