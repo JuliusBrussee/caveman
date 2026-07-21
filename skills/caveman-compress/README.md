@@ -25,7 +25,7 @@ CLAUDE.md          ← compressed (Claude reads this — fewer tokens every sess
 CLAUDE.original.md ← human-readable backup (you edit this)
 ```
 
-Original never lost. You can read and edit `.original.md`. Run skill again to re-compress after edits.
+Original never lost. Backup lives in a data dir, not next to your file — `$XDG_DATA_HOME/caveman-compress/backups/<parent-dir-name>/` (macOS/Linux) or `%LOCALAPPDATA%\caveman-compress\backups\<parent-dir-name>\` (Windows) — so skill auto-loaders don't re-read it as a live file. You can read and edit `.original.md` there. Run skill again to re-compress after edits.
 
 ## Benchmarks
 

@@ -9,8 +9,10 @@ Usage:
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import List
 
@@ -109,6 +111,59 @@ def strip_llm_wrapper(text: str) -> str:
     if m:
         return m.group(2)
     return text
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically as UTF-8.
+
+    Path.write_text() truncates the destination before encoding the string —
+    a UnicodeEncodeError (or any other failure) partway through leaves a
+    0-byte file, destroying whatever was there before (issue #655). Encode
+    first, write the bytes to a sibling temp file, fsync, then os.replace()
+    so the destination only ever moves from one complete, valid file to
+    another. Preserves the original file's permission bits across the swap.
+    """
+    data = text.encode("utf-8")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        if path.exists():
+            os.chmod(tmp_path, stat.S_IMODE(path.stat().st_mode))
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def first_nonblank_line(text: str) -> str:
+    """Return the first non-blank line, stripped — used to detect a prose
+    preamble smuggled in ahead of the real content (issue #588)."""
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _write_target(filepath: Path, text: str, backup_path: Path) -> None:
+    """Write to the target file, surfacing the backup location if the write
+    itself fails. write_text_atomic already leaves the target untouched on
+    failure, but the caller still needs to know where the pre-compression
+    original lives instead of being left to guess (issue #652)."""
+    try:
+        write_text_atomic(filepath, text)
+    except Exception:
+        print(f"❌ Write to {filepath} failed. Original preserved at backup: {backup_path}")
+        raise
+
 
 from .detect import should_compress
 from .validate import validate
@@ -246,7 +301,7 @@ def compress_file(filepath: Path) -> bool:
         print("Skipping (not natural language)")
         return False
 
-    original_text = filepath.read_text(errors="ignore")
+    original_text = filepath.read_text(encoding="utf-8", errors="ignore")
     # Store backup outside the source directory so skill auto-loaders don't
     # re-ingest the `.original.md` copy as a live file. Mirror the source's
     # parent-dir name + stem under a platform-aware base to reduce collisions.
@@ -300,8 +355,8 @@ def compress_file(filepath: Path) -> bool:
     # touching the input file. If the filesystem dropped bytes (encoding,
     # antivirus, disk full), unlink the bad backup and abort instead of
     # leaving the user with a corrupt backup + compressed primary.
-    backup_path.write_text(original_text)
-    backup_readback = backup_path.read_text(errors="ignore")
+    write_text_atomic(backup_path, original_text)
+    backup_readback = backup_path.read_text(encoding="utf-8", errors="ignore")
     if backup_readback != original_text:
         print(f"❌ Backup write verification failed: {backup_path}")
         print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
@@ -310,7 +365,7 @@ def compress_file(filepath: Path) -> bool:
         except OSError:
             pass
         return False
-    filepath.write_text(compressed)
+    _write_target(filepath, compressed, backup_path)
 
     # Step 2: Validate + Retry
     for attempt in range(MAX_RETRIES):
@@ -328,7 +383,7 @@ def compress_file(filepath: Path) -> bool:
 
         if attempt == MAX_RETRIES - 1:
             # Restore original on failure
-            filepath.write_text(original_text)
+            _write_target(filepath, original_text, backup_path)
             backup_path.unlink(missing_ok=True)
             print("❌ Failed after retries — original restored")
             return False
@@ -337,6 +392,23 @@ def compress_file(filepath: Path) -> bool:
         compressed = call_claude(
             build_fix_prompt(original_text, compressed, result.errors)
         )
-        filepath.write_text(compressed)
+
+        if compressed is None or not compressed.strip():
+            print("❌ Fix attempt aborted: Claude returned an empty response.")
+            print("   Skipping this attempt.")
+            continue
+
+        # Guard against a prose preamble smuggled in ahead of the real fixed
+        # content (issue #588). Only enforced when the original starts with a
+        # structural anchor (frontmatter `---` or a heading) — plain-prose
+        # first lines get legitimately rewritten by compression, and requiring
+        # them verbatim would reject every valid fix.
+        anchor = first_nonblank_line(original_text)
+        if anchor.startswith(("---", "#")) and first_nonblank_line(compressed) != anchor:
+            print("❌ Fix attempt aborted: output does not start with the original's first line.")
+            print("   Possible preamble leak. Skipping this attempt.")
+            continue
+
+        _write_target(filepath, compressed, backup_path)
 
     return True

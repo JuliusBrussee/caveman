@@ -41,6 +41,17 @@ More text with `inline3`.
     def test_empty(self):
         self.assertEqual(extract_inline_codes("no backticks here"), [])
 
+    def test_indented_fence_backtick_not_leaked_as_inline(self):
+        # A fence indented 1-3 spaces is valid CommonMark and already handled
+        # by extract_code_blocks/FENCE_OPEN_REGEX. The old column-0-anchored
+        # strip regex missed it, so a backtick inside the indented fence body
+        # leaked out and got paired with the next real inline span (issue
+        # from PR #619 review). Only the real trailing inline span should
+        # come back.
+        text = "   ```\n   `weird`\n   ```\nReal `inline` span here."
+        result = extract_inline_codes(text)
+        self.assertEqual(result, ["inline"])
+
 
 class TestValidateInlineCodes(unittest.TestCase):
     def test_match(self):
