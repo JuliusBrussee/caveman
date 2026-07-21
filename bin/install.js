@@ -221,10 +221,15 @@ const PROVIDERS = [
   { id: 'roo',        label: 'Roo Code',            mech: 'npx skills add (roo)',          detect: 'vscode-ext:roo||vscode-ext:rooveterinaryinc.roo-cline||cursor-ext:roo', profile: 'roo' },
   { id: 'augment',    label: 'Augment Code',        mech: 'npx skills add (augment)',      detect: 'vscode-ext:augment||jetbrains-plugin:augment', profile: 'augment' },
 
-  // GitHub Copilot: detected via VS Code / Cursor extension dirs (no `gh` CLI
-  // needed). The old `command:copilot` soft probe never fired for most users
-  // because Copilot ships as an editor extension, not a CLI (issue #336).
-  { id: 'copilot',    label: 'GitHub Copilot',      mech: 'npx skills add (github-copilot)', detect: 'vscode-ext:github.copilot||vscode-ext:github.copilot-chat||cursor-ext:github.copilot', profile: 'github-copilot' },
+  // GitHub Copilot — two distinct runtimes:
+  //   • `copilot` (this row): the editor extension (VS Code / Cursor). Detected
+  //     via the extension dir; installed as a `.github/copilot-instructions.md`
+  //     skill, since the editor has no CLI to call (issue #336).
+  //   • `copilot-cli` (next row): the standalone GitHub Copilot CLI
+  //     (`@github/copilot`, the `copilot` binary). It has a native plugin
+  //     system, so caveman installs as a plugin like Claude Code / Gemini do.
+  { id: 'copilot',     label: 'GitHub Copilot',      mech: 'npx skills add (github-copilot)', detect: 'vscode-ext:github.copilot||vscode-ext:github.copilot-chat||cursor-ext:github.copilot', profile: 'github-copilot' },
+  { id: 'copilot-cli', label: 'GitHub Copilot CLI',  mech: 'copilot plugin install',          detect: 'command:copilot' },
 
   // CLI agents — require the binary. The `||dir:~/.foo` fallbacks were the
   // main source of false positives (warp, kiro, junie etc. leave config dirs
@@ -568,6 +573,46 @@ function installGemini(ctx) {
   const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`], null, opts.dryRun);
   if (spawnOk(r)) results.installed.push('gemini');
   else results.failed.push(['gemini', 'gemini extensions install failed']);
+  process.stdout.write('\n');
+}
+
+// GitHub Copilot CLI native install. The standalone `@github/copilot` CLI has a
+// plugin system that reads the same `.claude-plugin/marketplace.json` Claude
+// Code uses, so the shape mirrors installClaude(): register the marketplace,
+// then install `caveman@caveman` from it. The marketplace form is the
+// future-proof one — a direct `copilot plugin install owner/repo` warns that
+// direct installs are deprecated.
+//
+// Activation differs from Claude Code: Copilot CLI loads plugin hooks from a
+// root `hooks.json` (not from the `hooks` block in `.claude-plugin/plugin.json`),
+// which caveman does not yet ship, so the SessionStart auto-on hook does not
+// fire here. The plugin still loads all skills and the `/caveman` command, so
+// activation is per-session via `/caveman` (or repo-wide via --with-init, which
+// writes `.github/copilot-instructions.md` + `AGENTS.md` — both read by the CLI).
+function installCopilotCli(ctx) {
+  const { say, note, opts, results } = ctx;
+  results.detected++;
+  say('→ GitHub Copilot CLI detected');
+
+  if (!opts.force) {
+    const r = captureSpawn('copilot', ['plugin', 'list']);
+    if (r.status === 0 && /caveman/i.test(r.stdout || '')) {
+      note('  caveman plugin already installed (use --force to reinstall)');
+      results.skipped.push(['copilot-cli', 'plugin already installed']);
+      process.stdout.write('\n');
+      return;
+    }
+  }
+  // `marketplace add` exits non-zero when the marketplace is already registered;
+  // that's fine, so gate success on the install step only (not the add step).
+  runSpawn('copilot', ['plugin', 'marketplace', 'add', REPO], null, opts.dryRun);
+  const r = runSpawn('copilot', ['plugin', 'install', 'caveman@caveman'], null, opts.dryRun);
+  if ((r.status || 0) === 0) {
+    results.installed.push('copilot-cli');
+    note("  activate per session with /caveman (Copilot CLI does not run caveman's SessionStart hook yet)");
+  } else {
+    results.failed.push(['copilot-cli', 'copilot plugin install failed']);
+  }
   process.stdout.write('\n');
 }
 
@@ -1212,6 +1257,17 @@ function uninstall(ctx) {
     }
   }
 
+  // GitHub Copilot CLI plugin. Same idempotency probe; uninstall takes the
+  // plugin name (`caveman`), not the `caveman@caveman` marketplace form.
+  if (hasCmd('copilot')) {
+    const probe = captureSpawn('copilot', ['plugin', 'list']);
+    if (probe.status === 0 && /caveman/i.test(probe.stdout || '')) {
+      runSpawn('copilot', ['plugin', 'uninstall', 'caveman'], null, opts.dryRun);
+    } else {
+      note('  copilot cli plugin not installed — skipping');
+    }
+  }
+
   // opencode native install — strip plugin entry, MCP entry, and our files.
   // Probed by the existence of the plugin dir we own; if absent, skip silently.
   const ocDir = opencodeConfigDir();
@@ -1468,6 +1524,7 @@ async function main() {
     if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
     if (prov.id === 'claude')   { await installClaude(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
+    if (prov.id === 'copilot-cli') { installCopilotCli(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
     if (prov.id === 'hermes')   { installHermes(ctx); continue; }
