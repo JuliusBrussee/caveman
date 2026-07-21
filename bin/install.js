@@ -435,6 +435,13 @@ function captureSpawn(cmd, args) {
   catch (_) { return { status: 1, stdout: '', stderr: '' }; }
 }
 
+function captureJson(cmd, args) {
+  const result = captureSpawn(cmd, args);
+  if (!spawnOk(result)) return null;
+  try { return JSON.parse(result.stdout || '{}'); }
+  catch (_) { return null; }
+}
+
 // spawnSync reports a missing binary as { status: null, error }, so the old
 // `(r.status || 0) === 0` checks read ENOENT as success — a machine without
 // the `claude` CLI got "installed: claude" with nothing installed and the
@@ -576,25 +583,60 @@ function installCodex(ctx) {
   results.detected++;
   say('→ Codex CLI detected');
 
-  if (!opts.force) {
-    const probe = captureSpawn('codex', ['plugin', 'list', '--json']);
-    if (probe.status === 0) {
-      try {
-        const installed = JSON.parse(probe.stdout || '{}').installed || [];
-        const caveman = installed.find(plugin => plugin.pluginId === 'caveman@caveman');
-        if (caveman && caveman.enabled) {
-          note('  caveman plugin already installed and enabled (use --force to reinstall)');
-          results.skipped.push(['codex', 'plugin already installed and enabled']);
-          process.stdout.write('\n');
-          return;
-        }
-      } catch (_) { /* malformed output: attempt normal install */ }
+  if (opts.dryRun) {
+    runSpawn('codex', ['plugin', 'marketplace', 'add', REPO], null, true);
+    runSpawn('codex', ['plugin', 'add', 'caveman@caveman'], null, true);
+    results.installed.push('codex');
+    process.stdout.write('\n');
+    return;
+  }
+
+  const pluginState = captureJson('codex', ['plugin', 'list', '--json']);
+  const installed = Array.isArray(pluginState && pluginState.installed) ? pluginState.installed : [];
+  const caveman = installed.find(plugin => plugin.pluginId === 'caveman@caveman');
+  if (caveman && caveman.enabled && !opts.force) {
+    note('  caveman plugin already installed and enabled (use --force to reinstall)');
+    results.skipped.push(['codex', 'plugin already installed and enabled']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  const marketplaceState = captureJson('codex', ['plugin', 'marketplace', 'list', '--json']);
+  const marketplaces = Array.isArray(marketplaceState && marketplaceState.marketplaces)
+    ? marketplaceState.marketplaces : [];
+  const marketplace = marketplaces.find(entry => entry.name === 'caveman');
+
+  let marketplaceReady = true;
+  if (!marketplace) {
+    marketplaceReady = spawnOk(runSpawn(
+      'codex', ['plugin', 'marketplace', 'add', REPO], null, false
+    ));
+  } else if (opts.force && marketplace.marketplaceSource &&
+             marketplace.marketplaceSource.sourceType === 'git') {
+    marketplaceReady = spawnOk(runSpawn(
+      'codex', ['plugin', 'marketplace', 'upgrade', 'caveman'], null, false
+    ));
+  }
+
+  // Establish or refresh the marketplace before removing an existing plugin.
+  // A failed marketplace probe must not leave a working install removed.
+  if (!marketplaceReady) {
+    results.failed.push(['codex', 'codex marketplace setup failed']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  if (caveman) {
+    const removed = runSpawn('codex', ['plugin', 'remove', 'caveman@caveman'], null, false);
+    if (!spawnOk(removed)) {
+      results.failed.push(['codex', 'could not remove existing Codex plugin']);
+      process.stdout.write('\n');
+      return;
     }
   }
 
-  const marketplace = runSpawn('codex', ['plugin', 'marketplace', 'add', REPO], null, opts.dryRun);
-  const plugin = runSpawn('codex', ['plugin', 'add', 'caveman@caveman'], null, opts.dryRun);
-  if (spawnOk(marketplace) && spawnOk(plugin)) {
+  const plugin = runSpawn('codex', ['plugin', 'add', 'caveman@caveman'], null, false);
+  if (spawnOk(plugin)) {
     results.installed.push('codex');
   } else {
     results.failed.push(['codex', 'codex plugin install failed']);
@@ -1245,8 +1287,9 @@ function uninstall(ctx) {
 
   // Codex plugin. Keep marketplace configured for easy reinstall.
   if (hasCmd('codex')) {
-    const probe = captureSpawn('codex', ['plugin', 'list', '--json']);
-    if (probe.status === 0 && /caveman@caveman/.test(probe.stdout || '')) {
+    const state = captureJson('codex', ['plugin', 'list', '--json']);
+    const installed = Array.isArray(state && state.installed) ? state.installed : [];
+    if (installed.some(plugin => plugin.pluginId === 'caveman@caveman')) {
       const r = runSpawn('codex', ['plugin', 'remove', 'caveman@caveman'], null, opts.dryRun);
       if (spawnOk(r)) ok('  removed codex plugin');
     } else {

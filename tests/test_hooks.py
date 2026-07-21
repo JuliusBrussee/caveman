@@ -240,6 +240,28 @@ class HookScriptTests(unittest.TestCase):
             self.assertEqual((codex_dir / ".caveman-active").read_text(), "full")
             self.assertFalse((home / ".claude" / ".caveman-active").exists())
 
+    def test_codex_independent_default_emits_structured_context(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-codex-independent-") as tmp:
+            home = Path(tmp)
+            codex_dir = home / ".codex"
+            codex_dir.mkdir()
+
+            result = self.run_cmd(
+                ["node", "src/hooks/caveman-activate.js"],
+                home,
+                extra_env={
+                    "PLUGIN_ROOT": str(REPO_ROOT),
+                    "CODEX_HOME": str(codex_dir),
+                    "CAVEMAN_DEFAULT_MODE": "commit",
+                },
+            )
+
+            output = json.loads(result.stdout)
+            hook_output = output["hookSpecificOutput"]
+            self.assertEqual(hook_output["hookEventName"], "SessionStart")
+            self.assertIn("level: commit", hook_output["additionalContext"])
+            self.assertEqual((codex_dir / ".caveman-active").read_text(), "commit")
+
     def test_codex_mode_tracker_reinforces_active_mode(self):
         with tempfile.TemporaryDirectory(prefix="caveman-codex-tracker-") as tmp:
             home = Path(tmp)

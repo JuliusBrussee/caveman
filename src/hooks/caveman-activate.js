@@ -14,6 +14,19 @@ const agentDir = getAgentConfigDir();
 const flagPath = path.join(agentDir, '.caveman-active');
 const settingsPath = path.join(agentDir, 'settings.json');
 
+function emitSessionContext(output) {
+  if (isCodexHook()) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'SessionStart',
+        additionalContext: output
+      }
+    }));
+    return;
+  }
+  process.stdout.write(output);
+}
+
 // Apply per-agent model overrides from env vars before emitting rules.
 // Best-effort: any error is swallowed so SessionStart is never blocked.
 try {
@@ -48,7 +61,7 @@ safeWriteFlag(flagPath, mode);
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 if (INDEPENDENT_MODES.has(mode)) {
-  process.stdout.write('CAVEMAN MODE ACTIVE — level: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill.');
+  emitSessionContext('CAVEMAN MODE ACTIVE — level: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill.');
   process.exit(0);
 }
 
@@ -173,13 +186,4 @@ if (!isCodexHook()) {
   }
 }
 
-if (isCodexHook()) {
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: 'SessionStart',
-      additionalContext: output
-    }
-  }));
-} else {
-  process.stdout.write(output);
-}
+emitSessionContext(output);

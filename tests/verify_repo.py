@@ -163,7 +163,6 @@ def verify_manifests_and_syntax() -> None:
         ROOT / ".codex-plugin/plugin.json",
         ROOT / ".codex/hooks.json",
         ROOT / "gemini-extension.json",
-        ROOT / "plugins/caveman/.codex-plugin/plugin.json",
     ]
     for path in manifest_paths:
         read_json(path)
