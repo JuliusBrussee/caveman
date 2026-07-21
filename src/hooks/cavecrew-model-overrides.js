@@ -27,8 +27,19 @@ const AGENT_ENV_MAP = [
 ];
 
 // Return the plugin root directory given the hooks directory path.
-// Plugin layout: <plugin_root>/hooks/<this-file>  →  plugin root = parent of hooks dir.
+// Layouts (#645): plugin/repo checkout puts this file at <root>/src/hooks/
+// (agents/ lives two levels up); standalone installs at <config>/hooks/
+// (one level up). Prefer CLAUDE_PLUGIN_ROOT, then the first candidate that
+// actually contains an agents/ directory.
 function resolvePluginRoot(hookDir) {
+  const candidates = [];
+  if (process.env.CLAUDE_PLUGIN_ROOT) candidates.push(process.env.CLAUDE_PLUGIN_ROOT);
+  candidates.push(path.resolve(hookDir, '..', '..'), path.resolve(hookDir, '..'));
+  for (const root of candidates) {
+    try {
+      if (fs.statSync(path.join(root, 'agents')).isDirectory()) return root;
+    } catch (e) {}
+  }
   return path.resolve(hookDir, '..');
 }
 

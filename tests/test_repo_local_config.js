@@ -156,6 +156,27 @@ test('findRepoConfigPath returns null outside any repo', (tmp) => {
   assert.strictEqual(findRepoConfigPath(tmp), null);
 });
 
+// ── #634: optional startDir param (backward compatible) ────────────────────
+
+test('getDefaultMode(startDir) resolves repo config for a directory other than process.cwd()', (tmp) => {
+  fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ defaultMode: 'off' }));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-elsewhere-'));
+  try {
+    process.chdir(elsewhere); // process cwd has no repo config
+    assert.strictEqual(getDefaultMode(), 'full', 'process cwd alone should not see the other dir\'s config');
+    assert.strictEqual(getDefaultMode(tmp), 'off', 'startDir should resolve that directory\'s repo config');
+  } finally {
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  }
+});
+
+test('getDefaultMode() with no args is unchanged (defaults to process.cwd())', (tmp) => {
+  fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ defaultMode: 'lite' }));
+  process.chdir(tmp);
+  assert.strictEqual(getDefaultMode(), 'lite');
+  assert.strictEqual(getDefaultMode(undefined), 'lite');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 fs.rmSync(tmpHome, { recursive: true, force: true });
 process.exit(failed === 0 ? 0 : 1);

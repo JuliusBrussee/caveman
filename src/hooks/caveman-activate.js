@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag, recordModeChange } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, recordModeChange, readFlag, VALID_MODES } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -22,7 +22,30 @@ try {
   applyOverrides(resolvePluginRoot(__dirname));
 } catch (e) {}
 
-const mode = getDefaultMode();
+// SessionStart re-fires mid-conversation (resume, /clear, context compaction),
+// not just at true session start. Re-firing must not clobber a mode the user
+// switched to mid-session (#691): branch on the hook payload's `source` field —
+// only a real `startup` resets to the configured default; resume/clear/compact
+// preserve a valid existing flag.
+// Sync stdin read assumes the parent (Claude Code) writes the payload and
+// closes the pipe — it always does. A parent that held the pipe open forever
+// would block here; no such caller exists, and a TTY (manual run) skips it.
+let source = 'startup';
+try {
+  if (!process.stdin.isTTY) {
+    const raw = fs.readFileSync(0, 'utf8');
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && typeof data.source === 'string') source = data.source;
+    }
+  }
+} catch (e) { /* no/bad stdin → treat as startup */ }
+
+let mode = getDefaultMode();
+if (source !== 'startup') {
+  const existing = readFlag(flagPath);
+  if (existing && VALID_MODES.includes(existing)) mode = existing;
+}
 
 // "off" mode — skip activation entirely, don't write flag or emit rules
 if (mode === 'off') {
@@ -139,7 +162,10 @@ if (skillContent) {
     'Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.';
 }
 
-// 3. Detect missing statusline config — nudge Claude to help set it up
+// 3. Detect missing statusline config — nudge Claude to help set it up.
+// One-shot (#661): the nudge costs ~90 tokens per session, so a marker file
+// gates it to the first session only. Users who declined stop paying for it.
+const nudgeMarkerPath = path.join(claudeDir, '.caveman-nudge-shown');
 try {
   let hasStatusline = false;
   if (fs.existsSync(settingsPath)) {
@@ -149,7 +175,8 @@ try {
     }
   }
 
-  if (!hasStatusline) {
+  if (!hasStatusline && !fs.existsSync(nudgeMarkerPath)) {
+    safeWriteFlag(nudgeMarkerPath, '1');
     const isWindows = process.platform === 'win32';
     const scriptName = isWindows ? 'caveman-statusline.ps1' : 'caveman-statusline.sh';
     const scriptPath = path.join(__dirname, scriptName);
