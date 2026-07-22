@@ -208,7 +208,7 @@ const PROVIDERS = [
   { id: 'gemini',     label: 'Gemini CLI',          mech: 'gemini extensions install',     detect: 'command:gemini' },
   { id: 'opencode',   label: 'opencode',            mech: 'native opencode plugin',        detect: 'command:opencode' },
   { id: 'openclaw',   label: 'OpenClaw',            mech: 'workspace skill + SOUL.md',     detect: 'command:openclaw||dir:$HOME/.openclaw/workspace' },
-  { id: 'codex',      label: 'Codex CLI',           mech: 'npx skills add (codex)',        detect: 'command:codex',           profile: 'codex' },
+  { id: 'codex',      label: 'Codex CLI',           mech: 'codex plugin install',          detect: 'command:codex' },
 
   // IDE / VS Code-family — extension probes are precise. Cursor/Windsurf also
   // ship CLI binaries; we drop the dir fallback because the dir lingers after
@@ -435,6 +435,13 @@ function captureSpawn(cmd, args) {
   catch (_) { return { status: 1, stdout: '', stderr: '' }; }
 }
 
+function captureJson(cmd, args) {
+  const result = captureSpawn(cmd, args);
+  if (!spawnOk(result)) return null;
+  try { return JSON.parse(result.stdout || '{}'); }
+  catch (_) { return null; }
+}
+
 // spawnSync reports a missing binary as { status: null, error }, so the old
 // `(r.status || 0) === 0` checks read ENOENT as success — a machine without
 // the `claude` CLI got "installed: claude" with nothing installed and the
@@ -568,6 +575,72 @@ function installGemini(ctx) {
   const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`], null, opts.dryRun);
   if (spawnOk(r)) results.installed.push('gemini');
   else results.failed.push(['gemini', 'gemini extensions install failed']);
+  process.stdout.write('\n');
+}
+
+function installCodex(ctx) {
+  const { say, note, opts, results } = ctx;
+  results.detected++;
+  say('→ Codex CLI detected');
+
+  if (opts.dryRun) {
+    runSpawn('codex', ['plugin', 'marketplace', 'add', REPO], null, true);
+    runSpawn('codex', ['plugin', 'add', 'caveman@caveman'], null, true);
+    results.installed.push('codex');
+    process.stdout.write('\n');
+    return;
+  }
+
+  const pluginState = captureJson('codex', ['plugin', 'list', '--json']);
+  const installed = Array.isArray(pluginState && pluginState.installed) ? pluginState.installed : [];
+  const caveman = installed.find(plugin => plugin.pluginId === 'caveman@caveman');
+  if (caveman && caveman.enabled && !opts.force) {
+    note('  caveman plugin already installed and enabled (use --force to reinstall)');
+    results.skipped.push(['codex', 'plugin already installed and enabled']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  const marketplaceState = captureJson('codex', ['plugin', 'marketplace', 'list', '--json']);
+  const marketplaces = Array.isArray(marketplaceState && marketplaceState.marketplaces)
+    ? marketplaceState.marketplaces : [];
+  const marketplace = marketplaces.find(entry => entry.name === 'caveman');
+
+  let marketplaceReady = true;
+  if (!marketplace) {
+    marketplaceReady = spawnOk(runSpawn(
+      'codex', ['plugin', 'marketplace', 'add', REPO], null, false
+    ));
+  } else if (opts.force && marketplace.marketplaceSource &&
+             marketplace.marketplaceSource.sourceType === 'git') {
+    marketplaceReady = spawnOk(runSpawn(
+      'codex', ['plugin', 'marketplace', 'upgrade', 'caveman'], null, false
+    ));
+  }
+
+  // Establish or refresh the marketplace before removing an existing plugin.
+  // A failed marketplace probe must not leave a working install removed.
+  if (!marketplaceReady) {
+    results.failed.push(['codex', 'codex marketplace setup failed']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  if (caveman) {
+    const removed = runSpawn('codex', ['plugin', 'remove', 'caveman@caveman'], null, false);
+    if (!spawnOk(removed)) {
+      results.failed.push(['codex', 'could not remove existing Codex plugin']);
+      process.stdout.write('\n');
+      return;
+    }
+  }
+
+  const plugin = runSpawn('codex', ['plugin', 'add', 'caveman@caveman'], null, false);
+  if (spawnOk(plugin)) {
+    results.installed.push('codex');
+  } else {
+    results.failed.push(['codex', 'codex plugin install failed']);
+  }
   process.stdout.write('\n');
 }
 
@@ -1212,6 +1285,18 @@ function uninstall(ctx) {
     }
   }
 
+  // Codex plugin. Keep marketplace configured for easy reinstall.
+  if (hasCmd('codex')) {
+    const state = captureJson('codex', ['plugin', 'list', '--json']);
+    const installed = Array.isArray(state && state.installed) ? state.installed : [];
+    if (installed.some(plugin => plugin.pluginId === 'caveman@caveman')) {
+      const r = runSpawn('codex', ['plugin', 'remove', 'caveman@caveman'], null, opts.dryRun);
+      if (spawnOk(r)) ok('  removed codex plugin');
+    } else {
+      note('  codex plugin not installed — skipping');
+    }
+  }
+
   // opencode native install — strip plugin entry, MCP entry, and our files.
   // Probed by the existence of the plugin dir we own; if absent, skip silently.
   const ocDir = opencodeConfigDir();
@@ -1467,6 +1552,7 @@ async function main() {
     // missing without --force).
     if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
     if (prov.id === 'claude')   { await installClaude(ctx); continue; }
+    if (prov.id === 'codex')    { installCodex(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
@@ -1516,7 +1602,7 @@ async function main() {
     process.stdout.write('  or pass --only <agent> to force a specific target.\n');
   }
   process.stdout.write('\n');
-  ctx.note("  start any session and say 'caveman mode', or run /caveman in Claude Code");
+  ctx.note("  start any session and say 'caveman mode', or run /caveman in Claude Code or Codex");
   ctx.note('  measure what caveman save you: run /caveman-stats (numbers are estimates)');
   ctx.note('  verified team savings coming soon — join waitlist: https://caveman.so');
   ctx.note(`  uninstall: npx -y github:${REPO} -- --uninstall`);

@@ -1,16 +1,18 @@
 #!/usr/bin/env node
-// caveman-stats — read the active Claude Code session log, print real token
+// caveman-stats — read the active agent session log, print real token
 // usage plus an estimated savings figure from the benchmark in benchmarks/.
 //
 // Run directly:    node hooks/caveman-stats.js
-// Inside Claude:   /caveman-stats triggers this via the UserPromptSubmit hook.
+// Inside agent:    /caveman-stats triggers this via the UserPromptSubmit hook.
 // Hook integration passes --session-file <transcript_path> so we always read
 // the active session, not whichever JSONL was modified most recently.
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
-const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME } = require('./caveman-config');
+const {
+  getAgentConfigDir, isCodexHook, readFlag, appendFlag, readHistory,
+  safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME,
+} = require('./caveman-config');
 
 // Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
 // 10 tasks, sonnet-4-20250514). Only 'full' has measured data; lite / ultra /
@@ -52,8 +54,8 @@ function formatUsd(amount) {
   return `$${amount.toFixed(4)}`;
 }
 
-function findRecentSession(claudeDir) {
-  const projectsDir = path.join(claudeDir, 'projects');
+function findRecentSession(agentDir, codex = isCodexHook()) {
+  const projectsDir = path.join(agentDir, codex ? 'sessions' : 'projects');
   let entries;
   try { entries = fs.readdirSync(projectsDir, { withFileTypes: true }); }
   catch { return null; }
@@ -84,23 +86,71 @@ function parseSession(filePath) {
   let cacheReadTokens = 0;
   let turns = 0;
   let model = null;
+  let codexTotals = null;
+  const seenCodexTotals = new Set();
   const messages = []; // per-message {ts, outputTokens} for mode attribution (#601)
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
-    if (entry.type !== 'assistant' || !entry.message) continue;
-    const usage = entry.message.usage;
-    if (!usage) continue;
-    outputTokens    += usage.output_tokens           || 0;
-    cacheReadTokens += usage.cache_read_input_tokens || 0;
-    turns++;
-    if (!model && entry.message.model) model = entry.message.model;
-    const ts = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
-    messages.push({
-      ts: Number.isFinite(ts) ? ts : null,
-      outputTokens: usage.output_tokens || 0,
-    });
+    if (entry.type === 'assistant' && entry.message && entry.message.usage) {
+      const usage = entry.message.usage;
+      outputTokens    += usage.output_tokens           || 0;
+      cacheReadTokens += usage.cache_read_input_tokens || 0;
+      turns++;
+      if (!model && entry.message.model) model = entry.message.model;
+      const ts = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
+      messages.push({
+        ts: Number.isFinite(ts) ? ts : null,
+        outputTokens: usage.output_tokens || 0,
+      });
+      continue;
+    }
+
+    // Codex records model metadata in turn_context and usage snapshots as
+    // event_msg/token_count entries. last_token_usage is one model call;
+    // total_token_usage is cumulative and must not be summed.
+    if (entry.type === 'turn_context' && entry.payload && entry.payload.model) {
+      model = entry.payload.model;
+      continue;
+    }
+    if (entry.type === 'event_msg' && entry.payload &&
+        entry.payload.type === 'token_count' && entry.payload.info) {
+      const info = entry.payload.info;
+      const total = info.total_token_usage;
+      if (total) {
+        const snapshotKey = JSON.stringify([
+          total.input_tokens || 0,
+          total.cached_input_tokens || 0,
+          total.cache_write_input_tokens || 0,
+          total.output_tokens || 0,
+          total.reasoning_output_tokens || 0,
+          total.total_tokens || 0,
+        ]);
+        // Codex can emit the same cumulative snapshot more than once. Count
+        // each distinct snapshot once or output, cache, and turn totals inflate.
+        if (seenCodexTotals.has(snapshotKey)) continue;
+        seenCodexTotals.add(snapshotKey);
+        codexTotals = total;
+      }
+
+      const usage = info.last_token_usage;
+      if (!usage) continue;
+      outputTokens    += usage.output_tokens       || 0;
+      cacheReadTokens += usage.cached_input_tokens || 0;
+      turns++;
+      const ts = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
+      messages.push({
+        ts: Number.isFinite(ts) ? ts : null,
+        outputTokens: usage.output_tokens || 0,
+      });
+    }
+  }
+  // Cumulative totals are authoritative for Codex. Unique last-token records
+  // remain above only to preserve per-call timestamps for mode attribution.
+  if (codexTotals) {
+    outputTokens = codexTotals.output_tokens || 0;
+    cacheReadTokens = codexTotals.cached_input_tokens || 0;
   }
   return { outputTokens, cacheReadTokens, turns, model, messages };
 }
@@ -449,8 +499,8 @@ function main() {
   const sinceIdx = args.indexOf('--since');
   const sinceArg = sinceIdx !== -1 ? args[sinceIdx + 1] : null;
 
-  const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-  const historyPath = path.join(claudeDir, '.caveman-history.jsonl');
+  const agentDir = getAgentConfigDir();
+  const historyPath = path.join(agentDir, '.caveman-history.jsonl');
 
   // Lifetime aggregation paths short-circuit before we need a live session.
   if (all || sinceArg) {
@@ -464,15 +514,15 @@ function main() {
     return;
   }
 
-  const sessionFile = sessionFileArg || findRecentSession(claudeDir);
+  const sessionFile = sessionFileArg || findRecentSession(agentDir);
 
   if (!sessionFile) {
-    process.stderr.write('caveman-stats: no Claude Code session found.\n');
+    process.stderr.write('caveman-stats: no agent session found.\n');
     process.exit(1);
   }
 
   const parsed = parseSession(sessionFile);
-  const flagPath = path.join(claudeDir, '.caveman-active');
+  const flagPath = path.join(agentDir, '.caveman-active');
   const mode = readFlag(flagPath);
 
   // #601: attribute tokens to the mode active when each message happened,
@@ -480,7 +530,7 @@ function main() {
   // attributeByMode). Never credit the whole session to the current flag.
   let flagMtimeMs = null;
   try { flagMtimeMs = fs.statSync(flagPath).mtimeMs; } catch (e) {}
-  const modeLog = readModeLog(path.join(claudeDir, MODE_LOG_BASENAME));
+  const modeLog = readModeLog(path.join(agentDir, MODE_LOG_BASENAME));
   const attribution = attributeByMode({
     messages: parsed.messages,
     modeLog,
@@ -511,13 +561,13 @@ function main() {
     // user-owned, same symlink-clobber surface as the .caveman-active flag.
     const agg = aggregateHistory(historyPath, null);
     const suffix = agg.estSavedTokens > 0 ? `⛏  ${humanizeTokens(agg.estSavedTokens)}` : '';
-    safeWriteFlag(path.join(claudeDir, '.caveman-statusline-suffix'), suffix);
+    safeWriteFlag(path.join(agentDir, '.caveman-statusline-suffix'), suffix);
   }
 
   if (share) {
     process.stdout.write(formatShare({ ...parsed, mode, attribution }) + '\n');
   } else {
-    const scanDirs = [claudeDir, process.cwd()].filter((d, i, a) => a.indexOf(d) === i);
+    const scanDirs = [agentDir, process.cwd()].filter((d, i, a) => a.indexOf(d) === i);
     const compressed = summarizeCompressed(findCompressedPairs(scanDirs));
     process.stdout.write(formatStats({ ...parsed, mode, sessionPath: sessionFile, compressed, attribution }));
   }

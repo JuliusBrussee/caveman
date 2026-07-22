@@ -44,7 +44,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **opencode** | `node bin/install.js --only opencode` *(or `npx -y github:JuliusBrussee/caveman -- --only opencode`)* | Yes (plugin + AGENTS.md) |
 | **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
 | **Hermes Agent** | `npx -y github:JuliusBrussee/caveman -- --only hermes` *(or `node bin/install.js --only hermes` from a clone)* | Yes (native skills, enabled on load) |
-| **Codex CLI** | `npx skills add JuliusBrussee/caveman -a codex` | Per-session: `/caveman` |
+| **Codex CLI** | `codex plugin marketplace add JuliusBrussee/caveman && codex plugin add caveman@caveman` | Yes |
 | **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` | Per-session by default; `--with-init` for an always-on rule file |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` | Per-session by default; `--with-init` for an always-on rule file |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` | Per-session by default; `--with-init` for an always-on rule file |
@@ -78,6 +78,45 @@ If you want to install for one agent (or want to know exactly what command runs 
 "Soft probe" = installer won't auto-detect these without `--only <id>` because there's no reliable always-on signal (Copilot subscription state is auth-gated; the others have no CLI / config-dir-only). Pass the flag when you want them.
 
 For "auto-activates? No" agents, type `/caveman` once per session (or use natural-language triggers like "talk like caveman", "caveman mode").
+
+### Codex: install, trust, and verify
+
+Codex loads Caveman's `SessionStart` and `UserPromptSubmit` hooks from the
+plugin manifest. Complete setup once:
+
+```bash
+codex plugin marketplace add JuliusBrussee/caveman
+codex plugin add caveman@caveman
+```
+
+1. Start Codex interactively.
+2. When Codex shows **Hooks need review**, choose **Trust all and continue**.
+3. Start a new task. Existing tasks do not receive `SessionStart` context
+   retroactively.
+
+Verify installation and hook state:
+
+```bash
+codex plugin list
+cat "${CODEX_HOME:-$HOME/.codex}/.caveman-active"
+```
+
+The plugin should be enabled. The flag should contain `full`, `lite`, `ultra`,
+or another selected Caveman mode after the new task starts. `/caveman ultra`
+changes the mode through the `UserPromptSubmit` hook.
+
+For plugin development, point the marketplace at a local checkout, reinstall,
+then repeat the trust and new-task steps:
+
+```bash
+codex plugin remove caveman@caveman
+codex plugin marketplace remove caveman
+codex plugin marketplace add /absolute/path/to/caveman
+codex plugin add caveman@caveman
+```
+
+Re-review hooks after changing `hooks/hooks.json`; Codex invalidates trust when
+hook commands change.
 
 **Finding a profile slug for `npx skills add ... -a <profile>`?** Either read the table above, or print the live matrix from the installer:
 

@@ -14,6 +14,9 @@ class HookScriptTests(unittest.TestCase):
     def run_cmd(self, cmd, home, extra_env=None):
         env = os.environ.copy()
         env.pop("CLAUDE_PLUGIN_ROOT", None)
+        env.pop("PLUGIN_ROOT", None)
+        env.pop("CODEX_HOME", None)
+        env.pop("CAVEMAN_AGENT", None)
         env["HOME"] = str(home)
         env["USERPROFILE"] = str(home)
         if extra_env:
@@ -213,6 +216,130 @@ class HookScriptTests(unittest.TestCase):
             )
 
             self.assertIn("PLUGIN ROOT MARKER RULESET", result.stdout)
+
+    def test_codex_activate_emits_structured_context_and_uses_codex_home(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-codex-activate-") as tmp:
+            home = Path(tmp)
+            codex_dir = home / ".codex"
+            codex_dir.mkdir()
+
+            result = self.run_cmd(
+                ["node", "src/hooks/caveman-activate.js"],
+                home,
+                extra_env={
+                    "PLUGIN_ROOT": str(REPO_ROOT),
+                    "CODEX_HOME": str(codex_dir),
+                },
+            )
+
+            output = json.loads(result.stdout)
+            hook_output = output["hookSpecificOutput"]
+            self.assertEqual(hook_output["hookEventName"], "SessionStart")
+            self.assertIn("CAVEMAN MODE ACTIVE", hook_output["additionalContext"])
+            self.assertIn("## Intensity", hook_output["additionalContext"])
+            self.assertEqual((codex_dir / ".caveman-active").read_text(), "full")
+            self.assertFalse((home / ".claude" / ".caveman-active").exists())
+
+    def test_codex_independent_default_emits_structured_context(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-codex-independent-") as tmp:
+            home = Path(tmp)
+            codex_dir = home / ".codex"
+            codex_dir.mkdir()
+
+            result = self.run_cmd(
+                ["node", "src/hooks/caveman-activate.js"],
+                home,
+                extra_env={
+                    "PLUGIN_ROOT": str(REPO_ROOT),
+                    "CODEX_HOME": str(codex_dir),
+                    "CAVEMAN_DEFAULT_MODE": "commit",
+                },
+            )
+
+            output = json.loads(result.stdout)
+            hook_output = output["hookSpecificOutput"]
+            self.assertEqual(hook_output["hookEventName"], "SessionStart")
+            self.assertIn("level: commit", hook_output["additionalContext"])
+            self.assertEqual((codex_dir / ".caveman-active").read_text(), "commit")
+
+    def test_codex_mode_tracker_reinforces_active_mode(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-codex-tracker-") as tmp:
+            home = Path(tmp)
+            codex_dir = home / ".codex"
+            codex_dir.mkdir()
+
+            result = subprocess.run(
+                ["node", "src/hooks/caveman-mode-tracker.js"],
+                cwd=REPO_ROOT,
+                env={
+                    **os.environ,
+                    "HOME": str(home),
+                    "USERPROFILE": str(home),
+                    "PLUGIN_ROOT": str(REPO_ROOT),
+                    "CODEX_HOME": str(codex_dir),
+                },
+                input=json.dumps({"prompt": "/caveman ultra"}),
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+
+            output = json.loads(result.stdout)
+            hook_output = output["hookSpecificOutput"]
+            self.assertEqual(hook_output["hookEventName"], "UserPromptSubmit")
+            self.assertIn("CAVEMAN MODE ACTIVE (ultra)", hook_output["additionalContext"])
+            self.assertEqual((codex_dir / ".caveman-active").read_text(), "ultra")
+
+    def test_codex_plugin_hook_works_from_subdirectory(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-codex-plugin-hook-") as tmp:
+            home = Path(tmp)
+            codex_dir = home / ".codex"
+            codex_dir.mkdir()
+            nested = home / "repo" / "nested"
+            nested.mkdir(parents=True)
+
+            hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text())["hooks"]
+            command = hooks["SessionStart"][0]["hooks"][0]["command"]
+            env = os.environ.copy()
+            env.update({
+                "HOME": str(home),
+                "USERPROFILE": str(home),
+                "PLUGIN_ROOT": str(REPO_ROOT),
+                "CODEX_HOME": str(codex_dir),
+            })
+
+            result = subprocess.run(
+                command,
+                cwd=nested,
+                env=env,
+                shell=True,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+
+            output = json.loads(result.stdout)
+            self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "SessionStart")
+            self.assertEqual((codex_dir / ".caveman-active").read_text(), "full")
+
+    def test_codex_manifest_wires_both_hooks(self):
+        manifest = json.loads((REPO_ROOT / ".codex-plugin" / "plugin.json").read_text())
+        self.assertEqual(manifest["hooks"], "./hooks/hooks.json")
+        self.assertFalse((REPO_ROOT / ".codex" / "hooks.json").exists())
+
+        hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text())["hooks"]
+        self.assertIn("SessionStart", hooks)
+        self.assertIn("UserPromptSubmit", hooks)
+        for event, script in (
+            ("SessionStart", "caveman-activate.js"),
+            ("UserPromptSubmit", "caveman-mode-tracker.js"),
+        ):
+            handler = hooks[event][0]["hooks"][0]
+            self.assertIn(script, handler["command"])
+            self.assertIn("${PLUGIN_ROOT}", handler["command"])
+            self.assertIn(script, handler["commandWindows"])
+            self.assertIn("%PLUGIN_ROOT%", handler["commandWindows"])
+            self.assertNotIn("command_windows", handler)
 
 
 if __name__ == "__main__":

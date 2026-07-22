@@ -28,6 +28,8 @@
     "skills/",
     "plugins/",
     "commands/",
+    ".codex-plugin/",
+    "hooks/",
     "dist/caveman.skill",
     "README.md",
     "LICENSE"

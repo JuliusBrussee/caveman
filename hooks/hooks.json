@@ -1,0 +1,31 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CAVEMAN_AGENT=codex node \"${PLUGIN_ROOT}/src/hooks/caveman-activate.js\"",
+            "commandWindows": "set \"CAVEMAN_AGENT=codex\" && node \"%PLUGIN_ROOT%\\src\\hooks\\caveman-activate.js\"",
+            "timeout": 5,
+            "statusMessage": "Loading caveman mode"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CAVEMAN_AGENT=codex node \"${PLUGIN_ROOT}/src/hooks/caveman-mode-tracker.js\"",
+            "commandWindows": "set \"CAVEMAN_AGENT=codex\" && node \"%PLUGIN_ROOT%\\src\\hooks\\caveman-mode-tracker.js\"",
+            "timeout": 5,
+            "statusMessage": "Tracking caveman mode"
+          }
+        ]
+      }
+    ]
+  }
+}

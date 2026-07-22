@@ -37,6 +37,14 @@ function makeSession(dir, lines) {
   return sessFile;
 }
 
+function makeCodexSession(dir, lines) {
+  const sessionsDir = path.join(dir, '.codex', 'sessions', '2026', '07', '22');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const sessFile = path.join(sessionsDir, 'rollout-test.jsonl');
+  fs.writeFileSync(sessFile, lines.map(l => JSON.stringify(l)).join('\n'));
+  return sessFile;
+}
+
 console.log('caveman-stats tests\n');
 
 test('reads --session-file directly and sums output tokens', (tmp) => {
@@ -92,7 +100,7 @@ test('reports no-session when no .jsonl exists', (tmp) => {
     });
   } catch (e) { err = e; }
   assert.ok(err, 'should exit non-zero');
-  assert.match(err.stderr, /no Claude Code session found/);
+  assert.match(err.stderr, /no agent session found/);
 });
 
 test('mode tracker handles /caveman-stats with decision block', (tmp) => {
@@ -125,6 +133,91 @@ test('mode tracker preserves caveman flag when /caveman-stats fires', (tmp) => {
   });
   // The flag must still say 'full' — the stats command must not change mode.
   assert.strictEqual(fs.readFileSync(path.join(claudeDir, '.caveman-active'), 'utf8'), 'full');
+});
+
+test('reads Codex token_count records and uses CODEX_HOME', (tmp) => {
+  const sess = makeCodexSession(tmp, [
+    { type: 'turn_context', payload: { model: 'gpt-5.6-sol' } },
+    { type: 'event_msg', payload: { type: 'token_count', info: {
+      total_token_usage: { output_tokens: 100, cached_input_tokens: 200 },
+      last_token_usage: { output_tokens: 100, cached_input_tokens: 200 },
+    } } },
+    { type: 'event_msg', payload: { type: 'token_count', info: {
+      total_token_usage: { output_tokens: 150, cached_input_tokens: 250 },
+      last_token_usage: { output_tokens: 50, cached_input_tokens: 50 },
+    } } },
+  ]);
+  const codexDir = path.join(tmp, '.codex');
+  fs.writeFileSync(path.join(codexDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: tmp,
+      CODEX_HOME: codexDir,
+      CAVEMAN_AGENT: 'codex',
+    },
+  });
+  assert.match(out, /Turns:\s+2/);
+  assert.match(out, /Output tokens:\s+150/);
+  assert.match(out, /Cache-read tokens:\s+250/);
+  assert.ok(fs.existsSync(path.join(codexDir, '.caveman-history.jsonl')));
+  assert.ok(!fs.existsSync(path.join(tmp, '.claude', '.caveman-history.jsonl')));
+});
+
+test('deduplicates repeated Codex cumulative token snapshots', (tmp) => {
+  const first = { type: 'event_msg', payload: { type: 'token_count', info: {
+    total_token_usage: { output_tokens: 100, cached_input_tokens: 200 },
+    last_token_usage: { output_tokens: 100, cached_input_tokens: 200 },
+  } } };
+  const second = { type: 'event_msg', payload: { type: 'token_count', info: {
+    total_token_usage: { output_tokens: 150, cached_input_tokens: 250 },
+    last_token_usage: { output_tokens: 50, cached_input_tokens: 50 },
+  } } };
+  const sess = makeCodexSession(tmp, [first, second, second]);
+  const { parseSession } = require(STATS);
+  const parsed = parseSession(sess);
+  assert.equal(parsed.turns, 2);
+  assert.equal(parsed.outputTokens, 150);
+  assert.equal(parsed.cacheReadTokens, 250);
+  assert.equal(parsed.messages.reduce((sum, message) => sum + message.outputTokens, 0), 150);
+});
+
+test('Codex mode tracker blocks /caveman-stats with parsed stats', (tmp) => {
+  const sess = makeCodexSession(tmp, [
+    { type: 'turn_context', payload: { model: 'gpt-5.6-sol' } },
+    { type: 'event_msg', payload: { type: 'token_count', info: {
+      last_token_usage: { output_tokens: 75, cached_input_tokens: 25 },
+    } } },
+  ]);
+  const codexDir = path.join(tmp, '.codex');
+  fs.writeFileSync(path.join(codexDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [TRACKER], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: tmp,
+      CODEX_HOME: codexDir,
+      PLUGIN_ROOT: ROOT,
+      CAVEMAN_AGENT: 'codex',
+    },
+    input: JSON.stringify({ prompt: '/caveman-stats', transcript_path: sess }),
+  });
+  const parsed = JSON.parse(out);
+  assert.strictEqual(parsed.decision, 'block');
+  assert.match(parsed.reason, /Output tokens:\s+75/);
+});
+
+test('stats failure advice points at installed script path', (tmp) => {
+  const out = execFileSync(process.execPath, [TRACKER], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: tmp, PLUGIN_ROOT: ROOT, CAVEMAN_AGENT: 'codex' },
+    input: JSON.stringify({ prompt: '/caveman-stats --since invalid' }),
+  });
+  const parsed = JSON.parse(out);
+  assert.strictEqual(parsed.decision, 'block');
+  assert.match(parsed.reason, /src[\\/]hooks[\\/]caveman-stats\.js/);
+  assert.doesNotMatch(parsed.reason, /node hooks[\\/]caveman-stats\.js/);
 });
 
 test('shows USD savings when model is a known sonnet variant', (tmp) => {

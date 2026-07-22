@@ -35,7 +35,7 @@ Verify: `Test-Path "$PluginSkillDir\SKILL.md"` should print `True`. Restart Clau
 
 1. Enable symlinks first: `git config --global core.symlinks true` (requires Developer Mode or admin).
 2. Clone repo → Open VS Code → Codex Settings → Plugins → find "Caveman" under the local marketplace → Install → Reload Window.
-3. Codex hooks are currently disabled on Windows, so use `$caveman` to start the mode manually each session.
+3. Trust Caveman hooks when Codex requests review, then start a new task. Caveman activates automatically.
 
 ## `npx skills` symlink fallback
 
