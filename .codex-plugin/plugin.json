@@ -16,7 +16,7 @@
     "writing"
   ],
   "skills": "./skills/",
-  "hooks": "./.codex/hooks.json",
+  "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Caveman",
     "shortDescription": "Talk like caveman. Cut filler. Keep technical accuracy.",

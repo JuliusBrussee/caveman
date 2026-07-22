@@ -115,7 +115,7 @@ codex plugin marketplace add /absolute/path/to/caveman
 codex plugin add caveman@caveman
 ```
 
-Re-review hooks after changing `.codex/hooks.json`; Codex invalidates trust when
+Re-review hooks after changing `hooks/hooks.json`; Codex invalidates trust when
 hook commands change.
 
 **Finding a profile slug for `npx skills add ... -a <profile>`?** Either read the table above, or print the live matrix from the installer:
