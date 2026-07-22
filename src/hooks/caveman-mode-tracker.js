@@ -75,8 +75,8 @@ process.stdin.on('end', () => {
     const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
     if (statsMatch) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
+      const statsPath = path.join(__dirname, 'caveman-stats.js');
       try {
-        const statsPath = path.join(__dirname, 'caveman-stats.js');
         const argv = [statsPath];
         if (data.transcript_path) argv.push('--session-file', data.transcript_path);
         if (tailArgs.includes('--share')) argv.push('--share');
@@ -90,7 +90,8 @@ process.stdin.on('end', () => {
       } catch (e) {
         process.stdout.write(JSON.stringify({
           decision: 'block',
-          reason: 'caveman-stats: could not run stats script.\nTry manually: node hooks/caveman-stats.js'
+          reason: 'caveman-stats: could not run stats script.\nTry manually: ' +
+            JSON.stringify(process.execPath) + ' ' + JSON.stringify(statsPath)
         }));
       }
       return;

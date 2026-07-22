@@ -86,6 +86,8 @@ function parseSession(filePath) {
   let cacheReadTokens = 0;
   let turns = 0;
   let model = null;
+  let codexTotals = null;
+  const seenCodexTotals = new Set();
   const messages = []; // per-message {ts, outputTokens} for mode attribution (#601)
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -113,9 +115,27 @@ function parseSession(filePath) {
       continue;
     }
     if (entry.type === 'event_msg' && entry.payload &&
-        entry.payload.type === 'token_count' && entry.payload.info &&
-        entry.payload.info.last_token_usage) {
-      const usage = entry.payload.info.last_token_usage;
+        entry.payload.type === 'token_count' && entry.payload.info) {
+      const info = entry.payload.info;
+      const total = info.total_token_usage;
+      if (total) {
+        const snapshotKey = JSON.stringify([
+          total.input_tokens || 0,
+          total.cached_input_tokens || 0,
+          total.cache_write_input_tokens || 0,
+          total.output_tokens || 0,
+          total.reasoning_output_tokens || 0,
+          total.total_tokens || 0,
+        ]);
+        // Codex can emit the same cumulative snapshot more than once. Count
+        // each distinct snapshot once or output, cache, and turn totals inflate.
+        if (seenCodexTotals.has(snapshotKey)) continue;
+        seenCodexTotals.add(snapshotKey);
+        codexTotals = total;
+      }
+
+      const usage = info.last_token_usage;
+      if (!usage) continue;
       outputTokens    += usage.output_tokens       || 0;
       cacheReadTokens += usage.cached_input_tokens || 0;
       turns++;
@@ -125,6 +145,12 @@ function parseSession(filePath) {
         outputTokens: usage.output_tokens || 0,
       });
     }
+  }
+  // Cumulative totals are authoritative for Codex. Unique last-token records
+  // remain above only to preserve per-call timestamps for mode attribution.
+  if (codexTotals) {
+    outputTokens = codexTotals.output_tokens || 0;
+    cacheReadTokens = codexTotals.cached_input_tokens || 0;
   }
   return { outputTokens, cacheReadTokens, turns, model, messages };
 }

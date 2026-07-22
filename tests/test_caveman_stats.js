@@ -165,6 +165,24 @@ test('reads Codex token_count records and uses CODEX_HOME', (tmp) => {
   assert.ok(!fs.existsSync(path.join(tmp, '.claude', '.caveman-history.jsonl')));
 });
 
+test('deduplicates repeated Codex cumulative token snapshots', (tmp) => {
+  const first = { type: 'event_msg', payload: { type: 'token_count', info: {
+    total_token_usage: { output_tokens: 100, cached_input_tokens: 200 },
+    last_token_usage: { output_tokens: 100, cached_input_tokens: 200 },
+  } } };
+  const second = { type: 'event_msg', payload: { type: 'token_count', info: {
+    total_token_usage: { output_tokens: 150, cached_input_tokens: 250 },
+    last_token_usage: { output_tokens: 50, cached_input_tokens: 50 },
+  } } };
+  const sess = makeCodexSession(tmp, [first, second, second]);
+  const { parseSession } = require(STATS);
+  const parsed = parseSession(sess);
+  assert.equal(parsed.turns, 2);
+  assert.equal(parsed.outputTokens, 150);
+  assert.equal(parsed.cacheReadTokens, 250);
+  assert.equal(parsed.messages.reduce((sum, message) => sum + message.outputTokens, 0), 150);
+});
+
 test('Codex mode tracker blocks /caveman-stats with parsed stats', (tmp) => {
   const sess = makeCodexSession(tmp, [
     { type: 'turn_context', payload: { model: 'gpt-5.6-sol' } },
@@ -188,6 +206,18 @@ test('Codex mode tracker blocks /caveman-stats with parsed stats', (tmp) => {
   const parsed = JSON.parse(out);
   assert.strictEqual(parsed.decision, 'block');
   assert.match(parsed.reason, /Output tokens:\s+75/);
+});
+
+test('stats failure advice points at installed script path', (tmp) => {
+  const out = execFileSync(process.execPath, [TRACKER], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: tmp, PLUGIN_ROOT: ROOT, CAVEMAN_AGENT: 'codex' },
+    input: JSON.stringify({ prompt: '/caveman-stats --since invalid' }),
+  });
+  const parsed = JSON.parse(out);
+  assert.strictEqual(parsed.decision, 'block');
+  assert.match(parsed.reason, /src[\\/]hooks[\\/]caveman-stats\.js/);
+  assert.doesNotMatch(parsed.reason, /node hooks[\\/]caveman-stats\.js/);
 });
 
 test('shows USD savings when model is a known sonnet variant', (tmp) => {
