@@ -81,5 +81,102 @@ test('normal stdin (valid JSON + clean EOF) still exits 0', () => {
   }
 });
 
+// --- Claude Code's 5s hook timeout -----------------------------------------
+// A complete payload can arrive well before the caller closes stdin. Doing the
+// work only in the 'end' listener meant the hook sat idle until EOF and was
+// killed at the timeout — silently, injecting nothing.
+//
+// Driven through a child so the assertions here stay synchronous: the driver
+// writes one complete payload, leaves stdin OPEN, and reports how long the hook
+// took to exit on its own plus whatever it managed to write.
+const HOOK_TIMEOUT_MS = 5000;
+
+function runWithStdinHeldOpen(configDir, prompt) {
+  const driver = `
+    const { spawn } = require('child_process');
+    const started = Date.now();
+    const p = spawn(process.execPath, [${JSON.stringify(HOOK_PATH)}], {
+      stdio: ['pipe', 'pipe', 'ignore'],
+      env: { ...process.env, CLAUDE_CONFIG_DIR: ${JSON.stringify(configDir)} },
+    });
+    let out = '';
+    p.stdout.on('data', c => { out += c; });
+    p.stdin.write(JSON.stringify({ prompt: ${JSON.stringify(prompt)} }));   // stdin stays open
+    const kill = setTimeout(() => { p.kill('SIGKILL'); }, ${HOOK_TIMEOUT_MS * 2});
+    p.on('exit', (code, signal) => {
+      clearTimeout(kill);
+      process.stdout.write(JSON.stringify({ ms: Date.now() - started, code, signal, out }));
+    });
+  `;
+  const res = spawnSync(process.execPath, ['-e', driver], { encoding: 'utf8' });
+  return JSON.parse(res.stdout);
+}
+
+test('a complete payload is acted on before the 5s hook timeout, without EOF', () => {
+  const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-tracker-stdin-'));
+  try {
+    const r = runWithStdinHeldOpen(tmpConfig, 'hello there');
+    assert.ok(
+      r.signal === null && r.code === CLEAN_EXIT,
+      `hook did not exit on its own with stdin held open (code=${r.code} signal=${r.signal} ` +
+        `after ${r.ms}ms) — Claude Code kills it at ${HOOK_TIMEOUT_MS}ms`
+    );
+    assert.ok(
+      r.ms < HOOK_TIMEOUT_MS,
+      `hook took ${r.ms}ms with stdin held open; the hook timeout is ${HOOK_TIMEOUT_MS}ms`
+    );
+  } finally {
+    fs.rmSync(tmpConfig, { recursive: true, force: true });
+  }
+});
+
+test('the per-turn reinforcement is still emitted when stdin never closes', () => {
+  const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-tracker-stdin-'));
+  try {
+    fs.writeFileSync(path.join(tmpConfig, '.caveman-active'), 'full');
+    const r = runWithStdinHeldOpen(tmpConfig, 'hello there');
+    assert.ok(
+      /CAVEMAN MODE ACTIVE/.test(r.out || ''),
+      `expected the additionalContext injection on stdout, got ${JSON.stringify(r.out)} ` +
+        `(exit code=${r.code} signal=${r.signal} after ${r.ms}ms)`
+    );
+  } finally {
+    fs.rmSync(tmpConfig, { recursive: true, force: true });
+  }
+});
+
+// The payload can also arrive split across chunks; a partial one must not be
+// mistaken for a broken one, and the body must still run exactly once.
+test('a payload split across chunks is handled once, and only once', () => {
+  const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-tracker-stdin-'));
+  try {
+    fs.writeFileSync(path.join(tmpConfig, '.caveman-active'), 'full');
+    const driver = `
+      const { spawn } = require('child_process');
+      const p = spawn(process.execPath, [${JSON.stringify(HOOK_PATH)}], {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        env: { ...process.env, CLAUDE_CONFIG_DIR: ${JSON.stringify(tmpConfig)} },
+      });
+      let out = '';
+      p.stdout.on('data', c => { out += c; });
+      const payload = JSON.stringify({ prompt: 'hello there' });
+      p.stdin.write(payload.slice(0, 8));
+      setTimeout(() => { p.stdin.write(payload.slice(8)); p.stdin.end(); }, 50);
+      p.on('exit', (code, signal) =>
+        process.stdout.write(JSON.stringify({ code, signal, out })));
+    `;
+    const r = JSON.parse(spawnSync(process.execPath, ['-e', driver], { encoding: 'utf8' }).stdout);
+    assert.strictEqual(r.code, CLEAN_EXIT, `expected clean exit, got code=${r.code} signal=${r.signal}`);
+    const injections = (r.out.match(/CAVEMAN MODE ACTIVE/g) || []).length;
+    assert.strictEqual(
+      injections,
+      1,
+      `expected exactly one injection for one payload, got ${injections}: ${JSON.stringify(r.out)}`
+    );
+  } finally {
+    fs.rmSync(tmpConfig, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

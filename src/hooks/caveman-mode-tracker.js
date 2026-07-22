@@ -19,12 +19,22 @@ const flagPath = path.join(claudeDir, '.caveman-active');
 const prevPath = path.join(claudeDir, '.caveman-active.prev');
 
 let input = '';
-process.stdin.on('data', chunk => { input += chunk; });
+let handled = false;
 // Abnormal stdin close (broken pipe, parent crash) emits 'error'; without a
 // listener Node throws it as an uncaught exception and the hook exits
 // non-zero — a spurious hook failure (#538). Hooks must always exit 0.
 process.stdin.on('error', () => process.exit(0));
-process.stdin.on('end', () => {
+
+// Act on a COMPLETE payload rather than waiting for stdin to close. The whole
+// body used to live in the 'end' listener alone, so the hook did nothing until
+// the caller sent EOF — and Claude Code killed it at the 5s timeout whenever
+// that EOF was late. The sibling SessionStart hook never reads stdin and never
+// times out; this one did, on ~2% of runs. Destroying stdin (rather than
+// exiting) releases the only thing holding the event loop open, so Node drains
+// and flushes stdout on its own.
+function handlePayload() {
+  if (handled) return;
+  handled = true;
   try {
     const data = JSON.parse(input);
     // Collapse whitespace so phrase triggers still match multiline prompts —
@@ -203,4 +213,13 @@ process.stdin.on('end', () => {
   } catch (e) {
     // Silent fail
   }
+}
+
+process.stdin.on('data', chunk => {
+  input += chunk;
+  // A partial payload is not an error — keep reading until it parses.
+  try { JSON.parse(input); } catch (e) { return; }
+  handlePayload();
+  process.stdin.destroy();
 });
+process.stdin.on('end', handlePayload);
