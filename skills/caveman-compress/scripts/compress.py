@@ -14,6 +14,21 @@ import sys
 from pathlib import Path
 from typing import List
 
+# Force UTF-8 for interactive console output. Windows text streams default to
+# the system codepage (commonly cp1252) when Python isn't in UTF-8 mode (see
+# the encoding notes throughout this file) -- without this, a bare print() of
+# a non-ASCII status glyph (the checkmark/cross-mark used on the pass/fail
+# paths below) raises UnicodeEncodeError and crashes the whole run instead of
+# reporting cleanly. errors="backslashreplace" only affects what a human sees
+# in a legacy console; it never touches file contents, which go through the
+# strict, gated UTF-8 file I/O below.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
 OUTER_FENCE_REGEX = re.compile(
     r"\A\s*(`{3,}|~{3,})[^\n]*\n(.*)\n\1\s*\Z", re.DOTALL
 )
@@ -150,6 +165,50 @@ class PlaceholderIntegrityError(RuntimeError):
 
 def _placeholder(i: int) -> str:
     return f"{PLACEHOLDER_PREFIX}{i}{PLACEHOLDER_SUFFIX}"
+
+
+# ---------- Unicode integrity gate ----------
+#
+# Forcing encoding="utf-8" on every read/write below (see the file-I/O
+# calls in compress_file()) makes on-disk corruption structurally
+# impossible for whatever the in-memory string already contains -- every
+# Python str round-trips through UTF-8 losslessly. But that alone doesn't
+# catch a string that already *lost* information upstream of the write,
+# e.g. call_claude()'s subprocess decode uses errors="replace" as a
+# last-resort fallback for a genuinely corrupt subprocess byte stream, which
+# would silently smuggle U+FFFD replacement characters into otherwise-valid
+# UTF-8 text. This gate runs immediately before every overwrite of the
+# user's file and fails closed -- raising instead of writing -- if the text
+# about to be written isn't a clean, lossless UTF-8 round trip of what the
+# model actually said.
+
+
+class UnicodeIntegrityError(RuntimeError):
+    """Raised when text about to be written would corrupt or lose Unicode
+    content relative to the reference text -- e.g. a bad round-trip encode,
+    or new U+FFFD replacement characters not present in the reference.
+    Callers must fail closed (abort before writing) rather than persist it.
+    """
+
+
+def check_unicode_integrity(text: str, reference_text: str, label: str) -> None:
+    """Fail-closed UTF-8 integrity gate. Raises UnicodeIntegrityError if `text`
+    is unsafe to write: it must (a) round-trip encode/decode as UTF-8, and
+    (b) introduce no U+FFFD replacement characters beyond what the reference
+    text already contained.
+    """
+    try:
+        text.encode("utf-8").decode("utf-8")
+    except UnicodeError as e:
+        raise UnicodeIntegrityError(f"{label} failed UTF-8 round-trip: {e}") from e
+
+    new_replacement_chars = text.count("�") - reference_text.count("�")
+    if new_replacement_chars > 0:
+        raise UnicodeIntegrityError(
+            f"{label} introduced {new_replacement_chars} new U+FFFD replacement "
+            "character(s) not present in the reference text -- likely lossy "
+            "decoding upstream (e.g. a subprocess boundary using errors='replace')."
+        )
 
 
 def mask_code(body: str):
@@ -338,7 +397,13 @@ def compress_file(filepath: Path) -> bool:
         print("Skipping (not natural language)")
         return False
 
-    original_text = filepath.read_text(errors="ignore")
+    # encoding="utf-8" is explicit and non-lossy (no errors="ignore"): without
+    # it, this falls back to locale.getpreferredencoding() -- cp1252 on a
+    # default Windows install -- which silently mangles or drops multi-byte
+    # prose characters (em-dash, arrows, not-equal, ...) before compression
+    # even starts. A genuinely non-UTF-8 input file should raise here rather
+    # than have its content silently corrupted.
+    original_text = filepath.read_text(encoding="utf-8")
     # Store backup outside the source directory so skill auto-loaders don't
     # re-ingest the `.original.md` copy as a live file. Mirror the source's
     # parent-dir name + stem under a platform-aware base to reduce collisions.
@@ -407,12 +472,25 @@ def compress_file(filepath: Path) -> bool:
     # Reassemble: frontmatter (verbatim) + compressed body
     compressed = frontmatter + compressed_body
 
+    # Fail-closed Unicode integrity gate (see check_unicode_integrity docstring):
+    # abort before touching disk at all if the compressed text isn't a clean,
+    # lossless UTF-8 round trip of what the model returned.
+    try:
+        check_unicode_integrity(compressed, original_text, "Compressed output")
+    except UnicodeIntegrityError as e:
+        print(f"❌ Compression aborted: {e}")
+        print("   Original file is untouched (no backup created).")
+        return False
+
     # Save original as backup, then verify the backup readback before
     # touching the input file. If the filesystem dropped bytes (encoding,
     # antivirus, disk full), unlink the bad backup and abort instead of
     # leaving the user with a corrupt backup + compressed primary.
-    backup_path.write_text(original_text)
-    backup_readback = backup_path.read_text(errors="ignore")
+    # encoding="utf-8" explicit on both sides (no errors="ignore" on the
+    # readback) so a dropped/mangled byte is a hard mismatch, not silently
+    # swallowed into a false "backup verified" result.
+    backup_path.write_text(original_text, encoding="utf-8")
+    backup_readback = backup_path.read_text(encoding="utf-8")
     if backup_readback != original_text:
         print(f"❌ Backup write verification failed: {backup_path}")
         print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
@@ -421,7 +499,7 @@ def compress_file(filepath: Path) -> bool:
         except OSError:
             pass
         return False
-    filepath.write_text(compressed)
+    filepath.write_text(compressed, encoding="utf-8")
 
     # Step 2: Validate + Retry
     for attempt in range(MAX_RETRIES):
@@ -439,7 +517,7 @@ def compress_file(filepath: Path) -> bool:
 
         if attempt == MAX_RETRIES - 1:
             # Restore original on failure
-            filepath.write_text(original_text)
+            filepath.write_text(original_text, encoding="utf-8")
             backup_path.unlink(missing_ok=True)
             print("❌ Failed after retries — original restored")
             return False
@@ -452,6 +530,17 @@ def compress_file(filepath: Path) -> bool:
         compressed = call_claude(
             build_fix_prompt(original_text, compressed, result.errors)
         )
-        filepath.write_text(compressed)
+        try:
+            check_unicode_integrity(compressed, original_text, "Fixed output")
+        except UnicodeIntegrityError as e:
+            # Same fail-closed gate as the first pass: a fix-pass that lost
+            # Unicode content is not safe to write, even mid-retry. Restore
+            # the original rather than leave a corrupted file on disk.
+            print(f"❌ Fix pass aborted: {e}")
+            filepath.write_text(original_text, encoding="utf-8")
+            backup_path.unlink(missing_ok=True)
+            print("❌ Original restored")
+            return False
+        filepath.write_text(compressed, encoding="utf-8")
 
     return True

@@ -28,7 +28,13 @@ class ValidationResult:
 
 
 def read_file(path: Path) -> str:
-    return path.read_text(errors="ignore")
+    # encoding="utf-8" is explicit and non-lossy (no errors="ignore"): the
+    # original/compressed comparisons this feeds only mean anything if both
+    # sides are decoded exactly, byte-for-byte, as the UTF-8 compress_file()
+    # writes. Falling back to a locale codec (cp1252 on Windows) here let
+    # Unicode-corrupted output still compare "equal enough" to pass — see
+    # the caveman-compress Unicode-prose regression this guards against.
+    return path.read_text(encoding="utf-8")
 
 
 # ---------- Extractors ----------
