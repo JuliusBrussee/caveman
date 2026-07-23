@@ -183,6 +183,13 @@ def verify_manifests_and_syntax() -> None:
     ensure("caveman-config.js" in install_sh, "install.sh missing caveman-config.js")
     ensure("caveman-config.js" in uninstall_sh, "uninstall.sh missing caveman-config.js")
 
+    # REPO_URL drives the curl-pipe fallback download path (no local clone), so it must
+    # point at the hooks' actual location, not the pre-refactor top-level hooks/ path.
+    ensure(
+        'REPO_URL="https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks"' in install_sh,
+        "install.sh REPO_URL must point at main/src/hooks (curl-pipe fallback 404s otherwise)",
+    )
+
     print("JSON manifests and JS/bash syntax OK")
 
 
@@ -202,6 +209,10 @@ def verify_powershell_static() -> None:
         "install.ps1 missing PowerShell statusline command",
     )
     ensure("[CAVEMAN" in statusline_text, "caveman-statusline.ps1 missing badge output")
+    ensure(
+        '$RepoUrl = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks"' in install_text,
+        "install.ps1 RepoUrl must point at main/src/hooks (curl-pipe fallback 404s otherwise)",
+    )
 
     print("Windows install path statically wired")
 
