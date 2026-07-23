@@ -74,7 +74,7 @@ function loadConfig() {
 }
 const config = loadConfig();
 
-const { getDefaultMode, safeWriteFlag, readFlag } = config;
+const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange } = config;
 
 // Load the shared mode-change parser (#602) the same way loadConfig() loads
 // caveman-config.js — see the doc comment above loadConfig() for why this
@@ -103,7 +103,8 @@ function opencodeConfigDir() {
   return path.join(os.homedir(), '.config', 'opencode');
 }
 
-const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
+const opencodeDir = opencodeConfigDir();
+const flagPath = path.join(opencodeDir, '.caveman-active');
 
 function removeFlag() {
   try {
@@ -122,10 +123,12 @@ function reinforcementLine(mode) {
 function applyModeChange(change) {
   if (!change) return;
   if (change.action === 'clear') {
+    recordModeChange(opencodeDir, null);
     removeFlag();
     return;
   }
   if (change.action === 'set' && change.mode) {
+    recordModeChange(opencodeDir, change.mode);
     safeWriteFlag(flagPath, change.mode);
   }
 }
@@ -136,9 +139,11 @@ function applyModeChange(change) {
 function handleSessionCreated() {
   const mode = getDefaultMode();
   if (mode === 'off') {
+    recordModeChange(opencodeDir, null);
     removeFlag();
     return;
   }
+  recordModeChange(opencodeDir, mode);
   safeWriteFlag(flagPath, mode);
 }
 
