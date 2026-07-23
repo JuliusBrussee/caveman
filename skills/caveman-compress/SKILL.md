@@ -63,9 +63,16 @@ python3 -m scripts <absolute_filepath>
 - Tables (compress cell text, keep structure)
 - Frontmatter/YAML headers in markdown files
 
+### Never mutate word forms (shave tokens, not characters)
+- Removing a whole word saves a token. Chopping letters off a word does not.
+- Keep correct verb tense/conjugation, plurals, and punctuation.
+- Original: "The server basically crashes when traffic spikes"
+- Good: "Server crashes when traffic spikes" — dropped whole words ("The", "basically").
+- Bad: "Server crash when traffic spike" — chopped "crashes"→"crash" and "spikes"→"spike", broke grammar, saved no tokens.
+
 ### Compress
 - Use short synonyms: "big" not "extensive", "fix" not "implement a solution for", "use" not "utilize"
-- Fragments OK: "Run tests before commit" not "You should always run tests before committing"
+- Fragments OK: "Run tests before committing" not "You should always run tests before committing"
 - Drop "you should", "make sure to", "remember to" — just state the action
 - Merge redundant bullets that say the same thing differently
 - Keep one example where multiple examples show the same pattern

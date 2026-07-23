@@ -122,6 +122,7 @@ if (skillContent) {
   output =
     'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' +
     'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
+    '"Smart caveman" is terse, not broken. Real grammatical English — never literal caveman impression ("me fix bug", "server no start"). Keep pronouns, agreement, word forms.\n\n' +
     '## Persistence\n\n' +
     'ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. Still active if unsure. Off only: "stop caveman" / "normal mode".\n\n' +
     'Current level: **' + modeLabel + '**. Switch: `/caveman lite|full|ultra`.\n\n' +
