@@ -17,8 +17,11 @@ const assert = require('assert');
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-userhome-'));
 process.env.XDG_CONFIG_HOME = tmpHome;
 delete process.env.CAVEMAN_DEFAULT_MODE;
+const APPDATA_SEGMENT = /AppData/;
+const CONFIG_FILE_NAME = 'config.json';
+const WINDOWS_PLATFORM = 'win32';
 
-const { getDefaultMode, findRepoConfigPath } = require('../src/hooks/caveman-config');
+const { getDefaultMode, findRepoConfigPath, getConfigPath } = require('../src/hooks/caveman-config');
 
 let passed = 0;
 let failed = 0;
@@ -120,6 +123,33 @@ test('falls through to user config when repo config absent', (tmp) => {
     assert.strictEqual(getDefaultMode(), 'review');
   } finally {
     fs.rmSync(path.join(tmpHome, 'caveman'), { recursive: true, force: true });
+  }
+});
+
+test('win32 without APPDATA falls back to ~/.config/caveman/config.json', (tmp) => {
+  const origXdg = process.env.XDG_CONFIG_HOME;
+  const origAppData = process.env.APPDATA;
+  const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const origHomedir = os.homedir;
+  const posixConfigDir = path.join(tmp, '.config', 'caveman');
+  try {
+    delete process.env.XDG_CONFIG_HOME;
+    delete process.env.APPDATA;
+    Object.defineProperty(process, 'platform', { value: WINDOWS_PLATFORM });
+    os.homedir = () => tmp;
+    fs.mkdirSync(posixConfigDir, { recursive: true });
+    fs.writeFileSync(path.join(posixConfigDir, CONFIG_FILE_NAME),
+      JSON.stringify({ defaultMode: 'lite' }));
+
+    assert.match(getConfigPath(), APPDATA_SEGMENT);
+    assert.strictEqual(getDefaultMode(), 'lite');
+  } finally {
+    if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = origXdg;
+    if (origAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = origAppData;
+    Object.defineProperty(process, 'platform', origPlatform);
+    os.homedir = origHomedir;
   }
 });
 
