@@ -69,7 +69,7 @@ function loadConfig() {
 }
 const config = loadConfig();
 
-const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = config;
+const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange, VALID_MODES } = config;
 
 // Modes handled by independent skills — not selectable via /caveman <arg>.
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
@@ -85,7 +85,8 @@ function opencodeConfigDir() {
   return path.join(os.homedir(), '.config', 'opencode');
 }
 
-const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
+const opencodeDir = opencodeConfigDir();
+const flagPath = path.join(opencodeDir, '.caveman-active');
 
 function reinforcementLine(mode) {
   return 'CAVEMAN MODE ACTIVE (' + mode + '). ' +
@@ -163,9 +164,11 @@ function parseModeChange(promptRaw) {
 function applyModeChange(mode) {
   if (!mode) return;
   if (mode === 'off') {
+    recordModeChange(opencodeDir, null);
     try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
     return;
   }
+  recordModeChange(opencodeDir, mode);
   safeWriteFlag(flagPath, mode);
 }
 
@@ -175,9 +178,11 @@ function applyModeChange(mode) {
 function handleSessionCreated() {
   const mode = getDefaultMode();
   if (mode === 'off') {
+    recordModeChange(opencodeDir, null);
     try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
     return;
   }
+  recordModeChange(opencodeDir, mode);
   safeWriteFlag(flagPath, mode);
 }
 
