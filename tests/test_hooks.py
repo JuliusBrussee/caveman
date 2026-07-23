@@ -215,5 +215,50 @@ class HookScriptTests(unittest.TestCase):
             self.assertIn("PLUGIN ROOT MARKER RULESET", result.stdout)
 
 
+class StatuslineExitCodeTests(unittest.TestCase):
+    def run_statusline(self, config_dir, extra_env=None):
+        env = os.environ.copy()
+        env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+        if extra_env:
+            env.update(extra_env)
+        return subprocess.run(
+            ["bash", str(REPO_ROOT / "src" / "hooks" / "caveman-statusline.sh")],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+    def test_exits_zero_with_empty_savings_suffix_file(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-statusline-empty-suffix-") as tmp:
+            config_dir = Path(tmp)
+            (config_dir / ".caveman-active").write_text("full")
+            (config_dir / ".caveman-statusline-suffix").write_text("")
+
+            result = self.run_statusline(config_dir)
+
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("CAVEMAN", result.stdout)
+
+    def test_exits_zero_with_no_savings_suffix_file(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-statusline-no-suffix-") as tmp:
+            config_dir = Path(tmp)
+            (config_dir / ".caveman-active").write_text("full")
+
+            result = self.run_statusline(config_dir)
+
+            self.assertEqual(result.returncode, 0)
+
+    def test_exits_zero_with_populated_savings_suffix_file(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-statusline-suffix-") as tmp:
+            config_dir = Path(tmp)
+            (config_dir / ".caveman-active").write_text("full")
+            (config_dir / ".caveman-statusline-suffix").write_text("42.1K saved")
+
+            result = self.run_statusline(config_dir)
+
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("42.1K saved", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
