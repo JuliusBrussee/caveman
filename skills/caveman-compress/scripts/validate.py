@@ -28,7 +28,13 @@ class ValidationResult:
 
 
 def read_file(path: Path) -> str:
-    return path.read_text(errors="ignore")
+    # encoding="utf-8" is explicit and non-lossy (no errors="ignore"): the
+    # original/compressed comparisons this feeds only mean anything if both
+    # sides are decoded exactly, byte-for-byte, as the UTF-8 compress_file()
+    # writes. Falling back to a locale codec (cp1252 on Windows) here let
+    # Unicode-corrupted output still compare "equal enough" to pass — see
+    # the caveman-compress Unicode-prose regression this guards against.
+    return path.read_text(encoding="utf-8")
 
 
 # ---------- Extractors ----------
@@ -95,9 +101,18 @@ def count_bullets(text):
 
 
 def extract_inline_codes(text):
-    text_without_fences = re.sub(r"^```[\s\S]*?^```", "", text, flags=re.MULTILINE)
-    text_without_fences = re.sub(r"^~~~[\s\S]*?^~~~", "", text_without_fences, flags=re.MULTILINE)
-    return re.findall(r"`([^`]+)`", text_without_fences)
+    # The non-greedy ```...``` / ~~~...~~~ regexes used previously mis-handle
+    # multiple fences and fences not opening at column 0 (indented code under
+    # a list item), letting inline-code checks silently see through into
+    # fenced content or skip real fences — see issue #112. Reuse the same
+    # line-based extractor validate_code_blocks() already relies on so both
+    # checks agree on what counts as "inside a fence".
+    blocks = extract_code_blocks(text)
+    text_without_fences = text
+    for block in blocks:
+        text_without_fences = text_without_fences.replace(block, "", 1)
+    # [^`\n]+ excludes newlines — standard markdown inline code is single-line.
+    return re.findall(r"`([^`\n]+)`", text_without_fences)
 
 
 # ---------- Validators ----------

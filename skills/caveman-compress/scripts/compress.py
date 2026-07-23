@@ -14,6 +14,21 @@ import sys
 from pathlib import Path
 from typing import List
 
+# Force UTF-8 for interactive console output. Windows text streams default to
+# the system codepage (commonly cp1252) when Python isn't in UTF-8 mode (see
+# the encoding notes throughout this file) -- without this, a bare print() of
+# a non-ASCII status glyph (the checkmark/cross-mark used on the pass/fail
+# paths below) raises UnicodeEncodeError and crashes the whole run instead of
+# reporting cleanly. errors="backslashreplace" only affects what a human sees
+# in a legacy console; it never touches file contents, which go through the
+# strict, gated UTF-8 file I/O below.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
 OUTER_FENCE_REGEX = re.compile(
     r"\A\s*(`{3,}|~{3,})[^\n]*\n(.*)\n\1\s*\Z", re.DOTALL
 )
@@ -111,9 +126,142 @@ def strip_llm_wrapper(text: str) -> str:
     return text
 
 from .detect import should_compress
-from .validate import validate
+from .validate import extract_code_blocks, validate
 
 MAX_RETRIES = 2
+
+# ---------- Code masking ----------
+#
+# Preserve-code was previously enforced only by asking the (non-deterministic)
+# compression model nicely, then catching violations after the fact with a
+# byte-exact validator. That validator is correct and stays as-is, but a model
+# instruction is not a guarantee — see issues #112 / #588. Masking fenced
+# blocks and inline code with opaque placeholders *before* the model call
+# makes preservation structural: the model never sees the real code, so it
+# cannot mangle it, and the validator's code checks become un-failable by
+# construction (the spliced-back text is byte-identical to the original).
+#
+# Delimiters are U+27E6/U+27E7 (mathematical white square brackets): no
+# markdown-active ASCII inside them (no backtick, underscore, bracket, angle
+# bracket), no interior whitespace for a whitespace-normalizing compressor to
+# collapse or split, and they don't occur in ordinary prose or code — so a
+# stray token found in the model's output can only be one we inserted.
+PLACEHOLDER_PREFIX = "⟦CVMN-CODE-"
+PLACEHOLDER_SUFFIX = "⟧"
+PLACEHOLDER_REGEX = re.compile(
+    re.escape(PLACEHOLDER_PREFIX) + r"(\d+)" + re.escape(PLACEHOLDER_SUFFIX)
+)
+
+
+class PlaceholderIntegrityError(RuntimeError):
+    """Raised when the model dropped, duplicated, or altered a mask token.
+
+    A missing/altered placeholder means the model already rewrote the prose
+    around it — there's no reliable way to guess where the code belonged, so
+    callers must fail closed (abort before backup/write) rather than splice a
+    partial or best-guess result.
+    """
+
+
+def _placeholder(i: int) -> str:
+    return f"{PLACEHOLDER_PREFIX}{i}{PLACEHOLDER_SUFFIX}"
+
+
+# ---------- Unicode integrity gate ----------
+#
+# Forcing encoding="utf-8" on every read/write below (see the file-I/O
+# calls in compress_file()) makes on-disk corruption structurally
+# impossible for whatever the in-memory string already contains -- every
+# Python str round-trips through UTF-8 losslessly. But that alone doesn't
+# catch a string that already *lost* information upstream of the write,
+# e.g. call_claude()'s subprocess decode uses errors="replace" as a
+# last-resort fallback for a genuinely corrupt subprocess byte stream, which
+# would silently smuggle U+FFFD replacement characters into otherwise-valid
+# UTF-8 text. This gate runs immediately before every overwrite of the
+# user's file and fails closed -- raising instead of writing -- if the text
+# about to be written isn't a clean, lossless UTF-8 round trip of what the
+# model actually said.
+
+
+class UnicodeIntegrityError(RuntimeError):
+    """Raised when text about to be written would corrupt or lose Unicode
+    content relative to the reference text -- e.g. a bad round-trip encode,
+    or new U+FFFD replacement characters not present in the reference.
+    Callers must fail closed (abort before writing) rather than persist it.
+    """
+
+
+def check_unicode_integrity(text: str, reference_text: str, label: str) -> None:
+    """Fail-closed UTF-8 integrity gate. Raises UnicodeIntegrityError if `text`
+    is unsafe to write: it must (a) round-trip encode/decode as UTF-8, and
+    (b) introduce no U+FFFD replacement characters beyond what the reference
+    text already contained.
+    """
+    try:
+        text.encode("utf-8").decode("utf-8")
+    except UnicodeError as e:
+        raise UnicodeIntegrityError(f"{label} failed UTF-8 round-trip: {e}") from e
+
+    new_replacement_chars = text.count("�") - reference_text.count("�")
+    if new_replacement_chars > 0:
+        raise UnicodeIntegrityError(
+            f"{label} introduced {new_replacement_chars} new U+FFFD replacement "
+            "character(s) not present in the reference text -- likely lossy "
+            "decoding upstream (e.g. a subprocess boundary using errors='replace')."
+        )
+
+
+def mask_code(body: str):
+    """Replace fenced blocks, then inline `code` spans, with placeholders.
+
+    Returns (masked_body, fragments) where fragments[i] is the verbatim
+    original text (fences/backticks included) for placeholder i. Fenced
+    blocks are masked first so inline code that happens to live inside a
+    fence is never separately (double-)masked — by the time the inline pass
+    runs, fenced regions have already been replaced with tokens.
+    """
+    fragments: List[str] = []
+    masked = body
+
+    for block in extract_code_blocks(body):
+        idx = len(fragments)
+        fragments.append(block)
+        # Block placeholders live on their own line so a restored fence
+        # starts at column 0 as CommonMark expects.
+        masked = masked.replace(block, f"\n{_placeholder(idx)}\n", 1)
+
+    def _mask_inline(m: "re.Match") -> str:
+        idx = len(fragments)
+        fragments.append(m.group(0))
+        return _placeholder(idx)
+
+    masked = re.sub(r"`([^`\n]+)`", _mask_inline, masked)
+    return masked, fragments
+
+
+def unmask_code(text: str, fragments: List[str]) -> str:
+    """Splice fragments back by index; fail closed on any integrity mismatch."""
+    found = [int(n) for n in PLACEHOLDER_REGEX.findall(text)]
+    expected = set(range(len(fragments)))
+    if set(found) != expected or len(found) != len(fragments):
+        missing = expected - set(found)
+        unexpected = set(found) - expected
+        dupes = {n for n in found if found.count(n) > 1}
+        detail = ", ".join(
+            filter(
+                None,
+                [
+                    f"missing={sorted(missing)}" if missing else "",
+                    f"unexpected={sorted(unexpected)}" if unexpected else "",
+                    f"duplicated={sorted(dupes)}" if dupes else "",
+                ],
+            )
+        )
+        raise PlaceholderIntegrityError(
+            f"Placeholder integrity check failed ({detail}). The model likely "
+            "dropped, duplicated, or altered a masked code token."
+        )
+    return PLACEHOLDER_REGEX.sub(lambda m: fragments[int(m.group(1))], text)
 
 
 # ---------- Claude Calls ----------
@@ -173,6 +321,9 @@ def build_compress_prompt(original: str) -> str:
 Compress this markdown into caveman format.
 
 STRICT RULES:
+- The text may contain opaque placeholder tokens like ⟦CVMN-CODE-3⟧. Copy each
+  one EXACTLY once, in place — never edit, split, translate, reorder, wrap, or
+  delete a placeholder token.
 - Do NOT modify anything inside ``` code blocks
 - Do NOT modify anything inside inline backticks
 - Preserve ALL URLs exactly
@@ -246,7 +397,13 @@ def compress_file(filepath: Path) -> bool:
         print("Skipping (not natural language)")
         return False
 
-    original_text = filepath.read_text(errors="ignore")
+    # encoding="utf-8" is explicit and non-lossy (no errors="ignore"): without
+    # it, this falls back to locale.getpreferredencoding() -- cp1252 on a
+    # default Windows install -- which silently mangles or drops multi-byte
+    # prose characters (em-dash, arrows, not-equal, ...) before compression
+    # even starts. A genuinely non-UTF-8 input file should raise here rather
+    # than have its content silently corrupted.
+    original_text = filepath.read_text(encoding="utf-8")
     # Store backup outside the source directory so skill auto-loaders don't
     # re-ingest the `.original.md` copy as a live file. Mirror the source's
     # parent-dir name + stem under a platform-aware base to reduce collisions.
@@ -276,12 +433,31 @@ def compress_file(filepath: Path) -> bool:
         print("❌ Refusing to compress: body is empty after frontmatter removal.")
         return False
 
-    # Step 1: Compress (body only, frontmatter excluded)
-    print("Compressing with Claude...")
-    compressed_body = call_claude(build_compress_prompt(body))
+    # Step 1: Mask code, then compress (body only, frontmatter excluded).
+    # If the sentinel already appears in the source (vanishingly unlikely,
+    # but possible on a file about caveman-compress itself), skip masking
+    # rather than risk colliding with real placeholders — fall back to the
+    # prompt-only preserve-code instructions for this file.
+    if PLACEHOLDER_PREFIX in body:
+        print("⚠️ Mask sentinel already present in source — skipping code masking for this file.")
+        masked_body, fragments = body, []
+    else:
+        masked_body, fragments = mask_code(body)
+        if fragments:
+            print(f"Masked {len(fragments)} code fragment(s) before compression")
 
-    if compressed_body is None or not compressed_body.strip():
+    print("Compressing with Claude...")
+    compressed_masked = call_claude(build_compress_prompt(masked_body))
+
+    if compressed_masked is None or not compressed_masked.strip():
         print("❌ Compression aborted: Claude returned an empty response.")
+        print("   Original file is untouched (no backup created).")
+        return False
+
+    try:
+        compressed_body = unmask_code(compressed_masked, fragments)
+    except PlaceholderIntegrityError as e:
+        print(f"❌ Compression aborted: {e}")
         print("   Original file is untouched (no backup created).")
         return False
 
@@ -296,12 +472,25 @@ def compress_file(filepath: Path) -> bool:
     # Reassemble: frontmatter (verbatim) + compressed body
     compressed = frontmatter + compressed_body
 
+    # Fail-closed Unicode integrity gate (see check_unicode_integrity docstring):
+    # abort before touching disk at all if the compressed text isn't a clean,
+    # lossless UTF-8 round trip of what the model returned.
+    try:
+        check_unicode_integrity(compressed, original_text, "Compressed output")
+    except UnicodeIntegrityError as e:
+        print(f"❌ Compression aborted: {e}")
+        print("   Original file is untouched (no backup created).")
+        return False
+
     # Save original as backup, then verify the backup readback before
     # touching the input file. If the filesystem dropped bytes (encoding,
     # antivirus, disk full), unlink the bad backup and abort instead of
     # leaving the user with a corrupt backup + compressed primary.
-    backup_path.write_text(original_text)
-    backup_readback = backup_path.read_text(errors="ignore")
+    # encoding="utf-8" explicit on both sides (no errors="ignore" on the
+    # readback) so a dropped/mangled byte is a hard mismatch, not silently
+    # swallowed into a false "backup verified" result.
+    backup_path.write_text(original_text, encoding="utf-8")
+    backup_readback = backup_path.read_text(encoding="utf-8")
     if backup_readback != original_text:
         print(f"❌ Backup write verification failed: {backup_path}")
         print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
@@ -310,7 +499,7 @@ def compress_file(filepath: Path) -> bool:
         except OSError:
             pass
         return False
-    filepath.write_text(compressed)
+    filepath.write_text(compressed, encoding="utf-8")
 
     # Step 2: Validate + Retry
     for attempt in range(MAX_RETRIES):
@@ -328,15 +517,30 @@ def compress_file(filepath: Path) -> bool:
 
         if attempt == MAX_RETRIES - 1:
             # Restore original on failure
-            filepath.write_text(original_text)
+            filepath.write_text(original_text, encoding="utf-8")
             backup_path.unlink(missing_ok=True)
             print("❌ Failed after retries — original restored")
             return False
 
+        # Fix-pass runs on the already-unmasked body, so the "model never sees
+        # real code" guarantee is first-pass only — validate() byte-checks
+        # code blocks against the backup every iteration and restores the
+        # original on final failure, so a retry can only abort clean, not corrupt.
         print("Fixing with Claude...")
         compressed = call_claude(
             build_fix_prompt(original_text, compressed, result.errors)
         )
-        filepath.write_text(compressed)
+        try:
+            check_unicode_integrity(compressed, original_text, "Fixed output")
+        except UnicodeIntegrityError as e:
+            # Same fail-closed gate as the first pass: a fix-pass that lost
+            # Unicode content is not safe to write, even mid-retry. Restore
+            # the original rather than leave a corrupted file on disk.
+            print(f"❌ Fix pass aborted: {e}")
+            filepath.write_text(original_text, encoding="utf-8")
+            backup_path.unlink(missing_ok=True)
+            print("❌ Original restored")
+            return False
+        filepath.write_text(compressed, encoding="utf-8")
 
     return True

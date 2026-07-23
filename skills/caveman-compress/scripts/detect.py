@@ -90,7 +90,11 @@ def detect_file_type(filepath: Path) -> str:
     # Extensionless files (like CLAUDE.md, TODO) — check content
     if not ext:
         try:
-            text = filepath.read_text(errors="ignore")
+            # encoding="utf-8" explicit (Windows otherwise falls back to the
+            # system codepage). errors="ignore" stays here deliberately —
+            # this is a heuristic classification read, not the exact-content
+            # path (that's compress.py / validate.py, both now strict UTF-8).
+            text = filepath.read_text(encoding="utf-8", errors="ignore")
         except (OSError, PermissionError):
             return "unknown"
 
