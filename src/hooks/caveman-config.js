@@ -24,12 +24,14 @@ const VALID_MODES = [
   'wenyan-lite', 'wenyan', 'wenyan-full', 'wenyan-ultra',
   'commit', 'review', 'compress'
 ];
+const CONFIG_FILE_NAME = 'config.json';
+const WINDOWS_PLATFORM = 'win32';
 
 function getConfigDir() {
   if (process.env.XDG_CONFIG_HOME) {
     return path.join(process.env.XDG_CONFIG_HOME, 'caveman');
   }
-  if (process.platform === 'win32') {
+  if (process.platform === WINDOWS_PLATFORM) {
     return path.join(
       process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
       'caveman'
@@ -39,7 +41,11 @@ function getConfigDir() {
 }
 
 function getConfigPath() {
-  return path.join(getConfigDir(), 'config.json');
+  return path.join(getConfigDir(), CONFIG_FILE_NAME);
+}
+
+function getPosixHomeConfigPath() {
+  return path.join(os.homedir(), '.config', 'caveman', CONFIG_FILE_NAME);
 }
 
 // Walk up from `start` looking for a repo-local caveman config. Returns the
@@ -104,6 +110,10 @@ function getDefaultMode() {
   // 3. User config file
   const userMode = readModeFromConfigFile(getConfigPath());
   if (userMode) return userMode;
+  if (process.platform === WINDOWS_PLATFORM && !process.env.XDG_CONFIG_HOME) {
+    const posixHomeMode = readModeFromConfigFile(getPosixHomeConfigPath());
+    if (posixHomeMode) return posixHomeMode;
+  }
 
   // 4. Default
   return 'full';
