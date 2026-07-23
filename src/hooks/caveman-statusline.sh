@@ -48,3 +48,10 @@ if [ "${CAVEMAN_STATUSLINE_SAVINGS:-1}" != "0" ]; then
     [ -n "$SAVINGS" ] && printf ' \033[38;5;172m%s\033[0m' "$SAVINGS"
   fi
 fi
+
+# The badge above is always printed by this point; a stale/empty suffix file
+# must not turn into a failing exit code (Claude Code hides the whole
+# statusline on non-zero exit). The `[ -n "$SAVINGS" ] &&` test above is the
+# last command run when the suffix file exists but is empty, and its false
+# result would otherwise become this script's exit status.
+exit 0
