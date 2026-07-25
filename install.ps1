@@ -69,7 +69,19 @@ caveman: Node.js (>=18) required. Install:
   # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
   # package, and a literal `--` was tripping bin/install.js's parseArgs as an
   # unknown flag.
-  & npx -y "github:$Repo" @InstallerArgs
+  # npm 12 disables git package fetches by default. Allow only the root package
+  # requested here; older npm versions do not understand this config flag.
+  $npxVersion = [string](& npx --version)
+  $npxMajor = 0
+  if ($npxVersion -match '^(\d+)') {
+    $npxMajor = [int]$Matches[1]
+  }
+
+  if ($npxMajor -ge 12) {
+    & npx --allow-git=root -y "github:$Repo" @InstallerArgs
+  } else {
+    & npx -y "github:$Repo" @InstallerArgs
+  }
   exit $LASTEXITCODE
 }
 
