@@ -51,4 +51,18 @@ if ! command -v npx >/dev/null 2>&1; then
   exit 1
 fi
 
+# npm 12 disables git package fetches by default. Allow only the root package
+# requested here; keep the old invocation for npm versions that predate this
+# config flag.
+NPX_VERSION=""
+if NPX_VERSION=$(npx --version 2>/dev/null); then :; fi
+NPX_MAJOR=${NPX_VERSION%%.*}
+case "$NPX_MAJOR" in
+  ''|*[!0-9]*) NPX_MAJOR=0 ;;
+esac
+
+if [ "$NPX_MAJOR" -ge 12 ]; then
+  exec npx --allow-git=root -y "github:$REPO" "$@"
+fi
+
 exec npx -y "github:$REPO" "$@"
