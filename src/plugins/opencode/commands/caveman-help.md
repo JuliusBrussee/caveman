@@ -5,8 +5,8 @@ Show the caveman quick-reference card.
 
 | Command | What |
 |---|---|
-| `/caveman` | Activate at default level (full) |
-| `/caveman lite` | Light compression — ~30% tokens dropped |
+| `/caveman` | Activate at configured default level |
+| `/caveman lite` | Light compression — no filler/hedging, keeps articles + full sentences |
 | `/caveman ultra` | Maximum compression |
 | `/caveman wenyan[-lite\|-ultra]` | Classical Chinese compression |
 | `/caveman off` | Deactivate |

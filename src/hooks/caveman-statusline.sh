@@ -27,6 +27,10 @@ case "$MODE" in
   *) exit 0 ;;
 esac
 
+# Legacy alias: old flag files may hold 'wenyan' — badge shows the canonical
+# level name (matches caveman-config.js MODE_ALIASES).
+[ "$MODE" = "wenyan" ] && MODE="wenyan-full"
+
 if [ -z "$MODE" ] || [ "$MODE" = "full" ]; then
   printf '\033[38;5;172m[CAVEMAN]\033[0m'
 else

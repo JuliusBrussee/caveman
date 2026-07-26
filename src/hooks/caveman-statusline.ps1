@@ -31,6 +31,10 @@ $Mode = ($Mode -replace '[^a-z0-9-]', '')
 $Valid = @('off','lite','full','ultra','wenyan-lite','wenyan','wenyan-full','wenyan-ultra','commit','review','compress')
 if (-not ($Valid -contains $Mode)) { exit 0 }
 
+# Legacy alias: old flag files may hold 'wenyan' — badge shows the canonical
+# level name (matches caveman-config.js MODE_ALIASES).
+if ($Mode -eq 'wenyan') { $Mode = 'wenyan-full' }
+
 $Esc = [char]27
 if ([string]::IsNullOrEmpty($Mode) -or $Mode -eq "full") {
     [Console]::Write("${Esc}[38;5;172m[CAVEMAN]${Esc}[0m")

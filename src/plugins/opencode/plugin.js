@@ -56,20 +56,77 @@ const here = dirname(fileURLToPath(import.meta.url));
 // both silently break the plugin (#418 follow-up). createRequire() still
 // resolves node BUILT-INS fine in the compiled binary, which is all
 // caveman-config needs (fs/path/os).
+function evalConfig(target) {
+  try {
+    if (!target || !existsSync(target)) return null;
+    const code = readFileSync(target, 'utf8').replace(/^#![^\n]*\n/, '');
+    const mod = { exports: {} };
+    new Function('module', 'exports', 'require', '__dirname', '__filename', code)(
+      mod, mod.exports, createRequire(import.meta.url), dirname(target), target
+    );
+    return mod.exports;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Exports the plugin needs from caveman-config. An INSTALLED
+// caveman-config.cjs can be STALE — bin/install.js copies it once, so a user
+// upgrading caveman without re-running the installer keeps a copy that
+// predates e.g. classifyPrompt. Destructuring blindly produced
+// `TypeError: classifyPrompt is not a function` on EVERY chat message.
+const REQUIRED_FNS = ['getDefaultMode', 'safeWriteFlag', 'readFlag', 'normalizeMode', 'classifyPrompt'];
+
+function isComplete(mod) {
+  return !!mod &&
+    Array.isArray(mod.VALID_MODES) &&
+    REQUIRED_FNS.every((k) => typeof mod[k] === 'function');
+}
+
+// Prefer the installed sibling, but if it's stale/broken fall back to the dev
+// copy in the source tree. If neither is complete, keep whichever loaded so
+// the still-present exports work, and let the stubs below cover the rest.
 function loadConfig() {
   const installed = join(here, 'caveman-config.cjs');
   const dev = join(here, '..', '..', 'hooks', 'caveman-config.js');
-  const target = existsSync(installed) ? installed : dev;
-  const code = readFileSync(target, 'utf8').replace(/^#![^\n]*\n/, '');
-  const mod = { exports: {} };
-  new Function('module', 'exports', 'require', '__dirname', '__filename', code)(
-    mod, mod.exports, createRequire(import.meta.url), dirname(target), target
-  );
-  return mod.exports;
+  const first = evalConfig(installed);
+  if (isComplete(first)) return first;
+  const second = evalConfig(dev);
+  if (isComplete(second)) return second;
+  return first || second || {};
 }
-const config = loadConfig();
 
-const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = config;
+let config;
+try {
+  config = loadConfig() || {};
+} catch (e) {
+  config = {};
+}
+
+// Fail-safe accessors. A missing export must never throw inside an opencode
+// lifecycle hook — worst case the plugin degrades to "no mode change".
+const fn = (name, fallback) => (typeof config[name] === 'function' ? config[name] : fallback);
+
+const FALLBACK_MODES = [
+  'off', 'lite', 'full', 'ultra',
+  'wenyan-lite', 'wenyan', 'wenyan-full', 'wenyan-ultra',
+  'commit', 'review', 'compress'
+];
+
+const getDefaultMode = fn('getDefaultMode', () => 'full');
+// No-op rather than a raw fs.writeFileSync: CLAUDE.md requires every flag
+// write to go through safeWriteFlag's symlink-safe path, so if that helper is
+// unavailable we write nothing at all.
+const safeWriteFlag = fn('safeWriteFlag', () => {});
+const readFlag = fn('readFlag', () => null);
+const normalizeMode = fn('normalizeMode', (m) => {
+  const raw = String(m == null ? '' : m).trim().toLowerCase();
+  return raw === 'wenyan' ? 'wenyan-full' : raw;
+});
+// Deliberately NOT stubbed with a guessing implementation — when the shared
+// classifier is missing, natural-language toggles are simply inert.
+const classifyPrompt = typeof config.classifyPrompt === 'function' ? config.classifyPrompt : null;
+const VALID_MODES = Array.isArray(config.VALID_MODES) ? config.VALID_MODES : FALLBACK_MODES;
 
 // Modes handled by independent skills — not selectable via /caveman <arg>.
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
@@ -106,13 +163,26 @@ function parseModeChange(promptRaw) {
   prompt = prompt.toLowerCase();
   if (!prompt) return null;
 
-  // Natural-language deactivation — checked before activation so "stop talking
-  // like caveman" doesn't trip the activation regex.
-  if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
-      /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
-      /\bnormal mode\b/i.test(prompt)) {
-    return 'off';
+  // Natural-language on/off intent — shared classifier in caveman-config.js
+  // (same source the Claude Code tracker uses; this file previously carried
+  // its own drifted regex copies with the same negation/question bugs, plus
+  // a bare `normal mode` match that deactivated on ANY mention).
+  //
+  // Fail safe when a stale installed caveman-config.cjs doesn't export it:
+  // no crash, no mode change — slash commands below still work.
+  let wantsOff = false;
+  let wantsOn = false;
+  if (classifyPrompt) {
+    try {
+      const verdict = classifyPrompt(prompt) || {};
+      wantsOff = verdict.wantsOff === true;
+      wantsOn = verdict.wantsOn === true;
+    } catch (e) {
+      wantsOff = false;
+      wantsOn = false;
+    }
   }
+  if (wantsOff) return 'off';
 
   // Expanded /caveman command template. opencode replaces a typed
   // "/caveman <level>" with the command file's body ("Activate caveman
@@ -124,14 +194,14 @@ function parseModeChange(promptRaw) {
   if (tpl) {
     const arg = tpl[1] || '';
     if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
-    if (arg === 'wenyan-full') return 'wenyan';
-    if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return arg;
+    const norm = normalizeMode(arg);
+    if (VALID_MODES.includes(norm) && !INDEPENDENT_MODES.has(norm)) return norm;
     return getDefaultMode();
   }
 
-  // Natural-language activation
-  if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-      /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
+  // Natural-language activation (classifier already rejects questions and
+  // negated prompts like "don't use caveman")
+  if (wantsOn) {
     const mode = getDefaultMode();
     return mode === 'off' ? null : mode;
   }
@@ -150,8 +220,8 @@ function parseModeChange(promptRaw) {
     if (cmd === '/caveman') {
       if (!arg)                                     return getDefaultMode();
       if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
-      if (arg === 'wenyan-full')                    return 'wenyan';
-      if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return arg;
+      const norm = normalizeMode(arg);
+      if (VALID_MODES.includes(norm) && !INDEPENDENT_MODES.has(norm)) return norm;
       // Unknown arg — leave flag alone. No silent overwrite.
       return null;
     }
@@ -204,12 +274,17 @@ export const CavemanPlugin = async (_ctx) => {
   // output.parts is the array of message parts; text parts carry .text.
   // Return value is ignored — state changes happen via the flag file.
   'chat.message': async (_input, output) => {
-    if (!output || !output.parts) return;
-    for (const part of output.parts) {
-      if (part && part.type === 'text' && part.text) {
-        const change = parseModeChange(part.text);
-        if (change) applyModeChange(change);
+    // Never let a parse failure surface as a plugin error on a user message.
+    try {
+      if (!output || !Array.isArray(output.parts)) return;
+      for (const part of output.parts) {
+        if (part && part.type === 'text' && part.text) {
+          const change = parseModeChange(part.text);
+          if (change) applyModeChange(change);
+        }
       }
+    } catch (e) {
+      // Silent fail — mode tracking is best-effort
     }
   },
 

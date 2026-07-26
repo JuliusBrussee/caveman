@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
-const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange, VALID_MODES } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange, VALID_MODES, normalizeMode, classifyPrompt } = require('./caveman-config');
 
 // Modes handled by their own slash commands (/caveman-commit, etc.) — not
 // selectable via /caveman <arg>.
@@ -27,46 +27,22 @@ process.stdin.on('error', () => process.exit(0));
 process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
-    // Collapse whitespace so phrase triggers still match multiline prompts —
-    // every regex below sees a single-line prompt (#598).
+    // Collapse whitespace so the slash-command parsing below sees a
+    // single-line prompt (#598). classifyPrompt does its own collapsing.
     const prompt = (data.prompt || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
-    // Deactivation intent — computed FIRST so "turn caveman mode off" never
-    // falls through to the activation patterns (#598: the old contiguous
-    // "turn off" phrasing missed the "turn X off" word order entirely, and
-    // the activation regex then re-armed caveman at the default level).
-    const wantsOff =
-      /\b(stop|disable|deactivate|quit|exit|kill)\s+(the\s+)?caveman\b/.test(prompt) ||
-      /\bcaveman(\s+mode)?\s+(off|stop|disabled?)\b/.test(prompt) ||
-      /\bturn\s+off\s+(the\s+)?caveman\b/.test(prompt) ||
-      // "normal mode" only as a command (prompt-initial, optionally led by a
-      // switch-back verb) or with caveman context — never mid-sentence for
-      // e.g. vim's normal mode ("how do I exit vim normal mode").
-      /^(please\s+)?(go\s+|back\s+to\s+|switch\s+(back\s+)?to\s+|return\s+to\s+)?normal\s+mode\b/.test(prompt) ||
-      (/\bnormal\s+mode\b/.test(prompt) && /\bcaveman\b/.test(prompt));
+    // Natural-language on/off intent — shared classifier in caveman-config.js
+    // (also used by the opencode plugin). Handles negation ("don't use
+    // caveman" must not activate), question guarding on BOTH directions
+    // ("what's the difference between caveman mode and normal mode?" must
+    // not deactivate), and gerund-tolerant off verbs ("stop using caveman").
+    const { wantsOn, wantsOff } = classifyPrompt(data.prompt);
 
-    // Questions about caveman are not activation commands
-    // ("what is caveman mode?", "does caveman lite drop articles?").
-    const isQuestion =
-      /^(what|whats|what's|how|why|when|where|who|does|do|did|is|are|can|could|would|should|tell me|explain)\b/.test(prompt);
-
-    // Natural language activation (e.g. "activate caveman", "turn on caveman
-    // mode", "talk like caveman"). README tells users they can say these.
-    // Also brevity requests ("less tokens", "be brief/terse", "fewer tokens",
-    // "shorter answers") — but not when scoped to a single section
-    // ("be brief in the summary"), which is a one-off instruction, not a
-    // session-wide mode switch.
-    if (!wantsOff && !isQuestion) {
-      if (/\b(activate|enable|start|turn on|use|switch to|want|give me)\b[^.]{0,40}\bcaveman\b/.test(prompt) ||
-          /\btalk like\b[^.]{0,40}\bcaveman\b/.test(prompt) ||
-          /\bcaveman\s+mode\s+(on|please|now)\b/.test(prompt) ||
-          /^caveman(\s+mode)?\s*[.!]*$/.test(prompt) ||
-          /\b(less tokens|fewer tokens|be brief|be terse|shorter answers)\b(?!\s+(in|for|on|about|when|during|with)\b)/.test(prompt)) {
-        const mode = getDefaultMode();
-        if (mode !== 'off') {
-          recordModeChange(claudeDir, mode); // #601: timestamped transition log
-          safeWriteFlag(flagPath, mode);
-        }
+    if (wantsOn) {
+      const mode = getDefaultMode();
+      if (mode !== 'off') {
+        recordModeChange(claudeDir, mode); // #601: timestamped transition log
+        safeWriteFlag(flagPath, mode);
       }
     }
 
@@ -124,11 +100,13 @@ process.stdin.on('end', () => {
           mode = getDefaultMode();
         } else if (arg === 'off' || arg === 'stop' || arg === 'disable') {
           mode = 'off';
-        } else if (arg === 'wenyan-full') {
-          // Canonical alias — config stores as 'wenyan'
-          mode = 'wenyan';
-        } else if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) {
-          mode = arg;
+        } else {
+          // normalizeMode maps the 'wenyan' shorthand to canonical
+          // 'wenyan-full' — same table every entry path uses.
+          const norm = normalizeMode(arg);
+          if (VALID_MODES.includes(norm) && !INDEPENDENT_MODES.has(norm)) {
+            mode = norm;
+          }
         }
         // Unknown arg → mode stays null, flag untouched (no silent overwrite)
       }

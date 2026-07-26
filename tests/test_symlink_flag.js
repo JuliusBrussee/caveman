@@ -10,7 +10,7 @@ const path = require('path');
 const os = require('os');
 const assert = require('assert');
 
-const { safeWriteFlag, readFlag, VALID_MODES } = require('../src/hooks/caveman-config');
+const { safeWriteFlag, readFlag, VALID_MODES, normalizeMode } = require('../src/hooks/caveman-config');
 
 let passed = 0;
 let failed = 0;
@@ -186,7 +186,9 @@ test('all valid modes round-trip through symlinked parent', (tmp) => {
   for (const mode of VALID_MODES) {
     safeWriteFlag(flagPath, mode);
     const read = readFlag(flagPath);
-    assert.strictEqual(read, mode, `mode '${mode}' did not round-trip`);
+    // readFlag normalizes aliases ('wenyan' → 'wenyan-full') so every
+    // reader sees the canonical level name.
+    assert.strictEqual(read, normalizeMode(mode), `mode '${mode}' did not round-trip`);
   }
 });
 
@@ -217,7 +219,164 @@ test('safeWriteFlag no longer has blanket symlink parent refusal', (tmp) => {
   assert.ok(foundOwnershipCheck, 'safeWriteFlag should include ownership/home-dir verification');
 });
 
-// ---------- Summary ----------
+// ---------- opencode plugin: stale caveman-config.cjs guard ----------
+//
+// bin/install.js copies src/hooks/caveman-config.js next to plugin.js as
+// caveman-config.cjs. A user who upgrades caveman without re-running the
+// installer keeps an OLD copy — one that can predate classifyPrompt. The
+// plugin used to destructure it blindly and threw
+// "TypeError: classifyPrompt is not a function" on every chat message.
 
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+const { pathToFileURL } = require('url');
+
+const PLUGIN_SRC = path.join(__dirname, '..', 'src', 'plugins', 'opencode', 'plugin.js');
+const CONFIG_SRC = path.join(__dirname, '..', 'src', 'hooks', 'caveman-config.js');
+
+// Build tmp/plugins/caveman/{package.json,plugin.js,caveman-config.cjs} plus
+// (optionally) the dev-fallback copy at tmp/hooks/caveman-config.js — the
+// exact relative layout plugin.js probes.
+function scaffoldPlugin(tmp, { staleInstalled, withDevFallback }) {
+  const pluginDir = path.join(tmp, 'plugins', 'caveman');
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({ type: 'module' }));
+  fs.copyFileSync(PLUGIN_SRC, path.join(pluginDir, 'plugin.js'));
+
+  const configSrc = fs.readFileSync(CONFIG_SRC, 'utf8');
+  const stale = configSrc + '\ndelete module.exports.classifyPrompt;\n';
+  fs.writeFileSync(
+    path.join(pluginDir, 'caveman-config.cjs'),
+    staleInstalled ? stale : configSrc
+  );
+
+  if (withDevFallback) {
+    const hooksDir = path.join(tmp, 'hooks');
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.writeFileSync(path.join(hooksDir, 'caveman-config.js'), configSrc);
+    fs.writeFileSync(path.join(hooksDir, 'package.json'), JSON.stringify({ type: 'commonjs' }));
+  }
+
+  return path.join(pluginDir, 'plugin.js');
+}
+
+async function asyncTest(name, fn) {
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-plugin-test-'));
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  const savedDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  try {
+    // Isolate both opencode's config dir and caveman's user config dir.
+    process.env.XDG_CONFIG_HOME = tmpBase;
+    delete process.env.CAVEMAN_DEFAULT_MODE;
+    await fn(tmpBase);
+    passed++;
+    console.log(`  ✓ ${name}`);
+  } catch (e) {
+    failed++;
+    console.error(`  ✗ ${name}`);
+    console.error(`    ${e.message}`);
+  } finally {
+    if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = savedXdg;
+    if (savedDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = savedDefault;
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+}
+
+function send(hooks, text) {
+  return hooks['chat.message'](null, { parts: [{ type: 'text', text }] });
+}
+
+async function main() {
+  console.log('\nopencode plugin: stale caveman-config.cjs guard\n');
+
+  await asyncTest('stale installed config without classifyPrompt does not crash chat.message', async (tmp) => {
+    const entry = scaffoldPlugin(tmp, { staleInstalled: true, withDevFallback: false });
+    const mod = await import(pathToFileURL(entry).href);
+    const hooks = await mod.CavemanPlugin({});
+    const flagPath = path.join(tmp, 'opencode', '.caveman-active');
+
+    // Session start still armed the flag at the default level.
+    assert.strictEqual(readFlag(flagPath), 'full', 'session start should write the flag');
+
+    // No throw, and no mode change: the NL classifier is simply inert.
+    await send(hooks, 'stop caveman');
+    assert.strictEqual(readFlag(flagPath), 'full', 'NL off must be inert without classifyPrompt');
+    await send(hooks, 'talk like a caveman');
+    assert.strictEqual(readFlag(flagPath), 'full', 'NL on must be inert without classifyPrompt');
+  });
+
+  await asyncTest('slash commands still work with a stale installed config', async (tmp) => {
+    const entry = scaffoldPlugin(tmp, { staleInstalled: true, withDevFallback: false });
+    const mod = await import(pathToFileURL(entry).href);
+    const hooks = await mod.CavemanPlugin({});
+    const flagPath = path.join(tmp, 'opencode', '.caveman-active');
+
+    await send(hooks, '/caveman ultra');
+    assert.strictEqual(readFlag(flagPath), 'ultra');
+    await send(hooks, '/caveman off');
+    assert.strictEqual(readFlag(flagPath), null);
+  });
+
+  await asyncTest('falls back to the dev config copy when the installed one is stale', async (tmp) => {
+    const entry = scaffoldPlugin(tmp, { staleInstalled: true, withDevFallback: true });
+    const mod = await import(pathToFileURL(entry).href);
+    const hooks = await mod.CavemanPlugin({});
+    const flagPath = path.join(tmp, 'opencode', '.caveman-active');
+
+    // classifyPrompt recovered from the dev copy — NL toggles live again.
+    await send(hooks, 'stop caveman');
+    assert.strictEqual(readFlag(flagPath), null, 'NL off should work via the dev fallback');
+    await send(hooks, 'talk like a caveman');
+    assert.strictEqual(readFlag(flagPath), 'full', 'NL on should work via the dev fallback');
+  });
+
+  await asyncTest('classifier matrix reaches the plugin path (activate / deactivate / neither)', async (tmp) => {
+    const entry = scaffoldPlugin(tmp, { staleInstalled: false, withDevFallback: false });
+    const mod = await import(pathToFileURL(entry).href);
+    const hooks = await mod.CavemanPlugin({});
+    const flagPath = path.join(tmp, 'opencode', '.caveman-active');
+
+    const activate = [
+      'activate caveman', 'turn on caveman mode', 'talk like caveman',
+      'use caveman instead of normal mode', 'switch to caveman mode, not normal mode',
+      'can you talk like a caveman?', 'could you use caveman mode?'
+    ];
+    const deactivate = [
+      'stop caveman', 'disable caveman', 'deactivate caveman', 'normal mode',
+      'can you stop caveman', 'can you switch back to normal mode? caveman is hard to read',
+      'caveman is annoying, please turn it off', 'disable that caveman thing'
+    ];
+    const neither = [
+      "don't be brief, explain everything in detail", 'no need to be brief',
+      "don't turn off caveman", 'do not disable caveman',
+      "please don't disable caveman when I paste code",
+      'caveman is better than normal mode'
+    ];
+
+    for (const p of activate) {
+      try { fs.unlinkSync(flagPath); } catch (e) {}
+      await send(hooks, p);
+      assert.strictEqual(readFlag(flagPath), 'full', `should ACTIVATE: ${p}`);
+    }
+    for (const p of deactivate) {
+      safeWriteFlag(flagPath, 'ultra');
+      await send(hooks, p);
+      assert.strictEqual(readFlag(flagPath), null, `should DEACTIVATE: ${p}`);
+    }
+    for (const p of neither) {
+      safeWriteFlag(flagPath, 'ultra');
+      await send(hooks, p);
+      assert.strictEqual(readFlag(flagPath), 'ultra', `should be NEITHER (stay ultra): ${p}`);
+      try { fs.unlinkSync(flagPath); } catch (e) {}
+      await send(hooks, p);
+      assert.strictEqual(readFlag(flagPath), null, `should be NEITHER (stay off): ${p}`);
+    }
+  });
+
+  // ---------- Summary ----------
+
+  console.log(`\n${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exit(1);
+}
+
+main();

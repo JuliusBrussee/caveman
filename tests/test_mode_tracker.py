@@ -35,12 +35,14 @@ class ModeTrackerTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def send(self, prompt):
+    def send(self, prompt, env_extra=None):
         env = os.environ.copy()
         env.pop("CAVEMAN_DEFAULT_MODE", None)
         env["HOME"] = self._tmp.name
         env["USERPROFILE"] = self._tmp.name
         env["CLAUDE_CONFIG_DIR"] = str(self.claude_dir)
+        if env_extra:
+            env.update(env_extra)
         return subprocess.run(
             ["node", str(TRACKER)],
             cwd=REPO_ROOT,
@@ -131,6 +133,146 @@ class ModeTrackerTests(unittest.TestCase):
     def test_bare_caveman_mode_still_works(self):
         self.send("caveman mode")
         self.assertEqual(self.flag_value(), "full")
+
+    # ── shared classifier: negation + question guards ───────────────────
+
+    def test_dont_use_caveman_does_not_activate(self):
+        # Pre-fix: activation regex had no negation guard — this ACTIVATED.
+        self.send("don't use caveman mode for this")
+        self.assertIsNone(self.flag_value())
+
+    def test_do_not_use_caveman_does_not_activate(self):
+        self.send("please do not use caveman")
+        self.assertIsNone(self.flag_value())
+
+    def test_negated_prompt_does_not_deactivate_active_mode(self):
+        # Scoped "don't use caveman for this" is a one-off instruction, not
+        # a session-wide off switch.
+        self.flag.write_text("ultra")
+        self.send("don't use caveman for this one answer")
+        self.assertEqual(self.flag_value(), "ultra")
+
+    def test_mode_comparison_question_does_not_deactivate(self):
+        # Pre-fix: the weak "normal mode + caveman" co-occurrence clause
+        # ignored the question guard and DELETED the flag.
+        self.flag.write_text("full")
+        self.send("what is the difference between caveman mode and normal mode?")
+        self.assertEqual(self.flag_value(), "full")
+
+    def test_stop_using_caveman_deactivates(self):
+        # Pre-fix: off verbs required 'caveman' adjacent — 'using' broke it.
+        self.flag.write_text("full")
+        self.send("stop using caveman")
+        self.assertIsNone(self.flag_value())
+
+    def test_stop_talking_like_a_caveman_deactivates(self):
+        self.flag.write_text("full")
+        self.send("stop talking like a caveman")
+        self.assertIsNone(self.flag_value())
+
+    def test_can_you_stop_caveman_deactivates(self):
+        # Question form of an explicit off verb is a polite command.
+        self.flag.write_text("full")
+        self.send("can you stop caveman")
+        self.assertIsNone(self.flag_value())
+
+    # ── classifier acceptance matrix ────────────────────────────────────
+    #
+    # One case per row of the agreed on/off/neither matrix. Driven through
+    # the real hook so the flag file is the assertion, not the classifier's
+    # return value.
+
+    ACTIVATE_CASES = [
+        "activate caveman",
+        "turn on caveman mode",
+        "talk like caveman",
+        # contrastive "normal mode" names the thing being rejected
+        "use caveman instead of normal mode",
+        "switch to caveman mode, not normal mode",
+        # polite question wrapper around an imperative
+        "can you talk like a caveman?",
+        "could you use caveman mode?",
+    ]
+
+    DEACTIVATE_CASES = [
+        "stop caveman",
+        "disable caveman",
+        "deactivate caveman",
+        "normal mode",
+        "can you stop caveman",
+        "can you switch back to normal mode? caveman is hard to read",
+        # pronoun reference back to the caveman mention in the same prompt
+        "caveman is annoying, please turn it off",
+        "disable that caveman thing",
+    ]
+
+    NEITHER_CASES = [
+        # negated brevity trigger — carries no 'caveman' anchor
+        "don't be brief, explain everything in detail",
+        "no need to be brief",
+        # negated deactivation reads as "keep it on"
+        "don't turn off caveman",
+        "do not disable caveman",
+        "please don't disable caveman when I paste code",
+        # comparison, not a command
+        "caveman is better than normal mode",
+    ]
+
+    def test_matrix_activate(self):
+        for prompt in self.ACTIVATE_CASES:
+            with self.subTest(prompt=prompt):
+                try:
+                    self.flag.unlink()
+                except FileNotFoundError:
+                    pass
+                self.send(prompt)
+                self.assertEqual(self.flag_value(), "full")
+
+    def test_matrix_deactivate(self):
+        for prompt in self.DEACTIVATE_CASES:
+            with self.subTest(prompt=prompt):
+                self.flag.write_text("ultra")
+                self.send(prompt)
+                self.assertIsNone(self.flag_value())
+
+    def test_matrix_neither_from_off(self):
+        # Nothing in the NEITHER column may switch caveman on.
+        for prompt in self.NEITHER_CASES:
+            with self.subTest(prompt=prompt):
+                try:
+                    self.flag.unlink()
+                except FileNotFoundError:
+                    pass
+                self.send(prompt)
+                self.assertIsNone(self.flag_value())
+
+    def test_matrix_neither_from_on(self):
+        # ...nor switch it off, nor clobber the active level.
+        for prompt in self.NEITHER_CASES:
+            with self.subTest(prompt=prompt):
+                self.flag.write_text("ultra")
+                self.send(prompt)
+                self.assertEqual(self.flag_value(), "ultra")
+
+    # ── wenyan alias normalization ──────────────────────────────────────
+
+    def test_wenyan_and_wenyan_full_share_canonical_flag(self):
+        self.send("/caveman wenyan")
+        self.assertEqual(self.flag_value(), "wenyan-full")
+        self.send("/caveman wenyan-full")
+        self.assertEqual(self.flag_value(), "wenyan-full")
+
+    def test_legacy_wenyan_flag_reads_back_canonical(self):
+        # Old installs may still hold the 'wenyan' alias in the flag file —
+        # reinforcement must announce the canonical level SKILL.md defines.
+        self.flag.write_text("wenyan")
+        r = self.send("ordinary prompt")
+        self.assertIn("CAVEMAN MODE ACTIVE (wenyan-full)", r.stdout)
+
+    def test_env_default_wenyan_normalized(self):
+        self.send("activate caveman",
+                  env_extra={"CAVEMAN_DEFAULT_MODE": "wenyan"})
+        self.assertEqual(self.flag_value(), "wenyan-full")
 
     # ── slash commands ──────────────────────────────────────────────────
 
