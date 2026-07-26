@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.cloud/schemas/policy.schema.json",
+  "type": "object",
+  "required": ["version", "runtime_mode", "fail_policy", "providers", "limits", "retention", "optimizers", "sdk", "telemetry"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "runtime_mode": { "enum": ["record", "recommend", "shadow", "canary", "active", "compress"] },
+    "fail_policy": { "enum": ["fail_open", "fail_closed"] },
+    "providers": {
+      "type": "object",
+      "required": ["allowed", "allowed_models", "allowed_regions"],
+      "properties": {
+        "allowed": { "type": "array", "items": { "enum": ["openai", "anthropic", "gemini", "azure_openai", "openai_compatible"] } },
+        "allowed_models": { "type": "array", "items": { "type": "string" } },
+        "allowed_regions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": ["max_request_bytes", "max_artifact_bytes", "requests_per_minute", "concurrent_requests", "monthly_usd"],
+      "properties": {
+        "max_request_bytes": { "type": "integer", "minimum": 1 },
+        "max_artifact_bytes": { "type": "integer", "minimum": 1 },
+        "requests_per_minute": { "type": "integer", "minimum": 1 },
+        "concurrent_requests": { "type": "integer", "minimum": 1 },
+        "monthly_usd": {
+          "type": "object",
+          "required": ["soft", "hard"],
+          "properties": {
+            "soft": { "type": "number", "minimum": 0 },
+            "hard": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "retention": { "type": "object", "required": ["policy_id"], "properties": { "policy_id": { "type": "string" } } },
+    "optimizers": { "type": "object" },
+    "compress": {
+      "type": "object",
+      "properties": {
+        "method": { "enum": ["auto", "elision", "toon"] },
+        "pixel_density": { "enum": ["conservative", "balanced", "max"] }
+      },
+      "additionalProperties": true
+    },
+    "task_profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "quality_floor": { "type": "number", "minimum": 0, "maximum": 1 },
+          "alpha": { "type": "number", "minimum": 0, "maximum": 10 },
+          "candidate_allowlist": { "type": "array", "items": { "type": "string" } },
+          "candidate_denylist": { "type": "array", "items": { "type": "string" } },
+          "max_p95_latency_delta_ms": { "type": "integer", "minimum": 0 },
+          "max_error_delta": { "type": "number", "minimum": 0 },
+          "max_cost_ratio": { "type": "number", "minimum": 0 },
+          "cascade_enabled": { "type": "boolean" },
+          "cascade_tau": { "type": "number", "minimum": 0, "maximum": 1 },
+          "max_escalation_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+          "stickiness": { "enum": ["conversation", "none", "key"] },
+          "cross_provider": { "type": "boolean" },
+          "data_residency": { "type": "array", "items": { "type": "string" } },
+          "trusted_route_hints": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "sdk": { "type": "object" },
+    "telemetry": {
+      "type": "object",
+      "required": ["metadata_enabled", "raw_payloads_enabled", "sample_rate"],
+      "properties": {
+        "metadata_enabled": { "type": "boolean" },
+        "raw_payloads_enabled": { "type": "boolean" },
+        "sample_rate": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,48 @@
+# packages/sdk-ts — TypeScript SDK (`@caveman/sdk`)
+
+Single-file SDK (`src/index.ts`) exported as an ES module. Provides `Cave` (main client),
+`CaveTrace` (per-request tracing), and BM25-backed tool-search against the gateway. No runtime
+dependencies — only `devDependencies` for TypeScript.
+
+## Layout
+
+- `src/index.ts` — entire SDK; exports `Cave`, `CaveTrace`, `CaveOptions`, `CaveTool`, `ToolSearchResult`, `CompressOptions`, `CompressResult`
+- `tests/tool-search.test.ts` — type-level assertions compiled by `tsc --noEmit`
+- `tests/tool-search.runtime.mjs` — runtime tests using `node:test` + global fetch mock (imports from `dist/`)
+- `tests/parity.runtime.mjs` — cross-language conformance suite; drives `../../parity/fixtures.json` (shared with sdk-python). Same fixtures, two languages → a field in one SDK and not the other fails CI.
+- `tsconfig.json` / `tsconfig.test.json` — separate configs; test config covers `tests/`. Both extend the **repo-root** `../../../tsconfig.base.json`.
+
+## Key APIs
+
+- `new Cave(options)` — requires `apiKey`, `baseURL`, `agent`
+- `cave.trace(opts, fn)` — wraps a callback with a `CaveTrace`; sends tool-call spans to `/sdk/v1/events`
+- `cave.tools({ catalog, strategy })` — returns `{ initial, strategy, search(query, opts?) }`. **`search()` is async** (returns `Promise<ToolSearchResult>`); breaking change from 1.0 which was sync. `opts.ranker` (`"bm25"`|`"embeddings"`) is passed through to the gateway verbatim; `opts.toolSessionId` sends `session_id` so provider callbacks can re-inject called deferred tools. The SDK never computes similarity
+- `cave.toolSearch(catalog, query, opts?)` — direct variant, same contract (incl. `ranker` / `toolSessionId`). Schema-token counters are estimates; `tokenBasis` discloses the counter and `basis` is always `"inferred"`
+- `cave.compress(payload, opts?)` → `Promise<CompressResult>`; POSTs `/sdk/v1/compress`, maps the Engine report. **Byte-safe pass-through** on any transport/parse problem (original input, `ratio:0`, no handle); `tokenCountBasis` discloses the counter and `basis` is always `"inferred"`. The SDK delegates — it never reimplements a compressor
+- `CaveTrace.context.expand(sourceRef)` — the GET half of `checkpoint()`; `GET /sdk/v1/checkpoints/{ref}/expand` returns the stored `{source_ref, version, messages, checkpoint}`
+- `cave.openai/anthropic/gemini/vertex()` — thin provider clients; proxied through gateway; each exposes a `.raw` fetch escape hatch (mirrors the Python `Provider.raw`). `cave.bedrock({region, endpoint?})` is a no-network first-party route descriptor: Runtime defaults to `/bedrock`; explicit Mantle returns `/bedrock/anthropic`; `sdkOnly:false` mirrors Python's `sdk_only`
+- `cave.prompts.internalBrevity({style, preserveErrorsVerbatim?, preserveCodeVerbatim?})` — output-style snippet (`style:"none"` → `""`); MIRRORS the Python `cave.prompts.internal_brevity`
+- `CaveTrace.model.openai.responses.create(body, {cave:{latencyClass, toolSessionId}})` — passing a `latencyClass` hint sets the `x-cave-async` header (`"true"` unless `"interactive"`); passing `toolSessionId` sets `x-cave-tool-session`. Mirrored by the Python `responses.create(body, latency_class=..., tool_session_id=...)`
+- `CaveTrace.artifacts.page()` — stores large payloads to `/sdk/v1/artifacts` (body `{value, options, workflow}`); `strategy:"verbatim"` bypasses storage. Mirrored by the Python `trace.artifacts.page` / `page_artifact`
+- `CaveTrace.context.checkpoint()` — POSTs to `/sdk/v1/checkpoints`; gateway persists it (Valkey) + returns a reversible `source_ref` (expand via `GET /sdk/v1/checkpoints/{ref}/expand`)
+- `cave.exporter({serviceName?})` → `OTelExporter`; `recordSpan(...)` maps GenAI fields to `gen_ai.*`, `export()` POSTs the OTLP/JSON batch to `/otlp/v1/traces` (headers via `otlpHeaders()`)
+- `cave.retryLoopBreaker(threshold=3)` → `RetryLoopBreaker`; `.record(name, args)` throws `RetryLoopError` after `threshold` consecutive identical tool calls; `.guard(name, args, fn)` records then runs `fn`
+- `cave.jobs` → reserved `JobsClient` surface. Every method fails locally with `cave_async_jobs_unavailable`; it performs no network request until durable encrypted request storage, credential custody, and a draining worker exist. MIRRORS the Python `Cave.jobs`
+
+## Conventions
+
+- Tests: type assertions in `.test.ts` (compiled only), runtime in `.runtime.mjs` (run against `dist/`)
+- Build before runtime tests: `pnpm build && pnpm test:node`
+- Request body keys are `snake_case` to the gateway; response mapped to `camelCase` in `ToolSearchResult`
+- `x-cave-workflow` header defaults to `defaultWorkflow ?? "unlabeled-workflow"`; never omit it
+- Deferred tool-search session handoff uses request `session_id`, result `sessionId`, and provider header `x-cave-tool-session`; update sdk-python + parity fixtures with any change
+
+## Gotchas
+
+- **byte-safe**: SDK sends request bodies to the gateway verbatim; no rewriting allowed. `compress()` is the one path that yields smaller bytes and it **delegates** to the Engine — on any problem it passes the original through
+- **mirror sdk-python**: every field/method exists in both, enforced by the shared parity suite — a divergence is a CI failure, not a convention slip. Change one SDK, change both **and** the fixtures
+- published as `@caveman/sdk` (the `release.artifact` in PRODUCTS.yaml); the workspace name stays `@caveman/sdk` until the npm redirect plan lands
+- `strategy:"deferred"` initial set = `alwaysLoad` tools + up to `initialToolCount` (default 8); never returns the full catalog without a `search()` call
+- `reductionPct` rounds to one decimal; `savedTokens` is derived (`full - sent`), not from the gateway response
+
+See ../../../CLAUDE.md (root) · ../../../docs/design.md

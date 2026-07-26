@@ -1,0 +1,16 @@
+{
+  "name": "@caveman/evals",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "test": "tsc && tsc --project tsconfig.test.json && node --test tests/grade.runtime.mjs tests/localization_f1.parity.runtime.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

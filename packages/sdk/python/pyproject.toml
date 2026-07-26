@@ -1,0 +1,14 @@
+[project]
+# Public PyPI distribution name (was `caveman-cloud`). The import package stays
+# `caveman_cloud` — `pip install caveman` then `import caveman_cloud`.
+name = "caveman"
+version = "1.0.0"
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = []
+
+[tool.setuptools]
+packages = ["caveman_cloud"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

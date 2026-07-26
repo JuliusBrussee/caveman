@@ -1,0 +1,11 @@
+{
+  "name": "@caveman/contracts",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node -e \"JSON.parse(require('fs').readFileSync('schemas/policy.schema.json','utf8'))\"",
+    "lint": "node -e \"JSON.parse(require('fs').readFileSync('schemas/policy.schema.json','utf8'))\"",
+    "test": "node -e \"JSON.parse(require('fs').readFileSync('schemas/policy.schema.json','utf8'))\""
+  }
+}
