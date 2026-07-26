@@ -12,3 +12,5 @@ context/refs/research-brief-caveman-code-efficiency.md
 # Build artifacts
 dist/*
 !dist/caveman.skill
+node_modules/
+packages/**/dist/
