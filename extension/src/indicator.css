@@ -1,0 +1,52 @@
+@font-face {
+  font-family: "Caveman Mono";
+  src: url("../fonts/geist-mono.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+#caveman-indicator {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483647;
+  display: none; /* shown (flex) by the content script when enabled */
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 9px;
+  font-family: "Caveman Mono", ui-monospace, "SF Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #f2ece3;
+  background: rgba(10, 10, 10, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.18),
+    0 10px 30px -12px rgba(0, 0, 0, 0.7);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  backdrop-filter: blur(14px) saturate(150%);
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.16s ease, border-color 0.16s ease;
+}
+#caveman-indicator:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+#caveman-indicator .cm-flame {
+  display: inline-grid;
+  grid-template-columns: repeat(8, 2px);
+  gap: 1px;
+  line-height: 0;
+}
+#caveman-indicator .cm-flame span {
+  width: 2px;
+  height: 2px;
+  border-radius: 0.5px;
+}
+#caveman-indicator .cm-lvl {
+  color: rgba(242, 236, 227, 0.5);
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@caveman/skill-caveman-learn",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "Consent-gated editing skill that closes the loop on a Caveman learn report: review ranked token sinks and apply cost-lowering fixes (trim config, offload recurring context to cavemem) with per-edit approval, a net-token-negative gate, and a never-make-the-agent-dumber guard.",
+  "files": ["SKILL.md"],
+  "scripts": {
+    "test": "node --test tests/*.mjs"
+  }
+}

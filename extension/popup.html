@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>Caveman Mode</title>
+  </head>
+  <body data-enabled="1">
+    <div class="grain" aria-hidden="true"></div>
+    <div class="hairline" aria-hidden="true"></div>
+
+    <header class="head" style="--d: 0ms">
+      <a class="brand" href="#" id="brand">
+        <span class="flame" id="flame" aria-hidden="true"></span>
+        <span class="wordmark">Caveman<span class="sub">/mode</span></span>
+      </a>
+      <label class="switch" title="Turn caveman mode on or off">
+        <input type="checkbox" id="master" />
+        <span class="slider"></span>
+      </label>
+    </header>
+
+    <section class="block" style="--d: 60ms">
+      <div class="eyebrow"><span class="tick"></span>Intensity</div>
+      <div class="segmented" id="levels">
+        <label><input type="radio" name="level" value="lite" /><span>lite</span></label>
+        <label><input type="radio" name="level" value="full" /><span>full</span></label>
+        <label><input type="radio" name="level" value="ultra" /><span>ultra</span></label>
+      </div>
+      <p class="hint" id="levelHint"></p>
+    </section>
+
+    <section class="block" style="--d: 120ms">
+      <div class="eyebrow"><span class="tick"></span>Active on</div>
+      <ul class="sites">
+        <li>
+          <label><input type="checkbox" data-site="chatgpt.com" /><span>ChatGPT</span></label>
+          <code>chatgpt.com</code>
+        </li>
+        <li>
+          <label><input type="checkbox" data-site="claude.ai" /><span>Claude</span></label>
+          <code>claude.ai</code>
+        </li>
+        <li>
+          <label><input type="checkbox" data-site="gemini.google.com" /><span>Gemini</span></label>
+          <code>gemini.google.com</code>
+        </li>
+      </ul>
+    </section>
+
+    <section class="cta" style="--d: 180ms">
+      <a class="review" id="review" href="#" target="_blank" rel="noopener noreferrer">
+        <span class="stars" aria-hidden="true">★★★★★</span>
+        <span class="review-label">Leave a review</span>
+        <span class="review-arrow" aria-hidden="true">→</span>
+      </a>
+      <p class="proof">join 6000+ people using it</p>
+    </section>
+
+    <footer class="foot" style="--d: 240ms">why many word when few do trick</footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
