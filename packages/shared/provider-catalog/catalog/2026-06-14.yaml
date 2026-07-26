@@ -1,0 +1,256 @@
+- provider: openai
+  model: gpt-5.5
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 5.00
+    output_per_million: 30.00
+    cache_read_input_per_million: 0.50
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    responses_api: true
+    chat_completions: true
+    prompt_cache_key: true
+    prompt_cache_retention: true
+    streaming: true
+    batch: true
+    flex: true
+    long_context_threshold_tokens: 270000
+  sources:
+    - https://openai.com/api/pricing/
+    - https://developers.openai.com/api/docs/guides/prompt-caching
+  verified_at: 2026-06-02T00:00:00Z
+- provider: openai
+  model: gpt-5.5-mini
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 0.60
+    output_per_million: 2.40
+    cache_read_input_per_million: 0.06
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    responses_api: true
+    chat_completions: true
+    prompt_cache_key: true
+    streaming: true
+    batch: true
+  sources:
+    - https://openai.com/api/pricing/
+  verified_at: 2026-06-02T00:00:00Z
+- provider: openai
+  model: gpt-5.5-nano
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 0.15
+    output_per_million: 0.60
+    cache_read_input_per_million: 0.015
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    responses_api: true
+    chat_completions: true
+    streaming: true
+    batch: true
+  sources:
+    - https://openai.com/api/pricing/
+  verified_at: 2026-06-02T00:00:00Z
+- provider: openai
+  model: text-embedding-3-large
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 0.13
+    output_per_million: 0.00
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    embeddings: true
+  sources:
+    - https://openai.com/api/pricing/
+  verified_at: 2026-06-02T00:00:00Z
+- provider: openai
+  model: text-embedding-3-small
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 0.02
+    output_per_million: 0.00
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    embeddings: true
+  sources:
+    - https://openai.com/api/pricing/
+  verified_at: 2026-06-02T00:00:00Z
+- provider: anthropic
+  model: claude-sonnet-4-6
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 3.00
+    output_per_million: 15.00
+    cache_read_input_per_million: 0.30
+    cache_write_input_per_million: 3.75
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    messages_api: true
+    count_tokens: true
+    prompt_cache: true
+    streaming: true
+    message_batches: true
+    context_editing: true
+  sources:
+    - https://platform.claude.com/docs/en/about-claude/pricing
+  verified_at: 2026-06-02T00:00:00Z
+- provider: anthropic
+  model: claude-sonnet-4-5
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 3.00
+    output_per_million: 15.00
+    cache_read_input_per_million: 0.30
+    cache_write_input_per_million: 3.75
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    messages_api: true
+    count_tokens: true
+    prompt_cache: true
+    streaming: true
+    message_batches: true
+  sources:
+    - https://platform.claude.com/docs/en/about-claude/pricing
+  verified_at: 2026-06-02T00:00:00Z
+- provider: anthropic
+  model: claude-opus-4-1
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 15.00
+    output_per_million: 75.00
+    cache_read_input_per_million: 1.50
+    cache_write_input_per_million: 18.75
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    messages_api: true
+    prompt_cache: true
+    streaming: true
+    message_batches: true
+  sources:
+    - https://platform.claude.com/docs/en/about-claude/pricing
+  verified_at: 2026-06-02T00:00:00Z
+- provider: anthropic
+  model: claude-haiku-4-5
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 1.00
+    output_per_million: 5.00
+    cache_read_input_per_million: 0.10
+    cache_write_input_per_million: 1.25
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    messages_api: true
+    prompt_cache: true
+    streaming: true
+    message_batches: true
+  sources:
+    - https://platform.claude.com/docs/en/about-claude/pricing
+  verified_at: 2026-06-02T00:00:00Z
+- provider: gemini
+  model: gemini-2.5-pro
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 1.25
+    output_per_million: 10.00
+    cache_read_input_per_million: 0.125
+    cache_write_input_per_million: null
+    reasoning_output_per_million: 10.00
+    batch_discount_fraction: 0.50
+    cache_storage_per_million_tokens_hour: 4.50
+  capabilities:
+    generate_content: true
+    stream_generate_content: true
+    explicit_cache: true
+    streaming: true
+    batch: true
+  sources:
+    - https://ai.google.dev/gemini-api/docs/pricing
+  verified_at: 2026-06-02T00:00:00Z
+- provider: gemini
+  model: gemini-2.5-flash
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 0.30
+    output_per_million: 2.50
+    cache_read_input_per_million: 0.03
+    cache_write_input_per_million: null
+    reasoning_output_per_million: 2.50
+    batch_discount_fraction: 0.50
+    cache_storage_per_million_tokens_hour: 1.00
+  capabilities:
+    generate_content: true
+    stream_generate_content: true
+    explicit_cache: true
+    streaming: true
+    batch: true
+  sources:
+    - https://ai.google.dev/gemini-api/docs/pricing
+  verified_at: 2026-06-02T00:00:00Z
+- provider: bedrock
+  model: anthropic.claude-3-5-sonnet-20241022-v2:0
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 3.00
+    output_per_million: 15.00
+    cache_read_input_per_million: 0.30
+    cache_write_input_per_million: 3.75
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    prompt_cache: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+  verified_at: 2026-06-14T00:00:00Z
+- provider: bedrock
+  model: anthropic.claude-3-5-haiku-20241022-v1:0
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 0.80
+    output_per_million: 4.00
+    cache_read_input_per_million: 0.08
+    cache_write_input_per_million: 1.00
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    prompt_cache: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+  verified_at: 2026-06-14T00:00:00Z

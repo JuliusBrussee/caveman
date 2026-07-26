@@ -1,0 +1,141 @@
+- provider: openai
+  model: gpt-5.5
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 5.00
+    output_per_million: 30.00
+    cache_read_input_per_million: 0.50
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    responses_api: true
+    chat_completions: true
+    prompt_cache_key: true
+    prompt_cache_retention: true
+    streaming: true
+    batch: true
+    flex: true
+    long_context_threshold_tokens: 270000
+  sources:
+    - https://openai.com/api/pricing/
+    - https://developers.openai.com/api/docs/guides/prompt-caching
+  verified_at: 2026-06-02T00:00:00Z
+- provider: openai
+  model: gpt-5.4
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 2.50
+    output_per_million: 15.00
+    cache_read_input_per_million: 0.25
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    responses_api: true
+    chat_completions: true
+    prompt_cache_key: true
+    prompt_cache_retention: true
+    streaming: true
+    batch: true
+    flex: true
+  sources:
+    - https://openai.com/api/pricing/
+  verified_at: 2026-06-02T00:00:00Z
+- provider: anthropic
+  model: claude-sonnet-4-6
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 3.00
+    output_per_million: 15.00
+    cache_read_input_per_million: 0.30
+    cache_write_input_per_million: 3.75
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    messages_api: true
+    count_tokens: true
+    prompt_cache: true
+    cache_write_5m_multiplier: 1.25
+    cache_write_1h_multiplier: 2.0
+    cache_read_multiplier: 0.1
+    streaming: true
+    message_batches: true
+    context_editing: true
+    inference_geo: ["global", "us"]
+  sources:
+    - https://platform.claude.com/docs/en/about-claude/pricing
+    - https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+  verified_at: 2026-06-02T00:00:00Z
+- provider: anthropic
+  model: claude-sonnet-4-5
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 3.00
+    output_per_million: 15.00
+    cache_read_input_per_million: 0.30
+    cache_write_input_per_million: 3.75
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    messages_api: true
+    count_tokens: true
+    prompt_cache: true
+    streaming: true
+    message_batches: true
+    context_editing: true
+  sources:
+    - https://platform.claude.com/docs/en/about-claude/pricing
+  verified_at: 2026-06-02T00:00:00Z
+- provider: gemini
+  model: gemini-2.5-pro
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 1.25
+    output_per_million: 10.00
+    cache_read_input_per_million: 0.125
+    cache_write_input_per_million: null
+    reasoning_output_per_million: 10.00
+    batch_discount_fraction: 0.50
+    cache_storage_per_million_tokens_hour: 4.50
+  capabilities:
+    generate_content: true
+    stream_generate_content: true
+    explicit_cache: true
+    implicit_cache_analytics: true
+    prompt_threshold_tokens_for_base_price: 200000
+    streaming: true
+    batch: true
+  sources:
+    - https://ai.google.dev/gemini-api/docs/pricing
+    - https://ai.google.dev/gemini-api/docs/caching
+  verified_at: 2026-06-02T00:00:00Z
+- provider: azure_openai
+  model: gpt-5.4
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 2.50
+    output_per_million: 15.00
+    cache_read_input_per_million: 0.25
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    responses_api: true
+    chat_completions: true
+    prompt_cache: true
+    prompt_cache_retention_values_by_model:
+      gpt-5.4: ["in_memory", "24h"]
+      newer_than_gpt-5.4: ["24h"]
+    cached_tokens_field: usage.prompt_tokens_details.cached_tokens
+    streaming: true
+    api_version_allowlist: true
+  sources:
+    - https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/prompt-caching
+  verified_at: 2026-06-02T00:00:00Z

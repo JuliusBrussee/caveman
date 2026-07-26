@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["provider", "model", "region", "currency", "pricing", "capabilities", "sources", "verified_at"],
+    "properties": {
+      "provider": { "type": "string" },
+      "model": { "type": "string" },
+      "region": { "type": "string" },
+      "currency": { "type": "string" },
+      "pricing": {
+        "type": "object",
+        "required": ["input_per_million", "output_per_million"],
+        "properties": {
+          "input_per_million": { "type": "number" },
+          "output_per_million": { "type": "number" },
+          "cache_read_input_per_million": { "type": ["number", "null"] },
+          "cache_write_input_per_million": { "type": ["number", "null"] },
+          "cache_write_1h_input_per_million": { "type": ["number", "null"] },
+          "reasoning_output_per_million": { "type": ["number", "null"] },
+          "batch_discount_fraction": { "type": ["number", "null"] },
+          "cache_storage_per_million_tokens_hour": { "type": ["number", "null"] },
+          "long_context_threshold_tokens": { "type": ["integer", "null"] },
+          "long_context_threshold_inclusive": { "type": ["boolean", "null"] },
+          "long_context_input_multiplier": { "type": ["number", "null"] },
+          "long_context_output_multiplier": { "type": ["number", "null"] }
+        }
+      },
+      "capabilities": { "type": "object" },
+      "sources": { "type": "array", "items": { "type": "string" } },
+      "verified_at": { "type": "string", "format": "date-time" }
+    }
+  }
+}
