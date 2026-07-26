@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc",
     "lint": "tsc --noEmit",
-    "test": "tsc --project tsconfig.test.json && node --test tests/*.runtime.mjs",
+    "test": "tsc && tsc --project tsconfig.test.json && node --test tests/*.runtime.mjs",
     "test:types": "tsc --project tsconfig.test.json",
     "test:node": "node --test tests/*.runtime.mjs"
   },
