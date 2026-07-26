@@ -1,0 +1,356 @@
+import { test } from "node:test";
+import assert from "node:assert";
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { mkdtempSync, readFileSync, unlinkSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
+
+function runCli(argv, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("node", [cli, ...argv], { env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("exit", (code) => resolve({ code, stdout, stderr }));
+    child.on("error", reject);
+  });
+}
+
+function listen(server) {
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
+}
+
+// startImportStub runs a minimal control-api imports endpoint that records
+// every POST body + URL it receives and answers like the real handler.
+function startImportStub() {
+  const imports = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      if (req.method === "POST" && req.url.startsWith("/api/v1/imports")) {
+        const rows = body.split("\n").filter((l) => l.trim().length > 0);
+        imports.push({ url: req.url, auth: req.headers.authorization, body, rowCount: rows.length });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: "imp_1", status: "completed", row_count: rows.length, format: "caveman-jsonl" }));
+        return;
+      }
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { code: "cave_not_found", message: "not found" } }));
+    });
+  });
+  return { server, imports };
+}
+
+// makeSpendDb creates a local spend store shaped like the standalone proxy's
+// requests table (only the columns sync reads) and returns an inserter.
+function makeSpendDb(caveDir) {
+  const db = new DatabaseSync(join(caveDir, "caveman.db"));
+  db.exec(`CREATE TABLE requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    trace_id TEXT,
+    agent_slug TEXT,
+    provider TEXT,
+    model TEXT,
+    status_code INTEGER,
+    error_code TEXT,
+    latency_ms INTEGER,
+    request_bytes INTEGER,
+    response_bytes INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cached_input_tokens INTEGER,
+    total_cost_usd REAL,
+    savings_usd REAL,
+    basis TEXT NOT NULL,
+    runtime_mode TEXT,
+    optimization_ids TEXT,
+    compression_tokens_before INTEGER,
+    compression_tokens_after INTEGER
+  )`);
+  const stmt = db.prepare(`INSERT INTO requests (
+    ts, request_id, trace_id, agent_slug, provider, model, status_code, error_code,
+    latency_ms, request_bytes, response_bytes, input_tokens, output_tokens,
+    cached_input_tokens, total_cost_usd, savings_usd, basis, runtime_mode,
+    optimization_ids, compression_tokens_before, compression_tokens_after
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const insert = (requestId, tokensBefore, tokensAfter) =>
+    stmt.run(
+      "2026-07-01 10:00:00.000", requestId, "trace-" + requestId, "claude-code", "anthropic",
+      "claude-sonnet-4-5", 200, "", 850, 2048, 512, 500, 120, 300, 0.004, 0.0011,
+      "inferred", "compress", "s4_compress", tokensBefore, tokensAfter,
+    );
+  return { db, insert };
+}
+
+// sync with no credentials must degrade like every connected verb: one
+// actionable line, non-zero exit, no stack trace.
+test("sync without login exits non-zero with a login hint", async () => {
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir };
+  delete env.CAVE_TOKEN;
+
+  const out = await runCli(["sync"], env);
+  assert.notEqual(out.code, 0, "logged-out sync must exit non-zero");
+  assert.match(out.stderr, /caveman login/, "must hint at `caveman login`");
+});
+
+// Happy path + idempotency: first sync uploads all local spans as caveman-jsonl
+// (labeled inferred), a second sync is a no-op (watermark), and new local rows
+// sync incrementally — never re-uploading what the server already accepted.
+test("sync uploads local spans, advances the watermark, and stays idempotent", async () => {
+  const { server, imports } = startImportStub();
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
+
+  const { db, insert } = makeSpendDb(caveDir);
+  insert("req-1", 1000, 400);
+  insert("req-2", 2000, 1200);
+
+  const first = await runCli(["sync"], env);
+  assert.equal(first.code, 0, `sync failed: ${first.stderr}`);
+  assert.match(first.stdout, /synced 2 spans/, "must report the span count");
+  assert.match(first.stdout, /1400 estimated tokens saved \(inferred; counter basis unavailable\)/, "estimated savings must disclose the unavailable counter basis and remain inferred");
+  assert.equal(imports.length, 1, "exactly one import POST");
+  assert.match(imports[0].url, /format=caveman-jsonl/, "must post the caveman-jsonl format");
+  assert.equal(imports[0].auth, "Bearer ci-token", "must send the logged-in credentials");
+  assert.equal(imports[0].rowCount, 2, "must upload one jsonl line per span");
+  const span = JSON.parse(imports[0].body.split("\n")[0]);
+  assert.equal(span.span_id, "req-1");
+  assert.equal(span.timestamp, "2026-07-01 10:00:00.000");
+  assert.equal(span.input_tokens, 500);
+  assert.equal(span.attributes["cave.basis"], "inferred", "every synced span must carry the inferred basis");
+  assert.ok(!("organization_id" in span) || !span.organization_id, "the file must never assert a tenant scope");
+
+  // Second run: nothing new — no POST, honest no-op.
+  const second = await runCli(["sync"], env);
+  assert.equal(second.code, 0, `empty sync failed: ${second.stderr}`);
+  assert.match(second.stdout, /nothing new to sync/);
+  assert.match(second.stdout, /inferred/, "even the no-op line keeps the inferred label");
+  assert.equal(imports.length, 1, "an empty sync must not POST");
+
+  // A new local span syncs incrementally from the watermark.
+  insert("req-3", 500, 100);
+  db.close();
+  const third = await runCli(["sync"], env);
+  assert.equal(third.code, 0, `incremental sync failed: ${third.stderr}`);
+  assert.match(third.stdout, /synced 1 spans? · 400 estimated tokens saved \(inferred; counter basis unavailable\)/);
+  assert.equal(imports.length, 2);
+  assert.equal(imports[1].rowCount, 1, "must only upload the span past the watermark");
+  assert.match(imports[1].body, /"span_id":"req-3"/);
+
+  // The watermark is persisted in the CLI's state dir.
+  const state = JSON.parse(readFileSync(join(home, ".caveman-cloud", "sync.json"), "utf8"));
+  assert.equal(Object.values(state.watermarks)[0], 3, "watermark must sit at the last confirmed rowid");
+
+  server.close();
+});
+
+// No local spend store at all: a clean no-op, exit 0, no POST, no crash.
+test("sync with no local spend store is a safe no-op", async () => {
+  const { server, imports } = startImportStub();
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
+
+  const out = await runCli(["sync"], env);
+  assert.equal(out.code, 0, `sync failed: ${out.stderr}`);
+  assert.match(out.stdout, /nothing to sync/);
+  assert.match(out.stdout, /inferred/, "the hint keeps the inferred framing");
+  assert.equal(imports.length, 0, "must not POST when there is no store");
+
+  server.close();
+});
+
+// A failed import must NOT advance the watermark: the next sync retries the
+// same spans instead of silently dropping them.
+test("sync does not advance the watermark when the server rejects the import", async () => {
+  const server = createServer((req, res) => {
+    req.on("data", () => {});
+    req.on("end", () => {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { code: "cave_import_parse_failed", message: "bad import" } }));
+    });
+  });
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
+
+  const { db, insert } = makeSpendDb(caveDir);
+  insert("req-1", 1000, 400);
+  db.close();
+
+  const failed = await runCli(["sync"], env);
+  assert.notEqual(failed.code, 0, "a rejected import must exit non-zero");
+  assert.match(failed.stderr, /bad import/, "must surface the server's error");
+
+  const { server: okServer, imports } = startImportStub();
+  const okPort = await listen(okServer);
+  const retry = await runCli(["sync"], { ...env, CAVE_API_URL: `http://127.0.0.1:${okPort}` });
+  assert.equal(retry.code, 0, `retry failed: ${retry.stderr}`);
+  assert.equal(imports.length, 1, "the retry must re-send the unsynced span");
+  assert.equal(imports[0].rowCount, 1);
+
+  server.close();
+  okServer.close();
+});
+
+// After a successful login, the CLI runs the same sync once automatically and
+// tells the user what happened (the funnel bridge).
+test("login auto-syncs local inferred savings once", async () => {
+  const TOKEN = `${Buffer.from(JSON.stringify({ uid: "u1", oid: "org-test" })).toString("base64url")}.sig`;
+  const imports = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const send = (code, obj) => {
+        res.writeHead(code, { "content-type": "application/json" });
+        res.end(JSON.stringify(obj));
+      };
+      if (req.url === "/api/v1/auth/device/code") {
+        send(200, { device_code: "dev-1", user_code: "AAAA-1111", verification_uri: "http://stub/activate", expires_in: 60, interval: 0 });
+      } else if (req.url === "/api/v1/auth/device/token") {
+        send(200, { access_token: TOKEN, token_type: "Bearer", expires_in: 900 });
+      } else if (req.method === "POST" && req.url.startsWith("/api/v1/imports")) {
+        const rows = body.split("\n").filter((l) => l.trim().length > 0);
+        imports.push({ auth: req.headers.authorization, rowCount: rows.length });
+        send(200, { id: "imp_1", status: "completed", row_count: rows.length, format: "caveman-jsonl" });
+      } else {
+        send(404, {});
+      }
+    });
+  });
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_NO_KEYCHAIN: "1" };
+  delete env.CAVE_TOKEN;
+
+  const { db, insert } = makeSpendDb(caveDir);
+  insert("req-1", 1000, 400);
+  db.close();
+
+  const login = await runCli(["login", "--base-url", `http://127.0.0.1:${port}`], env);
+  assert.equal(login.code, 0, `login failed: ${login.stderr}`);
+  assert.equal(imports.length, 1, "login must run the sync once");
+  assert.equal(imports[0].auth, `Bearer ${TOKEN}`, "the auto-sync must use the freshly stored token");
+  assert.match(login.stderr, /synced 1 local spans? · 600 estimated tokens saved \(inferred; counter basis unavailable\)/, "login must disclose the estimated counter basis and keep savings inferred");
+
+  server.close();
+});
+
+// A local DB reset (e.g. `make reset-local` wipes ~/.caveman) restarts rowids at
+// 1. The watermark must be keyed to the DB's identity, so the next sync re-reads
+// from the start instead of silently reporting "nothing new" and dropping spans.
+test("sync re-reads from the start after the local DB is reset", async () => {
+  const { server, imports } = startImportStub();
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
+
+  const first = makeSpendDb(caveDir);
+  first.insert("req-1", 1000, 400);
+  first.insert("req-2", 2000, 1200);
+  first.db.close();
+
+  const run1 = await runCli(["sync"], env);
+  assert.equal(run1.code, 0, `first sync failed: ${run1.stderr}`);
+  assert.match(run1.stdout, /synced 2 spans/, "first sync uploads both spans");
+  assert.equal(imports.length, 1, "one import so far");
+
+  // Simulate `make reset-local`: delete the DB (and any sidecar files), then a
+  // fresh proxy recreates it — rowids restart at 1.
+  const dbFile = join(caveDir, "caveman.db");
+  unlinkSync(dbFile);
+  for (const ext of ["-wal", "-shm", "-journal"]) {
+    try { unlinkSync(dbFile + ext); } catch { /* not present */ }
+  }
+  const second = makeSpendDb(caveDir);
+  second.insert("reset-1", 500, 100); // id 1 in the fresh DB — <= the old watermark of 2
+  second.insert("reset-2", 800, 200); // id 2 in the fresh DB
+  second.db.close();
+
+  const run2 = await runCli(["sync"], env);
+  assert.equal(run2.code, 0, `post-reset sync failed: ${run2.stderr}`);
+  assert.doesNotMatch(run2.stdout, /nothing new/, "a reset DB must not be mistaken for 'already up to date'");
+  assert.match(run2.stdout, /synced 2 spans/, "both spans from the recreated DB must upload");
+  assert.equal(imports.length, 2, "the reset must trigger a second import POST");
+  assert.equal(imports[1].rowCount, 2, "both fresh rows upload, not skipped by the stale watermark");
+  assert.match(imports[1].body, /"span_id":"reset-1"/);
+
+  server.close();
+});
+
+// Locally compressed SUBSCRIPTION traffic (Claude Pro/Max) must sync as tokens:
+// the span has to carry auth_mode + the compression before/after + the o200k
+// counter basis so the cloud can aggregate token savings by auth mode — and it
+// must never carry a dollar figure, because a seat has no per-token price.
+// (honesty rule: no-fake-savings)
+test("sync carries subscription token savings with auth_mode and zero dollars", async () => {
+  const { server, imports } = startImportStub();
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
+
+  // Full-shape store: the columns the standalone proxy actually writes, including
+  // the three the older fixture omits (token_usage_basis, auth_mode, counter basis).
+  const db = new DatabaseSync(join(caveDir, "caveman.db"));
+  db.exec(`CREATE TABLE requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL, request_id TEXT NOT NULL, trace_id TEXT, agent_slug TEXT,
+    provider TEXT, model TEXT, status_code INTEGER, error_code TEXT, latency_ms INTEGER,
+    request_bytes INTEGER, response_bytes INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+    cached_input_tokens INTEGER, total_cost_usd REAL, savings_usd REAL, basis TEXT NOT NULL,
+    token_usage_basis TEXT, auth_mode TEXT, runtime_mode TEXT, optimization_ids TEXT,
+    compression_tokens_before INTEGER, compression_tokens_after INTEGER,
+    compression_token_count_basis TEXT
+  )`);
+  db.prepare(`INSERT INTO requests (
+    ts, request_id, trace_id, agent_slug, provider, model, status_code, error_code, latency_ms,
+    request_bytes, response_bytes, input_tokens, output_tokens, cached_input_tokens,
+    total_cost_usd, savings_usd, basis, token_usage_basis, auth_mode, runtime_mode,
+    optimization_ids, compression_tokens_before, compression_tokens_after, compression_token_count_basis
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    "2026-07-25 10:00:00.000", "req-sub", "trace-sub", "claude-code", "anthropic", "claude-sonnet-4-5",
+    200, "", 900, 4096, 700, 900, 150, 0,
+    // The local store zeroes cost + savings for subscription rows (no list price).
+    0, 0, "inferred", "provider_complete", "subscription", "compress",
+    "caveman-compression", 3000, 1100, "estimated_engine_o200k",
+  );
+  db.close();
+
+  const out = await runCli(["sync"], env);
+  assert.equal(out.code, 0, `sync failed: ${out.stderr}`);
+  assert.equal(imports.length, 1, "one import POST");
+  const span = JSON.parse(imports[0].body.split("\n")[0]);
+  assert.equal(span.attributes["cave.auth_mode"], "subscription", "the cloud aggregates tokens by auth mode — the label must ride along");
+  assert.equal(span.attributes["cave.compression_tokens_before"], "3000");
+  assert.equal(span.attributes["cave.compression_tokens_after"], "1100");
+  assert.equal(span.attributes["cave.compression_token_count_basis"], "estimated_engine_o200k", "token counts must declare the local o200k estimator");
+  assert.equal(span.attributes["cave.basis"], "inferred");
+  assert.equal(span.attributes["cave.savings_usd"], "0", "subscription savings are tokens — never dollars");
+  assert.equal(span.total_cost_usd, 0, "subscription traffic has no per-token price");
+  assert.match(out.stdout, /1900 estimated tokens saved \(inferred; counter basis estimated_engine_o200k\)/);
+  // The disclosure that imports never touch managed money must survive, and now
+  // also names the tokens-only rule for subscription sessions.
+  assert.match(out.stdout, /never affect managed budgets, verified savings, or billing/);
+  assert.match(out.stdout, /Subscription\/OAuth sessions carry token counts only — no dollar figure/);
+
+  server.close();
+});

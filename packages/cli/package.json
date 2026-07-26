@@ -1,0 +1,35 @@
+{
+  "name": "@caveman/cli",
+  "version": "1.0.0",
+  "description": "Caveman CLI — wrap any coding agent with a local byte-safe compression + truthful-metering proxy (`caveman claude`), and drive Caveman Cloud from the terminal. Compression/metering run in companion Go binaries: run `caveman setup` to see install state. Savings are labeled inferred until verified.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JuliusBrussee/caveman.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://getcaveman.dev",
+  "bugs": {
+    "url": "https://github.com/JuliusBrussee/caveman/issues"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "caveman": "dist/index.js",
+    "cave": "dist/index.js"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "node scripts/gen-binaries.mjs && node scripts/gen-wedge-installer.mjs && node scripts/compile-registries.mjs && tsc && node scripts/shebang.mjs",
+    "prepublishOnly": "npm run build",
+    "lint": "tsc --noEmit",
+    "test": "node scripts/gen-binaries.mjs && node scripts/gen-wedge-installer.mjs && node scripts/compile-registries.mjs && tsc && node --test tests/*.runtime.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  }
+}
