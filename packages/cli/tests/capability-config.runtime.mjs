@@ -202,4 +202,3 @@ test("config surface rejects account and consent keys without writing", async ()
     isolated.cleanup();
   }
 });
-
