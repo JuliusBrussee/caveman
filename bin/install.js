@@ -208,6 +208,7 @@ const PROVIDERS = [
   { id: 'gemini',     label: 'Gemini CLI',          mech: 'gemini extensions install',     detect: 'command:gemini' },
   { id: 'opencode',   label: 'opencode',            mech: 'native opencode plugin',        detect: 'command:opencode' },
   { id: 'openclaw',   label: 'OpenClaw',            mech: 'workspace skill + SOUL.md',     detect: 'command:openclaw||dir:$HOME/.openclaw/workspace' },
+  { id: 'grok',       label: 'Grok CLI',            mech: 'native grok rules + skills',    detect: 'command:grok||dir:$HOME/.grok' },
   { id: 'codex',      label: 'Codex CLI',           mech: 'npx skills add (codex)',        detect: 'command:codex',           profile: 'codex' },
 
   // IDE / VS Code-family — extension probes are precise. Cursor/Windsurf also
@@ -644,6 +645,227 @@ function installHermes(ctx) {
     results.installed.push('hermes');
   } catch (err) {
     results.failed.push(['hermes', 'copy failed: ' + err.message]);
+  }
+
+  process.stdout.write('\n');
+}
+
+// ── Grok CLI native install ───────────────────────────────────────────────
+// Grok Build TUI (xAI) discovers:
+//   - Always-on rules from $GROK_HOME/rules/*.md and $GROK_HOME/AGENTS.md
+//   - Skills from $GROK_HOME/skills/<name>/SKILL.md (slash + auto-invoke)
+//   - Agents from $GROK_HOME/agents/*.md
+// SessionStart hook stdout is ignored (passive), so always-on comes from
+// rules/ + AGENTS.md — same pattern as opencode, not Claude Code hooks.
+//
+// Multi-account: ~/.grok-accounts/<id>/ often symlinks skills/agents/AGENTS.md
+// to ~/.grok. We write the shared assets once (realpath-deduped) and write the
+// always-on rules file into every discovered home so account GROK_HOME still
+// picks it up.
+const GROK_SKILL_DIRS = ['caveman', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
+const GROK_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
+const GROK_AGENTS_MD_BEGIN = '<!-- caveman-begin -->';
+const GROK_AGENTS_MD_END = '<!-- caveman-end -->';
+const GROK_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
+
+function grokDefaultHome() {
+  if (process.env.GROK_HOME) return path.resolve(process.env.GROK_HOME);
+  return path.join(os.homedir(), '.grok');
+}
+
+// Resolve install targets. When GROK_HOME is set, ONLY that home is used
+// (tests, single-account override, CI isolation). When unset, discover the
+// default ~/.grok plus multi-account dirs under ~/.grok-accounts/<id>/.
+function discoverGrokHomes(opts = {}) {
+  const homes = [];
+  const seen = new Set();
+  const add = (p, { create = false } = {}) => {
+    if (!p) return;
+    const resolved = path.resolve(p);
+    if (seen.has(resolved)) return;
+    if (!fs.existsSync(resolved)) {
+      if (!create) return;
+      try { fs.mkdirSync(resolved, { recursive: true }); } catch (_) { return; }
+    }
+    seen.add(resolved);
+    homes.push(resolved);
+  };
+
+  // Explicit override: never spill into the real ~/.grok or other accounts.
+  if (process.env.GROK_HOME) {
+    add(process.env.GROK_HOME, { create: !opts.dryRun });
+    return homes;
+  }
+
+  add(path.join(os.homedir(), '.grok'));
+  const accountsRoot = path.join(os.homedir(), '.grok-accounts');
+  if (fs.existsSync(accountsRoot)) {
+    let entries = [];
+    try { entries = fs.readdirSync(accountsRoot, { withFileTypes: true }); } catch (_) {}
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const home = path.join(accountsRoot, e.name);
+      // Account home signal: has config.toml (file or symlink) or agent_id.
+      if (fs.existsSync(path.join(home, 'config.toml')) || fs.existsSync(path.join(home, 'agent_id'))) {
+        add(home);
+      }
+    }
+  }
+  return homes;
+}
+
+function realPathSafe(p) {
+  try { return fs.realpathSync(p); } catch (_) { return path.resolve(p); }
+}
+
+function appendGrokAgentsMd(agentsMd, ruleBody, opts, note) {
+  const fencedBlock = `${GROK_AGENTS_MD_BEGIN}\n${ruleBody}${GROK_AGENTS_MD_END}\n`;
+  if (!fs.existsSync(agentsMd)) {
+    if (!opts.dryRun) fs.writeFileSync(agentsMd, fencedBlock, { mode: 0o644 });
+    process.stdout.write(`  installed: ${agentsMd}\n`);
+    return;
+  }
+  const existing = fs.readFileSync(agentsMd, 'utf8');
+  if (existing.includes(GROK_AGENTS_MD_BEGIN) && existing.includes(GROK_AGENTS_MD_END)) {
+    note(`  ${agentsMd} already contains caveman ruleset`);
+    return;
+  }
+  if (existing.includes(GROK_AGENTS_MD_SENTINEL) && !opts.force) {
+    note(`  ${agentsMd} already has caveman sentinel — leaving as-is (use --force to re-fence)`);
+    return;
+  }
+  if (opts.dryRun) {
+    note(`  would append caveman block to ${agentsMd}`);
+    return;
+  }
+  const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
+  fs.writeFileSync(agentsMd, existing + sep + fencedBlock, { mode: 0o644 });
+  process.stdout.write(`  appended caveman ruleset to ${agentsMd}\n`);
+}
+
+function installGrok(ctx) {
+  const { say, note, warn, opts, repoRoot, results } = ctx;
+  results.detected++;
+  say('→ Grok CLI detected');
+
+  if (!repoRoot) {
+    warn('  Grok native install requires a local clone of the caveman repo.');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only grok');
+    results.failed.push(['grok', 'native install requires local repo clone']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  const homes = discoverGrokHomes({ dryRun: opts.dryRun });
+  if (homes.length === 0) {
+    // Dry-run with unset/missing home still prints a plan against the default path.
+    if (opts.dryRun) {
+      note(`  would install into ${grokDefaultHome()}/ (rules + skills + agents + AGENTS.md)`);
+      results.installed.push('grok');
+      process.stdout.write('\n');
+      return;
+    }
+    warn('  No Grok home found (~/.grok or $GROK_HOME).');
+    note('  Install Grok CLI first, or set GROK_HOME to your config dir.');
+    results.failed.push(['grok', 'no grok home']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  let ruleBody;
+  try {
+    ruleBody = fs.readFileSync(path.join(repoRoot, 'src', 'rules', 'caveman-activate.md'), 'utf8').trimEnd() + '\n';
+  } catch (e) {
+    results.failed.push(['grok', 'missing src/rules/caveman-activate.md']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  if (opts.dryRun) {
+    for (const home of homes) {
+      note(`  would install into ${home}/ (rules + skills + agents + AGENTS.md)`);
+    }
+    results.installed.push('grok');
+    process.stdout.write('\n');
+    return;
+  }
+
+  try {
+    // Skills / agents / AGENTS.md: write once per realpath (accounts often symlink to ~/.grok).
+    const writtenSkills = new Set();
+    const writtenAgents = new Set();
+    const writtenAgentsMd = new Set();
+
+    for (const home of homes) {
+      // Always-on rule — every home gets its own rules/ file (not usually symlinked).
+      const rulesDir = path.join(home, 'rules');
+      const rulePath = path.join(rulesDir, 'caveman.md');
+      fs.mkdirSync(rulesDir, { recursive: true });
+      if (fs.existsSync(rulePath) && !opts.force) {
+        const cur = fs.readFileSync(rulePath, 'utf8');
+        if (cur.includes(GROK_AGENTS_MD_SENTINEL)) {
+          note(`  skipped ${rulePath} (exists; --force to overwrite)`);
+        } else {
+          fs.writeFileSync(rulePath, ruleBody, { mode: 0o644 });
+          process.stdout.write(`  installed: ${rulePath}\n`);
+        }
+      } else {
+        fs.writeFileSync(rulePath, ruleBody, { mode: 0o644 });
+        process.stdout.write(`  installed: ${rulePath}\n`);
+      }
+
+      // Skills
+      const skillsDir = path.join(home, 'skills');
+      const skillsReal = realPathSafe(skillsDir);
+      if (!writtenSkills.has(skillsReal)) {
+        writtenSkills.add(skillsReal);
+        fs.mkdirSync(skillsDir, { recursive: true });
+        for (const name of GROK_SKILL_DIRS) {
+          const src = path.join(repoRoot, 'skills', name);
+          const dest = path.join(skillsDir, name);
+          if (!fs.existsSync(src)) continue;
+          if (fs.existsSync(dest) && !opts.force) {
+            note(`  skipped ${dest}/ (exists; --force to overwrite)`);
+            continue;
+          }
+          if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
+          copyDirRecursive(src, dest);
+          process.stdout.write(`  installed: ${dest}/\n`);
+        }
+      }
+
+      // Agents (cavecrew subagents)
+      const agentsDir = path.join(home, 'agents');
+      const agentsReal = realPathSafe(agentsDir);
+      if (!writtenAgents.has(agentsReal)) {
+        writtenAgents.add(agentsReal);
+        fs.mkdirSync(agentsDir, { recursive: true });
+        for (const f of GROK_AGENT_FILES) {
+          const src = path.join(repoRoot, 'agents', f);
+          const dest = path.join(agentsDir, f);
+          if (!fs.existsSync(src)) continue;
+          if (fs.existsSync(dest) && !opts.force) {
+            note(`  skipped ${dest} (exists; --force to overwrite)`);
+            continue;
+          }
+          fs.copyFileSync(src, dest);
+          process.stdout.write(`  installed: ${dest}\n`);
+        }
+      }
+
+      // AGENTS.md always-on block (belt-and-suspenders with rules/)
+      const agentsMd = path.join(home, 'AGENTS.md');
+      // If AGENTS.md is a symlink, realpath to the target file for dedup.
+      const agentsMdKey = fs.existsSync(agentsMd) ? realPathSafe(agentsMd) : path.resolve(agentsMd);
+      if (!writtenAgentsMd.has(agentsMdKey)) {
+        writtenAgentsMd.add(agentsMdKey);
+        appendGrokAgentsMd(agentsMd, ruleBody, opts, note);
+      }
+    }
+
+    results.installed.push('grok');
+  } catch (err) {
+    results.failed.push(['grok', 'install failed: ' + err.message]);
   }
 
   process.stdout.write('\n');
@@ -1315,6 +1537,75 @@ function uninstall(ctx) {
     if (prunedHermes) ok('  pruned caveman skills from Hermes');
   }
 
+  // Grok CLI native install — strip rules, skills, agents, AGENTS.md block.
+  // Probed by our rules/caveman.md or skill dirs; multi-home aware.
+  {
+    const homes = discoverGrokHomes({ dryRun: true }); // never mkdir on uninstall
+    const seenSkillRoots = new Set();
+    const seenAgentRoots = new Set();
+    const seenAgentsMd = new Set();
+    let prunedGrok = false;
+    for (const home of homes) {
+      const rulePath = path.join(home, 'rules', 'caveman.md');
+      if (fs.existsSync(rulePath)) {
+        if (!opts.dryRun) { try { fs.unlinkSync(rulePath); } catch (_) {} }
+        note(`  removed ${rulePath}`);
+        prunedGrok = true;
+      }
+      const skillsDir = path.join(home, 'skills');
+      const skillsReal = realPathSafe(skillsDir);
+      if (!seenSkillRoots.has(skillsReal) && fs.existsSync(skillsDir)) {
+        seenSkillRoots.add(skillsReal);
+        for (const name of GROK_SKILL_DIRS) {
+          const p = path.join(skillsDir, name);
+          if (fs.existsSync(p)) {
+            if (!opts.dryRun) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+            note(`  removed ${p}`);
+            prunedGrok = true;
+          }
+        }
+      }
+      const agentsDir = path.join(home, 'agents');
+      const agentsReal = realPathSafe(agentsDir);
+      if (!seenAgentRoots.has(agentsReal) && fs.existsSync(agentsDir)) {
+        seenAgentRoots.add(agentsReal);
+        for (const f of GROK_AGENT_FILES) {
+          const p = path.join(agentsDir, f);
+          if (fs.existsSync(p)) {
+            if (!opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
+            note(`  removed ${p}`);
+            prunedGrok = true;
+          }
+        }
+      }
+      const agentsMd = path.join(home, 'AGENTS.md');
+      if (fs.existsSync(agentsMd)) {
+        const key = realPathSafe(agentsMd);
+        if (seenAgentsMd.has(key)) continue;
+        seenAgentsMd.add(key);
+        const body = fs.readFileSync(agentsMd, 'utf8');
+        const begin = body.indexOf(GROK_AGENTS_MD_BEGIN);
+        const end = body.indexOf(GROK_AGENTS_MD_END);
+        if (begin !== -1 && end !== -1 && end > begin) {
+          const before = body.slice(0, begin).replace(/\n+$/, '\n');
+          const after = body.slice(end + GROK_AGENTS_MD_END.length).replace(/^\n+/, '\n');
+          let next = (before + after).trimEnd();
+          next = next ? next + '\n' : '';
+          if (!opts.dryRun) {
+            if (next === '') {
+              try { fs.unlinkSync(agentsMd); } catch (_) {}
+            } else {
+              fs.writeFileSync(agentsMd, next, { mode: 0o644 });
+            }
+          }
+          note(next === '' ? `  removed ${agentsMd}` : `  stripped caveman block from ${agentsMd}`);
+          prunedGrok = true;
+        }
+      }
+    }
+    if (prunedGrok) ok('  pruned caveman entries from Grok CLI');
+  }
+
   // Flag file
   const flag = path.join(configDir, '.caveman-active');
   if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
@@ -1471,6 +1762,7 @@ async function main() {
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
     if (prov.id === 'hermes')   { installHermes(ctx); continue; }
+    if (prov.id === 'grok')     { installGrok(ctx); continue; }
     if (prov.profile)           { installViaSkills(ctx, prov); continue; }
   }
 
