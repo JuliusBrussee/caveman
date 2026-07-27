@@ -71,7 +71,7 @@ All validations passed ✅ — headings, code blocks, URLs, file paths preserved
 
 ## Install
 
-Compress is built in with the `caveman` plugin. Install `caveman` once, then use `/caveman-compress`.
+Compress is built into the `caveman` plugin. Install `caveman` once, then use `/caveman-compress`.
 
 If you need local files, the compress skill lives at:
 
