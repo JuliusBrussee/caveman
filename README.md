@@ -95,7 +95,7 @@ irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | i
 ~30 seconds. Needs Node ≥18. Skips agents you no have. Safe to re-run.
 
 > [!TIP]
-> **Turn it on:** type `/caveman` or say *"talk like caveman"*. **Turn it off:** say *"normal mode"*. On Claude Code, Codex, and Gemini it's already on from message one. No command needed.
+> **Turn it on:** type `/caveman` or say *"talk like caveman"*. **Turn it off:** say *"normal mode"*. On Claude Code, Codex, Gemini, opencode, OpenClaw, Hermes, and **Grok CLI** it's already on from message one. No command needed.
 
 <details>
 <summary><strong>Install for one agent, or any of 30+ others</strong></summary>
@@ -113,6 +113,9 @@ gemini extensions install https://github.com/JuliusBrussee/caveman
 
 # Cursor / Windsurf / Cline / Codex / 30+ more, via the skills registry
 npx skills add JuliusBrussee/caveman -a cursor
+
+# Grok CLI (xAI) — always-on rules + skills (needs a local clone)
+node bin/install.js --only grok
 ```
 
 **Install broke?** Open your agent in this repo and say: *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent read repo, agent fix own brain. Snake eat tail.
@@ -255,6 +258,30 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.
 ```
 
 Two things happen, no more: a caveman skill lands in the workspace, and a tiny marker-fenced block is appended to `SOUL.md` (OpenClaw injects it every turn, so the lobster is terse from message one — no `/caveman` per session). Custom path? `OPENCLAW_WORKSPACE=/your/path`. Uninstall with the same line plus `--uninstall`; your other workspace content stays untouched. Lobster claw still sharp. Lobster mouth now small.
+
+</details>
+
+<details>
+<summary><strong>🪨 Grok CLI — always on from message one</strong></summary>
+
+<br>
+
+[**Grok CLI**](https://grok.x.ai) (Grok Build TUI) loads `$GROK_HOME/rules/*.md` and `AGENTS.md` every session. Skills live under `$GROK_HOME/skills/`. SessionStart hook stdout is ignored, so caveman uses rules + AGENTS.md for always-on — not Claude-style hooks.
+
+From a local clone of this repo:
+
+```bash
+node bin/install.js --only grok
+```
+
+What lands:
+
+- `$GROK_HOME/rules/caveman.md` — always-on full-intensity ruleset (default **full**, not ultra)
+- Marker-fenced block in `$GROK_HOME/AGENTS.md` — same rules, strip-clean on uninstall
+- Skills under `$GROK_HOME/skills/` (`caveman`, `caveman-commit`, `caveman-review`, …, `cavecrew`)
+- cavecrew agents under `$GROK_HOME/agents/`
+
+Installs into `~/.grok` by default; override with `GROK_HOME=/path` (tests / custom path). Uninstall: `node bin/install.js --uninstall` (or the same scoped line with `--uninstall`).
 
 </details>
 
