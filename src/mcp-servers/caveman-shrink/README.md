@@ -1,3 +1,5 @@
+> **English** | [中文](./README.zh-CN.md)
+
 # caveman-shrink
 
 > MCP middleware. Wrap any MCP server. Cut the prose. Keep the substance.

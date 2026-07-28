@@ -1,3 +1,5 @@
+> **English** | [中文](./README.zh-CN.md)
+
 # Caveman Hooks
 
 These hooks are **bundled with the caveman plugin** and activate automatically when the plugin is installed. No manual setup required.

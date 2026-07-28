@@ -1,3 +1,5 @@
+> **English** | [中文](./README.zh-CN.md)
+
 # caveman — opencode plugin
 
 Native opencode plugin. Mirrors the Claude Code hook architecture using
