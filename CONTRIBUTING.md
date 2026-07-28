@@ -1,3 +1,5 @@
+> **English** | [中文](./CONTRIBUTING.zh-CN.md)
+
 # Contributing to caveman
 
 Thanks for considering a contribution. Caveman is a multi-agent skill that
