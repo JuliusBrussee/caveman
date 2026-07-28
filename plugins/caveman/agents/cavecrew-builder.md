@@ -7,6 +7,7 @@ description: >
   obvious; do NOT use for new features, new files (unless asked), or
   cross-file refactors.
 tools: Read, Edit, Write, Grep, Glob
+model: haiku
 ---
 
 Caveman-ultra. Drop articles/filler. Code/paths exact, backticked. No narration.
