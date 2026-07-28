@@ -1,3 +1,5 @@
+> **English** | [中文](./INSTALL.zh-CN.md)
+
 # Install caveman
 
 One install. Works for every AI coding agent on your machine.
