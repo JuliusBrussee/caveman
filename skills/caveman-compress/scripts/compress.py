@@ -39,6 +39,38 @@ def split_frontmatter(text: str):
         return m.group(1), m.group(2)
     return "", text
 
+
+def read_exact(path: Path) -> str:
+    """Read text as UTF-8 with no newline translation.
+
+    ``Path.read_text`` grew a ``newline`` parameter only in 3.13 and the skill
+    supports 3.10+, so go through ``open`` to keep older interpreters working.
+    """
+    with path.open(encoding="utf-8", errors="ignore", newline="") as fh:
+        return fh.read()
+
+
+def _lf(text: str) -> str:
+    """Normalize to LF so CRLF and LF copies of the same text compare equal."""
+    return text.replace("\r\n", "\n")
+
+
+def match_line_endings(text: str, reference: str) -> str:
+    """Rewrite text's line endings to match the reference document's.
+
+    Every read and write here pins ``newline=""`` so Python performs no
+    translation of its own — otherwise ``write_text`` emits CRLF on Windows and
+    silently rewrites every line of the user's file. Claude always returns LF,
+    so a CRLF source still needs its endings restored explicitly.
+    """
+    crlf = reference.count("\r\n")
+    lf = reference.count("\n") - crlf
+    normalized = _lf(text)
+    if crlf > lf:
+        return normalized.replace("\n", "\r\n")
+    return normalized
+
+
 # Filenames and paths that almost certainly hold secrets or PII. Compressing
 # them ships raw bytes to the Anthropic API — a third-party data boundary that
 # developers on sensitive codebases cannot cross. detect.py already skips .env
@@ -246,7 +278,7 @@ def compress_file(filepath: Path) -> bool:
         print("Skipping (not natural language)")
         return False
 
-    original_text = filepath.read_text(errors="ignore")
+    original_text = read_exact(filepath)
     # Store backup outside the source directory so skill auto-loaders don't
     # re-ingest the `.original.md` copy as a live file. Mirror the source's
     # parent-dir name + stem under a platform-aware base to reduce collisions.
@@ -287,21 +319,25 @@ def compress_file(filepath: Path) -> bool:
 
     # Compare the BODY (not the whole file) — frontmatter is preserved verbatim
     # and would never change, so identity must be judged on the compressible part.
-    if compressed_body.strip() == body.strip():
+    # Normalize line endings first: the body keeps the source file's CRLF while
+    # Claude always answers in LF, so a raw compare would never match on a CRLF
+    # file and the no-op guard below would stop firing entirely.
+    if _lf(compressed_body).strip() == _lf(body).strip():
         print("❌ Compression aborted: output is identical to input.")
         print("   Likely causes: Claude refused, returned the prompt verbatim, or the file is")
         print("   already in caveman form. Original file is untouched (no backup created).")
         return False
 
-    # Reassemble: frontmatter (verbatim) + compressed body
-    compressed = frontmatter + compressed_body
+    # Reassemble: frontmatter (verbatim) + compressed body, then restore the
+    # source file's line endings — Claude always answers in LF.
+    compressed = match_line_endings(frontmatter + compressed_body, original_text)
 
     # Save original as backup, then verify the backup readback before
     # touching the input file. If the filesystem dropped bytes (encoding,
     # antivirus, disk full), unlink the bad backup and abort instead of
     # leaving the user with a corrupt backup + compressed primary.
-    backup_path.write_text(original_text)
-    backup_readback = backup_path.read_text(errors="ignore")
+    backup_path.write_text(original_text, encoding="utf-8", newline="")
+    backup_readback = read_exact(backup_path)
     if backup_readback != original_text:
         print(f"❌ Backup write verification failed: {backup_path}")
         print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
@@ -310,7 +346,7 @@ def compress_file(filepath: Path) -> bool:
         except OSError:
             pass
         return False
-    filepath.write_text(compressed)
+    filepath.write_text(compressed, encoding="utf-8", newline="")
 
     # Step 2: Validate + Retry
     for attempt in range(MAX_RETRIES):
@@ -328,15 +364,16 @@ def compress_file(filepath: Path) -> bool:
 
         if attempt == MAX_RETRIES - 1:
             # Restore original on failure
-            filepath.write_text(original_text)
+            filepath.write_text(original_text, encoding="utf-8", newline="")
             backup_path.unlink(missing_ok=True)
             print("❌ Failed after retries — original restored")
             return False
 
         print("Fixing with Claude...")
-        compressed = call_claude(
-            build_fix_prompt(original_text, compressed, result.errors)
+        compressed = match_line_endings(
+            call_claude(build_fix_prompt(original_text, compressed, result.errors)),
+            original_text,
         )
-        filepath.write_text(compressed)
+        filepath.write_text(compressed, encoding="utf-8", newline="")
 
     return True
