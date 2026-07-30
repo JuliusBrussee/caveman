@@ -5,9 +5,11 @@ import sys
 # Support both direct execution and module import
 try:
     from .validate import validate
+    from .textio import read_text
 except ImportError:
     sys.path.insert(0, str(Path(__file__).parent))
     from validate import validate
+    from textio import read_text
 
 try:
     import tiktoken
@@ -23,8 +25,8 @@ def count_tokens(text):
 
 
 def benchmark_pair(orig_path: Path, comp_path: Path):
-    orig_text = orig_path.read_text()
-    comp_text = comp_path.read_text()
+    orig_text = read_text(orig_path)
+    comp_text = read_text(comp_path)
 
     orig_tokens = count_tokens(orig_text)
     comp_tokens = count_tokens(comp_text)

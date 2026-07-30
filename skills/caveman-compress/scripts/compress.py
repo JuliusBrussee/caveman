@@ -111,6 +111,7 @@ def strip_llm_wrapper(text: str) -> str:
     return text
 
 from .detect import should_compress
+from .textio import read_text, write_text, write_text_atomic
 from .validate import validate
 
 MAX_RETRIES = 2
@@ -219,6 +220,12 @@ Return ONLY the fixed compressed file. No explanation.
 # ---------- Core Logic ----------
 
 
+def _restore_original(filepath: Path, original_text: str, backup_path: Path) -> None:
+    """Put the live target back to the verified backup content and drop the backup."""
+    write_text_atomic(filepath, original_text)
+    backup_path.unlink(missing_ok=True)
+
+
 def compress_file(filepath: Path) -> bool:
     # Resolve and validate path
     filepath = filepath.resolve()
@@ -246,7 +253,7 @@ def compress_file(filepath: Path) -> bool:
         print("Skipping (not natural language)")
         return False
 
-    original_text = filepath.read_text(errors="ignore")
+    original_text = read_text(filepath)
     # Store backup outside the source directory so skill auto-loaders don't
     # re-ingest the `.original.md` copy as a live file. Mirror the source's
     # parent-dir name + stem under a platform-aware base to reduce collisions.
@@ -300,8 +307,8 @@ def compress_file(filepath: Path) -> bool:
     # touching the input file. If the filesystem dropped bytes (encoding,
     # antivirus, disk full), unlink the bad backup and abort instead of
     # leaving the user with a corrupt backup + compressed primary.
-    backup_path.write_text(original_text)
-    backup_readback = backup_path.read_text(errors="ignore")
+    write_text(backup_path, original_text)
+    backup_readback = read_text(backup_path)
     if backup_readback != original_text:
         print(f"❌ Backup write verification failed: {backup_path}")
         print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
@@ -310,7 +317,7 @@ def compress_file(filepath: Path) -> bool:
         except OSError:
             pass
         return False
-    filepath.write_text(compressed)
+    write_text_atomic(filepath, compressed)
 
     # Step 2: Validate + Retry
     for attempt in range(MAX_RETRIES):
@@ -327,16 +334,18 @@ def compress_file(filepath: Path) -> bool:
             print(f"   - {err}")
 
         if attempt == MAX_RETRIES - 1:
-            # Restore original on failure
-            filepath.write_text(original_text)
-            backup_path.unlink(missing_ok=True)
+            _restore_original(filepath, original_text, backup_path)
             print("❌ Failed after retries — original restored")
             return False
 
         print("Fixing with Claude...")
-        compressed = call_claude(
-            build_fix_prompt(original_text, compressed, result.errors)
-        )
-        filepath.write_text(compressed)
+        try:
+            compressed = call_claude(
+                build_fix_prompt(original_text, compressed, result.errors)
+            )
+            write_text_atomic(filepath, compressed)
+        except Exception:
+            _restore_original(filepath, original_text, backup_path)
+            raise
 
     return True
