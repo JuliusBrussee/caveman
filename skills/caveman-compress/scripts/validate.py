@@ -3,6 +3,8 @@ import re
 from collections import Counter
 from pathlib import Path
 
+from .textio import read_text
+
 URL_REGEX = re.compile(r"https?://[^\s)]+")
 FENCE_OPEN_REGEX = re.compile(r"^(\s{0,3})(`{3,}|~{3,})(.*)$")
 HEADING_REGEX = re.compile(r"^(#{1,6})\s+(.*)", re.MULTILINE)
@@ -28,7 +30,7 @@ class ValidationResult:
 
 
 def read_file(path: Path) -> str:
-    return path.read_text(errors="ignore")
+    return read_text(path)
 
 
 # ---------- Extractors ----------

@@ -5,6 +5,8 @@ import json
 import re
 from pathlib import Path
 
+from .textio import read_text
+
 # Extensions that are natural language and compressible
 COMPRESSIBLE_EXTENSIONS = {".md", ".txt", ".markdown", ".rst", ".typ", ".typst", ".tex"}
 
@@ -90,7 +92,7 @@ def detect_file_type(filepath: Path) -> str:
     # Extensionless files (like CLAUDE.md, TODO) — check content
     if not ext:
         try:
-            text = filepath.read_text(errors="ignore")
+            text = read_text(filepath)
         except (OSError, PermissionError):
             return "unknown"
 
