@@ -3,7 +3,7 @@ name: caveman-compress
 description: >
   Compress natural language memory files (CLAUDE.md, todos, preferences) into caveman format
   to save input tokens. Preserves all technical substance, code, URLs, and structure.
-  Compressed version overwrites the original file. Human-readable backup saved as FILE.original.md.
+  Compressed version overwrites the original file. Human-readable backup saved out-of-tree to avoid re-ingestion by skill auto-loaders.
   Trigger: /caveman-compress FILEPATH or "compress memory file"
 ---
 
@@ -11,7 +11,7 @@ description: >
 
 ## Purpose
 
-Compress natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Human-readable backup saved as `<filename>.original.md`.
+Compress natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Human-readable backup saved out-of-tree (see Boundaries).
 
 ## Trigger
 
@@ -107,5 +107,9 @@ Compressed:
 - NEVER modify: .py, .js, .ts, .json, .yaml, .yml, .toml, .env, .lock, .css, .html, .xml, .sql, .sh
 - If file has mixed content (prose + code), compress ONLY the prose sections
 - If unsure whether something is code or prose, leave it unchanged
-- Original file is backed up as FILE.original.md before overwriting
-- Never compress FILE.original.md (skip it)
+- Original file is backed up **out-of-tree** before overwriting, to prevent skill/agent auto-loaders from re-ingesting the `.original.md` copy as a live file:
+  - Linux/macOS: `~/.local/share/caveman-compress/backups/<parent-dir>/<stem>.original.md`
+  - Windows: `%LOCALAPPDATA%\caveman-compress\backups\<parent-dir>\<stem>.original.md`
+  - Override with `$XDG_DATA_HOME` on Linux/macOS
+- Never compress `.original.md` files (skip them)
+- **Agent/skill definitions**: compressing a Claude Code agent (`~/.claude/agents/*.md`) or skill (`SKILL.md`) is safe — the backup lives out-of-tree so it cannot collide with the live compressed file on the same `name:` frontmatter field, which would cause nondeterministic agent loading
