@@ -73,7 +73,35 @@ process.stdin.on('end', () => {
     // /caveman-stats [--share] — block the prompt and inject stats output as
     // the hook's reason. The script reads the active session log, so we pass
     // transcript_path through when Claude Code provides it.
-    const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
+    // The desktop app and SDK entrypoints do not pass the raw typed text: a
+    // slash command arrives as "<command-name>/caveman:caveman-stats</command-name>",
+    // with any arguments in a separate ',
+      transcript_path: sess,
+    }),
+  });
+  const parsed = JSON.parse(out);
+  assert.strictEqual(parsed.decision, 'block');
+  assert.match(parsed.reason, /^🪨 Saved 650 output tokens/);
+});
+
+// A wrapped invocation of any OTHER command must not be mistaken for
+// /caveman-stats — no stats block, reinforcement branch as usual.
+test('mode tracker ignores unrelated wrapped commands', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [TRACKER], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, HOME: tmp },
+    input: JSON.stringify({
+      prompt: '<command-name>/caveman:caveman-help</command-name>',
+      transcript_path: '',
+    }),
+  });
+  const parsed = JSON.parse(out);
+  assert.ok(!parsed.decision, 'must not block on an unrelated command');
+  assert.ok(parsed.hookSpecificOutput, 'expected the reinforcement branch');
+});
     if (statsMatch) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
       try {
