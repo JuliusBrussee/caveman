@@ -143,6 +143,7 @@ Six levels. Switch anytime with `/caveman <level>`. Level sticks until you chang
 | `/caveman-review` | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` |
 | `/caveman-stats` | Real session token usage, lifetime savings, USD. Tweetable line with `--share`. |
 | `/caveman-compress <file>` | Rewrite a memory file (like `CLAUDE.md`) into caveman-speak. Cuts ~46% input tokens **every session after**. Code, URLs, paths byte-preserved. |
+| `/caveman-test` | Terse test cases. One behavior per test, matches repo's existing framework. |
 | `caveman-shrink` | MCP middleware. Wraps any MCP server, compresses its tool descriptions. [npm](https://www.npmjs.com/package/caveman-shrink). |
 | `cavecrew-*` | Caveman subagents (investigator, builder, reviewer). ~60% fewer tokens than vanilla, so main context lasts longer. |
 

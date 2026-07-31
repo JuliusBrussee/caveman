@@ -30,6 +30,7 @@ Mode stick until changed or session end.
 | **caveman-commit** | `/caveman-commit` | Terse commit messages. Conventional Commits. ≤50 char subject. |
 | **caveman-review** | `/caveman-review` | One-line PR comments: `L42: bug: user null. Add guard.` |
 | **caveman-compress** | `/caveman-compress <file>` | Compress .md files to caveman prose. Saves ~46% input tokens. |
+| **caveman-test** | `/caveman-test` | Terse test cases. One behavior per test, matches repo's framework. |
 | **caveman-help** | `/caveman-help` | This card. |
 
 ## Deactivate

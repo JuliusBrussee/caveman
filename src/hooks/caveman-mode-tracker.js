@@ -10,7 +10,7 @@ const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange, VALID_MODES }
 
 // Modes handled by their own slash commands (/caveman-commit, etc.) — not
 // selectable via /caveman <arg>.
-const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
+const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress', 'test']);
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -118,6 +118,8 @@ process.stdin.on('end', () => {
         mode = 'review';
       } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
         mode = 'compress';
+      } else if (cmd === '/caveman-test' || cmd === '/caveman:caveman-test') {
+        mode = 'test';
       } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
         // Bare /caveman → activate at configured default
         if (!arg) {

@@ -1,0 +1,5 @@
+---
+description: Generate terse caveman-style test cases
+---
+
+Write test cases for the code in question. Match the repo's existing test framework and conventions. One logical behavior per test: happy path, boundary value, error case, or branch visible in the diff. Test names state condition and expected outcome. No redundant setup, no comments restating assertions, no debug prints. Reuse existing fixtures/mocks. Output test code only — do not modify the implementation or run the suite.
