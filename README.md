@@ -69,10 +69,10 @@ Same fix. Third of the words. Nothing technical lost.
 
 ```
 ┌────────────────────────────────────────────┐
-│   output tokens saved   █████████       65% │
-│   input tokens saved    ░░░░░░░░░         0% │
-│   technical accuracy    █████████      100% │
-│   vibes                 █████████       OOG │
+│   output tokens saved   █████████      65% │
+│   input tokens saved    ░░░░░░░░░       0% │
+│   technical accuracy    █████████     100% │
+│   vibes                 █████████      OOG │
 └────────────────────────────────────────────┘
 ```
 
