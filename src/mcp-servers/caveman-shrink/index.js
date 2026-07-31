@@ -57,18 +57,8 @@ upstream.on('exit', (code, signal) => {
 // JSON-RPC framing over stdio: messages are separated by newlines (the
 // MCP stdio transport uses LSP-like content but most servers emit one JSON
 // object per line). We line-buffer in both directions and parse opportunistically.
-function makeLineBuffer(onLine) {
-  let buf = '';
-  return chunk => {
-    buf += chunk.toString('utf8');
-    let nl;
-    while ((nl = buf.indexOf('\n')) !== -1) {
-      const line = buf.slice(0, nl);
-      buf = buf.slice(nl + 1);
-      if (line.trim()) onLine(line);
-    }
-  };
-}
+// Lives in line-buffer.js so the chunk-boundary handling is unit-testable.
+const { makeLineBuffer } = require('./line-buffer');
 
 function transformResponse(msg) {
   // Compress description fields on list-style responses. Match by method

@@ -13,6 +13,9 @@ const { compress, compressDescriptionsInPlace } = require(
 const { getSpawnOptions } = require(
   path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink', 'spawn-options.js')
 );
+const { makeLineBuffer } = require(
+  path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink', 'line-buffer.js')
+);
 
 let passed = 0;
 let failed = 0;
@@ -216,6 +219,60 @@ test('package.json "files" ships every module the entry points require (#597)', 
       queue.push(dep);
     }
   }
+});
+
+// ── Line framing across chunk boundaries ────────────────────────────────────
+// Node delivers stdout to a 'data' listener in arbitrary byte-sized chunks. A
+// per-chunk Buffer#toString('utf8') mangles any multi-byte character split
+// across two chunks into U+FFFD, and because the line still parses as JSON the
+// corruption reaches the model silently as a mangled tool description.
+
+test('reassembles a multi-byte character split across chunks', () => {
+  const payload = JSON.stringify({
+    jsonrpc: '2.0', id: 1,
+    result: { tools: [{ name: 't', description: '读取文件 — reads a file 🎉' }] }
+  }) + '\n';
+  const full = Buffer.from(payload, 'utf8');
+  // Cut one byte into the 3-byte '读' so its sequence straddles the boundary.
+  const cut = full.indexOf(Buffer.from('读', 'utf8')) + 1;
+
+  const lines = [];
+  const feed = makeLineBuffer(l => lines.push(l));
+  feed(full.subarray(0, cut));
+  feed(full.subarray(cut));
+
+  assert.equal(lines.length, 1, 'expected exactly one framed line');
+  assert.ok(!lines[0].includes('�'),
+    `replacement character in reassembled line: ${lines[0]}`);
+  assert.equal(JSON.parse(lines[0]).result.tools[0].description,
+    '读取文件 — reads a file 🎉');
+});
+
+test('survives a byte-at-a-time stream', () => {
+  const payload = JSON.stringify({ result: { tools: [{ description: '日本語 ✅ café' }] } }) + '\n';
+  const full = Buffer.from(payload, 'utf8');
+  const lines = [];
+  const feed = makeLineBuffer(l => lines.push(l));
+  for (const byte of full) feed(Buffer.from([byte]));
+
+  assert.equal(lines.length, 1);
+  assert.equal(JSON.parse(lines[0]).result.tools[0].description, '日本語 ✅ café');
+});
+
+test('emits one line per newline-delimited message and drops blanks', () => {
+  const lines = [];
+  const feed = makeLineBuffer(l => lines.push(l));
+  feed(Buffer.from('{"a":1}\n\n  \n{"b":2}\n', 'utf8'));
+  assert.deepStrictEqual(lines, ['{"a":1}', '{"b":2}']);
+});
+
+test('withholds a trailing partial line until its newline arrives', () => {
+  const lines = [];
+  const feed = makeLineBuffer(l => lines.push(l));
+  feed(Buffer.from('{"a":', 'utf8'));
+  assert.deepStrictEqual(lines, [], 'partial line must not be emitted');
+  feed(Buffer.from('1}\n', 'utf8'));
+  assert.deepStrictEqual(lines, ['{"a":1}']);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
