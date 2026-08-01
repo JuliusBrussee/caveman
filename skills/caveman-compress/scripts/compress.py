@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 _IS_WINDOWS = os.name == "nt" or sys.platform == "win32"
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)  # unix-only; refuses to open through a pre-placed symlink at the lock path
@@ -361,6 +361,37 @@ from .detect import should_compress
 from .validate import validate
 
 MAX_RETRIES = 2
+MAX_FILE_SIZE_BYTES = 500_000
+MAX_FILE_SIZE_LABEL = "500KB"
+
+ENV_ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
+ENV_COMPRESS_PROVIDER = "CAVEMAN_COMPRESS_PROVIDER"
+ENV_FALLBACK_PROVIDER = "CAVEMAN_PROVIDER"
+ENV_COMPRESS_MODEL = "CAVEMAN_COMPRESS_MODEL"
+ENV_FALLBACK_MODEL = "CAVEMAN_MODEL"
+
+PROVIDER_CLAUDE = "claude"
+PROVIDER_ANTHROPIC = "anthropic"
+PROVIDER_OPENCODE = "opencode"
+SUPPORTED_PROVIDERS = frozenset({
+    PROVIDER_CLAUDE,
+    PROVIDER_ANTHROPIC,
+    PROVIDER_OPENCODE,
+})
+
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5"
+ANTHROPIC_MAX_TOKENS = 8192
+CLAUDE_CLI = "claude"
+CLAUDE_PRINT_ARG = "--print"
+CLAUDE_SETTING_SOURCES_ARG = "--setting-sources"
+CLAUDE_STRICT_MCP_ARG = "--strict-mcp-config"
+OPENCODE_CLI = "opencode"
+OPENCODE_RUN_ARG = "run"
+OPENCODE_FILE_ARG = "--file"
+MODEL_ARG = "--model"
+OPENCODE_PROMPT_PREFIX = ".caveman-compress-prompt-"
+OPENCODE_PROMPT_SUFFIX = ".md"
+OPENCODE_PROMPT_MESSAGE = "Follow the attached prompt exactly. Return only the final answer."
 
 
 def _is_smaller_than_body(candidate_body: str, body: str) -> bool:
@@ -394,14 +425,158 @@ def _is_smaller_than_body(candidate_body: str, body: str) -> bool:
 CLAUDE_CALL_TIMEOUT_SECONDS = LOCK_WAIT_SECONDS // (MAX_RETRIES + 1)
 
 
-# ---------- Claude Calls ----------
+# ---------- LLM Calls ----------
+
+
+class AnthropicSdkUnavailable(RuntimeError):
+    """Raised when the explicitly selected Anthropic SDK is unavailable."""
+
+
+def configured_provider() -> str:
+    provider = (
+        os.environ.get(ENV_COMPRESS_PROVIDER)
+        or os.environ.get(ENV_FALLBACK_PROVIDER)
+        or PROVIDER_CLAUDE
+    ).strip().lower()
+    if provider not in SUPPORTED_PROVIDERS:
+        supported = ", ".join(sorted(SUPPORTED_PROVIDERS))
+        raise ValueError(
+            f"Unsupported caveman-compress provider: {provider}. "
+            f"Supported providers: {supported}"
+        )
+    return provider
+
+
+def configured_model(default_model: Optional[str] = None) -> Optional[str]:
+    model = (
+        os.environ.get(ENV_COMPRESS_MODEL)
+        or os.environ.get(ENV_FALLBACK_MODEL)
+        or default_model
+    )
+    if model is None:
+        return None
+    return model.strip() or None
+
+
+def run_cli(
+    binary_name: str,
+    args: List[str],
+    stdin_prompt: Optional[str] = None,
+) -> str:
+    binary = shutil.which(binary_name) or binary_name
+    command = [binary, *args]
+    run_kwargs = {
+        "text": True,
+        "capture_output": True,
+        "check": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "timeout": CLAUDE_CALL_TIMEOUT_SECONDS,
+    }
+    if stdin_prompt is not None:
+        run_kwargs["input"] = stdin_prompt
+    try:
+        result = subprocess.run(command, **run_kwargs)
+        return strip_llm_wrapper(result.stdout.strip())
+    except FileNotFoundError as error:
+        raise RuntimeError(f"{binary_name} CLI not found on PATH") from error
+    except subprocess.CalledProcessError as error:
+        stderr = error.stderr.strip() if error.stderr else "no stderr"
+        raise RuntimeError(f"{binary_name} call failed:\n{stderr}") from error
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            f"{binary_name} CLI call timed out after "
+            f"{CLAUDE_CALL_TIMEOUT_SECONDS}s"
+        ) from error
+
+
+def call_anthropic_sdk(prompt: str) -> str:
+    api_key = os.environ.get(ENV_ANTHROPIC_API_KEY)
+    if not api_key:
+        raise RuntimeError(
+            f"{ENV_ANTHROPIC_API_KEY} is required for provider "
+            f"'{PROVIDER_ANTHROPIC}'"
+        )
+    try:
+        import anthropic
+    except ImportError as error:
+        raise AnthropicSdkUnavailable(
+            f"anthropic package is required for provider '{PROVIDER_ANTHROPIC}'"
+        ) from error
+
+    client = anthropic.Anthropic(
+        api_key=api_key,
+        timeout=CLAUDE_CALL_TIMEOUT_SECONDS,
+    )
+    message = client.messages.create(
+        model=configured_model(DEFAULT_CLAUDE_MODEL),
+        max_tokens=ANTHROPIC_MAX_TOKENS,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    # Tool-heavy models can put a tool_use or thinking block first.
+    text = next(
+        (
+            block.text
+            for block in message.content
+            if getattr(block, "type", None) == "text"
+        ),
+        "",
+    )
+    return strip_llm_wrapper(text.strip())
+
+
+def call_claude_cli(prompt: str) -> str:
+    args = []
+    model = configured_model()
+    if model:
+        args.extend([MODEL_ARG, model])
+    args.extend([
+        CLAUDE_PRINT_ARG,
+        CLAUDE_SETTING_SOURCES_ARG,
+        "",
+        CLAUDE_STRICT_MCP_ARG,
+    ])
+    return run_cli(CLAUDE_CLI, args, prompt)
+
+
+def call_opencode_cli(prompt: str) -> str:
+    args = [OPENCODE_RUN_ARG]
+    model = configured_model()
+    if model:
+        args.extend([MODEL_ARG, model])
+
+    prompt_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            prefix=OPENCODE_PROMPT_PREFIX,
+            suffix=OPENCODE_PROMPT_SUFFIX,
+            delete=False,
+        ) as prompt_file:
+            prompt_file.write(prompt)
+            prompt_path = Path(prompt_file.name)
+        args.extend(
+            [OPENCODE_FILE_ARG, str(prompt_path), OPENCODE_PROMPT_MESSAGE]
+        )
+        return run_cli(OPENCODE_CLI, args)
+    finally:
+        if prompt_path is not None:
+            try:
+                prompt_path.unlink(missing_ok=True)
+            except OSError as error:
+                raise RuntimeError(
+                    f"Failed to delete temporary opencode prompt: {prompt_path}"
+                ) from error
 
 
 def call_claude(prompt: str) -> str:
-    """Send a prompt to Claude.
+    """Send a prompt to the configured compression provider.
 
     Prefers the Anthropic SDK when ANTHROPIC_API_KEY is set; otherwise falls
-    back to the ``claude --print`` CLI (which handles desktop auth).
+    back to the ``claude --print`` CLI (which handles desktop auth). Set
+    ``CAVEMAN_COMPRESS_PROVIDER=opencode`` and ``CAVEMAN_COMPRESS_MODEL`` (or
+    ``CAVEMAN_MODEL``) to route compression through opencode instead.
 
     On Windows the CLI subprocess decoding defaults to the system codepage
     (cp1251 / cp1252) and crashes on UTF-8 output — see issue #152. Pinning
@@ -410,55 +585,17 @@ def call_claude(prompt: str) -> str:
     report. Windows users with non-ASCII content can also set
     ``ANTHROPIC_API_KEY`` to route through the SDK and skip the subprocess.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if api_key:
+    provider = configured_provider()
+    if provider == PROVIDER_OPENCODE:
+        return call_opencode_cli(prompt)
+    if provider == PROVIDER_ANTHROPIC:
+        return call_anthropic_sdk(prompt)
+    if os.environ.get(ENV_ANTHROPIC_API_KEY):
         try:
-            import anthropic
-
-            client = anthropic.Anthropic(api_key=api_key, timeout=CLAUDE_CALL_TIMEOUT_SECONDS)
-            msg = client.messages.create(
-                model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
-                max_tokens=8192,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            # Tool-heavy models can put a tool_use or thinking block first; take
-            # the first text block instead of trusting content[0].
-            text = next((block.text for block in msg.content if getattr(block, "type", None) == "text"), "")
-            return strip_llm_wrapper(text.strip())
-        except ImportError:
-            pass  # anthropic not installed, fall back to CLI
-    # Fallback: use claude CLI (handles desktop auth).
-    # Resolve binary via shutil.which so Windows .cmd/.bat shims (e.g.
-    # %APPDATA%\npm\claude.CMD) work without shell=True. On POSIX,
-    # shutil.which returns the same absolute path as the implicit lookup,
-    # so this is a no-op there. Falls back to bare "claude" if not found
-    # on PATH so subprocess raises a clear FileNotFoundError.
-    claude_bin = shutil.which("claude") or "claude"
-    try:
-        result = subprocess.run(
-            [
-                claude_bin,
-                "--print",
-                "--setting-sources",
-                "",
-                "--strict-mcp-config",
-            ],
-            input=prompt,
-            text=True,
-            capture_output=True,
-            check=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=CLAUDE_CALL_TIMEOUT_SECONDS,
-        )
-        return strip_llm_wrapper(result.stdout.strip())
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Claude call failed:\n{e.stderr}")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(
-            f"Claude CLI call timed out after {CLAUDE_CALL_TIMEOUT_SECONDS}s "
-            "(stalled network, or an auth prompt with no TTY to answer it)"
-        )
+            return call_anthropic_sdk(prompt)
+        except AnthropicSdkUnavailable:
+            pass
+    return call_claude_cli(prompt)
 
 
 def build_compress_prompt(original: str) -> str:
@@ -591,22 +728,24 @@ def compress_file(filepath: Path) -> bool:
     # Resolve first so the lock and every check below key off the same canonical path regardless of how the caller spelled it.
     filepath = filepath.resolve()
 
-    MAX_FILE_SIZE = 500_000  # 500KB
     # None of these three checks depends on mutual exclusion, so they run before the lock is taken — a rejected input (bad path, oversized, sensitive name) shouldn't leave a permanent lock file behind in shared state.
     if not filepath.exists():
         raise FileNotFoundError(f"File not found: {filepath}")
-    if filepath.stat().st_size > MAX_FILE_SIZE:
-        raise ValueError(f"File too large to compress safely (max 500KB): {filepath}")
+    if filepath.stat().st_size > MAX_FILE_SIZE_BYTES:
+        raise ValueError(
+            f"File too large to compress safely (max {MAX_FILE_SIZE_LABEL}): "
+            f"{filepath}"
+        )
 
     # Refuse files that look like they contain secrets or PII. Compressing ships
-    # the raw bytes to the Anthropic API — a third-party boundary — so we fail
+    # the raw bytes to the configured provider — a third-party boundary — so we fail
     # loudly rather than silently exfiltrate credentials or keys. Override is
     # intentional: the user must rename the file if the heuristic is wrong.
     if is_sensitive_path(filepath):
         raise ValueError(
             f"Refusing to compress {filepath}: filename looks sensitive "
             "(credentials, keys, secrets, or known private paths). "
-            "Compression sends file contents to the Anthropic API. "
+            "Compression sends file contents to the configured LLM provider. "
             "Rename the file if this is a false positive."
         )
 
