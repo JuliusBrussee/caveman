@@ -537,7 +537,7 @@ async function installClaude(ctx) {
     // 'auto'
     shouldWireHooks = !pluginInstallSucceeded;
     if (!shouldWireHooks) {
-      note('  hooks: plugin manifest handles SessionStart + UserPromptSubmit');
+      note('  hooks: plugin manifest handles SessionStart + UserPromptSubmit + SessionEnd');
       note('  (pass --with-hooks to also wire standalone hooks in settings.json)');
       results.skipped.push(['claude-hooks', 'plugin manifest handles hooks']);
     } else {
@@ -999,7 +999,7 @@ async function installHooks(ctx) {
   if (opts.dryRun) {
     note(`  would mkdir -p ${hooksDir}`);
     for (const f of HOOK_FILES) note(`  would install ${path.join(hooksDir, f)}`);
-    note(`  would merge SessionStart + UserPromptSubmit + statusline into ${settingsPath}`);
+    note(`  would merge SessionStart + UserPromptSubmit + SessionEnd + statusline into ${settingsPath}`);
     return 'ok';
   }
 
@@ -1068,6 +1068,7 @@ async function installHooks(ctx) {
   const node = absoluteNodePath();
   const activate = path.join(hooksDir, 'caveman-activate.js');
   const tracker  = path.join(hooksDir, 'caveman-mode-tracker.js');
+  const stats = path.join(hooksDir, 'caveman-stats.js');
   const statusline = path.join(hooksDir, 'caveman-statusline.sh');
 
   // Migrate any legacy bare-`node` invocations of our managed scripts.
@@ -1085,6 +1086,16 @@ async function installHooks(ctx) {
     marker: 'caveman-mode-tracker',
     timeout: 5,
     statusMessage: 'Tracking caveman mode...',
+  });
+
+  // SessionEnd — silently record a lifetime stats snapshot. Keep the `--record`
+  // flag unquoted (path only is quoted) so the command matches the plugin
+  // manifest and standalone installers byte-for-byte.
+  SETTINGS.addCommandHook(settings, 'SessionEnd', {
+    command: `${PLATFORM_PATHS.hookCommand(node, [stats])} --record`,
+    marker: 'caveman-stats',
+    timeout: 5,
+    statusMessage: 'Recording caveman stats...',
   });
 
   // Statusline — set if absent or already pointing at our script.
@@ -1534,8 +1545,8 @@ FLAGS
   --all                 Turn on hooks + init. (mcp-shrink needs an upstream;
                         pass --with-mcp-shrink="<cmd>" to add it.)
   --minimal             Just the plugin/extension install.
-  --with-hooks          Claude Code: install SessionStart/UserPromptSubmit hooks
-                        + statusline badge. (Default ON.)
+  --with-hooks          Claude Code: install SessionStart/UserPromptSubmit/
+                        SessionEnd hooks + statusline badge. (Default ON.)
   --no-hooks            Skip the hooks installer.
   --with-init           Write per-repo IDE rule files into \$PWD.
   --with-mcp-shrink="<upstream cmd>"
