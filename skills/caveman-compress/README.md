@@ -91,6 +91,19 @@ skills/caveman-compress/
 
 Requires Python 3.10 or newer.
 
+### Provider / model
+
+Default path uses Claude: `ANTHROPIC_API_KEY` + Anthropic SDK when set, else `claude --print`.
+
+To use opencode instead:
+
+```bash
+export CAVEMAN_COMPRESS_PROVIDER=opencode
+export CAVEMAN_COMPRESS_MODEL=github-copilot/gpt-4.1
+```
+
+`CAVEMAN_PROVIDER` and `CAVEMAN_MODEL` are fallback env vars when compress-specific values are unset.
+
 ## Usage
 
 ```
@@ -120,13 +133,13 @@ Examples:
         ↓
 detect file type        (no tokens)
         ↓
-Claude compresses       (tokens: one call)
+configured provider compresses       (tokens — one call)
         ↓
 validate output         (no tokens)
   checks: headings, code blocks, URLs, file paths, bullets
         ↓
-if errors: Claude fixes cherry-picked issues only   (tokens: targeted fix)
-  does NOT recompress; only patches broken parts
+if errors: configured provider fixes cherry-picked issues only   (tokens — targeted fix)
+  does NOT recompress — only patches broken parts
         ↓
 retry up to 2 times
         ↓
