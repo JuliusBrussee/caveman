@@ -67,6 +67,25 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertEqual(path.read_text(), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
+    def test_expanded_compressed_output_does_not_touch_disk(self):
+        # A structurally faithful but LONGER rewrite passes every validate()
+        # check (same heading, no URLs/code/inline code lost), so without a
+        # length gate it was written and reported as a successful compression.
+        # Isolate the backup data dir so no backup lands in the real home dir.
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            original = "# Heading\n\nFox jump dog.\n"
+            expanded = "# Heading\n\nThe quick brown fox jumps over the lazy dog, repeatedly.\n"
+            self.assertGreater(len(expanded), len(original))
+            path = self._file_with(Path(tmp), original)
+            with mock.patch.object(compress_mod, "call_claude", return_value=expanded):
+                ok = compress_mod.compress_file(path)
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(), original)
+            backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
+            self.assertFalse(backup.exists())
+
     def test_real_compression_writes_backup_and_target(self):
         # Isolate the backup data dir to a temp location so the out-of-tree
         # backup (issue #420) never lands in the developer's real home dir.

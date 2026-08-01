@@ -293,6 +293,18 @@ def compress_file(filepath: Path) -> bool:
         print("   already in caveman form. Original file is untouched (no backup created).")
         return False
 
+    # The whole point of the skill is token reduction, but validate() only
+    # checks structural invariants (headings/code blocks/URLs/paths/bullets/
+    # inline code) — it never compares length. A rewrite that is structurally
+    # faithful but LONGER therefore passes every check and gets written and
+    # reported as a successful "compression". Gate on length here, beside the
+    # identical-output guard, so we abort before any backup or write.
+    if len(compressed_body) >= len(body):
+        print("❌ Compression aborted: output is not smaller than input "
+              f"({len(compressed_body)} >= {len(body)} chars).")
+        print("   Original file is untouched (no backup created).")
+        return False
+
     # Reassemble: frontmatter (verbatim) + compressed body
     compressed = frontmatter + compressed_body
 
