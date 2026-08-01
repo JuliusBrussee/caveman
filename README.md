@@ -237,7 +237,7 @@ Measured on the caveman skill itself: **1,069 → 415 est. tokens, −61%**, `in
 
 ## The skill
 
-The original, and still the fastest way to feel caveman. MIT forever. Works in [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex, Gemini, Cursor, Windsurf, Cline, Copilot, and 30+ other agents.
+The original, and still the fastest way to feel caveman. MIT forever. Works in [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Oh My Pi (OMP), Codex, Gemini, Cursor, Windsurf, Cline, Copilot, and 30+ other agents.
 
 Type `/caveman` if your agent does not activate it automatically. Switch with `/caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra`; turn it off with `/caveman off` or `normal mode`.
 
