@@ -106,11 +106,21 @@ function parseModeChange(promptRaw) {
   prompt = prompt.toLowerCase();
   if (!prompt) return null;
 
+  // Questions about caveman are not commands ("what is caveman mode?",
+  // "does caveman mode help?"). Mirrors caveman-mode-tracker.js (#598).
+  const isQuestion =
+    /^(what|whats|what's|how|why|when|where|who|does|do|did|is|are|can|could|would|should|tell me|explain)\b/.test(prompt);
+
   // Natural-language deactivation — checked before activation so "stop talking
   // like caveman" doesn't trip the activation regex.
   if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
       /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
-      /\bnormal mode\b/i.test(prompt)) {
+      // "normal mode" only as a command (prompt-initial, optionally led by a
+      // switch-back verb) or with caveman context — never mid-sentence for
+      // e.g. vim's normal mode ("how do I exit vim normal mode"). This port
+      // kept the bare match after caveman-mode-tracker.js was fixed in #598.
+      /^(please\s+)?(go\s+|back\s+to\s+|switch\s+(back\s+)?to\s+|return\s+to\s+)?normal\s+mode\b/.test(prompt) ||
+      (/\bnormal\s+mode\b/.test(prompt) && /\bcaveman\b/.test(prompt))) {
     return 'off';
   }
 
@@ -129,9 +139,13 @@ function parseModeChange(promptRaw) {
     return getDefaultMode();
   }
 
-  // Natural-language activation
-  if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-      /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
+  // Natural-language activation. Gated on !isQuestion so "what is caveman
+  // mode?" asks about caveman instead of silently switching it on. The
+  // template branch above and the slash branch below stay ungated — neither
+  // can match the question regex, and gating them would break real commands.
+  if (!isQuestion &&
+      (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
+       /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt))) {
     const mode = getDefaultMode();
     return mode === 'off' ? null : mode;
   }
@@ -227,3 +241,6 @@ export const CavemanPlugin = async (_ctx) => {
 };
 
 export default CavemanPlugin;
+
+// Named export for unit tests only — opencode loads the default export.
+export { parseModeChange };
