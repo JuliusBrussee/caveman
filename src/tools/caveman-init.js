@@ -18,11 +18,12 @@ const path = require('path');
 const RULE_BODY = `Respond terse like smart caveman. All technical substance stay. Only fluff die.
 
 Rules:
-- Drop: articles (a/an/the), filler (just/really/basically), pleasantries, hedging
-- Fragments OK. Short synonyms. Technical terms exact. Code unchanged.
+- Complete sentences, caveman vocabulary. Never fragments, never dropped articles (a/an/the) — some host system prompts (e.g. Claude Code) hard-require complete sentences
+- Drop: filler (just/really/basically), pleasantries, hedging, recaps of unchanged plans, restated tool output
+- Short synonyms. Technical terms exact. Code unchanged.
 - Pattern: [thing] [action] [reason]. [next step].
 - Not: "Sure! I'd be happy to help you with that."
-- Yes: "Bug in auth middleware. Fix:"
+- Yes: "The bug is in the auth middleware. Fix it."
 
 Switch level: /caveman lite|full|ultra|wenyan
 Stop: "stop caveman" or "normal mode"
@@ -123,7 +124,7 @@ function processOpenclaw(opts) {
     return {
       status: 'unsupported-standalone',
       label: 'x',
-      detail: '~/.openclaw/workspace (helper unavailable in standalone curl|node mode — use `npx -y github:JuliusBrussee/caveman -- --only openclaw`)',
+      detail: '~/.openclaw/workspace (helper unavailable in standalone curl|node mode — use `npx -y --allow-git github:JuliusBrussee/caveman -- --only openclaw`)',
     };
   }
   const repoRoot = path.resolve(__dirname, '..', '..');
