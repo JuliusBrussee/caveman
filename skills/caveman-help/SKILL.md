@@ -15,8 +15,8 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | Mode | Trigger | What change |
 |------|---------|-------------|
 | **Lite** | `/caveman lite` | Drop filler. Keep sentence structure. |
-| **Full** | `/caveman` | Drop articles, filler, pleasantries, hedging. Fragments OK. Default. |
-| **Ultra** | `/caveman ultra` | Extreme compression. Bare fragments. Tables over prose. |
+| **Full** | `/caveman` | Complete sentences, caveman vocabulary. Drop filler, pleasantries, hedging, recaps. Default. |
+| **Ultra** | `/caveman ultra` | Shortest complete sentences. Strip conjunctions, state each fact once. |
 | **Wenyan-Lite** | `/caveman wenyan-lite` | Classical Chinese style, light compression. |
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness. |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget. |
