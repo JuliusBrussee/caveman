@@ -33,7 +33,7 @@ const REPO = 'JuliusBrussee/caveman';
 // the new tag on every release (CI release step) AFTER regenerating
 // src/hooks/checksums.sha256 so the integrity manifest matches the ref.
 // Overridable via CAVEMAN_REF for testing against a branch.
-const PINNED_REF = process.env.CAVEMAN_REF || 'v1.9.1';
+const PINNED_REF = process.env.CAVEMAN_REF || 'v1.10.0';
 // OpenClaw skill frontmatter wants a bare semver, not a `v`-prefixed tag —
 // derive it from PINNED_REF so the two never drift (was hardcoded separately
 // in cli/lib/openclaw.js as '1.0.0').
