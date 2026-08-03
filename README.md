@@ -333,7 +333,7 @@ Caveman free forever. Sponsors keep the rock sharp.
 
 Caveman save you token, save you money. Star cost zero. Fair trade. ⭐
 
-[![Star History Chart](https://api.star-history.com/svg?repos=JuliusBrussee/caveman&type=Date)](https://star-history.com/#JuliusBrussee/caveman&Date)
+[![Star History Chart](./docs/assets/star-history.png)](https://star-history.com/#JuliusBrussee/caveman&Date)
 
 ---
 
