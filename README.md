@@ -8,7 +8,8 @@
 
 <p align="center">
   Make your AI coding agent talk like a caveman.<br>
-  Same answers, <strong>65% fewer output tokens</strong>. Brain still big. Mouth small.
+  Same answers. <strong>65% fewer output tokens</strong> on prose,<br>
+  <strong>8.5%</strong> on <a href="#independently-measured-jetbrains-86-tasks">agentic coding runs</a>. Brain still big. Mouth small.
 </p>
 
 <p align="center">
@@ -77,6 +78,8 @@ Same fix. Third of the words. Nothing technical lost.
 ```
 
 Caveman no make brain smaller. Caveman make *mouth* smaller. Shrinks what the agent **says**, not what it knows.
+
+That 65% is the prose number, measured on replies like the ones above. On a full agentic coding run, where most of the output is code and tool calls, it's [8.5%](#independently-measured-jetbrains-86-tasks). Same skill, different workload — mechanism below.
 
 ## Install
 
@@ -151,7 +154,7 @@ Six levels. Switch anytime with `/caveman <level>`. Level sticks until you chang
 
 ## Benchmarks
 
-Real token counts from the Claude API. Average **65% output reduction** across 10 prompts (range 22–87%), measured against default verbose replies. Output tokens only, committed and reproducible in [`benchmarks/`](./benchmarks/) and [`evals/`](./evals/).
+Real token counts from the Claude API. Average **65% output reduction** across 10 **chat-style prompts** (range 22–87%), measured against default verbose replies. Output tokens only, committed and reproducible in [`benchmarks/`](./benchmarks/) and [`evals/`](./evals/). This is one-question-one-answer, not a full agentic coding run — for that number, see [JetBrains](#independently-measured-jetbrains-86-tasks) below.
 
 <!-- BENCHMARK-TABLE-START -->
 | Task | Normal | Caveman | Saved |
@@ -171,6 +174,29 @@ Real token counts from the Claude API. Average **65% output reduction** across 1
 
 > [!IMPORTANT]
 > **Honest number warning.** Caveman only shrinks **output** tokens. Input and reasoning tokens are untouched, and the skill itself adds ~1–1.5k input tokens per turn. So whole-session savings run smaller than the output number, and on already-terse workloads they can go net-negative. The real win is **readability and speed**. Cost savings are the bonus. When caveman wins, when it loses, and how to measure it yourself: **[docs/HONEST-NUMBERS.md](./docs/HONEST-NUMBERS.md)**.
+
+### Independently measured: JetBrains, 86 tasks
+
+JetBrains ran the skill against [86 tasks from SkillsBench](https://blog.jetbrains.com/ai/2026/07/speak-to-ai-agents-like-cavemen-tosave-tokens/) in July 2026 — real coding work, auto-graded by each task's own tests, Claude Code on `claude-sonnet-5`, skill forced on for every reply.
+
+| Workload | Output tokens saved | Measured by |
+|---|---:|---|
+| Chat-style prose | **65%** | us, table above |
+| Agentic coding run | **8.5%** | JetBrains, 86 tasks |
+
+Both numbers are real. They measure different workloads, and the gap is mechanical: caveman compresses narration and leaves code, diffs, tool calls, and error strings byte-exact. In a chat answer, narration is the whole reply. In an agentic run it's the thin layer between tool calls, so that's all there is to squeeze. An output-only skill has a low ceiling on work that is mostly not prose.
+
+Pick the number that matches your workload:
+
+- **Agent writes you prose** — explanations, review, docs, debugging walkthroughs → 65% territory.
+- **Agent works a repo unattended** → single digits. Not zero, not 65%.
+
+Quality was unaffected: across 86 auto-graded tasks the two arms were statistically indistinguishable. Small mouth, same brain — checked by someone who didn't ship it.
+
+Two things follow:
+
+- **Agentic bills are mostly input tokens**, which an output-only skill cannot touch by construction. `/caveman-compress` and `caveman-shrink` chip at that side; the skill alone never will.
+- **The right number is your number.** JetBrains had to run a full paid benchmark to find out what caveman does on their stack. That's the job [Caveman 2](#caveman-2) exists to do — for yours, continuously.
 
 Turns out short isn't just cheaper. A March 2026 paper, [*Brevity Constraints Reverse Performance Hierarchies in Language Models*](https://arxiv.org/abs/2604.00025), tested 31 models and found that constraining large models to brief answers **improved accuracy by ~26 points** on some benchmarks. Sometimes less word = more correct.
 
@@ -263,6 +289,8 @@ Two things happen, no more: a caveman skill lands in the workspace, and a tiny m
 **Caveman make token small. Caveman 2 make it _provable_.**
 
 Today's savings numbers (including `/caveman-stats`) are local estimates. Caveman 2 measures and verifies them across a whole team — real receipts, real dashboard, real proof the tokens went down. Building it now.
+
+[The JetBrains result](#independently-measured-jetbrains-86-tasks) is the argument for it. 65% and 8.5% are both correct, and neither one is *your* number — one harness, one model, one task set, and your stack is none of those. The fix is not a better README claim, ours or anyone's. It's a baseline on your own traffic and a receipt at the end of the month.
 
 [**Join the waitlist → caveman.so**](https://caveman.so)
 
