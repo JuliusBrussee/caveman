@@ -9,7 +9,7 @@
 <p align="center">
   Make your AI coding agent talk like a caveman.<br>
   Same answers. <strong>65% fewer output tokens</strong> on prose,<br>
-  <strong>8.5%</strong> on <a href="#independently-measured-jetbrains-86-tasks">agentic coding runs</a>. Brain still big. Mouth small.
+  <strong>8.5%</strong> on <a href="#independently-measured-jetbrains-86-tasks">long-horizon agentic coding runs</a>. Brain still big. Mouth small.
 </p>
 
 <p align="center">
