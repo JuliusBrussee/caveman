@@ -100,6 +100,14 @@ function parseSession(filePath) {
   let turns = 0;
   let model = null;
   const messages = []; // per-message {ts, outputTokens} for mode attribution (#601)
+  // Claude Code writes one JSONL line PER CONTENT BLOCK of an API response
+  // (text block, then each tool_use block), all sharing the same message.id +
+  // requestId and repeating the same usage object. Summing every line counts
+  // the same response's tokens once per block — 1.5-2.1x inflation measured
+  // on real tool-heavy sessions. Count each (requestId, message.id) once.
+  // Entries without a message.id (synthetic/legacy logs) keep per-line
+  // counting — there is no key to dedupe on.
+  const seenResponses = new Set();
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let entry;
@@ -107,6 +115,11 @@ function parseSession(filePath) {
     if (entry.type !== 'assistant' || !entry.message) continue;
     const usage = entry.message.usage;
     if (!usage) continue;
+    if (entry.message.id) {
+      const key = (entry.requestId || '') + ':' + entry.message.id;
+      if (seenResponses.has(key)) continue;
+      seenResponses.add(key);
+    }
     outputTokens    += usage.output_tokens           || 0;
     cacheReadTokens += usage.cache_read_input_tokens || 0;
     turns++;
