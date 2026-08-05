@@ -268,6 +268,38 @@ already-closed #635 gap and reframe the deferred item as consolidating the
 three separate uninstall implementations, not fixing a gap that no longer
 exists in two of them.
 
+**v7 revision note.** v6 (target `e994c5b9e96ff58f41b59765d5ff532d32007caa`)
+returned 2 High + 1 Medium — this is the sixth review round and hit the
+round-economics trip-wire (`cross-agent-review.md`'s five-round
+guideline); all three findings below are real but small, mechanical, and
+non-repeating in *content* even though they share the same underlying
+*class* (edge-case/idempotence gaps) as most prior rounds. Fixed directly
+without spinning another dedicated Tier-1 round; this is the last prose
+iteration before moving to Tier-2 and implementation:
+
+1. **High** — the new `cli/install.js` scoped-enumeration pass didn't say
+   to honor `opts.dryRun` (so `--uninstall --dry-run` could delete newly
+   scoped files) and an absent config directory would make
+   `fs.readdirSync` throw uncaught (breaking uninstall on a never-installed
+   or already-clean machine). Fixed: the checklist item now requires both
+   guards explicitly, with matching acceptance-criteria additions.
+2. **High** — the standalone `uninstall.sh`'s prescribed scoped-enumeration
+   used `find "$CLAUDE_DIR" -maxdepth 1 -name '...'`, a GNU find extension
+   rejected by the BSD find shipped on macOS — one of this script's target
+   platforms — so it would fail outright rather than filter/remove
+   anything. Fixed: switched to a portable shell-glob candidate loop (no
+   `find` at all), with the same per-name pattern test as before; added a
+   cross-platform (GNU + BSD) verification requirement to acceptance.
+3. **Medium** — `resolvePrev`'s catch block returned `rejected: false` for
+   EVERY `lstatSync` error on the scoped `.prev` path, not just `ENOENT`,
+   contradicting the fail-closed `rejected` contract every other
+   `resolve*` function follows (current callers only read `.mode`, so this
+   didn't reopen the legacy-fallback leak, but it blocks future callers
+   from telling the two failure modes apart). Fixed: the catch now checks
+   `e.code !== 'ENOENT'` for `rejected`, matching `resolveState`'s own
+   distinction; extended the Phase 4 file-state-matrix test item to cover
+   `resolvePrev` directly where a non-`ENOENT` failure is constructible.
+
 ## Problem
 
 Every Claude Code session on the machine reads and writes the same handful of
@@ -485,7 +517,16 @@ function resolvePrev(claudeDir, sessionId) {
   try {
     st = fs.lstatSync(scopedPrevPath);
   } catch (e) {
-    return { path: scopedPrevPath, mode: null, rejected: false };
+    // Tier-1 v6 Medium finding: only ENOENT means "genuinely no prev for
+    // this session." Any other stat error (permission denied, etc.) must
+    // stay distinguishable via `rejected`, matching resolveState's own
+    // ENOENT-vs-everything-else contract -- current callers only consume
+    // `.mode`, so this doesn't reopen the legacy-fallback leak the v4/v5
+    // fixes closed, but a resolver that silently blurs the two failure
+    // modes contradicts the fail-closed diagnostics contract every other
+    // resolve* function in this file follows, and blocks any future
+    // caller from telling them apart.
+    return { path: scopedPrevPath, mode: null, rejected: e.code !== 'ENOENT' };
   }
   const mode = readFlag(scopedPrevPath);
   return { path: scopedPrevPath, mode, rejected: mode === null };
@@ -1152,7 +1193,11 @@ also requiring the legacy "off" behavior change; fixed).
     with a distinguishable active legacy sentinel value present at the
     legacy path — and assert the resolved path/mode/render decision for
     each, in both `caveman-config.js`'s `resolveFlag` directly and through
-    the Bash/PowerShell statuslines.
+    the Bash/PowerShell statuslines. Where a non-`ENOENT` stat failure is
+    constructible, also exercise `resolvePrev` against it directly and
+    assert `rejected: true` (Tier-1 v6 Medium finding — `resolvePrev`'s
+    catch previously returned `rejected: false` for every stat error, not
+    just `ENOENT`).
   - **Acceptance:** test passes for the JS + Bash pair unconditionally;
     the PowerShell leg runs when `pwsh`/`powershell` is resolvable on PATH
     and is explicitly skipped (with a printed reason, not a silent no-op)
@@ -1174,7 +1219,17 @@ also requiring the legacy "off" behavior change; fixed).
     existing array, so this pattern must NOT also match bare
     `.caveman-active`/`.caveman-active.prev`, or the fix would silently
     duplicate-report/re-attempt removing files the existing loop already
-    handled).
+    handled). **Two guards, both required (Tier-1 v6 High finding):** (a)
+    the new pass must honor `opts.dryRun` exactly like the existing loop
+    does — a `--uninstall --dry-run` run must print "would remove" for
+    each matched scoped name and unlink nothing, never silently deleting
+    scoped state during a dry run; (b) wrap the `fs.readdirSync(configDir)`
+    call so a missing config directory (never-installed or already-clean
+    machine — `ENOENT`) is treated as "nothing to enumerate," not an
+    uncaught throw that aborts the whole uninstall (including the
+    unrelated `STATE_FILES_TO_REMOVE` loop, if this pass runs before it, or
+    aborts the process entirely if it runs after and the throw is
+    unhandled).
   - **Acceptance:** extend the installer e2e uninstall test
     (`tests/installer/e2e.freshinstall.test.mjs` or a new case) to seed the
     5 existing `STATE_FILES_TO_REMOVE` entries (confirm they're STILL
@@ -1185,7 +1240,12 @@ also requiring the legacy "off" behavior change; fixed).
     that must NOT match the new scoped-only regex (e.g.
     `.caveman-active-backup.2026` — a literal dot, which the
     `[A-Za-z0-9_-]` charset rejects) — assert the real ones are removed,
-    history survives, and the near-miss survives.
+    history survives, and the near-miss survives. Additionally: (a) a
+    `--dry-run` run over the same fixture set removes nothing and prints a
+    "would remove" line per scoped match; (b) an uninstall run against a
+    config directory that does not exist at all completes without
+    throwing (no-op for the new pass, existing loop's own guards apply
+    unchanged).
 
 - [ ] `src/hooks/uninstall.sh`
   - **Task:** unlike `cli/install.js`, this standalone uninstaller has NO
@@ -1198,10 +1258,18 @@ also requiring the legacy "off" behavior change; fixed).
     `.caveman-history.jsonl` untouched, matching `cli/install.js`'s
     "keep, note it" behavior), replacing the current bare
     `if [ -f "$FLAG_FILE" ]; then rm "$FLAG_FILE"; ...` block; and (2) a
-    scoped-variant enumeration pass (`find "$CLAUDE_DIR" -maxdepth 1
-    -name '.caveman-active-*'` piped through a per-name pattern test — not
-    a bare glob expansion, which would accept a near-miss name the pattern
-    should reject) matching `^\.caveman-active-[A-Za-z0-9_-]{1,128}(\.prev)?$`.
+    scoped-variant enumeration pass. **Portability (Tier-1 v6 High
+    finding): `find "$CLAUDE_DIR" -maxdepth 1 -name '...'` is a GNU find
+    extension — `-maxdepth` is rejected by the BSD find shipped on macOS,
+    one of this script's target platforms, so the standalone uninstaller
+    would fail outright before removing anything.** Use a portable
+    shell-glob candidate loop instead (no `find` at all):
+    `for f in "$CLAUDE_DIR"/.caveman-active-*; do [ -e "$f" ] || continue;
+    ...pattern-test "$f"'s basename...; done` — `[ -e "$f" ]` guards the
+    no-match case (an unexpanded glob literal), and each candidate still
+    goes through the same per-name pattern test as before (not a bare
+    glob-expansion accept, which would let a near-miss name through)
+    matching `^\.caveman-active-[A-Za-z0-9_-]{1,128}(\.prev)?$`.
   - **Acceptance:** a standalone-install-style test (new, or extend an
     existing installer test if one already drives `uninstall.sh`) seeds
     the same fixture set as the `cli/install.js` uninstall test (all 5
@@ -1209,6 +1277,9 @@ also requiring the legacy "off" behavior change; fixed).
     a scoped `.prev` file, `.caveman-history.jsonl`, a near-miss name) and
     asserts the same removal/survival split — including that
     `.caveman-history.jsonl` survives here too, matching `cli/install.js`.
+    Run (or at minimum manually verify) this test under both GNU
+    coreutils/GNU find (Linux) and BSD utilities (macOS) — the whole point
+    of the portability fix is that it can't only be proven on one platform.
 
 - [ ] `src/hooks/uninstall.ps1`
   - **Task:** same two additions as `uninstall.sh` (exact-name array +
