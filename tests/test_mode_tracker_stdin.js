@@ -147,7 +147,7 @@ test('envelope "/caveman off" deactivates', () => {
   try {
     fs.writeFileSync(path.join(cfg, '.caveman-active'), 'full');
     send(cfg, { prompt: envelope('/caveman', 'off', true) });
-    assert.strictEqual(flagValue(cfg), null);
+    assert.strictEqual(flagValue(cfg), 'off');
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
   }

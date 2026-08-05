@@ -247,7 +247,7 @@ for (const { prompt, preset } of parityCases) {
     const verdict = parseModeChange(normalized, { getDefaultMode: () => 'full' });
     const expected =
       verdict === null ? (preset || null) :
-      verdict.action === 'clear' ? null :
+      verdict.action === 'clear' ? 'off' :
       verdict.mode;
     assert.strictEqual(runTracker(prompt, preset), expected);
   });

@@ -6,14 +6,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
-const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, recordModeChange, sanitizeSessionId, flagBaseName, prevBaseName, isActiveMode, resolveFlag, resolvePrev } = require('./caveman-config');
 const { parseModeChange, INDEPENDENT_MODES } = require('./caveman-parse');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const flagPath = path.join(claudeDir, '.caveman-active');
-// Remembers the prose mode active before a one-shot independent mode
-// (/caveman-commit etc.) so the next ordinary prompt can restore it (#599).
-const prevPath = path.join(claudeDir, '.caveman-active.prev');
 
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
@@ -24,6 +20,11 @@ process.stdin.on('error', () => process.exit(0));
 process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
+    const sessionId = sanitizeSessionId(data.session_id);
+    const writeFlagPath = path.join(claudeDir, flagBaseName(sessionId));
+    // Remembers the prose mode active before a one-shot independent mode
+    // (/caveman-commit etc.) so the next ordinary prompt can restore it (#599).
+    const writePrevPath = path.join(claudeDir, prevBaseName(sessionId));
     // Collapse whitespace so phrase triggers still match multiline prompts —
     // every regex below sees a single-line prompt (#598).
     let prompt = (data.prompt || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -75,6 +76,7 @@ process.stdin.on('end', () => {
         const statsPath = path.join(__dirname, 'caveman-stats.js');
         const argv = [statsPath];
         if (data.transcript_path) argv.push('--session-file', data.transcript_path);
+        if (sessionId) argv.push('--session-id', sessionId);
         if (tailArgs.includes('--share')) argv.push('--share');
         if (tailArgs.includes('--all')) argv.push('--all');
         const sinceIdx = tailArgs.indexOf('--since');
@@ -110,18 +112,18 @@ process.stdin.on('end', () => {
         // Save the prose mode being displaced — but never overwrite an
         // already-saved one with another independent mode (/caveman-commit
         // followed by /caveman-review must still restore the original).
-        const current = readFlag(flagPath);
-        if (current && !INDEPENDENT_MODES.has(current)) {
-          safeWriteFlag(prevPath, current);
+        const { mode: current } = resolveFlag(claudeDir, sessionId);
+        if (isActiveMode(current) && !INDEPENDENT_MODES.has(current)) {
+          safeWriteFlag(writePrevPath, current);
         }
         setIndependentThisTurn = true;
       }
-      recordModeChange(claudeDir, mode); // #601: timestamped transition log
-      safeWriteFlag(flagPath, mode);
+      recordModeChange(claudeDir, mode, sessionId); // #601: timestamped transition log
+      safeWriteFlag(writeFlagPath, mode);
     } else if (change && change.action === 'clear') {
-      recordModeChange(claudeDir, null); // #601
-      try { fs.unlinkSync(flagPath); } catch (e) {}
-      try { fs.unlinkSync(prevPath); } catch (e) {}
+      recordModeChange(claudeDir, null, sessionId); // #601
+      safeWriteFlag(writeFlagPath, 'off');
+      try { fs.unlinkSync(writePrevPath); } catch (e) {}
     }
 
     // Per-turn reinforcement: emit a short reminder when caveman is active.
@@ -135,22 +137,22 @@ process.stdin.on('end', () => {
     // If the flag is missing, corrupted, oversized, or a symlink pointing at
     // something like ~/.ssh/id_rsa, readFlag returns null and we emit nothing
     // — never inject untrusted bytes into model context.
-    let activeMode = readFlag(flagPath);
+    let { mode: activeMode } = resolveFlag(claudeDir, sessionId);
 
     // One-shot restore (#599): an independent mode set on a PREVIOUS prompt
     // has served its turn — bring back the prose mode that was active before
     // it, or deactivate if caveman wasn't active then.
     if (activeMode && INDEPENDENT_MODES.has(activeMode) && !setIndependentThisTurn) {
-      const prev = readFlag(prevPath);
-      try { fs.unlinkSync(prevPath); } catch (e) {}
-      if (prev && !INDEPENDENT_MODES.has(prev)) {
-        recordModeChange(claudeDir, prev); // #601
-        safeWriteFlag(flagPath, prev);
+      const { mode: prev } = resolvePrev(claudeDir, sessionId);
+      try { fs.unlinkSync(writePrevPath); } catch (e) {}
+      if (isActiveMode(prev) && !INDEPENDENT_MODES.has(prev)) {
+        recordModeChange(claudeDir, prev, sessionId); // #601
+        safeWriteFlag(writeFlagPath, prev);
         activeMode = prev;
       } else {
-        recordModeChange(claudeDir, null); // #601
-        try { fs.unlinkSync(flagPath); } catch (e) {}
-        activeMode = null;
+        recordModeChange(claudeDir, null, sessionId); // #601
+        safeWriteFlag(writeFlagPath, 'off');
+        activeMode = 'off';
       }
     }
 
@@ -159,7 +161,7 @@ process.stdin.on('end', () => {
     // hook stdin's cwd through so that check resolves for the session's
     // directory, not this hook process's own cwd. This gates ONLY the
     // reinforcement output below — it never deletes or writes the flag file.
-    if (activeMode && !INDEPENDENT_MODES.has(activeMode) && getDefaultMode(data.cwd) !== 'off') {
+    if (isActiveMode(activeMode) && !INDEPENDENT_MODES.has(activeMode) && getDefaultMode(data.cwd) !== 'off') {
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",

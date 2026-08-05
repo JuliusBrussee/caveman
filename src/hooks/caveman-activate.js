@@ -9,10 +9,9 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag, recordModeChange, readFlag, VALID_MODES } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, recordModeChange, sanitizeSessionId, flagBaseName, resolveFlag } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
 // Apply per-agent model overrides from env vars before emitting rules.
@@ -31,33 +30,44 @@ try {
 // closes the pipe — it always does. A parent that held the pipe open forever
 // would block here; no such caller exists, and a TTY (manual run) skips it.
 let source = 'startup';
+let sessionId = null;
 try {
   if (!process.stdin.isTTY) {
     const raw = fs.readFileSync(0, 'utf8');
     if (raw) {
       const data = JSON.parse(raw);
       if (data && typeof data.source === 'string') source = data.source;
+      if (data) sessionId = sanitizeSessionId(data.session_id);
     }
   }
 } catch (e) { /* no/bad stdin → treat as startup */ }
 
+const writeFlagPath = path.join(claudeDir, flagBaseName(sessionId));
+
 let mode = getDefaultMode();
 if (source !== 'startup') {
-  const existing = readFlag(flagPath);
-  if (existing && VALID_MODES.includes(existing)) mode = existing;
+  const resolved = resolveFlag(claudeDir, sessionId);
+  if (resolved.rejected) {
+    mode = 'off'; // fail closed -- an existing-but-rejected scoped file
+                   // must NOT silently reactivate at the configured default
+  } else if (resolved.mode) {
+    mode = resolved.mode; // genuinely resolved (scoped or legacy-fallback)
+  }
+  // else: truly nothing resolved (fresh session, no legacy either) --
+  // `mode` stays at getDefaultMode() from above, which is correct.
 }
 
 // "off" mode — skip activation entirely, don't write flag or emit rules
 if (mode === 'off') {
-  recordModeChange(claudeDir, null); // #601: timestamped transition log
-  try { fs.unlinkSync(flagPath); } catch (e) {}
+  recordModeChange(claudeDir, mode, sessionId); // #601: timestamped transition log
+  safeWriteFlag(writeFlagPath, 'off');
   process.stdout.write('OK');
   process.exit(0);
 }
 
 // 1. Write flag file (symlink-safe)
-recordModeChange(claudeDir, mode); // #601
-safeWriteFlag(flagPath, mode);
+recordModeChange(claudeDir, mode, sessionId); // #601
+safeWriteFlag(writeFlagPath, mode);
 
 // 2. Emit full caveman ruleset, filtered to the active intensity level.
 //    The old 2-sentence summary was too weak — models drifted back to verbose

@@ -1,7 +1,49 @@
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }
-$Flag = Join-Path $ClaudeDir ".caveman-active"
-if (-not (Test-Path $Flag)) { exit 0 }
+
+# Claude Code invokes statusLine commands with the same JSON-on-stdin
+# contract as other hooks (e.g. session_id, cwd). ConvertFrom-Json is a
+# first-party PowerShell idiom, not an external dependency the way jq would
+# be for Bash. ReadToEnd on a closed/empty stdin returns "" immediately, not
+# a hang (matches a manual/test invocation with no input).
+$StdinJson = ""
+try { $StdinJson = [Console]::In.ReadToEnd() } catch {}
+
+$SessionId = ""
+if ($StdinJson) {
+    try {
+        $Data = $StdinJson | ConvertFrom-Json -ErrorAction Stop
+        if ($Data.session_id) {
+            $Raw = [string]$Data.session_id
+            # Whole-string anchored match using \z, NOT a trailing $ (Tier-2 v2
+            # High finding): .NET's $ matches end-of-string OR immediately
+            # before a single trailing `\n` by default, so a value ending in
+            # one newline would falsely pass a `$`-anchored check. \z has no
+            # such exception. Reject entirely on any non-match — never strip
+            # or truncate down to a valid-looking id.
+            if ($Raw -match '^[A-Za-z0-9_-]{1,128}\z') {
+                $SessionId = $Raw
+            }
+        }
+    } catch {}
+}
+
+# Resolve the flag path with the same ENOENT-vs-rejected fallback semantics
+# as caveman-config.js's resolveFlag: no session id (or an invalid one) ->
+# always the legacy path, unchanged from today. A valid session id with NO
+# scoped file at all (true ENOENT) falls back to the legacy path. A valid
+# session id whose scoped file EXISTS (even a reparse point, even
+# invalid/oversized content) is fail-closed: never fall back to legacy.
+$LegacyFlag = Join-Path $ClaudeDir ".caveman-active"
+$Flag = $LegacyFlag
+if ($SessionId) {
+    $ScopedFlag = Join-Path $ClaudeDir ".caveman-active-$SessionId"
+    if (Test-Path -LiteralPath $ScopedFlag) {
+        $Flag = $ScopedFlag
+    }
+}
+
+if (-not (Test-Path -LiteralPath $Flag)) { exit 0 }
 
 # Refuse reparse points (symlinks / junctions) and oversized files. Without
 # this, a local attacker could point the flag at a secret file and have the
@@ -31,8 +73,11 @@ $Mode = ($Mode -replace '[^a-z0-9-]', '')
 $Valid = @('off','lite','full','ultra','wenyan-lite','wenyan','wenyan-full','wenyan-ultra','commit','review','compress')
 if (-not ($Valid -contains $Mode)) { exit 0 }
 
+# A resolved mode of 'off' renders nothing at all, matching isActiveMode.
+if ($Mode -eq "off") { exit 0 }
+
 $Esc = [char]27
-if ([string]::IsNullOrEmpty($Mode) -or $Mode -eq "full") {
+if ($Mode -eq "full") {
     [Console]::Write("${Esc}[38;5;172m[CAVEMAN]${Esc}[0m")
 } else {
     $Suffix = $Mode.ToUpperInvariant()
