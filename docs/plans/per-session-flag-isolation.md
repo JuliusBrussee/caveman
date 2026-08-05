@@ -1563,3 +1563,34 @@ also requiring the legacy "off" behavior change; fixed).
 - All three uninstall entry points (`cli/install.js`, `uninstall.sh`,
   `uninstall.ps1`) remove every scoped flag/`.prev` file they can enumerate,
   not just the legacy name.
+
+## Review Decisions
+
+Cleared: 8 Tier-1 headless rounds (v1-v8, Codex/gpt-5.6-luna, v7 at xhigh
+effort) + 3 Tier-2 cross-agent confirmation rounds (v1-v3). Every "vN
+revision note" in the Origin section above documents that round's findings
+and fixes verbatim; not re-summarized here.
+
+**Final Tier-2 v3 verdict: LGTM — approve. 0 Critical, 0 High, 0 Medium, 1
+Low, 0 Nit.**
+
+**Deferred Low (not fixed, judged non-blocking):** `uninstall.ps1`'s
+scoped-file enumeration regex (Phase 5) still anchors with a trailing `$`
+rather than `\z`, the same class of .NET quirk fixed in the
+`caveman-statusline.ps1` sanitizer (v10). Reviewer's own assessment:
+structurally unreachable here — every writer of a scoped filename goes
+through the already-anchor-correct sanitizer, and NTFS disallows a literal
+`\n` in filenames regardless — flagged for consistency, not exploitability.
+Disposition: use `\z` when implementing this regex anyway (zero extra
+cost, matches the sanitizer's own idiom), but not worth a v11 review round
+for a Low with no reachable impact.
+
+**Stopping the plan-review loop here.** 11 total rounds (8 T1 + 3 T2) is
+well past the round-economics trip-wire invoked at T1 v7. Every round
+found genuinely real, non-repeating-in-content defects — this was not
+manufactured churn — but the recurring class (anchor/edge-case bugs,
+checklist-completeness gaps) is now closed at every site independently
+verified across three whole-plan passes (T1 v7 xhigh, Tier-2 v2, Tier-2
+v3). Further plan-review rounds would have rapidly diminishing signal;
+remaining code-level correctness is the PR review process's job from here,
+not another round against prose. Proceeding to implementation.
