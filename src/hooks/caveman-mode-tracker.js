@@ -317,4 +317,10 @@ process.stdin.on('data', chunk => {
 // listener Node throws it as an uncaught exception and the hook exits
 // non-zero — a spurious hook failure (#538). Hooks must always exit 0.
 process.stdin.on('error', () => process.exit(0));
+// Same failure, output side (#397): the harness can close its end of our
+// stdout/stderr after this hook has already written a payload, and an
+// unlistened 'error' there throws just as loudly.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', () => process.exit(0));
+}
 process.stdin.on('end', () => handle(input));
