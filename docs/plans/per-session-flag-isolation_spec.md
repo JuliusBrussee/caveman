@@ -179,11 +179,16 @@ equality instead of a regex.
 
 ## Follow-ups explicitly deferred (not part of this PR)
 
-- Fix `cli/install.js`'s pre-existing incomplete uninstall (never removes
-  `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-history.jsonl`,
-  `.caveman-statusline-suffix`, scoped or not) — real gap, predates this
-  change, deserves its own PR/issue rather than being smuggled into this
-  diff.
+- Consolidating the three separate uninstall implementations
+  (`cli/install.js`'s `STATE_FILES_TO_REMOVE` loop, `uninstall.sh`,
+  `uninstall.ps1`) into one shared implementation — this plan brings the
+  two standalone scripts up to feature parity with `cli/install.js`'s
+  existing state-file coverage (a real gap this plan closes, since
+  `cli/install.js` already fixed it upstream under issue #635 but the two
+  standalone scripts never got the equivalent fix) and adds the new
+  scoped-variant enumeration to all three, but the underlying duplication
+  across three near-identical implementations is a pre-existing
+  maintenance smell this plan doesn't otherwise address.
 - `opencode` native plugin per-session isolation — same problem exists there
   (`session.created` writes one global flag), but it's a different runtime
   contract (Bun plugin, no `CLAUDE_CONFIG_DIR`/hook-JSON-on-stdin shape) and

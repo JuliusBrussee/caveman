@@ -213,6 +213,61 @@ this round found genuinely subtle, distinct issues, not repeats:
    of the thirteen occurrences is now individually classified by line
    number, verified against the actual file content.
 
+**v6 revision note.** v5 (target `9f92622928959b44cd17063d8c7797d5a8f78f29`) returned
+3 High + 1 Medium, all real:
+
+1. **High** — v5's `resolvePrev` still collapsed `ENOENT` on the scoped
+   `.prev` stat with every other stat error via a bare `fs.existsSync`
+   check, reintroducing the exact fail-open collapse v4 was supposed to
+   fix (just moved from `resolveState` into `resolvePrev`'s own body).
+   Fixed: `resolvePrev` no longer stats independently — it reuses
+   `resolveFlag`'s own already-computed `path === scopedActivePath` result
+   to decide whether this session has scoped identity, then does its own
+   `lstatSync`/`readFlag` on the scoped `.prev` path with the same
+   ENOENT-vs-rejected branching `resolveState` already uses for the active
+   flag, so there's exactly one fail-closed code path instead of two
+   independently-maintained ones.
+2. **High** — the test-enumeration checklist item covered
+   `test_mode_tracker.py` and `verify_repo.py` but missed two more test
+   files that assert on the flag value: `tests/test_mode_tracker_stdin.js`
+   (one of its eight `assert.strictEqual(flagValue(cfg), ...)` calls, the
+   `'envelope "/caveman off" deactivates'` case, expects `null`) and
+   `tests/test_caveman_parse.js` (its parity-oracle line comparing
+   `parseModeChange`'s output against the observed flag value maps
+   `action === 'clear'` to `null`). Both need their expected `null`
+   changed to `'off'`; every other assertion in both files already expects
+   a real mode string and is unaffected. Fixed: added both files, with the
+   exact line/assertion identified, to the Phase 4 checklist.
+3. **High** — the Design "Uninstall enumeration" section, the Non-Goals
+   section, the Invariant Matrix row, and Phase 5's checklist item for
+   `cli/install.js` all described its uninstall as "two exact-path
+   unlinks" — ground truth at the actual target SHA is a
+   `STATE_FILES_TO_REMOVE` array (5 legacy names) plus a loop, an upstream
+   fix (#635) that already closes the completeness gap this plan had been
+   claiming was still open. Fixed: rewrote all four sections to correctly
+   describe the existing loop and scope `cli/install.js`'s remaining work
+   to ONLY adding a scoped-variant enumeration pass alongside it — no
+   redesign of what's already there. The two standalone scripts
+   (`uninstall.sh`, `uninstall.ps1`) still lack any equivalent of the
+   #635 fix and keep their full two-part checklist items (exact-name
+   array + scoped enumeration).
+4. **Medium** — `src/hooks/README.md`'s "Custom statusline" section shows
+   a hand-rolled bash snippet that reads only the legacy global flag path
+   with no session-scoping and no `off`-content special-casing (would
+   render `[CAVEMAN:OFF]` for an explicitly-off session). Fixed: added to
+   Phase 5's docs checklist item — the fix redirects readers to invoke the
+   shipped `caveman-statusline.sh` instead of hand-duplicating its logic,
+   rather than teaching the README snippet the same resolver rules a
+   second time.
+
+The companion spec's "Follow-ups explicitly deferred" section also carried a
+stale bullet from the same pre-fast-forward misunderstanding, claiming
+`cli/install.js`'s uninstall "never removes" four of the five
+`STATE_FILES_TO_REMOVE` names — fixed to correctly describe the
+already-closed #635 gap and reframe the deferred item as consolidating the
+three separate uninstall implementations, not fixing a gap that no longer
+exists in two of them.
+
 ## Problem
 
 Every Claude Code session on the machine reads and writes the same handful of
@@ -377,20 +432,31 @@ Only a session that has *never* written to its scoped path at all (true
 `ENOENT`) falls back — resolving the v1 ambiguity precisely.
 
 **`resolvePrev` is state-aware, not a bare alias for `resolveState` with
-`prevBaseName` (fixes v4 finding 1).** A v3 draft defined `resolvePrev` as
-`resolveState(claudeDir, sessionId, prevBaseName)` — symmetric with
-`resolveFlag`, but WRONG: `.prev`'s legacy-fallback should only apply while
-this session has never scoped ANYTHING, not independently of whether the
-session already has scoped identity. Tier-1 v4 review found the reachable
-leak: a session that is already scoped (has a scoped ACTIVE flag — e.g. it
-was just turned explicitly off before its first `/caveman-commit`, or it
-simply never had a prior prose mode) but has no scoped `.prev` file yet
-would still `ENOENT` on the SCOPED `.prev` path and fall back to the LEGACY
-`.prev` — restoring a stale, unrelated previous mode from another session or
-a legacy caller into a session that has its own, already-established
-identity. The fix: gate `.prev`'s legacy fallback on whether the session's
-scoped ACTIVE flag exists at all — if it does, `.prev` ENOENT means "this
-session genuinely has no prev," full stop, never fall back:
+`prevBaseName` (fixes v4 finding 1; fixes v5 finding 1).** A v3 draft
+defined `resolvePrev` as `resolveState(claudeDir, sessionId, prevBaseName)`
+— symmetric with `resolveFlag`, but WRONG: `.prev`'s legacy-fallback should
+only apply while this session has never scoped ANYTHING, not independently
+of whether the session already has scoped identity. Tier-1 v4 review found
+the reachable leak: a session that is already scoped (has a scoped ACTIVE
+flag) but has no scoped `.prev` file yet would still `ENOENT` on the SCOPED
+`.prev` path and fall back to the LEGACY `.prev` — restoring a stale,
+unrelated previous mode from another session or a legacy caller.
+
+A v4 fix gated this on `fs.existsSync(scopedActivePath)` — Tier-1 v5 review
+found THAT check itself collapses ENOENT with every other stat failure
+(permission error, a dangling symlink) into the same `false`, so a scoped
+active identity that becomes momentarily unstatable (or is itself a
+rejected symlink/oversized file, per the `resolveFlag`/`rejected` fix
+above) gets misclassified as "no scoped identity" — falling straight
+through to the legacy `.prev` fallback this whole fix exists to prevent.
+Independently re-stat-ing the active path here is also a second,
+redundant, racy identity check when `resolveFlag` already computed the
+authoritative answer moments earlier in the same call chain. Fixed: reuse
+`resolveFlag`'s own already-fail-closed resolution instead of a second
+stat call — `resolveFlag` returns the scoped active PATH itself (not the
+legacy path) in every case where this session has scoped identity, whether
+that content is valid, `'off'`, or rejected; only a genuine legacy
+fallback returns the legacy path:
 
 ```js
 function resolvePrev(claudeDir, sessionId) {
@@ -398,8 +464,14 @@ function resolvePrev(claudeDir, sessionId) {
     const legacyPrevPath = path.join(claudeDir, prevBaseName(null));
     return { path: legacyPrevPath, mode: readFlag(legacyPrevPath), rejected: false };
   }
+  const activeResolved = resolveFlag(claudeDir, sessionId);
   const scopedActivePath = path.join(claudeDir, flagBaseName(sessionId));
-  const sessionHasScopedIdentity = fs.existsSync(scopedActivePath);
+  // True exactly when resolveFlag resolved to THIS session's scoped path
+  // (valid, 'off', or rejected content -- doesn't matter which) rather
+  // than falling back to legacy. Reuses resolveFlag's own fail-closed
+  // ENOENT-vs-everything-else distinction instead of a second, independent
+  // (and potentially racy) stat call on the same path.
+  const sessionHasScopedIdentity = activeResolved.path === scopedActivePath;
   if (!sessionHasScopedIdentity) {
     // This session has never scoped anything (including its own active
     // flag) -- consistent with resolveFlag's own legacy fallback story.
@@ -640,61 +712,81 @@ permission-denied scoped path) — same fail-closed expectation.
 
 ### Uninstall enumeration
 
-Three separate uninstall entry points exist and all currently unlink only
-the exact literal `.caveman-active` path: `cli/install.js`'s uninstall
-function (`configDir` case; the opencode `ocFlag` case is out of scope, see
-Non-Goals), and the two standalone hook uninstallers
-`src/hooks/uninstall.sh` and `src/hooks/uninstall.ps1` (used for a
-standalone, non-plugin hook-only install — a v2 draft covered only the
-first and missed these two, which Tier-1 v3 review flagged as High: without
-fixing them too, a standalone install's uninstall leaves every scoped flag
-and `.prev` file behind, and a later reinstall can resurrect a stale
-per-session mode).
+**A v2-v4 draft described `cli/install.js`'s uninstall as removing only the
+exact literal `.caveman-active` path, and claimed `.caveman-mode-log.jsonl`
+/ `.caveman-history.jsonl` / `.caveman-statusline-suffix` are "never
+removed by any uninstall entry point today."** Tier-1 v5 review caught that
+this was stale: it described the plugin's state from BEFORE the upstream
+fast-forward this plan's own Reference-context paragraph names
+(`0d95a81` → `ec83e5b`). At the actual current target SHA, `cli/install.js`
+already ships a fix for that exact gap (issue #635) — a `STATE_FILES_TO_REMOVE`
+array plus a loop that removes `.caveman-active`, `.caveman-active.prev`,
+`.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`, and
+`.caveman-nudge-shown` by exact name, while explicitly KEEPING
+`.caveman-history.jsonl` (the user's lifetime savings ledger — noted, not
+deleted). This plan's job is narrower than a v4 draft assumed: extend that
+EXISTING exact-name removal so it ALSO enumerates and removes the new
+scoped variants (`.caveman-active-<id>`, `.caveman-active-<id>.prev`),
+which the static array obviously can't name in advance — not build a
+from-scratch removal mechanism.
 
-All three gain the same enumeration: list the config directory's entries
-once and remove every name matching
-`^\.caveman-active(-[A-Za-z0-9_-]{1,128})?(\.prev)?$` — `fs.readdirSync` +
-a JS regex test in `cli/install.js` (real directory enumeration, not a shell
-glob — Node's `fs` APIs don't expand `*`); `find "$CLAUDE_DIR" -maxdepth 1
--name '.caveman-active*'` filtered through an equivalent shell pattern
-test (not a bare glob, to enforce the same charset/length bound) in
-`uninstall.sh`; `Get-ChildItem` + a PowerShell regex `-match` filter in
-`uninstall.ps1`. **This regex's optional `(-[A-Za-z0-9_-]{1,128})?` group
-means it matches the LEGACY (non-scoped) `.caveman-active.prev` too** — a v3
-draft's Non-Goals section claimed that file was an untouched pre-existing
-gap, which directly contradicted this enumeration and Phase 5's own test
-fixture (which requires `.prev` removal). Fixed: the legacy `.prev` file IS
-now cleaned up as a natural consequence of this enumeration; only
-`.caveman-mode-log.jsonl`, `.caveman-history.jsonl`, and
-`.caveman-statusline-suffix` remain the genuinely deferred, unrelated
-uninstall gap (see Non-Goals).
+The two standalone hook uninstallers, `src/hooks/uninstall.sh` and
+`src/hooks/uninstall.ps1` (used for a standalone, non-plugin hook-only
+install), are NOT similarly fixed upstream — both still remove only the
+exact literal `.caveman-active` path and nothing else (confirmed against
+the current target SHA; Tier-1 v3 review flagged their omission as High).
+Without fixing them too, a standalone install's uninstall leaves every
+scoped flag, `.prev` file, mode-log, and suffix file behind, and a later
+reinstall can resurrect a stale per-session mode.
+
+The fix, correctly scoped to what actually needs to change:
+
+- **`cli/install.js`**: after the existing `STATE_FILES_TO_REMOVE` loop
+  (leave it untouched — it already correctly handles the exact-name legacy
+  files and the "keep history" note), add one more pass:
+  `fs.readdirSync(configDir)`, removing every entry matching
+  `^\.caveman-active-[A-Za-z0-9_-]{1,128}(\.prev)?$` (the SCOPED-only
+  pattern — no optional group; the legacy names are already handled by the
+  existing array, so this new pass must not re-describe or duplicate them).
+- **`uninstall.sh`**: add both the exact-name array (mirroring
+  `STATE_FILES_TO_REMOVE`'s five entries, since this standalone uninstaller
+  currently has none of that upstream #635 fix) AND the scoped-variant
+  enumeration (`find "$CLAUDE_DIR" -maxdepth 1 -name '.caveman-active-*'`
+  filtered through an equivalent shell pattern test, not a bare glob, to
+  enforce the same charset/length bound) — keep `.caveman-history.jsonl`
+  untouched, matching `cli/install.js`'s "keep, don't remove" behavior.
+- **`uninstall.ps1`**: same two additions, PowerShell idiom
+  (`Get-ChildItem` + a `-match` filter for the scoped pass).
 
 ## Non-Goals (explicit scope boundaries)
 
 - **`opencode` native plugin** (`src/plugins/opencode/plugin.js`) — different
   runtime, own `session.created` lifecycle hook, no `CLAUDE_CONFIG_DIR`
   contract. Left on today's global-flag behavior. Follow-up, not this PR.
-- **`.caveman-statusline-suffix`** (lifetime savings display string) — stays
-  global. It's an aggregate informational display, not mode-toggle behavior;
-  scoping it per-session would show "no savings yet" on every fresh session,
-  which is a UX regression for a purely cosmetic figure.
-- **`.caveman-nudge-shown`** (one-shot statusline-setup nudge marker) — stays
-  global by design; it's meant to fire once ever, not once per session.
+- **Per-session `.caveman-statusline-suffix`** (lifetime savings display
+  string) — stays global. It's an aggregate informational display, not
+  mode-toggle behavior; scoping it per-session would show "no savings yet"
+  on every fresh session, which is a UX regression for a purely cosmetic
+  figure. (Its EXISTING removal on uninstall, by `cli/install.js`'s
+  `STATE_FILES_TO_REMOVE`, is untouched by this plan — that mechanism
+  already works and this plan doesn't change it.)
+- **Per-session `.caveman-nudge-shown`** (one-shot statusline-setup nudge
+  marker) — stays global by design; it's meant to fire once ever, not once
+  per session. (Same note: its existing removal on uninstall is untouched.)
 - **Regenerating `src/hooks/checksums.sha256`** — that manifest verifies
   files downloaded from the pinned release tag (`PINNED_REF` in
   `cli/install.js`, currently `v1.10.0`) for the curl\|bash / `npx` remote
   install path. Per the existing top-of-file comment, it's regenerated at
   release-cut time, after this change is merged and tagged — not part of
   this PR's diff.
-- **Fixing the pre-existing incomplete uninstall of UNRELATED state files**
-  — `.caveman-mode-log.jsonl`, `.caveman-history.jsonl`, and
-  `.caveman-statusline-suffix` are never removed by any of the three
-  uninstall entry points today, and this plan does not add that. (The
-  legacy `.caveman-active.prev` is NOT in this deferred list — the Phase 5
-  enumeration's regex naturally matches and removes it, since its charset
-  after `.caveman-active` is identical to the scoped-`.prev` pattern; a v3
-  draft incorrectly listed it here, contradicting the enumeration and
-  Phase 5's own test fixture. Fixed.)
+- **Bringing `uninstall.sh`/`uninstall.ps1` to full feature parity with
+  `cli/install.js` beyond the scoped-flag fix** — those two standalone
+  scripts gain the exact-name array AND the scoped-variant pass (Uninstall
+  enumeration above), matching `cli/install.js`'s STATE-file coverage. This
+  plan does not otherwise redesign or consolidate the three uninstall entry
+  points into one shared implementation, even though that duplication is
+  itself a pre-existing maintenance smell — out of scope, a real but
+  separate cleanup.
 
 ## Invariant Matrix
 
@@ -713,12 +805,12 @@ fallback rule.
 | `src/hooks/caveman-stats.js` | reader (flag + mode-log join) via explicit `--session-id`, falls back to legacy when absent; `flagMtimeMs` stats the SAME path `resolveFlag` returned | needs-change |
 | `src/hooks/caveman-statusline.sh` | reader, same ENOENT-vs-rejected + `isActiveMode`("off" -> nothing) semantics | needs-change |
 | `src/hooks/caveman-statusline.ps1` | reader, same semantics | needs-change |
-| `cli/install.js` (uninstall, `configDir` case) | deletes state files | needs-change (enumerate) |
+| `cli/install.js` (uninstall, `STATE_FILES_TO_REMOVE` loop) | already removes 5 legacy state files by exact name (upstream #635 fix) — untouched by this plan | needs-change: ADD a scoped-variant enumeration pass alongside it, don't redesign the existing loop |
 | `cli/install.js` (uninstall, opencode `ocFlag` case) | deletes state files | conforms (opencode explicitly out of scope, unlink stays exact-path) |
-| `src/hooks/uninstall.sh` | standalone hook-only uninstaller, deletes state files | needs-change (enumerate) — missed in v2, found by Tier-1 v3 review |
-| `src/hooks/uninstall.ps1` | standalone hook-only uninstaller (Windows), deletes state files | needs-change (enumerate) — same v3 finding |
+| `src/hooks/uninstall.sh` | standalone hook-only uninstaller, deletes ONLY the exact legacy `.caveman-active` (no #635-equivalent fix here) | needs-change: add BOTH the exact-name array (mirroring `STATE_FILES_TO_REMOVE`) AND the scoped-variant enumeration — missed entirely in v2, found by Tier-1 v3 review |
+| `src/hooks/uninstall.ps1` | standalone hook-only uninstaller (Windows), same gap as `uninstall.sh` | needs-change: same two additions — same v3 finding |
 | `src/plugins/opencode/plugin.js` | writer + reader (opencode) | out of scope — legacy/alternate path, left conforming to its OWN existing (global) contract, tested only to confirm this PR doesn't touch it |
-| `CLAUDE.md`, `src/hooks/README.md`, `INSTALL.md` | documentation of the flag topology | needs-change |
+| `CLAUDE.md`, `src/hooks/README.md`, `INSTALL.md` | documentation of the flag topology — `README.md`'s custom-statusline CODE SAMPLE (not just prose) also needs a fix, see Phase 5 | needs-change |
 | `tests/test_symlink_flag.js`, `tests/test_repo_local_config.js` | exercise `caveman-config.js` helpers | test-only — extend for new helpers |
 
 Legacy/alternate-path test required by the matrix: a hook invocation with NO
@@ -889,8 +981,9 @@ also requiring the legacy "off" behavior change; fixed).
     even for the legacy path; call this out explicitly in the test as an
     intentional, documented change, not a silent regression).
 
-- [ ] `tests/test_mode_tracker.py`, `tests/verify_repo.py` (existing tests —
-  update, don't just extend)
+- [ ] `tests/test_mode_tracker.py`, `tests/verify_repo.py`,
+  `tests/test_mode_tracker_stdin.js`, `tests/test_caveman_parse.js`
+  (existing tests — update, don't just extend)
   - **Task:** Tier-1 v3 review found these pre-existing tracked tests
     assert the OLD unlink-on-off behavior this plan intentionally changes,
     and a v3 draft's checklist only named `tests/test_mode_tracker_stdin.js`
@@ -899,8 +992,28 @@ also requiring the legacy "off" behavior change; fixed).
     `assertIsNone(self.flag_value())` assertions all need to change, but
     three of the thirteen actual occurrences are NOT deactivation
     assertions at all; they check that caveman was never activated in the
-    first place, and must stay asserting absence.** The precise,
-    line-verified split in `tests/test_mode_tracker.py` (13 total
+    first place, and must stay asserting absence.** **Tier-1 v5 review then
+    found the enumeration STILL incomplete — the checklist only ever named
+    the Python file plus one JS file for NEW coverage, never noticing that
+    `tests/test_mode_tracker_stdin.js` and `tests/test_caveman_parse.js`
+    (both pre-existing, both currently green) ALSO assert the old
+    null/absent-on-clear behavior and would fail under this plan unchanged.**
+    Line-verified ground truth for all four files:
+    - `tests/test_mode_tracker_stdin.js`: exactly ONE of its eight
+      `assert.strictEqual(flagValue(cfg), ...)` calls expects `null` —
+      line 150, `'envelope "/caveman off" deactivates'`. Change it to
+      expect `'off'`. The other seven expect an actual mode string
+      (`'lite'`, `'ultra'`, `'full'`) and are unaffected.
+    - `tests/test_caveman_parse.js`: its parity oracle maps
+      `verdict.action === 'clear' ? null : verdict.mode` when comparing
+      `parseModeChange`'s output against `runTracker`'s actual observed
+      flag value (around line 249). Change the `null` to `'off'` — a
+      `'clear'` verdict now corresponds to the tracker writing `off`, not
+      leaving the flag absent. `parseModeChange` itself (in
+      `caveman-parse.js`) keeps returning `{ action: 'clear' }` unchanged —
+      only the ORACLE's interpretation of what "clear" produces on disk
+      changes, not the parser's own contract.
+    Precise, line-verified split in `tests/test_mode_tracker.py` (13 total
     `assertIsNone(self.flag_value())` occurrences):
     - **Change to expect content `off`** (10 lines — genuine deactivation
       outcomes): lines 63, 68, 73, 79, 84, 89 (`turn caveman mode off` /
@@ -936,11 +1049,16 @@ also requiring the legacy "off" behavior change; fixed).
     absence check (line 190) are verified UNCHANGED in the diff (a reviewer
     or implementer checking the diff should see these four lines untouched
     — treat any incidental change to them as a self-check failure, not a
-    stylistic choice); `verify_repo.py`'s three named assertions are
-    updated to match the new `off`-is-written semantics. The full existing
-    test suite (per the whole-plan Acceptance Gates) passes with these
-    updates, proving no other tracked test still encodes the old
-    unlink-on-off assumption.
+    stylistic choice); `verify_repo.py`'s three named assertions,
+    `test_mode_tracker_stdin.js`'s one line-150 assertion, and
+    `test_caveman_parse.js`'s one parity-oracle mapping are all updated to
+    match the new `off`-is-written semantics. The full existing test suite
+    (per the whole-plan Acceptance Gates) passes with these updates,
+    proving no other tracked test still encodes the old unlink-on-off
+    assumption — this is the second time that exact claim has been made in
+    this plan's revision history (v4, then v5), so treat "the full suite
+    passes" as something to actually run and observe at implementation
+    time, not re-assert from memory a third time.
 
 ### Phase 3 — stats + statuslines
 
@@ -1044,38 +1162,58 @@ also requiring the legacy "off" behavior change; fixed).
 ### Phase 5 — installer + docs
 
 - [ ] `cli/install.js`
-  - **Task:** in the uninstall path, replace the two exact-path
-    `.caveman-active` unlinks (`configDir` case only — leave the opencode
-    `ocFlag` case as exact-path, out of scope) with `fs.readdirSync(configDir)`
-    enumeration, unlinking every entry matching
-    `^\.caveman-active(-[A-Za-z0-9_-]{1,128})?(\.prev)?$`.
+  - **Task:** a v2-v4 draft mis-described this file's CURRENT uninstall as
+    "two exact-path unlinks" — ground truth at the actual target SHA is a
+    `STATE_FILES_TO_REMOVE` array (5 exact legacy names, an upstream #635
+    fix) plus a loop, with `.caveman-history.jsonl` explicitly kept, not
+    removed. **Leave that loop and its comment untouched** — do not
+    re-describe or duplicate it. ADD one more pass immediately after it:
+    `fs.readdirSync(configDir)`, unlinking every entry matching
+    `^\.caveman-active-[A-Za-z0-9_-]{1,128}(\.prev)?$` (scoped-only — no
+    optional session-id group; the legacy names are already covered by the
+    existing array, so this pattern must NOT also match bare
+    `.caveman-active`/`.caveman-active.prev`, or the fix would silently
+    duplicate-report/re-attempt removing files the existing loop already
+    handled).
   - **Acceptance:** extend the installer e2e uninstall test
-    (`tests/installer/e2e.freshinstall.test.mjs` or a new case) to seed a
-    legacy flag, two scoped flags for different session ids (including one
-    containing literal `off` content), a `.prev` file, and a genuine
-    near-miss name that must NOT match the regex (e.g.
+    (`tests/installer/e2e.freshinstall.test.mjs` or a new case) to seed the
+    5 existing `STATE_FILES_TO_REMOVE` entries (confirm they're STILL
+    removed — regression check that this plan didn't touch that loop), two
+    scoped flags for different session ids (including one containing
+    literal `off` content), a scoped `.prev` file, `.caveman-history.jsonl`
+    (confirm it's STILL kept, not removed), and a genuine near-miss name
+    that must NOT match the new scoped-only regex (e.g.
     `.caveman-active-backup.2026` — a literal dot, which the
-    `[A-Za-z0-9_-]` charset rejects) — assert the real ones are removed and
-    the near-miss survives.
+    `[A-Za-z0-9_-]` charset rejects) — assert the real ones are removed,
+    history survives, and the near-miss survives.
 
 - [ ] `src/hooks/uninstall.sh`
-  - **Task:** replace the exact-path `$FLAG_FILE` removal (currently
-    `if [ -f "$FLAG_FILE" ]; then rm "$FLAG_FILE"; ...`) with an enumeration
-    of `$CLAUDE_DIR`'s entries, removing every name matching the same
-    `^\.caveman-active(-[A-Za-z0-9_-]{1,128})?(\.prev)?$` pattern via a
-    real directory listing (`find "$CLAUDE_DIR" -maxdepth 1
-    -name '.caveman-active*'` piped through a per-name pattern test — not a
-    bare glob expansion, which would accept a near-miss name the regex
-    should reject).
+  - **Task:** unlike `cli/install.js`, this standalone uninstaller has NO
+    equivalent of the upstream #635 fix — it still only removes the exact
+    literal `.caveman-active` (confirmed at the target SHA; nothing else).
+    Add BOTH: (1) an exact-name pass mirroring `cli/install.js`'s
+    `STATE_FILES_TO_REMOVE` array (`.caveman-active`,
+    `.caveman-active.prev`, `.caveman-mode-log.jsonl`,
+    `.caveman-statusline-suffix`, `.caveman-nudge-shown` — keeping
+    `.caveman-history.jsonl` untouched, matching `cli/install.js`'s
+    "keep, note it" behavior), replacing the current bare
+    `if [ -f "$FLAG_FILE" ]; then rm "$FLAG_FILE"; ...` block; and (2) a
+    scoped-variant enumeration pass (`find "$CLAUDE_DIR" -maxdepth 1
+    -name '.caveman-active-*'` piped through a per-name pattern test — not
+    a bare glob expansion, which would accept a near-miss name the pattern
+    should reject) matching `^\.caveman-active-[A-Za-z0-9_-]{1,128}(\.prev)?$`.
   - **Acceptance:** a standalone-install-style test (new, or extend an
-    existing installer test if one already drives `uninstall.sh`) seeds the
-    same fixture set as the `cli/install.js` uninstall test (legacy flag,
-    two scoped flags including one with `off` content, a `.prev` file, a
-    near-miss name) and asserts the same removal/survival split.
+    existing installer test if one already drives `uninstall.sh`) seeds
+    the same fixture set as the `cli/install.js` uninstall test (all 5
+    legacy state files, two scoped flags including one with `off` content,
+    a scoped `.prev` file, `.caveman-history.jsonl`, a near-miss name) and
+    asserts the same removal/survival split — including that
+    `.caveman-history.jsonl` survives here too, matching `cli/install.js`.
 
 - [ ] `src/hooks/uninstall.ps1`
-  - **Task:** same fix, PowerShell idiom: `Get-ChildItem $ClaudeDir` +
-    a `-match` filter against the equivalent anchored pattern, replacing
+  - **Task:** same two additions as `uninstall.sh` (exact-name array +
+    scoped-variant enumeration), PowerShell idiom: `Get-ChildItem $ClaudeDir`
+    + a `-match` filter against the equivalent anchored pattern, replacing
     the exact-path `$FlagFile` removal.
   - **Acceptance:** same fixture set and split as `uninstall.sh` (manual
     `pwsh` check if unavailable in CI, documented explicitly).
@@ -1089,12 +1227,26 @@ also requiring the legacy "off" behavior change; fixed).
     content rather than file absence, and add a short "how do I check my
     current session's mode" note (run `/caveman-stats` inside the session,
     which now reports its exact resolved flag path; or find the
-    most-recently-modified `.caveman-active-*` file).
+    most-recently-modified `.caveman-active-*` file). **Additionally fix
+    `src/hooks/README.md`'s "Custom statusline" CODE SAMPLE** (a bash
+    snippet showing users how to add a caveman badge to their own
+    statusline script) — it currently reads only the legacy global
+    `.caveman-active` and would render `[CAVEMAN:OFF]` for an explicitly-off
+    session, leaking cross-session state and misrepresenting "off" as an
+    active-looking badge (Tier-1 v5 Medium finding: users who copy this
+    sample get neither session isolation nor correct off-rendering). A
+    hand-duplicated snippet reimplementing the full resolver logic will
+    drift again the next time this design changes — redirect the sample to
+    invoke the shipped `caveman-statusline.sh` directly (e.g. `bash
+    "$CAVEMAN_HOOKS_DIR/caveman-statusline.sh"` piped the same stdin JSON)
+    rather than hand-rolling a second, simplified implementation.
   - **Acceptance:** grep for `\.caveman-active` across these three files
     turns up no sentence that still describes a single global flag as the
     only state or describes "off" as file-absence; the troubleshooting
     sections (`INSTALL.md`'s `cat .../.caveman-active` debug step) show the
-    scoped-name pattern too.
+    scoped-name pattern too; `README.md`'s custom-statusline sample no
+    longer contains a hand-rolled mode-rendering `if`/`case` block that
+    duplicates `caveman-statusline.sh`'s logic.
 
 ## Acceptance Gates (whole plan)
 
