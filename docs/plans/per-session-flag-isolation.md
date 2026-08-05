@@ -392,6 +392,42 @@ checked out except one genuine Critical:
    reviewer as "not worth restructuring" given the codebase's existing
    tolerance for this pattern elsewhere; left as-is.)
 
+**v10 revision note.** v9 (target `4614ed82a46740cd1ad6d37d5f2eb09e30f9702f`)
+was the Tier-2 final confirmation pass. The reviewer confirmed the v9
+Bash Critical fix correct via live execution against the adversarial
+input, then found 2 new High findings — both real, both fixed:
+
+1. **High** — the v9 PowerShell fix (`-notmatch
+   '^[A-Za-z0-9_-]{1,128}$'`) is correctly anchored against the specific
+   `abc/../../etc/passwd`-class input the v9 finding targeted, but .NET's
+   `$` metacharacter (unlike bash's `=~` or JS's `RegExp`) matches "end of
+   string OR immediately before a single trailing `\n`" by default —
+   verified live: a value like `"abc123\n"` passes this "anchored" check
+   as a false match, violating the reject-not-strip invariant on that one
+   narrow shape (no traversal/escape capability — the character class
+   still excludes `/` and `.` — but a real violation of "reject entirely
+   on any non-match" nonetheless). Fixed: use `\z` (absolute end-of-string,
+   no newline exception) instead of the trailing `$`:
+   `$SessionId -notmatch '^[A-Za-z0-9_-]{1,128}\z'`; added a trailing-`\n`
+   test vector to acceptance.
+2. **High** — the `caveman-mode-tracker.js` Phase 2 checklist gave a
+   precise 1:1 "replace X with Y" mapping for the three READ call sites
+   (`current`, `activeMode`, `prev`) but never named the equivalent
+   mapping for the three places this file WRITES or DELETES `.prev` (the
+   independent-mode capture write, the clear-action unlink, the
+   one-shot-restore consumption unlink) — a checklist-completeness gap in
+   the same recurring family as five previously-fixed findings in this
+   document (v2 findings 2/4/5/6, v3 finding 1, v4 finding 1, v5 finding
+   1, v6 finding 1). If any of those three sites were left targeting the
+   file's original top-level `prevPath` constant (bound to the legacy
+   path) instead of the newly-computed `writePrevPath`, a scoped session's
+   independent-mode capture/restore would silently corrupt or leak the
+   legacy `.prev` file. Fixed: added an explicit sentence naming all three
+   call sites by their exact current shape, matching this plan's own
+   established per-call-site style; extended acceptance with a regression
+   test proving a scoped session's capture/consumption never touches a
+   distinguishable legacy `.prev` sentinel.
+
 ## Problem
 
 Every Claude Code session on the machine reads and writes the same handful of
@@ -1078,8 +1114,22 @@ also requiring the legacy "off" behavior change; fixed).
   - **Task:** extract + sanitize `data.session_id` in the `end` handler
     (alongside the existing `data.prompt`/`data.cwd`/`data.transcript_path`
     reads). Compute `writeFlagPath`/`writePrevPath` via
-    `flagBaseName`/`prevBaseName` — used for every write. For every READ of
-    current state, use the resolver instead: replace
+    `flagBaseName`/`prevBaseName` — used for every write. **Every write or
+    delete of `.prev`, by name (Tier-2 v2 High finding — this checklist
+    gave a precise 1:1 mapping for the three READ sites below but never
+    named the WRITE/unlink sites, which is exactly the class of
+    checklist-completeness gap this document has repeatedly needed to
+    close): the independent-mode capture write
+    (`safeWriteFlag(prevPath, current)` → `safeWriteFlag(writePrevPath,
+    current)`), the clear-action unlink (`fs.unlinkSync(prevPath)` →
+    `fs.unlinkSync(writePrevPath)`), and the one-shot-restore consumption
+    unlink (`fs.unlinkSync(prevPath)` → `fs.unlinkSync(writePrevPath)`,
+    always executed regardless of branch) — must all target
+    `writePrevPath`, never the file's original top-level `prevPath`
+    constant. Remove that constant entirely once every one of its uses is
+    migrated; a lingering unmigrated use is a silent cross-session `.prev`
+    leak in the same family as five previously-fixed findings in this
+    plan.** For every READ of current state, use the resolver instead: replace
     `const current = readFlag(flagPath)` (independent-mode capture) with
     `const { mode: current } = resolveFlag(claudeDir, sessionId)`; replace
     `let activeMode = readFlag(flagPath)` with
@@ -1121,7 +1171,15 @@ also requiring the legacy "off" behavior change; fixed).
     expectations verbatim, including "off" still writing `off` rather than
     unlinking — note this IS a behavior change from today's unlink-on-off
     even for the legacy path; call this out explicitly in the test as an
-    intentional, documented change, not a silent regression).
+    intentional, documented change, not a silent regression). **New
+    (Tier-2 v2 High finding): a scoped session's independent-mode capture
+    write, and both `.prev` unlinks, must never touch the legacy
+    `.prev` file** — a regression test seeds a distinguishable sentinel
+    value at the legacy `.prev` path, drives a scoped session through an
+    independent-mode override (capture) and its consumption (restore),
+    and asserts the legacy sentinel is untouched throughout, mirroring the
+    existing Phase 1 acceptance test that already covers this for
+    `resolvePrev`'s READ side but not this file's WRITE side.
 
 - [ ] `tests/test_mode_tracker.py`, `tests/verify_repo.py`,
   `tests/test_mode_tracker_stdin.js`, `tests/test_caveman_parse.js`
@@ -1276,17 +1334,28 @@ also requiring the legacy "off" behavior change; fixed).
     match, reject-not-strip, ENOENT-vs-rejected fallback, `off` renders
     nothing), PowerShell idiom (`ConvertFrom-Json` on stdin is fine here —
     it's a first-party PowerShell idiom, not an external dependency the way
-    `jq` would be for Bash). **Anchor the regex explicitly (Tier-2 v1
-    Medium finding):** .NET regex's `-match` operator is UNANCHORED by
-    default — `$SessionId -match '[A-Za-z0-9_-]{1,128}'` matches if the
-    pattern is found ANYWHERE in the string, same failure class as the
-    Bash `case`-glob bug above. Use
-    `$SessionId -match '^[A-Za-z0-9_-]{1,128}$'` with explicit `^`/`$`
-    anchors.
+    `jq` would be for Bash). **Anchor the regex explicitly, using `\z` not
+    a trailing `$` (Tier-2 v1 Medium + Tier-2 v2 High finding):** .NET
+    regex's `-match` operator is UNANCHORED by default —
+    `$SessionId -match '[A-Za-z0-9_-]{1,128}'` matches if the pattern is
+    found ANYWHERE in the string, same failure class as the Bash
+    `case`-glob bug above. But adding `^`/`$` anchors is NOT sufficient on
+    its own: unlike bash's `=~` or JS's `RegExp`, .NET's `$` (with no
+    `Multiline` option, the default) matches "end of string **or
+    immediately before a single trailing `\n`**" — so
+    `$SessionId -notmatch '^[A-Za-z0-9_-]{1,128}$'` would still let a
+    value like `"abc123\n"` through as a false "match," violating the
+    reject-not-strip invariant on that one narrow shape (verified live on
+    `pwsh`: bash's `=~` and JS's `RegExp` do NOT share this exception).
+    Use `\z` (absolute end-of-string, no newline exception) instead of the
+    trailing `$`:
+    `$SessionId -notmatch '^[A-Za-z0-9_-]{1,128}\z'`.
   - **Acceptance:** same test vectors AND the same file-state matrix as the
     Bash script produce the same resolved path (manual `pwsh` check if
     `pwsh` is unavailable in CI, documented explicitly — not a silent
-    "looks right" visual check).
+    "looks right" visual check), PLUS a vector for a value ending in a
+    single trailing `\n` (e.g. `"abc123\n"`) asserting it is REJECTED, not
+    accepted as a false match.
 
 ### Phase 4 — shared sanitizer test vectors
 
