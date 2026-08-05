@@ -181,6 +181,38 @@ design fixes held:
    is now scoped to path selection and attribution semantics, not literal
    output bytes.
 
+**v5 revision note.** v4 (target `32005d901a0707ff575b0553d40bcaf441c38679`)
+cleared every prior finding at every severity but returned 3 new High —
+this round found genuinely subtle, distinct issues, not repeats:
+
+1. **High** — a v3 draft defined `resolvePrev` as a bare
+   `resolveState(..., prevBaseName)` alias, symmetric with `resolveFlag` —
+   but WRONG for `.prev` specifically: a session that already has scoped
+   ACTIVE state (e.g. explicitly turned off before its first
+   `/caveman-commit`) but no scoped `.prev` yet would still `ENOENT` on the
+   scoped `.prev` and fall back to a stale LEGACY `.prev`, leaking another
+   session's or caller's previous mode. Fixed: `resolvePrev` now gates its
+   own legacy fallback on whether the session's scoped ACTIVE flag exists
+   at all — once it does, `.prev` absence means "no prev," never "check
+   legacy."
+2. **High** — `resolveState`/`resolveFlag` returned `mode: null` for BOTH
+   "genuinely never touched" (ENOENT) and "touched but rejected"
+   (symlink/oversized/corrupted), and `caveman-activate.js`'s
+   resume-preserve check couldn't tell them apart — a rejected scoped file
+   on resume fell through to `getDefaultMode()` instead of staying
+   inactive, contradicting the plan's own fail-closed principle. Fixed:
+   `resolveState` now also returns `rejected: true/false`; resume
+   explicitly resolves to `'off'` when `rejected` is true, never the
+   configured default.
+3. **High** — the v3/v4 test-update checklist claimed "twelve"
+   `assertIsNone(self.flag_value())` assertions in `test_mode_tracker.py`
+   all need to change to expect `off`, but three of the actual thirteen
+   occurrences (lines 107, 109, 113) assert "never activated," not
+   "deactivated," and must stay asserting absence — following the v4
+   wording literally would have broken those three tests. Fixed: every one
+   of the thirteen occurrences is now individually classified by line
+   number, verified against the actual file content.
+
 ## Problem
 
 Every Claude Code session on the machine reads and writes the same handful of
@@ -302,7 +334,7 @@ which helper each call site uses:
 function resolveState(claudeDir, sessionId, baseNameFn) {
   const legacyPath = path.join(claudeDir, baseNameFn(null));
   if (!sessionId) {
-    return { path: legacyPath, mode: readFlag(legacyPath) };
+    return { path: legacyPath, mode: readFlag(legacyPath), rejected: false };
   }
   const scopedPath = path.join(claudeDir, baseNameFn(sessionId));
   let st;
@@ -311,26 +343,31 @@ function resolveState(claudeDir, sessionId, baseNameFn) {
   } catch (e) {
     if (e.code === 'ENOENT') {
       // Never touched by scoped logic yet -> legacy fallback.
-      return { path: legacyPath, mode: readFlag(legacyPath) };
+      return { path: legacyPath, mode: readFlag(legacyPath), rejected: false };
     }
     // Any other stat error (permission, etc.) -> fail closed. Never fall back.
-    return { path: scopedPath, mode: null };
+    return { path: scopedPath, mode: null, rejected: true };
   }
   // Scoped path exists in SOME form. readFlag re-validates symlink/size/
   // whitelist and returns null for anything unsafe or invalid -- that null
-  // is a fail-closed "inactive," NOT a signal to fall back to legacy.
-  return { path: scopedPath, mode: readFlag(scopedPath) };
+  // is a fail-closed "inactive," NOT a signal to fall back to legacy. Track
+  // this distinctly as `rejected` (v4 finding 2 -- see below) so a caller
+  // can tell "genuinely never touched, use the default" apart from
+  // "something's here and it's bad, stay inactive."
+  const mode = readFlag(scopedPath);
+  return { path: scopedPath, mode, rejected: mode === null };
 }
 function resolveFlag(claudeDir, sessionId) { return resolveState(claudeDir, sessionId, flagBaseName); }
-function resolvePrev(claudeDir, sessionId) { return resolveState(claudeDir, sessionId, prevBaseName); }
 ```
 
 `mode` is `null` for "inactive" (including the fail-closed cases above) or a
 `VALID_MODES` string including `'off'` (see `isActiveMode` above to collapse
 `'off'` into "inactive" for callers that only care about active/inactive).
-Returning `{ path, mode }` (not just `mode`) lets `caveman-stats.js` stat the
-*same* path it read mode from (fixes the Medium finding about `flagMtimeMs`
-following a different path than `mode`).
+Returning `{ path, mode, rejected }` (not just `mode`) lets
+`caveman-stats.js` stat the *same* path it read mode from (fixes the Medium
+finding about `flagMtimeMs` following a different path than `mode`) and lets
+resume logic distinguish "never touched" from "touched but rejected" (v4
+finding 2, below).
 
 Because "off" is now written rather than deleted, a session that has
 explicitly turned off has a scoped file that exists with content `'off'` —
@@ -338,6 +375,50 @@ explicitly turned off has a scoped file that exists with content `'off'` —
 returns the scoped path with mode `'off'`, never falling through to legacy.
 Only a session that has *never* written to its scoped path at all (true
 `ENOENT`) falls back — resolving the v1 ambiguity precisely.
+
+**`resolvePrev` is state-aware, not a bare alias for `resolveState` with
+`prevBaseName` (fixes v4 finding 1).** A v3 draft defined `resolvePrev` as
+`resolveState(claudeDir, sessionId, prevBaseName)` — symmetric with
+`resolveFlag`, but WRONG: `.prev`'s legacy-fallback should only apply while
+this session has never scoped ANYTHING, not independently of whether the
+session already has scoped identity. Tier-1 v4 review found the reachable
+leak: a session that is already scoped (has a scoped ACTIVE flag — e.g. it
+was just turned explicitly off before its first `/caveman-commit`, or it
+simply never had a prior prose mode) but has no scoped `.prev` file yet
+would still `ENOENT` on the SCOPED `.prev` path and fall back to the LEGACY
+`.prev` — restoring a stale, unrelated previous mode from another session or
+a legacy caller into a session that has its own, already-established
+identity. The fix: gate `.prev`'s legacy fallback on whether the session's
+scoped ACTIVE flag exists at all — if it does, `.prev` ENOENT means "this
+session genuinely has no prev," full stop, never fall back:
+
+```js
+function resolvePrev(claudeDir, sessionId) {
+  if (!sessionId) {
+    const legacyPrevPath = path.join(claudeDir, prevBaseName(null));
+    return { path: legacyPrevPath, mode: readFlag(legacyPrevPath), rejected: false };
+  }
+  const scopedActivePath = path.join(claudeDir, flagBaseName(sessionId));
+  const sessionHasScopedIdentity = fs.existsSync(scopedActivePath);
+  if (!sessionHasScopedIdentity) {
+    // This session has never scoped anything (including its own active
+    // flag) -- consistent with resolveFlag's own legacy fallback story.
+    return resolveState(claudeDir, sessionId, prevBaseName);
+  }
+  // Session already has scoped identity -- .prev is scoped-only from here
+  // on. ENOENT means "no prev for this session," never a signal to
+  // consult a legacy .prev that belongs to a different session/caller.
+  const scopedPrevPath = path.join(claudeDir, prevBaseName(sessionId));
+  let st;
+  try {
+    st = fs.lstatSync(scopedPrevPath);
+  } catch (e) {
+    return { path: scopedPrevPath, mode: null, rejected: false };
+  }
+  const mode = readFlag(scopedPrevPath);
+  return { path: scopedPrevPath, mode, rejected: mode === null };
+}
+```
 
 **The read/write split, stated explicitly (this is the exact fix for v3
 finding 1):**
@@ -353,12 +434,6 @@ finding 1):**
   independent-mode override, its `activeMode` read for the reinforcement
   decision, and its `prev` read during one-shot independent-mode restore;
   and `caveman-stats.js`'s flag read.
-- A stale legacy `.caveman-active.prev` left over from before this session
-  ever scoped anything is a minor, accepted residue (same class as the
-  pre-existing incomplete-uninstall gap in Non-Goals) — `resolvePrev`'s
-  fallback will surface it once, and the next write clears only this
-  session's own scoped `.prev`, not the legacy one. Not fixed here; noted so
-  it isn't mistaken for a new bug during review.
 
 ### "Off" truthiness — every call site, not just reinforcement (fixes v3 finding 2)
 
@@ -664,14 +739,20 @@ also requiring the legacy "off" behavior change; fixed).
 - [ ] `src/hooks/caveman-config.js`
   - **Task:** add `SESSION_ID_RE`, `sanitizeSessionId(raw)`, `flagBaseName(sessionId)`,
     `prevBaseName(sessionId)`, `isActiveMode(mode)`, `resolveState(claudeDir,
-    sessionId, baseNameFn)`, `resolveFlag(claudeDir, sessionId)` (=
-    `resolveState(..., flagBaseName)`), `resolvePrev(claudeDir, sessionId)` (=
-    `resolveState(..., prevBaseName)`) — per Design above, both return
-    `{ path, mode }` with ENOENT-vs-rejected fail-closed semantics. Change
-    `recordModeChange(claudeDir, newMode)` to `recordModeChange(claudeDir,
-    newMode, sessionId)`: resolve `current` via `resolveFlag(claudeDir,
-    sessionId).mode` (not the hardcoded legacy path), append `session_id:
-    sessionId || null` to the JSON row. Export all new functions.
+    sessionId, baseNameFn)` (returns `{ path, mode, rejected }`),
+    `resolveFlag(claudeDir, sessionId)` (= `resolveState(..., flagBaseName)`).
+    **`resolvePrev` is NOT a bare `resolveState(..., prevBaseName)` alias —
+    it additionally gates legacy fallback on whether the session's scoped
+    ACTIVE flag already exists** (per Design above — fixes v4 finding 1:
+    a v3 draft's symmetric alias let a session with scoped active state but
+    no scoped `.prev` fall back to a stale legacy `.prev`, leaking another
+    session's/caller's previous mode). Change `recordModeChange(claudeDir,
+    newMode)` to `recordModeChange(claudeDir, newMode, sessionId)`: resolve
+    `rawCurrent` via `resolveFlag(claudeDir, sessionId).mode`, normalize both
+    `rawCurrent` and `newMode` through `isActiveMode` before comparing/
+    logging (Design above — fixes v3 finding 2/v4 finding 2's normalization
+    gap), append `session_id: sessionId || null` to the JSON row. Export all
+    new functions.
   - **Acceptance:** existing `tests/test_symlink_flag.js` and
     `tests/test_repo_local_config.js` still pass unmodified (backward-compatible
     signature — `sessionId` is a new optional third arg). New unit coverage
@@ -679,14 +760,21 @@ also requiring the legacy "off" behavior change; fixed).
     accepts a UUID-shaped string and rejects `../etc`, `""`, `null`, a
     200-char string, and a non-string, with NO partial/stripped acceptance;
     `flagBaseName`/`prevBaseName` return the legacy name for `null`/`undefined`
-    and the scoped name otherwise; `resolveFlag`/`resolvePrev` return legacy
-    on ENOENT, fail closed (`mode: null`, scoped path) on a symlinked or
-    oversized scoped file, and return the scoped path+mode (including
-    `'off'`) once that scoped file exists in any form; `isActiveMode`
-    returns `false` for `null`, `undefined`, and `'off'`, and `true` for
-    every other `VALID_MODES` string; `recordModeChange` writes a row
-    containing the exact `session_id` value passed (or `null` when omitted)
-    and computes `prev` from the resolved path, not the legacy one.
+    and the scoped name otherwise; `resolveFlag` returns legacy on ENOENT,
+    fails closed (`mode: null`, `rejected: true`, scoped path) on a
+    symlinked or oversized scoped file, and returns the scoped path+mode
+    (including `'off'`) once that scoped file exists in any form;
+    `resolvePrev` specifically — with a scoped ACTIVE flag present but no
+    scoped `.prev` file, and a legacy `.prev` present with a DIFFERENT
+    value — returns `{ mode: null, rejected: false }` for the scoped `.prev`
+    path, NEVER the legacy value (this is the exact v4 finding 1 regression
+    test); `isActiveMode` returns `false` for `null`, `undefined`, and
+    `'off'`, and `true` for every other `VALID_MODES` string;
+    `recordModeChange` writes a row containing the exact `session_id` value
+    passed (or `null` when omitted), computes `prev` from the resolved path
+    (not the legacy one), and is a no-op (no row appended) when the
+    normalized current and normalized next are the same value (e.g.
+    resolved `current: 'off'` and called with `newMode: null`).
 
 ### Phase 2 — hooks
 
@@ -703,9 +791,26 @@ also requiring the legacy "off" behavior change; fixed).
     flagged as High. This v4 wording is scoped to the active-mode flag
     only — do not touch `nudgeMarkerPath`.** For the `source !== 'startup'`
     resume-preserve check, replace the current direct `readFlag(flagPath)`
-    with `resolveFlag(claudeDir, sessionId).mode` (the READ side — this is
-    what lets a resuming session with no scoped file yet correctly inherit
-    the legacy mode instead of reading as "inactive," per v3 finding 1).
+    with the full `resolveFlag(claudeDir, sessionId)` result (not just
+    `.mode`) and branch on `rejected` explicitly (fixes v4 finding 2 — a
+    resolution can be `{ mode: null, rejected: true }` for an EXISTING
+    symlinked/oversized/corrupted scoped file, which is a different case
+    from "genuinely nothing here yet" and must not silently fall through to
+    the configured default):
+    ```js
+    let mode = getDefaultMode();
+    if (source !== 'startup') {
+      const resolved = resolveFlag(claudeDir, sessionId);
+      if (resolved.rejected) {
+        mode = 'off'; // fail closed -- an existing-but-rejected scoped
+                       // file must NOT silently reactivate at the default
+      } else if (resolved.mode) {
+        mode = resolved.mode; // genuinely resolved (scoped or legacy-fallback)
+      }
+      // else: truly nothing resolved (fresh session, no legacy either) --
+      // `mode` stays at getDefaultMode() from above, which is correct.
+    }
+    ```
     Replace the `mode === 'off'` branch's `fs.unlinkSync(flagPath)` with
     `safeWriteFlag(writeFlagPath, 'off')`. Thread `sessionId` into every
     `recordModeChange` call in this file — pass whatever mode value was
@@ -724,12 +829,16 @@ also requiring the legacy "off" behavior change; fixed).
     "inactive") — this is the exact case v3 review's finding 1 caught
     missing. Piping a `resume` source with a pre-existing scoped flag for
     that session id preserves IT instead (extends the existing #691
-    resume-preserve test to the scoped path). A `mode === 'off'` resolution
-    writes literal `off` content to the scoped path (verify via direct file
-    read), not an unlink. A `resume` re-fire where the resolved mode is
-    already `'off'` (i.e. no actual change) appends NO new mode-log row —
-    proves `recordModeChange`'s internal normalization prevents the
-    spurious off→null transition v3 finding 2 named.
+    resume-preserve test to the scoped path). **New (v4 finding 2): piping
+    a `resume` source where the scoped flag exists but is a symlink, is
+    oversized, or contains garbage content, with an active DEFAULT mode
+    configured — must resolve to `'off'` (fail closed), NOT the configured
+    default.** A `mode === 'off'` resolution writes literal `off` content
+    to the scoped path (verify via direct file read), not an unlink. A
+    `resume` re-fire where the resolved mode is already `'off'` (i.e. no
+    actual change) appends NO new mode-log row — proves
+    `recordModeChange`'s internal normalization prevents the spurious
+    off→null transition v3 finding 2 named.
 
 - [ ] `src/hooks/caveman-mode-tracker.js`
   - **Task:** extract + sanitize `data.session_id` in the `end` handler
@@ -785,25 +894,53 @@ also requiring the legacy "off" behavior change; fixed).
   - **Task:** Tier-1 v3 review found these pre-existing tracked tests
     assert the OLD unlink-on-off behavior this plan intentionally changes,
     and a v3 draft's checklist only named `tests/test_mode_tracker_stdin.js`
-    for NEW coverage, never touching these. `tests/test_mode_tracker.py` has
-    twelve `self.assertIsNone(self.flag_value())` assertions across its
-    deactivation tests (`flag_value()` returns `None` when the file doesn't
-    exist) — each must change to assert the flag file exists with content
-    `off` instead. `tests/verify_repo.py` has three matching assertions:
-    `"off mode should remove flag file"` (line ~314), `"/caveman with off
-    default should not write flag"` (line ~327 — under this plan, a bare
-    `/caveman` with a configured-off default now DOES write `off` content,
-    so this assertion's message and check both need to flip), and `"normal
-    mode should remove flag file"` (line ~364) — all three become "...flag
-    file contains `off`" instead of "...removes flag file." Its
-    `uninstall.sh` check (line ~379, "uninstall.sh should remove flag
-    file") stays correct as-is — enumeration still removes the flag, it's
-    the ON/OFF representation that changed, not the uninstall behavior.
-  - **Acceptance:** every one of the fifteen identified assertions (twelve
-    in `test_mode_tracker.py`, three in `verify_repo.py`) is updated to
-    match the new `off`-is-written semantics; the full existing test suite
-    (per the whole-plan Acceptance Gates) passes with these updates, proving
-    no other tracked test still encodes the old unlink-on-off assumption.
+    for NEW coverage, never touching these. **Tier-1 v4 review then found
+    the v3 fix over-broad and under-specified — it claimed "twelve"
+    `assertIsNone(self.flag_value())` assertions all need to change, but
+    three of the thirteen actual occurrences are NOT deactivation
+    assertions at all; they check that caveman was never activated in the
+    first place, and must stay asserting absence.** The precise,
+    line-verified split in `tests/test_mode_tracker.py` (13 total
+    `assertIsNone(self.flag_value())` occurrences):
+    - **Change to expect content `off`** (10 lines — genuine deactivation
+      outcomes): lines 63, 68, 73, 79, 84, 89 (`turn caveman mode off` /
+      `turn caveman off` / `turn off caveman` / `stop\ncaveman` / `normal
+      mode` / `back to normal mode please` — all explicit deactivations),
+      144 (`/caveman off`), 160 (`/caveman-commit` with no prior mode,
+      restored to nothing on the next prompt), 189 and 192
+      (`test_deactivation_clears_saved_prev` — the deactivation itself and
+      the subsequent prompt proving it stays deactivated).
+    - **Leave asserting absence, unchanged** (3 lines — the flag was never
+      activated in the first place, not deactivated): lines 107 and 109
+      (`test_question_does_not_activate` — a bare question about caveman
+      must never activate it, so the flag is correctly absent both times)
+      and 113 (`test_scoped_brevity_does_not_activate` — a section-scoped
+      brevity request must not activate caveman either). Line 190's
+      `assertFalse(self.prev.exists(), ...)` also stays unchanged — `.prev`
+      clearing remains an unlink in this plan, only the main flag's "off"
+      representation changes.
+    - `tests/verify_repo.py` has three matching assertions to flip:
+      `"off mode should remove flag file"` (line ~314), `"/caveman with off
+      default should not write flag"` (line ~327 — under this plan, a bare
+      `/caveman` with a configured-off default now DOES write `off`
+      content, so this assertion's message and check both need to flip),
+      and `"normal mode should remove flag file"` (line ~364) — all three
+      become "...flag file contains `off`" instead of "...removes flag
+      file." Its `uninstall.sh` check (line ~379, "uninstall.sh should
+      remove flag file") stays correct as-is — enumeration still removes
+      the flag, it's the ON/OFF representation that changed, not the
+      uninstall behavior.
+  - **Acceptance:** exactly the 10 line-verified `test_mode_tracker.py`
+    deactivation assertions change to expect `off` content; the 3
+    never-activated assertions (lines 107, 109, 113) and the `.prev`
+    absence check (line 190) are verified UNCHANGED in the diff (a reviewer
+    or implementer checking the diff should see these four lines untouched
+    — treat any incidental change to them as a self-check failure, not a
+    stylistic choice); `verify_repo.py`'s three named assertions are
+    updated to match the new `off`-is-written semantics. The full existing
+    test suite (per the whole-plan Acceptance Gates) passes with these
+    updates, proving no other tracked test still encodes the old
+    unlink-on-off assumption.
 
 ### Phase 3 — stats + statuslines
 
