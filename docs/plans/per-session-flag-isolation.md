@@ -345,6 +345,53 @@ edit:
    only `/caveman-stats`'s own reported path (or the exact sanitized
    session-id filename it reports), never a directory-wide mtime scan.
 
+**v9 revision note.** v8 (target `28a9a9947aacd869edb111261d9dd927a1e7349f`)
+was the first Tier-2 cross-agent confirmation round (per
+`cross-agent-review.md`'s conditional three-tier doctrine — 8 rounds of
+Tier-1 headless review preceded this, matching or exceeding the round
+count where the trip-wire calls for moving to the next tier rather than
+continuing to iterate the same lane). The Tier-2 reviewer independently
+re-derived every ground-truth claim in the plan against the actual source
+(down to exact line numbers across all cited files) rather than trusting
+either the plan's prose or the 8 prior rounds' verdicts — everything
+checked out except one genuine Critical:
+
+1. **Critical** — the Phase 3 `caveman-statusline.sh` checklist item's
+   only concrete illustration of the "whole-string anchored match"
+   sanitizer was `case "$SESSION_ID" in [A-Za-z0-9_-]*)` — but a bash
+   `case` glob's trailing `*` matches ANY sequence of ANY characters, so
+   this pattern only constrains the FIRST character of `$SESSION_ID`,
+   not the whole string. A value like `abc/../../etc/passwd` (alnum first
+   char, arbitrary rest) matches this pattern and would get concatenated
+   into the scoped flag path — reintroducing the exact
+   strip-then-truncate-class vulnerability the plan's own v1 revision
+   note and spec documented as already fixed, through
+   `caveman-statusline.sh`'s own already-documented threat model
+   (rendering arbitrary file content to the terminal, e.g. `~/.ssh/id_rsa`).
+   The plan's own Phase 4 test vectors would likely have caught a literal
+   implementation of the broken example before merge, but the checklist
+   itself should never hand out incorrect illustrative code for a
+   security-relevant sanitizer. Fixed: replaced the illustrative snippet
+   with bash's actually-anchored `[[ "$SESSION_ID" =~
+   ^[A-Za-z0-9_-]{1,128}$ ]]`.
+2. **Medium** — the `caveman-statusline.ps1` checklist item said "whole-
+   string anchored match" abstractly with no concrete idiom, and
+   PowerShell's `-match` operator is unanchored by default (same pitfall
+   family, different language) — a naive `$SessionId -match
+   '[A-Za-z0-9_-]+'` would substring-match, not whole-string-match. Fixed:
+   added the explicit anchored form,
+   `$SessionId -notmatch '^[A-Za-z0-9_-]{1,128}$'`.
+3. **Nit** (wording only, no functional defect) — the `resolvePrev` design
+   commentary said reusing `resolveFlag`'s resolution avoids "a second,
+   independent, racy stat call," but the code actually calls `resolveFlag`
+   fresh (a live second stat), so what's really eliminated is the
+   *duplicated identity-check logic* from v4/v5, not the syscall itself.
+   Fixed: reworded to describe what the fix actually eliminates. (A second
+   nit — `resolveState`/`resolvePrev` performing a stat that `readFlag`
+   redundantly repeats internally — was explicitly assessed by the
+   reviewer as "not worth restructuring" given the codebase's existing
+   tolerance for this pattern elsewhere; left as-is.)
+
 ## Problem
 
 Every Claude Code session on the machine reads and writes the same handful of
@@ -526,14 +573,16 @@ active identity that becomes momentarily unstatable (or is itself a
 rejected symlink/oversized file, per the `resolveFlag`/`rejected` fix
 above) gets misclassified as "no scoped identity" — falling straight
 through to the legacy `.prev` fallback this whole fix exists to prevent.
-Independently re-stat-ing the active path here is also a second,
-redundant, racy identity check when `resolveFlag` already computed the
-authoritative answer moments earlier in the same call chain. Fixed: reuse
-`resolveFlag`'s own already-fail-closed resolution instead of a second
-stat call — `resolveFlag` returns the scoped active PATH itself (not the
-legacy path) in every case where this session has scoped identity, whether
-that content is valid, `'off'`, or rejected; only a genuine legacy
-fallback returns the legacy path:
+Independently re-deriving "does this session have scoped identity" via a
+second, differently-coded check is also duplicated logic that can (and
+did, across v4/v5) drift from `resolveFlag`'s own fail-closed answer.
+Fixed: reuse `resolveFlag`'s own already-fail-closed resolution instead of
+re-deriving identity a second way (Tier-2 v1 nit: this still calls
+`resolveFlag` fresh — it eliminates the duplicated *logic*, not the
+underlying stat call itself) — `resolveFlag` returns the scoped active
+PATH itself (not the legacy path) in every case where this session has
+scoped identity, whether that content is valid, `'off'`, or rejected; only
+a genuine legacy fallback returns the legacy path:
 
 ```js
 function resolvePrev(claudeDir, sessionId) {
@@ -1194,14 +1243,23 @@ also requiring the legacy "off" behavior change; fixed).
 
 - [ ] `src/hooks/caveman-statusline.sh`
   - **Task:** read stdin, extract `session_id` via a plain string match (no
-    `jq`), validate with a **whole-string anchored match** (e.g. `case
-    "$SESSION_ID" in [A-Za-z0-9_-]*) ...whole-string test via parameter
-    expansion or a strict regex match, never `tr -cd` character stripping
-    followed by truncation`) and a length cap, rejecting the entire value
-    (falling back to no-session behavior) on any failure — never a
-    stripped/truncated partial value. Resolve the ENOENT-vs-rejected
-    fallback semantics equivalent to `resolveFlag`. Render nothing for a
-    resolved mode of `off` (matching `isActiveMode`).
+    `jq`), validate with a **whole-string anchored match** and a length
+    cap: `[[ "$SESSION_ID" =~ ^[A-Za-z0-9_-]{1,128}$ ]]` (bash extended
+    regex, `^`/`$` anchored — matches the FULL string end-to-end).
+    **Do not use a bare `case ... in [A-Za-z0-9_-]*)` glob pattern for
+    this** (Tier-2 v1 Critical finding): a `case` glob only requires the
+    string to START with an allowed character — the trailing `*` matches
+    ANYTHING after it, so `case "../../etc/passwd" in [A-Za-z0-9_-]*)`
+    matches even though the value is a path-traversal string, silently
+    reintroducing the exact strip-then-truncate-class vulnerability the
+    v1 review already fixed once (`../../etc/passwd` reduced to a
+    valid-looking id) — through this exact statusline script's own
+    documented threat model (rendering untrusted content to the
+    terminal). Reject the entire value (falling back to no-session
+    behavior) on any failure — never a stripped/truncated partial value.
+    Resolve the ENOENT-vs-rejected fallback semantics equivalent to
+    `resolveFlag`. Render nothing for a resolved mode of `off` (matching
+    `isActiveMode`).
   - **Acceptance:** manual + scripted invocation
     (`echo '{"session_id":"abc-123"}' | bash caveman-statusline.sh`) reads
     the scoped file when present; with no stdin JSON or an invalid
@@ -1218,7 +1276,13 @@ also requiring the legacy "off" behavior change; fixed).
     match, reject-not-strip, ENOENT-vs-rejected fallback, `off` renders
     nothing), PowerShell idiom (`ConvertFrom-Json` on stdin is fine here —
     it's a first-party PowerShell idiom, not an external dependency the way
-    `jq` would be for Bash).
+    `jq` would be for Bash). **Anchor the regex explicitly (Tier-2 v1
+    Medium finding):** .NET regex's `-match` operator is UNANCHORED by
+    default — `$SessionId -match '[A-Za-z0-9_-]{1,128}'` matches if the
+    pattern is found ANYWHERE in the string, same failure class as the
+    Bash `case`-glob bug above. Use
+    `$SessionId -match '^[A-Za-z0-9_-]{1,128}$'` with explicit `^`/`$`
+    anchors.
   - **Acceptance:** same test vectors AND the same file-state matrix as the
     Bash script produce the same resolved path (manual `pwsh` check if
     `pwsh` is unavailable in CI, documented explicitly — not a silent
