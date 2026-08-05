@@ -300,6 +300,51 @@ iteration before moving to Tier-2 and implementation:
    distinction; extended the Phase 4 file-state-matrix test item to cover
    `resolvePrev` directly where a non-`ENOENT` failure is constructible.
 
+**v8 revision note.** v7 (target `d2a1a0401cbff64870a90d989b770fe175de5372`),
+run at xhigh effort as the trip-wire's "one elevated review," returned 3
+High + 1 Medium. The reviewer explicitly classified these as the same
+recurring class (edge-case/idempotence gaps), not a new architectural
+class — one of the three is a self-inflicted regression from v7's own
+edit:
+
+1. **High** — v7 fixed the Phase 5 `uninstall.sh` checklist item to use a
+   portable shell-glob loop instead of GNU `find -maxdepth`, but the
+   Design section (written earlier in the doc, describing the same
+   mechanism) still prescribed the rejected `find -maxdepth` command —
+   an internal contradiction that could reintroduce the exact portability
+   bug v7 claimed to fix, since Design is read first. Fixed: Design now
+   points at the portable loop and its dangling-symlink guard (see finding
+   3) instead of duplicating a second, stale, uncoordinated description of
+   the same mechanism — a direct consequence of not sweeping the whole
+   doc for every place `find "$CLAUDE_DIR"` was mentioned after v7's Phase
+   5 edit. Grepped the full plan+spec afterward for `maxdepth` and the
+   glob-loop guard to confirm no other stale copy remains.
+2. **High** — the portable shell-glob loop's guard, `[ -e "$f" ] ||
+   continue`, is false for a *dangling* symlink (`-e` follows the link
+   and reports false on a broken target), so uninstall would `continue`
+   past — and leave behind — a dangling scoped `.caveman-active-<id>` or
+   `.prev` symlink, which the plan's own resolver treats as
+   existing-but-rejected state; a reinstalled session could then read that
+   leftover instead of correctly falling back. Fixed: guard is now
+   `[ -e "$f" ] || [ -L "$f" ] || continue`, and the acceptance criteria
+   add a dangling-scoped-symlink fixture.
+3. **High** — the `uninstall.ps1` checklist item specified
+   `Get-ChildItem $ClaudeDir` with no missing-directory guard, but the
+   actual script runs with `$ErrorActionPreference = 'Stop'`
+   (`src/hooks/uninstall.ps1:7`) — an unguarded call on a config directory
+   that doesn't exist (never-installed/already-clean machine) throws and
+   aborts the ENTIRE uninstall, not just the new pass. Fixed: task now
+   requires a `Test-Path` (or equivalently narrow `-ErrorAction`) guard
+   before `Get-ChildItem`; acceptance adds a missing-directory case.
+4. **Medium** — the docs checklist's "how do I check my current session's
+   mode" note suggested finding the most-recently-modified
+   `.caveman-active-*` file as an alternative to `/caveman-stats` — under
+   concurrent sessions, the newest scoped file can belong to a DIFFERENT
+   session entirely, so this heuristic can point a user at the wrong
+   mode. Fixed: removed the mtime-heuristic suggestion; the note now names
+   only `/caveman-stats`'s own reported path (or the exact sanitized
+   session-id filename it reports), never a directory-wide mtime scan.
+
 ## Problem
 
 Every Claude Code session on the machine reads and writes the same handful of
@@ -784,7 +829,10 @@ The fix, correctly scoped to what actually needs to change:
 
 - **`cli/install.js`**: after the existing `STATE_FILES_TO_REMOVE` loop
   (leave it untouched — it already correctly handles the exact-name legacy
-  files and the "keep history" note), add one more pass:
+  files and the "keep history" note), add one more pass, guarded against a
+  missing config directory (`ENOENT` on `fs.readdirSync` means "nothing to
+  enumerate," not a throw) and honoring `opts.dryRun` (print "would
+  remove," delete nothing) exactly like the existing loop:
   `fs.readdirSync(configDir)`, removing every entry matching
   `^\.caveman-active-[A-Za-z0-9_-]{1,128}(\.prev)?$` (the SCOPED-only
   pattern — no optional group; the legacy names are already handled by the
@@ -792,12 +840,16 @@ The fix, correctly scoped to what actually needs to change:
 - **`uninstall.sh`**: add both the exact-name array (mirroring
   `STATE_FILES_TO_REMOVE`'s five entries, since this standalone uninstaller
   currently has none of that upstream #635 fix) AND the scoped-variant
-  enumeration (`find "$CLAUDE_DIR" -maxdepth 1 -name '.caveman-active-*'`
-  filtered through an equivalent shell pattern test, not a bare glob, to
-  enforce the same charset/length bound) — keep `.caveman-history.jsonl`
-  untouched, matching `cli/install.js`'s "keep, don't remove" behavior.
+  enumeration — a **portable shell-glob candidate loop**, not `find
+  -maxdepth` (a GNU extension BSD find on macOS rejects; see Phase 5 for
+  the exact loop and its dangling-symlink guard) — keep
+  `.caveman-history.jsonl` untouched, matching `cli/install.js`'s "keep,
+  don't remove" behavior.
 - **`uninstall.ps1`**: same two additions, PowerShell idiom
-  (`Get-ChildItem` + a `-match` filter for the scoped pass).
+  (`Get-ChildItem` + a `-match` filter for the scoped pass, guarded against
+  a missing config directory — `uninstall.ps1` runs with
+  `$ErrorActionPreference = 'Stop'`, so an unguarded `Get-ChildItem` on an
+  absent directory throws and aborts the whole uninstall; see Phase 5).
 
 ## Non-Goals (explicit scope boundaries)
 
@@ -1264,30 +1316,56 @@ also requiring the legacy "off" behavior change; fixed).
     one of this script's target platforms, so the standalone uninstaller
     would fail outright before removing anything.** Use a portable
     shell-glob candidate loop instead (no `find` at all):
-    `for f in "$CLAUDE_DIR"/.caveman-active-*; do [ -e "$f" ] || continue;
-    ...pattern-test "$f"'s basename...; done` — `[ -e "$f" ]` guards the
-    no-match case (an unexpanded glob literal), and each candidate still
-    goes through the same per-name pattern test as before (not a bare
-    glob-expansion accept, which would let a near-miss name through)
+    `for f in "$CLAUDE_DIR"/.caveman-active-*; do [ -e "$f" ] || [ -L "$f" ]
+    || continue; ...pattern-test "$f"'s basename...; done` — the guard is
+    `[ -e "$f" ] || [ -L "$f" ]`, **not** bare `[ -e "$f" ]` (Tier-1 v7
+    High finding): `-e` follows symlinks and is false for a *dangling*
+    symlink, so a bare `-e` guard would `continue` past — and leave
+    behind — a dangling `.caveman-active-<id>` or `.prev` symlink, which
+    the plan's own resolver semantics treat as existing-but-rejected state
+    (a reinstalled session could then read that leftover rejected symlink
+    instead of correctly falling back). `[ -e "$f" ] || [ -L "$f" ]`
+    catches both "no match at all" (unexpanded glob literal — neither `-e`
+    nor `-L` true) and "dangling symlink match" (`-L` true, `-e` false),
+    so only the genuine no-match case is skipped. Each surviving candidate
+    still goes through the same per-name pattern test as before (not a
+    bare glob-expansion accept, which would let a near-miss name through)
     matching `^\.caveman-active-[A-Za-z0-9_-]{1,128}(\.prev)?$`.
   - **Acceptance:** a standalone-install-style test (new, or extend an
     existing installer test if one already drives `uninstall.sh`) seeds
     the same fixture set as the `cli/install.js` uninstall test (all 5
     legacy state files, two scoped flags including one with `off` content,
-    a scoped `.prev` file, `.caveman-history.jsonl`, a near-miss name) and
-    asserts the same removal/survival split — including that
-    `.caveman-history.jsonl` survives here too, matching `cli/install.js`.
-    Run (or at minimum manually verify) this test under both GNU
-    coreutils/GNU find (Linux) and BSD utilities (macOS) — the whole point
-    of the portability fix is that it can't only be proven on one platform.
+    a scoped `.prev` file, `.caveman-history.jsonl`, a near-miss name),
+    **plus a dangling scoped symlink** (`.caveman-active-<id>` pointing at
+    a target that doesn't exist) — assert the same removal/survival split,
+    that `.caveman-history.jsonl` survives, AND that the dangling symlink
+    is removed, not silently skipped. Run (or at minimum manually verify)
+    this test under both GNU coreutils/GNU find (Linux) and BSD utilities
+    (macOS) — the whole point of the portability fix is that it can't only
+    be proven on one platform.
 
 - [ ] `src/hooks/uninstall.ps1`
   - **Task:** same two additions as `uninstall.sh` (exact-name array +
     scoped-variant enumeration), PowerShell idiom: `Get-ChildItem $ClaudeDir`
     + a `-match` filter against the equivalent anchored pattern, replacing
-    the exact-path `$FlagFile` removal.
-  - **Acceptance:** same fixture set and split as `uninstall.sh` (manual
-    `pwsh` check if unavailable in CI, documented explicitly).
+    the exact-path `$FlagFile` removal. **Missing-directory guard (Tier-1
+    v7 High finding):** this script runs with
+    `$ErrorActionPreference = 'Stop'` (`src/hooks/uninstall.ps1:7`), and
+    its existing path operations are guarded by `Test-Path` — an unguarded
+    `Get-ChildItem $ClaudeDir` on a config directory that doesn't exist
+    (never-installed or already-clean machine) throws under that
+    preference and aborts the entire uninstall, not just the new
+    scoped-variant pass. Gate the new enumeration behind
+    `Test-Path $ClaudeDir` (or an equivalent narrowly-scoped
+    `-ErrorAction SilentlyContinue` on `Get-ChildItem` alone, not a blanket
+    preference change) so a missing directory is a no-op, matching the
+    other two uninstallers' ENOENT-safe behavior.
+  - **Acceptance:** same fixture set and split as `uninstall.sh` (dangling
+    scoped symlink included — `Get-ChildItem` does not follow symlinks by
+    default, so confirm the equivalent dangling-target case is still
+    matched and removed), plus an uninstall run against a missing config
+    directory that completes without throwing (manual `pwsh` check if
+    unavailable in CI, documented explicitly).
 
 - [ ] `CLAUDE.md`, `src/hooks/README.md`, `INSTALL.md`
   - **Task:** update every prose/ASCII-diagram description of
@@ -1296,9 +1374,16 @@ also requiring the legacy "off" behavior change; fixed).
     legacy global name when no session id is available or its scoped file
     has never been written), note that "off" is now represented as written
     content rather than file absence, and add a short "how do I check my
-    current session's mode" note (run `/caveman-stats` inside the session,
-    which now reports its exact resolved flag path; or find the
-    most-recently-modified `.caveman-active-*` file). **Additionally fix
+    current session's mode" note: run `/caveman-stats` inside the session,
+    which now reports its exact resolved flag path. **Do not** suggest
+    finding the most-recently-modified `.caveman-active-*` file as an
+    alternative (Tier-1 v7 Medium finding) — with concurrent sessions, the
+    newest scoped file can belong to a DIFFERENT session, and presenting
+    that heuristic as equivalent to `/caveman-stats` can point a user at
+    the wrong mode entirely. If a second method is wanted at all, name only
+    the exact sanitized-session-id filename for THIS session (obtainable
+    from `/caveman-stats`'s own reported path) — never a directory-wide
+    mtime scan. **Additionally fix
     `src/hooks/README.md`'s "Custom statusline" CODE SAMPLE** (a bash
     snippet showing users how to add a caveman badge to their own
     statusline script) — it currently reads only the legacy global
