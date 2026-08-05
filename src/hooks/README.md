@@ -6,24 +6,35 @@ If you installed caveman standalone (without the plugin), the unified Node insta
 
 ## What's Included
 
+Each Claude Code session gets its own mode flag,
+`$CLAUDE_CONFIG_DIR/.caveman-active-<session_id>` (default
+`~/.claude/.caveman-active-<session_id>`) — so toggling caveman in one
+session never affects another running concurrently. A session falls back to
+the shared legacy `$CLAUDE_CONFIG_DIR/.caveman-active` only when it has no
+resolvable session id, or has never written its own scoped file yet.
+Deactivating caveman ("off") is now represented by writing the literal
+content `off` to the flag file, not by deleting it — absence means "never
+touched," not "explicitly off." Run `/caveman-stats` inside a session to see
+its exact resolved flag path.
+
 ### `caveman-activate.js` — SessionStart hook
 
 - Runs once when Claude Code starts
-- Writes `full` to `$CLAUDE_CONFIG_DIR/.caveman-active` (default `~/.claude/.caveman-active`) via the symlink-safe `safeWriteFlag` helper
+- Writes `full` to the session's scoped flag file (falling back to the legacy global path per above) via the symlink-safe `safeWriteFlag` helper
 - Emits caveman rules as hidden SessionStart context
 - Detects missing statusline config and emits setup nudge (Claude will offer to help)
 
 ### `caveman-mode-tracker.js` — UserPromptSubmit hook
 
 - Fires on every user prompt, checks for `/caveman` commands and natural-language activation/deactivation phrases ("talk like caveman", "stop caveman", "normal mode")
-- Writes the active mode to the flag file when a caveman command is detected; deletes it on deactivation
+- Writes the active mode to the session's scoped flag file when a caveman command is detected; writes `off` content on deactivation
 - Emits a small per-turn reinforcement reminder when the flag is set to a non-independent mode (`lite`/`full`/`ultra`/`wenyan*`)
 - Supports: `lite`, `full`, `ultra`, `wenyan`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`, `commit`, `review`, `compress`
 
 ### `caveman-statusline.sh` / `caveman-statusline.ps1` — Statusline badge script
 
-- Reads `$CLAUDE_CONFIG_DIR/.caveman-active` (default `~/.claude/.caveman-active`) and outputs a colored badge
-- Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc.
+- Reads the session's scoped flag file (falling back to the legacy global path per above, resolved from the `session_id` Claude Code passes on stdin) and outputs a colored badge
+- Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc. Renders nothing when the resolved mode is `off`.
 - Appends the lifetime savings suffix `⛏ 12.4k` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` (written by `caveman-stats.js` on each `/caveman-stats` run; absent until the first run, so fresh installs render no fake number). Opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`.
 
 ## Statusline Badge
@@ -58,21 +69,22 @@ If you already have a custom statusline, caveman does not overwrite it and Claud
 
 Replace the path with the actual script location (e.g. `~/.claude/hooks/` for standalone installs, or the plugin install directory for plugin installs).
 
-**Custom statusline:** If you already have a statusline script, add this snippet to it:
+**Custom statusline:** If you already have a statusline script, invoke the
+shipped `caveman-statusline.sh` directly and append its output, rather than
+hand-rolling a second implementation of the flag-resolution/rendering logic
+(that logic — per-session scoping, the legacy fallback, `off` rendering
+nothing — changes over time, and a hand-duplicated snippet will silently
+drift out of sync with it). Claude Code passes the same stdin JSON to every
+`statusLine` command, so pipe it straight through:
 
 ```bash
-caveman_text=""
-caveman_flag="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-active"
-if [ -f "$caveman_flag" ]; then
-  caveman_mode=$(cat "$caveman_flag" 2>/dev/null)
-  if [ "$caveman_mode" = "full" ] || [ -z "$caveman_mode" ]; then
-    caveman_text=$'\033[38;5;172m[CAVEMAN]\033[0m'
-  else
-    caveman_suffix=$(echo "$caveman_mode" | tr '[:lower:]' '[:upper:]')
-    caveman_text=$'\033[38;5;172m[CAVEMAN:'"${caveman_suffix}"$']\033[0m'
-  fi
-fi
+caveman_text=$(printf '%s' "$STDIN_JSON" | bash "$CAVEMAN_HOOKS_DIR/caveman-statusline.sh")
 ```
+
+Replace `$STDIN_JSON` with however your script already captures its own
+stdin, and `$CAVEMAN_HOOKS_DIR` with the actual hooks directory (e.g.
+`~/.claude/hooks` for standalone installs, or the plugin install directory
+for plugin installs).
 
 Badge examples:
 - `/caveman` → `[CAVEMAN]`
@@ -84,7 +96,8 @@ Badge examples:
 ## How It Works
 
 ```
-SessionStart hook ──writes "full"──▶ $CLAUDE_CONFIG_DIR/.caveman-active ◀──writes mode── UserPromptSubmit hook
+SessionStart hook ──writes "full"──▶ .caveman-active-<session_id> ◀──writes mode── UserPromptSubmit hook
+                                     (or legacy .caveman-active)
                                               │
                                            reads
                                               ▼
@@ -92,7 +105,7 @@ SessionStart hook ──writes "full"──▶ $CLAUDE_CONFIG_DIR/.caveman-activ
                                     [CAVEMAN:ULTRA] │ ...
 ```
 
-SessionStart stdout is injected as hidden system context — Claude sees it, users don't. The statusline runs as a separate process. The flag file is the bridge.
+SessionStart stdout is injected as hidden system context — Claude sees it, users don't. The statusline runs as a separate process. The scoped flag file (one per session, falling back to the legacy global path when no session id is available) is the bridge.
 
 ## Uninstall
 
@@ -108,4 +121,4 @@ node cli/install.js --uninstall
 Or manually:
 1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, and `caveman-statusline.{sh,ps1}`.
 2. Remove the SessionStart, UserPromptSubmit, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
-3. Delete `$CLAUDE_CONFIG_DIR/.caveman-active` (and `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if you ran `/caveman-stats`).
+3. Delete `$CLAUDE_CONFIG_DIR/.caveman-active` and every `$CLAUDE_CONFIG_DIR/.caveman-active-<session_id>` (and matching `.prev` files), plus `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if you ran `/caveman-stats`. `.caveman-history.jsonl` is your lifetime savings ledger — kept unless you delete it yourself.

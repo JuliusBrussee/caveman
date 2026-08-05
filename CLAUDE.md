@@ -136,10 +136,11 @@ The old steps that mirrored SKILL.md and rules into root dotdirs (`.cursor/`, `.
 
 ## Hook system (Claude Code)
 
-Three hooks in `src/hooks/` plus a `caveman-config.js` shared module and a `package.json` CommonJS marker. Communicate via flag file at `$CLAUDE_CONFIG_DIR/.caveman-active` (falls back to `~/.claude/.caveman-active`).
+Three hooks in `src/hooks/` plus a `caveman-config.js` shared module and a `package.json` CommonJS marker. Communicate via a per-session flag file, `$CLAUDE_CONFIG_DIR/.caveman-active-<session_id>` — falling back to the legacy global `$CLAUDE_CONFIG_DIR/.caveman-active` (default `~/.claude/.caveman-active`) for a caller with no resolvable session id, or a session that has never written its own scoped file yet. "Off" is represented by writing the literal content `off` to the flag file, not by deleting it — see `caveman-config.js`'s `isActiveMode`/`resolveFlag`/`resolvePrev` below.
 
 ```
-SessionStart hook ──writes "full"──▶ $CLAUDE_CONFIG_DIR/.caveman-active ◀──writes mode── UserPromptSubmit hook
+SessionStart hook ──writes "full"──▶ .caveman-active-<session_id> ◀──writes mode── UserPromptSubmit hook
+                                     (or legacy .caveman-active)
                                                        │
                                                     reads
                                                        ▼
@@ -157,11 +158,14 @@ Exports:
 - `getDefaultMode()` — resolves default mode in order: `CAVEMAN_DEFAULT_MODE` env var → repo-local config (`<cwd>/.caveman/config.json` or `<cwd>/.caveman.json`, walking up to the filesystem root) → user config (`$XDG_CONFIG_HOME/caveman/config.json` / `~/.config/caveman/config.json` / `%APPDATA%\caveman\config.json`) → `'full'`. The env var short-circuits before any cwd walk. Repo-local config lets a team check in a per-project default without polluting every contributor's env or user config.
 - `findRepoConfigPath(start)` — walks up from `start` (default `process.cwd()`) looking for the first `.caveman/config.json` or `.caveman.json`. Bounded to 64 ancestors. Refuses symlinked files (symmetric with `safeWriteFlag` / `readFlag`).
 - `safeWriteFlag(flagPath, content)` — symlink-safe flag write. Refuses if flag target or its immediate parent is a symlink. Opens with `O_NOFOLLOW` where supported. Atomic temp + rename. Creates with `0600`. Protects against local attackers replacing the predictable flag path with a symlink to clobber files writable by the user. Used by both write hooks. Silent-fails on all filesystem errors.
+- `sanitizeSessionId(raw)` / `flagBaseName(sessionId)` / `prevBaseName(sessionId)` — per-session flag isolation. `sanitizeSessionId` is reject-not-strip: an invalid session id (path traversal, embedded separator, oversized, wrong type) is rejected in full, never stripped/truncated into a valid-looking id. `flagBaseName`/`prevBaseName` return the scoped filename for a valid session id, or the legacy global name for `null`.
+- `isActiveMode(mode)` — `!!mode && mode !== 'off'`. Every caller that used to rely on bare truthiness must use this instead, since `readFlag` can now return the truthy string `'off'`.
+- `resolveState(claudeDir, sessionId, baseNameFn)` / `resolveFlag` / `resolvePrev` — the shared ENOENT-vs-rejected resolver. No session id -> always the legacy path. Scoped path ENOENT -> this session has never touched anything, fall back to legacy. Scoped path exists but its content is rejected by `readFlag` (symlink, oversized, garbage) -> fail closed, `{ rejected: true }`, never fall back to legacy. `resolvePrev` additionally gates its own legacy fallback on whether the session already has scoped ACTIVE identity (reusing `resolveFlag`'s own result), not resolved independently.
 
 ### `src/hooks/caveman-activate.js` — SessionStart hook
 
 Runs once per Claude Code session start. Three things:
-1. Writes the active mode to `$CLAUDE_CONFIG_DIR/.caveman-active` via `safeWriteFlag` (creates if missing). Branches on the hook payload's `source` field (#691): `startup` resets to the configured default; `resume`/`clear`/`compact` re-fires preserve a valid existing flag so mid-session `/caveman <level>` switches survive.
+1. Writes the active mode to the session's scoped flag file (via `flagBaseName(sessionId)`, falling back to the legacy global path) via `safeWriteFlag` (creates if missing). Branches on the hook payload's `source` field (#691): `startup` resets to the configured default; `resume`/`clear`/`compact` re-fires resolve via `resolveFlag` and preserve a valid existing flag so mid-session `/caveman <level>` switches survive — an existing-but-rejected scoped file (`resolved.rejected`) resolves to `'off'` instead of silently reactivating at the configured default.
 2. Emits caveman ruleset as hidden stdout — Claude Code injects SessionStart hook stdout as system context, invisible to user
 3. Checks `settings.json` for statusline config; if missing, appends nudge to offer setup — once per install, gated by a `.caveman-nudge-shown` marker file (#661)
 
@@ -182,14 +186,15 @@ Reads JSON from stdin. Three responsibilities:
 - `/caveman-review` → `review`
 - `/caveman-compress` → `compress`
 
-**2. Natural-language activation/deactivation.** Matches phrases like "activate caveman", "turn on caveman mode", "talk like caveman" and writes the configured default mode. Matches "stop caveman", "disable caveman", "normal mode", "deactivate caveman" etc. and deletes the flag file. README promises these triggers, the hook enforces them.
+**2. Natural-language activation/deactivation.** Matches phrases like "activate caveman", "turn on caveman mode", "talk like caveman" and writes the configured default mode. Matches "stop caveman", "disable caveman", "normal mode", "deactivate caveman" etc. and writes literal `off` content to the flag file (not a delete — absence means "never touched," not "explicitly off"). README promises these triggers, the hook enforces them.
 
 **3. Per-turn reinforcement.** When flag is set to a non-independent mode (i.e. not `commit`/`review`/`compress`), emits a small `hookSpecificOutput` JSON reminder so the model keeps caveman style after other plugins inject competing instructions mid-conversation. The full ruleset still comes from SessionStart — this is just an attention anchor.
 
 ### `src/hooks/caveman-statusline.sh` — Statusline badge
 
-Reads flag file at `$CLAUDE_CONFIG_DIR/.caveman-active`. Outputs colored badge string for Claude Code statusline:
+Reads stdin JSON for `session_id` (same contract as the other hooks), resolves the session's scoped flag file (falling back to the legacy global path), same ENOENT-vs-rejected semantics as `resolveFlag`. Outputs colored badge string for Claude Code statusline:
 - `full` or empty → `[CAVEMAN]` (orange)
+- `off` → nothing (matching `isActiveMode`)
 - anything else → `[CAVEMAN:<MODE_UPPERCASED>]` (orange)
 
 Then appends the lifetime-savings suffix (`⛏ 12.4k`) read from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` — written by `caveman-stats.js` on every `/caveman-stats` run. **Default on**; users opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`. The suffix file is absent until `/caveman-stats` runs at least once, so fresh installs render no fake number.
@@ -204,7 +209,7 @@ Configured in `settings.json` under `statusLine.command`. PowerShell counterpart
 
 The `install.sh` / `install.ps1` shims at the repo root delegate to `cli/install.js` via `node` (local clone) or `npx -y github:JuliusBrussee/caveman` (curl|bash). No legacy fallback path remains — earlier `install.sh.legacy` / `install.ps1.legacy` files were removed.
 
-**Uninstall** — `npx -y github:JuliusBrussee/caveman -- --uninstall` (or `node cli/install.js --uninstall` from a clone). Strips caveman hook entries from `settings.json` via substring marker `caveman`, deletes hook files, and removes the Claude plugin / Gemini extension. Also removes state files from `$CLAUDE_CONFIG_DIR` (`.caveman-active`, `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`, `.caveman-nudge-shown`); keeps `.caveman-history.jsonl` (lifetime savings data) with a printed note (#635). Skill installs done via `npx skills add` must be removed via the IDE's skill manager (we don't track them).
+**Uninstall** — `npx -y github:JuliusBrussee/caveman -- --uninstall` (or `node cli/install.js --uninstall` from a clone). Strips caveman hook entries from `settings.json` via substring marker `caveman`, deletes hook files, and removes the Claude plugin / Gemini extension. Also removes state files from `$CLAUDE_CONFIG_DIR` (`.caveman-active`, `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`, `.caveman-nudge-shown`), plus every scoped `.caveman-active-<session_id>[.prev]` file it can enumerate; keeps `.caveman-history.jsonl` (lifetime savings data) with a printed note (#635). All three uninstall entry points (`cli/install.js`, `uninstall.sh`, `uninstall.ps1`) enumerate the scoped variants too. Skill installs done via `npx skills add` must be removed via the IDE's skill manager (we don't track them).
 
 ---
 
