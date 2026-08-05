@@ -103,6 +103,46 @@ same resolved path attribution reads mode from) and one Nit (an uninstall
 near-miss test fixture that actually matched the intended charset) are also
 folded into this v2.
 
+**v3 revision note.** v2 (target `82f37cc8790f2df1da3b6416fabe9d99b8e5ccd9`)
+cleared all Criticals but returned 5 more High + 2 Medium — precision gaps
+in the checklist, not new design flaws:
+
+1. **High** — the checklist told `activate.js`/`mode-tracker.js` to compute
+   their READ of current state via the same `flagBaseName` helper used for
+   WRITES, which never falls back — a valid session id with no scoped file
+   yet, plus an active legacy flag, would read as "inactive" instead of
+   inheriting the legacy state. Fixed: reads go through
+   `resolveFlag`/`resolvePrev`; writes use `flagBaseName`/`prevBaseName`
+   directly. Stated explicitly per call site.
+2. **High** — only the reinforcement-emit check was updated to
+   `isActiveMode()`; `mode-tracker.js`'s independent-mode `current` capture
+   and `prev` restore-decision still treated literal `'off'` as an active
+   mode to save/restore, corrupting one-shot state and mode-log entries
+   after `/caveman off` → `/caveman-commit` → an ordinary prompt. Fixed:
+   both gates use `isActiveMode()` too; a restored `'off'` normalizes to
+   `null` in the mode-log, never logged as `'off'` itself.
+3. **High** — the mode-log filter's `(row.session_id || null) === (sessionId
+   || null)` coerced any falsy-but-present value (`""`, `0`, `false`) to
+   `null` via `||`, letting a corrupted row masquerade as a legitimate
+   legacy-fallback row. Fixed: strict validation in `readModeLog` — a
+   present `session_id` must be `null` or pass `sanitizeSessionId`;
+   anything else is `malformed` and excluded from every reader.
+4. **High** — the plan only touched `cli/install.js`'s uninstall function;
+   two standalone entry points, `src/hooks/uninstall.sh` and
+   `uninstall.ps1`, also remove only the exact legacy flag path and were
+   missed entirely. Fixed: both gain the same enumeration.
+5. **High** — the Acceptance Gates section claimed byte-identical legacy
+   flag content while the Phase 2 checklist separately required legacy
+   `/caveman off` to write `'off'` instead of unlinking — a direct
+   contradiction. Fixed: the gate now states path selection is unchanged
+   but the "off" representation change is universal, on the legacy path
+   too.
+
+Two Medium findings (the docs task promised `/caveman-stats` reports the
+resolved flag path, but the implementation task never required exposing
+it; the statusline test plan mostly proved sanitizer decisions, not the
+full ENOENT-vs-rejected file-state matrix) are also folded into this v3.
+
 ## Problem
 
 Every Claude Code session on the machine reads and writes the same handful of
@@ -206,19 +246,27 @@ emit check, and the statusline scripts' render logic (both must render
 nothing — no `[CAVEMAN:OFF]` badge — for a resolved mode of `'off'`, matching
 today's behavior for an absent flag).
 
-### Shared resolver — ENOENT vs rejected content (fixes v2 findings 2 + 4)
+### Shared resolver — ENOENT vs rejected content, generalized to flag AND prev (fixes v2 findings 2 + 4; fixes v3 finding 1)
 
-One function in `caveman-config.js`, used by every consumer (`activate.js`,
-`mode-tracker.js`, `stats.js`, and reimplemented with equivalent semantics in
-both statusline scripts):
+One pair of functions in `caveman-config.js`, used by every consumer that
+**reads** current state (`activate.js`'s resume-preserve check,
+`mode-tracker.js`'s `current`/`activeMode`/`prev` reads, `stats.js`, and
+reimplemented with equivalent semantics in both statusline scripts). A v2
+draft specified this resolver but the Implementation-Ready Checklist still
+told `activate.js`/`mode-tracker.js` to compute their READ path via the same
+`flagBaseName` helper used for WRITES — which never falls back at all
+(Tier-1 v2 High finding: a valid session id with no scoped file yet and an
+active legacy flag would read as "inactive" instead of correctly inheriting
+the legacy state). This v3 makes the read/write split explicit and names
+which helper each call site uses:
 
 ```js
-function resolveFlag(claudeDir, sessionId) {
-  const legacyPath = path.join(claudeDir, '.caveman-active');
+function resolveState(claudeDir, sessionId, baseNameFn) {
+  const legacyPath = path.join(claudeDir, baseNameFn(null));
   if (!sessionId) {
     return { path: legacyPath, mode: readFlag(legacyPath) };
   }
-  const scopedPath = path.join(claudeDir, flagBaseName(sessionId));
+  const scopedPath = path.join(claudeDir, baseNameFn(sessionId));
   let st;
   try {
     st = fs.lstatSync(scopedPath);
@@ -235,6 +283,8 @@ function resolveFlag(claudeDir, sessionId) {
   // is a fail-closed "inactive," NOT a signal to fall back to legacy.
   return { path: scopedPath, mode: readFlag(scopedPath) };
 }
+function resolveFlag(claudeDir, sessionId) { return resolveState(claudeDir, sessionId, flagBaseName); }
+function resolvePrev(claudeDir, sessionId) { return resolveState(claudeDir, sessionId, prevBaseName); }
 ```
 
 `mode` is `null` for "inactive" (including the fail-closed cases above) or a
@@ -250,6 +300,58 @@ explicitly turned off has a scoped file that exists with content `'off'` —
 returns the scoped path with mode `'off'`, never falling through to legacy.
 Only a session that has *never* written to its scoped path at all (true
 `ENOENT`) falls back — resolving the v1 ambiguity precisely.
+
+**The read/write split, stated explicitly (this is the exact fix for v3
+finding 1):**
+
+- **Writes always target `path.join(claudeDir, flagBaseName(sessionId))`
+  (or `prevBaseName(sessionId)` for `.prev`) directly — no resolver call.**
+  A write establishes THIS session's own state; it never needs to know
+  where the legacy file is.
+- **Reads of "what is the currently active mode/prev for this session"
+  always go through `resolveFlag`/`resolvePrev`.** This includes:
+  `caveman-activate.js`'s resume-preserve check (`source !== 'startup'`
+  branch); `caveman-mode-tracker.js`'s `current` capture before an
+  independent-mode override, its `activeMode` read for the reinforcement
+  decision, and its `prev` read during one-shot independent-mode restore;
+  and `caveman-stats.js`'s flag read.
+- A stale legacy `.caveman-active.prev` left over from before this session
+  ever scoped anything is a minor, accepted residue (same class as the
+  pre-existing incomplete-uninstall gap in Non-Goals) — `resolvePrev`'s
+  fallback will surface it once, and the next write clears only this
+  session's own scoped `.prev`, not the legacy one. Not fixed here; noted so
+  it isn't mistaken for a new bug during review.
+
+### "Off" truthiness — every call site, not just reinforcement (fixes v3 finding 2)
+
+A v2 draft updated only `caveman-mode-tracker.js`'s reinforcement-emit check
+to use `isActiveMode()`. Tier-1 v3 review found two more truthiness checks on
+mode-like values in the same file that also treat literal `'off'` as if it
+were an active prose mode to save/restore:
+
+1. **Current-mode capture before an independent-mode override**
+   (`if (current && !INDEPENDENT_MODES.has(current)) { safeWriteFlag(prevPath, current); }`).
+   With `current === 'off'` this saves `'off'` into `.prev` as if it were a
+   real mode to restore later. Fix: gate on `isActiveMode(current)` instead
+   of bare truthiness — an off/inactive current mode has nothing worth
+   saving.
+2. **One-shot independent-mode restore decision**
+   (`if (prev && !INDEPENDENT_MODES.has(prev)) { ...restore prev as active... }
+   else { ...deactivate... }`). With `prev === 'off'` this takes the
+   "restore as active" branch and calls `recordModeChange(claudeDir, prev,
+   sessionId)` — logging `'off'` as if it were a distinct mode value
+   instead of the same thing as `null`/deactivated. Fix: gate on
+   `isActiveMode(prev)`; when it's false (including `prev === 'off'`), take
+   the SAME branch as "no prev to restore" — `recordModeChange(claudeDir,
+   null, sessionId)` and write `'off'` (not unlink) to the flag, so the
+   mode-log always records `null` for an inactive/off state regardless of
+   which code path produced it.
+
+The one truthiness check that does NOT need this treatment:
+`if (activeMode && INDEPENDENT_MODES.has(activeMode))` (deciding whether
+THIS turn is a one-shot independent-mode turn) — `INDEPENDENT_MODES.has('off')`
+is already `false`, so this condition is correct as bare truthiness
+regardless of `isActiveMode`.
 
 ### Mode-transition log — add `session_id`, keep one shared file (fixes v2 findings 5 + 6)
 
@@ -277,12 +379,36 @@ must be handled differently:
   legacy path (its own `sessionId` is also falsy). A properly scoped reader
   (valid `sessionId`) excludes these, since they represent other
   concurrent/legacy activity that isn't this session's.
+- **Key present with any other value** (empty string, a number, `false`, or
+  a string that fails `sanitizeSessionId`) — a v2 draft's `(row.session_id
+  || null) === (sessionId || null)` comparison silently coerced any of
+  these falsy-but-not-null values (`""`, `0`, `false`) to `null` via `||`,
+  letting a corrupted row masquerade as a legitimate legacy-fallback row.
+  Tier-1 v3 review flagged this as High. Fixed: validate every present
+  `session_id` value strictly in `readModeLog` itself — it must be either
+  JSON `null` or a string that passes `sanitizeSessionId`; anything else is
+  a malformed row and is **excluded from every reader's attribution**
+  (never silently coerced into matching), while still being counted so a
+  future debugging pass can find it.
 
 ```js
+// In readModeLog, per parsed row `e`:
+const hasSessionIdKey = Object.prototype.hasOwnProperty.call(e, 'session_id');
+let sessionIdValue;   // sanitized string, null (valid legacy marker), or undefined (malformed)
+if (!hasSessionIdKey) {
+  sessionIdValue = undefined; // handled as "no key" below, not "malformed"
+} else if (e.session_id === null) {
+  sessionIdValue = null;
+} else {
+  sessionIdValue = sanitizeSessionId(e.session_id); // null return here means MALFORMED, not "legacy" -- see filter below
+}
+// row = { ts, mode, prev, hasSessionIdKey, session_id: sessionIdValue, malformed: hasSessionIdKey && e.session_id !== null && sessionIdValue === null }
+
 function relevantModeLogRows(modeLog, sessionId) {
   return modeLog.filter(row => {
-    if (!row.hasSessionIdKey) return true;       // pre-migration historical row
-    return (row.session_id || null) === (sessionId || null);
+    if (row.malformed) return false;             // corrupted session_id value -- never join anything
+    if (!row.hasSessionIdKey) return true;        // pre-migration historical row
+    return row.session_id === (sessionId || null);
   });
 }
 ```
@@ -313,6 +439,18 @@ different purpose (a stable per-session key for
 `.caveman-history.jsonl`'s cross-session rollup) — this plan does not touch
 that line or that file.
 
+**Stats now exposes the resolved flag path (fixes v3 Medium finding).** The
+docs task below promises "`/caveman-stats` reports the resolved session
+file," but a v2 draft's `caveman-stats.js` task only required using
+`resolveFlag`'s path for `flagMtimeMs` — it never actually threaded that path
+into the user-visible output, so the docs promise wasn't backed by an
+implementation requirement. Fixed: `resolveFlag`'s `path` is passed into
+`formatStats`/`formatShare` and rendered in the output (e.g. a `Flag file:`
+line), for all three outcomes — scoped, legacy-fallback, and fail-closed
+(where it still shows the scoped path even though `mode` is `null`, so a
+user debugging a rejected/corrupted scoped file can see exactly which path
+was rejected).
+
 ### Statusline scripts
 
 Both `caveman-statusline.sh` and `caveman-statusline.ps1` currently read no
@@ -328,17 +466,48 @@ is the v1 Critical fix — see Invariant Matrix), and resolve the same
 ENOENT-vs-rejected fallback semantics as `resolveFlag` above. A resolved mode
 of `'off'` renders nothing, matching `isActiveMode`.
 
+**Test coverage must exercise the full file-state matrix, not just the
+sanitizer (fixes v3 Medium finding).** A v2 draft's statusline test plan
+mostly proved sanitizer accept/reject decisions. Tier-1 v3 review pointed out
+this doesn't prove the ENOENT-vs-rejected fallback logic itself is correctly
+ported to Bash/PowerShell: a naive "scoped-file-exists ? read scoped :
+read legacy" implementation (missing the reject-vs-ENOENT distinction) would
+pass every sanitizer test while still leaking a legacy mode through a
+corrupted scoped file. Phase 4's shared test vectors are extended with a
+**file-state matrix**, each case run with an active, distinguishable legacy
+sentinel value present so a wrong fallback is observable:
+`scoped-ENOENT` (must read legacy sentinel), `scoped-valid-content`
+(must read scoped, ignore legacy sentinel), `scoped-off-content` (must
+render nothing), `scoped-invalid-content` (garbage bytes — must render
+nothing, must NOT read legacy sentinel), `scoped-oversized` (>64 bytes —
+same), `scoped-symlink` (points at an arbitrary file — same), and, where the
+platform allows constructing it, a non-`ENOENT` stat failure (e.g. a
+permission-denied scoped path) — same fail-closed expectation.
+
 ### Uninstall enumeration
 
-`cli/install.js`'s uninstaller currently unlinks only the exact literal
-`.caveman-active` path (`configDir` case) and `.caveman-active` under the
-opencode config dir. Neither removes `.caveman-active.prev` (pre-existing
-gap, out of scope — see Non-Goals) nor would either remove the new
-`.caveman-active-<id>` / `.caveman-active-<id>.prev` scoped variants this
-plan introduces. Enumerate `configDir`'s entries once and unlink every name
-matching `^\.caveman-active(-[A-Za-z0-9_-]{1,128})?(\.prev)?$` via
-`fs.readdirSync` — real directory enumeration, not a shell glob (Node's `fs`
-APIs don't expand `*`).
+Three separate uninstall entry points exist and all currently unlink only
+the exact literal `.caveman-active` path: `cli/install.js`'s uninstall
+function (`configDir` case; the opencode `ocFlag` case is out of scope, see
+Non-Goals), and the two standalone hook uninstallers
+`src/hooks/uninstall.sh` and `src/hooks/uninstall.ps1` (used for a
+standalone, non-plugin hook-only install — a v2 draft covered only the
+first and missed these two, which Tier-1 v3 review flagged as High: without
+fixing them too, a standalone install's uninstall leaves every scoped flag
+and `.prev` file behind, and a later reinstall can resurrect a stale
+per-session mode). None of the three removes `.caveman-active.prev` for the
+*legacy* (non-scoped) name either (pre-existing gap, out of scope — see
+Non-Goals).
+
+All three gain the same enumeration: list the config directory's entries
+once and remove every name matching
+`^\.caveman-active(-[A-Za-z0-9_-]{1,128})?(\.prev)?$` — `fs.readdirSync` +
+a JS regex test in `cli/install.js` (real directory enumeration, not a shell
+glob — Node's `fs` APIs don't expand `*`); `find "$CLAUDE_DIR" -maxdepth 1
+-name '.caveman-active*'` filtered through an equivalent shell pattern
+test (not a bare glob, to enforce the same charset/length bound) in
+`uninstall.sh`; `Get-ChildItem` + a PowerShell regex `-match` filter in
+`uninstall.ps1`.
 
 ## Non-Goals (explicit scope boundaries)
 
@@ -381,17 +550,22 @@ fallback rule.
 | `src/hooks/caveman-statusline.ps1` | reader, same semantics | needs-change |
 | `cli/install.js` (uninstall, `configDir` case) | deletes state files | needs-change (enumerate) |
 | `cli/install.js` (uninstall, opencode `ocFlag` case) | deletes state files | conforms (opencode explicitly out of scope, unlink stays exact-path) |
+| `src/hooks/uninstall.sh` | standalone hook-only uninstaller, deletes state files | needs-change (enumerate) — missed in v2, found by Tier-1 v3 review |
+| `src/hooks/uninstall.ps1` | standalone hook-only uninstaller (Windows), deletes state files | needs-change (enumerate) — same v3 finding |
 | `src/plugins/opencode/plugin.js` | writer + reader (opencode) | out of scope — legacy/alternate path, left conforming to its OWN existing (global) contract, tested only to confirm this PR doesn't touch it |
 | `CLAUDE.md`, `src/hooks/README.md`, `INSTALL.md` | documentation of the flag topology | needs-change |
 | `tests/test_symlink_flag.js`, `tests/test_repo_local_config.js` | exercise `caveman-config.js` helpers | test-only — extend for new helpers |
 
 Legacy/alternate-path test required by the matrix: a hook invocation with NO
-`session_id` (or an invalid one) must produce the SAME files, paths, and
-flag content as today — writes and reads the legacy global `.caveman-active`
-— proving the fallback isn't just documented but actually exercised. (The
-mode-log row gains an additive `session_id: null` field even on this path —
-see the relaxed acceptance-gate wording below; this is the one intentional,
-documented deviation from strict byte-identity.)
+`session_id` (or an invalid one) must produce the SAME files and paths as
+today — writes and reads the legacy global `.caveman-active` — proving the
+fallback isn't just documented but actually exercised. Two intentional,
+documented deviations from strict byte-identity apply on this path too (not
+just the scoped path): the mode-log row gains an additive `session_id: null`
+field, and an "off" resolution now writes literal `off` content instead of
+unlinking the file (see the Acceptance Gates wording below — a v2 draft's
+gate contradicted this second point by claiming full byte-identity while
+also requiring the legacy "off" behavior change; fixed).
 
 ## Implementation-Ready Checklist
 
@@ -399,13 +573,15 @@ documented deviation from strict byte-identity.)
 
 - [ ] `src/hooks/caveman-config.js`
   - **Task:** add `SESSION_ID_RE`, `sanitizeSessionId(raw)`, `flagBaseName(sessionId)`,
-    `prevBaseName(sessionId)`, `isActiveMode(mode)`, `resolveFlag(claudeDir, sessionId)`
-    (per Design above — returns `{ path, mode }`, ENOENT-vs-rejected fail-closed
-    semantics). Change `recordModeChange(claudeDir, newMode)` to
-    `recordModeChange(claudeDir, newMode, sessionId)`: resolve `current` via
-    `resolveFlag(claudeDir, sessionId).mode` (not the hardcoded legacy path),
-    append `session_id: sessionId || null` to the JSON row. Export all new
-    functions.
+    `prevBaseName(sessionId)`, `isActiveMode(mode)`, `resolveState(claudeDir,
+    sessionId, baseNameFn)`, `resolveFlag(claudeDir, sessionId)` (=
+    `resolveState(..., flagBaseName)`), `resolvePrev(claudeDir, sessionId)` (=
+    `resolveState(..., prevBaseName)`) — per Design above, both return
+    `{ path, mode }` with ENOENT-vs-rejected fail-closed semantics. Change
+    `recordModeChange(claudeDir, newMode)` to `recordModeChange(claudeDir,
+    newMode, sessionId)`: resolve `current` via `resolveFlag(claudeDir,
+    sessionId).mode` (not the hardcoded legacy path), append `session_id:
+    sessionId || null` to the JSON row. Export all new functions.
   - **Acceptance:** existing `tests/test_symlink_flag.js` and
     `tests/test_repo_local_config.js` still pass unmodified (backward-compatible
     signature — `sessionId` is a new optional third arg). New unit coverage
@@ -413,10 +589,12 @@ documented deviation from strict byte-identity.)
     accepts a UUID-shaped string and rejects `../etc`, `""`, `null`, a
     200-char string, and a non-string, with NO partial/stripped acceptance;
     `flagBaseName`/`prevBaseName` return the legacy name for `null`/`undefined`
-    and the scoped name otherwise; `resolveFlag` returns legacy on ENOENT,
-    fails closed (`mode: null`, scoped path) on a symlinked or oversized
-    scoped file, and returns the scoped path+mode (including `'off'`) once
-    that scoped file exists in any form; `recordModeChange` writes a row
+    and the scoped name otherwise; `resolveFlag`/`resolvePrev` return legacy
+    on ENOENT, fail closed (`mode: null`, scoped path) on a symlinked or
+    oversized scoped file, and return the scoped path+mode (including
+    `'off'`) once that scoped file exists in any form; `isActiveMode`
+    returns `false` for `null`, `undefined`, and `'off'`, and `true` for
+    every other `VALID_MODES` string; `recordModeChange` writes a row
     containing the exact `session_id` value passed (or `null` when omitted)
     and computes `prev` from the resolved path, not the legacy one.
 
@@ -424,47 +602,78 @@ documented deviation from strict byte-identity.)
 
 - [ ] `src/hooks/caveman-activate.js`
   - **Task:** in the existing synchronous stdin-read block (already parses
-    `data.source`), also extract and sanitize `data.session_id`. Replace the
-    `mode === 'off'` branch's `fs.unlinkSync(flagPath)` with
-    `safeWriteFlag(flagPath, 'off')`. Compute `flagPath` via `resolveFlag`
-    (or `flagBaseName` directly, since activate.js always writes for ITS OWN
-    session and doesn't need the legacy-fallback read path for writes) after
-    session-id resolution. Thread `sessionId` into every `recordModeChange`
-    call in this file.
+    `data.source`), also extract and sanitize `data.session_id`. Compute
+    `writeFlagPath = path.join(claudeDir, flagBaseName(sessionId))` — used
+    for EVERY write in this file, unconditionally, never through the
+    resolver. For the `source !== 'startup'` resume-preserve check, replace
+    the current direct `readFlag(flagPath)` with
+    `resolveFlag(claudeDir, sessionId).mode` (the READ side — this is what
+    lets a resuming session with no scoped file yet correctly inherit the
+    legacy mode instead of reading as "inactive," per v3 finding 1). Replace
+    the `mode === 'off'` branch's `fs.unlinkSync(flagPath)` with
+    `safeWriteFlag(writeFlagPath, 'off')`. Thread `sessionId` into every
+    `recordModeChange` call in this file.
   - **Acceptance:** `node caveman-activate.js < /dev/null` (no session_id)
     still writes `.caveman-active` (legacy path) — proves the fallback.
     Piping `{"source":"startup","session_id":"abc-123"}` writes
     `.caveman-active-abc-123` and NOT the legacy path. Piping a `resume`
-    source with a pre-existing scoped flag for that session id preserves it
-    (does not reset to the configured default) — extends the existing #691
-    resume-preserve test to the scoped path. A `mode === 'off'` resolution
-    writes literal `off` content to the scoped path (verify via direct file
-    read), not an unlink.
+    source for a session id with NO scoped file yet, while an active legacy
+    flag exists, preserves the LEGACY mode (not "inactive") — this is the
+    exact case v3 review's finding 1 caught missing. Piping a `resume`
+    source with a pre-existing scoped flag for that session id preserves
+    IT instead (extends the existing #691 resume-preserve test to the
+    scoped path). A `mode === 'off'` resolution writes literal `off`
+    content to the scoped path (verify via direct file read), not an
+    unlink.
 
 - [ ] `src/hooks/caveman-mode-tracker.js`
   - **Task:** extract + sanitize `data.session_id` in the `end` handler
     (alongside the existing `data.prompt`/`data.cwd`/`data.transcript_path`
-    reads). Compute `flagPath`/`prevPath` via `flagBaseName`/`prevBaseName`
-    using that session id. Replace every `fs.unlinkSync(flagPath)` used to
-    represent "off" with `safeWriteFlag(flagPath, 'off')` (the `.prev`
-    unlinks stay unlinks — that's genuinely transient one-shot-restore
-    state, not the on/off sentinel). Thread `sessionId` into every
-    `recordModeChange` call. Use `isActiveMode(activeMode)` instead of bare
-    truthiness in the reinforcement-emit check. Pass
-    `--session-id <sessionId>` (only when a valid sessionId was resolved —
-    omit the flag entirely otherwise) to the `caveman-stats.js`
-    `execFileSync` invocation, alongside the existing `--session-file`.
+    reads). Compute `writeFlagPath`/`writePrevPath` via
+    `flagBaseName`/`prevBaseName` — used for every write. For every READ of
+    current state, use the resolver instead: replace
+    `const current = readFlag(flagPath)` (independent-mode capture) with
+    `const { mode: current } = resolveFlag(claudeDir, sessionId)`; replace
+    `let activeMode = readFlag(flagPath)` with
+    `let { mode: activeMode } = resolveFlag(claudeDir, sessionId)`; replace
+    `const prev = readFlag(prevPath)` with
+    `const { mode: prev } = resolvePrev(claudeDir, sessionId)`. Change the
+    independent-mode-capture gate from `if (current && !INDEPENDENT_MODES.has(current))`
+    to `if (isActiveMode(current) && !INDEPENDENT_MODES.has(current))`
+    (v3 finding 2, item 1). Change the one-shot-restore gate from
+    `if (prev && !INDEPENDENT_MODES.has(prev))` to
+    `if (isActiveMode(prev) && !INDEPENDENT_MODES.has(prev))`; the `else`
+    branch (deactivate) now also runs when `prev === 'off'`, writing `off`
+    to `writeFlagPath` (not unlinking) and calling
+    `recordModeChange(claudeDir, null, sessionId)` — never logging `'off'`
+    itself as a mode value (v3 finding 2, item 2). Leave the
+    `activeMode && INDEPENDENT_MODES.has(activeMode)` gate as bare
+    truthiness (`INDEPENDENT_MODES.has('off')` is already false, so
+    `isActiveMode` would be redundant there). Replace every remaining
+    `fs.unlinkSync(writeFlagPath)` used to represent "off" with
+    `safeWriteFlag(writeFlagPath, 'off')` (the `.prev` unlinks stay unlinks
+    — that's genuinely transient one-shot-restore state, not the on/off
+    sentinel). Thread `sessionId` into every `recordModeChange` call. Use
+    `isActiveMode(activeMode)` instead of bare truthiness in the
+    reinforcement-emit check. Pass `--session-id <sessionId>` (only when a
+    valid sessionId was resolved — omit the flag entirely otherwise) to the
+    `caveman-stats.js` `execFileSync` invocation, alongside the existing
+    `--session-file`.
   - **Acceptance:** extend `tests/test_mode_tracker_stdin.js` with cases:
     two payloads with different `session_id`s and the same prompt
     (`"/caveman ultra"` then `"/caveman off"`) produce two independent scoped
     flag files, neither affecting the other's state or the legacy global
     file; the "off" payload leaves the scoped file present with content
-    `off`, not deleted. A payload with no `session_id` behaves exactly as
-    today (legacy path only, matching the pre-change test expectations
-    verbatim, including "off" still writing `off` rather than unlinking —
-    note this IS a behavior change from today's unlink-on-off even for the
-    legacy path; call this out explicitly in the test as an intentional,
-    documented change, not a silent regression).
+    `off`, not deleted. `/caveman off` then `/caveman-commit` then an
+    ordinary prompt does NOT save `off` into `.prev` and does NOT restore
+    `off` as a distinct logged mode — the mode-log's row for the restore
+    step must show `mode: null`, not `mode: "off"` (this is the exact
+    sequence v3 finding 2 named). A payload with no `session_id` behaves
+    exactly as today (legacy path only, matching the pre-change test
+    expectations verbatim, including "off" still writing `off` rather than
+    unlinking — note this IS a behavior change from today's unlink-on-off
+    even for the legacy path; call this out explicitly in the test as an
+    intentional, documented change, not a silent regression).
 
 ### Phase 3 — stats + statuslines
 
@@ -473,24 +682,37 @@ documented deviation from strict byte-identity.)
     `sanitizeSessionId` (defense in depth); when absent or invalid, treat as
     `null`. Use `resolveFlag(claudeDir, sessionId)` for the flag this script
     reads — `flagMtimeMs` must `fs.statSync` the exact `path` `resolveFlag`
-    returned, not a separately-hardcoded path. Do NOT change the existing
-    `sessionId = path.basename(sessionFile, '.jsonl')` computation used for
-    the `.caveman-history.jsonl` append — that stays as-is, unrelated to
-    this flag/mode-log resolution. In `readModeLog`, also parse and return
-    `session_id` and `hasSessionIdKey` (`Object.prototype.hasOwnProperty`
-    check on the raw parsed row, before any defaulting) per row. In
-    `main()`, filter `modeLog` via the `relevantModeLogRows` logic (Design
-    above) using the `--session-id` argument (not the transcript-derived
-    id) before calling `attributeByMode`.
+    returned, not a separately-hardcoded path. Thread that same `path` into
+    `formatStats`/`formatShare` and render it in the output (a `Flag file:`
+    line) for all three outcomes (scoped, legacy-fallback, fail-closed) —
+    this is what backs the docs task's "reports the resolved session file"
+    claim (v3 Medium finding: a v2 draft made that promise in the docs task
+    without a matching implementation requirement here). Do NOT change the
+    existing `sessionId = path.basename(sessionFile, '.jsonl')` computation
+    used for the `.caveman-history.jsonl` append — that stays as-is,
+    unrelated to this flag/mode-log resolution. In `readModeLog`, also
+    parse and return `session_id`, `hasSessionIdKey`
+    (`Object.prototype.hasOwnProperty` check on the raw parsed row, before
+    any defaulting), and `malformed` per row (Design above — a present,
+    non-null `session_id` that fails `sanitizeSessionId` is `malformed:
+    true` and must be excluded from every reader, never coerced to `null`
+    via `||`). In `main()`, filter `modeLog` via the `relevantModeLogRows`
+    logic (Design above) using the `--session-id` argument (not the
+    transcript-derived id) before calling `attributeByMode`.
   - **Acceptance:** extend `tests/test_caveman_stats.js` with cases: (a)
     `.caveman-mode-log.jsonl` seeded with interleaved rows for two different
     explicit `session_id`s — attribution for session A's `--session-id`
     only reflects session A's rows; (b) a mix of true pre-migration rows
     (no `session_id` key at all) and new legacy-fallback rows
     (`session_id: null`) — the former join a scoped reader too, the latter
-    do not; (c) invoking with no `--session-id` (manual/lifetime path)
-    reads the legacy flag and joins legacy-or-keyless rows exactly as
-    before this change (regression check).
+    do not; (c) a malformed row (`session_id: ""`, `session_id: 0`,
+    `session_id: false`, or a path-traversal string) is excluded from
+    EVERY reader's attribution, scoped or legacy — proves the `||`
+    coercion bug from v2 doesn't recur; (d) invoking with no `--session-id`
+    (manual/lifetime path) reads the legacy flag and joins legacy-or-keyless
+    rows exactly as before this change (regression check); (e) stats output
+    includes the resolved flag path in all three of scoped/legacy/fail-closed
+    outcomes.
 
 - [ ] `src/hooks/caveman-statusline.sh`
   - **Task:** read stdin, extract `session_id` via a plain string match (no
@@ -508,8 +730,10 @@ documented deviation from strict byte-identity.)
     `session_id` (including a path-traversal or oversized value) it reads
     the legacy path exactly as today, with NO partial/stripped id ever used
     to construct a path. A scoped file containing `off` renders nothing.
-    Shared test vectors (Phase 4) prove the same session id sanitizes
-    identically here and in `caveman-config.js`.
+    Additionally covers the full file-state matrix from Phase 4 (ENOENT,
+    valid content, `off` content, invalid content, oversized, symlink, and
+    a non-`ENOENT` stat failure where constructible), each run against a
+    distinguishable active legacy sentinel to prove no wrong fallback.
 
 - [ ] `src/hooks/caveman-statusline.ps1`
   - **Task:** same behavior as the Bash script (whole-string anchored
@@ -517,27 +741,38 @@ documented deviation from strict byte-identity.)
     nothing), PowerShell idiom (`ConvertFrom-Json` on stdin is fine here —
     it's a first-party PowerShell idiom, not an external dependency the way
     `jq` would be for Bash).
-  - **Acceptance:** same test vectors as the Bash script produce the same
-    resolved path (manual `pwsh` check if `pwsh` is unavailable in CI,
-    documented explicitly — not a silent "looks right" visual check).
+  - **Acceptance:** same test vectors AND the same file-state matrix as the
+    Bash script produce the same resolved path (manual `pwsh` check if
+    `pwsh` is unavailable in CI, documented explicitly — not a silent
+    "looks right" visual check).
 
 ### Phase 4 — shared sanitizer test vectors
 
 - [ ] `tests/test_session_scoping.js` (new)
   - **Task:** define one shared table of `{ input, expectedSanitized }`
     vectors covering: valid UUID, valid short alnum id, empty string,
-    `../../etc/passwd`, a string with a null byte, a 200-char string, `null`,
-    a number. Exercise `sanitizeSessionId` from `caveman-config.js` directly,
-    AND pipe the same raw `session_id` values through
-    `caveman-statusline.sh` (via `child_process.execFileSync('bash', [...])`)
-    and, if `pwsh`/`powershell` is available, `caveman-statusline.ps1`,
-    asserting all three resolve to the identical scoped-vs-fallback
-    decision — critically, that an invalid value NEVER produces a
-    stripped/truncated scoped path in any of the three implementations.
+    `../../etc/passwd`, a string with an embedded path separator, a 200-char
+    string, `null`, a number. Exercise `sanitizeSessionId` from
+    `caveman-config.js` directly, AND pipe the same raw `session_id` values
+    through `caveman-statusline.sh` (via
+    `child_process.execFileSync('bash', [...])`) and, if `pwsh`/`powershell`
+    is available, `caveman-statusline.ps1`, asserting all three resolve to
+    the identical scoped-vs-fallback decision — critically, that an invalid
+    value NEVER produces a stripped/truncated scoped path in any of the
+    three implementations. Additionally define the file-state matrix (v3
+    Medium finding): for a valid session id, construct each of `ENOENT`
+    (no scoped file), valid mode content, `off` content, invalid/garbage
+    content, oversized (>64 bytes) content, a symlink pointing elsewhere,
+    and (where constructible) a non-`ENOENT` stat failure — each case paired
+    with a distinguishable active legacy sentinel value present at the
+    legacy path — and assert the resolved path/mode/render decision for
+    each, in both `caveman-config.js`'s `resolveFlag` directly and through
+    the Bash/PowerShell statuslines.
   - **Acceptance:** test passes for the JS + Bash pair unconditionally;
     the PowerShell leg runs when `pwsh`/`powershell` is resolvable on PATH
     and is explicitly skipped (with a printed reason, not a silent no-op)
-    otherwise.
+    otherwise. Every file-state matrix case proves the legacy sentinel is
+    read ONLY for `ENOENT` and never for any other scoped-file state.
 
 ### Phase 5 — installer + docs
 
@@ -555,6 +790,28 @@ documented deviation from strict byte-identity.)
     `.caveman-active-backup.2026` — a literal dot, which the
     `[A-Za-z0-9_-]` charset rejects) — assert the real ones are removed and
     the near-miss survives.
+
+- [ ] `src/hooks/uninstall.sh`
+  - **Task:** replace the exact-path `$FLAG_FILE` removal (currently
+    `if [ -f "$FLAG_FILE" ]; then rm "$FLAG_FILE"; ...`) with an enumeration
+    of `$CLAUDE_DIR`'s entries, removing every name matching the same
+    `^\.caveman-active(-[A-Za-z0-9_-]{1,128})?(\.prev)?$` pattern via a
+    real directory listing (`find "$CLAUDE_DIR" -maxdepth 1
+    -name '.caveman-active*'` piped through a per-name pattern test — not a
+    bare glob expansion, which would accept a near-miss name the regex
+    should reject).
+  - **Acceptance:** a standalone-install-style test (new, or extend an
+    existing installer test if one already drives `uninstall.sh`) seeds the
+    same fixture set as the `cli/install.js` uninstall test (legacy flag,
+    two scoped flags including one with `off` content, a `.prev` file, a
+    near-miss name) and asserts the same removal/survival split.
+
+- [ ] `src/hooks/uninstall.ps1`
+  - **Task:** same fix, PowerShell idiom: `Get-ChildItem $ClaudeDir` +
+    a `-match` filter against the equivalent anchored pattern, replacing
+    the exact-path `$FlagFile` removal.
+  - **Acceptance:** same fixture set and split as `uninstall.sh` (manual
+    `pwsh` check if unavailable in CI, documented explicitly).
 
 - [ ] `CLAUDE.md`, `src/hooks/README.md`, `INSTALL.md`
   - **Task:** update every prose/ASCII-diagram description of
@@ -580,12 +837,21 @@ documented deviation from strict byte-identity.)
 - Two concurrent simulated sessions (distinct `session_id`s) toggle caveman
   independently, including one turning off while the other stays on —
   proven by an automated test, not manual inspection.
-- A session with no `session_id` reads and writes the legacy
-  `.caveman-active` file exactly as before this change, with one documented,
-  intentional exception: the mode-log row it appends now additionally
-  carries `session_id: null` (an additive JSON field; the flag file itself
-  and every other on-disk path/content stays byte-identical).
+- A session with no `session_id` selects the same legacy `.caveman-active`
+  path as before this change (path selection is unchanged) — with two
+  explicit, documented representation changes that apply UNIVERSALLY,
+  including on this legacy path, not just the scoped one: (1) the mode-log
+  row it appends additionally carries `session_id: null` (an additive JSON
+  field), and (2) an "off" resolution now writes literal `off` content to
+  the flag file instead of unlinking it. A v2 draft of this gate claimed
+  full byte-identical flag content on the legacy path, which directly
+  contradicted requirement (2) elsewhere in this same plan — this wording
+  is the fix (Tier-1 v3 High finding).
 - `caveman-stats.js` attribution for a session with concurrent-session
   mode-log rows interleaved in time only reflects that session's own rows
   (plus genuinely historical pre-migration rows, which have no
-  `session_id` key at all).
+  `session_id` key at all) — and never a malformed row's value, regardless
+  of which session is reading.
+- All three uninstall entry points (`cli/install.js`, `uninstall.sh`,
+  `uninstall.ps1`) remove every scoped flag/`.prev` file they can enumerate,
+  not just the legacy name.
