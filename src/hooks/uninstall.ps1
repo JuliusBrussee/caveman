@@ -9,7 +9,6 @@ $ErrorActionPreference = "Stop"
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
 $HooksDir = Join-Path $ClaudeDir "hooks"
 $Settings = Join-Path $ClaudeDir "settings.json"
-$FlagFile = Join-Path $ClaudeDir ".caveman-active"
 
 $HookFiles = @("package.json", "caveman-config.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js")
 
@@ -118,10 +117,39 @@ console.log('  Removed ' + removed + ' caveman hook entries from settings.json')
     }
 }
 
-# 3. Remove flag file
-if (Test-Path $FlagFile) {
-    Remove-Item $FlagFile -Force
-    Write-Host "  Removed: $FlagFile"
+# 3. Remove flag + per-session state files. `.caveman-history.jsonl` is the
+# user's lifetime savings ledger -- deliberately kept, not stale state.
+$StateFilesToRemove = @(
+    ".caveman-active",
+    ".caveman-active.prev",
+    ".caveman-mode-log.jsonl",
+    ".caveman-statusline-suffix",
+    ".caveman-nudge-shown"
+)
+foreach ($f in $StateFilesToRemove) {
+    $p = Join-Path $ClaudeDir $f
+    if (Test-Path $p) {
+        Remove-Item $p -Force
+        Write-Host "  Removed: $p"
+    }
+}
+$HistoryFile = Join-Path $ClaudeDir ".caveman-history.jsonl"
+if (Test-Path $HistoryFile) {
+    Write-Host "  Kept: $HistoryFile (lifetime history - delete manually if unwanted)"
+}
+
+# Per-session scoped flag/.prev files (.caveman-active-<session_id>[.prev]).
+# Test-Path guards against a missing ClaudeDir -- this script runs with
+# $ErrorActionPreference = "Stop", so an unguarded Get-ChildItem on an
+# absent directory would throw and abort the whole uninstall.
+if (Test-Path $ClaudeDir) {
+    $ScopedPattern = '^\.caveman-active-[A-Za-z0-9_-]{1,128}(\.prev)?\z'
+    Get-ChildItem -Path $ClaudeDir -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match $ScopedPattern } |
+        ForEach-Object {
+            Remove-Item $_.FullName -Force
+            Write-Host "  Removed: $($_.FullName)"
+        }
 }
 
 Write-Host ""
