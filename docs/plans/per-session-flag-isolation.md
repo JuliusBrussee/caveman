@@ -143,6 +143,44 @@ resolved flag path, but the implementation task never required exposing
 it; the statusline test plan mostly proved sanitizer decisions, not the
 full ENOENT-vs-rejected file-state matrix) are also folded into this v3.
 
+**v4 revision note.** v3 (target `710fff42c49cafef5fdfe6a69bfab6271aa59a92`)
+cleared all Criticals AND all prior Highs but returned 3 new High + 2
+Medium — narrower precision gaps than v3's, all confirming the deeper
+design fixes held:
+
+1. **High** — `caveman-activate.js`'s checklist said `writeFlagPath` is
+   used for "every write in this file," but that file also writes
+   `.caveman-nudge-shown` (required to stay global per Non-Goals) — the
+   wording was ambiguous enough to scope the nudge marker too. Fixed:
+   narrowed to "every write to the active-mode flag specifically," with an
+   explicit "do not touch `nudgeMarkerPath`" callout and a matching
+   acceptance check.
+2. **High** — `recordModeChange` still compared the raw (non-normalized)
+   `current`/`newMode` values, so a resolved `current === 'off'` compared
+   against `next === null` would still log a spurious `{mode: null, prev:
+   'off'}` transition, even with every call-site-level `isActiveMode` fix
+   from v3 in place. Fixed: `isActiveMode` normalization moved INSIDE
+   `recordModeChange` itself — single source of truth, no call site can
+   get it wrong, and callers no longer need to pre-normalize before calling
+   it.
+3. **High** — the plan only named `tests/test_mode_tracker_stdin.js` for
+   new coverage, missing that pre-existing tracked tests
+   (`tests/test_mode_tracker.py`, twelve assertions; `tests/verify_repo.py`,
+   three assertions) assert the OLD unlink-on-off behavior this plan
+   intentionally changes — they'd fail under the whole-plan "full test
+   suite passes" gate. Fixed: added an explicit checklist item enumerating
+   every assertion that needs updating.
+4. **Medium** — Non-Goals claimed `.caveman-active.prev` (legacy name) is
+   an untouched, deferred uninstall gap, directly contradicting Phase 5's
+   own enumeration regex (which matches it) and test fixture (which
+   requires its removal). Fixed: narrowed the deferred list to the
+   genuinely untouched files (mode-log, history, statusline-suffix).
+5. **Medium** — the stats section claimed manual/lifetime invocations are
+   preserved "byte-for-byte," directly contradicted by the same plan
+   requiring a new `Flag file:` output line universally. Fixed: the claim
+   is now scoped to path selection and attribution semantics, not literal
+   output bytes.
+
 ## Problem
 
 Every Claude Code session on the machine reads and writes the same handful of
@@ -353,16 +391,51 @@ THIS turn is a one-shot independent-mode turn) — `INDEPENDENT_MODES.has('off')
 is already `false`, so this condition is correct as bare truthiness
 regardless of `isActiveMode`.
 
-### Mode-transition log — add `session_id`, keep one shared file (fixes v2 findings 5 + 6)
+### Mode-transition log — add `session_id`, keep one shared file (fixes v2 findings 5 + 6; fixes v3 finding 2)
 
 `recordModeChange(claudeDir, newMode, sessionId)` (new third parameter)
 resolves `current` via `resolveFlag(claudeDir, sessionId).mode` — the SAME
 path/logic every other consumer uses — instead of the current hardcoded
-`readFlag(path.join(claudeDir, '.caveman-active'))`. It appends
-`{ ts, mode, prev, session_id: sessionId || null }`. The log stays a single
-shared append-only file (`appendFlag`'s `O_APPEND` already makes concurrent
-writers safe); fragmenting it per session would complicate
-`aggregateHistory`'s cross-session lifetime rollup for no benefit.
+`readFlag(path.join(claudeDir, '.caveman-active'))`.
+
+**`isActiveMode` normalization lives INSIDE `recordModeChange`, once, not at
+every call site (fixes v3 finding 2).** A v3 draft's "off truthiness" fixes
+normalized `'off'` to `null` at each call site in `caveman-mode-tracker.js`
+before calling `recordModeChange`, but `recordModeChange` itself still
+compared the raw resolved `current` (which can legitimately be `'off'`, not
+normalized, when read from disk) against the raw `newMode` argument. Tier-1
+v3 review found the gap this leaves: a call site that resolves `current` as
+`'off'` and passes `newMode: null` (e.g. a resume/re-fire path, or any
+future call site that doesn't happen to pre-normalize) sees
+`(current || null) === next` evaluate `'off' !== null` (since `'off'` is
+truthy) and logs a spurious `{ mode: null, prev: 'off' }` transition row for
+what is semantically a no-op (off → off). Fixed: both `current` and
+`newMode` are normalized through `isActiveMode` INSIDE `recordModeChange`,
+so callers never need to think about it and no call site can get it wrong:
+
+```js
+function recordModeChange(claudeDir, newMode, sessionId) {
+  const rawCurrent = resolveFlag(claudeDir, sessionId).mode;
+  const current = isActiveMode(rawCurrent) ? rawCurrent : null;
+  const next = isActiveMode(newMode) ? newMode : null;
+  if (current === next) return; // semantically unchanged (off/null collapse to the same state)
+  appendFlag(logPath, JSON.stringify({ ts: Date.now(), mode: next, prev: current, session_id: sessionId || null }));
+}
+```
+
+This also simplifies every caller in `caveman-activate.js` and
+`caveman-mode-tracker.js`: they can pass whatever mode value they actually
+resolved (including a literal `'off'`) into `recordModeChange` without
+pre-normalizing it themselves — the function's own internal normalization
+is the single source of truth, so a future call site added without knowing
+about `isActiveMode` still can't log a spurious `'off'`-vs-`null`
+transition.
+
+It appends `{ ts, mode: next, prev: current, session_id: sessionId || null
+}`. The log stays a single shared append-only file (`appendFlag`'s
+`O_APPEND` already makes concurrent writers safe); fragmenting it per
+session would complicate `aggregateHistory`'s cross-session lifetime
+rollup for no benefit.
 
 `readModeLog` in `caveman-stats.js` gains a `session_id` field on each
 returned row, additionally tracking whether the **key was present at all**
@@ -427,11 +500,17 @@ use it for `resolveFlag` and the mode-log filter. When `--session-id` is
 **not** supplied (a direct `node caveman-stats.js` run, `--all`/`--since`
 lifetime aggregation, or any older caller that only passes
 `--session-file`), `sessionId` is `null` — `resolveFlag` reads the legacy
-path exactly as every pre-this-change invocation always has. This preserves
-manual/lifetime usage byte-for-byte while fixing the split-brain the
-Critical finding identified: a hook falling back to legacy (invalid or
-missing `session_id`) now passes an empty/omitted `--session-id`, so stats
-falls back to legacy too, matching the hook exactly.
+path exactly as every pre-this-change invocation always has: **path
+selection and attribution semantics for the no-session case are
+unchanged.** (A v3 draft over-claimed this as byte-for-byte OUTPUT
+identity, which directly contradicted the new `Flag file:` output line
+required just below — every invocation's rendered text changes now,
+scoped or not. Fixed: the compatibility claim is scoped to path
+selection/attribution, not literal output bytes.) This fixes the
+split-brain the Critical finding identified: a hook falling back to legacy
+(invalid or missing `session_id`) now passes an empty/omitted
+`--session-id`, so stats falls back to legacy too, matching the hook
+exactly.
 
 The pre-existing `sessionId = path.basename(sessionFile, '.jsonl')`
 computation at the lifetime-history append site is UNCHANGED and serves a
@@ -495,9 +574,7 @@ standalone, non-plugin hook-only install — a v2 draft covered only the
 first and missed these two, which Tier-1 v3 review flagged as High: without
 fixing them too, a standalone install's uninstall leaves every scoped flag
 and `.prev` file behind, and a later reinstall can resurrect a stale
-per-session mode). None of the three removes `.caveman-active.prev` for the
-*legacy* (non-scoped) name either (pre-existing gap, out of scope — see
-Non-Goals).
+per-session mode).
 
 All three gain the same enumeration: list the config directory's entries
 once and remove every name matching
@@ -507,7 +584,15 @@ glob — Node's `fs` APIs don't expand `*`); `find "$CLAUDE_DIR" -maxdepth 1
 -name '.caveman-active*'` filtered through an equivalent shell pattern
 test (not a bare glob, to enforce the same charset/length bound) in
 `uninstall.sh`; `Get-ChildItem` + a PowerShell regex `-match` filter in
-`uninstall.ps1`.
+`uninstall.ps1`. **This regex's optional `(-[A-Za-z0-9_-]{1,128})?` group
+means it matches the LEGACY (non-scoped) `.caveman-active.prev` too** — a v3
+draft's Non-Goals section claimed that file was an untouched pre-existing
+gap, which directly contradicted this enumeration and Phase 5's own test
+fixture (which requires `.prev` removal). Fixed: the legacy `.prev` file IS
+now cleaned up as a natural consequence of this enumeration; only
+`.caveman-mode-log.jsonl`, `.caveman-history.jsonl`, and
+`.caveman-statusline-suffix` remain the genuinely deferred, unrelated
+uninstall gap (see Non-Goals).
 
 ## Non-Goals (explicit scope boundaries)
 
@@ -526,10 +611,15 @@ test (not a bare glob, to enforce the same charset/length bound) in
   install path. Per the existing top-of-file comment, it's regenerated at
   release-cut time, after this change is merged and tagged — not part of
   this PR's diff.
-- **Fixing the pre-existing incomplete uninstall** (`.caveman-active.prev`,
-  `.caveman-mode-log.jsonl`, `.caveman-history.jsonl`, `.caveman-statusline-suffix`
-  are never removed by `cli/install.js --uninstall` today, scoped file or
-  not). Real gap, predates this change, not touched here.
+- **Fixing the pre-existing incomplete uninstall of UNRELATED state files**
+  — `.caveman-mode-log.jsonl`, `.caveman-history.jsonl`, and
+  `.caveman-statusline-suffix` are never removed by any of the three
+  uninstall entry points today, and this plan does not add that. (The
+  legacy `.caveman-active.prev` is NOT in this deferred list — the Phase 5
+  enumeration's regex naturally matches and removes it, since its charset
+  after `.caveman-active` is identical to the scoped-`.prev` pattern; a v3
+  draft incorrectly listed it here, contradicting the enumeration and
+  Phase 5's own test fixture. Fixed.)
 
 ## Invariant Matrix
 
@@ -604,27 +694,42 @@ also requiring the legacy "off" behavior change; fixed).
   - **Task:** in the existing synchronous stdin-read block (already parses
     `data.source`), also extract and sanitize `data.session_id`. Compute
     `writeFlagPath = path.join(claudeDir, flagBaseName(sessionId))` — used
-    for EVERY write in this file, unconditionally, never through the
-    resolver. For the `source !== 'startup'` resume-preserve check, replace
-    the current direct `readFlag(flagPath)` with
-    `resolveFlag(claudeDir, sessionId).mode` (the READ side — this is what
-    lets a resuming session with no scoped file yet correctly inherit the
-    legacy mode instead of reading as "inactive," per v3 finding 1). Replace
-    the `mode === 'off'` branch's `fs.unlinkSync(flagPath)` with
+    for every write **to the active-mode flag specifically**, unconditionally,
+    never through the resolver. **This file also writes
+    `.caveman-nudge-shown` (the one-shot statusline-setup nudge marker) —
+    `nudgeMarkerPath` is UNCHANGED and stays global per Non-Goals; a v3
+    draft's "every write in this file" wording was ambiguous enough that a
+    literal reading could scope that marker too, which Tier-1 v3 review
+    flagged as High. This v4 wording is scoped to the active-mode flag
+    only — do not touch `nudgeMarkerPath`.** For the `source !== 'startup'`
+    resume-preserve check, replace the current direct `readFlag(flagPath)`
+    with `resolveFlag(claudeDir, sessionId).mode` (the READ side — this is
+    what lets a resuming session with no scoped file yet correctly inherit
+    the legacy mode instead of reading as "inactive," per v3 finding 1).
+    Replace the `mode === 'off'` branch's `fs.unlinkSync(flagPath)` with
     `safeWriteFlag(writeFlagPath, 'off')`. Thread `sessionId` into every
-    `recordModeChange` call in this file.
+    `recordModeChange` call in this file — pass whatever mode value was
+    actually resolved (including a literal `'off'`); `recordModeChange`'s
+    own internal `isActiveMode` normalization (Design above) handles
+    collapsing `'off'` to `null` for logging, so this file does not need to
+    pre-normalize.
   - **Acceptance:** `node caveman-activate.js < /dev/null` (no session_id)
     still writes `.caveman-active` (legacy path) — proves the fallback.
     Piping `{"source":"startup","session_id":"abc-123"}` writes
-    `.caveman-active-abc-123` and NOT the legacy path. Piping a `resume`
-    source for a session id with NO scoped file yet, while an active legacy
-    flag exists, preserves the LEGACY mode (not "inactive") — this is the
-    exact case v3 review's finding 1 caught missing. Piping a `resume`
-    source with a pre-existing scoped flag for that session id preserves
-    IT instead (extends the existing #691 resume-preserve test to the
-    scoped path). A `mode === 'off'` resolution writes literal `off`
-    content to the scoped path (verify via direct file read), not an
-    unlink.
+    `.caveman-active-abc-123` and NOT the legacy path, and leaves
+    `.caveman-nudge-shown` at its existing global path (not
+    `.caveman-nudge-shown-abc-123`) — proving the narrowed write scope.
+    Piping a `resume` source for a session id with NO scoped file yet,
+    while an active legacy flag exists, preserves the LEGACY mode (not
+    "inactive") — this is the exact case v3 review's finding 1 caught
+    missing. Piping a `resume` source with a pre-existing scoped flag for
+    that session id preserves IT instead (extends the existing #691
+    resume-preserve test to the scoped path). A `mode === 'off'` resolution
+    writes literal `off` content to the scoped path (verify via direct file
+    read), not an unlink. A `resume` re-fire where the resolved mode is
+    already `'off'` (i.e. no actual change) appends NO new mode-log row —
+    proves `recordModeChange`'s internal normalization prevents the
+    spurious off→null transition v3 finding 2 named.
 
 - [ ] `src/hooks/caveman-mode-tracker.js`
   - **Task:** extract + sanitize `data.session_id` in the `end` handler
@@ -674,6 +779,31 @@ also requiring the legacy "off" behavior change; fixed).
     unlinking — note this IS a behavior change from today's unlink-on-off
     even for the legacy path; call this out explicitly in the test as an
     intentional, documented change, not a silent regression).
+
+- [ ] `tests/test_mode_tracker.py`, `tests/verify_repo.py` (existing tests —
+  update, don't just extend)
+  - **Task:** Tier-1 v3 review found these pre-existing tracked tests
+    assert the OLD unlink-on-off behavior this plan intentionally changes,
+    and a v3 draft's checklist only named `tests/test_mode_tracker_stdin.js`
+    for NEW coverage, never touching these. `tests/test_mode_tracker.py` has
+    twelve `self.assertIsNone(self.flag_value())` assertions across its
+    deactivation tests (`flag_value()` returns `None` when the file doesn't
+    exist) — each must change to assert the flag file exists with content
+    `off` instead. `tests/verify_repo.py` has three matching assertions:
+    `"off mode should remove flag file"` (line ~314), `"/caveman with off
+    default should not write flag"` (line ~327 — under this plan, a bare
+    `/caveman` with a configured-off default now DOES write `off` content,
+    so this assertion's message and check both need to flip), and `"normal
+    mode should remove flag file"` (line ~364) — all three become "...flag
+    file contains `off`" instead of "...removes flag file." Its
+    `uninstall.sh` check (line ~379, "uninstall.sh should remove flag
+    file") stays correct as-is — enumeration still removes the flag, it's
+    the ON/OFF representation that changed, not the uninstall behavior.
+  - **Acceptance:** every one of the fifteen identified assertions (twelve
+    in `test_mode_tracker.py`, three in `verify_repo.py`) is updated to
+    match the new `off`-is-written semantics; the full existing test suite
+    (per the whole-plan Acceptance Gates) passes with these updates, proving
+    no other tracked test still encodes the old unlink-on-off assumption.
 
 ### Phase 3 — stats + statuslines
 
