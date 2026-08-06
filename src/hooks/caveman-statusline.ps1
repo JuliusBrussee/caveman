@@ -13,14 +13,23 @@ $SessionId = ""
 if ($StdinJson) {
     try {
         $Data = $StdinJson | ConvertFrom-Json -ErrorAction Stop
+        # PR-review v5 High finding: plain dot-notation property access
+        # ($Data.session_id) is CASE-INSENSITIVE in PowerShell -- a payload
+        # containing "Session_Id" (or any other casing) would resolve here,
+        # while JS's JSON.parse(...).session_id and Bash's structural walker
+        # are both case-sensitive and would treat it as absent. Filter
+        # PSObject.Properties with the case-SENSITIVE -ceq operator so only
+        # an exact-case "session_id" key is ever considered, matching real
+        # JSON member semantics (property names are case-sensitive per spec).
+        $SessionIdProp = $Data.PSObject.Properties | Where-Object { $_.Name -ceq 'session_id' } | Select-Object -First 1
         # PR-review High finding: a truthy NON-STRING session_id (e.g. a JSON
         # number) would otherwise be cast to a string and matched, computing
         # a scoped path the JS/Bash implementations never would (both reject
         # non-string session_id outright) -- a cross-implementation parity
         # gap that could display another scoped session's mode. Require the
         # actual JSON type to be a string before casting or matching.
-        if ($Data.session_id -is [string]) {
-            $Raw = $Data.session_id
+        if ($SessionIdProp -and $SessionIdProp.Value -is [string]) {
+            $Raw = $SessionIdProp.Value
             # Whole-string anchored match using \z, NOT a trailing $ (Tier-2 v2
             # High finding): .NET's $ matches end-of-string OR immediately
             # before a single trailing `\n` by default, so a value ending in

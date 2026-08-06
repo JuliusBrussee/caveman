@@ -349,6 +349,38 @@ if (pwshBin) {
     assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a numeric session_id must fall back to the legacy sentinel, never read the scoped-123 file');
     assert.doesNotMatch(out, /\[CAVEMAN:ULTRA\]/, 'must not read the scoped file a naive string-cast would compute');
   });
+
+  test('a differently-cased "session_id" JSON key must be treated as absent, matching JS/Bash case-sensitive property access (statusline.ps1) (PR-review v5 High)', (tmp) => {
+    seedLegacy(tmp); // 'wenyan-ultra'
+    fs.mkdirSync(tmp, { recursive: true });
+    // PowerShell's dot-notation property access ($Data.session_id) is
+    // case-INSENSITIVE by default, so a payload using any other casing
+    // (e.g. "Session_Id") would previously resolve here even though
+    // JS's JSON.parse(...).session_id and Bash's structural walker are
+    // both case-sensitive and would treat the same payload as having no
+    // session_id at all. A real scoped file exists at the path the
+    // wrongly-cased key would compute to, so this is observable.
+    fs.writeFileSync(path.join(tmp, '.caveman-active-case-mismatch'), 'ultra');
+    const out = execFileSync(pwshBin, ['-NoProfile', '-File', STATUSLINE_PS1], {
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+      input: '{"Session_Id":"case-mismatch"}',
+    });
+    assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a differently-cased session_id key must fall back to the legacy sentinel');
+    assert.doesNotMatch(out, /\[CAVEMAN:ULTRA\]/, 'must not read the scoped file a case-insensitive property match would compute');
+  });
+
+  test('the correctly-cased "session_id" key still resolves normally after the case-sensitive fix (statusline.ps1)', (tmp) => {
+    fs.mkdirSync(tmp, { recursive: true });
+    seedLegacy(tmp);
+    safeWriteFlag(path.join(tmp, '.caveman-active-case-ok'), 'full');
+    const out = execFileSync(pwshBin, ['-NoProfile', '-File', STATUSLINE_PS1], {
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+      input: '{"session_id":"case-ok"}',
+    });
+    assert.match(out, /\[CAVEMAN\]/, 'a correctly-cased session_id must still resolve the scoped flag');
+  });
 }
 
 // ── Non-ENOENT stat failure (resolveFlag + resolvePrev) ─────────────────────
