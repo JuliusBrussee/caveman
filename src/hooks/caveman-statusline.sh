@@ -48,12 +48,26 @@ STDIN_JSON=$(cat 2>/dev/null)
 #     value is discarded unless the object's bracket depth returns to
 #     exactly 0 and no string was left unterminated -- i.e. the whole
 #     document actually closed.
+# PR-review v8 High finding: the depth counter treated "{"/"[" and "}"/"]"
+# as interchangeable (only counting aggregate nesting, not bracket TYPE),
+# and never checked what followed a value before the next structural
+# character. Two more real divergences: (1) {"session_id":"a"] -- opened
+# with { but closed with the WRONG bracket type ] -- left depth at 0 and
+# was accepted, even though JS/PowerShell reject mismatched delimiters;
+# (2) {"session_id":"a" garbage} -- trailing non-whitespace between the
+# value and the next delimiter was silently skipped char-by-char, again
+# accepted where a real parser would reject. Fixed by (a) a small stack
+# recording which bracket type opened each depth level, verified on every
+# close; (b) a one-shot check that the character immediately following the
+# top-level session_id value's closing quote (skipping whitespace) is
+# exactly "," or "}" -- anything else marks the whole result malformed.
 SESSION_ID_EXTRACT=$(printf '%s' "$STDIN_JSON" | awk '
 { buf = buf $0 "\n" }
 END {
   n = length(buf); depth = 0; instr = 0; esc = 0
   keybuf = ""; keystart = 0; expect_colon = 0; expect_value = 0
-  escape_seen = 0; result = ""; found = "none"; malformed = 0; i = 1
+  escape_seen = 0; result = ""; found = "none"; malformed = 0
+  just_closed_target_value = 0; i = 1
   while (i <= n) {
     c = substr(buf, i, 1)
     if (instr) {
@@ -63,7 +77,7 @@ END {
         instr = 0
         if (expect_value && depth == 1) {
           if (found == "none") {
-            if (escape_seen) { found = "other" } else { found = "string"; result = keybuf }
+            if (escape_seen) { found = "other" } else { found = "string"; result = keybuf; just_closed_target_value = 1 }
           }
           expect_value = 0
         }
@@ -72,6 +86,11 @@ END {
       }
       keybuf = keybuf c; i++; continue
     }
+    if (just_closed_target_value) {
+      if (c == " " || c == "\t" || c == "\n" || c == "\r") { i++; continue }
+      if (c != "," && c != "}") { malformed = 1; break }
+      just_closed_target_value = 0
+    }
     if (c == "\"") { instr = 1; keybuf = ""; keystart = 1; escape_seen = 0; i++; continue }
     if (expect_value) {
       if (c == " " || c == "\t" || c == "\n" || c == "\r") { i++; continue }
@@ -79,8 +98,14 @@ END {
       expect_value = 0
       continue
     }
-    if (c == "{" || c == "[") { depth++; i++; continue }
-    if (c == "}" || c == "]") { depth--; if (depth < 0) { malformed = 1; break }; i++; continue }
+    if (c == "{" || c == "[") { stack[depth] = c; depth++; i++; continue }
+    if (c == "}" || c == "]") {
+      depth--
+      if (depth < 0) { malformed = 1; break }
+      want = (c == "}") ? "{" : "["
+      if (stack[depth] != want) { malformed = 1; break }
+      i++; continue
+    }
     if (expect_colon) { if (c == ":") { expect_colon = 0; expect_value = 1 }; i++; continue }
     i++
   }

@@ -571,6 +571,37 @@ test('truncated/malformed JSON must not still yield a usable session_id (statusl
   assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'truncated JSON must fall back to legacy, matching a real parser throwing on malformed input');
 });
 
+test('a mismatched closing bracket type must be rejected, not treated as balancing the depth (statusline.sh) (PR-review v8 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // {"session_id":"a"]  -- opened with { but closed with ], the WRONG
+  // bracket type. A depth counter that doesn't track WHICH bracket
+  // opened each level sees depth return to 0 and wrongly accepts this,
+  // even though JS/PowerShell reject mismatched delimiters outright.
+  fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"a"]',
+  });
+  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a mismatched closing bracket must fall back to legacy, matching a real parser rejecting invalid JSON');
+});
+
+test('trailing non-whitespace after the session_id value must be rejected (statusline.sh) (PR-review v8 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // {"session_id":"a" garbage}  -- arbitrary text between the value and
+  // the next delimiter was previously skipped character-by-character
+  // instead of being rejected as invalid JSON grammar.
+  fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"a" garbage}',
+  });
+  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'trailing garbage after the value must fall back to legacy, matching a real parser rejecting invalid JSON');
+});
+
 test('a single unambiguous session_id occurrence still resolves the scoped flag normally (statusline.sh)', (tmp) => {
   fs.mkdirSync(tmp, { recursive: true });
   seedLegacy(tmp);
