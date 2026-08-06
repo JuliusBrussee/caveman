@@ -44,24 +44,53 @@ function skip(name, reason) {
   console.log(`  ~ ${name} (skipped: ${reason})`);
 }
 
-// A symlink farm containing only the binaries statusline.sh actually needs
-// (awk, cat, wc, tr, od, grep, head) — deliberately NOT python3 — so
-// `command -v python3` fails and the script falls onto its frozen awk
-// path, without collaterally removing whichever real PATH directory also
-// happens to hold those other binaries (removing whole directories, e.g.
-// to strip out /usr/bin's python3, would also strip /usr/bin's tr/wc/od
-// that the rest of the script needs downstream of extraction).
-let noPython3PathCache = null;
-function pathWithoutPython3() {
-  if (noPython3PathCache) return noPython3PathCache;
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-no-python3-bin-'));
-  for (const bin of ['bash', 'awk', 'cat', 'wc', 'tr', 'od', 'grep', 'head']) {
-    const real = execFileSync('/usr/bin/which', [bin], { encoding: 'utf8' }).trim();
+// Resolve a binary's real path without depending on any specific `which`
+// location (T1 v11 Nit: hardcoded /usr/bin/which is absent on some Linux
+// distros) — search $PATH directly, same lookup `command -v` would do.
+function resolveBin(name) {
+  const dirs = (process.env.PATH || '').split(path.delimiter);
+  for (const d of dirs) {
+    const candidate = path.join(d, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch (_) { /* try next PATH entry */ }
+  }
+  return null;
+}
+
+// Builds a symlink farm containing exactly the binaries statusline.sh needs
+// (awk, cat, wc, tr, od, grep, head, bash), plus python3 only when
+// `includePython3` is true — so both the python3 branch and the frozen awk
+// fallback branch can be forced deterministically instead of depending on
+// whatever happens to be ambient on PATH (T1 v11 Low: the renamed
+// "python3 path" tests relied on ambient python3, which CI never
+// explicitly guarantees for the node job). Farms are cached and cleaned up
+// on process exit (T1 v11 Nit: the original helper leaked its temp dir).
+const pathFarmCache = new Map();
+const pathFarmDirs = [];
+function buildPathFarm(includePython3) {
+  const key = includePython3 ? 'with-python3' : 'without-python3';
+  if (pathFarmCache.has(key)) return pathFarmCache.get(key);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `caveman-${key}-bin-`));
+  const bins = ['bash', 'awk', 'cat', 'wc', 'tr', 'od', 'grep', 'head'];
+  if (includePython3) bins.push('python3');
+  for (const bin of bins) {
+    const real = resolveBin(bin);
+    if (!real) throw new Error(`buildPathFarm: could not resolve "${bin}" on PATH`);
     fs.symlinkSync(real, path.join(dir, bin));
   }
-  noPython3PathCache = dir;
+  pathFarmCache.set(key, dir);
+  pathFarmDirs.push(dir);
   return dir;
 }
+process.on('exit', () => {
+  for (const dir of pathFarmDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* best-effort cleanup */ }
+  }
+});
+function pathWithoutPython3() { return buildPathFarm(false); }
+function pathWithPython3Forced() { return buildPathFarm(true); }
 
 let pwshBin = null;
 try {
@@ -630,13 +659,15 @@ test('a missing value for an unrelated key must be rejected (statusline.sh, pyth
   seedLegacy(tmp);
   fs.mkdirSync(tmp, { recursive: true });
   // {"session_id":"a","x":}  -- a missing value for a DIFFERENT key is
-  // invalid JSON grammar. This exercises the python3 path specifically
-  // (python3 is on PATH in this environment): real json.load rejects the
-  // whole document, so extraction yields nothing and legacy is rendered.
+  // invalid JSON grammar. Forces the python3 path deterministically (T1
+  // v11 Low: relying on ambient python3 meant a python3-less runner would
+  // silently exercise the awk path instead and fail confusingly): real
+  // json.load rejects the whole document, so extraction yields nothing and
+  // legacy is rendered.
   fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
   const out = execFileSync('bash', [STATUSLINE_SH], {
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    env: { ...process.env, PATH: pathWithPython3Forced(), CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
     input: '{"session_id":"a","x":}',
   });
   assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a missing member value elsewhere in the document must fall back to legacy');
@@ -668,7 +699,7 @@ test('a trailing comma before the closing brace must be rejected (statusline.sh,
   fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
   const out = execFileSync('bash', [STATUSLINE_SH], {
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    env: { ...process.env, PATH: pathWithPython3Forced(), CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
     input: '{"session_id":"a",}',
   });
   assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a trailing comma before the closing brace must fall back to legacy, matching real JSON grammar');
@@ -694,12 +725,11 @@ test('duplicate top-level session_id keys must resolve like JSON.parse/ConvertFr
   // compliant payload. Both JSON.parse and ConvertFrom-Json resolve
   // duplicate keys to the LAST occurrence (verified empirically), so the
   // real session_id here is "../bad" -- which fails the sanitizer and
-  // falls back to legacy. This exercises the python3 path specifically
-  // (python3 is on PATH in this environment).
+  // falls back to legacy. Forces the python3 path deterministically.
   fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
   const out = execFileSync('bash', [STATUSLINE_SH], {
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    env: { ...process.env, PATH: pathWithPython3Forced(), CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
     input: '{"session_id":"a","session_id":"../bad"}',
   });
   assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'duplicate top-level session_id keys must resolve to the LAST occurrence, which then fails the sanitizer and falls back to legacy');
