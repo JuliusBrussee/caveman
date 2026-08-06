@@ -44,6 +44,25 @@ function skip(name, reason) {
   console.log(`  ~ ${name} (skipped: ${reason})`);
 }
 
+// A symlink farm containing only the binaries statusline.sh actually needs
+// (awk, cat, wc, tr, od, grep, head) — deliberately NOT python3 — so
+// `command -v python3` fails and the script falls onto its frozen awk
+// path, without collaterally removing whichever real PATH directory also
+// happens to hold those other binaries (removing whole directories, e.g.
+// to strip out /usr/bin's python3, would also strip /usr/bin's tr/wc/od
+// that the rest of the script needs downstream of extraction).
+let noPython3PathCache = null;
+function pathWithoutPython3() {
+  if (noPython3PathCache) return noPython3PathCache;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-no-python3-bin-'));
+  for (const bin of ['bash', 'awk', 'cat', 'wc', 'tr', 'od', 'grep', 'head']) {
+    const real = execFileSync('/usr/bin/which', [bin], { encoding: 'utf8' }).trim();
+    fs.symlinkSync(real, path.join(dir, bin));
+  }
+  noPython3PathCache = dir;
+  return dir;
+}
+
 let pwshBin = null;
 try {
   execFileSync(process.platform === 'win32' ? 'where' : 'which', ['pwsh'], { stdio: 'ignore' });
@@ -607,13 +626,13 @@ test('trailing non-whitespace after the session_id value must be rejected (statu
   assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'trailing garbage after the value must fall back to legacy, matching a real parser rejecting invalid JSON');
 });
 
-test('a missing value for an unrelated key must be rejected (statusline.sh) (PR-review v9 High)', (tmp) => {
+test('a missing value for an unrelated key must be rejected (statusline.sh, python3 path) (PR-review v9 High)', (tmp) => {
   seedLegacy(tmp);
   fs.mkdirSync(tmp, { recursive: true });
-  // {"session_id":"a","x":}  -- a missing value for a DIFFERENT key was
-  // previously invisible to the one-shot post-value check (which only
-  // validates what follows session_id's own value), letting the rest of
-  // the document's grammar go unchecked.
+  // {"session_id":"a","x":}  -- a missing value for a DIFFERENT key is
+  // invalid JSON grammar. This exercises the python3 path specifically
+  // (python3 is on PATH in this environment): real json.load rejects the
+  // whole document, so extraction yields nothing and legacy is rendered.
   fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
   const out = execFileSync('bash', [STATUSLINE_SH], {
     encoding: 'utf8',
@@ -623,7 +642,27 @@ test('a missing value for an unrelated key must be rejected (statusline.sh) (PR-
   assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a missing member value elsewhere in the document must fall back to legacy');
 });
 
-test('a trailing comma before the closing brace must be rejected (statusline.sh) (PR-review v9 High)', (tmp) => {
+test('a missing value for an unrelated key is NOT rejected by the frozen awk fallback (statusline.sh, no-python3 path) (T1 v10 High: awk fallback residual gap, not further hardened per design review)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // Known, accepted residual gap: the awk walker is FROZEN per the
+  // trip-wire design review (no further hardening -- python3-primary
+  // covers the correct-semantics case). With python3 absent, the walker
+  // does NOT flag a missing value for an unrelated key as malformed, so it
+  // resolves "a" and the SCOPED flag renders -- diverging from
+  // JSON.parse/ConvertFrom-Json. This test documents the actual behavior
+  // so "68 tests pass" never again implies the awk fallback was verified
+  // to reject this input; it wasn't, and per design it's not going to be.
+  fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: pathWithoutPython3(), CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"a","x":}',
+  });
+  assert.match(out, /\[CAVEMAN:LITE\]/, 'documents the frozen awk fallback resolving "a" despite the missing member value elsewhere -- accepted residual, not a regression target');
+});
+
+test('a trailing comma before the closing brace must be rejected (statusline.sh, python3 path) (PR-review v9 High)', (tmp) => {
   seedLegacy(tmp);
   fs.mkdirSync(tmp, { recursive: true });
   fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
@@ -635,16 +674,28 @@ test('a trailing comma before the closing brace must be rejected (statusline.sh)
   assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a trailing comma before the closing brace must fall back to legacy, matching real JSON grammar');
 });
 
-test('duplicate top-level session_id keys must resolve like JSON.parse/ConvertFrom-Json (last occurrence wins) (statusline.sh) (PR-review v9 High)', (tmp) => {
+test('a trailing comma before the closing brace is NOT rejected by the frozen awk fallback (statusline.sh, no-python3 path) (T1 v10 High: awk fallback residual gap, not further hardened per design review)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // Same known/accepted residual class as the missing-value case above.
+  fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: pathWithoutPython3(), CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"a",}',
+  });
+  assert.match(out, /\[CAVEMAN:LITE\]/, 'documents the frozen awk fallback resolving "a" despite the trailing comma -- accepted residual, not a regression target');
+});
+
+test('duplicate top-level session_id keys must resolve like JSON.parse/ConvertFrom-Json (last occurrence wins) (statusline.sh, python3 path) (PR-review v9 High)', (tmp) => {
   seedLegacy(tmp);
   fs.mkdirSync(tmp, { recursive: true });
   // {"session_id":"a","session_id":"../bad"} is a WELL-FORMED, RFC-8259-
   // compliant payload. Both JSON.parse and ConvertFrom-Json resolve
   // duplicate keys to the LAST occurrence (verified empirically), so the
   // real session_id here is "../bad" -- which fails the sanitizer and
-  // falls back to legacy. A walker that keeps the FIRST occurrence would
-  // wrongly resolve the scoped "a" flag on a genuinely well-formed input,
-  // not just a malformed-input edge case.
+  // falls back to legacy. This exercises the python3 path specifically
+  // (python3 is on PATH in this environment).
   fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
   const out = execFileSync('bash', [STATUSLINE_SH], {
     encoding: 'utf8',
@@ -653,6 +704,26 @@ test('duplicate top-level session_id keys must resolve like JSON.parse/ConvertFr
   });
   assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'duplicate top-level session_id keys must resolve to the LAST occurrence, which then fails the sanitizer and falls back to legacy');
   assert.doesNotMatch(out, /\[CAVEMAN:LITE\]/, 'must not resolve the scoped flag from the FIRST duplicate occurrence');
+});
+
+test('duplicate top-level session_id keys resolve FIRST-wins in the frozen awk fallback, diverging from real JSON.parse (statusline.sh, no-python3 path) (T1 v10 High: awk fallback residual gap, not further hardened per design review)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // Known, accepted residual gap: with python3 absent, the awk walker's
+  // `if (found == "none")` value-assignment guard keeps the FIRST
+  // occurrence of a top-level session_id key, not the last. On this
+  // well-formed input the walker resolves "a" (the first occurrence) and
+  // renders the SCOPED flag, where a real JSON parser would resolve
+  // "../bad" (the last occurrence) and fail the sanitizer into legacy.
+  // The awk walker is frozen per the trip-wire design review -- this is
+  // documented, not silently reintroduced as "fixed".
+  fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: pathWithoutPython3(), CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"a","session_id":"../bad"}',
+  });
+  assert.match(out, /\[CAVEMAN:LITE\]/, 'documents the frozen awk fallback resolving the FIRST duplicate occurrence, not the last -- accepted residual, not a regression target');
 });
 
 test('a session_id value containing an embedded NUL byte is rejected before it ever reaches shell capture (statusline.sh) (PR-review v10 High/design)', (tmp) => {
