@@ -523,6 +523,54 @@ test('a top-level session_id of null/bool/array is rejected exactly like a numbe
   }
 });
 
+test('a JSON-escaped session_id value must be rejected rather than returned undecoded (statusline.sh) (PR-review v6 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // {"session_id":"a"} decodes to "a" in JS/PowerShell (real JSON
+  // parsers). The Bash walker never decodes escapes, so it previously
+  // extracted the raw, undecoded "u0061" and resolved a DIFFERENT scoped
+  // file than JS/PowerShell would -- a real session, but the wrong one.
+  // A real scoped file exists at both the correctly-decoded ("a") and the
+  // wrongly-undecoded ("u0061") paths so any silent divergence is observable.
+  fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
+  fs.writeFileSync(path.join(tmp, '.caveman-active-u0061'), 'ultra');
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"\\u0061"}',
+  });
+  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'an escaped session_id value must fall back to legacy rather than resolve any scoped file');
+  assert.doesNotMatch(out, /\[CAVEMAN:LITE\]|\[CAVEMAN:ULTRA\]/, 'must not resolve either the correctly-decoded or wrongly-undecoded scoped path');
+});
+
+test('a genuinely unescaped session_id value with the same characters still resolves normally (statusline.sh)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"a"}',
+  });
+  assert.match(out, /\[CAVEMAN:LITE\]/, 'a plain, unescaped value must still resolve the scoped flag normally');
+});
+
+test('truncated/malformed JSON must not still yield a usable session_id (statusline.sh) (PR-review v6 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // JS's JSON.parse and PowerShell's ConvertFrom-Json both throw on this
+  // (missing closing brace) and fall back to legacy. The Bash walker
+  // previously stopped scanning as soon as it found a plausible value,
+  // without checking whether the rest of the document was well-formed.
+  fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"a"', // missing closing brace
+  });
+  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'truncated JSON must fall back to legacy, matching a real parser throwing on malformed input');
+});
+
 test('a single unambiguous session_id occurrence still resolves the scoped flag normally (statusline.sh)', (tmp) => {
   fs.mkdirSync(tmp, { recursive: true });
   seedLegacy(tmp);

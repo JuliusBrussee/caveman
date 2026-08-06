@@ -29,35 +29,62 @@ STDIN_JSON=$(cat 2>/dev/null)
 # (number/bool/null/array/object) emits "OTHER" (rejected, matching
 # JS/PowerShell); no top-level key at all (including one that exists only
 # nested) emits "NONE". Nested occurrences are never inspected.
+# PR-review v6 High finding: the walker never JSON-decoded escape sequences
+# (a literal backslash was just dropped, keeping whatever followed
+# uninterpreted) and returned a value as soon as it was found, without
+# checking whether the REST of the document was even well-formed. Two real
+# divergences from JS/PowerShell (which both use genuine JSON parsers):
+# (1) {"session_id":"a"} decodes to "a" in JS/PowerShell but this
+#     walker extracted the raw, undecoded "u0061" -- a wrong value, not a
+#     rejection; (2) truncated/malformed input like {"session_id":"a" (no
+#     closing brace) would still "succeed" here, while JSON.parse /
+#     ConvertFrom-Json throw on it and fall back to legacy. Fixed two ways
+#     rather than writing a full JSON escape decoder (real session_ids are
+#     always plain alnum+hyphen and never legitimately need escaping, so
+#     rejecting on ANY escape costs nothing in practice): (a) any escape
+#     sequence inside the session_id value rejects it outright instead of
+#     returning the wrongly-undecoded text; (b) the scan continues to the
+#     end of input (rather than stopping at the first match) and the found
+#     value is discarded unless the object's bracket depth returns to
+#     exactly 0 and no string was left unterminated -- i.e. the whole
+#     document actually closed.
 SESSION_ID_EXTRACT=$(printf '%s' "$STDIN_JSON" | awk '
 { buf = buf $0 "\n" }
 END {
   n = length(buf); depth = 0; instr = 0; esc = 0
   keybuf = ""; keystart = 0; expect_colon = 0; expect_value = 0
-  result = ""; found = "none"; i = 1
+  escape_seen = 0; result = ""; found = "none"; malformed = 0; i = 1
   while (i <= n) {
     c = substr(buf, i, 1)
     if (instr) {
       if (esc) { keybuf = keybuf c; esc = 0; i++; continue }
-      if (c == "\\") { esc = 1; i++; continue }
+      if (c == "\\") { esc = 1; escape_seen = 1; i++; continue }
       if (c == "\"") {
         instr = 0
-        if (expect_value && depth == 1) { result = keybuf; found = "string"; break }
-        if (keystart == 1 && depth == 1 && keybuf == "session_id") { expect_colon = 1 }
-        keystart = 0; i++; continue
+        if (expect_value && depth == 1) {
+          if (found == "none") {
+            if (escape_seen) { found = "other" } else { found = "string"; result = keybuf }
+          }
+          expect_value = 0
+        }
+        if (keystart == 1 && depth == 1 && keybuf == "session_id" && !escape_seen) { expect_colon = 1 }
+        keystart = 0; escape_seen = 0; i++; continue
       }
       keybuf = keybuf c; i++; continue
     }
-    if (c == "\"") { instr = 1; keybuf = ""; keystart = 1; i++; continue }
+    if (c == "\"") { instr = 1; keybuf = ""; keystart = 1; escape_seen = 0; i++; continue }
     if (expect_value) {
       if (c == " " || c == "\t" || c == "\n" || c == "\r") { i++; continue }
-      found = "other"; break
+      if (found == "none") { found = "other" }
+      expect_value = 0
+      continue
     }
     if (c == "{" || c == "[") { depth++; i++; continue }
-    if (c == "}" || c == "]") { depth--; i++; continue }
+    if (c == "}" || c == "]") { depth--; if (depth < 0) { malformed = 1; break }; i++; continue }
     if (expect_colon) { if (c == ":") { expect_colon = 0; expect_value = 1 }; i++; continue }
     i++
   }
+  if (found == "string" && (malformed || instr != 0 || depth != 0)) { found = "other" }
   if (found == "string") print "STRING:" result
   else if (found == "other") print "OTHER"
   else print "NONE"
