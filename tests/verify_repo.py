@@ -190,6 +190,19 @@ def verify_manifests_and_syntax() -> None:
         actual = hashlib.sha256((hook_dir / filename).read_bytes()).hexdigest()
         ensure(actual == expected, f"hook checksum mismatch: {filename}")
 
+    # Regression guard: plugin hooks must resolve node through run-with-node.sh,
+    # not invoke it bare — a bare `node "$script"` fails under the minimal PATH
+    # hook commands run with (no nvm/profile sourcing), printing
+    # "/bin/sh: 1: node: not found" noise on every prompt.
+    plugin_manifest = read_json(ROOT / ".claude-plugin/plugin.json")
+    for event in ("SessionStart", "UserPromptSubmit"):
+        for group in plugin_manifest["hooks"][event]:
+            for hook in group["hooks"]:
+                ensure(
+                    "run-with-node.sh" in hook["command"],
+                    f"{event} hook does not route node through run-with-node.sh: {hook['command']}",
+                )
+
     run(["node", "--check", "src/hooks/caveman-config.js"])
     run(["node", "--check", "src/hooks/caveman-parse.js"])
     run(["node", "--check", "src/hooks/caveman-activate.js"])
@@ -202,6 +215,7 @@ def verify_manifests_and_syntax() -> None:
         run([bash, "-n", "src/hooks/install.sh"])
         run([bash, "-n", "src/hooks/uninstall.sh"])
         run([bash, "-n", "src/hooks/caveman-statusline.sh"])
+        run([bash, "-n", "src/hooks/run-with-node.sh"])
     else:
         print("SKIP: Bash syntax checks require Bash; PowerShell static checks still run")
 
