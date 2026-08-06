@@ -13,8 +13,14 @@ $SessionId = ""
 if ($StdinJson) {
     try {
         $Data = $StdinJson | ConvertFrom-Json -ErrorAction Stop
-        if ($Data.session_id) {
-            $Raw = [string]$Data.session_id
+        # PR-review High finding: a truthy NON-STRING session_id (e.g. a JSON
+        # number) would otherwise be cast to a string and matched, computing
+        # a scoped path the JS/Bash implementations never would (both reject
+        # non-string session_id outright) -- a cross-implementation parity
+        # gap that could display another scoped session's mode. Require the
+        # actual JSON type to be a string before casting or matching.
+        if ($Data.session_id -is [string]) {
+            $Raw = $Data.session_id
             # Whole-string anchored match using \z, NOT a trailing $ (Tier-2 v2
             # High finding): .NET's $ matches end-of-string OR immediately
             # before a single trailing `\n` by default, so a value ending in

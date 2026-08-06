@@ -336,6 +336,19 @@ if (pwshBin) {
     const out = runStatuslinePs1(tmp, SESSION_ID);
     assert.strictEqual(out.trim(), '', 'a dangling scoped symlink must render nothing, not the legacy sentinel');
   });
+
+  test('a numeric JSON session_id must be rejected like JS/Bash, never cast to a matching scoped path (statusline.ps1) (PR-review v2 High)', (tmp) => {
+    seedLegacy(tmp); // 'wenyan-ultra'
+    fs.mkdirSync(tmp, { recursive: true });
+    // A real scoped file DOES exist at the path a numeric-to-string cast
+    // would compute -- this is what makes the bug observable (a sanitizer
+    // vector test with no matching file on disk can't distinguish
+    // "correctly rejected" from "accepted but happened to ENOENT").
+    fs.writeFileSync(path.join(tmp, '.caveman-active-123'), 'ultra');
+    const out = runStatuslinePs1(tmp, 123); // JSON.stringify emits {"session_id":123}, not a string
+    assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a numeric session_id must fall back to the legacy sentinel, never read the scoped-123 file');
+    assert.doesNotMatch(out, /\[CAVEMAN:ULTRA\]/, 'must not read the scoped file a naive string-cast would compute');
+  });
 }
 
 // ── Non-ENOENT stat failure (resolveFlag + resolvePrev) ─────────────────────
