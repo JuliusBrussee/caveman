@@ -427,22 +427,68 @@ if (isRoot) {
   }
 }
 
-test('a session_id-shaped substring elsewhere in the JSON must not be silently preferred over (or confused with) the real top-level value (statusline.sh) (PR-review v3 High)', (tmp) => {
+test('a genuinely NESTED session_id occurrence must never be selected over (or in place of) the real top-level value (statusline.sh) (PR-review v3 High, superseded parser: v4 High)', (tmp) => {
   seedLegacy(tmp);
   fs.mkdirSync(tmp, { recursive: true });
   safeWriteFlag(scopedPath(tmp), 'full');
-  // Two genuine, distinct `"session_id":"..."` occurrences in the raw text --
-  // grep -o has no notion of "top-level property" and would previously pick
-  // whichever `head -n 1` happened to return first. With the ambiguity guard,
-  // 2+ matches reject the session id outright rather than guessing.
-  const payload = `{"cwd":"/x/","session_id":"${SESSION_ID}","note":"session_id":"other-session"}`;
+  // A genuinely nested "session_id" key (inside "meta") plus the real
+  // top-level one -- the top-level value must win, and the nested one must
+  // never even be considered a candidate.
+  const payload = `{"cwd":"/x/","session_id":"${SESSION_ID}","meta":{"session_id":"other-session"}}`;
   const out = execFileSync('bash', [STATUSLINE_SH], {
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
     input: payload,
   });
-  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'ambiguous session_id must fall back to the legacy sentinel, never guess between candidates');
-  assert.doesNotMatch(out, /\[CAVEMAN\]\[0m$/, 'must not resolve the scoped "full" flag from an ambiguous extraction');
+  assert.match(out, /\[CAVEMAN\]/, 'the real top-level session_id must resolve the scoped flag');
+  assert.doesNotMatch(out, /WENYAN/, 'must not fall back to legacy just because a nested duplicate key exists');
+});
+
+test('a session_id key found ONLY nested (absent at the top level) must resolve like no session_id was sent at all (statusline.sh) (PR-review v4 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // Only a NESTED "session_id" exists; there is no top-level one at all.
+  // A scoped file exists at the path the nested value would compute to --
+  // this is what makes the bug observable (without it, "correctly ignored"
+  // and "accepted but happened to ENOENT" look identical).
+  fs.writeFileSync(scopedPath(tmp), 'ultra');
+  const payload = '{"cwd":"/x/","meta":{"session_id":"' + SESSION_ID + '"}}';
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: payload,
+  });
+  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a session_id that only exists nested must never be treated as the top-level value');
+});
+
+test('a non-string top-level session_id must not be shadowed by a genuinely nested string session_id (statusline.sh) (PR-review v4 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // Reviewer's exact v4 exploit: {"session_id":123,"meta":{"session_id":"other-session"}}.
+  // A match-count-based ambiguity guard sees exactly ONE quoted candidate
+  // (the nested one -- 123 isn't quoted) and would wrongly select it.
+  fs.writeFileSync(path.join(tmp, '.caveman-active-other-session'), 'lite');
+  const payload = '{"session_id":123,"meta":{"session_id":"other-session"}}';
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: payload,
+  });
+  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a numeric top-level session_id must fall back to legacy, never adopt a nested string value');
+  assert.doesNotMatch(out, /\[CAVEMAN:LITE\]/, 'must not read the scoped file the nested value would compute');
+});
+
+test('a top-level session_id of null/bool/array is rejected exactly like a number (statusline.sh) (PR-review v4 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  for (const value of ['null', 'true', '["x"]', '{"a":1}']) {
+    const out = execFileSync('bash', [STATUSLINE_SH], {
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+      input: `{"session_id":${value}}`,
+    });
+    assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, `a top-level session_id of ${value} must fall back to legacy`);
+  }
 });
 
 test('a single unambiguous session_id occurrence still resolves the scoped flag normally (statusline.sh)', (tmp) => {

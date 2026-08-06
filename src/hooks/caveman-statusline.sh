@@ -16,20 +16,57 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 # on EOF (a closed/empty stdin, as in a manual/test invocation with no
 # input, is not a hang).
 STDIN_JSON=$(cat 2>/dev/null)
-# PR-review High finding: grep -o searches the ENTIRE JSON text as a
-# substring match, not the top-level parsed property. A nested or escaped
-# field elsewhere in the payload containing "session_id":"..." could be
-# matched (and, with `head -n 1`, matched INSTEAD of the real one) while
-# JavaScript/PowerShell only ever see the real top-level value. There is no
-# JSON parser available here (zero-dependency posture), so require the match
-# to be UNIQUE across the whole text: any ambiguity (0 or 2+ candidates)
-# rejects the session id entirely rather than guessing which one is real.
-SESSION_ID_MATCHES=$(printf '%s' "$STDIN_JSON" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"')
-SESSION_ID_MATCH_COUNT=$(printf '%s' "$SESSION_ID_MATCHES" | grep -c . 2>/dev/null)
+# PR-review High finding (v3+v4): a plain grep -o match, even gated on
+# "exactly one occurrence", cannot tell a top-level key from a NESTED one --
+# {"session_id":123,"meta":{"session_id":"other"}} has exactly one QUOTED
+# "session_id" occurrence (the nested one; the top-level 123 isn't quoted),
+# so a match-count guard alone still selects the wrong value while
+# JS/PowerShell reject the non-string top-level value and fall back to
+# legacy. Fixed by structurally walking the JSON (bracket-depth + in-string
+# tracking, still no external dependency -- awk is POSIX/always present)
+# to find ONLY the top-level "session_id" key and classify its value type:
+# a top-level string emits "STRING:<value>"; a top-level non-string value
+# (number/bool/null/array/object) emits "OTHER" (rejected, matching
+# JS/PowerShell); no top-level key at all (including one that exists only
+# nested) emits "NONE". Nested occurrences are never inspected.
+SESSION_ID_EXTRACT=$(printf '%s' "$STDIN_JSON" | awk '
+{ buf = buf $0 "\n" }
+END {
+  n = length(buf); depth = 0; instr = 0; esc = 0
+  keybuf = ""; keystart = 0; expect_colon = 0; expect_value = 0
+  result = ""; found = "none"; i = 1
+  while (i <= n) {
+    c = substr(buf, i, 1)
+    if (instr) {
+      if (esc) { keybuf = keybuf c; esc = 0; i++; continue }
+      if (c == "\\") { esc = 1; i++; continue }
+      if (c == "\"") {
+        instr = 0
+        if (expect_value && depth == 1) { result = keybuf; found = "string"; break }
+        if (keystart == 1 && depth == 1 && keybuf == "session_id") { expect_colon = 1 }
+        keystart = 0; i++; continue
+      }
+      keybuf = keybuf c; i++; continue
+    }
+    if (c == "\"") { instr = 1; keybuf = ""; keystart = 1; i++; continue }
+    if (expect_value) {
+      if (c == " " || c == "\t" || c == "\n" || c == "\r") { i++; continue }
+      found = "other"; break
+    }
+    if (c == "{" || c == "[") { depth++; i++; continue }
+    if (c == "}" || c == "]") { depth--; i++; continue }
+    if (expect_colon) { if (c == ":") { expect_colon = 0; expect_value = 1 }; i++; continue }
+    i++
+  }
+  if (found == "string") print "STRING:" result
+  else if (found == "other") print "OTHER"
+  else print "NONE"
+}
+' 2>/dev/null)
 RAW_SESSION_ID=""
-if [ -n "$SESSION_ID_MATCHES" ] && [ "$SESSION_ID_MATCH_COUNT" = "1" ]; then
-  RAW_SESSION_ID=$(printf '%s' "$SESSION_ID_MATCHES" | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/')
-fi
+case "$SESSION_ID_EXTRACT" in
+  STRING:*) RAW_SESSION_ID="${SESSION_ID_EXTRACT#STRING:}" ;;
+esac
 
 # Whole-string anchored match, reject entirely on any non-match — never
 # strip characters or truncate down to a valid-looking id (v1 Critical fix:
@@ -108,7 +145,12 @@ fi
 # NUL byte with `od` (POSIX, no new dependency) BEFORE ever reading the file
 # into a shell variable, and reject the whole file outright -- reject, not
 # strip, matching every other validation step in this script.
-if od -An -tx1 -- "$FLAG" 2>/dev/null | grep -qw '00'; then
+# PR-review v4 High finding: BSD/macOS od rejects a `--` end-of-options
+# marker before the filename (`illegal option -- -`), which silently
+# disabled this whole guard on macOS. Read via stdin redirection instead --
+# od never has to parse a filename argument at all, so this form is
+# GNU/BSD-compatible without needing `--`.
+if od -An -tx1 < "$FLAG" 2>/dev/null | grep -qw '00'; then
   exit 0
 fi
 
