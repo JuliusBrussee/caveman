@@ -510,5 +510,20 @@ test('scoped content containing a NUL byte must be rejected outright, never sile
   assert.strictEqual(out.trim(), '', 'NUL-containing content must be rejected, never truncated down to a valid-looking mode');
 });
 
+if (pwshBin) {
+  test('scoped content containing a NUL byte must be rejected outright (statusline.ps1) (invariant-matrix confirmation, no fix needed)', (tmp) => {
+    // Unlike Bash's $(...) command substitution, a .NET string CAN hold an
+    // embedded NUL character, and Get-Content -Raw preserves it -- so this
+    // was never actually reachable in PowerShell. Asserted here as a
+    // confirming regression test (not a fix) so this invariant is verified
+    // by the suite instead of relying on ad-hoc manual confirmation.
+    seedLegacy(tmp);
+    fs.mkdirSync(tmp, { recursive: true });
+    fs.writeFileSync(scopedPath(tmp), Buffer.from('full\x00garbage', 'utf8'));
+    const out = runStatuslinePs1(tmp, SESSION_ID);
+    assert.strictEqual(out.trim(), '', 'NUL-containing content must be rejected in PowerShell too');
+  });
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
