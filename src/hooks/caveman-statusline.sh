@@ -56,15 +56,28 @@ if [ -L "$FLAG" ] || [ ! -f "$FLAG" ]; then
   exit 0
 fi
 
-# Hard-cap the read at 64 bytes and strip anything outside [a-z0-9-] — blocks
-# terminal-escape injection and OSC hyperlink spoofing via the flag contents.
-MODE=$(head -c 64 "$FLAG" 2>/dev/null | tr -d '\n\r' | tr '[:upper:]' '[:lower:]')
-MODE=$(printf '%s' "$MODE" | tr -cd 'a-z0-9-')
+# Reject-not-strip, exact-match validation (PR-review High finding): check
+# the real file SIZE against the same 64-byte cap readFlag enforces BEFORE
+# reading, then read the FULL bounded content, trim only leading/trailing
+# whitespace, and exact-match the whitelist -- mirrors caveman-config.js's
+# readFlag algorithm exactly. The prior `head -c 64 | tr -d '\n\r' |
+# tr -cd 'a-z0-9-'` pipeline silently deleted invalid characters instead of
+# rejecting the whole value on any non-match, so an oversized file (which
+# readFlag would reject outright) or a value like "f u l l" reduced to a
+# valid-looking mode -- exactly the strip-vs-reject class this design
+# rejects everywhere else (the session-id sanitizer above, readFlag itself).
+FLAG_SIZE=$(wc -c < "$FLAG" 2>/dev/null | tr -d '[:space:]')
+if [ -z "$FLAG_SIZE" ] || [ "$FLAG_SIZE" -gt 64 ]; then
+  exit 0
+fi
+MODE=$(cat "$FLAG" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+MODE="${MODE#"${MODE%%[![:space:]]*}"}"
+MODE="${MODE%"${MODE##*[![:space:]]}"}"
 
-# Whitelist. Anything else → render nothing rather than echo attacker bytes
-# (this is also the scoped-identity "rejected content" case: an invalid
-# MODE here never falls back to the legacy sentinel, because FLAG is
-# already the scoped path when SCOPED_IDENTITY=1).
+# Whitelist, exact match. Anything else → render nothing rather than echo
+# attacker bytes (this is also the scoped-identity "rejected content" case:
+# an invalid MODE here never falls back to the legacy sentinel, because
+# FLAG is already the scoped path when SCOPED_IDENTITY=1).
 case "$MODE" in
   off|lite|full|ultra|wenyan-lite|wenyan|wenyan-full|wenyan-ultra|commit|review|compress) ;;
   *) exit 0 ;;

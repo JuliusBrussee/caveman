@@ -271,6 +271,32 @@ test('file-state matrix: scoped-oversized rejected, never falls back (statusline
   assert.strictEqual(out.trim(), '');
 });
 
+test('scoped-oversized content that STARTS with a valid mode word must still be rejected, not truncated-then-accepted (statusline.sh) (PR-review High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  fs.writeFileSync(scopedPath(tmp), 'full' + 'x'.repeat(100)); // oversized, but head -c 64 alone would see "full..."
+  const out = runStatuslineSh(tmp, SESSION_ID);
+  assert.strictEqual(out.trim(), '', 'oversized content must be rejected outright, never truncated down to a valid-looking mode');
+});
+
+test('scoped content with embedded invalid characters ("f u l l") must be rejected, not stripped-then-accepted (statusline.sh) (PR-review High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  fs.writeFileSync(scopedPath(tmp), 'f u l l');
+  const out = runStatuslineSh(tmp, SESSION_ID);
+  assert.strictEqual(out.trim(), '', '"f u l l" must be rejected outright, never stripped down to "full"');
+});
+
+if (pwshBin) {
+  test('scoped content with an embedded newline ("full\\nnot-a-mode") must be rejected, not first-line-accepted (statusline.ps1) (PR-review High)', (tmp) => {
+    seedLegacy(tmp);
+    fs.mkdirSync(tmp, { recursive: true });
+    fs.writeFileSync(scopedPath(tmp), 'full\nnot-a-mode');
+    const out = runStatuslinePs1(tmp, SESSION_ID);
+    assert.strictEqual(out.trim(), '', 'multi-line content must be rejected as a whole, never validated on its first line alone');
+  });
+}
+
 test('file-state matrix: scoped-symlink rejected, never falls back (resolveFlag)', (tmp) => {
   seedLegacy(tmp);
   fs.mkdirSync(tmp, { recursive: true });
@@ -301,6 +327,14 @@ if (pwshBin) {
     fs.symlinkSync(target, scopedPath(tmp));
     const out = runStatuslinePs1(tmp, SESSION_ID);
     assert.strictEqual(out.trim(), '');
+  });
+
+  test('file-state matrix: scoped DANGLING symlink rejected, never falls back to legacy (statusline.ps1) (PR-review High)', (tmp) => {
+    seedLegacy(tmp);
+    fs.mkdirSync(tmp, { recursive: true });
+    fs.symlinkSync(path.join(tmp, 'nonexistent-target'), scopedPath(tmp));
+    const out = runStatuslinePs1(tmp, SESSION_ID);
+    assert.strictEqual(out.trim(), '', 'a dangling scoped symlink must render nothing, not the legacy sentinel');
   });
 }
 

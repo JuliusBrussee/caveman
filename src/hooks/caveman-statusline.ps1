@@ -36,14 +36,22 @@ if ($StdinJson) {
 # invalid/oversized content) is fail-closed: never fall back to legacy.
 $LegacyFlag = Join-Path $ClaudeDir ".caveman-active"
 $Flag = $LegacyFlag
+$ScopedIdentity = $false
 if ($SessionId) {
     $ScopedFlag = Join-Path $ClaudeDir ".caveman-active-$SessionId"
-    if (Test-Path -LiteralPath $ScopedFlag) {
+    # PR-review High finding: Test-Path follows a reparse point and can
+    # report $false for a DANGLING scoped symlink on some PowerShell
+    # versions (target-following resolution), which would wrongly fall
+    # through to the legacy path -- exactly the fail-open bypass this
+    # design rejects elsewhere. Get-Item -Force detects the directory
+    # ENTRY itself (a reparse point exists regardless of target validity),
+    # matching resolveFlag's/statusline.sh's lstat-based existence check.
+    try {
+        Get-Item -LiteralPath $ScopedFlag -Force -ErrorAction Stop | Out-Null
         $Flag = $ScopedFlag
-    }
+        $ScopedIdentity = $true
+    } catch {}
 }
-
-if (-not (Test-Path -LiteralPath $Flag)) { exit 0 }
 
 # Refuse reparse points (symlinks / junctions) and oversized files. Without
 # this, a local attacker could point the flag at a secret file and have the
@@ -54,21 +62,28 @@ try {
     if ($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { exit 0 }
     if ($Item.Length -gt 64) { exit 0 }
 } catch {
+    # Scoped identity + missing/rejected content -> fail closed, render
+    # nothing, never fall back to the legacy sentinel ($Flag is already the
+    # scoped path here when $ScopedIdentity is true).
     exit 0
 }
 
 $Mode = ""
 try {
-    $Raw = Get-Content -LiteralPath $Flag -TotalCount 1 -ErrorAction Stop
+    # Reject-not-strip, exact-match validation (PR-review High finding):
+    # -TotalCount 1 only reads the FIRST line, so a file like
+    # "full`nnot-a-mode" (within the 64-byte cap) would validate on "full"
+    # alone while readFlag reads the COMPLETE content and rejects the whole
+    # value. Read the full bounded content (-Raw) and trim only
+    # leading/trailing whitespace -- mirrors caveman-config.js's readFlag
+    # exactly, same as the Bash statusline's fix for the equivalent bug.
+    $Raw = Get-Content -LiteralPath $Flag -Raw -ErrorAction Stop
     if ($null -ne $Raw) { $Mode = ([string]$Raw).Trim() }
 } catch {
     exit 0
 }
 
-# Strip anything outside [a-z0-9-] — blocks terminal-escape and OSC hyperlink
-# injection via the flag contents. Then whitelist-validate.
 $Mode = $Mode.ToLowerInvariant()
-$Mode = ($Mode -replace '[^a-z0-9-]', '')
 
 $Valid = @('off','lite','full','ultra','wenyan-lite','wenyan','wenyan-full','wenyan-ultra','commit','review','compress')
 if (-not ($Valid -contains $Mode)) { exit 0 }
