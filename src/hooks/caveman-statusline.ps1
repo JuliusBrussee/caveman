@@ -56,7 +56,20 @@ if ($SessionId) {
         Get-Item -LiteralPath $ScopedFlag -Force -ErrorAction Stop | Out-Null
         $Flag = $ScopedFlag
         $ScopedIdentity = $true
-    } catch {}
+    } catch [System.Management.Automation.ItemNotFoundException] {
+        # True not-found (ENOENT-equivalent) -> fall back to the legacy path,
+        # $Flag is already $LegacyFlag.
+    } catch {
+        # PR-review High finding: catching every exception here treated an
+        # EACCES/I/O failure the same as "doesn't exist" and fell through to
+        # the legacy path, potentially rendering another session's mode.
+        # Empirically confirmed distinct: Get-Item throws
+        # ItemNotFoundException for a missing path but
+        # UnauthorizedAccessException (or other exceptions) for a lookup that
+        # failed for any other reason. Fail closed for everything but a
+        # confirmed not-found.
+        exit 0
+    }
 }
 
 # Refuse reparse points (symlinks / junctions) and oversized files. Without

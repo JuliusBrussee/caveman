@@ -396,7 +396,73 @@ if (isRoot) {
       fs.chmodSync(tmp, 0o700);
     }
   });
+
+  test('non-ENOENT scoped lookup failure must fail closed, never fall back to legacy (statusline.sh) (PR-review v3 High)', (tmp) => {
+    // Legacy flag lives inside the SAME directory whose permissions we lock,
+    // so a bug here is observable as "renders the legacy sentinel anyway"
+    // rather than a silent empty result either way.
+    seedLegacy(tmp);
+    fs.writeFileSync(scopedPath(tmp), 'full');
+    fs.chmodSync(tmp, 0o000);
+    try {
+      const out = runStatuslineSh(tmp, SESSION_ID);
+      assert.strictEqual(out.trim(), '', '[-e]/[-L] cannot distinguish EACCES from ENOENT -- must fail closed, never render the legacy sentinel');
+    } finally {
+      fs.chmodSync(tmp, 0o700);
+    }
+  });
+
+  if (pwshBin) {
+    test('non-ENOENT scoped lookup failure must fail closed, never fall back to legacy (statusline.ps1) (PR-review v3 High)', (tmp) => {
+      seedLegacy(tmp);
+      fs.writeFileSync(scopedPath(tmp), 'full');
+      fs.chmodSync(tmp, 0o000);
+      try {
+        const out = runStatuslinePs1(tmp, SESSION_ID);
+        assert.strictEqual(out.trim(), '', 'catching every exception (not just ItemNotFoundException) must fail closed, never render the legacy sentinel');
+      } finally {
+        fs.chmodSync(tmp, 0o700);
+      }
+    });
+  }
 }
+
+test('a session_id-shaped substring elsewhere in the JSON must not be silently preferred over (or confused with) the real top-level value (statusline.sh) (PR-review v3 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  safeWriteFlag(scopedPath(tmp), 'full');
+  // Two genuine, distinct `"session_id":"..."` occurrences in the raw text --
+  // grep -o has no notion of "top-level property" and would previously pick
+  // whichever `head -n 1` happened to return first. With the ambiguity guard,
+  // 2+ matches reject the session id outright rather than guessing.
+  const payload = `{"cwd":"/x/","session_id":"${SESSION_ID}","note":"session_id":"other-session"}`;
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: payload,
+  });
+  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'ambiguous session_id must fall back to the legacy sentinel, never guess between candidates');
+  assert.doesNotMatch(out, /\[CAVEMAN\]\[0m$/, 'must not resolve the scoped "full" flag from an ambiguous extraction');
+});
+
+test('a single unambiguous session_id occurrence still resolves the scoped flag normally (statusline.sh)', (tmp) => {
+  fs.mkdirSync(tmp, { recursive: true });
+  seedLegacy(tmp);
+  safeWriteFlag(scopedPath(tmp), 'full');
+  const out = runStatuslineSh(tmp, SESSION_ID);
+  assert.match(out, /\[CAVEMAN\]/, 'a single unambiguous session_id must still read the scoped file');
+});
+
+test('scoped content containing a NUL byte must be rejected outright, never silently truncated by command substitution (statusline.sh) (PR-review v3 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // "full\0garbage" -- $(cat ...) would drop everything from the NUL byte
+  // onward, leaving a bash variable containing exactly "full" unless this is
+  // rejected before ever reading the file into a variable.
+  fs.writeFileSync(scopedPath(tmp), Buffer.from('full\x00garbage', 'utf8'));
+  const out = runStatuslineSh(tmp, SESSION_ID);
+  assert.strictEqual(out.trim(), '', 'NUL-containing content must be rejected, never truncated down to a valid-looking mode');
+});
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

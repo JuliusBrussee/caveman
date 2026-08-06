@@ -16,7 +16,20 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 # on EOF (a closed/empty stdin, as in a manual/test invocation with no
 # input, is not a hang).
 STDIN_JSON=$(cat 2>/dev/null)
-RAW_SESSION_ID=$(printf '%s' "$STDIN_JSON" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/')
+# PR-review High finding: grep -o searches the ENTIRE JSON text as a
+# substring match, not the top-level parsed property. A nested or escaped
+# field elsewhere in the payload containing "session_id":"..." could be
+# matched (and, with `head -n 1`, matched INSTEAD of the real one) while
+# JavaScript/PowerShell only ever see the real top-level value. There is no
+# JSON parser available here (zero-dependency posture), so require the match
+# to be UNIQUE across the whole text: any ambiguity (0 or 2+ candidates)
+# rejects the session id entirely rather than guessing which one is real.
+SESSION_ID_MATCHES=$(printf '%s' "$STDIN_JSON" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"')
+SESSION_ID_MATCH_COUNT=$(printf '%s' "$SESSION_ID_MATCHES" | grep -c . 2>/dev/null)
+RAW_SESSION_ID=""
+if [ -n "$SESSION_ID_MATCHES" ] && [ "$SESSION_ID_MATCH_COUNT" = "1" ]; then
+  RAW_SESSION_ID=$(printf '%s' "$SESSION_ID_MATCHES" | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/')
+fi
 
 # Whole-string anchored match, reject entirely on any non-match — never
 # strip characters or truncate down to a valid-looking id (v1 Critical fix:
@@ -37,12 +50,27 @@ fi
 LEGACY_FLAG="$CLAUDE_DIR/.caveman-active"
 FLAG="$LEGACY_FLAG"
 SCOPED_IDENTITY=0
+SCOPED_LOOKUP_AMBIGUOUS=0
 if [ -n "$SESSION_ID" ]; then
   SCOPED_FLAG="$CLAUDE_DIR/.caveman-active-$SESSION_ID"
   if [ -e "$SCOPED_FLAG" ] || [ -L "$SCOPED_FLAG" ]; then
     FLAG="$SCOPED_FLAG"
     SCOPED_IDENTITY=1
+  elif [ ! -x "$CLAUDE_DIR" ] || [ ! -r "$CLAUDE_DIR" ]; then
+    # PR-review High finding: `[ -e ] || [ -L ]` cannot distinguish true
+    # ENOENT from EACCES/an I/O failure -- bash's test operators just report
+    # false either way. A stat() on $SCOPED_FLAG can only fail with EACCES
+    # due to a containing directory lacking search/read permission, so if
+    # $CLAUDE_DIR itself isn't readable+searchable, the "doesn't exist"
+    # result above is untrustworthy. Fail closed instead of silently
+    # falling back to the legacy path (which could show another session's
+    # mode) -- matches resolveFlag's ENOENT-vs-rejected distinction.
+    SCOPED_LOOKUP_AMBIGUOUS=1
   fi
+fi
+
+if [ "$SCOPED_LOOKUP_AMBIGUOUS" = "1" ]; then
+  exit 0
 fi
 
 # Refuse symlinks — a local attacker could point the flag at ~/.ssh/id_rsa and
@@ -70,6 +98,20 @@ FLAG_SIZE=$(wc -c < "$FLAG" 2>/dev/null | tr -d '[:space:]')
 if [ -z "$FLAG_SIZE" ] || [ "$FLAG_SIZE" -gt 64 ]; then
   exit 0
 fi
+
+# PR-review High finding: bash command substitution ($(...)) cannot retain
+# NUL bytes -- content like "full\0garbage" would have the NUL (and
+# everything the shell drops with it) silently disappear before the
+# whitelist check, so "full\0garbage" could validate as "full". JS's
+# readFlag reads into a Buffer and keeps the NUL byte, which never matches
+# any whitelisted mode, so it correctly rejects the same content. Detect any
+# NUL byte with `od` (POSIX, no new dependency) BEFORE ever reading the file
+# into a shell variable, and reject the whole file outright -- reject, not
+# strip, matching every other validation step in this script.
+if od -An -tx1 -- "$FLAG" 2>/dev/null | grep -qw '00'; then
+  exit 0
+fi
+
 MODE=$(cat "$FLAG" 2>/dev/null | tr '[:upper:]' '[:lower:]')
 MODE="${MODE#"${MODE%%[![:space:]]*}"}"
 MODE="${MODE%"${MODE##*[![:space:]]}"}"
