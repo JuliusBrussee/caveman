@@ -523,15 +523,17 @@ test('a top-level session_id of null/bool/array is rejected exactly like a numbe
   }
 });
 
-test('a JSON-escaped session_id value must be rejected rather than returned undecoded (statusline.sh) (PR-review v6 High)', (tmp) => {
+test('a JSON-escaped session_id value must never resolve the WRONG (undecoded) scoped path (statusline.sh) (PR-review v6/v10)', (tmp) => {
   seedLegacy(tmp);
   fs.mkdirSync(tmp, { recursive: true });
   // {"session_id":"a"} decodes to "a" in JS/PowerShell (real JSON
-  // parsers). The Bash walker never decodes escapes, so it previously
-  // extracted the raw, undecoded "u0061" and resolved a DIFFERENT scoped
-  // file than JS/PowerShell would -- a real session, but the wrong one.
-  // A real scoped file exists at both the correctly-decoded ("a") and the
-  // wrongly-undecoded ("u0061") paths so any silent divergence is observable.
+  // parsers). Pre-python3-migration (v6), the awk walker never decoded
+  // escapes and rejected the value outright rather than risk resolving the
+  // wrongly-undecoded "u0061" path. Post-migration (v10), when python3 is
+  // available it decodes correctly via a real parser and resolves "a" --
+  // matching JS/PowerShell exactly, which is strictly better than the old
+  // reject-on-any-escape behavior. Either way, the wrongly-undecoded
+  // "u0061" path must never be the one selected.
   fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
   fs.writeFileSync(path.join(tmp, '.caveman-active-u0061'), 'ultra');
   const out = execFileSync('bash', [STATUSLINE_SH], {
@@ -539,8 +541,11 @@ test('a JSON-escaped session_id value must be rejected rather than returned unde
     env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
     input: '{"session_id":"\\u0061"}',
   });
-  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'an escaped session_id value must fall back to legacy rather than resolve any scoped file');
-  assert.doesNotMatch(out, /\[CAVEMAN:LITE\]|\[CAVEMAN:ULTRA\]/, 'must not resolve either the correctly-decoded or wrongly-undecoded scoped path');
+  assert.doesNotMatch(out, /\[CAVEMAN:ULTRA\]/, 'must never resolve the wrongly-undecoded "u0061" scoped path');
+  assert.ok(
+    /\[CAVEMAN:WENYAN-ULTRA\]/.test(out) || /\[CAVEMAN:LITE\]/.test(out),
+    'must either fall back to legacy (no python3) or correctly decode to "a" (python3 present), never anything else'
+  );
 });
 
 test('a genuinely unescaped session_id value with the same characters still resolves normally (statusline.sh)', (tmp) => {
@@ -600,6 +605,77 @@ test('trailing non-whitespace after the session_id value must be rejected (statu
     input: '{"session_id":"a" garbage}',
   });
   assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'trailing garbage after the value must fall back to legacy, matching a real parser rejecting invalid JSON');
+});
+
+test('a missing value for an unrelated key must be rejected (statusline.sh) (PR-review v9 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // {"session_id":"a","x":}  -- a missing value for a DIFFERENT key was
+  // previously invisible to the one-shot post-value check (which only
+  // validates what follows session_id's own value), letting the rest of
+  // the document's grammar go unchecked.
+  fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"a","x":}',
+  });
+  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a missing member value elsewhere in the document must fall back to legacy');
+});
+
+test('a trailing comma before the closing brace must be rejected (statusline.sh) (PR-review v9 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"a",}',
+  });
+  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a trailing comma before the closing brace must fall back to legacy, matching real JSON grammar');
+});
+
+test('duplicate top-level session_id keys must resolve like JSON.parse/ConvertFrom-Json (last occurrence wins) (statusline.sh) (PR-review v9 High)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // {"session_id":"a","session_id":"../bad"} is a WELL-FORMED, RFC-8259-
+  // compliant payload. Both JSON.parse and ConvertFrom-Json resolve
+  // duplicate keys to the LAST occurrence (verified empirically), so the
+  // real session_id here is "../bad" -- which fails the sanitizer and
+  // falls back to legacy. A walker that keeps the FIRST occurrence would
+  // wrongly resolve the scoped "a" flag on a genuinely well-formed input,
+  // not just a malformed-input edge case.
+  fs.writeFileSync(path.join(tmp, '.caveman-active-a'), 'lite');
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"a","session_id":"../bad"}',
+  });
+  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'duplicate top-level session_id keys must resolve to the LAST occurrence, which then fails the sanitizer and falls back to legacy');
+  assert.doesNotMatch(out, /\[CAVEMAN:LITE\]/, 'must not resolve the scoped flag from the FIRST duplicate occurrence');
+});
+
+test('a session_id value containing an embedded NUL byte is rejected before it ever reaches shell capture (statusline.sh) (PR-review v10 High/design)', (tmp) => {
+  seedLegacy(tmp);
+  fs.mkdirSync(tmp, { recursive: true });
+  // A JSON-escaped \u0000 decodes to a literal NUL character. Some bash
+  // builds preserve a NUL through $(...) command substitution; the
+  // actual macOS default /bin/bash (3.2.57, what "#!/bin/bash" resolves
+  // to) silently drops it, splicing the surrounding bytes together --
+  // the same root cause as the v3 flag-content NUL finding, just at the
+  // JSON-extraction boundary instead. The python3 path sidesteps this
+  // entirely by validating the FULL decoded string against the safe
+  // charset (which by definition can never contain NUL) before ever
+  // writing to stdout; the frozen awk fallback also rejects it (any
+  // escape sequence in the value is rejected outright there).
+  fs.writeFileSync(path.join(tmp, '.caveman-active-ab'), 'lite'); // the path a naive NUL-dropping capture would compute
+  const out = execFileSync('bash', [STATUSLINE_SH], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, CAVEMAN_STATUSLINE_SAVINGS: '0' },
+    input: '{"session_id":"a\\u0000b"}',
+  });
+  assert.match(out, /\[CAVEMAN:WENYAN-ULTRA\]/, 'a NUL-containing decoded value must be rejected entirely and fall back to legacy');
+  assert.doesNotMatch(out, /\[CAVEMAN:LITE\]/, 'must never resolve the scoped path a NUL-dropping shell capture would compute ("ab")');
 });
 
 test('a single unambiguous session_id occurrence still resolves the scoped flag normally (statusline.sh)', (tmp) => {
