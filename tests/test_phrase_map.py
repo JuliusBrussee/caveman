@@ -12,7 +12,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "skills" / "caveman-compress"))
 
-from scripts.phrase_map import apply_phrase_map  # noqa: E402
+from scripts.phrase_map import (  # noqa: E402
+    _compile_regex,
+    _substitute_until_stable,
+    apply_phrase_map,
+)
 
 
 class PhraseMapTests(unittest.TestCase):
@@ -64,6 +68,58 @@ class PhraseMapTests(unittest.TestCase):
 
     def test_empty_string(self):
         self.assertEqual(apply_phrase_map(""), "")
+
+    def test_short_phrase_does_not_match_mid_word(self):
+        # "point in time" is a real PHRASE_MAP entry (-> "moment"). Without
+        # a word-boundary anchor, the literal substring "point in time" also
+        # occurs mid-word inside "checkpoint in time-series data" (the "point"
+        # in "checkpoint" is not a separate word). This must NOT be replaced —
+        # doing so would mangle "checkpoint" into a broken word.
+        text = "Snapshot the checkpoint in time-series data before restart."
+        result = apply_phrase_map(text)
+        self.assertIn("checkpoint in time-series", result)
+
+    def test_boundary_anchor_still_matches_real_word_boundaries(self):
+        # The fix for the mid-word false-match above must not cost real,
+        # properly word-bounded matches elsewhere in the same dictionary.
+        text = "We'll ship it at some point in time next quarter."
+        result = apply_phrase_map(text)
+        self.assertIn("moment", result)
+
+    def test_recursive_pass_catches_chained_compression(self):
+        # A single pass only catches phrases present in the ORIGINAL text.
+        # This proves the loop in _substitute_until_stable also catches a
+        # phrase that only exists after an earlier replacement created it —
+        # using a synthetic map so the test doesn't depend on whether any
+        # real PHRASE_MAP entries happen to chain (most don't, by design).
+        synthetic_map = {"alpha beta": "gamma delta", "gamma delta": "epsilon"}
+        regex = _compile_regex(synthetic_map)
+        result = _substitute_until_stable("alpha beta", synthetic_map, regex)
+        self.assertEqual(result, "epsilon")
+
+    def test_single_pass_alone_would_not_catch_the_chain(self):
+        # Companion to the test above: confirms the chain genuinely requires
+        # a second pass, so the recursive test isn't accidentally passing
+        # for an unrelated reason (e.g. a direct "alpha beta" -> "epsilon"
+        # entry existing).
+        from scripts.phrase_map import _substitute_once
+
+        synthetic_map = {"alpha beta": "gamma delta", "gamma delta": "epsilon"}
+        regex = _compile_regex(synthetic_map)
+        one_pass = _substitute_once("alpha beta", synthetic_map, regex)
+        self.assertEqual(one_pass, "gamma delta")
+        self.assertNotEqual(one_pass, "epsilon")
+
+    def test_leading_in_does_not_produce_doubled_preposition(self):
+        # "close proximity to" -> "near" is correct on its own, but text
+        # commonly reads "in close proximity to" — collapsing only the
+        # shorter phrase would leave a dangling "in" in front of "near",
+        # producing the broken "in near the office". The longer variant
+        # must win (longest-first ordering) and consume the leading "in" too.
+        text = "The warehouse is in close proximity to the depot."
+        result = apply_phrase_map(text)
+        self.assertIn("is near the depot", result)
+        self.assertNotIn("in near", result)
 
     def test_measurable_character_reduction_on_wordy_prose(self):
         # Character count is a dependency-free stand-in for "did this shrink

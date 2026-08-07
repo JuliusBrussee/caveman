@@ -42,7 +42,16 @@ Before the file ever reaches Claude, `scripts/phrase_map.py` runs a fixed
 find-and-replace over the prose (skipping code blocks and inline code): known
 wordy phrases collapse to their single-word equivalent — `"due to the fact
 that"` → `"because"`, `"in order to"` → `"to"`, `"with regard to"` → `"about"`,
-and about 50 more in `PHRASE_MAP`.
+and about 215 more in `PHRASE_MAP` — spanning plain-language style guides,
+legal/government plain-English guidance, academic writing conciseness
+guides, and technical-documentation style guides (Microsoft's and Google's
+own developer-docs guides) — hand-filtered so every replacement is a
+grammatically safe drop-in regardless of what follows it (see the module
+docstring for what was excluded and why, including several plain-language-
+guide staples that turned out to break on common follow-on prepositions).
+Matching is word-boundary-anchored (won't fire mid-word, e.g. inside
+"checkpoint") and runs to a fixed point per prose segment, so a
+replacement that creates a new matchable phrase gets caught too.
 
 **Why a table instead of just letting Claude do it:** Claude already collapses
 phrases like this per the Compression Rules below — this pre-pass exists to
@@ -55,13 +64,16 @@ collapsing to a 1-word replacement is a real, mechanical token cut.
 
 **Measured impact is conditional on writing style.** Run against this
 repo's own `tests/caveman-compress/*.original.md` fixtures (terse
-engineering notes and PR-style writing), it found zero matches — that
-style of prose doesn't use the formal phrases in the table. Run against
-deliberately wordy/corporate-style prose, it cut ~32% of tokens before
-Claude even saw the text. It helps most on the kind of verbose writing
-people don't realize is bloated (meeting notes, policy docs, corporate
-email pasted into a memory file); it does close to nothing on prose
-that's already terse. See `tests/test_phrase_map.py`'s
+engineering notes and PR-style writing), it cuts ~0.02% — essentially
+nothing, because that style of prose doesn't use the formal phrases in
+the table. Run against deliberately wordy/corporate-style prose, it cut
+~32% of tokens before Claude even saw the text. Run against instructional
+README-style prose ("please make sure that...", "this allows you to...",
+"it is recommended that you..."), it cut ~26%. It helps most on verbose
+writing people don't realize is bloated (meeting notes, policy docs,
+corporate email, over-explained setup instructions pasted into a memory
+file); it does close to nothing on prose that's already terse. See
+`tests/test_phrase_map.py`'s
 `PhraseMapTokenReductionTests` for the reproducible measurement.
 
 ## Compression Rules

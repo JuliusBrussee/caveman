@@ -134,7 +134,9 @@ Some phrase always mean same short word. `"due to the fact that"` always mean `"
 
 Table only swap *phrases* for *words*, never single word for single word. `"extensive"` → `"big"` cost same tokens either way — no point. But `"in order to"` (3+ tokens) → `"to"` (1 token) — real cut, zero risk, zero model call.
 
-Honest number: this help depend on how file written. Run against this repo's own terse fixture files — near zero match, engineer-notes style don't use phrase like that. Run against wordy/corporate-style prose — cut **~32%** of tokens before Claude touch it. Best on meeting notes, policy doc, corporate email pasted into memory file. Does little on prose already terse.
+216 entries in table now, pulled from plain-language, legal/government, academic, and technical-docs style guides — hand-checked so every swap stay grammatical no matter what word follow it.
+
+Honest number: this help depend on how file written. Run against this repo's own terse fixture files — near zero match, engineer-notes style don't use phrase like that. Run against wordy/corporate-style prose — cut **~32%** of tokens before Claude touch it. Run against README-style instruction prose ("please make sure that...", "this allows you to...") — cut **~26%**. Best on meeting notes, policy doc, corporate email, over-explained setup instructions pasted into memory file. Does little on prose already terse.
 
 ## What Is Preserved
 
