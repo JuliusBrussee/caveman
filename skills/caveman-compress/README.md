@@ -110,6 +110,8 @@ Examples:
         ↓
 detect file type        (no tokens)
         ↓
+collapse wordy phrases  (no tokens — fixed lookup table, see below)
+        ↓
 Claude compresses       (tokens — one call)
         ↓
 validate output         (no tokens)
@@ -125,6 +127,14 @@ write original   → CLAUDE.original.md
 ```
 
 Only two things use tokens: initial compression + targeted fix if validation fails. Everything else is local Python.
+
+### Wordy phrase table (before Claude even see file)
+
+Some phrase always mean same short word. `"due to the fact that"` always mean `"because"`. No model needed to know that — fixed table swap it before file reach Claude, free, instant.
+
+Table only swap *phrases* for *words*, never single word for single word. `"extensive"` → `"big"` cost same tokens either way — no point. But `"in order to"` (3+ tokens) → `"to"` (1 token) — real cut, zero risk, zero model call.
+
+Honest number: this help depend on how file written. Run against this repo's own terse fixture files — near zero match, engineer-notes style don't use phrase like that. Run against wordy/corporate-style prose — cut **~32%** of tokens before Claude touch it. Best on meeting notes, policy doc, corporate email pasted into memory file. Does little on prose already terse.
 
 ## What Is Preserved
 

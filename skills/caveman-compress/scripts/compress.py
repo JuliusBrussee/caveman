@@ -166,6 +166,7 @@ def _write_target(filepath: Path, text: str, backup_path: Path) -> None:
 
 
 from .detect import should_compress
+from .phrase_map import apply_phrase_map
 from .validate import validate
 
 MAX_RETRIES = 2
@@ -331,9 +332,16 @@ def compress_file(filepath: Path) -> bool:
         print("❌ Refusing to compress: body is empty after frontmatter removal.")
         return False
 
-    # Step 1: Compress (body only, frontmatter excluded)
+    # Step 1a: Deterministic phrase pre-pass (free, no model call). Collapses
+    # known wordy phrases ("due to the fact that" -> "because") before the
+    # LLM ever sees the text, shrinking the prompt for step 1b. See
+    # phrase_map.py's module docstring for why this only targets multi-word
+    # phrases rather than single-word synonyms.
+    phrase_mapped_body = apply_phrase_map(body)
+
+    # Step 1b: Compress (body only, frontmatter excluded)
     print("Compressing with Claude...")
-    compressed_body = call_claude(build_compress_prompt(body))
+    compressed_body = call_claude(build_compress_prompt(phrase_mapped_body))
 
     if compressed_body is None or not compressed_body.strip():
         print("❌ Compression aborted: Claude returned an empty response.")
