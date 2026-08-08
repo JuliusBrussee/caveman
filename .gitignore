@@ -12,3 +12,6 @@ context/refs/research-brief-caveman-code-efficiency.md
 # Build artifacts
 dist/*
 !dist/caveman.skill
+
+# Local star-history chart scratch (not part of the product)
+tmp-starcharts/
