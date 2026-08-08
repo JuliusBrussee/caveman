@@ -1,3 +1,5 @@
+> **English** | [中文](./README.zh-CN.md)
+
 # Evals
 
 Measures real token compression of caveman skills by running the same
