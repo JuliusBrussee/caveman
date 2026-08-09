@@ -147,11 +147,15 @@ existing propagation lag (verified above) — not a new gap.
     true-startup-refresh case (a non-startup event on a session with no
     scoped identity AND no legacy value yet — a rare fresh-install-mid-resume
     edge case), fall back to `mode = getDefaultMode()` for the ruleset
-    emission only (still write `resolved.path`, i.e. legacy). Always
-    `safeWriteFlag(writeTarget, mode)` and `recordModeChange(claudeDir, mode
-    === 'off' ? null : mode, sessionId)` exactly once, after this resolution
-    — matches the existing single-write-call shape, just with a corrected
-    target.
+    emission only (still write `resolved.path`, i.e. legacy). Always call
+    `recordModeChange(claudeDir, mode === 'off' ? null : mode, sessionId)`
+    **THEN** `safeWriteFlag(writeTarget, mode)`, exactly once, after this
+    resolution — this order is load-bearing (T1 v4 Low finding):
+    `recordModeChange` reads the PRE-write value via its own internal
+    `resolveFlag` call as `current`; writing first would make `current ===
+    next` always true and silently suppress every mode-log entry this hook
+    is meant to produce. Matches the existing record-then-write shape in
+    the closed PR, just with a corrected write target.
   - **Acceptance:** a `source: 'startup'` invocation with `session_id` set
     and NO prior scoped identity never creates `.caveman-active-<id>`; it
     only writes/refreshes the legacy `.caveman-active`. A `source: 'resume'`
@@ -192,36 +196,65 @@ existing propagation lag (verified above) — not a new gap.
     legacy value. Running it on an already-synced session (no scoped file)
     is a silent no-op. Running it with no `session_id` at all never touches
     the legacy file.
-- [ ] `tests/test_session_scoping.js` (new cases, alongside existing 71)
+- [ ] `tests/test_session_scoping.js` (new cases (c), (g), alongside existing 71)
+  - **Task:** (c) `/caveman <level>` still isolates (regression guard
+    against re-breaking this). (g) setting `/caveman <level>` to a value
+    equal to the current legacy value still isolates (no accidental
+    sync-detection).
+  - **Acceptance:** full suite passes.
+- [ ] `tests/test_hooks.py` (new cases (a),(b),(d),(e),(f),(h),(i),(j) — T1
+  v4 Medium finding: these describe `caveman-activate.js` write-target
+  behavior, which `test_session_scoping.js` has no subprocess harness for
+  — it drives only `caveman-config.js` helpers and the statusline scripts.
+  `test_hooks.py:158-215` already has the `caveman-activate.js` subprocess
+  pattern (`node src/hooks/caveman-activate.js` with `CLAUDE_CONFIG_DIR`
+  env and a JSON stdin payload) — extend that, don't add a
+  helper-level-only test that would false-green the plan's headline fix.
   - **Task:** (a) true-startup with no legacy file yet → legacy gets seeded
     from `getDefaultMode()`, no scoped file created. (b) true-startup with
     an existing legacy value → legacy gets refreshed (overwritten) from
     `getDefaultMode()` again, matching upstream's unconditional-refresh
-    behavior; still no scoped file. (c) `/caveman <level>` still isolates
-    (regression guard against re-breaking this). (d) `/caveman default` on
-    an isolated session deletes scoped state and falls back to legacy. (e)
-    `/caveman default` on an already-synced session is a no-op. (f)
-    `/caveman default` with no `session_id` never touches the legacy file.
-    (g) setting `/caveman <level>` to a value equal to the current legacy
-    value still isolates (no accidental sync-detection). (h) **[T1 v3 High
+    behavior; still no scoped file. (d) `/caveman default` on an isolated
+    session deletes scoped state and falls back to legacy (drive the
+    unlink via a direct file-state setup, then assert `caveman-activate.js`
+    resolves/writes legacy on its next fire). (e) `/caveman default` on an
+    already-synced session is a no-op. (f) `/caveman default` with no
+    `session_id` never touches the legacy file. (h) **[T1 v3 High
     regression guard]** a `source: 'resume'` (and separately `'compact'`)
-    re-fire on a SYNCED session (no scoped file) must NOT create
-    `.caveman-active-<id>` — this is the exact bug the review round caught
-    in the closed PR's inherited resume branch. (i) `/caveman default`
-    immediately followed by a `source: 'resume'` re-fire must NOT re-create
+    re-fire on a SYNCED session (no scoped file, real `session_id` in the
+    stdin payload) must NOT create `.caveman-active-<id>` — this is the
+    exact bug the review round caught in the closed PR's inherited resume
+    branch. (i) a scoped-file unlink (simulating `/caveman default`)
+    immediately followed by a `source: 'resume'` fire must NOT re-create
     the scoped file (guards against the revert command being silently
     undone by the very next hook fire). (j) **[T1 v3 Medium regression
-    guard]** a `source: 'startup'` re-fire (simulating `claude --resume` as
-    a new process) on an ALREADY-isolated session must preserve the scoped
-    value — both the flag file's content AND the emitted ruleset must match
-    the isolated level, never fall back to the config default.
+    guard, T1 v4 Low: verify the premise first]** before writing this case,
+    confirm what `source` value Claude Code's SessionStart hook actually
+    sends for `claude --resume` continuing an existing session (not
+    verified by either review round). If it's genuinely `'startup'`,
+    write the case as: a `source: 'startup'` fire on an ALREADY-isolated
+    session must preserve the scoped value — both the flag file's content
+    AND the emitted ruleset must match the isolated level, never fall back
+    to the config default. If the actual value is ambiguous or unverifiable,
+    write the regression guard for BOTH `'startup'` and `'resume'` on an
+    already-isolated session, since the invariant (isolated mode preserved,
+    ruleset matches) must hold either way — the unified design in the
+    `caveman-activate.js` checklist item is correct under either value.
   - **Acceptance:** full suite passes; new cases specifically distinguish
-    "synced, reading legacy live" from "isolated, at any value."
-- [ ] Docs (`skills/caveman/SKILL.md`, `plugins/caveman/skills/caveman/SKILL.md`,
-  `README.md`)
+    "synced, reading legacy live" from "isolated, at any value," and
+    genuinely exercise `caveman-activate.js` as a subprocess (not just its
+    underlying helpers) for every case describing its write-target
+    behavior.
+- [ ] Docs (`skills/caveman/SKILL.md`, `README.md`)
   - **Task:** Document the three-state model (synced / isolated / revert),
     `/caveman default`'s behavior, and that setting a level matching the
-    current default still isolates. These files have zero prior mentions of
+    current default still isolates. `skills/caveman/SKILL.md` is the SOLE
+    source of truth (T1 v4 Medium finding: `plugins/caveman/skills/caveman/
+    SKILL.md` is a CI-synced mirror — `.github/workflows/sync-skill.yml`
+    copies `skills/caveman/SKILL.md` there on every `main` push touching
+    `skills/`; this repo's own doctrine forbids hand-editing synced copies,
+    and CI would silently clobber a direct edit to the mirror anyway). These
+    files have zero prior mentions of
     per-session scoping (the earlier PR never merged), so this is new
     documentation, not an update to stale text.
   - **Acceptance:** a reader can determine, from SKILL.md alone, what
@@ -231,7 +264,11 @@ existing propagation lag (verified above) — not a new gap.
 ## Verification
 
 - `node --test tests/test_session_scoping.js` — full suite, including new
-  cases above.
+  cases (c)/(g) above.
+- `python3 tests/test_hooks.py` (or the repo's actual test runner for this
+  file — confirm invocation before relying on it) — full suite, including
+  new cases (a),(b),(d)-(f),(h)-(j) above, which genuinely exercise
+  `caveman-activate.js` as a subprocess.
 - `node tests/test_caveman_parse.js`, `node tests/test_mode_tracker_stdin.js`
   — regression guard for the parser/tracker changes.
 - Manual smoke: two `CLAUDE_CONFIG_DIR` sandboxes representing two
@@ -291,3 +328,31 @@ Tier-1 narrows without converging past ~5 rounds.
   - **Low** (ambiguous "resolve the legacy value" instruction risked
     `resolveFlag(claudeDir, sessionId)` returning the scoped value):
     checklist now explicitly specifies `resolveFlag(claudeDir, null).mode`.
+
+### v4 (Tier-1, DeepSeek V4 Pro via headless bridge) — LGTM, 0 Critical/High
+
+2 Medium, 2 Low, all addressed:
+
+- **Medium** (docs checklist named the CI-synced plugin mirror,
+  `plugins/caveman/skills/caveman/SKILL.md`, as an edit target — violates
+  this repo's own doctrine and CI would clobber it anyway): removed; docs
+  checklist now targets `skills/caveman/SKILL.md` only.
+- **Medium** (new `caveman-activate.js` regression cases (a)-(j) were
+  routed to `tests/test_session_scoping.js`, which has no subprocess
+  harness for that hook — a helper-level test would false-green the
+  headline fix): checklist item re-split — cases (c)/(g) stay in
+  `test_session_scoping.js` (they're genuinely about `caveman-parse.js`/
+  `caveman-mode-tracker.js` behavior already covered by that file's
+  existing pattern); cases (a),(b),(d)-(f),(h)-(j) moved to
+  `tests/test_hooks.py`, which already has the `caveman-activate.js`
+  subprocess pattern.
+- **Low** (`safeWriteFlag`/`recordModeChange` order in the checklist text
+  implied write-then-record, which would silently suppress every mode-log
+  entry since `recordModeChange` reads the pre-write value as `current`):
+  explicit `recordModeChange` THEN `safeWriteFlag` ordering stated, with
+  the load-bearing reason spelled out.
+- **Low** (test (j)'s premise — that `claude --resume` sends
+  `source: 'startup'` — was asserted without verification): checklist now
+  requires verifying the premise before writing the case, with a fallback
+  to covering both `'startup'` and `'resume'` if the actual value can't be
+  confirmed; the design itself is correct under either value.
