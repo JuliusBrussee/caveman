@@ -66,11 +66,38 @@ already matched the desired design in the closed PR. `resolveFlag`/
 `resolvePrev`'s ENOENT-fallback-to-legacy logic — already correct, that's
 what makes "synced" work automatically once a session has no scoped file.
 
-**What changes:** `caveman-activate.js`'s true-startup branch (currently
-writes to the SCOPED path unconditionally, isolating every fresh session
-immediately — this is the actual bug) must write to the LEGACY path
-instead when a session has no scoped identity yet. Plus one new parser
-action (`/caveman default`) and its handler (delete scoped state).
+**What changes:** `caveman-activate.js` needs a genuine rewrite of its
+write-target logic, not just the true-startup branch. A T1 review round
+(v3, High finding) caught that the closed PR's `writeFlagPath` is computed
+ONCE from `flagBaseName(sessionId)` before the `source` branch and used
+unconditionally — meaning even the EXISTING resume/clear/compact branch
+already always writes scoped, regardless of whether the session has scoped
+identity. This is currently masked because true-startup always created a
+scoped file first (so by the time resume ever fires, scoped identity
+already exists) — but naively fixing only the true-startup branch (this
+plan's original v1/v2 shape) would surface the SAME bug on a synced
+session's first resume/compact re-fire, and would silently undo
+`/caveman default`'s own unlink on its very next re-fire.
+
+**Unified fix:** compute `resolveFlag(claudeDir, sessionId)` once, for
+EVERY event type (startup or not). The write target is always
+`resolved.path` (scoped if the session has scoped identity, legacy
+otherwise) — this single rule replaces the old source-branching write-target
+logic entirely. The ONE true-startup-specific addition: when `source ===
+'startup'` AND the session has no scoped identity (`resolved.path` equals
+the legacy path), refresh `mode` from `getDefaultMode()` before writing —
+matching upstream's exact refresh-on-every-session-start mechanism. Every
+other case (any event on an already-isolated session, any non-startup event
+on a synced session) just reinforces whatever `resolveFlag` already
+resolved, writing back to `resolved.path`. This also resolves a second,
+related finding: since an already-isolated session's `mode` is now always
+read via `resolved.mode` (never forced to the config default), the ruleset
+emitted at a process-restart true-startup (`claude --resume` on an isolated
+session) now correctly matches the session's actual isolated level instead
+of diverging from it.
+
+Plus one new parser action (`/caveman default`) and its handler (delete
+scoped state).
 
 ## Invariant Matrix
 
@@ -80,12 +107,14 @@ never a private snapshot taken at session creation.
 
 | # | Code path | Current (closed PR) | Fixed |
 |---|---|---|---|
-| 1 | `caveman-activate.js` true startup (`source === 'startup'`) | Writes `getDefaultMode()` to **scoped** path unconditionally — isolates on creation | Writes `getDefaultMode()` to **legacy** path unconditionally (matches upstream exactly) — stays synced |
-| 2 | `caveman-activate.js` resume/clear/compact (`source !== 'startup'`) | `resolveFlag` ENOENT-fallback; writes back to `resolved.path` | Unchanged — already correct; clarified as the single write target |
+| 1 | `caveman-activate.js` true startup, session has NO scoped identity (`source === 'startup'`, `resolved.path === legacyPath`) | Writes `getDefaultMode()` to **scoped** path unconditionally — isolates on creation | Writes `getDefaultMode()` to **legacy** path (matches upstream exactly) — stays synced |
+| 2 | `caveman-activate.js` ANY event (startup OR resume/clear/compact), session HAS scoped identity | `writeFlagPath` computed unconditionally from `flagBaseName(sessionId)` before the `source` branch — always scoped, regardless of event type (this is also true today for a synced session hit by resume, see row 2b) | Write target = `resolved.path` (scoped) — reinforces the existing scoped value; correctly preserves isolation across a process restart (`claude --resume`) too, not just mid-conversation re-fires |
+| 2b | `caveman-activate.js` resume/clear/compact, session has NO scoped identity (T1 v3 High finding) | **BUG in the closed PR, inherited unless fixed here too**: `writeFlagPath` is computed from `flagBaseName(sessionId)` before the branch and used unconditionally — a synced session's first resume/compact re-fire silently creates `.caveman-active-<id>`, re-isolating it (and undoing a prior `/caveman default`'s own unlink on its very next re-fire) | Write target = `resolved.path` (legacy, since `resolveFlag` ENOENT-falls-through) — no scoped file created; this and rows 1/2 collapse into ONE unified write-target rule: `resolved.path`, with row 1's config-refresh as the one true-startup-specific addition |
 | 3 | `caveman-mode-tracker.js` `/caveman <level>` (`action: 'set'`) | Writes scoped, unconditional | Unchanged |
 | 4 | `caveman-mode-tracker.js` `/caveman off` / NL deactivate (`action: 'clear'`) | Writes scoped `'off'` | Unchanged |
-| 5 | `caveman-mode-tracker.js` `/caveman default` | Does not exist | New `action: 'reset'` — unlink scoped active flag + scoped `.prev`, log the transition to whatever the legacy value currently resolves to |
+| 5 | `caveman-mode-tracker.js` `/caveman default` | Does not exist | New `action: 'reset'` — unlink scoped active flag + scoped `.prev`, log the transition to whatever the legacy value currently resolves to (read via `resolveFlag(claudeDir, null)` explicitly — see checklist note on why `resolveFlag(claudeDir, sessionId)` is wrong here) |
 | 6 | `caveman-parse.js` grammar | No `default` keyword | `arg === 'default'` (and `/caveman:caveman default`) → `{action: 'reset'}`; must not collide with `VALID_MODES` (it doesn't — `default` is not a mode) |
+| 6b | `src/plugins/opencode/plugin.js` `applyModeChange` (T1 v3 Medium finding) | Handles `set`/`clear` only; shares `parseModeChange` with the Claude Code hook (`caveman-parse.js` header, `plugin.js:93/164`) | No code change — `reset` is silently ignored, which is the CORRECT behavior: opencode has one non-scoped flag, so there is nothing to revert. Documented explicitly (not left implicit) so a reader doesn't mistake missing opencode handling for an oversight |
 | 7 | Uninstall enumeration (`cli/install.js`, `uninstall.sh`, `uninstall.ps1`) | Globs `.caveman-active-*` + validates id segment | No change needed — no new filename pattern introduced |
 | 8 | `caveman-stats.js` mode-log attribution | Logs `{mode, prev, session_id}` per transition | No change needed — `/caveman default`'s log entry uses existing `recordModeChange` shape |
 | 9 | PowerShell / Bash statusline read side | Reads whichever path the JS write side resolved | No change needed — entirely a write-side fix |
@@ -103,18 +132,36 @@ existing propagation lag (verified above) — not a new gap.
 ## Implementation-Ready Checklist
 
 - [ ] `src/hooks/caveman-activate.js`
-  - **Task:** Split the true-startup branch from the resume branch more
-    explicitly. True startup: `mode = getDefaultMode()`, write target =
-    `path.join(claudeDir, flagBaseName(null))` (legacy), regardless of
-    `sessionId`. Resume/clear/compact: keep existing `resolveFlag(claudeDir,
-    sessionId)` call, write target = `resolved.path` (already correctly
-    scoped-or-legacy). `recordModeChange` call keeps passing the real
-    `sessionId` in both branches (log attribution, not write target).
+  - **Task:** Replace the `source`-branch write-target logic entirely (do
+    NOT keep it as two separate branches that each decide their own write
+    target — that shape is exactly what produced the T1 v3 High finding).
+    Call `resolveFlag(claudeDir, sessionId)` unconditionally, for every
+    event type. Default `mode = resolved.mode` and `writeTarget =
+    resolved.path`. If `resolved.rejected`, `mode = 'off'` (writeTarget
+    stays `resolved.path`, which `resolveState` guarantees is the scoped
+    path for a rejected read). Otherwise, if `source === 'startup'` AND
+    `resolved.path === path.join(claudeDir, flagBaseName(null))` (i.e. this
+    session has no scoped identity), override `mode = getDefaultMode()`
+    (writeTarget stays the legacy path — same value `resolved.path` already
+    holds in this case). If `resolved.mode` was falsy AND we didn't hit the
+    true-startup-refresh case (a non-startup event on a session with no
+    scoped identity AND no legacy value yet — a rare fresh-install-mid-resume
+    edge case), fall back to `mode = getDefaultMode()` for the ruleset
+    emission only (still write `resolved.path`, i.e. legacy). Always
+    `safeWriteFlag(writeTarget, mode)` and `recordModeChange(claudeDir, mode
+    === 'off' ? null : mode, sessionId)` exactly once, after this resolution
+    — matches the existing single-write-call shape, just with a corrected
+    target.
   - **Acceptance:** a `source: 'startup'` invocation with `session_id` set
-    never creates `.caveman-active-<id>`; it only ever writes/refreshes the
-    legacy `.caveman-active`. A `source: 'resume'` invocation on a session
-    that previously isolated itself (scoped file exists) still preserves
-    that scoped file, unchanged behavior from the closed PR.
+    and NO prior scoped identity never creates `.caveman-active-<id>`; it
+    only writes/refreshes the legacy `.caveman-active`. A `source: 'resume'`
+    (or `'compact'`/`'clear'`) invocation on a SYNCED session (no scoped
+    file) does NOT create one either — regression test for the exact bug T1
+    v3 caught. A session that previously isolated itself (scoped file
+    exists) stays isolated across BOTH resume re-fires AND a fresh
+    `source: 'startup'` (simulating `claude --resume` as a new process) —
+    the emitted ruleset always matches the stored scoped mode, never
+    diverges to the config default.
 - [ ] `src/hooks/caveman-parse.js`
   - **Task:** In the `/caveman`/`/caveman:caveman` branch, recognize
     `arg === 'default'` before the `VALID_MODES.includes(arg)` check,
@@ -128,8 +175,15 @@ existing propagation lag (verified above) — not a new gap.
     is truthy (a keyless/legacy caller has no scoped identity to revert —
     must be a no-op, not an accidental unlink of the legacy file itself,
     since `flagBaseName(null) === flagBaseName(sessionId)` when
-    `sessionId` is falsy). Resolve the legacy value first (for the log),
-    then `recordModeChange`, then `fs.unlinkSync` both the scoped active
+    `sessionId` is falsy). **Read the legacy value explicitly via
+    `resolveFlag(claudeDir, null).mode`, NOT `resolveFlag(claudeDir,
+    sessionId)`** (T1 v3 Low finding: at this point the scoped file still
+    exists, so `resolveFlag(claudeDir, sessionId)` returns the SCOPED value,
+    not the legacy one — `recordModeChange`'s own internal
+    `resolveFlag(claudeDir, sessionId)` call would then see `current ===
+    next` and silently skip logging the transition). Call
+    `recordModeChange(claudeDir, <legacy value>, sessionId)` with that
+    explicitly-legacy value, THEN `fs.unlinkSync` both the scoped active
     flag and scoped `.prev`, each in its own try/catch (matches existing
     unlink-on-clear pattern at the bottom of the `clear` branch).
   - **Acceptance:** running `/caveman default` on an isolated session
@@ -149,7 +203,18 @@ existing propagation lag (verified above) — not a new gap.
     `/caveman default` on an already-synced session is a no-op. (f)
     `/caveman default` with no `session_id` never touches the legacy file.
     (g) setting `/caveman <level>` to a value equal to the current legacy
-    value still isolates (no accidental sync-detection).
+    value still isolates (no accidental sync-detection). (h) **[T1 v3 High
+    regression guard]** a `source: 'resume'` (and separately `'compact'`)
+    re-fire on a SYNCED session (no scoped file) must NOT create
+    `.caveman-active-<id>` — this is the exact bug the review round caught
+    in the closed PR's inherited resume branch. (i) `/caveman default`
+    immediately followed by a `source: 'resume'` re-fire must NOT re-create
+    the scoped file (guards against the revert command being silently
+    undone by the very next hook fire). (j) **[T1 v3 Medium regression
+    guard]** a `source: 'startup'` re-fire (simulating `claude --resume` as
+    a new process) on an ALREADY-isolated session must preserve the scoped
+    value — both the flag file's content AND the emitted ruleset must match
+    the isolated level, never fall back to the config default.
   - **Acceptance:** full suite passes; new cases specifically distinguish
     "synced, reading legacy live" from "isolated, at any value."
 - [ ] Docs (`skills/caveman/SKILL.md`, `plugins/caveman/skills/caveman/SKILL.md`,
@@ -195,4 +260,34 @@ Tier-1 narrows without converging past ~5 rounds.
 
 ## Review Decisions
 
-(populated as review rounds land)
+### v1/v2 → v3 (Tier-1, DeepSeek V4 Pro via headless bridge)
+
+- **v1 (2 attempts) + v2**: hit `malformed_structured_review` transport
+  rejections, not review verdicts — packets self-released, never claimed.
+  v1's two attempts were schema-shape issues (empty `suggested_fix`, a
+  non-integer `line`); v2's was a genuine planning bug the reviewer's own
+  artifact-integrity check caught (branch was based on vanilla
+  `origin/main`, which never had the closed PR's per-session-scoping
+  infrastructure — `tests/test_session_scoping.js` didn't exist at that
+  SHA). Fixed by rebasing the branch onto the closed PR's final reviewed
+  head (`ff20fd7`) instead, and adding explicit structured-output guidance
+  to the packet.
+- **v3 (clean transport, real verdict)**: 0 Critical, 1 High, 2 Medium, 1
+  Low. All four addressed in this revision:
+  - **High** (matrix row 2 misstated the resume/clear/compact write
+    target): fixed by unifying the write-target logic to always be
+    `resolved.path` for every event type, with true-startup's
+    config-refresh as the one addition on top — see the rewritten "What
+    changes" section, matrix rows 1/2/2b, and the `caveman-activate.js`
+    checklist item. New regression tests (h)/(i) added.
+  - **Medium** (startup rule-emission divergence for an already-isolated
+    session on process restart): resolved as a side effect of the same
+    unified fix — `mode` for an isolated session is now always read via
+    `resolved.mode`, regardless of event type. New regression test (j)
+    added.
+  - **Medium** (opencode consumer of the new `reset` action not addressed):
+    documented explicitly as an intentional no-op (matrix row 6b) — no code
+    change needed, opencode has no per-session scoping to revert.
+  - **Low** (ambiguous "resolve the legacy value" instruction risked
+    `resolveFlag(claudeDir, sessionId)` returning the scoped value):
+    checklist now explicitly specifies `resolveFlag(claudeDir, null).mode`.
