@@ -124,6 +124,23 @@ process.stdin.on('end', () => {
       recordModeChange(claudeDir, null, sessionId); // #601
       safeWriteFlag(writeFlagPath, 'off');
       try { fs.unlinkSync(writePrevPath); } catch (e) {}
+    } else if (change && change.action === 'reset' && sessionId) {
+      // Revert this session from isolated back to synced/default
+      // (session-sync-with-opt-in-isolation). A keyless caller has no
+      // scoped identity to revert -- flagBaseName(null) === flagBaseName
+      // (sessionId) when sessionId is falsy, so acting here would unlink
+      // the LEGACY file itself; gate on sessionId being truthy.
+      //
+      // Read the legacy value EXPLICITLY via resolveFlag(claudeDir, null),
+      // not resolveFlag(claudeDir, sessionId) -- the scoped file still
+      // exists at this point, so the session-scoped resolve would return
+      // the scoped value, making recordModeChange's own internal
+      // resolveFlag(claudeDir, sessionId) call see current === next and
+      // silently skip logging the transition.
+      const { mode: legacyMode } = resolveFlag(claudeDir, null);
+      recordModeChange(claudeDir, legacyMode, sessionId); // #601
+      try { fs.unlinkSync(writeFlagPath); } catch (e) {}
+      try { fs.unlinkSync(writePrevPath); } catch (e) {}
     }
 
     // Per-turn reinforcement: emit a short reminder when caveman is active.

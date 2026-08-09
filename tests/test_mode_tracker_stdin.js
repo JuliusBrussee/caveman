@@ -330,5 +330,105 @@ test("scoped session's independent-mode capture/restore never touches the legacy
   }
 });
 
+// ---------- session-sync-with-opt-in-isolation: /caveman default ----------
+
+test('/caveman <level> still isolates, including a level equal to the current legacy value (T1 v3/v4 case c/g)', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'lite');
+    send(cfg, { prompt: '/caveman lite', session_id: 'session-a' }); // matches current legacy value
+    assert.strictEqual(
+      scopedFlagValue(cfg, 'session-a'),
+      'lite',
+      'setting a level equal to the current legacy value must still isolate -- no accidental sync-detection'
+    );
+    assert.strictEqual(flagValue(cfg), 'lite', 'legacy value must be untouched by an isolating set');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('/caveman default on an isolated session deletes scoped state and falls back to legacy (case d)', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'full');
+    send(cfg, { prompt: '/caveman ultra', session_id: 'session-a' });
+    assert.strictEqual(scopedFlagValue(cfg, 'session-a'), 'ultra');
+
+    send(cfg, { prompt: '/caveman default', session_id: 'session-a' });
+    assert.strictEqual(
+      scopedFlagValue(cfg, 'session-a'),
+      null,
+      '/caveman default must delete the scoped active flag'
+    );
+    assert.strictEqual(flagValue(cfg), 'full', 'legacy value must be unaffected by the revert');
+
+    const log = fs
+      .readFileSync(path.join(cfg, '.caveman-mode-log.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map(JSON.parse);
+    const last = log[log.length - 1];
+    assert.strictEqual(
+      last.mode,
+      'full',
+      '/caveman default must log the transition to the LEGACY value, not silently no-op ' +
+        '(a bug class: reading resolveFlag(claudeDir, sessionId) instead of ' +
+        'resolveFlag(claudeDir, null) would see current === next and skip logging)'
+    );
+    assert.strictEqual(last.prev, 'ultra');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('/caveman default also deletes the scoped .prev file', () => {
+  const cfg = makeConfigDir();
+  try {
+    send(cfg, { prompt: '/caveman ultra', session_id: 'session-a' });
+    send(cfg, { prompt: '/caveman-commit', session_id: 'session-a' }); // captures 'ultra' into scoped .prev
+    assert.strictEqual(scopedPrevValue(cfg, 'session-a'), 'ultra');
+
+    send(cfg, { prompt: '/caveman default', session_id: 'session-a' });
+    assert.strictEqual(
+      scopedPrevValue(cfg, 'session-a'),
+      null,
+      '/caveman default must delete the scoped .prev file, not leave a dangling reference'
+    );
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('/caveman default on an already-synced session (no scoped file) is a silent no-op (case e)', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'lite');
+    const res = send(cfg, { prompt: '/caveman default', session_id: 'session-a' });
+    assert.strictEqual(res.status, 0, 'must exit cleanly even with nothing to revert');
+    assert.strictEqual(scopedFlagValue(cfg, 'session-a'), null);
+    assert.strictEqual(flagValue(cfg), 'lite', 'legacy value must be unaffected');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('/caveman default with no session_id never touches the legacy file (case f)', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'full');
+    const res = send(cfg, { prompt: '/caveman default' }); // no session_id
+    assert.strictEqual(res.status, 0);
+    assert.strictEqual(
+      flagValue(cfg),
+      'full',
+      'a keyless caller has no scoped identity to revert -- must never unlink the legacy file itself ' +
+        '(flagBaseName(null) === flagBaseName(sessionId) when sessionId is falsy)'
+    );
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
