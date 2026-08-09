@@ -167,12 +167,18 @@ existing propagation lag (verified above) — not a new gap.
     the emitted ruleset always matches the stored scoped mode, never
     diverges to the config default.
 - [ ] `src/hooks/caveman-parse.js`
-  - **Task:** In the `/caveman`/`/caveman:caveman` branch, recognize
-    `arg === 'default'` before the `VALID_MODES.includes(arg)` check,
-    returning `{ action: 'reset' }`.
+  - **Task:** In the `/caveman`/`/caveman:caveman` slash-command dispatch
+    branch ONLY, recognize `arg === 'default'` before the
+    `VALID_MODES.includes(arg)` check, returning `{ action: 'reset' }`.
+    **Do NOT add this to the `expandedTpl` (opencode template) dispatch
+    branch** — that site stays ignorant of `default` intentionally, per
+    matrix row 6b (opencode has no per-session scoping, so `reset` is a
+    correct no-op there; there is no asymmetry bug to "fix").
   - **Acceptance:** `parseModeChange('/caveman default', {...})` returns
     `{ action: 'reset' }`; `/caveman defaultx` or any non-exact match still
-    falls through to the existing unknown-arg no-op.
+    falls through to the existing unknown-arg no-op; the `expandedTpl`
+    branch's own default-mode template (`activate caveman mode:`) is
+    untouched.
 - [ ] `src/hooks/caveman-mode-tracker.js`
   - **Task:** Add an `else if (change && change.action === 'reset')` branch
     alongside the existing `set`/`clear` handling. Only act when `sessionId`
@@ -356,3 +362,20 @@ Tier-1 narrows without converging past ~5 rounds.
   requires verifying the premise before writing the case, with a fallback
   to covering both `'startup'` and `'resume'` if the actual value can't be
   confirmed; the design itself is correct under either value.
+
+### v6 (Tier-2, Kimi) — LGTM, 0 Critical/High/Medium/Low, 1 Nit
+
+Independent cross-agent confirmation (Kimi was also the closed PR's T2
+reviewer; re-verified the inherited machinery rather than trusting that
+pass). Confirmed the T1 v3 High's premise exactly, checked all four unified
+write-target cases plus hunted for a fifth (found none), verified the
+`/caveman default` unlink-vs-hook-refire race converges under every
+interleaving, and confirmed the test-routing split and premise pass. One
+Nit: the `caveman-parse.js` checklist item didn't explicitly say the
+`expandedTpl` (opencode template) dispatch branch should NOT also learn
+`default` — fixed by naming the slash-command branch specifically and
+adding an explicit "do not add this to expandedTpl" note.
+
+**Both required tiers (Tier 1, Tier 2) now clean at this exact head.**
+Antigravity (bonus, non-blocking) still pending. Proceeding to
+implementation.
