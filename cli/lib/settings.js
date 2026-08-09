@@ -364,5 +364,6 @@ module.exports = {
   rewriteLegacyManagedHookCommands,
   pruneOrphanedManagedHooks,
   claudeConfigDir,
+  tokenizeCommand,
   MANAGED_HOOK_BASENAMES,
 };
