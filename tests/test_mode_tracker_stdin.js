@@ -87,10 +87,21 @@ function makeConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-tracker-'));
 }
 
+// T1 PR-review v1 Low finding: CLAUDE_CONFIG_DIR only relocates the FLAG
+// file -- getDefaultMode() separately resolves via HOME/XDG_CONFIG_HOME
+// (caveman-config.js's config-file lookup), which leaking ...process.env
+// left ambient. On a machine with a real ~/.config/caveman/config.json
+// (caveman's own target audience), any test asserting a hardcoded default
+// mode silently broke. Isolate both: HOME to a scratch dir with no config,
+// XDG_CONFIG_HOME cleared so it can't override HOME's resolution either.
 function send(configDir, payload) {
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-tracker-home-'));
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir, HOME: isolatedHome, USERPROFILE: isolatedHome };
+  delete env.XDG_CONFIG_HOME;
+  delete env.CAVEMAN_DEFAULT_MODE;
   return spawnSync(process.execPath, [HOOK_PATH], {
     input: JSON.stringify(payload),
-    env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
+    env,
     stdio: ['pipe', 'pipe', 'pipe'],
     encoding: 'utf8',
   });

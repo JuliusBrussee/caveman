@@ -62,6 +62,11 @@ test('/caveman off|stop|disable all clear', () => {
   assert.deepStrictEqual(parseModeChange('/caveman disable', defaultFull), { action: 'clear' });
 });
 
+test('/caveman default reverts to synced (session-sync-with-opt-in-isolation)', () => {
+  assert.deepStrictEqual(parseModeChange('/caveman default', defaultFull), { action: 'reset' });
+  assert.deepStrictEqual(parseModeChange('/caveman:caveman default', defaultFull), { action: 'reset' });
+});
+
 test('wenyan-full alias stores as "wenyan"', () => {
   assert.deepStrictEqual(parseModeChange('/caveman wenyan-full', defaultFull), { action: 'set', mode: 'wenyan' });
 });
@@ -216,11 +221,21 @@ test('without expandedTpl, template bodies are inert plain text', () => {
 
 function runTracker(prompt, presetFlag) {
   const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-parse-parity-'));
+  // T1 PR-review v1 Low finding: the parity check below computes its
+  // expected verdict against a MOCKED getDefaultMode() that always returns
+  // 'full', but the real tracker subprocess resolves getDefaultMode() from
+  // the real environment (HOME/XDG_CONFIG_HOME's config.json) unless that's
+  // isolated too -- on a machine with a real ~/.config/caveman/config.json
+  // (caveman's own target audience), the mock and the subprocess disagree.
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-parse-parity-home-'));
   try {
     if (presetFlag) fs.writeFileSync(path.join(cfg, '.caveman-active'), presetFlag);
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: cfg, HOME: isolatedHome, USERPROFILE: isolatedHome };
+    delete env.XDG_CONFIG_HOME;
+    delete env.CAVEMAN_DEFAULT_MODE;
     spawnSync(process.execPath, [HOOK_PATH], {
       input: JSON.stringify({ prompt }),
-      env: { ...process.env, CLAUDE_CONFIG_DIR: cfg },
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
       encoding: 'utf8',
     });
@@ -228,6 +243,7 @@ function runTracker(prompt, presetFlag) {
     return fs.existsSync(flagPath) ? fs.readFileSync(flagPath, 'utf8') : null;
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
+    fs.rmSync(isolatedHome, { recursive: true, force: true });
   }
 }
 

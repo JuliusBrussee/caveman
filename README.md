@@ -139,7 +139,7 @@ Six levels. Switch anytime with `/caveman <level>`. Level sticks until you chang
 
 ### One toggle, or per-session?
 
-By default, every Claude Code session on your machine shares the same level — switch it in one session, every other session (open or future) follows along, exactly like flipping a single machine-wide switch.
+By default, every Claude Code session on your machine follows the same shared level — the one set by your caveman config (env var, repo-local `.caveman.json`, or your user `config.json`). Untouched sessions are never isolated. No in-session `/caveman` command changes what OTHER sessions see, though — the only way to change the shared level for everyone is editing the config itself; `/caveman <level>` inside a session only ever affects that one session (see below).
 
 Running `/caveman <level>` in a specific session opts THAT session out of the shared default — it locks to the level you picked, and stops following changes made elsewhere, even if you later set the shared default to that exact same level again. Run `/caveman default` in that session to undo it: the session drops its own setting and goes back to following whatever the shared default is doing.
 

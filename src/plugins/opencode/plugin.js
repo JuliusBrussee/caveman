@@ -117,7 +117,16 @@ function applyModeChange(change) {
   }
   if (change.action === 'set' && change.mode) {
     safeWriteFlag(flagPath, change.mode);
+    return;
   }
+  // 'reset' (session-sync-with-opt-in-isolation): opencode has one
+  // non-scoped flag, no per-session isolation to revert -- correct no-op.
+  // Currently unreachable in practice (parse.js's expandedTpl dispatch
+  // deliberately never learns the `default` keyword, since opencode always
+  // expands slash commands to template prose before this parser runs), but
+  // guarded explicitly here too so a future change to that dispatch can't
+  // silently fall through to nothing happening with no trace of why.
+  if (change.action === 'reset') return;
 }
 
 // Session-start logic — extracted so the `event` dispatcher (opencode >= 1.15)
