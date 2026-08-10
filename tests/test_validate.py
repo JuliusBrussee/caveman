@@ -8,10 +8,15 @@ sys.path.insert(0, str(REPO_ROOT / "skills" / "caveman-compress"))
 
 from scripts.validate import (  # noqa: E402
     ValidationResult,
+    extract_code_blocks,
     extract_inline_codes,
     validate,
+    validate_code_blocks,
     validate_inline_codes,
 )
+
+MANGLED = "- step:\n{i}```\n{i}rm -rf /  # rewritten\n{i}```\n"
+INTACT = "- step:\n{i}```\n{i}rm -rf /important\n{i}```\n"
 
 
 class TestExtractInlineCodes(unittest.TestCase):
@@ -52,6 +57,16 @@ More text with `inline3`.
         result = extract_inline_codes(text)
         self.assertEqual(result, ["inline"])
 
+    def test_list_nested_fence_backtick_not_leaked_as_inline(self):
+        text = "- step:\n    ```\n    `weird`\n    ```\nReal `inline` span here."
+        result = extract_inline_codes(text)
+        self.assertEqual(result, ["inline"])
+
+    def test_deeply_nested_fence_backtick_not_leaked_as_inline(self):
+        text = "- a:\n  - b:\n        ```\n        `weird`\n        ```\nReal `inline` span."
+        result = extract_inline_codes(text)
+        self.assertEqual(result, ["inline"])
+
 
 class TestValidateInlineCodes(unittest.TestCase):
     def test_match(self):
@@ -80,6 +95,41 @@ class TestValidateInlineCodes(unittest.TestCase):
         result = ValidationResult()
         validate_inline_codes("plain text", "also plain", result)
         self.assertTrue(result.is_valid)
+
+
+class TestExtractCodeBlocks(unittest.TestCase):
+    def test_top_level_fence(self):
+        self.assertEqual(len(extract_code_blocks("```\ncode\n```\n")), 1)
+
+    def test_fence_indented_within_list_item(self):
+        self.assertEqual(len(extract_code_blocks(INTACT.format(i="    "))), 1)
+
+    def test_fence_indented_within_nested_list_item(self):
+        text = "- a:\n  - b:\n        ```\n        code\n        ```\n"
+        self.assertEqual(len(extract_code_blocks(text)), 1)
+
+    def test_tilde_fence_indented_within_list_item(self):
+        text = "- step:\n    ~~~\n    code\n    ~~~\n"
+        self.assertEqual(len(extract_code_blocks(text)), 1)
+
+
+class TestValidateCodeBlocks(unittest.TestCase):
+    def test_rewritten_block_is_rejected_at_every_indent(self):
+        for indent in ("", "  ", "    ", "        "):
+            with self.subTest(indent=len(indent)):
+                result = ValidationResult()
+                validate_code_blocks(
+                    INTACT.format(i=indent), MANGLED.format(i=indent), result
+                )
+                self.assertFalse(result.is_valid)
+
+    def test_untouched_block_passes(self):
+        for indent in ("", "  ", "    ", "        "):
+            with self.subTest(indent=len(indent)):
+                result = ValidationResult()
+                text = INTACT.format(i=indent)
+                validate_code_blocks(text, text, result)
+                self.assertTrue(result.is_valid)
 
 
 class TestValidateIntegration(unittest.TestCase):
