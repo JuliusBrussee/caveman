@@ -63,7 +63,7 @@ function parseArgs(argv) {
     dryRun: false, force: false, skipSkills: false,
     withHooks: 'auto', withInit: false, withMcpShrink: false,
     all: false, minimal: false, listOnly: false, noColor: false,
-    only: [], uninstall: false, nonInteractive: false,
+    only: [], uninstall: false, doctor: false, nonInteractive: false,
     configDir: null, help: false, always: true,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -116,6 +116,7 @@ function parseArgs(argv) {
       case '--list': opts.listOnly = true; break;
       case '--no-color': opts.noColor = true; break;
       case '--uninstall': case '-u': opts.uninstall = true; break;
+      case '--doctor': opts.doctor = true; break;
       case '--non-interactive': opts.nonInteractive = true; break;
       case '-h': case '--help': opts.help = true; break;
       // POSIX end-of-options marker. Older curl|bash flows pipe `-- --only foo`
@@ -1455,6 +1456,9 @@ FLAGS
                         Example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"
   --no-mcp-shrink       Skip MCP shrink. (Default.)
   --uninstall, -u       Remove caveman from this machine.
+  --doctor              Report the health of the Claude Code hooks install
+                        (files, integrity, settings.json wiring) and exit.
+                        Read-only; honors --config-dir. Exit 1 if problems.
   --config-dir <path>   Claude Code config dir for hook files + settings.json.
                         Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT
                         scope \`claude plugin install\`, \`gemini extensions
@@ -1487,6 +1491,17 @@ async function main() {
 
   const configDir = opts.configDir || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   const repoRoot = detectRepoRoot();
+
+  if (opts.doctor) {
+    const { runDoctor } = require('./lib/doctor.js');
+    const problems = runDoctor({
+      configDir,
+      hookFiles: HOOK_FILES,
+      manifestPath: repoRoot ? path.join(repoRoot, 'src', 'hooks', 'checksums.sha256') : null,
+      c,
+    });
+    return problems > 0 ? 1 : 0;
+  }
 
   const ctx = {
     opts, configDir, repoRoot,
