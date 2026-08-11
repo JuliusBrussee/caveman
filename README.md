@@ -137,11 +137,25 @@ Six levels. Switch anytime with `/caveman <level>`. Level sticks until you chang
 > [!NOTE]
 > **Speak your tongue.** Caveman keeps your language. Write Portuguese, caveman grunt Portuguese. Spanish, French, same. It compresses the *style*, never translates. `wenyan` mode is the exception on purpose: classical Chinese packs the most meaning per token.
 
+### One toggle, or per-session?
+
+By default, every Claude Code session on your machine follows the same shared level — the one set by your caveman config (env var, repo-local `.caveman.json`, or your user `config.json`). Untouched sessions are never isolated. No in-session `/caveman` command changes what OTHER sessions see, though — the only way to change the shared level for everyone is editing the config itself; `/caveman <level>` inside a session only ever affects that one session (see below).
+
+Running `/caveman <level>` in a specific session opts THAT session out of the shared default — it locks to the level you picked, and stops following changes made elsewhere, even if you later set the shared default to that exact same level again. Run `/caveman default` in that session to undo it: the session drops its own setting and goes back to following whatever the shared default is doing.
+
+| You do | Effect |
+|---|---|
+| `/caveman ultra` in session A | Session A locks to `ultra`. Every other session is unaffected. |
+| `/caveman ultra` again, in session B | Session B *also* locks to `ultra` — independently. A and B no longer track each other or the shared default. |
+| `/caveman default` in session A | Session A un-locks, goes back to following the shared default live. |
+| Nothing, ever, in session C | Session C always follows the shared default — same as caveman worked before per-session locking existed. |
+
 ## What you get
 
 | Command | What it does |
 |---|---|
-| `/caveman [lite\|full\|ultra\|wenyan]` | Compress every reply. Level sticks for the session. |
+| `/caveman [lite\|full\|ultra\|wenyan]` | Compress every reply. Locks the level to this session — see [above](#one-toggle-or-per-session). |
+| `/caveman default` | Un-lock this session; go back to following the shared default. |
 | `/caveman-commit` | Conventional Commit messages, ≤50-char subject. Why over what. |
 | `/caveman-review` | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` |
 | `/caveman-stats` | Real session token usage, lifetime savings, USD. Tweetable line with `--share`. |

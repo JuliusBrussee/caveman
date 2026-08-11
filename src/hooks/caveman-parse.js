@@ -173,6 +173,13 @@ function parseModeChange(promptRaw, options) {
         return mode === 'off' ? { action: 'clear' } : { action: 'set', mode };
       }
       if (arg === 'off' || arg === 'stop' || arg === 'disable') return { action: 'clear' };
+      // Revert this session from isolated back to synced/default (session-
+      // sync-with-opt-in-isolation). Deliberately NOT added to the
+      // expandedTpl (opencode template) dispatch branch above — opencode has
+      // no per-session scoping, so nothing to revert; a match there would be
+      // a no-op anyway, but not exposing the keyword keeps the two dispatch
+      // sites' grammars honest about what they actually support.
+      if (arg === 'default') return { action: 'reset' };
       if (arg === 'wenyan-full') return { action: 'set', mode: 'wenyan' }; // canonical alias — config stores as 'wenyan'
       if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return { action: 'set', mode: arg };
       // Unknown arg → no-op, flag untouched (no silent overwrite with default)

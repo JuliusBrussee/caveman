@@ -60,33 +60,33 @@ class ModeTrackerTests(unittest.TestCase):
         # Pre-fix: this ACTIVATED caveman and downgraded ultra -> full.
         self.flag.write_text("ultra")
         self.send("turn caveman mode off")
-        self.assertIsNone(self.flag_value())
+        self.assertEqual(self.flag_value(), "off")
 
     def test_turn_caveman_off_deactivates(self):
         self.flag.write_text("full")
         self.send("turn caveman off")
-        self.assertIsNone(self.flag_value())
+        self.assertEqual(self.flag_value(), "off")
 
     def test_turn_off_caveman_deactivates(self):
         self.flag.write_text("full")
         self.send("turn off caveman")
-        self.assertIsNone(self.flag_value())
+        self.assertEqual(self.flag_value(), "off")
 
     def test_stop_caveman_multiline_deactivates(self):
         # Pre-fix: `.*` without the s flag never matched across lines.
         self.flag.write_text("ultra")
         self.send("stop\ncaveman")
-        self.assertIsNone(self.flag_value())
+        self.assertEqual(self.flag_value(), "off")
 
     def test_normal_mode_command_deactivates(self):
         self.flag.write_text("full")
         self.send("normal mode")
-        self.assertIsNone(self.flag_value())
+        self.assertEqual(self.flag_value(), "off")
 
     def test_back_to_normal_mode_deactivates(self):
         self.flag.write_text("full")
         self.send("back to normal mode please")
-        self.assertIsNone(self.flag_value())
+        self.assertEqual(self.flag_value(), "off")
 
     def test_vim_normal_mode_does_not_deactivate(self):
         self.flag.write_text("full")
@@ -141,7 +141,7 @@ class ModeTrackerTests(unittest.TestCase):
     def test_slash_caveman_off(self):
         self.flag.write_text("full")
         self.send("/caveman off")
-        self.assertIsNone(self.flag_value())
+        self.assertEqual(self.flag_value(), "off")
 
     # ── #599: one-shot independent modes ────────────────────────────────
 
@@ -157,7 +157,7 @@ class ModeTrackerTests(unittest.TestCase):
         self.send("/caveman-commit")
         self.assertEqual(self.flag_value(), "commit")
         r = self.send("ordinary follow-up question")
-        self.assertIsNone(self.flag_value())
+        self.assertEqual(self.flag_value(), "off")
         self.assertNotIn("CAVEMAN MODE ACTIVE", r.stdout)
 
     def test_chained_independent_modes_keep_original_prev(self):
@@ -186,10 +186,10 @@ class ModeTrackerTests(unittest.TestCase):
         self.flag.write_text("ultra")
         self.send("/caveman-commit")
         self.send("stop caveman")
-        self.assertIsNone(self.flag_value())
+        self.assertEqual(self.flag_value(), "off")
         self.assertFalse(self.prev.exists(), "prev file must not survive deactivation")
         self.send("ordinary prompt")
-        self.assertIsNone(self.flag_value(), "nothing should resurrect the mode")
+        self.assertEqual(self.flag_value(), "off", "nothing should resurrect the mode")
 
 
 if __name__ == "__main__":

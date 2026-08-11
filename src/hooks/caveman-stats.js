@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME } = require('./caveman-config');
+const { appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME, sanitizeSessionId, resolveFlag } = require('./caveman-config');
 
 // Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
 // 10 tasks, sonnet-4-20250514). Only 'full' has measured data; lite / ultra /
@@ -168,6 +168,18 @@ function summarizeCompressed(pairs) {
 // stats joins those timestamps against the session JSONL message timestamps.
 
 // Read + validate the transition log. Returns rows sorted by ts.
+//
+// Each row additionally carries session_id-related fields so a scoped reader
+// can join only its own session's rows, plus keyless historical rows:
+//   hasSessionIdKey - whether the raw parsed JSON had a `session_id` key at
+//     all (a true pre-migration row has none; every row this change writes
+//     has the key, even when its value is null for a legacy-fallback write).
+//   session_id      - sanitized string (valid scoped id), null (legacy
+//     marker written by a hook resolving to the legacy path), or undefined
+//     (malformed: the key was present with a non-null value that failed
+//     sanitizeSessionId -- never coerced to null, per relevantModeLogRows).
+//   malformed       - true iff the key was present, non-null, and failed
+//     sanitizeSessionId.
 function readModeLog(logPath) {
   const rows = [];
   for (const line of readHistory(logPath)) {
@@ -178,10 +190,34 @@ function readModeLog(logPath) {
     const mode = norm(e.mode);
     const prev = norm(e.prev);
     if (mode === undefined || prev === undefined) continue; // reject non-whitelisted values
-    rows.push({ ts: e.ts, mode, prev });
+
+    const hasSessionIdKey = Object.prototype.hasOwnProperty.call(e, 'session_id');
+    let sessionIdValue;
+    if (!hasSessionIdKey) {
+      sessionIdValue = undefined;
+    } else if (e.session_id === null) {
+      sessionIdValue = null;
+    } else {
+      sessionIdValue = sanitizeSessionId(e.session_id); // null here means MALFORMED, not legacy
+    }
+    const malformed = hasSessionIdKey && e.session_id !== null && sessionIdValue === null;
+
+    rows.push({ ts: e.ts, mode, prev, hasSessionIdKey, session_id: sessionIdValue, malformed });
   }
   rows.sort((a, b) => a.ts - b.ts);
   return rows;
+}
+
+// Filter mode-log rows to the ones relevant to `sessionId`'s attribution:
+// keyless historical rows always join (nothing regresses for pre-migration
+// data); a present session_id must match exactly (never coerced via ||); a
+// malformed row never joins any reader, scoped or legacy.
+function relevantModeLogRows(modeLog, sessionId) {
+  return modeLog.filter(row => {
+    if (row.malformed) return false;
+    if (!row.hasSessionIdKey) return true;
+    return row.session_id === (sessionId || null);
+  });
 }
 
 // Attribute each message's output tokens to the mode active when it was
@@ -394,14 +430,16 @@ function formatShare({ outputTokens, turns, mode, model, attribution }) {
 // Pure formatter — separated from main() so tests can pass synthetic inputs.
 // `attribution` (from attributeByMode, #601) splits output tokens per mode;
 // when omitted, the current mode is assumed for the whole session.
-function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessionPath, compressed, attribution }) {
+function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessionPath, flagPath, compressed, attribution }) {
   const sep = '──────────────────────────────────';
   const shortPath = sessionPath && sessionPath.length > 45
     ? '...' + sessionPath.slice(-45)
     : (sessionPath || '');
 
   if (turns === 0) {
-    return `\nCaveman Stats\n${sep}\nNo conversation yet — stats available after first response.\n${sep}\n`;
+    return `\nCaveman Stats\n${sep}\n` +
+      (flagPath ? `Flag file:  ${flagPath}\n` : '') +
+      `No conversation yet — stats available after first response.\n${sep}\n`;
   }
 
   const attr = attribution || wholeSessionAttribution(mode, outputTokens);
@@ -488,6 +526,7 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
 
   return `\nCaveman Stats\n${sep}\n` +
     (shortPath ? `Session:  ${shortPath}\n` : '') +
+    (flagPath ? `Flag file:  ${flagPath}\n` : '') +
     `Turns:    ${turns}\n${sep}\n` +
     `Output tokens:         ${outputTokens.toLocaleString()}\n` +
     `Cache-read tokens:     ${cacheReadTokens.toLocaleString()}\n${sep}\n` +
@@ -500,6 +539,10 @@ function main() {
   const args = process.argv.slice(2);
   const i = args.indexOf('--session-file');
   const sessionFileArg = i !== -1 ? args[i + 1] : null;
+  const sessionIdIdx = args.indexOf('--session-id');
+  // Defense in depth: sanitize again here even though the caller (mode
+  // tracker) already sanitized -- trust nothing across a process boundary.
+  const sessionId = sessionIdIdx !== -1 ? sanitizeSessionId(args[sessionIdIdx + 1]) : null;
   const share = args.includes('--share');
   const all = args.includes('--all');
   const sinceIdx = args.indexOf('--since');
@@ -528,15 +571,16 @@ function main() {
   }
 
   const parsed = parseSession(sessionFile);
-  const flagPath = path.join(claudeDir, '.caveman-active');
-  const mode = readFlag(flagPath);
+  const resolved = resolveFlag(claudeDir, sessionId);
+  const flagPath = resolved.path;
+  const mode = resolved.mode;
 
   // #601: attribute tokens to the mode active when each message happened,
   // via the transition log the hooks maintain (fallbacks documented on
   // attributeByMode). Never credit the whole session to the current flag.
   let flagMtimeMs = null;
   try { flagMtimeMs = fs.statSync(flagPath).mtimeMs; } catch (e) {}
-  const modeLog = readModeLog(path.join(claudeDir, MODE_LOG_BASENAME));
+  const modeLog = relevantModeLogRows(readModeLog(path.join(claudeDir, MODE_LOG_BASENAME)), sessionId);
   const attribution = attributeByMode({
     messages: parsed.messages,
     modeLog,
@@ -576,7 +620,7 @@ function main() {
   } else {
     const scanDirs = [claudeDir, process.cwd()].filter((d, i, a) => a.indexOf(d) === i);
     const compressed = summarizeCompressed(findCompressedPairs(scanDirs));
-    process.stdout.write(formatStats({ ...parsed, mode, sessionPath: sessionFile, compressed, attribution }));
+    process.stdout.write(formatStats({ ...parsed, mode, sessionPath: sessionFile, flagPath, compressed, attribution }));
   }
 }
 
@@ -586,5 +630,5 @@ module.exports = {
   formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
   deriveNet, ruleOverheadPerTurn, parseSession, priceForModel, formatUsd, COMPRESSION,
   MODEL_OUTPUT_PRICE_PER_M, findCompressedPairs, summarizeCompressed, humanizeTokens,
-  outputReductionPct, readModeLog, attributeByMode,
+  outputReductionPct, readModeLog, relevantModeLogRows, attributeByMode,
 };

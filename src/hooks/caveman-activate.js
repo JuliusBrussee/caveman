@@ -9,10 +9,9 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag, recordModeChange, readFlag, VALID_MODES } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, recordModeChange, sanitizeSessionId, flagBaseName, resolveFlag } = require('./caveman-config');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
 // Apply per-agent model overrides from env vars before emitting rules.
@@ -23,41 +22,80 @@ try {
 } catch (e) {}
 
 // SessionStart re-fires mid-conversation (resume, /clear, context compaction),
-// not just at true session start. Re-firing must not clobber a mode the user
-// switched to mid-session (#691): branch on the hook payload's `source` field —
-// only a real `startup` resets to the configured default; resume/clear/compact
-// preserve a valid existing flag.
+// not just at true session start.
 // Sync stdin read assumes the parent (Claude Code) writes the payload and
 // closes the pipe — it always does. A parent that held the pipe open forever
 // would block here; no such caller exists, and a TTY (manual run) skips it.
 let source = 'startup';
+let sessionId = null;
 try {
   if (!process.stdin.isTTY) {
     const raw = fs.readFileSync(0, 'utf8');
     if (raw) {
       const data = JSON.parse(raw);
       if (data && typeof data.source === 'string') source = data.source;
+      if (data) sessionId = sanitizeSessionId(data.session_id);
     }
   }
 } catch (e) { /* no/bad stdin → treat as startup */ }
 
-let mode = getDefaultMode();
-if (source !== 'startup') {
-  const existing = readFlag(flagPath);
-  if (existing && VALID_MODES.includes(existing)) mode = existing;
+// Write-target resolution (session-sync-with-opt-in-isolation, T1 v3 High
+// fix): the OLD logic computed the write target from flagBaseName(sessionId)
+// unconditionally, before branching on `source` — meaning EVERY event type,
+// not just true startup, always wrote to the session's own scoped path. That
+// silently isolated a session on its very first resume/compact/clear re-fire
+// even when it had never touched anything (and would undo /caveman default's
+// own unlink on the very next re-fire). Fixed: resolveFlag is called
+// unconditionally, for every event type, and the write target is ALWAYS
+// `resolved.path` — scoped if this session already has scoped identity
+// (from an earlier /caveman <level> or /caveman default not yet run this
+// turn), legacy otherwise. This also means an already-isolated session stays
+// isolated across a process restart (`claude --resume`), not just a
+// mid-conversation re-fire, because the branch keys on path equality rather
+// than on `source`.
+const resolved = resolveFlag(claudeDir, sessionId);
+const legacyFlagPath = path.join(claudeDir, flagBaseName(null));
+
+let mode;
+let writeFlagPath = resolved.path;
+
+if (resolved.rejected) {
+  mode = 'off'; // fail closed -- an existing-but-rejected scoped file must
+                 // NOT silently reactivate at the configured default.
+                 // resolveState guarantees resolved.path is the scoped path
+                 // whenever rejected is true.
+} else if (source === 'startup' && resolved.path === legacyFlagPath) {
+  // True startup AND no scoped identity: refresh the SHARED value from
+  // config, exactly matching upstream's pre-scoping mechanism (verified via
+  // `git show ec83e5b:src/hooks/caveman-activate.js`) — this is the only
+  // case that ever re-derives mode from getDefaultMode() rather than
+  // preserving whatever resolveFlag found.
+  mode = getDefaultMode();
+} else {
+  // Any event on an already-isolated session, or a non-startup event on a
+  // synced session: preserve exactly what resolveFlag resolved. A synced
+  // session with no legacy value yet either (fresh install, first hook fire
+  // happens to not be 'startup') falls back to getDefaultMode() for THIS
+  // session's own ruleset emission only — writeFlagPath stays the legacy
+  // path either way, so nothing gets scoped.
+  mode = resolved.mode || getDefaultMode();
 }
 
-// "off" mode — skip activation entirely, don't write flag or emit rules
+// "off" mode — skip activation entirely, don't emit rules (still records +
+// writes, so the transition is logged and the flag reflects reality).
 if (mode === 'off') {
-  recordModeChange(claudeDir, null); // #601: timestamped transition log
-  try { fs.unlinkSync(flagPath); } catch (e) {}
+  recordModeChange(claudeDir, null, sessionId); // #601: timestamped transition log
+  safeWriteFlag(writeFlagPath, 'off');
   process.stdout.write('OK');
   process.exit(0);
 }
 
-// 1. Write flag file (symlink-safe)
-recordModeChange(claudeDir, mode); // #601
-safeWriteFlag(flagPath, mode);
+// 1. Write flag file (symlink-safe). Record BEFORE write — recordModeChange
+// reads the PRE-write value via its own resolveFlag call as `current`;
+// writing first would make current === next always and silently suppress
+// every mode-log entry this hook is meant to produce.
+recordModeChange(claudeDir, mode, sessionId); // #601
+safeWriteFlag(writeFlagPath, mode);
 
 // 2. Emit full caveman ruleset, filtered to the active intensity level.
 //    The old 2-sentence summary was too weak — models drifted back to verbose

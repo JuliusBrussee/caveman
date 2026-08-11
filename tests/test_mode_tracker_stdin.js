@@ -87,10 +87,21 @@ function makeConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-tracker-'));
 }
 
+// T1 PR-review v1 Low finding: CLAUDE_CONFIG_DIR only relocates the FLAG
+// file -- getDefaultMode() separately resolves via HOME/XDG_CONFIG_HOME
+// (caveman-config.js's config-file lookup), which leaking ...process.env
+// left ambient. On a machine with a real ~/.config/caveman/config.json
+// (caveman's own target audience), any test asserting a hardcoded default
+// mode silently broke. Isolate both: HOME to a scratch dir with no config,
+// XDG_CONFIG_HOME cleared so it can't override HOME's resolution either.
 function send(configDir, payload) {
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-tracker-home-'));
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir, HOME: isolatedHome, USERPROFILE: isolatedHome };
+  delete env.XDG_CONFIG_HOME;
+  delete env.CAVEMAN_DEFAULT_MODE;
   return spawnSync(process.execPath, [HOOK_PATH], {
     input: JSON.stringify(payload),
-    env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
+    env,
     stdio: ['pipe', 'pipe', 'pipe'],
     encoding: 'utf8',
   });
@@ -98,6 +109,16 @@ function send(configDir, payload) {
 
 function flagValue(configDir) {
   const p = path.join(configDir, '.caveman-active');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+}
+
+function scopedFlagValue(configDir, sessionId) {
+  const p = path.join(configDir, `.caveman-active-${sessionId}`);
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+}
+
+function scopedPrevValue(configDir, sessionId) {
+  const p = path.join(configDir, `.caveman-active-${sessionId}.prev`);
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
 }
 
@@ -147,7 +168,7 @@ test('envelope "/caveman off" deactivates', () => {
   try {
     fs.writeFileSync(path.join(cfg, '.caveman-active'), 'full');
     send(cfg, { prompt: envelope('/caveman', 'off', true) });
-    assert.strictEqual(flagValue(cfg), null);
+    assert.strictEqual(flagValue(cfg), 'off');
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
   }
@@ -250,6 +271,171 @@ test('/caveman-stats emits hookSpecificOutput.additionalContext, not decision:bl
       'additionalContext must instruct the model to relay the block verbatim'
     );
     assert.match(parsed.hookSpecificOutput.additionalContext, /Saved 650 output tokens|Caveman Stats/);
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+// ---------- per-session flag isolation (Acceptance Gates: concurrent sessions) ----------
+
+test('two concurrent sessions toggle caveman independently, including one turning off while the other stays on', () => {
+  const cfg = makeConfigDir();
+  try {
+    send(cfg, { prompt: '/caveman ultra', session_id: 'session-a' });
+    send(cfg, { prompt: '/caveman lite', session_id: 'session-b' });
+    assert.strictEqual(scopedFlagValue(cfg, 'session-a'), 'ultra');
+    assert.strictEqual(scopedFlagValue(cfg, 'session-b'), 'lite');
+
+    // Turn session-a off; session-b must be completely unaffected.
+    send(cfg, { prompt: 'stop caveman', session_id: 'session-a' });
+    assert.strictEqual(scopedFlagValue(cfg, 'session-a'), 'off');
+    assert.strictEqual(scopedFlagValue(cfg, 'session-b'), 'lite');
+
+    // And the legacy global flag was never touched by either scoped session.
+    assert.strictEqual(flagValue(cfg), null);
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('a session with no session_id still uses the legacy global flag, unaffected by scoped sessions', () => {
+  const cfg = makeConfigDir();
+  try {
+    send(cfg, { prompt: '/caveman ultra', session_id: 'session-a' });
+    send(cfg, { prompt: '/caveman full' }); // no session_id -> legacy path
+    assert.strictEqual(flagValue(cfg), 'full');
+    assert.strictEqual(scopedFlagValue(cfg, 'session-a'), 'ultra');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+// ---------- Tier-2 v2 High finding: .prev write/unlink sites must target the scoped path ----------
+
+test("scoped session's independent-mode capture/restore never touches the legacy .prev file (Tier-2 v2 High)", () => {
+  const cfg = makeConfigDir();
+  const LEGACY_PREV_SENTINEL = 'wenyan-ultra';
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active.prev'), LEGACY_PREV_SENTINEL);
+
+    send(cfg, { prompt: '/caveman ultra', session_id: 'session-a' });
+    send(cfg, { prompt: '/caveman-commit', session_id: 'session-a' }); // captures 'ultra' into scoped .prev
+    assert.strictEqual(scopedFlagValue(cfg, 'session-a'), 'commit');
+    assert.strictEqual(scopedPrevValue(cfg, 'session-a'), 'ultra');
+    assert.strictEqual(
+      fs.readFileSync(path.join(cfg, '.caveman-active.prev'), 'utf8'),
+      LEGACY_PREV_SENTINEL,
+      'independent-mode capture must never touch the legacy .prev sentinel'
+    );
+
+    send(cfg, { prompt: 'ordinary follow-up question', session_id: 'session-a' }); // one-shot restore consumption
+    assert.strictEqual(scopedFlagValue(cfg, 'session-a'), 'ultra');
+    assert.strictEqual(scopedPrevValue(cfg, 'session-a'), null, '.prev must be consumed (unlinked)');
+    assert.strictEqual(
+      fs.readFileSync(path.join(cfg, '.caveman-active.prev'), 'utf8'),
+      LEGACY_PREV_SENTINEL,
+      'one-shot restore consumption must never touch the legacy .prev sentinel'
+    );
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+// ---------- session-sync-with-opt-in-isolation: /caveman default ----------
+
+test('/caveman <level> still isolates, including a level equal to the current legacy value (T1 v3/v4 case c/g)', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'lite');
+    send(cfg, { prompt: '/caveman lite', session_id: 'session-a' }); // matches current legacy value
+    assert.strictEqual(
+      scopedFlagValue(cfg, 'session-a'),
+      'lite',
+      'setting a level equal to the current legacy value must still isolate -- no accidental sync-detection'
+    );
+    assert.strictEqual(flagValue(cfg), 'lite', 'legacy value must be untouched by an isolating set');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('/caveman default on an isolated session deletes scoped state and falls back to legacy (case d)', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'full');
+    send(cfg, { prompt: '/caveman ultra', session_id: 'session-a' });
+    assert.strictEqual(scopedFlagValue(cfg, 'session-a'), 'ultra');
+
+    send(cfg, { prompt: '/caveman default', session_id: 'session-a' });
+    assert.strictEqual(
+      scopedFlagValue(cfg, 'session-a'),
+      null,
+      '/caveman default must delete the scoped active flag'
+    );
+    assert.strictEqual(flagValue(cfg), 'full', 'legacy value must be unaffected by the revert');
+
+    const log = fs
+      .readFileSync(path.join(cfg, '.caveman-mode-log.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map(JSON.parse);
+    const last = log[log.length - 1];
+    assert.strictEqual(
+      last.mode,
+      'full',
+      '/caveman default must log the transition to the LEGACY value, not silently no-op ' +
+        '(a bug class: reading resolveFlag(claudeDir, sessionId) instead of ' +
+        'resolveFlag(claudeDir, null) would see current === next and skip logging)'
+    );
+    assert.strictEqual(last.prev, 'ultra');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('/caveman default also deletes the scoped .prev file', () => {
+  const cfg = makeConfigDir();
+  try {
+    send(cfg, { prompt: '/caveman ultra', session_id: 'session-a' });
+    send(cfg, { prompt: '/caveman-commit', session_id: 'session-a' }); // captures 'ultra' into scoped .prev
+    assert.strictEqual(scopedPrevValue(cfg, 'session-a'), 'ultra');
+
+    send(cfg, { prompt: '/caveman default', session_id: 'session-a' });
+    assert.strictEqual(
+      scopedPrevValue(cfg, 'session-a'),
+      null,
+      '/caveman default must delete the scoped .prev file, not leave a dangling reference'
+    );
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('/caveman default on an already-synced session (no scoped file) is a silent no-op (case e)', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'lite');
+    const res = send(cfg, { prompt: '/caveman default', session_id: 'session-a' });
+    assert.strictEqual(res.status, 0, 'must exit cleanly even with nothing to revert');
+    assert.strictEqual(scopedFlagValue(cfg, 'session-a'), null);
+    assert.strictEqual(flagValue(cfg), 'lite', 'legacy value must be unaffected');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('/caveman default with no session_id never touches the legacy file (case f)', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'full');
+    const res = send(cfg, { prompt: '/caveman default' }); // no session_id
+    assert.strictEqual(res.status, 0);
+    assert.strictEqual(
+      flagValue(cfg),
+      'full',
+      'a keyless caller has no scoped identity to revert -- must never unlink the legacy file itself ' +
+        '(flagBaseName(null) === flagBaseName(sessionId) when sessionId is falsy)'
+    );
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
   }

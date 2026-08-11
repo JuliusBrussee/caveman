@@ -1379,6 +1379,24 @@ function uninstall(ctx) {
     note(`  kept ${historyPath} (lifetime history — delete manually if unwanted)`);
   }
 
+  // Per-session scoped flag/.prev files (.caveman-active-<session_id>[.prev]).
+  // A missing configDir means nothing to enumerate, not an error -- readdirSync
+  // is guarded so uninstall stays a no-op here on a never-installed/already-
+  // clean machine rather than throwing and aborting the rest of uninstall.
+  const SCOPED_STATE_RE = /^\.caveman-active-[A-Za-z0-9_-]{1,128}(\.prev)?$/;
+  let configDirEntries = [];
+  try { configDirEntries = fs.readdirSync(configDir); } catch (_) { /* no configDir -- nothing to do */ }
+  for (const name of configDirEntries) {
+    if (!SCOPED_STATE_RE.test(name)) continue;
+    const p = path.join(configDir, name);
+    if (opts.dryRun) {
+      note(`  would remove ${p}`);
+    } else {
+      try { fs.unlinkSync(p); } catch (_) {}
+      note(`  removed ${p}`);
+    }
+  }
+
   process.stdout.write('\n');
   ok('uninstall done.');
   ok('npx-skills installs (Cursor/Windsurf/etc.) — remove via your IDE\'s skill manager');

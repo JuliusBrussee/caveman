@@ -334,23 +334,118 @@ function appendFlag(filePath, line) {
   }
 }
 
+// Per-session flag isolation. Every Claude Code session gets its own
+// .caveman-active-<session_id> (and matching .prev), falling back to the
+// legacy global .caveman-active only for a session that has NEVER written
+// its own scoped file. "off" is a WRITTEN mode value ('off'), not file
+// absence — absence must mean exactly one thing ("never touched"), so once
+// scoping is in play it can no longer also mean "explicitly deactivated."
+//
+// sanitizeSessionId is reject-not-strip: an invalid session_id (path
+// traversal, embedded separator, oversized, wrong type) is rejected in
+// full, never stripped/truncated into a valid-looking id — a stripped
+// partial value is itself a path-construction hazard.
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+function sanitizeSessionId(raw) {
+  return typeof raw === 'string' && SESSION_ID_RE.test(raw) ? raw : null;
+}
+
+function flagBaseName(sessionId) {
+  return sessionId ? `.caveman-active-${sessionId}` : '.caveman-active';
+}
+
+function prevBaseName(sessionId) {
+  return sessionId ? `.caveman-active-${sessionId}.prev` : '.caveman-active.prev';
+}
+
+// A mode of 'off' or null/undefined is inactive. Every caller that used to
+// rely on bare truthiness (readFlag can now return the truthy string 'off')
+// must use this instead.
+function isActiveMode(mode) {
+  return !!mode && mode !== 'off';
+}
+
+// Shared ENOENT-vs-rejected resolver for both the active flag and .prev.
+// No sessionId -> always the legacy path (no scoping to resolve).
+// Scoped path ENOENT -> this session has never touched anything; fall back
+//   to the legacy path (rejected: false — nothing to distrust).
+// Scoped path exists but its content is rejected by readFlag (symlink,
+//   oversized, garbage) -> fail closed: never fall back to legacy, report
+//   rejected: true so a caller (e.g. activate.js's resume-preserve check)
+//   can choose 'off' over silently reactivating at the configured default.
+function resolveState(claudeDir, sessionId, baseNameFn) {
+  const legacyPath = path.join(claudeDir, baseNameFn(null));
+  if (!sessionId) {
+    return { path: legacyPath, mode: readFlag(legacyPath), rejected: false };
+  }
+  const scopedPath = path.join(claudeDir, baseNameFn(sessionId));
+  let st;
+  try {
+    st = fs.lstatSync(scopedPath);
+  } catch (e) {
+    if (e.code === 'ENOENT') {
+      return { path: legacyPath, mode: readFlag(legacyPath), rejected: false };
+    }
+    return { path: scopedPath, mode: null, rejected: true };
+  }
+  const mode = readFlag(scopedPath);
+  return { path: scopedPath, mode, rejected: mode === null };
+}
+
+function resolveFlag(claudeDir, sessionId) {
+  return resolveState(claudeDir, sessionId, flagBaseName);
+}
+
+// .prev's legacy fallback is gated on whether this session has scoped
+// identity at ALL (any write to its own active flag, valid/off/rejected),
+// not resolved independently -- once a session is scoped, .prev absence
+// means "no prev for this session," never "check legacy/another session's
+// .prev." Reuses resolveFlag's own already-fail-closed identity check
+// instead of a second, independent stat call on the active path.
+function resolvePrev(claudeDir, sessionId) {
+  if (!sessionId) {
+    const legacyPrevPath = path.join(claudeDir, prevBaseName(null));
+    return { path: legacyPrevPath, mode: readFlag(legacyPrevPath), rejected: false };
+  }
+  const activeResolved = resolveFlag(claudeDir, sessionId);
+  const scopedActivePath = path.join(claudeDir, flagBaseName(sessionId));
+  const sessionHasScopedIdentity = activeResolved.path === scopedActivePath;
+  if (!sessionHasScopedIdentity) {
+    return resolveState(claudeDir, sessionId, prevBaseName);
+  }
+  const scopedPrevPath = path.join(claudeDir, prevBaseName(sessionId));
+  let st;
+  try {
+    st = fs.lstatSync(scopedPrevPath);
+  } catch (e) {
+    return { path: scopedPrevPath, mode: null, rejected: e.code !== 'ENOENT' };
+  }
+  const mode = readFlag(scopedPrevPath);
+  return { path: scopedPrevPath, mode, rejected: mode === null };
+}
+
 // Mode-transition log (#601). Whenever the active-mode flag actually changes,
-// append {ts, mode, prev} to $CLAUDE_CONFIG_DIR/.caveman-mode-log.jsonl so
-// caveman-stats can attribute output tokens to the mode that was active when
-// each message was generated, instead of whatever mode the flag holds at
-// stats time. mode/prev are a VALID_MODES string or null (null = caveman off).
-// prev lets stats attribute messages that predate the first logged transition
-// of a session. No-op when the mode is unchanged; best-effort like all flag IO.
+// append {ts, mode, prev, session_id} to $CLAUDE_CONFIG_DIR/.caveman-mode-log.jsonl
+// so caveman-stats can attribute output tokens to the mode that was active
+// when each message was generated, instead of whatever mode the flag holds
+// at stats time. mode/prev are a VALID_MODES string or null (null = caveman
+// off, normalized internally from any inactive value including 'off' itself
+// so 'off' is never logged as a distinct mode). session_id is the sanitized
+// id or null (legacy/keyless). prev lets stats attribute messages that
+// predate the first logged transition of a session. No-op when the
+// normalized mode is unchanged; best-effort like all flag IO.
 const MODE_LOG_BASENAME = '.caveman-mode-log.jsonl';
 
-function recordModeChange(claudeDir, newMode) {
+function recordModeChange(claudeDir, newMode, sessionId) {
   try {
-    const current = readFlag(path.join(claudeDir, '.caveman-active'));
-    const next = newMode || null;
-    if ((current || null) === next) return;
+    const rawCurrent = resolveFlag(claudeDir, sessionId).mode;
+    const current = isActiveMode(rawCurrent) ? rawCurrent : null;
+    const next = isActiveMode(newMode) ? newMode : null;
+    if (current === next) return;
     appendFlag(
       path.join(claudeDir, MODE_LOG_BASENAME),
-      JSON.stringify({ ts: Date.now(), mode: next, prev: current || null })
+      JSON.stringify({ ts: Date.now(), mode: next, prev: current, session_id: sessionId || null })
     );
   } catch (e) {
     // Silent fail — the log is best-effort
@@ -380,4 +475,8 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory, recordModeChange, MODE_LOG_BASENAME };
+module.exports = {
+  getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES,
+  safeWriteFlag, readFlag, appendFlag, readHistory, recordModeChange, MODE_LOG_BASENAME,
+  sanitizeSessionId, flagBaseName, prevBaseName, isActiveMode, resolveState, resolveFlag, resolvePrev,
+};

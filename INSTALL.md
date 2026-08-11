@@ -164,8 +164,17 @@ Open Claude Code, type `/caveman`. Response should be terse fragments — "Got i
 
 **3. Check the flag file.**
 
+Each session gets its own scoped flag file, `.caveman-active-<session_id>`,
+falling back to the legacy `.caveman-active` name when no session id is
+available. Run `/caveman-stats` inside the session — it reports the exact
+resolved flag path (a `Flag file:` line). Do not go hunting for the
+most-recently-modified `.caveman-active-*` file yourself: with concurrent
+sessions running, the newest scoped file can belong to a DIFFERENT
+session, and that heuristic can point you at the wrong mode entirely. Once
+`/caveman-stats` has told you the exact path:
+
 ```bash
-cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-active"
+cat "<path reported by /caveman-stats>"
 # expected output: full
 ```
 
@@ -186,10 +195,11 @@ What it removes:
 - The Claude Code plugin and the Gemini CLI extension (if installed).
 - The opencode native plugin (`~/.config/opencode/plugins/caveman/`, the `plugin` and `mcp.caveman-shrink` entries from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file).
 - The OpenClaw workspace skill folder and the marker-fenced block from `~/.openclaw/workspace/SOUL.md` (when present).
-- The `.caveman-active` flag file.
+- The `.caveman-active` flag file, every per-session `.caveman-active-<session_id>` flag/`.prev` file it can enumerate, `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`, and `.caveman-nudge-shown`.
 
 What it does **not** remove:
 
+- `.caveman-history.jsonl` (your lifetime savings ledger) — deliberately kept, not stale state. Delete it by hand if you don't want it.
 - Skills installed via `npx skills add` — the `skills` CLI manages those. Run `npx skills remove caveman` (or use your IDE's skill manager).
 - Per-repo rule files written by `--with-init` (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`). Delete by hand if you want.
 
@@ -209,7 +219,7 @@ Still broken? [Open an issue](https://github.com/JuliusBrussee/caveman/issues).
 
 1. Run `node cli/install.js --list` — confirm `claude` is on the detected list. If not, `claude` isn't on `PATH`. Fix that first.
 2. Open `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/settings.json`) and look for `"hooks"` containing `caveman-activate.js` and `caveman-mode-tracker.js`. If missing, re-run with `--force`.
-3. Check `$CLAUDE_CONFIG_DIR/.caveman-active` exists with content `full`. If not, the SessionStart hook silent-failed — check `$CLAUDE_CONFIG_DIR/hooks/` for the JS files and try `node $CLAUDE_CONFIG_DIR/hooks/caveman-activate.js < /dev/null` to see if it errors.
+3. Run `/caveman-stats` and check its `Flag file:` line resolves to a path with content `full` (or run `node $CLAUDE_CONFIG_DIR/hooks/caveman-activate.js < /dev/null` and check whichever `.caveman-active` / `.caveman-active-<session_id>` file it just wrote). If neither exists, the SessionStart hook silent-failed — check `$CLAUDE_CONFIG_DIR/hooks/` for the JS files and see if the direct invocation above errors.
 4. Restart Claude Code. The SessionStart hook only fires on session start, not mid-session.
 
 **"Hooks failing on Windows."**

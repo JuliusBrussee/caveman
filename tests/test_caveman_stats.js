@@ -796,5 +796,141 @@ test('lifetime view excludes legacy rows from net even when mixed with rows that
   assert.match(out, /Est\. net:\s+\+1,536/);
 });
 
+// ---------- per-session flag isolation: --session-id + mode-log filtering ----------
+
+test('--session-id A only reflects session A rows, not interleaved session B rows', (tmp) => {
+  const now = Date.now();
+  const iso = (minAgo) => new Date(now - minAgo * 60_000).toISOString();
+  const sess = makeSession(tmp, [
+    { type: 'assistant', timestamp: iso(20), message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 400 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-mode-log.jsonl'), [
+    { ts: now - 90 * 60_000, mode: 'full', prev: null, session_id: 'session-a' },
+    { ts: now - 80 * 60_000, mode: 'ultra', prev: null, session_id: 'session-b' }, // interleaved, different session
+  ].map(o => JSON.stringify(o)).join('\n') + '\n');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active-session-a'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess, '--session-id', 'session-a'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // Uniform under session A's own 'full' mode -- session B's row must never
+  // be joined (it would otherwise show as a second attributed mode).
+  assert.doesNotMatch(out, /Mode changed mid-session/);
+  assert.match(out, /Est\. tokens saved:/);
+});
+
+test('keyless pre-migration rows join a scoped reader too; legacy-fallback (session_id: null) rows do not', (tmp) => {
+  const now = Date.now();
+  const iso = (minAgo) => new Date(now - minAgo * 60_000).toISOString();
+  const sess = makeSession(tmp, [
+    { type: 'assistant', timestamp: iso(20), message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 400 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-mode-log.jsonl'), [
+    { ts: now - 90 * 60_000, mode: 'ultra', prev: null }, // true pre-migration row, no session_id key at all
+    { ts: now - 80 * 60_000, mode: 'wenyan-ultra', prev: 'ultra', session_id: null }, // legacy-fallback write
+  ].map(o => JSON.stringify(o)).join('\n') + '\n');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active-session-a'), 'full');
+  const scopedOut = execFileSync(process.execPath, [STATS, '--session-file', sess, '--session-id', 'session-a'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // The keyless row (no session_id key) still joins: session A's attribution
+  // shows 'ultra' as the mode at inception, not just its own 'full'.
+  assert.match(scopedOut, /ultra:/);
+  // The legacy-fallback row (session_id: null) must NOT join a scoped reader.
+  assert.doesNotMatch(scopedOut, /wenyan-ultra/);
+});
+
+test('a malformed session_id row (empty string, 0, false, path-traversal) never joins any reader', (tmp) => {
+  const now = Date.now();
+  const iso = (minAgo) => new Date(now - minAgo * 60_000).toISOString();
+  const sess = makeSession(tmp, [
+    { type: 'assistant', timestamp: iso(20), message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 400 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-mode-log.jsonl'), [
+    { ts: now - 90 * 60_000, mode: 'ultra', prev: null, session_id: '' },
+    { ts: now - 85 * 60_000, mode: 'wenyan', prev: null, session_id: 0 },
+    { ts: now - 80 * 60_000, mode: 'commit', prev: null, session_id: false },
+    { ts: now - 75 * 60_000, mode: 'lite', prev: null, session_id: '../../etc/passwd' },
+  ].map(o => JSON.stringify(o)).join('\n') + '\n');
+
+  // Neither a scoped reader (session-a) nor a legacy reader (no --session-id)
+  // should ever join these malformed rows -- proves the || coercion bug from
+  // v2 (which silently treated "", 0, false as null / a legacy match) does
+  // not recur.
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active-session-a'), 'full');
+  const scopedOut = execFileSync(process.execPath, [STATS, '--session-file', sess, '--session-id', 'session-a'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.doesNotMatch(scopedOut, /ultra:|wenyan:|commit:|lite:/);
+
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const legacyOut = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.doesNotMatch(legacyOut, /ultra:|wenyan:|commit:|lite:/);
+});
+
+test('no --session-id (manual/lifetime path) reads the legacy flag and joins legacy-or-keyless rows exactly as before (regression check)', (tmp) => {
+  const now = Date.now();
+  const iso = (minAgo) => new Date(now - minAgo * 60_000).toISOString();
+  const sess = makeSession(tmp, [
+    { type: 'assistant', timestamp: iso(20), message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 400 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-mode-log.jsonl'),
+    JSON.stringify({ ts: now - 90 * 60_000, mode: 'full', prev: null }) + '\n'); // true keyless row
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.doesNotMatch(out, /Mode changed mid-session/); // uniform under 'full' the whole time
+  assert.match(out, /Est\. tokens saved:/);
+});
+
+test('stats output includes the resolved flag path in scoped, legacy-fallback, and fail-closed outcomes', (tmp) => {
+  const now = Date.now();
+  const iso = (minAgo) => new Date(now - minAgo * 60_000).toISOString();
+  const sess = makeSession(tmp, [
+    { type: 'assistant', timestamp: iso(5), message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 100 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+
+  // Scoped: a real scoped flag exists.
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active-session-a'), 'full');
+  const scopedOut = execFileSync(process.execPath, [STATS, '--session-file', sess, '--session-id', 'session-a'], {
+    encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.match(scopedOut, /Flag file:\s+.*\.caveman-active-session-a/);
+
+  // Legacy fallback: valid session id, but no scoped file yet -- ENOENT falls
+  // back to the legacy path.
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'lite');
+  const fallbackOut = execFileSync(process.execPath, [STATS, '--session-file', sess, '--session-id', 'session-b'], {
+    encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.match(fallbackOut, /Flag file:\s+.*\.caveman-active$/m);
+
+  // Fail-closed: scoped file exists but its content is rejected (a symlink).
+  const target = path.join(claudeDir, 'elsewhere.txt');
+  fs.writeFileSync(target, 'full');
+  fs.symlinkSync(target, path.join(claudeDir, '.caveman-active-session-c'));
+  const rejectedOut = execFileSync(process.execPath, [STATS, '--session-file', sess, '--session-id', 'session-c'], {
+    encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.match(rejectedOut, /Flag file:\s+.*\.caveman-active-session-c/);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

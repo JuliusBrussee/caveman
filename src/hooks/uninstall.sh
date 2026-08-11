@@ -8,7 +8,6 @@ set -e
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
-FLAG_FILE="$CLAUDE_DIR/.caveman-active"
 
 HOOK_FILES=("package.json" "caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh" "cavecrew-model-overrides.js")
 
@@ -113,11 +112,44 @@ if [ -f "$SETTINGS.bak" ]; then
   echo "  Removed: $SETTINGS.bak"
 fi
 
-# 4. Remove flag file
-if [ -f "$FLAG_FILE" ]; then
-  rm "$FLAG_FILE"
-  echo "  Removed: $FLAG_FILE"
+# 4. Remove flag + per-session state files. `.caveman-history.jsonl` is the
+# user's lifetime savings ledger -- deliberately kept, not stale state.
+STATE_FILES_TO_REMOVE=(
+  ".caveman-active"
+  ".caveman-active.prev"
+  ".caveman-mode-log.jsonl"
+  ".caveman-statusline-suffix"
+  ".caveman-nudge-shown"
+)
+for f in "${STATE_FILES_TO_REMOVE[@]}"; do
+  p="$CLAUDE_DIR/$f"
+  if [ -f "$p" ]; then
+    rm "$p"
+    echo "  Removed: $p"
+  fi
+done
+if [ -f "$CLAUDE_DIR/.caveman-history.jsonl" ]; then
+  echo "  Kept: $CLAUDE_DIR/.caveman-history.jsonl (lifetime history — delete manually if unwanted)"
 fi
+
+# Per-session scoped flag/.prev files (.caveman-active-<session_id>[.prev]).
+# Portable glob loop, not `find -maxdepth` (a GNU extension BSD find on
+# macOS rejects). Guard is [ -e ] || [ -L ], not bare [ -e ], so a dangling
+# scoped symlink is still removed rather than silently left behind (-e
+# follows the link and is false for a broken target).
+for f in "$CLAUDE_DIR"/.caveman-active-*; do
+  [ -e "$f" ] || [ -L "$f" ] || continue
+  # Reject anything outside [A-Za-z0-9_-] in the id segment, and require the
+  # optional .prev suffix to be exact (not a bare glob accept -- this is what
+  # rejects a near-miss name like .caveman-active-backup.2026).
+  base=$(basename "$f")
+  id_part="${base#.caveman-active-}"
+  id_part="${id_part%.prev}"
+  if [[ "$id_part" =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then
+    rm "$f"
+    echo "  Removed: $f"
+  fi
+done
 
 echo ""
 echo "Done! Restart Claude Code to complete the uninstall."
