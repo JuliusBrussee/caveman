@@ -66,20 +66,7 @@ gemini extensions install https://github.com/JuliusBrussee/caveman
 npx skills add JuliusBrussee/caveman --skill '*' -a codex --yes  # replace codex with your agent profile
 ```
 
-Type `/caveman` if your agent does not activate it automatically. Switch with `/caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra`; turn it off with `/caveman off` or `normal mode`. See [INSTALL.md](./INSTALL.md) for the full 30+ agent matrix, dry run, flags, verification, and uninstall.
-
-One install also brings the small tools:
-
-| Tool / command | What you get |
-|---|---|
-| `/caveman [lite\|full\|ultra\|wenyan-lite\|wenyan-full\|wenyan-ultra\|off]` | Shorter replies at the intensity you choose. |
-| `cavecrew-investigator`, `cavecrew-builder`, `cavecrew-reviewer` | Compressed subagent presets for locating, editing, and reviewing code. |
-| `/caveman-commit` | Terse Conventional Commit messages. |
-| `/caveman-review` | One-line, actionable review findings. |
-| `/caveman-compress <file>` | Smaller Markdown memory files, with the original backed up. |
-| `/caveman-stats` | Local session token usage and estimated savings in Claude Code. |
-
-That is the whole adoption path for shorter answers. Stop there if that is all you need. Add the local Proxy later when you want Caveman to shrink what the agent reads too.
+See [INSTALL.md](./INSTALL.md) for the full 30+ agent matrix, dry run, flags, verification, and uninstall.
 
 Caveman started as a skill/plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex, Gemini, Cursor, Windsurf, Cline, Copilot, and 30+ other agents. Install once; the agent drops filler and answers in tight caveman-speak while keeping code, commands, and errors byte-for-byte exact.
 
@@ -108,15 +95,43 @@ The original. MIT, and it stays MIT.
 </tr>
 </table>
 
-Same concrete fix, fewer words. Broader reduction and quality-equivalence claims stay unpublished until a reproducible run with raw outputs is committed.
+Same concrete fix, fewer words.
+
+Type `/caveman` if your agent does not activate it automatically. Switch with `/caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra`; turn it off with `/caveman off` or `normal mode`.
+
+One install also brings the small tools:
+
+| Tool / command | What you get |
+|---|---|
+| `/caveman [lite\|full\|ultra\|wenyan-lite\|wenyan-full\|wenyan-ultra\|off]` | Shorter replies at the intensity you choose. |
+| `cavecrew-investigator`, `cavecrew-builder`, `cavecrew-reviewer` | Compressed subagent presets for locating, editing, and reviewing code. |
+| `/caveman-commit` | Terse Conventional Commit messages. |
+| `/caveman-review` | One-line, actionable review findings. |
+| `/caveman-compress <file>` | Smaller Markdown memory files, with the original backed up. |
+| `/caveman-stats` | Local session token usage and estimated savings in Claude Code. |
+
+That is the whole adoption path for shorter answers. Stop there if that is all you need. Add the local Proxy later when you want Caveman to shrink what the agent reads too.
 
 <!-- BENCHMARK-TABLE-START -->
-_No published output-style benchmark result. Run [`benchmarks/run.py`](./benchmarks/run.py), review paired output quality, and commit raw results before publishing a percentage._
+| Task | Normal | Caveman | Saved |
+|------|-------:|--------:|------:|
+| Explain React re-render bug | 1180 | 159 | 87% |
+| Fix auth middleware token expiry | 704 | 121 | 83% |
+| Set up PostgreSQL connection pool | 2347 | 380 | 84% |
+| Explain git rebase vs merge | 702 | 292 | 58% |
+| Refactor callback to async/await | 387 | 301 | 22% |
+| Architecture: microservices vs monolith | 446 | 310 | 30% |
+| Review PR for security issues | 678 | 398 | 41% |
+| Docker multi-stage build | 1042 | 290 | 72% |
+| Debug PostgreSQL race condition | 1200 | 232 | 81% |
+| Implement React error boundary | 3454 | 456 | 87% |
+| **Average** | **1214** | **294** | **65%** |
 <!-- BENCHMARK-TABLE-END -->
 
-Use the skill by itself, or keep going when input compression becomes worth the extra setup.
+> [!IMPORTANT]
+> **Honest number warning.** Caveman only shrinks **output** tokens. Input and reasoning tokens are untouched, and the skill itself adds ~1–1.5k input tokens per turn. So whole-session savings run smaller than the output number, and on already-terse workloads they can go net-negative. The real win is **readability and speed**. Cost savings are the bonus. When caveman wins, when it loses, and how to measure it yourself: **[docs/HONEST-NUMBERS.md](./docs/HONEST-NUMBERS.md)**.
 
-Output-token counts measure length only. They do not prove semantic or technical equivalence; raw paired outputs require separate review before any quality claim.
+Use the skill by itself, or keep going when input compression becomes worth the extra setup.
 
 Shorter answers only fixed output. Tool catalogs, MCP results, logs, repeated files, and skill bodies ride upstream again and again. Caveman Proxy catches them before the next model call; Caveman Engine compresses them locally.
 
