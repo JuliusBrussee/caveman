@@ -85,18 +85,6 @@ Caveman started as a skill/plugin for [Claude Code](https://docs.anthropic.com/e
 
 Agent mouth got smaller. Appetite did not. Tool schemas, files, logs, history, and skill bodies still crossed the provider boundary in full, often on every turn. Caveman 2 shrinks that input before the provider call. Caveman Proxy sits under your existing agent; Caveman Engine powers compression and stores every moved byte for exact recovery.
 
-## Keep your agent
-
-Caveman works underneath the stack you already use. Adopt only the layer you need.
-
-| Need | Smallest Caveman path |
-|---|---|
-| Shorter, cleaner answers | Install the MIT skill above. No Caveman account, proxy, or code changes. |
-| Less input in Claude Code, Codex, Gemini, Aider, opencode, Hermes, or OpenClaw | `npm install -g @caveman-ai/cli`, then wrap your existing agent with one `caveman` command. |
-| Vercel AI SDK | Point the OpenAI-compatible or Anthropic provider `baseURL` at Caveman. Keep the AI SDK loop, tools, and call sites. See the exact [Vercel AI SDK recipe](./integrations/recipes/vercel-ai-sdk.json). |
-| LangChain, LiteLLM, OpenAI Agents, CrewAI, PydanticAI, or a provider SDK | Point the existing provider client at Caveman. See [`integrations/recipes/`](./integrations/recipes/). |
-| A new TypeScript agent | Run `npm create @caveman-ai/agent@latest my-agent`, powered by [`@caveman-ai/agent`](./packages/agent). |
-
 ## The skill
 
 The original. MIT, and it stays MIT.
@@ -131,6 +119,18 @@ Use the skill by itself, or keep going when input compression becomes worth the 
 Output-token counts measure length only. They do not prove semantic or technical equivalence; raw paired outputs require separate review before any quality claim.
 
 Shorter answers only fixed output. Tool catalogs, MCP results, logs, repeated files, and skill bodies ride upstream again and again. Caveman Proxy catches them before the next model call; Caveman Engine compresses them locally.
+
+## Keep your agent
+
+Caveman works underneath the stack you already use. Adopt only the layer you need.
+
+| Need | Smallest Caveman path |
+|---|---|
+| Shorter, cleaner answers | Install the MIT skill above. No Caveman account, proxy, or code changes. |
+| Less input in Claude Code, Codex, Gemini, Aider, opencode, Hermes, or OpenClaw | `npm install -g @caveman-ai/cli`, then wrap your existing agent with one `caveman` command. |
+| Vercel AI SDK | Point the OpenAI-compatible or Anthropic provider `baseURL` at Caveman. Keep the AI SDK loop, tools, and call sites. See the exact [Vercel AI SDK recipe](./integrations/recipes/vercel-ai-sdk.json). |
+| LangChain, LiteLLM, OpenAI Agents, CrewAI, PydanticAI, or a provider SDK | Point the existing provider client at Caveman. See [`integrations/recipes/`](./integrations/recipes/). |
+| A new TypeScript agent | Run `npm create @caveman-ai/agent@latest my-agent`, powered by [`@caveman-ai/agent`](./packages/agent). |
 
 ## Caveman Proxy
 
