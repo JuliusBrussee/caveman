@@ -171,6 +171,12 @@ test('priceForModel matches by prefix across point releases', () => {
   assert.strictEqual(priceForModel('gpt-4'), null);
 });
 
+test('priceForModel covers MiniMax output pricing', () => {
+  const { priceForModel } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
+  assert.strictEqual(priceForModel('MiniMax-M3'), 2.40);
+  assert.strictEqual(priceForModel('MiniMax-M2.7'), 1.20);
+});
+
 test('formatStats handles empty session gracefully', () => {
   const { formatStats } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
   const out = formatStats({ outputTokens: 0, cacheReadTokens: 0, turns: 0, mode: 'full', model: null });

@@ -33,10 +33,8 @@ function ruleOverheadPerTurn() {
   return Number.isInteger(n) && n > 0 ? n : DEFAULT_RULE_OVERHEAD_TOKENS_PER_TURN;
 }
 
-// Approximate Anthropic public output-token pricing, USD per million.
-// Match by model id prefix so this stays correct across point releases
-// (e.g. claude-sonnet-4-20250514, claude-sonnet-4-7). Update from
-// https://www.anthropic.com/pricing if a release changes the tier.
+// Approximate public output-token pricing, USD per million.
+// Match by model id prefix so this stays correct across point releases.
 // Most-specific prefixes MUST come first — priceForModel returns the first match.
 const MODEL_OUTPUT_PRICE_PER_M = [
   // Legacy Opus 4.0 / 4.1 (pre-4.5) billed at the old $75/M output tier,
@@ -51,6 +49,8 @@ const MODEL_OUTPUT_PRICE_PER_M = [
   ['claude-3-5-sonnet',  15.00],
   ['claude-3-5-haiku',    4.00],
   ['claude-3-opus',      75.00],
+  ['MiniMax-M3',          2.40],
+  ['MiniMax-M2.7',        1.20],
 ];
 
 function priceForModel(model) {
