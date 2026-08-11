@@ -1,0 +1,14 @@
+[
+  {"nodeId":"1","role":{"type":"role","value":"RootWebArea"},"name":{"type":"computedString","value":"Fixture App"},"backendDOMNodeId":1,"childIds":["2","3","4","5","6","7","10","11","12"]},
+  {"nodeId":"2","ignored":true,"role":{"type":"role","value":"generic"},"name":{"type":"computedString","value":"layout noise"},"childIds":["8"]},
+  {"nodeId":"8","role":{"type":"role","value":"button"},"name":{"type":"computedString","value":"Save settings"},"backendDOMNodeId":42,"properties":[{"name":"disabled","value":{"type":"boolean","value":false}}]},
+  {"nodeId":"3","ignored":true,"role":{"type":"role","value":"generic"},"name":{"type":"computedString","value":"css wrapper"}},
+  {"nodeId":"4","ignored":true,"role":{"type":"role","value":"generic"},"name":{"type":"computedString","value":"spacer"}},
+  {"nodeId":"5","role":{"type":"role","value":"generic"},"name":{"type":"computedString","value":""},"childIds":["9"]},
+  {"nodeId":"9","role":{"type":"role","value":"textbox"},"name":{"type":"computedString","value":"Email address"},"value":{"type":"string","value":"ops@example.com"},"backendDOMNodeId":43,"properties":[{"name":"editable","value":{"type":"token","value":"plaintext"}}]},
+  {"nodeId":"6","role":{"type":"role","value":"heading"},"name":{"type":"computedString","value":"Operations Overview"},"backendDOMNodeId":44},
+  {"nodeId":"7","role":{"type":"role","value":"link"},"name":{"type":"computedString","value":"View trace detail"},"backendDOMNodeId":45},
+  {"nodeId":"10","ignored":true,"role":{"type":"role","value":"generic"},"name":{"type":"computedString","value":"paint layer"}},
+  {"nodeId":"11","ignored":true,"role":{"type":"role","value":"generic"},"name":{"type":"computedString","value":"layout slot"}},
+  {"nodeId":"12","ignored":true,"role":{"type":"role","value":"generic"},"name":{"type":"computedString","value":"decorative shell"}}
+]

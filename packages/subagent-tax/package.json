@@ -1,0 +1,31 @@
+{
+  "name": "subagent-tax",
+  "version": "0.1.0",
+  "description": "Measure how big a prefix each coding harness on your machine sends per call — local capture sink, no provider API calls.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JuliusBrussee/caveman.git",
+    "directory": "packages/subagent-tax"
+  },
+  "homepage": "https://caveman.so",
+  "keywords": ["llm", "tokens", "agent", "benchmark", "claude-code", "codex", "gemini-cli", "opencode"],
+  "bin": {
+    "subagent-tax": "./run.mjs"
+  },
+  "files": [
+    "run.mjs",
+    "lib",
+    "tests",
+    "fixtures",
+    "METHOD.md",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18.17"
+  }
+}

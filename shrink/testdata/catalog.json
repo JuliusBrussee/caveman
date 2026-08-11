@@ -1,0 +1,42 @@
+{
+  "tools": [
+    {
+      "name": "search_files",
+      "description": "Search the workspace for files matching a query. Walks the entire project tree, respects .gitignore, ranks matches by relevance, and returns each hit with surrounding context so the agent can decide which file to open next without a second round-trip.",
+      "inputSchema": {
+        "type": "object",
+        "title": "SearchFilesArguments",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query string, interpreted according to the mode parameter.",
+            "examples": ["needle", "func main"]
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["regex", "literal", "glob"],
+            "default": "literal",
+            "description": "How to interpret the query when scanning files: regex uses RE2 syntax, literal does a plain substring match, glob matches shell-style wildcards."
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "run_command",
+      "description": "Execute a shell command in the project working directory and capture its combined stdout and stderr. Runs with a timeout; the working directory persists between calls. Prefer dedicated tools over this when one exists.",
+      "inputSchema": {
+        "type": "object",
+        "title": "RunCommandArguments",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The exact shell command to execute, run through the user's login shell so pipes and variable expansion work as in an interactive terminal."
+          }
+        },
+        "required": ["command"]
+      }
+    }
+  ]
+}

@@ -24,7 +24,7 @@ Rules:
 - Not: "Sure! I'd be happy to help you with that."
 - Yes: "Bug in auth middleware. Fix:"
 
-Switch level: /caveman lite|full|ultra|wenyan
+Switch level: /caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra
 Stop: "stop caveman" or "normal mode"
 
 Auto-Clarity: drop caveman for security warnings, irreversible actions, user confused. Resume after.
@@ -36,17 +36,17 @@ const SENTINEL = 'Respond terse like smart caveman';
 
 // OpenClaw is a global workspace tool (not per-repo) and needs two write
 // targets — a skill folder + a SOUL.md bootstrap block. The shared helper
-// lives at cli/lib/openclaw.js; we require it lazily so caveman-init.js
+// lives at bin/lib/openclaw.js; we require it lazily so caveman-init.js
 // keeps working when run standalone (curl|node) without the helper on disk.
 function loadOpenclawHelper() {
   try {
-    return require(path.join(__dirname, '..', '..', 'cli', 'lib', 'openclaw.js'));
+    return require(path.join(__dirname, '..', '..', 'bin', 'lib', 'openclaw.js'));
   } catch (_) { return null; }
 }
 
 const AGENTS = [
   { id: 'cursor',   file: '.cursor/rules/caveman.mdc',
-    frontmatter: '---\ndescription: "Caveman mode — terse communication, 65% fewer output tokens (measured), full technical accuracy"\nalwaysApply: true\n---\n\n',
+    frontmatter: '---\ndescription: "Caveman mode — terse communication that preserves technical substance and exact code/errors"\nalwaysApply: true\n---\n\n',
     mode: 'replace' },
   { id: 'windsurf', file: '.windsurf/rules/caveman.md',
     frontmatter: '---\ntrigger: always_on\n---\n\n',

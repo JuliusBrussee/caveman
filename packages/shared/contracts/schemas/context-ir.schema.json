@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/context-ir.schema.json",
+  "title": "Caveman Context IR",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "segments"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "segments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/segment"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "stability",
+        "safety",
+        "priority",
+        "recovery",
+        "cache_region",
+        "privacy",
+        "opaque",
+        "provenance_digest",
+        "token_count",
+        "body_handle"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "instruction",
+            "user_intent",
+            "tool_schema",
+            "skill",
+            "memory",
+            "history",
+            "tool_result",
+            "artifact",
+            "error",
+            "output_contract"
+          ]
+        },
+        "stability": {
+          "enum": ["build", "session", "turn"]
+        },
+        "safety": {
+          "enum": ["S0", "S1", "S2", "S3", "S4"]
+        },
+        "priority": {
+          "enum": ["required", "high", "normal", "low"]
+        },
+        "recovery": {
+          "enum": ["none", "exact_ccr", "source_ref", "recompute"]
+        },
+        "cache_region": {
+          "enum": ["frozen_prefix", "live_zone", "uncached"]
+        },
+        "privacy": {
+          "enum": ["content_blind", "local_sensitive", "connected_allowed"]
+        },
+        "opaque": {
+          "type": "boolean"
+        },
+        "ttl_turns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "provenance_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "token_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "body_handle": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

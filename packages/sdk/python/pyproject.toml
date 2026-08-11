@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Public PyPI distribution name. `caveman` belongs to an unrelated project;
+# keep distribution and import names distinct (`import caveman_cloud`).
+name = "caveman-sdk"
+version = "1.0.0"
+description = "Stdlib-only Python client for Caveman gateway tracing, tool deferral, checkpoints, and recoverable compression."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = []
+authors = [{name = "Caveman"}]
+keywords = ["agents", "ai", "llm", "observability", "opentelemetry", "optimization"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://caveman.so/docs/sdk/python"
+Repository = "https://github.com/JuliusBrussee/caveman"
+Issues = "https://github.com/JuliusBrussee/caveman/issues"
+
+[tool.setuptools]
+packages = ["caveman_cloud"]
+
+[tool.setuptools.package-data]
+caveman_cloud = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

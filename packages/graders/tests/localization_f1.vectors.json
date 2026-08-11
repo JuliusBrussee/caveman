@@ -1,0 +1,110 @@
+[
+  {
+    "name": "perfect_match_structured",
+    "candidate": [
+      { "path": "a.py", "lines": [[1, 10]] },
+      { "path": "b.py", "lines": [[5, 5]] }
+    ],
+    "reference": [
+      { "path": "a.py", "lines": [[1, 10]] },
+      { "path": "b.py", "lines": [[5, 5]] }
+    ],
+    "options": {},
+    "expected_passed": true,
+    "expected_file_f1": 1.0,
+    "expected_line_f1": 1.0
+  },
+  {
+    "name": "file_match_partial_line_overlap_fails",
+    "candidate": [{ "path": "a.py", "lines": [[1, 10]] }],
+    "reference": [{ "path": "a.py", "lines": [[5, 14]] }],
+    "options": {},
+    "expected_passed": false,
+    "expected_file_f1": 1.0,
+    "expected_line_f1": 0.4286
+  },
+  {
+    "name": "compact_text_file_precision_drop",
+    "candidate": "a.py:1-10\nb.py:1-5\nc.py:1-5",
+    "reference": "a.py:1-10\nb.py:1-5",
+    "options": {},
+    "expected_passed": true,
+    "expected_file_f1": 0.8,
+    "expected_line_f1": 1.0
+  },
+  {
+    "name": "cross_format_compact_list_vs_structured",
+    "candidate": ["a.py:1-10", "b.py:20-30"],
+    "reference": [
+      { "path": "a.py", "lines": [[1, 10]] },
+      { "path": "b.py", "lines": [[20, 30]] }
+    ],
+    "options": {},
+    "expected_passed": true,
+    "expected_file_f1": 1.0,
+    "expected_line_f1": 1.0
+  },
+  {
+    "name": "unparseable_candidate_fails_closed",
+    "candidate": 12345,
+    "reference": [{ "path": "a.py", "lines": [[1, 10]] }],
+    "options": {},
+    "expected_passed": false,
+    "expected_file_f1": null,
+    "expected_line_f1": null
+  },
+  {
+    "name": "missing_reference_fails_closed",
+    "candidate": [{ "path": "a.py", "lines": [[1, 10]] }],
+    "reference": null,
+    "options": {},
+    "expected_passed": false,
+    "expected_file_f1": null,
+    "expected_line_f1": null
+  },
+  {
+    "name": "disjoint_files_no_shared",
+    "candidate": [{ "path": "x.py", "lines": [[1, 5]] }],
+    "reference": [{ "path": "y.py", "lines": [[1, 5]] }],
+    "options": {},
+    "expected_passed": false,
+    "expected_file_f1": 0.0,
+    "expected_line_f1": 0.0
+  },
+  {
+    "name": "custom_lower_line_threshold_passes",
+    "candidate": [{ "path": "a.py", "lines": [[1, 10]] }],
+    "reference": [{ "path": "a.py", "lines": [[5, 14]] }],
+    "options": { "file_threshold": 0.5, "line_threshold": 0.4 },
+    "expected_passed": true,
+    "expected_file_f1": 1.0,
+    "expected_line_f1": 0.4286
+  },
+  {
+    "name": "file_level_only_both_empty_ranges",
+    "candidate": [{ "path": "a.py" }],
+    "reference": "a.py",
+    "options": {},
+    "expected_passed": true,
+    "expected_file_f1": 1.0,
+    "expected_line_f1": 1.0
+  },
+  {
+    "name": "disjoint_files_threshold_zero_still_fails",
+    "candidate": [{ "path": "x.py", "lines": [[1, 5]] }],
+    "reference": [{ "path": "y.py", "lines": [[1, 5]] }],
+    "options": { "threshold": 0 },
+    "expected_passed": false,
+    "expected_file_f1": 0.0,
+    "expected_line_f1": 0.0
+  },
+  {
+    "name": "exact_match_threshold_zero_passes",
+    "candidate": [{ "path": "a.py", "lines": [[1, 10]] }],
+    "reference": [{ "path": "a.py", "lines": [[1, 10]] }],
+    "options": { "threshold": 0 },
+    "expected_passed": true,
+    "expected_file_f1": 1.0,
+    "expected_line_f1": 1.0
+  }
+]

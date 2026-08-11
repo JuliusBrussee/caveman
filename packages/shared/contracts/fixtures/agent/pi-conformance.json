@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "evidence": "static_contract_only",
+  "harness": "pi",
+  "adapter_version": "1.0.0",
+  "upstream_version": "0.83.0",
+  "normalized_context_digest": "a3c9b91bf41d7735e45fb225af393b0cbf739849e206f75b02988f8ae9a554f3",
+  "plan_sha256": "06a323320d812d8b31dfc50edf1f6c4967559c71865fc0c8fd87547020247434",
+  "build_sha256": "76287b2d2d18e4a69aaae9f7f65a32f9eb34dc4a4bfa24d86d10a5f948a4ed31",
+  "ordered_transform_ids": [
+    "caveman.cache-preserve.v1",
+    "caveman.tool-search.v1",
+    "caveman.ccr-results.v1"
+  ],
+  "provider_visible_digest": "346475978b66b4a0eb7c647e272767e9410ace0d9a90968fd99a0fa2503b651c",
+  "recovery_handles": [
+    "cave_ccr_sha256:50aa8501f8ad72c8255573e2d0e1a18c02f66397454593fe8b55e5b57eddd28a"
+  ],
+  "accounting_method": "provider_reported_public_catalog",
+  "failure_fallback": "original"
+}

@@ -11,7 +11,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import anthropic
+try:
+    import anthropic
+except ModuleNotFoundError:  # Dry-run and contract tests need no paid-provider SDK.
+    anthropic = None
 
 # The only env var this benchmark needs: the anthropic SDK reads it in
 # anthropic.Anthropic(). Read it — and ONLY it — from repo-root .env.local.
@@ -31,7 +34,7 @@ if _API_KEY_VAR not in os.environ and _env_file.exists():
             os.environ.setdefault(_API_KEY_VAR, value.strip())
             break
 
-SCRIPT_VERSION = "1.0.0"
+SCRIPT_VERSION = "1.1.0"
 SCRIPT_DIR = Path(__file__).parent
 REPO_DIR = SCRIPT_DIR.parent
 PROMPTS_PATH = SCRIPT_DIR / "prompts.json"
@@ -199,6 +202,8 @@ def save_results(results, rows, summary, model, trials, skill_hash):
             "date": datetime.now(timezone.utc).isoformat(),
             "trials": trials,
             "skill_md_sha256": skill_hash,
+            "quality_evaluated": False,
+            "quality_note": "Token counts do not establish semantic or technical equivalence; review raw paired outputs separately.",
         },
         "summary": summary,
         "rows": rows,
@@ -253,11 +258,17 @@ def main():
     parser.add_argument("--model", default="claude-sonnet-4-20250514", help="Model to use")
     args = parser.parse_args()
 
+    if args.trials < 1:
+        parser.error("--trials must be at least 1")
+
     prompts = load_prompts()
 
     if args.dry_run:
         dry_run(prompts, args.model, args.trials)
         return
+
+    if anthropic is None:
+        parser.error("anthropic package required for live benchmark; install benchmarks/requirements.txt")
 
     caveman_system = load_caveman_system()
     skill_hash = sha256_file(SKILL_PATH)

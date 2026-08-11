@@ -1,0 +1,316 @@
+{
+  "schema_version": "1",
+  "agents": [
+    {
+      "schema_version": "1",
+      "id": "aider",
+      "display_name": "Aider",
+      "vendor": "OpenAI / Anthropic",
+      "homepage": "https://aider.chat/docs/llms/openai-compat.html",
+      "binary_names": [
+        "aider"
+      ],
+      "args": [],
+      "install": "python -m pip install aider-chat",
+      "wire_protocol": "openai-chat",
+      "injection": {
+        "method": "env",
+        "env": {
+          "OPENAI_API_BASE": "{{cave_base_url}}/openai/v1"
+        }
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "0.86.2",
+      "injection_completeness": "declarative",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "claude",
+      "display_name": "Claude Code",
+      "vendor": "Anthropic",
+      "homepage": "https://code.claude.com/docs",
+      "binary_names": [
+        "claude"
+      ],
+      "args": [],
+      "install": "npm i -g @anthropic-ai/claude-code",
+      "wire_protocol": "anthropic-messages",
+      "injection": {
+        "method": "env",
+        "env": {
+          "ANTHROPIC_BASE_URL": "{{cave_base_url}}",
+          "ANTHROPIC_AUTH_TOKEN": "{{cave_api_key}}"
+        }
+      },
+      "skills": {
+        "format": "skill-md",
+        "user_dirs": [
+          "~/.claude/skills"
+        ],
+        "project_dirs": [
+          ".claude/skills"
+        ]
+      },
+      "command_hook": {
+        "method": "claude-pretooluse"
+      },
+      "memory_hook": {
+        "method": "claude-userpromptsubmit"
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "2.1.226",
+      "injection_completeness": "builder-assisted",
+      "last_verified_at": "2026-08-08",
+      "verified_by": "ground-truth-2026-08-08",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "codex",
+      "display_name": "OpenAI Codex CLI",
+      "vendor": "OpenAI",
+      "homepage": "https://developers.openai.com/codex",
+      "binary_names": [
+        "codex"
+      ],
+      "args": [],
+      "install": "npm i -g @openai/codex",
+      "wire_protocol": "openai-responses",
+      "injection": {
+        "method": "env",
+        "env": {}
+      },
+      "skills": {
+        "format": "skill-md",
+        "user_dirs": [
+          "~/.codex/skills"
+        ],
+        "project_dirs": []
+      },
+      "command_hook": {
+        "method": "codex-pretooluse",
+        "file": "~/.codex/AGENTS.md"
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "0.146.0",
+      "injection_completeness": "code-only",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "gemini",
+      "display_name": "Gemini CLI",
+      "vendor": "Google",
+      "homepage": "https://github.com/google-gemini/gemini-cli",
+      "binary_names": [
+        "gemini"
+      ],
+      "args": [],
+      "install": "npm i -g @google/gemini-cli",
+      "wire_protocol": "gemini-generatecontent",
+      "injection": {
+        "method": "env",
+        "env": {
+          "GOOGLE_GEMINI_BASE_URL": "{{cave_base_url}}",
+          "GOOGLE_VERTEX_BASE_URL": "{{cave_base_url}}/vertex"
+        }
+      },
+      "command_hook": {
+        "method": "gemini-beforetool"
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "0.53.1",
+      "injection_completeness": "declarative",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "hermes",
+      "display_name": "Hermes Agent",
+      "vendor": "Nous Research",
+      "homepage": "https://hermes-agent.nousresearch.com/docs/",
+      "binary_names": [
+        "hermes"
+      ],
+      "args": [
+        "--provider",
+        "custom"
+      ],
+      "install": "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+      "wire_protocol": "openai-chat",
+      "injection": {
+        "method": "env",
+        "env": {
+          "CUSTOM_BASE_URL": "{{cave_base_url}}",
+          "CUSTOM_API_KEY": "{{cave_api_key}}"
+        }
+      },
+      "command_hook": {
+        "method": "hermes-plugin"
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "0.19.1",
+      "injection_completeness": "builder-assisted",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "openclaw",
+      "display_name": "OpenClaw",
+      "vendor": "OpenClaw",
+      "homepage": "https://github.com/openclaw/openclaw#readme",
+      "binary_names": [
+        "openclaw"
+      ],
+      "args": [
+        "chat"
+      ],
+      "install": "npm i -g openclaw",
+      "wire_protocol": "openai-chat",
+      "injection": {
+        "method": "config-file",
+        "env_var": "OPENCLAW_CONFIG_PATH",
+        "base_config": {
+          "path": "~/.openclaw/openclaw.json",
+          "env_var": "OPENCLAW_CONFIG_PATH",
+          "state_dir": {
+            "env_var": "OPENCLAW_STATE_DIR",
+            "filename": "openclaw.json"
+          }
+        },
+        "config_overlay": {
+          "local": {
+            "mcp": {
+              "servers": {
+                "caveman": {
+                  "command": "caveman-mcp",
+                  "args": []
+                }
+              }
+            }
+          },
+          "managed": {
+            "mcp": {
+              "servers": {
+                "caveman": {
+                  "command": "caveman-mcp",
+                  "args": []
+                }
+              }
+            }
+          }
+        }
+      },
+      "command_hook": {
+        "method": "openclaw-plugin"
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "2026.7.1-2",
+      "injection_completeness": "builder-assisted",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "opencode",
+      "display_name": "opencode",
+      "vendor": "sst",
+      "homepage": "https://opencode.ai/docs/config",
+      "binary_names": [
+        "opencode"
+      ],
+      "args": [],
+      "install": "npm i -g opencode-ai",
+      "wire_protocol": "openai-chat",
+      "injection": {
+        "method": "config-env-content",
+        "env_var": "OPENCODE_CONFIG_CONTENT",
+        "config_content": {
+          "local": {
+            "$schema": "https://opencode.ai/config.json",
+            "provider": {
+              "openai": {
+                "options": {
+                  "baseURL": "{{cave_base_url}}/v1",
+                  "headers": {
+                    "X-Cave-Agent": "opencode"
+                  }
+                }
+              },
+              "anthropic": {
+                "options": {
+                  "baseURL": "{{cave_base_url}}/v1",
+                  "headers": {
+                    "X-Cave-Agent": "opencode"
+                  }
+                }
+              }
+            }
+          },
+          "managed": {
+            "$schema": "https://opencode.ai/config.json",
+            "provider": {
+              "caveman": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Caveman Gateway",
+                "options": {
+                  "baseURL": "{{cave_base_url}}/v1",
+                  "apiKey": "{env:CAVE_API_KEY}",
+                  "headers": {
+                    "x-cave-upstream-key": "{env:OPENAI_API_KEY}",
+                    "X-Cave-Agent": "opencode"
+                  }
+                },
+                "models": {
+                  "gpt-5.5": {
+                    "name": "GPT-5.5 (via Caveman)",
+                    "limit": {
+                      "context": 1050000,
+                      "output": 32768
+                    }
+                  },
+                  "gpt-5.4-mini": {
+                    "name": "GPT-5.4 mini (via Caveman)",
+                    "limit": {
+                      "context": 400000,
+                      "output": 16384
+                    }
+                  }
+                }
+              }
+            },
+            "model": "caveman/gpt-5.5"
+          }
+        }
+      },
+      "command_hook": {
+        "method": "opencode-plugin"
+      },
+      "attribution": {
+        "header": "X-Cave-Agent"
+      },
+      "tested_agent_version": "1.18.11",
+      "injection_completeness": "declarative",
+      "fallback": "generic-env",
+      "maintainer": null
+    }
+  ]
+}

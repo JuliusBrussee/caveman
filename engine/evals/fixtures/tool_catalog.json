@@ -1,0 +1,53 @@
+{
+  "tools": [
+    {
+      "name": "search_files",
+      "description": "Search the workspace for files matching a query. This tool walks the entire project tree, respects .gitignore and common ignore patterns, ranks matches by relevance, and returns each hit with several lines of surrounding context so the agent can decide which file to open next without a second round-trip.",
+      "inputSchema": {
+        "type": "object",
+        "title": "SearchFilesArguments",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query string. Interpreted according to the mode parameter; for regex mode this must be a valid RE2 expression, otherwise it is treated as a literal substring or glob.",
+            "examples": ["needle", "func main", "import .* from"]
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["regex", "literal", "glob"],
+            "default": "literal",
+            "description": "How to interpret the query string when scanning files. Regex uses RE2 syntax, literal does a plain substring match, and glob matches shell-style wildcards against file paths."
+          },
+          "max_results": {
+            "type": "integer",
+            "default": 50,
+            "description": "The maximum number of ranked results to return. Increase this when the first page of results does not contain the file you are looking for, but keep it modest to avoid flooding the context window with low-relevance matches."
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "run_command",
+      "description": "Execute a shell command in the project working directory and capture its combined stdout and stderr. The command runs with a timeout and the working directory persists between calls within a session. Prefer dedicated tools over this when one exists, because shell output is unstructured and harder to reason about.",
+      "inputSchema": {
+        "type": "object",
+        "title": "RunCommandArguments",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The exact shell command to execute. It is run through the user's login shell, so shell builtins, pipes, and environment variable expansion all work as they would in an interactive terminal session."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "default": 120000,
+            "examples": [5000, 60000, 600000],
+            "description": "How long to wait, in milliseconds, before killing the command and returning a timeout error. The default is two minutes which is enough for most build and test commands but not for long-running servers."
+          }
+        },
+        "required": ["command"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+{"generateContentRequest":{"contents":[{"role":"user","parts":[{"text":"Count this prompt."}]}],"systemInstruction":{"parts":[{"text":"Be concise."}]},"tools":[{"functionDeclarations":[{"name":"lookup","description":"Look up a value"}]}],"generationConfig":{"temperature":0.2,"maxOutputTokens":128}}}

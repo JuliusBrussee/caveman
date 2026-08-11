@@ -1,0 +1,55 @@
+{
+  "name": "@caveman-ai/sdk",
+  "version": "1.0.0",
+  "description": "Zero-dependency TypeScript client for Caveman gateway tracing, tool deferral, checkpoints, and recoverable compression.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JuliusBrussee/caveman.git",
+    "directory": "packages/sdk/typescript"
+  },
+  "homepage": "https://caveman.so/docs/sdk/typescript",
+  "bugs": {
+    "url": "https://github.com/JuliusBrussee/caveman/issues"
+  },
+  "keywords": [
+    "agents",
+    "ai",
+    "llm",
+    "observability",
+    "opentelemetry",
+    "optimization"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
+    "lint": "tsc --noEmit",
+    "test": "npm run build && npm run test:types && npm run test:node",
+    "test:types": "tsc --project tsconfig.test.json",
+    "test:node": "node --test tests/*.runtime.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

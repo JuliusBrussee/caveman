@@ -1,3 +1,8 @@
+Scope note: this MIT license covers this repository except the engine-linked
+directories listed in LICENSING.md (engine/, proxy/, mcp/, shrink/, browse/,
+the cavemem Go core, shared/platform/), which are licensed under the Business
+Source License 1.1 — see LICENSE.BSL.
+
 MIT License
 
 Copyright (c) 2026 Julius Brussee

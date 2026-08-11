@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/cave-plan.schema.json",
+  "title": "Caveman Agent Cave Plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "model",
+    "reasoning",
+    "segment_routes",
+    "budgets",
+    "recovery",
+    "fallbacks"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "plan_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reasoning": {
+      "enum": ["none", "minimal", "low", "medium", "high"]
+    },
+    "segment_routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["segment_kind", "transform_id", "fallback"],
+        "properties": {
+          "segment_kind": {
+            "enum": [
+              "instruction",
+              "user_intent",
+              "tool_schema",
+              "skill",
+              "memory",
+              "history",
+              "tool_result",
+              "artifact",
+              "error",
+              "output_contract"
+            ]
+          },
+          "segment_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "transform_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fallback": {
+            "const": "original"
+          }
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instructions",
+        "tools",
+        "memory",
+        "history",
+        "results_artifacts",
+        "reasoning",
+        "output",
+        "retry_cascade_reserve"
+      ],
+      "properties": {
+        "instructions": {
+          "$ref": "#/$defs/tokenBudget"
+        },
+        "tools": {
+          "$ref": "#/$defs/tokenBudget"
+        },
+        "memory": {
+          "$ref": "#/$defs/tokenBudget"
+        },
+        "history": {
+          "$ref": "#/$defs/tokenBudget"
+        },
+        "results_artifacts": {
+          "$ref": "#/$defs/tokenBudget"
+        },
+        "reasoning": {
+          "$ref": "#/$defs/tokenBudget"
+        },
+        "output": {
+          "$ref": "#/$defs/tokenBudget"
+        },
+        "retry_cascade_reserve": {
+          "$ref": "#/$defs/tokenBudget"
+        }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "tools"],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "cave_retrieve",
+              "cave_search_tools",
+              "cave_memory_search",
+              "cave_artifact_page"
+            ]
+          }
+        }
+      }
+    },
+    "fallbacks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unknown", "transform_error", "not_smaller"],
+      "properties": {
+        "unknown": {
+          "const": "original"
+        },
+        "transform_error": {
+          "const": "original"
+        },
+        "not_smaller": {
+          "const": "original"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "tokenBudget": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}
