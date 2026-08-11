@@ -48,8 +48,8 @@
     },
     {
       "id": "error-boundary",
-      "category": "implementation",
-      "prompt": "Implement a React error boundary component that catches render errors, shows a fallback UI with a retry button, and logs the error details."
+      "category": "explanation",
+      "prompt": "When should I use a React error boundary instead of try/catch? What kinds of errors do error boundaries not catch, and how do you handle those cases?"
     }
   ]
 }
