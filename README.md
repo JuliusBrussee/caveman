@@ -92,7 +92,7 @@ Caveman works underneath the stack you already use. Adopt only the layer you nee
 | Need | Smallest Caveman path |
 |---|---|
 | Shorter, cleaner answers | Install the MIT skill above. No Caveman account, proxy, or code changes. |
-| Less input in Claude Code, Codex, Gemini, Aider, opencode, Hermes, or OpenClaw | Build the local Proxy preview, then wrap your existing agent with one `caveman` command. |
+| Less input in Claude Code, Codex, Gemini, Aider, opencode, Hermes, or OpenClaw | `npm install -g @caveman-ai/cli`, then wrap your existing agent with one `caveman` command. |
 | Vercel AI SDK | Point the OpenAI-compatible or Anthropic provider `baseURL` at Caveman. Keep the AI SDK loop, tools, and call sites. See the exact [Vercel AI SDK recipe](./integrations/recipes/vercel-ai-sdk.json). |
 | LangChain, LiteLLM, OpenAI Agents, CrewAI, PydanticAI, or a provider SDK | Point the existing provider client at Caveman. See [`integrations/recipes/`](./integrations/recipes/). |
 | A new TypeScript agent | Run `npm create @caveman-ai/agent@latest my-agent`, powered by [`@caveman-ai/agent`](./packages/agent). |
@@ -142,23 +142,19 @@ No code change. In local mode, Caveman sends no prompts or outputs to a Caveman 
   <img src="docs/assets/wrap-stack.svg" alt="coding agent talks to a local caveman proxy that forwards upstream to the provider with auth passed through byte-exact; a CCR store below the proxy keeps the original bytes and returns a recovery handle to the agent; an MCP toolkit side-channel gives the agent caveman_retrieve, toon encode/decode, and browse" width="820">
 </p>
 
-### Proxy preview: source build
+### Install the CLI
 
-Proxy packages are not published yet. Build current preview from source:
-
-```text
-git clone https://github.com/JuliusBrussee/caveman.git
-cd caveman
-# macOS/Linux
-scripts/install-local-cli.sh
-# Windows PowerShell
-pwsh -File scripts/install-local-cli.ps1
+```bash
+npm install -g @caveman-ai/cli
+caveman setup --install   # downloads the signed runtime binaries
 ```
 
-Build needs Go and `pnpm`. Without Go, CLI still installs but missing runtime
-binaries produce a loud byte-safe pass-through. SDK users can point provider
-base URLs at local Proxy directly
-(`ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic`).
+`setup --install` verifies the signed checksum manifest and the SHA-256 of
+every binary before an atomic install. Prefer building from source? A clone
+plus `scripts/install-local-cli.sh` (macOS/Linux) or
+`pwsh -File scripts/install-local-cli.ps1` (Windows) still works — that path
+needs Go and `pnpm`. SDK users can point provider base URLs at the local
+Proxy directly (`ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic`).
 
 ```bash
 caveman claude                  # full stack (default): S4 compress + TOON best-of + caveman & browse MCP tools + output shrink
