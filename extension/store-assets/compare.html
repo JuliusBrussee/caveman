@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      @font-face { font-family: "Geist"; src: url("../fonts/geist-sans.woff2") format("woff2"); font-weight: 100 900; }
+      @font-face { font-family: "Geist Mono"; src: url("../fonts/geist-mono.woff2") format("woff2"); font-weight: 100 900; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { width: 1280px; height: 800px; overflow: hidden;
+        background: radial-gradient(hsl(0 0% 100% / 0.05) 1px, transparent 1px) 0 0 / 22px 22px, #0a0a0a;
+        color: #f2ece3; font-family: "Geist", sans-serif; -webkit-font-smoothing: antialiased; }
+      .hairline { position: absolute; inset-inline: 0; top: 0; height: 1px;
+        background: linear-gradient(90deg, transparent, hsl(0 0% 100% / 0.3), transparent); }
+      .page { padding: 76px 96px; height: 100%; display: flex; flex-direction: column; }
+      .eyebrow { display: inline-flex; align-items: center; gap: 12px; font-family: "Geist Mono";
+        font-size: 13px; font-weight: 500; letter-spacing: 0.3em; text-transform: uppercase; color: hsl(0 0% 100% / 0.5); }
+      h1 { font-family: "Geist", sans-serif; font-weight: 500; font-size: 56px;
+        line-height: 1; letter-spacing: -0.03em; margin-top: 20px; }
+      h1 .dim { color: hsl(0 0% 100% / 0.5); }
+      .q { margin-top: 26px; font-size: 18px; color: hsl(0 0% 100% / 0.55); }
+      .q b { color: #f2ece3; font-weight: 500; }
+      .cols { margin-top: 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; flex: 1; }
+      .card { position: relative; border: 1px solid hsl(0 0% 100% / 0.1); border-radius: 18px;
+        background: hsl(0 0% 100% / 0.03); padding: 30px 32px; display: flex; flex-direction: column; }
+      .card .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+      .tag { font-family: "Geist Mono"; font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: hsl(0 0% 100% / 0.45); }
+      .tok { font-family: "Geist Mono"; font-size: 12px; letter-spacing: 0.08em; color: hsl(0 0% 100% / 0.4);
+        border: 1px solid hsl(0 0% 100% / 0.12); border-radius: 999px; padding: 5px 11px; }
+      .ans { font-size: 19px; line-height: 1.62; color: hsl(0 0% 100% / 0.66); }
+      .card.after .ans { color: #f2ece3; }
+      .ans code { font-family: "Geist Mono"; font-size: 17px; background: hsl(0 0% 100% / 0.08);
+        padding: 2px 7px; border-radius: 6px; }
+      .save { margin-top: auto; padding-top: 22px; font-family: "Geist Mono"; font-size: 13px;
+        letter-spacing: 0.12em; text-transform: uppercase; color: hsl(0 0% 100% / 0.85); }
+      .flames { position: absolute; top: 28px; right: 30px; }
+      .foot { margin-top: 26px; text-align: center; font-family: "Geist Mono"; font-size: 12px;
+        letter-spacing: 0.2em; text-transform: uppercase; color: hsl(0 0% 100% / 0.32); }
+    </style>
+  </head>
+  <body>
+    <div class="hairline"></div>
+    <div class="page">
+      <span class="eyebrow"><span id="eflame"></span>Caveman / mode</span>
+      <h1>Technical substance. <span class="dim">Less filler.</span></h1>
+      <p class="q"><b>You:</b> why does my React component re-render?</p>
+
+      <div class="cols">
+        <div class="card before">
+          <div class="top"><span class="tag">Before</span><span class="tok">longer</span></div>
+          <p class="ans">Great question! Your component is re-rendering because you're creating a new
+            object reference on every render. When you pass an inline object as a prop, React treats it
+            as a brand-new value each time, which triggers a re-render of the child. To fix this, wrap
+            the object in a <code>useMemo</code> hook so the reference stays stable across renders.</p>
+          <div class="save" style="color: hsl(0 0% 100% / 0.4)">verbose · lots to read</div>
+        </div>
+        <div class="card after">
+          <div class="top"><span class="tag">After · caveman</span><span class="tok">shorter</span></div>
+          <p class="ans">New object ref each render. Inline object prop = new ref = re-render.
+            Wrap in <code>useMemo</code>.</p>
+          <div class="save">compact · fix included</div>
+        </div>
+      </div>
+
+      <div class="foot">caveman mode · caveman.so</div>
+    </div>
+
+    <script src="flame.js"></script>
+    <script>buildFlame(document.getElementById("eflame"), 3, 1);</script>
+  </body>
+</html>

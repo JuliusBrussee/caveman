@@ -1,0 +1,84 @@
+service:
+  name: checkout
+  owner: payments
+  database:
+    host: db.internal
+    port: 5432
+  feature_00:
+    enabled: true
+    rollout: 0
+  feature_01:
+    enabled: false
+    rollout: 1
+  feature_02:
+    enabled: true
+    rollout: 2
+  feature_03:
+    enabled: false
+    rollout: 3
+  feature_04:
+    enabled: true
+    rollout: 4
+  feature_05:
+    enabled: false
+    rollout: 5
+  feature_06:
+    enabled: true
+    rollout: 6
+  feature_07:
+    enabled: false
+    rollout: 7
+  feature_08:
+    enabled: true
+    rollout: 8
+  feature_09:
+    enabled: false
+    rollout: 9
+  feature_10:
+    enabled: true
+    rollout: 10
+  feature_11:
+    enabled: false
+    rollout: 11
+  feature_12:
+    enabled: true
+    rollout: 12
+  feature_13:
+    enabled: false
+    rollout: 13
+  feature_14:
+    enabled: true
+    rollout: 14
+  feature_15:
+    enabled: false
+    rollout: 15
+  feature_16:
+    enabled: true
+    rollout: 16
+  feature_17:
+    enabled: false
+    rollout: 17
+  feature_18:
+    enabled: true
+    rollout: 18
+  feature_19:
+    enabled: false
+    rollout: 19
+  feature_20:
+    enabled: true
+    rollout: 20
+  feature_21:
+    enabled: false
+    rollout: 21
+  feature_22:
+    enabled: true
+    rollout: 22
+  feature_23:
+    enabled: false
+    rollout: 23
+  feature_24:
+    enabled: true
+    rollout: 24
+  incident:
+    status: ERROR
+    action: rollback

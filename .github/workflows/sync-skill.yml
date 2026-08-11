@@ -20,9 +20,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
+          persist-credentials: false
 
       - name: Pull latest before making changes
         run: |
@@ -55,6 +56,8 @@ jobs:
         run: mkdir -p dist && cd skills && zip -r ../dist/caveman.skill caveman/
 
       - name: Commit and push if changed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           git add \
             skills/caveman-compress/ \
@@ -67,4 +70,6 @@ jobs:
             dist/caveman.skill
           git diff --staged --quiet && exit 0
           git commit -m "chore: sync SKILL.md copies [skip ci]"
-          git push
+          git config --local credential.helper '!f() { echo "username=x-access-token"; echo "password=$GITHUB_TOKEN"; }; f'
+          git push "https://github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+          git config --local --unset credential.helper

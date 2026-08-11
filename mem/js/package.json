@@ -1,0 +1,21 @@
+{
+  "name": "cavemem",
+  "version": "1.0.0",
+  "description": "Durable, compression-native agent memory — thin client over the cavemem binary.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}

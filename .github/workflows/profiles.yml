@@ -1,0 +1,63 @@
+name: profile-contract
+
+on:
+  pull_request:
+    paths:
+      - "agents/profiles/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profile-contract-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  profiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.16.0"
+      - name: Reject mixed profile and product changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! git cat-file -e "$BASE_SHA:agents/agents.json" 2>/dev/null; then
+            echo "profile registry absent at base (initial import); skipping lane-scope gate"
+            exit 0
+          fi
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > /tmp/changed-files
+          profile_touched=false
+          while IFS= read -r file; do
+            case "$file" in
+              agents/profiles/*)
+                profile_touched=true
+                ;;
+              agents/agents.json|packages/cli/src/agents.generated.ts|packages/cli/src/reserved-verbs.generated.ts)
+                ;;
+              *)
+                echo "profile lane rejects out-of-scope path: $file"
+                exit 1
+                ;;
+            esac
+          done < /tmp/changed-files
+          if [[ "$profile_touched" != "true" ]]; then
+            echo "profile lane requires one agents/profiles change"
+            exit 1
+          fi
+      - name: Validate profile registry
+        run: node agents/compile.mjs
+      - name: Require generated artifacts in pull request
+        run: git diff --exit-code -- agents/agents.json packages/cli/src/agents.generated.ts packages/cli/src/reserved-verbs.generated.ts
+      - name: Install CLI build dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund --no-package-lock --prefix packages/cli
+      - name: Build CLI
+        run: npm --prefix packages/cli run build
+      - name: Run fake-harness matrix and help fixture
+        run: node --test packages/cli/tests/agent-registry.runtime.mjs packages/cli/tests/agent-shortcut.runtime.mjs packages/cli/tests/porcelain.runtime.mjs

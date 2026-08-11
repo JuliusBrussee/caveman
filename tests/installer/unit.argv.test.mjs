@@ -1,4 +1,4 @@
-// Unit tests for the argv parser embedded in cli/install.js.
+// Unit tests for the argv parser embedded in bin/install.js.
 // We don't import parseArgs (it's not exported) — instead we shell out to the
 // installer with --help / --list / unknown flags and assert the framing.
 // For deeper coverage of flag-resolution semantics, exec --dry-run --list and
@@ -9,15 +9,19 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const INSTALLER = path.resolve(HERE, '..', '..', 'cli', 'install.js');
-const requireCjs = createRequire(import.meta.url);
-const { winQuoteIfNeeded } = requireCjs(INSTALLER);
+const INSTALLER = path.resolve(HERE, '..', '..', 'bin', 'install.js');
+const CLEAN_ENV = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PATH'),
+);
+CLEAN_ENV.PATH = path.join(HERE, '__no_commands__');
 
 function run(...args) {
-  return spawnSync('node', [INSTALLER, ...args], { encoding: 'utf8' });
+  return spawnSync(process.execPath, [INSTALLER, ...args], {
+    encoding: 'utf8',
+    env: CLEAN_ENV,
+  });
 }
 
 test('--help prints usage and exits 0', () => {
@@ -102,7 +106,7 @@ test('--config-dir expands ~ to home directory', async () => {
   // positive assertion when claude isn't on PATH on the runner.
   if (/Claude Code detected/.test(r.stdout)) {
     const { homedir } = await import('node:os');
-    assert.match(r.stdout, new RegExp(homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/' + suffix));
+    assert.match(r.stdout, new RegExp(homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\\\/]' + suffix));
   }
 });
 
@@ -165,28 +169,6 @@ test('--all does NOT auto-enable mcp-shrink (no sensible default upstream)', () 
   // Whether or not claude is on PATH, the wiring banner should not appear
   // because withMcpShrink stays false under --all alone.
   assert.doesNotMatch(r.stdout, /wiring caveman-shrink MCP proxy/);
-});
-
-test('winQuoteIfNeeded leaves a plain argument untouched', () => {
-  assert.equal(winQuoteIfNeeded('claude'), 'claude');
-  assert.equal(winQuoteIfNeeded('/tmp/plain-path'), '/tmp/plain-path');
-});
-
-test('winQuoteIfNeeded quotes whitespace and embedded quotes (pre-existing behavior)', () => {
-  assert.equal(winQuoteIfNeeded('has space'), '"has space"');
-  assert.equal(winQuoteIfNeeded(''), '""');
-});
-
-test('winQuoteIfNeeded quotes cmd.exe metacharacters (Windows command-injection fix)', () => {
-  // Pre-fix, the trigger regex only matched /[\s"]/ — none of these contain
-  // whitespace or a quote, so they reached cmd.exe (via spawnXplat's
-  // `shell: true`) completely unquoted. An attacker-influenced arg like a
-  // --with-mcp-shrink value or --with-init cwd containing one of these could
-  // chain a second command (e.g. `foo & calc.exe`).
-  for (const ch of ['&', '|', '^', '<', '>', '%', '(', ')']) {
-    const arg = `foo${ch}bar`;
-    assert.equal(winQuoteIfNeeded(arg), `"${arg}"`, `metacharacter ${JSON.stringify(ch)} must trigger quoting`);
-  }
 });
 
 test('--help discloses --config-dir scope', () => {

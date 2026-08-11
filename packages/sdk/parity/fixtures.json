@@ -1,0 +1,1015 @@
+{
+  "version": 1,
+  "description": "Cross-language SDK parity fixtures. The TypeScript (@caveman-ai/sdk) and Python (caveman_cloud) SDKs each run EVERY operation below against a mocked transport and assert the same wire request (method, path, header set, body) and the same derived result. A field present in one SDK and absent in the other makes one side's assertion fail — so this file is a release gate: change one SDK without the other and CI goes red. Both SDKs MUST implement a handler for every operation; a missing handler is a failure, never a skip.",
+  "config": {
+    "api_key": "cave_live_parity_key",
+    "base_url": "http://gateway.test",
+    "control_url": "http://control.test",
+    "agent": "parity-agent",
+    "default_workflow": "parity-workflow",
+    "retention": "metadata",
+    "user": "parity-user-hash"
+  },
+  "std_headers": {
+    "content-type": "application/json",
+    "authorization": "Bearer cave_live_parity_key",
+    "x-cave-agent": "parity-agent",
+    "x-cave-workflow": "parity-workflow",
+    "x-cave-retention": "metadata",
+    "x-cave-user-hash": "parity-user-hash"
+  },
+  "std_headers_traced": {
+    "content-type": "application/json",
+    "authorization": "Bearer cave_live_parity_key",
+    "x-cave-agent": "parity-agent",
+    "x-cave-workflow": "parity-workflow",
+    "x-cave-retention": "metadata",
+    "x-cave-user-hash": "parity-user-hash",
+    "x-cave-trace-id": "aaaabbbbccccddddeeeeffff00001111",
+    "x-cave-parent-span-id": "1122334455667788"
+  },
+  "std_headers_artifact_traced": {
+    "content-type": "application/json",
+    "authorization": "Bearer cave_live_parity_key",
+    "x-cave-agent": "parity-agent",
+    "x-cave-workflow": "parity-workflow",
+    "x-cave-retention": "metadata",
+    "x-cave-user-hash": "parity-user-hash",
+    "x-cave-trace-id": "aaaabbbbccccddddeeeeffff00001111",
+    "x-cave-parent-span-id": "1122334455667788",
+    "x-cave-artifact-envelope": "value-v1",
+    "x-cave-artifact-source": "tool:fetch"
+  },
+  "std_headers_async_traced": {
+    "content-type": "application/json",
+    "authorization": "Bearer cave_live_parity_key",
+    "x-cave-agent": "parity-agent",
+    "x-cave-workflow": "parity-workflow",
+    "x-cave-retention": "metadata",
+    "x-cave-user-hash": "parity-user-hash",
+    "x-cave-async": "true",
+    "x-cave-trace-id": "aaaabbbbccccddddeeeeffff00001111",
+    "x-cave-parent-span-id": "1122334455667788"
+  },
+  "otlp_headers": {
+    "content-type": "application/json",
+    "x-cave-api-key": "cave_live_parity_key",
+    "x-cave-agent": "parity-agent",
+    "x-cave-workflow": "parity-workflow",
+    "x-cave-retention": "metadata",
+    "x-cave-user-hash": "parity-user-hash"
+  },
+  "operations": [
+    {
+      "name": "context_assemble",
+      "input": {
+        "provider": "anthropic",
+        "model": "claude-test",
+        "session_id": "parity-gateway",
+        "slots": [
+          { "id": "turn", "stability": "volatile", "content": "hello" },
+          { "id": "tools", "stability": "stable", "content": [{ "name": "lookup", "description": "Lookup one record", "input_schema": { "type": "object" } }] },
+          { "id": "system", "stability": "stable", "content": "You are exact." },
+          { "id": "playbook", "stability": "session", "content": "Escalate refunds above 100." }
+        ]
+      },
+      "expect": {
+        "result": {
+          "request": {
+            "model": "claude-test",
+            "tools": [{ "description": "Lookup one record", "input_schema": { "type": "object" }, "name": "lookup" }],
+            "system": [
+              { "type": "text", "text": "You are exact." },
+              { "type": "text", "text": "Escalate refunds above 100." }
+            ],
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "hello" }] }]
+          },
+          "headers": { "x-cave-assembly": "v1;slots=4;prefix=15506e067a67;vbb=1" },
+          "prefix_hash": "15506e067a6722f449496ebe3eed6f340bcfefc53483026603d0b1d97b16eced",
+          "breakpoints": [],
+          "stable_tokens": 56,
+          "token_basis": "estimated_bytes_div_4",
+          "basis": "inferred",
+          "volatile_below_breakpoint": true
+        }
+      }
+    },
+    {
+      "name": "context_assemble_self",
+      "input": {
+        "provider": "anthropic",
+        "model": "claude-test",
+        "session_id": "parity-self",
+        "emit_cache_hints": "self",
+        "slots": [
+          { "id": "turn", "stability": "volatile", "content": "hello" },
+          { "id": "tools", "stability": "stable", "content": [{ "name": "lookup", "description": "Lookup one record", "input_schema": { "type": "object" } }] },
+          { "id": "system", "stability": "stable", "content": "You are exact." },
+          { "id": "playbook", "stability": "session", "content": "Escalate refunds above 100." }
+        ]
+      },
+      "expect": {
+        "result": {
+          "request": {
+            "model": "claude-test",
+            "tools": [{ "description": "Lookup one record", "input_schema": { "type": "object" }, "name": "lookup", "cache_control": { "type": "ephemeral" } }],
+            "system": [
+              { "type": "text", "text": "You are exact." },
+              { "type": "text", "text": "Escalate refunds above 100." }
+            ],
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "hello" }] }]
+          },
+          "headers": { "x-cave-assembly": "v1;slots=4;prefix=15506e067a67;vbb=1" },
+          "prefix_hash": "15506e067a6722f449496ebe3eed6f340bcfefc53483026603d0b1d97b16eced",
+          "breakpoints": ["tools[0]"],
+          "stable_tokens": 56,
+          "token_basis": "estimated_bytes_div_4",
+          "basis": "inferred",
+          "volatile_below_breakpoint": true
+        }
+      }
+    },
+    {
+      "name": "context_assemble_none",
+      "input": {
+        "provider": "anthropic",
+        "model": "claude-test",
+        "session_id": "parity-none",
+        "emit_cache_hints": "none",
+        "slots": [
+          { "id": "turn", "stability": "volatile", "content": "hello" },
+          { "id": "tools", "stability": "stable", "content": [{ "name": "lookup", "description": "Lookup one record", "input_schema": { "type": "object" } }] },
+          { "id": "system", "stability": "stable", "content": "You are exact." },
+          { "id": "playbook", "stability": "session", "content": "Escalate refunds above 100." }
+        ]
+      },
+      "expect": {
+        "result": {
+          "request": {
+            "model": "claude-test",
+            "tools": [{ "description": "Lookup one record", "input_schema": { "type": "object" }, "name": "lookup" }],
+            "system": [
+              { "type": "text", "text": "You are exact." },
+              { "type": "text", "text": "Escalate refunds above 100." }
+            ],
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "hello" }] }]
+          },
+          "headers": { "x-cave-assembly": "v1;slots=4;prefix=15506e067a67;vbb=1" },
+          "prefix_hash": "15506e067a6722f449496ebe3eed6f340bcfefc53483026603d0b1d97b16eced",
+          "breakpoints": [],
+          "stable_tokens": 56,
+          "token_basis": "estimated_bytes_div_4",
+          "basis": "inferred",
+          "volatile_below_breakpoint": true
+        }
+      }
+    },
+    {
+      "name": "tool_search",
+      "input": {
+        "catalog": [
+          { "name": "search", "description": "Search things", "input_schema": { "type": "object", "properties": {} }, "read_only": true, "idempotent": true, "always_load": false },
+          { "name": "fetch", "description": "Fetch a thing", "input_schema": { "type": "object", "properties": {} }, "read_only": false, "idempotent": false, "always_load": true }
+        ],
+        "query": "find a thing",
+        "context": "parity test",
+        "max_tools": 5,
+        "session_id": "tool-session-1"
+      },
+      "response": {
+        "session_id": "tool-session-1",
+        "tools": [{ "name": "search", "description": "Search things" }],
+        "sent_schema_tokens": 120,
+        "full_schema_tokens": 840,
+        "deferred_count": 1,
+        "token_basis": "estimated_bytes_div_4",
+        "method": "lexical-hit-rate"
+      },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/tool-search",
+          "headers": "std_headers",
+          "body": {
+            "tools": [
+              { "name": "search", "description": "Search things", "input_schema": { "type": "object", "properties": {} }, "read_only": true, "idempotent": true, "always_load": false },
+              { "name": "fetch", "description": "Fetch a thing", "input_schema": { "type": "object", "properties": {} }, "read_only": false, "idempotent": false, "always_load": true }
+            ],
+            "query": "find a thing",
+            "context": "parity test",
+            "max_tools": 5,
+            "session_id": "tool-session-1"
+          }
+        },
+        "result": {
+          "sent_schema_tokens": 120,
+          "full_schema_tokens": 840,
+          "deferred_count": 1,
+          "method": "lexical-hit-rate",
+          "token_basis": "estimated_bytes_div_4",
+          "basis": "inferred",
+          "session_id": "tool-session-1",
+          "saved_tokens": 720,
+          "reduction_pct": 85.7,
+          "tool_count": 1
+        }
+      }
+    },
+    {
+      "name": "tool_search_embeddings",
+      "input": {
+        "catalog": [
+          { "name": "search", "description": "Search things", "input_schema": { "type": "object", "properties": {} }, "read_only": true, "idempotent": true, "always_load": false }
+        ],
+        "query": "semantic find",
+        "ranker": "embeddings"
+      },
+      "response": {
+        "tools": [],
+        "sent_schema_tokens": 50,
+        "full_schema_tokens": 200,
+        "deferred_count": 2,
+        "token_basis": "estimated_bytes_div_4",
+        "method": "embeddings"
+      },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/tool-search",
+          "headers": "std_headers",
+          "body": {
+            "tools": [
+              { "name": "search", "description": "Search things", "input_schema": { "type": "object", "properties": {} }, "read_only": true, "idempotent": true, "always_load": false }
+            ],
+            "query": "semantic find",
+            "ranker": "embeddings"
+          }
+        },
+        "result": {
+          "sent_schema_tokens": 50,
+          "full_schema_tokens": 200,
+          "deferred_count": 2,
+          "method": "embeddings",
+          "token_basis": "estimated_bytes_div_4",
+          "basis": "inferred",
+          "saved_tokens": 150,
+          "reduction_pct": 75.0,
+          "tool_count": 0
+        }
+      }
+    },
+    {
+      "name": "tools_builder_search",
+      "input": {
+        "catalog": [
+          { "name": "always", "description": "Always loaded tool", "input_schema": { "type": "object", "properties": {} }, "read_only": true, "idempotent": true, "always_load": true },
+          { "name": "lazy", "description": "Lazy loaded tool", "input_schema": { "type": "object", "properties": {} }, "read_only": false, "idempotent": false, "always_load": false }
+        ],
+        "strategy": "deferred",
+        "query": "find a thing",
+        "context": "parity test",
+        "max_tools": 5
+      },
+      "response": {
+        "tools": [{ "name": "lazy", "description": "Lazy loaded tool" }],
+        "sent_schema_tokens": 60,
+        "full_schema_tokens": 420,
+        "deferred_count": 1,
+        "token_basis": "estimated_bytes_div_4",
+        "method": "lexical-hit-rate"
+      },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/tool-search",
+          "headers": "std_headers",
+          "body": {
+            "tools": [
+              { "name": "always", "description": "Always loaded tool", "input_schema": { "type": "object", "properties": {} }, "read_only": true, "idempotent": true, "always_load": true },
+              { "name": "lazy", "description": "Lazy loaded tool", "input_schema": { "type": "object", "properties": {} }, "read_only": false, "idempotent": false, "always_load": false }
+            ],
+            "query": "find a thing",
+            "context": "parity test",
+            "max_tools": 5
+          }
+        },
+        "result": {
+          "strategy": "deferred",
+          "initial_tool_names": ["always", "lazy"],
+          "sent_schema_tokens": 60,
+          "full_schema_tokens": 420,
+          "deferred_count": 1,
+          "method": "lexical-hit-rate",
+          "token_basis": "estimated_bytes_div_4",
+          "basis": "inferred",
+          "saved_tokens": 360,
+          "reduction_pct": 85.7,
+          "tool_count": 1
+        }
+      }
+    },
+    {
+      "name": "compress",
+      "input": { "payload": "{\"a\":[1,1,1,1,1]}", "content_type": "json" },
+      "response": {
+        "output": "<<compressed>>",
+        "content_type": "json",
+        "tokens_before": 1000,
+        "tokens_after": 200,
+        "ratio": 0.8,
+        "basis": "inferred",
+        "token_count_basis": "o200k_base",
+        "recovery_handle": "ccr_abc",
+        "method": "elision",
+        "lossless_to_model": false
+      },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/compress",
+          "headers": "std_headers",
+          "body": { "input": "{\"a\":[1,1,1,1,1]}", "content_type": "json" }
+        },
+        "result": {
+          "output": "<<compressed>>",
+          "content_type": "json",
+          "tokens_before": 1000,
+          "tokens_after": 200,
+          "ratio": 0.8,
+          "basis": "inferred",
+          "token_count_basis": "o200k_base",
+          "recovery_handle": "ccr_abc",
+          "method": "elision",
+          "lossless_to_model": false
+        }
+      }
+    },
+    {
+      "name": "compress_toon",
+      "input": { "payload": "{\"rows\":[{\"id\":1,\"name\":\"a\"},{\"id\":2,\"name\":\"b\"}]}", "content_type": "toon" },
+      "response": {
+        "output": "rows[2]{id,name}:\n  1,a\n  2,b",
+        "content_type": "toon",
+        "tokens_before": 40,
+        "tokens_after": 20,
+        "ratio": 0.5,
+        "basis": "inferred",
+        "token_count_basis": "o200k_base",
+        "recovery_handle": "ccr_toon",
+        "method": "toon",
+        "lossless_to_model": true
+      },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/compress",
+          "headers": "std_headers",
+          "body": { "input": "{\"rows\":[{\"id\":1,\"name\":\"a\"},{\"id\":2,\"name\":\"b\"}]}", "content_type": "toon" }
+        },
+        "result": {
+          "output": "rows[2]{id,name}:\n  1,a\n  2,b",
+          "content_type": "toon",
+          "tokens_before": 40,
+          "tokens_after": 20,
+          "ratio": 0.5,
+          "basis": "inferred",
+          "token_count_basis": "o200k_base",
+          "recovery_handle": "ccr_toon",
+          "method": "toon",
+          "lossless_to_model": true
+        }
+      }
+    },
+    {
+      "name": "compress_passthrough",
+      "input": { "payload": "raw payload bytes" },
+      "transport": "error",
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/compress",
+          "headers": "std_headers",
+          "body": { "input": "raw payload bytes" }
+        },
+        "result": {
+          "output": "raw payload bytes",
+          "content_type": "unknown",
+          "tokens_before": 0,
+          "tokens_after": 0,
+          "ratio": 0.0,
+          "basis": "inferred",
+          "token_count_basis": "unavailable",
+          "recovery_handle": null,
+          "method": null,
+          "lossless_to_model": null
+        }
+      }
+    },
+    {
+      "name": "compress_bad_report",
+      "input": { "payload": "raw payload bytes", "content_type": "toon" },
+      "response": {
+        "output": "<<bad>>",
+        "content_type": "toon",
+        "tokens_before": "not-a-number",
+        "tokens_after": 20,
+        "ratio": "bad",
+        "basis": "inferred"
+      },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/compress",
+          "headers": "std_headers",
+          "body": { "input": "raw payload bytes", "content_type": "toon" }
+        },
+        "result": {
+          "output": "raw payload bytes",
+          "content_type": "toon",
+          "tokens_before": 0,
+          "tokens_after": 0,
+          "ratio": 0.0,
+          "basis": "inferred",
+          "token_count_basis": "unavailable",
+          "recovery_handle": null,
+          "method": null,
+          "lossless_to_model": null
+        }
+      }
+    },
+    {
+      "name": "compress_optimistic_ratio",
+      "input": { "payload": "raw payload bytes", "content_type": "text" },
+      "response": {
+        "output": "<<compressed>>",
+        "content_type": "text",
+        "tokens_before": 100,
+        "tokens_after": 80,
+        "ratio": 0.9,
+        "basis": "verified",
+        "token_count_basis": "approx_chars_div_4"
+      },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/compress",
+          "headers": "std_headers",
+          "body": { "input": "raw payload bytes", "content_type": "text" }
+        },
+        "result": {
+          "output": "<<compressed>>",
+          "content_type": "text",
+          "tokens_before": 100,
+          "tokens_after": 80,
+          "ratio": 0.2,
+          "basis": "inferred",
+          "token_count_basis": "approx_chars_div_4",
+          "recovery_handle": null,
+          "method": null,
+          "lossless_to_model": null
+        }
+      }
+    },
+    {
+      "name": "compress_unchanged_false_claim",
+      "input": { "payload": "raw payload bytes", "content_type": "text" },
+      "response": {
+        "output": "raw payload bytes",
+        "content_type": "text",
+        "tokens_before": 100,
+        "tokens_after": 80,
+        "ratio": 0,
+        "basis": "inferred",
+        "token_count_basis": "o200k_base"
+      },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/compress",
+          "headers": "std_headers",
+          "body": { "input": "raw payload bytes", "content_type": "text" }
+        },
+        "result": {
+          "output": "raw payload bytes",
+          "content_type": "text",
+          "tokens_before": 0,
+          "tokens_after": 0,
+          "ratio": 0.0,
+          "basis": "inferred",
+          "token_count_basis": "unavailable",
+          "recovery_handle": null,
+          "method": null,
+          "lossless_to_model": null
+        }
+      }
+    },
+    {
+      "name": "cave_plan",
+      "input": {},
+      "response": {
+        "scope": "project",
+        "project_id": "proj_parity",
+        "headline": { "low": 18.4, "base": 31.2, "high": 47.9, "basis": "inferred", "move_count": 2 },
+        "headroom_by_class": [
+          { "safety_class": "S2_STRUCTURAL", "low": 12.0, "base": 21.0, "high": 33.0, "move_count": 1 },
+          { "safety_class": "S1_PROVIDER_NATIVE", "low": 6.4, "base": 10.2, "high": 14.9, "move_count": 1 }
+        ],
+        "moves": [
+          {
+            "optimizer_id": "tool-result-truncation",
+            "title": "Truncate oversized tool results",
+            "family": "input_bloat",
+            "safety_class": "S2_STRUCTURAL",
+            "basis": "inferred",
+            "confidence": "medium",
+            "quality_risk": "low",
+            "implementation_effort": "small",
+            "requires_eval_gate": true,
+            "scope_count": 3,
+            "sample_size": 4120,
+            "savings_usd_low": 12.0,
+            "savings_usd_base": 21.0,
+            "savings_usd_high": 33.0,
+            "share_of_headline_pct": 67.3,
+            "next_action": "Cap tool-result size at the callsite or page it to an artifact.",
+            "summary": "Oversized tool results re-enter context on support-triage.",
+            "top_scopes": [
+              { "workflow_id": "wf_1", "workflow_name": "support-triage", "provider": "openai", "model": "gpt-4o", "savings_usd_base": 15.0, "share_pct": 71.4 },
+              { "workflow_id": "wf_2", "workflow_name": "eval-runner", "savings_usd_base": 6.0, "share_pct": 28.6 }
+            ]
+          },
+          {
+            "optimizer_id": "prompt-prefix-stability",
+            "title": "Stabilize the cached prompt prefix",
+            "family": "cache",
+            "safety_class": "S1_PROVIDER_NATIVE",
+            "basis": "inferred",
+            "confidence": "high",
+            "quality_risk": "none",
+            "implementation_effort": "small",
+            "requires_eval_gate": false,
+            "scope_count": 1,
+            "sample_size": 990,
+            "savings_usd_low": 6.4,
+            "savings_usd_base": 10.2,
+            "savings_usd_high": 14.9,
+            "share_of_headline_pct": 32.7,
+            "next_action": "Flip to active to capture this with zero app change.",
+            "summary": "Cache breakpoints are already active; this is the residual churn.",
+            "already_active_note": "cache breakpoints are already active; this is the residual signal."
+          }
+        ],
+        "no_signal": [
+          { "optimizer_id": "toon-reencoding", "title": "TOON re-encode tabular JSON", "reason_code": "no_detector_yet", "reason": "No detector emits this signal yet." },
+          { "optimizer_id": "retry-loop-reduction", "title": "Reduce retry loops", "reason_code": "no_matching_traffic", "reason": "No matching traffic shape in the current window." }
+        ],
+        "methodology": "Inferred per-day headroom from the last 7 closed days of provider-complete, catalog-priced telemetry. Figures are not verified savings.",
+        "as_of": "2026-07-21",
+        "detectors_last_ran": "2026-07-22T04:12:00Z",
+        "diagnostics": [],
+        "mode_note": "You're in record mode. $10/day of this plan is S1 provider-native — flip to active to start capturing it with zero app change."
+      },
+      "expect": {
+        "wire": {
+          "method": "GET",
+          "path": "/sdk/v1/cave-plan",
+          "base": "gateway",
+          "headers": "otlp_headers",
+          "body_keys": []
+        },
+        "result_from": "response"
+      }
+    },
+    {
+      "name": "checkpoint",
+      "input": {
+        "trace_id": "aaaabbbbccccddddeeeeffff00001111",
+        "span_id": "1122334455667788",
+        "messages": [
+          { "role": "user", "content": "hi" },
+          { "role": "assistant", "content": "hello" }
+        ],
+        "options": { "keep_last": 2 }
+      },
+      "response": { "source_ref": "parity-org.parity-proj.cp1", "version": 1, "summary": "structural", "reversible": true },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/checkpoints",
+          "headers": "std_headers_traced",
+          "body": {
+            "messages": [
+              { "role": "user", "content": "hi" },
+              { "role": "assistant", "content": "hello" }
+            ],
+            "options": { "keep_last": 2 },
+            "workflow": "parity-workflow"
+          }
+        },
+        "result_from": "response"
+      }
+    },
+    {
+      "name": "context_pack",
+      "input": {
+        "query": "postgres migration deploy failure",
+        "items": [
+          { "id": "intro", "text": "general project overview", "tokens": 20 },
+          { "id": "deploy", "text": "deploy failed with ERROR in postgres", "tokens": 30, "pin": true },
+          { "id": "billing", "text": "billing dashboard polish", "tokens": 25 }
+        ],
+        "options": {
+          "max_tokens": 55,
+          "reserve_tokens": 5,
+          "now": "2026-07-26T12:00:00Z",
+          "recency_half_life_ms": 21600000,
+          "recency_weight": 0.15,
+          "error_boost": 0.8
+        }
+      },
+      "response": {
+        "items": [
+          { "id": "intro", "text": "general project overview", "tokens": 20 },
+          { "id": "deploy", "text": "deploy failed with ERROR in postgres", "tokens": 30, "pin": true }
+        ],
+        "tokens_used": 50,
+        "tokens_before": 75,
+        "tokens_saved": 25,
+        "deferred_count": 1,
+        "deferred_ids": ["billing"],
+        "basis": "inferred"
+      },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/context/pack",
+          "headers": "std_headers",
+          "body": {
+            "query": "postgres migration deploy failure",
+            "items": [
+              { "id": "intro", "text": "general project overview", "tokens": 20 },
+              { "id": "deploy", "text": "deploy failed with ERROR in postgres", "tokens": 30, "pin": true },
+              { "id": "billing", "text": "billing dashboard polish", "tokens": 25 }
+            ],
+            "options": {
+              "max_tokens": 55,
+              "reserve_tokens": 5,
+              "now": "2026-07-26T12:00:00Z",
+              "recency_half_life_ms": 21600000,
+              "recency_weight": 0.15,
+              "error_boost": 0.8
+            }
+          }
+        },
+        "result": {
+          "items": [
+            { "id": "intro", "text": "general project overview", "tokens": 20 },
+            { "id": "deploy", "text": "deploy failed with ERROR in postgres", "tokens": 30, "pin": true }
+          ],
+          "tokens_used": 50,
+          "tokens_before": 75,
+          "tokens_saved": 25,
+          "deferred_count": 1,
+          "deferred_ids": ["billing"],
+          "basis": "inferred"
+        }
+      }
+    },
+    {
+      "name": "checkpoint_expand",
+      "input": {
+        "source_ref": "tenant a/ref+1",
+        "trace_id": "aaaabbbbccccddddeeeeffff00001111",
+        "span_id": "1122334455667788"
+      },
+      "response": {
+        "source_ref": "tenant a/ref+1",
+        "version": 1,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "checkpoint": { "version": 1, "summary": "structural" }
+      },
+      "expect": {
+        "wire": {
+          "method": "GET",
+          "path": "/sdk/v1/checkpoints/tenant%20a%2Fref%2B1/expand",
+          "headers": "std_headers_traced",
+          "body_keys": []
+        },
+        "result_from": "response"
+      }
+    },
+    {
+      "name": "event_tool_call",
+      "input": {
+        "trace_id": "aaaabbbbccccddddeeeeffff00001111",
+        "span_id": "1122334455667788",
+        "tags": { "env": "test" },
+        "name": "do_thing",
+        "options": { "read_only": true }
+      },
+      "response": { "ok": true },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/events",
+          "headers": "std_headers_traced",
+          "body_keys": ["duration_ms", "name", "options", "outcome", "sequence", "span_type", "tags", "workflow"]
+        },
+        "result": "tool-result"
+      }
+    },
+    {
+      "name": "artifacts_page",
+      "input": {
+        "trace_id": "aaaabbbbccccddddeeeeffff00001111",
+        "span_id": "1122334455667788",
+        "value": { "big": "payload" },
+        "options": { "source": "tool:fetch", "strategy": "json-index" }
+      },
+      "response": { "artifact_id": "art_123", "stored": true },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/sdk/v1/artifacts",
+          "headers": "std_headers_artifact_traced",
+          "body": {
+            "value": { "big": "payload" },
+            "options": { "source": "tool:fetch", "strategy": "json-index" },
+            "workflow": "parity-workflow"
+          }
+        },
+        "result": "[cave-artifact id=art_123 source=tool:fetch type=application/json]\nsummary: artifact stored.\nretrieve: authenticated GET /sdk/v1/artifacts/art_123 or trace.artifacts.get(\"art_123\").\n[/cave-artifact]"
+      }
+    },
+    {
+      "name": "artifacts_get",
+      "input": {
+        "trace_id": "aaaabbbbccccddddeeeeffff00001111",
+        "span_id": "1122334455667788",
+        "artifact_id": "art_123"
+      },
+      "response": { "big": "payload" },
+      "expect": {
+        "wire": {
+          "method": "GET",
+          "path": "/sdk/v1/artifacts/art_123",
+          "headers": "std_headers_traced"
+        },
+        "result": { "big": "payload" }
+      }
+    },
+    {
+      "name": "model_create_async",
+      "input": {
+        "path": "/openai/v1/responses",
+        "body": { "model": "gpt-4o", "input": "hi" },
+        "latency_class": "background",
+        "trace_id": "aaaabbbbccccddddeeeeffff00001111",
+        "span_id": "1122334455667788"
+      },
+      "response": { "id": "resp_1", "output": "ok" },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/openai/v1/responses",
+          "headers": "std_headers_async_traced",
+          "body": { "model": "gpt-4o", "input": "hi" }
+        },
+        "result_from": "response"
+      }
+    },
+    {
+      "name": "model_create_traced",
+      "input": {
+        "path": "/openai/v1/responses",
+        "body": { "model": "gpt-4o", "input": "hi" },
+        "trace_id": "aaaabbbbccccddddeeeeffff00001111",
+        "span_id": "1122334455667788"
+      },
+      "response": { "id": "resp_2", "output": "ok" },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/openai/v1/responses",
+          "headers": "std_headers_traced",
+          "body": { "model": "gpt-4o", "input": "hi" }
+        },
+        "result_from": "response"
+      }
+    },
+    {
+      "name": "provider_create_untraced",
+      "input": {
+        "path": "/openai/v1/responses",
+        "body": { "model": "gpt-4o", "input": "hi" }
+      },
+      "response": { "id": "resp_3", "output": "ok" },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/openai/v1/responses",
+          "headers": "std_headers",
+          "body": { "model": "gpt-4o", "input": "hi" }
+        },
+        "result_from": "response"
+      }
+    },
+    {
+      "name": "bedrock",
+      "input": { "region": "eu-west-1" },
+      "expect": {
+        "result": {
+          "region": "eu-west-1",
+          "endpoint": "runtime",
+          "gateway_prefix": "/bedrock",
+          "instrumented": true,
+          "sdk_only": false
+        }
+      }
+    },
+    {
+      "name": "bedrock_mantle",
+      "input": { "region": "us-east-1", "endpoint": "mantle" },
+      "expect": {
+        "result": {
+          "region": "us-east-1",
+          "endpoint": "mantle",
+          "gateway_prefix": "/bedrock/anthropic",
+          "instrumented": true,
+          "sdk_only": false
+        }
+      }
+    },
+    {
+      "name": "otlp_export",
+      "input": {
+        "service_name": "parity-svc",
+        "span": {
+          "name": "chat",
+          "trace_id": "0123456789abcdef0123456789abcdef",
+          "span_id": "0123456789abcdef",
+          "start_time_ns": 1000000000,
+          "end_time_ns": 2000000000,
+          "operation": "chat",
+          "provider": "openai",
+          "model": "gpt-4o",
+          "input_tokens": 100,
+          "output_tokens": 50
+        }
+      },
+      "response": { "ok": true, "spans_accepted": 1, "spans_total": 1, "otel_schema_version": "1.0.0" },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/v1/traces",
+          "headers": "otlp_headers",
+          "body": {
+            "resourceSpans": [
+              {
+                "resource": {
+                  "attributes": [
+                    { "key": "service.name", "value": { "stringValue": "parity-svc" } },
+                    { "key": "cave.agent", "value": { "stringValue": "parity-agent" } }
+                  ]
+                },
+                "scopeSpans": [
+                  {
+                    "scope": { "name": "caveman-cloud", "version": "1.0.0" },
+                    "spans": [
+                      {
+                        "traceId": "0123456789abcdef0123456789abcdef",
+                        "spanId": "0123456789abcdef",
+                        "parentSpanId": "",
+                        "name": "chat",
+                        "kind": 3,
+                        "startTimeUnixNano": "1000000000",
+                        "endTimeUnixNano": "2000000000",
+                        "attributes": [
+                          { "key": "gen_ai.operation.name", "value": { "stringValue": "chat" } },
+                          { "key": "gen_ai.provider.name", "value": { "stringValue": "openai" } },
+                          { "key": "gen_ai.request.model", "value": { "stringValue": "gpt-4o" } },
+                          { "key": "gen_ai.response.model", "value": { "stringValue": "gpt-4o" } },
+                          { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "100" } },
+                          { "key": "gen_ai.usage.output_tokens", "value": { "intValue": "50" } },
+                          { "key": "cave.agent", "value": { "stringValue": "parity-agent" } },
+                          { "key": "cave.workflow", "value": { "stringValue": "parity-workflow" } }
+                        ],
+                        "status": { "code": 1 }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "result_from": "response"
+      }
+    },
+    {
+      "name": "otlp_export_traced",
+      "input": {
+        "service_name": "parity-svc",
+        "trace_id": "aaaabbbbccccddddeeeeffff00001111",
+        "root_span_id": "1122334455667788",
+        "span": {
+          "name": "plan",
+          "span_id": "99aabbccddeeff00",
+          "start_time_ns": 3000000000,
+          "end_time_ns": 4000000000,
+          "operation": "chat",
+          "provider": "openai",
+          "model": "gpt-4o",
+          "input_tokens": 10,
+          "output_tokens": 5
+        }
+      },
+      "response": { "ok": true, "spans_accepted": 1, "spans_total": 1, "otel_schema_version": "1.0.0" },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/v1/traces",
+          "headers": "otlp_headers",
+          "body": {
+            "resourceSpans": [
+              {
+                "resource": {
+                  "attributes": [
+                    { "key": "service.name", "value": { "stringValue": "parity-svc" } },
+                    { "key": "cave.agent", "value": { "stringValue": "parity-agent" } }
+                  ]
+                },
+                "scopeSpans": [
+                  {
+                    "scope": { "name": "caveman-cloud", "version": "1.0.0" },
+                    "spans": [
+                      {
+                        "traceId": "aaaabbbbccccddddeeeeffff00001111",
+                        "spanId": "99aabbccddeeff00",
+                        "parentSpanId": "1122334455667788",
+                        "name": "plan",
+                        "kind": 3,
+                        "startTimeUnixNano": "3000000000",
+                        "endTimeUnixNano": "4000000000",
+                        "attributes": [
+                          { "key": "gen_ai.operation.name", "value": { "stringValue": "chat" } },
+                          { "key": "gen_ai.provider.name", "value": { "stringValue": "openai" } },
+                          { "key": "gen_ai.request.model", "value": { "stringValue": "gpt-4o" } },
+                          { "key": "gen_ai.response.model", "value": { "stringValue": "gpt-4o" } },
+                          { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "10" } },
+                          { "key": "gen_ai.usage.output_tokens", "value": { "intValue": "5" } },
+                          { "key": "cave.agent", "value": { "stringValue": "parity-agent" } },
+                          { "key": "cave.workflow", "value": { "stringValue": "parity-workflow" } }
+                        ],
+                        "status": { "code": 1 }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "result_from": "response"
+      }
+    },
+    {
+      "name": "jobs_unavailable",
+      "input": {
+        "body": { "kind": "summarize" },
+        "latency_class": "offline"
+      },
+      "expect": {
+        "result": { "error_code": "cave_async_jobs_unavailable" }
+      }
+    },
+    {
+      "name": "retry_loop_breaker",
+      "input": {
+        "threshold": 2,
+        "calls": [
+          { "name": "t", "args": { "x": 1 } },
+          { "name": "t", "args": { "x": 1 } },
+          { "name": "t", "args": { "x": 1 } }
+        ]
+      },
+      "expect": {
+        "result": { "fired_at_call": 2, "repeats": 3, "threshold": 2 }
+      }
+    },
+    {
+      "name": "retry_loop_breaker_key_order",
+      "input": {
+        "threshold": 2,
+        "calls": [
+          { "name": "t", "args": { "a": 1, "b": 2 } },
+          { "name": "t", "args": { "b": 2, "a": 1 } },
+          { "name": "t", "args": { "a": 1, "b": 2 } }
+        ]
+      },
+      "expect": {
+        "result": { "fired_at_call": 2, "repeats": 3, "threshold": 2 }
+      }
+    }
+  ]
+}

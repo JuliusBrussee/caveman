@@ -1,0 +1,74 @@
+{
+  "tools": [
+    {
+      "description": "Write bytes to a file on disk. The path must be an absolute path. Provide exactly one of body or body_b64.",
+      "inputSchema": {
+        "properties": {
+          "body": {
+            "description": "UTF-8 text contents. Exactly one of body or body_b64 is required.",
+            "type": "string"
+          },
+          "body_b64": {
+            "description": "Base64-encoded contents. Rejected if body is also set.",
+            "type": "string"
+          },
+          "count": {
+            "description": "The number of items to return in a single page of results, which the server Values above 100 are not allowed and negative numbers are invalid.",
+            "type": "integer"
+          },
+          "limit": {
+            "description": "Sets the limit. Anything over 100 errors.",
+            "type": "integer"
+          },
+          "mode": {
+            "default": "overwrite",
+            "description": "How to write the file.",
+            "enum": [
+              "overwrite",
+              "append"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "description": "Target path, e.g. /srv/data/out.txt. It must be absolute, not relative.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "write_file"
+    },
+    {
+      "description": "Create a calendar event.",
+      "inputSchema": {
+        "$defs": {
+          "ISO8601Duration": {
+            "description": "An ISO 8601 duration. Must match the P#DT#H#M#S grammar.",
+            "type": "string"
+          },
+          "default": {
+            "description": "A definition whose name collides with a metadata key. It must not be dropped.",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "duration": {
+            "$ref": "#/$defs/ISO8601Duration"
+          },
+          "start": {
+            "description": "Event start time. The format must be RFC3339, e.g. 2026-08-08T14:00:00Z. Values without a timezone are rejected.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start"
+        ],
+        "type": "object"
+      },
+      "name": "schedule_event"
+    }
+  ]
+}

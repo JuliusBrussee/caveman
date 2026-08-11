@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 384" width="860" height="384" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" role="img" aria-label="caveman proxy pipeline: agent to proxy (record, compress, pixel) to provider, with a CCR store and recovery-handle side channel, and a pixel branch rendering text slabs to PNG pages">
+  <style>
+    .ln  { stroke: #8b949e; fill: none; stroke-width: 1.4; }
+    .thin{ stroke: #8b949e; fill: none; stroke-width: 1; opacity: .7; }
+    .box { stroke: #8b949e; fill: none; stroke-width: 1.4; }
+    .tx  { fill: #57606a; }
+    .dim { fill: #8b949e; }
+    .dash{ stroke: #8b949e; fill: none; stroke-width: 1.2; stroke-dasharray: 4 3; }
+    @media (prefers-color-scheme: dark) {
+      .ln, .box { stroke: #7d8590; }
+      .thin, .dash { stroke: #768390; }
+      .tx  { fill: #adbac7; }
+      .dim { fill: #768390; }
+    }
+  </style>
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8" class="ln"/>
+    </marker>
+  </defs>
+
+  <!-- agent -->
+  <rect class="box" x="24" y="34" width="150" height="64" rx="6"/>
+  <text class="tx"  x="99" y="62" text-anchor="middle" font-size="13">coding agent</text>
+  <text class="dim" x="99" y="80" text-anchor="middle" font-size="9">claude · hermes · codex …</text>
+
+  <!-- agent -> proxy -->
+  <text class="dim" x="252" y="58" text-anchor="middle" font-size="10">request</text>
+  <line class="ln" x1="174" y1="66" x2="328" y2="66" marker-end="url(#ah)"/>
+
+  <!-- proxy -->
+  <rect class="box" x="330" y="20" width="222" height="92" rx="6"/>
+  <text class="tx" x="441" y="44" text-anchor="middle" font-size="13">caveman proxy</text>
+  <rect class="thin" x="342" y="62" width="60" height="34" rx="4"/>
+  <text class="dim" x="372" y="83" text-anchor="middle" font-size="10">record</text>
+  <rect class="thin" x="410" y="62" width="74" height="34" rx="4"/>
+  <text class="dim" x="447" y="83" text-anchor="middle" font-size="10">compress</text>
+  <rect class="thin" x="492" y="62" width="48" height="34" rx="4"/>
+  <text class="dim" x="516" y="83" text-anchor="middle" font-size="10">pixel</text>
+
+  <!-- proxy -> provider -->
+  <text class="dim" x="629" y="58" text-anchor="middle" font-size="10">upstream</text>
+  <line class="ln" x1="552" y1="66" x2="704" y2="66" marker-end="url(#ah)"/>
+
+  <!-- provider -->
+  <rect class="box" x="706" y="34" width="130" height="64" rx="6"/>
+  <text class="tx"  x="771" y="62" text-anchor="middle" font-size="13">provider</text>
+  <text class="dim" x="771" y="80" text-anchor="middle" font-size="9">anthropic · openai · gemini</text>
+
+  <!-- proxy -> CCR -->
+  <line class="ln" x1="441" y1="112" x2="441" y2="164" marker-end="url(#ah)"/>
+  <text class="dim" x="451" y="140" font-size="9">store original first</text>
+
+  <!-- CCR store -->
+  <rect class="box" x="330" y="164" width="222" height="54" rx="6"/>
+  <text class="tx"  x="441" y="187" text-anchor="middle" font-size="12">CCR store</text>
+  <text class="dim" x="441" y="205" text-anchor="middle" font-size="9">original bytes · byte-exact</text>
+
+  <!-- recovery handle back to agent -->
+  <path class="dash" d="M330,196 C 210,196 99,180 99,100" marker-end="url(#ah)"/>
+  <text class="dim" x="150" y="150" text-anchor="middle" font-size="9">X-Caveman-Recovery-Handle</text>
+  <text class="dim" x="150" y="163" text-anchor="middle" font-size="9">→ caveman_retrieve (MCP)</text>
+
+  <!-- divider -->
+  <line class="thin" x1="24" y1="250" x2="836" y2="250" opacity=".35"/>
+
+  <!-- pixel branch -->
+  <text class="tx" x="24" y="278" font-size="11">pixel branch</text>
+
+  <!-- text slab -->
+  <rect class="box" x="120" y="272" width="82" height="80" rx="3"/>
+  <line class="thin" x1="128" y1="284" x2="194" y2="284"/>
+  <line class="thin" x1="128" y1="293" x2="194" y2="293"/>
+  <line class="thin" x1="128" y1="302" x2="188" y2="302"/>
+  <line class="thin" x1="128" y1="311" x2="194" y2="311"/>
+  <line class="thin" x1="128" y1="320" x2="184" y2="320"/>
+  <line class="thin" x1="128" y1="329" x2="194" y2="329"/>
+  <line class="thin" x1="128" y1="338" x2="176" y2="338"/>
+  <text class="dim" x="161" y="366" text-anchor="middle" font-size="9">text slab</text>
+
+  <!-- slab -> pages -->
+  <line class="ln" x1="208" y1="312" x2="248" y2="312" marker-end="url(#ah)"/>
+
+  <!-- PNG page stack -->
+  <rect class="box" x="272" y="284" width="56" height="66" rx="3"/>
+  <rect class="box" x="280" y="278" width="56" height="66" rx="3"/>
+  <rect class="box" x="288" y="272" width="56" height="66" rx="3"/>
+  <text class="dim" x="316" y="308" text-anchor="middle" font-size="9">PNG</text>
+  <text class="dim" x="308" y="366" text-anchor="middle" font-size="9">7 pages</text>
+
+  <!-- measured caption -->
+  <text class="tx"  x="410" y="300" font-size="12">55,413 → 11,402 est. tokens</text>
+  <text class="dim" x="410" y="318" font-size="10">−79% · 7 PNG pages · inferred</text>
+  <text class="dim" x="410" y="336" font-size="9">dense minified JSON + long-line logs, claude-fable-5</text>
+</svg>

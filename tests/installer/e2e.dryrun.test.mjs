@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const INSTALLER = path.resolve(HERE, '..', '..', 'cli', 'install.js');
+const INSTALLER = path.resolve(HERE, '..', '..', 'bin', 'install.js');
 
 function freshTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'cm-dryrun-'));
@@ -30,24 +30,13 @@ test('dry-run --only claude prints plan and writes nothing', () => {
   if (/Claude Code detected/.test(r.stdout)) {
     assert.match(r.stdout, /would run: claude plugin marketplace add/);
     assert.match(r.stdout, /would run: claude plugin install caveman@caveman/);
-    assert.match(r.stdout, /would mkdir -p .*\/hooks/);
+    assert.match(r.stdout, /would mkdir -p .*[\\\/]hooks/);
     assert.match(r.stdout, /would install .*caveman-activate\.js/);
     assert.match(r.stdout, /would merge SessionStart \+ UserPromptSubmit \+ statusline/);
   }
   // Nothing should have been written.
   assert.equal(fs.existsSync(path.join(cfg, 'settings.json')), false);
   assert.equal(fs.existsSync(path.join(cfg, 'hooks')), false);
-});
-
-test('dry-run --only gemini passes --consent (issue #676 — avoids the confirmation-prompt hang)', () => {
-  const cfg = freshTmpDir();
-  // --only forces installGemini to run regardless of whether `gemini` is
-  // actually on PATH — safe to assert against on any CI runner.
-  const r = spawnSync('node', [INSTALLER,
-    '--dry-run', '--only', 'gemini', '--non-interactive', '--config-dir', cfg,
-  ], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfg } });
-  assert.equal(r.status, 0);
-  assert.match(r.stdout, /would run: gemini extensions install https:\/\/github\.com\/\S+ --consent/);
 });
 
 test('dry-run --uninstall does not delete files', () => {

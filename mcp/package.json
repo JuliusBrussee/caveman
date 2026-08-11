@@ -1,0 +1,25 @@
+{
+  "name": "caveman-mcp",
+  "version": "1.0.0",
+  "description": "Caveman MCP server — compress/retrieve/stats compression tools over stdio. Local-only, inferred-only.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "caveman-mcp": "bin/caveman-mcp.mjs"
+  },
+  "files": [
+    "bin/caveman-mcp.mjs",
+    "bin/binary-installer.generated.mjs",
+    "bin/release.generated.mjs",
+    "README.md",
+    "LICENSE.launcher",
+    "BINARY_LICENSE.md"
+  ],
+  "scripts": {
+    "prepack": "node ../packages/cli/scripts/gen-wedge-installer.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

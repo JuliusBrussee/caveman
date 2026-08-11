@@ -1,0 +1,12 @@
+{
+  "name": "@caveman/explorer",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "FastContext-style exploration subagent for coding agents — read-only, cheap model, compact path:line citations, kept out of the solver's context.",
+  "files": ["fastcontext.claude-agent.md"],
+  "scripts": {
+    "test": "node --test tests/*.mjs"
+  }
+}

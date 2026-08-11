@@ -1,0 +1,189 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://caveman.so/schemas/agent-profile.json",
+  "title": "Caveman agent profile",
+  "description": "One declarative profile per AI coding agent that `caveman wrap` can route through the byte-safe gateway. Profiles are DATA: adding an agent is a new file here, not a code change. The compiler (compile.mjs) validates these against this schema and emits agents.json + the CLI's embedded agents.generated.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "envKey": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*_(BASE_URL|API_BASE|API_KEY|AUTH_TOKEN|HOST)$"
+    },
+    "envValue": {
+      "type": "string",
+      "pattern": "^(?:\\{\\{cave_(?:proxy_url|api_key|org_id)\\}\\}|\\{\\{cave_base_url\\}\\}(?:/[A-Za-z0-9._-]+)*|[A-Za-z0-9._-]+)$"
+    },
+    "profilePath": {
+      "type": "string",
+      "pattern": "^~/\\.[a-z0-9][a-z0-9-]*/[A-Za-z0-9._/-]+$"
+    }
+  },
+  "required": ["schema_version", "id", "display_name", "vendor", "homepage", "binary_names", "install", "wire_protocol", "injection"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "description": "kebab-case, globally unique; the `caveman wrap <id>` selector" },
+    "display_name": { "type": "string" },
+    "vendor": { "type": "string" },
+    "homepage": { "type": "string", "format": "uri" },
+    "binary_names": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "matched against the wrap target / argv basename for auto-detect" },
+    "args": { "type": "array", "items": { "type": "string" }, "default": [] },
+    "install": { "type": "string", "description": "one-line install hint shown when the binary is missing" },
+    "wire_protocol": {
+      "enum": ["anthropic-messages", "openai-chat", "openai-responses", "gemini-generatecontent"],
+      "description": "the protocol the agent speaks to the proxy; an unknown value FAILS the compile (honesty: no guessed protocol)"
+    },
+    "injection": {
+      "type": "object",
+      "description": "how the CLI points this agent at the gateway",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["method", "env"],
+          "properties": {
+            "method": { "const": "env" },
+            "env": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/envKey" },
+              "additionalProperties": { "$ref": "#/$defs/envValue" },
+              "description": "literal env vars; values may use {{cave_base_url}}/{{cave_api_key}}/{{cave_proxy_url}}/{{cave_org_id}} templates. A var whose rendered value is empty is omitted (never set to \"\")."
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["method", "env_var", "config_content"],
+          "properties": {
+            "method": { "const": "config-env-content" },
+            "env_var": { "type": "string", "description": "the env var that carries the rendered inline JSON config (e.g. OPENCODE_CONFIG_CONTENT)" },
+            "config_content": {
+              "type": "object",
+              "required": ["local"],
+              "properties": {
+                "local": { "type": "object", "description": "config for local BYOK mode (caveman start)" },
+                "managed": { "type": "object", "description": "config for managed mode (CAVE_GATEWAY_URL points off-loopback)" }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["method", "env_var", "config_overlay"],
+          "properties": {
+            "method": { "const": "config-file" },
+            "env_var": { "type": "string", "description": "the env var that points the agent at the rendered temp config file (e.g. OPENCLAW_CONFIG_PATH)" },
+            "base_config": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path"],
+              "properties": {
+                "path": { "type": "string", "description": "the user's config file to merge, with ~ resolved against HOME" },
+                "env_var": { "type": "string", "description": "if set and present in the shell env, this path overrides path" },
+                "state_dir": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["env_var", "filename"],
+                  "properties": {
+                    "env_var": { "type": "string", "description": "if set and env_var is absent, read filename from this state directory" },
+                    "filename": { "type": "string", "description": "config filename inside state_dir env_var" }
+                  }
+                }
+              }
+            },
+            "config_overlay": {
+              "type": "object",
+              "required": ["local"],
+              "properties": {
+                "local": { "description": "overlay merged over the base config for local BYOK mode (caveman start)" },
+                "managed": { "description": "overlay merged over the base config when CAVE_GATEWAY_URL points off-loopback" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "attribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "header": { "type": "string", "description": "the header the proxy reads to attribute telemetry to this agent" } }
+    },
+    "command_hook": {
+      "type": "object",
+      "description": "how `caveman wrap`/`caveman hooks` auto-routes this agent's noisy shell-command output through `caveman shrink` (RTK-parity, byte-exact recoverable). ABSENT = manual-only: the agent has no hook surface we can install, so we only print the `caveman shrink -- <cmd>` guidance. An unknown method FAILS the compile (honesty: no claimed hook we cannot honor).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["method"],
+          "properties": { "method": { "const": "claude-pretooluse", "description": "HARD rewrite: a Bash PreToolUse hook in ~/.claude/settings.json returns updatedInput.command" } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["method", "file"],
+          "properties": {
+            "method": { "const": "codex-pretooluse", "description": "HARD rewrite: a PreToolUse hook in ~/.codex/hooks.json returns permissionDecision=allow with updatedInput.command for shell tools" },
+            "file": { "type": "string", "description": "Separate auto-read instructions surface retained for optional directives; never used as command rewrite mechanism." }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["method"],
+          "properties": { "method": { "const": "gemini-beforetool", "description": "HARD rewrite: a BeforeTool hook in ~/.gemini/settings.json (matcher run_shell_command) returns hookSpecificOutput.tool_input.command" } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["method"],
+          "properties": { "method": { "const": "opencode-plugin", "description": "HARD rewrite: a plugin in ~/.config/opencode/plugins/ mutates output.args.command on the bash tool before exec" } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["method"],
+          "properties": { "method": { "const": "hermes-plugin", "description": "HARD rewrite: a Hermes plugin rewrites oversized terminal/tool output through caveman shrink" } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["method"],
+          "properties": { "method": { "const": "openclaw-plugin", "description": "HARD rewrite: an OpenClaw plugin rewrites oversized tool results through caveman shrink" } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["method", "file"],
+          "properties": {
+            "method": { "const": "instruction-note", "description": "SOFT nudge: append a delimited 'prefer caveman shrink' note to a file the agent auto-reads as model instructions. Model-dependent, not a deterministic rewrite — retained only for hosts without a current hard hook surface." },
+            "file": { "type": "string", "description": "the global instructions file the agent auto-reads (use ~ for home), e.g. ~/.codex/AGENTS.md. The note is appended inside HTML-comment delimiters: idempotent, never disturbs the user's own content, removed on `caveman hooks uninstall`." }
+          }
+        }
+      ]
+    },
+    "memory_hook": {
+      "type": "object",
+      "description": "OPTIONAL, OFF BY DEFAULT. How `caveman mem hook install` / `caveman wrap --auto-recall` auto-injects relevant cavemem recalls into this agent each turn. The default loop is the editing skill's pointer + agent-driven `caveman mem recall`; this is an explicit opt-in upgrade the user turns on. ABSENT = no auto-recall surface (the honest ceiling for agents without a live user-prompt hook). An unknown method FAILS the compile.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["method"],
+          "properties": { "method": { "const": "claude-userpromptsubmit", "description": "A UserPromptSubmit hook in ~/.claude/settings.json runs `caveman mem recall-hook`: it does a conservative lexical recall against the live user prompt and injects above-threshold hits as additionalContext, each disclosed + priced. Fail-open (never blocks). Claude Code is the only agent today with a verified live-prompt injection hook." } }
+        }
+      ]
+    },
+    "skills": {
+      "type": "object",
+      "description": "OPTIONAL. The agent's on-disk skill surface, used by `caveman convert` to pixel-compress installed skill bodies. ABSENT = no verified skill-file convention for this agent (convert skips it with an honest note). An unknown format FAILS the compile.",
+      "additionalProperties": false,
+      "required": ["format", "user_dirs"],
+      "properties": {
+        "format": { "const": "skill-md", "description": "skill dirs hold <name>/SKILL.md with YAML frontmatter (name/description) + markdown body — the Claude Code / Codex convention" },
+        "user_dirs": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "user-level skill roots (~ resolved against HOME), e.g. ~/.claude/skills" },
+        "project_dirs": { "type": "array", "items": { "type": "string" }, "default": [], "description": "repo-relative skill roots scanned only with `caveman convert --project`" }
+      }
+    },
+    "tested_agent_version": { "type": "string", "description": "exact binary version the profile was validated against; \"x\" = untested. The agent-conformance CI matrix pins are derived from this and must equal it (compile.mjs fails closed on a mismatch)." },
+    "injection_completeness": {
+      "enum": ["declarative", "builder-assisted", "code-only"],
+      "description": "OPTIONAL honesty label for how much of this agent's routing is DATA vs CODE. `declarative` = the injection block alone routes it (a true data-only add). `builder-assisted` = the injection block is the base but the CLI augments it in code (e.g. an overlay builder or an auth/bedrock short-circuit). `code-only` = the declared injection is inert and all routing lives in code. compile.mjs cross-checks any declared value against the CLI's real builders (a generated manifest scanned from index.ts) and the inert-injection rule, and FAILS CLOSED on a false claim (e.g. `declarative` for an agent that needs a builder)."
+    },
+    "last_verified_at": { "type": "string", "description": "OPTIONAL ISO date the tested_agent_version was last verified against a real installed binary. compile.mjs fails closed when this is older than the staleness budget (re-verify or drop the claim). Requires verified_by." },
+    "verified_by": { "type": "string", "description": "OPTIONAL who/what verified last_verified_at (e.g. a ground-truth review tag). Required whenever last_verified_at is set." },
+    "fallback": { "type": "string", "description": "what to apply if detection/injection fails; \"generic-env\" is the safe default" },
+    "maintainer": { "type": ["string", "null"], "description": "null = Caveman core team; else a GitHub handle" }
+  }
+}

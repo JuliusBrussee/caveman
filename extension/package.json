@@ -1,0 +1,17 @@
+{
+  "name": "caveman-browser-extension",
+  "version": "1.2.0",
+  "private": true,
+  "scripts": {
+    "setup:browser": "playwright install chromium",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "playwright test",
+    "test:all": "npm test && npm run test:browser",
+    "render:store-assets": "node scripts/render-store-assets.mjs",
+    "verify:stage": "node scripts/verify-extension-stage.mjs dist/stage",
+    "package": "npm run test:all && node scripts/build-extension-zip.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.55.0"
+  }
+}

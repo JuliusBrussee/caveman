@@ -1,0 +1,80 @@
+name: release-binaries
+
+on:
+  push:
+    tags:
+      - "bin-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-binaries-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-sign-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: binary-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.16.0"
+      - name: Require protected, annotated, verified tag and release pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq .object.sha)"
+          tag_type="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq .object.type)"
+          [[ "$tag_type" == "tag" ]] || { echo "binary release tag must be annotated" >&2; exit 1; }
+          verified="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_ref" --jq .verification.verified)"
+          [[ "$verified" == "true" ]] || { echo "binary release tag signature is not GitHub-verified" >&2; exit 1; }
+          target="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_ref" --jq .object.sha)"
+          git merge-base --is-ancestor "$target" origin/main
+          [[ "$(tr -d '\r\n' < packages/cli/BINARY_RELEASE)" == "$GITHUB_REF_NAME" ]] || {
+            echo "packages/cli/BINARY_RELEASE does not match $GITHUB_REF_NAME" >&2
+            exit 1
+          }
+      - name: Build deterministic cross-platform artifacts
+        run: node scripts/build-release-binaries.mjs --out dist/binaries
+      - name: Require complete 36-artifact matrix
+        run: |
+          set -euo pipefail
+          expected="$(node scripts/build-release-binaries.mjs --list | sort)"
+          actual="$(find dist/binaries -maxdepth 1 -type f ! -name checksums.txt -printf '%f\n' | sort)"
+          [[ "$actual" == "$expected" ]] || {
+            diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
+            exit 1
+          }
+      - name: Sign checksum manifest with pinned release key
+        env:
+          CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM }}
+        run: >-
+          node scripts/sign-binary-checksums.mjs
+          dist/binaries/checksums.txt
+          dist/binaries/checksums.txt.keysig
+          packages/cli/BINARY_SIGNING_PUBKEY.pub
+      - name: Publish binary-only release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists; refusing overwrite" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/binaries/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Signed Caveman runtime companions for macOS, Linux, and Windows."

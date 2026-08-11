@@ -1,0 +1,24 @@
+{
+  "schema_version": "1",
+  "id": "hermes",
+  "display_name": "Hermes Agent",
+  "vendor": "Nous Research",
+  "homepage": "https://hermes-agent.nousresearch.com/docs/",
+  "binary_names": ["hermes"],
+  "args": ["--provider", "custom"],
+  "install": "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+  "wire_protocol": "openai-chat",
+  "injection": {
+    "method": "env",
+    "env": {
+      "CUSTOM_BASE_URL": "{{cave_base_url}}",
+      "CUSTOM_API_KEY": "{{cave_api_key}}"
+    }
+  },
+  "command_hook": { "method": "hermes-plugin" },
+  "attribution": { "header": "x-cave-agent" },
+  "tested_agent_version": "0.19.1",
+  "injection_completeness": "builder-assisted",
+  "fallback": "generic-env",
+  "maintainer": null
+}

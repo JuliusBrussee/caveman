@@ -1,0 +1,264 @@
+# Eval fixtures: each is replayed through engine.Compress and must satisfy its
+# graders. Ratios use the engine's local token counter. Bands follow the
+# configured targets per content type.
+fixtures:
+  - name: json-tool-output
+    file: tool_output.json
+    quality_task:
+      question: "Answer exactly with the JSON field name that carries warning messages."
+      graders:
+        - {type: exact_match, value: "warnings"}
+    graders:
+      - {type: ratio_threshold, min: 0.70, max: 0.90}
+      - {type: json_or_toon_round_trip}
+      - {type: contains, value: "warnings"}
+      - {type: compressed}
+
+  - name: json-smartcrusher
+    file: json_smartcrusher.json
+    query: "What error code appears in the results"
+    probes:
+      - {dimension: error, value: "ERROR-503"}
+      - {dimension: number, value: '"id": 20'}
+    quality_task:
+      question: "What error code appears in the results?"
+      graders:
+        - {type: exact_match, value: "ERROR-503"}
+    graders:
+      - {type: json_or_toon_round_trip}
+      - {type: compressed}
+      - {type: ratio_threshold, min: 0.60, max: 0.95}
+      - {type: contains, value: "ERROR-503"}
+      - {type: contains, value: "__caveman_elided__"}
+      # The error and the anomaly sit in the MIDDLE of the array, where naive
+      # head/tail sampling would drop them — recall_keys checks they survive.
+      - {type: recall_keys, options: {must_contain: ["ERROR-503", "timeout", "9999"], min_recall: 1.0}}
+
+  - name: html-article
+    file: article.html
+    quality_task:
+      question: "Answer exactly with the article headline."
+      graders:
+        - {type: exact_match, value: "How Byte-Safe Compression Earns Trust"}
+    graders:
+      - {type: compressed}
+      - {type: ratio_threshold, min: 0.30, max: 0.95}
+      - {type: contains, value: "How Byte-Safe Compression Earns Trust"}
+      - {type: not_contains, value: "tracking pixel"}
+      - {type: not_contains, value: "copyright boilerplate"}
+
+  - name: repetition-log
+    file: repetition_log.txt
+    type: repetition
+    probes:
+      - {dimension: error, value: "ERROR: undefined symbol _caveman_entry"}
+    quality_task:
+      question: "Answer exactly with the undefined symbol name."
+      graders:
+        - {type: exact_match, value: "_caveman_entry"}
+    graders:
+      - {type: compressed}
+      - {type: ratio_threshold, min: 0.50, max: 0.95}
+      - {type: contains, value: "caveman:"}
+      # The unique error line must survive even though 60 identical lines collapse.
+      - {type: recall_keys, options: {must_contain: ["ERROR: undefined symbol _caveman_entry", "done with 1 error"], min_recall: 1.0}}
+
+  - name: build-log
+    file: build.log
+    probes:
+      - {dimension: error, value: "undefined symbol"}
+    quality_task:
+      question: "Answer exactly with the linker error phrase shown in the log."
+      graders:
+        - {type: exact_match, value: "undefined symbol"}
+    graders:
+      - {type: ratio_threshold, min: 0.85, max: 0.95}
+      - {type: contains, value: "ERROR"}
+      - {type: contains, value: "undefined symbol"}
+      - {type: compressed}
+
+  - name: csv-query-relevance
+    file: customer_revenue.csv
+    query: "customer-37 apac review"
+    probes:
+      - {dimension: identifier, value: "customer-37"}
+      - {dimension: status, value: "FAILED chargeback review"}
+    quality_task:
+      question: "Answer exactly with the status for customer-37."
+      graders:
+        - {type: exact_match, value: "review"}
+    graders:
+      - {type: compressed}
+      - {type: ratio_threshold, min: 0.45, max: 0.95}
+      - {type: contains, value: "name,region,revenue,status"}
+      - {type: contains, value: "customer-37"}
+      - {type: contains, value: "FAILED chargeback review"}
+      - {type: contains, value: "rows elided (caveman)"}
+
+  - name: yaml-query-relevance
+    file: service_features.yaml
+    query: "feature_17 rollout"
+    probes:
+      - {dimension: identifier, value: "feature_17"}
+      - {dimension: number, value: "rollout: 17"}
+      - {dimension: status, value: "status: ERROR"}
+    quality_task:
+      question: "Answer exactly with the rollout value for feature_17."
+      graders:
+        - {type: exact_match, value: "17"}
+    graders:
+      - {type: compressed}
+      - {type: ratio_threshold, min: 0.30, max: 0.95}
+      - {type: contains, value: "service:"}
+      - {type: contains, value: "feature_17:"}
+      - {type: contains, value: "rollout: 17"}
+      - {type: contains, value: "status: ERROR"}
+      - {type: contains, value: "config lines elided (caveman)"}
+
+  - name: go-source
+    file: sample.go
+    quality_task:
+      question: "Answer exactly with the exported Go function name."
+      graders:
+        - {type: exact_match, value: "Summarize"}
+    graders:
+      - {type: ratio_threshold, min: 0.40, max: 0.75}
+      - {type: contains, value: "func Summarize"}
+      - {type: compressed}
+
+  - name: python-source
+    file: sample.py
+    quality_task:
+      question: "Answer exactly with the Python function name."
+      graders:
+        - {type: exact_match, value: "summarize"}
+    graders:
+      - {type: ratio_threshold, min: 0.40, max: 0.80}
+      - {type: contains, value: "def summarize"}
+      - {type: compressed}
+
+  - name: typescript-source
+    file: sample.ts
+    quality_task:
+      question: "Answer exactly with the TypeScript function name."
+      graders:
+        - {type: exact_match, value: "summarize"}
+    graders:
+      - {type: ratio_threshold, min: 0.40, max: 0.80}
+      - {type: contains, value: "export function summarize"}
+      - {type: compressed}
+
+  - name: tool-catalog
+    file: tool_catalog.json
+    type: toolschema
+    quality_task:
+      question: "Return exactly this JSON object for the two tool calls: {\"tool_calls\":[{\"name\":\"search_files\"},{\"name\":\"run_command\"}]}"
+      graders:
+        - {type: exact_match, value: "{\"tool_calls\":[{\"name\":\"search_files\"},{\"name\":\"run_command\"}]}"}
+        - type: json_schema
+          options:
+            schema:
+              type: object
+              required: [tool_calls]
+              properties:
+                tool_calls:
+                  type: array
+                  minItems: 2
+                  maxItems: 2
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                    additionalProperties: false
+              additionalProperties: false
+        - {type: tool_sequence, options: {tools: ["search_files", "run_command"]}}
+    graders:
+      - {type: ratio_threshold, min: 0.55, max: 0.85}
+      - {type: valid_json}
+      - {type: contains, value: "search_files"}
+      - {type: contains, value: "regex"}
+      - {type: not_contains, value: "respects .gitignore"}
+      - {type: compressed}
+
+  - name: toon-tabular
+    file: toon_tabular.json
+    type: toon
+    quality_task:
+      question: "Answer exactly with the first hike name."
+      graders:
+        - {type: exact_match, value: "Blue Lake"}
+    graders:
+      - {type: ratio_threshold, min: 0.15, max: 0.80}
+      - {type: contains, value: "hikes[4]{id,name,distanceKm,sunny}:"}
+      - {type: toon_round_trip}
+      - {type: compressed}
+
+  - name: toon-nested-passthrough
+    file: toon_nested_passthrough.json
+    type: toon
+    quality_task:
+      question: "Answer exactly with the unsupported status field."
+      graders:
+        - {type: exact_match, value: "unsupported"}
+    graders:
+      - {type: byte_identical}
+
+  - name: toon-tricky-strings
+    file: toon_strings.json
+    type: toon
+    quality_task:
+      question: "Answer exactly with the comma-containing value."
+      graders:
+        - {type: exact_match, value: "a,b"}
+    graders:
+      - {type: contains, value: '"a,b"'}
+      - {type: contains, value: '"true"'}
+      - {type: contains, value: '"123"'}
+      - {type: contains, value: '"a\"b"'}
+      - {type: toon_round_trip}
+      - {type: compressed}
+
+  - name: plain-text-passthrough
+    file: passthrough.txt
+    quality_task:
+      question: "Answer exactly with the fixture mode."
+      graders:
+        - {type: exact_match, value: "passthrough"}
+    graders:
+      - {type: byte_identical}
+
+  # Terminal/command output (the recoverable-RTK path). No `type` is set, so this
+  # also checks Detect auto-routes raw ANSI output to the terminal compressor.
+  - name: terminal-session
+    file: terminal_session.txt
+    probes:
+      - {dimension: path, value: "tests/test_auth.py:42"}
+      - {dimension: error, value: "AssertionError: token expiry uses < not <="}
+      - {dimension: number, value: "3.14s"}
+    quality_task:
+      question: "Answer exactly with the file and line of the failing assertion."
+      graders:
+        - {type: exact_match, value: "tests/test_auth.py:42"}
+    graders:
+      - {type: compressed}
+      - {type: ratio_threshold, min: 0.80, max: 0.97}
+      - {type: contains, value: "AssertionError: token expiry uses < not <="}
+      - {type: contains, value: "1 failed, 70 passed in 3.14s"}
+      # ANSI color codes must be stripped from the model-visible output.
+      - {type: not_contains, value: "[32m"}
+      # The failure — error message, location, and summary — sits in the MIDDLE of
+      # 70 passing lines, exactly where naive head/tail sampling would drop it.
+      - {type: recall_keys, options: {must_contain: ["AssertionError: token expiry uses < not <=", "tests/test_auth.py:42", "1 failed, 70 passed in 3.14s"], min_recall: 1.0}}
+
+  # Short command output has nothing to strip or elide → byte-identical pass-through.
+  - name: terminal-passthrough
+    file: terminal_passthrough.txt
+    type: terminal
+    quality_task:
+      question: "Answer exactly with the command's output."
+      graders:
+        - {type: exact_match, value: "hi"}
+    graders:
+      - {type: byte_identical}
