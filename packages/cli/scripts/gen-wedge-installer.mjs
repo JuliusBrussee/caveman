@@ -20,6 +20,7 @@ for (const target of [
   join(publicRoot, "shared", "binary-installer"),
   join(stackRoot, "mcp", "bin"),
   join(stackRoot, "shrink", "bin"),
+  join(stackRoot, "browse", "bin"),
 ]) {
   if (!existsSync(target)) continue;
   writeFileSync(join(target, "release.generated.mjs"), generated);
