@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, delimiter } from "node:path";
@@ -66,7 +66,21 @@ async function stopChild(child) {
   await waitForExit(child, 1_500);
 }
 
-test("real proxy wraps stub agent through stub upstream and records SQLite telemetry", async () => {
+function hasGoToolchain() {
+  if (process.env.CAVEMAN_TEST_PROXY_BIN && existsSync(process.env.CAVEMAN_TEST_PROXY_BIN)) return true;
+  try {
+    const probe = spawnSync("go", ["version"], { stdio: "ignore" });
+    return probe.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+test("real proxy wraps stub agent through stub upstream and records SQLite telemetry", async (t) => {
+  if (!hasGoToolchain()) {
+    t.skip("go toolchain not found");
+    return;
+  }
   const upstream = await stubUpstream();
   const home = mkdtempSync(join(tmpdir(), "cave-agent-home-"));
   const caveHome = mkdtempSync(join(tmpdir(), "cave-agent-store-"));

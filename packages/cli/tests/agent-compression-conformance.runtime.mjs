@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createNetServer, connect } from "node:net";
@@ -259,9 +259,23 @@ function writeHomeConfig(home, id) {
   }
 }
 
-test("every shipped agent profile preserves protocol-correct recovery behavior through the real compression engine", { timeout: 90_000 }, async () => {
+function hasGoToolchain() {
+  if (process.env.CAVEMAN_TEST_PROXY_BIN && existsSync(process.env.CAVEMAN_TEST_PROXY_BIN)) return true;
+  try {
+    const probe = spawnSync("go", ["version"], { stdio: "ignore" });
+    return probe.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+test("every shipped agent profile preserves protocol-correct recovery behavior through the real compression engine", { timeout: 90_000 }, async (t) => {
   assert.deepEqual(profiles.map((profile) => profile.id).sort(), expectedProfiles, "new profiles must join the conformance matrix");
   assert.deepEqual(Object.keys(protocolCapabilities).sort(), expectedProfiles, "every profile needs an explicit recovery capability");
+  if (!hasGoToolchain()) {
+    t.skip("go toolchain not found");
+    return;
+  }
   const upstream = await conformanceUpstream();
   const suiteDir = mkdtempSync(join(tmpdir(), "cave-agent-compression-"));
   const caveHome = join(suiteDir, "cave-home");

@@ -50,7 +50,11 @@ if (source !== 'startup') {
 // "off" mode — skip activation entirely, don't write flag or emit rules
 if (mode === 'off') {
   recordModeChange(claudeDir, null); // #601: timestamped transition log
-  try { fs.unlinkSync(flagPath); } catch (e) {}
+  try {
+    fs.unlinkSync(flagPath);
+  } catch (e) {
+    if (process.env.CAVEMAN_DEBUG === '1') console.error('[caveman:debug] failed to unlink flagPath:', e.message);
+  }
   process.stdout.write('OK');
   process.exit(0);
 }

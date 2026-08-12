@@ -120,8 +120,16 @@ process.stdin.on('end', () => {
       safeWriteFlag(flagPath, mode);
     } else if (change && change.action === 'clear') {
       recordModeChange(claudeDir, null); // #601
-      try { fs.unlinkSync(flagPath); } catch (e) {}
-      try { fs.unlinkSync(prevPath); } catch (e) {}
+      try {
+        fs.unlinkSync(flagPath);
+      } catch (e) {
+        if (process.env.CAVEMAN_DEBUG === '1') console.error('[caveman:debug] failed to unlink flagPath:', e.message);
+      }
+      try {
+        fs.unlinkSync(prevPath);
+      } catch (e) {
+        if (process.env.CAVEMAN_DEBUG === '1') console.error('[caveman:debug] failed to unlink prevPath:', e.message);
+      }
     }
 
     // Per-turn reinforcement: emit a short reminder when caveman is active.
@@ -142,14 +150,22 @@ process.stdin.on('end', () => {
     // it, or deactivate if caveman wasn't active then.
     if (activeMode && INDEPENDENT_MODES.has(activeMode) && !setIndependentThisTurn) {
       const prev = readFlag(prevPath);
-      try { fs.unlinkSync(prevPath); } catch (e) {}
+      try {
+        fs.unlinkSync(prevPath);
+      } catch (e) {
+        if (process.env.CAVEMAN_DEBUG === '1') console.error('[caveman:debug] failed to unlink prevPath:', e.message);
+      }
       if (prev && !INDEPENDENT_MODES.has(prev)) {
         recordModeChange(claudeDir, prev); // #601
         safeWriteFlag(flagPath, prev);
         activeMode = prev;
       } else {
         recordModeChange(claudeDir, null); // #601
-        try { fs.unlinkSync(flagPath); } catch (e) {}
+        try {
+          fs.unlinkSync(flagPath);
+        } catch (e) {
+          if (process.env.CAVEMAN_DEBUG === '1') console.error('[caveman:debug] failed to unlink flagPath:', e.message);
+        }
         activeMode = null;
       }
     }

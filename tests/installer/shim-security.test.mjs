@@ -10,7 +10,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const shellShim = readFileSync(join(root, "install.sh"), "utf8");
 const powershellShim = readFileSync(join(root, "install.ps1"), "utf8");
 
-test("stdin shell install never executes caller cwd bin/install.js", () => {
+test("stdin shell install never executes caller cwd bin/install.js", { skip: process.platform === "win32" }, () => {
   const cwd = mkdtempSync(join(tmpdir(), "caveman-shim-cwd-"));
   mkdirSync(join(cwd, "bin"));
   const marker = join(cwd, "executed");

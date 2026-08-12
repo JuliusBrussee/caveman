@@ -8,8 +8,8 @@ import test from "node:test";
 const packageRoot = resolve(import.meta.dirname, "..");
 const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
 
-test("packed caveman-mcp installs and launches an explicit verified binary", () => {
-  const root = mkdtempSync(join(tmpdir(), "caveman-mcp-package-"));
+test("packed caveman-shrink installs and launches an explicit verified binary", () => {
+  const root = mkdtempSync(join(tmpdir(), "caveman-shrink-package-"));
   const packed = join(root, "packed");
   const consumer = join(root, "consumer");
   try {
@@ -26,7 +26,7 @@ test("packed caveman-mcp installs and launches an explicit verified binary", () 
     assert.notEqual(jsonAt, -1, pack.stdout);
     const metadata = JSON.parse(pack.stdout.slice(jsonAt))[0];
     const names = new Set(metadata.files.map((entry) => entry.path));
-    assert.ok(names.has("bin/caveman-mcp.mjs"));
+    assert.ok(names.has("bin/caveman-shrink.mjs"));
     assert.ok(names.has("bin/binary-installer.generated.mjs"));
     assert.ok(names.has("bin/release.generated.mjs"));
 
@@ -36,11 +36,11 @@ test("packed caveman-mcp installs and launches an explicit verified binary", () 
     ], { env, encoding: "utf8", shell: true });
     assert.equal(install.status, 0, install.stderr);
 
-    const manifest = JSON.parse(readFileSync(join(consumer, "node_modules", "caveman-mcp", "package.json"), "utf8"));
-    assert.equal(manifest.name, "caveman-mcp");
-    const launcher = join(consumer, "node_modules", "caveman-mcp", manifest.bin["caveman-mcp"]);
+    const manifest = JSON.parse(readFileSync(join(consumer, "node_modules", "caveman-shrink", "package.json"), "utf8"));
+    assert.equal(manifest.name, "caveman-shrink");
+    const launcher = join(consumer, "node_modules", "caveman-shrink", manifest.bin["caveman-shrink"]);
     const smoke = spawnSync(process.execPath, [launcher, "--version"], {
-      env: { ...process.env, CAVEMAN_MCP_BIN: process.execPath },
+      env: { ...process.env, CAVEMAN_SHRINK_BIN: process.execPath },
       encoding: "utf8",
     });
     assert.equal(smoke.status, 0, smoke.stderr);

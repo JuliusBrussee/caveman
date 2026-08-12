@@ -112,7 +112,11 @@ function reinforcementLine(mode) {
 function applyModeChange(change) {
   if (!change) return;
   if (change.action === 'clear') {
-    try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
+    try {
+      if (existsSync(flagPath)) unlinkSync(flagPath);
+    } catch (e) {
+      if (process.env.CAVEMAN_DEBUG === '1') console.error('[caveman:debug] failed to unlink flagPath:', e.message);
+    }
     return;
   }
   if (change.action === 'set' && change.mode) {
@@ -126,7 +130,11 @@ function applyModeChange(change) {
 function handleSessionCreated() {
   const mode = getDefaultMode();
   if (mode === 'off') {
-    try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
+    try {
+      if (existsSync(flagPath)) unlinkSync(flagPath);
+    } catch (e) {
+      if (process.env.CAVEMAN_DEBUG === '1') console.error('[caveman:debug] failed to unlink flagPath:', e.message);
+    }
     return;
   }
   safeWriteFlag(flagPath, mode);

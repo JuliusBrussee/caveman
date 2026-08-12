@@ -1,6 +1,6 @@
 # Caveman Gateway — the public, byte-safe `caveman` standalone gateway.
 
-> Spec: [docs/prd/03-caveman-proxy.md](../../docs/prd/03-caveman-proxy.md) · registry id `proxy` in [PRODUCTS.yaml](../../PRODUCTS.yaml).
+> Spec: `docs/prd/03-caveman-proxy.md` · registry id `proxy` in `PRODUCTS.yaml`.
 
 A base-URL-swap reverse proxy: point an agent at `http://127.0.0.1:8787` and its
 LLM traffic flows through Caveman with no code change. Single-operator, BYOK, zero
