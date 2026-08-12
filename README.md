@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="#start-small">Install</a> ·
+  <a href="#install">Install</a> ·
   <a href="#the-skill">See it</a> ·
   <a href="#keep-your-agent">Adoption paths</a> ·
   <a href="#caveman-proxy">Caveman Proxy</a> ·
@@ -39,21 +39,20 @@
 
 ---
 
-## Start small
+## Install
 
-Install the MIT skill first. It needs no Caveman account, proxy, Go toolchain, or code changes. Your agent and provider stay the same; only the answer style changes.
+Caveman is three separate installs. Each works alone. Not sure? Start with the skill — it needs no account, proxy, Go toolchain, or code changes.
 
-```bash
-# macOS · Linux · WSL · Git Bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash
-```
+| You want | One command | What lands on your machine |
+|---|---|---|
+| **Shorter answers** — the skill (MIT) | `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh \| bash` | The caveman skill + slash commands in every supported agent found on your machine. Nothing else. |
+| **Smaller inputs** — Caveman Proxy | `npm install -g @caveman-ai/cli && caveman setup --install` | The `caveman` CLI plus signed local binaries: proxy, engine, MCP recovery, memory — and the optional browse + shrink tools. Then `caveman claude` wraps your agent. |
+| **Compressed browsing** — Caveman Browse | Included in `caveman setup --install` (needs Chrome) | A local Chrome driver your agent reaches as MCP tools; try `caveman browse <url>`. |
+| **A new agent** — Agent SDK | `npm create @caveman-ai/agent@latest my-agent` | A TypeScript agent project on the native Caveman runtime. Client SDKs: `npm i @caveman-ai/sdk` · `pip install caveman-sdk`. |
 
-```powershell
-# Windows · PowerShell 5.1+
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.ps1 | iex
-```
+Windows, skill install: `irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.ps1 | iex` (PowerShell 5.1+).
 
-The installer needs Node.js 18+, finds supported agents already on your machine, skips the rest, and is safe to rerun. Prefer one agent only?
+The skill installer needs Node.js 18+, finds supported agents already on your machine, skips the rest, and is safe to rerun. Prefer one agent only?
 
 ```bash
 # Claude Code
@@ -75,6 +74,10 @@ Agent mouth got smaller. Appetite did not. Tool schemas, files, logs, history, a
 ## The skill
 
 The original. MIT, and it stays MIT.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash
+```
 
 <table>
 <tr>
@@ -224,6 +227,11 @@ The MCP server exposes five tools to any MCP host: `caveman_compress`, `caveman_
 
 ### Caveman Browse benchmark
 
+```bash
+npm install -g @caveman-ai/cli && caveman setup --install   # browse ships with the CLI binaries; needs Chrome
+caveman browse <url>
+```
+
 Measured 2026-08-10 across five independent Chrome runs with Chrome `151.0.7922.108`, Playwright `1.56.1`, and Caveman's offline `o200k_base` counter. Results are `inferred` token counts, reported as medians.
 
 | Fixture | Raw AX JSON | Playwright ARIA | Caveman full | Caveman focused query |
@@ -236,6 +244,11 @@ Large pages reward query-focused disclosure. Tiny pages can lose because Caveman
 Captured serializer fixture improved from 380 tokens to 58, an 84.7% reduction. Full delivered payload is 126 tokens after CCR and accounting metadata; four-tool MCP catalog costs 287 tokens. Full method, ranges, fixtures, functional gates, and claim boundary live in [`browse/BENCHMARK.md`](./browse/BENCHMARK.md).
 
 ## Pixel mode
+
+```bash
+npm install -g @caveman-ai/cli && caveman setup --install
+caveman wrap --pixel claude
+```
 
 The headline trick. A dense wall of text costs a lot of text tokens. Rendered to a PNG for a vision model, the same wall costs image tokens, far fewer for the right content. Pixel mode renders big request slabs (minified JSON tool catalogs, long-line logs, old history) into glyph-rendered PNG pages the model reads as vision input.
 
@@ -278,6 +291,11 @@ Measured on the caveman skill itself: **1,069 → 415 est. tokens, −61%**, `in
 
 ## Wrap any agent
 
+```bash
+npm install -g @caveman-ai/cli && caveman setup --install
+caveman claude   # or codex · gemini · aider · opencode · hermes · openclaw
+```
+
 `caveman <agent>` wraps seven agents natively. Adding one is a data change (a single JSON profile in [`agents/profiles/`](./agents/profiles/)), no code.
 
 | Agent | Vendor | How it's wrapped |
@@ -305,6 +323,10 @@ The default hands the agent the whole loadout, each with an honest ceiling:
 Turn pieces off in `~/.caveman-cloud/config.json` (wrap section).
 
 ## Build natively with `@caveman-ai/agent`
+
+```bash
+npm create @caveman-ai/agent@latest my-agent
+```
 
 [`@caveman-ai/agent`](./packages/agent) is the native TypeScript runtime for Caveman Engine. Use it when starting a new agent or when Caveman should own the loop, tools, subagents, conversations, provider selection, usage accounting, sandbox behavior, and transform execution.
 
