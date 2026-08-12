@@ -1,0 +1,32 @@
+{
+  "schema_version": "1",
+  "id": "claude",
+  "display_name": "Claude Code",
+  "vendor": "Anthropic",
+  "homepage": "https://code.claude.com/docs",
+  "binary_names": ["claude"],
+  "args": [],
+  "install": "npm i -g @anthropic-ai/claude-code",
+  "wire_protocol": "anthropic-messages",
+  "injection": {
+    "method": "env",
+    "env": {
+      "ANTHROPIC_BASE_URL": "{{cave_base_url}}",
+      "ANTHROPIC_AUTH_TOKEN": "{{cave_api_key}}"
+    }
+  },
+  "skills": {
+    "format": "skill-md",
+    "user_dirs": ["~/.claude/skills"],
+    "project_dirs": [".claude/skills"]
+  },
+  "command_hook": { "method": "claude-pretooluse" },
+  "memory_hook": { "method": "claude-userpromptsubmit" },
+  "attribution": { "header": "x-cave-agent" },
+  "tested_agent_version": "2.1.226",
+  "injection_completeness": "builder-assisted",
+  "last_verified_at": "2026-08-08",
+  "verified_by": "ground-truth-2026-08-08",
+  "fallback": "generic-env",
+  "maintainer": null
+}

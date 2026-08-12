@@ -1,0 +1,341 @@
+/* ── Caveman Mode popup — caveman.so aesthetic ─────────────────────────
+   Near-black, monochrome, GeistMono uppercase labels. The pixel-flame logo is
+   the only colour; everything else is grayscale. */
+
+@font-face {
+  font-family: "Geist";
+  src: url("fonts/geist-sans.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("fonts/geist-mono.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --bg: #0a0a0a;
+  --fg: #f2ece3; /* foreground 40 30% 93% */
+  --line: hsl(0 0% 100% / 0.1);
+  --sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  position: relative;
+  width: 296px;
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+  background:
+    radial-gradient(hsl(0 0% 100% / 0.05) 1px, transparent 1px) 0 0 / 16px 16px,
+    var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+body[data-enabled="0"] .block {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* atmosphere */
+.grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: radial-gradient(hsl(0 0% 100% / 0.018) 0.5px, transparent 0.5px);
+  background-size: 3px 3px;
+}
+.hairline {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, hsl(0 0% 100% / 0.32), transparent);
+}
+
+/* staggered load reveal */
+.head,
+.block,
+.cta,
+.foot {
+  position: relative;
+  animation: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .head,
+  .block,
+  .cta,
+  .foot {
+    animation: none;
+  }
+}
+
+/* ── header ─────────────────────────────────────────────────────────────── */
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 15px 13px;
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  text-decoration: none;
+}
+.flame {
+  display: inline-grid;
+  grid-template-columns: repeat(8, 2px);
+  gap: 1px;
+  line-height: 0;
+}
+.flame span {
+  width: 2px;
+  height: 2px;
+  border-radius: 0.5px;
+}
+.wordmark {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+.wordmark .sub {
+  color: hsl(0 0% 100% / 0.42);
+}
+
+/* toggle switch — monochrome (white = on) */
+.switch {
+  position: relative;
+  margin-left: auto;
+  width: 40px;
+  height: 23px;
+  flex: none;
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+}
+.slider {
+  position: absolute;
+  inset: 0;
+  background: hsl(0 0% 100% / 0.14);
+  border-radius: 999px;
+  transition: background 0.2s ease;
+}
+.slider::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 17px;
+  height: 17px;
+  background: hsl(0 0% 100% / 0.7);
+  border-radius: 50%;
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), background 0.2s ease;
+}
+.switch input:checked + .slider {
+  background: var(--fg);
+}
+.switch input:checked + .slider::before {
+  transform: translateX(17px);
+  background: var(--bg);
+}
+.switch input:focus-visible + .slider {
+  outline: 2px solid hsl(0 0% 100% / 0.5);
+  outline-offset: 2px;
+}
+
+/* ── blocks ─────────────────────────────────────────────────────────────── */
+.block {
+  padding: 14px 15px;
+  border-bottom: 1px solid var(--line);
+  transition: opacity 0.18s ease;
+}
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 11px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: hsl(0 0% 100% / 0.42);
+}
+.tick {
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  background: hsl(0 0% 100% / 0.3);
+}
+
+/* segmented intensity */
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  padding: 3px;
+  background: hsl(0 0% 100% / 0.03);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.segmented label {
+  position: relative;
+  text-align: center;
+}
+.segmented input {
+  position: absolute;
+  opacity: 0;
+}
+.segmented span {
+  display: block;
+  padding: 7px 0;
+  border-radius: 7px;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: hsl(0 0% 100% / 0.5);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.segmented span:hover {
+  color: hsl(0 0% 100% / 0.85);
+}
+.segmented input:checked + span {
+  background: var(--fg);
+  color: var(--bg);
+  font-weight: 600;
+}
+.segmented input:focus-visible + span {
+  outline: 2px solid hsl(0 0% 100% / 0.5);
+  outline-offset: 1px;
+}
+.hint {
+  margin: 10px 1px 0;
+  min-height: 15px;
+  font-size: 11px;
+  color: hsl(0 0% 100% / 0.42);
+}
+
+/* sites */
+.sites {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.sites li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.sites label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+}
+.sites code {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: hsl(0 0% 100% / 0.32);
+}
+input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--fg);
+  cursor: pointer;
+}
+
+/* ── review CTA (stays usable even when caveman mode is toggled off) ───────── */
+.cta {
+  padding: 14px 15px;
+  border-bottom: 1px solid var(--line);
+}
+.review {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 10px 12px;
+  text-decoration: none;
+  color: var(--fg);
+  background: hsl(0 0% 100% / 0.03);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+.review:hover {
+  background: hsl(0 0% 100% / 0.06);
+  border-color: hsl(0 0% 100% / 0.22);
+  transform: translateY(-1px);
+}
+.review:focus-visible {
+  outline: 2px solid hsl(0 0% 100% / 0.5);
+  outline-offset: 2px;
+}
+.review .stars {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: #f2792b; /* ember — the one spot of colour, matching the flame */
+}
+.review .review-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.review .review-arrow {
+  margin-left: auto;
+  color: hsl(0 0% 100% / 0.4);
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+.review:hover .review-arrow {
+  transform: translateX(2px);
+  color: var(--fg);
+}
+.proof {
+  margin: 10px 1px 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-align: center;
+  color: hsl(0 0% 100% / 0.34);
+}
+
+.foot {
+  padding: 12px 15px 14px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: hsl(0 0% 100% / 0.3);
+}

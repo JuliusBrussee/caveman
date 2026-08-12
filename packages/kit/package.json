@@ -1,0 +1,38 @@
+{
+  "name": "@caveman/kit",
+  "version": "1.0.0",
+  "description": "Honesty-enforcing React surfaces for Caveman: the OptimizedByCaveman mark, BasisBadge, and a headless honesty core.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "default": "./dist/core.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.test.json",
+    "test": "tsc -p tsconfig.json && tsc -p tsconfig.test.json && node --test tests/*.runtime.mjs"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "react": "19.2.1",
+    "react-dom": "19.2.1",
+    "typescript": "5.9.3"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  }
+}

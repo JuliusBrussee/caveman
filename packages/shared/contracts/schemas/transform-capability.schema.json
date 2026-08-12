@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/transform-capability.schema.json",
+  "title": "Caveman Transform Capability Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "registry_sha256", "capabilities"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "registry_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/capability"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source_manifest_sha256"],
+      "properties": {
+        "kind": {
+          "enum": ["native", "derived"]
+        },
+        "source_manifest_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "derived"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source_manifest_sha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "source_manifest_sha256": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transform_id",
+        "implementation_version",
+        "safety_classes",
+        "deterministic",
+        "recovery",
+        "eligible_segment_kinds",
+        "requires_eval",
+        "not_smaller_fallback",
+        "provenance",
+        "conformance_digest"
+      ],
+      "properties": {
+        "transform_id": {
+          "type": "string",
+          "pattern": "^caveman\\.[a-z0-9][a-z0-9.-]*$"
+        },
+        "implementation_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "safety_classes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["S0", "S1", "S2", "S3", "S4"]
+          }
+        },
+        "deterministic": {
+          "type": "boolean"
+        },
+        "recovery": {
+          "enum": ["none", "exact_ccr", "source_ref", "recompute"]
+        },
+        "eligible_segment_kinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "instruction",
+              "user_intent",
+              "tool_schema",
+              "skill",
+              "memory",
+              "history",
+              "tool_result",
+              "artifact",
+              "error",
+              "output_contract"
+            ]
+          }
+        },
+        "requires_eval": {
+          "type": "boolean"
+        },
+        "not_smaller_fallback": {
+          "const": "original"
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "conformance_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}
