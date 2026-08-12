@@ -1,6 +1,6 @@
 {
   "name": "@caveman-ai/cli",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Caveman CLI — wrap coding agents with recoverable local context compression and truthful metering (`caveman claude`), then drive Caveman Cloud from terminal. Compression and metering run in companion Go binaries: run `caveman setup` to see install state. Local savings stay inferred until verified.",
   "license": "MIT",
   "type": "module",
@@ -20,7 +20,11 @@
     "caveman": "dist/index.js",
     "cave": "dist/index.js"
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "node scripts/gen-binaries.mjs && node scripts/gen-wedge-installer.mjs && node scripts/compile-registries.mjs && tsc && node scripts/bundle-delegate.mjs && node scripts/bundle-tui.mjs && node scripts/shebang.mjs",
     "prepack": "npm run build",
