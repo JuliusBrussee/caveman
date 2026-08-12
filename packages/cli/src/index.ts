@@ -14901,10 +14901,14 @@ export function executableCandidateNames(
   pathExt = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
 ): string[] {
   if (platform !== "win32" || extname(command)) return [command];
-  const candidates = [command];
+  const candidates: string[] = [];
   for (const extension of pathExt.split(";").map((value) => value.trim()).filter(Boolean)) {
     candidates.push(`${command}${extension.startsWith(".") ? extension : `.${extension}`}`);
   }
+  // Windows cannot launch extensionless POSIX npm shims without a shell. Keep
+  // the bare name as a fallback for real extensionless executables, but prefer
+  // native executables and cmd/bat shims from PATHEXT.
+  candidates.push(command);
   const seen = new Set<string>();
   return candidates.filter((candidate) => {
     const key = candidate.toLowerCase();

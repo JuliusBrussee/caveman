@@ -23,7 +23,7 @@ test("CLI recognizes Windows paths and PATHEXT without double extensions", () =>
   assert.equal(commandHasPath("caveman-proxy"), false);
   assert.deepEqual(
     executableCandidateNames("caveman-proxy", "win32", ".EXE;.CMD;.EXE"),
-    ["caveman-proxy", "caveman-proxy.EXE", "caveman-proxy.CMD"],
+    ["caveman-proxy.EXE", "caveman-proxy.CMD", "caveman-proxy"],
   );
   assert.deepEqual(
     executableCandidateNames("caveman-proxy.exe", "win32", ".EXE;.CMD"),
