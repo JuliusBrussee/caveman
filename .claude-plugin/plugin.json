@@ -12,7 +12,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/hooks/caveman-activate.js\"",
-            "timeout": 5,
+            "timeout": 15,
             "statusMessage": "Loading caveman mode..."
           }
         ]
@@ -24,7 +24,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/hooks/caveman-mode-tracker.js\"",
-            "timeout": 5,
+            "timeout": 15,
             "statusMessage": "Tracking caveman mode..."
           }
         ]

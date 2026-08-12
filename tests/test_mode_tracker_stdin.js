@@ -255,5 +255,53 @@ test('/caveman-stats emits hookSpecificOutput.additionalContext, not decision:bl
   }
 });
 
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed === 0 ? 0 : 1);
+// ---------- Windows stdin EOF stall: buffered input processed anyway ----------
+
+// On Windows the hook's stdin pipe sometimes never signals EOF, so a hook
+// that does all its work in the 'end' handler idles until the hook timeout
+// kills it and the per-turn reinforcement is lost. The grace timer in the
+// tracker must process the buffered payload and exit on its own even when
+// stdin is deliberately held open. Async because spawnSync cannot keep the
+// child's stdin open past the write.
+function testStalledStdin() {
+  return new Promise(resolve => {
+    const { spawn } = require('child_process');
+    const name = 'stdin held open (no EOF): buffered input processed, clean self-exit';
+    const cfg = makeConfigDir();
+    const child = spawn(process.execPath, [HOOK_PATH], {
+      env: { ...process.env, CLAUDE_CONFIG_DIR: cfg },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    // Watchdog well below the 15s hook timeout: a hang here is the exact
+    // regression this test guards against.
+    const killer = setTimeout(() => child.kill(), 4000);
+    child.on('exit', (code, signal) => {
+      clearTimeout(killer);
+      try {
+        assert.strictEqual(signal, null,
+          'hook hung with stdin open and was killed by the watchdog (EOF-stall regression)');
+        assert.strictEqual(code, CLEAN_EXIT,
+          `expected clean exit, got status=${code}`);
+        assert.strictEqual(flagValue(cfg), 'ultra',
+          'buffered "/caveman ultra" was never processed');
+        passed++;
+        console.log(`  ✓ ${name}`);
+      } catch (e) {
+        failed++;
+        console.error(`  ✗ ${name}`);
+        console.error(`    ${e.message}`);
+      } finally {
+        fs.rmSync(cfg, { recursive: true, force: true });
+        resolve();
+      }
+    });
+    child.stdin.on('error', () => {}); // hook destroys its stdin; EPIPE here is expected
+    child.stdin.write(JSON.stringify({ prompt: '/caveman ultra' }));
+    // Deliberately NO child.stdin.end() — simulates the pipe that never EOFs.
+  });
+}
+
+testStalledStdin().then(() => {
+  console.log(`\n${passed} passed, ${failed} failed`);
+  process.exit(failed === 0 ? 0 : 1);
+});

@@ -16,12 +16,46 @@ const flagPath = path.join(claudeDir, '.caveman-active');
 const prevPath = path.join(claudeDir, '.caveman-active.prev');
 
 let input = '';
+let handled = false;
+
+// stdin EOF grace timer. Everything this hook does lives in handleInput,
+// which normally runs off stdin's 'end' event — but on Windows the hook's
+// stdin pipe sometimes never signals EOF, so the process sat idle doing no
+// work until the hook timeout killed it and the per-turn reinforcement was
+// lost. Observed on one Windows 11 install: 28 of 53 runs died at the 5s
+// limit (median 5423ms) while node itself starts in ~130ms — the cost was
+// waiting, not computing. Claude Code writes the whole JSON payload up
+// front, so process whatever is buffered after a short grace period
+// instead. A healthy 'end' fires in single-digit ms and clears this timer
+// before it ever fires.
+const STDIN_GRACE_MS = 250;
+const graceTimer = setTimeout(handleInput, STDIN_GRACE_MS);
+// Never let the timer itself be the reason the process stays alive.
+graceTimer.unref();
+
 process.stdin.on('data', chunk => { input += chunk; });
 // Abnormal stdin close (broken pipe, parent crash) emits 'error'; without a
 // listener Node throws it as an uncaught exception and the hook exits
 // non-zero — a spurious hook failure (#538). Hooks must always exit 0.
 process.stdin.on('error', () => process.exit(0));
-process.stdin.on('end', () => {
+process.stdin.on('end', handleInput);
+
+function handleInput() {
+  if (handled) return;          // 'end' and the timer must never both run
+  handled = true;
+  clearTimeout(graceTimer);
+  try {
+    runHook();
+  } finally {
+    // Release the stdin handle so the event loop drains and the process
+    // exits on its own once stdout has flushed. Deliberately not
+    // process.exit() — on Windows stdout to a pipe is async and exit() can
+    // truncate the write.
+    try { process.stdin.destroy(); } catch (e) {}
+  }
+}
+
+function runHook() {
   try {
     const data = JSON.parse(input);
     // Collapse whitespace so phrase triggers still match multiline prompts —
@@ -170,4 +204,4 @@ process.stdin.on('end', () => {
   } catch (e) {
     // Silent fail
   }
-});
+}
