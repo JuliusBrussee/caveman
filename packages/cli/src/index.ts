@@ -5591,6 +5591,32 @@ function readJsonObject(path: string): Record<string, unknown> {
   }
 }
 
+export function normalizeHookPath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === "win32" ? path.replace(/\\/g, "/") : path;
+}
+
+export function quoteHookPath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return `'${normalizeHookPath(path, platform).replace(/'/g, `'"'"'`)}'`;
+}
+
+export function nativeHookInvocation(
+  executable: string,
+  fastHook: string,
+  agentId: string,
+  executableIsProxy: boolean,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return executableIsProxy
+    ? `${quoteHookPath(executable, platform)} native-hook ${agentId} --adapter ${quoteHookPath(fastHook, platform)}`
+    : `${quoteHookPath(executable, platform)} ${quoteHookPath(fastHook, platform)} native-hook ${agentId}`;
+}
+
 function nativeHookCommand(agentId: string): string {
   const fastHook = join(dirname(fileURLToPath(import.meta.url)), "native-hook-fast.js");
   const explicitProxy = process.env.CAVEMAN_PROXY_BIN;
@@ -5598,10 +5624,10 @@ function nativeHookCommand(agentId: string): string {
   const proxy = explicitProxy || which("caveman-proxy") || (isExecutable(localProxy) ? localProxy : undefined);
   const bridgeCurrent = proxy ? probeVersionedBinary(proxy, "native_hook_bridge_v1").current : false;
   if (proxy && bridgeCurrent && existsSync(fastHook)) {
-    return `${JSON.stringify(proxy)} native-hook ${agentId} --adapter ${JSON.stringify(fastHook)}`;
+    return nativeHookInvocation(proxy, fastHook, agentId, true);
   }
   if (existsSync(fastHook)) {
-    return `${JSON.stringify(process.execPath)} ${JSON.stringify(fastHook)} native-hook ${agentId}`;
+    return nativeHookInvocation(process.execPath, fastHook, agentId, false);
   }
   return `${cavemanBinForHook()} native-hook ${agentId}`;
 }
@@ -9989,7 +10015,10 @@ function shouldShrink(command: string): boolean {
 // cavemanBinForHook is the invocation a Claude hook uses to call back into this
 // CLI, robust to PATH: a resolved `caveman`/`cave`, else this very script's node.
 function cavemanBinForHook(): string {
-  return which("caveman") ?? which("cave") ?? `${process.execPath} ${process.argv[1]}`;
+  const command = which("caveman") ?? which("cave");
+  return command
+    ? quoteHookPath(command)
+    : `${quoteHookPath(process.execPath)} ${quoteHookPath(process.argv[1]!)}`;
 }
 
 // shrinkHook is the settings-hook callback for the agents whose harness can
