@@ -172,7 +172,10 @@ process.stdin.on('end', () => {
     // Shared mode-change parser (#602) — single source of truth with the
     // opencode plugin for slash commands, namespaced /caveman:caveman-*,
     // natural-language activation/deactivation, and brevity triggers.
-    const change = parseModeChange(prompt, { getDefaultMode, skipNaturalLanguage });
+    const change = parseModeChange(prompt, {
+      getDefaultMode: () => getDefaultMode(data.cwd),
+      skipNaturalLanguage
+    });
 
     // A /caveman argument that resolves to no mode used to leave the level
     // untouched and say nothing, so a typo or punctuation glued to the level

@@ -30,8 +30,8 @@ class HookScriptTests(unittest.TestCase):
             cmd,
             cwd=REPO_ROOT,
             env=env,
-            text=True,
             stdin=subprocess.DEVNULL,
+            text=True,
             capture_output=True,
             check=True,
         )

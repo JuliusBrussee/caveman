@@ -54,6 +54,21 @@ test('reads --session-file directly and sums output tokens', (tmp) => {
   assert.match(out, /Cache-read tokens:\s+250/);
 });
 
+test('deduplicates multi-block assistant entries with the same message id (issue #793)', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { id: 'msg_123', usage: { output_tokens: 100, cache_read_input_tokens: 200 } } },
+    { type: 'assistant', message: { id: 'msg_123', usage: { output_tokens: 100, cache_read_input_tokens: 200 } } },
+    { type: 'assistant', message: { id: 'msg_456', usage: { output_tokens: 50, cache_read_input_tokens: 50 } } },
+  ]);
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(tmp, '.claude') },
+  });
+  assert.match(out, /Turns:\s+2/);
+  assert.match(out, /Output tokens:\s+150/);
+  assert.match(out, /Cache-read tokens:\s+250/);
+});
+
 test('shows full-mode savings estimate when flag is full', (tmp) => {
   const sess = makeSession(tmp, [
     { type: 'assistant', message: { usage: { output_tokens: 350 } } },

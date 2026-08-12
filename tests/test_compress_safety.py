@@ -29,44 +29,56 @@ class CompressSafetyTests(unittest.TestCase):
         return path
 
     def test_empty_input_refused(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
             path = self._file_with(Path(tmp), "")
             with mock.patch.object(compress_mod, "call_claude") as call:
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
             call.assert_not_called()
             self.assertEqual(path.read_text(encoding="utf-8"), "")
-            self.assertFalse((Path(tmp) / "task.original.md").exists())
+            backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
+            self.assertFalse(backup.exists())
 
     def test_empty_compressed_output_does_not_touch_disk(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
             original = "# Heading\n\nSome long natural language paragraph that should be compressed.\n"
             path = self._file_with(Path(tmp), original)
             with mock.patch.object(compress_mod, "call_claude", return_value=""):
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
             self.assertEqual(path.read_text(encoding="utf-8"), original)
-            self.assertFalse((Path(tmp) / "task.original.md").exists())
+            backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
+            self.assertFalse(backup.exists())
 
     def test_whitespace_only_compressed_output_does_not_touch_disk(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
             original = "# Heading\n\nProse that should change.\n"
             path = self._file_with(Path(tmp), original)
             with mock.patch.object(compress_mod, "call_claude", return_value="   \n  "):
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
             self.assertEqual(path.read_text(encoding="utf-8"), original)
-            self.assertFalse((Path(tmp) / "task.original.md").exists())
+            backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
+            self.assertFalse(backup.exists())
 
     def test_identical_compressed_output_does_not_touch_disk(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
             original = "# Heading\n\nProse.\n"
             path = self._file_with(Path(tmp), original)
             with mock.patch.object(compress_mod, "call_claude", return_value=original):
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
             self.assertEqual(path.read_text(encoding="utf-8"), original)
-            self.assertFalse((Path(tmp) / "task.original.md").exists())
+            backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
+            self.assertFalse(backup.exists())
 
     def test_real_compression_writes_backup_and_target(self):
         # Isolate the backup data dir to a temp location so the out-of-tree
@@ -159,7 +171,7 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertEqual(list(Path(tmp).glob("*.tmp")), [])
             self.assertEqual(list(backup_dir.glob("*.tmp")), [])
 
-    @unittest.skipIf(os.name == "nt", "Windows ACLs are not represented by POSIX mode bits")
+    @unittest.skipIf(os.name == "nt" or sys.platform == "win32", "Windows ACLs are not represented by POSIX mode bits")
     def test_permission_preserved_across_compression(self):
         with tempfile.TemporaryDirectory() as tmp, \
              tempfile.TemporaryDirectory() as data_home, \
@@ -204,6 +216,22 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertFalse(ok)
             self.assertNotIn(preamble_fix, written_texts)
             self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+
+    def test_expanded_compressed_output_rejected_and_aborted(self):
+        # A compression attempt that expands the text must be rejected (issue #776)
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            original = "# Heading\n\nShort text.\n"
+            expanded = "# Heading\n\nMuch longer text that expands beyond the original size.\n"
+            path = self._file_with(Path(tmp), original)
+            with mock.patch.object(compress_mod, "call_claude", return_value=expanded):
+                ok = compress_mod.compress_file(path)
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
+            self.assertFalse(backup.exists())
 
 
 if __name__ == "__main__":
