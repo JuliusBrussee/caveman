@@ -12,7 +12,9 @@ Please report vulnerabilities privately by emailing the maintainers or using [Gi
 
 ## Privacy & Telemetry
 
-**Caveman has no telemetry. Zero.** No analytics, no crash reporting, no phone-home, no accounts, no API keys collected. There is no caveman backend — nothing to send data to.
+**The caveman skill and hooks have no telemetry. Zero.** No analytics, no crash reporting, no phone-home, no accounts, no API keys collected.
+
+**The `caveman` CLI (proxy/wrap tool) is the one exception.** It sends anonymous usage stats by default: command counts and per-session token totals only — never prompts, code, argv, or file paths. The first interactive run prints a disclosure line. Opt out anytime with `caveman telemetry off`, `CAVEMAN_TELEMETRY=0`, or `DO_NOT_TRACK=1`; CI and non-interactive runs never send. If you log in (optional account), `caveman sync` uploads span metadata — tokens, cost, latency, model, status — never prompt or response bytes; ZDR orgs are excluded.
 
 ### After install: zero network calls
 

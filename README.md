@@ -115,6 +115,13 @@ gemini extensions install https://github.com/JuliusBrussee/caveman --consent
 npx skills add JuliusBrussee/caveman -a cursor
 ```
 
+**Want deeper savings?** The skill shrinks what the agent **says**. The **caveman proxy** shrinks what it **sends** — sits between your agent and the model, compresses traffic locally, meters what it saved:
+
+```bash
+npm install -g @caveman-ai/cli
+caveman claude   # wraps Claude Code — also works with codex, gemini, opencode, aider
+```
+
 The full per-agent matrix, all flags, dry-run, and uninstall live in **[INSTALL.md](./INSTALL.md)**.
 
 > [!TIP]
@@ -306,7 +313,11 @@ Hook architecture, file ownership, and CI sync are documented for maintainers in
 
 ## Privacy
 
-Caveman no phone home. No telemetry, no analytics, no accounts, no backend. After install, zero network calls — the skill is a prompt, the hooks are local scripts, and `/caveman-stats` reads a log already on your disk. Install-time fetches (GitHub plus your agents' own registries) are spelled out in [SECURITY.md](./SECURITY.md#privacy--telemetry).
+Caveman skill no phone home. No accounts, no analytics. After install, zero network calls — the skill is a prompt, the hooks are local scripts, and `/caveman-stats` reads a log already on your disk.
+
+One exception: the [`caveman` CLI](https://caveman.so) (the proxy/wrap tool) sends anonymous usage stats by default — command counts and session token totals only, never your prompts, code, or file paths. It says so on first run, and one command turns it off forever: `caveman telemetry off` (or set `DO_NOT_TRACK=1`).
+
+Install-time fetches (GitHub plus your agents' own registries) are spelled out in [SECURITY.md](./SECURITY.md#privacy--telemetry).
 
 ## Sponsors
 
