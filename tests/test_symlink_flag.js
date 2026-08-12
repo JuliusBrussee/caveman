@@ -190,6 +190,82 @@ test('all valid modes round-trip through symlinked parent', (tmp) => {
   }
 });
 
+// ---------- rename retry + guaranteed temp cleanup (#511/#578/#657) ----------
+
+test('recovers from transient rename failures within the retry budget', (tmp) => {
+  const flagDir = path.join(tmp, 'claude-config');
+  fs.mkdirSync(flagDir, { recursive: true });
+  const flagPath = path.join(flagDir, '.caveman-active');
+
+  // Simulate a lock held by another process (statusline read, concurrent
+  // hook) that clears after two attempts — the third rename should succeed.
+  const realRenameSync = fs.renameSync;
+  let calls = 0;
+  fs.renameSync = (...args) => {
+    calls++;
+    if (calls < 3) {
+      const err = new Error('EBUSY: resource busy or locked');
+      err.code = 'EBUSY';
+      throw err;
+    }
+    return realRenameSync(...args);
+  };
+  try {
+    safeWriteFlag(flagPath, 'ultra');
+  } finally {
+    fs.renameSync = realRenameSync;
+  }
+
+  assert.strictEqual(readFlag(flagPath), 'ultra', 'flag should be written once the lock clears');
+  const leftovers = fs.readdirSync(flagDir).filter(n => n !== '.caveman-active');
+  assert.deepStrictEqual(leftovers, [], 'no temp file should remain after a successful retry');
+});
+
+test('gives up silently after 3 failed attempts and leaves no orphaned temp file', (tmp) => {
+  const flagDir = path.join(tmp, 'claude-config');
+  fs.mkdirSync(flagDir, { recursive: true });
+  const flagPath = path.join(flagDir, '.caveman-active');
+  fs.writeFileSync(flagPath, 'full');
+
+  const realRenameSync = fs.renameSync;
+  fs.renameSync = () => {
+    const err = new Error('EPERM: operation not permitted');
+    err.code = 'EPERM';
+    throw err;
+  };
+  try {
+    assert.doesNotThrow(() => safeWriteFlag(flagPath, 'ultra'), 'must silent-fail, never throw');
+  } finally {
+    fs.renameSync = realRenameSync;
+  }
+
+  assert.strictEqual(fs.readFileSync(flagPath, 'utf8'), 'full', 'original flag content untouched');
+  const files = fs.readdirSync(flagDir);
+  assert.deepStrictEqual(files, ['.caveman-active'], `temp file leaked: ${files}`);
+});
+
+test('a non-transient rename error also leaves no orphaned temp file', (tmp) => {
+  const flagDir = path.join(tmp, 'claude-config');
+  fs.mkdirSync(flagDir, { recursive: true });
+  const flagPath = path.join(flagDir, '.caveman-active');
+
+  const realRenameSync = fs.renameSync;
+  fs.renameSync = () => {
+    const err = new Error('ENOSPC: no space left on device');
+    err.code = 'ENOSPC'; // not in the transient retry list
+    throw err;
+  };
+  try {
+    assert.doesNotThrow(() => safeWriteFlag(flagPath, 'ultra'), 'silent-fail semantics must hold for any error');
+  } finally {
+    fs.renameSync = realRenameSync;
+  }
+
+  const files = fs.readdirSync(flagDir).filter(n => n !== '.caveman-active');
+  assert.deepStrictEqual(files, [], 'temp file must be cleaned up even for a non-retried error');
+  assert.strictEqual(fs.existsSync(flagPath), false, 'flag was never created');
+});
+
 // ---------- Source code audit ----------
 
 test('safeWriteFlag no longer has blanket symlink parent refusal', (tmp) => {

@@ -1,4 +1,3 @@
-benchmarks/results/*.json
 __pycache__/
 *.pyc
 .venv/
@@ -12,3 +11,21 @@ context/refs/research-brief-caveman-code-efficiency.md
 # Build artifacts
 dist/*
 !dist/caveman.skill
+
+# Local star-history chart scratch (not part of the product)
+tmp-starcharts/
+
+# Engine stack build artifacts
+node_modules/
+bin/caveman-engine
+bin/caveman-proxy
+bin/caveman-wasm
+*/dist/
+packages/*/dist/
+packages/sdk/typescript/dist/
+packages/shared/*/dist/
+skills/*/dist/
+*.egg-info/
+extension/engine.wasm
+*.tsbuildinfo
+bin/cave

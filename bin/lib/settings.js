@@ -1,4 +1,4 @@
-// caveman — JSONC-tolerant settings.json read/write + defensive hook validation.
+// caveman — JSONC-tolerant settings.json read/write + scoped hook maintenance.
 //
 // Lifted in spirit from gsd-build/get-shit-done's stripJsonComments + readSettings.
 // Reused by bin/install.js and (optionally) by hooks/caveman-activate.js so a
@@ -8,7 +8,7 @@
 //   readSettings(path)             → object, {}, or null on hard parse failure
 //   writeSettings(path, obj)       → atomic write with newline
 //   stripJsonComments(src)         → string with // and /* */ stripped (string-aware)
-//   validateHookFields(settings)   → mutates: drops malformed hook entries
+//   validateHookFields(settings)   → validates only Caveman-managed handlers
 //   hasCavemanHook(settings, ev)   → idempotency probe
 //   addCommandHook(settings, ev, opts) → no-op if substring marker already present
 //   removeCavemanHooks(settings)   → uninstall helper
@@ -118,37 +118,34 @@ function writeSettings(p, obj) {
   const dir = path.dirname(p);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.${path.basename(p)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
-  fs.renameSync(tmp, p);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
+    fs.renameSync(tmp, p);
+  } catch (error) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw error;
+  }
 }
 
 // ── validateHookFields ────────────────────────────────────────────────────
-// Claude Code uses strict Zod on settings.json — a single malformed hook
-// silently discards the entire file. Mutate-to-valid before write.
-//
-// Required shape (per Claude Code docs):
-//   settings.hooks[event] = [{ hooks: [{ type:'command', command:'…', timeout?:n }, ...] }, ...]
-//   settings.hooks[event] = [{ matcher?:'…', hooks: [...] }, ...]   // also valid
+// Installer owns only handlers targeting one of its exact script basenames.
+// Preserve every foreign/unknown shape: Claude adds hook kinds over time, and
+// deleting a hook we do not understand can remove user security controls.
 function validateHookFields(settings) {
   if (!settings || typeof settings !== 'object') return settings;
   if (!settings.hooks || typeof settings.hooks !== 'object') return settings;
   for (const ev of Object.keys(settings.hooks)) {
     const arr = settings.hooks[ev];
-    if (!Array.isArray(arr)) { delete settings.hooks[ev]; continue; }
-    settings.hooks[ev] = arr.filter(entry => {
-      if (!entry || typeof entry !== 'object') return false;
-      if (!Array.isArray(entry.hooks)) return false;
+    if (!Array.isArray(arr)) continue;
+    for (const entry of arr) {
+      if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) continue;
       entry.hooks = entry.hooks.filter(h => {
-        if (!h || typeof h !== 'object') return false;
-        if (h.type === 'command') return typeof h.command === 'string' && h.command.length > 0;
-        if (h.type === 'agent')   return typeof h.prompt === 'string' && h.prompt.length > 0;
-        return false;
+        if (!h || typeof h !== 'object' || typeof h.command !== 'string') return true;
+        if (!referencesManagedScript(h.command)) return true;
+        return h.type === 'command' && h.command.length > 0;
       });
-      return entry.hooks.length > 0;
-    });
-    if (settings.hooks[ev].length === 0) delete settings.hooks[ev];
+    }
   }
-  if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
   return settings;
 }
 
@@ -168,7 +165,10 @@ function hasCavemanHook(settings, event, marker = 'caveman') {
 // might rotate across reinstalls.
 function addCommandHook(settings, event, opts) {
   if (!settings.hooks) settings.hooks = {};
-  if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
+  if (settings.hooks[event] !== undefined && !Array.isArray(settings.hooks[event])) {
+    throw new TypeError(`caveman: unsupported hook event shape for ${event}; refusing to overwrite it`);
+  }
+  if (settings.hooks[event] === undefined) settings.hooks[event] = [];
   const marker = opts.marker || opts.command;
   if (hasCavemanHook(settings, event, marker)) return false;
   const hook = { type: 'command', command: opts.command };
@@ -218,25 +218,29 @@ function referencesManagedScript(command) {
 }
 
 // ── removeCavemanHooks ────────────────────────────────────────────────────
-// Strip every entry whose any hook command targets one of our managed hook
-// scripts (exact basename match, see above). Empties events. Tolerates
-// malformed pre-existing settings (non-array hook lists, foreign shapes) —
-// those get dropped by validateHookFields first so we never call .length /
-// .filter on a non-array.
+// Strip only handlers whose command targets one of our managed hook scripts
+// (exact basename match, see above). Mixed matcher groups retain every foreign
+// handler. Unknown shapes survive byte-semantically.
 function removeCavemanHooks(settings) {
   if (!settings || !settings.hooks) return 0;
   validateHookFields(settings);
-  if (!settings.hooks) return 0; // validate may have deleted the whole tree
+  if (!settings.hooks) return 0;
   let removed = 0;
   for (const ev of Object.keys(settings.hooks)) {
-    if (!Array.isArray(settings.hooks[ev])) { delete settings.hooks[ev]; continue; }
-    const before = settings.hooks[ev].length;
+    if (!Array.isArray(settings.hooks[ev])) continue;
+    let removedFromEvent = 0;
     settings.hooks[ev] = settings.hooks[ev].filter(entry => {
       if (!entry || !Array.isArray(entry.hooks)) return true;
-      return !entry.hooks.some(h => h && typeof h.command === 'string' && referencesManagedScript(h.command));
+      const before = entry.hooks.length;
+      entry.hooks = entry.hooks.filter(h =>
+        !(h && typeof h.command === 'string' && referencesManagedScript(h.command))
+      );
+      const count = before - entry.hooks.length;
+      removedFromEvent += count;
+      return count === 0 || entry.hooks.length > 0;
     });
-    removed += before - settings.hooks[ev].length;
-    if (settings.hooks[ev].length === 0) delete settings.hooks[ev];
+    removed += removedFromEvent;
+    if (removedFromEvent > 0 && settings.hooks[ev].length === 0) delete settings.hooks[ev];
   }
   if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
   return removed;
@@ -253,6 +257,7 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
   let rewritten = 0;
   const reBare = /^node\s+("([^"]+)"|'([^']+)'|(\S+))\s*$/;
   for (const ev of Object.keys(settings.hooks)) {
+    if (!Array.isArray(settings.hooks[ev])) continue;
     for (const entry of settings.hooks[ev]) {
       if (!entry || !Array.isArray(entry.hooks)) continue;
       for (const h of entry.hooks) {
@@ -309,21 +314,23 @@ function pruneOrphanedManagedHooks(settings, configDir) {
     return false;
   };
 
-  if (settings.hooks && typeof settings.hooks === 'object') {
-    // Normalize malformed shapes first so the filter below only sees valid
-    // entries (and a poisoned settings.json can't survive the rewrite).
-    validateHookFields(settings);
-  }
+  if (settings.hooks && typeof settings.hooks === 'object') validateHookFields(settings);
   if (settings.hooks && typeof settings.hooks === 'object') {
     for (const ev of Object.keys(settings.hooks)) {
-      if (!Array.isArray(settings.hooks[ev])) { delete settings.hooks[ev]; continue; }
-      const before = settings.hooks[ev].length;
+      if (!Array.isArray(settings.hooks[ev])) continue;
+      let removedFromEvent = 0;
       settings.hooks[ev] = settings.hooks[ev].filter(entry => {
         if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return true;
-        return !entry.hooks.some(h => h && typeof h.command === 'string' && targetMissing(h.command));
+        const before = entry.hooks.length;
+        entry.hooks = entry.hooks.filter(h =>
+          !(h && typeof h.command === 'string' && targetMissing(h.command))
+        );
+        const count = before - entry.hooks.length;
+        removedFromEvent += count;
+        return count === 0 || entry.hooks.length > 0;
       });
-      removed += before - settings.hooks[ev].length;
-      if (settings.hooks[ev].length === 0) delete settings.hooks[ev];
+      removed += removedFromEvent;
+      if (removedFromEvent > 0 && settings.hooks[ev].length === 0) delete settings.hooks[ev];
     }
     if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
   }

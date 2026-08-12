@@ -1,0 +1,78 @@
+{
+  "schema": "caveman.cachebench.public-corpus-result.v1",
+  "verified_at": "2026-08-10",
+  "basis": "benchmark_public_corpus_simulated",
+  "publishable": false,
+  "source": {
+    "dataset": "sammshen/lmcache-agentic-traces",
+    "url": "https://huggingface.co/datasets/sammshen/lmcache-agentic-traces",
+    "revision": "6e043b9e89865df3aec19fd5679286b683bfd70e",
+    "license": "CC-BY-4.0",
+    "shards": [
+      {"path": "data/train-00000-of-00005.parquet", "bytes": 502376957, "sha256": "7d8fde279e899c0cd97e1b4b73dd2a0d76132c533e77ac1cdd310494710d7447"},
+      {"path": "data/train-00001-of-00005.parquet", "bytes": 555802662, "sha256": "594c934498c9d099e75f9d3332feaaed3587b8b0b8eeb5063e79514cc2aedc8f"},
+      {"path": "data/train-00002-of-00005.parquet", "bytes": 476154555, "sha256": "476b661879f28732bf5c56af4887666194b4f489a1128af59e58bdbfdf6d1ccc"},
+      {"path": "data/train-00003-of-00005.parquet", "bytes": 437652845, "sha256": "ca61176d73e4de62e273983a44531ceeacb251405f8db3b92a791d9343e2c66f"},
+      {"path": "data/train-00004-of-00005.parquet", "bytes": 398199928, "sha256": "a59fe71cf84ae0beb460cabb4edfd3e04f7da945c5d6777ae5df18716eceab71"}
+    ]
+  },
+  "method": {
+    "target_request_hit_rate": 0.97,
+    "target_eligible_token_hit_rate": 0.97,
+    "token_basis": "o200k_base estimate over canonical message JSON",
+    "quality_basis": "model_visible_request_equivalence",
+    "cold_starts_in_denominator": true,
+    "cross_session_reuse_assumed": false,
+    "opportunity_capture_is_diagnostic_not_gate": true,
+    "provider_requests_sent": false
+  },
+  "full_openai_gpt_5_6": {
+    "normalized_corpus_sha256": "c9a11c94fe8bf0ace9665c5b08a865b7a64079499c12d10564ab848b03de5583",
+    "retained_corpus_bytes": 2427422773,
+    "sessions": 767,
+    "requests": 24880,
+    "sources": {"swebench": 665, "gaia": 94, "wildclaw": 8},
+    "eligible_requests": 24706,
+    "ineligible_requests": 174,
+    "cold_start_ceiling_request_hit_rate": 0.9691720257234727,
+    "request_hits": 23938,
+    "request_hit_rate": 0.9689144337407917,
+    "eligible_tokens": 695014900,
+    "cache_read_tokens": 665558422,
+    "cache_write_tokens": 29456478,
+    "eligible_token_hit_rate": 0.9576174870495582,
+    "reusable_opportunity_requests": 23938,
+    "reusable_opportunity_tokens": 665558422,
+    "opportunity_request_capture_rate": 1.0,
+    "opportunity_token_capture_rate": 1.0,
+    "cold_writes": 768,
+    "invalidations": 0,
+    "invalid_samples": 0,
+    "model_visible_equivalence_failures": 0,
+    "strict_gate_passed": false,
+    "blocking_reasons": [
+      "request hit rate 0.9689 below target 0.9700",
+      "token hit rate 0.9576 below target 0.9700"
+    ]
+  },
+  "shard_00000_cross_provider": {
+    "normalized_corpus_sha256": "9d004e48e537587467aafd8f59cb8905293eec69671b24249e994afc1f79d070",
+    "sessions": 118,
+    "requests_per_provider": 4976,
+    "providers": [
+      {"provider": "anthropic", "model": "claude-sonnet-4-6", "request_hit_rate": 0.970056270096463, "eligible_token_hit_rate": 0.9569044342542916, "opportunity_request_capture_rate": 0.9936187731576781, "opportunity_token_capture_rate": 0.992327630807194, "invalid_samples": 0, "equivalence_failures": 0},
+      {"provider": "openai", "model": "gpt-5.6", "request_hit_rate": 0.9762861736334405, "eligible_token_hit_rate": 0.9643029222877852, "opportunity_request_capture_rate": 1.0, "opportunity_token_capture_rate": 1.0, "invalid_samples": 0, "equivalence_failures": 0},
+      {"provider": "bedrock", "model": "global.anthropic.claude-sonnet-4-6", "request_hit_rate": 0.970056270096463, "eligible_token_hit_rate": 0.9569044342542916, "opportunity_request_capture_rate": 0.9936187731576781, "opportunity_token_capture_rate": 0.992327630807194, "invalid_samples": 0, "equivalence_failures": 0},
+      {"provider": "gemini", "model": "gemini-2.5-pro", "request_hit_rate": 0.970056270096463, "eligible_token_hit_rate": 0.9569044342542916, "opportunity_request_capture_rate": 0.9936187731576781, "opportunity_token_capture_rate": 0.992327630807194, "invalid_samples": 0, "equivalence_failures": 0}
+    ]
+  },
+  "limitations": [
+    "No provider request was sent; cache reads and writes are deterministic simulation.",
+    "Token counts use o200k_base, not original-model or provider-counted tokens.",
+    "Dataset supplies normalized message histories, model labels, output lengths, and per-session gaps, not complete original provider envelopes or tool schemas.",
+    "Sessions are isolated because corpus has no global timeline; no cross-session cache reuse is credited.",
+    "Gemini implicit-cache retention uses a 5-minute simulation fallback and is never engine-causal attribution.",
+    "Model-visible equivalence does not replace task-quality evaluation on live model outputs.",
+    "Result proves neither production traffic prevalence nor invoice or verified savings."
+  ]
+}

@@ -87,7 +87,13 @@ function readModeFromConfigFile(configPath) {
   return null;
 }
 
-function getDefaultMode() {
+// startDir overrides the cwd the repo-config walk starts from (default
+// process.cwd(), same as findRepoConfigPath's own fallback) — lets a caller
+// resolve the mode for a directory other than its own process cwd (#634:
+// the UserPromptSubmit hook's stdin carries the session's cwd, which can
+// differ from the hook process's cwd). Every other resolution step is
+// cwd-independent, so only the repo-config walk takes it.
+function getDefaultMode(startDir) {
   // 1. Environment variable (highest priority)
   const envMode = process.env.CAVEMAN_DEFAULT_MODE;
   if (envMode && VALID_MODES.includes(envMode.toLowerCase())) {
@@ -95,7 +101,7 @@ function getDefaultMode() {
   }
 
   // 2. Repo-local config (checked-in, per-project default)
-  const repoConfigPath = findRepoConfigPath(process.cwd());
+  const repoConfigPath = findRepoConfigPath(startDir);
   if (repoConfigPath) {
     const repoMode = readModeFromConfigFile(repoConfigPath);
     if (repoMode) return repoMode;
@@ -178,18 +184,47 @@ function safeWriteFlag(flagPath, content) {
       if (e.code !== 'ENOENT') return;
     }
 
-    const tempPath = path.join(realFlagDir, `.caveman-active.${process.pid}.${Date.now()}`);
-    const O_NOFOLLOW = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
-    const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW;
-    let fd;
+    // tempPath is hoisted above the try so the finally below can always find
+    // it. On Windows, renameSync onto an existing target throws EPERM/EBUSY/
+    // EACCES/EEXIST when another process (statusline read, a concurrent
+    // session's hook) holds the file open without FILE_SHARE_DELETE —
+    // without the retry + guaranteed cleanup here, every such miss left an
+    // orphaned .caveman-active.<pid>.<ts> file behind (#511/#578/#657).
+    let tempPath;
     try {
-      fd = fs.openSync(tempPath, flags, 0o600);
-      fs.writeSync(fd, String(content));
-      try { fs.fchmodSync(fd, 0o600); } catch (e) { /* best-effort on Windows */ }
+      tempPath = path.join(realFlagDir, `.caveman-active.${process.pid}.${Date.now()}`);
+      const O_NOFOLLOW = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+      const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW;
+      let fd;
+      try {
+        fd = fs.openSync(tempPath, flags, 0o600);
+        fs.writeSync(fd, String(content));
+        try { fs.fchmodSync(fd, 0o600); } catch (e) { /* best-effort on Windows */ }
+      } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+      }
+
+      // Retry brief lock contention a few times. A missed write is harmless
+      // (concurrent writers publish the same mode value); a leaked temp file
+      // is not, so the finally below always sweeps it regardless of outcome.
+      let renamed = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          fs.renameSync(tempPath, realFlagPath);
+          renamed = true;
+          break;
+        } catch (e) {
+          const transient = e.code === 'EPERM' || e.code === 'EBUSY' ||
+                             e.code === 'EACCES' || e.code === 'EEXIST';
+          if (!transient) throw e;
+        }
+      }
+      if (!renamed && debug) {
+        process.stderr.write('[caveman] safeWriteFlag: rename contended after 3 attempts; flag not updated this write\n');
+      }
     } finally {
-      if (fd !== undefined) fs.closeSync(fd);
+      if (tempPath) { try { fs.unlinkSync(tempPath); } catch (e) { /* renamed already, or never created */ } }
     }
-    fs.renameSync(tempPath, realFlagPath);
   } catch (e) {
     // Silent fail — flag is best-effort
   }

@@ -95,7 +95,7 @@ test('reports no-session when no .jsonl exists', (tmp) => {
   assert.match(err.stderr, /no Claude Code session found/);
 });
 
-test('mode tracker handles /caveman-stats with decision block', (tmp) => {
+test('mode tracker delivers /caveman-stats via additionalContext', (tmp) => {
   const sess = makeSession(tmp, [
     { type: 'assistant', message: { usage: { output_tokens: 100 } } },
   ]);
@@ -107,9 +107,9 @@ test('mode tracker handles /caveman-stats with decision block', (tmp) => {
     input: JSON.stringify({ prompt: '/caveman-stats', transcript_path: sess }),
   });
   const parsed = JSON.parse(out);
-  assert.strictEqual(parsed.decision, 'block');
-  assert.match(parsed.reason, /Caveman Stats/);
-  assert.match(parsed.reason, /Output tokens:\s+100/);
+  assert.strictEqual(parsed.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.match(parsed.hookSpecificOutput.additionalContext, /Caveman Stats/);
+  assert.match(parsed.hookSpecificOutput.additionalContext, /Output tokens:\s+100/);
 });
 
 test('mode tracker preserves caveman flag when /caveman-stats fires', (tmp) => {
@@ -221,6 +221,7 @@ test('appends to lifetime history on each run', (tmp) => {
   const entry = JSON.parse(lines[0]);
   assert.strictEqual(entry.session_id, 's');
   assert.strictEqual(entry.output_tokens, 350);
+  assert.strictEqual(entry.turns, 1);
   assert.strictEqual(entry.est_saved_tokens, 650);
   assert.strictEqual(entry.mode, 'full');
   assert.strictEqual(entry.model, 'claude-sonnet-4-7');
@@ -456,8 +457,8 @@ test('mode tracker forwards --share to stats script', (tmp) => {
     input: JSON.stringify({ prompt: '/caveman-stats --share', transcript_path: sess }),
   });
   const parsed = JSON.parse(out);
-  assert.strictEqual(parsed.decision, 'block');
-  assert.match(parsed.reason, /^🪨 Saved 650 output tokens/);
+  assert.strictEqual(parsed.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.match(parsed.hookSpecificOutput.additionalContext, /🪨 Saved 650 output tokens/);
 });
 
 // ── Output-reduction share (never a "usage"/"budget" claim) ────────────────
@@ -631,6 +632,168 @@ test('excludes tokens that predate a mid-session flag write with no log (#601)',
   assert.match(out, /unattributed:\s+350 tokens/);
   assert.match(out, /excluded/);
   assert.doesNotMatch(out, /Est\. without caveman/);
+});
+
+// ── Rule-overhead + net (#145/#677) ────────────────────────────────────────
+// Gross output savings alone can never reveal the net-negative regime —
+// docs/HONEST-NUMBERS.md admits caveman's rules cost ~1-1.5k input tokens
+// every turn. These lines subtract that estimated cost from the estimated
+// savings so a terse workload doesn't look like a win when it isn't one.
+
+test('session shows a positive net when savings clear the rule overhead', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 1500 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // 1500/0.35 = 4286 (rounded), saved 2786; overhead 1250x1 turn; net = +1536.
+  assert.match(out, /Est\. rule overhead:\s+1,250 \(input, ~1,250\/turn over 1 turn\)/);
+  assert.match(out, /Est\. net:\s+\+1,536 \(net saving after rule overhead\)/);
+});
+
+test('session shows a NEGATIVE net and tells the user to consider turning caveman off (#145)', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 100 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // 100/0.35 = 286 (rounded), saved 186; overhead 1250; net = -1064.
+  assert.match(out, /Est\. net:\s+-1,064/);
+  assert.match(out, /caveman cost more than it saved for this workload/);
+  assert.match(out, /consider turning it off/);
+});
+
+test('CAVEMAN_RULE_OVERHEAD_TOKENS overrides the per-turn overhead estimate', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 1500 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_RULE_OVERHEAD_TOKENS: '500' },
+  });
+  // overhead 500x1 turn; net = 2786 - 500 = +2286.
+  assert.match(out, /Est\. rule overhead:\s+500 \(input, ~500\/turn over 1 turn\)/);
+  assert.match(out, /Est\. net:\s+\+2,286/);
+});
+
+test('deriveNet and ruleOverheadPerTurn validate a positive integer, falling back otherwise', () => {
+  const { deriveNet, ruleOverheadPerTurn } = require(STATS);
+  const saved = process.env.CAVEMAN_RULE_OVERHEAD_TOKENS;
+  try {
+    delete process.env.CAVEMAN_RULE_OVERHEAD_TOKENS;
+    assert.strictEqual(ruleOverheadPerTurn(), 1250);
+    assert.deepStrictEqual(deriveNet({ estSavedTokens: 2786, turns: 1 }), { overheadTokens: 1250, netTokens: 1536 });
+
+    process.env.CAVEMAN_RULE_OVERHEAD_TOKENS = '500';
+    assert.strictEqual(ruleOverheadPerTurn(), 500);
+
+    // Invalid overrides (non-numeric, zero, negative, non-integer) all fall
+    // back to the default rather than produce a nonsensical overhead.
+    process.env.CAVEMAN_RULE_OVERHEAD_TOKENS = 'garbage';
+    assert.strictEqual(ruleOverheadPerTurn(), 1250);
+    process.env.CAVEMAN_RULE_OVERHEAD_TOKENS = '0';
+    assert.strictEqual(ruleOverheadPerTurn(), 1250);
+    process.env.CAVEMAN_RULE_OVERHEAD_TOKENS = '-100';
+    assert.strictEqual(ruleOverheadPerTurn(), 1250);
+    process.env.CAVEMAN_RULE_OVERHEAD_TOKENS = '12.5';
+    assert.strictEqual(ruleOverheadPerTurn(), 1250);
+  } finally {
+    if (saved === undefined) delete process.env.CAVEMAN_RULE_OVERHEAD_TOKENS;
+    else process.env.CAVEMAN_RULE_OVERHEAD_TOKENS = saved;
+  }
+});
+
+test('does not fabricate a net when the savings span is unattributed (no guessing)', (tmp) => {
+  const now = Date.now();
+  const sess = makeSession(tmp, [
+    { type: 'assistant', timestamp: new Date(now - 60 * 60_000).toISOString(), message: { usage: { output_tokens: 350 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  // Flag written now, no transition log → mode during the message is unknown.
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.match(out, /unattributed:\s+350 tokens/);
+  assert.doesNotMatch(out, /Est\. net:/); // no attributed savings basis → no net claim
+});
+
+test('does not fabricate a net when mode has no benchmark estimate', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 100 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'ultra');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.match(out, /No savings estimate for 'ultra' mode/);
+  assert.doesNotMatch(out, /Est\. net:/);
+});
+
+test('lifetime view nets aggregated turns against aggregated savings', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  const histPath = path.join(claudeDir, '.caveman-history.jsonl');
+  fs.writeFileSync(histPath, [
+    { ts: 1000, session_id: 'a', mode: 'full', output_tokens: 1500, est_saved_tokens: 2786, est_saved_usd: 0, turns: 1 },
+    { ts: 2000, session_id: 'b', mode: 'full', output_tokens: 100,  est_saved_tokens: 186,  est_saved_usd: 0, turns: 1 },
+  ].map(o => JSON.stringify(o)).join('\n') + '\n');
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // saved 2972, overhead 1250x2 turns = 2500, net = +472.
+  assert.match(out, /Est\. tokens saved:\s+2,972/);
+  assert.match(out, /Est\. rule overhead:\s+2,500 \(input, ~1,250\/turn over 2 turns\)/);
+  assert.match(out, /Est\. net:\s+\+472/);
+});
+
+test('lifetime view omits net for legacy history rows that never logged turns', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-history.jsonl'),
+    JSON.stringify({ ts: 1000, session_id: 'a', mode: 'full', output_tokens: 350, est_saved_tokens: 650, est_saved_usd: 0 }) + '\n');
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // Gross total still reports (unchanged, pre-existing behavior)...
+  assert.match(out, /Est\. tokens saved:\s+650/);
+  // ...but net is omitted rather than computed against someone else's turns.
+  assert.doesNotMatch(out, /Est\. net:/);
+});
+
+test('lifetime view excludes legacy rows from net even when mixed with rows that logged turns', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-history.jsonl'), [
+    // Legacy row: no turns field — must not contribute to net in either direction.
+    { ts: 1000, session_id: 'legacy', mode: 'full', output_tokens: 350, est_saved_tokens: 650, est_saved_usd: 0 },
+    { ts: 2000, session_id: 'new',    mode: 'full', output_tokens: 1500, est_saved_tokens: 2786, est_saved_usd: 0, turns: 1 },
+  ].map(o => JSON.stringify(o)).join('\n') + '\n');
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // Gross total includes both rows: 650 + 2786 = 3436.
+  assert.match(out, /Est\. tokens saved:\s+3,436/);
+  // Net only nets the 'new' row's 2786 saved against its 1 logged turn —
+  // NOT 3436 against 1 turn, which would overstate the net.
+  assert.match(out, /Est\. rule overhead:\s+1,250 \(input, ~1,250\/turn over 1 turn\)/);
+  assert.match(out, /Est\. net:\s+\+1,536/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -27,6 +27,8 @@
 //   CAVEMAN_SHRINK_DEBUG=1  log compression deltas to stderr
 
 const { spawn } = require('child_process');
+const { constants: osConstants } = require('os');
+const { StringDecoder } = require('string_decoder');
 const { compressDescriptionsInPlace, compress } = require('./compress');
 
 const args = process.argv.slice(2);
@@ -40,18 +42,37 @@ const debug = process.env.CAVEMAN_SHRINK_DEBUG === '1';
 const fields = (process.env.CAVEMAN_SHRINK_FIELDS || 'description')
   .split(',').map(s => s.trim()).filter(Boolean);
 
-const { getSpawnOptions } = require('./spawn-options');
+const { getSpawnInvocation, getSpawnOptions } = require('./spawn-options');
 
-const upstream = spawn(args[0], args.slice(1), getSpawnOptions());
-
-upstream.on('error', err => {
-  process.stderr.write(`caveman-shrink: failed to spawn upstream: ${err.message}\n`);
+let invocation;
+try {
+  invocation = getSpawnInvocation(args[0], args.slice(1));
+} catch (error) {
+  process.stderr.write(`caveman-shrink: failed to resolve upstream safely: ${error.message}\n`);
   process.exit(1);
+}
+const upstream = spawn(invocation.command, invocation.args, getSpawnOptions());
+
+let spawnFailed = false;
+upstream.on('error', err => {
+  spawnFailed = true;
+  process.stderr.write(`caveman-shrink: failed to spawn upstream: ${err.message}\n`);
 });
 
-upstream.on('exit', (code, signal) => {
-  if (signal) process.exit(128 + (signal === 'SIGTERM' ? 15 : 9));
-  process.exit(code || 0);
+// `exit` can fire while stdout still has unread data and while our own stdout
+// is backpressured. Wait for child `close`, stop accepting client input, then
+// let Node exit naturally so every transformed byte drains.
+upstream.on('close', (code, signal) => {
+  process.stdin.pause();
+  process.stdin.removeListener('data', forwardInput);
+  process.stdin.removeListener('end', endInput);
+  if (spawnFailed) {
+    process.exitCode = 1;
+  } else if (signal) {
+    process.exitCode = 128 + (osConstants.signals[signal] || 1);
+  } else {
+    process.exitCode = code || 0;
+  }
 });
 
 // JSON-RPC framing over stdio: messages are separated by newlines (the
@@ -59,14 +80,25 @@ upstream.on('exit', (code, signal) => {
 // object per line). We line-buffer in both directions and parse opportunistically.
 function makeLineBuffer(onLine) {
   let buf = '';
-  return chunk => {
-    buf += chunk.toString('utf8');
+  const decoder = new StringDecoder('utf8');
+  const flushLines = () => {
     let nl;
     while ((nl = buf.indexOf('\n')) !== -1) {
       const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
       if (line.trim()) onLine(line);
     }
+  };
+  return {
+    push(chunk) {
+      buf += decoder.write(chunk);
+      flushLines();
+    },
+    end() {
+      buf += decoder.end();
+      if (buf.trim()) onLine(buf);
+      buf = '';
+    },
   };
 }
 
@@ -108,18 +140,42 @@ function transformResponse(msg) {
   return msg;
 }
 
+function writeClient(value) {
+  if (process.stdout.write(value)) return;
+  upstream.stdout.pause();
+  process.stdout.once('drain', () => upstream.stdout.resume());
+}
+
 // Upstream → us → client (model). Transform here.
-upstream.stdout.on('data', makeLineBuffer(line => {
+const responses = makeLineBuffer(line => {
   let msg;
   try { msg = JSON.parse(line); } catch {
     // Pass through unparseable lines unchanged.
-    process.stdout.write(line + '\n');
+    writeClient(line + '\n');
     return;
   }
   const out = transformResponse(msg);
-  process.stdout.write(JSON.stringify(out) + '\n');
-}));
+  writeClient(JSON.stringify(out) + '\n');
+});
+upstream.stdout.on('data', chunk => responses.push(chunk));
+upstream.stdout.on('end', () => responses.end());
 
 // Client → us → upstream. Pass through unchanged for v1.
-process.stdin.on('data', chunk => upstream.stdin.write(chunk));
-process.stdin.on('end',  () => upstream.stdin.end());
+function forwardInput(chunk) {
+  if (!upstream.stdin.writable || upstream.stdin.destroyed) return;
+  if (!upstream.stdin.write(chunk)) {
+    process.stdin.pause();
+    upstream.stdin.once('drain', () => process.stdin.resume());
+  }
+}
+function endInput() {
+  if (upstream.stdin.writable && !upstream.stdin.destroyed) upstream.stdin.end();
+}
+upstream.stdin.on('error', err => {
+  if (err.code !== 'EPIPE' && !spawnFailed) {
+    process.stderr.write(`caveman-shrink: upstream stdin failed: ${err.message}\n`);
+    process.exitCode = 1;
+  }
+});
+process.stdin.on('data', forwardInput);
+process.stdin.on('end', endInput);

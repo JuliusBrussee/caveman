@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -167,7 +168,29 @@ def verify_manifests_and_syntax() -> None:
     for path in manifest_paths:
         read_json(path)
 
+    hook_dir = ROOT / "src/hooks"
+    expected_hooks = {
+        "package.json",
+        "caveman-config.js",
+        "caveman-parse.js",
+        "caveman-activate.js",
+        "caveman-mode-tracker.js",
+        "caveman-stats.js",
+        "caveman-statusline.sh",
+        "caveman-statusline.ps1",
+        "cavecrew-model-overrides.js",
+    }
+    manifest: dict[str, str] = {}
+    for line in (hook_dir / "checksums.sha256").read_text(encoding="utf-8").splitlines():
+        digest, filename = line.split(maxsplit=1)
+        manifest[filename] = digest
+    ensure(set(manifest) == expected_hooks, "hook checksum manifest file set mismatch")
+    for filename, expected in manifest.items():
+        actual = hashlib.sha256((hook_dir / filename).read_bytes()).hexdigest()
+        ensure(actual == expected, f"hook checksum mismatch: {filename}")
+
     run(["node", "--check", "src/hooks/caveman-config.js"])
+    run(["node", "--check", "src/hooks/caveman-parse.js"])
     run(["node", "--check", "src/hooks/caveman-activate.js"])
     run(["node", "--check", "src/hooks/caveman-mode-tracker.js"])
     run(["node", "--check", "src/hooks/cavecrew-model-overrides.js"])
@@ -184,6 +207,37 @@ def verify_manifests_and_syntax() -> None:
     ensure("caveman-config.js" in uninstall_sh, "uninstall.sh missing caveman-config.js")
 
     print("JSON manifests and JS/bash syntax OK")
+
+
+def verify_package_contents() -> None:
+    section("Package Contents")
+    npm = shutil.which("npm")
+    ensure(npm is not None, "npm missing — cannot audit launch tarball")
+    with tempfile.TemporaryDirectory(prefix="caveman-pack-audit-") as tmp:
+        result = run(
+            [npm, "pack", "--dry-run", "--json", "--ignore-scripts"],
+            env={"npm_config_cache": str(Path(tmp) / "npm-cache")},
+        )
+    payload = json.loads(result.stdout)
+    ensure(isinstance(payload, list) and len(payload) == 1, "unexpected npm pack manifest")
+    files = {entry["path"] for entry in payload[0]["files"]}
+    required = {
+        "bin/install.js",
+        "agents/cavecrew-investigator.md",
+        "agents/cavecrew-builder.md",
+        "agents/cavecrew-reviewer.md",
+        "skills/caveman-compress/scripts/compress.py",
+        "src/hooks/caveman-parse.js",
+        "src/hooks/caveman-statusline.sh",
+        "dist/caveman.skill",
+    }
+    ensure(required <= files, f"launch tarball missing required files: {sorted(required - files)}")
+    leaked = sorted(
+        path for path in files
+        if "__pycache__" in Path(path).parts or Path(path).suffix in {".pyc", ".pyo", ".pyd"}
+    )
+    ensure(not leaked, f"launch tarball contains Python cache artifacts: {leaked}")
+    print(f"Launch tarball contains {len(files)} files with no Python cache artifacts")
 
 
 def verify_powershell_static() -> None:
@@ -398,6 +452,7 @@ def main() -> int:
         verify_skill_frontmatter_upload_compatibility,
         verify_synced_files,
         verify_manifests_and_syntax,
+        verify_package_contents,
         verify_powershell_static,
         verify_compress_fixtures,
         verify_compress_cli,

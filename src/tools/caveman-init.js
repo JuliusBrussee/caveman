@@ -24,7 +24,7 @@ Rules:
 - Not: "Sure! I'd be happy to help you with that."
 - Yes: "Bug in auth middleware. Fix:"
 
-Switch level: /caveman lite|full|ultra|wenyan
+Switch level: /caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra
 Stop: "stop caveman" or "normal mode"
 
 Auto-Clarity: drop caveman for security warnings, irreversible actions, user confused. Resume after.
@@ -46,7 +46,7 @@ function loadOpenclawHelper() {
 
 const AGENTS = [
   { id: 'cursor',   file: '.cursor/rules/caveman.mdc',
-    frontmatter: '---\ndescription: "Caveman mode — terse communication, 65% fewer output tokens (measured), full technical accuracy"\nalwaysApply: true\n---\n\n',
+    frontmatter: '---\ndescription: "Caveman mode — terse communication that preserves technical substance and exact code/errors"\nalwaysApply: true\n---\n\n',
     mode: 'replace' },
   { id: 'windsurf', file: '.windsurf/rules/caveman.md',
     frontmatter: '---\ntrigger: always_on\n---\n\n',

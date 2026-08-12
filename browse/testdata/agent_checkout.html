@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Agent checkout</title>
+  </head>
+  <body>
+    <main>
+      <h1>Agent checkout</h1>
+      <label>Email <input aria-label="Email" /></label>
+      <label>
+        Plan
+        <select aria-label="Plan">
+          <option>Free</option>
+          <option value="pro">Pro</option>
+        </select>
+      </label>
+      <button
+        style="margin-top: 1400px"
+        onclick="document.getElementById('status').textContent = 'Saved ' + document.querySelector('input').value + ' ' + document.querySelector('select').value"
+      >
+        Save order
+      </button>
+      <p id="status" role="status">Ready</p>
+    </main>
+  </body>
+</html>

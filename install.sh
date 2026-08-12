@@ -5,8 +5,8 @@
 # you'd pass to bin/install.js can be passed here; we just forward them.
 #
 # One-line install:
-#   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --all
+#   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash -s -- --all
 #
 # Local clone:
 #   bash install.sh [flags]
@@ -18,6 +18,7 @@
 set -euo pipefail
 
 REPO="JuliusBrussee/caveman"
+PINNED_REF="${CAVEMAN_REF:-v1.10.0}"
 
 # Require Node ≥18. nvm is a common path; print a hint if missing.
 if ! command -v node >/dev/null 2>&1; then
@@ -36,9 +37,14 @@ fi
 
 # If we're inside the repo clone, run the local installer directly — saves
 # the npx round-trip and keeps offline installs working. BASH_SOURCE is unset
-# when bash is invoked from stdin (curl | bash), and `set -u` would trip on a
-# bare reference — default to empty so the curl-pipe path falls through cleanly.
-here="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd)" || here=""
+# when bash is invoked from stdin (curl | bash). Do not feed an empty value to
+# dirname: dirname "" resolves to "." and would execute an unrelated
+# $PWD/bin/install.js from the caller's checkout.
+here=""
+source_path="${BASH_SOURCE[0]:-}"
+if [ -n "$source_path" ]; then
+  here="$(cd "$(dirname "$source_path")" 2>/dev/null && pwd)" || here=""
+fi
 if [ -n "$here" ] && [ -f "$here/bin/install.js" ]; then
   exec node "$here/bin/install.js" "$@"
 fi
@@ -51,4 +57,4 @@ if ! command -v npx >/dev/null 2>&1; then
   exit 1
 fi
 
-exec npx -y "github:$REPO" "$@"
+exec npx -y "github:$REPO#$PINNED_REF" "$@"

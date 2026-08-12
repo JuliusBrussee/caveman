@@ -1,6 +1,6 @@
 {
   "name": "caveman",
-  "description": "Ultra-compressed communication mode. Cuts 65% of output tokens (measured) while keeping full technical accuracy by speaking like a caveman.",
+  "description": "Ultra-compressed communication mode. Shortens replies while preserving technical substance, code, commands, and exact errors.",
   "version": "1.0.1",
   "contextFileName": "GEMINI.md"
 }

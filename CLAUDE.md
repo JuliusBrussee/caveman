@@ -19,7 +19,7 @@ README = product front door. Non-technical people read it to decide if caveman w
 
 ## Project overview
 
-Caveman makes AI coding agents respond in compressed caveman-style prose — cuts 65% output tokens (measured), full technical accuracy. Ships as Claude Code plugin, Codex plugin, Gemini CLI extension, agent rule files for Cursor, Windsurf, Cline, Copilot, 40+ others via `npx skills`.
+Caveman makes AI coding agents respond in compressed caveman-style prose while preserving technical substance, code, commands, and exact errors. Publish no reduction or quality-equivalence percentage without a committed reviewed benchmark. Ships as Claude Code plugin, Codex plugin, Gemini CLI extension, and agent rule files for Cursor, Windsurf, Cline, Copilot, and other profiles via `npx skills`.
 
 ---
 
@@ -58,6 +58,20 @@ caveman/
 │   ├── rules/                   # Auto-activation rule body (single source)
 │   ├── tools/                   # caveman-init.js (per-repo rule writer)
 │   └── mcp-servers/             # caveman-shrink npm-published MCP middleware
+│
+├── packages/                    # Current public packages
+│   ├── agent/                   # @caveman-ai/agent runtime + Cave Build compiler
+│   ├── create-caveman-agent/    # Agent SDK project initializer
+│   ├── cli/                     # @caveman-ai/cli
+│   ├── sdk/                     # TypeScript + Python gateway clients
+│   ├── kit/ · graders/          # Honesty UI surfaces + fail-closed eval graders
+│   ├── mastra/ · subagent-tax/  # Mastra adapter + local harness-prefix benchmark
+│   └── shared/                  # Contracts + binary installer
+├── engine/ · proxy/             # BSL local compression runtime + provider proxy
+├── cacheengine/ · rewriter/     # Standalone cache planner + prompt rewriter
+├── mcp/ · mem/ · shrink/        # Recovery tools, memory, output compression
+├── browse/ · extension/         # Local browser driver + MV3 extension
+├── shared/                       # Provider catalog + BSL platform libraries
 │
 ├── .claude-plugin/              # Claude Code plugin manifest (REQUIRED at root)
 ├── plugins/caveman/             # Claude Code plugin distribution (CI-mirrored)

@@ -1,0 +1,48 @@
+{
+  "schema_version": "1",
+  "id": "openclaw",
+  "display_name": "OpenClaw",
+  "vendor": "OpenClaw",
+  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "binary_names": ["openclaw"],
+  "args": ["chat"],
+  "install": "npm i -g openclaw",
+  "wire_protocol": "openai-chat",
+  "injection": {
+    "method": "config-file",
+    "env_var": "OPENCLAW_CONFIG_PATH",
+    "base_config": {
+      "path": "~/.openclaw/openclaw.json",
+      "env_var": "OPENCLAW_CONFIG_PATH",
+      "state_dir": { "env_var": "OPENCLAW_STATE_DIR", "filename": "openclaw.json" }
+    },
+    "config_overlay": {
+      "local": {
+        "mcp": {
+          "servers": {
+            "caveman": {
+              "command": "caveman-mcp",
+              "args": []
+            }
+          }
+        }
+      },
+      "managed": {
+        "mcp": {
+          "servers": {
+            "caveman": {
+              "command": "caveman-mcp",
+              "args": []
+            }
+          }
+        }
+      }
+    }
+  },
+  "command_hook": { "method": "openclaw-plugin" },
+  "attribution": { "header": "x-cave-agent" },
+  "tested_agent_version": "2026.7.1-2",
+  "injection_completeness": "builder-assisted",
+  "fallback": "generic-env",
+  "maintainer": null
+}

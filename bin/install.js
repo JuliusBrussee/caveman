@@ -25,7 +25,9 @@ const crypto = require('crypto');
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
 const HERMES = require('./lib/hermes');
+const OWNED = require('./lib/owned-install');
 const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
+const PORTABLE = require('./lib/portable-process');
 
 const REPO = 'JuliusBrussee/caveman';
 // Pin remote fetches to an immutable release tag, not the moving `main`
@@ -34,7 +36,10 @@ const REPO = 'JuliusBrussee/caveman';
 // the new tag on every release (CI release step) AFTER regenerating
 // src/hooks/checksums.sha256 so the integrity manifest matches the ref.
 // Overridable via CAVEMAN_REF for testing against a branch.
-const PINNED_REF = process.env.CAVEMAN_REF || 'v1.9.1';
+const PINNED_REF = process.env.CAVEMAN_REF || 'v1.10.0';
+const OPENCLAW_SKILL_VERSION = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(PINNED_REF)
+  ? PINNED_REF.replace(/^v/, '')
+  : undefined;
 const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/${PINNED_REF}`;
 const HOOKS_REMOTE = `${RAW_BASE}/src/hooks`;
 const INIT_SCRIPT_URL = `${RAW_BASE}/src/tools/caveman-init.js`;
@@ -45,6 +50,7 @@ const MCP_SHRINK_PKG = 'caveman-shrink';
 const HOOK_FILES = [
   'package.json',
   'caveman-config.js',
+  'caveman-parse.js',
   'caveman-activate.js',
   'caveman-mode-tracker.js',
   'caveman-stats.js',
@@ -142,9 +148,7 @@ function parseArgs(argv) {
       case '--purge-history': opts.purgeHistory = true; break;
       case '--mcp-shrink-name': {
         const value = argv[++i];
-        if (!value || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) {
-          die('error: --mcp-shrink-name requires letters, digits, underscore, or hyphen');
-        }
+        if (!value || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) die('error: --mcp-shrink-name requires letters, digits, underscore, or hyphen');
         opts.mcpShrinkName = value;
         break;
       }
@@ -273,7 +277,7 @@ const PROVIDERS = [
   // CLI agents — require the binary. The `||dir:~/.foo` fallbacks were the
   // main source of false positives (warp, kiro, junie etc. leave config dirs
   // behind on uninstall).
-  { id: 'hermes',     label: 'Hermes Agent',        mech: 'native plugin + skills',         detect: 'command:hermes' },
+  { id: 'hermes',     label: 'Hermes Agent',        mech: 'native plugin + skills',     detect: 'command:hermes' },
   { id: 'aider-desk', label: 'Aider Desk',          mech: 'npx skills add (aider-desk)',   detect: 'command:aider', profile: 'aider-desk' },
   { id: 'amp',        label: 'Sourcegraph Amp',     mech: 'npx skills add (amp)',          detect: 'command:amp',             profile: 'amp' },
   { id: 'bob',        label: 'IBM Bob',             mech: 'npx skills add (bob)',          detect: 'command:bob', profile: 'bob' },
@@ -308,8 +312,7 @@ const PROVIDERS = [
 function hasCmd(cmd) {
   try {
     if (process.platform === 'win32') {
-      const r = child_process.spawnSync('where', [cmd], { stdio: 'ignore' });
-      return r.status === 0;
+      return PORTABLE.resolveWindowsCommand(cmd, process.env) !== null;
     }
     const r = child_process.spawnSync('sh', ['-c', `command -v ${shellEscape(cmd)}`], { stdio: 'ignore' });
     return r.status === 0;
@@ -428,27 +431,21 @@ function detectRepoRoot() {
 }
 
 // ── Run helpers ────────────────────────────────────────────────────────────
-// On Windows, npm/npx/claude/gemini/codex etc. ship as `.cmd` batch shims.
-// Node's spawnSync('claude', ...) returns ENOENT for these unless we either
-// (a) set shell:true (cmd.exe respects PATHEXT) or
-// (b) resolve the actual `.cmd` path before spawning.
-// We pick (a) — simpler, fewer cross-version corner cases. The cost is that
-// args with spaces need quoting; we quote them defensively below.
+// On Windows, npm/npx/claude/gemini/codex ship as `.cmd` Node shims. Resolve
+// through PATH/PATHEXT and launch their Node entrypoint directly. This keeps
+// argument bytes intact without putting user-controlled paths into cmd.exe.
 const IS_WIN = process.platform === 'win32';
-
-function quoteWinArg(a) {
-  if (!IS_WIN) return a;
-  if (a === '' || /[\s"]/.test(a)) {
-    // Standard CommandLineToArgvW escaping
-    return '"' + String(a).replace(/\\(?=\\*"|$)/g, '\\\\').replace(/"/g, '\\"') + '"';
-  }
-  return a;
-}
 
 function spawnXplat(cmd, args, opts) {
   if (IS_WIN) {
-    const quoted = args.map(quoteWinArg).join(' ');
-    return child_process.spawnSync(`${cmd} ${quoted}`, [], Object.assign({ shell: true }, opts || {}));
+    try {
+      const invocation = PORTABLE.portableInvocation(cmd, args, {
+        env: (opts && opts.env) || process.env,
+      });
+      return child_process.spawnSync(invocation.command, invocation.args, opts || {});
+    } catch (error) {
+      return { status: null, signal: null, stdout: '', stderr: '', error };
+    }
   }
   return child_process.spawnSync(cmd, args, opts || {});
 }
@@ -636,7 +633,7 @@ function installViaSkills(ctx, prov) {
   process.stdout.write('\n');
 }
 
-// ── opencode native install ────────────────────────────────────────────────
+// ── opencode native install ───────────────────────────────────────────────
 // Drops the in-repo plugin (src/plugins/opencode/) plus skills, agents,
 // commands, and an AGENTS.md ruleset into ~/.config/opencode/. Patches
 // opencode.json with a "plugin" array entry. Mirrors the Claude Code hook
@@ -658,16 +655,6 @@ function opencodeConfigDir() {
   // %USERPROFILE%\.config\opencode via os.homedir()), NOT %APPDATA% (#376).
   if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
   return path.join(os.homedir(), '.config', 'opencode');
-}
-
-function copyDirRecursive(src, dest) {
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const s = path.join(src, entry.name);
-    const d = path.join(dest, entry.name);
-    if (entry.isDirectory()) copyDirRecursive(s, d);
-    else if (entry.isFile()) fs.copyFileSync(s, d);
-  }
 }
 
 function installOpencode(ctx) {
@@ -693,7 +680,7 @@ function installOpencode(ctx) {
 
   if (opts.dryRun) {
     note(`  would mkdir ${pluginDir}/, ${commandsDir}/, ${agentsDir}/, ${skillsDir}/`);
-    note(`  would copy plugin.js + package.json + caveman-config.cjs into ${pluginDir}/`);
+    note(`  would copy plugin.js + package.json + caveman-config.cjs + caveman-parse.cjs into ${pluginDir}/`);
     note(`  would copy ${OPENCODE_COMMAND_FILES.length} command files into ${commandsDir}/`);
     note(`  would copy ${OPENCODE_AGENT_FILES.length} cavecrew agents into ${agentsDir}/`);
     note(`  would copy ${OPENCODE_SKILL_DIRS.length} skill dirs into ${skillsDir}/`);
@@ -705,67 +692,69 @@ function installOpencode(ctx) {
   }
 
   try {
-    // 1. Plugin dir — copy plugin.js, package.json, caveman-config.js (sibling).
-    //    Same `--force` semantic as commands/agents/skills below: re-runs leave
-    //    user edits to plugin.js alone unless --force is passed.
-    fs.mkdirSync(pluginDir, { recursive: true });
     const pluginSrc = path.join(repoRoot, 'src', 'plugins', 'opencode');
-    const pluginPayload = [
-      [path.join(pluginSrc, 'plugin.js'),    path.join(pluginDir, 'plugin.js')],
-      [path.join(pluginSrc, 'package.json'), path.join(pluginDir, 'package.json')],
-      // Renamed to .cjs because the plugin dir is "type": "module" — a bare .js
-      // sibling would be loaded as ESM and break the plugin's require() bridge.
-      [path.join(repoRoot, 'src', 'hooks', 'caveman-config.js'),
-       path.join(pluginDir, 'caveman-config.cjs')],
-    ];
-    for (const [src, dest] of pluginPayload) {
-      if (fs.existsSync(dest) && !opts.force) {
-        note(`  skipped ${dest} (exists; --force to overwrite)`);
-        continue;
-      }
-      fs.copyFileSync(src, dest);
-    }
-    process.stdout.write(`  installed: ${pluginDir}\n`);
+    // Preflight every same-named path before writing anything. The ownership
+    // journal records installed digests and force backups, so uninstall can
+    // remove only bytes this installer still owns.
+    const operations = [{
+      relativePath: 'plugins/caveman',
+      write: (stage) => {
+        fs.mkdirSync(stage, { recursive: true });
+        fs.copyFileSync(path.join(pluginSrc, 'plugin.js'), path.join(stage, 'plugin.js'));
+        fs.copyFileSync(path.join(pluginSrc, 'package.json'), path.join(stage, 'package.json'));
+        // Plugin dir is ESM; the CommonJS config bridge needs .cjs.
+        fs.copyFileSync(path.join(repoRoot, 'src', 'hooks', 'caveman-config.js'), path.join(stage, 'caveman-config.cjs'));
+        // Shared mode parser keeps opencode and Claude hook behavior identical.
+        fs.copyFileSync(path.join(repoRoot, 'src', 'hooks', 'caveman-parse.js'), path.join(stage, 'caveman-parse.cjs'));
+      },
+    }];
 
-    // 2. Commands.
-    fs.mkdirSync(commandsDir, { recursive: true });
     const cmdSrcDir = path.join(pluginSrc, 'commands');
     for (const f of OPENCODE_COMMAND_FILES) {
       const src = path.join(cmdSrcDir, f);
-      const dest = path.join(commandsDir, f);
       if (!fs.existsSync(src)) continue; // defense-in-depth: skip a missing command file rather than crash (#434)
-      if (fs.existsSync(dest) && !opts.force) { note(`  skipped ${dest} (exists; --force to overwrite)`); continue; }
-      fs.copyFileSync(src, dest);
-      process.stdout.write(`  installed: ${dest}\n`);
+      operations.push({
+        relativePath: `commands/${f}`,
+        write: (stage) => fs.copyFileSync(src, stage),
+      });
     }
 
-    // 3. Subagents. Source files target Claude Code's schema (`tools: [...]`
+    // Subagents target Claude Code's `tools: [...]` schema; strip that line for
+    // opencode and materialize transformed bytes directly into the owned path.
     //    YAML array); opencode rejects that form and refuses to boot until the
     //    file is removed. Strip the `tools:` line on copy — opencode falls back
     //    to its default tool set, and subagent prompts already self-restrict in
     //    the body. Issue #386.
-    fs.mkdirSync(agentsDir, { recursive: true });
     const agentSrcDir = path.join(repoRoot, 'agents');
     for (const f of OPENCODE_AGENT_FILES) {
       const src = path.join(agentSrcDir, f);
-      const dest = path.join(agentsDir, f);
       if (!fs.existsSync(src)) continue;
-      if (fs.existsSync(dest) && !opts.force) { note(`  skipped ${dest} (exists; --force to overwrite)`); continue; }
-      fs.writeFileSync(dest, stripOpencodeAgentTools(fs.readFileSync(src, 'utf8')));
-      process.stdout.write(`  installed: ${dest}\n`);
+      const body = stripOpencodeAgentTools(fs.readFileSync(src, 'utf8'));
+      operations.push({
+        relativePath: `agents/${f}`,
+        write: (stage) => fs.writeFileSync(stage, body, { mode: 0o600, flag: 'wx' }),
+      });
     }
 
-    // 4. Skills — opencode auto-discovers SKILL.md from ~/.config/opencode/skills/.
-    fs.mkdirSync(skillsDir, { recursive: true });
+    // Skills are journaled as whole directories. Any unjournaled same-named
+    // directory is user content and blocks install unless --force backs it up.
     const skillSrcDir = path.join(repoRoot, 'skills');
     for (const name of OPENCODE_SKILL_DIRS) {
       const src = path.join(skillSrcDir, name);
-      const dest = path.join(skillsDir, name);
       if (!fs.existsSync(src)) continue;
-      if (fs.existsSync(dest) && !opts.force) { note(`  skipped ${dest}/ (exists; --force to overwrite)`); continue; }
-      copyDirRecursive(src, dest);
-      process.stdout.write(`  installed: ${dest}/\n`);
+      operations.push({
+        relativePath: `skills/${name}`,
+        write: (stage) => OWNED.copyPath(src, stage),
+      });
     }
+    OWNED.installOwned({
+      root: dir,
+      integration: 'opencode',
+      operations,
+      force: opts.force,
+      note,
+    });
+    process.stdout.write(`  installed owned opencode payload under: ${dir}\n`);
 
     // 5. AGENTS.md — Tier-3 always-on ruleset. Wrapped in begin/end markers so
     //    a later --uninstall can strip our block cleanly even if the user has
@@ -887,6 +876,7 @@ function installOpenclaw(ctx) {
     repoRoot,
     dryRun: opts.dryRun,
     force: opts.force,
+    version: OPENCLAW_SKILL_VERSION,
     log,
   });
 
@@ -1137,6 +1127,7 @@ async function loadRemoteHookChecksums() {
 // ── Uninstall ─────────────────────────────────────────────────────────────
 function uninstall(ctx) {
   const { say, note, warn, ok, opts, configDir } = ctx;
+  let cleanupFailed = false;
   say('🪨 caveman uninstall');
 
   if (opts.dryRun) note('  (dry run — nothing will be removed)');
@@ -1154,8 +1145,12 @@ function uninstall(ctx) {
         if (cmd.includes('caveman-statusline')) delete settings.statusLine;
       }
       SETTINGS.validateHookFields(settings);
-      if (!opts.dryRun) SETTINGS.writeSettings(settingsPath, settings);
-      ok(`  removed ${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`);
+      try {
+        if (!opts.dryRun) SETTINGS.writeSettings(settingsPath, settings);
+        ok(`  removed ${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`);
+      } catch (e) {
+        warn(`  could not update ${settingsPath}; continuing other cleanup: ${e && e.message || e}`);
+      }
     }
   }
 
@@ -1163,8 +1158,12 @@ function uninstall(ctx) {
     for (const f of HOOK_FILES) {
       const p = path.join(hooksDir, f);
       if (!fs.existsSync(p)) continue;
-      if (!opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
-      note(`  removed ${p}`);
+      if (opts.dryRun) {
+        note(`  would remove ${p}`);
+      } else {
+        try { fs.unlinkSync(p); } catch (_) {}
+        note(`  removed ${p}`);
+      }
     }
     // Don't rmdir hooksDir — other plugins may use it.
   }
@@ -1199,11 +1198,22 @@ function uninstall(ctx) {
     }
   }
 
-  // opencode native install — strip plugin entry, MCP entry, and our files.
-  // Probed by the existence of the plugin dir we own; if absent, skip silently.
+  // opencode native install — ownership journal is authority. Never infer
+  // ownership from a matching path name; pre-existing user files may use it.
   const ocDir = opencodeConfigDir();
-  const ocPluginDir = path.join(ocDir, 'plugins', 'caveman');
-  if (fs.existsSync(ocPluginDir)) {
+  let ocOwnership = { hadJournal: false };
+  try {
+    ocOwnership = OWNED.uninstallOwned({
+      root: ocDir,
+      integration: 'opencode',
+      dryRun: opts.dryRun,
+      note,
+      warn,
+    });
+  } catch (error) {
+    warn(`  opencode ownership journal invalid; left integration untouched: ${error.message}`);
+  }
+  if (ocOwnership.hadJournal) {
     const ocJson = path.join(ocDir, 'opencode.json');
     if (fs.existsSync(ocJson)) {
       const cfg = SETTINGS.readSettings(ocJson);
@@ -1219,22 +1229,6 @@ function uninstall(ctx) {
         if (!opts.dryRun) SETTINGS.writeSettings(ocJson, cfg);
         ok(`  pruned caveman entries from ${ocJson}`);
       }
-    }
-    if (!opts.dryRun) { try { fs.rmSync(ocPluginDir, { recursive: true, force: true }); } catch (_) {} }
-    note(`  removed ${ocPluginDir}`);
-    // Commands, agents, skills — only files matching our manifest (don't
-    // sweep the parent dirs; user may have other entries there).
-    for (const f of OPENCODE_COMMAND_FILES) {
-      const p = path.join(ocDir, 'commands', f);
-      if (fs.existsSync(p) && !opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
-    }
-    for (const f of OPENCODE_AGENT_FILES) {
-      const p = path.join(ocDir, 'agents', f);
-      if (fs.existsSync(p) && !opts.dryRun) { try { fs.unlinkSync(p); } catch (_) {} }
-    }
-    for (const name of OPENCODE_SKILL_DIRS) {
-      const p = path.join(ocDir, 'skills', name);
-      if (fs.existsSync(p) && !opts.dryRun) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
     }
     // AGENTS.md — strip the fenced caveman block (preserves user content
     // above and below). If the file is empty after the strip, remove it.
@@ -1282,25 +1276,57 @@ function uninstall(ctx) {
       note: (s) => note(s),
       warn: (s) => warn(s),
     };
-    const r = OPENCLAW.uninstallOpenclaw({ workspace: ocwWs, dryRun: opts.dryRun, log });
-    if (r.touched) ok('  pruned caveman entries from OpenClaw workspace');
+    try {
+      const r = OPENCLAW.uninstallOpenclaw({ workspace: ocwWs, dryRun: opts.dryRun, log });
+      if (r.touched) ok('  pruned caveman entries from OpenClaw workspace');
+    } catch (error) {
+      cleanupFailed = true;
+      warn(`  OpenClaw cleanup failed; continuing other cleanup: ${error.message}`);
+    }
   }
 
-  const hermesStatus = HERMES.uninstallHermes(ctx);
-  if (hermesStatus !== 0) {
-    warn('  Hermes uninstall completed with preserved/unsafe paths; see messages above.');
+  // Hermes native plugin lifecycle owns its files, config leaves, and state.
+  // Do not require Hermes CLI for a global uninstall on machines without it.
+  if (hasCmd('hermes')) {
+    const hermesStatus = HERMES.uninstallHermes(ctx);
+    if (hermesStatus !== 0) {
+      cleanupFailed = true;
+      warn('  Hermes uninstall completed with preserved/unsafe paths; see messages above.');
+    }
   }
 
-  // Flag file
-  const flag = path.join(configDir, '.caveman-active');
-  if (fs.existsSync(flag) && !opts.dryRun) { try { fs.unlinkSync(flag); } catch (_) {} }
+  // Per-session state. Keep lifetime savings history unless user removes it.
+  const stateFiles = [
+    '.caveman-active',
+    '.caveman-active.prev',
+    '.caveman-mode-log.jsonl',
+    '.caveman-statusline-suffix',
+    '.caveman-nudge-shown',
+  ];
+  for (const file of stateFiles) {
+    const statePath = path.join(configDir, file);
+    if (!fs.existsSync(statePath)) continue;
+    if (opts.dryRun) {
+      note(`  would remove ${statePath}`);
+    } else {
+      try { fs.unlinkSync(statePath); } catch (_) {}
+      note(`  removed ${statePath}`);
+    }
+  }
+  const historyPath = path.join(configDir, '.caveman-history.jsonl');
+  if (fs.existsSync(historyPath)) {
+    note(`  kept ${historyPath} (lifetime history — delete manually if unwanted)`);
+  }
 
   process.stdout.write('\n');
-  if (hermesStatus === 0) ok('uninstall done.');
-  else warn('uninstall incomplete.');
+  if (cleanupFailed) {
+    warn('uninstall incomplete. Review cleanup warnings above.');
+  } else {
+    ok('uninstall done.');
+  }
   ok('npx-skills installs (Cursor/Windsurf/etc.) — remove via your IDE\'s skill manager');
   ok('per-repo init files (.cursor/, .windsurf/, AGENTS.md) — remove with your editor');
-  return hermesStatus;
+  return cleanupFailed ? 1 : 0;
 }
 
 // ── Interactive prompt (TTY-only) ─────────────────────────────────────────
@@ -1363,17 +1389,15 @@ FLAGS
   --no-hooks            Skip the hooks installer.
   --with-init           Write per-repo IDE rule files into \$PWD.
   --with-mcp-shrink="<upstream cmd>"
-                        Claude Code, opencode, and Hermes: register caveman-shrink MCP
+                        Claude Code (and opencode): register caveman-shrink MCP
                         proxy wrapping the given upstream. Default OFF.
                         caveman-shrink crashes without an upstream, so a value
-                        is required. Quotes group argv values; no shell is used.
+                        is required. The value is whitespace-tokenized.
                         Example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"
   --no-mcp-shrink       Skip MCP shrink. (Default.)
-  --mcp-shrink-name <name>
-                        Hermes MCP server name. Default: caveman-shrink.
-  --disable             Disable the Hermes plugin; preserve files and state.
+  --disable             Disable native Hermes plugin; preserve files and state.
   --uninstall, -u       Remove caveman from this machine.
-  --purge-history       With --uninstall, also delete regular Caveman history.
+  --purge-history       With --uninstall, delete regular Hermes Caveman history.
   --config-dir <path>   Claude Code config dir for hook files + settings.json.
                         Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT
                         scope \`claude plugin install\`, \`gemini extensions
@@ -1417,9 +1441,7 @@ async function main() {
   };
 
   if (opts.disable) return HERMES.disableHermes(ctx);
-  if (opts.uninstall && opts.only.length === 1 && opts.only[0] === 'hermes') {
-    return HERMES.uninstallHermes(ctx);
-  }
+  if (opts.uninstall && opts.only.length === 1 && opts.only[0] === 'hermes') return HERMES.uninstallHermes(ctx);
   if (opts.uninstall) return uninstall(ctx);
 
   ctx.say('🪨 caveman installer');

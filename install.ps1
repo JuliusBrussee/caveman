@@ -4,7 +4,7 @@
 # you'd pass to bin/install.js can be passed here; we just forward them.
 #
 # One-line install:
-#   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.ps1 | iex
 #
 # Local clone:
 #   pwsh install.ps1 [flags]
@@ -28,6 +28,7 @@ function Install-Caveman {
 
   $ErrorActionPreference = "Stop"
   $Repo = "JuliusBrussee/caveman"
+  $PinnedRef = if ($env:CAVEMAN_REF) { $env:CAVEMAN_REF } else { "v1.10.0" }
 
   # Require Node ≥18.
   $node = Get-Command node -ErrorAction SilentlyContinue
@@ -69,7 +70,7 @@ caveman: Node.js (>=18) required. Install:
   # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
   # package, and a literal `--` was tripping bin/install.js's parseArgs as an
   # unknown flag.
-  & npx -y "github:$Repo" @InstallerArgs
+  & npx -y "github:$Repo#$PinnedRef" @InstallerArgs
   exit $LASTEXITCODE
 }
 

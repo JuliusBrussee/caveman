@@ -1,0 +1,68 @@
+{
+  "schema_version": "1",
+  "id": "opencode",
+  "display_name": "opencode",
+  "vendor": "sst",
+  "homepage": "https://opencode.ai/docs/config",
+  "binary_names": ["opencode"],
+  "args": [],
+  "install": "npm i -g opencode-ai",
+  "wire_protocol": "openai-chat",
+  "injection": {
+    "method": "config-env-content",
+    "env_var": "OPENCODE_CONFIG_CONTENT",
+    "config_content": {
+      "local": {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+          "openai": {
+            "options": {
+              "baseURL": "{{cave_base_url}}/v1",
+              "headers": { "X-Cave-Agent": "opencode" }
+            }
+          },
+          "anthropic": {
+            "options": {
+              "baseURL": "{{cave_base_url}}/v1",
+              "headers": { "X-Cave-Agent": "opencode" }
+            }
+          }
+        }
+      },
+      "managed": {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+          "caveman": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "Caveman Gateway",
+            "options": {
+              "baseURL": "{{cave_base_url}}/v1",
+              "apiKey": "{env:CAVE_API_KEY}",
+              "headers": {
+                "x-cave-upstream-key": "{env:OPENAI_API_KEY}",
+                "X-Cave-Agent": "opencode"
+              }
+            },
+            "models": {
+              "gpt-5.5": {
+                "name": "GPT-5.5 (via Caveman)",
+                "limit": { "context": 1050000, "output": 32768 }
+              },
+              "gpt-5.4-mini": {
+                "name": "GPT-5.4 mini (via Caveman)",
+                "limit": { "context": 400000, "output": 16384 }
+              }
+            }
+          }
+        },
+        "model": "caveman/gpt-5.5"
+      }
+    }
+  },
+  "command_hook": { "method": "opencode-plugin" },
+  "attribution": { "header": "X-Cave-Agent" },
+  "tested_agent_version": "1.18.11",
+  "injection_completeness": "declarative",
+  "fallback": "generic-env",
+  "maintainer": null
+}

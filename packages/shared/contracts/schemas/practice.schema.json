@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.cloud/schemas/practice.schema.json",
+  "title": "Caveman practice",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "family",
+    "title",
+    "predicate",
+    "fix",
+    "grader",
+    "experiment",
+    "evidence",
+    "never_claim",
+    "skill_render",
+    "cave_agent",
+    "sources"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "family": {
+      "enum": [
+        "input_bloat",
+        "cache",
+        "reliability",
+        "routing",
+        "pixel_density",
+        "labeling"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["harness", "payload_shape", "wire_protocol"],
+      "properties": {
+        "harness": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "claude-code",
+              "codex",
+              "gemini",
+              "opencode",
+              "hermes",
+              "openclaw",
+              "any"
+            ]
+          }
+        },
+        "payload_shape": {
+          "type": "string",
+          "minLength": 1
+        },
+        "wire_protocol": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["anthropic", "openai", "gemini", "any"]
+          }
+        }
+      }
+    },
+    "fix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prose", "apply"],
+      "properties": {
+        "prose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "apply": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "grader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "fixture_template"],
+      "properties": {
+        "type": {
+          "enum": [
+            "exact_match",
+            "contains",
+            "regex",
+            "json_schema",
+            "json_path_assertion",
+            "tool_called",
+            "tool_not_called",
+            "tool_sequence",
+            "tool_argument_assertion",
+            "http_status",
+            "latency_threshold",
+            "cost_threshold",
+            "token_threshold",
+            "custom_webhook",
+            "localization_f1",
+            "llm_judge"
+          ]
+        },
+        "fixture_template": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "experiment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "metric"],
+      "properties": {
+        "method": {
+          "enum": ["trial", "replay", "shadow", "canary", "local_ab"]
+        },
+        "metric": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "const": "unmeasured"
+        }
+      }
+    },
+    "never_claim": {
+      "type": "string",
+      "minLength": 1
+    },
+    "skill_render": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible", "skill_name"],
+      "properties": {
+        "eligible": {
+          "type": "boolean"
+        },
+        "skill_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        }
+      }
+    },
+    "cave_agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pr_shape", "scope_hint"],
+      "properties": {
+        "pr_shape": {
+          "enum": [
+            "config_change",
+            "code_change",
+            "instrumentation",
+            "none"
+          ]
+        },
+        "scope_hint": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "proposed_optimizer": {
+      "const": true
+    }
+  }
+}

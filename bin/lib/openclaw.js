@@ -23,6 +23,7 @@
 'use strict';
 
 const fs = require('fs');
+const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 
@@ -39,6 +40,101 @@ function resolveWorkspace(env = process.env) {
 
 function readIfExists(p) {
   try { return fs.readFileSync(p, 'utf8'); } catch (_) { return null; }
+}
+
+function sameFile(left, right) {
+  return left && right && left.dev === right.dev && left.ino === right.ino;
+}
+
+function digest(content) {
+  return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
+function sameSnapshot(left, right) {
+  return sameFile(left, right) &&
+    typeof left.cavemanContentSHA256 === 'string' &&
+    left.cavemanContentSHA256 === right.cavemanContentSHA256;
+}
+
+function readRegularIfExists(p) {
+  let before;
+  try { before = fs.lstatSync(p); } catch (error) {
+    if (error && error.code === 'ENOENT') return { content: null, stat: null };
+    throw error;
+  }
+  if (before.isSymbolicLink() || !before.isFile()) {
+    throw new Error(`openclaw: refusing non-regular file ${p}`);
+  }
+  const fd = fs.openSync(p, 'r');
+  try {
+    const opened = fs.fstatSync(fd);
+    if (!sameFile(before, opened)) throw new Error(`openclaw: ${p} changed while opening`);
+    const content = fs.readFileSync(fd, 'utf8');
+    opened.cavemanContentSHA256 = digest(content);
+    return { content, stat: opened };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function atomicWriteRegular(p, content, expectedStat) {
+  const dir = path.dirname(p);
+  const mode = expectedStat ? expectedStat.mode & 0o777 : 0o600;
+  const tmp = path.join(dir, `.${path.basename(p)}.${process.pid}.${cryptoRandom()}.tmp`);
+  let fd;
+  try {
+    fd = fs.openSync(tmp, 'wx', mode);
+    fs.writeFileSync(fd, content, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+
+    const current = readRegularIfExists(p);
+    if ((expectedStat && !sameSnapshot(expectedStat, current.stat)) || (!expectedStat && current.stat)) {
+      throw new Error(`openclaw: ${p} changed before atomic replace`);
+    }
+    fs.renameSync(tmp, p);
+    try {
+      const dirFD = fs.openSync(dir, 'r');
+      try { fs.fsyncSync(dirFD); } finally { fs.closeSync(dirFD); }
+    } catch (_) { /* directory fsync is not supported on every platform */ }
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch (_) {}
+    try { fs.unlinkSync(tmp); } catch (_) {}
+  }
+}
+
+function cryptoRandom() {
+  return crypto.randomBytes(6).toString('hex');
+}
+
+function unlinkRegular(p, expectedStat) {
+  const current = readRegularIfExists(p);
+  if (!sameSnapshot(expectedStat, current.stat)) {
+    throw new Error(`openclaw: refusing changed or non-regular file ${p}`);
+  }
+  fs.unlinkSync(p);
+}
+
+function ensureRealDirectory(p, create = false) {
+  let stat;
+  try { stat = fs.lstatSync(p); } catch (error) {
+    if (!error || error.code !== 'ENOENT' || !create) throw error;
+    fs.mkdirSync(p);
+    stat = fs.lstatSync(p);
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`openclaw: refusing non-directory or symlink ${p}`);
+  }
+}
+
+function restoreRegularSnapshot(p, snapshot) {
+  const current = readRegularIfExists(p);
+  if (snapshot.content === null) {
+    if (current.stat) unlinkRegular(p, current.stat);
+  } else {
+    atomicWriteRegular(p, snapshot.content, current.stat);
+  }
 }
 
 // ── Frontmatter helpers ───────────────────────────────────────────────────
@@ -67,11 +163,12 @@ function frontmatterHasKey(fm, key) {
   return re.test(fm);
 }
 
-function mergeOpenclawFrontmatter(src) {
+function mergeOpenclawFrontmatter(src, opts = {}) {
+  const version = opts.version || SKILL_VERSION;
   const { frontmatter, body } = splitFrontmatter(src);
   const additions = [];
   if (!frontmatterHasKey(frontmatter, 'name')) additions.push(`name: ${SKILL_NAME}`);
-  if (!frontmatterHasKey(frontmatter, 'version')) additions.push(`version: ${SKILL_VERSION}`);
+  if (!frontmatterHasKey(frontmatter, 'version')) additions.push(`version: ${version}`);
   if (!frontmatterHasKey(frontmatter, 'always')) additions.push('always: true');
   if (additions.length === 0 && frontmatter) return src;
   const fmBody = (frontmatter ? frontmatter.trimEnd() + '\n' : '') + additions.join('\n') + (additions.length ? '\n' : '');
@@ -97,7 +194,7 @@ function loadBootstrapSnippet(repoRoot) {
     '',
     '  skills/caveman/SKILL.md',
     '',
-    'Default intensity: `full`. Switch with `/caveman lite|full|ultra|wenyan`.',
+    'Default intensity: `full`. Switch with `/caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra`.',
     'Stop with: "stop caveman" / "normal mode" / "deactivate caveman".',
     '',
     'Auto-Clarity: drop caveman for security warnings, irreversible action',
@@ -153,7 +250,8 @@ function stripAllBootstrapBlocks(text) {
 }
 
 function appendBootstrapToSoul(soulPath, snippet) {
-  const existing = readIfExists(soulPath);
+  const opened = readRegularIfExists(soulPath);
+  const existing = opened.content;
   const count = (s, sub) => s.split(sub).length - 1;
   let base = existing;
   let repaired = false;
@@ -176,12 +274,13 @@ function appendBootstrapToSoul(soulPath, snippet) {
   } else {
     next = snippet;
   }
-  fs.writeFileSync(soulPath, next, { mode: 0o644 });
+  atomicWriteRegular(soulPath, next, opened.stat);
   return repaired ? { changed: true, repaired: true } : { changed: true };
 }
 
 function stripBootstrapFromSoul(soulPath) {
-  const existing = readIfExists(soulPath);
+  const opened = readRegularIfExists(soulPath);
+  const existing = opened.content;
   if (!existing) return { changed: false, reason: 'no SOUL.md' };
   const { next: stripped, found } = stripAllBootstrapBlocks(existing);
   if (!found) return { changed: false, reason: 'no marker block' };
@@ -190,15 +289,15 @@ function stripBootstrapFromSoul(soulPath) {
   if (next === '') {
     // SOUL.md only contained our block — remove the file so OpenClaw doesn't
     // bootstrap an empty section every turn.
-    try { fs.unlinkSync(soulPath); } catch (_) {}
+    unlinkRegular(soulPath, opened.stat);
     return { changed: true, removed: true };
   }
-  fs.writeFileSync(soulPath, next, { mode: 0o644 });
+  atomicWriteRegular(soulPath, next, opened.stat);
   return { changed: true };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
-function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, log = noopLog() } = {}) {
+function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, log = noopLog(), version } = {}) {
   const ws = workspace || resolveWorkspace();
   const skillBody = loadSkillBody(repoRoot);
   if (!skillBody) {
@@ -227,14 +326,31 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
     return { ok: true, dryRun: true };
   }
 
-  fs.mkdirSync(skillDir, { recursive: true });
-  const merged = mergeOpenclawFrontmatter(skillBody);
-  fs.writeFileSync(skillFile, merged, { mode: 0o644 });
+  ensureRealDirectory(ws);
+  ensureRealDirectory(path.join(ws, 'skills'), true);
+  ensureRealDirectory(skillDir, true);
+  const priorSkill = readRegularIfExists(skillFile);
+  const merged = mergeOpenclawFrontmatter(skillBody, { version });
+  try {
+    atomicWriteRegular(skillFile, merged, priorSkill.stat);
+    const soul = appendBootstrapToSoul(soulFile, snippet);
+    if (soul.changed) log.write(`  wrote bootstrap block to ${soulFile}\n`);
+    else log.note(`  ${soulFile} already contains caveman bootstrap`);
+  } catch (error) {
+    // SOUL is atomic, so failure leaves it unchanged. Roll skill write back too
+    // so install never returns with only half of always-on activation present.
+    try {
+      const currentSkill = readRegularIfExists(skillFile);
+      if (priorSkill.content === null) {
+        if (currentSkill.stat) unlinkRegular(skillFile, currentSkill.stat);
+        try { fs.rmdirSync(skillDir); } catch (_) {}
+      } else {
+        atomicWriteRegular(skillFile, priorSkill.content, currentSkill.stat);
+      }
+    } catch (_) { /* preserve original install error */ }
+    throw error;
+  }
   log.write(`  installed: ${skillFile}\n`);
-
-  const soul = appendBootstrapToSoul(soulFile, snippet);
-  if (soul.changed) log.write(`  wrote bootstrap block to ${soulFile}\n`);
-  else log.note(`  ${soulFile} already contains caveman bootstrap`);
 
   return { ok: true };
 }
@@ -246,27 +362,41 @@ function uninstallOpenclaw({ workspace, dryRun = false, log = noopLog() } = {}) 
 
   let touched = false;
 
-  if (fs.existsSync(skillDir)) {
-    if (dryRun) {
-      log.note(`  would remove ${skillDir}/`);
-    } else {
-      try { fs.rmSync(skillDir, { recursive: true, force: true }); } catch (_) {}
-      log.note(`  removed ${skillDir}`);
-    }
-    touched = true;
+  const hasSoul = fs.existsSync(soulFile);
+  const hasSkill = fs.existsSync(skillDir);
+  if (dryRun) {
+    if (hasSoul) { log.note(`  would strip caveman block from ${soulFile}`); touched = true; }
+    if (hasSkill) { log.note(`  would remove ${skillDir}/`); touched = true; }
+    return { ok: true, touched };
   }
 
-  if (fs.existsSync(soulFile)) {
-    if (dryRun) {
-      log.note(`  would strip caveman block from ${soulFile}`);
-      touched = true;
-    } else {
+  const soulSnapshot = readRegularIfExists(soulFile);
+  let stagedSkill = null;
+  try {
+    if (hasSkill) {
+      ensureRealDirectory(path.join(ws, 'skills'));
+      ensureRealDirectory(skillDir);
+      stagedSkill = path.join(path.dirname(skillDir), `.${SKILL_NAME}.remove.${process.pid}.${cryptoRandom()}`);
+      fs.renameSync(skillDir, stagedSkill);
+    }
+    if (hasSoul) {
       const r = stripBootstrapFromSoul(soulFile);
       if (r.changed) {
         log.note(r.removed ? `  removed ${soulFile}` : `  stripped caveman block from ${soulFile}`);
         touched = true;
       }
     }
+    if (stagedSkill) {
+      fs.rmSync(stagedSkill, { recursive: true, force: true });
+      log.note(`  removed ${skillDir}`);
+      touched = true;
+    }
+  } catch (error) {
+    try { restoreRegularSnapshot(soulFile, soulSnapshot); } catch (_) {}
+    try {
+      if (stagedSkill && fs.existsSync(stagedSkill) && !fs.existsSync(skillDir)) fs.renameSync(stagedSkill, skillDir);
+    } catch (_) {}
+    throw error;
   }
 
   return { ok: true, touched };

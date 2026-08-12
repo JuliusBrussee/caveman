@@ -1,0 +1,149 @@
+{
+  "schema_version": "1",
+  "recipes": [
+    {
+      "schema_version": "1",
+      "id": "anthropic-py",
+      "display_name": "Anthropic SDK (Python)",
+      "lang": "python",
+      "wire_protocol": "anthropic-messages",
+      "note": "The SDK appends /v1/messages itself, so the base URL is just the gateway + /w/{{app}}.",
+      "code": "import os\nimport anthropic\n\nclient = anthropic.Anthropic(\n    base_url=\"{{baseURL}}/w/{{app}}\",\n    api_key=os.environ[\"ANTHROPIC_API_KEY\"],\n)\n\nmsg = client.messages.create(\n    model=\"claude-sonnet-4-5\",\n    max_tokens=1024,\n    messages=[{\"role\": \"user\", \"content\": \"Why is the sky blue?\"}],\n)\n\n# Connected to Caveman Cloud? Add gateway auth + BYOK headers:\n#   default_headers={\"x-cave-api-key\": CAVE_API_KEY, \"x-cave-upstream-key\": ANTHROPIC_API_KEY}",
+      "models": [
+        "claude-sonnet-4-5"
+      ]
+    },
+    {
+      "schema_version": "1",
+      "id": "anthropic-ts",
+      "display_name": "Anthropic SDK (TypeScript)",
+      "lang": "ts",
+      "wire_protocol": "anthropic-messages",
+      "note": "The SDK appends /v1/messages itself, so the base URL is just the gateway + /w/{{app}}.",
+      "code": "import Anthropic from \"@anthropic-ai/sdk\";\n\nconst client = new Anthropic({\n  baseURL: \"{{baseURL}}/w/{{app}}\",\n  apiKey: process.env.ANTHROPIC_API_KEY,\n});\n\nconst msg = await client.messages.create({\n  model: \"claude-sonnet-4-5\",\n  max_tokens: 1024,\n  messages: [{ role: \"user\", content: \"Why is the sky blue?\" }],\n});\n\n// Claude Pro/Max OAuth bearer tokens pass through unchanged.\n// Connected to Caveman Cloud? Add gateway auth + BYOK headers:\n//   defaultHeaders: { \"x-cave-api-key\": CAVE_API_KEY, \"x-cave-upstream-key\": ANTHROPIC_API_KEY }",
+      "models": [
+        "claude-sonnet-4-5"
+      ]
+    },
+    {
+      "schema_version": "1",
+      "id": "crewai",
+      "display_name": "CrewAI",
+      "lang": "python",
+      "wire_protocol": "openai-chat",
+      "note": "CrewAI's LLM class is LiteLLM-backed; base_url routes every crew call through the gateway.",
+      "code": "import os\nfrom crewai import LLM\n\nllm = LLM(\n    model=\"openai/gpt-5.5\",\n    base_url=\"{{baseURL}}/w/{{app}}/openai/v1\",\n    api_key=os.environ[\"OPENAI_API_KEY\"],\n)\n\n# Pass llm to your Agents/Crew as usual.",
+      "models": [
+        "gpt-5.5"
+      ]
+    },
+    {
+      "schema_version": "1",
+      "id": "curl",
+      "display_name": "curl / raw HTTP",
+      "lang": "bash",
+      "wire_protocol": "multi",
+      "note": "The gateway speaks each provider's native protocol on its native path — bare or /w/-prefixed.",
+      "code": "# OpenAI protocol (Chat Completions, Responses, embeddings):\ncurl {{baseURL}}/w/{{app}}/v1/chat/completions \\\n  -H \"authorization: Bearer $OPENAI_API_KEY\" \\\n  -H \"content-type: application/json\" \\\n  -d '{\"model\":\"gpt-5.5\",\"messages\":[{\"role\":\"user\",\"content\":\"Why is the sky blue?\"}]}'\n\n# Anthropic protocol:\ncurl {{baseURL}}/w/{{app}}/v1/messages \\\n  -H \"x-api-key: $ANTHROPIC_API_KEY\" \\\n  -H \"anthropic-version: 2023-06-01\" \\\n  -H \"content-type: application/json\" \\\n  -d '{\"model\":\"claude-sonnet-4-5\",\"max_tokens\":256,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}'",
+      "models": [
+        "gpt-5.5",
+        "claude-sonnet-4-5"
+      ]
+    },
+    {
+      "schema_version": "1",
+      "id": "google-genai",
+      "display_name": "Google Gen AI SDK",
+      "lang": "python",
+      "wire_protocol": "gemini-generatecontent",
+      "note": "The SDK appends /v1beta/... itself, so the base URL is just the gateway + /w/{{app}}.",
+      "code": "import os\nfrom google import genai\nfrom google.genai import types\n\nclient = genai.Client(\n    api_key=os.environ[\"GEMINI_API_KEY\"],\n    http_options=types.HttpOptions(base_url=\"{{baseURL}}/w/{{app}}\"),\n)\n\nres = client.models.generate_content(\n    model=\"gemini-2.5-flash\",\n    contents=\"Why is the sky blue?\",\n)",
+      "models": [
+        "gemini-2.5-flash"
+      ]
+    },
+    {
+      "schema_version": "1",
+      "id": "langchain",
+      "display_name": "LangChain / LangGraph",
+      "lang": "python",
+      "wire_protocol": "multi",
+      "note": "Every LangChain chat model takes a base_url; LangGraph inherits whatever model you pass it.",
+      "code": "import os\nfrom langchain_openai import ChatOpenAI\n\nllm = ChatOpenAI(\n    model=\"gpt-5.5\",\n    base_url=\"{{baseURL}}/w/{{app}}/openai/v1\",\n    api_key=os.environ[\"OPENAI_API_KEY\"],\n)\n\nllm.invoke(\"Why is the sky blue?\")\n\n# Anthropic models keep their native protocol (no translation):\n#   from langchain_anthropic import ChatAnthropic\n#   llm = ChatAnthropic(model=\"claude-sonnet-4-5\", base_url=\"{{baseURL}}/w/{{app}}\")",
+      "models": [
+        "gpt-5.5",
+        "claude-sonnet-4-5"
+      ]
+    },
+    {
+      "schema_version": "1",
+      "id": "litellm",
+      "display_name": "LiteLLM",
+      "lang": "python",
+      "wire_protocol": "multi",
+      "note": "Works per-call via api_base, or fleet-wide via the LiteLLM proxy config.yaml.",
+      "code": "import os\nimport litellm\n\nres = litellm.completion(\n    model=\"openai/gpt-5.5\",\n    api_base=\"{{baseURL}}/w/{{app}}/openai/v1\",\n    api_key=os.environ[\"OPENAI_API_KEY\"],\n    messages=[{\"role\": \"user\", \"content\": \"Why is the sky blue?\"}],\n)\n\n# LiteLLM proxy? Point the model at the gateway in config.yaml instead:\n#   model_list:\n#     - model_name: gpt-5.5\n#       litellm_params:\n#         model: openai/gpt-5.5\n#         api_base: {{baseURL}}/w/{{app}}/openai/v1\n#         api_key: os.environ/OPENAI_API_KEY",
+      "models": [
+        "gpt-5.5"
+      ]
+    },
+    {
+      "schema_version": "1",
+      "id": "openai-agents",
+      "display_name": "OpenAI Agents SDK",
+      "lang": "python",
+      "wire_protocol": "openai-responses",
+      "note": "The Agents SDK honors OPENAI_BASE_URL — zero code — or a custom client for finer control.",
+      "code": "# Zero-code path: the Agents SDK reads OPENAI_BASE_URL.\n#   export OPENAI_BASE_URL=\"{{baseURL}}/w/{{app}}/openai/v1\"\n\n# Or set a custom client explicitly:\nimport os\nfrom openai import AsyncOpenAI\nfrom agents import Agent, Runner, set_default_openai_client\n\nset_default_openai_client(\n    AsyncOpenAI(\n        base_url=\"{{baseURL}}/w/{{app}}/openai/v1\",\n        api_key=os.environ[\"OPENAI_API_KEY\"],\n    ),\n    use_for_tracing=False,\n)\n\nagent = Agent(name=\"assistant\", instructions=\"Be concise.\")\nresult = Runner.run_sync(agent, \"Why is the sky blue?\")",
+      "models": []
+    },
+    {
+      "schema_version": "1",
+      "id": "openai-py",
+      "display_name": "OpenAI SDK (Python)",
+      "lang": "python",
+      "wire_protocol": "openai-responses",
+      "note": "One constructor argument. /w/{{app}} in the base URL attributes this app's spend — no custom headers.",
+      "code": "import os\nfrom openai import OpenAI\n\nclient = OpenAI(\n    base_url=\"{{baseURL}}/w/{{app}}/openai/v1\",\n    api_key=os.environ[\"OPENAI_API_KEY\"],\n)\n\n# Chat Completions and the Responses API both route through the gateway.\nres = client.responses.create(model=\"gpt-5.5\", input=\"Why is the sky blue?\")\n\n# Connected to Caveman Cloud? Add gateway auth + BYOK headers:\n#   default_headers={\"x-cave-api-key\": CAVE_API_KEY, \"x-cave-upstream-key\": OPENAI_API_KEY}",
+      "models": [
+        "gpt-5.5"
+      ]
+    },
+    {
+      "schema_version": "1",
+      "id": "openai-ts",
+      "display_name": "OpenAI SDK (TypeScript)",
+      "lang": "ts",
+      "wire_protocol": "openai-responses",
+      "note": "One constructor argument. /w/{{app}} in the base URL attributes this app's spend — no custom headers.",
+      "code": "import OpenAI from \"openai\";\n\nconst client = new OpenAI({\n  baseURL: \"{{baseURL}}/w/{{app}}/openai/v1\",\n  apiKey: process.env.OPENAI_API_KEY,\n});\n\n// Chat Completions and the Responses API both route through the gateway.\nconst res = await client.responses.create({\n  model: \"gpt-5.5\",\n  input: \"Why is the sky blue?\",\n});\n\n// Connected to Caveman Cloud? Add gateway auth + BYOK headers:\n//   defaultHeaders: { \"x-cave-api-key\": CAVE_API_KEY, \"x-cave-upstream-key\": OPENAI_API_KEY }",
+      "models": [
+        "gpt-5.5"
+      ]
+    },
+    {
+      "schema_version": "1",
+      "id": "pydantic-ai",
+      "display_name": "Pydantic AI",
+      "lang": "python",
+      "wire_protocol": "openai-chat",
+      "note": "Any provider class that takes base_url routes through the gateway.",
+      "code": "import os\nfrom pydantic_ai import Agent\nfrom pydantic_ai.models.openai import OpenAIChatModel\nfrom pydantic_ai.providers.openai import OpenAIProvider\n\nmodel = OpenAIChatModel(\n    \"gpt-5.5\",\n    provider=OpenAIProvider(\n        base_url=\"{{baseURL}}/w/{{app}}/openai/v1\",\n        api_key=os.environ[\"OPENAI_API_KEY\"],\n    ),\n)\n\nagent = Agent(model)\nresult = agent.run_sync(\"Why is the sky blue?\")",
+      "models": [
+        "gpt-5.5"
+      ]
+    },
+    {
+      "schema_version": "1",
+      "id": "vercel-ai-sdk",
+      "display_name": "Vercel AI SDK",
+      "lang": "ts",
+      "wire_protocol": "multi",
+      "note": "Use @ai-sdk/openai-compatible for OpenAI-protocol models; the Anthropic provider takes a baseURL too.",
+      "code": "import { createOpenAICompatible } from \"@ai-sdk/openai-compatible\";\nimport { generateText } from \"ai\";\n\nconst caveman = createOpenAICompatible({\n  name: \"caveman\",\n  baseURL: \"{{baseURL}}/w/{{app}}/openai/v1\",\n  apiKey: process.env.OPENAI_API_KEY,\n});\n\nconst { text } = await generateText({\n  model: caveman(\"gpt-5.5\"),\n  prompt: \"Why is the sky blue?\",\n});\n\n// Anthropic models keep their native protocol (no translation):\n//   import { createAnthropic } from \"@ai-sdk/anthropic\";\n//   const anthropic = createAnthropic({ baseURL: \"{{baseURL}}/w/{{app}}/v1\" });",
+      "models": [
+        "gpt-5.5"
+      ]
+    }
+  ]
+}

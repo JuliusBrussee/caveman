@@ -1,0 +1,310 @@
+{
+  "results": [
+    {
+      "id": 0,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 1,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 2,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 3,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 4,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 5,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 6,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 7,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 8,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 9,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 10,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 11,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 12,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 13,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 14,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 15,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 16,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 17,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 18,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 19,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 20,
+      "status": "ok",
+      "latency_ms": 9999
+    },
+    {
+      "id": 21,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 22,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 23,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 24,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 25,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 26,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 27,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 28,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 29,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 30,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 31,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 32,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 33,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 34,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 35,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 36,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 37,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 38,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 39,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 40,
+      "status": "error",
+      "code": "ERROR-503",
+      "msg": "connection timeout",
+      "latency_ms": 34
+    },
+    {
+      "id": 41,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 42,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 43,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 44,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 45,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 46,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 47,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 48,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 49,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 50,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 51,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 52,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 53,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 54,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 55,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 56,
+      "status": "ok",
+      "latency_ms": 34
+    },
+    {
+      "id": 57,
+      "status": "ok",
+      "latency_ms": 28
+    },
+    {
+      "id": 58,
+      "status": "ok",
+      "latency_ms": 31
+    },
+    {
+      "id": 59,
+      "status": "ok",
+      "latency_ms": 34
+    }
+  ],
+  "meta": {
+    "total": 60,
+    "source": "smartcrusher-fixture"
+  }
+}

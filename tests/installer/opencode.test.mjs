@@ -41,7 +41,8 @@ function shimOpencode() {
 }
 
 function runInstaller(args, env) {
-  return spawnSync('node', [INSTALLER, ...args, '--non-interactive', '--no-mcp-shrink'], {
+  const configDir = path.join(env.XDG_CONFIG_HOME, 'claude-test');
+  return spawnSync(process.execPath, [INSTALLER, ...args, '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink'], {
     env, encoding: 'utf8',
   });
 }
@@ -68,6 +69,7 @@ test('opencode fresh install drops plugin, commands, agents, skills, AGENTS.md, 
     assert.ok(fs.existsSync(path.join(ocDir, 'plugins', 'caveman', 'plugin.js')), 'plugin.js missing');
     assert.ok(fs.existsSync(path.join(ocDir, 'plugins', 'caveman', 'package.json')), 'plugin package.json missing');
     assert.ok(fs.existsSync(path.join(ocDir, 'plugins', 'caveman', 'caveman-config.cjs')), 'caveman-config.cjs sibling missing');
+    assert.ok(fs.existsSync(path.join(ocDir, 'plugins', 'caveman', 'caveman-parse.cjs')), 'caveman-parse.cjs sibling missing');
 
     for (const f of ['caveman.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md']) {
       assert.ok(fs.existsSync(path.join(ocDir, 'commands', f)), `command ${f} missing`);
@@ -148,6 +150,93 @@ test('opencode re-install preserves user edits to plugin.js without --force', ()
     assert.notEqual(r3.status, 2);
     const forced = fs.readFileSync(pluginPath, 'utf8');
     assert.doesNotMatch(forced, /USER-TWEAK-DO-NOT-OVERWRITE/, '--force should overwrite plugin.js');
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+test('opencode refuses an unowned plugin directory before writing other payloads', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const ocDir = path.join(xdg, 'opencode');
+    const userPlugin = path.join(ocDir, 'plugins', 'caveman');
+    fs.mkdirSync(userPlugin, { recursive: true });
+    fs.writeFileSync(path.join(userPlugin, 'user.js'), 'export default "mine";\n');
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+
+    const result = runInstaller(['--only', 'opencode'], env);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /ownership conflict/);
+    assert.equal(fs.readFileSync(path.join(userPlugin, 'user.js'), 'utf8'), 'export default "mine";\n');
+    assert.equal(fs.existsSync(path.join(ocDir, 'commands', 'caveman.md')), false);
+    assert.equal(fs.existsSync(path.join(ocDir, '.caveman-opencode-ownership.json')), false);
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+test('opencode uninstall never deletes unjournaled same-named user content', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const userPlugin = path.join(xdg, 'opencode', 'plugins', 'caveman');
+    fs.mkdirSync(userPlugin, { recursive: true });
+    fs.writeFileSync(path.join(userPlugin, 'user.js'), 'export default "mine";\n');
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    const removed = runInstaller(['--uninstall'], env);
+    assert.equal(removed.status, 0, removed.stderr);
+    assert.equal(fs.readFileSync(path.join(userPlugin, 'user.js'), 'utf8'), 'export default "mine";\n');
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+test('opencode --force backs up conflicts and uninstall restores original directory', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const ocDir = path.join(xdg, 'opencode');
+    const userPlugin = path.join(ocDir, 'plugins', 'caveman');
+    fs.mkdirSync(userPlugin, { recursive: true });
+    fs.writeFileSync(path.join(userPlugin, 'user.js'), 'export default "mine";\n');
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+
+    const installed = runInstaller(['--only', 'opencode', '--force'], env);
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.equal(fs.existsSync(path.join(userPlugin, 'user.js')), false);
+    assert.ok(fs.existsSync(path.join(userPlugin, 'plugin.js')));
+
+    const removed = runInstaller(['--uninstall'], env);
+    assert.equal(removed.status, 0, removed.stderr);
+    assert.equal(fs.readFileSync(path.join(userPlugin, 'user.js'), 'utf8'), 'export default "mine";\n');
+    assert.equal(fs.existsSync(path.join(userPlugin, 'plugin.js')), false);
+    assert.equal(fs.existsSync(path.join(ocDir, 'commands', 'caveman.md')), false);
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+test('opencode uninstall leaves modified owned files and keeps journal evidence', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    const installed = runInstaller(['--only', 'opencode'], env);
+    assert.equal(installed.status, 0, installed.stderr);
+    const ocDir = path.join(xdg, 'opencode');
+    const command = path.join(ocDir, 'commands', 'caveman.md');
+    fs.appendFileSync(command, '\nUSER EDIT\n');
+
+    const removed = runInstaller(['--uninstall'], env);
+    assert.equal(removed.status, 0, removed.stderr);
+    assert.match(removed.stderr, /left modified/);
+    assert.match(fs.readFileSync(command, 'utf8'), /USER EDIT/);
+    assert.ok(fs.existsSync(path.join(ocDir, '.caveman-opencode-ownership.json')));
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });
