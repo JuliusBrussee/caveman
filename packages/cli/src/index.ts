@@ -2178,9 +2178,7 @@ function printInstallResult(
 async function setupInstall(json: boolean, options: { continuing?: boolean } = {}) {
   const platform = setupPlatform();
   const timeoutSeconds = setupTimeoutSeconds();
-  const binDir = join(cavemanHome(), "bin");
-  // 0o700: proxy refuses CCR (sqlite parent) when ~/.caveman is group/world writable,
-  // and a permissive umask (e.g. Homebrew's 002) would otherwise create it 0775.
+  const binDir = join(ensureCavemanHome(), "bin");
   mkdirSync(binDir, { recursive: true, mode: 0o700 });
 
   const local = verifiedLocalInstall(binDir);
@@ -4710,17 +4708,38 @@ async function spawnWrapped(
       const removeSignalHandlers = () => {
         for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
       };
-      for (const signal of ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"] as NodeJS.Signals[]) {
+      const wrapSignals = ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"] as NodeJS.Signals[];
+      for (const signal of wrapSignals) {
         const handler = () => {
           // Forward the signal but defer cleanup and self-termination until the
           // child exits: deleting the wrap temp pack before the agent shuts down
           // races its SessionEnd hooks, which still read the plugin directory.
           removeSignalHandlers();
-          child.kill(signal);
-          child.once("exit", () => {
+          const finish = () => {
             cleanupWrapTempDirs();
             removeProxySessionMarker(sessionMarker);
             process.kill(process.pid, signal);
+          };
+          // Escape hatch: a second signal, or a child that traps the first one,
+          // must still clean up — the temp pack can hold copied agent
+          // credentials (e.g. the Codex ephemeral home's auth.json), so dying
+          // at default disposition without cleanup would strand them on disk.
+          const escape = () => {
+            removeSignalHandlers();
+            child.kill("SIGKILL");
+            finish();
+          };
+          for (const s of wrapSignals) {
+            signalHandlers.set(s, escape);
+            process.once(s, escape);
+          }
+          child.kill(signal);
+          const grace = setTimeout(escape, 10_000);
+          grace.unref();
+          child.once("exit", () => {
+            clearTimeout(grace);
+            removeSignalHandlers();
+            finish();
           });
         };
         signalHandlers.set(signal, handler);
@@ -8399,6 +8418,18 @@ export function wrapExternalWritesDisabled(env: NodeJS.ProcessEnv = process.env)
 
 function cavemanHome(): string {
   return process.env.CAVEMAN_HOME ?? join(homedir(), ".caveman");
+}
+
+// ensureCavemanHome creates ~/.caveman itself with owner-only perms and repairs
+// an existing permissive mode. The proxy refuses CCR (sqlite parent check) when
+// this directory is group/world writable, and recursive mkdir with a mode only
+// applies it to directories it creates — an earlier no-mode caller (login, mcp
+// install) would otherwise have already created it 0775 under umask 002.
+function ensureCavemanHome(): string {
+  const home = cavemanHome();
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  try { chmodSync(home, 0o700); } catch { /* not ours / Windows */ }
+  return home;
 }
 
 // cavemanBin resolves one of caveman's own Go binaries (proxy/engine/mcp/browse):
@@ -13956,7 +13987,7 @@ function credentialsPath() {
 }
 
 function fileTokenSet(token: string) {
-  mkdirSync(caveHome(), { recursive: true });
+  ensureCavemanHome();
   try { chmodSync(credentialsPath(), 0o600); } catch { /* created below */ }
   writeFileSync(credentialsPath(), token, { mode: 0o600 });
   chmodSync(credentialsPath(), 0o600);
