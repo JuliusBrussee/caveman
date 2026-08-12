@@ -81,5 +81,4 @@ Agent SDK, thin CLI, contracts, evals, and other adoption surfaces are MIT.
 Build/test inside this repository:
 `make product-build PRODUCT=engine` / `make product-test PRODUCT=engine`.
 
-Spec: [Engine PRD](../../docs/prd/02-caveman-engine.md) · registry id `engine` in
-[PRODUCTS.yaml](../../PRODUCTS.yaml).
+Registry id: `engine`.

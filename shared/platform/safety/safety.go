@@ -1,5 +1,5 @@
-// Package safety defines the optimization safety ladder (S0–S3) from
-// docs/design.md as the single source of truth shared by the worker's detectors
+// Package safety defines the optimization safety ladder (S0–S3), the single
+// source of truth shared by the worker's detectors
 // and the control-api's Cave Architect. The string values are the wire/DB
 // representation of `opportunities.safety_class`; do not change them.
 //

@@ -53,7 +53,7 @@ test("lapsed within 7-day grace keeps the requested mode and is labelled grace",
   assert.equal(resolveWrapGate(almost7, NOW, "compress").reason, "grace");
 });
 
-// ── ADR 0031: compression is NOT account-gated ────────────────────────────────
+// ── compression is NOT account-gated ────────────────────────────────
 // The entitlement labels the account; it never decides whether the local proxy
 // compresses. These are the pins that make a re-introduced account gate fail.
 test("no entitlement at all still compresses", () => {

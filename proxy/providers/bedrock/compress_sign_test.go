@@ -11,7 +11,7 @@ import (
 	"github.com/JuliusBrussee/caveman/shared/platform/awssig"
 )
 
-// S11 / ADR 0013 regression. Two invariants the managed gateway relies on:
+// S11 regression. Two invariants the managed gateway relies on:
 //
 //  1. The S4 compressor must SKIP every Bedrock vendor (Anthropic or not), so
 //     compress mode never reshapes a Bedrock body. Bedrock's separate, opt-in

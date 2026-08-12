@@ -1,11 +1,11 @@
-# public/shrink — caveman-shrink, the tool-catalog compressor (commercial Go core + MIT launcher)
+# shrink — caveman-shrink, the tool-catalog compressor (commercial Go core + MIT launcher)
 
 Compress MCP/OpenAI **tool definitions** before they fill the context window. A thin Go wrapper
 over the [engine](../engine/CLAUDE.md)'s `toolschema` compressor: it drops annotation metadata
 (examples, titles, `$comment`, `$schema`) and reduces long descriptions to their lead plus every
 constraint-bearing sentence. It keeps every **selection token** (tool/parameter names, types,
 enums, required) and argument-construction value (`default`, `const`, `$ref` targets)
-byte-for-byte. Everything is `inferred` (PRD `docs/prd/09-caveman-shrink.md`).
+byte-for-byte. Everything is `inferred`.
 
 ## Layout
 - `shrink.go` — the library: `Shrink` (catalog → compressed, fail-open S4 transform, durable-CCR-backed), `Recover` (handle → original bytes), `Lint` (per-tool inferred token reductions), `SelectionProfile` (the structural surface — what must survive). `WithStore`/`WithStorePath` select recovery storage; default is `CAVEMAN_CCR_DB` / `~/.caveman/ccr.db`.
@@ -40,4 +40,4 @@ adversarial conformance tests lock these construction surfaces; over-keep is saf
   `caveman-shrink recover`; failure to open storage makes library `Shrink` return an error, while
   the CLI catches that error and forwards the original bytes with no handle.
 
-See ../../CLAUDE.md (root) · ../engine/CLAUDE.md · ../../docs/prd/09-caveman-shrink.md
+See ../../CLAUDE.md (root) · ../engine/CLAUDE.md

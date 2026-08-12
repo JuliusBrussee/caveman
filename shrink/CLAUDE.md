@@ -1,12 +1,11 @@
-# public/shrink — caveman-shrink, the tool-catalog compressor (commercial Go core + MIT launcher)
+# shrink — caveman-shrink, the tool-catalog compressor (commercial Go core + MIT launcher)
 
 Compress MCP/OpenAI **tool definitions** before they fill the context window. A thin Go wrapper
 over the [engine](../engine/CLAUDE.md)'s `toolschema` compressor: it drops annotation metadata
 (examples, titles, `$comment`, `$schema`) and reduces free-text descriptions to their lead
 sentence **plus every constraint-bearing sentence**, while keeping every **selection token** —
 tool and parameter names, types, enums, required — and every **argument-construction value** —
-`default`, `const`, `$ref` targets — byte-for-byte. Everything is `inferred`
-(PRD `docs/prd/09-caveman-shrink.md`).
+`default`, `const`, `$ref` targets — byte-for-byte. Everything is `inferred`.
 
 ## Layout
 - `shrink.go` — the library: `Shrink` (catalog → compressed, fail-open S4 transform, durable-CCR-backed), `Recover` (handle → original bytes), `Lint` (per-tool inferred token reductions), `SelectionProfile` (the structural surface — what must survive). `WithStore`/`WithStorePath` pick the recovery store; default is the shared `CAVEMAN_CCR_DB` / `~/.caveman/ccr.db`.
@@ -47,4 +46,4 @@ tool and parameter names, types, enums, required — and every **argument-constr
 - **inferred-only** — token counts are estimates via the engine's offline counter; never `verified`, never re-projected.
 - **reversible for real** — a compressing shrink writes the exact original to the **durable** store (`engine.Compress` commits the recovery row before it publishes transformed bytes), so a printed handle resolves later, from a separate process, via `Recover` / `caveman-shrink recover`. It is NOT an in-memory store discarded on return — that minted handles that were unresolvable the instant `Shrink` returned. If the durable store cannot be opened, `Shrink` returns an error and the CLI forwards the original bytes: no handle, no reversibility claim.
 
-See ../../CLAUDE.md (root) · ../engine/CLAUDE.md · ../../docs/prd/09-caveman-shrink.md
+See ../../CLAUDE.md (root) · ../engine/CLAUDE.md

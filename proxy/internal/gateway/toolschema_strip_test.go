@@ -18,7 +18,7 @@ import (
 // the provider cache prefix. It changes model-visible bytes, so it is default
 // OFF, opt-in per operator, gated on the same local-wrap conditions live-zone
 // compression needs, and every rewritten catalog has its exact original in CCR
-// first (ADR 0024 §2, local wrap: recovery + CCR).
+// first.
 
 // toolCatalog is a Claude-Code-shaped catalog: schema annotations worth removing,
 // an MCP annotations block whose "title" is the tool's display NAME, a property

@@ -1,4 +1,4 @@
-# public/sdk/typescript — TypeScript SDK (`@caveman-ai/sdk`)
+# packages/sdk/typescript — TypeScript SDK (`@caveman-ai/sdk`)
 
 Single-file SDK (`src/index.ts`) exported as an ES module. Provides `Cave` (main client),
 `CaveTrace` (per-request tracing), and BM25-backed tool-search against the gateway. No runtime
@@ -47,8 +47,8 @@ dependencies — only `devDependencies` for TypeScript.
 - **byte-safe**: SDK sends request bodies to the gateway verbatim; no rewriting allowed. `compress()` is the one path that yields smaller bytes and it **delegates** to the Engine — on any problem it passes the original through
 - **context packing is connected-only and intentionally lossy**: it sends item bytes to gateway, never runs in local wrap, and relies on caller retaining every item named by `deferredIds`. It chooses what enters window; cache-optimal assembly chooses placement
 - **mirror sdk-python**: every field/method exists in both, enforced by the shared parity suite — a divergence is a CI failure, not a convention slip. Change one SDK, change both **and** the fixtures
-- published as `@caveman-ai/sdk` (the `release.artifact` in PRODUCTS.yaml); the workspace name stays `@caveman-ai/sdk` until the npm redirect plan lands
+- published as `@caveman-ai/sdk`; the workspace name stays `@caveman-ai/sdk` until the npm redirect plan lands
 - `strategy:"deferred"` initial set = `alwaysLoad` tools + up to `initialToolCount` (default 8); never returns the full catalog without a `search()` call
 - `reductionPct` rounds to one decimal; `savedTokens` is derived (`full - sent`), not from the gateway response
 
-See ../../../CLAUDE.md (root) · ../../../docs/design.md
+See ../../../CLAUDE.md (root)

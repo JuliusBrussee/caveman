@@ -23,8 +23,7 @@ context, so the solver only ever sees the final citations — that separation is
 mechanism, and Claude Code's native subagents give it for free.
 
 > Codex is not wired yet. It needs an MCP shim that must pass a transcript-isolation
-> test before it ships, or it would be FastContext-in-name-only. See
-> [`docs/FASTCONTEXT_EXPLORER_SPEC.md`](../../docs/FASTCONTEXT_EXPLORER_SPEC.md).
+> test before it ships, or it would be FastContext-in-name-only.
 
 ## What it honestly claims
 
@@ -50,5 +49,4 @@ eval gate) an eval-validated delta.
 (S3, eval-gated). The detector that surfaces it from telemetry stays dormant until the
 gateway parses tool-call blocks (it shares headroom with `context-compression`, so it
 is deduped against it — its distinct value is the resolution/quality axis and the
-measured cost split, not new headroom dollars). See ADR
-[`0018-fastcontext-exploration-offload`](../../docs/decisions/0018-fastcontext-exploration-offload.md).
+measured cost split, not new headroom dollars).

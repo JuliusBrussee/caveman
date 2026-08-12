@@ -13,7 +13,7 @@ import (
 // "re-established context" a developer pastes or restates session after session.
 // It is the detector behind the recurring_context sink class, whose fix is
 // cavemem_offload: move the block into cavemem so it's recalled compactly instead
-// of re-loaded every turn (see docs/CAVEMAN_LEARN_SPEC.md §5/§10).
+// of re-loaded every turn.
 //
 // HONESTY: the miner is deterministic and read-only. It persists only
 // fingerprints, counts, token weights, and content *locators* in sink evidence —

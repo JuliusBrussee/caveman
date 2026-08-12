@@ -1,4 +1,4 @@
-# public/create-caveman-agent
+# packages/create-caveman-agent
 
 Zero-runtime-dependency npm initializer for `@caveman-ai/agent`. `src/index.ts`
 parses provider/install flags, writes scaffold into temporary directory,

@@ -1,4 +1,4 @@
-# public/cacheengine — standalone prompt-cache engine
+# cacheengine — standalone prompt-cache engine
 
 Capability-driven planner plus provider-native wire compiler. Runtime needs no
 gateway process, network, database, or control plane. `engine.go` is

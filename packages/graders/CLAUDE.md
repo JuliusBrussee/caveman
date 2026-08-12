@@ -1,4 +1,4 @@
-# public/evals — eval grader taxonomy for Caveman Cloud
+# packages/graders — eval grader taxonomy for Caveman Cloud
 
 Single-file TypeScript package (`@caveman/evals`). Exports `grade(grader, value, deps?)` and
 the `Grader` discriminated union. Mirrors `cloud/optimizer/caveman_optimizer/graders.py` — keep
@@ -62,4 +62,4 @@ The last 11 are ported from langevals (behavior reference only, reimplemented �
 - `tool_sequence` checks ordered *subsequence*, not exact sequence; tests at `tests/grade.runtime.mjs:73-77` clarify the contract.
 - Each langevals-ported section carries the comment `Behavioral reference: langevals (MIT, (c) 2024 Reasoning Engine B.V.), reimplemented`.
 
-See ../../CLAUDE.md (root) · ../../docs/design.md
+See ../../CLAUDE.md (root)

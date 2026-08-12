@@ -879,7 +879,7 @@ function exploreUsage(): never {
 
 function guardExploreAgent(agent: string) {
   if (agent === "claude") return;
-  console.error(`caveman explore: only --agent claude is wired today (codex needs verified transcript isolation first — see docs/FASTCONTEXT_EXPLORER_SPEC.md). got: ${agent}`);
+  console.error(`caveman explore: only --agent claude is wired today (codex needs verified transcript isolation first). got: ${agent}`);
   process.exit(2);
 }
 
@@ -1784,7 +1784,7 @@ async function start(argv: string[] = []) {
   if (!resolved) return startMissingProxyUI(bin, options);
 
   // `caveman start` is the sibling entry point to `caveman wrap`, so it resolves the
-  // SAME mode decision. Per ADR 0031 there is no account condition in it — the
+  // SAME mode decision. There is no account condition in it — the
   // entitlement read is a label, not a permission. The mode this proxy actually runs
   // is CAVEMAN_MODE (the proxy itself falls back to record for anything unknown), so
   // a plain `caveman start` resolves to record; record never mutates bytes anyway.
@@ -1809,7 +1809,7 @@ async function start(argv: string[] = []) {
     CAVEMAN_RECOVERY: mcpRecovery ? "mcp" : "",
   };
   if (options.config) env.CAVEMAN_CONFIG = options.config;
-  // The account gate is gone (ADR 0031) and so is the variable that carried it. Strip
+  // The account gate is gone and so is the variable that carried it. Strip
   // any inherited copy so a stray export can never re-enter the contract; a proxy
   // binary old enough to still read it is already reported by the stale-binary state.
   delete env.CAVEMAN_WRAP_ENTITLED;
@@ -3151,7 +3151,7 @@ function wrapRecoveryEligible(opts: WrapOptions): boolean {
   return opts.mode === "compress" || opts.mode === "pixel";
 }
 
-// ── Wrap entitlement: an ACCOUNT fact, never a compression gate (ADR 0031) ──────
+// ── Wrap entitlement: an ACCOUNT fact, never a compression gate ──────
 // Local compression is the free adoption surface: it runs with no Caveman account,
 // no entitlement, and no seat. The entitlement read here says what the ACCOUNT
 // earns — analytics, team/seats, and cloud sync — and it never decides whether the
@@ -3159,8 +3159,6 @@ function wrapRecoveryEligible(opts: WrapOptions): boolean {
 // the user's own `record`/`--off` request and the proxy's technical conditions
 // (schema-aware prefix zones, MCP recovery, a durable prefix cache, and the
 // operator's `subscription_compress` switch).
-// (docs/decisions/0031-local-compression-not-account-gated.md, which supersedes the
-// account-gating parts of ADR 0022 and ADR 0023.)
 
 export type WrapEntitlement = {
   entitled: boolean;
@@ -3217,7 +3215,7 @@ export type OffState = { id: OffStateID; line: string; fix?: string };
 // status prints every active row in OFF_STATE_PRECEDENCE order.
 //
 // Every row here is a TECHNICAL reason compression is off or degraded. Account
-// state is NOT one of them (ADR 0031): being signed out, seat-walled, denied, or
+// state is NOT one of them: being signed out, seat-walled, denied, or
 // lapsed never turns local compression off, so none of those may appear here.
 const MCP_MARKER_ONLY_LINE =
   "MCP surface marker-only by your config — the engine MCP tools are not injected; streaming turns and Claude Pro/Max sessions pass through uncompressed (non-streaming API-key traffic still compresses)";
@@ -3376,7 +3374,7 @@ function printRunBanner(options: {
 
 // resolveWrapGate is the PURE mode decision (no IO) so it is unit-testable.
 // `requestedMode` is what the user asked for; the returned `mode` is what the local
-// proxy actually runs. Per ADR 0031 the ENTITLEMENT NEVER CHANGES THE MODE — it only
+// proxy actually runs. The ENTITLEMENT NEVER CHANGES THE MODE — it only
 // labels the account state for the messaging layer:
 //   - user asked for plain record (--off): stays plain record. `record` mode is
 //     always pass-through, so this is the one thing that withholds compression here.
@@ -3405,7 +3403,7 @@ export function resolveWrapGate(
 }
 
 // subscriptionCompressEnabled is the PURE decision behind subscription/OAuth
-// coding-agent compression (Claude Pro/Max, Codex ChatGPT, …). Per ADR 0031 there
+// coding-agent compression (Claude Pro/Max, Codex ChatGPT, …). There
 // is NO account condition here — a Caveman entitlement is irrelevant. It is on:
 //   - LOCALLY — this is the local wrap only; the managed gateway's lossless+stealth
 //     rule for non-PAYG traffic is unchanged and is not configured from here;
@@ -3539,7 +3537,7 @@ function planLabel(plan: string): string {
   }
 }
 
-// planWeeklyAllowanceText mirrors cloud/web/lib/plan.ts PLAN_WEEKLY_ALLOWANCE — the
+// planWeeklyAllowanceText mirrors the web dashboard's weekly-allowance display — the
 // parenthetical shows only for the capped tiers (free 5M / indie 50M).
 function planWeeklyAllowanceText(plan: string): string | null {
   if (plan === "free") return "5M optimized tokens/week";
@@ -3602,7 +3600,7 @@ async function requestWrapEntitlement(baseURL: string, accessToken: string, wrap
 
 // fetchAndStoreWrapEntitlement runs the login-time handshake. Login itself NEVER
 // fails for seats or a down entitlement service — and never for compression, which
-// does not depend on it (ADR 0031). The worst case is no cloud sync.
+// does not depend on it. The worst case is no cloud sync.
 async function fetchAndStoreWrapEntitlement(baseURL: string, accessToken: string) {
   const result = await requestWrapEntitlement(baseURL, accessToken);
   switch (result.kind) {
@@ -4666,7 +4664,7 @@ async function spawnWrapped(
   if (managedGeminiUnsupported) {
     process.stderr.write("caveman: managed Gemini CLI wrap is unsupported because Gemini CLI cannot send separate Caveman and upstream credentials; launching directly\n");
   }
-  // ADR 0031: the local proxy compresses with no account. When wrap runs the LOCAL
+  // The local proxy compresses with no account. When wrap runs the LOCAL
   // proxy path we resolve the mode; managed gateway traffic is governed by the cloud
   // policy engine, so we never resolve it here.
   const gateApplies = local && !opts.noProxy;
@@ -5129,7 +5127,7 @@ async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon:
     // Observe-only estimate: record mode measures would-have-saved tokens without
     // ever mutating the forwarded request.
     ...(observeEstimate ? { CAVEMAN_OBSERVE_ESTIMATE: "1" } : {}),
-    // Nothing else is stamped for subscription/OAuth compression: per ADR 0031 it
+    // Nothing else is stamped for subscription/OAuth compression: it
     // has no account condition. The operator off-switch (`subscription_compress:
     // off`) stays the operator's — we never override it from here.
   };
@@ -8191,7 +8189,7 @@ async function login(argv: string[] = []) {
 	    // until the control plane has recorded that this CLI stored the bundle.
 	    await acknowledgeDeviceGrant(baseURL, credentials.access_token, code.device_code, ackToken);
 	  }
-      // Mint/refresh the local-wrap entitlement for this device (ADR 0022). Best
+      // Mint/refresh the local-wrap entitlement for this device. Best
       // effort: login never fails for seats or a down entitlement service.
       await fetchAndStoreWrapEntitlement(baseURL, credentials.access_token);
       if (gateway && wrapMode(gateway) === "managed") {
@@ -11665,7 +11663,7 @@ function hooksUsage(): never {
 
 // hooksDirectiveCmd handles `caveman hooks install|uninstall --directive <id> [agent]`
 // (AUTOPILOT_SPEC §7.3): the same verb surface that removes a shrink note today,
-// extended with a flag — never a new porcelain verb (ADR 0024 cap). Install
+// extended with a flag — never a new porcelain verb (capped). Install
 // announces itself and prints the undo command (§7 announce+undo).
 function hooksDirectiveCmd(sub: "install" | "uninstall", directiveId: string, target: string | undefined) {
   // Object.hasOwn: directiveId is user input; a truthiness read would let
@@ -11722,7 +11720,7 @@ function hooksDirectiveCmd(sub: "install" | "uninstall", directiveId: string, ta
 
 function hooksCmd(rest: string[]) {
   // --directive <id> (or --directive=<id>) routes to the wrap-directive
-  // surface (same verb, no new porcelain — ADR 0024). Any OTHER --flag is
+  // surface (same verb, no new porcelain). Any OTHER --flag is
   // rejected loudly: silently ignoring `--directive=x` used to install the
   // shrink note and exit 0 while the user believed a directive was installed
   // (review C8).
@@ -13032,8 +13030,8 @@ function proxyRuntimeMatches(
     && proxyRuntimeGateMatches(runtime, recoveryViaMCP);
 }
 
-// The only cross-session gate input left is the recovery contract (ADR 0031 removed
-// the account one): reusing a proxy that lacks the agent's caveman_retrieve tool
+// The only cross-session gate input left is the recovery contract (the account
+// one was removed): reusing a proxy that lacks the agent's caveman_retrieve tool
 // would elide bytes nothing can expand.
 function proxyRuntimeGateMatches(
   runtime: ProxyRuntimeState,

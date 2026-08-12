@@ -1,4 +1,4 @@
-# public/extension — "Caveman Mode" browser extension (MV3, no bundler)
+# extension — "Caveman Mode" browser extension (MV3, no bundler)
 
 The consumer top-of-funnel: a toggle that, on ChatGPT / Claude / Gemini, prepends the **caveman
 skill directive** to each message you send and re-fires the send, so the AI replies in a compact,
@@ -29,4 +29,4 @@ removed it after Chrome Web Store review couldn't reproduce "compress prompt loc
 - Package: `npm run package` runs both suites, then writes `dist/caveman-browser-<version>.zip`. Staged set uses explicit allowlist in `scripts/verify-extension-stage.mjs`, cross-checked against manifest/CSS/HTML references.
 - Composer + send selectors live in the `SITES` map in `src/caveman.js`; a site redesign means updating it (each entry keeps aria-label fallbacks so one rename doesn't break it).
 
-See ../../CLAUDE.md (root) · ../../docs/prd/07-caveman-browser.md
+See ../../CLAUDE.md (root)

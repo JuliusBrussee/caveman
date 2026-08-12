@@ -297,7 +297,7 @@ test("every shipped agent profile preserves protocol-correct recovery behavior t
       CAVEMAN_HOME: caveHome,
       CAVEMAN_CONFIG: configPath,
       CAVEMAN_PROXY_OWNER: "wrap",
-      // No account signal: local compression is not account-gated (ADR 0031).
+      // No account signal: local compression is not account-gated.
       CAVEMAN_RECOVERY: "",
       CAVE_ENGINE_TOON: "0",
       CAVE_SSRF_ALLOWLIST: "127.0.0.1",

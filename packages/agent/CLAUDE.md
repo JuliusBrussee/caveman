@@ -1,4 +1,4 @@
-# public/agent
+# packages/agent
 
 `@caveman-ai/agent`: opinionated TypeScript efficiency framework over exact-pinned
 Pi. `src/runtime.ts` owns agent execution, cache safety, tool isolation, runtime
@@ -220,7 +220,7 @@ Public entry points:
   `apiKeySource` from the SDK's first init message: OAuth/unknown auth reports
   token counts but `costUsd: 0`, `priceBasis: "unpriced"`, and unpriced receipt
   calls; `maxBudgetUsd` requires a positively identified API-key source.
-  Subscription dollars are fiction (ADR 0023). Enforcement is reserve-and-clamp, one mode, no soft
+  Subscription dollars are fiction. Enforcement is reserve-and-clamp, one mode, no soft
   option: each call reserves its worst case (byte-derived input ceiling capped
   at the context window, times the catalog's worst rate, plus the configured
   output allowance), and a remainder that cannot cover the full allowance
@@ -252,7 +252,7 @@ Public entry points:
   an unpriced call is flagged, never counted as free. Serialized receipts carry
   `schema: caveman.agent.run-receipt.v1` and must validate against
   `public/shared/contracts/schemas/agent-run-receipt.schema.json`. That shared
-  shape is not sent through ADR 0032's anonymous CLI lane; future hub upload
+  shape is not sent through the anonymous CLI telemetry lane; future hub upload
   requires separate authenticated, tenant-scoped consent. Under a budget,
   `subagent()` caps become **wallets**: the child's `maxCostUsd` (USD runs) or
   `maxTokens` (token runs) is carved out of the parent's *remaining* budget

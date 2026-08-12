@@ -38,14 +38,14 @@ type Config struct {
 	Optimizers map[string]bool `yaml:"optimizers"`
 	// SubscriptionCompress is the operator off-switch for subscription-auth
 	// live-zone compression. Empty/default and "live_zone" both mean "allowed";
-	// "off" disables it; unknown values fail closed to "off". Per ADR 0031 there is
+	// "off" disables it; unknown values fail closed to "off". There is
 	// no account gate alongside it — local compression runs without a Caveman
 	// account. Subscription rows stay tokens-only and dollar-free regardless.
 	SubscriptionCompress string `yaml:"subscription_compress"`
 	// ToolSchemaStrip selects the tool-schema annotation strip. It is DEFAULT OFF:
 	// only the explicit value "annotations" turns it on, and "", "off", and any
 	// unrecognized value all mean off. The strip changes model-visible bytes, so it
-	// may only default on under ADR 0024's local-wrap clause (recovery + CCR) —
+	// may only default on under the local-wrap clause (recovery + CCR) —
 	// which it does not; it stays an explicit opt-in.
 	ToolSchemaStrip string `yaml:"toolschema_strip"`
 	// BreakpointPlan selects the cache-breakpoint planner. It is DEFAULT OFF: only

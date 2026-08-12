@@ -1,4 +1,4 @@
-# public/cli — `caveman` CLI
+# packages/cli — `caveman` CLI
 
 TypeScript CLI (`src/index.ts`) driving the local proxy and wrapping control-api
 REST calls. Published package has zero runtime dependencies. Build emits
@@ -40,7 +40,7 @@ aliases; `status`, `plan`, and `tools sdk snippets` absorb their public jobs.
 
 `login` polls control-api `/api/v1/auth/device/{code,token}`; `organization_id` is bound from the returned token. `CAVE_TOKEN` is the non-interactive CI path. Logged-out connected verbs print one line + exit non-zero (CI skips, never crashes).
 
-**First-run experience** (TTY only, once per machine, marker `firstRunAt` in config): on the first interactive wrap — banner, 30-day retrospective scan (`caveman-proxy learn scan --retro`, read-only over local Claude Code/Codex session logs; base behavior pass capped at 20s, retro pass at 60s, child timeout derived as 90s including margin), count-up reveal of tokens sent / would-have-cut / rides-every-turn stream figure (sums over scanned sessions, never extrapolated; `inferred`; tokens never dollars; three bases defined in `docs/SAVINGS_ACCOUNTING.md` §1.2 — sent is deduped once per API response, base cut carries no ratio against sent, only the stream figure shares sent's basis), telemetry disclosure, one `[y/N]` account question (yes → device login → existing span backfill). CLI persists only the closed, content-free aggregate; login or explicit `sync` uploads it to the authenticated project's `local-scan` import lane. Prompts, outputs, paths, session rows, free-text caveats, and anonymous telemetry never enter that upload; dashboard keeps it `inferred` and separate from spend/verified savings. Every failure degrades to one dim line and the agent still launches. Replay with the **unprinted** `caveman welcome` (porcelain caps unchanged). Anonymous **telemetry defaults ON (opt-out, [ADR 0032](../../docs/decisions/0032-cli-telemetry-opt-out-default.md))**: persisted v1 decisions and `DO_NOT_TRACK`/`CAVEMAN_TELEMETRY=0`/`caveman telemetry off` always win; CI/non-TTY never sends and never persists the default; the first eligible interactive run persists a stable anonymous id and prints the disclosure line.
+**First-run experience** (TTY only, once per machine, marker `firstRunAt` in config): on the first interactive wrap — banner, 30-day retrospective scan (`caveman-proxy learn scan --retro`, read-only over local Claude Code/Codex session logs; base behavior pass capped at 20s, retro pass at 60s, child timeout derived as 90s including margin), count-up reveal of tokens sent / would-have-cut / rides-every-turn stream figure (sums over scanned sessions, never extrapolated; `inferred`; tokens never dollars; sent is deduped once per API response, base cut carries no ratio against sent, only the stream figure shares sent's basis), telemetry disclosure, one `[y/N]` account question (yes → device login → existing span backfill). CLI persists only the closed, content-free aggregate; login or explicit `sync` uploads it to the authenticated project's `local-scan` import lane. Prompts, outputs, paths, session rows, free-text caveats, and anonymous telemetry never enter that upload; dashboard keeps it `inferred` and separate from spend/verified savings. Every failure degrades to one dim line and the agent still launches. Replay with the **unprinted** `caveman welcome` (porcelain caps unchanged). Anonymous **telemetry defaults ON (opt-out)**: persisted v1 decisions and `DO_NOT_TRACK`/`CAVEMAN_TELEMETRY=0`/`caveman telemetry off` always win; CI/non-TTY never sends and never persists the default; the first eligible interactive run persists a stable anonymous id and prints the disclosure line.
 
 `providers verify <conn>` → real POST `/api/v1/projects/{id}/providers/{conn}/verify` (no hardcoded status).
 
@@ -66,15 +66,15 @@ Presentation contract: [`TERMINAL_UX.md`](TERMINAL_UX.md).
 
 A capability may default on only when it is byte-safe, or when protected by the
 applicable path-specific gate: managed gateway uses an eval gate; local wrap
-uses recovery + CCR — **not** an account or entitlement (ADR 0031). There is
+uses recovery + CCR — **not** an account or entitlement. There is
 no eval gate in local `run`.
 Any PR flipping a default must name the clause and path.
 
 A verb enters porcelain only when its capability is automatic-by-default-safe
 inside `run` and users no longer need to type it. Porcelain stays capped at four
 verbs + agent shortcut + exactly two namespaces. A fifth verb, or a 16th printed
-verb in either namespace, requires a retirement ADR. `record` mode is always
-pass-through. See [ADR 0024](../../docs/decisions/0024-cli-porcelain-and-capability-promotion.md).
+verb in either namespace, requires a retirement decision. `record` mode is always
+pass-through.
 
 Capability config is grouped in `~/.caveman-cloud/config.json` as `think`,
 `remember`, and `execute`. `./.caveman/config.json` may only narrow its allowlisted
@@ -87,7 +87,7 @@ per-key source with `caveman tools config get`.
 - `providers verify` must NOT return a hardcoded status; the test asserts the CLI echoes the server's value (no-placeholder rule)
 - `plan` savings display must stay per-day; never multiply to monthly projection
 - Non-PAYG coverage includes Claude Pro/Max, Codex ChatGPT, Gemini OAuth, and routed compatible agents. Codex subscription mode keeps provider config ephemeral under `CODEX_HOME`, auto-installs its MCP recovery, and starts `/chatgpt/responses` in compress mode instead of forcing record/pass-through. Plain OpenAI `/responses` and Gemini `generateContent` requests with MCP explicitly disabled have no server-retrieval grammar, so they must remain byte-identical with zero compression accounting; the compression conformance matrix pins these protocol-specific fail-closed cases instead of requiring every profile to emit a CCR marker.
-- Subscription/OAuth wrap sessions (Claude Pro/Max) compress **locally only**, live zone only, and with **no account** ([ADR 0031](../../docs/decisions/0031-local-compression-not-account-gated.md)): `CAVEMAN_WRAP_ENTITLED` is gone from both doors and from the proxy, and both doors `delete` any inherited copy so a stray export cannot resurrect it. What both doors DO stamp is the recovery path (`CAVEMAN_RECOVERY`), explicitly (`"mcp"` or empty, never inherited): `wrap` answers it from the **agent's own** MCP install (an exported `CAVEMAN_RECOVERY=mcp` can't outlive that answer — it would have the proxy elide bytes behind markers this agent has no `caveman_retrieve` tool to expand), `start` from machine-wide MCP install evidence plus an explicit `CAVEMAN_RECOVERY=mcp` counted as the operator's own opt-in, re-stamped so the disclosure line and the proxy can never disagree; the compression disclosure line prints only when recovery holds, and no-MCP says compression is off and names `caveman mcp install <agent>`. The `subscription_compress: off` operator switch stays the operator's. Their savings are **tokens only** — a seat has no per-token price, so no dollar figure may ever appear for them, locally or in the synced span (no-fake-savings). The session-savings line treats `oauth` like `subscription` (OAuth is list-price-eligible on Vertex alone) and qualifies unconditionally when its capped auth-mode window is truncated
+- Subscription/OAuth wrap sessions (Claude Pro/Max) compress **locally only**, live zone only, and with **no account**: `CAVEMAN_WRAP_ENTITLED` is gone from both doors and from the proxy, and both doors `delete` any inherited copy so a stray export cannot resurrect it. What both doors DO stamp is the recovery path (`CAVEMAN_RECOVERY`), explicitly (`"mcp"` or empty, never inherited): `wrap` answers it from the **agent's own** MCP install (an exported `CAVEMAN_RECOVERY=mcp` can't outlive that answer — it would have the proxy elide bytes behind markers this agent has no `caveman_retrieve` tool to expand), `start` from machine-wide MCP install evidence plus an explicit `CAVEMAN_RECOVERY=mcp` counted as the operator's own opt-in, re-stamped so the disclosure line and the proxy can never disagree; the compression disclosure line prints only when recovery holds, and no-MCP says compression is off and names `caveman mcp install <agent>`. The `subscription_compress: off` operator switch stays the operator's. Their savings are **tokens only** — a seat has no per-token price, so no dollar figure may ever appear for them, locally or in the synced span (no-fake-savings). The session-savings line treats `oauth` like `subscription` (OAuth is list-price-eligible on Vertex alone) and qualifies unconditionally when its capped auth-mode window is truncated
 - Published runtime dependencies stay zero. TUI libraries must be bundled,
   lazy-loaded, and measured; do not move them onto ordinary command startup.
 - `learn` uses bundled Clack only when stdin/stdout/stderr are TTYs. `--plain`,
@@ -99,4 +99,4 @@ per-key source with `caveman tools config get`.
   `~/.agents/skills`, despite older/direct Caveman installs using
   `~/.codex/skills`; third-party post-install discovery must scan both.
 
-See ../../CLAUDE.md (root) · ../../docs/design.md
+See ../../CLAUDE.md (root)

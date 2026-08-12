@@ -14,8 +14,8 @@ import (
 )
 
 // Subscription live-zone compression: the local wrap MAY compress
-// subscription/OAuth-authenticated coding-agent traffic with NO Caveman account
-// (ADR 0031), but only through the SAME live-zone path PAYG uses, only when the
+// subscription/OAuth-authenticated coding-agent traffic with NO Caveman account,
+// but only through the SAME live-zone path PAYG uses, only when the
 // three technical conditions hold, and only ever as a tokens-only measurement —
 // a subscription row must never carry a dollar.
 
@@ -73,7 +73,7 @@ func claudeCodeConversation(liveText string) string {
 		`]}`
 }
 
-// TestSubscriptionLiveZoneNeedsNoAccount pins ADR 0031: local compression is NOT
+// TestSubscriptionLiveZoneNeedsNoAccount pins the invariant: local compression is NOT
 // account-gated. A bare server with no entitlement signal of any kind compresses
 // the live zone exactly like a signed-in one, because the only remaining policy
 // input is the operator off-switch.

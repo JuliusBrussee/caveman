@@ -14,9 +14,9 @@ import (
 // It is deliberately absent from cacheOptimizerIDs. Anthropic-direct breakpoints
 // are the provider_causal_cache method, so listing this id there would start
 // attributing cache savings to planner-placed breakpoints. That promotion needs
-// the exact provider/method/optimizer tuple discipline in
-// docs/SAVINGS_ACCOUNTING.md and is a deliberate later change with its own
-// review. Today the planner claims no tokens, no ratio, and no dollars.
+// the exact provider/method/optimizer tuple discipline and is a deliberate
+// later change with its own review. Today the planner claims no tokens, no
+// ratio, and no dollars.
 const breakpointPlanOptimizerID = "cache-breakpoint-plan"
 
 // breakpointPlanModeFrontier is the one value that enables the planner. It names

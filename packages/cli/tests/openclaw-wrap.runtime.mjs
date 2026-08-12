@@ -49,7 +49,7 @@ function runCli(argv, env) {
 
 function writeWrapConfig(home, wrap) {
   mkdirSync(join(home, ".caveman-cloud"), { recursive: true });
-  // Seed a valid wrap entitlement so the account gate (ADR 0022) keeps local
+  // Seed a valid wrap entitlement so the account gate keeps local
   // compression on — these tests verify the compress-mode overlay + MCP recovery.
   const wrapEntitlement = {
     entitled: true, plan: "free", telemetry_level: "metadata",
