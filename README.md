@@ -43,14 +43,31 @@
 
 Caveman is three separate installs. Each works alone. Not sure? Start with the skill — it needs no account, proxy, Go toolchain, or code changes.
 
-| You want | One command | What lands on your machine |
-|---|---|---|
-| **Shorter answers** — the skill (MIT) | `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh \| bash` | The caveman skill + slash commands in every supported agent found on your machine. Nothing else. |
-| **Smaller inputs** — Caveman Proxy | `npm install -g @caveman-ai/cli && caveman setup --install` | The `caveman` CLI plus signed local binaries: proxy, engine, MCP recovery, memory — and the optional browse + shrink tools. Then `caveman claude` wraps your agent. |
-| **Compressed browsing** — Caveman Browse | Included in `caveman setup --install` (needs Chrome) | A local Chrome driver your agent reaches as MCP tools; try `caveman browse <url>`. |
-| **A new agent** — Agent SDK | `npm create @caveman-ai/agent@latest my-agent` | A TypeScript agent project on the native Caveman runtime. Client SDKs: `npm i @caveman-ai/sdk` · `pip install caveman-sdk`. |
+**Shorter answers — the skill (MIT).** The caveman skill + slash commands in every supported agent found on your machine. Nothing else.
 
-Windows, skill install: `irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.ps1 | iex` (PowerShell 5.1+).
+```bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash
+```
+
+**Smaller inputs — Caveman Proxy.** The `caveman` CLI plus signed local binaries: proxy, engine, MCP recovery, memory — and the optional browse + shrink tools. Then `caveman claude` wraps your agent.
+
+```bash
+npm install -g @caveman-ai/cli && caveman setup --install
+```
+
+**Compressed browsing — Caveman Browse.** Included in `caveman setup --install` (needs Chrome) — a local Chrome driver your agent reaches as MCP tools.
+
+```bash
+caveman browse <url>
+```
+
+**A new agent — Agent SDK.** A TypeScript agent project on the native Caveman runtime. Client SDKs: `npm i @caveman-ai/sdk` · `pip install caveman-sdk`.
+
+```bash
+npm create @caveman-ai/agent@latest my-agent
+```
+
+On Windows, the skill installs with `irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.ps1 | iex` (PowerShell 5.1+).
 
 The skill installer needs Node.js 18+, finds supported agents already on your machine, skips the rest, and is safe to rerun. Prefer one agent only?
 
