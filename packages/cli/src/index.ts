@@ -448,13 +448,17 @@ function invokedCommand(legacyVerb: string, groupedTail = ""): string {
 
 let currentInvocation: ResolvedInvocation;
 currentInvocation = resolveInvocation(process.argv.slice(2));
-// Version 3 restores explicit opt-in. Every persisted older decision remains
-// authoritative; an undecided install stays off and writes nothing.
+// Version 3 = default-on (opt-out): telemetry is on unless the user
+// turns it off. A persisted decision from any version — including a "no" to the
+// old v1 [y/N] prompt — is honored forever; the default only fills the
+// undecided gap, and the first default-on run prints the disclosure line.
 const TELEMETRY_PROMPT_VERSION = 3;
 const TELEMETRY_URL = "https://api.caveman.so/telemetry/cli";
 // The production control-API origin — derived from TELEMETRY_URL (the CLI's
 // other hardcoded prod-host literal) so the two can never drift apart.
 const PROD_API_URL = new URL(TELEMETRY_URL).origin;
+const TELEMETRY_DISCLOSURE_LINE =
+  "anonymous usage stats on — command counts only, never prompts, code, or file paths · caveman telemetry off";
 const SYNC_DISCLOSURE =
   "sync uploads span metadata to your org's dashboard — tokens, cost, latency, model, status. Imported standalone observations never affect managed budgets, verified savings, or billing. Subscription/OAuth sessions carry token counts only — no dollar figure. Never prompt or response bytes.";
 const TELEMETRY_COMMAND_ALLOWLIST = [
@@ -474,6 +478,7 @@ let telemetryCommandSent = false;
 let telemetryEphemeralId = "";
 
 async function main() {
+  await ensureTelemetryDefault();
   try {
     await dispatch();
     emitCommandRunOnce("ok");
@@ -508,9 +513,12 @@ function telemetryState(): TelemetryRuntimeState {
 
   const cfg = telemetryConfigFromDisk();
   if (cfg?.decidedAt) return { state: cfg.enabled ? "on" : "off", source: "config", config: cfg };
-  // No decision on disk: default OFF. Do not persist an identifier until the
-  // user explicitly runs `caveman telemetry on` (or opts in via environment).
-  return { state: "off", source: "default", config: undefined };
+  // No decision on disk: default ON (opt-out); only reachable interactively —
+  // the CI/non-TTY branch above already returned off. NOTHING may send while
+  // source is still "default": telemetrySendable gates every emitter, so the
+  // first real send always follows ensureTelemetryDefault's persist (stable
+  // anonymous id) + printed disclosure.
+  return { state: "on", source: "default", config: undefined };
 }
 
 // telemetrySendable is the single choke point every emitter must pass: on, and
@@ -551,6 +559,42 @@ function parseTelemetryConfig(value: unknown): TelemetryConfig | undefined {
   const out: TelemetryConfig = { enabled: raw.enabled, decidedAt: raw.decidedAt, promptVersion: raw.promptVersion };
   if (typeof raw.anonymousId === "string" && raw.anonymousId) out.anonymousId = raw.anonymousId;
   return out;
+}
+
+// ensureTelemetryDefault persists the default-on decision (with a stable
+// anonymous id — retention counting is useless on ephemeral ids) the first time
+// a real command runs interactively, and prints the one-line disclosure so the
+// default is never silent. Env kills (DO_NOT_TRACK / CAVEMAN_TELEMETRY=0) and
+// any persisted decision — including a "no" to the old v1 prompt — win.
+async function ensureTelemetryDefault() {
+  const state = telemetryState();
+  if (isHelpLikeInvocation()) return;
+  // `caveman telemetry …` manages the decision explicitly — don't pre-mint an
+  // "on" for someone whose first-ever command is `telemetry off`.
+  if (currentInvocation.verb === "telemetry") return;
+  if (state.source !== "default") return;
+  const telemetry: TelemetryConfig = {
+    enabled: true,
+    anonymousId: randomUUID(),
+    decidedAt: new Date().toISOString(),
+    promptVersion: TELEMETRY_PROMPT_VERSION,
+  };
+  // A failed persist must never block the command (read-only home, root-owned
+  // config). Nothing sends this run either way: source stays "default" until a
+  // persist succeeds, and telemetrySendable refuses un-persisted defaults.
+  try {
+    await saveTelemetryConfig(telemetry);
+  } catch {
+    return;
+  }
+  process.stderr.write(`${dim(TELEMETRY_DISCLOSURE_LINE)}\n`);
+}
+
+function isHelpLikeInvocation(): boolean {
+  return currentInvocation.verb === "help"
+    || currentInvocation.verb === "version"
+    || currentInvocation.argv[0] === "--help"
+    || currentInvocation.argv[0] === "-h";
 }
 
 // promptYesNo is the one line-buffered [y/N] reader. Ctrl-D / closed stdin

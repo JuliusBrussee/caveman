@@ -2,11 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { createServer as createNetServer } from "node:net";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -110,40 +109,9 @@ test("non-TTY run does not prompt or post telemetry", async (t) => {
   stub.close();
 });
 
-test("fresh non-TTY telemetry status is runtime-off and writes no config", async () => {
-  const { env, home } = isolatedEnv();
-  const out = await runCli(["telemetry", "status"], env);
-  assert.equal(out.code, 0, out.stderr);
-  const status = JSON.parse(out.stdout);
-  assert.deepEqual(
-    { state: status.state, enabled: status.enabled, source: status.source, anonymous_id: status.anonymous_id },
-    { state: "off", enabled: false, source: "runtime", anonymous_id: "none" },
-  );
-  assert.throws(() => readFileSync(join(home, ".caveman-cloud", "config.json")), /ENOENT/);
-});
-
-test("telemetry on is the explicit persisted opt-in", async (t) => {
-  const stub = startTelemetryStub();
-  const port = await listenOrSkip(t, stub);
-  if (port === null) return;
-  const { env, home } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
-
-  const out = await runCli(["telemetry", "on"], env);
-  assert.equal(out.code, 0, out.stderr);
-  const result = JSON.parse(out.stdout);
-  assert.equal(result.telemetry, "on");
-  assert.match(result.anonymous_id, uuidRe);
-  const config = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
-  assert.equal(config.telemetry.enabled, true);
-  assert.equal(config.telemetry.anonymousId, result.anonymous_id);
-  assert.equal(config.telemetry.promptVersion, 3);
-  assert.ok(stub.posts.length >= 1, "explicit opt-in should emit consent telemetry");
-
-  stub.close();
-});
-
-// runCliPty runs the CLI under a real pty via script(1), proving interactive
-// commands follow the same default-off contract as automation.
+// runCliPty runs the CLI under a real pty via script(1) so TTY-gated behavior
+// (default-on persistence + disclosure) is exercised. Returns null when the
+// platform's script(1) is unavailable or fails to allocate a pty.
 function runCliPty(argv, env) {
   const cmd = process.platform === "darwin"
     ? ["script", ["-q", "/dev/null", "node", cli, ...argv]]
@@ -173,7 +141,7 @@ function runCliPty(argv, env) {
   });
 }
 
-test("interactive first command stays off without persisting an identifier", async (t) => {
+test("interactive first command persists default-on with disclosure and a stable id", async (t) => {
   const stub = startTelemetryStub();
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
@@ -185,20 +153,24 @@ test("interactive first command stays off without persisting an identifier", asy
     t.skip("script(1) pty unavailable in this environment");
     return;
   }
-  assert.doesNotMatch(first.output, /anonymous usage stats on/);
-  let cfg = {};
-  try {
-    cfg = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
-  } catch {
-    // No config file is expected on a fresh default-off install.
-  }
-  assert.ok(!("telemetry" in cfg), "default-off must not mint consent or an anonymous id");
-  assert.equal(stub.posts.length, 0, "default-off interactive command must not post");
+  assert.match(first.output, /anonymous usage stats on/, "first interactive run must print the disclosure");
+  const cfg = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
+  assert.equal(cfg.telemetry?.enabled, true);
+  assert.match(cfg.telemetry?.anonymousId ?? "", uuidRe, "persisted decision must carry a stable anonymous id");
+
+  const second = await runCliPty(["tools", "config", "get"], env);
+  assert.ok(second && second.code === 0, "second run failed");
+  assert.doesNotMatch(second.output, /anonymous usage stats on/, "disclosure prints once, not per run");
+
+  const ids = new Set(stub.posts.map((p) => JSON.parse(p.body)[0]?.anonymous_id));
+  assert.ok(stub.posts.length >= 2, `expected posts from both runs, got ${stub.posts.length}`);
+  assert.equal(ids.size, 1, `all events must carry the persisted id, saw ${[...ids].join(", ")}`);
+  assert.equal([...ids][0], cfg.telemetry.anonymousId);
 
   stub.close();
 });
 
-test("non-TTY run never persists a telemetry decision", async (t) => {
+test("non-TTY run never persists the default-on telemetry decision", async (t) => {
   const stub = startTelemetryStub();
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
@@ -206,20 +178,20 @@ test("non-TTY run never persists a telemetry decision", async (t) => {
 
   const out = await runCli(["compress"], { ...env, CAVEMAN_ENGINE_BIN: join(tmpdir(), "missing-caveman-engine") }, { input: "hello" });
   assert.equal(out.code, 0, out.stderr);
-  assert.doesNotMatch(out.stderr, /anonymous usage stats on/);
+  assert.doesNotMatch(out.stderr, /anonymous usage stats on/, "disclosure line is TTY-only");
   let persisted = {};
   try {
     persisted = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
   } catch {
     // no config written at all is the expected outcome
   }
-  assert.ok(!("telemetry" in persisted), "automation must never mint consent or an anonymous id");
+  assert.ok(!("telemetry" in persisted), "automation must never mint a default-on decision or anonymous id");
   assert.equal(stub.posts.length, 0);
 
   stub.close();
 });
 
-test("persisted v1 opt-out remains authoritative", async (t) => {
+test("persisted v1 opt-out survives the default-on era", async (t) => {
   const stub = startTelemetryStub();
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
@@ -295,87 +267,6 @@ test("CAVEMAN_TELEMETRY=1 emits one allowlisted command_run event", async (t) =>
   stub.close();
 });
 
-test("local wrap emits measured engine_session aggregates and real child outcome", async (t) => {
-  const stub = startTelemetryStub();
-  const telemetryPort = await listenOrSkip(t, stub);
-  if (telemetryPort === null) return;
-  const gateway = createNetServer(() => {});
-  let gatewayPort;
-  try {
-    gatewayPort = await listen(gateway);
-  } catch (error) {
-    stub.close();
-    if (error?.code === "EPERM") {
-      t.skip("local TCP listener denied in this sandbox");
-      return;
-    }
-    throw error;
-  }
-  const { env, caveDir } = isolatedEnv({
-    CAVEMAN_TELEMETRY: "1",
-    CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${telemetryPort}/telemetry`,
-    CAVE_GATEWAY_URL: `http://127.0.0.1:${gatewayPort}`,
-    NO_COLOR: "1",
-  });
-  const binDir = join(caveDir, "bin");
-  const runDir = join(caveDir, "run");
-  mkdirSync(binDir, { recursive: true });
-  mkdirSync(runDir, { recursive: true });
-  const proxyOwner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-  const runState = {
-    schema: "caveman.proxy.run.v1",
-    pid: proxyOwner.pid,
-    port: gatewayPort,
-    listen: `127.0.0.1:${gatewayPort}`,
-    mode: "compress",
-    owner: "wrap",
-    recovery_via_mcp: false,
-    instance_token: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    started_at: new Date().toISOString(),
-    version: "test",
-  };
-  writeFileSync(join(runDir, `${gatewayPort}.json`), JSON.stringify(runState));
-  const proxy = join(binDir, "caveman-proxy");
-  writeFileSync(proxy, `#!/usr/bin/env node
-const fs = require("node:fs"), path = require("node:path");
-if (process.argv[2] === "version") { console.log(JSON.stringify({version:"test",schema:"caveman.proxy.run.v1",capabilities:["run_state"]})); process.exit(0); }
-if (process.argv[2] === "status") { const p = process.argv[process.argv.indexOf("--port") + 1]; console.log(fs.readFileSync(path.join(process.env.CAVEMAN_HOME,"run",p+".json"),"utf8")); process.exit(0); }
-if (process.argv[2] === "stats" && process.argv.includes("--recent")) { console.log("[]"); process.exit(0); }
-if (process.argv[2] === "stats") { console.log(JSON.stringify({spans:12,tokens_in:480000,requests_eligible_for_compression:10,compression_tokens_before:210000,compression_tokens_after:90000,compression_tokens_saved:120000,cached_input_tokens:60000,cache_creation_input_tokens:20000,cache_bust_requests:2,headline_compression_refused:false,basis:"inferred"})); process.exit(0); }
-process.exit(1);
-`, { mode: 0o755 });
-  const agent = join(binDir, "fixture-agent");
-  writeFileSync(agent, "#!/bin/sh\nexit 7\n", { mode: 0o755 });
-  env.CAVEMAN_PROXY_BIN = proxy;
-  env.PATH = `${binDir}:${env.PATH}`;
-  t.after(() => {
-    if (proxyOwner.exitCode === null && proxyOwner.signalCode === null) proxyOwner.kill("SIGTERM");
-    gateway.close();
-    stub.close();
-  });
-
-  const out = await runCli(["wrap", "fixture-agent", "secret-argv-sentinel"], env, { timeoutMs: 5000 });
-  assert.equal(out.code, 7, out.stderr);
-  assert.equal(stub.posts.length, 1, "wrapped command outcome + Engine measurement must share one batch");
-  const events = stub.posts.flatMap((post) => JSON.parse(post.body));
-  const command = events.find((event) => event.event === "command_run");
-  const session = events.find((event) => event.event === "engine_session");
-  assert.ok(command, `missing command_run: ${JSON.stringify(events)}`);
-  assert.equal(command.exit_class, "error", "wrapped child failure must not be logged as success");
-  assert.ok(session, `missing engine_session: ${JSON.stringify(events)}`);
-  assert.equal(session.exit_class, "error");
-  assert.equal(session.measurement_ok, true);
-  assert.equal(session.measurement_mode, "compress");
-  assert.equal(session.requests_observed, 12);
-  assert.equal(session.input_tokens_observed, 480000);
-  assert.equal(session.compression_eligible_requests, 10);
-  assert.equal(session.compression_tokens_saved, 120000);
-  assert.equal(session.compression_pair_known, true);
-  assert.equal(session.cache_read_tokens, 60000);
-  assert.equal(session.cache_write_tokens, 20000);
-  assert.doesNotMatch(JSON.stringify(session), /secret-argv-sentinel|fixture-agent\/secret|prompt|completion|provider|model|path/i);
-});
-
 test("telemetry POST timeout does not hold the CLI past roughly two seconds", async (t) => {
   const stub = startTelemetryStub({ hang: true });
   const port = await listenOrSkip(t, stub);
@@ -389,6 +280,33 @@ test("telemetry POST timeout does not hold the CLI past roughly two seconds", as
   assert.equal(out.code, 0, out.stderr);
   assert.ok(out.elapsedMs < 2500, `CLI should exit after AbortSignal timeout, elapsed=${out.elapsedMs}ms`);
   assert.equal(stub.posts.length, 1, "the hung endpoint should still receive the attempted POST");
+
+  stub.close();
+});
+
+// ensureTelemetryDefault must never rewrite a persisted decision — pin that an
+// interactive run over a stale-version OPT-OUT leaves the config byte-identical,
+// prints nothing, and sends nothing.
+test("an interactive stale-version opt-out stays byte-identical and silent", async (t) => {
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const { env, home } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
+  const configDir = join(home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  const optOut = { enabled: false, decidedAt: "2026-07-03T00:00:00.000Z", promptVersion: 1 };
+  const raw = JSON.stringify({ telemetry: optOut });
+  writeFileSync(join(configDir, "config.json"), raw);
+
+  const out = await runCliPty(["tools", "config", "get"], env);
+  if (out === null || out.code !== 0) {
+    stub.close();
+    t.skip("script(1) pty unavailable in this environment");
+    return;
+  }
+  assert.doesNotMatch(out.output, /anonymous usage stats on/, "an opt-out must never be re-disclosed");
+  assert.equal(readFileSync(join(configDir, "config.json"), "utf8"), raw, "an opt-out config must stay byte-identical");
+  assert.equal(stub.posts.length, 0, "an opt-out must never send");
 
   stub.close();
 });

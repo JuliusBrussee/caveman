@@ -22,7 +22,7 @@ reporting](https://github.com/JuliusBrussee/caveman/security/advisories/new).
 | Local Proxy + Engine | No | Request content, possibly transformed, and provider credentials go to the provider selected by the agent. Recovery originals stay in local CCR storage unless the agent retrieves and sends them later. |
 | Agent SDK `observe-only` | No | Directly to the configured provider. No Caveman gateway telemetry. |
 | Managed Caveman gateway | Yes | Requests and responses transit Caveman Cloud and the selected provider. Do not treat managed mode as local-only. |
-| Anonymous CLI telemetry | No | Content-free usage events go to Caveman only after explicit opt-in. Default is off. |
+| Anonymous CLI telemetry | No | Content-free usage events go to Caveman by default (opt-out). First interactive run prints the disclosure; `caveman telemetry off` or `DO_NOT_TRACK=1` turns it off for good. |
 | Authenticated dashboard sync | Yes | Local span metadata and aggregate findings go to Caveman Cloud when credentials are present. Raw prompt and response bodies are excluded. |
 
 Your model provider, MCP servers, browser targets, agent plugins, and any command
@@ -31,10 +31,12 @@ offline or private.
 
 ## Anonymous CLI telemetry
 
-Telemetry is **opt-in and off by default**. A fresh install sends nothing and
-does not create an anonymous identifier. Login is not required: once telemetry
-is explicitly enabled, logged-out CLI use can send anonymous events to
-`https://api.caveman.so/telemetry/cli`.
+Telemetry is **on by default and opt-out**.
+The default is never silent: the first interactive command persists the decision
+(with a stable anonymous identifier) and prints a one-line disclosure naming the
+scope and the off switch. Nothing sends before that disclosure run, and CI /
+non-interactive runs never send and never persist the default. Login is not
+required; anonymous events go to `https://api.caveman.so/telemetry/cli`.
 
 ```bash
 caveman telemetry status
@@ -46,9 +48,12 @@ Controls, in precedence order:
 
 - non-empty, non-zero `DO_NOT_TRACK` forces telemetry off;
 - `CAVEMAN_TELEMETRY=1|true|on` enables it and other non-empty values disable it;
-- CI and non-interactive runs default off;
-- otherwise the persisted choice in `~/.caveman-cloud/config.json` applies;
-- no persisted choice means off.
+- CI and non-interactive runs are always off;
+- otherwise the persisted choice in `~/.caveman-cloud/config.json` applies —
+  a persisted opt-out (from any version, including the old opt-in prompt's "no")
+  is honored forever;
+- no persisted choice means on, persisted with a printed disclosure on the
+  first interactive command.
 
 `CAVEMAN_TELEMETRY_URL` overrides the destination, mainly for testing. Telemetry
 requests time out after 1.5 seconds and failures do not fail the CLI command.

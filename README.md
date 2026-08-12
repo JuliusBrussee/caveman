@@ -398,7 +398,7 @@ Local runtime results report `inferred`; controlled benchmark results report `be
 
 ## Privacy
 
-Your agent still talks to the provider you chose. Local compression needs no Caveman account. Anonymous CLI telemetry is opt-in and off by default; it does not require login once enabled. Authenticated dashboard sync runs only with connected credentials. Skill and hooks run locally; local proxy forwards provider traffic; CCR stays in a SQLite file on your disk. Agent SDK `observe-only` mode sends no Caveman gateway telemetry. Exact network, telemetry, storage, and managed-gateway boundaries live in [SECURITY.md](./SECURITY.md).
+Your agent still talks to the provider you chose. Local compression needs no Caveman account. The `caveman` CLI sends anonymous usage stats by default — command counts only, never your prompts, code, or file paths. It says so on first run, and one command turns it off forever: `caveman telemetry off` (or `DO_NOT_TRACK=1`). Authenticated dashboard sync runs only with connected credentials. Skill and hooks run locally; local proxy forwards provider traffic; CCR stays in a SQLite file on your disk. Agent SDK `observe-only` mode sends no Caveman gateway telemetry. Exact network, telemetry, storage, and managed-gateway boundaries live in [SECURITY.md](./SECURITY.md).
 
 ## License
 
