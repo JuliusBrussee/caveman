@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -41,7 +41,7 @@ def test_python_client_oversized_memory_reaches_stable_exit_contract(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    binary = tmp_path / "cavemem-fixture"
+    binary = tmp_path / "cavemem-fixture.py"
     binary.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
@@ -49,8 +49,13 @@ def test_python_client_oversized_memory_reaches_stable_exit_contract(
         "raise SystemExit(65 if len(data) > 256 * 1024 else 0)\n",
         encoding="utf-8",
     )
-    os.chmod(binary, 0o700)
     monkeypatch.setenv("CAVEMEM_BIN", str(binary))
+    real_run = subprocess.run
+
+    def run_python_fixture(command: list[str], **kwargs: object):
+        return real_run([sys.executable, str(binary), *command[1:]], **kwargs)
+
+    monkeypatch.setattr(cavemem.subprocess, "run", run_python_fixture)
     with pytest.raises(subprocess.CalledProcessError) as caught:
         cavemem.remember("x" * (256 * 1024 + 1))
     assert caught.value.returncode == cavemem.MEMORY_TOO_LARGE_EXIT_CODE

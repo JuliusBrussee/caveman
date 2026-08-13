@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -225,18 +224,8 @@ func PrepareSQLitePathCanonical(path string) (string, error) {
 	if !parentInfo.IsDir() {
 		return "", fmt.Errorf("sqlite parent %q must be a directory", resolvedParent)
 	}
-	// Sticky shared temp directories (/tmp, macOS /private/tmp) prevent another
-	// user from replacing the 0600 file we create. Non-sticky writable parents
-	// remain unsafe because pathname replacement can race SQLite's reopen.
-	// On Windows the POSIX permission bits Go reports are synthetic (every
-	// directory reads as 0777), so this check would reject every path there.
-	// The writable-parent invariant is therefore UNENFORCED on Windows: the
-	// default per-user %USERPROFILE%\.caveman path is safe, but an
-	// operator-chosen path under a permissive ACL is not detected.
-	// TODO(windows): check the parent DACL (GetSecurityInfo) for broad
-	// write grants instead of skipping.
-	if runtime.GOOS != "windows" && parentInfo.Mode().Perm()&0o022 != 0 && parentInfo.Mode()&os.ModeSticky == 0 {
-		return "", fmt.Errorf("sqlite parent %q is group/world writable", parent)
+	if err := validateSQLiteParentSecurity(resolvedParent, parentInfo); err != nil {
+		return "", err
 	}
 	canonicalPath := filepath.Join(resolvedParent, filepath.Base(path))
 	if err := secureSQLiteFile(canonicalPath, true); err != nil {

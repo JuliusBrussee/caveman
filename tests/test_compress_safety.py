@@ -159,6 +159,7 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertEqual(list(Path(tmp).glob("*.tmp")), [])
             self.assertEqual(list(backup_dir.glob("*.tmp")), [])
 
+    @unittest.skipIf(os.name == "nt", "Windows ACLs are not represented by POSIX mode bits")
     def test_permission_preserved_across_compression(self):
         with tempfile.TemporaryDirectory() as tmp, \
              tempfile.TemporaryDirectory() as data_home, \

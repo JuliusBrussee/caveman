@@ -21,7 +21,7 @@ caveman-shrink recover ccr_... > tools.original.json
 caveman-shrink lint tools.json
 ```
 
-MIT launcher downloads matching commercial binary on first run, verifies
+MIT launcher downloads matching BSL-1.1 binary on first run, verifies
 key-signed checksum manifest plus artifact SHA-256, and caches it under
 `~/.caveman/bin`. No Go toolchain or global Caveman install is required:
 
@@ -29,7 +29,7 @@ key-signed checksum manifest plus artifact SHA-256, and caches it under
 npx -y caveman-shrink lint tools.json
 ```
 
-MIT applies to npm launcher. Downloaded binary follows commercial terms named
+MIT applies to npm launcher. Downloaded binary follows BSL-1.1 terms named
 in `BINARY_LICENSE.md`.
 
 ## Guarantees

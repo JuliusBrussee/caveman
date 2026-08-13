@@ -27,6 +27,7 @@ const OPENCLAW = require('./lib/openclaw');
 const OWNED = require('./lib/owned-install');
 const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
 const PORTABLE = require('./lib/portable-process');
+const PLATFORM_PATHS = require('./lib/platform-paths');
 
 const REPO = 'JuliusBrussee/caveman';
 // Pin remote fetches to an immutable release tag, not the moving `main`
@@ -308,16 +309,12 @@ function cursorExtPresent(needle) {
 
 function jetbrainsPresent() {
   const home = os.homedir();
-  return fs.existsSync(path.join(home, 'Library/Application Support/JetBrains'))
-      || fs.existsSync(path.join(home, '.config/JetBrains'));
+  return PLATFORM_PATHS.jetbrainsRoots(home).some(root => fs.existsSync(root));
 }
 
 function jetbrainsPluginPresent(needle) {
   const home = os.homedir();
-  const roots = [
-    path.join(home, 'Library/Application Support/JetBrains'),
-    path.join(home, '.config/JetBrains'),
-  ];
+  const roots = PLATFORM_PATHS.jetbrainsRoots(home);
   const re = new RegExp(needle, 'i');
   for (const r of roots) {
     if (!fs.existsSync(r)) continue;
@@ -980,14 +977,14 @@ async function installHooks(ctx) {
   SETTINGS.rewriteLegacyManagedHookCommands(settings, node);
 
   SETTINGS.addCommandHook(settings, 'SessionStart', {
-    command: `"${node}" "${activate}"`,
+    command: PLATFORM_PATHS.hookCommand(node, [activate]),
     marker: 'caveman-activate',
     timeout: 5,
     statusMessage: 'Loading caveman mode...',
   });
 
   SETTINGS.addCommandHook(settings, 'UserPromptSubmit', {
-    command: `"${node}" "${tracker}"`,
+    command: PLATFORM_PATHS.hookCommand(node, [tracker]),
     marker: 'caveman-mode-tracker',
     timeout: 5,
     statusMessage: 'Tracking caveman mode...',
@@ -999,7 +996,7 @@ async function installHooks(ctx) {
   // Use -ExecutionPolicy Bypass so users without RemoteSigned policy can run.
   const psHost = IS_WIN && hasCmd('pwsh') ? 'pwsh' : (IS_WIN ? 'powershell' : null);
   const slCmd = IS_WIN
-    ? `${psHost} -NoProfile -ExecutionPolicy Bypass -File "${path.join(hooksDir, 'caveman-statusline.ps1')}"`
+    ? PLATFORM_PATHS.hookCommand(psHost, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(hooksDir, 'caveman-statusline.ps1')])
     : `bash "${statusline}"`;
   if (!settings.statusLine) {
     settings.statusLine = { type: 'command', command: slCmd };

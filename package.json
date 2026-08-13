@@ -1,7 +1,7 @@
 {
   "name": "caveman-installer",
   "version": "2.0.0",
-  "description": "Caveman installer \u2014 detects your AI coding agents and installs caveman for each one.",
+  "description": "Caveman installer — detects your AI coding agents and installs caveman for each one.",
   "license": "MIT",
   "author": "Julius Brussee",
   "homepage": "https://github.com/JuliusBrussee/caveman",
@@ -35,5 +35,8 @@
     "!**/__pycache__/**",
     "!**/*.py[cod]"
   ],
-  "packageManager": "pnpm@10.14.0"
+  "packageManager": "pnpm@10.14.0",
+  "dependencies": {
+    "@caveman-ai/cli": "^1.1.0"
+  }
 }

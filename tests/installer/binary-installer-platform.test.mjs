@@ -17,7 +17,7 @@ test("standalone binary installer supports Windows targets", () => {
 test("Windows PATH lookup respects PATHEXT and existing extensions", () => {
   assert.deepEqual(
     executableCandidateNames("caveman-mcp", "win32", ".EXE;.CMD;.EXE"),
-    ["caveman-mcp", "caveman-mcp.EXE", "caveman-mcp.CMD"],
+    ["caveman-mcp.EXE", "caveman-mcp.CMD", "caveman-mcp"],
   );
   assert.deepEqual(
     executableCandidateNames("caveman-mcp.exe", "win32", ".EXE;.CMD"),

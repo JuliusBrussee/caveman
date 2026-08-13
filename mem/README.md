@@ -7,6 +7,10 @@ conservative threshold and compresses each hit through the
 [Caveman engine](../engine), so the inferred token cost is honest and the dropped
 detail stays recoverable. **Inferred-only** — it never claims `verified` savings.
 
+Go core and binary ship under BSL 1.1. Thin JS/Python clients remain MIT.
+BSL runtime is source-available, not OSI Open Source before Change Date. See
+`LICENSE` and `../LICENSING.md`.
+
 ## CLI
 
 ```bash

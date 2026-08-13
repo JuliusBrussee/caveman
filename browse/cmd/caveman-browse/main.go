@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -336,10 +337,7 @@ func closeDirectBrowser(logger *slog.Logger, eng *engine.Engine) {
 }
 
 func defaultChromePath() string {
-	candidates := []string{
-		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-		"/Applications/Chromium.app/Contents/MacOS/Chromium",
-	}
+	candidates := defaultChromeCandidates(runtime.GOOS, os.Getenv)
 	for _, path := range candidates {
 		if st, err := os.Stat(path); err == nil && !st.IsDir() {
 			return path
@@ -351,6 +349,43 @@ func defaultChromePath() string {
 		}
 	}
 	return ""
+}
+
+func defaultChromeCandidates(goos string, getenv func(string) string) []string {
+	if goos == "darwin" {
+		return []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		}
+	}
+	if goos != "windows" {
+		return nil
+	}
+	roots := []string{
+		getenv("LOCALAPPDATA"),
+		getenv("PROGRAMFILES"),
+		getenv("PROGRAMFILES(X86)"),
+		getenv("ProgramW6432"),
+	}
+	var candidates []string
+	seen := map[string]bool{}
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		for _, relative := range []string{
+			filepath.Join("Google", "Chrome", "Application", "chrome.exe"),
+			filepath.Join("Chromium", "Application", "chrome.exe"),
+		} {
+			candidate := filepath.Join(root, relative)
+			key := strings.ToLower(candidate)
+			if !seen[key] {
+				seen[key] = true
+				candidates = append(candidates, candidate)
+			}
+		}
+	}
+	return candidates
 }
 
 func statePath() string {

@@ -12,6 +12,11 @@ the Caveman engine's forced-only `a11y` compressor, and exposes four tools:
 Savings are always `inferred`. Recovery is CCR-backed: `browser_recover` returns
 the byte-exact original AX payload for a snapshot handle.
 
+Source and binaries ship under BSL 1.1. This runtime is source-available, not
+OSI Open Source before Change Date. First-party self-hosted production is
+permitted; third-party hosted, managed, or embedded use requires commercial
+license. See `LICENSE` and `../LICENSING.md`.
+
 `browser_snapshot.query` is the token-efficient path on large pages. It keeps
 best matching accessible nodes plus their ancestors while CCR retains the full
 raw tree. Compact output uses `[uid] role "name"` lines; only actionable or

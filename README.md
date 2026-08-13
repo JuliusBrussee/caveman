@@ -13,6 +13,7 @@
 </p>
 
 <p align="center">
+  <a href="https://www.producthunt.com/products/caveman?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-caveman-2" target="_blank" rel="noopener noreferrer"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1220849&amp;theme=light&amp;t=1786634691828" alt="Caveman - why use many token when few do trick | Product Hunt" width="250" height="54"/></a>
   <a href="https://trendshift.io/repositories/25391?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-25391" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/25391" alt="JuliusBrussee%2Fcaveman | Trendshift" width="250" height="55"/></a>
 </p>
 
@@ -49,13 +50,13 @@ Caveman is three separate installs. Each works alone. Not sure? Start with the s
 curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash
 ```
 
-**Smaller inputs — Caveman Proxy.** The `caveman` CLI plus signed local binaries: proxy, engine, MCP recovery, memory — and the optional browse + shrink tools. Then `caveman claude` wraps your agent.
+**Smaller inputs — Caveman Proxy (BSL-1.1 runtime; MIT CLI).** The `caveman` CLI plus signed local binaries: proxy, engine, MCP recovery, memory — and the optional browse + shrink tools. Then `caveman claude` wraps your agent.
 
 ```bash
 npm install -g @caveman-ai/cli && caveman setup --install
 ```
 
-**Compressed browsing — Caveman Browse.** Included in `caveman setup --install` (needs Chrome) — a local Chrome driver your agent reaches as MCP tools.
+**Compressed browsing — Caveman Browse (BSL-1.1).** Included in `caveman setup --install` (needs Chrome) — a local Chrome driver your agent reaches as MCP tools.
 
 ```bash
 caveman browse <url>
@@ -87,6 +88,10 @@ See [INSTALL.md](./INSTALL.md) for the full 30+ agent matrix, dry run, flags, ve
 Caveman started as a skill/plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex, Gemini, Cursor, Windsurf, Cline, Copilot, and 30+ other agents. Install once; the agent drops filler and answers in tight caveman-speak while keeping code, commands, and errors byte-for-byte exact.
 
 Agent mouth got smaller. Appetite did not. Tool schemas, files, logs, history, and skill bodies still crossed the provider boundary in full, often on every turn. Caveman 2 shrinks that input before the provider call. Caveman Proxy sits under your existing agent; Caveman Engine powers compression and stores every moved byte for exact recovery.
+
+**License boundary:** new Engine-linked runtime work is BSL-1.1. Skill, Agent
+SDK, CLI, client SDKs, extension shell, contracts, catalog, graders, and kit
+remain MIT. BSL is source-available, not OSI Open Source before Change Date.
 
 ## The skill
 
@@ -171,6 +176,8 @@ Caveman works underneath the stack you already use. Adopt only the layer you nee
 
 One command wraps your agent and routes provider traffic through a local proxy. Caveman Engine powers its compression. In a pinned 54-run Claude Code benchmark, Caveman used **33.2% fewer provider-reported input tokens** than direct Claude Code while passing all 18 exact-answer checks. [Method, per-case results, and limits.](./docs/WRAP-BENCHMARK.md) `benchmark_counterfactual`
 
+Proxy and Engine source/binaries are BSL-1.1. Thin CLI remains MIT.
+
 No code change. In local mode, Caveman sends no prompts or outputs to a Caveman backend: the proxy forwards each request to your chosen provider, while CCR recovery copies stay on your disk. Claude Pro/Max OAuth credentials pass through to Anthropic as-is.
 
 <p align="center">
@@ -212,6 +219,9 @@ Safety gates stay explicit:
 - **Labeled evidence.** Local results report `inferred`: estimates for choosing what to try. `verified` requires real traffic and eval gates. Offline caveman never reports it.
 
 ## What the engine does to a payload
+
+Everything in Engine-linked runtime, including new cache-planning and rewriting
+modules, is BSL-1.1 unless `LICENSING.md` explicitly classifies it as MIT.
 
 `detect()` types each payload, then routes it to a compressor that keeps what answers depend on:
 
@@ -402,11 +412,11 @@ Your agent still talks to the provider you chose. Local compression needs no Cav
 
 ## License
 
-Split license. The skill half is [MIT](./LICENSE) and stays that way. The engine half is BSL-1.1, more open than the three letters suggest.
+Split license. Skill and adoption surfaces are [MIT](./LICENSE). Engine-linked runtime is BSL-1.1 source-available, not OSI Open Source before Change Date.
 
 **MIT** — the skill, Agent SDK and initializer, the CLI, both client SDKs (TS + Python), kit, evals/graders, contracts, provider catalog, the extension shell, and the thin cavemem clients.
 
-**BSL-1.1** — the engine, proxy, MCP server, `shrink`, the cavemem Go core, and the shared Go platform. Source-available: read it, fork it, self-host it for your own first-party traffic free, production included. Every BSL version auto-converts to **Apache-2.0** on the earlier of `2030-06-21` or four years after that version first ships. The grant withholds one thing: reselling the engine to third parties as a hosted, managed, or embedded service, which needs a commercial license. The BSL text and per-directory map ship with the engine source.
+**BSL-1.1** — Engine, Proxy, Cache Engine, rewriter, Browse, MCP server, `shrink`, cavemem Go core, and shared Go platform. New Engine-linked runtime modules default to BSL-1.1. Source-available: read it, fork it, self-host it for your own first-party traffic free, production included. Every BSL version auto-converts to **Apache-2.0** on the earlier of `2030-06-21` or four years after that version first ships. Third-party hosted, managed, or embedded service use needs commercial license. BSL text and per-directory map ship with source.
 
 `engine/pixel` embeds [pxpipe](https://github.com/teamchong/pxpipe) (MIT) plus glyph atlases derived from Spleen 5×8 (BSD-2-Clause) and GNU Unifont (dual OFL-1.1 / GPLv2-with-font-exception); its `NOTICE` travels with that source.
 

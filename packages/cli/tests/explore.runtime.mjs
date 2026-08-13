@@ -56,7 +56,7 @@ test("explore install --agent codex fails closed (non-zero, no file)", async () 
   assert.notEqual(out.code, 0, "codex must not be installed yet");
   assert.match(
     out.stderr,
-    /caveman explore: only --agent claude is wired today \(codex needs verified transcript isolation first — see docs\/FASTCONTEXT_EXPLORER_SPEC\.md\)\. got: codex/,
+    /caveman explore: only --agent claude is wired today \(codex needs verified transcript isolation first\)\. got: codex/,
   );
   assert.ok(!existsSync(join(dir, "SKILL.md")), "no skill file may be written for unsupported agent");
 });

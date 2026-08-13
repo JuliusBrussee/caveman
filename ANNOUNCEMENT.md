@@ -39,7 +39,7 @@ Caveman 2 ships under **two** licenses, and the split is deliberate:
 
 **MIT — the funnel.** The skill, the CLI, both SDKs, the kit, the evals, the contracts, the provider-catalog, and the extension shell. Take it. Fork it. Embed it in whatever you want. This is the on-ramp and we want it everywhere.
 
-**BSL-1.1 — the engine.** The compression engine, the proxy, the MCP server, `shrink`, the cavemem Go core, and the shared platform. You can self-host all of it for your **own** traffic — including production — completely free. You can integrate it. You can read every line of the source. There is exactly one thing you can't do: take Caveman's compression and **resell it to third parties** as a hosted, managed, or embedded service without a commercial license.
+**BSL-1.1 — Engine-linked runtime, including new modules.** Compression Engine, Proxy, Cache Engine, rewriter, Browse, MCP server, `shrink`, cavemem Go core, and shared platform. You can self-host all of it for your **own** traffic — including production — completely free. You can integrate it. You can read every line of source. Third-party hosted, managed, or embedded service use requires commercial license.
 
 That's the whole restriction. One threat. Someone standing up "compression-as-a-service for other people's traffic" off the back of our work.
 
@@ -101,7 +101,7 @@ Thanks for using the skill. v2 exists to earn the same trust at engine scale.
 
 Real run: a 40-record JSON went `16,098 → 1,091 tokens` (93% smaller), byte-safe, fully recoverable via CCR. Savings are **inferred** — measured on your machine, not projected, not "verified."
 
-**Licensing:** MIT for the skill, CLI, SDKs, kit, evals, contracts, catalog, and extension shell. BSL-1.1 for the engine/proxy/mcp/shrink/cavemem-core/platform — self-host your own traffic (incl. production) free; only reselling Caveman-as-a-service needs a commercial license. Sunsets to Apache-2.0 in ~4 years.
+**Licensing:** MIT for skill, CLI, SDKs, kit, evals, contracts, catalog, and extension shell. BSL-1.1 for Engine/Proxy/Cache Engine/rewriter/Browse/MCP/shrink/cavemem-core/platform — new Engine-linked runtime modules default to BSL-1.1; self-host own traffic (incl. production) free; third-party hosted/managed/embed use needs commercial license. Sunsets to Apache-2.0 on scheduled Change Date.
 
 **Ships now:** engine, proxy, CLI, SDKs (as the packages resolve). **Coming soon:** browser extension. Install commands and pip/npm/docker badges go live when the packages publish.
 

@@ -231,6 +231,20 @@ test('rewriteLegacyManagedHookCommands rewrites bare-node managed scripts', () =
   assert.equal(s.hooks.SessionStart[0].hooks[1].command, 'node /abs/hooks/some-user-hook.js');
 });
 
+test('rewriteLegacyManagedHookCommands emits PowerShell invocation on Windows', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: 'command', command: "node \"C:/Users/O'Brien/.claude/hooks/caveman-activate.js\"" }] }],
+    },
+  };
+  const n = SETTINGS.rewriteLegacyManagedHookCommands(s, "C:/Program Files/nodejs/node.exe", 'win32');
+  assert.equal(n, 1);
+  assert.equal(
+    s.hooks.SessionStart[0].hooks[0].command,
+    "& 'C:/Program Files/nodejs/node.exe' 'C:/Users/O''Brien/.claude/hooks/caveman-activate.js'",
+  );
+});
+
 test('rewriteLegacyManagedHookCommands ignores already-absolute node commands', () => {
   const s = {
     hooks: {

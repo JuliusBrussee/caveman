@@ -6,6 +6,13 @@ Standalone prompt-cache planner and provider-native wire engine. Import path:
 github.com/JuliusBrussee/caveman/cacheengine
 ```
 
+## License
+
+Source ships under Business Source License 1.1 (`BSL-1.1`). It is
+source-available, not OSI Open Source before Change Date. First-party
+self-hosted production is permitted; third-party hosted, managed, or embedded
+service use requires commercial license. See `LICENSE` and `../LICENSING.md`.
+
 Core planner knows capabilities, not provider names. Give it ordered stable
 segments plus cache economics; it selects positive-break-even prefix points,
 guards epoch bytes, detects volatile data and drift, and creates tenant-opaque,

@@ -25,6 +25,8 @@ import { chmod, mkdir, open, readFile, rename, writeFile } from "node:fs/promise
 import { homedir, hostname, tmpdir } from "node:os";
 import { basename, delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { connect as netConnect, createServer as netCreateServer, isIP, type AddressInfo } from "node:net";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { createHash, createHmac, createPublicKey, randomBytes, randomUUID, verify as edVerify, type KeyObject } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { PROFILES, type AgentProfile } from "./agents.generated.js";
@@ -3656,7 +3658,9 @@ function printSeatWall(body: Record<string, unknown> | null) {
 
 // refreshWrapEntitlementInBackground silently re-fetches during offline grace so a
 // renewed plan lifts the notice next session. Fire-and-forget; failure stays in
-// grace. On 401 it rotates through the CLI's refresh-token path, then retries once.
+// grace. Socket is explicitly unrefed so a stalled control plane cannot hold a
+// completed wrapped agent process open. A 401 is left for foreground auth paths
+// to refresh; credential rotation must not become hidden post-run work.
 function isoWeekKey(now = new Date()): string {
   const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const day = d.getUTCDay() || 7;
@@ -3675,13 +3679,50 @@ function claimWeeklyRunRefresh(now = new Date()): boolean {
   return claimed;
 }
 
+function backgroundPostJSON(urlString: string, token: string, body: string): Promise<{ ok: boolean; status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlString);
+    const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        "x-cave-csrf": "cli",
+      },
+    }, (response) => {
+      response.socket?.unref();
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      response.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > 1 << 20) {
+          request.destroy(new Error("wrap entitlement response exceeds 1 MiB"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => {
+        let parsed: unknown = null;
+        try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { /* invalid response stays null */ }
+        const status = response.statusCode ?? 0;
+        resolve({ ok: status >= 200 && status < 300, status, body: parsed });
+      });
+    });
+    request.on("socket", (socket) => socket.unref());
+    request.on("error", reject);
+    request.setTimeout(5000, () => request.destroy(new Error("wrap entitlement refresh timed out")));
+    request.end(body);
+  });
+}
+
 function refreshWrapEntitlementInBackground(options: { wrappedRun?: boolean } = {}) {
   if (wrapExternalWritesDisabled()) return;
   const wrappedRun = options.wrappedRun === true;
   if (wrappedRun && !claimWeeklyRunRefresh()) return;
   void (async () => {
     try {
-      let cfg = await config();
+      const cfg = await config();
       if (!cfg.token) return;
       const deviceId = ensureDeviceId();
       const body = JSON.stringify({
@@ -3689,25 +3730,14 @@ function refreshWrapEntitlementInBackground(options: { wrappedRun?: boolean } = 
         device_name: hostname(),
         ...(wrappedRun ? { wrapped_run: true } : {}),
       });
-      const doPost = (tok: string) =>
-        fetch(`${cfg.baseURL}/api/v1/me/wrap-entitlement`, {
-          method: "POST",
-          headers: { authorization: `Bearer ${tok}`, "content-type": "application/json", "x-cave-csrf": "cli" },
-          body,
-          signal: AbortSignal.timeout(5000),
-        });
-      let resp = await doPost(cfg.token);
-      if (resp.status === 401 && cfg.refreshToken) {
-        cfg = await refreshCLIConfig(cfg);
-        if (cfg.token) resp = await doPost(cfg.token);
-      }
+      const resp = await backgroundPostJSON(`${cfg.baseURL}/api/v1/me/wrap-entitlement`, cfg.token, body);
       if (!resp.ok) {
         mutateRawConfig((out) => {
           out.wrapEntitlementRefresh = { at: new Date().toISOString(), ok: false };
         });
         return;
       }
-      const ent = await resp.json().catch(() => null);
+      const ent = resp.body;
       if (parseWrapEntitlement(ent)) {
         saveWrapEntitlement(ent);
         mutateRawConfig((out) => {
@@ -5133,7 +5163,7 @@ async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon:
   };
   // Same reason as `start`: the dead account variable never rides along inherited.
   delete env.CAVEMAN_WRAP_ENTITLED;
-  const child = spawn(resolved, [], { stdio: "ignore", env, detached: true });
+  const child = spawn(resolved, [], { stdio: "ignore", env, detached: true, windowsHide: true });
   child.unref();
   for (let i = 0; i < 20; i++) {
     await sleep(100);
@@ -5600,7 +5630,9 @@ export function quoteHookPath(
   path: string,
   platform: NodeJS.Platform = process.platform,
 ): string {
-  return `'${normalizeHookPath(path, platform).replace(/'/g, `'"'"'`)}'`;
+  const normalized = normalizeHookPath(path, platform);
+  if (platform === "win32") return `'${normalized.replace(/'/g, "''")}'`;
+  return `'${normalized.replace(/'/g, `'"'"'`)}'`;
 }
 
 export function nativeHookInvocation(
@@ -5610,9 +5642,29 @@ export function nativeHookInvocation(
   executableIsProxy: boolean,
   platform: NodeJS.Platform = process.platform,
 ): string {
-  return executableIsProxy
-    ? `${quoteHookPath(executable, platform)} native-hook ${agentId} --adapter ${quoteHookPath(fastHook, platform)}`
-    : `${quoteHookPath(executable, platform)} ${quoteHookPath(fastHook, platform)} native-hook ${agentId}`;
+  const executableInvocation = hookExecutableInvocation(
+    executable,
+    executableIsProxy ? undefined : fastHook,
+    platform,
+  );
+  const invocation = executableIsProxy
+    ? `${executableInvocation} native-hook ${agentId} --adapter ${quoteHookPath(fastHook, platform)}`
+    : `${executableInvocation} native-hook ${agentId}`;
+  return invocation;
+}
+
+export function hookExecutableInvocation(
+  executable: string,
+  script: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const invocation = script
+    ? `${quoteHookPath(executable, platform)} ${quoteHookPath(script, platform)}`
+    : quoteHookPath(executable, platform);
+  // Claude/Codex/Gemini dispatch command hooks through PowerShell on native
+  // Windows. A quoted executable is only a string literal there; `&` is the
+  // required invocation operator. POSIX hook commands keep their exact shape.
+  return platform === "win32" ? `& ${invocation}` : invocation;
 }
 
 function nativeHookCommand(agentId: string): string {
@@ -8081,7 +8133,7 @@ function openLoginBrowser(url: string): void {
     process.stderr.write(`  browser opener unavailable; open ${url}\n`);
     return;
   }
-  const child = spawn(opener.command, opener.args, { detached: true, stdio: "ignore" });
+  const child = spawn(opener.command, opener.args, { detached: true, stdio: "ignore", windowsHide: true });
   child.once("error", () => process.stderr.write(`  browser did not open; open ${url}\n`));
   child.unref();
 }
@@ -10015,8 +10067,8 @@ function shouldShrink(command: string): boolean {
 function cavemanBinForHook(): string {
   const command = which("caveman") ?? which("cave");
   return command
-    ? quoteHookPath(command)
-    : `${quoteHookPath(process.execPath)} ${quoteHookPath(process.argv[1]!)}`;
+    ? hookExecutableInvocation(command, undefined)
+    : hookExecutableInvocation(process.execPath, process.argv[1]!);
 }
 
 // shrinkHook is the settings-hook callback for the agents whose harness can
@@ -11286,10 +11338,23 @@ function opencodePluginPath(): string {
 // cavemanInvocation returns how to call back into THIS CLI from a generated plugin,
 // baked at install time so it is independent of the agent's PATH: a resolved
 // caveman/cave binary, else this script under node.
+export function generatedPluginInvocation(
+  onPath: string | undefined,
+  currentScript: string,
+  platform: NodeJS.Platform = process.platform,
+): { cmd: string; pre: string[] } {
+  if (onPath) {
+    const invocation = portableInvocation(onPath, [], platform);
+    return { cmd: invocation.command, pre: invocation.args };
+  }
+  return { cmd: process.execPath, pre: [currentScript] };
+}
+
 function cavemanInvocation(): { cmd: string; pre: string[] } {
-  const onPath = which("caveman") ?? which("cave");
-  if (onPath) return { cmd: onPath, pre: [] };
-  return { cmd: process.execPath, pre: [process.argv[1] ?? ""] };
+  return generatedPluginInvocation(
+    which("caveman") ?? which("cave") ?? undefined,
+    process.argv[1] ?? "",
+  );
 }
 function opencodePluginSource(): string {
   const { cmd, pre } = cavemanInvocation();
@@ -12456,7 +12521,7 @@ function openLearnReport(report: string): void {
     process.stderr.write(`cannot open visual report; open this file: ${report}\n`);
     return;
   }
-  const child = spawn(opener.command, opener.args, { detached: true, stdio: "ignore" });
+  const child = spawn(opener.command, opener.args, { detached: true, stdio: "ignore", windowsHide: true });
   child.once("error", () => {
     process.stderr.write(`cannot open visual report; open this file: ${report}\n`);
   });

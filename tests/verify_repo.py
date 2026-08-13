@@ -197,9 +197,13 @@ def verify_manifests_and_syntax() -> None:
     run(["node", "--check", "src/hooks/cavecrew-model-overrides.js"])
     run(["node", "--check", "bin/install.js"])
     run(["node", "--check", "bin/lib/settings.js"])
-    run(["bash", "-n", "src/hooks/install.sh"])
-    run(["bash", "-n", "src/hooks/uninstall.sh"])
-    run(["bash", "-n", "src/hooks/caveman-statusline.sh"])
+    bash = shutil.which("bash")
+    if bash is not None:
+        run([bash, "-n", "src/hooks/install.sh"])
+        run([bash, "-n", "src/hooks/uninstall.sh"])
+        run([bash, "-n", "src/hooks/caveman-statusline.sh"])
+    else:
+        print("SKIP: Bash syntax checks require Bash; PowerShell static checks still run")
 
     # Ensure install/uninstall scripts include caveman-config.js
     install_sh = (ROOT / "src/hooks/install.sh").read_text(encoding="utf-8")
@@ -207,7 +211,7 @@ def verify_manifests_and_syntax() -> None:
     ensure("caveman-config.js" in install_sh, "install.sh missing caveman-config.js")
     ensure("caveman-config.js" in uninstall_sh, "uninstall.sh missing caveman-config.js")
 
-    print("JSON manifests and JS/bash syntax OK")
+    print("JSON manifests and available script syntax OK")
 
 
 def verify_package_contents() -> None:
@@ -293,7 +297,7 @@ def verify_compress_cli() -> None:
     section("Compress CLI")
 
     skip_result = run(
-        ["python3", "-m", "scripts", "../../src/hooks/install.sh"],
+        [sys.executable, "-m", "scripts", "../../src/hooks/install.sh"],
         cwd=ROOT / "skills/caveman-compress",
         check=False,
     )
@@ -305,7 +309,7 @@ def verify_compress_cli() -> None:
     )
 
     missing_result = run(
-        ["python3", "-m", "scripts", "../../does-not-exist.md"],
+        [sys.executable, "-m", "scripts", "../../does-not-exist.md"],
         cwd=ROOT / "skills/caveman-compress",
         check=False,
     )
@@ -319,7 +323,10 @@ def verify_hook_install_flow() -> None:
     section("Claude Hook Flow")
 
     ensure(shutil.which("node") is not None, "node is required for hook verification")
-    ensure(shutil.which("bash") is not None, "bash is required for hook verification")
+    bash = shutil.which("bash")
+    if bash is None:
+        print("SKIP: Bash hook install flow requires Bash; native PowerShell path covered statically")
+        return
 
     with tempfile.TemporaryDirectory(prefix="caveman-verify-") as temp_root:
         temp_root_path = Path(temp_root)
@@ -334,7 +341,7 @@ def verify_hook_install_flow() -> None:
         (claude_dir / "settings.json").write_text(json.dumps(existing_settings, indent=2) + "\n", encoding="utf-8")
         hook_env = {"HOME": shell_path(home), "CLAUDE_CONFIG_DIR": shell_path(claude_dir)}
 
-        run(["bash", "src/hooks/install.sh"], env=hook_env)
+        run([bash, "src/hooks/install.sh"], env=hook_env)
 
         settings = read_json(claude_dir / "settings.json")
         hooks = settings["hooks"]
@@ -420,15 +427,15 @@ def verify_hook_install_flow() -> None:
 
         (claude_dir / ".caveman-active").write_text("wenyan-ultra", encoding="utf-8")
         statusline = run(
-            ["bash", "src/hooks/caveman-statusline.sh"],
+            [bash, "src/hooks/caveman-statusline.sh"],
             env=hook_env,
         )
         ensure("[CAVEMAN:WENYAN-ULTRA]" in statusline.stdout, "statusline badge output mismatch")
 
-        reinstall = run(["bash", "src/hooks/install.sh"], env=hook_env)
+        reinstall = run([bash, "src/hooks/install.sh"], env=hook_env)
         ensure("Nothing to do" in reinstall.stdout, "install.sh should be idempotent")
 
-        run(["bash", "src/hooks/uninstall.sh"], env=hook_env)
+        run([bash, "src/hooks/uninstall.sh"], env=hook_env)
         settings_after = read_json(claude_dir / "settings.json")
         ensure(settings_after == existing_settings, "uninstall.sh did not restore non-caveman settings")
         ensure(not (claude_dir / ".caveman-active").exists(), "uninstall.sh should remove flag file")
@@ -437,19 +444,54 @@ def verify_hook_install_flow() -> None:
         home = Path(temp_root) / "home"
         claude_dir = home / ".claude"
         hook_env = {"HOME": shell_path(home), "CLAUDE_CONFIG_DIR": shell_path(claude_dir)}
-        run(["bash", "src/hooks/install.sh"], env=hook_env)
+        run([bash, "src/hooks/install.sh"], env=hook_env)
         settings = read_json(claude_dir / "settings.json")
         ensure("statusLine" in settings, "fresh install should configure statusline")
         activate = run(["node", "src/hooks/caveman-activate.js"], env=hook_env)
         ensure("STATUSLINE SETUP NEEDED" not in activate.stdout, "fresh install should not nudge for statusline")
-        run(["bash", "src/hooks/uninstall.sh"], env=hook_env)
+        run([bash, "src/hooks/uninstall.sh"], env=hook_env)
         ensure(read_json(claude_dir / "settings.json") == {}, "fresh uninstall should leave empty settings")
 
     print("Claude hook install/uninstall flow OK")
 
 
+def verify_license_boundaries() -> None:
+    section("License Boundaries")
+
+    bsl_text = (ROOT / "LICENSE.BSL").read_text(encoding="utf-8")
+    bsl_directories = (
+        "engine",
+        "proxy",
+        "cacheengine",
+        "rewriter",
+        "browse",
+        "mcp",
+        "shrink",
+        "mem",
+        "shared/platform",
+    )
+    licensing = (ROOT / "LICENSING.md").read_text(encoding="utf-8")
+    for relative in bsl_directories:
+        license_path = ROOT / relative / "LICENSE"
+        ensure(license_path.exists(), f"BSL directory missing LICENSE: {relative}")
+        ensure(
+            license_path.read_text(encoding="utf-8") == bsl_text,
+            f"BSL directory license differs from LICENSE.BSL: {relative}",
+        )
+        ensure(f"`{relative}/`" in licensing, f"LICENSING.md omits BSL directory: {relative}")
+
+    package = read_json(ROOT / "package.json")
+    ensure(isinstance(package, dict) and package.get("license") == "MIT", "root installer must remain MIT")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    ensure("New Engine-linked runtime modules default to BSL-1.1" in readme, "README missing new-runtime BSL rule")
+    ensure("not OSI Open Source before Change Date" in readme, "README missing BSL source-available boundary")
+
+    print(f"{len(bsl_directories)} BSL directories carry canonical license; MIT installer boundary preserved")
+
+
 def main() -> int:
     checks = [
+        verify_license_boundaries,
         verify_skill_frontmatter_upload_compatibility,
         verify_synced_files,
         verify_manifests_and_syntax,
