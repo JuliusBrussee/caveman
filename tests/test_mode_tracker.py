@@ -182,6 +182,51 @@ class ModeTrackerTests(unittest.TestCase):
         r = self.send("/caveman-commit")
         self.assertNotIn("CAVEMAN MODE ACTIVE", r.stdout)
 
+    # ── unresolved /caveman argument is reported, not swallowed ─────────
+
+    def test_glued_punctuation_still_switches(self):
+        self.flag.write_text("full", encoding="utf-8")
+        self.send("/caveman ultra; this feature does not seem to be working")
+        self.assertEqual(self.flag_value(), "ultra")
+
+    def test_unresolved_arg_is_announced_without_echo(self):
+        self.flag.write_text("full", encoding="utf-8")
+        r = self.send("/caveman blorptastic")
+        self.assertEqual(self.flag_value(), "full", "level must not change")
+        self.assertIn("not recognized", r.stdout)
+        for mode in ("lite", "full", "ultra", "wenyan-lite", "wenyan-ultra"):
+            self.assertIn(mode, r.stdout, f"notice must name {mode}")
+        self.assertNotIn(
+            "blorptastic", r.stdout,
+            "untrusted argument must never be echoed into model context",
+        )
+
+    def test_unresolved_arg_notice_when_caveman_off(self):
+        r = self.send("/caveman blorptastic")
+        self.assertIsNone(self.flag_value())
+        self.assertIn("not recognized", r.stdout)
+        self.assertNotIn("blorptastic", r.stdout)
+
+    def test_help_card_body_does_not_deactivate(self):
+        # The card documents the deactivation phrases; quoting them is not
+        # issuing them. The envelope unwrap (#537) covers the slash path; this
+        # covers the body arriving as plain prose.
+        self.flag.write_text("full", encoding="utf-8")
+        self.send(
+            '| **Ultra** | `/caveman ultra` | Extreme compression. |\n\n'
+            '## Deactivate\n\n'
+            'Say "stop caveman" or "normal mode". Resume anytime with `/caveman`.\n\n'
+            "## Language\n\nKeep user's language by default."
+        )
+        self.assertEqual(self.flag_value(), "full")
+
+    def test_short_deactivation_still_works(self):
+        # Control for the case above: the same regexes still fire on a real
+        # command, so the silence there is the scoping and not the harness.
+        self.flag.write_text("ultra", encoding="utf-8")
+        self.send("stop caveman")
+        self.assertIsNone(self.flag_value())
+
     def test_deactivation_clears_saved_prev(self):
         self.flag.write_text("ultra", encoding="utf-8")
         self.send("/caveman-commit")

@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
-const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange } = require('./caveman-config');
+const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange, VALID_MODES } = require('./caveman-config');
 const { parseModeChange, INDEPENDENT_MODES } = require('./caveman-parse');
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
@@ -169,11 +169,34 @@ process.stdin.on('end', () => {
     // hook stdin's cwd through so that check resolves for the session's
     // directory, not this hook process's own cwd. This gates ONLY the
     // reinforcement output below — it never deletes or writes the flag file.
+    // One stdout write per run, so the unresolved-argument notice and the
+    // per-turn reinforcement share a single additionalContext.
+    const context = [];
+
+    // A /caveman argument that matched no mode. The level is deliberately left
+    // alone, but saying nothing reads as success — the user believes the level
+    // switched and the session keeps running at the old one. The notice names
+    // the valid modes, built from VALID_MODES so it cannot drift from the
+    // parser, and NEVER repeats the rejected argument back: this string goes
+    // into model context and the argument is untrusted input.
+    if (change && change.action === 'unresolved') {
+      const selectable = VALID_MODES.filter(m => !INDEPENDENT_MODES.has(m));
+      context.push(
+        `CAVEMAN: /caveman argument not recognized — level unchanged (${readFlag(flagPath) || 'off'}). ` +
+        `Valid: ${selectable.join(', ')}. Tell the user the level did not change ` +
+        `and name the valid modes. Do not quote the argument back.`
+      );
+    }
+
     if (activeMode && !INDEPENDENT_MODES.has(activeMode) && getDefaultMode(data.cwd) !== 'off') {
+      context.push(`CAVEMAN MODE ACTIVE (${activeMode}) — session ruleset applies.`);
+    }
+
+    if (context.length) {
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext: `CAVEMAN MODE ACTIVE (${activeMode}) — session ruleset applies.`
+          additionalContext: context.join(' ')
         }
       }));
     }
