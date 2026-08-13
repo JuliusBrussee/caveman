@@ -43,6 +43,7 @@ const fields = (process.env.CAVEMAN_SHRINK_FIELDS || 'description')
   .split(',').map(s => s.trim()).filter(Boolean);
 
 const { getSpawnInvocation, getSpawnOptions } = require('./spawn-options');
+const { installShutdownHandlers, killUpstream } = require('./shutdown');
 
 let invocation;
 try {
@@ -52,6 +53,10 @@ try {
   process.exit(1);
 }
 const upstream = spawn(invocation.command, invocation.args, getSpawnOptions());
+
+// We spawned the upstream, so we own tearing it down. Without this a host that
+// stops us with a signal leaves the server orphaned with its stdio open (#742).
+installShutdownHandlers(upstream);
 
 let spawnFailed = false;
 upstream.on('error', err => {
@@ -170,6 +175,11 @@ function forwardInput(chunk) {
 }
 function endInput() {
   if (upstream.stdin.writable && !upstream.stdin.destroyed) upstream.stdin.end();
+  // Closing our stdin is how a host asks for a graceful stop, and on Windows it
+  // is the only teardown that runs since there are no real signals there. A
+  // well-behaved server exits on the EOF forwarded above; this reaps the ones
+  // that don't. unref() so it never delays an upstream that exited promptly.
+  setTimeout(() => killUpstream(upstream, 'SIGTERM'), 2000).unref();
 }
 upstream.stdin.on('error', err => {
   if (err.code !== 'EPIPE' && !spawnFailed) {

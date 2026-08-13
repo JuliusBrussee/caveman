@@ -13,6 +13,9 @@ const { compress, compressDescriptionsInPlace } = require(
 const { getSpawnOptions } = require(
   path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink', 'spawn-options.js')
 );
+const { killUpstream, installShutdownHandlers, FORWARDED_SIGNALS } = require(
+  path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink', 'shutdown.js')
+);
 
 let passed = 0;
 let failed = 0;
@@ -153,6 +156,95 @@ test('defaults to current platform when no arg passed', () => {
   assert.equal(opts.shell, undefined);
   assert.equal(opts.windowsHide, true);
   assert.deepEqual(opts.stdio, ['pipe', 'pipe', 'inherit']);
+});
+
+// shutdown: the proxy owns the upstream it spawned, so a host stopping us has
+// to take the upstream with it rather than orphaning it (#742).
+
+// Minimal stand-ins so these tests never spawn a real process or wait out a
+// real grace period.
+function fakeChild() {
+  const calls = [];
+  return {
+    pid: 4321,
+    exitCode: null,
+    signalCode: null,
+    kill(signal) { calls.push(signal); return true; },
+    killed: calls,
+  };
+}
+
+function fakeProcess() {
+  const handlers = new Map();
+  const exits = [];
+  return {
+    on(sig, fn) { handlers.set(sig, fn); },
+    exit(code) { exits.push(code); },
+    emit(sig) { const fn = handlers.get(sig); if (fn) fn(); },
+    handlers,
+    exits,
+  };
+}
+
+test('forwards a termination signal to the upstream (#742)', () => {
+  const child = fakeChild();
+  const proc = fakeProcess();
+  installShutdownHandlers(child, { process: proc, setTimeout: () => null });
+
+  proc.emit('SIGTERM');
+  assert.deepStrictEqual(child.killed, ['SIGTERM']);
+});
+
+test('forwards every signal a host might use to stop us', () => {
+  const proc = fakeProcess();
+  installShutdownHandlers(fakeChild(), { process: proc, setTimeout: () => null });
+
+  assert.deepStrictEqual([...proc.handlers.keys()].sort(), [...FORWARDED_SIGNALS].sort());
+  // SIGKILL cannot be trapped; registering for it would be a silent no-op.
+  assert.ok(!proc.handlers.has('SIGKILL'));
+});
+
+test('shutdown is idempotent so a second signal does not re-kill', () => {
+  const child = fakeChild();
+  const proc = fakeProcess();
+  const { isShuttingDown } = installShutdownHandlers(child, {
+    process: proc,
+    setTimeout: () => null,
+  });
+
+  proc.emit('SIGINT');
+  proc.emit('SIGTERM');
+  assert.deepStrictEqual(child.killed, ['SIGINT']);
+  assert.equal(isShuttingDown(), true);
+});
+
+test('does not signal an upstream that already exited', () => {
+  const child = fakeChild();
+  child.exitCode = 0;
+  assert.equal(killUpstream(child, 'SIGTERM'), false);
+  assert.deepStrictEqual(child.killed, []);
+});
+
+test('a kill that throws is reported rather than crashing teardown', () => {
+  const child = fakeChild();
+  child.kill = () => { throw new Error('ESRCH'); };
+  assert.equal(killUpstream(child, 'SIGTERM'), false);
+});
+
+test('exits with the conventional code when the upstream ignores the signal', () => {
+  for (const [signal, code] of [['SIGTERM', 143], ['SIGINT', 130]]) {
+    const proc = fakeProcess();
+    let onGrace;
+    installShutdownHandlers(fakeChild(), {
+      process: proc,
+      graceMs: 0,
+      setTimeout: fn => { onGrace = fn; return null; },
+    });
+
+    proc.emit(signal);
+    onGrace();
+    assert.deepStrictEqual(proc.exits, [code], `${signal} should exit ${code}`);
+  }
 });
 
 test('preserves enum values inside parens (nested sentinel restoration — #444)', () => {
