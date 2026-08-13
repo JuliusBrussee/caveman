@@ -62,7 +62,6 @@ var blockedPrefixes = func() []netip.Prefix {
 		// Shared/special-use ranges must not become internal-network pivots.
 		"100.64.0.0/10",  // carrier-grade NAT
 		"192.0.0.0/24",   // IETF protocol assignments
-		"198.18.0.0/15",  // benchmarking networks
 		"240.0.0.0/4",    // reserved/broadcast
 		"100::/64",       // IPv6 discard-only
 		"64:ff9b::/96",   // NAT64 well-known prefix
@@ -71,6 +70,26 @@ var blockedPrefixes = func() []netip.Prefix {
 		"2002::/16",      // 6to4
 		// IPv4-mapped IPv6 range — blocks ::ffff:127.0.0.1 style bypasses
 		"::ffff:0:0/96",
+	}
+	out := make([]netip.Prefix, 0, len(raw))
+	for _, s := range raw {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			panic("ssrf: invalid built-in prefix: " + s)
+		}
+		out = append(out, p.Masked())
+	}
+	return out
+}()
+
+// selfHostedSyntheticPrefixes contains non-routable ranges used by local TUN
+// clients as synthetic DNS answers. Managed deployments keep these blocked;
+// self-hosted clients must be able to dial them so mihomo/Clash-style fake-IP
+// routing can translate the connection back to the intended provider host.
+var selfHostedSyntheticPrefixes = func() []netip.Prefix {
+	raw := []string{
+		"198.18.0.0/15",       // RFC 2544 benchmarking; common fake-IP IPv4 pool
+		"fdfe:dcba:9876::/64", // common mihomo fake-IP IPv6 pool
 	}
 	out := make([]netip.Prefix, 0, len(raw))
 	for _, s := range raw {
@@ -260,11 +279,20 @@ func checkAddr(addr netip.Addr, host, port string, cfg Config) error {
 		}
 	}
 
+	for _, p := range selfHostedSyntheticPrefixes {
+		if p.Contains(addr) {
+			if !cfg.ManagedMode {
+				return nil
+			}
+			return fmt.Errorf("ssrf: destination %s (for host %q) is in blocked range %s", addr, host, p)
+		}
+	}
+
 	for _, p := range blockedPrefixes {
 		if p.Contains(addr) {
-			// These ranges (link-local/metadata, ULA, multicast, unspecified,
-			// documentation) are absolutely blocked — no allowlist escape in
-			// any mode.
+			// These ranges (link-local/metadata, ULA outside the narrow local-TUN
+			// exception, multicast, unspecified, documentation) are absolutely
+			// blocked — no allowlist escape in any mode.
 			return fmt.Errorf("ssrf: destination %s (for host %q) is in blocked range %s", addr, host, p)
 		}
 	}

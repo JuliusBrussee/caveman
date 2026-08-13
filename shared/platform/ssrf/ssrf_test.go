@@ -113,6 +113,24 @@ var validateURLCases = []urlCase{
 		wantErr: true,
 	},
 	{
+		name:    "benchmark fake-IP network allowed self-hosted",
+		url:     "https://198.18.0.1/api",
+		cfg:     selfHostedCfg,
+		wantErr: false,
+	},
+	{
+		name:    "mihomo fake-IP IPv6 allowed self-hosted",
+		url:     "https://[fdfe:dcba:9876::2c]/api",
+		cfg:     selfHostedCfg,
+		wantErr: false,
+	},
+	{
+		name:    "mihomo fake-IP IPv6 blocked managed",
+		url:     "https://[fdfe:dcba:9876::2c]/api",
+		cfg:     managedCfg,
+		wantErr: true,
+	},
+	{
 		name:    "NAT64 private-network pivot blocked",
 		url:     "https://[64:ff9b::a00:1]/api",
 		cfg:     managedCfg,
