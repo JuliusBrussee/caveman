@@ -15,6 +15,16 @@ const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.cla
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
+function removeFlag(path) {
+  try {
+    fs.unlinkSync(path);
+  } catch (error) {
+    if (process.env.CAVEMAN_DEBUG === '1' && error.code !== 'ENOENT') {
+      console.error(`caveman: failed to remove flag ${path}: ${error.message}`);
+    }
+  }
+}
+
 // Apply per-agent model overrides from env vars before emitting rules.
 // Best-effort: any error is swallowed so SessionStart is never blocked.
 try {
@@ -50,7 +60,7 @@ if (source !== 'startup') {
 // "off" mode — skip activation entirely, don't write flag or emit rules
 if (mode === 'off') {
   recordModeChange(claudeDir, null); // #601: timestamped transition log
-  try { fs.unlinkSync(flagPath); } catch (e) {}
+  removeFlag(flagPath);
   process.stdout.write('OK');
   process.exit(0);
 }

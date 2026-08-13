@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, delimiter } from "node:path";
@@ -14,6 +14,7 @@ const cliDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = process.env.CAVEMAN_TEST_CLI ?? join(cliDir, "dist", "index.js");
 const packageParent = join(cliDir, "..");
 const publicRoot = existsSync(join(packageParent, "proxy")) ? packageParent : join(packageParent, "..");
+const goToolchainAvailable = spawnSync("go", ["version"], { stdio: "ignore" }).status === 0;
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -66,7 +67,8 @@ async function stopChild(child) {
   await waitForExit(child, 1_500);
 }
 
-test("real proxy wraps stub agent through stub upstream and records SQLite telemetry", async () => {
+test("real proxy wraps stub agent through stub upstream and records SQLite telemetry", async (t) => {
+  if (!process.env.CAVEMAN_TEST_PROXY_BIN && !goToolchainAvailable) return t.skip("go toolchain not found");
   const upstream = await stubUpstream();
   const home = mkdtempSync(join(tmpdir(), "cave-agent-home-"));
   const caveHome = mkdtempSync(join(tmpdir(), "cave-agent-store-"));

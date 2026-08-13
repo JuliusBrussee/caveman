@@ -24,7 +24,7 @@ mechanism, and Claude Code's native subagents give it for free.
 
 > Codex is not wired yet. It needs an MCP shim that must pass a transcript-isolation
 > test before it ships, or it would be FastContext-in-name-only. See
-> [`docs/FASTCONTEXT_EXPLORER_SPEC.md`](../../docs/FASTCONTEXT_EXPLORER_SPEC.md).
+> Internal reference: `docs/FASTCONTEXT_EXPLORER_SPEC.md` (source repository only).
 
 ## What it honestly claims
 
@@ -51,4 +51,4 @@ eval gate) an eval-validated delta.
 gateway parses tool-call blocks (it shares headroom with `context-compression`, so it
 is deduped against it — its distinct value is the resolution/quality axis and the
 measured cost split, not new headroom dollars). See ADR
-[`0018-fastcontext-exploration-offload`](../../docs/decisions/0018-fastcontext-exploration-offload.md).
+Internal ADR `0018-fastcontext-exploration-offload` (source repository only).

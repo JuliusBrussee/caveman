@@ -3,7 +3,8 @@
 The consent-gated half of `caveman learn`. The analyzer (the Go proxy) **measures**
 where an agent's tokens go and writes a ranked plan; this skill is what an agent
 loads to **act** on that plan — proposing each fix and applying it only with the
-user's per-edit yes. It is the loop-closer the [learn spec](../../../docs/CAVEMAN_LEARN_SPEC.md) §10
+user's per-edit yes. It is the loop-closer from internal learn spec
+`docs/CAVEMAN_LEARN_SPEC.md` §10 (source repository only)
 describes, plus the new `cavemem_offload` move.
 
 ## Layout

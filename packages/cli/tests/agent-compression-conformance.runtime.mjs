@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createNetServer, connect } from "node:net";
@@ -30,6 +30,7 @@ const protocolCapabilities = {
 const responseSentinel = "CAVEMAN_CONFORMANCE_OK";
 const payloadMarker = "CAVEMAN_CONFORMANCE_PAYLOAD";
 const longPrompt = Array.from({ length: 260 }, (_, i) => `${payloadMarker} section ${i % 7}: preserve this repeated operator context.`).join("\n");
+const goToolchainAvailable = spawnSync("go", ["version"], { stdio: "ignore" }).status === 0;
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -259,7 +260,8 @@ function writeHomeConfig(home, id) {
   }
 }
 
-test("every shipped agent profile preserves protocol-correct recovery behavior through the real compression engine", { timeout: 90_000 }, async () => {
+test("every shipped agent profile preserves protocol-correct recovery behavior through the real compression engine", { timeout: 90_000 }, async (t) => {
+  if (!process.env.CAVEMAN_TEST_PROXY_BIN && !goToolchainAvailable) return t.skip("go toolchain not found");
   assert.deepEqual(profiles.map((profile) => profile.id).sort(), expectedProfiles, "new profiles must join the conformance matrix");
   assert.deepEqual(Object.keys(protocolCapabilities).sort(), expectedProfiles, "every profile needs an explicit recovery capability");
   const upstream = await conformanceUpstream();

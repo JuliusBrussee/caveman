@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,12 +13,14 @@ const cliDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = process.env.CAVEMAN_TEST_CLI ?? join(cliDir, "dist", "index.js");
 const packageParent = join(cliDir, "..");
 const publicRoot = existsSync(join(packageParent, "proxy")) ? packageParent : join(packageParent, "..");
+const goToolchainAvailable = spawnSync("go", ["version"], { stdio: "ignore" }).status === 0;
 
 function reportFrom(output) {
   return JSON.parse(output.trim());
 }
 
-test("seeded Claude root sits on the real three-session recurrence threshold", async () => {
+test("seeded Claude root sits on the real three-session recurrence threshold", async (t) => {
+  if (!process.env.CAVEMAN_TEST_PROXY_BIN && !goToolchainAvailable) return t.skip("go toolchain not found");
   const root = mkdtempSync(join(tmpdir(), "cave-claude-root-"));
   const canonicalRoot = mkdtempSync(join(tmpdir(), "cave-claude-canonical-"));
   const caveHome = mkdtempSync(join(tmpdir(), "cave-learn-home-"));

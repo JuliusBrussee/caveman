@@ -15,6 +15,16 @@ const flagPath = path.join(claudeDir, '.caveman-active');
 // (/caveman-commit etc.) so the next ordinary prompt can restore it (#599).
 const prevPath = path.join(claudeDir, '.caveman-active.prev');
 
+function removeFlag(path) {
+  try {
+    fs.unlinkSync(path);
+  } catch (error) {
+    if (process.env.CAVEMAN_DEBUG === '1' && error.code !== 'ENOENT') {
+      console.error(`caveman: failed to remove flag ${path}: ${error.message}`);
+    }
+  }
+}
+
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
 // Abnormal stdin close (broken pipe, parent crash) emits 'error'; without a
@@ -120,8 +130,8 @@ process.stdin.on('end', () => {
       safeWriteFlag(flagPath, mode);
     } else if (change && change.action === 'clear') {
       recordModeChange(claudeDir, null); // #601
-      try { fs.unlinkSync(flagPath); } catch (e) {}
-      try { fs.unlinkSync(prevPath); } catch (e) {}
+      removeFlag(flagPath);
+      removeFlag(prevPath);
     }
 
     // Per-turn reinforcement: emit a short reminder when caveman is active.
@@ -142,14 +152,14 @@ process.stdin.on('end', () => {
     // it, or deactivate if caveman wasn't active then.
     if (activeMode && INDEPENDENT_MODES.has(activeMode) && !setIndependentThisTurn) {
       const prev = readFlag(prevPath);
-      try { fs.unlinkSync(prevPath); } catch (e) {}
+      removeFlag(prevPath);
       if (prev && !INDEPENDENT_MODES.has(prev)) {
         recordModeChange(claudeDir, prev); // #601
         safeWriteFlag(flagPath, prev);
         activeMode = prev;
       } else {
         recordModeChange(claudeDir, null); // #601
-        try { fs.unlinkSync(flagPath); } catch (e) {}
+        removeFlag(flagPath);
         activeMode = null;
       }
     }

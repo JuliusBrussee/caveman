@@ -9,4 +9,4 @@ why "adding an agent is a pure data change" is only true for the declarative tie
 surfaces, and the fail-closed compile invariants (catalog-priced models, derived CI pins,
 verification staleness).
 
-Deeper narrative: [`../../docs/UNIVERSAL_AGENT_WRAP_SPEC.md`](../../docs/UNIVERSAL_AGENT_WRAP_SPEC.md).
+Deeper narrative: `docs/UNIVERSAL_AGENT_WRAP_SPEC.md` (internal source repository only).

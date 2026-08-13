@@ -1,6 +1,6 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -17,12 +17,16 @@ const proxyBin = join(suiteDir, "caveman-proxy");
 const proxyPackage = existsSync(join(repoRoot, "public", "proxy"))
   ? "./public/proxy/cmd/caveman-proxy"
   : "./proxy/cmd/caveman-proxy";
+const goToolchainAvailable = spawnSync("go", ["version"], { stdio: "ignore" }).status === 0;
+let proxyBuilt = false;
 
 before(() => {
+  if (!goToolchainAvailable) return;
   execFileSync("go", ["build", "-o", proxyBin, proxyPackage], {
     cwd: repoRoot,
     stdio: "pipe",
   });
+  proxyBuilt = true;
 });
 
 after(() => rmSync(suiteDir, { recursive: true, force: true }));
@@ -141,7 +145,8 @@ function baseEnv(home, binDir, port, binary = proxyBin) {
   };
 }
 
-test("leftover record proxy is SIGTERM-restarted into live compress mode", async () => {
+test("leftover record proxy is SIGTERM-restarted into live compress mode", async (t) => {
+  if (!proxyBuilt) return t.skip("go toolchain not found");
   const dir = mkdtempSync(join(suiteDir, "flip-"));
   const home = join(dir, "home");
   const binDir = join(dir, "bin");
@@ -179,7 +184,8 @@ test("leftover record proxy is SIGTERM-restarted into live compress mode", async
   }
 });
 
-test("same-mode proxy is restarted when the recovery gate is stale", async () => {
+test("same-mode proxy is restarted when the recovery gate is stale", async (t) => {
+  if (!proxyBuilt) return t.skip("go toolchain not found");
   const dir = mkdtempSync(join(suiteDir, "gate-flip-"));
   const home = join(dir, "home");
   const binDir = join(dir, "bin");
@@ -218,7 +224,8 @@ test("same-mode proxy is restarted when the recovery gate is stale", async () =>
   }
 });
 
-test("another live session marker prevents restart and preserves running mode", async () => {
+test("another live session marker prevents restart and preserves running mode", async (t) => {
+  if (!proxyBuilt) return t.skip("go toolchain not found");
   const dir = mkdtempSync(join(suiteDir, "held-"));
   const home = join(dir, "home");
   const binDir = join(dir, "bin");
@@ -248,7 +255,8 @@ test("another live session marker prevents restart and preserves running mode", 
   }
 });
 
-test("another live session with incompatible recovery gate makes new agent run direct", async () => {
+test("another live session with incompatible recovery gate makes new agent run direct", async (t) => {
+  if (!proxyBuilt) return t.skip("go toolchain not found");
   const dir = mkdtempSync(join(suiteDir, "held-gate-"));
   const home = join(dir, "home");
   const binDir = join(dir, "bin");
@@ -278,7 +286,8 @@ test("another live session with incompatible recovery gate makes new agent run d
   }
 });
 
-test("restart timeout never escalates to SIGKILL and still launches agent", async () => {
+test("restart timeout never escalates to SIGKILL and still launches agent", async (t) => {
+  if (!proxyBuilt) return t.skip("go toolchain not found");
   const dir = mkdtempSync(join(suiteDir, "timeout-"));
   const home = join(dir, "home");
   const binDir = join(dir, "bin");
@@ -332,7 +341,8 @@ process.exit(0);
   }
 });
 
-test("generation takeover aborts signal and reports successor live mode", async () => {
+test("generation takeover aborts signal and reports successor live mode", async (t) => {
+  if (!proxyBuilt) return t.skip("go toolchain not found");
   const dir = mkdtempSync(join(suiteDir, "takeover-"));
   const home = join(dir, "home");
   const binDir = join(dir, "bin");
@@ -391,7 +401,8 @@ process.exit(0);
   }
 });
 
-test("foreign listener is never signalled and gets owner-unknown banner", async () => {
+test("foreign listener is never signalled and gets owner-unknown banner", async (t) => {
+  if (!proxyBuilt) return t.skip("go toolchain not found");
   const dir = mkdtempSync(join(suiteDir, "foreign-"));
   const home = join(dir, "home");
   const binDir = join(dir, "bin");
