@@ -396,7 +396,7 @@ func isJSONDelimiter(c byte) bool {
 // path. S4 is the honest class: it is the class defined as altering model-visible
 // bytes, and its safety.Info.RequiresCCR forces the original into the recovery
 // store before the transform may ship. That recovery requirement is exactly the
-// local-wrap promotion clause of ADR 0024 §2 (local wrap: recovery + CCR), the
+// local-wrap promotion clause (local wrap: recovery + CCR), the
 // only clause under which this lever may ever default on. Unlike TOON it is not
 // lossless-to-model: the dropped annotations are recoverable from CCR, never from
 // the emitted bytes.

@@ -340,8 +340,8 @@ type Server struct {
 }
 
 // liveZoneCompressionAllowed reports whether subscription- or OAuth-classified
-// traffic may take the SAME live-zone compression path PAYG traffic uses. Per
-// ADR 0031 local compression is NOT account-gated: no login, no entitlement, and
+// traffic may take the SAME live-zone compression path PAYG traffic uses. Local
+// compression is NOT account-gated: no login, no entitlement, and
 // no seat is required, because compression is the free adoption surface. It is on
 // by default and the operator turns it off with `subscription_compress: off`; any
 // unrecognized value fails closed to off here as well as in the config loader.
@@ -420,7 +420,7 @@ type Config struct {
 	// SubscriptionCompress is the operator off-switch for subscription live-zone
 	// compression: empty/"live_zone" allow it, "off" (and any unknown value) fail
 	// closed to S0 passthrough. It is the ONLY policy input — there is no account
-	// gate (ADR 0031).
+	// gate.
 	SubscriptionCompress string
 	// ToolSchemaStrip enables the tool-schema annotation strip when it is exactly
 	// "annotations". It is default OFF and additionally requires the same

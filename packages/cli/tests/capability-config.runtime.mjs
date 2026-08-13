@@ -105,7 +105,7 @@ test("project overlay cannot change mode or forge account state at start door", 
     const out = await runStart(harness);
     assert.equal(out.code, 0, out.stderr);
     assert.equal(out.proxyEnv.mode, "compress");
-    // ADR 0031: there is no account signal in the child env at all any more.
+    // There is no account signal in the child env at all any more.
     assert.equal(out.proxyEnv.entitled, "<unset>");
     const persisted = JSON.parse(readFileSync(harness.configPath, "utf8"));
     assert.equal(persisted.wrapEntitlement.entitled, true);

@@ -26,7 +26,7 @@ func hashText(text string) string {
 // learn.go is the local setup profiler. It turns config files and real session
 // history into a Cave Score + a ranked list of token sinks (the `caveman.learn.v1`
 // contract). Class A sinks are asserted as facts; Class B sinks are softened with
-// their evidence attached. Everything is `inferred`. See docs/CAVEMAN_LEARN_SPEC.md.
+// their evidence attached. Everything is `inferred`.
 
 // Cave Score weights + caps (documented in one place; mirror the cloud "start at
 // 100, subtract capped penalties" mechanic). Higher = leaner.

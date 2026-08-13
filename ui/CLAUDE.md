@@ -1,7 +1,7 @@
-# public/ui — minimal shared React utilities
+# ui — minimal shared React utilities
 
 Single-file library (`src/index.ts`). Exports two things: `cx()` (className joiner) and `surface`
-(Tailwind class constant for bordered card surfaces). Consumed by `cloud/web`; built to `dist/` via `tsc`.
+(Tailwind class constant for bordered card surfaces). Consumed by the web dashboard; built to `dist/` via `tsc`.
 
 ## Layout
 
@@ -22,4 +22,4 @@ Single-file library (`src/index.ts`). Exports two things: `cx()` (className join
 - Package is deliberately thin — do not add component files or third-party deps without strong reason
 - No UI components exist yet; `surface` is a raw Tailwind string, not a React component
 
-See ../../CLAUDE.md (root) · ../../docs/design.md
+See ../../CLAUDE.md (root)

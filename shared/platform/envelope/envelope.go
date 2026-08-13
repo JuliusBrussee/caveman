@@ -1,6 +1,6 @@
-// Package envelope implements envelope encryption for artifact/payload bodies,
-// per ADR 0009 (KMS-compatible envelope encryption with separate secrets/payload
-// keys).
+// Package envelope implements envelope encryption for artifact/payload bodies:
+// KMS-compatible envelope encryption with separate secrets/payload
+// keys.
 //
 // Each object is encrypted with a freshly-generated 256-bit data key
 // (AES-256-GCM). The data key is then wrapped (encrypted) by the master key via

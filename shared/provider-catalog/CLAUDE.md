@@ -1,4 +1,4 @@
-# public/shared/provider-catalog — provider + model pricing catalog
+# shared/provider-catalog — provider + model pricing catalog
 
 Single source of truth for token prices (input, output, cache-read, cache-write, reasoning,
 batch) consumed by the gateway and optimizer for cost accounting and savings math. No runtime
@@ -34,4 +34,4 @@ code — data + schema only.
 - `batch_discount_fraction: 0.50` means 50 % off, not 50 % of the listed rate — keep that interpretation consistent.
 - `build`/`lint`/`test` scripts in `package.json` only parse the schema JSON; they do NOT validate catalog YAML.
 
-See ../../../CLAUDE.md (root) · ../../../docs/design.md
+See ../../../CLAUDE.md (root)

@@ -471,7 +471,7 @@ func TestLiveZoneRequiresPrefixStabilizer(t *testing.T) {
 	})
 }
 
-// TestOAuthLiveZoneNeedsNoAccount pins ADR 0031 for the OAuth classification:
+// TestOAuthLiveZoneNeedsNoAccount pins the invariant for the OAuth classification:
 // OAuth-authenticated traffic compresses with no Caveman account, but still fails
 // closed without the agent's own caveman_retrieve MCP recovery — these paths are
 // marker-only, so without it the elided detail would be unreachable.

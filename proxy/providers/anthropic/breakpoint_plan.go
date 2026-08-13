@@ -14,9 +14,9 @@ import (
 // It is deliberately NOT in the gateway's cacheOptimizerIDs set. Anthropic-direct
 // breakpoints ARE the provider_causal_cache method, so adding this id there would
 // start minting cache savings for planner-placed breakpoints. Minting requires the
-// exact provider/method/optimizer tuple discipline in docs/SAVINGS_ACCOUNTING.md,
-// and earning it is a deliberate later change with its own review. Until then the
-// planner mints nothing: no tokens, no ratio, no dollars.
+// exact provider/method/optimizer tuple discipline, and earning it is a
+// deliberate later change with its own review. Until then the planner mints
+// nothing: no tokens, no ratio, no dollars.
 const BreakpointPlanID = "cache-breakpoint-plan"
 
 // maxCacheBreakpoints is Anthropic's hard cap on cache_control markers per

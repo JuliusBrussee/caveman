@@ -21,7 +21,7 @@ import (
 // budget-bounded walk so the base scan's timing and output stay byte-identical
 // when `--retro` is absent.
 //
-// HONESTY (docs/SAVINGS_ACCOUNTING.md §1.2): everything here is `inferred` and
+// HONESTY: everything here is `inferred` and
 // sums only over sessions actually read. Provider usage is counted once per API
 // response (message id), never once per transcript line. WouldCutTokens counts
 // each unique tool-output once plus a conservative lower bound for observed

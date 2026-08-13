@@ -6,8 +6,7 @@ agent-turn request each installed coding harness sends — the prefix (system
 prompt + tool schemas) that re-ships with every call a subagent makes.
 
 The word *verified* is deliberately absent from this tool's vocabulary: in this
-repo it is a reserved savings-accounting term
-(`docs/SAVINGS_ACCOUNTING.md`). Recipes and conventions that have been checked
+repo it is a reserved savings-accounting term. Recipes and conventions that have been checked
 are called **confirmed**.
 
 ## What runs

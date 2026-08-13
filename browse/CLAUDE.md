@@ -1,4 +1,4 @@
-# public/browse — `caveman-browse` browser driver
+# browse — `caveman-browse` browser driver
 
 Local, agent-facing browser interaction for the open Caveman surface. It serves
 stdio MCP tools that read a real Chrome accessibility tree, compress it with the

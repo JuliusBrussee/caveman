@@ -157,7 +157,7 @@ test("connected run refreshes at most once per ISO week and skips wall/denied st
     blocked.wrapEntitlementRunRefreshWeek = "2000-01-03";
     writeFileSync(f.configPath, JSON.stringify(blocked), { mode: 0o600 });
     const statePath = join(f.env.CAVEMAN_HOME, "run", `${new URL(f.env.CAVE_GATEWAY_URL).port}.json`);
-    // The mode stays compress: per ADR 0031 a seat wall or a denied entitlement no
+    // The mode stays compress: a seat wall or a denied entitlement no
     // longer downgrades the local proxy, so the running state must still match.
     const state = JSON.parse(readFileSync(statePath, "utf8"));
     state.recovery_via_mcp = false;

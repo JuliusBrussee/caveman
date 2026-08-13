@@ -248,7 +248,7 @@ var migrations = []string{
 // without busy_timeout a contender returns SQLITE_BUSY instead of waiting — a
 // failed lookup reads as a cache miss, and the gateway then forwards the
 // client's ORIGINAL bytes for a frozen block it already compressed, flipping the
-// upstream prefix mid-conversation (ADR 0023 Decision 5).
+// upstream prefix mid-conversation.
 func sqliteDSN(path string) string {
 	const pragmas = "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	if path == ":memory:" {

@@ -4,7 +4,6 @@ package store
 // `caveman learn report --json` and rendered into the static HTML report. It is the
 // local setup-profiler analogue of the cloud Cave Plan: a Cave Score plus a flat,
 // ranked list of token sinks. Everything here is `inferred` — learn never verifies.
-// See docs/CAVEMAN_LEARN_SPEC.md.
 
 const (
 	learnSchema = "caveman.learn.v1"

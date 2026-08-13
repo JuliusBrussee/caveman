@@ -197,7 +197,7 @@ test("same-mode proxy is restarted when the recovery gate is stale", async (t) =
   const original = await startRealProxy(home, port, "compress");
   let successorPid = original.state.pid;
   try {
-    assert.equal(original.state.wrap_entitled, undefined, "no account signal in run state (ADR 0031)");
+    assert.equal(original.state.wrap_entitled, undefined, "no account signal in run state");
     assert.equal(original.state.recovery_via_mcp, false);
     const out = await runCli(cli, ["wrap", "claude"], {
       env: baseEnv(home, binDir, port),

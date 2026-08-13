@@ -506,7 +506,7 @@ func TestStandaloneCompressMode_RealEngine_QueryAware(t *testing.T) {
 	}
 }
 
-// TestStandaloneSubscriptionCompress_NoAccountRequired proves ADR 0031 end to end
+// TestStandaloneSubscriptionCompress_NoAccountRequired proves the invariant end to end
 // with the real engine: a subscription-authenticated coding-agent request takes
 // live-zone compression with NO account signal in the environment at all, while
 // `record` mode stays byte-identical pass-through. The persisted row is

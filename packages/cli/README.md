@@ -206,6 +206,4 @@ Official Skills CLI telemetry behavior also applies; set
 Dated local smoke on Matt Pocock's 35-skill repository converted 27 profitable
 skills and left eight safely as text. Sum across one invocation of each
 converted skill: 32,314 → 9,537 estimated tokens (−70% `inferred`). This is
-estimator output, not provider-reported billing or a skill-quality benchmark;
-see internal research note `docs/research/skill-pixel-install-2026-08-09.md`
-(source repository only).
+estimator output, not provider-reported billing or a skill-quality benchmark.

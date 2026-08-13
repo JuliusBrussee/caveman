@@ -80,7 +80,7 @@ func TestLoad_CompressModeAccepted(t *testing.T) {
 }
 
 // A bare config leaves the subscription off-switch at its permissive default:
-// per ADR 0031 local compression needs no account, so an empty value means
+// local compression needs no account, so an empty value means
 // "allowed" and only an explicit "off" (or an unknown value) closes it.
 func TestLoad_SubscriptionCompressDefaultsToAllowed(t *testing.T) {
 	t.Setenv("CAVEMAN_SUBSCRIPTION_COMPRESS", "")

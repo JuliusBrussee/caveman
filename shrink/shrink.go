@@ -3,8 +3,7 @@
 // and truncates descriptions while preserving the structural selection surface
 // (tool and parameter names, types, enums, required) verbatim. Description
 // reduction is model-visible and lossy, so this structural invariant does not
-// guarantee same-tool behavior. Everything it reports is `inferred` (PRD
-// docs/prd/09-caveman-shrink.md).
+// guarantee same-tool behavior. Everything it reports is `inferred`.
 package shrink
 
 import (
