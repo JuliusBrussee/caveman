@@ -87,8 +87,8 @@ class TestValidateIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             orig = Path(tmp) / "original.md"
             comp = Path(tmp) / "compressed.md"
-            orig.write_text("Run `rm -rf /` to delete")
-            comp.write_text("Run  to delete")
+            orig.write_text("Run `rm -rf /` to delete", encoding="utf-8")
+            comp.write_text("Run  to delete", encoding="utf-8")
             result = validate(orig, comp)
             self.assertFalse(result.is_valid)
             self.assertTrue(any("Inline code lost" in e for e in result.errors))

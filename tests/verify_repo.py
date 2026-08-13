@@ -48,6 +48,7 @@ def run(
         env=merged_env,
         text=True,
         encoding="utf-8",
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         check=False,
     )
@@ -330,7 +331,7 @@ def verify_hook_install_flow() -> None:
             "statusLine": {"type": "command", "command": "bash /tmp/existing-statusline.sh"},
             "hooks": {"Notification": [{"hooks": [{"type": "command", "command": "echo keep-me"}]}]},
         }
-        (claude_dir / "settings.json").write_text(json.dumps(existing_settings, indent=2) + "\n")
+        (claude_dir / "settings.json").write_text(json.dumps(existing_settings, indent=2) + "\n", encoding="utf-8")
         hook_env = {"HOME": shell_path(home), "CLAUDE_CONFIG_DIR": shell_path(claude_dir)}
 
         run(["bash", "src/hooks/install.sh"], env=hook_env)
@@ -381,7 +382,7 @@ def verify_hook_install_flow() -> None:
         ensure(not (claude_dir / ".caveman-active").exists(), "/caveman with off default should not write flag")
 
         # Reset back to full for subsequent tests
-        (claude_dir / ".caveman-active").write_text("full")
+        (claude_dir / ".caveman-active").write_text("full", encoding="utf-8")
 
         run(
             ["node", "src/hooks/caveman-mode-tracker.js"],
@@ -417,7 +418,7 @@ def verify_hook_install_flow() -> None:
         )
         ensure(not (claude_dir / ".caveman-active").exists(), "normal mode should remove flag file")
 
-        (claude_dir / ".caveman-active").write_text("wenyan-ultra")
+        (claude_dir / ".caveman-active").write_text("wenyan-ultra", encoding="utf-8")
         statusline = run(
             ["bash", "src/hooks/caveman-statusline.sh"],
             env=hook_env,
