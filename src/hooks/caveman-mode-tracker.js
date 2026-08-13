@@ -25,6 +25,72 @@ function removeFlag(path) {
   }
 }
 
+// Per-level directives. Every level used to inject one identical sentence, so
+// `/caveman ultra` mid-session moved the statusline badge and changed nothing
+// about the output — the level-specific rules are emitted ONLY by the
+// SessionStart hook, i.e. only for whatever level the session opened at.
+const LEVEL_DIRECTIVE = {
+  lite: 'Cut filler, pleasantries and hedging. Keep articles and whole sentences.',
+  full: 'Drop articles, filler, pleasantries, hedging. Fragments OK. ' +
+        'Short synonyms. No tool-call narration, no decorative tables.',
+  ultra: 'Fragments only. One word where one word carries it. Each fact once. ' +
+         'Drop conjunctions where cause-then-effect stays unambiguous. ' +
+         'No invented abbreviations, no arrows — both cost tokens and clarity.',
+  'wenyan-lite': 'Semi-classical Chinese register. Drop filler and hedging, keep grammar.',
+  wenyan: 'Full 文言文. Classical sentence patterns, subjects often omitted.',
+  'wenyan-full': 'Full 文言文. Classical sentence patterns, subjects often omitted.',
+  'wenyan-ultra': 'Extreme classical Chinese. Maximum compression, ultra terse.'
+};
+
+// Exemptions, restated every turn, because this is where caveman loses. Another
+// active instruction set (a task-start protocol, a review checklist, an audit
+// block) demands fixed-format multi-line output; caveman demands compression;
+// the model resolves the clash by dropping one of them. Neither should be
+// dropped — they govern different things. A required block is a structured
+// artifact like a code block and gets the same verbatim treatment.
+const VERBATIM_CLAUSE =
+  'Verbatim, never compressed: code, commit messages, security warnings, ' +
+  'error strings, and any fixed-format block another active instruction ' +
+  'requires (protocol blocks, gates, checklists, audit blocks) — including ' +
+  'their field labels. Compress the prose around such a block, not the block.';
+
+// The level's own ruleset, filtered out of SKILL.md — the same source of truth
+// the SessionStart hook reads, with the same candidate paths. Emitted only on a
+// level CHANGE, so an ordinary turn still costs one short line. Returns '' on
+// any miss: a standalone hook install may have no skills dir at all, and a
+// missing ruleset must never break a turn.
+function readLevelRuleset(modeLabel) {
+  const candidates = [];
+  if (process.env.CLAUDE_PLUGIN_ROOT) {
+    candidates.push(path.join(process.env.CLAUDE_PLUGIN_ROOT, 'skills', 'caveman', 'SKILL.md'));
+  }
+  candidates.push(
+    path.join(__dirname, '..', '..', 'skills', 'caveman', 'SKILL.md'),
+    path.join(__dirname, '..', 'skills', 'caveman', 'SKILL.md')
+  );
+
+  for (const candidate of candidates) {
+    try {
+      const body = fs.readFileSync(candidate, 'utf8').replace(/^---[\s\S]*?---\s*/, '');
+      return body.split('\n').reduce((acc, line) => {
+        const row = line.match(/^\|\s*\*\*(\S+?)\*\*\s*\|/);
+        if (row) {
+          if (row[1] === modeLabel) acc.push(line);
+          return acc;
+        }
+        const example = line.match(/^- (\S+?):\s/);
+        if (example) {
+          if (example[1] === modeLabel) acc.push(line);
+          return acc;
+        }
+        acc.push(line);
+        return acc;
+      }, []).join('\n').trim();
+    } catch (e) { /* try next candidate */ }
+  }
+  return '';
+}
+
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
 // Abnormal stdin close (broken pipe, parent crash) emits 'error'; without a
@@ -114,8 +180,14 @@ process.stdin.on('end', () => {
     // "Level persist until changed or session end", and a one-shot skill
     // invocation should not count as "changed" forever.
     let setIndependentThisTurn = false;
+    // Set when THIS prompt moved the level. Drives the one-time re-emission of
+    // the new level's ruleset below.
+    let switchedTo = null;
     if (change && change.action === 'set') {
       const mode = change.mode;
+      if (!INDEPENDENT_MODES.has(mode) && readFlag(flagPath) !== mode) {
+        switchedTo = mode;
+      }
       if (INDEPENDENT_MODES.has(mode)) {
         // Save the prose mode being displaced — but never overwrite an
         // already-saved one with another independent mode (/caveman-commit
@@ -189,7 +261,21 @@ process.stdin.on('end', () => {
     }
 
     if (activeMode && !INDEPENDENT_MODES.has(activeMode) && getDefaultMode(data.cwd) !== 'off') {
-      context.push(`CAVEMAN MODE ACTIVE (${activeMode}) — session ruleset applies.`);
+      // 'wenyan' is stored canonically; SKILL.md labels that row wenyan-full.
+      const label = activeMode === 'wenyan' ? 'wenyan-full' : activeMode;
+      context.push(
+        `CAVEMAN MODE ACTIVE (${label}). ` +
+        `${LEVEL_DIRECTIVE[activeMode] || LEVEL_DIRECTIVE.full} ${VERBATIM_CLAUSE}`
+      );
+
+      // Level just changed: re-emit that level's own rules once, so the switch
+      // reaches the model instead of only the flag file and the statusline.
+      if (switchedTo === activeMode) {
+        const ruleset = readLevelRuleset(label);
+        if (ruleset) {
+          context.push(`CAVEMAN LEVEL NOW ${label} — rules for this level:\n${ruleset}`);
+        }
+      }
     }
 
     if (context.length) {
