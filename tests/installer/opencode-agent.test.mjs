@@ -6,9 +6,9 @@
 //   Configuration is invalid at .../cavecrew-reviewer.md
 //   ↳ Expected object | undefined, got ["Read","Grep","Bash"] tools
 //
-// Fix: strip the `tools:` field on copy. These tests prove the helper
-// strips the field, preserves every other frontmatter key and the body,
-// and handles both the inline array form and the multi-line YAML list form.
+// Fix: strip Claude-only fields on copy. These tests prove the helper strips
+// the fields, preserves opencode-compatible frontmatter and the body, and
+// handles both the inline array form and the multi-line YAML list form.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -46,7 +46,7 @@ body line two
   assert.doesNotMatch(fm, /^tools:/m, '`tools` field must be absent');
   assert.match(fm, /^name: test-agent$/m, '`name` preserved');
   assert.match(fm, /^description: short description$/m, '`description` preserved');
-  assert.match(fm, /^model: haiku$/m, '`model` preserved');
+  assert.doesNotMatch(fm, /^model:/m, 'bare Claude `model` alias must be absent');
   assert.match(out, /^body line one$/m, 'body preserved');
   assert.match(out, /^body line two$/m, 'body preserved');
 });
@@ -68,7 +68,7 @@ body
   assert.doesNotMatch(fm, /^tools:/m, '`tools` field must be absent');
   assert.doesNotMatch(fm, /^\s+- Read$/m, '`tools` list items must be absent');
   assert.match(fm, /^name: test-agent$/m, '`name` preserved');
-  assert.match(fm, /^model: haiku$/m, '`model` preserved');
+  assert.doesNotMatch(fm, /^model:/m, 'bare Claude `model` alias must be absent');
 });
 
 // ── Folded `description: >` block must NOT be eaten ──────────────────────
@@ -89,7 +89,31 @@ body
   assert.match(fm, /^description: >$/m, 'folded scalar header preserved');
   assert.match(fm, /Diff\/branch\/file reviewer/, 'folded scalar body preserved');
   assert.match(fm, /no scope creep/, 'second folded line preserved');
-  assert.match(fm, /^model: haiku$/m);
+  assert.doesNotMatch(fm, /^model:/m);
+});
+
+test('strips bare Claude model alias from frontmatter', () => {
+  const src = `---
+name: test-agent
+model \t: \thaiku \t
+---
+body
+`;
+  const out = stripOpencodeAgentTools(src);
+  const fm = frontmatter(out);
+  assert.doesNotMatch(fm, /^model[ \t]*:/m, '`model` field must be absent');
+  assert.match(fm, /^name: test-agent$/m, '`name` preserved');
+  assert.match(out, /^body$/m, 'body preserved');
+});
+
+test('preserves provider-qualified opencode model ID', () => {
+  const src = `---
+name: test-agent
+model: anthropic/claude-haiku-4-5
+---
+body
+`;
+  assert.equal(stripOpencodeAgentTools(src), src);
 });
 
 // ── No frontmatter: pass content through untouched ───────────────────────
@@ -98,11 +122,11 @@ test('returns input unchanged when no frontmatter fence', () => {
   assert.equal(stripOpencodeAgentTools(src), src);
 });
 
-// ── No `tools:` field: pass content through untouched ────────────────────
-test('returns input unchanged when frontmatter has no `tools:` field', () => {
+// ── No Claude-only fields: pass content through untouched ────────────────
+test('returns input unchanged when frontmatter has no Claude-only fields', () => {
   const src = `---
 name: x
-model: haiku
+model: anthropic/claude-haiku-4-5
 ---
 body
 `;
@@ -135,6 +159,7 @@ test('all shipped cavecrew agent files become opencode-safe after transform (GRE
     const fm = frontmatter(out);
 
     assert.doesNotMatch(fm, /^tools:/m, `${f}: tools field still present after transform`);
+    assert.doesNotMatch(fm, /^model[ \t]*:[ \t]*(?:haiku|sonnet|opus)[ \t]*$/m, `${f}: bare Claude model alias still present after transform`);
     assert.match(fm, /^name: cavecrew-/m, `${f}: name field preserved`);
     assert.match(fm, /^description:/m, `${f}: description field preserved`);
 
@@ -161,6 +186,7 @@ test('installer-equivalent copy writes opencode-safe agent file (issue 386 end-t
       const fm = frontmatter(installed);
       assert.doesNotMatch(fm, /^tools:\s*\[/m, `${f}: array form survived in installed file`);
       assert.doesNotMatch(fm, /^tools:/m, `${f}: tools field survived in installed file`);
+      assert.doesNotMatch(fm, /^model[ \t]*:[ \t]*(?:haiku|sonnet|opus)[ \t]*$/m, `${f}: bare Claude model alias survived in installed file`);
     }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

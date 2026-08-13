@@ -1,7 +1,7 @@
 'use strict';
 
-// Strip the `tools:` field from a Claude-Code-style subagent frontmatter so
-// the file is valid for opencode, whose schema rejects the YAML array form
+// Strip Claude-Code-only fields from subagent frontmatter so the file is valid
+// for opencode, whose schema rejects the YAML array form
 // (`tools: [Read, Grep, Bash]`) with:
 //
 //   Configuration is invalid at .../agents/cavecrew-reviewer.md
@@ -12,8 +12,13 @@
 // which is what the cavecrew subagent prompts already self-restrict against
 // in their body ("Read-only locator", "No `Bash` available", etc.), so
 // dropping the array form is safe.
+//
+// Claude's bare model aliases (`haiku`, `sonnet`, `opus`) are also invalid in
+// opencode, which expects `provider/model-id`. Omitting them makes the subagent
+// inherit the invoking model while preserving qualified opencode model IDs.
 
 const TOOLS_FIELD_RE = /^tools[ \t]*:/;
+const CLAUDE_MODEL_ALIAS_RE = /^model[ \t]*:[ \t]*(?:haiku|sonnet|opus)[ \t]*$/;
 const CONTINUATION_RE = /^[ \t]/;
 const FRONTMATTER_FENCE = '---\n';
 
@@ -33,6 +38,7 @@ function stripOpencodeAgentTools(content) {
       dropping = false;
     }
     if (TOOLS_FIELD_RE.test(line)) { dropping = true; continue; }
+    if (CLAUDE_MODEL_ALIAS_RE.test(line)) continue;
     out.push(line);
   }
 
