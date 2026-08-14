@@ -2,6 +2,7 @@
   "name": "caveman-installer",
   "version": "2.0.0",
   "description": "Caveman installer — detects your AI coding agents and installs caveman for each one.",
+  "keywords": ["pi-package", "pi", "skills", "caveman"],
   "license": "MIT",
   "author": "Julius Brussee",
   "homepage": "https://github.com/JuliusBrussee/caveman",
@@ -35,7 +36,11 @@
     "!**/__pycache__/**",
     "!**/*.py[cod]"
   ],
-  "packageManager": "pnpm@10.14.0",
+  "pi": {
+    "extensions": ["./pi-extension/index.js"],
+    "skills": ["./skills"]
+  },
+  "packageManager": "bun@1.3.14",
   "dependencies": {
     "@caveman-ai/cli": "^1.1.0"
   }

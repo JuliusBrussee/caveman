@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 0,
+  "workspaces": {
+    "": {
+      "name": "caveman-installer",
+      "dependencies": {
+        "@caveman-ai/cli": "^1.1.0",
+      },
+    },
+  },
+  "packages": {
+    "@caveman-ai/cli": ["@caveman-ai/cli@1.1.0", "", { "bin": { "cave": "dist/index.js", "caveman": "dist/index.js" } }, "sha512-Gg/bkNVRgChBTjeZjldQ2UM6+l9XT+CZ/l3U25PA11t5khEfa5HTPE8RJXdKXiMGBhMZInhiWaDnLozHl4oq1Q=="],
+  }
+}
