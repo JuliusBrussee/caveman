@@ -210,6 +210,8 @@ function checkNodeVersion() {
 // install when the user passes `--only <id>`. This stops the installer from
 // firing `npx skills add ...` against agents the user has never installed
 // just because some other tool created `~/.foo` along the way.
+const CURSOR_GLOBAL_SKILLS_DIR = ['.cursor', 'skills'];
+const GLOBAL_SKILLS_FLAG = '-g';
 const PROVIDERS = [
   { id: 'claude',     label: 'Claude Code',         mech: 'claude plugin install',         detect: 'command:claude' },
   { id: 'gemini',     label: 'Gemini CLI',          mech: 'gemini extensions install',     detect: 'command:gemini' },
@@ -220,7 +222,7 @@ const PROVIDERS = [
   // IDE / VS Code-family — extension probes are precise. Cursor/Windsurf also
   // ship CLI binaries; we drop the dir fallback because the dir lingers after
   // uninstall and false-positives heavily.
-  { id: 'cursor',     label: 'Cursor',              mech: 'npx skills add (cursor)',       detect: 'command:cursor||macapp:Cursor', profile: 'cursor' },
+  { id: 'cursor',     label: 'Cursor',              mech: 'npx skills add (cursor)',       detect: 'command:cursor||macapp:Cursor', profile: 'cursor', globalSkillsDir: CURSOR_GLOBAL_SKILLS_DIR },
   { id: 'windsurf',   label: 'Windsurf',            mech: 'npx skills add (windsurf)',     detect: 'command:windsurf||macapp:Windsurf', profile: 'windsurf' },
   { id: 'cline',      label: 'Cline',               mech: 'npx skills add (cline)',        detect: 'vscode-ext:cline',        profile: 'cline' },
   { id: 'continue',   label: 'Continue',            mech: 'npx skills add (continue)',     detect: 'vscode-ext:continue.continue||vscode-ext:continue', profile: 'continue' },
@@ -568,7 +570,7 @@ function installGemini(ctx) {
 }
 
 function installViaSkills(ctx, prov) {
-  const { say, opts, results } = ctx;
+  const { say, note, warn, opts, results } = ctx;
   results.detected++;
   say(`→ ${prov.label} detected`);
   // --skill '*' --yes: skip the upstream skill-selection TUI and confirmation
@@ -582,6 +584,22 @@ function installViaSkills(ctx, prov) {
   // every agent adapter (see issue #389). `--skill '*' -a <agent>` is the
   // documented form for "install every skill into a specific agent".
   const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
+  if (prov.globalSkillsDir) {
+    const globalSkillsDir = path.join(os.homedir(), ...prov.globalSkillsDir);
+    if (opts.dryRun) {
+      note(`  would mkdir -p ${globalSkillsDir}`);
+    } else {
+      try {
+        fs.mkdirSync(globalSkillsDir, { recursive: true });
+      } catch (error) {
+        warn(`  failed to create ${globalSkillsDir}: ${error.message}`);
+        results.failed.push([prov.id, 'global skills directory creation failed']);
+        process.stdout.write('\n');
+        return;
+      }
+    }
+    args.push(GLOBAL_SKILLS_FLAG);
+  }
   const r = runSpawn('npx', args, null, opts.dryRun);
   if (spawnOk(r)) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
