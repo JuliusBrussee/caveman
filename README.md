@@ -389,14 +389,20 @@ No savings percentage is published for `@caveman-ai/agent`. Current evidence is 
 
 One idea. **Agent do more with less.**
 
-| Repo | What it shrinks |
-|------|------|
-| [**caveman**](https://github.com/JuliusBrussee/caveman) *(you here)* | What the agent **says**, and now what it **reads** |
-| [**@caveman-ai/agent**](./packages/agent) *(also here)* | What your production agent **loads, calls, and spends** |
-| [**caveman-code**](https://github.com/JuliusBrussee/caveman-code) | The **whole agent**, end to end |
-| [**cavemem**](https://github.com/JuliusBrussee/cavemem) | What the agent **remembers**, across sessions |
-| [**cavekit**](https://github.com/JuliusBrussee/cavekit) | The **build loop**, spec-driven |
-| [**cavegemma**](https://github.com/JuliusBrussee/finetune-caveman) | The compression **baked into weights** (Gemma fine-tune) |
+| Repo | What it shrinks | Status |
+|------|------|------|
+| [**caveman**](https://github.com/JuliusBrussee/caveman) *(you here)* | What the agent **says**, and now what it **reads** | live |
+| [**caveman-browse**](https://github.com/JuliusBrussee/caveman-browse) | What the agent **sees in the browser** | live |
+| [**@caveman-ai/agent**](./packages/agent) *(also here)* | What your production agent **loads, calls, and spends** | v1 here · standalone v2 in dev |
+| [**cavegemma**](https://github.com/JuliusBrussee/cavegemma) | The compression **baked into weights** (Gemma fine-tune) | labs |
+| [**caveman-code**](https://github.com/JuliusBrussee/caveman-code) | The **whole agent**, end to end | frozen |
+| [**cavemem**](https://github.com/JuliusBrussee/cavemem) | What the agent **remembers**, across sessions | frozen |
+| [**cavekit**](https://github.com/JuliusBrussee/cavekit) | The **build loop**, spec-driven | frozen |
+
+Frozen repos still install and work; they are no longer in active development.
+Their best ideas live on here (cavemem's compressed-memory core ships inside
+caveman; caveman-code's lesson became `caveman wrap` — make the agent you
+already use cheaper instead of replacing it).
 
 ## From `inferred` to `verified`
 
