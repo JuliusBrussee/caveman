@@ -47,7 +47,7 @@ Caveman is three separate installs. Each works alone. Not sure? Start with the s
 **Shorter answers — the skill (MIT).** The caveman skill + slash commands in every supported agent found on your machine. Nothing else.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash
+npx skills add JuliusBrussee/caveman
 ```
 
 **Smaller inputs — Caveman Proxy (BSL-1.1 runtime; MIT CLI).** The `caveman` CLI plus signed local binaries: proxy, engine, MCP recovery, memory — and the optional browse + shrink tools. Then `caveman claude` wraps your agent.
