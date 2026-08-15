@@ -25,7 +25,7 @@ const crypto = require('crypto');
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
 const OWNED = require('./lib/owned-install');
-const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
+const { transformOpencodeAgentFrontmatter } = require('./lib/opencode-agent');
 const PORTABLE = require('./lib/portable-process');
 const PLATFORM_PATHS = require('./lib/platform-paths');
 
@@ -220,7 +220,7 @@ const PROVIDERS = [
   // IDE / VS Code-family — extension probes are precise. Cursor/Windsurf also
   // ship CLI binaries; we drop the dir fallback because the dir lingers after
   // uninstall and false-positives heavily.
-  { id: 'cursor',     label: 'Cursor',              mech: 'npx skills add (cursor)',       detect: 'command:cursor||macapp:Cursor', profile: 'cursor' },
+  { id: 'cursor',     label: 'Cursor',              mech: 'npx skills add (cursor)',       detect: 'command:cursor||macapp:Cursor', profile: 'cursor', globalSkillsDir: ['.cursor', 'skills'] },
   { id: 'windsurf',   label: 'Windsurf',            mech: 'npx skills add (windsurf)',     detect: 'command:windsurf||macapp:Windsurf', profile: 'windsurf' },
   { id: 'cline',      label: 'Cline',               mech: 'npx skills add (cline)',        detect: 'vscode-ext:cline',        profile: 'cline' },
   { id: 'continue',   label: 'Continue',            mech: 'npx skills add (continue)',     detect: 'vscode-ext:continue.continue||vscode-ext:continue', profile: 'continue' },
@@ -568,7 +568,7 @@ function installGemini(ctx) {
 }
 
 function installViaSkills(ctx, prov) {
-  const { say, opts, results } = ctx;
+  const { say, note, warn, opts, results } = ctx;
   results.detected++;
   say(`→ ${prov.label} detected`);
   // --skill '*' --yes: skip the upstream skill-selection TUI and confirmation
@@ -582,6 +582,28 @@ function installViaSkills(ctx, prov) {
   // every agent adapter (see issue #389). `--skill '*' -a <agent>` is the
   // documented form for "install every skill into a specific agent".
   const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
+  // Without -g the upstream CLI writes to a PROJECT-local ./.agents/skills
+  // under whatever directory the installer happened to run from. For an agent
+  // whose skills UI reads a fixed home directory, that means the install
+  // reports success and the skills never appear (#836) — a `curl | bash` run
+  // from ~/.local/bin put them in ~/.local/bin/.agents/skills. Set
+  // globalSkillsDir on a provider whose skills live at a known home path.
+  if (prov.globalSkillsDir) {
+    const globalSkillsDir = path.join(os.homedir(), ...prov.globalSkillsDir);
+    if (opts.dryRun) {
+      note(`  would mkdir -p ${globalSkillsDir}`);
+    } else {
+      // Belt and braces: -g should create the target itself. A failure here is
+      // not fatal — let the CLI run and report the real error rather than
+      // aborting on a directory we may not have needed.
+      try {
+        fs.mkdirSync(globalSkillsDir, { recursive: true });
+      } catch (error) {
+        warn(`  could not pre-create ${globalSkillsDir}: ${error.message}`);
+      }
+    }
+    args.push('-g');
+  }
   const r = runSpawn('npx', args, null, opts.dryRun);
   if (spawnOk(r)) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
@@ -746,7 +768,7 @@ function installOpencode(ctx) {
     for (const f of OPENCODE_AGENT_FILES) {
       const src = path.join(agentSrcDir, f);
       if (!fs.existsSync(src)) continue;
-      const body = stripOpencodeAgentTools(fs.readFileSync(src, 'utf8'));
+      const body = transformOpencodeAgentFrontmatter(fs.readFileSync(src, 'utf8'));
       operations.push({
         relativePath: `agents/${f}`,
         write: (stage) => fs.writeFileSync(stage, body, { mode: 0o600, flag: 'wx' }),
