@@ -1,23 +1,24 @@
 'use strict';
 
-// Strip the `tools:` field from a Claude-Code-style subagent frontmatter so
-// the file is valid for opencode, whose schema rejects the YAML array form
-// (`tools: [Read, Grep, Bash]`) with:
+// Strip the `tools:` field from Claude-Code-style subagent frontmatter so the
+// file can be loaded by agents whose schemas reject Claude's tool names or
+// YAML array form (`tools: [Read, Grep, Bash]`). opencode reports:
 //
 //   Configuration is invalid at .../agents/cavecrew-reviewer.md
 //   ↳ Expected object | undefined, got ["Read","Grep","Bash"] tools
 //
-// opencode allows `tools` to be a map (`{read: true, grep: true}`) or
-// omitted entirely. Omitting falls back to opencode's default tool set,
-// which is what the cavecrew subagent prompts already self-restrict against
-// in their body ("Read-only locator", "No `Bash` available", etc.), so
-// dropping the array form is safe.
+// Gemini rejects the same frontmatter earlier with `tools.0: Invalid tool
+// name` because Claude's tool vocabulary does not match Gemini's.
+//
+// Omitting the field falls back to the target agent's default tool set. The
+// cavecrew prompts already self-restrict in their bodies ("Read-only locator",
+// "No `Bash` available", etc.), so dropping the Claude-specific field is safe.
 
 const TOOLS_FIELD_RE = /^tools[ \t]*:/;
 const CONTINUATION_RE = /^[ \t]/;
 const FRONTMATTER_FENCE = '---\n';
 
-function stripOpencodeAgentTools(content) {
+function stripAgentTools(content) {
   if (typeof content !== 'string' || !content.startsWith(FRONTMATTER_FENCE)) return content;
   const fmEnd = content.indexOf('\n---', FRONTMATTER_FENCE.length);
   if (fmEnd < 0) return content;
@@ -39,4 +40,6 @@ function stripOpencodeAgentTools(content) {
   return FRONTMATTER_FENCE + out.join('\n') + rest;
 }
 
-module.exports = { stripOpencodeAgentTools };
+const stripOpencodeAgentTools = stripAgentTools;
+
+module.exports = { stripAgentTools, stripOpencodeAgentTools };
