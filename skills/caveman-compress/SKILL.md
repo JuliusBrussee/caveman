@@ -27,13 +27,54 @@ python3 -m scripts <absolute_filepath>
 
 3. The CLI will:
 - detect file type (no tokens)
-- call Claude to compress
+- collapse known wordy phrases via a fixed lookup table (no tokens, no model call — see "Deterministic phrase pre-pass" below)
+- call Claude to compress what's left
 - validate output (no tokens)
 - if errors: cherry-pick fix with Claude (targeted fixes only, no recompression)
 - retry up to 2 times
 - if still failing after 2 retries: report error to user, leave original file untouched
 
 4. Return result to user
+
+## Deterministic Phrase Pre-Pass
+
+Before the file ever reaches Claude, `scripts/phrase_map.py` runs a fixed
+find-and-replace over the prose (skipping code blocks and inline code): known
+wordy phrases collapse to their single-word equivalent — `"due to the fact
+that"` → `"because"`, `"in order to"` → `"to"`, `"with regard to"` → `"about"`,
+and about 215 more in `PHRASE_MAP` — spanning plain-language style guides,
+legal/government plain-English guidance, academic writing conciseness
+guides, and technical-documentation style guides (Microsoft's and Google's
+own developer-docs guides) — hand-filtered so every replacement is a
+grammatically safe drop-in regardless of what follows it (see the module
+docstring for what was excluded and why, including several plain-language-
+guide staples that turned out to break on common follow-on prepositions).
+Matching is word-boundary-anchored (won't fire mid-word, e.g. inside
+"checkpoint") and runs to a fixed point per prose segment, so a
+replacement that creates a new matchable phrase gets caught too.
+
+**Why a table instead of just letting Claude do it:** Claude already collapses
+phrases like this per the Compression Rules below — this pre-pass exists to
+do the part that's decidable ahead of time for free, shrinking the prompt
+Claude receives instead of paying a model call to reach the same conclusion.
+It only ever fires on multi-word phrases, not single-word synonyms — swapping
+`"extensive"` for `"big"` costs about the same number of tokens either way, so
+that kind of swap saves nothing and isn't in the table. A 3-word phrase
+collapsing to a 1-word replacement is a real, mechanical token cut.
+
+**Measured impact is conditional on writing style.** Run against this
+repo's own `tests/caveman-compress/*.original.md` fixtures (terse
+engineering notes and PR-style writing), it cuts ~0.02% — essentially
+nothing, because that style of prose doesn't use the formal phrases in
+the table. Run against deliberately wordy/corporate-style prose, it cut
+~32% of tokens before Claude even saw the text. Run against instructional
+README-style prose ("please make sure that...", "this allows you to...",
+"it is recommended that you..."), it cut ~26%. It helps most on verbose
+writing people don't realize is bloated (meeting notes, policy docs,
+corporate email, over-explained setup instructions pasted into a memory
+file); it does close to nothing on prose that's already terse. See
+`tests/test_phrase_map.py`'s
+`PhraseMapTokenReductionTests` for the reproducible measurement.
 
 ## Compression Rules
 
