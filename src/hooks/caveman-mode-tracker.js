@@ -6,8 +6,48 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
-const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange } = require('./caveman-config');
-const { parseModeChange, INDEPENDENT_MODES } = require('./caveman-parse');
+
+// Guarded sibling load — see the long comment in caveman-activate.js. Without
+// it a missing caveman-config.js or caveman-parse.js (#848, #801) throws an
+// uncaught MODULE_NOT_FOUND at module load, which escapes the try/catch inside
+// the stdin 'end' handler below and fails the hook on every single prompt.
+function requireSibling(name) {
+  try {
+    return require('./' + name);
+  } catch (error) {
+    const detail = String((error && error.message) || error).split('\n')[0];
+    const unresolved = error && error.code === 'MODULE_NOT_FOUND' &&
+      detail.includes("'./" + name + "'");
+    process.stderr.write(unresolved
+      ? 'caveman: ' + name + '.js is missing from ' + __dirname + ' — the install is ' +
+        'incomplete. Run `/plugin update caveman`, or rerun install.sh for standalone ' +
+        'hooks. Prompt tracking is off until then.\n'
+      : 'caveman: could not load ' + name + '.js — ' + detail +
+        '. Prompt tracking is off until then.\n');
+    return null;
+  }
+}
+
+const config = requireSibling('caveman-config');
+const parse = requireSibling('caveman-parse');
+// Every branch below needs both. Emit nothing and exit clean rather than
+// failing the user's prompt: the "Hooks must always exit 0" guarantee has to
+// hold at module load too, not only inside the stdin handler.
+//
+// Drain stdin first instead of exiting on the spot — Claude Code writes the
+// hook payload after spawn, and dying before that write lands turns it into a
+// broken pipe on the caller's side (#397). `return` at module top level is a
+// CommonJS module-wrapper feature, so this exits the hook without reindenting
+// everything below it.
+if (!config || !parse) {
+  process.stdin.on('data', () => {});
+  process.stdin.on('error', () => process.exit(0));
+  process.stdin.on('end', () => process.exit(0));
+  return;
+}
+
+const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange } = config;
+const { parseModeChange, INDEPENDENT_MODES } = parse;
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');

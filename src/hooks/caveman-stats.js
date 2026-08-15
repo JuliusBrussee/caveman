@@ -10,7 +10,33 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME } = require('./caveman-config');
+// Guarded sibling load — see the long comment in caveman-activate.js. This
+// script is not a hook itself, but the UserPromptSubmit hook shells out to it
+// for /caveman-stats, so a missing caveman-config.js (#848, #801) should
+// produce one actionable line, not a Node stack trace the hook then reports as
+// an unexplained failure.
+function requireSibling(name) {
+  try {
+    return require('./' + name);
+  } catch (error) {
+    const detail = String((error && error.message) || error).split('\n')[0];
+    const unresolved = error && error.code === 'MODULE_NOT_FOUND' &&
+      detail.includes("'./" + name + "'");
+    process.stderr.write(unresolved
+      ? 'caveman-stats: ' + name + '.js is missing from ' + __dirname + ' — the install ' +
+        'is incomplete. Run `/plugin update caveman`, or rerun install.sh for standalone ' +
+        'hooks.\n'
+      : 'caveman-stats: could not load ' + name + '.js — ' + detail + '\n');
+    return null;
+  }
+}
+
+const config = requireSibling('caveman-config');
+// Nothing meaningful is computable without it: every read below goes through
+// this module. Exit non-zero so the caller can tell stats did not run.
+if (!config) process.exit(1);
+
+const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME } = config;
 
 // Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
 // 10 tasks, sonnet-4-20250514). Only 'full' has measured data; lite / ultra /

@@ -9,7 +9,57 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { getDefaultMode, safeWriteFlag, recordModeChange, readFlag, VALID_MODES } = require('./caveman-config');
+
+// A sibling hook file can be absent from a real install — a partial plugin
+// checkout (#848) or an installer copy list that omits one (#801). A bare
+// top-level `require` turns that into an uncaught MODULE_NOT_FOUND: a raw Node
+// stack trace and exit 1 on EVERY session start, which Claude Code surfaces as
+// "SessionStart:startup hook error". Load defensively and degrade instead —
+// the same treatment the optional cavecrew-model-overrides require below
+// already gets. Kept inline rather than in a shared module on purpose: this is
+// the guard that makes a missing sibling survivable, so it must not itself be
+// a sibling that can go missing.
+function requireSibling(name) {
+  try {
+    return require('./' + name);
+  } catch (error) {
+    // First line only: Node appends a multi-line "Require stack:" block to
+    // .message, and echoing that back reprints the very noise this guard
+    // exists to remove.
+    const detail = String((error && error.message) || error).split('\n')[0];
+    // Distinguish "this file is not there" from a MODULE_NOT_FOUND thrown by
+    // something the sibling itself requires — the second is a real bug and
+    // reporting it as a missing install would send users down the wrong path.
+    const unresolved = error && error.code === 'MODULE_NOT_FOUND' &&
+      detail.includes("'./" + name + "'");
+    process.stderr.write(unresolved
+      ? 'caveman: ' + name + '.js is missing from ' + __dirname + ' — the install is ' +
+        'incomplete. Run `/plugin update caveman`, or rerun install.sh for standalone ' +
+        'hooks. Continuing with reduced functionality.\n'
+      : 'caveman: could not load ' + name + '.js — ' + detail +
+        '. Continuing with reduced functionality.\n');
+    return null;
+  }
+}
+
+// Stand-ins used when caveman-config is unavailable. SessionStart still emits
+// the built-in fallback ruleset — a session with rules and no flag file beats a
+// session with neither. Only persistence is lost: no flag write, no mode log,
+// and readFlag() reports nothing active.
+const DEGRADED_CONFIG = {
+  // caveman-config.getDefaultMode() consults env, then repo config, then user
+  // config. Only the env var is reachable without it, and it is also the
+  // highest-priority source — so an explicit opt-out still wins while degraded.
+  getDefaultMode: () => (process.env.CAVEMAN_DEFAULT_MODE === 'off' ? 'off' : 'full'),
+  safeWriteFlag: () => {},
+  recordModeChange: () => {},
+  readFlag: () => null,
+  // Unreachable while degraded — readFlag() above never returns a mode.
+  VALID_MODES: [],
+};
+
+const { getDefaultMode, safeWriteFlag, recordModeChange, readFlag, VALID_MODES } =
+  requireSibling('caveman-config') || DEGRADED_CONFIG;
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
