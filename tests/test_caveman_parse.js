@@ -66,12 +66,58 @@ test('wenyan-full alias stores as "wenyan"', () => {
   assert.deepStrictEqual(parseModeChange('/caveman wenyan-full', defaultFull), { action: 'set', mode: 'wenyan' });
 });
 
-test('bogus level returns null — never falls through to the default', () => {
-  assert.strictEqual(parseModeChange('/caveman not-a-real-level', defaultFull), null);
+// A bogus level is now REPORTED rather than swallowed (#838), but the original
+// danger these two guard against is unchanged: it must never activate the
+// default. 'unresolved' carries no mode, and applyModeChange/the tracker act
+// only on 'set'/'clear'.
+test('bogus level is unresolved — never falls through to the default', () => {
+  const verdict = parseModeChange('/caveman not-a-real-level', defaultFull);
+  assert.deepStrictEqual(verdict, { action: 'unresolved' });
+  assert.strictEqual(verdict.mode, undefined, 'must not carry a mode');
 });
 
 test('independent modes are not reachable via /caveman <arg>', () => {
-  assert.strictEqual(parseModeChange('/caveman commit', defaultFull), null);
+  const verdict = parseModeChange('/caveman commit', defaultFull);
+  assert.strictEqual(verdict.action, 'unresolved');
+  assert.strictEqual(verdict.mode, undefined, 'must not activate the mode');
+});
+
+// #838: punctuation glued to the level matched no mode, left the level
+// untouched, and said nothing. Only parts[1] is read, so trailing WORDS were
+// already harmless — it is the glued character that broke it.
+test('punctuation glued to the level still resolves (#838)', () => {
+  for (const prompt of ['/caveman ultra;', '/caveman ultra.', '/caveman ultra!', '/caveman ultra,']) {
+    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'ultra' }, prompt);
+  }
+});
+
+test('punctuation glued to a hyphenated level still resolves (#838)', () => {
+  assert.deepStrictEqual(
+    parseModeChange('/caveman wenyan-ultra.', defaultFull),
+    { action: 'set', mode: 'wenyan-ultra' }
+  );
+  assert.deepStrictEqual(
+    parseModeChange('/caveman wenyan-full,', defaultFull),
+    { action: 'set', mode: 'wenyan' }
+  );
+});
+
+test('punctuation glued to off still deactivates (#838)', () => {
+  assert.deepStrictEqual(parseModeChange('/caveman off.', defaultFull), { action: 'clear' });
+});
+
+test('trailing words after the level remain harmless', () => {
+  assert.deepStrictEqual(
+    parseModeChange('/caveman ultra; still too verbose', defaultFull),
+    { action: 'set', mode: 'ultra' }
+  );
+});
+
+// `/caveman ?` is plausibly someone asking for help. Bare `/caveman` still
+// activates; an argument that was PRESENT but normalized away must not.
+test('a punctuation-only argument does not activate', () => {
+  assert.deepStrictEqual(parseModeChange('/caveman ?', defaultFull), { action: 'unresolved' });
+  assert.deepStrictEqual(parseModeChange('/caveman', defaultFull), { action: 'set', mode: 'full' });
 });
 
 test('/caveman-commit, /caveman-review, /caveman-compress set independent modes', () => {
@@ -178,10 +224,10 @@ test('expandedTpl: empty level (bare "/caveman", multi-line template head) uses 
   );
 });
 
-test('expandedTpl: bogus level in the template returns null, not the default (#602 drift)', () => {
-  assert.strictEqual(
+test('expandedTpl: bogus level in the template is unresolved, not the default (#602 drift)', () => {
+  assert.deepStrictEqual(
     parseModeChange('Activate caveman mode: not-a-real-level', { ...defaultFull, expandedTpl: true }),
-    null
+    { action: 'unresolved' }
   );
 });
 
@@ -231,6 +277,81 @@ function runTracker(prompt, presetFlag) {
   }
 }
 
+// #838: natural-language triggers ran over the whole prompt, so any pasted
+// text that merely QUOTED them fired them.
+test('prose quoting "stop caveman" no longer deactivates (#838)', () => {
+  const prompt = 'why does the help card say "stop caveman" or "normal mode" here?';
+  assert.strictEqual(parseModeChange(prompt, defaultFull), null);
+});
+
+test('prose quoting "activate caveman" no longer activates (#838)', () => {
+  assert.strictEqual(
+    parseModeChange('the readme says you can "activate caveman" by typing it', defaultFull),
+    null
+  );
+});
+
+test('backtick-quoted triggers are inert too', () => {
+  assert.strictEqual(parseModeChange('the `stop caveman` phrase is documented', defaultFull), null);
+});
+
+// The cap that was tried first broke exactly these: a user explaining WHY they
+// want the mode off writes more words, not fewer, and a dropped deactivation
+// is silent — the user cannot escape and is told nothing.
+test('long compound deactivation still works — no length cap (#838)', () => {
+  for (const prompt of [
+    'that is enough compression for now — please turn off caveman mode and go back to full sentences for the rest of this task',
+    'ok this is getting hard to read, stop caveman mode and then go through the auth middleware and explain the token expiry check',
+  ]) {
+    assert.ok(prompt.length > 120, 'fixture must be long enough to matter');
+    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'clear' }, prompt);
+  }
+});
+
+test('long compound activation still works', () => {
+  const prompt = 'activate caveman mode and then start by reading the proxy package and summarising how the dial guard is wired up';
+  assert.ok(prompt.length > 110);
+  assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'full' });
+});
+
+test('apostrophes do not blank the command ("don\'t stop caveman, it\'s useful")', () => {
+  assert.deepStrictEqual(
+    parseModeChange("don't stop caveman, it's useful", defaultFull),
+    { action: 'clear' }
+  );
+});
+
+test('short natural-language triggers still work (positive control)', () => {
+  assert.deepStrictEqual(parseModeChange('stop caveman', defaultFull), { action: 'clear' });
+  assert.deepStrictEqual(parseModeChange('back to normal mode please', defaultFull), { action: 'clear' });
+  assert.deepStrictEqual(parseModeChange('activate caveman', defaultFull), { action: 'set', mode: 'full' });
+});
+
+// A foreign slash command's own text must not toggle our mode — symmetric with
+// the skipNaturalLanguage that a foreign command ENVELOPE already sets.
+test('a slash-initiated prompt does not fire natural-language triggers', () => {
+  assert.strictEqual(parseModeChange('/caveman-help stop caveman', defaultFull), null);
+  assert.strictEqual(parseModeChange('/some-other-command activate caveman', defaultFull), null);
+});
+
+test('slash commands themselves are unaffected by prompt length', () => {
+  const long = '/caveman ultra ' + 'x'.repeat(400);
+  assert.deepStrictEqual(parseModeChange(long, defaultFull), { action: 'set', mode: 'ultra' });
+});
+
+// An independent mode IS a real mode, just not reachable this way — saying
+// "not recognized" would deny a mode the user can see in the docs.
+test('an independent mode via /caveman <arg> reports its own command', () => {
+  assert.deepStrictEqual(
+    parseModeChange('/caveman commit', defaultFull),
+    { action: 'unresolved', independentMode: 'commit' }
+  );
+});
+
+test('a quoted level resolves (leading punctuation stripped too)', () => {
+  assert.deepStrictEqual(parseModeChange('/caveman "ultra"', defaultFull), { action: 'set', mode: 'ultra' });
+});
+
 const parityCases = [
   { prompt: '/caveman ultra', preset: null },
   { prompt: '/caveman off', preset: 'full' },
@@ -245,8 +366,10 @@ for (const { prompt, preset } of parityCases) {
   test(`parity: "${prompt}" (preset=${preset}) matches shared-parser verdict`, () => {
     const normalized = prompt.trim().toLowerCase().replace(/\s+/g, ' ');
     const verdict = parseModeChange(normalized, { getDefaultMode: () => 'full' });
+    // null and 'unresolved' both mean "leave the flag exactly as it was".
     const expected =
       verdict === null ? (preset || null) :
+      verdict.action === 'unresolved' ? (preset || null) :
       verdict.action === 'clear' ? null :
       verdict.mode;
     assert.strictEqual(runTracker(prompt, preset), expected);
