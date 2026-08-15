@@ -275,6 +275,15 @@ func checkAddr(addr netip.Addr, host, port string, cfg Config) error {
 				(isInAllowList(host, port, cfg.AllowList) || isInAllowList(addr.String(), port, cfg.AllowList) || isInAllowList("localhost", port, cfg.AllowList)) {
 				return nil
 			}
+			// A fail-closed guard that does not name its own escape hatch reads
+			// as "unsupported" rather than "not opted in" — #841 concluded the
+			// proxy simply could not reach a local relay, when self-hosted mode
+			// has allowed exactly that all along. Managed mode is deliberately
+			// silent: the allowlist is a no-op there by contract, so advertising
+			// it would send the operator after a setting that cannot help.
+			if !cfg.ManagedMode {
+				return fmt.Errorf("ssrf: destination %s (for host %q) is in blocked range %s; add %s to the SSRF allowlist (CAVE_SSRF_ALLOWLIST) to permit it", addr, host, p, allowListSuggestion(addr, port))
+			}
 			return fmt.Errorf("ssrf: destination %s (for host %q) is in blocked range %s", addr, host, p)
 		}
 	}
@@ -304,10 +313,25 @@ func checkAddr(addr netip.Addr, host, port string, cfg Config) error {
 		// In self-hosted mode, RFC1918 is blocked unless the original hostname
 		// OR the resolved IP literal appears in the allowlist.
 		if !isInAllowList(host, port, cfg.AllowList) && !isInAllowList(addr.String(), port, cfg.AllowList) {
-			return fmt.Errorf("ssrf: destination %s (for host %q) is a private address; add it to the allowlist to permit it", addr, host)
+			return fmt.Errorf("ssrf: destination %s (for host %q) is a private address; add %s to the SSRF allowlist (CAVE_SSRF_ALLOWLIST) to permit it", addr, host, allowListSuggestion(addr, port))
 		}
 	}
 	return nil
+}
+
+// allowListSuggestion renders the allowlist entry to advise for a blocked
+// destination. It must be an entry isInAllowList would actually accept at BOTH
+// stages: ValidateHost pre-flights with an empty port, so JoinHostPort would
+// emit a trailing-colon token like "127.0.0.1:" that matches only the
+// port-less stage — an operator following that advice literally relaxes the
+// pre-flight guard, is blocked again at dial time by a second message naming a
+// different token, and leaves a stale weakening entry behind. The bare address
+// form is the one entry that matches every stage.
+func allowListSuggestion(addr netip.Addr, port string) string {
+	if port == "" {
+		return addr.String()
+	}
+	return net.JoinHostPort(addr.String(), port)
 }
 
 func inRFC1918(addr netip.Addr) bool {
