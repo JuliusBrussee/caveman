@@ -75,11 +75,35 @@ function parseModeChange(promptRaw, options) {
   prompt = prompt.toLowerCase().replace(/\s+/g, ' ');
   if (!prompt) return null;
 
+  // Natural-language triggers fire only on a SHORT, command-like utterance.
+  // They run over the WHOLE prompt, so prose that merely MENTIONS them fired
+  // them: a bug report quoting the /caveman-help card's own line —
+  //   Say "stop caveman" or "normal mode".
+  // — switched caveman off mid-task. Same exposure for any pasted changelog,
+  // issue text or documentation carrying those words. The envelope unwrap in
+  // the tracker (#537) closes the slash-command path; this closes the prose
+  // one, which needs no envelope at all.
+  //
+  // Slash commands are parsed further down and are NEVER length-capped, so
+  // `/caveman off` still works inside a prompt of any size. 120 chars clears
+  // every documented natural-language form with headroom — the longest,
+  // "back to normal mode please", is 26.
+  const NL_TRIGGER_MAX_CHARS = 120;
+  const isCommandLike =
+    prompt.length <= NL_TRIGGER_MAX_CHARS && !prompt.startsWith('/');
+
+  // Trailing punctuation glued to a mode word defeats the closed-list match
+  // below. It shows up whenever a sentence is appended to the command —
+  // "/caveman ultra; still too verbose" parses the argument as "ultra;". Only
+  // parts[1] is ever read, so extra WORDS after the mode were already
+  // harmless; it is the character glued to the mode that broke it.
+  const stripArgPunctuation = (raw) => (raw || '').replace(/[.,;:!?'")\]}]+$/, '');
+
   // Deactivation intent — computed FIRST so "turn caveman mode off" never
   // falls through to the activation patterns (#598), and applied with the
   // highest priority: it's what the tracker's original unconditional
   // end-of-function deactivation check amounted to.
-  const wantsOff = !options.skipNaturalLanguage && (
+  const wantsOff = !options.skipNaturalLanguage && isCommandLike && (
     /\b(stop|disable|deactivate|quit|exit|kill)\s+(the\s+)?caveman\b/.test(prompt) ||
     /\bcaveman(\s+mode)?\s+(off|stop|disabled?)\b/.test(prompt) ||
     /\bturn\s+off\s+(the\s+)?caveman\b/.test(prompt) ||
@@ -111,7 +135,7 @@ function parseModeChange(promptRaw, options) {
     }
     const tpl = /^activate caveman mode:[ \t]*(\S*)/.exec(firstLine);
     if (tpl) {
-      const arg = tpl[1] || '';
+      const arg = stripArgPunctuation(tpl[1]);
       if (!arg) {
         const mode = getDefaultMode();
         return mode === 'off' ? { action: 'clear' } : { action: 'set', mode };
@@ -119,7 +143,9 @@ function parseModeChange(promptRaw, options) {
       if (arg === 'off' || arg === 'stop' || arg === 'disable') return { action: 'clear' };
       if (arg === 'wenyan-full') return { action: 'set', mode: 'wenyan' };
       if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return { action: 'set', mode: arg };
-      return null; // unknown/bogus level — leave flag untouched (#602)
+      // Unknown level — flag untouched (#602), but SAY so: silence here reads
+      // as success and the session keeps running at the level it already had.
+      return { action: 'unresolved' };
     }
   }
 
@@ -134,7 +160,7 @@ function parseModeChange(promptRaw, options) {
     // "be brief/terse", "fewer tokens", "shorter answers") — but not when
     // scoped to a single section ("be brief in the summary"), which is a
     // one-off instruction, not a session-wide mode switch.
-    if (!isQuestion) {
+    if (isCommandLike && !isQuestion) {
       if (/\b(activate|enable|start|turn on|use|switch to|want|give me)\b[^.]{0,40}\bcaveman\b/.test(prompt) ||
           /\btalk like\b[^.]{0,40}\bcaveman\b/.test(prompt) ||
           /\bcaveman\s+mode\s+(on|please|now)\b/.test(prompt) ||
@@ -155,7 +181,7 @@ function parseModeChange(promptRaw, options) {
   if (prompt.startsWith('/caveman')) {
     const parts = prompt.split(/\s+/);
     const cmd = parts[0]; // /caveman, /caveman-commit, /caveman-review, etc.
-    const arg = parts[1] || '';
+    const arg = stripArgPunctuation(parts[1]);
 
     if (cmd === '/caveman-commit' || cmd === '/caveman:caveman-commit') {
       return { action: 'set', mode: 'commit' };
@@ -175,8 +201,10 @@ function parseModeChange(promptRaw, options) {
       if (arg === 'off' || arg === 'stop' || arg === 'disable') return { action: 'clear' };
       if (arg === 'wenyan-full') return { action: 'set', mode: 'wenyan' }; // canonical alias — config stores as 'wenyan'
       if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return { action: 'set', mode: arg };
-      // Unknown arg → no-op, flag untouched (no silent overwrite with default)
-      return null;
+      // Unknown arg → flag untouched (no silent overwrite with default), and
+      // reported rather than swallowed. Consumers that act only on
+      // 'set'/'clear' ignore this verdict, so it is additive.
+      return { action: 'unresolved' };
     }
   }
 

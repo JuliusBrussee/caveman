@@ -66,12 +66,15 @@ test('wenyan-full alias stores as "wenyan"', () => {
   assert.deepStrictEqual(parseModeChange('/caveman wenyan-full', defaultFull), { action: 'set', mode: 'wenyan' });
 });
 
-test('bogus level returns null — never falls through to the default', () => {
-  assert.strictEqual(parseModeChange('/caveman not-a-real-level', defaultFull), null);
+test('bogus level is unresolved — never falls through to the default', () => {
+  // Contract change: was null, now a reported no-op. The danger this guards
+  // against is unchanged — a bogus level must never activate the default —
+  // but the tracker can now tell the user the level did not move.
+  assert.deepStrictEqual(parseModeChange('/caveman not-a-real-level', defaultFull), { action: 'unresolved' });
 });
 
 test('independent modes are not reachable via /caveman <arg>', () => {
-  assert.strictEqual(parseModeChange('/caveman commit', defaultFull), null);
+  assert.deepStrictEqual(parseModeChange('/caveman commit', defaultFull), { action: 'unresolved' });
 });
 
 test('/caveman-commit, /caveman-review, /caveman-compress set independent modes', () => {
@@ -178,10 +181,10 @@ test('expandedTpl: empty level (bare "/caveman", multi-line template head) uses 
   );
 });
 
-test('expandedTpl: bogus level in the template returns null, not the default (#602 drift)', () => {
-  assert.strictEqual(
+test('expandedTpl: bogus level in the template is unresolved, not the default (#602 drift)', () => {
+  assert.deepStrictEqual(
     parseModeChange('Activate caveman mode: not-a-real-level', { ...defaultFull, expandedTpl: true }),
-    null
+    { action: 'unresolved' }
   );
 });
 
@@ -231,14 +234,78 @@ function runTracker(prompt, presetFlag) {
   }
 }
 
+// ---------- punctuation glued to the mode ----------
+
+test('trailing semicolon does not defeat the mode match', () => {
+  assert.deepStrictEqual(
+    parseModeChange('/caveman ultra; still too verbose', defaultFull),
+    { action: 'set', mode: 'ultra' }
+  );
+});
+
+test('trailing period and comma do not defeat the mode match', () => {
+  assert.deepStrictEqual(parseModeChange('/caveman lite.', defaultFull), { action: 'set', mode: 'lite' });
+  assert.deepStrictEqual(parseModeChange('/caveman:caveman ultra,', defaultFull), { action: 'set', mode: 'ultra' });
+});
+
+test('punctuation-only difference still resolves off', () => {
+  assert.deepStrictEqual(parseModeChange('/caveman off.', defaultFull), { action: 'clear' });
+});
+
+test('unknown argument reports unresolved instead of returning null', () => {
+  assert.deepStrictEqual(parseModeChange('/caveman blorptastic', defaultFull), { action: 'unresolved' });
+});
+
+// ---------- phrase triggers must not fire on prose that quotes them ----------
+
+const HELP_CARD_EXCERPT =
+  '| **Ultra** | `/caveman ultra` | Extreme compression. Bare fragments. | ' +
+  'Mode stick until changed or session end. ## Deactivate ' +
+  'Say "stop caveman" or "normal mode". Resume anytime with `/caveman`.';
+
+test('help-card text does not deactivate', () => {
+  assert.strictEqual(parseModeChange(HELP_CARD_EXCERPT, defaultFull), null);
+});
+
+test('long prose quoting the deactivation phrases does not deactivate', () => {
+  const report =
+    'fix these bugs. bug 2, bigger - opening /caveman-help switched caveman off. ' +
+    'the card\'s own line "say stop caveman or normal mode" matched the deactivation ' +
+    'regex, which runs over the whole prompt.';
+  assert.strictEqual(parseModeChange(report, defaultFull), null);
+});
+
+test('long prose describing activation does not activate', () => {
+  const doc =
+    'the readme says users can turn on caveman mode by typing activate caveman, ' +
+    'and that phrasing is what the natural language matcher keys on. document that ' +
+    'in the contributing guide please.';
+  assert.strictEqual(parseModeChange(doc, defaultFull), null);
+});
+
+test('short deactivation and activation still fire (control)', () => {
+  assert.deepStrictEqual(parseModeChange('stop caveman', defaultFull), { action: 'clear' });
+  assert.deepStrictEqual(parseModeChange('activate caveman', defaultFull), { action: 'set', mode: 'full' });
+});
+
+test('/caveman off still works inside a long prompt', () => {
+  const long =
+    '/caveman off and then walk me through why the deactivation regex used to run ' +
+    'over the entire prompt body, including documentation text that quoted the ' +
+    'trigger phrases verbatim.';
+  assert.deepStrictEqual(parseModeChange(long, defaultFull), { action: 'clear' });
+});
+
 const parityCases = [
   { prompt: '/caveman ultra', preset: null },
   { prompt: '/caveman off', preset: 'full' },
   { prompt: '/caveman not-a-real-level', preset: 'ultra' },
+  { prompt: '/caveman ultra; still too verbose', preset: 'full' },
   { prompt: 'be brief', preset: null },
   { prompt: 'activate caveman', preset: null },
   { prompt: 'stop caveman', preset: 'full' },
   { prompt: 'what is caveman mode?', preset: null },
+  { prompt: HELP_CARD_EXCERPT, preset: 'full' },
 ];
 
 for (const { prompt, preset } of parityCases) {
@@ -247,6 +314,9 @@ for (const { prompt, preset } of parityCases) {
     const verdict = parseModeChange(normalized, { getDefaultMode: () => 'full' });
     const expected =
       verdict === null ? (preset || null) :
+      // 'unresolved' leaves the flag exactly where it was, same as null — it
+      // differs only in that the tracker now says so out loud.
+      verdict.action === 'unresolved' ? (preset || null) :
       verdict.action === 'clear' ? null :
       verdict.mode;
     assert.strictEqual(runTracker(prompt, preset), expected);
