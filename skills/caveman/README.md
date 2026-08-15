@@ -12,7 +12,7 @@ Six intensity levels:
 |-------|-------------|
 | `lite` | Drop filler/hedging. Sentences stay full. Professional but tight. |
 | `full` | Default. Drop articles, fragments OK, short synonyms. |
-| `ultra` | Bare fragments. Abbreviations (DB, auth, fn). Arrows for causality. |
+| `ultra` | Bare fragments. Abbreviations (DB, auth, fn). NO ARROWS. |
 | `wenyan-lite` | Classical Chinese register, light compression. |
 | `wenyan-full` | Maximum 文言文. 80-90% character reduction. |
 | `wenyan-ultra` | Extreme classical compression. |
