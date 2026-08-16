@@ -1,14 +1,9 @@
-# @caveman/explorer — the FastContext exploration subagent
+# @caveman/explorer
 
-A free, BYOK exploration subagent for coding agents, based on **FastContext**
-([arXiv 2606.14066](https://arxiv.org/abs/2606.14066)). It separates *finding code*
-from *changing code*: a cheap, read-only explorer answers "where does X live?" with a
-compact list of `path:line` citations, and its reads/greps never enter your main
-agent's context window.
-
-In the paper, repository reading and searching account for **~46% of a coding agent's
-tokens**. Offloading that to a small explorer cut end-to-end tokens 14–60% while
-resolution went *up*.
+Read-only repository exploration subagent inspired by FastContext
+([arXiv 2606.14066](https://arxiv.org/abs/2606.14066)). It keeps file reads and
+searches in isolated subagent context, then answers location questions with
+compact `path:line` citations for solver.
 
 ## Install
 
@@ -17,36 +12,23 @@ cave explore install            # writes ./.claude/agents/fastcontext.md (this r
 cave explore install --user     # writes ~/.claude/agents/fastcontext.md (all repos)
 ```
 
-Claude Code then delegates exploration to the `fastcontext` subagent automatically
-(it runs on Haiku, with only Read/Glob/Grep). The subagent runs in its own isolated
-context, so the solver only ever sees the final citations — that separation is the
-mechanism, and Claude Code's native subagents give it for free.
+Claude Code can delegate broad exploration to `fastcontext`, a Haiku agent with
+Read, Glob and Grep only. It cannot edit files or run commands; solver receives
+final citations rather than explorer transcript.
 
-> Codex is not wired yet. It needs an MCP shim that must pass a transcript-isolation
-> test before it ships, or it would be FastContext-in-name-only.
+Codex is not wired. Its integration needs a transcript-isolation test before release.
 
-## What it honestly claims
+## Claim boundary
 
-Caveman does not train the paper's 4B model, so it does **not** inherit the paper's
-14–60% headline. What it claims is what it can prove:
-
-- **Local / BYOK:** nothing. The explorer just runs; you keep your own keys.
-- **After `caveman login`:** because both the explorer (Haiku) and the solver
-  (Sonnet/Opus) route through the gateway, Caveman **measures** the explorer's spend
-  against the solver's — a real cost split, not an estimate. The explorer's added
-  spend is shown as cost, never netted into a savings number.
-- **Savings stay `inferred`** (a per-day rate, never multiplied to a month) until a
-  CaveBench A/B proves a net win *and* non-regressed resolution for your specific
-  main-model pairing. For some pairings that honest number may be near zero — and
-  that is the point.
-
-The funnel: free subagent → `caveman login` → measured explorer cost → (after the
-eval gate) an eval-validated delta.
+This package does not implement paper's trained model and does not inherit paper's
+reported results. Local explorer uses your configured Claude Code model and
+credential. Whether delegation reduces total tokens or improves task result depends
+on repository, question, solver, and explorer model. Measure complete task, including
+explorer calls, before claiming a benefit.
 
 ## How it relates to the rest of Caveman
 
-`exploration-offload` is a Cave Plan optimizer in the `input_bloat` mutex family
-(S3, eval-gated). The detector that surfaces it from telemetry stays dormant until the
-gateway parses tool-call blocks (it shares headroom with `context-compression`, so it
-is deduped against it — its distinct value is the resolution/quality axis and the
-measured cost split, not new headroom dollars).
+Explorer is optional complement to Engine compression. Engine reduces selected
+payloads in one context; explorer keeps broad repository search in another context
+and returns citations. Neither mechanism proves savings without complete-task
+comparison.

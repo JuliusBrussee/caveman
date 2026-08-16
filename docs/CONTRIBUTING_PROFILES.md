@@ -2,21 +2,16 @@
 
 # Contributing to Caveman
 
-Caveman accepts community contributions to its open interfaces. Fastest path is
+Caveman accepts community contributions. Fastest path is
 one agent profile: one JSON file that teaches `caveman run` how to launch another
 AI coding harness through an existing wire protocol and hook surface.
 
-## Open interface, closed engine
-
-The boundary is deliberate: **the skill stays MIT forever; the engine was never
-open-source — going closed is not a relicensing, it is declining to ship a
-release that never went out; keeping it commercial is what pays for a real free
-tier.**
+## License boundary
 
 Profiles, CLI launcher, SDKs, contracts, kit, graders, provider catalog,
-integration recipes, extension shell, and non-core skills are MIT. Engine,
-proxy, MCP, shrink, cavemem Go core, and shared Go platform code are commercial
-closed-source and are not contribution targets in this repository.
+integration recipes, extension shell, and non-core skills are MIT. Engine-linked
+runtime source uses BSL 1.1. Both are contribution targets under terms in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md) and [`LICENSING.md`](../LICENSING.md).
 
 ## Add an agent profile
 
@@ -37,23 +32,24 @@ node --test packages/cli/tests/agent-registry.runtime.mjs packages/cli/tests/age
 ```
 
 Commit profile plus regenerated `agents/agents.json` and
-`packages/cli/src/agents.generated.ts`. Profile-only CI re-runs compiler, fake-harness
-matrix, and first-screen help fixture. It does not run full server release gate.
+`packages/cli/src/agents.generated.ts`. Profile-only CI re-runs compiler,
+fake-harness matrix, and first-screen help fixture; full server release gate is
+separate.
 
 These compiler controls are security boundaries:
 
-1. **Environment key:** `injection.env` keys must match
+1. Environment key: `injection.env` keys must match
    `^[A-Z][A-Z0-9_]*_(BASE_URL|API_BASE|API_KEY|AUTH_TOKEN|HOST)$`. Loader,
    path, and proxy controls are denied. Failure: `injection.env key "<key>" is
    not allowlisted`.
-2. **Environment value:** value must be one exact
+2. Environment value: value must be one exact
    `{{cave_base_url}}`, `{{cave_proxy_url}}`, `{{cave_api_key}}`, or
    `{{cave_org_id}}` token, or a safe identifier literal. Literal URLs and
    unknown templates fail.
-3. **Profile path:** instruction and base-config paths stay under
+3. Profile path: instruction and base-config paths stay under
    `~/.<profile-id>/`, with no `..`. Absolute paths and another profile's home
    fail.
-4. **Reserved command:** profile id and every binary name must not collide with
+4. Reserved command: profile id and every binary name must not collide with
    porcelain, namespaces, printed commands, or legacy aliases. Failure names
    colliding command.
 
@@ -90,9 +86,8 @@ commit:
 git commit -s -m "your message"
 ```
 
-That adds `Signed-off-by: Your Name <your@email>`. MIT contributions are
-inbound=outbound. No CLA or closed-core relicense grant applies because
-closed-core source is not published here.
+That adds `Signed-off-by: Your Name <your@email>`. Contribution license follows
+directory rules in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 Keep pull requests small and focused. Questions: open a discussion or email
-**hello@caveman.so**.
+`hello@caveman.so`.

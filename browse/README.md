@@ -18,15 +18,15 @@ permitted; third-party hosted, managed, or embedded use requires commercial
 license. See `LICENSE` and `../LICENSING.md`.
 
 `browser_snapshot.query` is the token-efficient path on large pages. It keeps
-best matching accessible nodes plus their ancestors while CCR retains the full
-raw tree. Compact output uses `[uid] role "name"` lines; only actionable or
-unknown custom roles spend UID tokens. `tokens_after` counts the exact
-agent-visible JSON result; `view_tokens` isolates compact tree cost.
+best matching accessible nodes and ancestors while CCR retains full raw tree;
+compact output uses `[uid] role "name"` lines, with UID tokens reserved for
+actionable or unknown custom roles. `tokens_after` counts exact agent-visible
+JSON result, and `view_tokens` isolates compact tree cost.
 
 Build:
 
 ```bash
-go build ./public/browse/cmd/caveman-browse
+go build ./browse/cmd/caveman-browse
 ```
 
 Run as MCP server:
@@ -46,10 +46,9 @@ caveman-browse close
 ```
 
 Direct commands share one detached, isolated Chrome until `close`; first use
-creates both profile and CCR directories. Actions report `settled:false` after
-CDP dispatch because application state is not proven until another focused
-snapshot. Browser navigation allows `http(s)`, `about:blank`, and bounded
-`data:text/html`; local files and privileged browser schemes fail closed.
+creates profile and CCR directories. Actions report `settled:false` until another
+focused snapshot proves state, while navigation permits `http(s)`, `about:blank`,
+and bounded `data:text/html` but rejects local files and privileged schemes.
 
 Proof and comparison: [BENCHMARK.md](BENCHMARK.md). Large-page query focus wins
 sharply; tiny-page results can exceed bare Playwright ARIA text because Caveman

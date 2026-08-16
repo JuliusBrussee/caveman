@@ -10,9 +10,11 @@
 
 ---
 
-A Claude Code skill that compresses your project memory files (`CLAUDE.md`, todos, preferences) into caveman format — so every session loads fewer tokens automatically.
+A Claude Code skill that compresses project memory files (`CLAUDE.md`, todos,
+preferences) into caveman format, reducing repeated input size.
 
-Claude read `CLAUDE.md` on every session start. If file big, cost big. Caveman make file small. Cost go down forever.
+Claude loads `CLAUDE.md` on every session start, so large files add repeated
+input tokens. Caveman shortens supported natural-language files.
 
 ## What It Do
 
@@ -21,11 +23,15 @@ Claude read `CLAUDE.md` on every session start. If file big, cost big. Caveman m
 ```
 
 ```
-CLAUDE.md          ← compressed (Claude reads this — fewer tokens every session)
+CLAUDE.md          ← compressed (Claude reads smaller file each session)
 CLAUDE.original.md ← human-readable backup (you edit this)
 ```
 
-Original never lost. Backup lives in a data dir, not next to your file — `$XDG_DATA_HOME/caveman-compress/backups/<parent-dir-name>/` (macOS/Linux) or `%LOCALAPPDATA%\caveman-compress\backups\<parent-dir-name>\` (Windows) — so skill auto-loaders don't re-read it as a live file. You can read and edit `.original.md` there. Run skill again to re-compress after edits.
+Original remains in data directory rather than next to live file, so skill
+auto-loaders do not read it twice. Path is
+`$XDG_DATA_HOME/caveman-compress/backups/<parent-dir-name>/` on macOS and Linux,
+or `%LOCALAPPDATA%\caveman-compress\backups\<parent-dir-name>\` on Windows. Edit
+`.original.md` there, then run skill again to re-compress.
 
 ## Benchmarks
 
@@ -33,14 +39,15 @@ Real results on real project files:
 
 | File | Original | Compressed | Saved |
 |------|----------:|----------:|------:|
-| `claude-md-preferences.md` | 706 | 285 | **59.6%** |
-| `project-notes.md` | 1145 | 535 | **53.3%** |
-| `claude-md-project.md` | 1122 | 636 | **43.3%** |
-| `todo-list.md` | 627 | 388 | **38.1%** |
-| `mixed-with-code.md` | 888 | 560 | **36.9%** |
-| **Average** | **898** | **481** | **46%** |
+| `claude-md-preferences.md` | 706 | 285 | 59.6% |
+| `project-notes.md` | 1145 | 535 | 53.3% |
+| `claude-md-project.md` | 1122 | 636 | 43.3% |
+| `todo-list.md` | 627 | 388 | 38.1% |
+| `mixed-with-code.md` | 888 | 560 | 36.9% |
+| Average | 898 | 481 | 46% |
 
-All validations passed ✅ — headings, code blocks, URLs, file paths preserved exactly.
+All fixture validations passed: headings, code blocks, URLs, and file paths were
+preserved exactly.
 
 ## Before / After
 
@@ -48,7 +55,7 @@ All validations passed ✅ — headings, code blocks, URLs, file paths preserved
 <tr>
 <td width="50%">
 
-### 📄 Original (706 tokens)
+### Original (706 tokens)
 
 > "I strongly prefer TypeScript with strict mode enabled for all new code. Please don't use `any` type unless there's genuinely no way around it, and if you do, leave a comment explaining the reasoning. I find that taking the time to properly type things catches a lot of bugs before they ever make it to runtime."
 
@@ -57,17 +64,20 @@ All validations passed ✅ — headings, code blocks, URLs, file paths preserved
 
 ### <img src="../../docs/assets/dancing-rock.svg" width="20" height="20" alt="rock"/> Caveman (285 tokens)
 
-> "Prefer TypeScript strict mode always. No `any` unless unavoidable — comment why if used. Proper types catch bugs early."
+> "Prefer TypeScript strict mode always. No `any` unless unavoidable; comment why if used. Proper types catch bugs early."
 
 </td>
 </tr>
 </table>
 
-**Same instructions. 60% fewer tokens. Every. Single. Session.**
+This fixture produced 59.6% fewer counted tokens. Structural validation passed;
+result does not prove semantic equivalence on other files or models.
 
 ## Security
 
-`caveman-compress` is flagged as Snyk High Risk due to subprocess and file I/O patterns detected by static analysis. This is a false positive — see [SECURITY.md](./SECURITY.md) for a full explanation of what the skill does and does not do.
+`caveman-compress` is flagged as Snyk High Risk due to subprocess and file I/O
+patterns detected by static analysis. See [SECURITY.md](./SECURITY.md) for why
+these operations exist and how paths are constrained.
 
 ## Install
 
@@ -76,10 +86,10 @@ Compress is built in with the `caveman` plugin. Install `caveman` once, then use
 If you need local files, the compress skill lives at:
 
 ```bash
-caveman-compress/
+skills/caveman-compress/
 ```
 
-**Requires:** Python 3.10+
+Requires Python 3.10 or newer.
 
 ## Usage
 
@@ -98,8 +108,8 @@ Examples:
 
 | Type | Compress? |
 |------|-----------|
-| `.md`, `.txt`, `.rst`, `.typ`, `.typst`, `.tex` | ✅ Yes |
-| Extensionless natural language | ✅ Yes |
+| `.md`, `.txt`, `.rst`, `.typ`, `.typst`, `.tex` | Yes |
+| Extensionless natural language | Yes |
 | `.py`, `.js`, `.ts`, `.json`, `.yaml` | ❌ Skip (code/config) |
 | `*.original.md` | ❌ Skip (backup files) |
 
@@ -110,13 +120,13 @@ Examples:
         ↓
 detect file type        (no tokens)
         ↓
-Claude compresses       (tokens — one call)
+Claude compresses       (tokens: one call)
         ↓
 validate output         (no tokens)
   checks: headings, code blocks, URLs, file paths, bullets
         ↓
-if errors: Claude fixes cherry-picked issues only   (tokens — targeted fix)
-  does NOT recompress — only patches broken parts
+if errors: Claude fixes cherry-picked issues only   (tokens: targeted fix)
+  does NOT recompress; only patches broken parts
         ↓
 retry up to 2 times
         ↓
@@ -142,22 +152,25 @@ Caveman compress natural language. It never touch:
 
 ## Why This Matter
 
-`CLAUDE.md` loads on **every session start**. A 1000-token project memory file costs tokens every single time you open a project. Over 100 sessions that's 100,000 tokens of overhead — just for context you already wrote.
+`CLAUDE.md` loads on every session start. A 1,000-token project memory file adds
+1,000 input tokens each time project opens, or 100,000 across 100 sessions.
 
-Caveman cut that by ~46% on average. Same instructions. Same accuracy. Less waste.
+Caveman reduced counted tokens by about 46% on five listed fixtures. Validators
+confirmed headings, code blocks, URLs, and file paths. They did not establish
+general semantic or task-quality equivalence.
 
 ```
 ┌────────────────────────────────────────────┐
 │  TOKEN SAVINGS PER FILE    █████       46% │
-│  SESSIONS THAT BENEFIT     ██████████ 100% │
-│  INFORMATION PRESERVED     ██████████ 100% │
+│  FIXTURES IN TABLE                       5 │
+│  STRUCTURAL VALIDATION       passed on all │
 │  SETUP TIME                █            1x │
 └────────────────────────────────────────────┘
 ```
 
 ## Part of Caveman
 
-This skill is part of the [caveman](https://github.com/JuliusBrussee/caveman) toolkit — making Claude use fewer tokens without losing accuracy.
+This skill is part of the [caveman](https://github.com/JuliusBrussee/caveman) toolkit.
 
-- **caveman** — make Claude *speak* like caveman (cuts response tokens ~65%)
-- **caveman-compress** — make Claude *read* less (cuts context tokens ~46%)
+- `caveman`: ask Claude to answer in shorter prose
+- `caveman-compress`: shorten supported project-memory files with backups and validation

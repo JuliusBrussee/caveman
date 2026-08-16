@@ -2,7 +2,7 @@
 
 Measured 2026-08-10 with Google Chrome 151.0.7922.108, locked
 `@playwright/test` 1.56.1, and Caveman's offline `o200k_base` counter. Every
-number is an `inferred` token count for one snapshot—not provider usage or
+number is an `inferred` token count for one snapshot, not provider usage or
 billing.
 
 ## Results
@@ -15,8 +15,8 @@ across all five runs.
 
 | Representation | Tokens | Versus raw AX | Versus Playwright |
 |---|---:|---:|---:|
-| Raw `Accessibility.getFullAXTree` JSON | 398,494 `[398,493–398,497]` | — | — |
-| Playwright `locator("body").ariaSnapshot()` | 15,704 | 96.06% less | — |
+| Raw `Accessibility.getFullAXTree` JSON | 398,494 `[398,493–398,497]` | n/a | n/a |
+| Playwright `locator("body").ariaSnapshot()` | 15,704 | 96.06% less | n/a |
 | Caveman full agent-visible result | 13,368 `[13,367–13,368]` | 96.65% less | 14.88% less |
 | Caveman focused result, query `ORD-0173` | 121 `[121–122]` | 99.97% less | 99.23% less / 129.8× smaller |
 
@@ -30,8 +30,8 @@ action refs, recovery handle, or accounting. That asymmetry favors Playwright.
 
 | Representation | Tokens | Versus raw AX | Versus Playwright |
 |---|---:|---:|---:|
-| Raw `Accessibility.getFullAXTree` JSON | 4,186 `[4,183–4,188]` | — | — |
-| Playwright `locator("body").ariaSnapshot()` | 67 | 98.40% less | — |
+| Raw `Accessibility.getFullAXTree` JSON | 4,186 `[4,183–4,188]` | n/a | n/a |
+| Playwright `locator("body").ariaSnapshot()` | 67 | 98.40% less | n/a |
 | Caveman full agent-visible result | 157 `[156–159]` | 96.25% less | 2.34× larger |
 | Caveman focused result, query `Email Plan Save order` | 111 `[110–113]` | 97.35% less | 1.66× larger |
 
@@ -55,16 +55,16 @@ Run Caveman live-Chrome benchmark and functional loop:
 
 ```bash
 CAVEMAN_BROWSE_CHROME="/path/to/Chrome" \
-  go test -tags=integration -run 'TestCDPQueryScales|TestCDPFullTokenEfficient' -count=5 -v ./public/browse
+  go test -tags=integration -run 'TestCDPQueryScales|TestCDPFullTokenEfficient' -count=5 -v ./browse
 ```
 
 Count locked Playwright ARIA baseline with same tokenizer:
 
 ```bash
 CAVEMAN_BROWSE_CHROME="/path/to/Chrome" \
-  node public/browse/scripts/playwright-aria-baseline.mjs |
+  node browse/scripts/playwright-aria-baseline.mjs |
   CAVEMAN_CCR_DB=/tmp/caveman-browse-bench.db \
-  go run ./public/engine/cmd/caveman-engine compress --type no-such-type >/dev/null
+  go run ./engine/cmd/caveman-engine compress --type no-such-type >/dev/null
 ```
 
 Pass `agent_checkout.html` after the baseline script to reproduce the small-form
@@ -77,8 +77,7 @@ CLI reattachment, and explicit Chrome shutdown.
 
 ## Claim boundary
 
-These results prove this corpus and toolchain, not universal open-web dominance.
-Phase 1 remains scoped to same-origin, predictable controls. OOPIFs, dialogs,
-downloads, and arbitrary-site actionability remain deferred. Query-focused
-progressive disclosure is default best practice for large pages; full snapshots
-remain available when task intent is unknown.
+These results apply to this corpus and toolchain. Phase 1 covers same-origin,
+predictable controls; OOPIFs, dialogs, downloads, and arbitrary-site
+actionability remain deferred. Query-focused progressive disclosure is default
+for large pages, with full snapshots available when task intent is unknown.

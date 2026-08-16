@@ -45,12 +45,13 @@ smaller context + recovery handle
 ```
 
 `Compress`, `Retrieve`, `Detect`, and `Stats` form stable core API used by proxy,
-CLI, SDKs, MCP server, and WASM build. Default registry has 14 compressors,
-including JSON, logs, code, diffs, search results, HTML, tables, config, terminal
-output, tool schemas, TOON, accessibility trees, and repetition.
+CLI, SDKs, MCP server, and WASM build. Default registry has 15 compressors:
+JSON, logs, code, diffs, search results, text, HTML, tables, config, tool schemas,
+tool-schema annotations, TOON, accessibility trees, repetition, and terminal
+output.
 
-`record` mode never transforms. Unknown modes fail closed to `record`. Unknown
-graders fail with `passed: false`.
+`record` mode never transforms, and unknown modes fail closed to `record`.
+Unknown graders return `passed: false`.
 
 ## Engine CLI
 
