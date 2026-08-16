@@ -194,10 +194,67 @@ func (s *Store) BuildLearnPlanWithRetro(cwd string, sources []string, sinceExpr 
 		plan.Retro = s.buildLearnRetro(sourceSet, since, sinceExpr, cfg.configTaxPerTurn(), retro)
 	}
 
+	if plan.WrapMeasured = s.wrapMeasuredSince(since); plan.WrapMeasured != nil {
+		plan.WrapMeasured.WindowDays = int(windowDays(sinceExpr, "", ""))
+		plan.Caveats = appendUnique(plan.Caveats, fmt.Sprintf("Saved-so-far numbers are Caveman-counted tokens (basis: %s) over requests the proxy recorded in the window. Tokens only, no dollars. Kept apart from the could-have-saved replay: different requests, different method, never summed together.", plan.WrapMeasured.Basis))
+	}
+
 	if err := s.upsertSinks(plan.Sinks); err != nil {
 		logStoreWarning(s.logger, "learn sink persist failed", err)
 	}
 	return plan, nil
+}
+
+// wrapMeasuredSince sums proxy-recorded wrap activity at or after since. Nil
+// unless at least one row booked a real compression cut or an observe-mode
+// estimate: a machine that never ran the proxy must not render a zero card.
+// The write path already refuses negative token fields, so the clamps below
+// are defense-in-depth against rows written by other tooling.
+func (s *Store) wrapMeasuredSince(since time.Time) *LearnWrapMeasured {
+	where := ""
+	var args []any
+	if !since.IsZero() {
+		where = " WHERE ts >= ?"
+		args = append(args, since.UTC().Format(storeTSLayout))
+	}
+	out := &LearnWrapMeasured{}
+	var bases string
+	err := s.db.QueryRow(`SELECT COUNT(*),
+		COALESCE(SUM(CASE WHEN COALESCE(compression_tokens_before,0) > COALESCE(compression_tokens_after,0) THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(compression_tokens_before),0), COALESCE(SUM(compression_tokens_after),0),
+		COALESCE(SUM(would_save_tokens),0),
+		COALESCE(GROUP_CONCAT(DISTINCT NULLIF(compression_token_count_basis,'')),'')
+		FROM requests`+where, args...).Scan(
+		&out.Requests, &out.CompressedRequests,
+		&out.TokensBefore, &out.TokensAfter, &out.WouldSaveTokens, &bases,
+	)
+	if err != nil || out.Requests == 0 {
+		return nil
+	}
+	if out.TokensBefore < 0 {
+		out.TokensBefore = 0
+	}
+	if out.TokensAfter < 0 {
+		out.TokensAfter = 0
+	}
+	if out.WouldSaveTokens < 0 {
+		out.WouldSaveTokens = 0
+	}
+	if out.TokensSaved = out.TokensBefore - out.TokensAfter; out.TokensSaved < 0 {
+		out.TokensSaved = 0
+	}
+	if out.TokensSaved == 0 && out.WouldSaveTokens == 0 {
+		return nil
+	}
+	switch {
+	case bases == "":
+		out.Basis = "unavailable"
+	case !strings.Contains(bases, ","):
+		out.Basis = bases
+	default:
+		out.Basis = "mixed"
+	}
+	return out
 }
 
 // LearnScan builds the plan and writes concise cavemem learnings from the reducible

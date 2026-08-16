@@ -52,6 +52,31 @@ type LearnPlan struct {
 	// ContextDepth is present only when at least one scanned session carried
 	// usage data. Additive optional field: the schema stays `caveman.learn.v1`.
 	ContextDepth *LearnContextDepth `json:"context_depth,omitempty"`
+	// WrapMeasured is present only when the proxy recorded wrap activity in the
+	// window. Additive optional field: the schema stays `caveman.learn.v1`.
+	WrapMeasured *LearnWrapMeasured `json:"wrap_measured,omitempty"`
+}
+
+// LearnWrapMeasured sums what the proxy itself recorded inside the window:
+// tokens the wrap actually cut on requests it compressed, plus what observe
+// mode measured it would have cut without transforming. Counts are the
+// engine's o200k estimates summed over recorded rows — token volume only,
+// never a dollar, and never blended with the transcript-replay Retro block
+// (the two measure different requests by different methods).
+type LearnWrapMeasured struct {
+	Basis string `json:"basis"` // compression token count basis, e.g. estimated_engine_o200k
+	// WindowDays names the interval the sums cover; 0 means the since
+	// expression did not bound it and the sums are all-time.
+	WindowDays int   `json:"window_days"`
+	Requests   int64 `json:"requests"`
+	CompressedRequests int64  `json:"compressed_requests"`
+	TokensBefore       int64  `json:"tokens_before"`
+	TokensAfter        int64  `json:"tokens_after"`
+	TokensSaved        int64  `json:"tokens_saved"`
+	// WouldSaveTokens is observe-mode's report-only measurement on rows that
+	// were never transformed; it is disjoint from TokensSaved by construction
+	// (a row books one or the other, never both).
+	WouldSaveTokens int64 `json:"would_save_tokens"`
 }
 
 // LearnContextDepth summarizes how deep scanned sessions ran into their model's

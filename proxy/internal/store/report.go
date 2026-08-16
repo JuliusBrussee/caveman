@@ -403,6 +403,82 @@ func depthBars(d *LearnContextDepth) []depthBar {
 	return out
 }
 
+// pctOf is part as a whole-percent of whole, clamped to 0..100 for bar widths.
+// Template callers must pass int64 fields; an int argument fails at Execute time.
+func pctOf(part, whole int64) int {
+	if whole <= 0 || part <= 0 {
+		return 0
+	}
+	pct := int(part * 100 / whole)
+	if pct > 100 {
+		pct = 100
+	}
+	return pct
+}
+
+// famLabel is the plain-language display name for a retro family. The JSON
+// contract keeps the fix-naming Label untouched; only the report translates.
+func famLabel(f LearnRetroFamily) string {
+	switch f.ID {
+	case retroFamilyToolOutputs:
+		return "big tool results, compressed"
+	case retroFamilyRepeatedBlocks:
+		return "re-pasted context, remembered once in cavemem"
+	}
+	return f.Label
+}
+
+// famSeg is one segment of the single stacked composition bar; widths are
+// shares of the family total, floored so a small family stays visible.
+type famSeg struct {
+	Label  string
+	Tokens int64
+	Pct    int
+	Color  string
+}
+
+func famSegs(families []LearnRetroFamily) []famSeg {
+	var total int64
+	for _, f := range families {
+		total += f.Tokens
+	}
+	if total <= 0 {
+		return nil
+	}
+	colors := map[string]string{
+		retroFamilyToolOutputs:    "#448361",
+		retroFamilyRepeatedBlocks: "#e0b357",
+	}
+	out := make([]famSeg, 0, len(families))
+	for _, f := range families {
+		if f.Tokens <= 0 {
+			continue
+		}
+		pct := pctOf(f.Tokens, total)
+		if pct < 3 {
+			pct = 3
+		}
+		color := colors[f.ID]
+		if color == "" {
+			color = "#cfcdc7"
+		}
+		out = append(out, famSeg{Label: famLabel(f), Tokens: f.Tokens, Pct: pct, Color: color})
+	}
+	return out
+}
+
+// humanTokens compacts a token count for the big stat numbers: 21.7M, 855k.
+// Exact values stay in tooltips and the JSON sidecar.
+func humanTokens(v int64) string {
+	switch {
+	case v >= 1_000_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(v)/1e6), ".0") + "M"
+	case v >= 10_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(v)/1e3), ".0") + "k"
+	}
+	return commaInt(v)
+}
+
 func sumPerDay(sinks []Sink) int64 {
 	var total int64
 	for _, s := range sinks {
@@ -428,7 +504,9 @@ func learnTLDR(plan LearnPlan) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Cave score %d of 100.", plan.CaveScore.Score)
 	if len(plan.Sinks) == 0 {
-		b.WriteString(" No token sinks found. Setup lean. Keep going.")
+		b.WriteString(" No token sinks found. Setup lean.")
+		savingsTLDR(&b, plan)
+		b.WriteString(" Keep going.")
 		return b.String()
 	}
 	var red, rec, beh int
@@ -459,17 +537,45 @@ func learnTLDR(plan LearnPlan) string {
 	if d := plan.ContextDepth; d != nil && d.Over50Pct > 0 {
 		fmt.Fprintf(&b, " %s ran past half the context window.", plural(d.Over50Pct, "session"))
 	}
+	savingsTLDR(&b, plan)
 	b.WriteString(" Cost chart below. Approve fixes one by one. Cost go down.")
 	return b.String()
 }
 
+// savingsTLDR appends the wrap-measured and retro-replay sentences. Token-only,
+// claiming only what was measured, and the retro figure is attributed to the
+// fixes collectively — most of it can need a cavemem offload the wrap alone
+// cannot deliver.
+func savingsTLDR(b *strings.Builder, plan LearnPlan) {
+	if w := plan.WrapMeasured; w != nil && w.TokensSaved > 0 {
+		fmt.Fprintf(b, " Caveman already saved %s tokens.", humanTokens(w.TokensSaved))
+	}
+	if r := plan.Retro; r != nil && r.WouldCutStreamTokens > 0 {
+		fmt.Fprintf(b, " Replay of %s: the fixes here could have saved %s of the %s tokens sent.",
+			plural(r.SessionsScanned, "past session"), humanTokens(r.WouldCutStreamTokens), humanTokens(r.TokensObserved))
+	}
+}
+
 var learnTemplate = template.Must(template.New("learn").Funcs(template.FuncMap{
-	"tldr":         learnTLDR,
-	"comma":        commaInt,
+	"tldr": learnTLDR,
+	// comma accepts both int64 plan fields and int rates so no raw integer
+	// renders unformatted next to formatted ones.
+	"comma": func(v any) string {
+		switch n := v.(type) {
+		case int:
+			return commaInt(int64(n))
+		case int64:
+			return commaInt(n)
+		}
+		return fmt.Sprintf("%v", v)
+	},
 	"plural":       plural,
 	"costFamilies": costFamilies,
 	"sumPerDay":    sumPerDay,
 	"depthBars":    depthBars,
+	"pctOf":        pctOf,
+	"famSegs":      famSegs,
+	"human":        humanTokens,
 	"classClass": func(class string) string {
 		switch class {
 		case classReducible:
@@ -608,6 +714,21 @@ summary .num{font-variant-numeric:tabular-nums;color:#787774;font-size:14px;whit
 .hlegend{display:flex;align-items:center;gap:16px;margin-top:14px;font-size:12px;color:#787774}
 .hlegend>span{display:flex;align-items:center;gap:6px}
 .hcap{margin-left:auto;color:#9b9a97}
+.split{display:grid;grid-template-columns:1fr 1fr}
+.panel{min-width:0;padding-right:28px}
+.panel+.panel{border-left:1px solid #ededec;padding-left:28px;padding-right:0}
+.pnum{font-size:34px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.15;margin:2px 0 10px}
+.punit{font-size:14px;font-weight:400;color:#787774;margin-left:6px;letter-spacing:0}
+.pcap{font-size:13px;color:#787774;margin:8px 0 0;line-height:1.5}
+.pcap.dim{color:#9b9a97}
+.meter{height:10px;border-radius:5px;background:#f1f1ef;overflow:hidden}
+.meter span{display:block;height:100%;border-radius:5px;background:#448361;min-width:3px}
+.stack{display:flex;height:12px;border-radius:6px;overflow:hidden;background:#f1f1ef;margin:22px 0 10px}
+.stack span{display:block;height:100%}
+.fine{font-size:12px;color:#9b9a97;margin:10px 0 0}
+.dcard details{border-bottom:none;margin-top:12px}
+.dcard summary{padding:6px 0;color:#787774;font-size:13px}
+@media(max-width:560px){.dstats{flex-wrap:wrap;gap:20px}.split{grid-template-columns:1fr}.panel{padding-right:0}.panel+.panel{border-left:none;border-top:1px solid #ededec;padding:20px 0 0;margin-top:20px}}
 ul.caveats{margin:0;padding-left:20px;color:#787774;font-size:14px}
 ul.caveats li{margin:6px 0}
 @media(max-width:560px){main{padding:48px 16px 96px}h1{font-size:32px}.icon{font-size:48px}}
@@ -623,6 +744,62 @@ ul.caveats li{margin:6px 0}
   <div class="emoji">🗿</div>
   <div><div class="label">TLDR</div>{{tldr .Plan}}</div>
 </div>
+
+{{if or .Plan.WrapMeasured .Plan.Retro}}
+<h2>Savings</h2>
+<p class="note">Counted in tokens, not dollars — what a token costs depends on caching. Each number is measured on its own set of requests; none are added together.</p>
+<div class="dcard">
+  <div class="split">
+    {{with .Plan.WrapMeasured}}
+    <div class="panel">
+      <div class="kicker">Saved so far</div>
+      <div class="pnum" title="{{comma .TokensSaved}} tokens">{{human .TokensSaved}}<span class="punit">tokens</span></div>
+      {{if .TokensSaved}}
+      <div class="meter" title="cut {{comma .TokensSaved}} of {{comma .TokensBefore}} tokens"><span style="width:{{pctOf .TokensSaved .TokensBefore}}%"></span></div>
+      <p class="pcap">Caveman compressed {{comma .CompressedRequests}} of the {{comma .Requests}} requests it handled, making them {{pctOf .TokensSaved .TokensBefore}}% smaller.</p>
+      {{else}}
+      <p class="pcap">Nothing cut yet — Caveman watched {{comma .Requests}} requests without changing them.</p>
+      {{end}}
+      {{if .WouldSaveTokens}}<p class="pcap dim">Plus {{human .WouldSaveTokens}} tokens spotted in watch-only mode, not cut.</p>{{end}}
+    </div>
+    {{end}}
+    {{with .Plan.Retro}}
+    <div class="panel">
+      <div class="kicker">Could have saved{{if .TimeBoxed}} · partial scan{{end}}</div>
+      <div class="pnum" title="{{comma .WouldCutStreamTokens}} tokens">{{human .WouldCutStreamTokens}}<span class="punit">tokens</span></div>
+      {{if .WouldCutStreamTokens}}
+      <div class="meter" title="{{comma .WouldCutStreamTokens}} of {{comma .TokensObserved}} tokens"><span style="width:{{pctOf .WouldCutStreamTokens .TokensObserved}}%"></span></div>
+      <p class="pcap">{{pctOf .WouldCutStreamTokens .TokensObserved}}% of the {{human .TokensObserved}} tokens your last {{plural .SessionsScanned "session"}} sent, across the two fixes below.</p>
+      {{else}}
+      <p class="pcap">The replay found savings but too few timestamps to state an honest total.</p>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+  {{with .Plan.Retro}}
+  {{$segs := famSegs .Families}}
+  {{if $segs}}
+  <div class="kicker" style="margin:22px 0 8px">Where it comes from · each cut counted once · {{human .WouldCutTokens}} tokens</div>
+  <div class="stack" style="margin-top:0">
+    {{range $segs}}<span style="width:{{.Pct}}%;background:{{.Color}}" title="{{.Label}} · {{comma .Tokens}} tokens"></span>{{end}}
+  </div>
+  <div class="hlegend">
+    {{range $segs}}<span><span class="dot" style="background:{{.Color}}"></span>{{.Label}} · {{human .Tokens}}</span>{{end}}
+    <span class="hcap">a different count from the headline, which weighs every re-send</span>
+  </div>
+  {{end}}
+  {{if .ConfigPrefixTokensPerTurn}}<p class="fine">Your always-on config adds {{comma .ConfigPrefixTokensPerTurn}} tokens every turn — a separate fix, not included above.</p>{{end}}
+  {{if not .EngineUsed}}<p class="fine">The compression engine could not start, so tool-result savings are missing from these numbers.</p>{{end}}
+  {{end}}
+  {{with .Plan.WrapMeasured}}<p class="fine">Saved-so-far counts use Caveman's own token counter ({{.Basis}}), not provider numbers.</p>{{end}}
+  {{with .Plan.Retro}}{{if .Caveats}}
+  <details>
+    <summary><span class="caret">▶</span>How this was measured</summary>
+    <div class="body"><ul class="caveats">{{range .Caveats}}<li>{{.}}</li>{{end}}</ul></div>
+  </details>
+  {{end}}{{end}}
+</div>
+{{end}}
 
 <h2>Cave Score</h2>
 <p class="note">Setup leanness. Starts at 100, subtracts capped penalties. Inferred and local-only, never a savings or dollar figure.</p>
