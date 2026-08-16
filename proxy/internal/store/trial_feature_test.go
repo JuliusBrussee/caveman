@@ -695,7 +695,7 @@ func TestLearnHTMLReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	for _, want := range []string{"Cave Score", "Biggest Token Sinks", "What's Safely Reducible", "Behavioral Observations", "Caveats"} {
+	for _, want := range []string{"TLDR", "Cave score", "Cave Score", "Token Sinks", "Caveats"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report missing section %q", want)
 		}

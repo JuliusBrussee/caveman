@@ -49,6 +49,20 @@ type LearnPlan struct {
 	// had something honest to report. Additive optional field: the schema stays
 	// `caveman.learn.v1`.
 	Retro *LearnRetro `json:"retro,omitempty"`
+	// ContextDepth is present only when at least one scanned session carried
+	// usage data. Additive optional field: the schema stays `caveman.learn.v1`.
+	ContextDepth *LearnContextDepth `json:"context_depth,omitempty"`
+}
+
+// LearnContextDepth summarizes how deep scanned sessions ran into their model's
+// context window: each session's PEAK context share, bucketed in tens. Window
+// sizes are assumed per-provider defaults (the dumbzone caveat applies), and
+// every number is transcript arithmetic, never a projection.
+type LearnContextDepth struct {
+	Sessions  int   `json:"sessions"`
+	Over30Pct int   `json:"over_30_pct"`
+	Over50Pct int   `json:"over_50_pct"`
+	Buckets   []int `json:"buckets"` // 10 buckets: peak share 0-10%, 10-20%, ... 90-100%+
 }
 
 // LearnRetro is the retrospective "would-have-saved" block for the scanned

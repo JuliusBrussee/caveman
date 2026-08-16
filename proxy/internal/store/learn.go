@@ -52,6 +52,7 @@ type behaviorScan struct {
 	Turns             int
 	DumbzoneTurns     int
 	Contexts          []int
+	SessionPeakPct    []int // per session: peak context as a percent of the assumed model window
 	TaskSpawns        int
 	SessionsScanned   int
 	SessionsBySource  map[string]int
@@ -67,6 +68,29 @@ func (b *behaviorScan) recordSession(source string) {
 		b.SessionsBySource = map[string]int{}
 	}
 	b.SessionsBySource[source]++
+}
+
+// contextDepth buckets each session's peak context share for the report's
+// histogram. Nil when no scanned session carried usage data.
+func contextDepth(beh behaviorScan) *LearnContextDepth {
+	if len(beh.SessionPeakPct) == 0 {
+		return nil
+	}
+	d := &LearnContextDepth{Sessions: len(beh.SessionPeakPct), Buckets: make([]int, 10)}
+	for _, pct := range beh.SessionPeakPct {
+		if pct > 30 {
+			d.Over30Pct++
+		}
+		if pct > 50 {
+			d.Over50Pct++
+		}
+		i := pct / 10
+		if i > 9 {
+			i = 9
+		}
+		d.Buckets[i]++
+	}
+	return d
 }
 
 func (b behaviorScan) medianContext() int {
@@ -120,6 +144,7 @@ func (s *Store) BuildLearnPlanWithRetro(cwd string, sources []string, sinceExpr 
 		Window:           LearnWindow{From: beh.From, To: beh.To, Since: sinceExpr},
 		SessionsScanned:  beh.SessionsScanned,
 		SessionsBySource: beh.SessionsBySource,
+		ContextDepth:     contextDepth(beh),
 		Sinks:            []Sink{},
 		Caveats: []string{
 			"Local learn results are inferred. No local number is promoted to verified; Cloud additionally requires supported provider-causal, provider-complete, catalog-priced active evidence.",
@@ -602,6 +627,7 @@ func scanClaudeTranscriptBehaviorUntil(path, relPath string, since time.Time, sl
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	beh.recordSession("claude")
 	sessionTasks := 0
+	sessionPeakPct := 0
 	seenSlugs := map[string]bool{}
 	seenUsage := map[string]bool{}
 	pendingTools := map[string]learnToolCall{}
@@ -640,7 +666,11 @@ func scanClaudeTranscriptBehaviorUntil(path, relPath string, since time.Time, sl
 				}
 				beh.Turns++
 				beh.Contexts = append(beh.Contexts, ctx)
-				if ctx > int(dumbzoneFraction*float64(contextWindow("anthropic", claudeModel(obj)))) {
+				window := contextWindow("anthropic", claudeModel(obj))
+				if pct := ctx * 100 / window; pct > sessionPeakPct {
+					sessionPeakPct = pct
+				}
+				if ctx > int(dumbzoneFraction*float64(window)) {
 					beh.DumbzoneTurns++
 				}
 			}
@@ -661,6 +691,9 @@ func scanClaudeTranscriptBehaviorUntil(path, relPath string, since time.Time, sl
 	if sessionTasks > 0 {
 		beh.TaskSpawns += sessionTasks
 		beh.SessionsWithTasks++
+	}
+	if sessionPeakPct > 0 {
+		beh.SessionPeakPct = append(beh.SessionPeakPct, sessionPeakPct)
 	}
 	sessionSum := sha256.Sum256([]byte(relPath))
 	sessionRef := hex.EncodeToString(sessionSum[:8])
@@ -750,6 +783,7 @@ func scanCodexSessionBehaviorUntil(path string, since time.Time, beh *behaviorSc
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	beh.recordSession("codex")
 	lineNo := 0
+	sessionPeakPct := 0
 	for sc.Scan() {
 		lineNo++
 		if deadline != nil && deadline.expired() {
@@ -786,9 +820,16 @@ func scanCodexSessionBehaviorUntil(path string, since time.Time, beh *behaviorSc
 		beh.Turns++
 		beh.Contexts = append(beh.Contexts, ctx)
 		model := firstString(payload["model"], info["model"], obj["model"])
-		if ctx > int(dumbzoneFraction*float64(contextWindow("openai", model))) {
+		window := contextWindow("openai", model)
+		if pct := ctx * 100 / window; pct > sessionPeakPct {
+			sessionPeakPct = pct
+		}
+		if ctx > int(dumbzoneFraction*float64(window)) {
 			beh.DumbzoneTurns++
 		}
+	}
+	if sessionPeakPct > 0 {
+		beh.SessionPeakPct = append(beh.SessionPeakPct, sessionPeakPct)
 	}
 	return false
 }
@@ -831,6 +872,7 @@ func mergeBehaviorScan(dst, src *behaviorScan) {
 	dst.Turns += src.Turns
 	dst.DumbzoneTurns += src.DumbzoneTurns
 	dst.Contexts = append(dst.Contexts, src.Contexts...)
+	dst.SessionPeakPct = append(dst.SessionPeakPct, src.SessionPeakPct...)
 	dst.TaskSpawns += src.TaskSpawns
 	dst.SessionsScanned += src.SessionsScanned
 	dst.SessionsWithTasks += src.SessionsWithTasks
