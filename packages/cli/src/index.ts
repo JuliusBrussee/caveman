@@ -55,6 +55,9 @@ import { portableInvocation } from "./portable-command.js";
 
 type TokenStore = "keychain" | "file";
 type TelemetryConfig = { enabled: boolean; anonymousId?: string; decidedAt: string; promptVersion: number };
+// The high-water mark of proxy token totals already reported, so each event
+// carries a delta instead of replaying lifetime history on every command.
+type TelemetryTokenWatermark = { tokensIn: number; tokensSaved: number; at: string };
 type StoredCredentials = {
   access_token: string;
   refresh_token?: string;
@@ -74,6 +77,7 @@ type Config = {
   gatewayUrl?: string;
   logoutPendingLocalCleanup?: boolean;
   telemetry?: TelemetryConfig;
+  telemetryTokens?: TelemetryTokenWatermark;
 };
 type WrapMode = "local" | "managed";
 export type OverlayBuilderContext = { mode: WrapMode; gatewayUrl: string; env: NodeJS.ProcessEnv };
@@ -392,9 +396,9 @@ function resolveInvocation(raw: string[]): ResolvedInvocation {
   if (handler) return { verb: top, argv: raw.slice(1), handler };
   const agent = RESERVED_VERBS.has(top) ? undefined : findAgent(top);
   if (agent) return {
-    verb: "wrap",
+    verb: "run",
     argv: normalizeAgentShortcutWrapArgs(raw),
-    handler: wrap,
+    handler: agentShortcut,
     agent,
   };
   return { verb: top, argv: raw.slice(1), handler: () => unknownInvocation(top) };
@@ -450,17 +454,23 @@ function invokedCommand(legacyVerb: string, groupedTail = ""): string {
 
 let currentInvocation: ResolvedInvocation;
 currentInvocation = resolveInvocation(process.argv.slice(2));
-// Version 3 = default-on (opt-out): telemetry is on unless the user
-// turns it off. A persisted decision from any version — including a "no" to the
-// old v1 [y/N] prompt — is honored forever; the default only fills the
+// Version 4 = default-on (opt-out) plus token volume: command_run now carries
+// the local proxy's processed/saved token deltas, so a v3 "yes" was given for a
+// narrower scope and gets the new disclosure reprinted once (never re-asked, and
+// never flipped on). A persisted decision from any version — including a "no" to
+// the old v1 [y/N] prompt — is honored forever; the default only fills the
 // undecided gap, and the first default-on run prints the disclosure line.
-const TELEMETRY_PROMPT_VERSION = 3;
+const TELEMETRY_PROMPT_VERSION = 4;
 const TELEMETRY_URL = "https://api.caveman.so/telemetry/cli";
 // The production control-API origin — derived from TELEMETRY_URL (the CLI's
 // other hardcoded prod-host literal) so the two can never drift apart.
 const PROD_API_URL = new URL(TELEMETRY_URL).origin;
 const TELEMETRY_DISCLOSURE_LINE =
-  "anonymous usage stats on — command counts only, never prompts, code, or file paths · caveman telemetry off";
+  "anonymous usage stats on — command counts and token totals only, never prompts, code, or file paths · caveman telemetry off";
+// Reading token totals means spawning caveman-proxy to query the local SQLite
+// store. It runs after the command's own work, so the cost lands on process exit;
+// a slow or wedged binary drops the token fields rather than holding the CLI.
+const TELEMETRY_TOKEN_READ_TIMEOUT_MS = 400;
 const SYNC_DISCLOSURE =
   "sync uploads span metadata to your org's dashboard — tokens, cost, latency, model, status. Imported standalone observations never affect managed budgets, verified savings, or billing. Subscription/OAuth sessions carry token counts only — no dollar figure. Never prompt or response bytes.";
 const TELEMETRY_COMMAND_ALLOWLIST = [
@@ -574,6 +584,7 @@ async function ensureTelemetryDefault() {
   // `caveman telemetry …` manages the decision explicitly — don't pre-mint an
   // "on" for someone whose first-ever command is `telemetry off`.
   if (currentInvocation.verb === "telemetry") return;
+  if (state.source === "config") return ensureTelemetryDisclosureVersion(state);
   if (state.source !== "default") return;
   const telemetry: TelemetryConfig = {
     enabled: true,
@@ -586,6 +597,25 @@ async function ensureTelemetryDefault() {
   // persist succeeds, and telemetrySendable refuses un-persisted defaults.
   try {
     await saveTelemetryConfig(telemetry);
+  } catch {
+    return;
+  }
+  process.stderr.write(`${dim(TELEMETRY_DISCLOSURE_LINE)}\n`);
+}
+
+// ensureTelemetryDisclosureVersion reprints the disclosure once for someone who
+// consented under older wording. v4 widened command_run with token volume, and a
+// v3 "yes" was given for command counts alone — it stays a yes (re-asking would
+// silently reset a decision the user already made), but it is never widened
+// silently. Only reached with source "config", which already means interactive,
+// not CI, and no env override in play. An opt-out is left completely untouched:
+// no write, no line, no version bump.
+async function ensureTelemetryDisclosureVersion(state: TelemetryRuntimeState) {
+  const cfg = state.config;
+  if (!cfg?.enabled || state.state !== "on") return;
+  if (cfg.promptVersion >= TELEMETRY_PROMPT_VERSION) return;
+  try {
+    await saveTelemetryConfig({ ...cfg, promptVersion: TELEMETRY_PROMPT_VERSION });
   } catch {
     return;
   }
@@ -681,6 +711,16 @@ async function telemetryOff() {
     promptVersion: TELEMETRY_PROMPT_VERSION,
   };
   await saveTelemetryConfig(telemetry);
+  // Drop the token watermark with the decision. Keeping it would make a later
+  // `telemetry on` report every token processed during the opt-out window as one
+  // delta — the seeding rule has to hold across the off/on boundary too.
+  try {
+    mutateRawConfig((out) => {
+      delete out.telemetryTokens;
+    });
+  } catch {
+    /* best effort: the decision itself is already persisted */
+  }
   print({ telemetry: "off", anonymous_id: "none" });
 }
 
@@ -727,6 +767,146 @@ function telemetryAnonymousId(state: TelemetryRuntimeState): string {
   return telemetryEphemeralId;
 }
 
+// parseProxyStatsPayload pulls the stats object out of caveman-proxy's stdout.
+// The binary points its JSON slog handler at stdout too, so a log line can land
+// ahead of the payload and a plain JSON.parse of the whole stream would throw.
+// Every candidate must carry a numeric tokens_in: without that check a stray log
+// object parses "successfully" as zero tokens, which reads as a rewound store and
+// replays the entire lifetime total as one delta.
+function parseProxyStatsPayload(out: string): Record<string, unknown> | null {
+  const attempt = (text: string): Record<string, unknown> | null => {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+      const raw = parsed as Record<string, unknown>;
+      return typeof raw.tokens_in === "number" ? raw : null;
+    } catch {
+      return null;
+    }
+  };
+  const trimmed = out.trim();
+  if (!trimmed) return null;
+  const whole = attempt(trimmed);
+  if (whole) return whole;
+  // Log lines can land on either side of the payload (a deferred Close() error
+  // prints after it), so scan candidate object bounds from the end rather than
+  // assuming the payload runs to EOF. Bounded: this output is a handful of lines,
+  // and the budget keeps a pathological one from costing real time.
+  const lines = trimmed.split("\n");
+  let budget = 64;
+  for (let start = lines.length - 1; start >= 0 && budget > 0; start--) {
+    if (!lines[start]!.startsWith("{")) continue;
+    for (let end = lines.length; end > start && budget > 0; end--) {
+      budget--;
+      const candidate = attempt(lines.slice(start, end).join("\n"));
+      if (candidate) return candidate;
+    }
+  }
+  return null;
+}
+
+// readProxyTokenTotals reads the local proxy's lifetime token aggregate. Every
+// failure path — no store yet, no proxy binary, slow spawn, unparsable output —
+// returns null and the event simply ships without token fields. Numbers only:
+// `caveman-proxy stats --json` is an aggregate over the requests table, never a
+// row, a prompt, a model name, or a path.
+function readProxyTokenTotals(): { tokensIn: number; tokensSaved: number; basis: string } | null {
+  try {
+    const db = process.env.CAVEMAN_DB || join(cavemanHome(), "caveman.db");
+    if (!existsSync(db)) return null;
+    const bin = resolveGoBin("caveman-proxy", "CAVEMAN_PROXY_BIN");
+    if (!bin) return null;
+    const out = execFileSync(bin, ["stats", "--json"], {
+      encoding: "utf8",
+      timeout: TELEMETRY_TOKEN_READ_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parsed = parseProxyStatsPayload(out);
+    if (!parsed) return null;
+    const tokensIn = parsed.tokens_in as number;
+    const tokensSaved = typeof parsed.compression_tokens_saved === "number" ? parsed.compression_tokens_saved : 0;
+    if (!Number.isFinite(tokensIn) || !Number.isFinite(tokensSaved)) return null;
+    // Basis rides along because these are tokenizer estimates, not billed counts;
+    // the receiving side must never promote them to verified savings.
+    const basis = typeof parsed.basis === "string" && parsed.basis ? parsed.basis : "inferred";
+    return {
+      tokensIn: Math.max(0, Math.trunc(tokensIn)),
+      tokensSaved: Math.max(0, Math.trunc(tokensSaved)),
+      basis,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseTelemetryTokenWatermark(value: unknown): TelemetryTokenWatermark | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.tokensIn !== "number" || typeof raw.tokensSaved !== "number") return null;
+  if (!Number.isFinite(raw.tokensIn) || !Number.isFinite(raw.tokensSaved)) return null;
+  return {
+    tokensIn: Math.max(0, Math.trunc(raw.tokensIn)),
+    tokensSaved: Math.max(0, Math.trunc(raw.tokensSaved)),
+    at: typeof raw.at === "string" ? raw.at : "",
+  };
+}
+
+function telemetryTokenWatermarkFromDisk(): TelemetryTokenWatermark | null {
+  try {
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as { telemetryTokens?: unknown };
+    return parseTelemetryTokenWatermark(parsed.telemetryTokens);
+  } catch {
+    return null;
+  }
+}
+
+// telemetryTokenDelta returns what to report for THIS event and advances the
+// watermark to the totals it read. The send is fire-and-forget, so a dropped POST
+// loses that delta rather than replaying it — undercounting beats double-counting
+// a savings number.
+//
+// Two cases report nothing and only re-baseline. The first read on a machine
+// seeds the watermark: the store can already hold traffic from before the user
+// saw this disclosure, and telemetry starts at consent rather than reaching
+// backwards through history. A store that rewound (db deleted, restored backup)
+// re-baselines for the same reason — never a negative, never a second copy of
+// history.
+function telemetryTokenDelta(): { processed: number; saved: number; basis: string } | null {
+  const totals = readProxyTokenTotals();
+  if (!totals) return null;
+  const prior = telemetryTokenWatermarkFromDisk();
+  const rewound = prior !== null && (totals.tokensIn < prior.tokensIn || totals.tokensSaved < prior.tokensSaved);
+  const processed = prior && !rewound ? Math.max(0, totals.tokensIn - prior.tokensIn) : 0;
+  const saved = prior && !rewound ? Math.max(0, totals.tokensSaved - prior.tokensSaved) : 0;
+  const rebaselining = prior === null || rewound;
+  if (processed === 0 && saved === 0 && !rebaselining) return null;
+  // Claim the delta optimistically: two CLI processes exiting together would
+  // otherwise read the same watermark and both report the same tokens, inflating
+  // a savings figure. Whoever writes second sees the watermark already moved and
+  // reports nothing.
+  let claimed = true;
+  try {
+    mutateRawConfig((out) => {
+      const current = parseTelemetryTokenWatermark(out.telemetryTokens);
+      if (current?.tokensIn !== prior?.tokensIn || current?.tokensSaved !== prior?.tokensSaved) {
+        claimed = false;
+        return;
+      }
+      out.telemetryTokens = {
+        tokensIn: totals.tokensIn,
+        tokensSaved: totals.tokensSaved,
+        at: new Date().toISOString(),
+      } satisfies TelemetryTokenWatermark;
+    });
+  } catch {
+    // Read-only home: report nothing rather than resend the same delta forever.
+    return null;
+  }
+  if (!claimed) return null;
+  if (processed === 0 && saved === 0) return null;
+  return { processed, saved, basis: totals.basis };
+}
+
 function emitCommandRunOnce(exitClass: TelemetryExitClass, errorClass?: TelemetryErrorClass): Promise<void> {
   const event = commandRunEventOnce(exitClass, errorClass);
   return event ? emitTelemetryEvents([event]) : Promise.resolve();
@@ -755,6 +935,14 @@ function commandRunEventOnce(exitClass: TelemetryExitClass, errorClass?: Telemet
   if (sub) event.subcommand = sub;
   if (agent) event.agent = agent;
   if (exitClass === "error") event.error_class = errorClass ?? "other";
+  // Token volume rides on command_run only — runtime_bootstrap shares the same
+  // watermark and would race it into a double count.
+  const tokens = telemetryTokenDelta();
+  if (tokens) {
+    event.tokens_processed = tokens.processed;
+    event.tokens_saved = tokens.saved;
+    event.tokens_basis = tokens.basis;
+  }
   return event;
 }
 
@@ -4612,6 +4800,110 @@ function normalizeAgentShortcutWrapArgs(input: string[]): string[] {
     agentArgs.push(item);
   }
   return [...wrapFlags, agent, ...agentArgs];
+}
+
+// Aider is deliberately absent: it has no lifecycle hooks, so nothing on the
+// native path would ever start the proxy or apply routedAiderArgs — a direct
+// launch would point it at a dead endpoint. Aider keeps the wrap door.
+function nativeAgentId(id: string): NativeAgent | undefined {
+  return id === "claude" || id === "codex" || id === "hermes" || id === "gemini" || id === "opencode" ? id : undefined;
+}
+
+// `caveman <agent>` — the default door. It persistently enables the native
+// integration (the same journaled user-scoped writes as `caveman enable <agent>`)
+// and then launches the host binary untouched: routing, Core, and proxy
+// autostart all live in the installed hooks, so plain `<agent>` stays caveman'd
+// in every later session too. Wrap-session flags, unsupported agents, or any
+// enable failure fall back to the ephemeral `wrap` door — the shortcut is
+// never worse than a session-only wrap.
+async function agentShortcut(rest: string[]) {
+  // normalizeAgentShortcutWrapArgs hoists --off/--pixel/--workflow to the
+  // front, so a leading flag means explicit session-only wrap intent.
+  if (rest[0]?.startsWith("--")) return wrap(rest);
+  const agent = findAgent(rest[0] ?? "");
+  const native = agent ? nativeAgentId(agent.id) : undefined;
+  if (!agent || !native) return wrap(rest);
+  // A Cave Build lock is enforced at the wrap door (claudeCaveBuildEnv); the
+  // native door applies none of its transforms, so a locked project must keep
+  // routing through wrap or the lock would be silently unenforced.
+  if (existsSync(join(process.cwd(), ".caveman", "agent.lock.json"))) return wrap(rest);
+  // First-run disclosure comes before the first persistent write, mirroring wrap.
+  await firstRunExperience();
+  try {
+    // An existing journal means the machine-wide install already owns routing —
+    // exactly what plain `<agent>` uses — so launch directly without re-probing
+    // (status probes spawn three subprocesses); `caveman doctor <agent>` stays
+    // the repair door for drifted installs.
+    if (!readNativeJournal(native)) enableNative([native]);
+  } catch (error) {
+    process.stderr.write(`${mark("warn")} native enable failed: ${(error as Error).message} — using session-only wrap for this run\n`);
+    return wrap(rest);
+  }
+  const bin = which(binOf(agent));
+  if (!bin) {
+    wrapNotFoundUI(rest[0]!, agent);
+    await emitCommandRunOnce("error", "usage");
+    process.exit(127);
+  }
+  // The native SessionStart hook autostarts the proxy, but only after the host
+  // has approved the installed hooks — start it here too so the first routed
+  // request never hits a dead endpoint. Fail-open, same as the hook.
+  try {
+    const opts = defaultWrapOptions();
+    const gw = gatewayURL();
+    const { host, port } = gatewayHostPort(gw);
+    if (wrapMode(gw) === "local" && !opts.noProxy && !(await portListening(host, port))) {
+      const subscription = native === "codex" && detectCodexWrapAuthMode() === "subscription";
+      const mode = subscription && opts.mode === "pixel" ? "record" : opts.mode;
+      const recovery = Boolean(probeMcpBinary()?.probe.current);
+      await startWrapProxy(
+        mode,
+        recovery,
+        subscription ? false : opts.toon,
+        opts.pixelModels,
+        opts.pixelDensity,
+        gw,
+        subscription ? "codex-subscription" : "standard",
+        false,
+      );
+    }
+  } catch { /* runtime startup is fail-open; the native hook retries at SessionStart */ }
+  if (native === "hermes") maybeWarnHermesMissingKey(agent, gatewayURL());
+  const code = await new Promise<number>((resolve, reject) => {
+    const invocation = portableInvocation(bin, [...agent.args, ...rest.slice(1)]);
+    const child = spawn(invocation.command, invocation.args, { stdio: "inherit" });
+    // tty-generated signals (Ctrl+C / Ctrl+\) already reach the child through
+    // the shared foreground group — forwarding would double-deliver them. But
+    // process-directed SIGTERM/SIGHUP (timeout(1), supervisors, pkill) only hit
+    // this launcher, so those must be forwarded. Either way the launcher
+    // re-raises on itself after the child exits so callers see a signal death,
+    // not a clean exit.
+    let fatal: NodeJS.Signals | undefined;
+    for (const signal of ["SIGINT", "SIGQUIT"] as NodeJS.Signals[]) {
+      process.on(signal, () => { fatal = signal; /* the tty delivered it to the child already */ });
+    }
+    for (const signal of ["SIGHUP", "SIGTERM"] as NodeJS.Signals[]) {
+      process.on(signal, () => {
+        fatal = signal;
+        child.kill(signal);
+        const grace = setTimeout(() => child.kill("SIGKILL"), 10_000);
+        grace.unref();
+      });
+    }
+    child.on("error", (error) => reject(new Error(`failed to exec ${bin}: ${error.message}`)));
+    child.on("exit", (exitCode, signal) => {
+      if (fatal) {
+        process.removeAllListeners(fatal);
+        process.kill(process.pid, fatal);
+        return;
+      }
+      resolve(exitCode ?? signalExitCode(signal));
+    });
+  });
+  const exitClass: TelemetryExitClass = code === 0 ? "ok" : "error";
+  const event = commandRunEventOnce(exitClass, exitClass === "error" ? "other" : undefined);
+  if (event) await emitTelemetryEvents([event]);
+  process.exit(code);
 }
 
 // runWrapped execs the resolved command with the gateway injection applied. It

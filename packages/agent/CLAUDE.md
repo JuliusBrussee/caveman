@@ -1,5 +1,11 @@
 # packages/agent
 
+> **Repository routing:** do not continue Agent SDK product work here. Source of
+> truth is `JuliusBrussee/caveman-agent-sdk`, local checkout
+> `/Users/julb/Desktop/GitHub/caveman-agent-sdk`. This directory is a historical
+> consumer copy; edit only for pinned integration, migration/removal, or an
+> explicit cross-repo sync.
+
 `@caveman-ai/agent`: opinionated TypeScript efficiency framework over exact-pinned
 Pi. `src/runtime.ts` owns agent execution, cache safety, tool isolation, runtime
 supervision, and content-blind evidence. Loopback runtime readiness requires

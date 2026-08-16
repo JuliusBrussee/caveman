@@ -42,7 +42,7 @@
 
 ## Install
 
-Caveman is three separate installs. Each works alone. Not sure? Start with the skill — it needs no account, proxy, Go toolchain, or code changes.
+Caveman is two separate installs. Each works alone. Not sure? Start with the skill — it needs no account, proxy, Go toolchain, or code changes.
 
 **Shorter answers — the skill (MIT).** The caveman skill + slash commands in every supported agent found on your machine. Nothing else.
 
@@ -54,18 +54,6 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/insta
 
 ```bash
 npm install -g @caveman-ai/cli && caveman setup --install
-```
-
-**Compressed browsing — Caveman Browse (BSL-1.1).** Included in `caveman setup --install` (needs Chrome) — a local Chrome driver your agent reaches as MCP tools.
-
-```bash
-caveman browse <url>
-```
-
-**A new agent — Agent SDK.** A TypeScript agent project on the native Caveman runtime. Client SDKs: `npm i @caveman-ai/sdk` · `pip install caveman-sdk`.
-
-```bash
-npm create @caveman-ai/agent@latest my-agent
 ```
 
 On Windows, the skill installs with `irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.ps1 | iex` (PowerShell 5.1+).
@@ -414,7 +402,7 @@ Local runtime results report `inferred`; controlled benchmark results report `be
 
 ## Privacy
 
-Your agent still talks to the provider you chose. Local compression needs no Caveman account. The `caveman` CLI sends anonymous usage stats by default — command counts only, never your prompts, code, or file paths. It says so on first run, and one command turns it off forever: `caveman telemetry off` (or `DO_NOT_TRACK=1`). Authenticated dashboard sync runs only with connected credentials. Skill and hooks run locally; local proxy forwards provider traffic; CCR stays in a SQLite file on your disk. Agent SDK `observe-only` mode sends no Caveman gateway telemetry. Exact network, telemetry, storage, and managed-gateway boundaries live in [SECURITY.md](./SECURITY.md).
+Your agent still talks to the provider you chose. Local compression needs no Caveman account. The `caveman` CLI sends anonymous usage stats by default — which commands you ran, plus how many tokens went through and how many got cut. Never your prompts, code, or file paths. It says so on first run, and one command turns it off forever: `caveman telemetry off` (or `DO_NOT_TRACK=1`). Authenticated dashboard sync runs only with connected credentials. Skill and hooks run locally; local proxy forwards provider traffic; CCR stays in a SQLite file on your disk. Agent SDK `observe-only` mode sends no Caveman gateway telemetry. Exact network, telemetry, storage, and managed-gateway boundaries live in [SECURITY.md](./SECURITY.md).
 
 ## License
 

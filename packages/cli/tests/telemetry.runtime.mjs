@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -307,6 +307,233 @@ test("an interactive stale-version opt-out stays byte-identical and silent", asy
   assert.doesNotMatch(out.output, /anonymous usage stats on/, "an opt-out must never be re-disclosed");
   assert.equal(readFileSync(join(configDir, "config.json"), "utf8"), raw, "an opt-out config must stay byte-identical");
   assert.equal(stub.posts.length, 0, "an opt-out must never send");
+
+  stub.close();
+});
+
+// stubProxyStats writes a fake caveman-proxy that answers `stats --json` with a
+// fixed aggregate, plus the store file whose existence gates the read.
+function stubProxyStats({ env, caveDir }, { tokensIn, tokensSaved, basis = "inferred" }) {
+  const bin = join(mkdtempSync(join(tmpdir(), "cave-bin-")), "caveman-proxy");
+  const body = JSON.stringify({ tokens_in: tokensIn, compression_tokens_saved: tokensSaved, basis });
+  writeFileSync(bin, `#!/bin/sh\ncat <<'CAVE_EOF'\n${body}\nCAVE_EOF\n`, { mode: 0o755 });
+  chmodSync(bin, 0o755);
+  writeFileSync(join(caveDir, "caveman.db"), "");
+  return { ...env, CAVEMAN_PROXY_BIN: bin };
+}
+
+test("command_run carries the proxy token delta, then stops repeating it", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("sh stub is POSIX-only");
+    return;
+  }
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const iso = isolatedEnv({
+    CAVEMAN_TELEMETRY: "1",
+    CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
+  });
+  const env = stubProxyStats(iso, { tokensIn: 184320, tokensSaved: 41200 });
+
+  // First sight of the store only seeds the watermark. Whatever it already holds
+  // predates this disclosure and must never be reported retroactively.
+  const first = await runCli(["version"], env);
+  assert.equal(first.code, 0, first.stderr);
+  const firstEvent = JSON.parse(stub.posts[0].body)[0];
+  assert.ok(!("tokens_processed" in firstEvent), "pre-existing history must not be swept up by the first event");
+  const watermark = JSON.parse(readFileSync(join(iso.home, ".caveman-cloud", "config.json"), "utf8")).telemetryTokens;
+  assert.equal(watermark.tokensIn, 184320, "the baseline is still recorded");
+  assert.equal(watermark.tokensSaved, 41200);
+
+  // Same totals on the next run: the delta is zero, so the fields stay absent
+  // rather than reporting a zero.
+  const second = await runCli(["version"], env);
+  assert.equal(second.code, 0, second.stderr);
+  const secondEvent = JSON.parse(stub.posts[1].body)[0];
+  assert.ok(!("tokens_processed" in secondEvent), "an unchanged store must not resend the same tokens");
+  assert.ok(!("tokens_saved" in secondEvent));
+  assert.equal(secondEvent.event, "command_run", "the event itself still ships");
+
+  // Store grew: only the increment goes out.
+  const grown = stubProxyStats(iso, { tokensIn: 200000, tokensSaved: 45000 });
+  const third = await runCli(["version"], grown);
+  assert.equal(third.code, 0, third.stderr);
+  const thirdEvent = JSON.parse(stub.posts[2].body)[0];
+  assert.equal(thirdEvent.tokens_processed, 15680);
+  assert.equal(thirdEvent.tokens_saved, 3800);
+  assert.equal(thirdEvent.tokens_basis, "inferred", "token volume must ship with its basis, never bare");
+
+  stub.close();
+});
+
+// The seeding rule has to survive the off/on boundary: tokens processed while
+// telemetry was off belong to the opt-out window and are never reported later.
+test("telemetry off drops the token watermark so re-enabling re-seeds", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("sh stub is POSIX-only");
+    return;
+  }
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const iso = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
+  const configDir = join(iso.home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+    telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-08-01T00:00:00.000Z", promptVersion: 4 },
+    telemetryTokens: { tokensIn: 1000, tokensSaved: 200, at: "2026-08-01T00:00:00.000Z" },
+  }));
+
+  const off = await runCli(["telemetry", "off"], iso.env);
+  assert.equal(off.code, 0, off.stderr);
+  const afterOff = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  assert.ok(!("telemetryTokens" in afterOff), "the watermark must not outlive the opt-out");
+
+  // Traffic accumulated while off. The next run that can send must re-seed
+  // against the grown store rather than report the opt-out window.
+  const env = stubProxyStats(iso, { tokensIn: 900000, tokensSaved: 300000 });
+  const back = await runCli(["version"], { ...env, CAVEMAN_TELEMETRY: "1" });
+  assert.equal(back.code, 0, back.stderr);
+  const events = stub.posts.flatMap((p) => JSON.parse(p.body));
+  assert.ok(events.length > 0, "the run must still send its command_run event");
+  for (const event of events) {
+    assert.ok(!("tokens_processed" in event), "opt-out window traffic must never be reported on re-enable");
+  }
+  const watermark = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).telemetryTokens;
+  assert.equal(watermark.tokensIn, 900000, "re-enabling re-seeds from the current store");
+
+  stub.close();
+});
+
+// caveman-proxy points its JSON logger at stdout, the same stream the payload
+// uses. A log line ahead of the object must not silence token reporting — and a
+// log object must never be mistaken for the payload, which would read as a
+// rewound store and replay lifetime history.
+test("a log line on the proxy's stdout does not break or poison the token read", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("sh stub is POSIX-only");
+    return;
+  }
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const iso = isolatedEnv({
+    CAVEMAN_TELEMETRY: "1",
+    CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
+  });
+  const bin = join(mkdtempSync(join(tmpdir(), "cave-bin-")), "caveman-proxy");
+  const noisy = [
+    '{"time":"2026-08-16T00:00:00Z","level":"WARN","msg":"store migration applied"}',
+    JSON.stringify({ tokens_in: 5000, compression_tokens_saved: 1000, basis: "inferred" }, null, 2),
+    // A deferred Close() error prints after the payload, so the scan cannot
+    // assume the object runs to the end of the stream.
+    '{"time":"2026-08-16T00:00:01Z","level":"WARN","msg":"close failed"}',
+  ].join("\n");
+  writeFileSync(bin, `#!/bin/sh\ncat <<'CAVE_EOF'\n${noisy}\nCAVE_EOF\n`, { mode: 0o755 });
+  chmodSync(bin, 0o755);
+  writeFileSync(join(iso.caveDir, "caveman.db"), "");
+  const configDir = join(iso.home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+    telemetryTokens: { tokensIn: 4000, tokensSaved: 800, at: "2026-08-01T00:00:00.000Z" },
+  }));
+
+  const out = await runCli(["version"], { ...iso.env, CAVEMAN_PROXY_BIN: bin });
+  assert.equal(out.code, 0, out.stderr);
+  const event = JSON.parse(stub.posts[0].body)[0];
+  assert.equal(event.tokens_processed, 1000, "the payload must still be found behind the log line");
+  assert.equal(event.tokens_saved, 200);
+  const watermark = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).telemetryTokens;
+  assert.equal(watermark.tokensIn, 5000, "the log object must never become the watermark");
+
+  stub.close();
+});
+
+test("a rewound proxy store re-baselines instead of replaying or going negative", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("sh stub is POSIX-only");
+    return;
+  }
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const iso = isolatedEnv({
+    CAVEMAN_TELEMETRY: "1",
+    CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
+  });
+  const configDir = join(iso.home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+    telemetryTokens: { tokensIn: 500000, tokensSaved: 90000, at: "2026-08-01T00:00:00.000Z" },
+  }));
+  const env = stubProxyStats(iso, { tokensIn: 1200, tokensSaved: 300 });
+
+  const out = await runCli(["version"], env);
+  assert.equal(out.code, 0, out.stderr);
+  const event = JSON.parse(stub.posts[0].body)[0];
+  assert.ok(!("tokens_processed" in event), "a deleted/restored store must not report its history a second time");
+  assert.ok(!("tokens_saved" in event));
+  const watermark = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).telemetryTokens;
+  assert.equal(watermark.tokensIn, 1200, "the watermark re-baselines to the smaller store");
+  assert.equal(watermark.tokensSaved, 300);
+
+  stub.close();
+});
+
+test("a missing proxy binary drops the token fields, not the event", async (t) => {
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const { env } = isolatedEnv({
+    CAVEMAN_TELEMETRY: "1",
+    CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
+    CAVEMAN_PROXY_BIN: join(tmpdir(), "missing-caveman-proxy"),
+  });
+
+  const out = await runCli(["version"], env);
+  assert.equal(out.code, 0, out.stderr);
+  assert.equal(stub.posts.length, 1);
+  const event = JSON.parse(stub.posts[0].body)[0];
+  assert.equal(event.command, "version");
+  assert.ok(!("tokens_processed" in event), "no local store means no token claim, not a zero");
+
+  stub.close();
+});
+
+// A v3 "yes" was consent for command counts alone. v4 widened the payload with
+// token volume, so the decision stands but the new wording prints once.
+test("a stale-version opt-in is re-disclosed once and never re-asked", async (t) => {
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const { env, home } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
+  const configDir = join(home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  const optIn = {
+    enabled: true,
+    anonymousId: "123e4567-e89b-12d3-a456-426614174000",
+    decidedAt: "2026-07-03T00:00:00.000Z",
+    promptVersion: 3,
+  };
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({ telemetry: optIn }));
+
+  const first = await runCliPty(["tools", "config", "get"], env);
+  if (first === null || first.code !== 0) {
+    stub.close();
+    t.skip("script(1) pty unavailable in this environment");
+    return;
+  }
+  assert.match(first.output, /token totals/, "the widened scope must be disclosed");
+  assert.doesNotMatch(first.output, /\[y\/N\]/, "an existing decision is never re-asked");
+  const cfg = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  assert.equal(cfg.telemetry.promptVersion, 4);
+  assert.equal(cfg.telemetry.anonymousId, optIn.anonymousId, "re-disclosure must not rotate the id");
+  assert.equal(cfg.telemetry.decidedAt, optIn.decidedAt, "the original decision date stands");
+
+  const second = await runCliPty(["tools", "config", "get"], env);
+  assert.ok(second && second.code === 0, "second run failed");
+  assert.doesNotMatch(second.output, /anonymous usage stats on/, "re-disclosure prints once, not per run");
 
   stub.close();
 });

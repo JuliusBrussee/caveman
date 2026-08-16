@@ -1,5 +1,12 @@
 # browse — `caveman-browse` browser driver
 
+> **Repository routing:** do not continue Browse product work here. Source of
+> truth is `JuliusBrussee/caveman-browse`, local checkout
+> `/Users/julb/Desktop/GitHub/caveman-browse`. This directory is a consumer
+> copy; edit only for pinned integration, migration/removal, or an explicit
+> cross-repo sync. Accessibility-compressor work stays here in
+> `engine/compressors/axtree.go` because Engine is owned by this repo.
+
 Local, agent-facing browser interaction for the open Caveman surface. It serves
 stdio MCP tools that read a real Chrome accessibility tree, compress it with the
 engine's forced-only `a11y` compressor, act on `uid` handles, and recover the
