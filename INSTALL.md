@@ -9,16 +9,16 @@ If just want it to work, run the one-liner. If want to know what gets touched, s
 **macOS / Linux / WSL / Git Bash**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.1.0/install.sh | bash
 ```
 
 **Windows (PowerShell 5.1+)**
 
 ```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.1.0/install.ps1 | iex
 ```
 
-> Piping a script straight into a shell runs it sight-unseen. If you'd rather read it first, download then run: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh -o install.sh` (review it) `&& bash install.sh`. Bootstrap, package, and hook downloads stay pinned to that immutable release. Set `CAVEMAN_REF` only when intentionally testing another ref.
+> Piping a script straight into a shell runs it sight-unseen. If you'd rather read it first, download then run: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.1.0/install.sh -o install.sh` (review it) `&& bash install.sh`. Bootstrap, package, and hook downloads stay pinned to that immutable release. Set `CAVEMAN_REF` only when intentionally testing another ref.
 
 What it does:
 
@@ -31,7 +31,7 @@ What it does:
 Want to preview before installing? Use `--dry-run`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash -s -- --dry-run
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.1.0/install.sh | bash -s -- --dry-run
 ```
 
 ## Per-agent install
