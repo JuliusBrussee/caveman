@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "id": "pydantic-ai",
+  "display_name": "Pydantic AI",
+  "lang": "python",
+  "wire_protocol": "openai-chat",
+  "note": "Any provider class that takes base_url routes through the gateway.",
+  "code": "import os\nfrom pydantic_ai import Agent\nfrom pydantic_ai.models.openai import OpenAIChatModel\nfrom pydantic_ai.providers.openai import OpenAIProvider\n\nmodel = OpenAIChatModel(\n    \"gpt-5.5\",\n    provider=OpenAIProvider(\n        base_url=\"{{baseURL}}/w/{{app}}/openai/v1\",\n        api_key=os.environ[\"OPENAI_API_KEY\"],\n    ),\n)\n\nagent = Agent(model)\nresult = agent.run_sync(\"Why is the sky blue?\")",
+  "models": ["gpt-5.5"]
+}

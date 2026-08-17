@@ -4,7 +4,10 @@ Decision guide. When to delegate to caveman subagents instead of doing the work 
 
 ## What it does
 
-Tells the main thread when to spawn a caveman-style subagent versus the vanilla equivalent. The win: subagent tool-results inject back into main context verbatim, and caveman output is roughly 1/3 the size of vanilla prose. Across 20 delegations in one session, that is the difference between context exhaustion and finishing the task.
+Tells main thread when to spawn a caveman-style subagent. Compact return
+contracts can reduce repeated prose when results return to main context, but
+effect depends on task, agent, and delegation count. This skill publishes no
+universal reduction rate.
 
 Three subagents:
 
@@ -26,7 +29,7 @@ Triggers on phrases like "delegate to subagent", "use cavecrew", "spawn investig
 
 Locate → fix → verify (most common):
 
-1. `cavecrew-investigator` returns site list (`path:line — symbol — note`)
+1. `cavecrew-investigator` returns site list (`path:line`, symbol, note)
 2. Main thread picks 1-2 sites, hands paths to `cavecrew-builder`
 3. `cavecrew-reviewer` audits the resulting diff
 
@@ -42,7 +45,7 @@ By default, `cavecrew-reviewer` and `cavecrew-investigator` pin `model: haiku` i
 | `CAVECREW_BUILDER_MODEL` | `cavecrew-builder` |
 | `CAVECREW_INVESTIGATOR_MODEL` | `cavecrew-investigator` |
 
-Example — run reviewer on sonnet, keep others on default:
+Example: run reviewer on sonnet and keep others on default.
 
 ```sh
 export CAVECREW_REVIEWER_MODEL=sonnet
@@ -50,12 +53,15 @@ export CAVECREW_REVIEWER_MODEL=sonnet
 
 Use the same model name strings you'd use in any Claude Code agent frontmatter (e.g. `haiku`, `sonnet`, `opus`).
 
-Overrides patch only the `model:` line in the installed agent's frontmatter; the prompt body is untouched and keeps receiving upstream updates. Plugin installs only — standalone hook installs have no local agent files to patch. Unset or blank = no change. The patch persists in the installed file until the plugin is updated or reinstalled.
+Overrides patch only `model:` line in installed agent frontmatter; prompt body
+stays untouched and continues receiving upstream updates. Only plugin installs
+have local agent files to patch. Empty variables do nothing. Patch persists until
+plugin update or reinstall.
 
 ## See also
 
-- [`SKILL.md`](./SKILL.md) — full decision matrix and output contracts
+- [`SKILL.md`](./SKILL.md): full decision matrix and output contracts
 - [`agents/cavecrew-investigator.md`](../../agents/cavecrew-investigator.md)
 - [`agents/cavecrew-builder.md`](../../agents/cavecrew-builder.md)
 - [`agents/cavecrew-reviewer.md`](../../agents/cavecrew-reviewer.md)
-- [Caveman README](../../README.md) — repo overview
+- [Caveman README](../../README.md): repo overview

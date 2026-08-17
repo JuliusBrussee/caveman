@@ -35,7 +35,7 @@ class CompressSafetyTests(unittest.TestCase):
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
             call.assert_not_called()
-            self.assertEqual(path.read_text(), "")
+            self.assertEqual(path.read_text(encoding="utf-8"), "")
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
     def test_empty_compressed_output_does_not_touch_disk(self):
@@ -45,7 +45,7 @@ class CompressSafetyTests(unittest.TestCase):
             with mock.patch.object(compress_mod, "call_claude", return_value=""):
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
-            self.assertEqual(path.read_text(), original)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
     def test_whitespace_only_compressed_output_does_not_touch_disk(self):
@@ -55,7 +55,7 @@ class CompressSafetyTests(unittest.TestCase):
             with mock.patch.object(compress_mod, "call_claude", return_value="   \n  "):
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
-            self.assertEqual(path.read_text(), original)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
     def test_identical_compressed_output_does_not_touch_disk(self):
@@ -65,7 +65,7 @@ class CompressSafetyTests(unittest.TestCase):
             with mock.patch.object(compress_mod, "call_claude", return_value=original):
                 ok = compress_mod.compress_file(path)
             self.assertFalse(ok)
-            self.assertEqual(path.read_text(), original)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
     def test_real_compression_writes_backup_and_target(self):
@@ -82,11 +82,11 @@ class CompressSafetyTests(unittest.TestCase):
                 v.return_value = mock.Mock(is_valid=True, errors=[], warnings=[])
                 ok = compress_mod.compress_file(path)
             self.assertTrue(ok)
-            self.assertEqual(path.read_text(), compressed)
+            self.assertEqual(path.read_text(encoding="utf-8"), compressed)
             # Backups now live OUTSIDE the source dir (issue #420), under a
             # platform-aware data dir mirroring the source parent name.
             backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
-            self.assertEqual(backup.read_text(), original)
+            self.assertEqual(backup.read_text(encoding="utf-8"), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
     def test_utf8_roundtrip_survives_compression(self):
@@ -159,6 +159,7 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertEqual(list(Path(tmp).glob("*.tmp")), [])
             self.assertEqual(list(backup_dir.glob("*.tmp")), [])
 
+    @unittest.skipIf(os.name == "nt", "Windows ACLs are not represented by POSIX mode bits")
     def test_permission_preserved_across_compression(self):
         with tempfile.TemporaryDirectory() as tmp, \
              tempfile.TemporaryDirectory() as data_home, \

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Caveman harness</title>
+    <style>
+      body { font: 14px system-ui; max-width: 640px; margin: 40px auto; }
+      #transcript div { padding: 6px 10px; margin: 4px 0; background: #f0f0f0; border-radius: 6px; white-space: pre-wrap; }
+      #prompt-textarea { border: 1px solid #ccc; border-radius: 8px; padding: 10px; min-height: 44px; }
+      button { margin-top: 8px; padding: 8px 14px; }
+    </style>
+  </head>
+  <body>
+    <h3>Mock chat (ChatGPT-shaped DOM)</h3>
+    <div id="transcript"></div>
+    <div
+      id="prompt-textarea"
+      class="ProseMirror"
+      contenteditable="true"
+      role="textbox"
+    ></div>
+    <button data-testid="send-button">Send</button>
+
+    <script>
+      // --- stub chrome.storage so the real content script runs unmodified ---
+      const _store = { enabled: true, level: "full", sites: {} };
+      const _listeners = [];
+      window.chrome = {
+        storage: {
+          sync: {
+            get(defaults, cb) {
+              const out = {};
+              for (const k in defaults)
+                out[k] = k in _store ? _store[k] : defaults[k];
+              queueMicrotask(() => cb(out));
+            },
+            set(obj, cb) {
+              const changes = {};
+              for (const k in obj) {
+                changes[k] = { oldValue: _store[k], newValue: obj[k] };
+                _store[k] = obj[k];
+              }
+              queueMicrotask(() => {
+                _listeners.forEach((fn) => fn(changes, "sync"));
+                cb && cb();
+              });
+            },
+          },
+          onChanged: { addListener: (fn) => _listeners.push(fn) },
+        },
+        runtime: { id: "harness" },
+      };
+
+      // --- mock "app": Enter (no shift) or send-button click sends the text.
+      //     Attached in bubble phase, like a normal site handler. If the content
+      //     script's capture-phase stopImmediatePropagation works, these only
+      //     fire on the re-dispatched (bypassed) send. ---
+      const editor = document.getElementById("prompt-textarea");
+      const sendBtn = document.querySelector('[data-testid="send-button"]');
+      const transcript = document.getElementById("transcript");
+
+      function appSend() {
+        const text = editor.innerText.trim();
+        if (!text) return;
+        const msg = document.createElement("div");
+        msg.setAttribute("data-message-author-role", "user");
+        msg.textContent = text;
+        transcript.appendChild(msg);
+        editor.innerHTML = ""; // clear composer
+      }
+      editor.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          appSend();
+        }
+      });
+      sendBtn.addEventListener("click", appSend);
+
+      // --- test driver exposed to the automation layer ---
+      window.cavemanTest = {
+        type(t) {
+          editor.focus();
+          editor.innerText = t;
+        },
+        pressEnter(overrides = {}) {
+          editor.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "Enter",
+              code: "Enter",
+              keyCode: 13,
+              which: 13,
+              bubbles: true,
+              cancelable: true,
+              ...overrides,
+            })
+          );
+        },
+        clickSend() {
+          sendBtn.click();
+        },
+        transcript() {
+          return [...transcript.querySelectorAll("div")].map((d) => d.textContent);
+        },
+        setStorage(value) {
+          return new Promise((resolve) => chrome.storage.sync.set(value, resolve));
+        },
+        wait(ms) {
+          return new Promise((r) => setTimeout(r, ms));
+        },
+      };
+    </script>
+
+    <!-- the real extension code, loaded in manifest order (directive then content) -->
+    <script src="../src/directive.js"></script>
+    <script src="../src/caveman.js"></script>
+  </body>
+</html>

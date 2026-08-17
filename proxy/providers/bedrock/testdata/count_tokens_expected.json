@@ -1,0 +1,1 @@
+{"model":"anthropic.claude-opus-4-8","messages":[{"role":"user","content":"Count this prompt."}],"system":"Be concise.","tools":[{"name":"lookup","description":"Look up a value","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"}}

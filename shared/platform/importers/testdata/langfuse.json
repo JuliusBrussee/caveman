@@ -1,0 +1,32 @@
+{
+  "observations": [
+    {
+      "id": "obs-1",
+      "traceId": "lf-trace-0001",
+      "type": "generation",
+      "name": "summarize",
+      "model": "gpt-5.5",
+      "startTime": "2026-06-02T08:00:00.000Z",
+      "endTime": "2026-06-02T08:00:02.500Z",
+      "level": "DEFAULT",
+      "usage": { "input": 2400, "output": 600, "cacheReadInputTokens": 1800 },
+      "metadata": { "provider": "openai", "agent": "research-agent", "workflow": "daily-digest" },
+      "input": [{ "role": "user", "content": "summarize this" }],
+      "output": { "text": "summary" }
+    },
+    {
+      "id": "obs-2",
+      "traceId": "lf-trace-0001",
+      "parentObservationId": "obs-1",
+      "type": "generation",
+      "name": "translate",
+      "model": "claude-sonnet-4-5",
+      "startTime": "2026-06-02T08:00:03.000Z",
+      "endTime": "2026-06-02T08:00:04.000Z",
+      "level": "ERROR",
+      "statusMessage": "rate limited",
+      "usage": { "promptTokens": 1000, "completionTokens": 200 },
+      "metadata": { "provider": "anthropic" }
+    }
+  ]
+}

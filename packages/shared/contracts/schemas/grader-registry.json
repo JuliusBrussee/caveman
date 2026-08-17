@@ -1,0 +1,868 @@
+{
+  "version": 1,
+  "graders": [
+    {
+      "type": "exact_match",
+      "title": "Exact match",
+      "category": "match",
+      "description": "Passes when the answer equals the expected value after trimming, case folding and key-order-insensitive JSON normalisation.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "properties": {
+          "expected": {
+            "description": "The value to compare against. The TypeScript grader object carries it here; the Python grade service reads the case reference instead, so a suite that only sets this option compares against the fixture reference on the service."
+          },
+          "case_sensitive": {
+            "type": "boolean",
+            "default": false,
+            "description": "Skip the case-folding step; JSON normalisation is unchanged."
+          },
+          "remove_punctuation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Delete ASCII punctuation before comparing; string-only, and fails closed when either side is a structured value."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "contains",
+      "title": "Contains",
+      "category": "match",
+      "description": "Passes when every listed fragment appears somewhere in the answer, matched case-sensitively as a substring.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["fragments"],
+        "properties": {
+          "fragments": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Fragments that must all be present. Legacy behaviour kept for compatibility: the Python service stringifies a non-string member instead of failing."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "not_contains",
+      "title": "Does not contain",
+      "category": "match",
+      "description": "Passes only when none of the listed fragments appear in the answer.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["fragments"],
+        "properties": {
+          "fragments": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Forbidden fragments; a non-string member is an invalid option and fails closed."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "regex",
+      "title": "Regex match",
+      "category": "match",
+      "description": "Passes when the pattern matches the answer, using each language's own regex engine on the portable pattern subset.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["pattern"],
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Regular expression searched in the answer text; an invalid pattern fails closed."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "not_regex",
+      "title": "Regex must not match",
+      "category": "match",
+      "description": "Passes when the pattern does not match the answer, after CRLF and a single trailing newline are normalised away.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["pattern"],
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Regular expression that must not match; an empty or invalid pattern fails closed."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "blocklist",
+      "title": "Blocklist",
+      "category": "safety",
+      "description": "Passes when none of the listed terms appear as whole words in the answer, compared case-insensitively.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["terms"],
+        "properties": {
+          "terms": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Forbidden terms; word boundaries are pinned lookarounds, not the engine's own word-character rule."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "json_schema",
+      "title": "JSON schema",
+      "category": "structure",
+      "description": "Passes when the answer satisfies a small JSON-Schema subset covering type, enum, required, properties and items only.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["schema"],
+        "properties": {
+          "schema": {
+            "type": "object",
+            "description": "The subset schema the answer must satisfy; an unknown type name fails closed."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "json_path_assertion",
+      "title": "JSON path",
+      "category": "structure",
+      "description": "Passes when the dotted path resolves in the answer and, when equals is set, holds that value.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Dot-separated path; array steps are numeric indexes."
+          },
+          "equals": {
+            "description": "Optional value assertion at the path; comparison is type-strict."
+          },
+          "exists": {
+            "type": "boolean",
+            "description": "Assert only presence (true) or absence (false) of the path, ignoring equals."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "tool_called",
+      "title": "Tool called",
+      "category": "tools",
+      "description": "Passes when every listed tool appears in the answer's tool calls.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["tools"],
+        "properties": {
+          "tools": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Tool names that must all have been called."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "tool_not_called",
+      "title": "Tool not called",
+      "category": "tools",
+      "description": "Passes when none of the listed tools appear in the answer's tool calls.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["tools"],
+        "properties": {
+          "tools": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Tool names that must not have been called."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "tool_sequence",
+      "title": "Tool sequence",
+      "category": "tools",
+      "description": "Passes when the listed tools appear as an ordered subsequence of the tool calls; other calls may sit between them.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["tools"],
+        "properties": {
+          "tools": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Tool names in the order they must appear."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "tool_argument_assertion",
+      "title": "Tool argument",
+      "category": "tools",
+      "description": "Passes when some call to the named tool carries the argument at path equal to the expected value.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["tool", "path", "equals"],
+        "properties": {
+          "tool": { "type": "string", "description": "Name of the tool call to inspect." },
+          "path": {
+            "type": "string",
+            "description": "Dot-separated path inside that call's arguments."
+          },
+          "equals": { "description": "Value the argument must equal; comparison is type-strict." }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "http_status",
+      "title": "HTTP status",
+      "category": "thresholds",
+      "description": "Passes when the answer's status field equals the expected status code; an answer without a status fails.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "type": "integer",
+            "description": "Expected status, read from the answer's status or status_code field."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "latency_threshold",
+      "title": "Latency ceiling",
+      "category": "thresholds",
+      "description": "Passes when the answer's recorded p95 latency is at or under the ceiling; an unmeasured answer fails.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["p95_ms"],
+        "properties": {
+          "p95_ms": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Ceiling in milliseconds, compared against the answer's p95_ms or latency_ms field."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "cost_threshold",
+      "title": "Cost ceiling",
+      "category": "thresholds",
+      "description": "Passes when the answer's recorded cost is at or under the ceiling; an unmeasured answer fails.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["max_usd"],
+        "properties": {
+          "max_usd": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Ceiling in US dollars, compared against the answer's cost_usd or total_cost_usd field."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "token_threshold",
+      "title": "Token ceiling",
+      "category": "thresholds",
+      "description": "Passes when the answer's recorded token count is at or under the ceiling; an unmeasured answer fails.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["max_tokens"],
+        "properties": {
+          "max_tokens": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Ceiling in tokens, compared against the answer's tokens or total_tokens field."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "bleu_score",
+      "title": "BLEU score",
+      "category": "similarity",
+      "description": "Modified n-gram precision with a brevity penalty against a reference string on a pinned tokenizer, so it is deterministic but not comparable to published sacrebleu numbers.",
+      "scored": true,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["reference"],
+        "properties": {
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Reference text; the Python service falls back to the case reference when this option is absent."
+          },
+          "threshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.5,
+            "description": "Score the answer must reach to pass."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "rouge_score",
+      "title": "ROUGE score",
+      "category": "similarity",
+      "description": "Unigram or longest-common-subsequence overlap against a reference string on the same pinned tokenizer, so it is deterministic but not comparable to published rouge-score numbers.",
+      "scored": true,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["reference"],
+        "properties": {
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Reference text; the Python service falls back to the case reference when this option is absent."
+          },
+          "rouge_type": {
+            "type": "string",
+            "enum": ["rouge_1", "rouge_l"],
+            "default": "rouge_1",
+            "description": "Unigram overlap or longest common subsequence."
+          },
+          "measure": {
+            "type": "string",
+            "enum": ["precision", "recall", "fmeasure"],
+            "default": "fmeasure",
+            "description": "Which figure the threshold is applied to."
+          },
+          "threshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.5,
+            "description": "Score the answer must reach to pass."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "context_f1",
+      "title": "Context F1",
+      "category": "retrieval",
+      "description": "Precision, recall or F1 between the retrieved and expected context lists, matched by normalised Levenshtein similarity.",
+      "scored": true,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["retrieved", "expected"],
+        "properties": {
+          "retrieved": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Context chunks the system retrieved; both lists ride on the options and the answer value is unused."
+          },
+          "expected": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Context chunks that should have been retrieved."
+          },
+          "measure": {
+            "type": "string",
+            "enum": ["precision", "recall", "f1"],
+            "default": "f1",
+            "description": "Which figure the threshold is applied to."
+          },
+          "similarity_threshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.7,
+            "description": "Similarity at which two chunks count as the same chunk."
+          },
+          "threshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.5,
+            "description": "Score the answer must reach to pass."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "no_pii",
+      "title": "No PII",
+      "category": "safety",
+      "description": "Fails when the answer matches any selected PII pattern, using a conservative regex subset with checksum-valid cards and IBANs and international phone numbers only, not Presidio.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "properties": {
+          "entities": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": ["email", "credit_card", "iban", "ipv4", "ipv6", "phone", "crypto"]
+            },
+            "description": "Entity kinds to look for; absent means all seven, and an unknown name fails closed."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "localization_f1",
+      "title": "Localization F1",
+      "category": "retrieval",
+      "description": "Scores cited files and line ranges against a gold localization set; file-level F1 and mean line-range overlap must both clear their thresholds.",
+      "scored": true,
+      "deterministic": true,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "description": "The gold localization set. The TypeScript grader object carries it here; the Python grade service reads the case reference instead."
+          },
+          "threshold": {
+            "type": "number",
+            "default": 0.5,
+            "description": "Default threshold for both figures."
+          },
+          "file_threshold": {
+            "type": "number",
+            "description": "File-level F1 the answer must reach; defaults to threshold."
+          },
+          "line_threshold": {
+            "type": "number",
+            "description": "Mean line-range overlap the answer must reach; defaults to threshold."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "custom_webhook",
+      "title": "Custom webhook",
+      "category": "external",
+      "description": "Posts the answer to your endpoint — the url is SSRF-checked before the call and redirects are refused, not followed — and takes the verdict from a system Caveman does not control; a blocked url, a redirect, a transport error or a missing verdict fails.",
+      "scored": false,
+      "deterministic": false,
+      "judge_calls": 0,
+      "options": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Endpoint that receives the answer and returns {\"passed\": bool, \"reason\": string}."
+          },
+          "timeout_s": {
+            "type": "number",
+            "minimum": 0,
+            "default": 5,
+            "description": "Request timeout on the Python grade service; the TypeScript package uses its injected fetch instead."
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    {
+      "type": "llm_judge",
+      "title": "LLM judge",
+      "category": "judge",
+      "description": "Asks a judge model for a PASS or FAIL verdict against a rubric; an ambiguous or missing verdict fails.",
+      "scored": false,
+      "deterministic": false,
+      "judge_calls": 1,
+      "prompt_template": "{rubric}\n\nOutput under test:\n{candidate}\n\nRespond with exactly PASS or FAIL.",
+      "options": {
+        "type": "object",
+        "required": ["rubric"],
+        "properties": {
+          "rubric": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What the judge should check."
+          },
+          "gateway_url": {
+            "type": "string",
+            "description": "Caveman gateway base URL the judge call goes through; the TypeScript package fails closed without it, the Python service falls back to $CAVE_GATEWAY_URL."
+          },
+          "model": {
+            "type": "string",
+            "default": "gpt-5.5",
+            "description": "Judge model; pin it for any gate that uses a judge."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "Gateway key for the judge call; leave unset to use the service environment."
+          },
+          "upstream_key": {
+            "type": "string",
+            "default": "stub",
+            "description": "Upstream provider key forwarded to the gateway."
+          },
+          "subject_model": {
+            "type": "string",
+            "description": "Model that produced the answer; the bias guard fails closed when it shares a family with the judge. The TypeScript package takes this from GradeDeps rather than options."
+          },
+          "timeout_s": {
+            "type": "number",
+            "minimum": 0,
+            "default": 15,
+            "description": "Judge-call timeout on the Python grade service; the TypeScript package uses its injected fetch instead."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "llm_score",
+      "title": "LLM score",
+      "category": "judge",
+      "description": "Asks a judge model to score the answer from 0.00 to 1.00 against a rubric and passes when the score reaches min_score.",
+      "scored": true,
+      "deterministic": false,
+      "judge_calls": 1,
+      "prompt_template": "You are a strict evaluation judge. {rubric}\n\nScore the RESPONSE from 0.00 to 1.00 against the rubric.\nReply with exactly one line: SCORE: <number>\n\nRESPONSE:\n{candidate}",
+      "options": {
+        "type": "object",
+        "required": ["rubric", "min_score"],
+        "properties": {
+          "rubric": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What the judge should score against."
+          },
+          "min_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Score the answer must reach; the comparison is inclusive and runs on the unrounded value."
+          },
+          "gateway_url": {
+            "type": "string",
+            "description": "Caveman gateway base URL the judge call goes through; the TypeScript package fails closed without it, the Python service falls back to $CAVE_GATEWAY_URL."
+          },
+          "model": {
+            "type": "string",
+            "default": "gpt-5.5",
+            "description": "Judge model; pin it for any gate that uses a judge."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "Gateway key for the judge call; leave unset to use the service environment."
+          },
+          "upstream_key": {
+            "type": "string",
+            "default": "stub",
+            "description": "Upstream provider key forwarded to the gateway."
+          },
+          "subject_model": {
+            "type": "string",
+            "description": "Model that produced the answer; the bias guard fails closed when it shares a family with the judge. The TypeScript package takes this from GradeDeps rather than options."
+          },
+          "timeout_s": {
+            "type": "number",
+            "minimum": 0,
+            "default": 15,
+            "description": "Judge-call timeout on the Python grade service; the TypeScript package uses its injected fetch instead."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "llm_category",
+      "title": "LLM category",
+      "category": "judge",
+      "description": "Asks a judge model to put the answer in exactly one of your categories and passes when that category is one of the passing ones.",
+      "scored": false,
+      "deterministic": false,
+      "judge_calls": 1,
+      "prompt_template": "You are a strict classification judge. {prompt}\n\nClassify the RESPONSE into exactly one of these categories: {categories}.\nReply with exactly one line: CATEGORY: <category>\n\nRESPONSE:\n{candidate}",
+      "options": {
+        "type": "object",
+        "required": ["prompt", "categories", "passing_categories"],
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "How the judge should classify the answer."
+          },
+          "categories": {
+            "type": "array",
+            "minItems": 2,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "The full category list, unique case-insensitively; the prompt lists them joined with a comma and a space."
+          },
+          "passing_categories": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Categories that count as a pass; every entry must be one of categories."
+          },
+          "gateway_url": {
+            "type": "string",
+            "description": "Caveman gateway base URL the judge call goes through; the TypeScript package fails closed without it, the Python service falls back to $CAVE_GATEWAY_URL."
+          },
+          "model": {
+            "type": "string",
+            "default": "gpt-5.5",
+            "description": "Judge model; pin it for any gate that uses a judge."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "Gateway key for the judge call; leave unset to use the service environment."
+          },
+          "upstream_key": {
+            "type": "string",
+            "default": "stub",
+            "description": "Upstream provider key forwarded to the gateway."
+          },
+          "subject_model": {
+            "type": "string",
+            "description": "Model that produced the answer; the bias guard fails closed when it shares a family with the judge. The TypeScript package takes this from GradeDeps rather than options."
+          },
+          "timeout_s": {
+            "type": "number",
+            "minimum": 0,
+            "default": 15,
+            "description": "Judge-call timeout on the Python grade service; the TypeScript package uses its injected fetch instead."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "llm_pairwise",
+      "title": "LLM pairwise",
+      "category": "judge",
+      "description": "Asks a judge model to compare the answer against a baseline under both orderings, two judge calls, and passes only when the baseline never wins.",
+      "scored": true,
+      "deterministic": false,
+      "judge_calls": 2,
+      "prompt_template": "You are a strict evaluation judge comparing two responses. Criteria: {criteria}\n\nReply with exactly one line: WINNER: A or WINNER: B or WINNER: TIE\n\nRESPONSE A:\n{first}\n\nRESPONSE B:\n{second}",
+      "options": {
+        "type": "object",
+        "required": ["baseline", "criteria"],
+        "properties": {
+          "baseline": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The response the answer is compared against."
+          },
+          "criteria": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What makes one response better than the other."
+          },
+          "gateway_url": {
+            "type": "string",
+            "description": "Caveman gateway base URL the judge call goes through; the TypeScript package fails closed without it, the Python service falls back to $CAVE_GATEWAY_URL."
+          },
+          "model": {
+            "type": "string",
+            "default": "gpt-5.5",
+            "description": "Judge model; pin it for any gate that uses a judge."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "Gateway key for the judge call; leave unset to use the service environment."
+          },
+          "upstream_key": {
+            "type": "string",
+            "default": "stub",
+            "description": "Upstream provider key forwarded to the gateway."
+          },
+          "subject_model": {
+            "type": "string",
+            "description": "Model that produced the answer; the bias guard fails closed when it shares a family with the judge. The TypeScript package takes this from GradeDeps rather than options."
+          },
+          "timeout_s": {
+            "type": "number",
+            "minimum": 0,
+            "default": 15,
+            "description": "Judge-call timeout on the Python grade service; the TypeScript package uses its injected fetch instead."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "llm_answer_match",
+      "title": "LLM answer match",
+      "category": "judge",
+      "description": "Asks a judge model whether the answer conveys the same answer as the expected one, ignoring wording and formatting.",
+      "scored": false,
+      "deterministic": false,
+      "judge_calls": 1,
+      "prompt_template": "You are a strict evaluation judge. Decide whether the RESPONSE conveys the same answer as the EXPECTED answer, ignoring differences in style, wording, or formatting.\nReply with exactly one line: MATCH: YES or MATCH: NO\n\nEXPECTED:\n{expected}\n\nRESPONSE:\n{candidate}",
+      "options": {
+        "type": "object",
+        "required": ["expected"],
+        "properties": {
+          "expected": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The answer the response should convey."
+          },
+          "gateway_url": {
+            "type": "string",
+            "description": "Caveman gateway base URL the judge call goes through; the TypeScript package fails closed without it, the Python service falls back to $CAVE_GATEWAY_URL."
+          },
+          "model": {
+            "type": "string",
+            "default": "gpt-5.5",
+            "description": "Judge model; pin it for any gate that uses a judge."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "Gateway key for the judge call; leave unset to use the service environment."
+          },
+          "upstream_key": {
+            "type": "string",
+            "default": "stub",
+            "description": "Upstream provider key forwarded to the gateway."
+          },
+          "subject_model": {
+            "type": "string",
+            "description": "Model that produced the answer; the bias guard fails closed when it shares a family with the judge. The TypeScript package takes this from GradeDeps rather than options."
+          },
+          "timeout_s": {
+            "type": "number",
+            "minimum": 0,
+            "default": 15,
+            "description": "Judge-call timeout on the Python grade service; the TypeScript package uses its injected fetch instead."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "semantic",
+      "title": "Semantic overlap (legacy)",
+      "category": "similarity",
+      "description": "Legacy grader: Jaccard token overlap against the case reference, a heuristic and not an embedding model.",
+      "scored": true,
+      "deterministic": true,
+      "judge_calls": 0,
+      "legacy": true,
+      "python_only": true,
+      "options": {
+        "type": "object",
+        "properties": {
+          "threshold": {
+            "type": "number",
+            "default": 0.5,
+            "description": "Token-overlap similarity the answer must reach; a non-numeric value fails closed."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "custom",
+      "title": "Custom predicate (legacy)",
+      "category": "match",
+      "description": "Legacy grader: runs one caller-supplied predicate (regex, jsonpath or contains) carried in the case reference rather than in options.",
+      "scored": false,
+      "deterministic": true,
+      "judge_calls": 0,
+      "legacy": true,
+      "python_only": true,
+      "options": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  ]
+}

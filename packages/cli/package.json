@@ -1,0 +1,43 @@
+{
+  "name": "@caveman-ai/cli",
+  "version": "1.2.0",
+  "description": "Caveman CLI — wrap coding agents with recoverable local context compression and truthful metering (`caveman claude`), then drive Caveman Cloud from terminal. Compression and metering run in companion Go binaries: run `caveman setup` to see install state. Local savings stay inferred until verified.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JuliusBrussee/caveman.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://getcaveman.dev",
+  "bugs": {
+    "url": "https://github.com/JuliusBrussee/caveman/issues"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "caveman": "dist/index.js",
+    "cave": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/gen-binaries.mjs && node scripts/gen-wedge-installer.mjs && node scripts/compile-registries.mjs && tsc && node scripts/bundle-delegate.mjs && node scripts/bundle-tui.mjs && node scripts/shebang.mjs",
+    "prepack": "npm run build",
+    "lint": "tsc --noEmit",
+    "test": "node scripts/gen-binaries.mjs && node scripts/gen-wedge-installer.mjs && node scripts/compile-registries.mjs && tsc && node scripts/bundle-delegate.mjs && node scripts/bundle-tui.mjs && node scripts/shebang.mjs && node --test --test-concurrency=4 tests/*.runtime.mjs",
+    "bench:native": "node scripts/benchmark-native-hooks.mjs",
+    "test:fast": "node scripts/gen-binaries.mjs && node scripts/gen-wedge-installer.mjs && node scripts/compile-registries.mjs && tsc && node scripts/bundle-delegate.mjs && node scripts/bundle-tui.mjs && node --test --test-concurrency=4 --test-reporter=dot tests/agent-native.runtime.mjs tests/billing.runtime.mjs tests/capability-config.runtime.mjs tests/login.runtime.mjs tests/mcp-surface.runtime.mjs tests/porcelain.runtime.mjs tests/practice-registry.runtime.mjs tests/skills.runtime.mjs tests/status.runtime.mjs tests/subscription-recovery.runtime.mjs tests/wrap-gate.runtime.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@clack/prompts": "1.7.0",
+    "@types/node": "24.10.1",
+    "esbuild": "0.28.1",
+    "typescript": "5.9.3"
+  }
+}

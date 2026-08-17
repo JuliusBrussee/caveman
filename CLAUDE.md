@@ -19,7 +19,24 @@ README = product front door. Non-technical people read it to decide if caveman w
 
 ## Project overview
 
-Caveman makes AI coding agents respond in compressed caveman-style prose — cuts 65% output tokens (measured), full technical accuracy. Ships as Claude Code plugin, Codex plugin, Gemini CLI extension, agent rule files for Cursor, Windsurf, Cline, Copilot, 40+ others via `npx skills`.
+Caveman makes AI coding agents respond in compressed caveman-style prose while preserving technical substance, code, commands, and exact errors. Publish no reduction or quality-equivalence percentage without a committed reviewed benchmark. Ships as Claude Code plugin, Codex plugin, Gemini CLI extension, and agent rule files for Cursor, Windsurf, Cline, Copilot, and other profiles via `npx skills`.
+
+## Repository routing
+
+This repo is source of truth for Caveman skills, Engine, and MV3 directive
+extension. Agent SDK + initializer work belongs in
+`/Users/julb/Desktop/GitHub/caveman-agent-sdk`
+(`JuliusBrussee/caveman-agent-sdk`). Browse driver/MCP/benchmark/plugin work
+belongs in `/Users/julb/Desktop/GitHub/caveman-browse`
+(`JuliusBrussee/caveman-browse`). Matching `packages/agent/`,
+`packages/create-caveman-agent/`, and `browse/` directories here are
+historical/consumer copies; edit only for pinned integration, migration/removal,
+or an explicitly requested cross-repo sync.
+
+Visibility is separate from ownership: this repo and `caveman-browse` are
+public now; `caveman-agent-sdk` is private during development and planned for
+public release after its release gates; Caveman-Cloud remains private
+commercial source.
 
 ---
 
@@ -35,9 +52,9 @@ caveman/
 ├── CLAUDE.md                    # This file (maintainer instructions)
 ├── AGENTS.md / GEMINI.md        # Autodiscovery files (must stay at root)
 │
-├── install.sh / install.ps1     # 30-line shims → cli/install.js
+├── install.sh / install.ps1     # 30-line shims → bin/install.js
 │
-├── cli/                         # Unified installer
+├── bin/                         # Unified installer
 │   ├── install.js               # Single source for all 30+ agents (PROVIDERS array)
 │   └── lib/settings.js          # JSONC-tolerant settings.json reader/writer
 │
@@ -58,6 +75,21 @@ caveman/
 │   ├── rules/                   # Auto-activation rule body (single source)
 │   ├── tools/                   # caveman-init.js (per-repo rule writer)
 │   └── mcp-servers/             # caveman-shrink npm-published MCP middleware
+│
+├── packages/                    # Current public packages
+│   ├── agent/                   # historical copy; source = caveman-agent-sdk
+│   ├── create-caveman-agent/    # historical copy; source = caveman-agent-sdk
+│   ├── cli/                     # @caveman-ai/cli
+│   ├── sdk/                     # TypeScript + Python gateway clients
+│   ├── kit/ · graders/          # Honesty UI surfaces + fail-closed eval graders
+│   ├── mastra/ · subagent-tax/  # Mastra adapter + local harness-prefix benchmark
+│   └── shared/                  # Contracts + binary installer
+├── engine/ · proxy/             # BSL local compression runtime + provider proxy
+├── cacheengine/ · rewriter/     # Standalone cache planner + prompt rewriter
+├── mcp/ · mem/ · shrink/        # Recovery tools, memory, output compression
+├── browse/                      # consumer copy; source = caveman-browse
+├── extension/                   # MV3 extension source
+├── shared/                       # Provider catalog + BSL platform libraries
 │
 ├── .claude-plugin/              # Claude Code plugin manifest (REQUIRED at root)
 ├── plugins/caveman/             # Claude Code plugin distribution (CI-mirrored)
@@ -84,8 +116,8 @@ caveman/
 |------|-----------------|
 | `skills/caveman/SKILL.md` | Caveman behavior: intensity levels, rules, wenyan mode, auto-clarity, persistence. Only file to edit for behavior changes. |
 | `src/rules/caveman-activate.md` | Always-on auto-activation rule body. Consumed by `src/tools/caveman-init.js` when a user runs `npx caveman --with-init` (per-repo IDE rule files). Edit here, not in any per-agent rule copy. |
-| `src/rules/caveman-openclaw-bootstrap.md` | Marker-fenced bootstrap snippet appended to `~/.openclaw/workspace/SOUL.md` by `cli/lib/openclaw.js`. Drives always-on caveman through the OpenClaw gateway. Must include the SENTINEL `Respond terse like smart caveman` and stay well under OpenClaw's 12K-per-bootstrap-file cap. |
-| `cli/lib/openclaw.js` | OpenClaw install/uninstall helper. Frontmatter merge (`version`, `always: true`), SOUL.md marker append/strip, idempotent. Shared by `cli/install.js` and `src/tools/caveman-init.js`. |
+| `src/rules/caveman-openclaw-bootstrap.md` | Marker-fenced bootstrap snippet appended to `~/.openclaw/workspace/SOUL.md` by `bin/lib/openclaw.js`. Drives always-on caveman through the OpenClaw gateway. Must include the SENTINEL `Respond terse like smart caveman` and stay well under OpenClaw's 12K-per-bootstrap-file cap. |
+| `bin/lib/openclaw.js` | OpenClaw install/uninstall helper. Frontmatter merge (`version`, `always: true`), SOUL.md marker append/strip, idempotent. Shared by `bin/install.js` and `src/tools/caveman-init.js`. |
 | `skills/caveman-commit/SKILL.md` | Caveman commit message behavior. Fully independent skill. |
 | `skills/caveman-review/SKILL.md` | Caveman code review behavior. Fully independent skill. |
 | `skills/caveman-help/SKILL.md` | Quick-reference card. One-shot display, not a persistent mode. |
@@ -161,9 +193,9 @@ Exports:
 ### `src/hooks/caveman-activate.js` — SessionStart hook
 
 Runs once per Claude Code session start. Three things:
-1. Writes the active mode to `$CLAUDE_CONFIG_DIR/.caveman-active` via `safeWriteFlag` (creates if missing). Branches on the hook payload's `source` field (#691): `startup` resets to the configured default; `resume`/`clear`/`compact` re-fires preserve a valid existing flag so mid-session `/caveman <level>` switches survive.
+1. Writes the active mode to `$CLAUDE_CONFIG_DIR/.caveman-active` via `safeWriteFlag` (creates if missing)
 2. Emits caveman ruleset as hidden stdout — Claude Code injects SessionStart hook stdout as system context, invisible to user
-3. Checks `settings.json` for statusline config; if missing, appends nudge to offer setup — once per install, gated by a `.caveman-nudge-shown` marker file (#661)
+3. Checks `settings.json` for statusline config; if missing, appends nudge to offer setup on first interaction
 
 Silent-fails on all filesystem errors — never blocks session start.
 
@@ -200,11 +232,11 @@ Configured in `settings.json` under `statusLine.command`. PowerShell counterpart
 
 **Plugin install** — hooks wired automatically by plugin system.
 
-**Standalone install** — `cli/install.js` (the unified Node installer) copies hook files into `$CLAUDE_CONFIG_DIR/hooks/` and merges SessionStart + UserPromptSubmit + statusline into `settings.json`. Uses the JSONC-tolerant helpers in `cli/lib/settings.js` so a commented `settings.json` no longer crashes the merge. Defensive `validateHookFields` runs before every write to prevent a single malformed hook from poisoning the entire file (Claude Code Zod silently discards the whole `settings.json` on schema mismatch).
+**Standalone install** — `bin/install.js` (the unified Node installer) copies hook files into `$CLAUDE_CONFIG_DIR/hooks/` and merges SessionStart + UserPromptSubmit + statusline into `settings.json`. Uses the JSONC-tolerant helpers in `bin/lib/settings.js` so a commented `settings.json` no longer crashes the merge. Defensive `validateHookFields` runs before every write to prevent a single malformed hook from poisoning the entire file (Claude Code Zod silently discards the whole `settings.json` on schema mismatch).
 
-The `install.sh` / `install.ps1` shims at the repo root delegate to `cli/install.js` via `node` (local clone) or `npx -y github:JuliusBrussee/caveman` (curl|bash). No legacy fallback path remains — earlier `install.sh.legacy` / `install.ps1.legacy` files were removed.
+The `install.sh` / `install.ps1` shims at the repo root delegate to `bin/install.js` via `node` (local clone) or `npx -y github:JuliusBrussee/caveman` (curl|bash). No legacy fallback path remains — earlier `install.sh.legacy` / `install.ps1.legacy` files were removed.
 
-**Uninstall** — `npx -y github:JuliusBrussee/caveman -- --uninstall` (or `node cli/install.js --uninstall` from a clone). Strips caveman hook entries from `settings.json` via substring marker `caveman`, deletes hook files, and removes the Claude plugin / Gemini extension. Also removes state files from `$CLAUDE_CONFIG_DIR` (`.caveman-active`, `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`, `.caveman-nudge-shown`); keeps `.caveman-history.jsonl` (lifetime savings data) with a printed note (#635). Skill installs done via `npx skills add` must be removed via the IDE's skill manager (we don't track them).
+**Uninstall** — `npx -y github:JuliusBrussee/caveman -- --uninstall` (or `node bin/install.js --uninstall` from a clone). Strips caveman hook entries from `settings.json` via substring marker `caveman`, deletes hook files, and removes the Claude plugin / Gemini extension. Skill installs done via `npx skills add` must be removed via the IDE's skill manager (we don't track them).
 
 ---
 
@@ -244,7 +276,7 @@ How caveman reaches each agent type:
 | Codex | Plugin in `plugins/caveman/` plus repo `.codex/hooks.json` and `.codex/config.toml` | Yes on macOS/Linux — SessionStart hook |
 | Gemini CLI | Extension with `GEMINI.md` context file | Yes — context file loads every session |
 | opencode | Native plugin (`src/plugins/opencode/`) copied into `~/.config/opencode/plugins/caveman/` + `AGENTS.md` ruleset + skills/agents/commands directories. Plugin uses `session.created` and `tui.prompt.append` lifecycle hooks. No statusline (opencode TUI exposes no plugin-writable badge). | Yes — `session.created` writes flag, `AGENTS.md` carries always-on ruleset |
-| OpenClaw | Workspace skill at `~/.openclaw/workspace/skills/caveman/SKILL.md` (frontmatter merged with `version` + `always: true`) plus a marker-fenced bootstrap block in `~/.openclaw/workspace/SOUL.md`. Both writes go through `cli/lib/openclaw.js`; workspace path is overridable via `OPENCLAW_WORKSPACE`. | Yes — SOUL.md is auto-injected each turn under "Project Context" (subject to OpenClaw's 12K-per-file / 60K-total bootstrap caps) |
+| OpenClaw | Workspace skill at `~/.openclaw/workspace/skills/caveman/SKILL.md` (frontmatter merged with `version` + `always: true`) plus a marker-fenced bootstrap block in `~/.openclaw/workspace/SOUL.md`. Both writes go through `bin/lib/openclaw.js`; workspace path is overridable via `OPENCLAW_WORKSPACE`. | Yes — SOUL.md is auto-injected each turn under "Project Context" (subject to OpenClaw's 12K-per-file / 60K-total bootstrap caps) |
 | Cursor | `npx skills add ... -a cursor` (default via `--only cursor`) writes the upstream skill profile; per-repo `.cursor/rules/caveman.mdc` via `--with-init` (calls `src/tools/caveman-init.js`) | Yes — always-on rule |
 | Windsurf | `npx skills add ... -a windsurf` (default via `--only windsurf`); per-repo `.windsurf/rules/caveman.md` via `--with-init` | Yes — always-on rule |
 | Cline | `npx skills add ... -a cline` (default via `--only cline`); per-repo `.clinerules/caveman.md` via `--with-init` | Yes — Cline auto-discovers `.clinerules/` |
@@ -255,10 +287,10 @@ opencode reaches Tier 1 minus the statusline (opencode's TUI has no plugin-writa
 
 For agents without hook systems, the always-on snippet lives in `INSTALL.md`'s "Want it always on?" section — keep current with `src/rules/caveman-activate.md`.
 
-**Adding a new agent.** Edit the `PROVIDERS` array in `cli/install.js` — single source of truth, no more bash/PS1 dual-source drift. Each entry has `id`, `label`, `mech`, `detect` (clause spec like `command:foo||dir:$HOME/x`), optional `profile` (vercel-labs/skills slug), optional `soft: true` (config-dir-only detection).
+**Adding a new agent.** Edit the `PROVIDERS` array in `bin/install.js` — single source of truth, no more bash/PS1 dual-source drift. Each entry has `id`, `label`, `mech`, `detect` (clause spec like `command:foo||dir:$HOME/x`), optional `profile` (vercel-labs/skills slug), optional `soft: true` (config-dir-only detection).
 
 1. The profile slug must exist in upstream [vercel-labs/skills](https://github.com/vercel-labs/skills). Verify against the README before merging — wrong slugs cause `npx skills add` to fail at runtime, not at install-script load.
-2. Run `node cli/install.js --list` to confirm the new row renders correctly.
+2. Run `node bin/install.js --list` to confirm the new row renders correctly.
 3. Soft probes (config-dir-only) are fine but tag them with `soft: true`. They render with `(soft)` in `--list` so users know detection is best-effort.
 
 ---
@@ -292,7 +324,7 @@ To reproduce: `uv run python benchmarks/run.py` (needs `ANTHROPIC_API_KEY` in `.
 
 - Edit `skills/<name>/SKILL.md` for behavior changes. Never edit synced copies under `plugins/caveman/skills/`.
 - Edit `src/rules/caveman-activate.md` for auto-activation rule changes. Never edit any per-agent rule copy a user has on their machine.
-- Edit `src/rules/caveman-openclaw-bootstrap.md` for the OpenClaw SOUL.md bootstrap snippet. Keep the `<!-- caveman-begin -->` / `<!-- caveman-end -->` markers and the `Respond terse like smart caveman` sentinel — `cli/lib/openclaw.js` keys idempotency off both. If you change the embedded fallback in `cli/lib/openclaw.js`, keep it byte-equivalent to the file.
+- Edit `src/rules/caveman-openclaw-bootstrap.md` for the OpenClaw SOUL.md bootstrap snippet. Keep the `<!-- caveman-begin -->` / `<!-- caveman-end -->` markers and the `Respond terse like smart caveman` sentinel — `bin/lib/openclaw.js` keys idempotency off both. If you change the embedded fallback in `bin/lib/openclaw.js`, keep it byte-equivalent to the file.
 - Per-skill human docs live in `skills/<name>/README.md`. The LLM-facing body is in `SKILL.md`. Don't merge them — different audiences.
 - Build artifacts go in `dist/`. Never check files into `dist/` manually — CI rebuilds them on push, and `dist/` is gitignored.
 - README most important file for user-facing impact. Optimize for non-technical readers. Preserve caveman voice.
@@ -301,6 +333,6 @@ To reproduce: `uv run python benchmarks/run.py` (needs `ANTHROPIC_API_KEY` in `.
 - CI workflow commits back to main after merge. Account for when checking branch state.
 - Hook files must silent-fail on all filesystem errors. Never let hook crash block session start.
 - Any new flag file write must go through `safeWriteFlag()` in `caveman-config.js`. Direct `fs.writeFileSync` on predictable user-owned paths reopens the symlink-clobber attack surface.
-- Hooks must respect `CLAUDE_CONFIG_DIR` env var, not hardcode `~/.claude`. Same for `cli/install.js` / statusline scripts.
-- `cli/install.js` is the only installer source. `install.sh` / `install.ps1` at repo root are 30-line shims that delegate to it. Never re-add per-OS install logic to the shims — that's how we got the Windows quoting bug (#249).
-- Any settings.json read in installer or hooks must go through `cli/lib/settings.js` `readSettings()` so JSONC comments don't crash the merge. Any settings.json write must run through `validateHookFields()` first.
+- Hooks must respect `CLAUDE_CONFIG_DIR` env var, not hardcode `~/.claude`. Same for `bin/install.js` / statusline scripts.
+- `bin/install.js` is the only installer source. `install.sh` / `install.ps1` at repo root are 30-line shims that delegate to it. Never re-add per-OS install logic to the shims — that's how we got the Windows quoting bug (#249).
+- Any settings.json read in installer or hooks must go through `bin/lib/settings.js` `readSettings()` so JSONC comments don't crash the merge. Any settings.json write must run through `validateHookFields()` first.

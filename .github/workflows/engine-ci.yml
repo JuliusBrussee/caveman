@@ -1,0 +1,144 @@
+name: engine-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      # Ubuntu 23.10+ runners restrict unprivileged user namespaces via
+      # AppArmor; the agent sandbox tests exercise the real userns sandbox.
+      - name: Allow unprivileged user namespaces for sandbox tests
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The CLI conformance suite needs the real proxy; building it here with
+      # the cached Go toolchain keeps the test inside its 90s budget.
+      - name: Prebuild caveman-proxy for conformance tests
+        run: go build -o "$RUNNER_TEMP/caveman-proxy" ./proxy/cmd/caveman-proxy
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm -r test
+        env:
+          CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}/caveman-proxy
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install pytest
+      - run: python -m pytest -q
+        working-directory: packages/sdk/python
+
+  root-surfaces:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install pytest==9.0.3
+      - run: npm test
+      - run: node --test tests/*.js
+      - run: python -m unittest discover -s tests -p 'test_*.py'
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/caveman-xdg
+      - run: python -m pytest -q tests
+        working-directory: mem/py
+      - run: python tests/verify_repo.py
+
+  extension:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run package
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - run: pnpm install --frozen-lockfile
+      - run: python -m pip install pytest==9.0.3
+      - run: go test ./...
+      - run: npm test
+      - name: Prebuild caveman-proxy for conformance tests
+        run: go build -o "$env:RUNNER_TEMP\caveman-proxy.exe" ./proxy/cmd/caveman-proxy
+      - run: pnpm -r build
+      - run: pnpm -r test
+        env:
+          CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}\caveman-proxy.exe
+      - run: node --test tests/*.js
+      - run: python -m unittest discover -s tests -p 'test_*.py'
+        env:
+          LOCALAPPDATA: ${{ runner.temp }}\caveman-data
+      - run: python -m pytest -q tests
+        working-directory: mem/py
+      - run: python -m pytest -q
+        working-directory: packages/sdk/python
+      - run: python tests/verify_repo.py
+      - run: npm --prefix extension ci
+      - run: npm --prefix extension test
+      - run: npm run test:windows

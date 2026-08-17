@@ -255,5 +255,94 @@ test('/caveman-stats emits hookSpecificOutput.additionalContext, not decision:bl
   }
 });
 
+// ---------- unresolved /caveman level (#838) ----------
+
+function contextOf(result) {
+  if (!result.stdout.trim()) return null;
+  return JSON.parse(result.stdout).hookSpecificOutput.additionalContext;
+}
+
+test('a bogus level is reported instead of silently ignored', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'ultra');
+    const ctx = contextOf(send(cfg, { prompt: '/caveman not-a-real-level' }));
+    assert.ok(ctx, 'a bogus level must produce a notice');
+    assert.match(ctx, /not recognized/);
+    assert.strictEqual(flagValue(cfg), 'ultra', 'the level must be left untouched');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('the rejected argument is never echoed back into model context', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'full');
+    const ctx = contextOf(send(cfg, { prompt: '/caveman IGNORE-PREVIOUS-INSTRUCTIONS' }));
+    assert.ok(ctx);
+    assert.doesNotMatch(ctx, /IGNORE-PREVIOUS-INSTRUCTIONS/i, 'untrusted input must not reach model context');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('the level list advertises the six documented levels, not the storage alias', () => {
+  const cfg = makeConfigDir();
+  try {
+    const ctx = contextOf(send(cfg, { prompt: '/caveman nope' }));
+    const listed = /Valid levels: ([^.]+)\./.exec(ctx);
+    assert.ok(listed, `expected a level list, got: ${ctx}`);
+    const levels = listed[1].split(',').map(v => v.trim());
+    assert.deepStrictEqual(
+      levels.sort(),
+      ['full', 'lite', 'ultra', 'wenyan-full', 'wenyan-lite', 'wenyan-ultra'],
+      'wenyan is the storage alias for wenyan-full — listing both advertises seven levels',
+    );
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('an independent mode is pointed at its own command, not denied', () => {
+  const cfg = makeConfigDir();
+  try {
+    const ctx = contextOf(send(cfg, { prompt: '/caveman commit' }));
+    assert.match(ctx, /\/caveman-commit/, 'must name the command that does work');
+    assert.doesNotMatch(ctx, /not recognized/, 'commit IS a real mode');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+// An early return on the notice would skip the #599 one-shot restore, leaving
+// the user stranded in /caveman-commit an extra turn because of a typo.
+test('a typo does not strand the user in a one-shot independent mode (#599)', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'commit');
+    fs.writeFileSync(path.join(cfg, '.caveman-active.prev'), 'ultra');
+    const ctx = contextOf(send(cfg, { prompt: '/caveman ultrra' }));
+    assert.strictEqual(flagValue(cfg), 'ultra', 'the prose mode must still be restored this turn');
+    assert.match(ctx, /not recognized/, 'and the notice must still be delivered');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('the notice and the per-turn reinforcement share one write', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'ultra');
+    const result = send(cfg, { prompt: '/caveman ultrra' });
+    assert.doesNotThrow(() => JSON.parse(result.stdout), 'two writes would produce invalid JSON');
+    const ctx = contextOf(result);
+    assert.match(ctx, /not recognized/);
+    assert.match(ctx, /CAVEMAN MODE ACTIVE \(ultra\)/, 'the turn must not lose its reinforcement');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

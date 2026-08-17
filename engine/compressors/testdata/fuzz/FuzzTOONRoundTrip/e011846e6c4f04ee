@@ -1,0 +1,2 @@
+go test fuzz v1
+string("{\"A000\":[{\"id\":0,\"id\":\"\"}]}")

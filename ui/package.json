@@ -1,0 +1,20 @@
+{
+  "name": "@caveman/ui",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsc --emitDeclarationOnly false --outDir dist",
+    "lint": "tsc --noEmit",
+    "test": "tsc --emitDeclarationOnly false --outDir dist && node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.7",
+    "typescript": "5.9.3"
+  },
+  "peerDependencies": {
+    "react": "19.2.1"
+  }
+}

@@ -1,0 +1,200 @@
+name: release-packages
+
+on:
+  push:
+    tags:
+      - "sdk-ts-v*"
+      - "sdk-python-v*"
+      - "agent-v*"
+      - "create-agent-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      ecosystem: ${{ steps.package.outputs.ecosystem }}
+      package: ${{ steps.package.outputs.package }}
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require protected, annotated, verified tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq .object.sha)"
+          tag_type="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq .object.type)"
+          [[ "$tag_type" == "tag" ]] || { echo "release tag must be annotated" >&2; exit 1; }
+          verified="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_ref" --jq .verification.verified)"
+          [[ "$verified" == "true" ]] || { echo "release tag signature is not GitHub-verified" >&2; exit 1; }
+          target="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_ref" --jq .object.sha)"
+          git cat-file -e "$target^{commit}"
+          git merge-base --is-ancestor "$target" origin/main
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.16.0"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Resolve package and require tag/version parity
+        id: package
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF_NAME" in
+            sdk-ts-v*)
+              package="packages/sdk/typescript"
+              ecosystem="npm"
+              version="${GITHUB_REF_NAME#sdk-ts-v}"
+              actual="$(node -p "require('./$package/package.json').version")"
+              ;;
+            sdk-python-v*)
+              package="packages/sdk/python"
+              ecosystem="pypi"
+              version="${GITHUB_REF_NAME#sdk-python-v}"
+              actual="$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("packages/sdk/python/pyproject.toml").read_text())["project"]["version"])')"
+              ;;
+            agent-v*)
+              package="packages/agent"
+              ecosystem="npm"
+              version="${GITHUB_REF_NAME#agent-v}"
+              actual="$(node -p "require('./$package/package.json').version")"
+              ;;
+            create-agent-v*)
+              package="packages/create-caveman-agent"
+              ecosystem="npm"
+              version="${GITHUB_REF_NAME#create-agent-v}"
+              actual="$(node -p "require('./$package/package.json').version")"
+              ;;
+            *)
+              echo "unsupported package release tag: $GITHUB_REF_NAME" >&2
+              exit 2
+              ;;
+          esac
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+            echo "release version is not semver: $version" >&2
+            exit 1
+          }
+          [[ "$actual" == "$version" ]] || {
+            echo "tag version $version does not match package version $actual" >&2
+            exit 1
+          }
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+          echo "ecosystem=$ecosystem" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build and test npm package
+        if: steps.package.outputs.ecosystem == 'npm'
+        working-directory: ${{ steps.package.outputs.package }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/package-dist"
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm audit --package-lock-only --omit=dev --audit-level=low
+          npm audit --package-lock-only --audit-level=high
+          npm test
+          npm pack --pack-destination "$RUNNER_TEMP/package-dist"
+          mapfile -t tarballs < <(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name '*.tgz' -print)
+          [[ "${#tarballs[@]}" == 1 ]] || { echo "expected exactly one npm tarball" >&2; exit 1; }
+          smoke="$RUNNER_TEMP/npm-artifact-smoke"
+          mkdir -p "$smoke"
+          (cd "$smoke" && npm init --yes >/dev/null)
+          (cd "$smoke" && npm install --ignore-scripts --no-audit --no-fund "${tarballs[0]}")
+          case "${{ steps.package.outputs.package }}" in
+            packages/sdk/typescript)
+              (cd "$smoke" && node --input-type=module -e 'const m=await import("@caveman-ai/sdk"); if(typeof m.Cave!=="function") process.exit(1)')
+              ;;
+            packages/agent)
+              (cd "$smoke" && node --input-type=module -e 'const m=await import("@caveman-ai/agent"); if(typeof m.agent!=="function") process.exit(1)')
+              "$smoke/node_modules/.bin/caveman-agent" --version
+              ;;
+            packages/create-caveman-agent)
+              generated="$smoke/generated-agent"
+              "$smoke/node_modules/.bin/create-caveman-agent" "$generated" --provider openai --no-install
+              test -f "$generated/src/agent.ts"
+              test -f "$generated/src/run.ts"
+              node -e 'const p=require(process.argv[1]); if(p.dependencies?.["@caveman-ai/agent"]!=="^0.1.0") process.exit(1)' "$generated/package.json"
+              node -e 'const p=require(process.argv[1]); if(p.scripts?.run!=="node --experimental-strip-types src/run.ts") process.exit(1)' "$generated/package.json"
+              grep -F 'entryPath: "src/agent.ts"' "$generated/src/run.ts"
+              grep -F 'rootDir' "$generated/src/run.ts"
+              ;;
+          esac
+      - name: Build and test Python package
+        if: steps.package.outputs.ecosystem == 'pypi'
+        working-directory: ${{ steps.package.outputs.package }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/package-dist"
+          python -m pip install --disable-pip-version-check build==1.3.0 pytest==9.0.3
+          python -m pytest
+          python -m build --sdist --wheel --outdir "$RUNNER_TEMP/package-dist"
+          mapfile -t wheels < <(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name '*.whl' -print)
+          mapfile -t sdists < <(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name '*.tar.gz' -print)
+          [[ "${#wheels[@]}" == 1 && "${#sdists[@]}" == 1 ]] || { echo "expected exactly one wheel and one sdist" >&2; exit 1; }
+          python -m venv "$RUNNER_TEMP/wheel-smoke"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install --disable-pip-version-check --no-deps "${wheels[0]}"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -c 'import caveman_cloud,importlib.metadata; assert importlib.metadata.version("caveman-sdk") == "${{ steps.package.outputs.version }}"'
+          python -m venv "$RUNNER_TEMP/sdist-smoke"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install --disable-pip-version-check setuptools==80.9.0
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install --disable-pip-version-check --no-deps --no-build-isolation "${sdists[0]}"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -c 'import caveman_cloud,importlib.metadata; assert importlib.metadata.version("caveman-sdk") == "${{ steps.package.outputs.version }}"'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: package-dist
+          path: ${{ runner.temp }}/package-dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-npm:
+    if: needs.build.outputs.ecosystem == 'npm'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/${{ needs.build.outputs.package == 'packages/agent' && '@caveman-ai/agent' || needs.build.outputs.package == 'packages/create-caveman-agent' && '@caveman-ai/create-agent' || '@caveman-ai/sdk' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: package-dist
+          path: dist
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.16.0"
+          registry-url: https://registry.npmjs.org
+      - name: Publish with npm trusted publishing
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.5.1
+          npm publish dist/*.tgz --access public
+
+  publish-pypi:
+    if: needs.build.outputs.ecosystem == 'pypi'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/caveman-sdk
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: package-dist
+          path: dist
+      - name: Publish with PyPI trusted publishing
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0

@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "id": "anthropic-ts",
+  "display_name": "Anthropic SDK (TypeScript)",
+  "lang": "ts",
+  "wire_protocol": "anthropic-messages",
+  "note": "The SDK appends /v1/messages itself, so the base URL is just the gateway + /w/{{app}}.",
+  "code": "import Anthropic from \"@anthropic-ai/sdk\";\n\nconst client = new Anthropic({\n  baseURL: \"{{baseURL}}/w/{{app}}\",\n  apiKey: process.env.ANTHROPIC_API_KEY,\n});\n\nconst msg = await client.messages.create({\n  model: \"claude-sonnet-4-5\",\n  max_tokens: 1024,\n  messages: [{ role: \"user\", content: \"Why is the sky blue?\" }],\n});\n\n// Claude Pro/Max OAuth bearer tokens pass through unchanged.\n// Connected to Caveman Cloud? Add gateway auth + BYOK headers:\n//   defaultHeaders: { \"x-cave-api-key\": CAVE_API_KEY, \"x-cave-upstream-key\": ANTHROPIC_API_KEY }",
+  "models": ["claude-sonnet-4-5"]
+}
