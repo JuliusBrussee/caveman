@@ -109,7 +109,7 @@ test("skills install caveman-explore --agent codex fails closed with unchanged m
   assert.equal(out.code, 2, "codex explorer install must fail closed");
   assert.match(
     out.stderr,
-    /caveman explore: only --agent claude is wired today \(codex needs verified transcript isolation first — see docs\/FASTCONTEXT_EXPLORER_SPEC\.md\)\. got: codex/,
+    /caveman explore: only --agent claude is wired today \(codex needs verified transcript isolation first\)\. got: codex/,
   );
   assert.ok(!existsSync(join(dir, "SKILL.md")), "guard must run before writing");
 });

@@ -1,8 +1,8 @@
-# public/kit — cavekit, honesty-enforcing React surfaces (MIT, public)
+# packages/kit — cavekit, honesty-enforcing React surfaces (MIT, public)
 
 Embeddable React surfaces that show Caveman savings **without ever lying about their
 provenance**. KIT1 scope: the locked attribution mark + the basis badge + a headless honesty
-core + the trial/usage-origin surface. Zero transport deps (PRD `docs/prd/11-cavekit.md`).
+core + the trial/usage-origin surface. Zero transport deps.
 
 ## Layout
 - `src/core.ts` — the React-free honesty core (importable via `@caveman/kit/core`): the `Basis` union + `normalizeBasis`/`isVerified`/`basisLabel`.
@@ -21,4 +21,4 @@ core + the trial/usage-origin surface. Zero transport deps (PRD `docs/prd/11-cav
 - Build/test: `make product-build PRODUCT=kit` / `make product-test PRODUCT=kit` (the test script builds first, then runs the type + runtime guards).
 - `verified` is a distinct provenance the kit only ever *renders when given* — it never manufactures it. The wider suite (SavingsCounter, CavePlan, hooks/transport) is deferred (PRD §12).
 
-See ../../CLAUDE.md (root) · ../../docs/prd/11-cavekit.md
+See ../../CLAUDE.md (root)

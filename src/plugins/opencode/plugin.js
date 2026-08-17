@@ -105,6 +105,16 @@ function opencodeConfigDir() {
 
 const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
 
+function removeFlag() {
+  try {
+    unlinkSync(flagPath);
+  } catch (error) {
+    if (process.env.CAVEMAN_DEBUG === '1' && error.code !== 'ENOENT') {
+      console.error(`caveman: failed to remove flag ${flagPath}: ${error.message}`);
+    }
+  }
+}
+
 function reinforcementLine(mode) {
   return 'CAVEMAN MODE ACTIVE (' + mode + ') — session ruleset applies.';
 }
@@ -112,7 +122,7 @@ function reinforcementLine(mode) {
 function applyModeChange(change) {
   if (!change) return;
   if (change.action === 'clear') {
-    try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
+    removeFlag();
     return;
   }
   if (change.action === 'set' && change.mode) {
@@ -126,7 +136,7 @@ function applyModeChange(change) {
 function handleSessionCreated() {
   const mode = getDefaultMode();
   if (mode === 'off') {
-    try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
+    removeFlag();
     return;
   }
   safeWriteFlag(flagPath, mode);

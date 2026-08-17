@@ -16,6 +16,10 @@ services.
 
 ## Per-Directory License
 
+Default rule: a new module that imports, links, embeds, or ships as part of
+Engine-linked runtime is BSL-1.1 unless a later decision explicitly classifies
+it as MIT adoption surface.
+
 | Path | License | Notes |
 |---|---|---|
 | `skills/` | MIT | Existing Caveman skill stays MIT and untouched. |
@@ -33,8 +37,10 @@ services.
 | `shared/provider-catalog/` | MIT | Public provider/model metadata and catalog schemas. |
 | `mem/js/` | MIT | Thin JavaScript client for cavemem. |
 | `mem/py/` | MIT | Thin Python client for cavemem. |
-| `ui/` | Private/not published | In-tree utility package; do not publish unless product decision changes. |
+| `ui/` | MIT | In-tree utility package; `package.json` disables registry publication. |
 | `engine/` | BSL-1.1 | Core compression IP and CCR. |
+| `cacheengine/` | BSL-1.1 | Provider-native prompt-cache planner and wire engine. |
+| `rewriter/` | BSL-1.1 | Engine-linked reflection rewriter and recovery gates. |
 | `browse/` | BSL-1.1 | Local browser driver; embeds the engine, vendors MIT chromedp modules. |
 | `proxy/` | BSL-1.1 | Standalone gateway and provider adapters. |
 | `mcp/` | BSL-1.1 | Go binary embeds the engine. |
@@ -67,7 +73,7 @@ BSL-licensed versions convert to Apache License, Version 2.0 on the earlier of:
 
 ## Commercial Boundary
 
-Free/open:
+Free/source-available:
 
 - local and single-tenant use
 - BYOK/self-hosted first-party traffic

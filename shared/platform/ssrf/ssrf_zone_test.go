@@ -81,6 +81,52 @@ func TestDialContext_ResolveOnceThenDialValidatedIP(t *testing.T) {
 	}
 }
 
+func TestDialContext_SelfHostedFakeIPReachesTUN(t *testing.T) {
+	lookup := func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{
+			netip.MustParseAddr("198.18.0.44"),
+			netip.MustParseAddr("fdfe:dcba:9876::2c"),
+		}, nil
+	}
+	var dialed string
+	dial := func(_ context.Context, _, addr string) (net.Conn, error) {
+		dialed = addr
+		left, right := net.Pipe()
+		_ = right.Close()
+		return left, nil
+	}
+	conn, err := dialContextWith(SelfHostedConfig(), lookup, dial)(t.Context(), "tcp", "api.anthropic.com:443")
+	if err != nil {
+		t.Fatalf("self-hosted fake-IP dial: %v", err)
+	}
+	_ = conn.Close()
+	if dialed != "198.18.0.44:443" {
+		t.Fatalf("dialed %q, want fake-IP address", dialed)
+	}
+
+	ipv6Only := func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("fdfe:dcba:9876::2c")}, nil
+	}
+	dialed = ""
+	conn, err = dialContextWith(SelfHostedConfig(), ipv6Only, dial)(t.Context(), "tcp", "api.anthropic.com:443")
+	if err != nil {
+		t.Fatalf("self-hosted IPv6 fake-IP dial: %v", err)
+	}
+	_ = conn.Close()
+	if dialed != "[fdfe:dcba:9876::2c]:443" {
+		t.Fatalf("dialed %q, want IPv6 fake-IP address", dialed)
+	}
+
+	dialed = ""
+	_, err = dialContextWith(ManagedConfig(), lookup, dial)(t.Context(), "tcp", "api.anthropic.com:443")
+	if err == nil {
+		t.Fatal("managed guard accepted fake-IP destination")
+	}
+	if dialed != "" {
+		t.Fatalf("managed guard dialed blocked fake-IP address %q", dialed)
+	}
+}
+
 func TestDialContext_AllowlistedHostnameCannotReachMetadata(t *testing.T) {
 	lookup := func(context.Context, string, string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("169.254.169.254")}, nil

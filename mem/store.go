@@ -3,7 +3,7 @@
 // behind a conservative threshold (it fails toward no recall), and compresses
 // each recalled memory through the engine so the inferred token cost of
 // injecting it is honest and the dropped detail stays recoverable via CCR.
-// Everything it reports is `inferred` (PRD docs/prd/10-cavemem.md).
+// Everything it reports is `inferred`.
 //
 // Byte-safety: a memory's raw text is written to SQLite as the durable source of
 // truth before any compression is attempted, so the engine can never cause a

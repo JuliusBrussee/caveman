@@ -1,7 +1,5 @@
 # Caveman Gateway — the public, byte-safe `caveman` standalone gateway.
 
-> Spec: [docs/prd/03-caveman-proxy.md](../../docs/prd/03-caveman-proxy.md) · registry id `proxy` in [PRODUCTS.yaml](../../PRODUCTS.yaml).
-
 A base-URL-swap reverse proxy: point an agent at `http://127.0.0.1:8787` and its
 LLM traffic flows through Caveman with no code change. Single-operator, BYOK, zero
 cloud dependencies. Record mode is always a pass-through; on any transform problem
@@ -9,8 +7,13 @@ the original bytes are forwarded unchanged. Standalone records truthful per-requ
 spend to `~/.caveman/caveman.db` and only ever labels savings `inferred` — never
 `verified`.
 
+Source and binaries ship under BSL 1.1. This runtime is source-available, not
+OSI Open Source before Change Date. First-party self-hosted production is
+permitted; third-party hosted, managed, or embedded use requires commercial
+license. See `LICENSE` and `../LICENSING.md`.
+
 ```bash
-go build ./public/proxy/...          # build
+go build ./proxy/...                 # build
 ANTHROPIC_API_KEY=… caveman-proxy    # serve on 127.0.0.1:8787
 caveman-proxy stats                  # print the local spend summary as JSON
 ```
@@ -50,4 +53,4 @@ route is separate, uses `/bedrock/anthropic`, and remains disabled unless the
 deployment explicitly enables `CAVE_BEDROCK_MANTLE_ENABLED`.
 
 The byte-safe provider adapters under `providers/` are shared with the managed
-gateway (`cloud/gateway-managed`), which imports them from here.
+gateway, which imports them from here.

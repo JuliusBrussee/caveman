@@ -1,10 +1,9 @@
-# public/mcp — the Caveman MCP server (commercial Go core + MIT launcher)
+# mcp — the Caveman MCP server (commercial Go core + MIT launcher)
 
 A thin **stdio JSON-RPC** adapter exposing the compression [engine](../engine/CLAUDE.md) as
 five MCP tools to any host (Claude Code, Cursor, …). It owns only the MCP framing; all
 compression is the engine's, linked **in-process** (no subprocess, no drift). Local-only — it
-opens no network connection — and everything it reports is `inferred`, never `verified` (PRD
-`docs/prd/06-caveman-mcp.md`).
+opens no network connection — and everything it reports is `inferred`, never `verified`.
 
 ## Layout
 - `server.go` — the `Server`: JSON-RPC loop, dispatch, the five tool handlers. Takes an injectable `Engine` interface so the framing is testable without the real compressors.
@@ -26,7 +25,7 @@ opens no network connection — and everything it reports is `inferred`, never `
 Registering this server puts all five tool schemas in the wrapped agent's prefix
 on **every** call — **11,060 tokens/call** in the agent bench (~2.22M over its 201
 calls). That is why `caveman wrap` gates the injection behind the `execute.mcp`
-surface knob (`auto` | `marker-only` | `true` | `false`, `public/cli/src/index.ts`).
+surface knob (`auto` | `marker-only` | `true` | `false`, `packages/cli/src/index.ts`).
 Under a non-auto surface wrap suppresses **both** of its injection sites — the
 `mcp install` write and, for config-file agents like openclaw, the profile's
 `mcp.servers.caveman` overlay — but it never uninstalls a server the user
@@ -49,7 +48,7 @@ per-call tax for every wrapped agent.
 - v1 is **stdio-only**, **string payloads only** (the engine detects type); HTTP transport + `caveman mcp` subcommand are v2.
 - **protocol negotiation must never error.** The adapter implements the 2024-11-05 contract and echoes that version back; a client asking for a newer one gets 2024-11-05 in the initialize result and decides for itself, per the MCP lifecycle. It previously answered `-32602: unsupported protocol version`, which made Claude Code (and every other current client) drop the server — and because `caveman wrap` reads recovery availability from an install-time marker rather than from the live agent, the proxy kept eliding content that no longer had a `caveman_retrieve` to expand it. Declining to echo an unimplemented version is right; refusing to speak is not.
 
-See ../../CLAUDE.md (root) · ../engine/CLAUDE.md · ../../docs/prd/06-caveman-mcp.md
+See ../../CLAUDE.md (root) · ../engine/CLAUDE.md
 
 ## Retrieve anti-storm
 

@@ -1,7 +1,8 @@
-Scope note: this MIT license covers this repository except the engine-linked
-directories listed in LICENSING.md (engine/, proxy/, mcp/, shrink/, browse/,
-the cavemem Go core, shared/platform/), which are licensed under the Business
-Source License 1.1 — see LICENSE.BSL.
+Scope note: this MIT license covers this repository except Engine-linked
+directories listed in LICENSING.md (engine/, proxy/, cacheengine/, rewriter/,
+browse/, mcp/, shrink/, cavemem Go core, shared/platform/), which are licensed
+under Business Source License 1.1 — see LICENSE.BSL. New Engine-linked runtime
+modules default to BSL-1.1 unless explicitly classified as MIT.
 
 MIT License
 

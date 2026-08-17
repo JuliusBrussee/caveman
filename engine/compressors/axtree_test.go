@@ -271,6 +271,35 @@ func TestAXTreeQueryKeepsBestMatchesAncestorsAndVisibleUIDsOnly(t *testing.T) {
 	}
 }
 
+func TestAXTreeQueryKeepsWholeRowForLineItemMatches(t *testing.T) {
+	input := []byte(`[
+	  {"nodeId": "1", "role": {"type": "role", "value": "RootWebArea"}, "name": {"type": "computedString", "value": "Orders"}, "backendDOMNodeId": 1, "childIds": ["2"]},
+	  {"nodeId": "2", "role": {"type": "role", "value": "table"}, "name": {"type": "computedString", "value": "Orders awaiting review"}, "backendDOMNodeId": 2, "childIds": ["3", "9"]},
+	  {"nodeId": "3", "role": {"type": "role", "value": "row"}, "name": {"type": "computedString", "value": ""}, "backendDOMNodeId": 3, "childIds": ["4", "5", "6", "7"]},
+	  {"nodeId": "4", "role": {"type": "role", "value": "cell"}, "name": {"type": "computedString", "value": "ORD-0173"}, "backendDOMNodeId": 4},
+	  {"nodeId": "5", "role": {"type": "role", "value": "cell"}, "name": {"type": "computedString", "value": "Customer 173"}, "backendDOMNodeId": 5},
+	  {"nodeId": "6", "role": {"type": "role", "value": "cell"}, "name": {"type": "computedString", "value": "EUR 193.00"}, "backendDOMNodeId": 6},
+	  {"nodeId": "7", "role": {"type": "role", "value": "cell"}, "name": {"type": "computedString", "value": ""}, "backendDOMNodeId": 7, "childIds": ["8"]},
+	  {"nodeId": "8", "role": {"type": "role", "value": "button"}, "name": {"type": "computedString", "value": "Review ORD-0173"}, "backendDOMNodeId": 8},
+	  {"nodeId": "9", "role": {"type": "role", "value": "row"}, "name": {"type": "computedString", "value": ""}, "backendDOMNodeId": 9, "childIds": ["10", "11"]},
+	  {"nodeId": "10", "role": {"type": "role", "value": "cell"}, "name": {"type": "computedString", "value": "ORD-0001"}, "backendDOMNodeId": 10},
+	  {"nodeId": "11", "role": {"type": "role", "value": "cell"}, "name": {"type": "computedString", "value": "Customer 1"}, "backendDOMNodeId": 11}
+	]`)
+	out, _, ok := axTreeCompressor{}.CompressWithMetadata(input, "ORD-0173")
+	if !ok {
+		t.Fatal("row-match fixture must compress")
+	}
+	view := string(out)
+	for _, sibling := range []string{"Customer 173", "EUR 193.00", "Review ORD-0173"} {
+		if !strings.Contains(view, sibling) {
+			t.Fatalf("matched row lost sibling cell %q:\n%s", sibling, view)
+		}
+	}
+	if strings.Contains(view, "ORD-0001") {
+		t.Fatalf("unmatched row leaked into focused view:\n%s", view)
+	}
+}
+
 func TestAXTreeQueryMissIsExplicitAndHasNoGuessableTargets(t *testing.T) {
 	input, err := os.ReadFile("testdata/axtree_cdp_local_page.json")
 	if err != nil {

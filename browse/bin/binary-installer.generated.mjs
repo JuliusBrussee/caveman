@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
 } from "node:fs";
 import { open } from "node:fs/promises";
@@ -20,8 +21,8 @@ import {
 
 function executable(path) {
   try {
-    accessSync(path, constants.X_OK);
-    return true;
+    if (process.platform !== "win32") accessSync(path, constants.X_OK);
+    return statSync(path).isFile();
   } catch {
     return false;
   }
@@ -33,10 +34,13 @@ export function executableCandidateNames(
   pathExt = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
 ) {
   if (platform !== "win32" || extname(name)) return [name];
-  const candidates = [name];
+  const candidates = [];
   for (const extension of pathExt.split(";").map((value) => value.trim()).filter(Boolean)) {
     candidates.push(`${name}${extension.startsWith(".") ? extension : `.${extension}`}`);
   }
+  // npm installs a POSIX shim beside its native .CMD shim. Windows X_OK is
+  // existence-only, so native PATHEXT candidates must win before bare fallback.
+  candidates.push(name);
   const seen = new Set();
   return candidates.filter((candidate) => {
     const key = candidate.toLowerCase();

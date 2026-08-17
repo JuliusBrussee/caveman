@@ -3,10 +3,10 @@
 "Caveman" — the name, the wordmark, and the rock logo — is a trademark of Julius
 Brussee. Trademark applications are pending (Nice Classes 9 and 42).
 
-The software in this repository is open source. **The code license (MIT or
-BSL-1.1, per directory — see [LICENSING.md](LICENSING.md)) grants you rights to
-the code. It does not grant you any rights to the Caveman name or logo.** Those
-are two separate things, on purpose.
+Software is split-licensed. MIT directories are open source; BSL-1.1
+directories are source-available, not OSI Open Source before Change Date. **Code
+license per directory — see [LICENSING.md](LICENSING.md) — grants code rights,
+not rights to Caveman name or logo.**
 
 ## What's fine (no permission needed)
 
@@ -27,8 +27,8 @@ are two separate things, on purpose.
 
 ## Why this exists
 
-The trademark, not the license, is the durable line between the free open-source
-engine and the commercial Caveman Cloud product. Anyone can run the code; only the
+Trademark is separate from both MIT adoption surfaces, BSL runtime, and
+commercial Caveman Cloud. Anyone can run code within its license; only the
 real thing gets to be called Caveman. Misuse of the marks terminates your license
 to use them (the code license is unaffected, but the confusion isn't allowed to
 stand).

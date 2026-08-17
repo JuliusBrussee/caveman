@@ -1,9 +1,8 @@
 # Public package releases
 
-`release-packages.yml` publishes four reviewed adoption artifacts from the public
-`JuliusBrussee/caveman` repository. It never runs from Caveman Cloud's private
-repository. Build jobs have no OIDC permission; only isolated publish jobs can
-mint registry tokens.
+`release-packages.yml` publishes four reviewed adoption artifacts from
+`JuliusBrussee/caveman`. Build jobs have no OIDC permission; only isolated
+publish jobs can mint registry tokens.
 
 ## Registry status and remaining setup
 
@@ -14,8 +13,9 @@ Bootstrap releases published and anonymously verified on 2026-08-11:
 - npm `@caveman-ai/create-agent@0.1.0`
 - PyPI `caveman-sdk==1.0.0`
 
-Fresh installs and runtime imports passed. Registry downloads matched reviewed
-artifact SHA-256 hashes. No registry credential ships in any release artifact.
+Fresh installs and runtime imports passed, and registry downloads matched
+reviewed artifact SHA-256 hashes. Release artifacts contain no registry
+credential.
 Remaining work moves future publication to trusted publishers:
 
 1. Mirror reviewed source with `tools/publish-public.sh --apply`, inspect diff,

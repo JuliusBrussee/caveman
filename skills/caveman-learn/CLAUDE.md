@@ -1,9 +1,9 @@
-# public/skills/caveman-learn — the Caveman Learn editing skill (MIT, public)
+# skills/caveman-learn — the Caveman Learn editing skill (MIT, public)
 
 The consent-gated half of `caveman learn`. The analyzer (the Go proxy) **measures**
 where an agent's tokens go and writes a ranked plan; this skill is what an agent
 loads to **act** on that plan — proposing each fix and applying it only with the
-user's per-edit yes. It is the loop-closer the [learn spec](../../../docs/CAVEMAN_LEARN_SPEC.md) §10
+user's per-edit yes. It is the loop-closer the learn spec §10
 describes, plus the new `cavemem_offload` move.
 
 ## Layout
@@ -29,4 +29,4 @@ config. `caveman learn apply` stays read-only (it materializes candidates), and
 `caveman mem *` are mechanical store ops. The offload move enforces a net-token-negative
 gate and the never-make-the-agent-dumber guard before any trim.
 
-See ../../../docs/CAVEMAN_LEARN_SPEC.md · ../../mem/CLAUDE.md (cavemem) · ../caveman-explore/SKILL.md (the packaging precedent)
+See ../../mem/CLAUDE.md (cavemem) · ../caveman-explore/SKILL.md (the packaging precedent)

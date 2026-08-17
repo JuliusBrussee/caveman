@@ -27,7 +27,7 @@ const toolSchemaStripVersion = "v1"
 
 // toolSchemaStripAllowed reports whether the tool-schema annotation strip may run.
 //
-// The strip changes model-visible bytes, so ADR 0024 §2 lets it default on only
+// The strip changes model-visible bytes, so it may default on only
 // under the local-wrap clause (recovery + CCR) — and it does not even do that: it
 // is default OFF and an operator turns it on explicitly with
 // `toolschema_strip: annotations` / CAVEMAN_TOOLSCHEMA_STRIP=annotations. On top

@@ -1,7 +1,7 @@
-# public/agents — the agent-profile registry (`caveman wrap` data)
+# agents — the agent-profile registry (`caveman wrap` data)
 
 Profiles for every AI coding agent `caveman wrap` can route through the byte-safe gateway. The
-keystone (docs/UNIVERSAL_AGENT_WRAP_SPEC.md) is a **collapse toward data**, not an absolute: for
+keystone is a **collapse toward data**, not an absolute: for
 most agents, adding one is a **data change** (one JSON file here) and the CLI's injection appliers
 + the proxy's wire-protocol adapters are the only code. But routing sits on a **three-tier honesty
 scale** (`injection_completeness`), because several agents genuinely need code:
@@ -20,7 +20,7 @@ declared `injection_completeness` claims more data-purity than reality (e.g. `de
 agent that needs a builder). Separately, `buildWrapEnv` first sprays a generic base-URL union
 (`WRAP_BASE_URL_ENV_VARS` in `../cli/src/index.ts`) as a fail-open fallback that any SDK subprocess
 children inherit; each agent reads only its own subset, and the profile's injection then layers on
-top. `docs/UNIVERSAL_AGENT_WRAP_SPEC.md` §0 is the fuller narrative — this is the working summary.
+top.
 
 ## Layout
 - `profiles/*.json` — one profile per agent (`claude`, `codex`, `gemini`, `aider`, `opencode`, `hermes`, `openclaw`).
@@ -100,4 +100,4 @@ convention** — `convert` skips the agent with an honest note, never guesses a 
 - `wire_protocol` must be one the proxy speaks natively (anthropic-messages · openai-chat ·
   openai-responses · gemini-generatecontent) — we don't translate protocols in the wrap path.
 
-See ../../CLAUDE.md (root) · ../../docs/UNIVERSAL_AGENT_WRAP_SPEC.md · ../cli/CLAUDE.md
+See ../../CLAUDE.md (root) · ../cli/CLAUDE.md

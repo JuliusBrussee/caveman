@@ -1,10 +1,9 @@
-# public/integrations — the framework-recipe registry (`caveman sdk` data)
+# integrations — the framework-recipe registry (`caveman sdk` data)
 
 Declarative routing recipes for AI SDKs/frameworks: each recipe is the one-line
 base-URL shape that points a framework at the byte-safe gateway, with `{{baseURL}}`
 (gateway origin) and `{{app}}` (the `/w/<app>` attribution slug) left as render-time
-templates. Recipes are DATA, not code — the collapse decision of
-`docs/UNIVERSAL_AGENT_WRAP_SPEC.md` §0 applied to app frameworks.
+templates. Recipes are DATA, not code — the collapse decision applied to app frameworks.
 
 ## Layout
 - `recipes/*.json` — one recipe per framework (12 today: openai-ts/py, anthropic-ts/py,
@@ -13,8 +12,7 @@ templates. Recipes are DATA, not code — the collapse decision of
 - `compile.mjs` — zero-dep build-time compiler: validates every recipe (fail-closed) and
   emits `recipes.json` (published registry) + two EMBEDDED copies —
   `../cli/src/recipes.generated.ts` (the CLI stays zero-runtime-dep) and
-  `../../cloud/web/components/gateway/recipes.generated.ts` (cloud may consume public
-  data; the reverse import is forbidden).
+  the web app's embedded copy (cloud may consume public data; the reverse import is forbidden).
 - `recipes.json` — generated; do not hand-edit.
 
 ## Conventions

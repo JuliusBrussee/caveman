@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // caveman-delegate-mcp — stdio MCP server exposing ONE tool: caveman_delegate.
 // Runs a bounded subtask in the pi harness (measured ~4.5k-token prefix vs a
-// ~30k-token minimum for a stripped Claude Code child; see
-// docs/research/agent-efficiency/2026-08-07-harness-routing.md) and returns
+// ~30k-token minimum for a stripped Claude Code child) and returns
 // the worker's report plus its provider-reported usage. Dependency-free.
 //
 // Env:

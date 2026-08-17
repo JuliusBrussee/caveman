@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -109,6 +110,24 @@ var validateURLCases = []urlCase{
 	{
 		name:    "benchmark network blocked",
 		url:     "https://198.18.0.1/api",
+		cfg:     managedCfg,
+		wantErr: true,
+	},
+	{
+		name:    "benchmark fake-IP network allowed self-hosted",
+		url:     "https://198.18.0.1/api",
+		cfg:     selfHostedCfg,
+		wantErr: false,
+	},
+	{
+		name:    "mihomo fake-IP IPv6 allowed self-hosted",
+		url:     "https://[fdfe:dcba:9876::2c]/api",
+		cfg:     selfHostedCfg,
+		wantErr: false,
+	},
+	{
+		name:    "mihomo fake-IP IPv6 blocked managed",
+		url:     "https://[fdfe:dcba:9876::2c]/api",
 		cfg:     managedCfg,
 		wantErr: true,
 	},
@@ -606,5 +625,86 @@ func TestDialContext_LoopbackAllowlist(t *testing.T) {
 	conn.Close()
 	if _, err := ssrf.DialContext(ssrf.Config{ManagedMode: true, AllowList: []string{"127.0.0.1"}})(context.Background(), "tcp", ln.Addr().String()); err == nil {
 		t.Fatal("managed mode must block loopback dial regardless of allowlist")
+	}
+}
+
+// A fail-closed guard that does not name its own escape hatch reads as
+// "unsupported" rather than "not opted in": #841 concluded the proxy could not
+// forward to a local relay at all, when self-hosted mode has permitted exactly
+// that via CAVE_SSRF_ALLOWLIST all along.
+//
+// The advice must ROUND-TRIP. Asserting only that the message contains the
+// host passes on a malformed token like "127.0.0.1:" (what JoinHostPort emits
+// for ValidateHost's empty port), which matches only the port-less stage and
+// leaves the operator blocked again at dial time by a second message naming a
+// different token. So: take the token the message suggests, feed it back as
+// the allowlist, and require the destination to actually become reachable.
+func TestSelfHostedBlockSuggestsAWorkingAllowlistEntry(t *testing.T) {
+	ctx := context.Background()
+	suggestion := regexp.MustCompile(`add (\S+) to the SSRF allowlist`)
+
+	for _, tc := range []struct{ name, host string }{
+		{"loopback literal", "127.0.0.1"},
+		{"ipv6 loopback", "::1"},
+		{"private address", "192.168.1.10"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			err := ssrf.ValidateHost(ctx, tc.host, ssrf.SelfHostedConfig())
+			if err == nil {
+				t.Fatalf("expected %s to be blocked without an allowlist entry", tc.host)
+			}
+			if !strings.Contains(err.Error(), "CAVE_SSRF_ALLOWLIST") {
+				t.Fatalf("self-hosted block must name the escape hatch, got: %v", err)
+			}
+			m := suggestion.FindStringSubmatch(err.Error())
+			if m == nil {
+				t.Fatalf("message must suggest a concrete allowlist entry, got: %v", err)
+			}
+			if strings.HasSuffix(m[1], ":") {
+				t.Fatalf("suggested entry %q has an empty port — it would only match pre-flight", m[1])
+			}
+			if err := ssrf.ValidateHost(ctx, tc.host, ssrf.SelfHostedConfig(m[1])); err != nil {
+				t.Fatalf("following the advice (%q) must unblock %s, still got: %v", m[1], tc.host, err)
+			}
+		})
+	}
+}
+
+// The suggestion must also work at DIAL time, which is where a real request is
+// actually stopped — a token that only satisfies pre-flight sends the operator
+// in a circle.
+func TestSuggestedAllowlistEntryWorksAtDialTime(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not bind listener: %v", err)
+	}
+	defer ln.Close()
+
+	_, dialErr := ssrf.DialContext(ssrf.SelfHostedConfig())(context.Background(), "tcp", ln.Addr().String())
+	if dialErr == nil {
+		t.Fatal("self-hosted without allowlist must block the loopback dial")
+	}
+	m := regexp.MustCompile(`add (\S+) to the SSRF allowlist`).FindStringSubmatch(dialErr.Error())
+	if m == nil {
+		t.Fatalf("dial-time block must suggest an allowlist entry, got: %v", dialErr)
+	}
+	conn, err := ssrf.DialContext(ssrf.SelfHostedConfig(m[1]))(context.Background(), "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("following the dial-time advice (%q) must connect, got: %v", m[1], err)
+	}
+	conn.Close()
+}
+
+func TestManagedBlockDoesNotAdvertiseAllowlist(t *testing.T) {
+	ctx := context.Background()
+	for _, host := range []string{"127.0.0.1", "192.168.1.10"} {
+		err := ssrf.ValidateHost(ctx, host, managedCfg)
+		if err == nil {
+			t.Fatalf("expected %s to be blocked in managed mode", host)
+		}
+		if strings.Contains(err.Error(), "CAVE_SSRF_ALLOWLIST") {
+			t.Fatalf("managed mode must not advertise a no-op setting, got: %v", err)
+		}
 	}
 }

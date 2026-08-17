@@ -1,4 +1,4 @@
-# public/sdk/python — Python SDK for the Caveman Cloud gateway
+# packages/sdk/python — Python SDK for the Caveman Cloud gateway
 
 Stdlib-only (`urllib.request`, no third-party deps) Python package. Provides `Cave` (config +
 entrypoint), `CaveTool` (tool descriptor), and `ToolSearchResult`. All HTTP calls POST to the
@@ -50,4 +50,4 @@ gateway with `x-cave-agent` / `x-cave-workflow` / `x-cave-retention` headers set
 - **context packing is connected-only and intentionally lossy**: it sends item bytes to gateway, never runs in local wrap, and relies on caller retaining every item named by `deferred_ids`. It chooses what enters window; cache-optimal assembly chooses placement
 - `sdk-python` and `sdk-ts` mirror the same field names and `/sdk/v1/*` contract — enforced by the shared parity suite (`tests/test_parity.py` + `../../parity/fixtures.json`), not just convention. A divergence is a CI failure. Change one SDK, change both **and** the fixtures
 
-See ../../../CLAUDE.md (root) · ../../../docs/design.md
+See ../../../CLAUDE.md (root)

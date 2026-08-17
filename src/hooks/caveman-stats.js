@@ -10,7 +10,59 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME } = require('./caveman-config');
+// caveman-config.js is a mandatory sibling, but an incomplete install leaves
+// it absent. A bare top-level require turns that into an uncaught
+// MODULE_NOT_FOUND stack trace, which the calling mode-tracker hook can only
+// report as an unexplained failure (#848). Print one actionable line instead.
+//
+// Deliberately inlined rather than extracted into a shared helper: a shared
+// loader would itself be one more sibling that can go missing, which is the
+// exact failure this guards against.
+let cavemanConfig;
+let configFailure = null;
+try {
+  cavemanConfig = require('./caveman-config');
+} catch (primary) {
+  // The opencode install layout renames the sibling to `.cjs` (its plugin dir
+  // is "type": "module"), same fallback caveman-parse.js already does. Gate the
+  // retry on the error naming THIS module: a MODULE_NOT_FOUND thrown by a
+  // require *inside* a sibling that loaded fine must not be re-reported as
+  // "./caveman-config.cjs is missing", blaming a file never meant to exist.
+  const message = String((primary && primary.message) || primary);
+  if (primary && primary.code === 'MODULE_NOT_FOUND' && message.includes("'./caveman-config'")) {
+    try { cavemanConfig = require('./caveman-config.cjs'); } catch (e) { /* report primary */ }
+  }
+  if (!cavemanConfig) {
+    const absent = !fs.existsSync(path.join(__dirname, 'caveman-config.js'))
+                && !fs.existsSync(path.join(__dirname, 'caveman-config.cjs'));
+    // Distinguish "the sibling is absent" from "the sibling loaded but its own
+    // require failed" — naming the wrong cause is worse than no message. Only
+    // the first line of error.message: Node appends a multi-line "Require
+    // stack:" block, the very noise this guard exists to remove.
+    configFailure = absent
+      ? 'caveman-config.js is missing from ' + __dirname + ' — the install is incomplete.'
+      : 'caveman-config could not load — ' + message.split('\n')[0];
+  }
+}
+// A module that LOADS but exports the wrong shape is the plugin-cache-drift
+// case #848 describes; without this check the first use dereferences undefined.
+if (cavemanConfig && !(typeof cavemanConfig.readFlag === 'function'
+    && typeof cavemanConfig.appendFlag === 'function'
+    && typeof cavemanConfig.readHistory === 'function'
+    && typeof cavemanConfig.safeWriteFlag === 'function'
+    && Array.isArray(cavemanConfig.VALID_MODES))) {
+  configFailure = 'caveman-config loaded but is missing expected exports — the install is inconsistent.';
+}
+if (configFailure) {
+  process.stderr.write('caveman-stats: ' + configFailure + '\n'
+    + 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks.\n');
+  // Unlike the two style hooks, stats has no useful degraded output — every
+  // figure it prints comes from the flag/history the config module owns.
+  // Exiting non-zero lets the mode-tracker's existing catch substitute its
+  // "could not run stats script" message rather than injecting a half-report.
+  process.exit(1);
+}
+const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME } = cavemanConfig;
 
 // Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
 // 10 tasks, sonnet-4-20250514). Only 'full' has measured data; lite / ultra /

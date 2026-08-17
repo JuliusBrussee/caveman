@@ -572,7 +572,9 @@ func runLearn(logger *slog.Logger, args []string) {
 		}
 		printJSON(plan)
 	case "report":
-		plan, err := spend.BuildLearnPlan(cwd, sources, since)
+		// --retro is the same opt-in as on scan: without it the report builds
+		// exactly as before; with it the "would have saved" replay block renders.
+		plan, err := spend.BuildLearnPlanWithRetro(cwd, sources, since, learnRetroOptions(args))
 		if err != nil {
 			fatalJSON(logger, err)
 		}

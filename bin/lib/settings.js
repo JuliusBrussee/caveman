@@ -252,7 +252,7 @@ function removeCavemanHooks(settings) {
 // `absoluteNode` so GUI launchers with minimal PATH still find Node. Only
 // touches commands matching the exact bare-node shape — won't false-positive
 // on user-authored hooks that just happen to mention "caveman".
-function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
+function rewriteLegacyManagedHookCommands(settings, absoluteNode, platform = process.platform) {
   if (!settings || !settings.hooks || !absoluteNode) return 0;
   let rewritten = 0;
   const reBare = /^node\s+("([^"]+)"|'([^']+)'|(\S+))\s*$/;
@@ -267,7 +267,9 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
         const scriptPath = m[2] || m[3] || m[4];
         const basename = path.basename(scriptPath);
         if (!MANAGED_HOOK_BASENAMES.has(basename)) continue;
-        h.command = `"${absoluteNode}" "${scriptPath}"`;
+        h.command = platform === 'win32'
+          ? `& '${String(absoluteNode).replace(/'/g, "''")}' '${String(scriptPath).replace(/'/g, "''")}'`
+          : `"${absoluteNode}" "${scriptPath}"`;
         rewritten++;
       }
     }

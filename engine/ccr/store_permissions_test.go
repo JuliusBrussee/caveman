@@ -59,7 +59,7 @@ func TestOpenRejectsDatabaseSymlink(t *testing.T) {
 
 func TestOpenRejectsWritableParentDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("parent-writability guard is skipped on Windows (synthetic perm bits)")
+		t.Skip("POSIX writable-parent setup does not model a Windows DACL")
 	}
 	dir := filepath.Join(t.TempDir(), "shared")
 	if err := os.Mkdir(dir, 0o777); err != nil {

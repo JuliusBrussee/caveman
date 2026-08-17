@@ -50,7 +50,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	credential := s.creds.Resolve(adapter.Name(), r)
 	authMode := ClassifyResolvedAuthMode(r.Header, credential)
-	// Per ADR 0031 local compression is not account-gated, so both non-PAYG
+	// Local compression is not account-gated, so both non-PAYG
 	// classifications reach the live zone on the same purely technical conditions:
 	// the operator off-switch, an adapter with cache-floor reasoning, and the MCP
 	// recovery + byte-stable prefix machinery that makes the rewrite recoverable

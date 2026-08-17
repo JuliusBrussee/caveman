@@ -5241,6 +5241,7 @@ export async function ensureCaveRuntime(
   }
   const child = spawn(invocation.command, [...invocation.args], {
     detached: true,
+    windowsHide: true,
     stdio: "ignore",
     env: buildRuntimeControlEnv(),
   });

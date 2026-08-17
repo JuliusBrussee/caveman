@@ -22,7 +22,7 @@ reporting](https://github.com/JuliusBrussee/caveman/security/advisories/new).
 | Local Proxy + Engine | No | Request content, possibly transformed, and provider credentials go to the provider selected by the agent. Recovery originals stay in local CCR storage unless the agent retrieves and sends them later. |
 | Agent SDK `observe-only` | No | Directly to the configured provider. No Caveman gateway telemetry. |
 | Managed Caveman gateway | Yes | Requests and responses transit Caveman Cloud and the selected provider. Do not treat managed mode as local-only. |
-| Anonymous CLI telemetry | No | Content-free usage events go to Caveman by default (opt-out). First interactive run prints the disclosure; `caveman telemetry off` or `DO_NOT_TRACK=1` turns it off for good. |
+| Anonymous CLI telemetry | No | Content-free usage events, including token counts processed and saved, go to Caveman by default (opt-out). First interactive run prints the disclosure; `caveman telemetry off` or `DO_NOT_TRACK=1` turns it off for good. |
 | Authenticated dashboard sync | Yes | Local span metadata and aggregate findings go to Caveman Cloud when credentials are present. Raw prompt and response bodies are excluded. |
 
 Your model provider, MCP servers, browser targets, agent plugins, and any command
@@ -58,11 +58,24 @@ Controls, in precedence order:
 `CAVEMAN_TELEMETRY_URL` overrides the destination, mainly for testing. Telemetry
 requests time out after 1.5 seconds and failures do not fail the CLI command.
 
+When the disclosed scope widens, the persisted decision carries the wording
+version it was made under. A wider scope reprints the disclosure once on the next
+interactive command and bumps the stored version; it never re-asks, never flips a
+decision, and never touches a persisted opt-out. Version 4 added the token
+totals below.
+
 Anonymous events can contain:
 
 - random anonymous ID; CLI version; OS; architecture; Node major version;
 - allowlisted command, subcommand, and known agent ID; duration; outcome; broad
   error class;
+- tokens processed and tokens saved by the local Proxy, as the increment since
+  the last event rather than lifetime totals, always carrying their measurement
+  basis (`inferred` — tokenizer estimates, never billed counts, never a dollar
+  figure). Read as an aggregate over the local store; when no store or Proxy
+  binary is present the fields are omitted rather than reported as zero. The
+  first read on a machine only records a baseline and reports nothing, so a store
+  holding traffic from before this disclosure is never reported retroactively;
 - local Proxy session aggregates: request and token counts, compression counts,
   cache read/write counts, measurement mode, and headline-suppression state;
 - first-run aggregate scan counts from local Claude Code or Codex history,

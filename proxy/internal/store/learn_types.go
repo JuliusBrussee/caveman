@@ -4,7 +4,6 @@ package store
 // `caveman learn report --json` and rendered into the static HTML report. It is the
 // local setup-profiler analogue of the cloud Cave Plan: a Cave Score plus a flat,
 // ranked list of token sinks. Everything here is `inferred` — learn never verifies.
-// See docs/CAVEMAN_LEARN_SPEC.md.
 
 const (
 	learnSchema = "caveman.learn.v1"
@@ -50,6 +49,45 @@ type LearnPlan struct {
 	// had something honest to report. Additive optional field: the schema stays
 	// `caveman.learn.v1`.
 	Retro *LearnRetro `json:"retro,omitempty"`
+	// ContextDepth is present only when at least one scanned session carried
+	// usage data. Additive optional field: the schema stays `caveman.learn.v1`.
+	ContextDepth *LearnContextDepth `json:"context_depth,omitempty"`
+	// WrapMeasured is present only when the proxy recorded wrap activity in the
+	// window. Additive optional field: the schema stays `caveman.learn.v1`.
+	WrapMeasured *LearnWrapMeasured `json:"wrap_measured,omitempty"`
+}
+
+// LearnWrapMeasured sums what the proxy itself recorded inside the window:
+// tokens the wrap actually cut on requests it compressed, plus what observe
+// mode measured it would have cut without transforming. Counts are the
+// engine's o200k estimates summed over recorded rows — token volume only,
+// never a dollar, and never blended with the transcript-replay Retro block
+// (the two measure different requests by different methods).
+type LearnWrapMeasured struct {
+	Basis string `json:"basis"` // compression token count basis, e.g. estimated_engine_o200k
+	// WindowDays names the interval the sums cover; 0 means the since
+	// expression did not bound it and the sums are all-time.
+	WindowDays int   `json:"window_days"`
+	Requests   int64 `json:"requests"`
+	CompressedRequests int64  `json:"compressed_requests"`
+	TokensBefore       int64  `json:"tokens_before"`
+	TokensAfter        int64  `json:"tokens_after"`
+	TokensSaved        int64  `json:"tokens_saved"`
+	// WouldSaveTokens is observe-mode's report-only measurement on rows that
+	// were never transformed; it is disjoint from TokensSaved by construction
+	// (a row books one or the other, never both).
+	WouldSaveTokens int64 `json:"would_save_tokens"`
+}
+
+// LearnContextDepth summarizes how deep scanned sessions ran into their model's
+// context window: each session's PEAK context share, bucketed in tens. Window
+// sizes are assumed per-provider defaults (the dumbzone caveat applies), and
+// every number is transcript arithmetic, never a projection.
+type LearnContextDepth struct {
+	Sessions  int   `json:"sessions"`
+	Over30Pct int   `json:"over_30_pct"`
+	Over50Pct int   `json:"over_50_pct"`
+	Buckets   []int `json:"buckets"` // 10 buckets: peak share 0-10%, 10-20%, ... 90-100%+
 }
 
 // LearnRetro is the retrospective "would-have-saved" block for the scanned

@@ -9,16 +9,16 @@ If just want it to work, run the one-liner. If want to know what gets touched, s
 **macOS / Linux / WSL / Git Bash**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.1.0/install.sh | bash
 ```
 
 **Windows (PowerShell 5.1+)**
 
 ```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.1.0/install.ps1 | iex
 ```
 
-> Piping a script straight into a shell runs it sight-unseen. If you'd rather read it first, download then run: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh -o install.sh` (review it) `&& bash install.sh`. Bootstrap, package, and hook downloads stay pinned to that immutable release. Set `CAVEMAN_REF` only when intentionally testing another ref.
+> Piping a script straight into a shell runs it sight-unseen. If you'd rather read it first, download then run: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.1.0/install.sh -o install.sh` (review it) `&& bash install.sh`. Bootstrap, package, and hook downloads stay pinned to that immutable release. Set `CAVEMAN_REF` only when intentionally testing another ref.
 
 What it does:
 
@@ -31,7 +31,7 @@ What it does:
 Want to preview before installing? Use `--dry-run`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash -s -- --dry-run
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.1.0/install.sh | bash -s -- --dry-run
 ```
 
 ## Hermes Agent
@@ -48,6 +48,8 @@ It installs Caveman native plugin, seven skills, and ownership manifest under ac
 
 If you want to install for one agent (or want to know exactly what command runs under the hood), use the table below. Every row also works as `--only <id>` to the unified installer.
 
+> **`npx skills add` writes to the folder you run it from.** Without `-g` it drops the skills in `./.agents/skills` under your current directory, so an agent that reads a fixed home folder — Cursor reads `~/.cursor/skills` — will not see them, even though the install prints success. Add `-g` for a user-wide install. The unified installer already passes it where it matters.
+
 | Agent | Install command | Auto-activates? |
 |---|---|:-:|
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` | Yes |
@@ -56,7 +58,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
 | **Hermes Agent** | `npx -y github:JuliusBrussee/caveman -- --only hermes` *(or `node bin/install.js --only hermes` from a clone)* | Yes (native skills, enabled on load) |
 | **Codex CLI** | `npx skills add JuliusBrussee/caveman -a codex` | Per-session: `/caveman` |
-| **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor` | Per-session by default; `--with-init` for an always-on rule file |
+| **Cursor** | `npx skills add JuliusBrussee/caveman -a cursor -g` | Per-session by default; `--with-init` for an always-on rule file |
 | **Windsurf** | `npx skills add JuliusBrussee/caveman -a windsurf` | Per-session by default; `--with-init` for an always-on rule file |
 | **Cline** | `npx skills add JuliusBrussee/caveman -a cline` | Per-session by default; `--with-init` for an always-on rule file |
 | **GitHub Copilot** *(soft probe)* | `npx -y github:JuliusBrussee/caveman -- --only copilot --with-init` | Repo-wide instructions via `--with-init` |

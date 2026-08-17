@@ -52,6 +52,67 @@ const { VALID_MODES } = cavemanConfig;
 // selectable via /caveman <arg>.
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
+// Natural-language triggers run over the whole prompt, so any pasted text that
+// merely QUOTES them fired them — a bug report quoting the /caveman-help card's
+// own line ("Say \"stop caveman\" or \"normal mode\".") switched caveman off
+// mid-task (#838). #537's envelope unwrap closed the slash-command path; this
+// is the prose path, which needs no envelope.
+//
+// Blank quoted spans before matching. A prompt-length cap looked like the fix
+// and is worse on both sides: it still fires on any short quoted line, and it
+// silently breaks the compound instructions people actually type ("turn off
+// caveman and write the release notes for ..."). That failure is the dangerous
+// direction — a false activation is a nuisance, but a deactivation that is
+// dropped in silence leaves the user unable to escape the mode with no
+// feedback explaining why.
+//
+// Only " and ` count as delimiters. Apostrophes are far too common in ordinary
+// English ("don't stop caveman, it's useful") and pairing on them would blank
+// the command itself.
+const QUOTED_SPAN_REGEX = /(["`])(?:(?!\1).)*\1/g;
+
+// A mode argument with punctuation glued to it ("/caveman ultra; still too
+// verbose") matched no mode, left the level untouched, and said nothing. Only
+// parts[1] is ever read, so extra WORDS after the mode were already harmless;
+// it is the trailing character that broke it. Modes are [a-z-] only, so
+// stripping every trailing character outside that class is safe.
+// Trailing punctuation only. A leading quote or bracket is stripped too so
+// `/caveman "ultra"` resolves — asymmetric handling would leave a second,
+// equally silent failure right next to the one being fixed.
+function normalizeModeArg(arg) {
+  return (arg || '').replace(/^[^a-z0-9]+/, '').replace(/[^a-z0-9-]+$/, '');
+}
+
+// Resolve a /caveman argument to a verdict. An argument that resolves to
+// nothing returns 'unresolved' rather than null, so the caller can say so
+// instead of failing silently. 'unresolved' is additive: applyModeChange in the
+// opencode plugin acts only on 'set'/'clear' and ignores anything else.
+function resolveModeArg(rawArg, getDefaultMode) {
+  const arg = normalizeModeArg(rawArg);
+  if (!arg) {
+    // Only a genuinely ABSENT argument means "bare /caveman → activate at the
+    // default". An argument that was present but normalized away is punctuation
+    // like `/caveman ?` — plausibly someone asking for help, who should not be
+    // switched into the mode by it.
+    if (rawArg) return { action: 'unresolved' };
+    const mode = getDefaultMode();
+    return mode === 'off' ? { action: 'clear' } : { action: 'set', mode };
+  }
+  if (arg === 'off' || arg === 'stop' || arg === 'disable') return { action: 'clear' };
+  // canonical alias — config stores wenyan-full as 'wenyan'
+  if (arg === 'wenyan-full') return { action: 'set', mode: 'wenyan' };
+  if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return { action: 'set', mode: arg };
+  // An independent mode IS a real mode, just not reachable this way. Saying
+  // "not recognized" would deny a mode the user can see in the docs; name its
+  // own command instead. Echoing `arg` here is safe precisely because it
+  // matched this fixed whitelist — it is no longer free-form user text.
+  if (INDEPENDENT_MODES.has(arg)) return { action: 'unresolved', independentMode: arg };
+  // Bogus level: never silently overwrite with the default (#602). The
+  // rejected string is untrusted input and is deliberately NOT echoed back —
+  // it would land in model context.
+  return { action: 'unresolved' };
+}
+
 function parseModeChange(promptRaw, options) {
   options = options || {};
   const getDefaultMode = options.getDefaultMode || cavemanConfig.getDefaultMode;
@@ -79,15 +140,22 @@ function parseModeChange(promptRaw, options) {
   // falls through to the activation patterns (#598), and applied with the
   // highest priority: it's what the tracker's original unconditional
   // end-of-function deactivation check amounted to.
-  const wantsOff = !options.skipNaturalLanguage && (
-    /\b(stop|disable|deactivate|quit|exit|kill)\s+(the\s+)?caveman\b/.test(prompt) ||
-    /\bcaveman(\s+mode)?\s+(off|stop|disabled?)\b/.test(prompt) ||
-    /\bturn\s+off\s+(the\s+)?caveman\b/.test(prompt) ||
+  // Matched against nlPrompt (quoted spans blanked, see QUOTED_SPAN_REGEX) so a
+  // prompt that CITES a trigger does not fire it. A prompt that starts with a
+  // slash is a command invocation: its own text must not toggle our mode,
+  // symmetric with the skipNaturalLanguage a foreign command envelope sets.
+  const naturalLanguage = !options.skipNaturalLanguage && !prompt.startsWith('/');
+  const nlPrompt = naturalLanguage ? prompt.replace(QUOTED_SPAN_REGEX, ' ') : '';
+
+  const wantsOff = naturalLanguage && (
+    /\b(stop|disable|deactivate|quit|exit|kill)\s+(the\s+)?caveman\b/.test(nlPrompt) ||
+    /\bcaveman(\s+mode)?\s+(off|stop|disabled?)\b/.test(nlPrompt) ||
+    /\bturn\s+off\s+(the\s+)?caveman\b/.test(nlPrompt) ||
     // "normal mode" only as a command (prompt-initial, optionally led by a
     // switch-back verb) or with caveman context — never mid-sentence for
     // e.g. vim's normal mode ("how do I exit vim normal mode").
-    /^(please\s+)?(go\s+|back\s+to\s+|switch\s+(back\s+)?to\s+|return\s+to\s+)?normal\s+mode\b/.test(prompt) ||
-    (/\bnormal\s+mode\b/.test(prompt) && /\bcaveman\b/.test(prompt))
+    /^(please\s+)?(go\s+|back\s+to\s+|switch\s+(back\s+)?to\s+|return\s+to\s+)?normal\s+mode\b/.test(nlPrompt) ||
+    (/\bnormal\s+mode\b/.test(nlPrompt) && /\bcaveman\b/.test(nlPrompt))
   );
   if (wantsOff) return { action: 'clear' };
 
@@ -110,24 +178,14 @@ function parseModeChange(promptRaw, options) {
       return { action: 'set', mode: 'compress' };
     }
     const tpl = /^activate caveman mode:[ \t]*(\S*)/.exec(firstLine);
-    if (tpl) {
-      const arg = tpl[1] || '';
-      if (!arg) {
-        const mode = getDefaultMode();
-        return mode === 'off' ? { action: 'clear' } : { action: 'set', mode };
-      }
-      if (arg === 'off' || arg === 'stop' || arg === 'disable') return { action: 'clear' };
-      if (arg === 'wenyan-full') return { action: 'set', mode: 'wenyan' };
-      if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return { action: 'set', mode: arg };
-      return null; // unknown/bogus level — leave flag untouched (#602)
-    }
+    if (tpl) return resolveModeArg(tpl[1], getDefaultMode);
   }
 
-  if (!options.skipNaturalLanguage) {
+  if (naturalLanguage) {
     // Questions about caveman are not activation commands
     // ("what is caveman mode?", "does caveman lite drop articles?").
     const isQuestion =
-      /^(what|whats|what's|how|why|when|where|who|does|do|did|is|are|can|could|would|should|tell me|explain)\b/.test(prompt);
+      /^(what|whats|what's|how|why|when|where|who|does|do|did|is|are|can|could|would|should|tell me|explain)\b/.test(nlPrompt);
 
     // Natural language activation (e.g. "activate caveman", "turn on caveman
     // mode", "talk like caveman"). Also brevity requests ("less tokens",
@@ -135,11 +193,11 @@ function parseModeChange(promptRaw, options) {
     // scoped to a single section ("be brief in the summary"), which is a
     // one-off instruction, not a session-wide mode switch.
     if (!isQuestion) {
-      if (/\b(activate|enable|start|turn on|use|switch to|want|give me)\b[^.]{0,40}\bcaveman\b/.test(prompt) ||
-          /\btalk like\b[^.]{0,40}\bcaveman\b/.test(prompt) ||
-          /\bcaveman\s+mode\s+(on|please|now)\b/.test(prompt) ||
-          /^caveman(\s+mode)?\s*[.!]*$/.test(prompt) ||
-          /\b(less tokens|fewer tokens|be brief|be terse|shorter answers)\b(?!\s+(in|for|on|about|when|during|with)\b)/.test(prompt)) {
+      if (/\b(activate|enable|start|turn on|use|switch to|want|give me)\b[^.]{0,40}\bcaveman\b/.test(nlPrompt) ||
+          /\btalk like\b[^.]{0,40}\bcaveman\b/.test(nlPrompt) ||
+          /\bcaveman\s+mode\s+(on|please|now)\b/.test(nlPrompt) ||
+          /^caveman(\s+mode)?\s*[.!]*$/.test(nlPrompt) ||
+          /\b(less tokens|fewer tokens|be brief|be terse|shorter answers)\b(?!\s+(in|for|on|about|when|during|with)\b)/.test(nlPrompt)) {
         const mode = getDefaultMode();
         // Mirrors the tracker exactly: a configured-off default makes this a
         // no-op (leave whatever flag state already exists), NOT a clear —
@@ -167,16 +225,9 @@ function parseModeChange(promptRaw, options) {
       return { action: 'set', mode: 'compress' };
     }
     if (cmd === '/caveman' || cmd === '/caveman:caveman') {
-      // Bare /caveman → activate at configured default
-      if (!arg) {
-        const mode = getDefaultMode();
-        return mode === 'off' ? { action: 'clear' } : { action: 'set', mode };
-      }
-      if (arg === 'off' || arg === 'stop' || arg === 'disable') return { action: 'clear' };
-      if (arg === 'wenyan-full') return { action: 'set', mode: 'wenyan' }; // canonical alias — config stores as 'wenyan'
-      if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return { action: 'set', mode: arg };
-      // Unknown arg → no-op, flag untouched (no silent overwrite with default)
-      return null;
+      // Bare /caveman → activate at configured default; otherwise resolve the
+      // level (punctuation-tolerant, bogus values reported not swallowed).
+      return resolveModeArg(arg, getDefaultMode);
     }
   }
 

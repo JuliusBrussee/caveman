@@ -69,7 +69,7 @@ Default output stays bounded. Detail never disappears; it moves behind `--all`,
 
 Disclosed opt-out `cli/v1` events cover command exposure/outcome/failure plus
 content-free aggregate local Engine sessions; CI/non-TTY defaults off and all
-kill switches from ADR 0032 apply. `implement` is an allowlisted subcommand.
+kill switches apply. `implement` is an allowlisted subcommand.
 Telemetry never includes prompts, argv values, report contents, sink ids, paths,
 provider/model/account/request/session IDs, hashes, or dollars. Owner reviews
 adoption and errors alongside local ClickHouse/runtime evidence; no product

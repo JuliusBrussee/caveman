@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
-// pixel mode is compression, so the account gate (ADR 0022) requires a valid
+// pixel mode is compression, so the account gate requires a valid
 // entitlement in config.json — seed one so the pixel wiring stays testable.
 function validEntitlement() {
   return {

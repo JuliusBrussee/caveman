@@ -24,7 +24,7 @@ function attributed(gw, id) {
   return `${gw.replace(/\/+$/, "")}/w/${id}`;
 }
 
-// A valid, future-dated wrap entitlement — the account-gated wrap (ADR 0022) only
+// A valid, future-dated wrap entitlement — the account-gated wrap only
 // runs the local proxy in compress/pixel mode when config.json carries one. Tests
 // that assert the compress/pixel wiring seed this so compression stays ON.
 function validEntitlement() {
@@ -92,7 +92,7 @@ test("wrap default (entitled) auto-starts the local proxy in compress mode with 
   const { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const dir = mkdtempSync(join(tmpdir(), "cave-wrap-proxy-"));
-  // Isolate HOME and seed a valid entitlement so compression is enabled (ADR 0022).
+  // Isolate HOME and seed a valid entitlement so compression is enabled.
   const home = mkdtempSync(join(tmpdir(), "cave-wrap-proxy-home-"));
   mkdirSync(join(home, ".caveman-cloud"), { recursive: true });
   writeFileSync(join(home, ".caveman-cloud", "config.json"), JSON.stringify(validEntitlement(), null, 2));
@@ -185,7 +185,7 @@ test("CAVEMAN_WRAP_MODE=record still selects record mode", async () => {
 });
 
 test("malformed config does not crash wrap and still compresses", async () => {
-  // An unreadable config means no readable entitlement. Per ADR 0031 that changes
+  // An unreadable config means no readable entitlement. That changes
   // nothing about compression — it is not an account gate — and never crashes.
   const out = await runWithProxyCapture(["wrap", "agent"], "{ not json");
   assert.equal(out.code, 0, out.stderr);
@@ -193,7 +193,7 @@ test("malformed config does not crash wrap and still compresses", async () => {
   assert.equal(out.proxyEnv.observe, "", "there is no observe-only fallback any more");
 });
 
-// ADR 0031: with no account at all, `caveman wrap` still runs the proxy in compress
+// With no account at all, `caveman wrap` still runs the proxy in compress
 // mode, and the run banner must not blame an account for anything.
 test("wrap with no account still compresses and prints the run banner", async () => {
   const out = await runWithProxyCapture(["wrap", "agent"], "{}"); // valid but entitlement-less config
@@ -338,7 +338,7 @@ setInterval(() => {}, 1000);
   return { ...out, proxyEnv, home };
 }
 
-// ADR 0022 + the 2026-07-25 local-wrap decision: an entitled LOCAL wrap stamps the
+// The 2026-07-25 local-wrap decision: an entitled LOCAL wrap stamps the
 // account signal that lets the proxy compress subscription/OAuth logins; every
 // other state must stamp it explicitly off, so an inherited env var can never grant
 // the capability to an unentitled session. (honesty rule: byte-safe)
@@ -346,7 +346,7 @@ test("a compress wrap stamps no account signal at all", async () => {
   const out = await runWithProxyCapture(["wrap", "agent"]);
   assert.equal(out.code, 0, out.stderr);
   assert.equal(out.proxyEnv.mode, "compress");
-  assert.equal(out.proxyEnv.entitled, "", "ADR 0031: no account signal is stamped any more");
+  assert.equal(out.proxyEnv.entitled, "", "no account signal is stamped any more");
   assert.equal(out.proxyEnv.subscription, "", "the operator off-switch stays the operator's — wrap never sets it");
   // Recovery is still a real gate: this bare binary has no caveman MCP retrieve tool,
   // so the proxy stays pass-through for subscription traffic and the disclosure says
@@ -439,7 +439,7 @@ test("start validates and applies documented host, port, and config flags", asyn
 test("a compress start stamps no account signal", async () => {
   const out = await runStartWithProxyCapture(undefined, { CAVEMAN_MODE: "compress" });
   assert.equal(out.code, 0, out.stderr);
-  assert.equal(out.proxyEnv.entitled, "", "ADR 0031: no account signal is stamped any more");
+  assert.equal(out.proxyEnv.entitled, "", "no account signal is stamped any more");
   // No agent on this machine has the caveman MCP retrieve tool installed, so the
   // recovery condition is absent and start says subscription compression is off.
   assert.match(out.stderr, /stay byte-identical pass-through here/);

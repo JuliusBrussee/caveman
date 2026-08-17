@@ -14,7 +14,7 @@ not production traffic, customer spend, a provider invoice, or Caveman
 
 | Arm | Exact quality | Provider input on held pairs | Reduction vs direct | Case-clustered 95% interval |
 |---|---:|---:|---:|---:|
-| Direct Claude Code | 18/18 | 885,793 | baseline | — |
+| Direct Claude Code | 18/18 | 885,793 | baseline | n/a |
 | Caveman wrap + skill | 18/18 | 591,673 | **33.2%** | **14.6% to 48.5%** |
 | Headroom wrap | 15/18 | 703,202 vs matched direct | 6.7% | -0.7% to 17.9% |
 
@@ -40,8 +40,8 @@ counted.
 
 ## Method
 
-- Six immutable MCP fixtures, each 60–95 KB: logs, deployment JSON, fraud CSV,
-  test output, configuration YAML, and dashboard HTML.
+- Six immutable MCP fixtures, each 60–95 KB: logs; deployment JSON; fraud CSV;
+  test output; configuration YAML; dashboard HTML.
 - Three rotated repetitions for direct Claude Code, Caveman, and Headroom: 54
   total agent runs and 18 direct/Caveman pairs.
 - Claude Code `2.1.223`, model `claude-sonnet-5`.
@@ -82,34 +82,12 @@ counted.
 - Harness Git commit: `630e157246b68b63559fb8baab29b87042db996b`
 - Dirty worktree at execution: `false`
 
-Source harness and comparison contract live in
-[`JuliusBrussee/Caveman-Cloud`](https://github.com/JuliusBrussee/Caveman-Cloud/tree/630e157246b68b63559fb8baab29b87042db996b/internal/wrapbench).
-The newer pinned result and its claim boundary were carried into this repository
-from the publishable report generated above.
+## Reproduction availability
 
-## Reproduce
-
-From the matching Caveman-Cloud checkout with authenticated Claude Code:
-
-```bash
-make bench-wrap-deps
-make bench-wrap-auth
-make bench-wrap-smoke
-make bench-wrap
-```
-
-The full command used by the harness accepts explicit repetitions, model,
-effort, per-run budget, timeout, and output path:
-
-```bash
-go run ./tools/cavebench-wrap \
-  -repetitions 3 \
-  -model claude-sonnet-5 \
-  -effort medium \
-  -max-budget-usd 1.50 \
-  -timeout 20m \
-  -out dist/cavebench/wrap/report.json
-```
+This repository contains published report and provenance hashes, but not raw
+harness or run artifacts for this result. It cannot be independently reproduced
+from this checkout. Treat result as pinned report, not reproducible public
+benchmark, until harness and raw artifacts are published here.
 
 Publication requires at least six cases and three repetitions; exact direct and
 Caveman quality on every run; one fixture call per run; the same provider usage

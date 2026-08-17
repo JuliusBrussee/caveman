@@ -26,7 +26,7 @@ func hashText(text string) string {
 // learn.go is the local setup profiler. It turns config files and real session
 // history into a Cave Score + a ranked list of token sinks (the `caveman.learn.v1`
 // contract). Class A sinks are asserted as facts; Class B sinks are softened with
-// their evidence attached. Everything is `inferred`. See docs/CAVEMAN_LEARN_SPEC.md.
+// their evidence attached. Everything is `inferred`.
 
 // Cave Score weights + caps (documented in one place; mirror the cloud "start at
 // 100, subtract capped penalties" mechanic). Higher = leaner.
@@ -52,6 +52,7 @@ type behaviorScan struct {
 	Turns             int
 	DumbzoneTurns     int
 	Contexts          []int
+	SessionPeakPct    []int // per session: peak context as a percent of the assumed model window
 	TaskSpawns        int
 	SessionsScanned   int
 	SessionsBySource  map[string]int
@@ -67,6 +68,29 @@ func (b *behaviorScan) recordSession(source string) {
 		b.SessionsBySource = map[string]int{}
 	}
 	b.SessionsBySource[source]++
+}
+
+// contextDepth buckets each session's peak context share for the report's
+// histogram. Nil when no scanned session carried usage data.
+func contextDepth(beh behaviorScan) *LearnContextDepth {
+	if len(beh.SessionPeakPct) == 0 {
+		return nil
+	}
+	d := &LearnContextDepth{Sessions: len(beh.SessionPeakPct), Buckets: make([]int, 10)}
+	for _, pct := range beh.SessionPeakPct {
+		if pct > 30 {
+			d.Over30Pct++
+		}
+		if pct > 50 {
+			d.Over50Pct++
+		}
+		i := pct / 10
+		if i > 9 {
+			i = 9
+		}
+		d.Buckets[i]++
+	}
+	return d
 }
 
 func (b behaviorScan) medianContext() int {
@@ -120,6 +144,7 @@ func (s *Store) BuildLearnPlanWithRetro(cwd string, sources []string, sinceExpr 
 		Window:           LearnWindow{From: beh.From, To: beh.To, Since: sinceExpr},
 		SessionsScanned:  beh.SessionsScanned,
 		SessionsBySource: beh.SessionsBySource,
+		ContextDepth:     contextDepth(beh),
 		Sinks:            []Sink{},
 		Caveats: []string{
 			"Local learn results are inferred. No local number is promoted to verified; Cloud additionally requires supported provider-causal, provider-complete, catalog-priced active evidence.",
@@ -169,10 +194,67 @@ func (s *Store) BuildLearnPlanWithRetro(cwd string, sources []string, sinceExpr 
 		plan.Retro = s.buildLearnRetro(sourceSet, since, sinceExpr, cfg.configTaxPerTurn(), retro)
 	}
 
+	if plan.WrapMeasured = s.wrapMeasuredSince(since); plan.WrapMeasured != nil {
+		plan.WrapMeasured.WindowDays = int(windowDays(sinceExpr, "", ""))
+		plan.Caveats = appendUnique(plan.Caveats, fmt.Sprintf("Saved-so-far numbers are Caveman-counted tokens (basis: %s) over requests the proxy recorded in the window. Tokens only, no dollars. Kept apart from the could-have-saved replay: different requests, different method, never summed together.", plan.WrapMeasured.Basis))
+	}
+
 	if err := s.upsertSinks(plan.Sinks); err != nil {
 		logStoreWarning(s.logger, "learn sink persist failed", err)
 	}
 	return plan, nil
+}
+
+// wrapMeasuredSince sums proxy-recorded wrap activity at or after since. Nil
+// unless at least one row booked a real compression cut or an observe-mode
+// estimate: a machine that never ran the proxy must not render a zero card.
+// The write path already refuses negative token fields, so the clamps below
+// are defense-in-depth against rows written by other tooling.
+func (s *Store) wrapMeasuredSince(since time.Time) *LearnWrapMeasured {
+	where := ""
+	var args []any
+	if !since.IsZero() {
+		where = " WHERE ts >= ?"
+		args = append(args, since.UTC().Format(storeTSLayout))
+	}
+	out := &LearnWrapMeasured{}
+	var bases string
+	err := s.db.QueryRow(`SELECT COUNT(*),
+		COALESCE(SUM(CASE WHEN COALESCE(compression_tokens_before,0) > COALESCE(compression_tokens_after,0) THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(compression_tokens_before),0), COALESCE(SUM(compression_tokens_after),0),
+		COALESCE(SUM(would_save_tokens),0),
+		COALESCE(GROUP_CONCAT(DISTINCT NULLIF(compression_token_count_basis,'')),'')
+		FROM requests`+where, args...).Scan(
+		&out.Requests, &out.CompressedRequests,
+		&out.TokensBefore, &out.TokensAfter, &out.WouldSaveTokens, &bases,
+	)
+	if err != nil || out.Requests == 0 {
+		return nil
+	}
+	if out.TokensBefore < 0 {
+		out.TokensBefore = 0
+	}
+	if out.TokensAfter < 0 {
+		out.TokensAfter = 0
+	}
+	if out.WouldSaveTokens < 0 {
+		out.WouldSaveTokens = 0
+	}
+	if out.TokensSaved = out.TokensBefore - out.TokensAfter; out.TokensSaved < 0 {
+		out.TokensSaved = 0
+	}
+	if out.TokensSaved == 0 && out.WouldSaveTokens == 0 {
+		return nil
+	}
+	switch {
+	case bases == "":
+		out.Basis = "unavailable"
+	case !strings.Contains(bases, ","):
+		out.Basis = bases
+	default:
+		out.Basis = "mixed"
+	}
+	return out
 }
 
 // LearnScan builds the plan and writes concise cavemem learnings from the reducible
@@ -602,6 +684,7 @@ func scanClaudeTranscriptBehaviorUntil(path, relPath string, since time.Time, sl
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	beh.recordSession("claude")
 	sessionTasks := 0
+	sessionPeakPct := 0
 	seenSlugs := map[string]bool{}
 	seenUsage := map[string]bool{}
 	pendingTools := map[string]learnToolCall{}
@@ -640,7 +723,11 @@ func scanClaudeTranscriptBehaviorUntil(path, relPath string, since time.Time, sl
 				}
 				beh.Turns++
 				beh.Contexts = append(beh.Contexts, ctx)
-				if ctx > int(dumbzoneFraction*float64(contextWindow("anthropic", claudeModel(obj)))) {
+				window := contextWindow("anthropic", claudeModel(obj))
+				if pct := ctx * 100 / window; pct > sessionPeakPct {
+					sessionPeakPct = pct
+				}
+				if ctx > int(dumbzoneFraction*float64(window)) {
 					beh.DumbzoneTurns++
 				}
 			}
@@ -661,6 +748,9 @@ func scanClaudeTranscriptBehaviorUntil(path, relPath string, since time.Time, sl
 	if sessionTasks > 0 {
 		beh.TaskSpawns += sessionTasks
 		beh.SessionsWithTasks++
+	}
+	if sessionPeakPct > 0 {
+		beh.SessionPeakPct = append(beh.SessionPeakPct, sessionPeakPct)
 	}
 	sessionSum := sha256.Sum256([]byte(relPath))
 	sessionRef := hex.EncodeToString(sessionSum[:8])
@@ -750,6 +840,7 @@ func scanCodexSessionBehaviorUntil(path string, since time.Time, beh *behaviorSc
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	beh.recordSession("codex")
 	lineNo := 0
+	sessionPeakPct := 0
 	for sc.Scan() {
 		lineNo++
 		if deadline != nil && deadline.expired() {
@@ -786,9 +877,16 @@ func scanCodexSessionBehaviorUntil(path string, since time.Time, beh *behaviorSc
 		beh.Turns++
 		beh.Contexts = append(beh.Contexts, ctx)
 		model := firstString(payload["model"], info["model"], obj["model"])
-		if ctx > int(dumbzoneFraction*float64(contextWindow("openai", model))) {
+		window := contextWindow("openai", model)
+		if pct := ctx * 100 / window; pct > sessionPeakPct {
+			sessionPeakPct = pct
+		}
+		if ctx > int(dumbzoneFraction*float64(window)) {
 			beh.DumbzoneTurns++
 		}
+	}
+	if sessionPeakPct > 0 {
+		beh.SessionPeakPct = append(beh.SessionPeakPct, sessionPeakPct)
 	}
 	return false
 }
@@ -831,6 +929,7 @@ func mergeBehaviorScan(dst, src *behaviorScan) {
 	dst.Turns += src.Turns
 	dst.DumbzoneTurns += src.DumbzoneTurns
 	dst.Contexts = append(dst.Contexts, src.Contexts...)
+	dst.SessionPeakPct = append(dst.SessionPeakPct, src.SessionPeakPct...)
 	dst.TaskSpawns += src.TaskSpawns
 	dst.SessionsScanned += src.SessionsScanned
 	dst.SessionsWithTasks += src.SessionsWithTasks

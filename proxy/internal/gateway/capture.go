@@ -28,8 +28,7 @@ import (
 // and no artifact in the repo could say what those bytes were: the CLI
 // transcript records what the agent sent, provider usage records what the
 // provider counted, and nothing recorded what went over the wire between them.
-// Every diagnosis of that gap was inference. See
-// docs/research/agent-efficiency/2026-08-07-where-the-tokens-go.md.
+// Every diagnosis of that gap was inference.
 //
 // It is deliberately NOT wired to any product surface, telemetry sink, or
 // savings figure. Captured bytes are request payloads — complete, UNREDACTED

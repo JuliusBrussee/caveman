@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
 // Local compression of subscription/OAuth logins needs a recovery path the agent
-// owns (CAVEMAN_RECOVERY=mcp) — and, per ADR 0031, NO account at all. These tests
+// owns (CAVEMAN_RECOVERY=mcp) — and NO account at all. These tests
 // pin that the CLI stamps the recovery answer, never stamps an account signal, and
 // never announces compression the proxy has switched off.
 
@@ -144,7 +144,7 @@ exit 0
 
 test("start: no MCP recovery stamps nothing and says compression is off", async () => {
   const out = await run(["start"]);
-  assert.equal(out.proxyEnv.entitled, "<unset>", "no account signal is stamped any more (ADR 0031)");
+  assert.equal(out.proxyEnv.entitled, "<unset>", "no account signal is stamped any more");
   assert.equal(out.proxyEnv.recovery, "<unset>", "no MCP install evidence must not claim a recovery path");
   assert.match(out.stderr, NO_RECOVERY);
   assert.match(out.stderr, /caveman mcp install/);
@@ -174,7 +174,7 @@ test("start: an inherited non-mcp CAVEMAN_RECOVERY is replaced by start's own an
   assert.doesNotMatch(out.stderr, CLAIM);
 });
 
-// ADR 0031 removes account gating, but recovery still requires agent binding.
+// Account gating is removed, but recovery still requires agent binding.
 test("start: no entitlement does not weaken recovery binding", async () => {
   const out = await run(["start"], { entitled: false, mcpAgent: "claude" });
   assert.equal(out.proxyEnv.entitled, "<unset>", "no account signal reaches the proxy");
@@ -229,7 +229,7 @@ test("wrap codex: ChatGPT subscription starts compress proxy with MCP recovery",
   assert.doesNotMatch(out.stderr, /byte-safe pass-through/);
 });
 
-// ADR 0031 end-to-end at the wrap door: a completely signed-out wrap with MCP
+// End-to-end at the wrap door: a completely signed-out wrap with MCP
 // recovery installed compresses and prints the same claim a signed-in one does.
 test("wrap: a signed-out agent with MCP recovery earns the same claim", async () => {
   const out = await run(["wrap", "claude"], { entitled: false, mcpAgent: "claude", listen: true });

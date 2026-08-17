@@ -64,11 +64,11 @@ test("tools and cloud discovery keep named product order, tiering, and caps", as
     const allToolCount = toolsAll.stdout.split("\n").filter((line) => /^\s{2}[a-z]/.test(line)).length;
     const cloudCount = cloud.stdout.split("\n").filter((line) => /^\s{2}[a-z]/.test(line)).length;
     assert.equal(defaultToolCount, 15);
-    assert.ok(defaultToolCount <= 15, "ADR 0024 default tools cap");
+    assert.ok(defaultToolCount <= 15, "default tools cap");
     assert.equal(allToolCount, 15);
-    assert.ok(allToolCount <= 15, "ADR 0024 all-tools cap");
+    assert.ok(allToolCount <= 15, "all-tools cap");
     assert.equal(cloudCount, 14);
-    assert.ok(cloudCount <= 15, "ADR 0024 cloud cap");
+    assert.ok(cloudCount <= 15, "cloud cap");
     assert.doesNotMatch(tools.stdout, /shrink-hook|practices|check/);
     assert.doesNotMatch(tools.stdout, /caveman help tools --all/);
     assert.doesNotMatch(toolsAll.stdout, /shrink-hook|practices|check/);

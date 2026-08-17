@@ -25,6 +25,8 @@ import { chmod, mkdir, open, readFile, rename, writeFile } from "node:fs/promise
 import { homedir, hostname, tmpdir } from "node:os";
 import { basename, delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { connect as netConnect, createServer as netCreateServer, isIP, type AddressInfo } from "node:net";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { createHash, createHmac, createPublicKey, randomBytes, randomUUID, verify as edVerify, type KeyObject } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { PROFILES, type AgentProfile } from "./agents.generated.js";
@@ -53,6 +55,9 @@ import { portableInvocation } from "./portable-command.js";
 
 type TokenStore = "keychain" | "file";
 type TelemetryConfig = { enabled: boolean; anonymousId?: string; decidedAt: string; promptVersion: number };
+// The high-water mark of proxy token totals already reported, so each event
+// carries a delta instead of replaying lifetime history on every command.
+type TelemetryTokenWatermark = { tokensIn: number; tokensSaved: number; at: string };
 type StoredCredentials = {
   access_token: string;
   refresh_token?: string;
@@ -72,6 +77,7 @@ type Config = {
   gatewayUrl?: string;
   logoutPendingLocalCleanup?: boolean;
   telemetry?: TelemetryConfig;
+  telemetryTokens?: TelemetryTokenWatermark;
 };
 type WrapMode = "local" | "managed";
 export type OverlayBuilderContext = { mode: WrapMode; gatewayUrl: string; env: NodeJS.ProcessEnv };
@@ -390,9 +396,9 @@ function resolveInvocation(raw: string[]): ResolvedInvocation {
   if (handler) return { verb: top, argv: raw.slice(1), handler };
   const agent = RESERVED_VERBS.has(top) ? undefined : findAgent(top);
   if (agent) return {
-    verb: "wrap",
+    verb: "run",
     argv: normalizeAgentShortcutWrapArgs(raw),
-    handler: wrap,
+    handler: agentShortcut,
     agent,
   };
   return { verb: top, argv: raw.slice(1), handler: () => unknownInvocation(top) };
@@ -448,17 +454,23 @@ function invokedCommand(legacyVerb: string, groupedTail = ""): string {
 
 let currentInvocation: ResolvedInvocation;
 currentInvocation = resolveInvocation(process.argv.slice(2));
-// Version 3 = default-on (opt-out): telemetry is on unless the user
-// turns it off. A persisted decision from any version — including a "no" to the
-// old v1 [y/N] prompt — is honored forever; the default only fills the
+// Version 4 = default-on (opt-out) plus token volume: command_run now carries
+// the local proxy's processed/saved token deltas, so a v3 "yes" was given for a
+// narrower scope and gets the new disclosure reprinted once (never re-asked, and
+// never flipped on). A persisted decision from any version — including a "no" to
+// the old v1 [y/N] prompt — is honored forever; the default only fills the
 // undecided gap, and the first default-on run prints the disclosure line.
-const TELEMETRY_PROMPT_VERSION = 3;
+const TELEMETRY_PROMPT_VERSION = 4;
 const TELEMETRY_URL = "https://api.caveman.so/telemetry/cli";
 // The production control-API origin — derived from TELEMETRY_URL (the CLI's
 // other hardcoded prod-host literal) so the two can never drift apart.
 const PROD_API_URL = new URL(TELEMETRY_URL).origin;
 const TELEMETRY_DISCLOSURE_LINE =
-  "anonymous usage stats on — command counts only, never prompts, code, or file paths · caveman telemetry off";
+  "anonymous usage stats on — command counts and token totals only, never prompts, code, or file paths · caveman telemetry off";
+// Reading token totals means spawning caveman-proxy to query the local SQLite
+// store. It runs after the command's own work, so the cost lands on process exit;
+// a slow or wedged binary drops the token fields rather than holding the CLI.
+const TELEMETRY_TOKEN_READ_TIMEOUT_MS = 400;
 const SYNC_DISCLOSURE =
   "sync uploads span metadata to your org's dashboard — tokens, cost, latency, model, status. Imported standalone observations never affect managed budgets, verified savings, or billing. Subscription/OAuth sessions carry token counts only — no dollar figure. Never prompt or response bytes.";
 const TELEMETRY_COMMAND_ALLOWLIST = [
@@ -572,6 +584,7 @@ async function ensureTelemetryDefault() {
   // `caveman telemetry …` manages the decision explicitly — don't pre-mint an
   // "on" for someone whose first-ever command is `telemetry off`.
   if (currentInvocation.verb === "telemetry") return;
+  if (state.source === "config") return ensureTelemetryDisclosureVersion(state);
   if (state.source !== "default") return;
   const telemetry: TelemetryConfig = {
     enabled: true,
@@ -584,6 +597,25 @@ async function ensureTelemetryDefault() {
   // persist succeeds, and telemetrySendable refuses un-persisted defaults.
   try {
     await saveTelemetryConfig(telemetry);
+  } catch {
+    return;
+  }
+  process.stderr.write(`${dim(TELEMETRY_DISCLOSURE_LINE)}\n`);
+}
+
+// ensureTelemetryDisclosureVersion reprints the disclosure once for someone who
+// consented under older wording. v4 widened command_run with token volume, and a
+// v3 "yes" was given for command counts alone — it stays a yes (re-asking would
+// silently reset a decision the user already made), but it is never widened
+// silently. Only reached with source "config", which already means interactive,
+// not CI, and no env override in play. An opt-out is left completely untouched:
+// no write, no line, no version bump.
+async function ensureTelemetryDisclosureVersion(state: TelemetryRuntimeState) {
+  const cfg = state.config;
+  if (!cfg?.enabled || state.state !== "on") return;
+  if (cfg.promptVersion >= TELEMETRY_PROMPT_VERSION) return;
+  try {
+    await saveTelemetryConfig({ ...cfg, promptVersion: TELEMETRY_PROMPT_VERSION });
   } catch {
     return;
   }
@@ -679,6 +711,16 @@ async function telemetryOff() {
     promptVersion: TELEMETRY_PROMPT_VERSION,
   };
   await saveTelemetryConfig(telemetry);
+  // Drop the token watermark with the decision. Keeping it would make a later
+  // `telemetry on` report every token processed during the opt-out window as one
+  // delta — the seeding rule has to hold across the off/on boundary too.
+  try {
+    mutateRawConfig((out) => {
+      delete out.telemetryTokens;
+    });
+  } catch {
+    /* best effort: the decision itself is already persisted */
+  }
   print({ telemetry: "off", anonymous_id: "none" });
 }
 
@@ -725,6 +767,146 @@ function telemetryAnonymousId(state: TelemetryRuntimeState): string {
   return telemetryEphemeralId;
 }
 
+// parseProxyStatsPayload pulls the stats object out of caveman-proxy's stdout.
+// The binary points its JSON slog handler at stdout too, so a log line can land
+// ahead of the payload and a plain JSON.parse of the whole stream would throw.
+// Every candidate must carry a numeric tokens_in: without that check a stray log
+// object parses "successfully" as zero tokens, which reads as a rewound store and
+// replays the entire lifetime total as one delta.
+function parseProxyStatsPayload(out: string): Record<string, unknown> | null {
+  const attempt = (text: string): Record<string, unknown> | null => {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+      const raw = parsed as Record<string, unknown>;
+      return typeof raw.tokens_in === "number" ? raw : null;
+    } catch {
+      return null;
+    }
+  };
+  const trimmed = out.trim();
+  if (!trimmed) return null;
+  const whole = attempt(trimmed);
+  if (whole) return whole;
+  // Log lines can land on either side of the payload (a deferred Close() error
+  // prints after it), so scan candidate object bounds from the end rather than
+  // assuming the payload runs to EOF. Bounded: this output is a handful of lines,
+  // and the budget keeps a pathological one from costing real time.
+  const lines = trimmed.split("\n");
+  let budget = 64;
+  for (let start = lines.length - 1; start >= 0 && budget > 0; start--) {
+    if (!lines[start]!.startsWith("{")) continue;
+    for (let end = lines.length; end > start && budget > 0; end--) {
+      budget--;
+      const candidate = attempt(lines.slice(start, end).join("\n"));
+      if (candidate) return candidate;
+    }
+  }
+  return null;
+}
+
+// readProxyTokenTotals reads the local proxy's lifetime token aggregate. Every
+// failure path — no store yet, no proxy binary, slow spawn, unparsable output —
+// returns null and the event simply ships without token fields. Numbers only:
+// `caveman-proxy stats --json` is an aggregate over the requests table, never a
+// row, a prompt, a model name, or a path.
+function readProxyTokenTotals(): { tokensIn: number; tokensSaved: number; basis: string } | null {
+  try {
+    const db = process.env.CAVEMAN_DB || join(cavemanHome(), "caveman.db");
+    if (!existsSync(db)) return null;
+    const bin = resolveGoBin("caveman-proxy", "CAVEMAN_PROXY_BIN");
+    if (!bin) return null;
+    const out = execFileSync(bin, ["stats", "--json"], {
+      encoding: "utf8",
+      timeout: TELEMETRY_TOKEN_READ_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parsed = parseProxyStatsPayload(out);
+    if (!parsed) return null;
+    const tokensIn = parsed.tokens_in as number;
+    const tokensSaved = typeof parsed.compression_tokens_saved === "number" ? parsed.compression_tokens_saved : 0;
+    if (!Number.isFinite(tokensIn) || !Number.isFinite(tokensSaved)) return null;
+    // Basis rides along because these are tokenizer estimates, not billed counts;
+    // the receiving side must never promote them to verified savings.
+    const basis = typeof parsed.basis === "string" && parsed.basis ? parsed.basis : "inferred";
+    return {
+      tokensIn: Math.max(0, Math.trunc(tokensIn)),
+      tokensSaved: Math.max(0, Math.trunc(tokensSaved)),
+      basis,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseTelemetryTokenWatermark(value: unknown): TelemetryTokenWatermark | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.tokensIn !== "number" || typeof raw.tokensSaved !== "number") return null;
+  if (!Number.isFinite(raw.tokensIn) || !Number.isFinite(raw.tokensSaved)) return null;
+  return {
+    tokensIn: Math.max(0, Math.trunc(raw.tokensIn)),
+    tokensSaved: Math.max(0, Math.trunc(raw.tokensSaved)),
+    at: typeof raw.at === "string" ? raw.at : "",
+  };
+}
+
+function telemetryTokenWatermarkFromDisk(): TelemetryTokenWatermark | null {
+  try {
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as { telemetryTokens?: unknown };
+    return parseTelemetryTokenWatermark(parsed.telemetryTokens);
+  } catch {
+    return null;
+  }
+}
+
+// telemetryTokenDelta returns what to report for THIS event and advances the
+// watermark to the totals it read. The send is fire-and-forget, so a dropped POST
+// loses that delta rather than replaying it — undercounting beats double-counting
+// a savings number.
+//
+// Two cases report nothing and only re-baseline. The first read on a machine
+// seeds the watermark: the store can already hold traffic from before the user
+// saw this disclosure, and telemetry starts at consent rather than reaching
+// backwards through history. A store that rewound (db deleted, restored backup)
+// re-baselines for the same reason — never a negative, never a second copy of
+// history.
+function telemetryTokenDelta(): { processed: number; saved: number; basis: string } | null {
+  const totals = readProxyTokenTotals();
+  if (!totals) return null;
+  const prior = telemetryTokenWatermarkFromDisk();
+  const rewound = prior !== null && (totals.tokensIn < prior.tokensIn || totals.tokensSaved < prior.tokensSaved);
+  const processed = prior && !rewound ? Math.max(0, totals.tokensIn - prior.tokensIn) : 0;
+  const saved = prior && !rewound ? Math.max(0, totals.tokensSaved - prior.tokensSaved) : 0;
+  const rebaselining = prior === null || rewound;
+  if (processed === 0 && saved === 0 && !rebaselining) return null;
+  // Claim the delta optimistically: two CLI processes exiting together would
+  // otherwise read the same watermark and both report the same tokens, inflating
+  // a savings figure. Whoever writes second sees the watermark already moved and
+  // reports nothing.
+  let claimed = true;
+  try {
+    mutateRawConfig((out) => {
+      const current = parseTelemetryTokenWatermark(out.telemetryTokens);
+      if (current?.tokensIn !== prior?.tokensIn || current?.tokensSaved !== prior?.tokensSaved) {
+        claimed = false;
+        return;
+      }
+      out.telemetryTokens = {
+        tokensIn: totals.tokensIn,
+        tokensSaved: totals.tokensSaved,
+        at: new Date().toISOString(),
+      } satisfies TelemetryTokenWatermark;
+    });
+  } catch {
+    // Read-only home: report nothing rather than resend the same delta forever.
+    return null;
+  }
+  if (!claimed) return null;
+  if (processed === 0 && saved === 0) return null;
+  return { processed, saved, basis: totals.basis };
+}
+
 function emitCommandRunOnce(exitClass: TelemetryExitClass, errorClass?: TelemetryErrorClass): Promise<void> {
   const event = commandRunEventOnce(exitClass, errorClass);
   return event ? emitTelemetryEvents([event]) : Promise.resolve();
@@ -753,6 +935,14 @@ function commandRunEventOnce(exitClass: TelemetryExitClass, errorClass?: Telemet
   if (sub) event.subcommand = sub;
   if (agent) event.agent = agent;
   if (exitClass === "error") event.error_class = errorClass ?? "other";
+  // Token volume rides on command_run only — runtime_bootstrap shares the same
+  // watermark and would race it into a double count.
+  const tokens = telemetryTokenDelta();
+  if (tokens) {
+    event.tokens_processed = tokens.processed;
+    event.tokens_saved = tokens.saved;
+    event.tokens_basis = tokens.basis;
+  }
   return event;
 }
 
@@ -879,7 +1069,7 @@ function exploreUsage(): never {
 
 function guardExploreAgent(agent: string) {
   if (agent === "claude") return;
-  console.error(`caveman explore: only --agent claude is wired today (codex needs verified transcript isolation first — see docs/FASTCONTEXT_EXPLORER_SPEC.md). got: ${agent}`);
+  console.error(`caveman explore: only --agent claude is wired today (codex needs verified transcript isolation first). got: ${agent}`);
   process.exit(2);
 }
 
@@ -1784,7 +1974,7 @@ async function start(argv: string[] = []) {
   if (!resolved) return startMissingProxyUI(bin, options);
 
   // `caveman start` is the sibling entry point to `caveman wrap`, so it resolves the
-  // SAME mode decision. Per ADR 0031 there is no account condition in it — the
+  // SAME mode decision. There is no account condition in it — the
   // entitlement read is a label, not a permission. The mode this proxy actually runs
   // is CAVEMAN_MODE (the proxy itself falls back to record for anything unknown), so
   // a plain `caveman start` resolves to record; record never mutates bytes anyway.
@@ -1809,7 +1999,7 @@ async function start(argv: string[] = []) {
     CAVEMAN_RECOVERY: mcpRecovery ? "mcp" : "",
   };
   if (options.config) env.CAVEMAN_CONFIG = options.config;
-  // The account gate is gone (ADR 0031) and so is the variable that carried it. Strip
+  // The account gate is gone and so is the variable that carried it. Strip
   // any inherited copy so a stray export can never re-enter the contract; a proxy
   // binary old enough to still read it is already reported by the stale-binary state.
   delete env.CAVEMAN_WRAP_ENTITLED;
@@ -3151,7 +3341,7 @@ function wrapRecoveryEligible(opts: WrapOptions): boolean {
   return opts.mode === "compress" || opts.mode === "pixel";
 }
 
-// ── Wrap entitlement: an ACCOUNT fact, never a compression gate (ADR 0031) ──────
+// ── Wrap entitlement: an ACCOUNT fact, never a compression gate ──────
 // Local compression is the free adoption surface: it runs with no Caveman account,
 // no entitlement, and no seat. The entitlement read here says what the ACCOUNT
 // earns — analytics, team/seats, and cloud sync — and it never decides whether the
@@ -3159,8 +3349,6 @@ function wrapRecoveryEligible(opts: WrapOptions): boolean {
 // the user's own `record`/`--off` request and the proxy's technical conditions
 // (schema-aware prefix zones, MCP recovery, a durable prefix cache, and the
 // operator's `subscription_compress` switch).
-// (docs/decisions/0031-local-compression-not-account-gated.md, which supersedes the
-// account-gating parts of ADR 0022 and ADR 0023.)
 
 export type WrapEntitlement = {
   entitled: boolean;
@@ -3217,7 +3405,7 @@ export type OffState = { id: OffStateID; line: string; fix?: string };
 // status prints every active row in OFF_STATE_PRECEDENCE order.
 //
 // Every row here is a TECHNICAL reason compression is off or degraded. Account
-// state is NOT one of them (ADR 0031): being signed out, seat-walled, denied, or
+// state is NOT one of them: being signed out, seat-walled, denied, or
 // lapsed never turns local compression off, so none of those may appear here.
 const MCP_MARKER_ONLY_LINE =
   "MCP surface marker-only by your config — the engine MCP tools are not injected; streaming turns and Claude Pro/Max sessions pass through uncompressed (non-streaming API-key traffic still compresses)";
@@ -3376,7 +3564,7 @@ function printRunBanner(options: {
 
 // resolveWrapGate is the PURE mode decision (no IO) so it is unit-testable.
 // `requestedMode` is what the user asked for; the returned `mode` is what the local
-// proxy actually runs. Per ADR 0031 the ENTITLEMENT NEVER CHANGES THE MODE — it only
+// proxy actually runs. The ENTITLEMENT NEVER CHANGES THE MODE — it only
 // labels the account state for the messaging layer:
 //   - user asked for plain record (--off): stays plain record. `record` mode is
 //     always pass-through, so this is the one thing that withholds compression here.
@@ -3405,7 +3593,7 @@ export function resolveWrapGate(
 }
 
 // subscriptionCompressEnabled is the PURE decision behind subscription/OAuth
-// coding-agent compression (Claude Pro/Max, Codex ChatGPT, …). Per ADR 0031 there
+// coding-agent compression (Claude Pro/Max, Codex ChatGPT, …). There
 // is NO account condition here — a Caveman entitlement is irrelevant. It is on:
 //   - LOCALLY — this is the local wrap only; the managed gateway's lossless+stealth
 //     rule for non-PAYG traffic is unchanged and is not configured from here;
@@ -3539,7 +3727,7 @@ function planLabel(plan: string): string {
   }
 }
 
-// planWeeklyAllowanceText mirrors cloud/web/lib/plan.ts PLAN_WEEKLY_ALLOWANCE — the
+// planWeeklyAllowanceText mirrors the web dashboard's weekly-allowance display — the
 // parenthetical shows only for the capped tiers (free 5M / indie 50M).
 function planWeeklyAllowanceText(plan: string): string | null {
   if (plan === "free") return "5M optimized tokens/week";
@@ -3602,7 +3790,7 @@ async function requestWrapEntitlement(baseURL: string, accessToken: string, wrap
 
 // fetchAndStoreWrapEntitlement runs the login-time handshake. Login itself NEVER
 // fails for seats or a down entitlement service — and never for compression, which
-// does not depend on it (ADR 0031). The worst case is no cloud sync.
+// does not depend on it. The worst case is no cloud sync.
 async function fetchAndStoreWrapEntitlement(baseURL: string, accessToken: string) {
   const result = await requestWrapEntitlement(baseURL, accessToken);
   switch (result.kind) {
@@ -3658,7 +3846,9 @@ function printSeatWall(body: Record<string, unknown> | null) {
 
 // refreshWrapEntitlementInBackground silently re-fetches during offline grace so a
 // renewed plan lifts the notice next session. Fire-and-forget; failure stays in
-// grace. On 401 it rotates through the CLI's refresh-token path, then retries once.
+// grace. Socket is explicitly unrefed so a stalled control plane cannot hold a
+// completed wrapped agent process open. A 401 is left for foreground auth paths
+// to refresh; credential rotation must not become hidden post-run work.
 function isoWeekKey(now = new Date()): string {
   const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const day = d.getUTCDay() || 7;
@@ -3677,13 +3867,50 @@ function claimWeeklyRunRefresh(now = new Date()): boolean {
   return claimed;
 }
 
+function backgroundPostJSON(urlString: string, token: string, body: string): Promise<{ ok: boolean; status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlString);
+    const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        "x-cave-csrf": "cli",
+      },
+    }, (response) => {
+      response.socket?.unref();
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      response.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > 1 << 20) {
+          request.destroy(new Error("wrap entitlement response exceeds 1 MiB"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => {
+        let parsed: unknown = null;
+        try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { /* invalid response stays null */ }
+        const status = response.statusCode ?? 0;
+        resolve({ ok: status >= 200 && status < 300, status, body: parsed });
+      });
+    });
+    request.on("socket", (socket) => socket.unref());
+    request.on("error", reject);
+    request.setTimeout(5000, () => request.destroy(new Error("wrap entitlement refresh timed out")));
+    request.end(body);
+  });
+}
+
 function refreshWrapEntitlementInBackground(options: { wrappedRun?: boolean } = {}) {
   if (wrapExternalWritesDisabled()) return;
   const wrappedRun = options.wrappedRun === true;
   if (wrappedRun && !claimWeeklyRunRefresh()) return;
   void (async () => {
     try {
-      let cfg = await config();
+      const cfg = await config();
       if (!cfg.token) return;
       const deviceId = ensureDeviceId();
       const body = JSON.stringify({
@@ -3691,25 +3918,14 @@ function refreshWrapEntitlementInBackground(options: { wrappedRun?: boolean } = 
         device_name: hostname(),
         ...(wrappedRun ? { wrapped_run: true } : {}),
       });
-      const doPost = (tok: string) =>
-        fetch(`${cfg.baseURL}/api/v1/me/wrap-entitlement`, {
-          method: "POST",
-          headers: { authorization: `Bearer ${tok}`, "content-type": "application/json", "x-cave-csrf": "cli" },
-          body,
-          signal: AbortSignal.timeout(5000),
-        });
-      let resp = await doPost(cfg.token);
-      if (resp.status === 401 && cfg.refreshToken) {
-        cfg = await refreshCLIConfig(cfg);
-        if (cfg.token) resp = await doPost(cfg.token);
-      }
+      const resp = await backgroundPostJSON(`${cfg.baseURL}/api/v1/me/wrap-entitlement`, cfg.token, body);
       if (!resp.ok) {
         mutateRawConfig((out) => {
           out.wrapEntitlementRefresh = { at: new Date().toISOString(), ok: false };
         });
         return;
       }
-      const ent = await resp.json().catch(() => null);
+      const ent = resp.body;
       if (parseWrapEntitlement(ent)) {
         saveWrapEntitlement(ent);
         mutateRawConfig((out) => {
@@ -4586,6 +4802,110 @@ function normalizeAgentShortcutWrapArgs(input: string[]): string[] {
   return [...wrapFlags, agent, ...agentArgs];
 }
 
+// Aider is deliberately absent: it has no lifecycle hooks, so nothing on the
+// native path would ever start the proxy or apply routedAiderArgs — a direct
+// launch would point it at a dead endpoint. Aider keeps the wrap door.
+function nativeAgentId(id: string): NativeAgent | undefined {
+  return id === "claude" || id === "codex" || id === "hermes" || id === "gemini" || id === "opencode" ? id : undefined;
+}
+
+// `caveman <agent>` — the default door. It persistently enables the native
+// integration (the same journaled user-scoped writes as `caveman enable <agent>`)
+// and then launches the host binary untouched: routing, Core, and proxy
+// autostart all live in the installed hooks, so plain `<agent>` stays caveman'd
+// in every later session too. Wrap-session flags, unsupported agents, or any
+// enable failure fall back to the ephemeral `wrap` door — the shortcut is
+// never worse than a session-only wrap.
+async function agentShortcut(rest: string[]) {
+  // normalizeAgentShortcutWrapArgs hoists --off/--pixel/--workflow to the
+  // front, so a leading flag means explicit session-only wrap intent.
+  if (rest[0]?.startsWith("--")) return wrap(rest);
+  const agent = findAgent(rest[0] ?? "");
+  const native = agent ? nativeAgentId(agent.id) : undefined;
+  if (!agent || !native) return wrap(rest);
+  // A Cave Build lock is enforced at the wrap door (claudeCaveBuildEnv); the
+  // native door applies none of its transforms, so a locked project must keep
+  // routing through wrap or the lock would be silently unenforced.
+  if (existsSync(join(process.cwd(), ".caveman", "agent.lock.json"))) return wrap(rest);
+  // First-run disclosure comes before the first persistent write, mirroring wrap.
+  await firstRunExperience();
+  try {
+    // An existing journal means the machine-wide install already owns routing —
+    // exactly what plain `<agent>` uses — so launch directly without re-probing
+    // (status probes spawn three subprocesses); `caveman doctor <agent>` stays
+    // the repair door for drifted installs.
+    if (!readNativeJournal(native)) enableNative([native]);
+  } catch (error) {
+    process.stderr.write(`${mark("warn")} native enable failed: ${(error as Error).message} — using session-only wrap for this run\n`);
+    return wrap(rest);
+  }
+  const bin = which(binOf(agent));
+  if (!bin) {
+    wrapNotFoundUI(rest[0]!, agent);
+    await emitCommandRunOnce("error", "usage");
+    process.exit(127);
+  }
+  // The native SessionStart hook autostarts the proxy, but only after the host
+  // has approved the installed hooks — start it here too so the first routed
+  // request never hits a dead endpoint. Fail-open, same as the hook.
+  try {
+    const opts = defaultWrapOptions();
+    const gw = gatewayURL();
+    const { host, port } = gatewayHostPort(gw);
+    if (wrapMode(gw) === "local" && !opts.noProxy && !(await portListening(host, port))) {
+      const subscription = native === "codex" && detectCodexWrapAuthMode() === "subscription";
+      const mode = subscription && opts.mode === "pixel" ? "record" : opts.mode;
+      const recovery = Boolean(probeMcpBinary()?.probe.current);
+      await startWrapProxy(
+        mode,
+        recovery,
+        subscription ? false : opts.toon,
+        opts.pixelModels,
+        opts.pixelDensity,
+        gw,
+        subscription ? "codex-subscription" : "standard",
+        false,
+      );
+    }
+  } catch { /* runtime startup is fail-open; the native hook retries at SessionStart */ }
+  if (native === "hermes") maybeWarnHermesMissingKey(agent, gatewayURL());
+  const code = await new Promise<number>((resolve, reject) => {
+    const invocation = portableInvocation(bin, [...agent.args, ...rest.slice(1)]);
+    const child = spawn(invocation.command, invocation.args, { stdio: "inherit" });
+    // tty-generated signals (Ctrl+C / Ctrl+\) already reach the child through
+    // the shared foreground group — forwarding would double-deliver them. But
+    // process-directed SIGTERM/SIGHUP (timeout(1), supervisors, pkill) only hit
+    // this launcher, so those must be forwarded. Either way the launcher
+    // re-raises on itself after the child exits so callers see a signal death,
+    // not a clean exit.
+    let fatal: NodeJS.Signals | undefined;
+    for (const signal of ["SIGINT", "SIGQUIT"] as NodeJS.Signals[]) {
+      process.on(signal, () => { fatal = signal; /* the tty delivered it to the child already */ });
+    }
+    for (const signal of ["SIGHUP", "SIGTERM"] as NodeJS.Signals[]) {
+      process.on(signal, () => {
+        fatal = signal;
+        child.kill(signal);
+        const grace = setTimeout(() => child.kill("SIGKILL"), 10_000);
+        grace.unref();
+      });
+    }
+    child.on("error", (error) => reject(new Error(`failed to exec ${bin}: ${error.message}`)));
+    child.on("exit", (exitCode, signal) => {
+      if (fatal) {
+        process.removeAllListeners(fatal);
+        process.kill(process.pid, fatal);
+        return;
+      }
+      resolve(exitCode ?? signalExitCode(signal));
+    });
+  });
+  const exitClass: TelemetryExitClass = code === 0 ? "ok" : "error";
+  const event = commandRunEventOnce(exitClass, exitClass === "error" ? "other" : undefined);
+  if (event) await emitTelemetryEvents([event]);
+  process.exit(code);
+}
+
 // runWrapped execs the resolved command with the gateway injection applied. It
 // auto-starts the local proxy when routing to loopback, so `caveman wrap claude`
 // is the one-command compression path. If the proxy can't be reached, a TTY run
@@ -4666,7 +4986,7 @@ async function spawnWrapped(
   if (managedGeminiUnsupported) {
     process.stderr.write("caveman: managed Gemini CLI wrap is unsupported because Gemini CLI cannot send separate Caveman and upstream credentials; launching directly\n");
   }
-  // ADR 0031: the local proxy compresses with no account. When wrap runs the LOCAL
+  // The local proxy compresses with no account. When wrap runs the LOCAL
   // proxy path we resolve the mode; managed gateway traffic is governed by the cloud
   // policy engine, so we never resolve it here.
   const gateApplies = local && !opts.noProxy;
@@ -5129,13 +5449,13 @@ async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon:
     // Observe-only estimate: record mode measures would-have-saved tokens without
     // ever mutating the forwarded request.
     ...(observeEstimate ? { CAVEMAN_OBSERVE_ESTIMATE: "1" } : {}),
-    // Nothing else is stamped for subscription/OAuth compression: per ADR 0031 it
+    // Nothing else is stamped for subscription/OAuth compression: it
     // has no account condition. The operator off-switch (`subscription_compress:
     // off`) stays the operator's — we never override it from here.
   };
   // Same reason as `start`: the dead account variable never rides along inherited.
   delete env.CAVEMAN_WRAP_ENTITLED;
-  const child = spawn(resolved, [], { stdio: "ignore", env, detached: true });
+  const child = spawn(resolved, [], { stdio: "ignore", env, detached: true, windowsHide: true });
   child.unref();
   for (let i = 0; i < 20; i++) {
     await sleep(100);
@@ -5591,6 +5911,54 @@ function readJsonObject(path: string): Record<string, unknown> {
   }
 }
 
+export function normalizeHookPath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === "win32" ? path.replace(/\\/g, "/") : path;
+}
+
+export function quoteHookPath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const normalized = normalizeHookPath(path, platform);
+  if (platform === "win32") return `'${normalized.replace(/'/g, "''")}'`;
+  return `'${normalized.replace(/'/g, `'"'"'`)}'`;
+}
+
+export function nativeHookInvocation(
+  executable: string,
+  fastHook: string,
+  agentId: string,
+  executableIsProxy: boolean,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const executableInvocation = hookExecutableInvocation(
+    executable,
+    executableIsProxy ? undefined : fastHook,
+    platform,
+  );
+  const invocation = executableIsProxy
+    ? `${executableInvocation} native-hook ${agentId} --adapter ${quoteHookPath(fastHook, platform)}`
+    : `${executableInvocation} native-hook ${agentId}`;
+  return invocation;
+}
+
+export function hookExecutableInvocation(
+  executable: string,
+  script: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const invocation = script
+    ? `${quoteHookPath(executable, platform)} ${quoteHookPath(script, platform)}`
+    : quoteHookPath(executable, platform);
+  // Claude/Codex/Gemini dispatch command hooks through PowerShell on native
+  // Windows. A quoted executable is only a string literal there; `&` is the
+  // required invocation operator. POSIX hook commands keep their exact shape.
+  return platform === "win32" ? `& ${invocation}` : invocation;
+}
+
 function nativeHookCommand(agentId: string): string {
   const fastHook = join(dirname(fileURLToPath(import.meta.url)), "native-hook-fast.js");
   const explicitProxy = process.env.CAVEMAN_PROXY_BIN;
@@ -5598,10 +5966,10 @@ function nativeHookCommand(agentId: string): string {
   const proxy = explicitProxy || which("caveman-proxy") || (isExecutable(localProxy) ? localProxy : undefined);
   const bridgeCurrent = proxy ? probeVersionedBinary(proxy, "native_hook_bridge_v1").current : false;
   if (proxy && bridgeCurrent && existsSync(fastHook)) {
-    return `${JSON.stringify(proxy)} native-hook ${agentId} --adapter ${JSON.stringify(fastHook)}`;
+    return nativeHookInvocation(proxy, fastHook, agentId, true);
   }
   if (existsSync(fastHook)) {
-    return `${JSON.stringify(process.execPath)} ${JSON.stringify(fastHook)} native-hook ${agentId}`;
+    return nativeHookInvocation(process.execPath, fastHook, agentId, false);
   }
   return `${cavemanBinForHook()} native-hook ${agentId}`;
 }
@@ -8057,7 +8425,7 @@ function openLoginBrowser(url: string): void {
     process.stderr.write(`  browser opener unavailable; open ${url}\n`);
     return;
   }
-  const child = spawn(opener.command, opener.args, { detached: true, stdio: "ignore" });
+  const child = spawn(opener.command, opener.args, { detached: true, stdio: "ignore", windowsHide: true });
   child.once("error", () => process.stderr.write(`  browser did not open; open ${url}\n`));
   child.unref();
 }
@@ -8191,7 +8559,7 @@ async function login(argv: string[] = []) {
 	    // until the control plane has recorded that this CLI stored the bundle.
 	    await acknowledgeDeviceGrant(baseURL, credentials.access_token, code.device_code, ackToken);
 	  }
-      // Mint/refresh the local-wrap entitlement for this device (ADR 0022). Best
+      // Mint/refresh the local-wrap entitlement for this device. Best
       // effort: login never fails for seats or a down entitlement service.
       await fetchAndStoreWrapEntitlement(baseURL, credentials.access_token);
       if (gateway && wrapMode(gateway) === "managed") {
@@ -9989,7 +10357,10 @@ function shouldShrink(command: string): boolean {
 // cavemanBinForHook is the invocation a Claude hook uses to call back into this
 // CLI, robust to PATH: a resolved `caveman`/`cave`, else this very script's node.
 function cavemanBinForHook(): string {
-  return which("caveman") ?? which("cave") ?? `${process.execPath} ${process.argv[1]}`;
+  const command = which("caveman") ?? which("cave");
+  return command
+    ? hookExecutableInvocation(command, undefined)
+    : hookExecutableInvocation(process.execPath, process.argv[1]!);
 }
 
 // shrinkHook is the settings-hook callback for the agents whose harness can
@@ -11259,10 +11630,23 @@ function opencodePluginPath(): string {
 // cavemanInvocation returns how to call back into THIS CLI from a generated plugin,
 // baked at install time so it is independent of the agent's PATH: a resolved
 // caveman/cave binary, else this script under node.
+export function generatedPluginInvocation(
+  onPath: string | undefined,
+  currentScript: string,
+  platform: NodeJS.Platform = process.platform,
+): { cmd: string; pre: string[] } {
+  if (onPath) {
+    const invocation = portableInvocation(onPath, [], platform);
+    return { cmd: invocation.command, pre: invocation.args };
+  }
+  return { cmd: process.execPath, pre: [currentScript] };
+}
+
 function cavemanInvocation(): { cmd: string; pre: string[] } {
-  const onPath = which("caveman") ?? which("cave");
-  if (onPath) return { cmd: onPath, pre: [] };
-  return { cmd: process.execPath, pre: [process.argv[1] ?? ""] };
+  return generatedPluginInvocation(
+    which("caveman") ?? which("cave") ?? undefined,
+    process.argv[1] ?? "",
+  );
 }
 function opencodePluginSource(): string {
   const { cmd, pre } = cavemanInvocation();
@@ -11665,7 +12049,7 @@ function hooksUsage(): never {
 
 // hooksDirectiveCmd handles `caveman hooks install|uninstall --directive <id> [agent]`
 // (AUTOPILOT_SPEC §7.3): the same verb surface that removes a shrink note today,
-// extended with a flag — never a new porcelain verb (ADR 0024 cap). Install
+// extended with a flag — never a new porcelain verb (capped). Install
 // announces itself and prints the undo command (§7 announce+undo).
 function hooksDirectiveCmd(sub: "install" | "uninstall", directiveId: string, target: string | undefined) {
   // Object.hasOwn: directiveId is user input; a truthiness read would let
@@ -11722,7 +12106,7 @@ function hooksDirectiveCmd(sub: "install" | "uninstall", directiveId: string, ta
 
 function hooksCmd(rest: string[]) {
   // --directive <id> (or --directive=<id>) routes to the wrap-directive
-  // surface (same verb, no new porcelain — ADR 0024). Any OTHER --flag is
+  // surface (same verb, no new porcelain). Any OTHER --flag is
   // rejected loudly: silently ignoring `--directive=x` used to install the
   // shrink note and exit 0 while the user believed a directive was installed
   // (review C8).
@@ -12429,7 +12813,7 @@ function openLearnReport(report: string): void {
     process.stderr.write(`cannot open visual report; open this file: ${report}\n`);
     return;
   }
-  const child = spawn(opener.command, opener.args, { detached: true, stdio: "ignore" });
+  const child = spawn(opener.command, opener.args, { detached: true, stdio: "ignore", windowsHide: true });
   child.once("error", () => {
     process.stderr.write(`cannot open visual report; open this file: ${report}\n`);
   });
@@ -13032,8 +13416,8 @@ function proxyRuntimeMatches(
     && proxyRuntimeGateMatches(runtime, recoveryViaMCP);
 }
 
-// The only cross-session gate input left is the recovery contract (ADR 0031 removed
-// the account one): reusing a proxy that lacks the agent's caveman_retrieve tool
+// The only cross-session gate input left is the recovery contract (the account
+// one was removed): reusing a proxy that lacks the agent's caveman_retrieve tool
 // would elide bytes nothing can expand.
 function proxyRuntimeGateMatches(
   runtime: ProxyRuntimeState,
@@ -14872,10 +15256,14 @@ export function executableCandidateNames(
   pathExt = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
 ): string[] {
   if (platform !== "win32" || extname(command)) return [command];
-  const candidates = [command];
+  const candidates: string[] = [];
   for (const extension of pathExt.split(";").map((value) => value.trim()).filter(Boolean)) {
     candidates.push(`${command}${extension.startsWith(".") ? extension : `.${extension}`}`);
   }
+  // Windows cannot launch extensionless POSIX npm shims without a shell. Keep
+  // the bare name as a fallback for real extensionless executables, but prefer
+  // native executables and cmd/bat shims from PATHEXT.
+  candidates.push(command);
   const seen = new Set<string>();
   return candidates.filter((candidate) => {
     const key = candidate.toLowerCase();

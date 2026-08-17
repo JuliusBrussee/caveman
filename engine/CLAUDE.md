@@ -1,4 +1,4 @@
-# public/engine — the content-aware Caveman Engine (commercial, binary-distributed)
+# engine — the content-aware Caveman Engine (commercial, binary-distributed)
 
 Detect a payload's type → route to a safety-classed compressor → count the token reduction
 → store the original for recovery. The stable four-call API (`Compress`/`Retrieve`/`Detect`/`Stats`)
@@ -48,4 +48,4 @@ is what the proxy, CLI, SDKs, MCP, and WASM build all share. Everything it repor
 - **cgo**: full code compression (Python/JS/TS) needs the tree-sitter build; the cgo-free build compresses Go only. The embedded eval fixtures cover all three under cgo.
 - **boundary**: this is `public/` — never import `cloud/…`. `make check-boundaries` enforces it.
 
-See ../../CLAUDE.md (root) · ../../docs/prd/02-caveman-engine.md
+See ../../CLAUDE.md (root)

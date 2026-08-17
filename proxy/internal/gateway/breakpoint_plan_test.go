@@ -112,7 +112,7 @@ func TestBreakpointPlanPlacesAndDiscloses(t *testing.T) {
 		t.Fatalf("row optimizations = %v", row.OptimizationIDs)
 	}
 	// The planner mints nothing until its id earns a place in the minting set
-	// under the provider/method/optimizer discipline (docs/SAVINGS_ACCOUNTING.md).
+	// under the provider/method/optimizer discipline.
 	if row.SavingsUSD != 0 {
 		t.Fatalf("the planner booked a saving: %v", row.SavingsUSD)
 	}

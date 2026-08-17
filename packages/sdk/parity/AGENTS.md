@@ -1,4 +1,4 @@
-# public/sdk/parity — the cross-language SDK conformance contract
+# packages/sdk/parity — the cross-language SDK conformance contract
 
 One language-neutral fixture file, run by **both** SDKs. The load-bearing honesty property
 of the SDKs: the wire contract is one thing, expressed twice (`@caveman-ai/sdk` TS +
@@ -23,4 +23,4 @@ assertion fail — so this folder is a release gate, not documentation.
 - Nothing random may reach an assertion. Ids the SDK would otherwise mint (trace id, span id) are injected through the operation `input` and pinned in the expected header set — the same way `otlp_export` pins its span ids.
 - Run: `make product-test PRODUCT=sdk-ts` && `make product-test PRODUCT=sdk-python`.
 
-See ../typescript/CLAUDE.md · ../python/CLAUDE.md · ../../../docs/prd/05-caveman-sdks.md
+See ../typescript/CLAUDE.md · ../python/CLAUDE.md

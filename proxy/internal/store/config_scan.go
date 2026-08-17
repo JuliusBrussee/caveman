@@ -12,7 +12,7 @@ import (
 // config_scan.go measures the local agent config that loads into context every
 // turn — the "config tax". It reads only local files (CLAUDE.md / AGENTS.md, skill
 // descriptions, hooks, plugins) and never writes them. Token counts are an
-// `inferred` estimate. See docs/CAVEMAN_LEARN_SPEC.md §4–§5.
+// `inferred` estimate.
 
 type skillInfo struct {
 	Name       string

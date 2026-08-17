@@ -24,7 +24,7 @@ export const BINARY_SIGNING_PUBKEY = ${JSON.stringify(publicKey)};
 
 if (process.argv.includes("--check")) {
   if (readFileSync(output, "utf8") !== generated) {
-    console.error("binary release constants are stale; run node public/cli/scripts/gen-binaries.mjs");
+    console.error("binary release constants are stale; run node packages/cli/scripts/gen-binaries.mjs");
     process.exit(1);
   }
 } else {

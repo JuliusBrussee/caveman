@@ -423,6 +423,37 @@ func focusAXRecords(records []axRecord, query string) []axRecord {
 		}
 	}
 
+	// A match inside a row or list item answers a lookup only together with
+	// its sibling cells — an order id without its customer/amount cells reads
+	// as "data unavailable". Keep the whole line item, not just the matching
+	// cell. Subtree size is bounded by real row width, not by the match cap.
+	for i := range records {
+		if !keep[i] {
+			continue
+		}
+		item := -1
+		if records[i].Role == "row" || records[i].Role == "listitem" {
+			item = i
+		}
+		wantDepth := records[i].Depth - 1
+		for j := i; j >= 0 && item == -1 && wantDepth >= 0; j-- {
+			if records[j].Depth != wantDepth {
+				continue
+			}
+			if records[j].Role == "row" || records[j].Role == "listitem" {
+				item = j
+				break
+			}
+			wantDepth--
+		}
+		if item == -1 {
+			continue
+		}
+		for j := item; j < len(records) && (j == item || records[j].Depth > records[item].Depth); j++ {
+			keep[j] = true
+		}
+	}
+
 	out := make([]axRecord, 0, matches*2)
 	keptDepth := make(map[int]bool)
 	for i, rec := range records {

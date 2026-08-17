@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/JuliusBrussee/caveman/browse"
@@ -84,5 +85,40 @@ func TestSaveDirectStateKeepsZeroTargetSessionCloseable(t *testing.T) {
 	}
 	if got.TargetID != "target-empty" || got.Targets == nil || len(got.Targets) != 0 || !got.Owned {
 		t.Fatalf("zero-target session state was dropped: %+v", got)
+	}
+}
+
+func TestDefaultChromeCandidatesPreserveMacPaths(t *testing.T) {
+	got := defaultChromeCandidates("darwin", func(string) string { return "" })
+	want := []string{
+		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		"/Applications/Chromium.app/Contents/MacOS/Chromium",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("candidates=%v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("candidate[%d]=%q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDefaultChromeCandidatesIncludeWindowsInstallRoots(t *testing.T) {
+	env := map[string]string{
+		"LOCALAPPDATA":      `C:\Users\cave\AppData\Local`,
+		"PROGRAMFILES":      `C:\Program Files`,
+		"PROGRAMFILES(X86)": `C:\Program Files (x86)`,
+	}
+	got := defaultChromeCandidates("windows", func(key string) string { return env[key] })
+	joined := strings.Join(got, "\n")
+	for _, want := range []string{
+		filepath.Join(env["LOCALAPPDATA"], "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(env["PROGRAMFILES"], "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(env["PROGRAMFILES(X86)"], "Chromium", "Application", "chrome.exe"),
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("Windows Chrome candidate %q missing from %v", want, got)
+		}
 	}
 }

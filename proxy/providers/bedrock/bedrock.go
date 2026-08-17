@@ -4,8 +4,7 @@ import "github.com/JuliusBrussee/caveman/proxy/providers"
 
 // Adapter is the AWS Bedrock gateway adapter. It embeds the shared Base and adds
 // Bedrock API-key/IAM authentication, a region/model allowlist, and
-// Bedrock-shaped usage parsing. See ADR 0013 (supersedes ADR 0007, which scoped
-// Bedrock SDK-only).
+// Bedrock-shaped usage parsing.
 //
 // Bedrock signs the exact post-transform upstream request and parses
 // Bedrock-shaped usage. Its only provider-native transform is the opt-in

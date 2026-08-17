@@ -5,7 +5,7 @@
 // to a local store labeled `inferred` — never `verified`.
 //
 // The request lifecycle and provider adapters live under this module:
-//   - providers/        the byte-safe adapter set (shared with cloud/gateway-managed)
+//   - providers/        the byte-safe adapter set (shared with the managed gateway)
 //   - internal/gateway/  the request loop, behind injected auth + telemetry
 //   - internal/config/   caveman.yaml + BYOK env-key resolution
 //   - internal/store/    the ~/.caveman/ SQLite spend store

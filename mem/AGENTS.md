@@ -1,10 +1,10 @@
-# public/mem — cavemem, durable agent memory (commercial Go core + MIT clients)
+# mem — cavemem, durable agent memory (commercial Go core + MIT clients)
 
 Durable, cross-session memory: `remember` / `recall` / `supersede` / `history` / `forget`. A local SQLite store holds the
 **raw** memories (the source of truth); recall ranks them with deterministic **BM25** behind a
 conservative threshold and compresses each hit through the [engine](../engine/CLAUDE.md) so the
 inferred token cost is honest and the dropped detail stays recoverable via CCR. Everything is
-`inferred` (PRD `docs/prd/10-cavemem.md`).
+`inferred`.
 
 ## Layout
 - `store.go` — `Remember`/`Recall`/`Supersede`/`History`/`Forget`/`Recover` over SQLite + engine; legacy schemas migrate in place.
@@ -30,4 +30,4 @@ served through `mcp.NewServer` so the framing matches caveman-mcp exactly.
 - **inferred-only** — `tokens_added`, score, and basis are inferred estimates; never `verified`.
 - **reversible** — a compressed recall hit carries a CCR `recovery_handle`; `Recover` returns the byte-exact original.
 
-See ../../CLAUDE.md (root) · ../engine/CLAUDE.md · ../mcp/CLAUDE.md · ../../docs/prd/10-cavemem.md
+See ../../CLAUDE.md (root) · ../engine/CLAUDE.md · ../mcp/CLAUDE.md

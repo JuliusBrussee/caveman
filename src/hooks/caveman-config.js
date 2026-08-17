@@ -223,7 +223,15 @@ function safeWriteFlag(flagPath, content) {
         process.stderr.write('[caveman] safeWriteFlag: rename contended after 3 attempts; flag not updated this write\n');
       }
     } finally {
-      if (tempPath) { try { fs.unlinkSync(tempPath); } catch (e) { /* renamed already, or never created */ } }
+      if (tempPath) {
+        try {
+          fs.unlinkSync(tempPath);
+        } catch (error) {
+          if (debug && error.code !== 'ENOENT') {
+            process.stderr.write(`[caveman] safeWriteFlag: failed to remove temp flag ${tempPath}: ${error.message}\n`);
+          }
+        }
+      }
     }
   } catch (e) {
     // Silent fail — flag is best-effort

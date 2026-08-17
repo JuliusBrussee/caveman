@@ -7,13 +7,12 @@
 // the agent never sees, a lag of a=2 steps with b=1 step of extra context, the
 // dual θ=500 gate (skip below θ, apply only if the saving clears θ), and
 // rewrite-never-delete — removed text is replaced by a short takeaway, not
-// dropped. See docs/superpowers/specs/2026-08-07-wrap-efficiency-program-design.md
-// §3.2 and docs/research/agent-efficiency/2026-08-07-agentdiet-extraction.md.
+// dropped.
 //
 // # Contracts the caller owns
 //
 // An accepted rewrite ends with a `<<ccr:…>>` recovery marker, the same syntax
-// the proxy's compression path emits (public/proxy/internal/gateway/proxy.go
+// the proxy's compression path emits (proxy/internal/gateway/proxy.go
 // appendCCRMarker) and the retrieve tool consumes. The handle is
 // ccr.Handle(StepBytes). THE CALLER MUST PERSIST THE ORIGINAL BYTES UNDER THAT
 // HANDLE — in a CCR store the retrieve path can reach — BEFORE putting an

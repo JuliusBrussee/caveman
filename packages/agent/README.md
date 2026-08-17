@@ -429,7 +429,7 @@ engine installed.
 
 Live coding sessions are never lock-eligible: host mode makes `compile` refuse
 with `cave_host_sandbox_lock_ineligible`, so nothing a session does becomes a
-Cave Build. Runnable example: [`examples/coding-agent`](../../examples/coding-agent).
+Cave Build. Internal runnable example: `examples/coding-agent` (source repository only).
 
 ## Evals and Cave Build
 

@@ -2,7 +2,7 @@
  * Runtime test: `cave agent list|show|run` hit the real control-api
  * optimization-proposals endpoints and print the server's actual response — never a
  * synthesized result. `run` surfaces the server's honest 501 (the live harness is
- * Phase 2). Run with: node --test public/cli/tests/agent.runtime.mjs
+ * Phase 2). Run with: node --test packages/cli/tests/agent.runtime.mjs
  * (Requires `tsc` build to dist first.)
  */
 import { test } from "node:test";
