@@ -957,6 +957,12 @@ func TestBehaviorBudgetCannotErasePartialRetroResult(t *testing.T) {
 	})
 
 	s := openRetroTestStore(t)
+	if _, err := s.db.Exec(`INSERT INTO applied_fixes
+		(sink_id, practice_id, fix_kind, applied_at, before_tokens_per_turn, before_evidence_json, note)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, "config_tax:baseline", "context-compression", "config_tax",
+		base.Add(-time.Hour).UTC().Format(time.RFC3339), 100, `{}`, "deadline fixture"); err != nil {
+		t.Fatal(err)
+	}
 	plan, err := s.BuildLearnPlanWithRetro(fx.cwd, []string{"claude"}, "30d", RetroOptions{
 		Enabled:          true,
 		BehaviorBudgetMS: 100,
@@ -983,6 +989,14 @@ func TestBehaviorBudgetCannotErasePartialRetroResult(t *testing.T) {
 	}
 	if !foundBehaviorCaveat {
 		t.Fatalf("base truncation caveat missing: %v", plan.Caveats)
+	}
+	if len(plan.Repos) != 0 || len(plan.Confirmed) != 0 {
+		t.Fatalf("deadline-truncated blocks were zero-filled instead of omitted: repos=%+v confirmed=%+v", plan.Repos, plan.Confirmed)
+	}
+	for _, want := range []string{"Repository summaries were omitted", "CLAUDE.md section-echo findings were omitted", "Applied-fix confirmations were omitted"} {
+		if !containsCaveat(plan.Caveats, want) {
+			t.Fatalf("missing %q caveat: %v", want, plan.Caveats)
+		}
 	}
 }
 

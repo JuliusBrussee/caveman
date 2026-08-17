@@ -18,6 +18,10 @@ Read the plan first:
 
 Then, only for the sinks the user chooses to act on, run the consent loop by class.
 
+Before proposing a fix, you may run: caveman learn simulate <sink_id>. Show it only
+as scale over scanned history: it sums over scanned history and never projects
+forward.
+
 REDUCIBLE (a heavy CLAUDE.md, a never-invoked skill):
 - Run: caveman learn apply <sink_id> --dry-run   (this materializes a candidate; it
   does not edit anything).
@@ -62,6 +66,10 @@ LOAD_BEARING: never touch. It appears in the report only so the score stays hone
 
 Binding rules:
 - Consent per edit. No "apply all" that hides the individual diffs.
+- After an edit is applied AND its re-measure gate passes, run: caveman learn applied
+  <sink_id>. Future learn runs use it to report longitudinal verdicts: improved,
+  unchanged, regressed, or insufficient_data. Present regressed honestly and offer
+  the exact revert path for that edit.
 - Every edit is reversible: report exactly what you changed. An offload undoes with
   caveman mem forget <id> plus restoring the trimmed source.
 - inferred only. Never present a local number as verified, and never attach a currency.

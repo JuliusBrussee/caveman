@@ -14,10 +14,14 @@ var sinkPracticeMappings = []struct {
 }{
 	{SinkPattern: "config_tax:*", PracticeID: "context-compression"},
 	{SinkPattern: "claude_md_weight:*", PracticeID: "context-compression"},
+	{SinkPattern: "claude_md_sections:*", PracticeID: "context-compression"},
 	{SinkPattern: "context_dumbzone", PracticeID: "context-compression"},
 	{SinkPattern: "dead_load:skills", PracticeID: "tool-schema-deferral"},
 	{SinkPattern: "recurring_context:repaste:*", PracticeID: "prompt-prefix-stability"},
 }
+
+// cache_churn, reread_waste, compaction_churn, cross_provider, and mcp_surface
+// remain unmapped: they are observations, not actionable practice families.
 
 func practiceIDForSink(sinkID string) string {
 	match := ""

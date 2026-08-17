@@ -14,11 +14,17 @@ func TestPracticeIDForSink(t *testing.T) {
 		{sinkID: "claude_md_weight:user", want: "context-compression"},
 		{sinkID: "claude_md_weight:project", want: "context-compression"},
 		{sinkID: "claude_md_weight:codex", want: "context-compression"},
+		{sinkID: "claude_md_sections:user", want: "context-compression"},
 		{sinkID: "context_dumbzone", want: "context-compression"},
 		{sinkID: "dead_load:skills", want: "tool-schema-deferral"},
 		{sinkID: "subagent_overuse", want: ""},
 		{sinkID: "recurring_context:repaste:abc123", want: "prompt-prefix-stability"},
 		{sinkID: "config_surface", want: ""},
+		{sinkID: "cache_churn", want: ""},
+		{sinkID: "reread_waste", want: ""},
+		{sinkID: "compaction_churn", want: ""},
+		{sinkID: "cross_provider:depth", want: ""},
+		{sinkID: "mcp_surface", want: ""},
 		{sinkID: "unknown", want: ""},
 	}
 
@@ -33,6 +39,7 @@ func TestPracticeIDForSink(t *testing.T) {
 
 func TestSinkPatternsForPracticeID(t *testing.T) {
 	if got, want := sinkPatternsForPracticeID("context-compression"), []string{
+		"claude_md_sections:*",
 		"claude_md_weight:*",
 		"config_tax:*",
 		"context_dumbzone",

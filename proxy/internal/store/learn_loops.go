@@ -194,10 +194,11 @@ func learningLoopSinks(loops []learningLoop) []Sink {
 			suggestion = "Request enough output once, or narrow the query before repeating pagination variants. Treat this as a measured pattern, not proof that every repeat was waste."
 		}
 		sinks = append(sinks, Sink{
-			SinkID: "learning_loop:" + loop.Kind + ":" + loop.SessionRef + ":" + loop.SignatureHash,
-			Title:  loop.Tool + " " + label + " " + itoa(loop.Calls) + " times in one session",
-			Class:  classBehavioral,
-			Basis:  observedLocal,
+			SinkID:         "learning_loop:" + loop.Kind + ":" + loop.SessionRef + ":" + loop.SignatureHash,
+			Title:          loop.Tool + " " + label + " " + itoa(loop.Calls) + " times in one session",
+			Class:          classBehavioral,
+			Basis:          observedLocal,
+			TokensObserved: int64(loop.OutputTokenFloor),
 			Evidence: map[string]any{
 				"kind":                        loop.Kind,
 				"tool":                        loop.Tool,
@@ -206,6 +207,7 @@ func learningLoopSinks(loops []learningLoop) []Sink {
 				"calls":                       loop.Calls,
 				"positions":                   loop.Positions,
 				"observed_output_token_floor": loop.OutputTokenFloor,
+				"tokens_observed_basis":       "bytes4_estimate",
 			},
 			Suggestion: suggestion,
 			Framing:    framingHistorical,

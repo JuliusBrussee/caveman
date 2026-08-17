@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -49,6 +50,64 @@ var (
 	once    sync.Once
 	loadErr error
 )
+
+const contextWindowTokensCapability = "context_window_tokens"
+
+// ContextWindowTokens returns the provider-declared context window from an
+// exact provider+model catalog match. Regional rows must agree; missing,
+// malformed, non-positive, or conflicting capability values fail closed.
+func ContextWindowTokens(provider, model string) (int, bool) {
+	once.Do(load)
+	provider = canonicalCapabilityProvider(provider)
+	window := 0
+	found := false
+	for _, entry := range entries {
+		if entry.Provider != provider || entry.Model != model {
+			continue
+		}
+		value, ok := positiveCapabilityInt(entry.Capabilities[contextWindowTokensCapability])
+		if !ok || (found && value != window) {
+			return 0, false
+		}
+		window = value
+		found = true
+	}
+	return window, found
+}
+
+func canonicalCapabilityProvider(provider string) string {
+	switch provider {
+	case "google":
+		return "gemini"
+	default:
+		return provider
+	}
+}
+
+func positiveCapabilityInt(value any) (int, bool) {
+	maxInt := uint64(^uint(0) >> 1)
+	switch typed := value.(type) {
+	case int:
+		return typed, typed > 0
+	case int64:
+		if typed <= 0 || uint64(typed) > maxInt {
+			return 0, false
+		}
+		return int(typed), true
+	case uint64:
+		if typed == 0 || typed > maxInt {
+			return 0, false
+		}
+		return int(typed), true
+	case float64:
+		if typed <= 0 || typed > float64(maxInt) || math.Trunc(typed) != typed {
+			return 0, false
+		}
+		return int(typed), true
+	default:
+		return 0, false
+	}
+}
 
 // Price returns the catalog pricing for an exact provider+model pair along with
 // the catalog version (the entry's verified_at date). When a model is not in the

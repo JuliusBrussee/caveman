@@ -12371,7 +12371,7 @@ async function trial(rest: string[]) {
     if (learnHistory) {
       proxyExecMaybe(["usage", "import", "codex", "--since", since]);
       proxyExecMaybe(["usage", "import", "claude", "--since", since]);
-      proxyExecMaybe(["learn", "scan", "--sources", "codex,claude,caveman", "--since", since]);
+      proxyExecMaybe(["learn", "scan", "--since", since]);
     }
     proxyExec(["trial", "analyze", "--trial-id", trialID], process.env, true);
     proxyPassthrough(["trial", "report", "--trial-id", trialID]);
@@ -12391,8 +12391,52 @@ type LearnSink = {
   basis: string;
   tokens_per_turn: number;
   tokens_per_day_rate: number;
-  evidence?: Record<string, unknown>;
+  tokens_observed?: number;
+  evidence?: Record<string, unknown> & {
+    measured_prefix_tokens?: number;
+    unexplained_prefix_tokens?: number;
+    token_basis?: string;
+    tokens_observed_basis?: "bytes4_estimate";
+  };
   suggestion?: string;
+};
+
+type LearnConfirmed = {
+  sink_id: string;
+  fix_kind: string;
+  applied_at: string;
+  before: number;
+  after?: number;
+  unit: string;
+  sessions_after: number;
+  verdict: "improved" | "unchanged" | "regressed" | "insufficient_data";
+  supporting_prefix_tokens?: number;
+  supporting_prefix_sessions?: number;
+};
+
+type LearnPortfolioGroup = {
+  fix_label: string;
+  sink_ids: string[];
+  combined_rate_per_day: number;
+  combined_observed_in_window: number;
+  top_sink_id: string;
+  top_sink_title: string;
+  confidence: string;
+  net_note?: string;
+};
+
+type LearnPortfolio = {
+  groups: LearnPortfolioGroup[];
+  best_next_move?: LearnPortfolioGroup;
+};
+
+type LearnRepo = {
+  repo: string;
+  sessions: number;
+  turns: number;
+  median_context: number;
+  dumbzone_pct: number;
+  measured_prefix_tokens?: number;
 };
 
 type LearnPlan = {
@@ -12403,6 +12447,9 @@ type LearnPlan = {
   cave_score: { score: number; basis: string; scope?: string };
   sinks: LearnSink[];
   retro?: LearnRetro;
+  confirmed?: LearnConfirmed[];
+  portfolio?: LearnPortfolio;
+  repos?: LearnRepo[];
 };
 
 // LearnRetro mirrors the proxy's optional `retro` block (learn scan --retro):
@@ -12435,6 +12482,11 @@ const LEARN_EMPTY =
   "no Claude Code or Codex sessions found in the last 30d — the plan needs a block repeated across ≥3 sessions; run `caveman claude` a few times, then `caveman learn`";
 const LEARN_DETAILED_NEXT =
   "next:  caveman tools skills install caveman-learn   (review + apply, with consent)  ·  preview one: caveman learn apply <sink_id> --dry-run";
+const LEARN_ALL_FOOTER = [
+  "advanced: caveman learn applied <sink_id> [--fix-kind <kind>] [--note <text>]   record an approved, re-measured fix",
+  "simulate: caveman learn simulate <sink_id...>   sum counterfactual scale over scanned history",
+  "scope:    caveman learn --repo <substring>   filter sessions before analysis",
+];
 const LEARN_SUMMARY_LIMIT = 3;
 
 function learnReportPath(): string {
@@ -12468,7 +12520,11 @@ function renderLearnDetailedRows(plan: LearnPlan, markdown: boolean): string[] {
   for (const [index, sink] of plan.sinks.entries()) {
     const lead = markdown ? `${index + 1}. **${sink.title}**` : `${index + 1}. ${sink.title}`;
     lines.push(`${lead}  ·  ${sink.sink_id}  ·  ${sink.class}`);
-    lines.push(`   ~${humanTokens(sink.tokens_per_turn)} tokens/turn · ~${humanTokens(sink.tokens_per_day_rate)} tokens/day · basis: inferred`);
+    const observed = typeof sink.tokens_observed === "number" && sink.tokens_observed > 0
+      ? ` · ~${humanTokens(sink.tokens_observed)} tokens observed (historical)`
+      : "";
+    const prefix = learnMeasuredPrefixSuffix(sink);
+    lines.push(`   ~${humanTokens(sink.tokens_per_turn)} tokens/turn · ~${humanTokens(sink.tokens_per_day_rate)} tokens/day${observed} · basis: inferred${prefix}`);
     if (KNOWN_PRACTICE_IDS.has(sink.practice_id)) {
       lines.push(`   practice: ${sink.practice_id} · unmeasured — verified nowhere yet`);
     }
@@ -12480,6 +12536,14 @@ function renderLearnDetailedRows(plan: LearnPlan, markdown: boolean): string[] {
 function learnEvidenceNumber(sink: LearnSink, key: string): number | undefined {
   const value = sink.evidence?.[key];
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function learnMeasuredPrefixSuffix(sink: LearnSink | undefined): string {
+  if (!sink || sink.sink_id !== "config_tax:baseline") return "";
+  const measured = learnEvidenceNumber(sink, "measured_prefix_tokens");
+  return measured && measured > 0
+    ? ` · provider-counted prefix ~${humanTokens(measured)} (turn-1 median)`
+    : "";
 }
 
 function compactLearnText(value: string, max = 108): string {
@@ -12507,16 +12571,44 @@ export type LearnTuiViewModel = {
   status?: string;
   moves: LearnSummaryMove[];
   protected?: string;
+  confirmed?: number;
   findings: number;
   report: string;
 };
 
 export function learnSummaryMoves(plan: LearnPlan): LearnSummaryMove[] {
-  const recurring = plan.sinks.filter((sink) => sink.class === "recurring_context");
   const moves: LearnSummaryMove[] = [];
+  const best = plan.portfolio?.best_next_move;
+  const represented = new Set(best?.sink_ids ?? []);
+  if (best) {
+    const confidenceLabels: Record<string, string> = {
+      measured_usage: "measured",
+      transcript_inferred: "transcript",
+      static_estimate: "estimate",
+    };
+    const confidence = confidenceLabels[best.confidence] ?? best.confidence;
+    const detail = [
+      `sink: ${best.top_sink_id}`,
+      best.combined_rate_per_day > 0
+        ? `~${humanTokens(best.combined_rate_per_day)} tokens/day`
+        : "",
+      best.combined_observed_in_window > 0
+        ? `~${humanTokens(best.combined_observed_in_window)} tokens observed`
+        : "",
+      confidence,
+    ].filter(Boolean);
+    moves.push({
+      title: best.top_sink_title,
+      kind: best.fix_label,
+      detail: detail.join(" · "),
+      ...(best.net_note ? { action: compactLearnText(best.net_note) } : {}),
+    });
+  }
+  const remaining = plan.sinks.filter((sink) => !represented.has(sink.sink_id));
+  const recurring = remaining.filter((sink) => sink.class === "recurring_context");
   let recurringAdded = false;
 
-  for (const sink of plan.sinks) {
+  for (const sink of remaining) {
     if (sink.class === "load_bearing") continue;
     if (sink.class === "recurring_context") {
       if (recurringAdded) continue;
@@ -12569,6 +12661,9 @@ function learnSourceLine(plan: LearnPlan, sessions: number): string {
   const sourceBits = [
     by.claude ? `Claude ${by.claude}` : "",
     by.codex ? `Codex ${by.codex}` : "",
+    by.gemini ? `Gemini ${by.gemini}` : "",
+    by.opencode ? `opencode ${by.opencode}` : "",
+    by.aider ? `aider ${by.aider}` : "",
   ].filter(Boolean);
   return `${sessions} sessions${sourceBits.length ? ` · ${sourceBits.join(" · ")}` : ""}`;
 }
@@ -12590,6 +12685,7 @@ export function buildLearnTuiModel(
   const sessions = Math.max(0, Number(plan.sessions_scanned ?? 0));
   const recurring = plan.sinks.some((sink) => sink.class === "recurring_context");
   const protectedSink = plan.sinks.find((sink) => sink.class === "load_bearing");
+  const confirmed = plan.confirmed?.length ?? 0;
   const diffText = learnDiffText(options.diff);
   const status = sessions === 0
     ? LEARN_EMPTY
@@ -12604,8 +12700,9 @@ export function buildLearnTuiModel(
     ...(status ? { status } : {}),
     moves: learnSummaryMoves(plan),
     ...(protectedSink
-      ? { protected: `${protectedSink.title.replace(/^Your\s+/i, "")} · included in score, never auto-fixed` }
+      ? { protected: `${protectedSink.title.replace(/^Your\s+/i, "")} · included in score, never auto-fixed${learnMeasuredPrefixSuffix(protectedSink)}` }
       : {}),
+    ...(confirmed > 0 ? { confirmed } : {}),
     findings: plan.sinks.length,
     report: options.report ?? learnReportPath(),
   };
@@ -12613,7 +12710,7 @@ export function buildLearnTuiModel(
 
 export function renderLearnPlan(
   plan: LearnPlan,
-  options: { markdown?: boolean; report?: string; diff?: LearnDiff; verbose?: boolean } = {},
+  options: { markdown?: boolean; report?: string; diff?: LearnDiff; verbose?: boolean; all?: boolean } = {},
 ): string {
   const markdown = options.markdown === true;
   const verbose = options.verbose === true || markdown;
@@ -12621,14 +12718,17 @@ export function renderLearnPlan(
   const sessions = Math.max(0, Number(plan.sessions_scanned ?? 0));
   const recurring = plan.sinks.some((sink) => sink.class === "recurring_context");
   const lines: string[] = [];
+  const confirmedLines = renderLearnConfirmed(plan.confirmed, markdown);
 
   if (sessions === 0) {
     lines.push(LEARN_EMPTY);
+    if (confirmedLines.length > 0) lines.push("", ...confirmedLines);
   } else if (!recurring) {
     if (plan.sinks.length > 0) {
       lines.push(...(verbose ? renderLearnDetailedRows(plan, markdown) : ["top moves", ...renderLearnSummaryRows(plan)]), "");
     }
     lines.push(`${sessions} sessions scanned · no block repeated across ≥3 sessions yet — keep running \`caveman claude\`, then re-run \`caveman learn\``);
+    if (confirmedLines.length > 0) lines.push("", ...confirmedLines);
   } else {
     lines.push(markdown
       ? `## Setup Score ${plan.cave_score.score} — basis: inferred (local sessions, not billed spend)`
@@ -12645,6 +12745,7 @@ export function renderLearnPlan(
     }
     const diffText = learnDiffText(options.diff);
     if (diffText) lines.push(diffText);
+    if (confirmedLines.length > 0) lines.push("", ...confirmedLines);
     if (verbose) {
       lines.push("", ...renderLearnDetailedRows(plan, markdown), "", LEARN_DETAILED_NEXT);
     } else {
@@ -12652,7 +12753,7 @@ export function renderLearnPlan(
       lines.push("", "top moves", ...renderLearnSummaryRows(plan));
       if (protectedSink) {
         const title = protectedSink.title.replace(/^Your\s+/i, "");
-        lines.push(`protected  ${title} · included in score, never auto-fixed`);
+        lines.push(`protected  ${title} · included in score, never auto-fixed${learnMeasuredPrefixSuffix(protectedSink)}`);
       }
       lines.push(
         "",
@@ -12661,8 +12762,61 @@ export function renderLearnPlan(
       );
     }
   }
+  if (options.all === true && (plan.repos?.length ?? 0) > 0) {
+    lines.push("", markdown ? "### Per-repo" : "per-repo", ...renderLearnRepos(plan.repos!, markdown));
+  }
+  if (options.all === true) {
+    lines.push("", ...(markdown ? ["### Advanced", ...LEARN_ALL_FOOTER.map((line) => `- ${line}`)] : LEARN_ALL_FOOTER));
+  }
   lines.push("", `report: ${report}`);
   return `${lines.join("\n")}\n`;
+}
+
+function learnMeasureValue(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "?";
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(1).replace(/\.0$/, "");
+}
+
+function learnMeasureUnit(unit: string): string {
+  const labels: Record<string, string> = {
+    config_tokens_per_turn: "config tokens/turn",
+    turns_over_half_window_pct: "turns over half-window (%)",
+    recurrence_present: "recurrence present",
+  };
+  return labels[unit] ?? unit.replaceAll("_", " ");
+}
+
+function learnAppliedDate(appliedAt: string): string {
+  return appliedAt.slice(0, 10);
+}
+
+function renderLearnConfirmed(confirmed: LearnConfirmed[] | undefined, markdown: boolean): string[] {
+  if (!confirmed?.length) return [];
+  const symbols: Record<LearnConfirmed["verdict"], string> = {
+    improved: "✓",
+    unchanged: "·",
+    regressed: "!",
+    insufficient_data: "·",
+  };
+  const rows = confirmed.flatMap((entry) => {
+    const applied = learnAppliedDate(entry.applied_at);
+    if (entry.verdict === "insufficient_data") {
+      const line = `${symbols[entry.verdict]} ${entry.sink_id} — applied ${applied} · needs more post-fix sessions (${entry.sessions_after} sessions so far)`;
+      return [markdown ? `- *${line}*` : line];
+    }
+    if (entry.after === undefined || !Number.isFinite(entry.after)) return [];
+    const line = `${symbols[entry.verdict]} ${entry.sink_id} — ${learnMeasureValue(entry.before)} → ${learnMeasureValue(entry.after)} ${learnMeasureUnit(entry.unit)} over ${entry.sessions_after} sessions (${entry.verdict}) · applied ${applied}`;
+    return [markdown ? `- ${line}` : line];
+  });
+  if (rows.length === 0) return [];
+  return [markdown ? "### Confirmed fixes" : "confirmed fixes", ...rows];
+}
+
+function renderLearnRepos(repos: LearnRepo[], markdown: boolean): string[] {
+  return repos.map((repo) =>
+    `${markdown ? "- " : ""}${repo.repo} · ${repo.sessions} sessions · dumbzone ${repo.dumbzone_pct}% · median context ~${humanTokens(repo.median_context)}`,
+  );
 }
 
 function readLearnDiff(current: LearnPlan): LearnDiff | undefined {
@@ -12790,6 +12944,15 @@ function proxyExecLearnAsync(proxyArgs: string[], onProgress?: (message: string)
   });
 }
 
+export function formatLearnProxyJSON(raw: string, tty = !!process.stdout.isTTY): string {
+  if (!tty) return raw;
+  try {
+    return `${JSON.stringify(JSON.parse(raw), null, 2)}\n`;
+  } catch {
+    return raw;
+  }
+}
+
 export function learnReportOpener(
   report: string,
   platform: NodeJS.Platform = process.platform,
@@ -12845,13 +13008,21 @@ function renderLearnApply(raw: Record<string, any>, dryRun: boolean): string {
 }
 
 function learnUsage(): void {
-  console.log(`${invokedAs()} learn [--all|--plain|--json|--md] [--since 30d] [--sources codex,claude,caveman]
+  console.log(`${invokedAs()} learn [--all|--plain|--json|--md] [--since 30d] [--sources claude,codex,gemini,opencode,aider]
   default       interactive setup score + grouped top moves
   --plain       compact text; no animation or keyboard menu
   --all         every finding, internal id, basis, and suggestion
   --json|--md   machine-readable or detailed Markdown output
   implement     open Claude Code or Codex to review and fix findings
-  apply         prepare one finding for consent-gated editing`);
+  apply         prepare one finding for consent-gated editing
+
+  advanced:
+  applied <sink_id> [--fix-kind <kind>] [--note <text>]
+                record an approved, re-measured fix
+  simulate <sink_id...>
+                sum counterfactual scale over scanned history
+  --repo <substring>
+                filter sessions before analysis`);
 }
 
 function learnImplementUsage(): void {
@@ -12964,6 +13135,11 @@ async function learn(rest: string[]) {
   const sub = rest[0];
   if (sub === "--help" || sub === "-h" || sub === "help") return learnUsage();
   if (sub === "implement") return learnImplement(rest.slice(1));
+  if (sub === "applied" || sub === "simulate") {
+    const rawText = proxyExecLearn(["learn", ...rest], false);
+    process.stdout.write(formatLearnProxyJSON(rawText));
+    return;
+  }
   if (sub === "apply") {
     const json = rest.includes("--json");
     const rawText = proxyExecLearn(["learn", ...rest], false);
@@ -12980,6 +13156,7 @@ async function learn(rest: string[]) {
   const json = rest.includes("--json");
   const markdown = rest.includes("--md");
   const verbose = rest.includes("--all") || rest.includes("--verbose");
+  const all = rest.includes("--all");
   const tui = learnTuiEnabled(rest);
   const forwarded = rest.filter((arg) => !["--json", "--md", "--all", "--verbose", "--plain"].includes(arg));
   const reportBefore = learnReportMtime();
@@ -13019,6 +13196,7 @@ async function learn(rest: string[]) {
       process.stdout.write(renderLearnPlan(plan, {
         report,
         verbose: true,
+        all: true,
         ...(diff ? { diff } : {}),
       }));
       return;
@@ -13045,6 +13223,7 @@ async function learn(rest: string[]) {
     markdown,
     report: learnReportPath(),
     verbose,
+    all,
     ...(diff ? { diff } : {}),
   }));
 }
