@@ -45,6 +45,10 @@ test('writes flag in normal (non-symlinked) directory', (tmp) => {
 });
 
 test('writes flag when parent directory is a symlink owned by current user', (tmp) => {
+  // POSIX-only: Windows lacks getuid/O_NOFOLLOW semantics, so safeWriteFlag
+  // fails closed (silently, per the hook invariant) through symlinked parents
+  // there — conservative, so the write-succeeds assertions don't apply.
+  if (process.platform === 'win32') return; // skip on Windows
   // Create real directory and symlink to it (simulating ~/.claude -> /real/path)
   const realDir = path.join(tmp, 'real-claude-config');
   fs.mkdirSync(realDir, { recursive: true });
@@ -75,6 +79,7 @@ test('readFlag works through symlinked parent directory', (tmp) => {
 });
 
 test('safeWriteFlag then readFlag round-trip through symlink', (tmp) => {
+  if (process.platform === 'win32') return; // skip on Windows (fails closed there)
   const realDir = path.join(tmp, 'real-config');
   fs.mkdirSync(realDir, { recursive: true });
   const symlinkDir = path.join(tmp, 'link-config');
@@ -135,6 +140,7 @@ test('flag file permissions are 0600 when written through symlink', (tmp) => {
 });
 
 test('overwrites existing flag through symlinked parent', (tmp) => {
+  if (process.platform === 'win32') return; // skip on Windows (fails closed there)
   const realDir = path.join(tmp, 'real-config');
   fs.mkdirSync(realDir, { recursive: true });
   const symlinkDir = path.join(tmp, 'link-config');
@@ -176,6 +182,7 @@ test('symlink to nonexistent target silently fails', (tmp) => {
 });
 
 test('all valid modes round-trip through symlinked parent', (tmp) => {
+  if (process.platform === 'win32') return; // skip on Windows (fails closed there)
   const realDir = path.join(tmp, 'real-config');
   fs.mkdirSync(realDir, { recursive: true });
   const symlinkDir = path.join(tmp, 'link-config');
