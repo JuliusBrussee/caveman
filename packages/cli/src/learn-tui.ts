@@ -15,6 +15,7 @@ export type LearnTuiModel = {
   status?: string;
   moves: LearnTuiMove[];
   protected?: string;
+  confirmed?: number;
   findings: number;
   report: string;
 };
@@ -41,6 +42,23 @@ export function learnMoveBody(move: LearnTuiMove): string {
     bold(move.title),
     green(move.detail),
     ...(move.action ? [dim(move.action)] : []),
+  ].join("\n");
+}
+
+export function learnScoreBody(model: LearnTuiModel): string {
+  const confirmed = model.confirmed && model.confirmed > 0
+    ? dim(`${model.confirmed} fixes measured since you applied them — run caveman learn --all`)
+    : undefined;
+  if (model.score === null) {
+    return [model.sessions, ...(model.status ? [model.status] : []), ...(confirmed ? [confirmed] : [])].join("\n");
+  }
+  const score = Math.max(0, Math.min(100, Math.round(model.score)));
+  return [
+    `${green(learnScoreBar(score))}  ${bold(`${score}/100`)}`,
+    ...(confirmed ? [confirmed] : []),
+    dim(model.scope),
+    model.sessions,
+    ...(model.diff ? [amber(model.diff)] : []),
   ].join("\n");
 }
 
@@ -85,16 +103,9 @@ export async function renderLearnTui(model: LearnTuiModel): Promise<LearnTuiResu
   p.intro(`${green(bold(" CAVEMAN "))} ${dim("LEARN / LOCAL SETUP")}`);
 
   if (model.score !== null) {
-    const score = Math.max(0, Math.min(100, Math.round(model.score)));
-    const scoreBody = [
-      `${green(learnScoreBar(score))}  ${bold(`${score}/100`)}`,
-      dim(model.scope),
-      model.sessions,
-      ...(model.diff ? [amber(model.diff)] : []),
-    ].join("\n");
-    p.note(scoreBody, "SETUP SCORE");
+    p.note(learnScoreBody(model), "SETUP SCORE");
   } else {
-    p.note([model.sessions, ...(model.status ? [model.status] : [])].join("\n"), "LEARN RESULT");
+    p.note(learnScoreBody(model), "LEARN RESULT");
   }
 
   if (model.moves.length > 0) {

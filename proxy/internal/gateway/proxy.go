@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -25,6 +26,37 @@ import (
 	"github.com/JuliusBrussee/caveman/shared/platform/id"
 	"github.com/JuliusBrussee/caveman/shared/platform/redact"
 )
+
+// doUpstream sends a freshly built request, retrying transient transport
+// failures with short backoff. Replay is safe by construction: an error from
+// httpClient.Do means zero response bytes were received — the failure happened
+// during dial or request upload — and nothing has been written to the client
+// yet. Without this, large uploads hitting a connection reset (~0.9% of >400KB
+// requests, issue #860 sibling) surfaced as a terminal 502 to the agent. No
+// retry after the client context ends: the caller is gone or out of time.
+func (s *Server) doUpstream(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
+	for attempt := 0; ; attempt++ {
+		req, err := build()
+		if err != nil {
+			return nil, err
+		}
+		resp, err := s.httpClient.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+		if attempt >= 2 || ctx.Err() != nil {
+			return nil, err
+		}
+		if s.logger != nil {
+			s.logger.Warn("upstream transport error; retrying", "attempt", attempt+1, "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(time.Duration(attempt+1) * 200 * time.Millisecond):
+		}
+	}
+}
 
 func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if !normalizeAgentPath(r) {
@@ -290,12 +322,18 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		upstreamHeaders.Set("user-agent", r.UserAgent())
 	}
 	s.applyUpstreamAuthFallback(adapter.Name(), credential, upstreamHeaders)
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL.String(), bytes.NewReader(transform.Body))
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream request could not be created.")
-		return
+	// Each retry attempt needs a fresh body reader, so the request is built per
+	// attempt from the buffered payload rather than once up front.
+	buildUpstream := func(payload []byte, header http.Header) func() (*http.Request, error) {
+		return func() (*http.Request, error) {
+			req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL.String(), bytes.NewReader(payload))
+			if err != nil {
+				return nil, err
+			}
+			req.Header = header
+			return req, nil
+		}
 	}
-	req.Header = upstreamHeaders
 
 	s.inflight.Add(1)
 	// Capture both sides of the transform before the send (see capture.go). Off
@@ -309,7 +347,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		Optimizers:  strings.Join(transform.OptimizerIDs, ","),
 	}, wholeBody(body), wholeBody(transform.Body))
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.doUpstream(r.Context(), buildUpstream(transform.Body, upstreamHeaders))
 	s.inflight.Add(-1)
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream provider unavailable.")
@@ -329,11 +367,6 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		if s.logger != nil {
 			s.logger.Warn("upstream rejected transformed request; retrying with original bytes", "status", resp.StatusCode, "request_id", requestID)
 		}
-		retryReq, rerr := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL.String(), bytes.NewReader(body))
-		if rerr != nil {
-			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream request could not be created.")
-			return
-		}
 		retryAuthContext := providers.WithRequestPayloadHash(r.Context(), body)
 		retryHeaders, rerr := adapter.SanitizeAndMapHeaders(retryAuthContext, r, credential, upstreamURL)
 		if rerr != nil {
@@ -344,9 +377,8 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			retryHeaders.Set("user-agent", r.UserAgent())
 		}
 		s.applyUpstreamAuthFallback(adapter.Name(), credential, retryHeaders)
-		retryReq.Header = retryHeaders
 		s.inflight.Add(1)
-		retryResp, derr := s.httpClient.Do(retryReq)
+		retryResp, derr := s.doUpstream(r.Context(), buildUpstream(body, retryHeaders))
 		s.inflight.Add(-1)
 		if derr != nil {
 			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream provider unavailable.")

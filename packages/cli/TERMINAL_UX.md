@@ -41,7 +41,13 @@ Default output stays bounded. Detail never disappears; it moves behind `--all`,
   baseline, then keyboard actions: implement, details, report, done. Full sink
   ids and detector detail live under `--all`; `--plain` disables interactive UI.
   Current proxy writes visual report from same plan, so front door performs one
-  full analysis.
+  full analysis. Portfolio output promotes one best next move: its concrete top
+  sink is the title, its fix label is the kind, and its measurement confidence
+  remains visible. Recorded fixes appear in a confirmed section with application
+  date, before/after unit, post-fix session count, and longitudinal verdict.
+  TUI confirmed-count note points to `caveman learn --all`, which also adds a
+  per-repository block. That block reports session count, dumbzone percentage,
+  and median context; it does not invent per-repository scores.
 - `caveman learn implement`: select Claude Code or Codex, install missing
   `caveman-learn` guide, then launch agent with current report and optional user
   focus. Agent asks before every edit. Load-bearing findings are never edited.
@@ -63,6 +69,9 @@ Default output stays bounded. Detail never disappears; it moves behind `--all`,
   input. `NO_COLOR` disables color.
 - Local savings remain `inferred`, currency-free in learn, and never projected
   from daily to monthly.
+- `tokens/day` is a forward rate. `tokens observed` is a historical window
+  total. Learn renders both separately and never adds them together or describes
+  observed totals as rates.
 - Unknown values stay absent. No synthetic zeros or guessed state.
 
 ## Measurement

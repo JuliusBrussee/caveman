@@ -117,7 +117,7 @@ Prefer building the proxy from source instead of signed binaries? `scripts/insta
 You have months of agent history on disk. `caveman learn` reads it and scores your setup. Local, read-only, no account.
 
 ```bash
-caveman learn             # scan Claude Code + Codex history, open the report
+caveman learn             # Claude Code + Codex + Gemini CLI + opencode; aider via CAVEMAN_AIDER_ROOT
 ```
 
 <p align="center">
@@ -133,6 +133,8 @@ caveman learn implement   # hand the plan to Claude Code or Codex
 ```
 
 The analyzer never edits your files. `learn implement` opens your own agent with the plan and the `caveman-learn` skill, which instructs it to propose each fix as a diff, apply only on your yes, re-measure, and revert anything that did not lower tokens per turn. Caveman never makes your agent dumber to make it cheaper.
+
+Fix land? `caveman learn applied <sink_id>` records it. Future runs say improved, unchanged, regressed, or need more data. No fake win.
 
 ## Caveman Proxy
 
