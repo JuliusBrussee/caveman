@@ -17,13 +17,17 @@ Run: uv run --with tiktoken python evals/measure.py
 from __future__ import annotations
 
 import json
+import os
 import statistics
 from pathlib import Path
 
 import tiktoken
 
 ENCODING = tiktoken.get_encoding("o200k_base")
-SNAPSHOT = Path(__file__).parent / "snapshots" / "results.json"
+LANG = os.environ.get("CAVEMAN_EVAL_LANG", "en")
+SNAPSHOT = Path(__file__).parent / "snapshots" / (
+    "results.json" if LANG == "en" else f"results.{LANG}.json"
+)
 
 
 def count(text: str) -> int:
