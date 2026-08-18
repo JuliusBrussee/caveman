@@ -21,15 +21,17 @@ test("stdin shell install never executes caller cwd bin/install.js", { skip: pro
   writeFileSync(join(fakeBin, "node"), "#!/bin/sh\nif [ \"$1\" = \"-p\" ]; then echo 24; else exec /usr/bin/env node \"$@\"; fi\n", { mode: 0o755 });
   writeFileSync(join(fakeBin, "npx"), "#!/bin/sh\nprintf '%s\\n' \"$@\"\n", { mode: 0o755 });
 
+  // Pin the ref via the shim's own CAVEMAN_REF override so this test checks
+  // the pass-through shape, not whichever release the shim currently pins.
   const result = spawnSync("bash", ["-s", "--", "--help"], {
     cwd,
     input: shellShim,
     encoding: "utf8",
-    env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}` },
+    env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}`, CAVEMAN_REF: "v3.4.5" },
   });
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stdout, /bad/);
-  assert.match(result.stdout, /^-y\ngithub:JuliusBrussee\/caveman#v1\.10\.0\n--help$/m);
+  assert.match(result.stdout, /^-y\ngithub:JuliusBrussee\/caveman#v3\.4\.5\n--help$/m);
   assert.equal(spawnSync("test", ["-e", marker]).status, 1, "caller payload must not execute");
 });
 
