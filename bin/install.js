@@ -696,6 +696,14 @@ function opencodeConfigDir() {
   return path.join(os.homedir(), '.config', 'opencode');
 }
 
+function opencodeConfigPath(dir) {
+  const jsonc = path.join(dir, 'opencode.jsonc');
+  const json  = path.join(dir, 'opencode.json');
+  if (fs.existsSync(jsonc)) return jsonc;
+  if (fs.existsSync(json))  return json;
+  return jsonc;
+}
+
 function installOpencode(ctx) {
   const { say, note, warn, opts, repoRoot, results } = ctx;
   results.detected++;
@@ -714,7 +722,7 @@ function installOpencode(ctx) {
   const commandsDir = path.join(dir, 'commands');
   const agentsDir   = path.join(dir, 'agents');
   const skillsDir   = path.join(dir, 'skills');
-  const opencodeJson = path.join(dir, 'opencode.json');
+  const opencodeJson = opencodeConfigPath(dir);
   const agentsMd     = path.join(dir, 'AGENTS.md');
 
   if (opts.dryRun) {
@@ -1253,7 +1261,7 @@ function uninstall(ctx) {
     warn(`  opencode ownership journal invalid; left integration untouched: ${error.message}`);
   }
   if (ocOwnership.hadJournal) {
-    const ocJson = path.join(ocDir, 'opencode.json');
+    const ocJson = opencodeConfigPath(ocDir);
     if (fs.existsSync(ocJson)) {
       const cfg = SETTINGS.readSettings(ocJson);
       if (cfg) {
