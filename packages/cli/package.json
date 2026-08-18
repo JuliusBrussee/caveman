@@ -1,6 +1,6 @@
 {
   "name": "@caveman-ai/cli",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Caveman CLI — wrap coding agents with recoverable local context compression and truthful metering (`caveman claude`), then drive Caveman Cloud from terminal. Compression and metering run in companion Go binaries: run `caveman setup` to see install state. Local savings stay inferred until verified.",
   "license": "MIT",
   "type": "module",
