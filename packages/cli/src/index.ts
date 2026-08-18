@@ -4874,6 +4874,7 @@ async function agentShortcut(rest: string[]) {
     }
   } catch { /* runtime startup is fail-open; the native hook retries at SessionStart */ }
   if (native === "hermes") maybeWarnHermesMissingKey(agent, gatewayURL());
+  const stopProxyKeepalive = startProxyKeepalive();
   const code = await new Promise<number>((resolve, reject) => {
     const invocation = portableInvocation(bin, [...agent.args, ...rest.slice(1)]);
     const child = spawn(invocation.command, invocation.args, { stdio: "inherit" });
@@ -4905,6 +4906,7 @@ async function agentShortcut(rest: string[]) {
       resolve(exitCode ?? signalExitCode(signal));
     });
   });
+  stopProxyKeepalive();
   const exitClass: TelemetryExitClass = code === 0 ? "ok" : "error";
   const event = commandRunEventOnce(exitClass, exitClass === "error" ? "other" : undefined);
   if (event) await emitTelemetryEvents([event]);
@@ -5258,6 +5260,7 @@ async function spawnWrapped(
     if (runtime.owner !== "unknown" && (runtime.mode === "compress" || runtime.mode === "pixel")) summaryKind = "compress";
   }
   const sessionStart = summaryKind ? new Date().toISOString() : undefined;
+  const stopProxyKeepalive = !direct && local && !opts.noProxy ? startProxyKeepalive(gw) : () => {};
   let code: number;
   try {
     code = await new Promise<number>((resolve, reject) => {
@@ -5314,6 +5317,7 @@ async function spawnWrapped(
       });
     });
   } finally {
+    stopProxyKeepalive();
     cleanupWrapTempDirs();
     removeProxySessionMarker(sessionMarker);
   }
@@ -5471,6 +5475,25 @@ async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon:
   }
   process.stderr.write(`${mark("warn")} started ${bin}, but proxy did not become ready on ${host}:${port}\n`);
   return false;
+}
+
+// startProxyKeepalive heartbeats the local proxy while the wrapped agent process
+// is alive, so a wrap-owned proxy's idle exit cannot fire under an open-but-quiet
+// session whose ANTHROPIC_BASE_URL still points at it (#860). The proxy treats
+// the beat as activity only — nothing is recorded. No immediate beat: launching
+// is already activity, and short-lived runs should never touch the port. The
+// timer is unref'd and every failure is ignored (fail-open, like the hooks).
+function startProxyKeepalive(gw = gatewayURL()): () => void {
+  if (wrapMode(gw) !== "local") return () => {};
+  const { host, port } = gatewayHostPort(gw);
+  const timer = setInterval(() => {
+    const req = httpRequest({ host, port, path: "/caveman/keepalive", method: "POST", timeout: 3000 }, (res) => res.resume());
+    req.on("timeout", () => req.destroy());
+    req.on("error", () => {});
+    req.end();
+  }, 5 * 60 * 1000);
+  timer.unref();
+  return () => clearInterval(timer);
 }
 
 // wrapMode selects which injection variant to use: "managed" when traffic is aimed

@@ -1002,6 +1002,39 @@ func TestRuntimeIdleLifecycleTracksSessionsAndRecoversFromMissingEnd(t *testing.
 	}
 }
 
+// A wrap heartbeat must hold off idle exit even with zero session activity: an
+// open-but-quiet agent still points its ANTHROPIC_BASE_URL at this proxy (#860).
+func TestKeepaliveHoldsOffIdleExit(t *testing.T) {
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runtime := New(store)
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				runtime.Keepalive()
+			}
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if runtime.WaitForIdle(ctx, 30*time.Millisecond) {
+		t.Fatal("idle exit fired while keepalive heartbeats were arriving")
+	}
+	close(stop)
+	if !runtime.WaitForIdle(context.Background(), 30*time.Millisecond) {
+		t.Fatal("idle exit must fire once heartbeats stop")
+	}
+}
+
 func TestRecordModeCollectsMetadataWithoutCoreStateReuseOrExactCCR(t *testing.T) {
 	store, err := ccr.OpenMemory()
 	if err != nil {

@@ -479,6 +479,17 @@ func (r *Runtime) UniqueRecentSession(now time.Time, window time.Duration, provi
 	return candidate, "unique_recent_session"
 }
 
+// Keepalive marks the runtime active without a session event. The wrap CLI
+// heartbeats this for as long as its agent process is alive, so a wrap-owned
+// proxy cannot idle-exit under an open-but-quiet session whose
+// ANTHROPIC_BASE_URL still points at it (issue #860). Idle exit then means
+// "no live wrap has heartbeat and no session has spoken for a full timeout".
+func (r *Runtime) Keepalive() {
+	r.mu.Lock()
+	r.lastActivity = time.Now()
+	r.mu.Unlock()
+}
+
 // WaitForIdle returns true only after every observed session ended and timeout
 // elapsed. Explicit long-running gateway owners do not call it.
 func (r *Runtime) WaitForIdle(ctx context.Context, idleTimeout time.Duration) bool {

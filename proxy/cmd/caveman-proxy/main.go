@@ -225,9 +225,25 @@ func runServe(logger *slog.Logger) {
 		}
 	}
 
+	handler := server.Handler()
+	if nativeRuntime != nil {
+		// Loopback liveness beacon for the wrap CLI: while a wrapped agent
+		// process is alive its wrap heartbeats here, which holds off the
+		// wrap-owned idle exit above (issue #860). It only refreshes the idle
+		// clock — no session state, no metering, nothing recorded.
+		proxied := handler
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/caveman/keepalive" && r.Method == http.MethodPost {
+				nativeRuntime.Keepalive()
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			proxied.ServeHTTP(w, r)
+		})
+	}
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           server.Handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
