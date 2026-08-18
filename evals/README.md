@@ -58,6 +58,35 @@ CAVEMAN_EVAL_MODEL=claude-haiku-4-5 uv run python evals/llm_run.py
 uv run --with tiktoken python evals/measure.py
 ```
 
+## Other languages
+
+The prompt set defaults to English. `CAVEMAN_EVAL_LANG` selects another one:
+
+```bash
+CAVEMAN_EVAL_LANG=fr uv run python evals/llm_run.py
+CAVEMAN_EVAL_LANG=fr uv run --with tiktoken python evals/measure.py
+```
+
+It reads `prompts/<lang>.txt` and writes `snapshots/results.<lang>.json`, so
+per-language snapshots never overwrite each other. `en` keeps the original
+`snapshots/results.json` path, so existing invocations are unchanged.
+
+The `__terse__` control arm is written in the prompt set's language
+(`TERSE_PREFIX_BY_LANG` in `llm_run.py`). This matters: an English
+"Answer concisely." in front of a French prompt measures a language switch on
+top of terseness, which is not the control the harness is trying to isolate.
+A language with no entry falls back to the English prefix — add one when you
+add a prompt set.
+
+`prompts/fr.txt` mirrors `prompts/en.txt` line for line, same ten topics in the
+same order, so the two sets are comparable arm by arm.
+
+## Adding a language
+
+1. Write `prompts/<lang>.txt`, ideally mirroring `en.txt` line for line.
+2. Add the language's terse instruction to `TERSE_PREFIX_BY_LANG`.
+3. Refresh with `CAVEMAN_EVAL_LANG=<lang> uv run python evals/llm_run.py`.
+
 ## Adding a prompt
 
 Append a line to `prompts/en.txt`, then refresh the snapshot.

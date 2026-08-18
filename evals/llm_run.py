@@ -34,10 +34,25 @@ from pathlib import Path
 
 EVALS = Path(__file__).parent
 SKILLS = EVALS.parent / "skills"
-PROMPTS = EVALS / "prompts" / "en.txt"
-SNAPSHOT = EVALS / "snapshots" / "results.json"
 
-TERSE_PREFIX = "Answer concisely."
+# Language of the prompt set. Defaults to "en" so existing invocations and the
+# committed snapshot path are unchanged. Any other value reads
+# prompts/<lang>.txt and writes snapshots/results.<lang>.json, so per-language
+# snapshots never overwrite each other.
+LANG = os.environ.get("CAVEMAN_EVAL_LANG", "en")
+PROMPTS = EVALS / "prompts" / f"{LANG}.txt"
+SNAPSHOT = EVALS / "snapshots" / (
+    "results.json" if LANG == "en" else f"results.{LANG}.json"
+)
+
+# The terse control arm has to be written in the prompt set's language. An
+# English "Answer concisely." in front of a French prompt set measures a
+# language switch on top of terseness, which is not the control we want.
+TERSE_PREFIX_BY_LANG = {
+    "en": "Answer concisely.",
+    "fr": "Réponds de façon concise.",
+}
+TERSE_PREFIX = TERSE_PREFIX_BY_LANG.get(LANG, TERSE_PREFIX_BY_LANG["en"])
 
 
 def run_claude(prompt: str, system: str | None = None) -> str:
@@ -62,7 +77,13 @@ def claude_version() -> str:
 
 
 def main() -> None:
-    prompts = [p.strip() for p in PROMPTS.read_text().splitlines() if p.strip()]
+    if not PROMPTS.exists():
+        available = sorted(p.stem for p in (EVALS / "prompts").glob("*.txt"))
+        raise SystemExit(
+            f"No prompt set at {PROMPTS}. "
+            f"CAVEMAN_EVAL_LANG={LANG!r}; available: {', '.join(available)}"
+        )
+    prompts = [p.strip() for p in PROMPTS.read_text(encoding="utf-8").splitlines() if p.strip()]
     skills = sorted(p.name for p in SKILLS.iterdir() if (p / "SKILL.md").exists())
 
     print(
@@ -76,6 +97,7 @@ def main() -> None:
             "claude_cli_version": claude_version(),
             "model": os.environ.get("CAVEMAN_EVAL_MODEL", "default"),
             "n_prompts": len(prompts),
+            "lang": LANG,
             "terse_prefix": TERSE_PREFIX,
         },
         "prompts": prompts,
