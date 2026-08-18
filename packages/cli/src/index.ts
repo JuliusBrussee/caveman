@@ -88,6 +88,11 @@ const wrapTempDirs = new Set<string>();
 // `caveman wrap` points agents at it.
 const PROXY_ADDR = "127.0.0.1:8787";
 const PROXY_URL = `http://${PROXY_ADDR}`;
+// Restores Claude Code's tool search after we take over ANTHROPIC_BASE_URL.
+// "auto" defers to Claude Code's own tool-catalog size threshold, so a user with
+// two small MCP servers pays no extra round-trip while a heavy setup stops
+// inlining every schema. "true" would force it on regardless.
+const TOOL_SEARCH_DEFAULT = "auto";
 
 // Gateway resolution is dynamic — resolved per invocation, never frozen at module
 // load — so `caveman login` persisting a managed gateway URL flips `wrap` to the
@@ -6338,6 +6343,13 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const route = appendUrlPath(gw, "/w/claude");
   const previousRoute = env.ANTHROPIC_BASE_URL;
   env.ANTHROPIC_BASE_URL = route;
+  // Claude Code turns tool search (progressive MCP tool disclosure) OFF as soon
+  // as ANTHROPIC_BASE_URL is not a first-party Anthropic host, so pointing it at
+  // caveman would otherwise force every MCP tool schema inline on every request
+  // — measured at ~48k extra prompt tokens on a 4-server setup. The proxy
+  // forwards tool_reference blocks byte-identically, which is the condition
+  // Claude Code names for the override. Never clobber an explicit user value.
+  if (env.ENABLE_TOOL_SEARCH === undefined) env.ENABLE_TOOL_SEARCH = TOOL_SEARCH_DEFAULT;
   settings.env = env;
   const withHooks = nativeHooksDocument("claude", true, settings);
 
@@ -7352,6 +7364,12 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
       if (beforeEnv.ANTHROPIC_BASE_URL === undefined) delete currentEnv.ANTHROPIC_BASE_URL;
       else currentEnv.ANTHROPIC_BASE_URL = beforeEnv.ANTHROPIC_BASE_URL;
     }
+    // Symmetric to the enable-side ENABLE_TOOL_SEARCH write: only withdraw the
+    // value we introduced ourselves and only while it is still untouched, so a
+    // user who set their own afterwards keeps it.
+    if (beforeEnv.ENABLE_TOOL_SEARCH === undefined && currentEnv.ENABLE_TOOL_SEARCH === TOOL_SEARCH_DEFAULT) {
+      delete currentEnv.ENABLE_TOOL_SEARCH;
+    }
     if (Object.keys(currentEnv).length > 0) currentRoot.env = currentEnv;
     else delete currentRoot.env;
     return jsonBytes(removeNativeHookEntries(currentRoot, "claude"));
@@ -8112,6 +8130,11 @@ const WRAP_BASE_URL_ENV_VARS = ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "OPENAI
 function wrapBaseUrlEnv(gw: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of WRAP_BASE_URL_ENV_VARS) env[key] = gw;
+  // Same reason as the native-enable path: redirecting ANTHROPIC_BASE_URL makes
+  // Claude Code drop tool search and inline every MCP tool schema. Inert for the
+  // other wrappable agents, which never read this variable. A value already in
+  // the environment is the user's choice and wins.
+  if (process.env.ENABLE_TOOL_SEARCH === undefined) env.ENABLE_TOOL_SEARCH = TOOL_SEARCH_DEFAULT;
   return env;
 }
 
