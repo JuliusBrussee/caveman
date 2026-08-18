@@ -3136,6 +3136,75 @@ function proxyYamlMode(): unknown {
   }
 }
 
+// Claude Code treats any ANTHROPIC_BASE_URL whose host is not api.anthropic.com
+// as a custom endpoint and withholds first-party-only capabilities — most
+// visibly the 1M-token context window, whose loss shrinks the auto-compact
+// window to the 200k default (#865). The local proxy is a byte-safe
+// pass-through whose anthropic upstream IS api.anthropic.com unless the
+// operator overrides providers.anthropic.base_url in caveman.yaml, so for the
+// default upstream the first-party assertion is truthful and we make it
+// through Claude Code's own escape hatch. Never overrides a value the user
+// already set, and never asserts when the upstream cannot be verified.
+const CLAUDE_ASSUME_FIRST_PARTY_ENV = "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL";
+
+// yamlProviderBaseUrl scans an indentation-nested `providers.<name>.base_url`
+// key without a YAML dependency (the published CLI has zero runtime deps).
+// Returns the value when found, null when the providers/<name> block or key is
+// absent, and undefined when the document uses a shape the scan cannot follow
+// (flow-style `{...}` blocks) — callers must treat undefined as unverifiable.
+function yamlProviderBaseUrl(raw: string, provider: string): string | null | undefined {
+  const lines = raw.split(/\r?\n/);
+  let providersIndent = -1;
+  let providerIndent = -1;
+  for (const line of lines) {
+    const code = line.split("#", 1)[0]!;
+    if (!code.trim()) continue;
+    const indent = code.length - code.trimStart().length;
+    const keyMatch = code.trim().match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+    if (providersIndent !== -1 && indent <= providersIndent) providersIndent = -1;
+    if (providerIndent !== -1 && indent <= providerIndent) providerIndent = -1;
+    if (!keyMatch) continue;
+    const key = keyMatch[1]!;
+    const rest = keyMatch[2] ?? "";
+    if (rest.startsWith("{") || rest.startsWith("[")) {
+      // Flow-style collections keep their children on this line; a providers
+      // subtree written that way is beyond this scan, so report unverifiable.
+      if (key === "providers" || providersIndent !== -1) return undefined;
+      continue;
+    }
+    if (providerIndent !== -1 && key === "base_url") {
+      const value = rest.replace(/^["']|["']\s*$/g, "").trim();
+      return value || null;
+    }
+    if (providersIndent !== -1 && key === provider && providerIndent === -1) providerIndent = indent;
+    else if (key === "providers" && providersIndent === -1 && providerIndent === -1 && indent === 0) providersIndent = indent;
+  }
+  return null;
+}
+
+// proxyAnthropicUpstreamIsFirstParty answers whether the local proxy's
+// anthropic upstream is verifiably api.anthropic.com: a missing caveman.yaml
+// means the compiled-in default upstream, an explicit override must name the
+// first-party host, and anything unverifiable (unreadable file, flow-style
+// YAML) refuses the assertion — withholding it only keeps today's behavior.
+function proxyAnthropicUpstreamIsFirstParty(): boolean {
+  const path = process.env.CAVEMAN_CONFIG ?? join(cavemanHome(), "caveman.yaml");
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === "ENOENT";
+  }
+  const override = yamlProviderBaseUrl(raw, "anthropic");
+  if (override === undefined) return false;
+  if (override === null) return true;
+  try {
+    return new URL(override).host === "api.anthropic.com";
+  } catch {
+    return false;
+  }
+}
+
 function projectCapabilityDocument(): Record<string, unknown> {
   try {
     return objectValue(JSON.parse(readFileSync(join(process.cwd(), ".caveman", "config.json"), "utf8")));
@@ -6338,6 +6407,14 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const route = appendUrlPath(gw, "/w/claude");
   const previousRoute = env.ANTHROPIC_BASE_URL;
   env.ANTHROPIC_BASE_URL = route;
+  // Routing through the local proxy makes ANTHROPIC_BASE_URL non-first-party in
+  // Claude Code's eyes, which silently drops the 1M context / ~600k
+  // auto-compact window to 200k (#865). When the proxy's anthropic upstream is
+  // verifiably api.anthropic.com, assert first-party through Claude Code's own
+  // escape hatch. Never touches a value the user already carries in settings.
+  const assumeFirstParty = env[CLAUDE_ASSUME_FIRST_PARTY_ENV] === undefined
+    && wrapMode(gw) === "local" && proxyAnthropicUpstreamIsFirstParty();
+  if (assumeFirstParty) env[CLAUDE_ASSUME_FIRST_PARTY_ENV] = "1";
   settings.env = env;
   const withHooks = nativeHooksDocument("claude", true, settings);
 
@@ -6361,7 +6438,7 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
       before: settingsBefore,
       after: Buffer.from(JSON.stringify(withHooks, null, 2) + "\n"),
       kind: "claude-settings",
-      owned: { route, previous_route: previousRoute ?? null },
+      owned: { route, previous_route: previousRoute ?? null, assume_first_party: assumeFirstParty ? "1" : null },
     },
     {
       file: mcpPath,
@@ -7352,6 +7429,13 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
       if (beforeEnv.ANTHROPIC_BASE_URL === undefined) delete currentEnv.ANTHROPIC_BASE_URL;
       else currentEnv.ANTHROPIC_BASE_URL = beforeEnv.ANTHROPIC_BASE_URL;
     }
+    // The first-party assertion is only ever written when the user carried no
+    // value of their own, so restore is a plain removal — but only while the
+    // value is still exactly ours; a user's later edit outlives disable.
+    const assume = operation.owned?.assume_first_party;
+    if (typeof assume === "string" && currentEnv[CLAUDE_ASSUME_FIRST_PARTY_ENV] === assume) {
+      delete currentEnv[CLAUDE_ASSUME_FIRST_PARTY_ENV];
+    }
     if (Object.keys(currentEnv).length > 0) currentRoot.env = currentEnv;
     else delete currentRoot.env;
     return jsonBytes(removeNativeHookEntries(currentRoot, "claude"));
@@ -8265,6 +8349,13 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
     }
   }
   if (agent.id === "hermes") applyHermesAuthEnv(env, renderedGw, gw);
+  if (agent.id === "claude" && wrapMode(gw) === "local" && env[CLAUDE_ASSUME_FIRST_PARTY_ENV] === undefined && proxyAnthropicUpstreamIsFirstParty()) {
+    // Keep Claude Code's first-party capability set (1M context window /
+    // ~600k auto-compact window) intact behind the local pass-through proxy
+    // (#865). Local-mode only: a managed gateway upstream is not verifiable
+    // from here, and a user-exported value always wins.
+    env[CLAUDE_ASSUME_FIRST_PARTY_ENV] = "1";
+  }
   return env;
 }
 
