@@ -184,7 +184,12 @@ export const CavemanPlugin = async (_ctx) => {
     if (!output || !Array.isArray(output.system)) return;
     const active = readFlag(flagPath);
     if (active && !INDEPENDENT_MODES.has(active)) {
-      output.system.push(reinforcementLine(active));
+      const line = reinforcementLine(active);
+      if (output.system.length > 0) {
+        output.system[output.system.length - 1] += '\n\n' + line;
+      } else {
+        output.system.push(line);
+      }
     }
   },
   };
