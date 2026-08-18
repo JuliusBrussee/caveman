@@ -2,7 +2,7 @@ package store
 
 import (
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 )
@@ -184,14 +184,34 @@ func readLikePath(toolName, input, repo string) (string, bool) {
 	if candidate == "" || strings.ContainsAny(candidate, "\x00\r\n") || strings.HasPrefix(candidate, "{") {
 		return "", false
 	}
-	cleaned := filepath.Clean(candidate)
+	cleaned := logPathClean(candidate)
 	if cleaned == "." {
 		return "", false
 	}
-	if !filepath.IsAbs(cleaned) && filepath.IsAbs(repo) {
-		cleaned = filepath.Clean(filepath.Join(repo, cleaned))
+	if !logPathAbs(cleaned) && logPathAbs(repo) {
+		cleaned = logPathClean(logPathClean(repo) + "/" + cleaned)
 	}
 	return cleaned, true
+}
+
+// logPathClean and logPathAbs normalize paths read out of session logs. Those
+// paths carry the separator convention of the machine that WROTE the log, not
+// the one scanning it, so OS-dependent filepath semantics mis-key them (on
+// Windows, filepath.IsAbs("/repo") is false and Clean flips separators, so
+// "/repo/a.go" and a repo-joined "a.go" never collide). Slash-normalized
+// path-package semantics plus a drive-letter check are deterministic on every
+// scanner platform.
+func logPathClean(p string) string {
+	return path.Clean(strings.ReplaceAll(p, `\`, "/"))
+}
+
+func logPathAbs(p string) bool {
+	p = strings.ReplaceAll(p, `\`, "/")
+	if path.IsAbs(p) {
+		return true
+	}
+	return len(p) >= 3 && p[1] == ':' && p[2] == '/' &&
+		('a' <= p[0]|0x20 && p[0]|0x20 <= 'z')
 }
 
 // simpleShellWords intentionally accepts only inert quoting/escaping. Shell

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,7 +20,13 @@ func TestMCPSurfaceParsesObservedClaudeJSONShapesAndSharesPrefixWithoutAttributi
 	}
 	write(filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{"project-a":{"command":"a"}}}`)
 	write(filepath.Join(croot, ".mcp.json"), `{"mcpServers":{"root-b":{"type":"http","url":"https://example.invalid"}}}`)
-	write(global, `{"mcpServers":{"context7":{"type":"http","url":"https://example.invalid"}},"projects":{"`+cwd+`":{"mcpServers":{"figma":{"command":"figma"}}}}}`)
+	// json.Marshal the project key: on Windows cwd carries backslashes, which
+	// raw concatenation would inject as invalid JSON escapes.
+	cwdKey, err := json.Marshal(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(global, `{"mcpServers":{"context7":{"type":"http","url":"https://example.invalid"}},"projects":{`+string(cwdKey)+`:{"mcpServers":{"figma":{"command":"figma"}}}}}`)
 
 	scopes := scanMCPConfigs(cwd, croot, global)
 	cfg := configScan{MCPScopes: scopes}
