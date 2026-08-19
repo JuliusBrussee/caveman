@@ -33,21 +33,12 @@ fi
 
 echo "Uninstalling caveman hooks..."
 
-# 1. Remove hook files
-REMOVED_FILES=0
-for hook in "${HOOK_FILES[@]}"; do
-  if [ -f "$HOOKS_DIR/$hook" ]; then
-    rm "$HOOKS_DIR/$hook"
-    echo "  Removed: $HOOKS_DIR/$hook"
-    REMOVED_FILES=$((REMOVED_FILES + 1))
-  fi
-done
-
-if [ "$REMOVED_FILES" -eq 0 ]; then
-  echo "  No hook files found in $HOOKS_DIR"
-fi
-
-# 2. Remove caveman entries from settings.json (idempotent)
+# 1. Remove caveman entries from settings.json (idempotent)
+#
+# This runs BEFORE the hook files are deleted, on purpose. If the settings edit
+# cannot complete, the install is still intact and the user can re-run or edit
+# by hand. The other order left Claude Code pointing at deleted scripts, which
+# is `Cannot find module …caveman-activate.js` on every session start (#471).
 if [ -f "$SETTINGS" ]; then
   # Require node for the same reason install.sh does — safe JSON editing
   if ! command -v node >/dev/null 2>&1; then
@@ -55,14 +46,28 @@ if [ -f "$SETTINGS" ]; then
     echo "         Remove the caveman SessionStart and UserPromptSubmit"
     echo "         entries from $SETTINGS manually."
   else
-    # Back up before editing, same policy as install.sh
-    cp "$SETTINGS" "$SETTINGS.bak"
+    # Back up before editing, same policy as install.sh: never overwrite an
+    # existing .bak, which is the only pre-caveman copy the user has.
+    if [ ! -f "$SETTINGS.bak" ]; then
+      cp "$SETTINGS" "$SETTINGS.bak"
+    fi
 
     # Pass paths via env vars — avoids shell injection if $HOME contains single quotes
     CAVEMAN_SETTINGS="$SETTINGS" node -e "
       const fs = require('fs');
       const settingsPath = process.env.CAVEMAN_SETTINGS;
-      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      // A settings.json with // comments is valid for Claude Code but not for
+      // JSON.parse. Bail out before touching anything rather than half-
+      // uninstalling: bin/install.js --uninstall handles JSONC properly.
+      let settings;
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      } catch (e) {
+        console.error('  Cannot parse ' + settingsPath + ': ' + e.message);
+        console.error('  Nothing was changed. If the file has // comments, run:');
+        console.error('    npx -y github:JuliusBrussee/caveman -- --uninstall');
+        process.exit(3);
+      }
 
       const path = require('path');
 
@@ -134,6 +139,20 @@ if [ -f "$SETTINGS" ]; then
       console.log('  Removed ' + removed + ' caveman hook entries from settings.json');
     "
   fi
+fi
+
+# 2. Remove hook files (only now that settings.json no longer points at them)
+REMOVED_FILES=0
+for hook in "${HOOK_FILES[@]}"; do
+  if [ -f "$HOOKS_DIR/$hook" ]; then
+    rm "$HOOKS_DIR/$hook"
+    echo "  Removed: $HOOKS_DIR/$hook"
+    REMOVED_FILES=$((REMOVED_FILES + 1))
+  fi
+done
+
+if [ "$REMOVED_FILES" -eq 0 ]; then
+  echo "  No hook files found in $HOOKS_DIR"
 fi
 
 # 3. Clean up backup file left by installer

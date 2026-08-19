@@ -35,30 +35,23 @@ if ($PluginInstalled) {
 
 Write-Host "Uninstalling caveman hooks..."
 
-# 1. Remove hook files
-$RemovedFiles = 0
-foreach ($hook in $HookFiles) {
-    $path = Join-Path $HooksDir $hook
-    if (Test-Path $path) {
-        Remove-Item $path -Force
-        Write-Host "  Removed: $path"
-        $RemovedFiles++
-    }
-}
-
-if ($RemovedFiles -eq 0) {
-    Write-Host "  No hook files found in $HooksDir"
-}
-
-# 2. Remove caveman entries from settings.json (idempotent)
+# 1. Remove caveman entries from settings.json (idempotent)
+#
+# This runs BEFORE the hook files are deleted, on purpose. If the settings edit
+# cannot complete, the install is still intact and the user can re-run or edit
+# by hand. The other order left Claude Code pointing at deleted scripts, which
+# is `Cannot find module ...caveman-activate.js` on every session start (#471).
 if (Test-Path $Settings) {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         Write-Host "WARNING: 'node' not found - cannot safely edit settings.json." -ForegroundColor Yellow
         Write-Host "         Remove the caveman SessionStart and UserPromptSubmit"
         Write-Host "         entries from $Settings manually."
     } else {
-        # Back up before editing
-        Copy-Item $Settings "$Settings.bak" -Force
+        # Back up before editing, same policy as install.ps1: never overwrite an
+        # existing .bak, which is the only pre-caveman copy the user has.
+        if (-not (Test-Path "$Settings.bak")) {
+            Copy-Item $Settings "$Settings.bak"
+        }
 
         # Pass path via env var — avoids injection if username contains a single quote.
         # Use a single-quote here-string so PowerShell does NOT expand $variables inside.
@@ -68,7 +61,18 @@ if (Test-Path $Settings) {
 const fs = require('fs');
 const path = require('path');
 const settingsPath = process.env.CAVEMAN_SETTINGS;
-const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+// A settings.json with // comments is valid for Claude Code but not for
+// JSON.parse. Bail out before touching anything rather than half-uninstalling:
+// bin/install.js --uninstall handles JSONC properly.
+let settings;
+try {
+  settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+} catch (e) {
+  console.error('  Cannot parse ' + settingsPath + ': ' + e.message);
+  console.error('  Nothing was changed. If the file has // comments, run:');
+  console.error('    npx -y github:JuliusBrussee/caveman -- --uninstall');
+  process.exit(3);
+}
 
 // Own ONLY handlers whose command targets one of our exact script basenames.
 // A bare 'caveman' substring also matches user-authored hooks that merely
@@ -148,12 +152,35 @@ console.log('  Removed ' + removed + ' caveman hook entries from settings.json')
             if (Test-Path $tmpScript) { Remove-Item $tmpScript -Force }
         }
 
+        # $ErrorActionPreference does not trip on a native exit code, so check
+        # it by hand: without this, a failed edit still fell through and deleted
+        # the user's only pre-caveman backup.
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Aborting: settings.json was not modified and nothing was removed." -ForegroundColor Yellow
+            exit 1
+        }
+
         # Clean up backup file left by installer
         if (Test-Path "$Settings.bak") {
             Remove-Item "$Settings.bak" -Force
             Write-Host "  Removed: $Settings.bak"
         }
     }
+}
+
+# 2. Remove hook files (only now that settings.json no longer points at them)
+$RemovedFiles = 0
+foreach ($hook in $HookFiles) {
+    $path = Join-Path $HooksDir $hook
+    if (Test-Path $path) {
+        Remove-Item $path -Force
+        Write-Host "  Removed: $path"
+        $RemovedFiles++
+    }
+}
+
+if ($RemovedFiles -eq 0) {
+    Write-Host "  No hook files found in $HooksDir"
 }
 
 # 3. Remove flag file

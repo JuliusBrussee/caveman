@@ -153,5 +153,26 @@ test('--only rejects an unknown or missing agent id instead of silently no-oppin
   assert.equal(bare.status, 2, 'bare --only must not install for every agent');
 });
 
+test('an orphan begin marker is damage, not a fence — user content survives re-runs', (tmp) => {
+  // A truncated write or a bad merge leaves a BEGIN with no END. Pairing it
+  // with a LATER block's END made the refresh replace everything between the
+  // two, deleting the user's own content on the SECOND run.
+  const agents = path.join(tmp, 'AGENTS.md');
+  const original = '<!-- caveman-begin -->\nOLD RULE\n\n## MY TEAM CONVENTIONS\nNever force-push to main.\n';
+  fs.writeFileSync(agents, original);
+  for (let i = 0; i < 3; i++) {
+    assert.match(runInit(tmp, '--only', 'agents'), /skipped-damaged-fence/);
+  }
+  assert.equal(fs.readFileSync(agents, 'utf8'), original, 'damaged-marker file must be left byte-identical');
+});
+
+test('an end marker above the begin marker is refused, not spliced', (tmp) => {
+  const agents = path.join(tmp, 'AGENTS.md');
+  const original = '## My notes\n<!-- caveman-end -->\nmore user text\n<!-- caveman-begin -->\nstale\n';
+  fs.writeFileSync(agents, original);
+  assert.match(runInit(tmp, '--only', 'agents'), /skipped-damaged-fence/);
+  assert.equal(fs.readFileSync(agents, 'utf8'), original);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

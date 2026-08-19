@@ -689,6 +689,12 @@ const OPENCODE_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
 const OPENCODE_AGENTS_MD_BEGIN = '<!-- caveman-begin -->';
 const OPENCODE_AGENTS_MD_END = '<!-- caveman-end -->';
 
+function countOccurrences(haystack, needle) {
+  let n = 0;
+  for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + needle.length)) n++;
+  return n;
+}
+
 function opencodeConfigDir() {
   // opencode uses ~/.config/opencode on every platform (on Windows that's
   // %USERPROFILE%\.config\opencode via os.homedir()), NOT %APPDATA% (#376).
@@ -811,17 +817,28 @@ function installOpencode(ctx) {
     const fencedBlock = `${OPENCODE_AGENTS_MD_BEGIN}\n${ruleBody}${OPENCODE_AGENTS_MD_END}\n`;
     if (fs.existsSync(agentsMd)) {
       const existing = fs.readFileSync(agentsMd, 'utf8');
-      const alreadyFenced = existing.includes(OPENCODE_AGENTS_MD_BEGIN)
-        && existing.includes(OPENCODE_AGENTS_MD_END);
-      const alreadyByLegacySentinel = !alreadyFenced && existing.includes(OPENCODE_AGENTS_MD_SENTINEL);
-      if (alreadyFenced) {
+      // Both markers present is not enough: they must be exactly one matched
+      // pair, in order. An END above a BEGIN (or an orphan BEGIN) made the
+      // slice arithmetic below run on end === -1, which re-appended the whole
+      // file from byte 19 and compounded on every re-run.
+      const begin = existing.indexOf(OPENCODE_AGENTS_MD_BEGIN);
+      const end = begin === -1 ? -1 : existing.indexOf(OPENCODE_AGENTS_MD_END, begin);
+      const alreadyFenced = begin !== -1 && end > begin
+        && countOccurrences(existing, OPENCODE_AGENTS_MD_BEGIN) === 1
+        && countOccurrences(existing, OPENCODE_AGENTS_MD_END) === 1;
+      const damagedFence = !alreadyFenced
+        && (existing.includes(OPENCODE_AGENTS_MD_BEGIN) || existing.includes(OPENCODE_AGENTS_MD_END));
+      const alreadyByLegacySentinel = !alreadyFenced && !damagedFence
+        && existing.includes(OPENCODE_AGENTS_MD_SENTINEL);
+      if (damagedFence) {
+        note(`  ${agentsMd} has unmatched caveman markers — leaving it untouched`);
+        note('  remove the stray <!-- caveman-begin/end --> marker, then re-run');
+      } else if (alreadyFenced) {
         // Refresh in place when the shipped ruleset has changed. The old
         // presence-only check meant a ruleset edit never reached anyone who
         // had already installed — the block went stale forever. Only the
         // bytes between our own markers are touched; user content around
         // them is preserved exactly.
-        const begin = existing.indexOf(OPENCODE_AGENTS_MD_BEGIN);
-        const end = existing.indexOf(OPENCODE_AGENTS_MD_END, begin);
         const currentBlock = existing.slice(begin, end + OPENCODE_AGENTS_MD_END.length + 1);
         if (currentBlock === fencedBlock) {
           note(`  ${agentsMd} already contains the current caveman ruleset`);

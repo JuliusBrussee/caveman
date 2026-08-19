@@ -55,6 +55,10 @@ function getSpawnInvocation(command, args, platform = process.platform, env = pr
   if (platform !== 'win32') return { command, args: [...args] };
   const executable = resolveWindowsCommand(command, env) || command;
   if (!/\.(?:cmd|bat)$/i.test(executable)) return { command: executable, args: [...args] };
+  const stat = fs.statSync(executable);
+  if (!stat.isFile() || stat.size > 256 * 1024) {
+    throw new Error(`cannot safely launch Windows command shim: ${executable}`);
+  }
   const relativeScript = parseWindowsNodeShim(fs.readFileSync(executable, 'utf8'));
   if (!relativeScript) throw new Error(`cannot safely launch non-Node Windows command shim: ${executable}`);
   const script = /^[A-Za-z]:[\\/]/.test(relativeScript)

@@ -322,6 +322,11 @@ function pruneOrphanedManagedHooks(settings, configDir) {
         // referencesManagedScript(). Plain basename() misses a Windows-written
         // command when a roaming $CLAUDE_CONFIG_DIR is processed on POSIX.
         if (!MANAGED_HOOK_BASENAMES.has(path.win32.basename(tok))) continue;
+        // A path absolute on the OTHER platform (`C:\...` seen from POSIX) is
+        // not ours to judge: path.isAbsolute() says false, we would join it
+        // under baseDir, find nothing, and prune a hook that is live on the
+        // machine that wrote it. Existence is only knowable for our own paths.
+        if (path.isAbsolute(tok) !== path.win32.isAbsolute(tok)) return false;
         const scriptPath = path.isAbsolute(tok) ? tok : path.join(baseDir, tok);
         return !fs.existsSync(scriptPath);
       }

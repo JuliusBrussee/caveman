@@ -449,3 +449,39 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     fs.rmSync(shimDir, { recursive: true, force: true });
   }
 });
+
+// ── AGENTS.md marker damage must not splice the file ─────────────────────
+// Both markers present is not enough: they must be one matched pair, in order.
+// An END above a BEGIN made `existing.indexOf(END, begin)` return -1, and the
+// slice arithmetic then re-appended the whole file from byte 19, compounding
+// on every re-run.
+test('opencode leaves an AGENTS.md with unmatched caveman markers untouched', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const ocDir = path.join(xdg, 'opencode');
+    fs.mkdirSync(ocDir, { recursive: true });
+    const agentsMd = path.join(ocDir, 'AGENTS.md');
+    const original = [
+      '## My team notes',
+      'Never force-push.',
+      '<!-- caveman-end -->',
+      'more user text',
+      '<!-- caveman-begin -->',
+      'stale rules',
+      '',
+    ].join('\n');
+    fs.writeFileSync(agentsMd, original);
+
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    for (let i = 0; i < 2; i++) {
+      const r = runInstaller(['--only', 'opencode'], env);
+      assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);
+      assert.match(r.stdout, /unmatched caveman markers/);
+    }
+    assert.equal(fs.readFileSync(agentsMd, 'utf8'), original, 'damaged-marker AGENTS.md must be byte-identical');
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});

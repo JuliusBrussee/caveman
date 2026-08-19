@@ -42,6 +42,12 @@ const SENTINEL = 'Respond terse like smart caveman';
 const FENCE_BEGIN = '<!-- caveman-begin -->';
 const FENCE_END = '<!-- caveman-end -->';
 
+function countOccurrences(haystack, needle) {
+  let n = 0;
+  for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + needle.length)) n++;
+  return n;
+}
+
 function fencedBlock(ruleBody) {
   return FENCE_BEGIN + '\n' + ruleBody.trimEnd() + '\n' + FENCE_END + '\n';
 }
@@ -54,7 +60,22 @@ function writeAtomic(fullPath, content) {
   const tmp = path.join(dir, `.${path.basename(fullPath)}.${process.pid}.tmp`);
   try {
     fs.writeFileSync(tmp, content, { mode: 0o644 });
-    fs.renameSync(tmp, fullPath);
+    // rename onto an existing target needs DELETE access and no other handle
+    // without FILE_SHARE_DELETE — OneDrive/Dropbox sync and AV scanners hold
+    // exactly those, and the plain writeFileSync this replaced did not. Retry
+    // brief contention rather than failing the whole init run, same policy as
+    // safeWriteFlag() in caveman-config.js.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        fs.renameSync(tmp, fullPath);
+        break;
+      } catch (error) {
+        const transient = error.code === 'EPERM' || error.code === 'EBUSY' ||
+                          error.code === 'EACCES' || error.code === 'EEXIST';
+        if (!transient || attempt >= 2) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * (attempt + 1));
+      }
+    }
   } catch (error) {
     try { fs.unlinkSync(tmp); } catch (_) {}
     throw error;
@@ -126,8 +147,19 @@ function processAgent(agent, targetDir, ruleBody, opts) {
 
   if (isAppend) {
     const begin = existing.indexOf(FENCE_BEGIN);
-    const end = existing.indexOf(FENCE_END, begin);
-    if (begin !== -1 && end !== -1) {
+    const end = begin === -1 ? -1 : existing.indexOf(FENCE_END, begin);
+    // Markers must be exactly one matched pair. An orphan BEGIN (truncated
+    // write, bad merge) would otherwise pair with a LATER block's END and the
+    // refresh would replace every byte between them — the user's own content
+    // included. Damaged markers are damage, not a fence: report and write
+    // nothing, so a second run cannot compound it (#596's chain, per-repo).
+    const paired = countOccurrences(existing, FENCE_BEGIN) === 1
+      && countOccurrences(existing, FENCE_END) === 1
+      && begin !== -1 && end > begin;
+    if (!paired && (existing.includes(FENCE_BEGIN) || existing.includes(FENCE_END))) {
+      return { status: 'skipped-damaged-fence', label: '!' };
+    }
+    if (paired) {
       // Refresh in place. A presence-only check meant a rule-body change never
       // reached anyone already initialized — the block went stale forever.
       const span = existing.slice(begin, end + FENCE_END.length + 1);
