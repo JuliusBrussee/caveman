@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const stub = join(here, "fixtures", "stub-caveman-mcp.mjs");
-const { RecoveryClient } = await import(join(here, "..", "dist", "testable.mjs"));
+// pathToFileURL, not a bare path: dynamic import() of an absolute Windows
+// path throws ERR_UNSUPPORTED_ESM_URL_SCHEME (the drive letter reads as a URL
+// scheme).
+const { RecoveryClient } = await import(pathToFileURL(join(here, "..", "dist", "testable.mjs")).href);
 
 const KNOWN_HANDLE = "ccr_0123456789abcdef0123456789abcdef";
 const KNOWN_BYTES = "exact original bytes\nline two éø bytes";
