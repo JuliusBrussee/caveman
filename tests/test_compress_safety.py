@@ -250,6 +250,25 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertIn(b"\r\n", backup.read_bytes())
             backup.unlink()
 
+    def test_one_crlf_line_does_not_convert_an_lf_document(self):
+        """A single pasted CRLF line used to rewrite every ending in the file —
+        and the backup with it, so the original bytes were unrecoverable."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "task.md"
+            raw = b"# Title\nline one\r\nline two\nlong prose body to compress.\n"
+            path.write_bytes(raw)
+
+            with mock.patch.object(compress_mod, "call_claude", return_value="# Title\n\nShort body.\n"), \
+                 mock.patch.object(compress_mod, "validate") as v:
+                v.return_value = mock.Mock(is_valid=True, errors=[], warnings=[])
+                ok = compress_mod.compress_file(path)
+
+            self.assertTrue(ok)
+            self.assertNotIn(b"\r\n", path.read_bytes())
+            backup = compress_mod.backup_dir_for(path) / "task.original.md"
+            self.assertEqual(backup.read_bytes(), raw)
+            backup.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

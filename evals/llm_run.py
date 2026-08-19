@@ -29,6 +29,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -52,21 +53,32 @@ SNAPSHOT = EVALS / "snapshots" / "results.json"
 TERSE_PREFIX = "Answer concisely."
 
 
+def claude_bin() -> str:
+    """Resolve the CLI through PATHEXT. npm installs it as claude.CMD on
+    Windows and CreateProcess does not apply PATHEXT, so a bare "claude"
+    raises FileNotFoundError there."""
+    return shutil.which("claude") or "claude"
+
+
 def run_claude(prompt: str, system: str | None = None) -> str:
-    cmd = ["claude", "-p"]
+    cmd = [claude_bin(), "-p"]
     if system:
         cmd += ["--system-prompt", system]
     if model := os.environ.get("CAVEMAN_EVAL_MODEL"):
         cmd += ["--model", model]
     cmd.append(prompt)
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    out = subprocess.run(
+        cmd, capture_output=True, text=True, check=True,
+        encoding="utf-8", errors="replace",
+    )
     return out.stdout.strip()
 
 
 def claude_version() -> str:
     try:
         out = subprocess.run(
-            ["claude", "--version"], capture_output=True, text=True, check=True
+            [claude_bin(), "--version"], capture_output=True, text=True,
+            check=True, encoding="utf-8", errors="replace",
         )
         return out.stdout.strip()
     except Exception:
