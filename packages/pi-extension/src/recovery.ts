@@ -8,6 +8,7 @@ import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import { type PortableInvocation, portableInvocation } from "./portable-command.ts";
 
 const PROBE_TIMEOUT_MS = 2000;
 const CALL_TIMEOUT_MS = 30_000;
@@ -91,9 +92,24 @@ export class RecoveryClient {
     }
   }
 
+  // resolveMcpBinary appends .exe on win32, but CAVEMAN_MCP_BIN is an operator
+  // override that can name anything — including a .cmd shim, which execFile
+  // and spawn both refuse with EFTYPE. Route through the same resolver the hook
+  // bridge uses so the override is as spawnable as the default. Fail-closed:
+  // callers treat a throw as "recovery cannot hold" and pass through.
+  private invocation(args: string[]): PortableInvocation | undefined {
+    try {
+      return portableInvocation(this.binary!, args);
+    } catch {
+      return undefined;
+    }
+  }
+
   private probe(): Promise<boolean> {
     return new Promise((resolve) => {
-      execFile(this.binary!, ["version", "--json"], { timeout: PROBE_TIMEOUT_MS, encoding: "utf8" }, (error, stdout) => {
+      const portable = this.invocation(["version", "--json"]);
+      if (!portable) return resolve(false);
+      execFile(portable.command, portable.args, { timeout: PROBE_TIMEOUT_MS, encoding: "utf8" }, (error, stdout) => {
         if (error) return resolve(false);
         try {
           const parsed = JSON.parse(stdout);
@@ -108,7 +124,9 @@ export class RecoveryClient {
   private async start(): Promise<boolean> {
     let child: ChildProcess;
     try {
-      child = spawn(this.binary!, [], { stdio: ["pipe", "pipe", "ignore"] });
+      const portable = this.invocation([]);
+      if (!portable) return false;
+      child = spawn(portable.command, portable.args, { stdio: ["pipe", "pipe", "ignore"] });
     } catch {
       return false;
     }
