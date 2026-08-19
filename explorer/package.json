@@ -7,6 +7,6 @@
   "description": "FastContext-style exploration subagent for coding agents — read-only, cheap model, compact path:line citations, kept out of the solver's context.",
   "files": ["fastcontext.claude-agent.md"],
   "scripts": {
-    "test": "node --test tests/*.mjs"
+    "test": "node --test --test-force-exit tests/*.mjs"
   }
 }

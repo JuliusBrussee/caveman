@@ -18,7 +18,7 @@
   "scripts": {
     "pretest": "node ../packages/cli/scripts/gen-wedge-installer.mjs && node scripts/copy-binary-installer.mjs",
     "prepack": "node ../packages/cli/scripts/gen-wedge-installer.mjs && node scripts/copy-binary-installer.mjs",
-    "test": "node --test bin/*.test.mjs tests/*.test.mjs"
+    "test": "node --test --test-force-exit bin/*.test.mjs tests/*.test.mjs"
   },
   "engines": {
     "node": ">=18"

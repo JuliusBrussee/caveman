@@ -19,7 +19,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test tests/installer/*.test.mjs",
+    "test": "node --test --test-force-exit tests/installer/*.test.mjs",
     "test:windows": "node scripts/test-windows-compat.mjs"
   },
   "files": [

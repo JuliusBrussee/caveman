@@ -47,7 +47,7 @@
     "lint": "tsc --noEmit",
     "test": "npm run build && npm run test:types && npm run test:node",
     "test:types": "tsc --project tsconfig.test.json",
-    "test:node": "node --test tests/*.runtime.mjs"
+    "test:node": "node --test --test-force-exit tests/*.runtime.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3"

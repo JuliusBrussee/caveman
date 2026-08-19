@@ -32,6 +32,7 @@ runPnpm("build CLI", ["--dir", "packages/cli", "build"]);
 runPnpm("build agent", ["--dir", "packages/agent", "build"]);
 run("Node Windows contracts", process.execPath, [
   "--test",
+  "--test-force-exit",
   "packages/cli/tests/windows-platform.runtime.mjs",
   "packages/cli/tests/portable-command.runtime.mjs",
   "packages/cli/tests/delegate-windows.runtime.mjs",

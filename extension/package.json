@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "setup:browser": "playwright install chromium",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test --test-force-exit test/*.test.mjs",
     "test:browser": "playwright test",
     "test:all": "npm test && npm run test:browser",
     "render:store-assets": "node scripts/render-store-assets.mjs",

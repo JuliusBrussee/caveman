@@ -23,7 +23,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test --test-force-exit tests/*.test.mjs"
   },
   "engines": {
     "node": ">=18.17"

@@ -7,6 +7,6 @@
   "description": "Read-only FastContext exploration skill with parallel repository search and citation-only output.",
   "files": ["SKILL.md"],
   "scripts": {
-    "test": "node --test tests/*.mjs"
+    "test": "node --test --test-force-exit tests/*.mjs"
   }
 }
