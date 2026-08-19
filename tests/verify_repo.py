@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -133,7 +134,16 @@ def verify_shipped_skills_are_documented() -> None:
         (ROOT / name).read_text(encoding="utf-8")
         for name in ("README.md", "CLAUDE.md")
     )
-    undocumented = [name for name in shipped if name not in docs]
+    # Only count a skill as documented when it is named in a code span — a
+    # path, a table cell, a slash command. A bare substring search over the
+    # whole document passes on any sentence that happens to use the word, so
+    # `skills/migration/` was "documented" by every prose mention of the word
+    # migration, and the guard could not fail for the drift it exists to catch.
+    spans = re.findall(r"`([^`\n]+)`", docs)
+    # Brace groups (`skills/{a,b,c}/SKILL.md`) are how the tables list families.
+    expanded = re.sub(r"[{}]", ",", "\n".join(spans))
+    named = set(re.split(r"[^A-Za-z0-9-]+", expanded))
+    undocumented = [name for name in shipped if name not in named]
     ensure(
         not undocumented,
         "these skills ship to users but are named in neither README.md nor "
@@ -213,21 +223,50 @@ def verify_manifests_and_syntax() -> None:
 
     claude_manifest = read_json(claude_manifest_path)
     ensure(isinstance(claude_manifest, dict), "Claude plugin manifest must be an object")
-    expected_agent_paths = [
-        "./agents/cavecrew-builder.md",
-        "./agents/cavecrew-investigator.md",
-        "./agents/cavecrew-reviewer.md",
-    ]
-    agent_paths = claude_manifest.get("agents")
+    # An explicit `agents` array loads ZERO agents on Claude Code 2.1.235 —
+    # `claude plugin details caveman` reports "Agents (0)" with the array and
+    # "Agents (3)" without it, so the cavecrew subagents the cavecrew skill
+    # delegates to simply did not exist for plugin users. The docs say
+    # string|string[] is valid; the shipped loader disagrees, and a directory
+    # string is rejected outright ("agents: Invalid input"). Rely on the
+    # default agents/ scan instead.
     ensure(
-        agent_paths == expected_agent_paths,
-        f"Claude plugin agent paths must be explicit and ./-prefixed: {agent_paths}",
+        "agents" not in claude_manifest,
+        "plugin.json must not declare `agents` — the array form loads no "
+        "agents at all; the default agents/ scan is the only working path",
     )
-    for agent_path in expected_agent_paths:
-        ensure(
-            (ROOT / agent_path).is_file(),
-            f"Claude plugin agent path missing: {agent_path}",
-        )
+    # The default scan turns EVERY top-level .md in agents/ into a subagent,
+    # named from its frontmatter or filename. agents/AGENTS.md and
+    # agents/CLAUDE.md (maintainer docs for the profile registry) shipped as
+    # bogus subagents named AGENTS and CLAUDE; they now live in agents/docs/,
+    # which the scan does not recurse into.
+    expected_agent_files = {
+        "cavecrew-builder.md",
+        "cavecrew-investigator.md",
+        "cavecrew-reviewer.md",
+    }
+    top_level_agent_md = {path.name for path in (ROOT / "agents").glob("*.md")}
+    ensure(
+        top_level_agent_md == expected_agent_files,
+        "agents/*.md is scanned wholesale into every user's subagent list; "
+        f"unexpected files ship as subagents: {sorted(top_level_agent_md - expected_agent_files)}. "
+        "Move non-agent markdown into agents/docs/.",
+    )
+
+    # Claude Code loads commands/*.md as flat skills alongside skills/*/SKILL.md,
+    # so a .md stub sharing a skill's name registers that name twice — `caveman`,
+    # `caveman-commit`, `caveman-review` and `caveman-stats` each appeared twice
+    # in `claude plugin details`, with a 3-line stub competing against the real
+    # ruleset for the same slash command. The .toml stubs are Codex/Gemini-only
+    # and are not scanned.
+    skill_names = {path.parent.name for path in (ROOT / "skills").glob("*/SKILL.md")}
+    command_stubs = {path.stem for path in (ROOT / "commands").glob("*.md")}
+    collisions = sorted(skill_names & command_stubs)
+    ensure(
+        not collisions,
+        f"commands/*.md shadows same-named skills/: {', '.join(collisions)}. "
+        "Both register as skills, so the slash command is ambiguous.",
+    )
 
     hook_dir = ROOT / "src/hooks"
     expected_hooks = {
