@@ -25,7 +25,12 @@ from scripts import compress as compress_mod  # noqa: E402
 class CompressSafetyTests(unittest.TestCase):
     def _file_with(self, dirpath: Path, text: str) -> Path:
         path = dirpath / "task.md"
-        path.write_text(text, encoding="utf-8")
+        # newline="" or Python's text mode rewrites every \n as \r\n on Windows,
+        # so the fixture would land as CRLF. compress.py then correctly
+        # PRESERVES the source's line endings (issue #762) and the assertions
+        # below, which compare against LF strings, fail — measuring the
+        # fixture's line endings rather than the compressor's behaviour.
+        path.write_text(text, encoding="utf-8", newline="")
         return path
 
     def test_empty_input_refused(self):
