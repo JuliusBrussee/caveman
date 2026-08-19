@@ -112,6 +112,38 @@ def _frontmatter_description(path: Path) -> str:
     return " ".join(part for part in description_lines if part)
 
 
+def verify_shipped_skills_are_documented() -> None:
+    """Every skills/*/SKILL.md installs into end users' agents.
+
+    .claude-plugin/marketplace.json sets source "./", so the plugin root is the
+    repo root and Claude Code auto-discovers every skills/ subdirectory — there
+    is no allowlist in plugin.json to gate it. A directory added here silently
+    claims a slot in every user's skill list and competes for activation, so it
+    must at least be named in the docs that tell users what they installed.
+    """
+    section("Shipped Skills Are Documented")
+
+    shipped = sorted(
+        path.parent.name
+        for path in (ROOT / "skills").glob("*/SKILL.md")
+    )
+    ensure(shipped, "no skills found — check the glob")
+
+    docs = "\n".join(
+        (ROOT / name).read_text(encoding="utf-8")
+        for name in ("README.md", "CLAUDE.md")
+    )
+    undocumented = [name for name in shipped if name not in docs]
+    ensure(
+        not undocumented,
+        "these skills ship to users but are named in neither README.md nor "
+        f"CLAUDE.md: {', '.join(undocumented)}. Document them, or move them "
+        "out of skills/ so they stop auto-installing.",
+    )
+
+    print(f"All {len(shipped)} shipped skills are documented")
+
+
 def verify_skill_frontmatter_upload_compatibility() -> None:
     section("Skill Frontmatter Upload Compatibility")
 
@@ -480,6 +512,58 @@ def verify_hook_install_flow() -> None:
         run([bash, "src/hooks/uninstall.sh"], env=hook_env)
         ensure(read_json(claude_dir / "settings.json") == {}, "fresh uninstall should leave empty settings")
 
+    # The settings.json backup must be written ONCE. Without the guard, a
+    # --force reinstall copies the already-merged file over the only
+    # pre-caveman copy, so the user's recovery path silently becomes a
+    # caveman-flavoured settings.json.
+    with tempfile.TemporaryDirectory(prefix="caveman-verify-bak-") as temp_root:
+        home = Path(temp_root) / "home"
+        claude_dir = home / ".claude"
+        claude_dir.mkdir(parents=True)
+        hook_env = {"HOME": shell_path(home), "CLAUDE_CONFIG_DIR": shell_path(claude_dir)}
+        pristine = {"theme": "dark", "myImportantSetting": True}
+        (claude_dir / "settings.json").write_text(
+            json.dumps(pristine, indent=2) + "\n", encoding="utf-8"
+        )
+        for _ in range(3):
+            run([bash, "src/hooks/install.sh", "--force"], env=hook_env)
+        ensure(
+            read_json(claude_dir / "settings.json.bak") == pristine,
+            "install.sh --force must not overwrite the pre-caveman settings.json.bak",
+        )
+
+    # #593: uninstall must own ONLY its own scripts. A user hook that merely
+    # mentions "caveman" in a path, and a foreign handler sharing a matcher
+    # group with ours, both have to survive.
+    with tempfile.TemporaryDirectory(prefix="caveman-verify-foreign-") as temp_root:
+        home = Path(temp_root) / "home"
+        claude_dir = home / ".claude"
+        claude_dir.mkdir(parents=True)
+        hook_env = {"HOME": shell_path(home), "CLAUDE_CONFIG_DIR": shell_path(claude_dir)}
+        run([bash, "src/hooks/install.sh"], env=hook_env)
+
+        settings = read_json(claude_dir / "settings.json")
+        foreign = {"type": "command", "command": 'bash "/home/me/caveman-notes-sync.sh"'}
+        settings["hooks"]["SessionStart"].append({"hooks": [dict(foreign)]})
+        # Foreign handler sharing OUR entry's matcher group.
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"].append(dict(foreign))
+        (claude_dir / "settings.json").write_text(
+            json.dumps(settings, indent=2) + "\n", encoding="utf-8"
+        )
+
+        run([bash, "src/hooks/uninstall.sh"], env=hook_env)
+        after = read_json(claude_dir / "settings.json")
+        remaining = [
+            h
+            for entries in after.get("hooks", {}).values()
+            for entry in entries
+            for h in entry.get("hooks", [])
+        ]
+        ensure(
+            remaining == [foreign, foreign],
+            f"uninstall.sh must preserve foreign hooks mentioning 'caveman'; got {remaining}",
+        )
+
     print("Claude hook install/uninstall flow OK")
 
 
@@ -520,6 +604,7 @@ def verify_license_boundaries() -> None:
 def main() -> int:
     checks = [
         verify_license_boundaries,
+        verify_shipped_skills_are_documented,
         verify_skill_frontmatter_upload_compatibility,
         verify_synced_files,
         verify_manifests_and_syntax,

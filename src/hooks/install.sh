@@ -64,14 +64,18 @@ if [ "$FORCE" -eq 0 ]; then
     if CAVEMAN_SETTINGS="$SETTINGS" node -e "
       const fs = require('fs');
       const settings = JSON.parse(fs.readFileSync(process.env.CAVEMAN_SETTINGS, 'utf8'));
-      const hasCavemanHook = (event) =>
+      // Probe for the exact script we wire for this event, not a bare
+      // 'caveman' substring — that also matches user hooks merely mentioning
+      // the word in a path (#593), which made us skip wiring and silently
+      // leave caveman inactive.
+      const hasCavemanHook = (event, script) =>
         Array.isArray(settings.hooks?.[event]) &&
         settings.hooks[event].some(e =>
-          e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+          e.hooks && e.hooks.some(h => h.command && h.command.includes(script))
         );
       process.exit(
-        hasCavemanHook('SessionStart') &&
-        hasCavemanHook('UserPromptSubmit') &&
+        hasCavemanHook('SessionStart', 'caveman-activate.js') &&
+        hasCavemanHook('UserPromptSubmit', 'caveman-mode-tracker.js') &&
         !!settings.statusLine
           ? 0
           : 1
@@ -122,8 +126,13 @@ if [ ! -f "$SETTINGS" ]; then
   echo '{}' > "$SETTINGS"
 fi
 
-# Back up existing settings.json before touching it
-cp "$SETTINGS" "$SETTINGS.bak"
+# Back up existing settings.json before touching it. Back up ONCE: without the
+# guard a --force reinstall overwrites the only pre-caveman copy with the
+# already-merged file, destroying the user's recovery path. Same guard as
+# bin/install.js.
+if [ ! -f "$SETTINGS.bak" ]; then
+  cp "$SETTINGS" "$SETTINGS.bak"
+fi
 
 # Pass paths via env vars — avoids shell injection if $HOME contains single quotes
 CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
@@ -136,8 +145,9 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
 
   // SessionStart — auto-load caveman rules
   if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
+  // Match the exact script, not a bare 'caveman' substring (#593).
   const hasStart = settings.hooks.SessionStart.some(e =>
-    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-activate.js'))
   );
   if (!hasStart) {
     settings.hooks.SessionStart.push({
@@ -153,7 +163,7 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
   // UserPromptSubmit — track mode changes when user types /caveman commands
   if (!settings.hooks.UserPromptSubmit) settings.hooks.UserPromptSubmit = [];
   const hasPrompt = settings.hooks.UserPromptSubmit.some(e =>
-    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-mode-tracker.js'))
   );
   if (!hasPrompt) {
     settings.hooks.UserPromptSubmit.push({

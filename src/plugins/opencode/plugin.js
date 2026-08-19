@@ -184,7 +184,28 @@ export const CavemanPlugin = async (_ctx) => {
     if (!output || !Array.isArray(output.system)) return;
     const active = readFlag(flagPath);
     if (active && !INDEPENDENT_MODES.has(active)) {
-      output.system.push(reinforcementLine(active));
+      const line = reinforcementLine(active);
+      // Idempotent: opencode is expected to rebuild `output.system` per
+      // request, but if it ever reuses the array across turns an unguarded
+      // append grows the system prompt without bound — silently eating the
+      // context window. Rewrite any line we already left instead of stacking
+      // another, so a mode switch updates in place rather than accumulating.
+      const stale = /CAVEMAN MODE ACTIVE \([a-z-]+\) — session ruleset applies\./g;
+      let found = false;
+      for (let i = 0; i < output.system.length; i++) {
+        if (typeof output.system[i] === 'string' && stale.test(output.system[i])) {
+          stale.lastIndex = 0;
+          output.system[i] = output.system[i].replace(stale, line);
+          found = true;
+        }
+        stale.lastIndex = 0;
+      }
+      if (found) return;
+      if (output.system.length > 0) {
+        output.system[output.system.length - 1] += '\n\n' + line;
+      } else {
+        output.system.push(line);
+      }
     }
   },
   };

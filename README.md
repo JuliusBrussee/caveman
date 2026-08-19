@@ -251,6 +251,9 @@ One install also brings the small tools:
 | `/caveman-review` | One-line, actionable review findings. |
 | `/caveman-compress <file>` | Smaller Markdown memory files, with the original backed up. |
 | `/caveman-stats` | Local session token usage and estimated savings in Claude Code. |
+| `/caveman-help` | One-screen reminder of every mode and command. |
+| `investigate-first`, `lean-build`, `surgical-patch`, `safe-refactor`, `migration`, `verify-and-stop` | Work patterns that write less code, so the agent bills fewer tokens. Your agent picks these up on its own when a task fits. |
+| `/caveman-setup`, `/caveman-discover`, `/caveman-learn`, `/caveman-manage`, `/caveman-optimize`, `/caveman-explore`, `/caveman-evidence-review` | Drive the caveman engine and proxy: set it up, find where tokens go, act on what it finds. |
 
 <!-- BENCHMARK-TABLE-START -->
 | Task | Normal | Caveman | Saved |

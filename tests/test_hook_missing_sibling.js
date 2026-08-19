@@ -252,7 +252,12 @@ function runActivateIn(hooks, cwd, env = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-home-'));
   try {
     return spawnSync(process.execPath, [path.join(hooks, 'caveman-activate.js')], {
-      input: SESSION_START,
+      // The payload's cwd is the session's directory and is what the hook
+      // resolves repo-local config against — the hook process's own cwd can
+      // differ (#634). Send both so the fixture matches what Claude Code does.
+      input: JSON.stringify({
+        session_id: 't', cwd, hook_event_name: 'SessionStart', source: 'startup',
+      }),
       encoding: 'utf8',
       cwd,
       env: { ...process.env, CLAUDE_CONFIG_DIR: home, HOME: home, USERPROFILE: home, ...env },
@@ -281,6 +286,37 @@ test('repo-local opt-out is found from a subdirectory', () => {
     fs.mkdirSync(path.join(repo, '.caveman'), { recursive: true });
     fs.writeFileSync(path.join(repo, '.caveman', 'config.json'), JSON.stringify({ defaultMode: 'off' }));
     assert.doesNotMatch(runActivateIn(hooks, deep).stdout, /CAVEMAN MODE ACTIVE/);
+  });
+});
+
+// #634 for SessionStart: the hook process's cwd is not necessarily the
+// session's. A project that checked in an opt-out must be honored based on
+// where the SESSION is, not where the hook happened to be spawned.
+test('payload cwd wins over the hook process cwd when they disagree', () => {
+  withInstall([], ({ hooks, root }) => {
+    const repo = path.join(root, 'session-repo');
+    const elsewhere = path.join(root, 'elsewhere');
+    fs.mkdirSync(repo, { recursive: true });
+    fs.mkdirSync(elsewhere, { recursive: true });
+    fs.writeFileSync(path.join(repo, '.caveman.json'), JSON.stringify({ defaultMode: 'off' }));
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-home-'));
+    try {
+      const r = spawnSync(process.execPath, [path.join(hooks, 'caveman-activate.js')], {
+        // Session is in the opted-out repo; the hook runs from elsewhere.
+        input: JSON.stringify({
+          session_id: 't', cwd: repo, hook_event_name: 'SessionStart', source: 'startup',
+        }),
+        encoding: 'utf8',
+        cwd: elsewhere,
+        env: { ...process.env, CLAUDE_CONFIG_DIR: home, HOME: home, USERPROFILE: home },
+      });
+      assert.strictEqual(r.status, 0);
+      assert.doesNotMatch(r.stdout, /CAVEMAN MODE ACTIVE/,
+        "the session's repo-local opt-out must win over the hook process cwd");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

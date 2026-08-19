@@ -123,6 +123,21 @@ caveman/
 | `skills/caveman-help/SKILL.md` | Quick-reference card. One-shot display, not a persistent mode. |
 | `skills/caveman-compress/SKILL.md` | Compress sub-skill behavior. |
 | `skills/cavecrew/SKILL.md` | Cavecrew decision guide — when to delegate to caveman subagents vs vanilla. Edit only here. |
+| `skills/{caveman-setup,caveman-discover,caveman-learn,caveman-manage,caveman-optimize,caveman-explore,caveman-evidence-review}/SKILL.md` | Engine/proxy driver skills. Ship with the plugin (see the auto-discovery note below). |
+| `skills/{investigate-first,lean-build,surgical-patch,safe-refactor,migration,verify-and-stop}/SKILL.md` | Token-discipline work patterns — same goal as caveman prose (fewer output tokens) applied to code volume rather than wording. Deliberately un-branded so they read as generic patterns to the model. Ship with the plugin. |
+
+### `skills/` is auto-discovered wholesale — every subdirectory ships
+
+`.claude-plugin/marketplace.json` sets `"source": "./"`, so the plugin root IS
+the repo root, and Claude Code auto-discovers **every** `skills/*/SKILL.md`
+with no `skills` key in `plugin.json` to gate it. Adding a directory under
+`skills/` therefore installs it into every plugin user's agent, where its
+`description` competes for activation on ordinary work.
+
+There is no allowlist. Before adding a directory here, decide whether it
+should reach end users; if not, it belongs under `packages/` or another root.
+Keep the two tables above and the README "What you get" table in sync with the
+actual directory listing — `ls skills/` is the source of truth.
 | `agents/cavecrew-investigator.md` | Read-only locator subagent (haiku). Output contract: `path:line — symbol — note`. |
 | `agents/cavecrew-builder.md` | Surgical 1-2 file editor subagent. Refuses 3+ file scope. |
 | `agents/cavecrew-reviewer.md` | Diff/file reviewer subagent (haiku). One-line findings with severity emoji. |
