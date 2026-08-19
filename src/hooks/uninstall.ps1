@@ -1,4 +1,4 @@
-# caveman — uninstaller for the SessionStart + UserPromptSubmit hooks (Windows PowerShell)
+# caveman — uninstaller for the SessionStart + SubagentStart + UserPromptSubmit hooks (Windows PowerShell)
 # Removes: hook files in ~/.claude/hooks, settings.json entries, and the flag file
 # Usage: powershell -ExecutionPolicy Bypass -File src\hooks\uninstall.ps1
 #   or:  irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks/uninstall.ps1 | iex
@@ -11,7 +11,7 @@ $HooksDir = Join-Path $ClaudeDir "hooks"
 $Settings = Join-Path $ClaudeDir "settings.json"
 $FlagFile = Join-Path $ClaudeDir ".caveman-active"
 
-$HookFiles = @("package.json", "caveman-config.js", "caveman-parse.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js")
+$HookFiles = @("package.json", "caveman-config.js", "caveman-parse.js", "caveman-activate.js", "caveman-subagent.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js")
 
 # Detect if caveman is installed as a plugin
 $PluginInstalled = $false
@@ -54,7 +54,7 @@ if ($RemovedFiles -eq 0) {
 if (Test-Path $Settings) {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         Write-Host "WARNING: 'node' not found - cannot safely edit settings.json." -ForegroundColor Yellow
-        Write-Host "         Remove the caveman SessionStart and UserPromptSubmit"
+        Write-Host "         Remove the caveman SessionStart, SubagentStart and UserPromptSubmit"
         Write-Host "         entries from $Settings manually."
     } else {
         # Back up before editing
@@ -79,7 +79,7 @@ const isCavemanEntry = (entry) =>
 
 let removed = 0;
 if (settings.hooks) {
-  for (const event of ['SessionStart', 'UserPromptSubmit']) {
+  for (const event of ['SessionStart', 'SubagentStart', 'UserPromptSubmit']) {
     if (Array.isArray(settings.hooks[event])) {
       const before = settings.hooks[event].length;
       settings.hooks[event] = settings.hooks[event].filter(e => !isCavemanEntry(e));

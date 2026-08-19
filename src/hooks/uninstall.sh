@@ -1,5 +1,5 @@
 #!/bin/bash
-# caveman — uninstaller for the SessionStart + UserPromptSubmit hooks
+# caveman — uninstaller for the SessionStart + SubagentStart + UserPromptSubmit hooks
 # Removes: hook files in ~/.claude/hooks, settings.json entries, and the flag file
 # Usage: bash src/hooks/uninstall.sh
 #   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks/uninstall.sh)
@@ -10,7 +10,7 @@ HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
 FLAG_FILE="$CLAUDE_DIR/.caveman-active"
 
-HOOK_FILES=("package.json" "caveman-config.js" "caveman-parse.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh" "cavecrew-model-overrides.js")
+HOOK_FILES=("package.json" "caveman-config.js" "caveman-parse.js" "caveman-activate.js" "caveman-subagent.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh" "cavecrew-model-overrides.js")
 
 # Detect if caveman is installed as a plugin (check plugin cache)
 PLUGIN_INSTALLED=0
@@ -52,7 +52,7 @@ if [ -f "$SETTINGS" ]; then
   # Require node for the same reason install.sh does — safe JSON editing
   if ! command -v node >/dev/null 2>&1; then
     echo "WARNING: 'node' not found — cannot safely edit settings.json."
-    echo "         Remove the caveman SessionStart and UserPromptSubmit"
+    echo "         Remove the caveman SessionStart, SubagentStart and UserPromptSubmit"
     echo "         entries from $SETTINGS manually."
   else
     # Back up before editing, same policy as install.sh
@@ -73,7 +73,7 @@ if [ -f "$SETTINGS" ]; then
 
       let removed = 0;
       if (settings.hooks) {
-        for (const event of ['SessionStart', 'UserPromptSubmit']) {
+        for (const event of ['SessionStart', 'SubagentStart', 'UserPromptSubmit']) {
           if (Array.isArray(settings.hooks[event])) {
             const before = settings.hooks[event].length;
             settings.hooks[event] = settings.hooks[event].filter(e => !isCavemanEntry(e));
