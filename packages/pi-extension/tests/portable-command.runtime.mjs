@@ -36,10 +36,15 @@ test("win32: a bare name resolves through PATHEXT, not to the Unix shim beside i
     // Exactly the npm/pnpm .bin layout: an extensionless Unix shim next to the
     // real .CMD. Picking the bare name is what produced spawn EFTYPE.
     writeFileSync(join(bin, "caveman"), "#!/bin/sh\nexec node caveman.js\n");
+    // Named .CMD, not .cmd: PATHEXT entries are uppercase and that is exactly
+    // what resolveWindowsCommand probes for. Windows and macOS are
+    // case-insensitive so either spelling passes there, but on a case-sensitive
+    // filesystem (the Linux runner) a lowercase fixture is simply never found —
+    // the test would silently stop exercising the .cmd branch.
     // Verbatim npm cmd-shim shape — the `node.exe` token and the `%~dp0`
     // relative target are both load-bearing for the shim parser.
     writeFileSync(
-      join(bin, "caveman.cmd"),
+      join(bin, "caveman.CMD"),
       '@IF EXIST "%~dp0\\node.exe" (\r\n'
       + '  "%~dp0\\node.exe"  "%~dp0\\cli\\dist\\index.js" %*\r\n'
       + ') ELSE (\r\n'
@@ -64,13 +69,13 @@ test("win32: a bare name resolves through PATHEXT, not to the Unix shim beside i
 test("win32: a real .exe is invoked directly", () => {
   const { root, bin } = fixture();
   try {
-    writeFileSync(join(bin, "caveman.exe"), "MZ");
+    writeFileSync(join(bin, "caveman.EXE"), "MZ");
     const r = portableInvocation("caveman", ["native-hook", "pi", "Stop"], "win32", {
       PATH: bin,
       PATHEXT: ".COM;.EXE;.BAT;.CMD",
     });
-    // PATHEXT entries are uppercase, so the probe finds "caveman.EXE".
-    assert.equal(r.command.toLowerCase(), join(bin, "caveman.exe").toLowerCase());
+    // Exact, not case-folded: the fixture is named for what PATHEXT probes.
+    assert.equal(r.command, join(bin, "caveman.EXE"));
     assert.deepEqual(r.args, ["native-hook", "pi", "Stop"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -80,7 +85,7 @@ test("win32: a real .exe is invoked directly", () => {
 test("win32: a shim whose target cannot be parsed throws rather than spawning garbage", () => {
   const { root, bin } = fixture();
   try {
-    writeFileSync(join(bin, "caveman.cmd"), "@echo off\r\necho not a node shim\r\n");
+    writeFileSync(join(bin, "caveman.CMD"), "@echo off\r\necho not a node shim\r\n");
     assert.throws(
       () => portableInvocation("caveman", [], "win32", { PATH: bin, PATHEXT: ".CMD" }),
       /non-Node Windows command shim/,
