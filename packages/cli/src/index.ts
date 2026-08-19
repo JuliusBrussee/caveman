@@ -326,6 +326,9 @@ const LEGACY_HANDLERS: Record<string, CommandHandler> = {
   // humans should not need to.
   "native-hook": (argv) => nativeHook(argv),
   setup: (argv) => setup(argv),
+  // Unprinted (porcelain caps): sync Go binaries to this CLI's pin, then check
+  // npm for a newer CLI — the one verb that answers "am I current?".
+  update: (argv) => update(argv),
   opportunities: (argv) => argv[0] === "list" ? get("/api/v1/opportunities").then(print) : commandUsage("opportunities list"),
   snippets,
   dev: (argv) => {
@@ -484,7 +487,7 @@ const TELEMETRY_COMMAND_ALLOWLIST = [
   "agent", "audit", "billing", "browse", "compress", "convert", "costs", "deploy", "dev", "doctor", "evals", "experiments",
   "explore", "help", "hooks", "init", "keys", "learn", "login", "logout", "mcp", "mem", "opportunities", "plan",
   "projects", "providers", "receipts", "retrieve", "score", "sdk", "setup", "shrink", "shrink-hook", "skills",
-  "run", "snippets", "start", "stats", "status", "sync", "telemetry", "toon", "traces", "trial", "unknown", "usage", "verify", "version", "welcome", "whoami", "wrap",
+  "run", "snippets", "start", "stats", "status", "sync", "telemetry", "toon", "traces", "trial", "unknown", "update", "usage", "verify", "version", "welcome", "whoami", "wrap",
 ] as const;
 const TELEMETRY_COMMANDS = new Set<string>(TELEMETRY_COMMAND_ALLOWLIST);
 const TELEMETRY_SUBCOMMANDS = new Set([
@@ -515,7 +518,7 @@ type TelemetryState = "on" | "off";
 type TelemetrySource = "env" | "config" | "runtime" | "default";
 type TelemetryRuntimeState = { state: TelemetryState; source: TelemetrySource; config: TelemetryConfig | undefined };
 type TelemetryExitClass = "ok" | "error";
-type TelemetryErrorClass = "network" | "auth" | "usage" | "unknown_command" | "other";
+type TelemetryErrorClass = "network" | "auth" | "usage" | "unknown_command" | "exec_failed" | "other";
 
 function telemetryState(): TelemetryRuntimeState {
   const dnt = process.env.DO_NOT_TRACK;
@@ -1006,6 +1009,10 @@ function emitTelemetryEvents(events: Record<string, unknown>[]): Promise<void> {
 function classifyTelemetryError(error: unknown): TelemetryErrorClass {
   const message = error instanceof Error ? error.message : "";
   if (telemetryCommandName() === "unknown" || message.startsWith("unknown command:")) return "unknown_command";
+  // Spawn failures and Windows shim rejections (portable-command.ts) — keep
+  // these out of "other" so agent-launch breakage is visible in telemetry. The
+  // bare "spawn E…" form covers sync spawn throws that skip the exec wrappers.
+  if (/^failed to exec |^spawn |windows command shim/i.test(message)) return "exec_failed";
   if (/not logged in|unauthorized|forbidden|auth/i.test(message)) return "auth";
   if (/fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|network/i.test(message)) return "network";
   if (/^usage:/i.test(message) || /invalid|unknown .*flag/i.test(message)) return "usage";
@@ -2453,6 +2460,54 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
   await writeFile(binaryInstallManifestPath(), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   await chmod(binaryInstallManifestPath(), 0o600);
   printInstallResult(installed, platform, binDir, json, options.continuing);
+}
+
+// ── caveman update ───────────────────────────────────────────────────────────
+// Syncs the Go binaries in ~/.caveman/bin to the release this CLI pins
+// (setupInstall is idempotent: stale manifest or checksum mismatch
+// re-downloads, current binaries print "already installed"), then checks npm
+// for a newer CLI. A newer CLI pins a newer binary release, so an outdated or
+// unverifiable CLI means the update is not proven complete — exit non-zero.
+function cliVersionBehind(current: string, latest: string): boolean {
+  const have = current.split(".").map((part) => parseInt(part, 10) || 0);
+  const want = latest.split(".").map((part) => parseInt(part, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((want[i] ?? 0) !== (have[i] ?? 0)) return (want[i] ?? 0) > (have[i] ?? 0);
+  }
+  return false;
+}
+
+async function latestPublishedCliVersion(timeoutSeconds: number): Promise<string | null> {
+  const registry = (process.env.CAVEMAN_NPM_REGISTRY ?? "https://registry.npmjs.org").replace(/\/+$/, "");
+  try {
+    const response = await fetch(`${registry}/@caveman-ai%2fcli`, {
+      headers: { accept: "application/vnd.npm.install-v1+json" },
+      signal: AbortSignal.timeout(timeoutSeconds * 1000),
+    });
+    if (!response.ok) return null;
+    const parsed = (await response.json()) as { "dist-tags"?: { latest?: unknown } };
+    const latest = parsed?.["dist-tags"]?.latest;
+    return typeof latest === "string" && latest ? latest : null;
+  } catch {
+    return null;
+  }
+}
+
+async function update(argv: string[] = []) {
+  if (argv.length > 0) commandUsage("update");
+  await setupInstall(false, { continuing: true });
+  const current = cliVersion();
+  const latest = await latestPublishedCliVersion(setupTimeoutSeconds());
+  if (!latest) {
+    console.error(`${mark("warn")} binaries synced to ${BINARY_RELEASE}, but npm was unreachable — cannot confirm CLI ${current} is the latest`);
+    process.exit(1);
+  }
+  if (cliVersionBehind(current, latest)) {
+    console.error(`${mark("warn")} binaries synced for CLI ${current}, but ${latest} is out — update the CLI, then run this again:`);
+    console.error(`  ${cyan("npm install -g @caveman-ai/cli@latest")}`);
+    process.exit(1);
+  }
+  console.log(`${mark("ok")} up to date — CLI ${current}, binaries ${BINARY_RELEASE}`);
 }
 
 type AgentNativeBundleSkill = {
@@ -4948,7 +5003,14 @@ async function agentShortcut(rest: string[]) {
   const stopProxyKeepalive = startProxyKeepalive();
   const code = await new Promise<number>((resolve, reject) => {
     const invocation = portableInvocation(bin, [...agent.args, ...rest.slice(1)]);
-    const child = spawn(invocation.command, invocation.args, { stdio: "inherit" });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(invocation.command, invocation.args, { stdio: "inherit" });
+    } catch (error) {
+      // macOS reports some exec failures (e.g. ENOEXEC) synchronously — wrap
+      // them like the async 'error' path so the message names the binary.
+      throw new Error(`failed to exec ${bin}: ${(error as Error).message}`);
+    }
     // tty-generated signals (Ctrl+C / Ctrl+\) already reach the child through
     // the shared foreground group — forwarding would double-deliver them. But
     // process-directed SIGTERM/SIGHUP (timeout(1), supervisors, pkill) only hit
@@ -5337,7 +5399,14 @@ async function spawnWrapped(
   try {
     code = await new Promise<number>((resolve, reject) => {
       const invocation = portableInvocation(bin, childArgs);
-      const child = spawn(invocation.command, invocation.args, { stdio: "inherit", env });
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(invocation.command, invocation.args, { stdio: "inherit", env });
+      } catch (error) {
+        // macOS reports some exec failures (e.g. ENOEXEC) synchronously — wrap
+        // them like the async 'error' path so the message names the binary.
+        throw new Error(`failed to exec ${bin}: ${(error as Error).message}`);
+      }
       const signalHandlers = new Map<NodeJS.Signals, () => void>();
       const removeSignalHandlers = () => {
         for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);

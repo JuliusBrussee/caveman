@@ -280,6 +280,47 @@ test("CAVEMAN_TELEMETRY=1 emits one allowlisted command_run event", async (t) =>
   stub.close();
 });
 
+// A resolved agent binary the OS refuses to launch (Windows POSIX-shim class,
+// ENOEXEC here) must be booked as exec_failed, not lost inside "other" — that
+// blindness is how the win32 launch bug hid in the dashboard.
+test("agent spawn failure books error_class exec_failed", async (t) => {
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const { env, home } = isolatedEnv({
+    CAVEMAN_TELEMETRY: "1",
+    CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
+    CAVE_GATEWAY_URL: "http://127.0.0.1:9",
+  });
+  const binDir = mkdtempSync(join(tmpdir(), "cave-noexec-bin-"));
+  // darwin: shebang-less garbage makes spawn throw ENOEXEC *synchronously* —
+  // the exact path this guards. Linux execvp instead re-runs such a file under
+  // /bin/sh (no spawn error at all), so there a nonexistent shebang interpreter
+  // forces the async ENOENT 'error' event through the same wrapped message.
+  const unlaunchable = process.platform === "darwin"
+    ? "\x00\x01 not launchable\n"
+    : "#!/caveman-no-such-interpreter\n";
+  writeFileSync(join(binDir, "codex"), unlaunchable, { mode: 0o755 });
+  env.PATH = `${binDir}:${env.PATH}`;
+  mkdirSync(join(home, ".caveman-cloud"), { recursive: true });
+  writeFileSync(
+    join(home, ".caveman-cloud", "config.json"),
+    JSON.stringify({ wrap: { proxy: false, shrink: false, mcp: false } }),
+  );
+
+  const out = await runCli(["wrap", "codex"], env, { timeoutMs: 30000 });
+  assert.notEqual(out.code, 0, "wrap must exit non-zero when the agent cannot launch");
+  assert.match(out.stderr, /failed to exec .*codex/);
+  const events = stub.posts.flatMap((post) => JSON.parse(post.body));
+  const run = events.find((event) => event.event === "command_run");
+  assert.ok(run, `no command_run event posted; events: ${JSON.stringify(events)}`);
+  assert.equal(run.command, "wrap");
+  assert.equal(run.exit_class, "error");
+  assert.equal(run.error_class, "exec_failed");
+
+  stub.close();
+});
+
 test("telemetry POST timeout does not hold the CLI past roughly two seconds", async (t) => {
   const stub = startTelemetryStub({ hang: true });
   const port = await listenOrSkip(t, stub);

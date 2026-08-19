@@ -15,6 +15,34 @@ test("parses npm and pnpm Node command shims", () => {
     parseWindowsNodeShim('node "%~dp0\\..\\pkg\\cli.mjs" %*'),
     "..\\pkg\\cli.mjs",
   );
+  // Exact npm cmd-shim@7 payload line (PATHEXT strip + two quoted segments).
+  assert.equal(
+    parseWindowsNodeShim(
+      'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & "%_prog%"  "%dp0%\\..\\pkg\\cli.js" %*\r\n',
+    ),
+    "..\\pkg\\cli.js",
+  );
+  // pnpm / yarn-classic (@zkochan/cmd-shim) IF EXIST form — the node.exe quoted
+  // prefix must not shadow the .js target.
+  assert.equal(
+    parseWindowsNodeShim(
+      '@SETLOCAL\r\n@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"   "%~dp0\\..\\pkg\\cli.js" %*\r\n) ELSE (\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node   "%~dp0\\..\\pkg\\cli.js" %*\r\n)\r\n',
+    ),
+    "..\\pkg\\cli.js",
+  );
+  // pnpm cross-drive: bin dir and store on different drives makes the target
+  // absolute instead of %~dp0-relative.
+  assert.equal(
+    parseWindowsNodeShim(
+      '@SETLOCAL\r\n@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"   "D:\\pnpm-store\\pkg\\cli.js" %*\r\n) ELSE (\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node   "D:\\pnpm-store\\pkg\\cli.js" %*\r\n)\r\n',
+    ),
+    "D:\\pnpm-store\\pkg\\cli.js",
+  );
+  // pnpm pinned-node variant: absolute node interpreter, %~dp0-relative target.
+  assert.equal(
+    parseWindowsNodeShim('@SETLOCAL\r\n@"C:\\Program Files\\nodejs\\node.exe"  "%~dp0\\..\\pkg\\cli.js" %*\r\n'),
+    "..\\pkg\\cli.js",
+  );
 });
 
 test("Windows Node shim launches target with Node and preserves argument bytes", () => {

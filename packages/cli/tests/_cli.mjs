@@ -11,14 +11,28 @@ export function isolatedCliEnv(extra = {}) {
   const home = mkdtempSync(join(tmpdir(), "caveman-cli-"));
   const bin = join(home, "bin");
   mkdirSync(bin, { recursive: true });
-  const noop = join(bin, "noop");
-  writeFileSync(noop, `#!/bin/sh
+  // Windows resolves executables through PATHEXT and has no shebang support, so
+  // an extensionless /bin/sh stub is not spawnable there at all — the same fact
+  // as #834. Ship the stub as a .cmd so the product resolves it the way it
+  // resolves a real Windows binary.
+  const isWindows = process.platform === "win32";
+  const noop = join(bin, isWindows ? "noop.cmd" : "noop");
+  if (isWindows) {
+    writeFileSync(noop, [
+      "@echo off",
+      'if "%~1"=="version" if "%~2"=="--json" echo {"version":"test","capabilities":["run_state","mcp_recovery"]}',
+      "exit /b 0",
+      "",
+    ].join("\r\n"));
+  } else {
+    writeFileSync(noop, `#!/bin/sh
 if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
   printf '%s\\n' '{"version":"test","capabilities":["run_state","mcp_recovery"]}'
 fi
 exit 0
 `, { mode: 0o755 });
-  chmodSync(noop, 0o755);
+    chmodSync(noop, 0o755);
+  }
   return {
     home,
     env: {
