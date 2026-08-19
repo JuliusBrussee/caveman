@@ -44,3 +44,29 @@ jobs:
           node-version: 20
       - name: Python test suite
         run: python -m unittest discover -s tests -v
+
+  # macOS is the primary development platform and had no runner at all: every
+  # `runs-on:` in this repo was ubuntu-latest plus one windows-latest, so "CI
+  # passes" proved nothing about the platform most of this code is written on.
+  # bash 3.2, BSD sed/find/readlink, and the POSIX install path all live here.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - name: Bash version (macOS ships 3.2 — no bash 4+ syntax may creep in)
+        run: bash --version
+      - name: Installer test suite
+        run: npm test
+      - name: Standalone hook/tool tests
+        run: node --test --test-force-exit tests/*.js
+      - name: Python test suite
+        run: python -m unittest discover -s tests
+      - name: Repo verification
+        run: python tests/verify_repo.py

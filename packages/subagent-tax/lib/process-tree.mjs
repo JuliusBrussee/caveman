@@ -29,7 +29,11 @@ export function resolveWindowsCommand(command, env = process.env) {
 export function parseWindowsNodeShim(source) {
   for (const line of source.split(/\r?\n/)) {
     if (!/(?:\bnode(?:\.exe)?\b|_prog)/i.test(line) || !/%\*/.test(line)) continue;
-    const match = line.match(/"%(?:dp0%|~dp0)\\([^"\r\n]+\.(?:cjs|mjs|js))"\s+%\*/i);
+    // Shim-relative target (npm cmd-shim, pnpm/yarn-classic @zkochan forms), or
+    // a drive-absolute target (pnpm emits one when the global bin dir and the
+    // store sit on different drives — path.relative crosses drives as absolute).
+    const match = line.match(/"%(?:dp0%|~dp0)\\([^"\r\n]+\.(?:cjs|mjs|js))"\s+%\*/i)
+      || line.match(/"([A-Za-z]:[\\/][^"\r\n]+\.(?:cjs|mjs|js))"\s+%\*/i);
     if (match) return match[1];
   }
   return null;
@@ -52,7 +56,9 @@ export function portableProcessInvocation(
   if (!relativeScript) {
     throw new Error(`cannot safely launch non-Node Windows command shim: ${executable}`);
   }
-  const script = resolve(dirname(executable), ...relativeScript.split(/[\\/]+/));
+  const script = /^[A-Za-z]:[\\/]/.test(relativeScript)
+    ? relativeScript
+    : resolve(dirname(executable), ...relativeScript.split(/[\\/]+/));
   if (!statSync(script).isFile()) throw new Error(`Windows command shim target is missing: ${script}`);
   return { command: execPath, args: [script, ...args] };
 }

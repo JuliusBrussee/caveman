@@ -1027,7 +1027,7 @@ async function installHooks(ctx) {
   const psHost = IS_WIN && hasCmd('pwsh') ? 'pwsh' : (IS_WIN ? 'powershell' : null);
   const slCmd = IS_WIN
     ? PLATFORM_PATHS.hookCommand(psHost, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(hooksDir, 'caveman-statusline.ps1')])
-    : `bash "${statusline}"`;
+    : PLATFORM_PATHS.hookCommand('bash', [statusline]);
   if (!settings.statusLine) {
     settings.statusLine = { type: 'command', command: slCmd };
     process.stdout.write('  statusline badge configured.\n');

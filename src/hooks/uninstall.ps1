@@ -108,7 +108,18 @@ fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
 console.log('  Removed ' + removed + ' caveman hook entries from settings.json');
 '@
 
-        node -e $nodeScript
+        # Write the script to a temp file rather than passing it to `node -e`.
+        # PowerShell's native-argument quoting mangles embedded double quotes,
+        # so `node -e "<script>"` truncated at the first one under cmd quoting
+        # (#249); install.ps1 was fixed to this shape in #250 and the
+        # uninstaller must not drift back.
+        $tmpScript = Join-Path $env:TEMP "caveman-uninstall-$([System.Diagnostics.Process]::GetCurrentProcess().Id).js"
+        try {
+            [System.IO.File]::WriteAllText($tmpScript, $nodeScript, [System.Text.Encoding]::UTF8)
+            node $tmpScript
+        } finally {
+            if (Test-Path $tmpScript) { Remove-Item $tmpScript -Force }
+        }
 
         # Clean up backup file left by installer
         if (Test-Path "$Settings.bak") {

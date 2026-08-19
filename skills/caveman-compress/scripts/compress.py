@@ -121,7 +121,7 @@ def strip_llm_wrapper(text: str) -> str:
     return text
 
 
-def write_text_atomic(path: Path, text: str) -> None:
+def write_text_atomic(path: Path, text: str, newline: str = "\n") -> None:
     """Write ``text`` to ``path`` atomically as UTF-8.
 
     Path.write_text() truncates the destination before encoding the string —
@@ -130,7 +130,15 @@ def write_text_atomic(path: Path, text: str) -> None:
     first, write the bytes to a sibling temp file, fsync, then os.replace()
     so the destination only ever moves from one complete, valid file to
     another. Preserves the original file's permission bits across the swap.
+
+    ``newline`` is the line terminator to emit. Callers pass the terminator
+    read_source() found in the source file so a CRLF document stays CRLF —
+    text-mode writes translating LF to the platform default rewrote every
+    line ending in every file the tool touched (issue #762), and reading the
+    bytes ourselves means nothing translates them back.
     """
+    if newline != "\n":
+        text = text.replace("\n", newline)
     data = text.encode("utf-8")
     fd, tmp_name = tempfile.mkstemp(
         dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
@@ -152,6 +160,36 @@ def write_text_atomic(path: Path, text: str) -> None:
         raise
 
 
+def read_source(filepath: Path) -> tuple[str, str]:
+    """Read a source file as UTF-8, returning (text, line_terminator).
+
+    Decodes strictly. The old errors="ignore" silently DROPPED every byte that
+    was not valid UTF-8 — a cp1252-authored file holding `\xe9` for "e-acute"
+    lost that byte, the mangled text was what got written to the backup, the
+    backup readback compared mangled-to-mangled so verification passed, and
+    then the original was overwritten. The bytes were unrecoverable and
+    nothing reported a problem (the destructive form of issue #686). A file we
+    cannot read exactly is a file we must not rewrite.
+
+    Line endings are detected from the raw bytes and returned to the caller
+    rather than being universal-newline'd away, so write_text_atomic can put
+    back what was there (issue #762).
+    """
+    raw = filepath.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ValueError(
+            f"Refusing to compress {filepath}: not valid UTF-8 "
+            f"(byte 0x{raw[e.start]:02x} at offset {e.start}). "
+            "Compression rewrites the file in place, and any byte this tool "
+            "cannot decode would be destroyed by the round trip. "
+            "Convert the file to UTF-8 first."
+        ) from None
+    newline = "\r\n" if "\r\n" in text else "\n"
+    return text.replace("\r\n", "\n").replace("\r", "\n"), newline
+
+
 def first_nonblank_line(text: str) -> str:
     """Return the first non-blank line, stripped — used to detect a prose
     preamble smuggled in ahead of the real content (issue #588)."""
@@ -161,13 +199,13 @@ def first_nonblank_line(text: str) -> str:
     return ""
 
 
-def _write_target(filepath: Path, text: str, backup_path: Path) -> None:
+def _write_target(filepath: Path, text: str, backup_path: Path, newline: str = "\n") -> None:
     """Write to the target file, surfacing the backup location if the write
     itself fails. write_text_atomic already leaves the target untouched on
     failure, but the caller still needs to know where the pre-compression
     original lives instead of being left to guess (issue #652)."""
     try:
-        write_text_atomic(filepath, text)
+        write_text_atomic(filepath, text, newline)
     except Exception:
         print(f"❌ Write to {filepath} failed. Original preserved at backup: {backup_path}")
         raise
@@ -309,7 +347,7 @@ def compress_file(filepath: Path) -> bool:
         print("Skipping (not natural language)")
         return False
 
-    original_text = filepath.read_text(encoding="utf-8", errors="ignore")
+    original_text, newline = read_source(filepath)
     # Store backup outside the source directory so skill auto-loaders don't
     # re-ingest the `.original.md` copy as a live file. Mirror the source's
     # parent-dir name + stem under a platform-aware base to reduce collisions.
@@ -363,9 +401,9 @@ def compress_file(filepath: Path) -> bool:
     # antivirus, disk full), unlink the bad backup and abort instead of
     # leaving the user with a corrupt backup + compressed primary.
     backup_dir.mkdir(parents=True, exist_ok=True)
-    write_text_atomic(backup_path, original_text)
-    backup_readback = backup_path.read_text(encoding="utf-8", errors="ignore")
-    if backup_readback != original_text:
+    write_text_atomic(backup_path, original_text, newline)
+    backup_readback, backup_newline = read_source(backup_path)
+    if backup_readback != original_text or backup_newline != newline:
         print(f"❌ Backup write verification failed: {backup_path}")
         print("   In-memory original differs from on-disk backup. Aborting before touching the input file.")
         try:
@@ -373,7 +411,7 @@ def compress_file(filepath: Path) -> bool:
         except OSError:
             pass
         return False
-    _write_target(filepath, compressed, backup_path)
+    _write_target(filepath, compressed, backup_path, newline)
 
     # Step 2: Validate + Retry
     for attempt in range(MAX_RETRIES):
@@ -391,7 +429,7 @@ def compress_file(filepath: Path) -> bool:
 
         if attempt == MAX_RETRIES - 1:
             # Restore original on failure
-            _write_target(filepath, original_text, backup_path)
+            _write_target(filepath, original_text, backup_path, newline)
             backup_path.unlink(missing_ok=True)
             print("❌ Failed after retries — original restored")
             return False
@@ -417,6 +455,6 @@ def compress_file(filepath: Path) -> bool:
             print("   Possible preamble leak. Skipping this attempt.")
             continue
 
-        _write_target(filepath, compressed, backup_path)
+        _write_target(filepath, compressed, backup_path, newline)
 
     return True

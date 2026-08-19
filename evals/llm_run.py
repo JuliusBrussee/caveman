@@ -30,7 +30,19 @@ import datetime as dt
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+# Windows consoles and piped stdout default to the ANSI code page (cp1252),
+# which cannot encode the arrows, em-dashes and minus signs printed below —
+# a diagnostic that crashes instead of printing is worse than useless
+# (#203/#459). Replace unencodable characters rather than raising.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 
 EVALS = Path(__file__).parent
 SKILLS = EVALS.parent / "skills"
@@ -62,7 +74,7 @@ def claude_version() -> str:
 
 
 def main() -> None:
-    prompts = [p.strip() for p in PROMPTS.read_text().splitlines() if p.strip()]
+    prompts = [p.strip() for p in PROMPTS.read_text(encoding="utf-8").splitlines() if p.strip()]
     skills = sorted(p.name for p in SKILLS.iterdir() if (p / "SKILL.md").exists())
 
     print(
@@ -91,13 +103,13 @@ def main() -> None:
     ]
 
     for skill in skills:
-        skill_md = (SKILLS / skill / "SKILL.md").read_text()
+        skill_md = (SKILLS / skill / "SKILL.md").read_text(encoding="utf-8")
         system = f"{TERSE_PREFIX}\n\n{skill_md}"
         print(f"  {skill}", flush=True)
         snapshot["arms"][skill] = [run_claude(p, system=system) for p in prompts]
 
     SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
-    SNAPSHOT.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2))
+    SNAPSHOT.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\nWrote {SNAPSHOT}")
 
 

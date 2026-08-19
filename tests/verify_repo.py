@@ -13,6 +13,15 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+# Windows consoles and piped stdout default to the ANSI code page (cp1252),
+# which cannot encode the arrows, em-dashes and minus signs printed below —
+# a diagnostic that crashes instead of printing is worse than useless
+# (#203/#459). Replace unencodable characters rather than raising.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -159,8 +168,9 @@ def verify_synced_files() -> None:
 def verify_manifests_and_syntax() -> None:
     section("Manifests And Syntax")
 
+    claude_manifest_path = ROOT / ".claude-plugin/plugin.json"
     manifest_paths = [
-        ROOT / ".claude-plugin/plugin.json",
+        claude_manifest_path,
         ROOT / ".claude-plugin/marketplace.json",
         ROOT / ".codex/hooks.json",
         ROOT / "gemini-extension.json",
@@ -168,6 +178,24 @@ def verify_manifests_and_syntax() -> None:
     ]
     for path in manifest_paths:
         read_json(path)
+
+    claude_manifest = read_json(claude_manifest_path)
+    ensure(isinstance(claude_manifest, dict), "Claude plugin manifest must be an object")
+    expected_agent_paths = [
+        "./agents/cavecrew-builder.md",
+        "./agents/cavecrew-investigator.md",
+        "./agents/cavecrew-reviewer.md",
+    ]
+    agent_paths = claude_manifest.get("agents")
+    ensure(
+        agent_paths == expected_agent_paths,
+        f"Claude plugin agent paths must be explicit and ./-prefixed: {agent_paths}",
+    )
+    for agent_path in expected_agent_paths:
+        ensure(
+            (ROOT / agent_path).is_file(),
+            f"Claude plugin agent path missing: {agent_path}",
+        )
 
     hook_dir = ROOT / "src/hooks"
     expected_hooks = {
