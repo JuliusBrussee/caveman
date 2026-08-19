@@ -171,12 +171,18 @@ try {
 // was not, and SessionStart is the one that actually has work to do.
 //
 // A watchdog covers the case where the payload never completes at all: activate
-// with `startup` defaults well inside the budget instead of forfeiting the
-// session. That is strictly better than the old behavior, which forfeited it.
-const PAYLOAD_WATCHDOG_MS = 1500;
+// well inside the budget instead of forfeiting the session. It must NOT assume
+// `startup` — that is the one source that resets the mode, so a slow payload on
+// a `compact`/`resume` event would silently drop a user's mid-session `ultra`
+// back to the default (#691 through the timeout door). An unknown source
+// preserves a valid existing flag. The deadline sits well below the host's 5s
+// budget but far enough above a cold Windows/AV start to be reached rarely.
+const PAYLOAD_WATCHDOG_MS = 3000;
 
-function activate(payload) {
-  let source = 'startup';
+function activate(payload, timedOut) {
+  // Unknown, not startup: we never saw the payload, so we cannot claim to know
+  // what kind of session event this was.
+  let source = timedOut ? 'unknown' : 'startup';
   // The session's cwd, which is not necessarily this hook process's cwd. The
   // repo-local config walk must start there or a checked-in .caveman.json
   // (including `defaultMode: "off"`, a project opting out) is missed — the same
@@ -198,7 +204,7 @@ if (process.stdin.isTTY) {
 } else {
   let input = '';
   let done = false;
-  const finish = () => {
+  const finish = (timedOut) => {
     if (done) return;
     done = true;
     clearTimeout(watchdog);
@@ -210,9 +216,9 @@ if (process.stdin.isTTY) {
     // exit as soon as stdout has flushed.
     try { process.stdin.pause(); } catch (e) {}
     try { process.stdin.unref(); } catch (e) {}
-    activate(input);
+    activate(input, timedOut === true);
   };
-  const watchdog = setTimeout(finish, PAYLOAD_WATCHDOG_MS);
+  const watchdog = setTimeout(() => finish(true), PAYLOAD_WATCHDOG_MS);
   // StringDecoder semantics: a multi-byte character split across two chunks is
   // held until complete, rather than each half becoming a replacement char.
   process.stdin.setEncoding('utf8');
@@ -225,8 +231,8 @@ if (process.stdin.isTTY) {
   // Abnormal close (broken pipe, parent crash) emits 'error'; without a
   // listener Node throws it as an uncaught exception and the hook exits
   // non-zero — a spurious hook failure (#538). Hooks must always exit 0.
-  process.stdin.on('error', finish);
-  process.stdin.on('end', finish);
+  process.stdin.on('error', () => finish());
+  process.stdin.on('end', () => finish());
 }
 
 function run(source, sessionCwd) {
