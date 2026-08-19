@@ -20,8 +20,20 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node-version }}
+      # package.json's "test" passes --test-force-exit, which needs Node >=20.14.
+      # Node 18 is still a supported RUNTIME (engines ">=18"; bin/install.js
+      # refuses to run below 18), so it stays in the matrix and runs the suite
+      # without the flag rather than being dropped — testing a version we claim
+      # to support matters more than uniform invocation. Verified flagless on
+      # 18.20.8: 172/172, no hang. The job timeout is the backstop the flag
+      # would otherwise provide.
       - name: Installer test suite
-        run: npm test
+        run: |
+          if node -e 'process.exit(process.versions.node.split(".")[0] >= 20 ? 0 : 1)'; then
+            npm test
+          else
+            node --test tests/installer/*.test.mjs
+          fi
       - name: Standalone hook/tool tests
         run: |
           for f in tests/test_*.js; do
