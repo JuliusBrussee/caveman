@@ -161,21 +161,76 @@ try {
 // switched to mid-session (#691): branch on the hook payload's `source` field —
 // only a real `startup` resets to the configured default; resume/clear/compact
 // preserve a valid existing flag.
-// Sync stdin read assumes the parent (Claude Code) writes the payload and
-// closes the pipe — it always does. A parent that held the pipe open forever
-// would block here; no such caller exists, and a TTY (manual run) skips it.
-let source = 'startup';
-try {
-  if (!process.stdin.isTTY) {
-    const raw = fs.readFileSync(0, 'utf8');
-    if (raw) {
-      const data = JSON.parse(raw);
-      if (data && typeof data.source === 'string') source = data.source;
-    }
-  }
-} catch (e) { /* no/bad stdin → treat as startup */ }
+// Payload arrival is EVENT-DRIVEN, and activation runs on the first COMPLETE
+// JSON object rather than at EOF. The host writes one object and closes, but
+// under the Windows pipe implementation that close can lag arbitrarily
+// (#729/#833). A synchronous `readFileSync(0)` blocks inside the read syscall
+// until EOF — no deadline can interrupt it — so a lagging close spent this
+// hook's entire 5s budget and the host killed it before the flag was written or
+// the ruleset emitted. caveman-mode-tracker.js was fixed this way; its sibling
+// was not, and SessionStart is the one that actually has work to do.
+//
+// A watchdog covers the case where the payload never completes at all: activate
+// with `startup` defaults well inside the budget instead of forfeiting the
+// session. That is strictly better than the old behavior, which forfeited it.
+const PAYLOAD_WATCHDOG_MS = 1500;
 
-let mode = getDefaultMode();
+function activate(payload) {
+  let source = 'startup';
+  // The session's cwd, which is not necessarily this hook process's cwd. The
+  // repo-local config walk must start there or a checked-in .caveman.json
+  // (including `defaultMode: "off"`, a project opting out) is missed — the same
+  // #634 bug already fixed in caveman-mode-tracker.js.
+  let sessionCwd;
+  try {
+    if (payload) {
+      const data = JSON.parse(payload);
+      if (data && typeof data.source === 'string') source = data.source;
+      if (data && typeof data.cwd === 'string') sessionCwd = data.cwd;
+    }
+  } catch (e) { /* no/bad stdin → treat as startup */ }
+  run(source, sessionCwd);
+}
+
+if (process.stdin.isTTY) {
+  // Manual run — no payload is coming.
+  activate('');
+} else {
+  let input = '';
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(watchdog);
+    // Attaching a 'data' listener puts the stdin handle into flowing mode and
+    // REFERENCES it, so pause() alone leaves the event loop alive and the
+    // process never exits while the host holds the write end open — which is
+    // exactly the lagging-close case this rewrite exists to survive. unref()
+    // drops the handle from the loop's ref count without closing the fd, so we
+    // exit as soon as stdout has flushed.
+    try { process.stdin.pause(); } catch (e) {}
+    try { process.stdin.unref(); } catch (e) {}
+    activate(input);
+  };
+  const watchdog = setTimeout(finish, PAYLOAD_WATCHDOG_MS);
+  // StringDecoder semantics: a multi-byte character split across two chunks is
+  // held until complete, rather than each half becoming a replacement char.
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    input += chunk;
+    // A partial payload throws here and we simply wait for more bytes.
+    try { JSON.parse(input); } catch (e) { return; }
+    finish();
+  });
+  // Abnormal close (broken pipe, parent crash) emits 'error'; without a
+  // listener Node throws it as an uncaught exception and the hook exits
+  // non-zero — a spurious hook failure (#538). Hooks must always exit 0.
+  process.stdin.on('error', finish);
+  process.stdin.on('end', finish);
+}
+
+function run(source, sessionCwd) {
+let mode = getDefaultMode(sessionCwd);
 if (source !== 'startup') {
   const existing = readFlag(flagPath);
   if (existing && VALID_MODES.includes(existing)) mode = existing;
@@ -303,9 +358,15 @@ const nudgeMarkerPath = path.join(claudeDir, '.caveman-nudge-shown');
 try {
   let hasStatusline = false;
   if (fs.existsSync(settingsPath)) {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    if (settings.statusLine) {
-      hasStatusline = true;
+    const rawSettings = fs.readFileSync(settingsPath, 'utf8');
+    try {
+      hasStatusline = !!JSON.parse(rawSettings).statusLine;
+    } catch (e) {
+      // JSONC (comments / trailing commas) is legal in settings.json and the
+      // hooks dir has no JSONC parser. Fall back to a substring probe and err
+      // toward NOT nudging: a spurious "set up your statusline" for a user who
+      // already has one is worse than a missing nudge.
+      hasStatusline = rawSettings.includes('"statusLine"');
     }
   }
 
@@ -331,3 +392,4 @@ try {
 }
 
 process.stdout.write(output);
+} // end run()

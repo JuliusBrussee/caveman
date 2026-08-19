@@ -63,30 +63,54 @@ if (Test-Path $Settings) {
         # Pass path via env var — avoids injection if username contains a single quote.
         # Use a single-quote here-string so PowerShell does NOT expand $variables inside.
         $env:CAVEMAN_SETTINGS = $Settings -replace '\\', '/'
-        $env:CAVEMAN_HOOKS_DIR = $HooksDir -replace '\\', '/'
 
         $nodeScript = @'
 const fs = require('fs');
+const path = require('path');
 const settingsPath = process.env.CAVEMAN_SETTINGS;
-const hooksDir = process.env.CAVEMAN_HOOKS_DIR;
-const managedStatusLinePath = hooksDir + '/caveman-statusline.ps1';
 const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
 
-const isCavemanEntry = (entry) =>
-  entry && entry.hooks && entry.hooks.some(h =>
-    h.command && h.command.includes('caveman')
-  );
+// Own ONLY handlers whose command targets one of our exact script basenames.
+// A bare 'caveman' substring also matches user-authored hooks that merely
+// mention the word in a path (#593). Mirrors referencesManagedScript() in
+// bin/lib/settings.js — keep the two in sync.
+const MANAGED = new Set([
+  'caveman-activate.js', 'caveman-mode-tracker.js', 'caveman-stats.js',
+  'caveman-statusline.sh', 'caveman-statusline.ps1',
+]);
+const tokenize = (command) => {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(command)) !== null) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+};
+// win32.basename splits on both / and \ so either slash form matches.
+const isManaged = (command) => {
+  if (typeof command !== 'string') return false;
+  try {
+    return tokenize(command).some(t => MANAGED.has(path.win32.basename(t)));
+  } catch (e) { return false; }
+};
 
 let removed = 0;
 if (settings.hooks) {
-  for (const event of ['SessionStart', 'UserPromptSubmit']) {
-    if (Array.isArray(settings.hooks[event])) {
-      const before = settings.hooks[event].length;
-      settings.hooks[event] = settings.hooks[event].filter(e => !isCavemanEntry(e));
-      removed += before - settings.hooks[event].length;
-      if (settings.hooks[event].length === 0) {
-        delete settings.hooks[event];
-      }
+  for (const event of Object.keys(settings.hooks)) {
+    if (!Array.isArray(settings.hooks[event])) continue;
+    let removedHere = 0;
+    // Filter the inner handler list, not the entry: a matcher group holding
+    // one of ours AND a foreign hook must keep the foreign one.
+    settings.hooks[event] = settings.hooks[event].filter(entry => {
+      if (!entry || !Array.isArray(entry.hooks)) return true;
+      const before = entry.hooks.length;
+      entry.hooks = entry.hooks.filter(h => !(h && isManaged(h.command)));
+      const n = before - entry.hooks.length;
+      removedHere += n;
+      return n === 0 || entry.hooks.length > 0;
+    });
+    removed += removedHere;
+    if (removedHere > 0 && settings.hooks[event].length === 0) {
+      delete settings.hooks[event];
     }
   }
   if (Object.keys(settings.hooks).length === 0) {
@@ -94,11 +118,14 @@ if (settings.hooks) {
   }
 }
 
+// Remove statusLine only when it points at our managed script. Matching by
+// basename also survives the slash-form mismatch between a Windows-written
+// settings.json and the forward-slashed env var.
 if (settings.statusLine) {
   const cmd = typeof settings.statusLine === 'string'
     ? settings.statusLine
     : (settings.statusLine.command || '');
-  if (cmd.includes(managedStatusLinePath)) {
+  if (isManaged(cmd)) {
     delete settings.statusLine;
     console.log('  Removed caveman statusLine from settings.json');
   }

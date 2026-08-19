@@ -815,7 +815,22 @@ function installOpencode(ctx) {
         && existing.includes(OPENCODE_AGENTS_MD_END);
       const alreadyByLegacySentinel = !alreadyFenced && existing.includes(OPENCODE_AGENTS_MD_SENTINEL);
       if (alreadyFenced) {
-        note(`  ${agentsMd} already contains caveman ruleset`);
+        // Refresh in place when the shipped ruleset has changed. The old
+        // presence-only check meant a ruleset edit never reached anyone who
+        // had already installed — the block went stale forever. Only the
+        // bytes between our own markers are touched; user content around
+        // them is preserved exactly.
+        const begin = existing.indexOf(OPENCODE_AGENTS_MD_BEGIN);
+        const end = existing.indexOf(OPENCODE_AGENTS_MD_END, begin);
+        const currentBlock = existing.slice(begin, end + OPENCODE_AGENTS_MD_END.length + 1);
+        if (currentBlock === fencedBlock) {
+          note(`  ${agentsMd} already contains the current caveman ruleset`);
+        } else {
+          const next = existing.slice(0, begin) + fencedBlock
+            + existing.slice(end + OPENCODE_AGENTS_MD_END.length).replace(/^\n/, '');
+          fs.writeFileSync(agentsMd, next, { mode: 0o644 });
+          process.stdout.write(`  refreshed caveman ruleset in ${agentsMd}\n`);
+        }
       } else if (alreadyByLegacySentinel) {
         if (!opts.force) {
           note(`  ${agentsMd} contains a legacy (un-fenced) caveman block — leaving as-is`);
@@ -859,7 +874,8 @@ function installOpencode(ctx) {
     }
 
     // 6. opencode.json — add plugin entry; optional caveman-shrink MCP.
-    let cfg = SETTINGS.readSettings(opencodeJson);
+    const ocMeta = {};
+    let cfg = SETTINGS.readSettings(opencodeJson, ocMeta);
     if (cfg === null) {
       warn(`  ${opencodeJson} unparseable; will not touch it. Edit manually then re-run.`);
       results.failed.push(['opencode', 'opencode.json unparseable']);
@@ -871,6 +887,11 @@ function installOpencode(ctx) {
     const opencodeBak = opencodeJson + '.bak';
     if (fs.existsSync(opencodeJson) && !fs.existsSync(opencodeBak)) {
       try { fs.copyFileSync(opencodeJson, opencodeBak); } catch (_) {}
+    }
+    // opencode.jsonc legitimately carries comments; we re-serialize plain JSON.
+    if (ocMeta.jsonc) {
+      warn(`  note: ${opencodeJson} contains comments — rewriting it drops them.`);
+      warn(`        Your original (with comments) is preserved at ${opencodeBak}`);
     }
     if (!Array.isArray(cfg.plugin)) cfg.plugin = [];
     if (!cfg.plugin.includes(OPENCODE_PLUGIN_REL)) {
@@ -985,7 +1006,8 @@ async function installHooks(ctx) {
   try { fs.chmodSync(path.join(hooksDir, 'caveman-statusline.sh'), 0o755); } catch (_) {}
 
   // Merge into settings.json
-  let settings = SETTINGS.readSettings(settingsPath);
+  const settingsMeta = {};
+  let settings = SETTINGS.readSettings(settingsPath, settingsMeta);
   if (settings === null) {
     warn('  settings.json unparseable; will not touch it. Edit manually then re-run.');
     return 'settings.json unparseable';
@@ -996,6 +1018,12 @@ async function installHooks(ctx) {
   const bak = settingsPath + '.bak';
   if (fs.existsSync(settingsPath) && !fs.existsSync(bak)) {
     try { fs.copyFileSync(settingsPath, bak); } catch (_) {}
+  }
+  // We re-serialize plain JSON, so // and /* */ comments do not survive. Say
+  // so rather than deleting a user's annotations silently.
+  if (settingsMeta.jsonc) {
+    warn(`  note: ${settingsPath} contains comments — rewriting it drops them.`);
+    warn(`        Your original (with comments) is preserved at ${bak}`);
   }
 
   const node = absoluteNodePath();

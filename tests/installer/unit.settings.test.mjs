@@ -234,7 +234,11 @@ test('rewriteLegacyManagedHookCommands rewrites bare-node managed scripts', () =
   assert.equal(s.hooks.SessionStart[0].hooks[1].command, 'node /abs/hooks/some-user-hook.js');
 });
 
-test('rewriteLegacyManagedHookCommands emits PowerShell invocation on Windows', () => {
+// #835: Git Bash is Claude Code's default hook shell on Windows, so the
+// rewrite must emit a bash-parseable command. The old PowerShell
+// call-operator shape (`& 'x' 'y'`) was a bash syntax error, meaning the
+// "migration" rewrote a working bare-node hook into a broken one.
+test('rewriteLegacyManagedHookCommands emits a bash-safe command on Windows', () => {
   const s = {
     hooks: {
       SessionStart: [{ hooks: [{ type: 'command', command: "node \"C:/Users/O'Brien/.claude/hooks/caveman-activate.js\"" }] }],
@@ -244,7 +248,7 @@ test('rewriteLegacyManagedHookCommands emits PowerShell invocation on Windows', 
   assert.equal(n, 1);
   assert.equal(
     s.hooks.SessionStart[0].hooks[0].command,
-    "& 'C:/Program Files/nodejs/node.exe' 'C:/Users/O''Brien/.claude/hooks/caveman-activate.js'",
+    '"C:/Program Files/nodejs/node.exe" "C:/Users/O\'Brien/.claude/hooks/caveman-activate.js"',
   );
 });
 

@@ -303,7 +303,15 @@ process.stdin.on('data', chunk => {
   // A partial payload throws here and we simply wait for more bytes.
   try { JSON.parse(input); } catch (e) { return; }
   handle(input);
+  // pause() stops the flow but the 'data' listener has REFERENCED the stdin
+  // handle, so the event loop stays alive until the host closes the write end.
+  // On Windows that close lags arbitrarily (#729/#833), so the hook sat idle
+  // with its work already done until the 5s budget expired and the host killed
+  // it — the shape of #819 (timeouts on turns that measure ~56ms of real work).
+  // unref() drops the handle from the loop without closing the fd, so we exit
+  // as soon as stdout has flushed.
   process.stdin.pause();
+  try { process.stdin.unref(); } catch (e) {}
 });
 // Abnormal stdin close (broken pipe, parent crash) emits 'error'; without a
 // listener Node throws it as an uncaught exception and the hook exits
