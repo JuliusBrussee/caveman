@@ -1,19 +1,23 @@
 // Regression for #470 + #571: /caveman-* reports 'Unknown command' in Claude Code.
 //
-// Claude Code resolves a slash command by scanning commands/*.md (YAML
-// frontmatter) BEFORE the UserPromptSubmit hook ever sees the prompt — it
-// ignores commands/*.toml entirely (#571; TOML is the Gemini extension
-// format). With no commands/<name>.md on disk, the chat input is rejected as
-// "Unknown command" — the mode tracker's handlers in
-// src/hooks/caveman-mode-tracker.js never get a chance to intercept.
-//
-// README.md and INSTALL.md advertise the /caveman-* slash commands, so every
-// documented command MUST ship BOTH formats:
-//   commands/<name>.md    — Claude Code plugin commands (#571)
+// README.md and INSTALL.md advertise the /caveman-* slash commands, so each one
+// must actually resolve in Claude Code and Gemini:
 //   commands/<name>.toml  — Gemini CLI extension commands (#470)
-// This test pins that contract, plus checks the caveman-stats bodies actually
-// trigger the hook regex (a description-only stub would still leave the
-// feature broken).
+//   skills/<name>/SKILL.md OR commands/<name>.md — Claude Code (#571)
+//
+// The Claude Code half is an EXCLUSIVE or. Claude Code loads commands/*.md as
+// flat skills in the same namespace as skills/*/SKILL.md, so shipping both for
+// one name registers it twice — `claude plugin details` listed `caveman`,
+// `caveman-commit`, `caveman-review` and `caveman-stats` twice each, with a
+// 3-line stub competing against the real ruleset for the same slash command.
+// #571 predates skills/ being auto-discovered from the plugin root; the stubs
+// were the only registration then and are pure duplication now.
+//
+// Deleting a stub does NOT break hook interception. Verified against Claude
+// Code 2.1.235 with a UserPromptSubmit hook that logs its stdin: invoking a
+// plugin skill delivers the RAW typed prompt ("/probe:probeskill"), not the
+// expanded body. So the mode tracker matches what the user typed, and a stub
+// body that re-emitted the command text was never the mechanism.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -59,26 +63,29 @@ test('#470 caveman-stats.toml prompt is intercepted by the mode-tracker regex', 
 
 // ── #571: Claude Code only discovers commands/*.md ─────────────────────────
 
-// Every command documented for Claude Code. Each needs a .md (Claude Code)
-// AND a .toml (Gemini extension) sibling — the formats coexist in commands/.
+// Every command documented for Claude Code. Each needs a .toml (Gemini
+// extension) plus exactly one Claude Code provider — a skill directory or a
+// flat command .md, never both.
 const DOCUMENTED_COMMANDS = ['caveman', 'caveman-commit', 'caveman-review', 'caveman-stats', 'caveman-init'];
+const SKILLS_DIR = path.join(REPO_ROOT, 'skills');
 
 for (const name of DOCUMENTED_COMMANDS) {
-  test(`#571 commands/${name}.md exists so Claude Code registers /${name}`, () => {
+  test(`#571 /${name} is registered in Claude Code exactly once`, () => {
+    const skillPath = path.join(SKILLS_DIR, name, 'SKILL.md');
     const mdPath = path.join(COMMANDS_DIR, `${name}.md`);
+    const providers = [
+      fs.existsSync(skillPath) && path.relative(REPO_ROOT, skillPath),
+      fs.existsSync(mdPath) && path.relative(REPO_ROOT, mdPath),
+    ].filter(Boolean);
     assert.ok(
-      fs.existsSync(mdPath),
-      `Missing ${path.relative(REPO_ROOT, mdPath)} — Claude Code only scans commands/*.md, so /${name} is "Unknown command" without it (issue #571).`,
+      providers.length > 0,
+      `Nothing registers /${name} for Claude Code — add skills/${name}/SKILL.md or commands/${name}.md, or the chat input is rejected as "Unknown command" (issue #571).`,
     );
-  });
-
-  test(`#571 commands/${name}.md has YAML frontmatter with a non-empty description`, () => {
-    const body = fs.readFileSync(path.join(COMMANDS_DIR, `${name}.md`), 'utf8');
-    assert.ok(body.startsWith('---\n'), `${name}.md must start with YAML frontmatter (---)`);
-    const fm = body.match(/^---\n([\s\S]*?)\n---/);
-    assert.ok(fm, `${name}.md frontmatter must be closed with ---`);
-    const desc = fm[1].match(/^description:\s*(.+)$/m);
-    assert.ok(desc && desc[1].trim().length > 0, `${name}.md must declare a non-empty description`);
+    assert.equal(
+      providers.length,
+      1,
+      `/${name} is registered twice (${providers.join(' and ')}). Claude Code loads commands/*.md as flat skills in the same namespace as skills/*/SKILL.md, so the slash command is ambiguous — drop the stub.`,
+    );
   });
 
   test(`#571 commands/${name}.toml still ships for Gemini`, () => {
@@ -89,22 +96,31 @@ for (const name of DOCUMENTED_COMMANDS) {
   });
 }
 
-test('#571 caveman-stats.md body is intercepted by the mode-tracker regex', () => {
-  const body = fs.readFileSync(path.join(COMMANDS_DIR, 'caveman-stats.md'), 'utf8');
-  const prompt = body.replace(/^---\n[\s\S]*?\n---\n/, '').replace(/\$ARGUMENTS/g, '').trim();
-  assert.match(
-    prompt,
-    HOOK_STATS_REGEX,
-    `Resolved body ${JSON.stringify(prompt)} must match the UserPromptSubmit handler regex in src/hooks/caveman-mode-tracker.js; otherwise the stats output is never injected.`,
-  );
+// The stub bodies used to be checked against this regex on the theory that
+// Claude Code expanded them before the hook ran. It does not — UserPromptSubmit
+// receives the raw text the user typed (verified on 2.1.235), in both the bare
+// and plugin-namespaced forms. That is what the handler must match.
+test('#571 mode tracker intercepts /caveman-stats as typed, bare and namespaced', () => {
+  for (const typed of ['/caveman-stats', '/caveman-stats --share', '/caveman:caveman-stats']) {
+    assert.match(
+      typed,
+      HOOK_STATS_REGEX,
+      `The UserPromptSubmit handler regex in src/hooks/caveman-mode-tracker.js must match ${JSON.stringify(typed)}; otherwise the stats output is never injected.`,
+    );
+  }
 });
 
 test('#571 command .md bodies use $ARGUMENTS, never the TOML {{args}} placeholder', () => {
-  for (const name of DOCUMENTED_COMMANDS) {
-    const body = fs.readFileSync(path.join(COMMANDS_DIR, `${name}.md`), 'utf8');
+  for (const mdPath of fs.readdirSync(COMMANDS_DIR).filter(f => f.endsWith('.md'))) {
+    const body = fs.readFileSync(path.join(COMMANDS_DIR, mdPath), 'utf8');
+    assert.ok(body.startsWith('---\n'), `${mdPath} must start with YAML frontmatter (---)`);
+    const fm = body.match(/^---\n([\s\S]*?)\n---/);
+    assert.ok(fm, `${mdPath} frontmatter must be closed with ---`);
+    const desc = fm[1].match(/^description:\s*(.+)$/m);
+    assert.ok(desc && desc[1].trim().length > 0, `${mdPath} must declare a non-empty description`);
     assert.ok(
       !body.includes('{{args}}'),
-      `commands/${name}.md contains {{args}} — Claude Code substitutes $ARGUMENTS, {{args}} would reach the model verbatim.`,
+      `commands/${mdPath} contains {{args}} — Claude Code substitutes $ARGUMENTS, {{args}} would reach the model verbatim.`,
     );
   }
 });
