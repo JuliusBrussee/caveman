@@ -19,16 +19,38 @@ import { tmpdir } from "node:os";
 // RecoveryClient spawns its binary argv-less, so each test materializes a tiny
 // shell shim that execs the node stub (optionally with a failure-mode env).
 
-function shim(extraEnv = "") {
+// extraEnv is given as `NAME=value` pairs so each platform can render them in
+// its own syntax; a #!/bin/sh shim is unspawnable on Windows and used to fail
+// every recovery case there with EFTYPE before the client was even exercised.
+function shim(env = {}, onceFlag = undefined) {
   const dir = mkdtempSync(join(tmpdir(), "cave-pi-mcp-"));
+  if (process.platform === "win32") {
+    // .cmd, which RecoveryClient resolves through portableInvocation.
+    const path = join(dir, "caveman-mcp.cmd");
+    const sets = Object.entries(env).map(([k, v]) => `@set ${k}=${v}\r\n`).join("");
+    const once = onceFlag
+      ? `@if not exist "${onceFlag.flag}" (\r\n`
+        + `@type nul > "${onceFlag.flag}"\r\n`
+        + Object.entries(onceFlag.env).map(([k, v]) => `@set ${k}=${v}\r\n`).join("")
+        + `)\r\n`
+      : "";
+    writeFileSync(path, `@echo off\r\n${sets}${once}@node  "${stub}" %*\r\n`);
+    return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  }
   const path = join(dir, "caveman-mcp");
-  writeFileSync(path, `#!/bin/sh\n${extraEnv}exec "${process.execPath}" "${stub}" "$@"\n`);
+  const sets = Object.entries(env).map(([k, v]) => `${k}=${v}; export ${k}\n`).join("");
+  const once = onceFlag
+    ? `if [ ! -e "${onceFlag.flag}" ]; then touch "${onceFlag.flag}"; `
+      + Object.entries(onceFlag.env).map(([k, v]) => `${k}=${v}; export ${k}; `).join("")
+      + `fi\n`
+    : "";
+  writeFileSync(path, `#!/bin/sh\n${sets}${once}exec "${process.execPath}" "${stub}" "$@"\n`);
   chmodSync(path, 0o755);
   return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test("probe failure (missing capability) makes the client unavailable", async () => {
-  const { path, cleanup } = shim("STUB_MCP_DROP_CAPABILITY=1; export STUB_MCP_DROP_CAPABILITY\n");
+  const { path, cleanup } = shim({ STUB_MCP_DROP_CAPABILITY: "1" });
   try {
     const recovery = new RecoveryClient(path);
     assert.equal(await recovery.ensure(), false);
@@ -60,7 +82,9 @@ test("retrieve returns exact bytes for a known handle and MCP error for unknown"
 
 test("child crash after init respawns on next retrieve and recovers the same handle", async () => {
   const flag = join(mkdtempSync(join(tmpdir(), "cave-pi-crash-")), "crashed-once");
-  const { path, cleanup } = shim(`if [ ! -e "${flag}" ]; then touch "${flag}"; STUB_MCP_EXIT_AFTER_INIT=1; export STUB_MCP_EXIT_AFTER_INIT; fi\n`);
+  // Crash-once: only the FIRST spawn exits after init, so the retrieve below
+  // exercises the respawn path.
+  const { path, cleanup } = shim({}, { flag, env: { STUB_MCP_EXIT_AFTER_INIT: "1" } });
   try {
     const recovery = new RecoveryClient(path);
     // First bring-up crashes right after initialize (crash-once shim)...
