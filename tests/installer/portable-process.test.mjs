@@ -40,3 +40,21 @@ test("root installer rejects non-Node command shims", () => {
     /cannot safely launch non-Node Windows command shim/,
   );
 });
+
+test("root installer parses pnpm cross-drive shims whose target is drive-absolute", () => {
+  // pnpm emits an absolute target when the global bin dir and the store sit on
+  // different drives (path.relative crosses drives as absolute). Only the CLI's
+  // copy of this parser handled that form; here it returned null and the throw
+  // took out every `npx skills add` provider install with no diagnostic.
+  assert.equal(
+    portable.parseWindowsNodeShim(
+      '@SETLOCAL\r\n@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"   "D:\\pnpm-store\\pkg\\cli.js" %*\r\n) ELSE (\r\n  node   "D:\\pnpm-store\\pkg\\cli.js" %*\r\n)\r\n',
+    ),
+    "D:\\pnpm-store\\pkg\\cli.js",
+  );
+  // %~dp0-relative form still wins when both could match.
+  assert.equal(
+    portable.parseWindowsNodeShim('@SETLOCAL\r\n@"C:\\Program Files\\nodejs\\node.exe"  "%~dp0\\..\\pkg\\cli.js" %*\r\n'),
+    "..\\pkg\\cli.js",
+  );
+});

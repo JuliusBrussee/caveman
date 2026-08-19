@@ -21,6 +21,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { hookCommand } = require('./platform-paths');
 
 // ── stripJsonComments ──────────────────────────────────────────────────────
 // Hand-rolled state machine. Tracks string state + backslash escape so a
@@ -95,7 +96,11 @@ function stripTrailingCommas(src) {
 // Try strict JSON first (fast path). On failure, strip comments and retry.
 // On total failure return `null` and warn — never silently overwrite a
 // malformed-but-recoverable file with `{}`.
-function readSettings(p) {
+// `meta` is an optional out-param. When the file only parsed after comment
+// stripping, meta.jsonc is set true — writeSettings re-serializes plain JSON,
+// so those comments do not survive the round trip. Callers that mutate a file
+// the user authored should warn and point at their backup.
+function readSettings(p, meta) {
   if (!fs.existsSync(p)) return {};
   let raw;
   try { raw = fs.readFileSync(p, 'utf8'); }
@@ -105,7 +110,11 @@ function readSettings(p) {
   }
   if (!raw.trim()) return {};
   try { return JSON.parse(raw); } catch (_) { /* fall through to JSONC */ }
-  try { return JSON.parse(stripJsonComments(raw)); }
+  try {
+    const parsed = JSON.parse(stripJsonComments(raw));
+    if (meta) meta.jsonc = true;
+    return parsed;
+  }
   catch (e) {
     process.stderr.write(`caveman: warning — ${p} is not valid JSON or JSONC: ${e.message}\n`);
     return null;
@@ -267,9 +276,10 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode, platform = pro
         const scriptPath = m[2] || m[3] || m[4];
         const basename = path.basename(scriptPath);
         if (!MANAGED_HOOK_BASENAMES.has(basename)) continue;
-        h.command = platform === 'win32'
-          ? `& '${String(absoluteNode).replace(/'/g, "''")}' '${String(scriptPath).replace(/'/g, "''")}'`
-          : `"${absoluteNode}" "${scriptPath}"`;
+        // One shape, one place. This used to emit PowerShell call-operator
+        // syntax on win32, which Git Bash — Claude Code's default hook shell
+        // on Windows — rejects as a syntax error (#835).
+        h.command = hookCommand(absoluteNode, [scriptPath], platform);
         rewritten++;
       }
     }
@@ -308,7 +318,15 @@ function pruneOrphanedManagedHooks(settings, configDir) {
     try {
       for (const tok of tokenizeCommand(command)) {
         if (!tok || typeof tok !== 'string') continue;
-        if (!MANAGED_HOOK_BASENAMES.has(path.basename(tok))) continue;
+        // win32.basename splits on both / and \, matching
+        // referencesManagedScript(). Plain basename() misses a Windows-written
+        // command when a roaming $CLAUDE_CONFIG_DIR is processed on POSIX.
+        if (!MANAGED_HOOK_BASENAMES.has(path.win32.basename(tok))) continue;
+        // A path absolute on the OTHER platform (`C:\...` seen from POSIX) is
+        // not ours to judge: path.isAbsolute() says false, we would join it
+        // under baseDir, find nothing, and prune a hook that is live on the
+        // machine that wrote it. Existence is only knowable for our own paths.
+        if (path.isAbsolute(tok) !== path.win32.isAbsolute(tok)) return false;
         const scriptPath = path.isAbsolute(tok) ? tok : path.join(baseDir, tok);
         return !fs.existsSync(scriptPath);
       }

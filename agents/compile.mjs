@@ -29,8 +29,14 @@ const schemaFile = join(here, "profiles", "schema.json");
 const reservedFile = join(here, "reserved-verbs.json");
 
 const WIRE_PROTOCOLS = new Set(["anthropic-messages", "openai-chat", "openai-responses", "gemini-generatecontent"]);
-const INJECTION_METHODS = new Set(["env", "config-env-content", "config-file"]);
-const COMMAND_HOOK_METHODS = new Set(["claude-pretooluse", "codex-pretooluse", "gemini-beforetool", "opencode-plugin", "hermes-plugin", "openclaw-plugin", "instruction-note"]);
+const INJECTION_METHODS = new Set(["env", "config-env-content", "config-file", "native-extension"]);
+// native-extension is a closed allowlist on every field: the CLI resolves the asset to a
+// file it ships and appends the loader flag itself — a profile can never name an arbitrary
+// executable, path, or flag (fail-closed on anything unknown).
+const NATIVE_EXTENSION_HOSTS = new Set(["pi"]);
+const NATIVE_EXTENSION_ASSETS = new Set(["caveman-pi-extension"]);
+const NATIVE_EXTENSION_LOADER_FLAGS = new Set(["--extension"]);
+const COMMAND_HOOK_METHODS = new Set(["claude-pretooluse", "codex-pretooluse", "gemini-beforetool", "opencode-plugin", "hermes-plugin", "openclaw-plugin", "pi-extension", "instruction-note"]);
 const MEMORY_HOOK_METHODS = new Set(["claude-userpromptsubmit"]);
 const SKILL_FORMATS = new Set(["skill-md"]);
 const ENV_KEY_PATTERN = "^[A-Z][A-Z0-9_]*_(BASE_URL|API_BASE|API_KEY|AUTH_TOKEN|HOST)$";
@@ -271,6 +277,11 @@ function validate(p, file) {
     need(inj.config_overlay && typeof inj.config_overlay === "object" && !Array.isArray(inj.config_overlay), "injection.config_overlay must be an object");
     need(Object.prototype.hasOwnProperty.call(inj.config_overlay, "local"), "injection.config_overlay.local is required");
     validateConfigStrings(inj.config_overlay, need, "injection.config_overlay");
+  } else if (inj.method === "native-extension") {
+    need(NATIVE_EXTENSION_HOSTS.has(inj.host), `injection.host "${inj.host}" is not an allowlisted native-extension host (fail-closed)`);
+    need(inj.host === p.id, `injection.host must equal the profile id (got "${inj.host}" for "${p.id}")`);
+    need(NATIVE_EXTENSION_ASSETS.has(inj.asset), `injection.asset "${inj.asset}" is not an allowlisted extension asset (fail-closed)`);
+    need(NATIVE_EXTENSION_LOADER_FLAGS.has(inj.loader_flag), `injection.loader_flag "${inj.loader_flag}" is not an allowlisted loader flag (fail-closed)`);
   }
   // command_hook is optional, but if present its method must be one we can honor —
   // an unknown method fails the build rather than claim a hook we'd silently no-op.
@@ -316,6 +327,11 @@ function validate(p, file) {
     gate(INJECTION_COMPLETENESS.has(p.injection_completeness), `${file}: unknown injection_completeness "${p.injection_completeness}" (fail-closed)`);
     if (injectionIsInert(p)) {
       gate(p.injection_completeness === "code-only", `${file}: injection_completeness must be "code-only": injection.env is empty, so all routing is code (got "${p.injection_completeness}")`);
+    } else if (p.injection.method === "native-extension") {
+      // A native-extension injection is builder-assisted by construction: the profile
+      // declares host/asset/flag as data, but the CLI resolves the shipped asset and
+      // appends the loader flag in code. Neither purer nor darker tiers are honest.
+      gate(p.injection_completeness === "builder-assisted", `${file}: injection_completeness must be "builder-assisted" for native-extension injection (got "${p.injection_completeness}")`);
     } else if (BUILDER_MANIFEST !== null) {
       if (BUILDER_MANIFEST.has(p.id)) {
         gate(p.injection_completeness !== "declarative", `${file}: injection_completeness cannot be "declarative": the CLI has a code builder for "${p.id}" (declare "builder-assisted" or "code-only")`);
@@ -405,7 +421,8 @@ export type WireProtocol = "anthropic-messages" | "openai-chat" | "openai-respon
 export type Injection =
   | { method: "env"; env: Record<string, string> }
   | { method: "config-env-content"; env_var: string; config_content: { local: unknown; managed?: unknown } }
-  | { method: "config-file"; env_var: string; base_config?: { path: string; env_var?: string; state_dir?: { env_var: string; filename: string } }; config_overlay: { local: unknown; managed?: unknown } };
+  | { method: "config-file"; env_var: string; base_config?: { path: string; env_var?: string; state_dir?: { env_var: string; filename: string } }; config_overlay: { local: unknown; managed?: unknown } }
+  | { method: "native-extension"; host: string; asset: string; loader_flag: string };
 
 export type CommandHook =
   | { method: "claude-pretooluse" }
@@ -414,6 +431,7 @@ export type CommandHook =
   | { method: "opencode-plugin" }
   | { method: "hermes-plugin" }
   | { method: "openclaw-plugin" }
+  | { method: "pi-extension" }
   | { method: "instruction-note"; file: string };
 
 export type MemoryHook =

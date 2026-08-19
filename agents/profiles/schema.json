@@ -99,6 +99,16 @@
               }
             }
           }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["method", "host", "asset", "loader_flag"],
+          "properties": {
+            "method": { "const": "native-extension" },
+            "host": { "enum": ["pi"], "description": "the host agent that loads the extension; must equal the profile id. Closed allowlist — the compiler fails on any unknown host." },
+            "asset": { "enum": ["caveman-pi-extension"], "description": "the CLI-shipped extension asset to load. Closed allowlist — a profile can never name an arbitrary file or executable." },
+            "loader_flag": { "enum": ["--extension"], "description": "the host CLI flag the wrap door uses to load the asset ephemerally. Closed allowlist." }
+          }
         }
       ]
     },
@@ -143,6 +153,11 @@
           "additionalProperties": false,
           "required": ["method"],
           "properties": { "method": { "const": "openclaw-plugin", "description": "HARD rewrite: an OpenClaw plugin rewrites oversized tool results through caveman shrink" } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["method"],
+          "properties": { "method": { "const": "pi-extension", "description": "HARD rewrite: the caveman Pi extension (native-extension injection asset) rewrites oversized tool results through the native runtime's PostToolUse output_replacement" } }
         },
         {
           "additionalProperties": false,

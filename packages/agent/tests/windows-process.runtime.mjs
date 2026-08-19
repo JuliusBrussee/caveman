@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   hostShellInvocation,
+  parseWindowsNodeShim,
   killProcessTree,
   portableInvocation,
   resolveWindowsCommand,
@@ -69,5 +70,23 @@ test("runtime probes use .exe companions from Windows Caveman home", () => {
   assert.deepEqual(
     proxyBinaryCandidates("win32", home),
     [resolve(home, "bin", "caveman-proxy.exe"), "caveman-proxy.exe"],
+  );
+});
+
+test("pnpm cross-drive shims with a drive-absolute target parse", () => {
+  // pnpm emits an absolute target when the global bin dir and the store sit on
+  // different drives (path.relative crosses drives as absolute). This parser
+  // used to return undefined for that form and the caller threw
+  // "non-Node Windows command shim" on a perfectly ordinary pnpm install.
+  assert.equal(
+    parseWindowsNodeShim(
+      '@SETLOCAL\r\n@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"   "D:\\pnpm-store\\pkg\\cli.js" %*\r\n) ELSE (\r\n  node   "D:\\pnpm-store\\pkg\\cli.js" %*\r\n)\r\n',
+    ),
+    "D:\\pnpm-store\\pkg\\cli.js",
+  );
+  // The %~dp0-relative form still wins when a line could match both.
+  assert.equal(
+    parseWindowsNodeShim('@SETLOCAL\r\n@"C:\\Program Files\\nodejs\\node.exe"  "%~dp0\\..\\pkg\\cli.js" %*\r\n'),
+    "..\\pkg\\cli.js",
   );
 });

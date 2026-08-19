@@ -6,7 +6,7 @@ import { isolatedCliEnv, runCli } from "./_cli.mjs";
 const HELP = `caveman
 
 run
-  caveman <agent>        run an agent on the layer  (aider | claude | codex | gemini | hermes | openclaw | opencode)
+  caveman <agent>        run an agent on the layer  (aider | claude | codex | gemini | hermes | openclaw | opencode | pi)
   caveman run -- <cmd>   run anything else on the layer
 
 understand

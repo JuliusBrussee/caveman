@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const assert = require('assert');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const INIT = path.join(ROOT, 'src', 'tools', 'caveman-init.js');
@@ -120,6 +120,58 @@ test('detects sentinel and skips files that already have caveman content', (tmp)
     '# Existing\n\nRespond terse like smart caveman. Hello.\n');
   const out = runInit(tmp, '--only', 'cline');
   assert.match(out, /skipped-already-installed/);
+});
+
+test('append mode fences its block so it can be refreshed and removed', (tmp) => {
+  fs.writeFileSync(path.join(tmp, 'AGENTS.md'), '# My rules\n\nKeep these.\n');
+  runInit(tmp, '--only', 'agents');
+  const body = fs.readFileSync(path.join(tmp, 'AGENTS.md'), 'utf8');
+  assert.match(body, /<!-- caveman-begin -->/);
+  assert.match(body, /<!-- caveman-end -->/);
+  assert.match(body, /^# My rules\n\nKeep these\./);
+
+  // Re-run with an unchanged ruleset is a no-op...
+  assert.match(runInit(tmp, '--only', 'agents'), /skipped-already-installed/);
+
+  // ...but a changed ruleset refreshes IN PLACE, preserving user content on
+  // both sides of the fence rather than appending a second block.
+  const stale = body.replace(/(<!-- caveman-begin -->\n)/, '$1OLD RULESET\n');
+  fs.writeFileSync(path.join(tmp, 'AGENTS.md'), stale + '\n# Trailing user section\n');
+  assert.match(runInit(tmp, '--only', 'agents'), /refreshed/);
+  const after = fs.readFileSync(path.join(tmp, 'AGENTS.md'), 'utf8');
+  assert.equal(after.match(/<!-- caveman-begin -->/g).length, 1, 'must not stack a second block');
+  assert.ok(!after.includes('OLD RULESET'), 'stale ruleset must be replaced');
+  assert.match(after, /^# My rules/);
+  assert.match(after, /# Trailing user section/);
+});
+
+test('--only rejects an unknown or missing agent id instead of silently no-opping', (tmp) => {
+  const bad = spawnSync(process.execPath, [INIT, tmp, '--only', 'nope'], { encoding: 'utf8' });
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /--only requires one of/);
+  const bare = spawnSync(process.execPath, [INIT, tmp, '--only'], { encoding: 'utf8' });
+  assert.equal(bare.status, 2, 'bare --only must not install for every agent');
+});
+
+test('an orphan begin marker is damage, not a fence — user content survives re-runs', (tmp) => {
+  // A truncated write or a bad merge leaves a BEGIN with no END. Pairing it
+  // with a LATER block's END made the refresh replace everything between the
+  // two, deleting the user's own content on the SECOND run.
+  const agents = path.join(tmp, 'AGENTS.md');
+  const original = '<!-- caveman-begin -->\nOLD RULE\n\n## MY TEAM CONVENTIONS\nNever force-push to main.\n';
+  fs.writeFileSync(agents, original);
+  for (let i = 0; i < 3; i++) {
+    assert.match(runInit(tmp, '--only', 'agents'), /skipped-damaged-fence/);
+  }
+  assert.equal(fs.readFileSync(agents, 'utf8'), original, 'damaged-marker file must be left byte-identical');
+});
+
+test('an end marker above the begin marker is refused, not spliced', (tmp) => {
+  const agents = path.join(tmp, 'AGENTS.md');
+  const original = '## My notes\n<!-- caveman-end -->\nmore user text\n<!-- caveman-begin -->\nstale\n';
+  fs.writeFileSync(agents, original);
+  assert.match(runInit(tmp, '--only', 'agents'), /skipped-damaged-fence/);
+  assert.equal(fs.readFileSync(agents, 'utf8'), original);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

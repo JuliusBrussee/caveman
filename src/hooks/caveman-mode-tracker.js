@@ -91,14 +91,19 @@ function removeFlag(path) {
 }
 
 let input = '';
-process.stdin.on('data', chunk => { input += chunk; });
-// Abnormal stdin close (broken pipe, parent crash) emits 'error'; without a
-// listener Node throws it as an uncaught exception and the hook exits
-// non-zero — a spurious hook failure (#538). Hooks must always exit 0.
-process.stdin.on('error', () => process.exit(0));
-process.stdin.on('end', () => {
+let handled = false;
+
+// Act on the first COMPLETE JSON payload rather than waiting for EOF. The host
+// writes one object and closes, but under the Windows pipe implementation that
+// close can lag arbitrarily (#729/#833) — and this hook is registered with a 5s
+// budget, so a lagging EOF spends the whole budget and the host kills us before
+// the flag is ever written. Parsing per chunk costs one JSON.parse of a payload
+// we are about to parse anyway.
+function handle(raw) {
+  if (handled) return;
+  handled = true;
   try {
-    const data = JSON.parse(input);
+    const data = JSON.parse(raw);
     // Collapse whitespace so phrase triggers still match multiline prompts —
     // every regex below sees a single-line prompt (#598).
     let prompt = (data.prompt || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -156,7 +161,12 @@ process.stdin.on('end', () => {
         if (sinceIdx !== -1 && tailArgs[sinceIdx + 1]) {
           argv.push('--since', tailArgs[sinceIdx + 1]);
         }
-        block = execFileSync(process.execPath, argv, { encoding: 'utf8', timeout: 5000 }).trim();
+        // 2.5s, not 5s. This hook is registered with timeout: 5 and has
+        // already spent its own Node startup; giving the child the host's
+        // entire budget means the host kills the hook before the child's own
+        // timeout can fire and produce the fallback message. Windows process
+        // spawn is ~10x macOS before antivirus (#819), so the margin is real.
+        block = execFileSync(process.execPath, argv, { encoding: 'utf8', timeout: 2500 }).trim();
       } catch (e) {
         block = 'caveman-stats: could not run stats script.\nTry manually: node hooks/caveman-stats.js';
       }
@@ -281,4 +291,30 @@ process.stdin.on('end', () => {
   } catch (e) {
     // Silent fail
   }
+}
+
+// StringDecoder semantics: a multi-byte character split across two chunks is
+// held until it is complete, instead of each half being coerced to a lone
+// replacement char by `'' + buffer`. Matters more now that the payload is
+// parsed per chunk rather than once at EOF.
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => {
+  input += chunk;
+  // A partial payload throws here and we simply wait for more bytes.
+  try { JSON.parse(input); } catch (e) { return; }
+  handle(input);
+  // pause() stops the flow but the 'data' listener has REFERENCED the stdin
+  // handle, so the event loop stays alive until the host closes the write end.
+  // On Windows that close lags arbitrarily (#729/#833), so the hook sat idle
+  // with its work already done until the 5s budget expired and the host killed
+  // it — the shape of #819 (timeouts on turns that measure ~56ms of real work).
+  // unref() drops the handle from the loop without closing the fd, so we exit
+  // as soon as stdout has flushed.
+  process.stdin.pause();
+  try { process.stdin.unref(); } catch (e) {}
 });
+// Abnormal stdin close (broken pipe, parent crash) emits 'error'; without a
+// listener Node throws it as an uncaught exception and the hook exits
+// non-zero — a spurious hook failure (#538). Hooks must always exit 0.
+process.stdin.on('error', () => process.exit(0));
+process.stdin.on('end', () => handle(input));

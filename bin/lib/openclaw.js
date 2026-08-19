@@ -259,7 +259,19 @@ function appendBootstrapToSoul(soulPath, snippet) {
     const nb = count(existing, MARK_BEGIN);
     const ne = count(existing, MARK_END);
     if (nb === 1 && ne === 1 && existing.indexOf(MARK_END) > existing.indexOf(MARK_BEGIN)) {
-      return { changed: false, reason: 'already present' };
+      // One well-formed block. Refresh it in place when the shipped snippet
+      // has changed — a presence-only check left the block stale forever, so
+      // a bootstrap edit never reached anyone who had already installed. Only
+      // the bytes between our own markers move; user content is preserved.
+      const b = existing.indexOf(MARK_BEGIN);
+      const e = existing.indexOf(MARK_END) + MARK_END.length;
+      const wanted = snippet.replace(/\n+$/, '');
+      if (existing.slice(b, e) === wanted) {
+        return { changed: false, reason: 'already present' };
+      }
+      const refreshed = existing.slice(0, b) + wanted + existing.slice(e);
+      atomicWriteRegular(soulPath, refreshed, opened.stat);
+      return { changed: true, refreshed: true };
     }
     if (nb > 0 || ne > 0) {
       // Damaged markers — strip them safely first, then append one clean block.
@@ -331,11 +343,24 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
   ensureRealDirectory(skillDir, true);
   const priorSkill = readRegularIfExists(skillFile);
   const merged = mergeOpenclawFrontmatter(skillBody, { version });
+  // Preserve a hand-edited workspace skill before clobbering it. opencode and
+  // hermes go through the ownership journal, which refuses to overwrite bytes
+  // it did not write; this path has no journal, so a user who tuned their
+  // SOUL-adjacent skill silently lost it. Back up once — a second install
+  // would otherwise overwrite the only pre-caveman copy with our own output.
+  const skillBak = skillFile + '.bak';
+  if (priorSkill.content !== null && priorSkill.content !== merged && !fs.existsSync(skillBak)) {
+    try {
+      fs.writeFileSync(skillBak, priorSkill.content, { mode: 0o600, flag: 'wx' });
+      log.note(`  backed up your existing ${skillFile} to ${skillBak}`);
+    } catch (_) { /* best effort — never block install on the backup */ }
+  }
   try {
     atomicWriteRegular(skillFile, merged, priorSkill.stat);
     const soul = appendBootstrapToSoul(soulFile, snippet);
-    if (soul.changed) log.write(`  wrote bootstrap block to ${soulFile}\n`);
-    else log.note(`  ${soulFile} already contains caveman bootstrap`);
+    if (soul.refreshed) log.write(`  refreshed bootstrap block in ${soulFile}\n`);
+    else if (soul.changed) log.write(`  wrote bootstrap block to ${soulFile}\n`);
+    else log.note(`  ${soulFile} already contains the current caveman bootstrap`);
   } catch (error) {
     // SOUL is atomic, so failure leaves it unchanged. Roll skill write back too
     // so install never returns with only half of always-on activation present.

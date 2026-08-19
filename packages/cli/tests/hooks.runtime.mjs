@@ -1313,3 +1313,16 @@ test("prototype-key directive ids fail closed", async () => {
     assert.match(out.stderr, /unknown directive/);
   }
 });
+
+// Pi's rewrite surface is the native extension: `hooks install pi` must point
+// at `caveman enable pi` and exit 0 — never the silent exit-1 that turned the
+// whole multi-agent install red whenever `pi` sat on PATH.
+test("hooks install/uninstall pi point at the native extension and exit 0", async () => {
+  const env = { ...process.env, NO_COLOR: "1", HOME: mkdtempSync(join(tmpdir(), "cave-home-")), CAVEMAN_HOME: mkdtempSync(join(tmpdir(), "cave-dot-")) };
+  const install = await runCli(["hooks", "install", "pi"], env);
+  assert.equal(install.code, 0, install.stderr);
+  assert.match(install.stderr, /native extension.*caveman enable pi/);
+  const uninstall = await runCli(["hooks", "uninstall", "pi"], env);
+  assert.equal(uninstall.code, 0, uninstall.stderr);
+  assert.match(uninstall.stderr, /caveman disable pi/);
+});

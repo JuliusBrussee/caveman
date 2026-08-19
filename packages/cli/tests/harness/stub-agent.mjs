@@ -1,13 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export function stubAgent({ dir, name = "claude" }) {
-  if (!dir) throw new Error("stubAgent requires dir");
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const path = join(dir, name);
-  writeFileSync(
-    path,
-    `#!/usr/bin/env node
+const SOURCE = `#!/usr/bin/env node
 const baseURL = process.env.ANTHROPIC_BASE_URL;
 if (!baseURL) {
   process.stderr.write("stub-agent: ANTHROPIC_BASE_URL is required\\n");
@@ -36,8 +30,28 @@ try {
   process.stderr.write("stub-agent: " + error.message + "\\n");
   process.exit(1);
 }
-`,
-    { mode: 0o755 },
-  );
+`;
+
+export function stubAgent({ dir, name = "claude" }) {
+  if (!dir) throw new Error("stubAgent requires dir");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // Windows cannot execute a shebang script: CreateProcess resolves through
+  // PATHEXT, so an extensionless file is not spawnable at all (#834). Write the
+  // body as .mjs and a .cmd shim under the bare name — which is exactly how a
+  // real agent binary presents itself on PATH there, so the product still has
+  // to resolve `name` through PATHEXT to find it.
+  if (process.platform === "win32") {
+    writeFileSync(join(dir, `${name}.mjs`), SOURCE);
+    const path = join(dir, `${name}.cmd`);
+    writeFileSync(path, [
+      "@echo off",
+      `node "%~dp0${name}.mjs" %*`,
+      "exit /b %errorlevel%",
+      "",
+    ].join("\r\n"));
+    return { dir, name, path };
+  }
+  const path = join(dir, name);
+  writeFileSync(path, SOURCE, { mode: 0o755 });
   return { dir, name, path };
 }

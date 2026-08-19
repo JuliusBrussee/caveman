@@ -34,6 +34,54 @@ Boundaries: code/commits/PRs written normal.
 
 const SENTINEL = 'Respond terse like smart caveman';
 
+// Marker fence for blocks appended to files the user also authors (AGENTS.md,
+// copilot-instructions.md). Same convention as bin/lib/openclaw.js (SOUL.md)
+// and the opencode AGENTS.md path in bin/install.js. Without it our block can
+// be neither refreshed on upgrade nor removed on uninstall — it just fossilizes
+// in the user's repo.
+const FENCE_BEGIN = '<!-- caveman-begin -->';
+const FENCE_END = '<!-- caveman-end -->';
+
+function countOccurrences(haystack, needle) {
+  let n = 0;
+  for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + needle.length)) n++;
+  return n;
+}
+
+function fencedBlock(ruleBody) {
+  return FENCE_BEGIN + '\n' + ruleBody.trimEnd() + '\n' + FENCE_END + '\n';
+}
+
+// Atomic write: these land on tracked files in the user's repo, so a partial
+// write from an interrupted run would corrupt a file they have committed.
+function writeAtomic(fullPath, content) {
+  const dir = path.dirname(fullPath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(fullPath)}.${process.pid}.tmp`);
+  try {
+    fs.writeFileSync(tmp, content, { mode: 0o644 });
+    // rename onto an existing target needs DELETE access and no other handle
+    // without FILE_SHARE_DELETE — OneDrive/Dropbox sync and AV scanners hold
+    // exactly those, and the plain writeFileSync this replaced did not. Retry
+    // brief contention rather than failing the whole init run, same policy as
+    // safeWriteFlag() in caveman-config.js.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        fs.renameSync(tmp, fullPath);
+        break;
+      } catch (error) {
+        const transient = error.code === 'EPERM' || error.code === 'EBUSY' ||
+                          error.code === 'EACCES' || error.code === 'EEXIST';
+        if (!transient || attempt >= 2) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * (attempt + 1));
+      }
+    }
+  } catch (error) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw error;
+  }
+}
+
 // OpenClaw is a global workspace tool (not per-repo) and needs two write
 // targets — a skill folder + a SOUL.md bootstrap block. The shared helper
 // lives at bin/lib/openclaw.js; we require it lazily so caveman-init.js
@@ -85,32 +133,66 @@ function processAgent(agent, targetDir, ruleBody, opts) {
   }
   const fullPath = path.join(targetDir, agent.file);
   const exists = fs.existsSync(fullPath);
+  const isAppend = agent.mode === 'append';
+  // Append targets are shared with the user, so our contribution is fenced.
+  // Replace targets are single-purpose files we own outright.
+  const desired = isAppend ? fencedBlock(ruleBody) : agent.frontmatter + ruleBody;
 
   if (!exists) {
-    if (!opts.dryRun) {
-      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-      fs.writeFileSync(fullPath, agent.frontmatter + ruleBody, { mode: 0o644 });
-    }
+    if (!opts.dryRun) writeAtomic(fullPath, desired);
     return { status: 'added', label: '+' };
   }
 
   const existing = fs.readFileSync(fullPath, 'utf8');
-  if (existing.includes(SENTINEL)) {
-    return { status: 'skipped-already-installed', label: '=' };
-  }
 
-  if (agent.mode === 'append') {
+  if (isAppend) {
+    const begin = existing.indexOf(FENCE_BEGIN);
+    const end = begin === -1 ? -1 : existing.indexOf(FENCE_END, begin);
+    // Markers must be exactly one matched pair. An orphan BEGIN (truncated
+    // write, bad merge) would otherwise pair with a LATER block's END and the
+    // refresh would replace every byte between them — the user's own content
+    // included. Damaged markers are damage, not a fence: report and write
+    // nothing, so a second run cannot compound it (#596's chain, per-repo).
+    const paired = countOccurrences(existing, FENCE_BEGIN) === 1
+      && countOccurrences(existing, FENCE_END) === 1
+      && begin !== -1 && end > begin;
+    if (!paired && (existing.includes(FENCE_BEGIN) || existing.includes(FENCE_END))) {
+      return { status: 'skipped-damaged-fence', label: '!' };
+    }
+    if (paired) {
+      // Refresh in place. A presence-only check meant a rule-body change never
+      // reached anyone already initialized — the block went stale forever.
+      const span = existing.slice(begin, end + FENCE_END.length + 1);
+      if (span === desired) return { status: 'skipped-already-installed', label: '=' };
+      if (!opts.dryRun) {
+        writeAtomic(fullPath, existing.slice(0, begin) + desired
+          + existing.slice(end + FENCE_END.length).replace(/^\n/, ''));
+      }
+      return { status: 'refreshed', label: '~' };
+    }
+    if (existing.includes(SENTINEL)) {
+      // Pre-fence install. Leave it: we cannot tell our bytes from the user's
+      // edits around them, and silently rewriting a tracked repo file is worse
+      // than a stale block. Re-run after deleting the old block to re-fence.
+      return { status: 'skipped-legacy-unfenced', label: '?' };
+    }
     if (!opts.dryRun) {
       const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
-      fs.writeFileSync(fullPath, existing + sep + ruleBody, { mode: 0o644 });
+      writeAtomic(fullPath, existing + sep + desired);
     }
     return { status: 'appended', label: '~' };
   }
 
+  // Replace-mode files carry no marker fence, so a sentinel hit cannot tell
+  // "our older ruleset" from "a user file that happens to quote the rule".
+  // Refreshing on a guess would clobber their content, so skip and let the
+  // existing --force flag be the deliberate refresh path.
+  if (existing.includes(SENTINEL)) {
+    return { status: 'skipped-already-installed', label: '=' };
+  }
+
   if (opts.force) {
-    if (!opts.dryRun) {
-      fs.writeFileSync(fullPath, agent.frontmatter + ruleBody, { mode: 0o644 });
-    }
+    if (!opts.dryRun) writeAtomic(fullPath, desired);
     return { status: 'overwritten', label: '!' };
   }
 
@@ -156,6 +238,16 @@ function parseArgs(argv) {
     else if (a === '-h' || a === '--help') opts.help = true;
     else if (!a.startsWith('-')) opts.target = path.resolve(a);
   }
+  // A missing or misspelled --only value used to fall through as falsy and
+  // install for EVERY agent, or match nothing and report a silent all-zero
+  // run. Both look like success. Fail loudly instead.
+  if (argv.includes('--only')) {
+    const known = AGENTS.map(a => a.id);
+    if (!opts.only || !known.includes(opts.only)) {
+      console.error(`caveman-init: --only requires one of: ${known.join(', ')}`);
+      process.exit(2);
+    }
+  }
   return opts;
 }
 
@@ -183,7 +275,7 @@ function main() {
   console.log(`🪨 caveman init — ${opts.target}${opts.dryRun ? ' (dry run)' : ''}\n`);
 
   const ruleBody = loadRuleBody();
-  const counts = { added: 0, appended: 0, overwritten: 0, skipped: 0 };
+  const counts = { added: 0, appended: 0, refreshed: 0, overwritten: 0, skipped: 0 };
 
   for (const agent of AGENTS) {
     if (opts.only && opts.only !== agent.id) continue;
@@ -192,11 +284,13 @@ function main() {
     console.log(`  ${result.label} ${target} (${result.status})`);
     if (result.status === 'added' || result.status === 'installed' || result.status === 'would-add') counts.added++;
     else if (result.status === 'appended') counts.appended++;
+    else if (result.status === 'refreshed') counts.refreshed++;
     else if (result.status === 'overwritten') counts.overwritten++;
     else counts.skipped++;
   }
 
   console.log(`\n${counts.added} added, ${counts.appended} appended, ` +
+              `${counts.refreshed} refreshed, ` +
               `${counts.overwritten} overwritten, ${counts.skipped} skipped`);
   if (opts.dryRun) console.log('(dry run — no files were written)');
 }

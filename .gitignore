@@ -29,3 +29,6 @@ skills/*/dist/
 extension/engine.wasm
 *.tsbuildinfo
 bin/cave
+.claude/skills/crossplatform-audit/SKILL.md
+.claude/skills/preflight/SKILL.md
+docs/GITHUB_OPEN_TRIAGE_2026-08-19.md

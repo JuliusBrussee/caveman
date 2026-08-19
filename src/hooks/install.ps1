@@ -46,15 +46,19 @@ if (-not $Force) {
     if ($AllFilesPresent -and (Test-Path $Settings)) {
         try {
             $settingsObj = Get-Content $Settings -Raw | ConvertFrom-Json
+            # Probe for the exact script we wire for this event, not a bare
+            # 'caveman' substring — that also matches user hooks merely
+            # mentioning the word in a path (#593), which made us skip wiring
+            # and silently leave caveman inactive. Mirrors install.sh.
             $hasCavemanHook = {
-                param([string]$eventName)
+                param([string]$eventName, [string]$script)
                 if (-not $settingsObj.hooks) { return $false }
                 $entries = $settingsObj.hooks.$eventName
                 if (-not $entries) { return $false }
                 foreach ($entry in $entries) {
                     if ($entry.hooks) {
                         foreach ($hookDef in $entry.hooks) {
-                            if ($hookDef.command -and $hookDef.command.Contains("caveman")) {
+                            if ($hookDef.command -and $hookDef.command.Contains($script)) {
                                 return $true
                             }
                         }
@@ -62,7 +66,8 @@ if (-not $Force) {
                 }
                 return $false
             }
-            $HooksWired = (& $hasCavemanHook "SessionStart") -and (& $hasCavemanHook "UserPromptSubmit")
+            $HooksWired = (& $hasCavemanHook "SessionStart" "caveman-activate.js") `
+                -and (& $hasCavemanHook "UserPromptSubmit" "caveman-mode-tracker.js")
             $HasStatusLine = $null -ne $settingsObj.statusLine
         } catch {
             $HooksWired = $false
@@ -108,8 +113,13 @@ if (-not (Test-Path $Settings)) {
     Set-Content -Path $Settings -Value "{}"
 }
 
-# Back up existing settings.json before touching it
-Copy-Item $Settings "$Settings.bak" -Force
+# Back up existing settings.json before touching it. Back up ONCE: without the
+# Test-Path guard a -Force reinstall overwrites the only pre-caveman copy with
+# the already-merged file, destroying the user's recovery path. Same guard as
+# bin/install.js.
+if (-not (Test-Path "$Settings.bak")) {
+    Copy-Item $Settings "$Settings.bak"
+}
 
 # Use node for safe JSON merging — pass paths via env vars to avoid injection
 # if the username contains a single quote (e.g., O'Brien).
@@ -127,8 +137,11 @@ if (!settings.hooks) settings.hooks = {};
 
 // SessionStart
 if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
+// Match the exact script, not a bare 'caveman' substring — that also matches
+// user hooks merely mentioning the word in a path (#593), which made us skip
+// wiring and silently leave caveman inactive.
 const hasStart = settings.hooks.SessionStart.some(e =>
-  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-activate.js'))
 );
 if (!hasStart) {
   settings.hooks.SessionStart.push({
@@ -144,7 +157,7 @@ if (!hasStart) {
 // UserPromptSubmit
 if (!settings.hooks.UserPromptSubmit) settings.hooks.UserPromptSubmit = [];
 const hasPrompt = settings.hooks.UserPromptSubmit.some(e =>
-  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-mode-tracker.js'))
 );
 if (!hasPrompt) {
   settings.hooks.UserPromptSubmit.push({
