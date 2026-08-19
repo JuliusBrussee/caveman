@@ -11,6 +11,17 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = join(root, "dist", "index.js");
 const release = readFileSync(join(root, "BINARY_RELEASE"), "utf8").trim();
 const cliVersion = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+// NOT in the Windows gate (scripts/test-windows-compat.mjs), and not for a
+// harness reason: the committed manifest below carries only the darwin and
+// linux artifacts, so on win32 `update` looks up caveman-proxy_win32_amd64,
+// misses, and fails before it downloads anything. Adding the rows needs the
+// release key, which only the binary-release environment holds:
+//   node -e 'const{execFileSync}=require("node:child_process"),{createHash}=require("node:crypto"),{writeFileSync}=require("node:fs");const d=createHash("sha256").update("#!/bin/sh\nexit 0\n").digest("hex");writeFileSync("packages/cli/tests/fixtures/binary-release/checksums.txt",execFileSync("node",["scripts/build-release-binaries.mjs","--list"],{encoding:"utf8"}).trim().split("\n").map((n)=>`${d}  ${n}\n`).join(""))'
+//   CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM=... node scripts/sign-binary-checksums.mjs \
+//     packages/cli/tests/fixtures/binary-release/checksums.txt \
+//     packages/cli/tests/fixtures/binary-release/checksums.txt.keysig \
+//     packages/cli/BINARY_SIGNING_PUBKEY.pub
+// Once that lands, this file needs no change to run on Windows.
 const fixture = join(root, "tests", "fixtures", "binary-release");
 const checksums = readFileSync(join(fixture, "checksums.txt"), "utf8");
 const signature = readFileSync(join(fixture, "checksums.txt.keysig"), "utf8");

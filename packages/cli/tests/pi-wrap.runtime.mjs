@@ -6,8 +6,22 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { nodeStub, stubEnv } from "./harness/index.mjs";
+
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = join(packageRoot, "dist", "index.js");
+
+// Pi is launched through portableInvocation, so a Node shim stands in for the
+// real binary on every platform (harness/stub-bin.mjs).
+const PI_STUB = `import { writeFileSync } from "node:fs";
+const keys = ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "GEMINI_API_BASE_URL"];
+writeFileSync(process.env.PI_CAPTURE, JSON.stringify({
+  argv: ARGV,
+  hook: process.env.CAVEMAN_PI_HOOK_CMD,
+  gateway: process.env.CAVE_GATEWAY_URL,
+  baseUrls: Object.fromEntries(keys.filter((key) => Object.hasOwn(process.env, key)).map((key) => [key, process.env[key]])),
+}));
+`;
 
 function fixture(cliPath = cli) {
   const root = mkdtempSync(join(tmpdir(), "cave-pi-wrap-"));
@@ -19,21 +33,12 @@ function fixture(cliPath = cli) {
   writeFileSync(join(home, ".caveman-cloud", "config.json"), JSON.stringify({
     wrap: { proxy: false, shrink: false, mcp: false, browse: false },
   }));
-  writeFileSync(join(bin, "pi"), `#!/bin/sh
-node - "$PI_CAPTURE" "$@" <<'NODE'
-const fs = require("node:fs");
-const capture = process.argv[2];
-fs.writeFileSync(capture, JSON.stringify({
-  argv: process.argv.slice(3),
-  hook: process.env.CAVEMAN_PI_HOOK_CMD,
-  gateway: process.env.CAVE_GATEWAY_URL,
-  baseUrls: Object.fromEntries(["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "GEMINI_API_BASE_URL"].filter((key) => Object.hasOwn(process.env, key)).map((key) => [key, process.env[key]])),
-}));
-NODE
-`, { mode: 0o755 });
-  const env = {
+  nodeStub(bin, "pi", PI_STUB);
+  // os.homedir() reads USERPROFILE on Windows, HOME everywhere else.
+  const env = stubEnv({
     ...process.env,
     HOME: home,
+    USERPROFILE: home,
     CAVEMAN_HOME: join(home, ".caveman"),
     CAVEMAN_PLAIN: "1",
     CAVEMAN_TELEMETRY: "0",
@@ -41,16 +46,15 @@ NODE
     CAVE_GATEWAY_URL: "http://127.0.0.1:18841",
     CI: "1",
     NO_COLOR: "1",
-    PATH: `${bin}:${process.env.PATH}`,
     PI_CAPTURE: capture,
-  };
+  }, bin);
   for (const key of ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "GEMINI_API_BASE_URL"]) delete env[key];
   return {
     capture,
     cliPath,
     env,
     root,
-    cleanup() { rmSync(root, { recursive: true, force: true }); },
+    cleanup() { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); },
   };
 }
 
@@ -105,7 +109,7 @@ test("wrap pi fails open when no bundled extension exists", async () => {
     assert.match(out.stderr, /temporary native pack unavailable: Pi extension not found .* launching Pi directly/);
   } finally {
     fx.cleanup();
-    rmSync(packageCopy, { recursive: true, force: true });
+    rmSync(packageCopy, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 

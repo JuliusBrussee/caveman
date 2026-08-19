@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { nativeStub, nodeStub, stubEnv } from "./harness/index.mjs";
+
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 const SETTINGS_BYTES = Buffer.from('{\n  "theme": "pi-fixture",\n  // Pi accepts JSONC here.\n  "provider": "keep"\n}\n');
 
@@ -19,27 +21,29 @@ function fixture() {
   mkdirSync(dirname(settings), { recursive: true });
   writeFileSync(settings, SETTINGS_BYTES);
   writeFileSync(extensionFixture, "export default function cavemanPiFixture() {}\n");
-  writeFileSync(join(bin, "pi"), '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "pi 0.84.2"; fi\n', { mode: 0o755 });
-  const mcp = join(bin, "caveman-mcp");
-  writeFileSync(mcp, `#!/bin/sh
-if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
-  printf '%s\n' '{"version":"1.0.0","capabilities":["mcp_recovery"]}'
-fi
-`, { mode: 0o755 });
-  const proxy = join(bin, "caveman-proxy");
-  writeFileSync(proxy, `#!/bin/sh
-if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
-  printf '%s\n' '{"version":"1.0.0","capabilities":["run_state","native_runtime_v1","native_hook_bridge_v1","typed_ccr"]}'
-elif [ "$1" = "status" ]; then
-  printf '%s\n' '{"owner":"unknown"}'
-elif [ "$1" = "stats" ]; then
-  printf '%s\n' '{}'
-fi
-`, { mode: 0o755 });
+  // `pi` is launched through portableInvocation; the two Go binaries are
+  // execFile'd directly. See harness/stub-bin.mjs for why that matters.
+  nodeStub(bin, "pi", `if (ARGV[0] === "--version") process.stdout.write("pi 0.84.2\\n");\n`);
+  const mcp = nativeStub(bin, "caveman-mcp", `if (ARGV[0] === "version" && ARGV[1] === "--json") {
+  process.stdout.write('{"version":"1.0.0","capabilities":["mcp_recovery"]}\\n');
+}
+`);
+  const proxy = nativeStub(bin, "caveman-proxy", `if (ARGV[0] === "version" && ARGV[1] === "--json") {
+  process.stdout.write('{"version":"1.0.0","capabilities":["run_state","native_runtime_v1","native_hook_bridge_v1","typed_ccr"]}\\n');
+} else if (ARGV[0] === "status") {
+  process.stdout.write('{"owner":"unknown"}\\n');
+} else if (ARGV[0] === "stats") {
+  process.stdout.write('{}\\n');
+}
+`);
   return {
-    env: {
+    // os.homedir() reads USERPROFILE on Windows and HOME everywhere else, and
+    // the Pi extension directory is resolved from it — set both or the test
+    // writes into the real profile.
+    env: stubEnv({
       ...process.env,
       HOME: home,
+      USERPROFILE: home,
       CAVEMAN_HOME: join(home, ".caveman"),
       CAVEMAN_MCP_BIN: mcp,
       CAVEMAN_PI_EXTENSION: extensionFixture,
@@ -48,13 +52,14 @@ fi
       CAVE_BINARY_PROBE_TIMEOUT_MS: "10000",
       CI: "1",
       NO_COLOR: "1",
-      PATH: `${bin}:${process.env.PATH}`,
-    },
+    }, bin),
     extension: join(home, ".pi", "agent", "extensions", "caveman-native.js"),
     home,
     root,
     settings,
-    cleanup() { rmSync(root, { recursive: true, force: true }); },
+    // Windows can still hold a handle on a just-exited stub .exe, so retry
+    // rather than fail the test on a cleanup race.
+    cleanup() { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); },
   };
 }
 

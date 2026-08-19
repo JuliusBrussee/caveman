@@ -32,7 +32,7 @@ try {
 }
 `;
 
-export function stubAgent({ dir, name = "claude" }) {
+export function stubAgent({ dir, name = "claude", platform = process.platform }) {
   if (!dir) throw new Error("stubAgent requires dir");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   // Windows cannot execute a shebang script: CreateProcess resolves through
@@ -40,12 +40,17 @@ export function stubAgent({ dir, name = "claude" }) {
   // body as .mjs and a .cmd shim under the bare name — which is exactly how a
   // real agent binary presents itself on PATH there, so the product still has
   // to resolve `name` through PATHEXT to find it.
-  if (process.platform === "win32") {
+  if (platform === "win32") {
     writeFileSync(join(dir, `${name}.mjs`), SOURCE);
     const path = join(dir, `${name}.cmd`);
+    // The backslash after %~dp0 is load-bearing, not cosmetic: parseWindowsNodeShim
+    // only recognizes a Node shim in the `"%~dp0\target.mjs" %*` form, so without
+    // it portableInvocation throws "non-Node Windows command shim" and every test
+    // that spawns through stubAgent fails on Windows. (%~dp0 already ends in a
+    // separator; Windows collapses the double.)
     writeFileSync(path, [
       "@echo off",
-      `node "%~dp0${name}.mjs" %*`,
+      `node "%~dp0\\${name}.mjs" %*`,
       "exit /b %errorlevel%",
       "",
     ].join("\r\n"));
