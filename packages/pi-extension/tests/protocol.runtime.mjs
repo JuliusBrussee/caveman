@@ -90,7 +90,12 @@ test("task profiling ports match the shared vocabulary", () => {
 test("hook invocation resolution honors CAVEMAN_PI_HOOK_CMD with fallback", () => {
   const stamped = resolveHookInvocations({ CAVEMAN_PI_HOOK_CMD: JSON.stringify(["/n/node", "/x/cli.js"]) });
   assert.deepEqual(stamped, [{ command: "/n/node", args: ["/x/cli.js"] }]);
+  // Build the expected local-bin path with join() rather than hardcoding a
+  // POSIX string: resolveHookInvocations joins too, so on Windows it yields
+  // "\x\.caveman\bin\caveman" and a literal comparison fails on separators
+  // alone — a platform-coupled assertion, not a real difference.
+  const localBin = join("/x/.caveman", "bin", "caveman");
   const fallback = resolveHookInvocations({ CAVEMAN_PI_HOOK_CMD: "not json", CAVEMAN_HOME: "/x/.caveman" });
-  assert.deepEqual(fallback.map((i) => i.command), ["caveman", "cave", "/x/.caveman/bin/caveman"]);
-  assert.deepEqual(resolveHookInvocations({ CAVEMAN_HOME: "/x/.caveman" }).map((i) => i.command), ["caveman", "cave", "/x/.caveman/bin/caveman"]);
+  assert.deepEqual(fallback.map((i) => i.command), ["caveman", "cave", localBin]);
+  assert.deepEqual(resolveHookInvocations({ CAVEMAN_HOME: "/x/.caveman" }).map((i) => i.command), ["caveman", "cave", localBin]);
 });
