@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
@@ -24,13 +25,15 @@ test('macOS hook command shape stays shell-compatible', () => {
 });
 
 test('JetBrains roots include Windows roaming and local AppData', () => {
+  // jetbrainsRoots probes the host filesystem, so its joins are host-shaped;
+  // build the expectations the same way instead of hardcoding POSIX output.
   assert.deepEqual(
     jetbrainsRoots('/Users/jane', { APPDATA: 'C:\\Users\\jane\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\jane\\AppData\\Local' }),
     [
-      '/Users/jane/Library/Application Support/JetBrains',
-      '/Users/jane/.config/JetBrains',
-      'C:\\Users\\jane\\AppData\\Roaming/JetBrains',
-      'C:\\Users\\jane\\AppData\\Local/JetBrains',
+      path.join('/Users/jane', 'Library/Application Support/JetBrains'),
+      path.join('/Users/jane', '.config/JetBrains'),
+      path.join('C:\\Users\\jane\\AppData\\Roaming', 'JetBrains'),
+      path.join('C:\\Users\\jane\\AppData\\Local', 'JetBrains'),
     ],
   );
 });

@@ -475,7 +475,9 @@ const TELEMETRY_DISCLOSURE_LINE =
 // Reading token totals means spawning caveman-proxy to query the local SQLite
 // store. It runs after the command's own work, so the cost lands on process exit;
 // a slow or wedged binary drops the token fields rather than holding the CLI.
-const TELEMETRY_TOKEN_READ_TIMEOUT_MS = 400;
+// Env-overridable because a loaded CI runner can exceed 400ms just spawning the
+// stub, which made the token-delta tests flaky under concurrency.
+const TELEMETRY_TOKEN_READ_TIMEOUT_MS = Number(process.env.CAVEMAN_TELEMETRY_TOKEN_READ_TIMEOUT_MS) || 400;
 const SYNC_DISCLOSURE =
   "sync uploads span metadata to your org's dashboard — tokens, cost, latency, model, status. Imported standalone observations never affect managed budgets, verified savings, or billing. Subscription/OAuth sessions carry token counts only — no dollar figure. Never prompt or response bytes.";
 const TELEMETRY_COMMAND_ALLOWLIST = [

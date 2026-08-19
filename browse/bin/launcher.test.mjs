@@ -18,7 +18,7 @@ test("launcher fails closed when explicit binary does not exist", async () => {
   assert.match(out.stderr, /does not point to an executable/);
 });
 
-test("launcher honors CAVEMAN_BROWSE_BIN explicit Go binary", async () => {
+test("launcher honors CAVEMAN_BROWSE_BIN explicit Go binary", { skip: process.platform === "win32" }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "caveman-browse-bin-"));
   const stub = join(dir, "real-caveman-browse");
   writeFileSync(stub, "#!/bin/sh\nprintf 'ok'\n", { mode: 0o755 });

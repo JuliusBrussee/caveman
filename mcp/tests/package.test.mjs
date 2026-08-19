@@ -7,6 +7,10 @@ import test from "node:test";
 
 const packageRoot = resolve(import.meta.dirname, "..");
 
+// npm is npm.cmd on Windows, and spawning a .cmd requires a shell there.
+const isWindows = process.platform === "win32";
+const npmBin = isWindows ? "npm.cmd" : "npm";
+
 test("packed caveman-mcp installs and launches an explicit verified binary", () => {
   const root = mkdtempSync(join(tmpdir(), "caveman-mcp-package-"));
   const packed = join(root, "packed");
@@ -14,10 +18,11 @@ test("packed caveman-mcp installs and launches an explicit verified binary", () 
   try {
     mkdirSync(packed, { recursive: true });
     const env = { ...process.env, NPM_CONFIG_CACHE: join(root, "npm-cache") };
-    const pack = spawnSync("npm", ["pack", "--json", "--pack-destination", packed], {
+    const pack = spawnSync(npmBin, ["pack", "--json", "--pack-destination", packed], {
       cwd: packageRoot,
       env,
       encoding: "utf8",
+      shell: isWindows,
     });
     assert.equal(pack.status, 0, pack.stderr);
     const jsonAt = pack.stdout.indexOf('[\n');
@@ -29,9 +34,9 @@ test("packed caveman-mcp installs and launches an explicit verified binary", () 
     assert.ok(names.has("bin/release.generated.mjs"));
 
     const tarball = join(packed, metadata.filename);
-    const install = spawnSync("npm", [
+    const install = spawnSync(npmBin, [
       "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", consumer, tarball,
-    ], { env, encoding: "utf8" });
+    ], { env, encoding: "utf8", shell: isWindows });
     assert.equal(install.status, 0, install.stderr);
 
     const manifest = JSON.parse(readFileSync(join(consumer, "node_modules", "caveman-mcp", "package.json"), "utf8"));

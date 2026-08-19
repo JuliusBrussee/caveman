@@ -6,7 +6,11 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    dependencies:
+      '@caveman-ai/cli':
+        specifier: ^1.1.0
+        version: 1.2.1
 
   browse: {}
 
@@ -387,6 +391,11 @@ packages:
   '@babel/runtime@7.29.7':
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
+
+  '@caveman-ai/cli@1.2.1':
+    resolution: {integrity: sha512-1V8jymxQvMBrjt3LlxP9AKxsjOsBqOOS2iBkeKtQtCzYeuAMSrOkv/7hho/iGXMjkkPvBw1ateh6C4BiBn+pUQ==}
+    engines: {node: '>=22.13'}
+    hasBin: true
 
   '@clack/core@1.4.3':
     resolution: {integrity: sha512-/kr3UWNtdJfxZtPgDqUOmG2pvwlmcLGheex5yiZKdwbzZJxhV+HMNR9QNmyY5cGwTNV6LrR7Jtp+KjhUAP1qBQ==}
@@ -2337,6 +2346,8 @@ snapshots:
   '@aws/lambda-invoke-store@0.3.0': {}
 
   '@babel/runtime@7.29.7': {}
+
+  '@caveman-ai/cli@1.2.1': {}
 
   '@clack/core@1.4.3':
     dependencies:

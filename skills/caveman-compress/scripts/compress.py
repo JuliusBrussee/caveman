@@ -16,6 +16,14 @@ import tempfile
 from pathlib import Path
 from typing import List
 
+# Windows consoles default to cp1252, which cannot encode the emoji glyphs in
+# our status lines; replace unencodable characters instead of crashing.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 OUTER_FENCE_REGEX = re.compile(
     r"\A\s*(`{3,}|~{3,})[^\n]*\n(.*)\n\1\s*\Z", re.DOTALL
 )
