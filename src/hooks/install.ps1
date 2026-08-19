@@ -1,5 +1,6 @@
 # caveman — one-command hook installer for Claude Code (Windows PowerShell)
-# Installs: SessionStart hook (auto-load rules) + UserPromptSubmit hook (mode tracking)
+# Installs: SessionStart hook (auto-load rules) + SubagentStart hook (propagate
+# rules to Task-spawned subagents) + UserPromptSubmit hook (mode tracking)
 # Usage: powershell -ExecutionPolicy Bypass -File src\hooks\install.ps1
 #   or:  powershell -ExecutionPolicy Bypass -File src\hooks\install.ps1 -Force
 #   or (remote, no -Force support via pipe):
@@ -24,7 +25,7 @@ $HooksDir = Join-Path $ClaudeDir "hooks"
 $Settings = Join-Path $ClaudeDir "settings.json"
 $RepoUrl = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks"
 
-$HookFiles = @("package.json", "caveman-config.js", "caveman-parse.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js")
+$HookFiles = @("package.json", "caveman-config.js", "caveman-parse.js", "caveman-activate.js", "caveman-subagent.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js")
 
 # Resolve source — works from repo clone or remote
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
@@ -62,7 +63,7 @@ if (-not $Force) {
                 }
                 return $false
             }
-            $HooksWired = (& $hasCavemanHook "SessionStart") -and (& $hasCavemanHook "UserPromptSubmit")
+            $HooksWired = (& $hasCavemanHook "SessionStart") -and (& $hasCavemanHook "SubagentStart") -and (& $hasCavemanHook "UserPromptSubmit")
             $HasStatusLine = $null -ne $settingsObj.statusLine
         } catch {
             $HooksWired = $false
@@ -137,6 +138,22 @@ if (!hasStart) {
       command: 'node "' + hooksDir + '/caveman-activate.js"',
       timeout: 5,
       statusMessage: 'Loading caveman mode...'
+    }]
+  });
+}
+
+// SubagentStart
+if (!settings.hooks.SubagentStart) settings.hooks.SubagentStart = [];
+const hasSubagent = settings.hooks.SubagentStart.some(e =>
+  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+);
+if (!hasSubagent) {
+  settings.hooks.SubagentStart.push({
+    hooks: [{
+      type: 'command',
+      command: 'node "' + hooksDir + '/caveman-subagent.js"',
+      timeout: 5,
+      statusMessage: 'Propagating caveman mode to subagent...'
     }]
   });
 }
