@@ -67,6 +67,7 @@ func defaultRegistry(counter tokens.Counter) *compressors.Registry {
 // passes the original bytes through unchanged (no handle, zero ratio).
 func (e *Engine) Compress(input []byte, opts Options) (Result, error) {
 	body, listing := unwrapListing(input)
+	body, wrapper := unwrapFileWrapper(body)
 	ct := opts.Type
 	if ct == "" {
 		ct = e.Detect(body)
@@ -106,6 +107,7 @@ func (e *Engine) Compress(input []byte, opts Options) (Result, error) {
 		return res, nil // parse problem → pass-through
 	}
 	out = listing.rewrap(out)
+	out = wrapper.rewrap(out)
 	after := e.counter.Count(out)
 	if after >= before || bytes.Equal(out, input) {
 		return res, nil // not actually smaller → pass-through, claim nothing
@@ -152,6 +154,7 @@ func (e *Engine) Compress(input []byte, opts Options) (Result, error) {
 // SafetyClass/Recoverable; the number is a token count of compressor output.
 func (e *Engine) Simulate(input []byte, opts Options) SimResult {
 	body, listing := unwrapListing(input)
+	body, wrapper := unwrapFileWrapper(body)
 	ct := opts.Type
 	if ct == "" {
 		ct = e.Detect(body)
@@ -182,6 +185,7 @@ func (e *Engine) Simulate(input []byte, opts Options) SimResult {
 		return res // parse problem → pass-through
 	}
 	out = listing.rewrap(out)
+	out = wrapper.rewrap(out)
 	after := e.counter.Count(out)
 	if after >= before || bytes.Equal(out, input) {
 		return res // not actually smaller → claim nothing
