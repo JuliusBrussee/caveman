@@ -21,6 +21,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { hookCommand } = require('./platform-paths.js');
 
 // ── stripJsonComments ──────────────────────────────────────────────────────
 // Hand-rolled state machine. Tracks string state + backslash escape so a
@@ -267,9 +268,7 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode, platform = pro
         const scriptPath = m[2] || m[3] || m[4];
         const basename = path.basename(scriptPath);
         if (!MANAGED_HOOK_BASENAMES.has(basename)) continue;
-        h.command = platform === 'win32'
-          ? `& '${String(absoluteNode).replace(/'/g, "''")}' '${String(scriptPath).replace(/'/g, "''")}'`
-          : `"${absoluteNode}" "${scriptPath}"`;
+        h.command = hookCommand(absoluteNode, [scriptPath], platform);
         rewritten++;
       }
     }

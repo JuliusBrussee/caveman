@@ -234,7 +234,9 @@ test('rewriteLegacyManagedHookCommands rewrites bare-node managed scripts', () =
   assert.equal(s.hooks.SessionStart[0].hooks[1].command, 'node /abs/hooks/some-user-hook.js');
 });
 
-test('rewriteLegacyManagedHookCommands emits PowerShell invocation on Windows', () => {
+test('rewriteLegacyManagedHookCommands emits cmd.exe-compatible invocation on Windows', () => {
+  // Claude Code spawns hook commands through cmd.exe on Windows, not
+  // PowerShell — a leading `&` call operator fails every invocation.
   const s = {
     hooks: {
       SessionStart: [{ hooks: [{ type: 'command', command: "node \"C:/Users/O'Brien/.claude/hooks/caveman-activate.js\"" }] }],
@@ -244,7 +246,7 @@ test('rewriteLegacyManagedHookCommands emits PowerShell invocation on Windows', 
   assert.equal(n, 1);
   assert.equal(
     s.hooks.SessionStart[0].hooks[0].command,
-    "& 'C:/Program Files/nodejs/node.exe' 'C:/Users/O''Brien/.claude/hooks/caveman-activate.js'",
+    '"C:/Program Files/nodejs/node.exe" "C:/Users/O\'Brien/.claude/hooks/caveman-activate.js"',
   );
 });
 
