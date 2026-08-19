@@ -41,12 +41,9 @@ var (
 // fail-open: anything it is not confident about is "text", which routes to a
 // conservative compressor. The order is strict-JSON, diff, code, log, search.
 func (e *Engine) Detect(input []byte) string {
-	// A read tool's line-number gutter is presentation, not content: it wraps
-	// JSON, source, logs and CSV alike, and every signal below reads the first
-	// bytes of a line. Classify what the file IS, not how the agent printed it.
-	if source, _, ok := compressors.SplitLineNumberedListing(input); ok {
-		input = source
-	}
+	// Agent file tags and read-tool line-number gutters are presentation, not
+	// content. Classify what the file is, not how the agent printed it.
+	input, _ = unwrapInput(input)
 	trimmed := bytes.TrimSpace(input)
 	if len(trimmed) == 0 {
 		return TypeText
