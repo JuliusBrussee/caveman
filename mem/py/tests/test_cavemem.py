@@ -33,8 +33,36 @@ def test_python_client_forwards_every_command(monkeypatch: pytest.MonkeyPatch) -
     assert cavemem.history("mem_1")["args"] == ["history", "mem_1"]
     assert cavemem.forget("mem_1")["args"] == ["forget", "mem_1"]
     assert all(command[0] == "/fixture/cavemem" for command, _ in calls)
-    assert calls[0][1] == {"capture_output": True, "text": True, "check": True, "input": "raw memory"}
-    assert all(kwargs == {"capture_output": True, "text": True, "check": True} for _, kwargs in calls[1:])
+    # encoding is pinned so a non-ASCII memory survives a Windows locale that
+    # is not utf-8 — text=True alone would use the ANSI code page there.
+    base = {"capture_output": True, "text": True, "check": True, "encoding": "utf-8"}
+    assert calls[0][1] == {**base, "input": "raw memory"}
+    assert all(kwargs == base for _, kwargs in calls[1:])
+
+
+def test_python_client_round_trips_non_ascii_memory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """text=True with no encoding= encodes stdin and decodes stdout with the
+    locale encoding; on a cp1252 Windows this raised before the binary ever
+    saw the text, and mojibake'd anything that came back."""
+    binary = tmp_path / "cavemem-echo.py"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdout.buffer.write(json.dumps({'text': sys.stdin.buffer.read().decode('utf-8')},\n"
+        "                                   ensure_ascii=False).encode('utf-8'))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CAVEMEM_BIN", str(binary))
+    real_run = subprocess.run
+
+    def run_python_fixture(command: list[str], **kwargs: object):
+        return real_run([sys.executable, str(binary), *command[1:]], **kwargs)
+
+    monkeypatch.setattr(cavemem.subprocess, "run", run_python_fixture)
+    assert cavemem.remember("café ≠ tea 記憶")["text"] == "café ≠ tea 記憶"
 
 
 def test_python_client_oversized_memory_reaches_stable_exit_contract(

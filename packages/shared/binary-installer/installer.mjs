@@ -152,6 +152,26 @@ async function download(url, part, timeout) {
   return hash.digest("hex");
 }
 
+// Windows refuses to replace a file another process holds open, and the
+// binaries this installs (caveman-proxy, cavemem) are long-lived daemons — an
+// update issued while one is running failed the rename outright and then the
+// catch deleted the verified download, so the user was left with neither the
+// new binary nor a retry (#657). Back off and try again; the daemon usually
+// exits within a second or two of being asked to.
+async function replaceWithRetry(part, target, attempts = 6) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(part, target);
+      return;
+    } catch (error) {
+      const locked = error.code === "EPERM" || error.code === "EBUSY" ||
+                     error.code === "EACCES" || error.code === "ETXTBSY";
+      if (!locked || attempt >= attempts - 1) throw error;
+      await new Promise((done) => setTimeout(done, 100 * 2 ** attempt));
+    }
+  }
+}
+
 export async function ensureBinary({ name, envVar }) {
   const explicit = process.env[envVar];
   if (explicit) {
@@ -185,7 +205,7 @@ export async function ensureBinary({ name, envVar }) {
     const actual = await download(`${release}/${artifact}`, part, timeout);
     if (actual !== expected) throw new Error(`signature check failed for ${artifact} — partial download deleted`);
     chmodSync(part, 0o755);
-    renameSync(part, target);
+    await replaceWithRetry(part, target);
   } catch (error) {
     cleanup(part);
     throw error;

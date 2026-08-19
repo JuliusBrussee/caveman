@@ -21,7 +21,18 @@ def _binary() -> str:
 
 
 def _call(args: list[str], input_text: str | None = None) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"capture_output": True, "text": True, "check": True}
+    # Pin utf-8 on both directions. text=True alone decodes the child's stdout
+    # (and encodes our stdin) with the locale encoding, which on Windows is the
+    # ANSI code page: remember("cafe\u0301") would raise UnicodeEncodeError
+    # before the Go binary saw it, and any recall of a non-ASCII memory would
+    # come back mojibake or blow up inside json.loads. The binary speaks utf-8
+    # JSON on every platform, so say so.
+    kwargs: dict[str, Any] = {
+        "capture_output": True,
+        "text": True,
+        "check": True,
+        "encoding": "utf-8",
+    }
     if input_text is not None:
         kwargs["input"] = input_text
     proc = subprocess.run([_binary(), *args], **kwargs)
