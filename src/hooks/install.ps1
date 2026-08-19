@@ -24,7 +24,7 @@ $HooksDir = Join-Path $ClaudeDir "hooks"
 $Settings = Join-Path $ClaudeDir "settings.json"
 $RepoUrl = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks"
 
-$HookFiles = @("package.json", "caveman-config.js", "caveman-parse.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js")
+$HookFiles = @("package.json", "caveman-config.js", "caveman-parse.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js", "run-with-node.sh")
 
 # Resolve source — works from repo clone or remote
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
@@ -134,7 +134,7 @@ if (!hasStart) {
   settings.hooks.SessionStart.push({
     hooks: [{
       type: 'command',
-      command: 'node "' + hooksDir + '/caveman-activate.js"',
+      command: 'sh "' + hooksDir + '/run-with-node.sh" "' + hooksDir + '/caveman-activate.js"',
       timeout: 5,
       statusMessage: 'Loading caveman mode...'
     }]
@@ -150,7 +150,7 @@ if (!hasPrompt) {
   settings.hooks.UserPromptSubmit.push({
     hooks: [{
       type: 'command',
-      command: 'node "' + hooksDir + '/caveman-mode-tracker.js"',
+      command: 'sh "' + hooksDir + '/run-with-node.sh" "' + hooksDir + '/caveman-mode-tracker.js"',
       timeout: 5,
       statusMessage: 'Tracking caveman mode...'
     }]

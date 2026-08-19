@@ -18,7 +18,10 @@ find_node() {
   command -v nodejs 2>/dev/null && return 0
   # nvm's installed versions (no active shell profile to resolve "default")
   # and the common OS package-manager / Homebrew install locations.
-  for candidate in "$HOME"/.nvm/versions/node/*/bin/node \
+  # ${HOME:-} — HOME is occasionally unset in the minimal env hooks run
+  # under; under `set -u` a bare "$HOME" would abort the script here
+  # instead of falling through to the other candidates below.
+  for candidate in "${HOME:-}"/.nvm/versions/node/*/bin/node \
                    /usr/local/bin/node /opt/homebrew/bin/node /usr/bin/node; do
     [ -x "$candidate" ] && printf '%s\n' "$candidate" && return 0
   done

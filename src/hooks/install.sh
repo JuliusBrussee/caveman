@@ -37,7 +37,7 @@ HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
 REPO_URL="https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks"
 
-HOOK_FILES=("package.json" "caveman-config.js" "caveman-parse.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh" "cavecrew-model-overrides.js")
+HOOK_FILES=("package.json" "caveman-config.js" "caveman-parse.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh" "cavecrew-model-overrides.js" "run-with-node.sh")
 
 # Resolve source — works from repo clone or curl pipe
 SCRIPT_DIR=""
@@ -143,7 +143,7 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
     settings.hooks.SessionStart.push({
       hooks: [{
         type: 'command',
-        command: 'node \"' + hooksDir + '/caveman-activate.js\"',
+        command: 'sh \"' + hooksDir + '/run-with-node.sh\" \"' + hooksDir + '/caveman-activate.js\"',
         timeout: 5,
         statusMessage: 'Loading caveman mode...'
       }]
@@ -159,7 +159,7 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
     settings.hooks.UserPromptSubmit.push({
       hooks: [{
         type: 'command',
-        command: 'node \"' + hooksDir + '/caveman-mode-tracker.js\"',
+        command: 'sh \"' + hooksDir + '/run-with-node.sh\" \"' + hooksDir + '/caveman-mode-tracker.js\"',
         timeout: 5,
         statusMessage: 'Tracking caveman mode...'
       }]

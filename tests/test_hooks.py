@@ -58,6 +58,28 @@ class HookScriptTests(unittest.TestCase):
             self.assertIn(str(statusline), settings["statusLine"]["command"])
 
     @POSIX_SHELL_ONLY
+    def test_install_wires_hooks_through_run_with_node_wrapper(self):
+        # Regression: install.sh used to wire hooks as a bare `node "$script"`
+        # — the exact "node: not found" hook-noise bug the run-with-node.sh
+        # wrapper exists to fix — so a fresh install must route through it too,
+        # not just the plugin manifest.
+        if BASH is None:
+            self.skipTest("bash not found")
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-wrapper-") as tmp:
+            home = Path(tmp)
+
+            self.run_cmd(["bash", "src/hooks/install.sh"], home)
+
+            hooks_dir = home / ".claude" / "hooks"
+            self.assertTrue((hooks_dir / "run-with-node.sh").exists(), "run-with-node.sh should be installed")
+
+            settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+            start_cmd = settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            prompt_cmd = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+            self.assertIn("run-with-node.sh", start_cmd)
+            self.assertIn("run-with-node.sh", prompt_cmd)
+
+    @POSIX_SHELL_ONLY
     def test_install_reconfigures_missing_statusline(self):
         if BASH is None:
             self.skipTest("bash not found")
