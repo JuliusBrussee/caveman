@@ -13,54 +13,52 @@ const { RecoveryClient } = await import(pathToFileURL(join(here, "..", "dist", "
 const KNOWN_HANDLE = "ccr_0123456789abcdef0123456789abcdef";
 const KNOWN_BYTES = "exact original bytes\nline two éø bytes";
 
-import { chmodSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 // RecoveryClient spawns its binary argv-less, so each test materializes a tiny
 // shell shim that execs the node stub (optionally with a failure-mode env).
 
-// extraEnv is given as `NAME=value` pairs so each platform can render them in
-// its own syntax; a #!/bin/sh shim is unspawnable on Windows and used to fail
-// every recovery case there with EFTYPE before the client was even exercised.
-function shim(env = {}, onceFlag = undefined) {
+// A pure launcher for the node stub — no env baked in. On Windows the launcher
+// is BYPASSED: portableInvocation reads the .cmd, extracts the node target and
+// runs it directly, so anything the shim tried to `set` would never execute.
+// Behaviour switches therefore travel through process.env (inherited by the
+// spawned child) and, for per-spawn behaviour, a flag file the stub owns.
+function shim() {
   const dir = mkdtempSync(join(tmpdir(), "cave-pi-mcp-"));
   if (process.platform === "win32") {
-    // .cmd, which RecoveryClient resolves through portableInvocation.
     const path = join(dir, "caveman-mcp.cmd");
-    const sets = Object.entries(env).map(([k, v]) => `@set ${k}=${v}\r\n`).join("");
-    const once = onceFlag
-      ? `@if not exist "${onceFlag.flag}" (\r\n`
-        + `@type nul > "${onceFlag.flag}"\r\n`
-        + Object.entries(onceFlag.env).map(([k, v]) => `@set ${k}=${v}\r\n`).join("")
-        + `)\r\n`
-      : "";
-    writeFileSync(path, `@echo off\r\n${sets}${once}@node  "${stub}" %*\r\n`);
+    writeFileSync(path, `@node  "${stub}" %*\r\n`);
     return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
   }
   const path = join(dir, "caveman-mcp");
-  const sets = Object.entries(env).map(([k, v]) => `${k}=${v}; export ${k}\n`).join("");
-  const once = onceFlag
-    ? `if [ ! -e "${onceFlag.flag}" ]; then touch "${onceFlag.flag}"; `
-      + Object.entries(onceFlag.env).map(([k, v]) => `${k}=${v}; export ${k}; `).join("")
-      + `fi\n`
-    : "";
-  writeFileSync(path, `#!/bin/sh\n${sets}${once}exec "${process.execPath}" "${stub}" "$@"\n`);
+  writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${stub}" "$@"\n`);
   chmodSync(path, 0o755);
   return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
+// Set env for the duration of one test; the spawned stub inherits it.
+function withEnv(vars, fn) {
+  const prior = {};
+  for (const [k, v] of Object.entries(vars)) { prior[k] = process.env[k]; process.env[k] = v; }
+  const restore = () => {
+    for (const [k, v] of Object.entries(prior)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  };
+  return Promise.resolve(fn()).finally(restore);
+}
+
 test("probe failure (missing capability) makes the client unavailable", async () => {
-  const { path, cleanup } = shim({ STUB_MCP_DROP_CAPABILITY: "1" });
-  try {
+  const { path, cleanup } = shim();
+  await withEnv({ STUB_MCP_DROP_CAPABILITY: "1" }, async () => {
     const recovery = new RecoveryClient(path);
     assert.equal(await recovery.ensure(), false);
     const result = await recovery.retrieve(KNOWN_HANDLE, undefined, undefined);
     assert.equal(result.isError, true);
     assert.match(result.text, /cave_recovery_unavailable/);
     recovery.dispose();
-  } finally {
-    cleanup();
-  }
+  }).finally(cleanup);
 });
 
 test("retrieve returns exact bytes for a known handle and MCP error for unknown", async () => {
@@ -82,23 +80,26 @@ test("retrieve returns exact bytes for a known handle and MCP error for unknown"
 
 test("child crash after init respawns on next retrieve and recovers the same handle", async () => {
   const flag = join(mkdtempSync(join(tmpdir(), "cave-pi-crash-")), "crashed-once");
-  // Crash-once: only the FIRST spawn exits after init, so the retrieve below
-  // exercises the respawn path.
-  const { path, cleanup } = shim({}, { flag, env: { STUB_MCP_EXIT_AFTER_INIT: "1" } });
-  try {
+  const { path, cleanup } = shim();
+  await withEnv({ STUB_MCP_EXIT_ONCE_FLAG: flag }, async () => {
     const recovery = new RecoveryClient(path);
-    // First bring-up crashes right after initialize (crash-once shim)...
+    // First bring-up crashes right after initialize (the stub creates the flag
+    // and exits; the respawn finds it and stays up)...
     await recovery.ensure();
     await new Promise((resolve) => setTimeout(resolve, 200));
     // ...next retrieve must respawn a healthy child and still resolve the handle.
     const result = await recovery.retrieve(KNOWN_HANDLE, undefined, undefined);
     assert.equal(result.isError, false, result.text);
     assert.equal(result.text, KNOWN_BYTES);
+    // Without this the test passes trivially when no crash ever happens: the
+    // flag only exists because the first child died after initialize, so it is
+    // the proof that the respawn path — not the happy path — was exercised.
+    assert.ok(existsSync(flag), "crash-once never fired; the respawn path was not exercised");
     recovery.dispose();
-  } finally {
+  }).finally(() => {
     cleanup();
     rmSync(dirname(flag), { recursive: true, force: true });
-  }
+  });
 });
 
 test("abort signal cancels a pending retrieve without killing the child", async () => {
