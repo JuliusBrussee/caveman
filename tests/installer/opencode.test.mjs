@@ -403,6 +403,14 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     assert.equal(sys1.system.length, 1, 'expected one reinforcement line');
     assert.match(sys1.system[0], /CAVEMAN MODE ACTIVE \(ultra\)/);
 
+    // Existing system prompts must remain a single entry. Some vLLM chat
+    // templates reject a second system message even when both precede user
+    // content, so append the reinforcement to the existing entry.
+    const sysWithExisting = { system: ['existing system prompt'] };
+    await handlers['experimental.chat.system.transform']({}, sysWithExisting);
+    assert.equal(sysWithExisting.system.length, 1, 'must not add a second system message');
+    assert.match(sysWithExisting.system[0], /^existing system prompt\n\nCAVEMAN MODE ACTIVE \(ultra\)/);
+
     // Natural-language deactivation removes the flag.
     await handlers['chat.message']({}, { parts: [{ type: 'text', text: 'stop caveman please' }] });
     assert.equal(fs.existsSync(flagPath), false, 'flag should be deleted after deactivation');
