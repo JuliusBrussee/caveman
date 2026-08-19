@@ -436,6 +436,9 @@ test("a log line on the proxy's stdout does not break or poison the token read",
   const iso = isolatedEnv({
     CAVEMAN_TELEMETRY: "1",
     CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
+    // Same generous budget as stubProxyStats: this test hand-rolls its stub
+    // bin, and the 400ms default flakes under test concurrency.
+    CAVEMAN_TELEMETRY_TOKEN_READ_TIMEOUT_MS: "10000",
   });
   const bin = join(mkdtempSync(join(tmpdir(), "cave-bin-")), "caveman-proxy");
   const noisy = [
