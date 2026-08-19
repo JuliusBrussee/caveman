@@ -53,7 +53,7 @@ function pathWith(prependDir) {
 }
 
 // ── 1. Fresh install populates expected files ────────────────────────────
-test('opencode fresh install drops plugin, commands, agents, skills, AGENTS.md, opencode.json', () => {
+test('opencode fresh install drops plugin, commands, agents, skills, AGENTS.md, opencode.jsonc', () => {
   const xdg = freshTmpDir();
   const shimDir = shimOpencode();
   try {
@@ -88,10 +88,12 @@ test('opencode fresh install drops plugin, commands, agents, skills, AGENTS.md, 
     assert.match(agentsBody, /<!-- caveman-begin -->/);
     assert.match(agentsBody, /<!-- caveman-end -->/);
 
-    const cfgPath = path.join(ocDir, 'opencode.json');
-    assert.ok(fs.existsSync(cfgPath), 'opencode.json missing');
+    // Fresh installs (neither config present) create opencode.jsonc — the
+    // installer prefers it so it never shadows an existing .jsonc (#861).
+    const cfgPath = path.join(ocDir, 'opencode.jsonc');
+    assert.ok(fs.existsSync(cfgPath), 'opencode.jsonc missing');
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-    assert.ok(Array.isArray(cfg.plugin), 'opencode.json missing plugin array');
+    assert.ok(Array.isArray(cfg.plugin), 'opencode.jsonc missing plugin array');
     assert.ok(cfg.plugin.includes('./plugins/caveman/plugin.js'), 'plugin entry missing');
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });
@@ -110,7 +112,7 @@ test('opencode idempotent install does not duplicate plugin entries', () => {
     const r2 = runInstaller(['--only', 'opencode'], env);
     assert.notEqual(r2.status, 2);
 
-    const cfg = JSON.parse(fs.readFileSync(path.join(xdg, 'opencode', 'opencode.json'), 'utf8'));
+    const cfg = JSON.parse(fs.readFileSync(path.join(xdg, 'opencode', 'opencode.jsonc'), 'utf8'));
     const matches = cfg.plugin.filter(p => p === './plugins/caveman/plugin.js');
     assert.equal(matches.length, 1, `expected 1 plugin entry, got ${matches.length}`);
 
@@ -325,10 +327,12 @@ test('opencode uninstall removes plugin dir, command/agent/skill files, prunes o
     assert.equal(fs.existsSync(path.join(ocDir, 'skills', 'caveman')), false, 'caveman skill dir survived');
     assert.equal(fs.existsSync(path.join(ocDir, 'AGENTS.md')), false, 'AGENTS.md (we wrote it) survived');
 
-    if (fs.existsSync(path.join(ocDir, 'opencode.json'))) {
-      const cfg = JSON.parse(fs.readFileSync(path.join(ocDir, 'opencode.json'), 'utf8'));
+    for (const name of ['opencode.jsonc', 'opencode.json']) {
+      const cfgPath = path.join(ocDir, name);
+      if (!fs.existsSync(cfgPath)) continue;
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
       const stillHasPlugin = Array.isArray(cfg.plugin) && cfg.plugin.includes('./plugins/caveman/plugin.js');
-      assert.equal(stillHasPlugin, false, 'plugin entry survived in opencode.json');
+      assert.equal(stillHasPlugin, false, `plugin entry survived in ${name}`);
     }
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });

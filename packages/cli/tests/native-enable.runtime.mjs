@@ -99,6 +99,9 @@ test("enable/disable claude is idempotent and preserves unrelated later edits", 
   // assert first-party or Claude Code shrinks the context/auto-compact window
   // to 200k behind the proxy route (#865).
   assert.equal(settings.env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL, "1");
+  // Redirecting the base URL makes Claude Code drop tool search and inline every
+  // MCP tool schema, so enable must restore it alongside the route.
+  assert.equal(settings.env.ENABLE_TOOL_SEARCH, "auto");
   assert.match(installedBytes, /native-hook-fast\.js/);
   assert.match(installedBytes, /native-hook claude/);
   assert.match(installedBytes, /caveman-proxy/);
@@ -128,6 +131,7 @@ test("enable/disable claude is idempotent and preserves unrelated later edits", 
   assert.equal(after.env.KEEP, "yes");
   assert.equal(after.env.ANTHROPIC_BASE_URL, undefined);
   assert.equal(after.env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL, undefined);
+  assert.equal(after.env.ENABLE_TOOL_SEARCH, undefined, "disable must withdraw the tool-search default it introduced");
   assert.equal(after.theme, "dark");
   assert.match(JSON.stringify(after), /later-user-hook/);
   assert.doesNotMatch(JSON.stringify(after), /native-hook|shrink-hook/);

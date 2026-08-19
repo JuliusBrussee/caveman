@@ -2,11 +2,15 @@ package store
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	enginetokens "github.com/JuliusBrussee/caveman/engine/tokens"
 )
 
 // config_scan.go measures the local agent config that loads into context every
@@ -28,11 +32,21 @@ type configScan struct {
 	CodexAgents     *ConfigSnapshot
 	Skills          []skillInfo
 	SkillDescTokens int // per-turn skill catalog tax (name+description only)
+	TokenBasis      string
 	HookCount       int
 	PluginCount     int
+	MCPScopes       []mcpScopeScan
 }
 
-// claudeRoot / codexRoot resolve the agent config dirs, env-overridable for tests.
+type mcpScopeScan struct {
+	Scope   string
+	Path    string
+	Servers []string
+	Present bool
+}
+
+// Agent roots resolve local transcript/config dirs and stay env-overridable so
+// tests never read or write a user's real agent data.
 func claudeRoot() string {
 	if r := os.Getenv("CAVEMAN_CLAUDE_ROOT"); r != "" {
 		return r
@@ -55,6 +69,34 @@ func codexRoot() string {
 	return filepath.Join(home, ".codex")
 }
 
+func geminiRoot() string {
+	if r := os.Getenv("CAVEMAN_GEMINI_ROOT"); r != "" {
+		return r
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".gemini")
+}
+
+func opencodeRoot() string {
+	if r := os.Getenv("CAVEMAN_OPENCODE_ROOT"); r != "" {
+		return r
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share", "opencode", "storage")
+}
+
+// Aider histories are project-relative and have no safe global discovery root.
+// Keep this source disabled unless the caller explicitly supplies a scan root.
+func aiderRoot() string {
+	return os.Getenv("CAVEMAN_AIDER_ROOT")
+}
+
 // estimateTokens is the project's inferred token heuristic (bytes/4), matching the
 // usage importer's roughJSONSize/4 convention. Conservative, deterministic, no deps.
 func estimateTokens(text string) int {
@@ -65,16 +107,32 @@ func estimateTokens(text string) int {
 	return (n + 3) / 4
 }
 
+// configTokenCount uses the engine's offline o200k tokenizer when available.
+// The byte estimate remains an explicit deterministic fallback; callers always
+// persist the returned basis beside the count.
+func configTokenCount(text string) (int, string) {
+	return configTokenCountWith(enginetokens.Default(), text)
+}
+
+func configTokenCountWith(counter enginetokens.Counter, text string) (int, string) {
+	if counter != nil && counter.Name() == "o200k_base" {
+		return counter.Count([]byte(text)), "o200k"
+	}
+	return estimateTokens(text), "bytes4"
+}
+
 // scanConfig reads every config-tax source for the current working directory and
 // the user's global agent config. cwd is where `caveman learn` was invoked.
 func scanConfig(cwd string) configScan {
 	now := time.Now().UTC().Format(time.RFC3339)
-	var sc configScan
+	_, tokenBasis := configTokenCount("")
+	sc := configScan{TokenBasis: tokenBasis}
 	add := func(snap *ConfigSnapshot) {
 		if snap == nil {
 			return
 		}
 		snap.ObservedAt = now
+		snap.MetadataJSON = metadataWithTokenBasis(snap.MetadataJSON, tokenBasis)
 		sc.Snapshots = append(sc.Snapshots, *snap)
 	}
 
@@ -120,7 +178,79 @@ func scanConfig(cwd string) configScan {
 			add(proj)
 		}
 	}
+	sc.MCPScopes = scanMCPConfigs(cwd, croot, claudeGlobalConfigPath())
 	return sc
+}
+
+func claudeGlobalConfigPath() string {
+	if path := os.Getenv("CAVEMAN_CLAUDE_GLOBAL_CONFIG"); path != "" {
+		return path
+	}
+	if root := os.Getenv("CAVEMAN_CLAUDE_ROOT"); root != "" {
+		// Tests and alternate Claude homes must not fall through to real user config.
+		return filepath.Join(root, ".claude.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude.json")
+}
+
+func scanMCPConfigs(cwd, croot, globalPath string) []mcpScopeScan {
+	sources := []mcpScopeScan{
+		{Scope: "cwd_mcp_json", Path: filepath.Join(cwd, ".mcp.json")},
+		{Scope: "claude_root_mcp_json", Path: filepath.Join(croot, ".mcp.json")},
+		{Scope: "claude_global", Path: globalPath},
+	}
+	for i := range sources {
+		if (sources[i].Scope == "cwd_mcp_json" && cwd == "") ||
+			(sources[i].Scope == "claude_root_mcp_json" && croot == "") || sources[i].Path == "" {
+			continue
+		}
+		raw, err := os.ReadFile(sources[i].Path)
+		if err != nil {
+			continue
+		}
+		sources[i].Present = true
+		sources[i].Servers = parseMCPServerNames(raw, cwd, sources[i].Scope == "claude_global")
+	}
+	return sources
+}
+
+// parseMCPServerNames handles shapes observed locally: an object-valued
+// mcpServers map at top level, plus object-valued projects[cwd].mcpServers in
+// ~/.claude.json. Only server names are retained; commands, URLs, and env stay out.
+func parseMCPServerNames(raw []byte, cwd string, includeProject bool) []string {
+	var object map[string]any
+	if json.Unmarshal(raw, &object) != nil {
+		return nil
+	}
+	names := map[string]bool{}
+	add := func(value any) {
+		for name, config := range asMap(value) {
+			if strings.TrimSpace(name) == "" || len(asMap(config)) == 0 {
+				continue
+			}
+			names[name] = true
+		}
+	}
+	add(object["mcpServers"])
+	if includeProject && cwd != "" {
+		projects := asMap(object["projects"])
+		project := asMap(projects[cwd])
+		if len(project) == 0 {
+			cleaned := filepath.Clean(cwd)
+			project = asMap(projects[cleaned])
+		}
+		add(project["mcpServers"])
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // configTaxPerTurn is the token tax loaded on every turn: CLAUDE.md (user +
@@ -143,12 +273,14 @@ func readMarkdownConfig(scope, path, kind string) *ConfigSnapshot {
 		return nil
 	}
 	text := string(raw)
+	tokens, basis := configTokenCount(text)
 	return &ConfigSnapshot{
-		Scope:  scope,
-		Path:   path,
-		Kind:   kind,
-		Lines:  strings.Count(text, "\n") + 1,
-		Tokens: estimateTokens(text),
+		Scope:        scope,
+		Path:         path,
+		Kind:         kind,
+		Lines:        strings.Count(text, "\n") + 1,
+		Tokens:       tokens,
+		MetadataJSON: compactMeta(map[string]any{"token_basis": basis}),
 	}
 }
 
@@ -170,13 +302,23 @@ func scanSkills(skillsDir string) []skillInfo {
 		if name == "" {
 			name = e.Name()
 		}
+		descTokens, _ := configTokenCount(name + " " + desc)
 		out = append(out, skillInfo{
 			Name:       name,
 			Path:       path,
-			DescTokens: estimateTokens(name + " " + desc),
+			DescTokens: descTokens,
 		})
 	}
 	return out
+}
+
+func metadataWithTokenBasis(raw, basis string) string {
+	meta := map[string]any{}
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &meta)
+	}
+	meta["token_basis"] = basis
+	return compactMeta(meta)
 }
 
 func readSkillFrontmatter(path string) (name, desc string) {
@@ -284,7 +426,7 @@ func (s *Store) InsertConfigSnapshots(snaps []ConfigSnapshot) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.Prepare(
+	currentStmt, err := tx.Prepare(
 		`INSERT INTO config_snapshots (scope, path, kind, lines, tokens, observed_at, metadata_json)
 		  VALUES (?, ?, ?, ?, ?, ?, ?)
 		  ON CONFLICT(scope, path, kind) DO UPDATE SET
@@ -296,7 +438,16 @@ func (s *Store) InsertConfigSnapshots(snaps []ConfigSnapshot) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer stmt.Close()
+	defer currentStmt.Close()
+	historyStmt, err := tx.Prepare(
+		`INSERT OR IGNORE INTO config_snapshot_history
+		  (scope, path, kind, lines, tokens, observed_at, metadata_json)
+		  VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer historyStmt.Close()
 	n := 0
 	for _, snap := range snaps {
 		if snap.Path == "" {
@@ -305,8 +456,23 @@ func (s *Store) InsertConfigSnapshots(snaps []ConfigSnapshot) (int, error) {
 		if snap.ObservedAt == "" {
 			snap.ObservedAt = time.Now().UTC().Format(time.RFC3339)
 		}
-		if _, err := stmt.Exec(snap.Scope, snap.Path, snap.Kind, snap.Lines, snap.Tokens, snap.ObservedAt, snap.MetadataJSON); err != nil {
+		if _, err := currentStmt.Exec(snap.Scope, snap.Path, snap.Kind, snap.Lines, snap.Tokens, snap.ObservedAt, snap.MetadataJSON); err != nil {
 			return n, err
+		}
+		var latestLines, latestTokens int
+		historyErr := tx.QueryRow(
+			`SELECT lines, tokens FROM config_snapshot_history
+			  WHERE scope = ? AND path = ? AND kind = ?
+			  ORDER BY observed_at DESC, id DESC LIMIT 1`,
+			snap.Scope, snap.Path, snap.Kind,
+		).Scan(&latestLines, &latestTokens)
+		if historyErr != nil && historyErr != sql.ErrNoRows {
+			return n, historyErr
+		}
+		if historyErr == sql.ErrNoRows || latestLines != snap.Lines || latestTokens != snap.Tokens {
+			if _, err := historyStmt.Exec(snap.Scope, snap.Path, snap.Kind, snap.Lines, snap.Tokens, snap.ObservedAt, snap.MetadataJSON); err != nil {
+				return n, err
+			}
 		}
 		n++
 	}

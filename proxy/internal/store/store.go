@@ -183,6 +183,21 @@ CREATE TABLE IF NOT EXISTS config_snapshots (
   UNIQUE(scope, path, kind)
 );
 
+CREATE TABLE IF NOT EXISTS config_snapshot_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope TEXT NOT NULL,
+  path TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  lines INTEGER,
+  tokens INTEGER,
+  observed_at TEXT NOT NULL,
+  metadata_json TEXT,
+  UNIQUE(scope, path, kind, observed_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_config_snapshot_history_latest
+  ON config_snapshot_history(scope, path, kind, observed_at DESC);
+
 CREATE TABLE IF NOT EXISTS prefix_replacements (
   original_sha256 TEXT PRIMARY KEY,
   handle TEXT NOT NULL,
@@ -198,11 +213,26 @@ CREATE TABLE IF NOT EXISTS learn_sinks (
   basis TEXT NOT NULL,
   tokens_per_turn INTEGER,
   tokens_per_day_rate INTEGER,
+  tokens_observed INTEGER,
   framing TEXT,
   evidence_json TEXT,
   suggestion TEXT,
   computed_at TEXT NOT NULL
-);`
+);
+
+CREATE TABLE IF NOT EXISTS applied_fixes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sink_id TEXT NOT NULL,
+  practice_id TEXT,
+  fix_kind TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  before_tokens_per_turn INTEGER,
+  before_evidence_json TEXT,
+  note TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_applied_fixes_applied_at
+  ON applied_fixes(applied_at, id);`
 
 // migrations are additive ALTERs for stores created before a column existed.
 // CREATE TABLE IF NOT EXISTS never adds a column to an existing table, so each new
@@ -238,6 +268,7 @@ var migrations = []string{
 	`ALTER TABLE requests ADD COLUMN compression_eligible INTEGER`,
 	`ALTER TABLE requests ADD COLUMN request_hash_complete INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE usage_events ADD COLUMN cache_creation_input_tokens INTEGER`,
+	`ALTER TABLE learn_sinks ADD COLUMN tokens_observed INTEGER`,
 }
 
 // sqliteDSN builds the driver DSN for path. The two pragmas are load-bearing,

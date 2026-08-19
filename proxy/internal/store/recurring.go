@@ -214,10 +214,25 @@ func contentSHA256(raw string) string {
 // fingerprint, distinct session, and a capped locator sample. It never stores the
 // block text.
 func (m *recurringMiner) observeTurn(rootKind, relPath string, jsonlLine int, ts string, obj map[string]any) {
+	m.observeBlocks(rootKind, relPath, jsonlLine, ts, extractTurnBlocks(obj), obj["isSidechain"] == true)
+}
+
+// observeTextPayloads is the normalized-source entrypoint. Payload boundaries
+// stay in document order and each payload uses segmenter v1 independently,
+// producing the same flattened block indexes as extractTurnBlocks.
+func (m *recurringMiner) observeTextPayloads(rootKind, relPath string, jsonlLine int, ts string, payloads []string, side bool) {
+	var blocks []string
+	for _, payload := range payloads {
+		blocks = append(blocks, segmentBlocks(payload)...)
+	}
+	m.observeBlocks(rootKind, relPath, jsonlLine, ts, blocks, side)
+}
+
+func (m *recurringMiner) observeBlocks(rootKind, relPath string, jsonlLine int, ts string, blocks []string, side bool) {
 	if m == nil {
 		return
 	}
-	for idx, raw := range extractTurnBlocks(obj) {
+	for idx, raw := range blocks {
 		tokens := estimateTokens(raw)
 		if tokens < minBlockTokens {
 			continue
@@ -228,13 +243,13 @@ func (m *recurringMiner) observeTurn(rootKind, relPath string, jsonlLine int, ts
 			agg = &fpAgg{sessions: map[string]bool{}}
 			m.byFP[fp] = agg
 		}
-		agg.sessions[relPath] = true
+		agg.sessions[rootKind+"\x00"+relPath] = true
 		agg.occurrences++
 		agg.totalTokens += tokens
 		if m.trackPositions {
 			agg.positions = append(agg.positions, recurringOccurrence{
 				RootKind: rootKind, RelPath: relPath, JSONLLine: jsonlLine,
-				Timestamp: ts, Tokens: tokens, Side: obj["isSidechain"] == true,
+				Timestamp: ts, Tokens: tokens, Side: side,
 			})
 		}
 		if tokens > agg.blockTokens {

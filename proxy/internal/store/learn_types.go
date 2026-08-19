@@ -55,6 +55,18 @@ type LearnPlan struct {
 	// WrapMeasured is present only when the proxy recorded wrap activity in the
 	// window. Additive optional field: the schema stays `caveman.learn.v1`.
 	WrapMeasured *LearnWrapMeasured `json:"wrap_measured,omitempty"`
+	// Confirmed is longitudinal local measurement for fixes explicitly recorded
+	// in Caveman's own outcome ledger. It is omitted until at least one outcome
+	// can be stated, including an honest insufficient-data verdict.
+	Confirmed []LearnConfirmed `json:"confirmed,omitempty"`
+	// Portfolio groups existing sink ranking keys for presentation. It introduces
+	// no new estimate and is omitted when no sink has a practice/fix-family join.
+	Portfolio *LearnPortfolio `json:"portfolio,omitempty"`
+	// Repos is emitted only when at least two repositories have at least two
+	// scanned sessions each. Unknown repositories never become a zero bucket.
+	Repos         []LearnRepo `json:"repos,omitempty"`
+	observedTurns int
+	computedAt    string
 }
 
 // LearnWrapMeasured sums what the proxy itself recorded inside the window:
@@ -67,12 +79,12 @@ type LearnWrapMeasured struct {
 	Basis string `json:"basis"` // compression token count basis, e.g. estimated_engine_o200k
 	// WindowDays names the interval the sums cover; 0 means the since
 	// expression did not bound it and the sums are all-time.
-	WindowDays int   `json:"window_days"`
-	Requests   int64 `json:"requests"`
-	CompressedRequests int64  `json:"compressed_requests"`
-	TokensBefore       int64  `json:"tokens_before"`
-	TokensAfter        int64  `json:"tokens_after"`
-	TokensSaved        int64  `json:"tokens_saved"`
+	WindowDays         int   `json:"window_days"`
+	Requests           int64 `json:"requests"`
+	CompressedRequests int64 `json:"compressed_requests"`
+	TokensBefore       int64 `json:"tokens_before"`
+	TokensAfter        int64 `json:"tokens_after"`
+	TokensSaved        int64 `json:"tokens_saved"`
 	// WouldSaveTokens is observe-mode's report-only measurement on rows that
 	// were never transformed; it is disjoint from TokensSaved by construction
 	// (a row books one or the other, never both).
@@ -171,16 +183,20 @@ type ScoreComponent struct {
 // Sink is one ranked token sink. Class A sinks are asserted as facts; Class B sinks
 // carry softened suggestions with their evidence attached.
 type Sink struct {
-	SinkID           string         `json:"sink_id"`
-	PracticeID       string         `json:"practice_id"`
-	Title            string         `json:"title"`
-	Class            string         `json:"class"`
-	Basis            string         `json:"basis"`
-	TokensPerTurn    int64          `json:"tokens_per_turn"`
-	TokensPerDayRate int64          `json:"tokens_per_day_rate"`
-	Evidence         map[string]any `json:"evidence"`
-	Suggestion       string         `json:"suggestion"`
-	Framing          string         `json:"framing"`
+	SinkID           string `json:"sink_id"`
+	PracticeID       string `json:"practice_id"`
+	Title            string `json:"title"`
+	Class            string `json:"class"`
+	Basis            string `json:"basis"`
+	TokensPerTurn    int64  `json:"tokens_per_turn"`
+	TokensPerDayRate int64  `json:"tokens_per_day_rate"`
+	// TokensObserved is a window-bounded historical total. It is never folded
+	// into TokensPerTurn or TokensPerDayRate; ranking may derive a daily
+	// equivalent from it without changing its public meaning.
+	TokensObserved int64          `json:"tokens_observed,omitempty"`
+	Evidence       map[string]any `json:"evidence"`
+	Suggestion     string         `json:"suggestion"`
+	Framing        string         `json:"framing"`
 }
 
 // ConfigSnapshot is one measured config-tax source, persisted to config_snapshots

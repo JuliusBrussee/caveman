@@ -225,7 +225,10 @@ test('rewriteLegacyManagedHookCommands rewrites bare-node managed scripts', () =
       ] }],
     },
   };
-  const n = SETTINGS.rewriteLegacyManagedHookCommands(s, '/usr/local/bin/node');
+  // Pin the platform: this asserts the POSIX quoting shape, which the host
+  // default would silently swap for PowerShell on a Windows CI box (the
+  // Windows shape has its own test below).
+  const n = SETTINGS.rewriteLegacyManagedHookCommands(s, '/usr/local/bin/node', 'linux');
   assert.equal(n, 1);
   assert.match(s.hooks.SessionStart[0].hooks[0].command, /"\/usr\/local\/bin\/node" "\/abs\/hooks\/caveman-activate\.js"/);
   assert.equal(s.hooks.SessionStart[0].hooks[1].command, 'node /abs/hooks/some-user-hook.js');

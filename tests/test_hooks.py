@@ -2,9 +2,16 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+# The install.sh/uninstall.sh under test are the POSIX install path; Windows
+# installs go through install.ps1, so driving them via git-bash proves nothing.
+POSIX_SHELL_ONLY = unittest.skipIf(
+    sys.platform == "win32", "POSIX shell install path; Windows uses install.ps1"
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -29,6 +36,7 @@ class HookScriptTests(unittest.TestCase):
             check=True,
         )
 
+    @POSIX_SHELL_ONLY
     def test_install_upgrades_old_two_file_install(self):
         if BASH is None:
             self.skipTest("bash not found")
@@ -49,6 +57,7 @@ class HookScriptTests(unittest.TestCase):
             self.assertIn("statusLine", settings)
             self.assertIn(str(statusline), settings["statusLine"]["command"])
 
+    @POSIX_SHELL_ONLY
     def test_install_reconfigures_missing_statusline(self):
         if BASH is None:
             self.skipTest("bash not found")
@@ -95,6 +104,7 @@ class HookScriptTests(unittest.TestCase):
             self.assertIn("statusLine", updated)
             self.assertIn(str(hooks_dir / "caveman-statusline.sh"), updated["statusLine"]["command"])
 
+    @POSIX_SHELL_ONLY
     def test_uninstall_preserves_custom_statusline(self):
         if BASH is None:
             self.skipTest("bash not found")

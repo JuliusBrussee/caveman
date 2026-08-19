@@ -4,7 +4,7 @@ import tomllib
 
 def test_distribution_metadata_is_publishable_and_typed() -> None:
     package_root = Path(__file__).resolve().parents[1]
-    metadata = tomllib.loads((package_root / "pyproject.toml").read_text())
+    metadata = tomllib.loads((package_root / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert metadata["build-system"] == {
         "requires": ["setuptools==80.9.0"],

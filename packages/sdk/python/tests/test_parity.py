@@ -32,7 +32,7 @@ from caveman_cloud import (
     RetryLoopError,
 )
 
-FIXTURES = json.loads((Path(__file__).resolve().parents[2] / "parity" / "fixtures.json").read_text())
+FIXTURES = json.loads((Path(__file__).resolve().parents[2] / "parity" / "fixtures.json").read_text(encoding="utf-8"))
 CONFIG = FIXTURES["config"]
 OPS = FIXTURES["operations"]
 

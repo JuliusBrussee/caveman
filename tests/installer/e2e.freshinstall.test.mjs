@@ -398,8 +398,10 @@ test('openclaw install writes skill folder + SOUL.md bootstrap', () => {
   const ws = path.join(dir, 'ws');
   fs.mkdirSync(ws);
   try {
+    // Pin the ref explicitly so the assertion tests the derivation, not
+    // whatever release the repo happens to be on (see the branch-ref test).
     const r = spawnSync(process.execPath, [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
-      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' },
+      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1', CAVEMAN_REF: 'v3.4.5' },
       encoding: 'utf8',
     });
     assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
@@ -409,7 +411,7 @@ test('openclaw install writes skill folder + SOUL.md bootstrap', () => {
     assert.ok(fs.existsSync(skillFile), 'skill SKILL.md missing');
     const skillRaw = fs.readFileSync(skillFile, 'utf8');
     assert.match(skillRaw, /^---\n/, 'skill missing frontmatter');
-    assert.match(skillRaw, /\nversion:\s*1\.10\.0/, 'skill version must match pinned installer ref');
+    assert.match(skillRaw, /\nversion:\s*3\.4\.5/, 'skill version must match pinned installer ref');
     assert.match(skillRaw, /\nalways:\s*true/, 'skill missing always: true frontmatter');
 
     // Body after the merged frontmatter must match the source body.

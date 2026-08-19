@@ -1,0 +1,30 @@
+[
+  {
+    "id": "cli-telemetry-default-consent-boundary",
+    "base_sha": "b4b26db82b178c575cd8a68aea0fad043c2ef316",
+    "target_sha": "1df938113ca9f662ba72be03d6ed21343ec0e970",
+    "task_type": "javascript-cli-telemetry-consent",
+    "prompt": "Update the CLI's anonymous usage telemetry consent boundary. On a first real interactive command with no saved decision, make the default explicit and persist a stable anonymous identifier before any event can be sent; keep help, automation, CI/non-TTY, environment opt-out, and an existing opt-out silent and non-persistent as appropriate. Restrict emitted data to an allowlisted content-free command summary, keep request failure/time bounded, and leave existing telemetry controls and logout behavior intact.",
+    "verify_hint": "pnpm --dir packages/cli build && pnpm --dir packages/cli exec node --test tests/telemetry.runtime.mjs",
+    "verify_command": "pnpm --dir packages/cli build && pnpm --dir packages/cli exec node --test tests/telemetry.runtime.mjs",
+    "verify_timeout": 1200,
+    "hidden_paths": [
+      "packages/cli/tests/telemetry.runtime.mjs"
+    ]
+  },
+  {
+    "id": "installer-idempotent-managed-state",
+    "base_sha": "7b2bed2d0b7237ebc8f3e980258e5a8bdd821da1",
+    "target_sha": "e843518438b2cfb404edf00db2d8e64c1d975e34",
+    "task_type": "javascript-installer-state-safety",
+    "prompt": "Make the multi-agent installer a safe, repeatable, reversible state transition. Reject unknown requested agent/profile IDs before mutating anything; expand home-relative configuration paths consistently and await asynchronous hook/init work so failures are observable. Re-running without force must preserve user edits and original backups; force may replace managed payloads. Install/uninstall must isolate and remove only managed rule blocks while preserving user text and JSONC settings, tolerate malformed hook shapes, and keep normal command behavior unchanged. Cover fresh, repeated, forced, malformed-config, and uninstall paths.",
+    "verify_hint": "node --test tests/installer/opencode.test.mjs tests/installer/unit.argv.test.mjs tests/installer/unit.settings.test.mjs",
+    "verify_command": "node --test tests/installer/opencode.test.mjs tests/installer/unit.argv.test.mjs tests/installer/unit.settings.test.mjs",
+    "verify_timeout": 1200,
+    "hidden_paths": [
+      "tests/installer/opencode.test.mjs",
+      "tests/installer/unit.argv.test.mjs",
+      "tests/installer/unit.settings.test.mjs"
+    ]
+  }
+]

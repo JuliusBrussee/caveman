@@ -49,3 +49,12 @@ func TestLearnRetroOptionsCarriesBothPassBudgets(t *testing.T) {
 		t.Fatalf("retro options = %+v, want enabled behavior=20000 retro=60000", got)
 	}
 }
+
+func TestFirstPositionalDoesNotConsumeValueAfterBooleanFlag(t *testing.T) {
+	if got := firstPositional([]string{"--dry-run", "claude_md_weight:user"}); got != "claude_md_weight:user" {
+		t.Fatalf("boolean flag positional = %q", got)
+	}
+	if got := firstPositional([]string{"--since", "30d", "--json", "sink"}); got != "sink" {
+		t.Fatalf("value/boolean flag positionals = %q", got)
+	}
+}

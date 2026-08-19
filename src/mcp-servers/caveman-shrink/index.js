@@ -133,9 +133,15 @@ function transformResponse(msg) {
     }
   }
 
-  // Some servers stuff descriptions in nested schemas. Only walk if nothing
-  // matched at the top level; avoids double-processing a tool's nested params.
-  if (!compressedSomething) compressDescriptionsInPlace(r, fields);
+  // Walk nested inputSchema descriptions (e.g. tool parameter descriptions).
+  // Always run — top-level compression does not cover nested schemas.
+  for (const arrayName of ['tools', 'prompts', 'resources', 'resourceTemplates']) {
+    if (Array.isArray(r[arrayName])) {
+      for (const item of r[arrayName]) {
+        if (item.inputSchema) compressDescriptionsInPlace(item.inputSchema, fields);
+      }
+    }
+  }
 
   return msg;
 }
