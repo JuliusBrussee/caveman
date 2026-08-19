@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { type PortableInvocation, portableInvocation } from "./portable-command.ts";
 import { type HookEvent, type HookResponse, sanitizeHookResponse } from "./protocol.ts";
 
 const HOOK_TIMEOUT_MS = 2000;
@@ -65,9 +66,22 @@ export class HookBridge {
 
   private invoke(invocation: HookInvocation, event: HookEvent, input: string): Promise<string | undefined | "ENOENT"> {
     return new Promise((resolve) => {
+      // On Windows `caveman` on PATH is a .cmd shim (or a non-executable Unix
+      // shim beside it), and ~/.caveman/bin/caveman is extensionless — execFile
+      // cannot run either and dies with `spawn EFTYPE`, which broke every hook
+      // call on Windows. Resolve to something spawnable first. A shim we cannot
+      // parse throws, which the fail-open contract treats as "try the next
+      // candidate" rather than taking down the caller.
+      let portable: PortableInvocation;
+      try {
+        portable = portableInvocation(invocation.command, [...invocation.args, "native-hook", "pi", event]);
+      } catch {
+        resolve("ENOENT");
+        return;
+      }
       const child = execFile(
-        invocation.command,
-        [...invocation.args, "native-hook", "pi", event],
+        portable.command,
+        portable.args,
         { timeout: event === "SessionStart" ? SESSION_START_TIMEOUT_MS : HOOK_TIMEOUT_MS, maxBuffer: HOOK_MAX_BUFFER, encoding: "utf8" },
         (error, stdout) => {
           if (error && (error as NodeJS.ErrnoException).code === "ENOENT") return resolve("ENOENT");
