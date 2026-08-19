@@ -9,6 +9,7 @@ packages:
   - "packages/graders"
   - "packages/kit"
   - "packages/mastra"
+  - "packages/pi-extension"
   - "packages/sdk/typescript"
   - "packages/shared/contracts"
   - "shared/provider-catalog"
