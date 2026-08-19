@@ -421,7 +421,7 @@ async function main(): Promise<void> {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext: context } }));
   } else if (mode !== "record" && agent === "claude" && eventName === "PostToolUse" && response?.output_replacement) {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: response.output_replacement } }));
-  } else if (mode !== "record" && (agent === "opencode" || agent === "pi") && eventName === "PostToolUse" && response) {
+  } else if (mode !== "record" && (agent === "opencode" || agent === "pi") && (eventName === "PostToolUse" || eventName === "PostToolUseFailure") && response) {
     process.stdout.write(JSON.stringify(response));
   }
 }

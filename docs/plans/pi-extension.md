@@ -20,7 +20,7 @@ Ground truth discovered during recon (deviations from the original spec sketch):
   gains `pi` with a raw-response output contract (opencode-style).
 - **`enable pi` reuses the existing file-mutation journal machinery** instead of the
   spec's `pi install npm:@caveman-ai/pi` path: the extension file is written to
-  `~/.pi/agent/extensions/caveman-native.mjs` (Pi auto-discovers that dir), journaled
+  `~/.pi/agent/extensions/caveman-native.js` (Pi auto-discovers that dir), journaled
   with sha256 ownership like the opencode plugin. This keeps `~/.pi/agent/settings.json`
   byte-identical (stronger than the spec asked), works offline, and gets
   crash-recovery/ownership-refusal for free. `pi install npm:@caveman-ai/pi` remains a
@@ -77,7 +77,7 @@ Ground truth discovered during recon (deviations from the original spec sketch):
      `CAVEMAN_PI_EXTENSION` → `dist/caveman-pi-extension.mjs` next to the CLI.
    - `scripts/bundle-pi-extension.mjs` in the build/test chain (delegate-MCP pattern).
    - Enable/disable: `piNativeMutations` writes the bundled extension to
-     `~/.pi/agent/extensions/caveman-native.mjs` (kind `pi-extension`), journaled;
+     `~/.pi/agent/extensions/caveman-native.js` (kind `pi-extension`), journaled;
      disable restores via existing machinery; drift ⇒ refusal, not deletion.
    - `pnpm-workspace.yaml` + capability rows + status/doctor text.
 4. **Tests** — package unit tests (protocol bounds, recovery client vs stub MCP server,

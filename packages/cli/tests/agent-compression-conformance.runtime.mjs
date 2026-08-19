@@ -17,7 +17,7 @@ const packageParent = join(cliDir, "..");
 const publicRoot = existsSync(join(packageParent, "agents")) ? packageParent : join(packageParent, "..");
 const registry = JSON.parse(readFileSync(join(publicRoot, "agents", "agents.json"), "utf8"));
 const profiles = registry.agents;
-const expectedProfiles = ["aider", "claude", "codex", "gemini", "hermes", "openclaw", "opencode"];
+const expectedProfiles = ["aider", "claude", "codex", "gemini", "hermes", "openclaw", "opencode", "pi"];
 const protocolCapabilities = {
   aider: { recovery: "server" },
   claude: { recovery: "server" },
@@ -26,6 +26,7 @@ const protocolCapabilities = {
   hermes: { recovery: "server" },
   openclaw: { recovery: "server" },
   opencode: { recovery: "server" },
+  pi: { recovery: "server" },
 };
 const responseSentinel = "CAVEMAN_CONFORMANCE_OK";
 const payloadMarker = "CAVEMAN_CONFORMANCE_PAYLOAD";
@@ -194,6 +195,15 @@ if (id === "claude") {
   body = { model: "gpt-4o-mini", stream: false, messages: [{ role: "user", content: prompt }] };
 } else if (id === "aider") {
   baseURL = process.env.OPENAI_API_BASE || "";
+  path = "/chat/completions";
+  body = { model: "gpt-4o-mini", stream: false, messages: [{ role: "user", content: prompt }] };
+} else if (id === "pi") {
+  // Simulates the routed Pi extension. Wrap must actually have passed the
+  // extension asset and stamped the hook env — a fail-open direct launch here
+  // must fail the conformance run, not silently pretend to route.
+  if (!process.argv.includes("--extension")) { process.stderr.write("pi: wrap did not pass --extension\\n"); process.exit(2); }
+  if (!process.env.CAVEMAN_PI_HOOK_CMD) { process.stderr.write("pi: wrap did not stamp CAVEMAN_PI_HOOK_CMD\\n"); process.exit(2); }
+  baseURL = (process.env.CAVE_GATEWAY_URL || "") + "/w/pi/openai/v1";
   path = "/chat/completions";
   body = { model: "gpt-4o-mini", stream: false, messages: [{ role: "user", content: prompt }] };
 } else {

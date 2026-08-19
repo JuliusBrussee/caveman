@@ -321,7 +321,7 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 
 func directOutputRewriteAgent(agentID string) bool {
 	switch strings.ToLower(strings.TrimSpace(agentID)) {
-	case "claude", "opencode":
+	case "claude", "opencode", "pi":
 		return true
 	default:
 		return false

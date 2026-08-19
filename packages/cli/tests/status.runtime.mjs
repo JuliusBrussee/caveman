@@ -136,7 +136,7 @@ if (cmd === "version") {
       "native_integrations",
     ]);
     assert.deepEqual(parsed.native_integrations.map((item) => item.agent), [
-      "claude", "codex", "hermes", "gemini", "opencode", "aider", "generic",
+      "claude", "codex", "hermes", "gemini", "opencode", "pi", "aider", "generic",
     ]);
     assert.equal(parsed.plan, null);
     assert.notEqual(parsed.mem_blocks, 0, "unknown mem count must be null, never a fabricated zero");
