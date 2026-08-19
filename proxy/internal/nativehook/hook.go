@@ -62,7 +62,7 @@ func Run(ctx context.Context, home, agent, adapterPath string, raw []byte, stdou
 
 func validAgent(agent string) bool {
 	switch agent {
-	case "claude", "codex", "hermes", "gemini", "opencode":
+	case "claude", "codex", "hermes", "gemini", "opencode", "pi":
 		return true
 	default:
 		return false
