@@ -60,6 +60,9 @@ function startTelemetryStub({ hang = false } = {}) {
     });
   });
   server.on("connection", (socket) => {
+    // Same reason as the listener unref in listenOrSkip: a socket the hang-mode
+    // stub keeps open must not pin the event loop after a failed assertion.
+    socket.unref();
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
   });
@@ -83,7 +86,13 @@ function listen(server) {
 
 async function listenOrSkip(t, stub) {
   try {
-    return await listen(stub.server);
+    const port = await listen(stub.server);
+    // A test that fails an assertion never reaches its stub.close(); an
+    // un-unref'd listener then holds this file's event loop open forever and
+    // node --test waits on it — one failed assert hung the whole suite for
+    // 6 hours on CI. unref makes a failure fail instead of hang.
+    stub.server.unref();
+    return port;
   } catch (error) {
     stub.close();
     if (error?.code === "EPERM") {
@@ -319,7 +328,9 @@ function stubProxyStats({ env, caveDir }, { tokensIn, tokensSaved, basis = "infe
   writeFileSync(bin, `#!/bin/sh\ncat <<'CAVE_EOF'\n${body}\nCAVE_EOF\n`, { mode: 0o755 });
   chmodSync(bin, 0o755);
   writeFileSync(join(caveDir, "caveman.db"), "");
-  return { ...env, CAVEMAN_PROXY_BIN: bin };
+  // The 400ms default budget is about real UX, not correctness; a loaded CI
+  // runner can blow it just spawning the stub, flaking every token assertion.
+  return { ...env, CAVEMAN_PROXY_BIN: bin, CAVEMAN_TELEMETRY_TOKEN_READ_TIMEOUT_MS: "10000" };
 }
 
 test("command_run carries the proxy token delta, then stops repeating it", async (t) => {
