@@ -1012,8 +1012,17 @@ func TestKeepaliveHoldsOffIdleExit(t *testing.T) {
 	defer store.Close()
 	runtime := New(store)
 	stop := make(chan struct{})
+	// Heartbeat interval must sit far below the idle threshold, not merely
+	// under it. Windows' default timer granularity is ~15.6ms, so a 10ms ticker
+	// really fires every ~16ms and a loaded CI runner stretches that further; a
+	// 30ms threshold left barely a 2x margin and the idle timer won this race
+	// intermittently on windows-latest. 5ms against 250ms is ~50x, which
+	// survives a scheduling stall an order of magnitude worse than anything
+	// observed.
+	const heartbeat = 5 * time.Millisecond
+	const idleAfter = 250 * time.Millisecond
 	go func() {
-		ticker := time.NewTicker(10 * time.Millisecond)
+		ticker := time.NewTicker(heartbeat)
 		defer ticker.Stop()
 		for {
 			select {
@@ -1024,13 +1033,13 @@ func TestKeepaliveHoldsOffIdleExit(t *testing.T) {
 			}
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
 	defer cancel()
-	if runtime.WaitForIdle(ctx, 30*time.Millisecond) {
+	if runtime.WaitForIdle(ctx, idleAfter) {
 		t.Fatal("idle exit fired while keepalive heartbeats were arriving")
 	}
 	close(stop)
-	if !runtime.WaitForIdle(context.Background(), 30*time.Millisecond) {
+	if !runtime.WaitForIdle(context.Background(), idleAfter) {
 		t.Fatal("idle exit must fire once heartbeats stop")
 	}
 }
