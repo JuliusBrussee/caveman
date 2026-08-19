@@ -58,21 +58,35 @@ function fixture(port, { runState = true, recoveryViaMcp = true } = {}) {
   mkdirSync(home, { recursive: true });
   mkdirSync(join(cavemanHome, "run"), { recursive: true });
   const hookLog = join(root, "hooks.log");
-  const hook = join(root, "caveman-hook.sh");
-  writeFileSync(hook, `#!/bin/sh
-event="$4"
-cat > /dev/null
-echo "$event" >> "${hookLog}"
-case "$event" in
-  SessionStart) printf '%s' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"CORE_MARKER_XYZ"}}' ;;
-  UserPromptSubmit) printf '%s' '{"hookSpecificOutput":{"additionalContext":"DYNAMIC_MARKER_ABC"}}' ;;
-  *) printf '%s' '{}' ;;
-esac
+  // A Node script invoked through process.execPath, not a #!/bin/sh shim:
+  // Windows cannot execute a shebang script, so the old fixture failed the
+  // whole suite there with `spawn EFTYPE` and told us nothing about the code
+  // under test. The event is the last argv entry either way.
+  const hook = join(root, "caveman-hook.mjs");
+  writeFileSync(hook, `
+import { appendFileSync } from "node:fs";
+const event = process.argv[process.argv.length - 1];
+appendFileSync(${JSON.stringify(hookLog)}, event + "\\n");
+process.stdin.resume();
+process.stdin.on("data", () => {});
+const bodies = {
+  SessionStart: '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"CORE_MARKER_XYZ"}}',
+  UserPromptSubmit: '{"hookSpecificOutput":{"additionalContext":"DYNAMIC_MARKER_ABC"}}',
+};
+process.stdout.write(bodies[event] ?? "{}");
+process.stdin.pause();
+process.stdin.unref();
 `);
-  chmodSync(hook, 0o755);
-  const mcpShim = join(root, "caveman-mcp");
-  writeFileSync(mcpShim, `#!/bin/sh\nexec "${process.execPath}" "${mcpStub}" "$@"\n`);
-  chmodSync(mcpShim, 0o755);
+  // CAVEMAN_MCP_BIN is a single path, so the shim has to be directly
+  // spawnable: a .cmd on Windows (which RecoveryClient now resolves through
+  // portableInvocation), a shebang script elsewhere.
+  const mcpShim = join(root, process.platform === "win32" ? "caveman-mcp.cmd" : "caveman-mcp");
+  if (process.platform === "win32") {
+    writeFileSync(mcpShim, `@node  "${mcpStub}" %*\r\n`);
+  } else {
+    writeFileSync(mcpShim, `#!/bin/sh\nexec "${process.execPath}" "${mcpStub}" "$@"\n`);
+    chmodSync(mcpShim, 0o755);
+  }
   if (runState) {
     writeFileSync(join(cavemanHome, "run", `${port}.json`), JSON.stringify({
       schema: "caveman.proxy.run.v1",
@@ -92,7 +106,7 @@ esac
     HOME: home,
     CAVEMAN_HOME: cavemanHome,
     CAVE_GATEWAY_URL: `http://127.0.0.1:${port}`,
-    CAVEMAN_PI_HOOK_CMD: JSON.stringify([hook, "placeholder"]),
+    CAVEMAN_PI_HOOK_CMD: JSON.stringify([process.execPath, hook, "placeholder"]),
     CAVEMAN_MCP_BIN: mcpShim,
     NO_COLOR: "1",
   };
