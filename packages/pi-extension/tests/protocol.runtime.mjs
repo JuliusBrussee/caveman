@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { join, dirname } from "node:path";
 
-const dist = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "testable.mjs");
+// pathToFileURL, not a bare path: dynamic import() of an absolute Windows path
+// throws ERR_UNSUPPORTED_ESM_URL_SCHEME ("Received protocol 'd:'") because the
+// drive letter reads as a URL scheme.
+const dist = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "testable.mjs")).href;
 const {
   MAX_CONTEXT_BYTES,
   ROUTES_BY_API,
