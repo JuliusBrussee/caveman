@@ -6,14 +6,26 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const { hookCommand, jetbrainsRoots } = require('../../bin/lib/platform-paths.js');
 
-test('Windows hook commands invoke quoted executables through PowerShell', () => {
+test('Windows hook commands use cmd.exe-compatible quoting, not PowerShell', () => {
+  // Claude Code spawns hook commands through cmd.exe on Windows, not
+  // PowerShell — a leading `&` call operator makes cmd.exe fail every
+  // invocation with "& was unexpected at this time" (issue: /caveman set
+  // the mode flag but never actually changed responses, because
+  // SessionStart's ruleset injection silently crashed every session).
   assert.equal(
     hookCommand(
       "C:\\Program Files\\nodejs\\node.exe",
       ["C:\\Users\\O'Brien\\.claude\\hooks\\caveman-activate.js"],
       'win32',
     ),
-    "& 'C:\\Program Files\\nodejs\\node.exe' 'C:\\Users\\O''Brien\\.claude\\hooks\\caveman-activate.js'",
+    '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\O\'Brien\\.claude\\hooks\\caveman-activate.js"',
+  );
+});
+
+test('Windows hook commands escape embedded double quotes for cmd.exe', () => {
+  assert.equal(
+    hookCommand('node.exe', ['C:\\path\\has "quote".js'], 'win32'),
+    '"node.exe" "C:\\path\\has ""quote"".js"',
   );
 });
 
