@@ -33,6 +33,9 @@ func TestUnwrapFileWrapper(t *testing.T) {
 		[]byte(`<file name="a">`),
 		[]byte(`</file>`),
 		[]byte(`<files>x</files>`),
+		// Open tag never terminated: the only `>` belongs to the closing tag.
+		[]byte(`<file name="x"</file>`),
+		[]byte(`<file name='a>b'` + "\nsome prose about a file\n</file>"),
 	} {
 		got, ww := unwrapFileWrapper(in)
 		if ww.present {
