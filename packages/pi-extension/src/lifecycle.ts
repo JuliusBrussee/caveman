@@ -21,23 +21,27 @@ export type HookInvocation = { command: string; args: string[] };
 // Wrap stamps CAVEMAN_PI_HOOK_CMD as a JSON argv array; the persistent door has
 // no wrap env, so fall back to the CLI on PATH.
 export function resolveHookInvocations(env: NodeJS.ProcessEnv = process.env): HookInvocation[] {
+  const localBin = join(env.CAVEMAN_HOME || join(homedir(), ".caveman"), "bin", "caveman");
+  const candidates: HookInvocation[] = [
+    { command: "caveman", args: [] },
+    { command: "cave", args: [] },
+    { command: localBin, args: [] },
+  ];
   const stamped = env.CAVEMAN_PI_HOOK_CMD;
   if (stamped) {
     try {
       const parsed = JSON.parse(stamped);
       if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((part) => typeof part === "string" && part.length > 0)) {
-        return [{ command: parsed[0], args: parsed.slice(1) }];
+        // Stamped first, but never ALONE: it bakes an absolute [node, …/dist/
+        // index.js] at enable time, so an nvm/node switch makes every hook call
+        // ENOENT and the session degrades to permanent silent direct mode.
+        candidates.unshift({ command: parsed[0], args: parsed.slice(1) });
       }
     } catch {
       // fall through to PATH resolution
     }
   }
-  const localBin = join(env.CAVEMAN_HOME || join(homedir(), ".caveman"), "bin", "caveman");
-  return [
-    { command: "caveman", args: [] },
-    { command: "cave", args: [] },
-    { command: localBin, args: [] },
-  ];
+  return candidates;
 }
 
 export class HookBridge {

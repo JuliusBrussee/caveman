@@ -88,8 +88,13 @@ test("task profiling ports match the shared vocabulary", () => {
 });
 
 test("hook invocation resolution honors CAVEMAN_PI_HOOK_CMD with fallback", () => {
-  const stamped = resolveHookInvocations({ CAVEMAN_PI_HOOK_CMD: JSON.stringify(["/n/node", "/x/cli.js"]) });
-  assert.deepEqual(stamped, [{ command: "/n/node", args: ["/x/cli.js"] }]);
+  const localBinFromHome = join("/x/.caveman", "bin", "caveman");
+  const stamped = resolveHookInvocations({ CAVEMAN_PI_HOOK_CMD: JSON.stringify(["/n/node", "/x/cli.js"]), CAVEMAN_HOME: "/x/.caveman" });
+  // Stamped first, but the PATH candidates must still follow it: the stamp bakes
+  // an absolute node path at enable time, so an nvm switch ENOENTs every hook
+  // call and a stamp-only list degrades the session to silent direct mode.
+  assert.deepEqual(stamped[0], { command: "/n/node", args: ["/x/cli.js"] });
+  assert.deepEqual(stamped.map((i) => i.command), ["/n/node", "caveman", "cave", localBinFromHome]);
   // Build the expected local-bin path with join() rather than hardcoding a
   // POSIX string: resolveHookInvocations joins too, so on Windows it yields
   // "\x\.caveman\bin\caveman" and a literal comparison fails on separators

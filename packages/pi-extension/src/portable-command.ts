@@ -40,7 +40,6 @@ function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
 }
 
 export function resolveWindowsCommand(command: string, env: NodeJS.ProcessEnv): string | undefined {
-  if (isAbsolute(command) || /[\\/]/.test(command)) return existsSync(command) ? command : undefined;
   const pathExt = envValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD";
   // Extensionless names resolve ONLY through PATHEXT — probing the bare name
   // first picks the unusable Unix shim sitting beside the real .CMD (#834).
@@ -48,6 +47,13 @@ export function resolveWindowsCommand(command: string, env: NodeJS.ProcessEnv): 
     ? [command]
     : pathExt.split(";").map((extension) =>
       `${command}${extension.startsWith(".") ? extension : `.${extension}`}`);
+  // A path (~/.caveman/bin/caveman, the hook bridge's third candidate) skips
+  // PATH lookup but NOT PATHEXT: returning the extensionless file straight to
+  // execFile is the exact EFTYPE this file exists to prevent.
+  if (isAbsolute(command) || /[\\/]/.test(command)) {
+    for (const name of names) if (existsSync(name)) return name;
+    return existsSync(command) ? command : undefined;
+  }
   for (const directory of (envValue(env, "PATH") ?? "").split(";")) {
     if (!directory) continue;
     for (const name of names) {

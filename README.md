@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/JuliusBrussee/caveman/stargazers"><img src="https://img.shields.io/github/stars/JuliusBrussee/caveman?style=flat&color=yellow" alt="Stars"></a>
   <a href="./INSTALL.md"><img src="https://img.shields.io/badge/skill_works_with-30%2B_agents-orange?style=flat" alt="30+ agents"></a>
-  <a href="#wrap-any-agent"><img src="https://img.shields.io/badge/wrap-7_native_agents-blue?style=flat" alt="7 native wrap profiles"></a>
+  <a href="#wrap-any-agent"><img src="https://img.shields.io/badge/wrap-8_native_agents-blue?style=flat" alt="8 native wrap profiles"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT_%2B_BSL-green?style=flat" alt="License"></a>
   <a href="https://skills.sh/JuliusBrussee/caveman"><img src="https://skills.sh/b/JuliusBrussee/caveman"></a>
 </p>
@@ -276,7 +276,7 @@ One install also brings the small tools:
 
 ## Wrap any agent
 
-`caveman <agent>` wraps seven agents natively. Adding one is a data change, a single JSON profile in [`agents/profiles/`](./agents/profiles/), no code.
+`caveman <agent>` wraps eight agents natively. Adding one is a data change, a single JSON profile in [`agents/profiles/`](./agents/profiles/), no code.
 
 | Agent | Vendor | How it's wrapped |
 |---|---|---|
@@ -287,8 +287,9 @@ One install also brings the small tools:
 | **opencode** | sst | inline config via env, your `opencode.json` untouched |
 | **Hermes Agent** | Nous Research | `--provider custom` + env |
 | **OpenClaw** | OpenClaw | ephemeral merged config, your config read-only |
+| **Pi** | pi.dev | bundled native extension, your `~/.pi` config untouched |
 
-Wrap never edits your own config files. Real sessions round-trip in record mode, tested against **Hermes v0.18.0** and **OpenClaw 2026.6.11**.
+Wrap never edits your own config files. Real sessions round-trip in record mode, tested against **Hermes v0.18.0**, **OpenClaw 2026.6.11**, and **Pi 0.84.2**.
 
 Not on the list? Point any provider SDK or framework (Vercel AI SDK, LangChain, LiteLLM, OpenAI Agents, CrewAI, PydanticAI) at the local proxy with a `baseURL` swap: [`integrations/recipes/`](./integrations/recipes/).
 
@@ -336,27 +337,6 @@ Split license. Skill and adoption surfaces are [MIT](./LICENSE). Engine-linked r
 `engine/pixel` embeds [pxpipe](https://github.com/teamchong/pxpipe) (MIT) plus glyph atlases derived from Spleen 5×8 (BSD-2-Clause) and GNU Unifont (dual OFL-1.1 / GPLv2-with-font-exception); its `NOTICE` travels with that source.
 
 "Caveman" and the rock logo are trademarks of Julius Brussee. "Powered by Caveman" is fine when true.
-
-## Sponsors
-
-Caveman free forever. Sponsors keep the rock sharp.
-
-<p align="center">
-  <a href="https://www.atlascloud.ai">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/atlas-cloud-dark.svg">
-      <img src="docs/assets/atlas-cloud.svg" alt="Atlas Cloud" height="32">
-    </picture>
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://www.atlascloud.ai"><strong>Atlas Cloud</strong></a> — full-modal AI inference platform, one API.
-</p>
-
-<p align="center">
-  <a href="https://github.com/sponsors/JuliusBrussee"><strong>Want your rock here? → Sponsor caveman</strong></a>
-</p>
 
 ## Star this repo
 

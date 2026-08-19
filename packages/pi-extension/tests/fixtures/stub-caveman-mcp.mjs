@@ -7,8 +7,13 @@
 // shell shim because the launcher is bypassed on Windows: portableInvocation
 // extracts the node target from a .cmd and runs it directly, so anything the
 // shim tried to set never executed.
+// STUB_MCP_HANG_INIT=1 starts but never answers initialize — the locked-ccr.db
+// case that used to hold Pi's session_start for the full 30s call budget.
+// STUB_MCP_SPAWN_LOG=<path> appends one pid line per serve-mode spawn, so a
+// test can count how many children ensure() actually created and whether
+// dispose() reaped them.
 
-import { existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 
 const KNOWN_HANDLE = "ccr_0123456789abcdef0123456789abcdef";
 const KNOWN_BYTES = "exact original bytes\nline two éø bytes";
@@ -18,6 +23,9 @@ if (process.argv[2] === "version") {
   process.stdout.write(JSON.stringify({ version: "1.0.0", schema: "caveman.mcp.version.v1", capabilities }) + "\n");
   process.exit(0);
 }
+
+const spawnLog = process.env.STUB_MCP_SPAWN_LOG;
+if (spawnLog) appendFileSync(spawnLog, `${process.pid}\n`);
 
 let buffer = "";
 process.stdin.setEncoding("utf8");
@@ -31,6 +39,7 @@ process.stdin.on("data", (chunk) => {
     let message;
     try { message = JSON.parse(line); } catch { continue; }
     if (message.method === "initialize") {
+      if (process.env.STUB_MCP_HANG_INIT === "1") continue; // alive, silent — never answers
       reply(message.id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "stub", version: "1.0.0" } });
       if (process.env.STUB_MCP_EXIT_AFTER_INIT === "1") process.exit(1);
       const onceFlag = process.env.STUB_MCP_EXIT_ONCE_FLAG;

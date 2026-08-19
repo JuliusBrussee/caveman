@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(here, "..");
@@ -133,6 +133,49 @@ function runPi(env, args) {
     });
   });
 }
+
+// Drives the BUILT extension directly (no pi CLI needed): the tool_result
+// handler used to shrink every tool including caveman_retrieve's own output.
+// The proxy files that output as an ObjectCommandResult and masks anything past
+// ~448 bytes, so the recovered original came back to the model as a fresh ccr://
+// mask and recovery looped instead of terminating — and registering the tool
+// disables the proxy's server-side retrieve loop, so nothing else strips it.
+test("caveman_retrieve output is never shrunk; other tools still are", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cave-pi-shrink-"));
+  const hookLog = join(root, "hooks.log");
+  const hook = join(root, "hook.mjs");
+  writeFileSync(hook, `
+import { appendFileSync } from "node:fs";
+const event = process.argv[process.argv.length - 1];
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  let toolName = "";
+  try { toolName = JSON.parse(input).tool_name ?? ""; } catch { /* logged as empty */ }
+  appendFileSync(${JSON.stringify(hookLog)}, event + " " + toolName + "\\n");
+  process.stdout.write('{"output_replacement":"SHRUNK <<ccr:handle>>"}');
+});
+`);
+  const prior = process.env.CAVEMAN_PI_HOOK_CMD;
+  process.env.CAVEMAN_PI_HOOK_CMD = JSON.stringify([process.execPath, hook, "placeholder"]);
+  try {
+    const { default: factory } = await import(pathToFileURL(extension).href);
+    const handlers = new Map();
+    factory({ registerTool: () => {}, on: (name, fn) => handlers.set(name, fn) });
+    const result = (toolName) => handlers.get("tool_result")({ toolName, input: {}, isError: false, content: [{ type: "text", text: "exact original bytes" }] });
+
+    const shrunk = await result("read_file");
+    assert.equal(shrunk?.content?.[0]?.text, "SHRUNK <<ccr:handle>>", "ordinary tool output must still shrink");
+    assert.equal(await result("caveman_retrieve"), undefined, "recovered originals must reach the model unmasked");
+    // Not merely unchanged output: the runtime is never even asked, so no
+    // handle can be minted for bytes that were already recovered.
+    assert.deepEqual(readFileSync(hookLog, "utf8").trim().split("\n"), ["PostToolUse read_file"]);
+  } finally {
+    if (prior === undefined) delete process.env.CAVEMAN_PI_HOOK_CMD; else process.env.CAVEMAN_PI_HOOK_CMD = prior;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("open gate: first request routes through /w/pi with Core in the system prompt", { skip: !havePi && "pi devDependency missing" }, async () => {
   const { server, requests, port } = await startStub();

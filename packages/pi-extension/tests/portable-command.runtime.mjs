@@ -95,6 +95,45 @@ test("win32: a shim whose target cannot be parsed throws rather than spawning ga
   }
 });
 
+// The CLI harness writes the .cmd that every stubAgent-spawned test launches on
+// Windows. It used to emit `node "%~dp0claude.mjs" %*` — no backslash — which the
+// parser below does not recognize, so portableInvocation threw "non-Node Windows
+// command shim" and took the whole CLI suite down on Windows. Asserted against
+// the REAL parser the CLI ships, not a copy of the regex.
+test("the CLI harness .cmd shim is parseable by the shipped parser", async () => {
+  const { portableInvocation: cliInvocation } = await import("../../cli/src/portable-command.ts");
+  const { stubAgent } = await import("../../cli/tests/harness/stub-agent.mjs");
+  const { root, bin } = fixture();
+  try {
+    // platform:"win32" explicitly, so the Windows shim is exercised from macOS
+    // and Linux too — this bug shipped precisely because nothing did.
+    const agent = stubAgent({ dir: bin, platform: "win32" });
+    const r = cliInvocation(agent.path, ["-p", "hi"], "win32", {});
+    assert.equal(r.command, process.execPath, "the .cmd must launch through node");
+    assert.equal(r.args[0], join(bin, "claude.mjs"));
+    assert.deepEqual(r.args.slice(1), ["-p", "hi"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("win32: an absolute extensionless path still resolves through PATHEXT", () => {
+  const { root, bin } = fixture();
+  try {
+    // ~/.caveman/bin/caveman — the hook bridge's third candidate. The
+    // extensionless file exists beside the real .CMD (same npm/pnpm layout as
+    // above), and returning it verbatim is the EFTYPE this file exists to stop.
+    writeFileSync(join(bin, "caveman"), "#!/bin/sh\nexec node caveman.js\n");
+    writeFileSync(join(bin, "caveman.CMD"), '@node  "%~dp0\\cli.js" %*\r\n');
+    writeFileSync(join(bin, "cli.js"), "//\n");
+    const r = portableInvocation(join(bin, "caveman"), ["native-hook", "pi", "Stop"], "win32", { PATHEXT: ".COM;.EXE;.BAT;.CMD" });
+    assert.equal(r.command, process.execPath);
+    assert.equal(r.args[0], join(bin, "cli.js"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("parseWindowsNodeShim reads both the shim-relative and drive-absolute forms", () => {
   assert.equal(
     parseWindowsNodeShim('  "%~dp0\\node.exe"  "%~dp0\\..\\caveman\\dist\\index.js" %*'),

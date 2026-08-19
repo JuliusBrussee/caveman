@@ -12,12 +12,13 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { HookBridge, promptDigest, taskContinuation, taskTerms, taskType } from "./lifecycle.ts";
-import { additionalContextOf } from "./protocol.ts";
+import { MAX_CONTEXT_BYTES, additionalContextOf } from "./protocol.ts";
 import { ProviderRouter } from "./provider.ts";
 import { RecoveryClient } from "./recovery.ts";
 import { shrinkToolResult } from "./tool-output.ts";
 
 const HEALTH_TIMEOUT_MS = 750;
+const RECOVERY_TOOL = "caveman_retrieve";
 
 function cavemanHome(): string {
   return process.env.CAVEMAN_HOME || join(homedir(), ".caveman");
@@ -91,6 +92,7 @@ export default function (pi: ExtensionAPI) {
   let sessionId = "default";
   let coreContext: string | undefined;
   let pendingContext: string[] = [];
+  let pendingBytes = 0;
   let gateDone = false;
 
   const notify = (ctx: ExtensionContext | undefined, message: string, kind: "warning" | "info") => {
@@ -130,7 +132,7 @@ export default function (pi: ExtensionAPI) {
   const GUARD_session_shutdown = GUARD("session_shutdown");
 
   pi.registerTool({
-    name: "caveman_retrieve",
+    name: RECOVERY_TOOL,
     label: "Retrieve compressed context",
     description: "Recover exact original content from a Caveman recovery handle.",
     parameters: Type.Object({
@@ -151,6 +153,7 @@ export default function (pi: ExtensionAPI) {
     gateDone = false;
     coreContext = undefined;
     pendingContext = [];
+    pendingBytes = 0;
     try {
       sessionId = ctx.sessionManager.getSessionId() || "default";
     } catch {
@@ -205,6 +208,7 @@ export default function (pi: ExtensionAPI) {
     });
     const dynamic = [additionalContextOf(response), ...pendingContext].filter(Boolean) as string[];
     pendingContext = [];
+    pendingBytes = 0;
     if (!coreContext && dynamic.length === 0) return undefined;
     // Core is appended byte-stably every turn (prefix caching); dynamic context
     // rides only the turn it arrived on.
@@ -225,10 +229,23 @@ export default function (pi: ExtensionAPI) {
       tool_input: event.input,
     });
     const context = additionalContextOf(response);
-    if (context) pendingContext.push(context);
+    // MAX_CONTEXT_BYTES caps ONE response, but these accumulate across every
+    // tool call of a turn and drain only at the next before_agent_start — a
+    // tool-heavy turn otherwise joins unbounded bytes into the system prompt.
+    const bytes = context ? Buffer.byteLength(context, "utf8") : 0;
+    if (context && pendingBytes + bytes <= MAX_CONTEXT_BYTES) {
+      pendingContext.push(context);
+      pendingBytes += bytes;
+    }
   }));
 
-  pi.on("tool_result", GUARD_tool_result((event: Parameters<typeof shrinkToolResult>[2]) => shrinkToolResult(bridge, sessionId, event)));
+  // caveman_retrieve's own output is the recovered ORIGINAL. Shrinking it hands
+  // the model a fresh ccr:// mask (the proxy's classifyTool files it as an
+  // ObjectCommandResult and masks anything past ~448 bytes), so recovery loops
+  // instead of terminating — and registering this tool disabled the proxy's
+  // server-side retrieve loop, so nothing else would strip it.
+  pi.on("tool_result", GUARD_tool_result((event: Parameters<typeof shrinkToolResult>[2]) =>
+    event.toolName === RECOVERY_TOOL ? undefined : shrinkToolResult(bridge, sessionId, event)));
 
   pi.on("session_before_compact", GUARD_session_before_compact(() => { void bridge.call("PreCompact", { session_id: sessionId }); }));
 

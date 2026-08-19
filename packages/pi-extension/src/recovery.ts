@@ -12,6 +12,12 @@ import { type PortableInvocation, portableInvocation } from "./portable-command.
 
 const PROBE_TIMEOUT_MS = 2000;
 const CALL_TIMEOUT_MS = 30_000;
+// The handshake does NOT get the retrieve budget: ensure() is awaited inside
+// session_start, so a caveman-mcp that starts but never answers initialize (an
+// orphan holding ccr.db) froze Pi startup for the full 30s. Every other budget
+// in this package is 750ms–6s; a timed-out handshake degrades the session to
+// "no recovery available" instead.
+const INIT_TIMEOUT_MS = 2000;
 
 export type RetrieveResult = { text: string; isError: boolean };
 
@@ -33,6 +39,7 @@ export class RecoveryClient {
   private child: ChildProcess | undefined;
   private initialized = false;
   private probed: boolean | undefined;
+  private ensuring: Promise<boolean> | undefined;
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private buffer = "";
@@ -46,8 +53,18 @@ export class RecoveryClient {
   // false (never throws) when recovery cannot hold — the caller passes through.
   async ensure(): Promise<boolean> {
     if (this.disposed || !this.binary) return false;
+    if (this.child && this.initialized) return true;
+    // probed/child are assigned only after an await, so N concurrent callers
+    // used to run N probes and N spawns with only the LAST child tracked — the
+    // rest stayed alive as orphans holding ccr.db. One in-flight bring-up,
+    // shared by everyone who asks while it runs.
+    this.ensuring ??= this.bringUp().finally(() => { this.ensuring = undefined; });
+    return this.ensuring;
+  }
+
+  private async bringUp(): Promise<boolean> {
     if (this.probed === undefined) this.probed = await this.probe();
-    if (!this.probed) return false;
+    if (!this.probed || this.disposed) return false;
     if (this.child && this.initialized) return true;
     return this.start();
   }
@@ -84,12 +101,11 @@ export class RecoveryClient {
       entry.reject(new Error("recovery client disposed"));
     }
     this.pending.clear();
-    if (child) {
-      try { child.stdin?.end(); } catch { /* already gone */ }
-      const term = setTimeout(() => { try { child.kill("SIGTERM"); } catch { /* already gone */ } }, 500);
-      term.unref?.();
-      child.once("exit", () => clearTimeout(term));
-    }
+    this.stop(child);
+    // A bring-up still in flight spawns after this returns; start() sees the
+    // disposed flag and reaps its own child, but await it here too so a caller
+    // that disposes mid-ensure() cannot leave one behind.
+    void this.ensuring?.then(() => { const late = this.child; this.child = undefined; this.stop(late); });
   }
 
   // resolveMcpBinary appends .exe on win32, but CAVEMAN_MCP_BIN is an operator
@@ -142,14 +158,27 @@ export class RecoveryClient {
         protocolVersion: "2024-11-05",
         capabilities: {},
         clientInfo: { name: "caveman-pi-extension", version: "0.1.0" },
-      }, undefined);
+      }, undefined, INIT_TIMEOUT_MS);
       this.notify("notifications/initialized");
+      if (this.disposed) { this.onChildGone(child); this.stop(child); return false; }
       this.initialized = true;
       return true;
     } catch {
+      // A child that failed (or never finished) the handshake is unusable and
+      // still holds ccr.db — reap it rather than leaving it for the next spawn
+      // to collide with.
       this.onChildGone(child);
+      this.stop(child);
       return false;
     }
+  }
+
+  private stop(child: ChildProcess | undefined): void {
+    if (!child) return;
+    try { child.stdin?.end(); } catch { /* already gone */ }
+    const term = setTimeout(() => { try { child.kill("SIGTERM"); } catch { /* already gone */ } }, 500);
+    term.unref?.();
+    child.once("exit", () => clearTimeout(term));
   }
 
   private onChildGone(child: ChildProcess): void {
@@ -186,7 +215,7 @@ export class RecoveryClient {
     }
   }
 
-  private call(method: string, params: Record<string, unknown>, signal: AbortSignal | undefined): Promise<unknown> {
+  private call(method: string, params: Record<string, unknown>, signal: AbortSignal | undefined, timeoutMs = CALL_TIMEOUT_MS): Promise<unknown> {
     const child = this.child;
     if (!child?.stdin?.writable) return Promise.reject(new Error("caveman-mcp not running"));
     if (signal?.aborted) return Promise.reject(new Error("retrieve cancelled"));
@@ -195,7 +224,7 @@ export class RecoveryClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`caveman-mcp ${method} timed out`));
-      }, CALL_TIMEOUT_MS);
+      }, timeoutMs);
       timer.unref?.();
       const onAbort = () => {
         this.pending.delete(id);

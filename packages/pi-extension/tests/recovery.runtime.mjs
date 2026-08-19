@@ -13,8 +13,20 @@ const { RecoveryClient } = await import(pathToFileURL(join(here, "..", "dist", "
 const KNOWN_HANDLE = "ccr_0123456789abcdef0123456789abcdef";
 const KNOWN_BYTES = "exact original bytes\nline two éø bytes";
 
-import { chmodSync, existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+
+// dispose() gives a child 500ms to leave on stdin EOF before SIGTERM, so poll
+// rather than assert instantly. A pid still answering signal 0 is an orphan
+// still holding ccr.db.
+async function assertAllDead(spawnLog) {
+  const pids = existsSync(spawnLog) ? readFileSync(spawnLog, "utf8").trim().split("\n").filter(Boolean).map(Number) : [];
+  const alive = () => pids.filter((pid) => { try { process.kill(pid, 0); return true; } catch { return false; } });
+  for (let attempt = 0; attempt < 30 && alive().length > 0; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.deepEqual(alive(), [], "dispose() left caveman-mcp children alive");
+}
 
 // RecoveryClient spawns its binary argv-less, so each test materializes a tiny
 // shell shim that execs the node stub (optionally with a failure-mode env).
@@ -99,6 +111,51 @@ test("child crash after init respawns on next retrieve and recovers the same han
   }).finally(() => {
     cleanup();
     rmSync(dirname(flag), { recursive: true, force: true });
+  });
+});
+
+// A caveman-mcp that starts but never answers initialize (an orphan holding
+// ccr.db) used to inherit the 30s call budget, and ensure() is awaited inside
+// session_start — measured 30,304ms of frozen Pi startup. The handshake gets its
+// own short budget in line with every other budget in this package (750ms–6s).
+test("a caveman-mcp that never answers initialize degrades fast, not in 30s", async () => {
+  const { path, cleanup } = shim();
+  const log = join(mkdtempSync(join(tmpdir(), "cave-pi-hang-")), "spawns");
+  await withEnv({ STUB_MCP_HANG_INIT: "1", STUB_MCP_SPAWN_LOG: log }, async () => {
+    const recovery = new RecoveryClient(path);
+    const started = Date.now();
+    assert.equal(await recovery.ensure(), false);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 5000, `initialize handshake must degrade fast, took ${elapsed}ms`);
+    const result = await recovery.retrieve(KNOWN_HANDLE, undefined, undefined);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /cave_recovery_unavailable/);
+    recovery.dispose();
+    // The hung child holds ccr.db; a timed-out handshake must reap it, not leak it.
+    await assertAllDead(log);
+  }).finally(() => {
+    cleanup();
+    rmSync(dirname(log), { recursive: true, force: true });
+  });
+});
+
+// probed/child were assigned only after an await, so N concurrent callers each
+// ran a probe and a spawn and only the LAST child stayed tracked: 3 concurrent
+// ensure() calls left 2 orphans alive after dispose(), each holding ccr.db.
+test("concurrent ensure() calls share one spawn and leave no orphan", async () => {
+  const { path, cleanup } = shim();
+  const log = join(mkdtempSync(join(tmpdir(), "cave-pi-conc-")), "spawns");
+  await withEnv({ STUB_MCP_SPAWN_LOG: log }, async () => {
+    const recovery = new RecoveryClient(path);
+    const results = await Promise.all([recovery.ensure(), recovery.ensure(), recovery.ensure()]);
+    assert.deepEqual(results, [true, true, true]);
+    const spawns = readFileSync(log, "utf8").trim().split("\n").filter(Boolean);
+    assert.equal(spawns.length, 1, `concurrent ensure() spawned ${spawns.length} children: ${spawns}`);
+    recovery.dispose();
+    await assertAllDead(log);
+  }).finally(() => {
+    cleanup();
+    rmSync(dirname(log), { recursive: true, force: true });
   });
 });
 
