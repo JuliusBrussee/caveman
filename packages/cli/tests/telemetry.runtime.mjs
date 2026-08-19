@@ -17,6 +17,10 @@ function isolatedEnv(extra = {}) {
   delete env.DO_NOT_TRACK;
   delete env.CAVEMAN_TELEMETRY;
   delete env.CAVEMAN_TELEMETRY_URL;
+  // GitHub Actions exports CI=1, which force-disables telemetry regardless of
+  // the pty — the interactive-disclosure tests then fail only on CI. A test
+  // that wants CI semantics passes CI explicitly via `extra` (reapplied below).
+  delete env.CI;
   Object.assign(env, extra);
   return { env, home, caveDir };
 }
