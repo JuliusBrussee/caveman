@@ -1,6 +1,9 @@
 package engine
 
-import "bytes"
+import (
+	"bytes"
+	"unicode"
+)
 
 // Coding agents wrap file references handed to the model: pi turns a @file
 // argument into `<file name="...">…</file>`, and other agents use the same
@@ -26,7 +29,10 @@ type fileWrapper struct {
 // contain non-whitespace content. Anything else returns the input unchanged and
 // a no-op wrapper, so callers need no branches.
 func unwrapFileWrapper(input []byte) ([]byte, fileWrapper) {
-	trimmed := bytes.TrimSpace(input)
+	leftTrimmed := bytes.TrimLeftFunc(input, unicode.IsSpace)
+	start := len(input) - len(leftTrimmed)
+	end := len(bytes.TrimRightFunc(input, unicode.IsSpace))
+	trimmed := input[start:end]
 	if len(trimmed) < 9 {
 		return input, fileWrapper{}
 	}
@@ -47,15 +53,42 @@ func unwrapFileWrapper(input []byte) ([]byte, fileWrapper) {
 	if bytes.Count(trimmed, []byte("<file")) != 1 || bytes.Count(trimmed, []byte("</file>")) != 1 {
 		return input, fileWrapper{}
 	}
-	openEnd := bytes.Index(trimmed, []byte(">"))
+	openEnd := fileOpeningTagEnd(trimmed)
 	if openEnd < 0 {
 		return input, fileWrapper{}
 	}
-	inner := trimmed[openEnd+1 : len(trimmed)-len("</file>")]
+	closeStart := len(trimmed) - len("</file>")
+	inner := trimmed[openEnd+1 : closeStart]
 	if len(bytes.TrimSpace(inner)) == 0 {
 		return input, fileWrapper{}
 	}
-	return inner, fileWrapper{prefix: trimmed[:openEnd+1], suffix: []byte("</file>"), present: true}
+	return inner, fileWrapper{
+		prefix:  input[:start+openEnd+1],
+		suffix:  input[start+closeStart:],
+		present: true,
+	}
+}
+
+// fileOpeningTagEnd finds the closing angle bracket without mistaking one in
+// a quoted attribute value for the end of the tag. An unterminated quote makes
+// the wrapper invalid and leaves the original untouched.
+func fileOpeningTagEnd(input []byte) int {
+	var quote byte
+	for i := len("<file"); i < len(input); i++ {
+		switch input[i] {
+		case '\'', '"':
+			if quote == 0 {
+				quote = input[i]
+			} else if quote == input[i] {
+				quote = 0
+			}
+		case '>':
+			if quote == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // rewrap puts the wrapper back on compressed output so the model still sees the
@@ -70,4 +103,39 @@ func (w fileWrapper) rewrap(out []byte) []byte {
 	b.Write(out)
 	b.Write(w.suffix)
 	return b.Bytes()
+}
+
+type inputWrapper interface {
+	rewrap([]byte) []byte
+}
+
+type inputWrappers []inputWrapper
+
+// unwrapInput removes supported presentation wrappers in outer-to-inner order.
+// Four layers cover known agent compositions while bounding repeated scans of
+// attacker-controlled input. rewrap applies them in reverse order.
+func unwrapInput(input []byte) ([]byte, inputWrappers) {
+	body := input
+	wrappers := make(inputWrappers, 0, 2)
+	for range 4 {
+		if inner, wrapper := unwrapListing(body); wrapper.present {
+			body = inner
+			wrappers = append(wrappers, wrapper)
+			continue
+		}
+		if inner, wrapper := unwrapFileWrapper(body); wrapper.present {
+			body = inner
+			wrappers = append(wrappers, wrapper)
+			continue
+		}
+		break
+	}
+	return body, wrappers
+}
+
+func (w inputWrappers) rewrap(out []byte) []byte {
+	for i := len(w) - 1; i >= 0; i-- {
+		out = w[i].rewrap(out)
+	}
+	return out
 }
