@@ -54,10 +54,12 @@ func unwrapFileWrapper(input []byte) ([]byte, fileWrapper) {
 		return input, fileWrapper{}
 	}
 	openEnd := fileOpeningTagEnd(trimmed)
-	if openEnd < 0 {
+	closeStart := len(trimmed) - len("</file>")
+	// An unterminated open tag makes fileOpeningTagEnd walk into the closing
+	// tag's own `>`; that is not a wrapper, and slicing on it would panic.
+	if openEnd < 0 || openEnd+1 > closeStart {
 		return input, fileWrapper{}
 	}
-	closeStart := len(trimmed) - len("</file>")
 	inner := trimmed[openEnd+1 : closeStart]
 	if len(bytes.TrimSpace(inner)) == 0 {
 		return input, fileWrapper{}
