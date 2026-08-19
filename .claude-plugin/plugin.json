@@ -5,11 +5,6 @@
     "name": "Julius Brussee",
     "url": "https://github.com/JuliusBrussee"
   },
-  "agents": [
-    "./agents/cavecrew-builder.md",
-    "./agents/cavecrew-investigator.md",
-    "./agents/cavecrew-reviewer.md"
-  ],
   "hooks": {
     "SessionStart": [
       {
