@@ -449,6 +449,23 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     assert.equal(fs.existsSync(flagPath), false, 'non-session.created event must not write the flag');
     await handlers.event({ event: { type: 'session.created' } });
     assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full');
+    const sessionInitRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(
+      { mode: sessionInitRows.at(-1).mode, prev: sessionInitRows.at(-1).prev },
+      { mode: 'full', prev: null },
+    );
+
+    // A session starting with the default resolved to "off" turns caveman off,
+    // and that transition is a mode change like any other — stats must be able
+    // to attribute the messages that follow to caveman being inactive.
+    process.env.CAVEMAN_DEFAULT_MODE = 'off';
+    await handlers.event({ event: { type: 'session.created' } });
+    assert.equal(fs.existsSync(flagPath), false, 'session init with default off should delete the flag');
+    const sessionOffRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(
+      { mode: sessionOffRows.at(-1).mode, prev: sessionOffRows.at(-1).prev },
+      { mode: null, prev: 'full' },
+    );
   } finally {
     if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
     else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
