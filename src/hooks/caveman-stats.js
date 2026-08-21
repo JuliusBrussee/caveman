@@ -64,11 +64,18 @@ if (configFailure) {
 }
 const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME } = cavemanConfig;
 
-// Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
-// 10 tasks, sonnet-4-20250514). Only 'full' has measured data; lite / ultra /
-// wenyan modes show no estimate until benchmarked. Add an entry here when a new
-// run is committed.
-const COMPRESSION = { 'full': 0.65 };
+// Mean per-task savings from benchmarks/results/*.json (deepseek-v4-flash, 2025-06-11).
+// 'full': 65% from sonnet-4-20250514 (Anthropic API, original benchmark).
+// 'lite': 76%, 'ultra': 73%, 'wenyan-lite': 72%, 'wenyan-full': 67%, 'wenyan-ultra': 72%.
+// Add an entry here when a new benchmark run is committed.
+const COMPRESSION = {
+  'full': 0.65,
+  'lite': 0.76,
+  'ultra': 0.73,
+  'wenyan-lite': 0.72,
+  'wenyan-full': 0.67,
+  'wenyan-ultra': 0.72,
+};
 
 // Per-turn INPUT cost the rules add: SKILL.md (~5 KB) is injected into
 // context, plus the per-turn reinforcement the mode tracker emits. This is
@@ -526,7 +533,7 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
     // above) intentionally get no net line rather than a guessed one.
     if (turns > 0) savings += '\n' + netLines({ estSavedTokens: estSaved, turns });
   } else if (mode && mode !== 'off') {
-    savings = `No savings estimate for '${mode}' mode — only 'full' has benchmark data.`;
+    savings = `No savings estimate for '${mode}' mode — benchmarked modes: full (65%), lite (76%), ultra (73%), wenyan-lite (72%), wenyan-full (67%), wenyan-ultra (72%).`;
   } else {
     savings = 'Caveman not active this session.';
   }
@@ -540,6 +547,7 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
 
   return `\nCaveman Stats\n${sep}\n` +
     (shortPath ? `Session:  ${shortPath}\n` : '') +
+    `Mode:     ${mode || 'off'}\n` +
     `Turns:    ${turns}\n${sep}\n` +
     `Output tokens:         ${outputTokens.toLocaleString()}\n` +
     `Cache-read tokens:     ${cacheReadTokens.toLocaleString()}\n${sep}\n` +
