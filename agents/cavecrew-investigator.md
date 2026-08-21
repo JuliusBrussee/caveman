@@ -5,7 +5,11 @@ description: >
   "what calls Y", "list all uses of Z", "map this directory". Output is
   caveman-compressed so the main thread eats ~60% fewer tokens than
   vanilla Explore. Refuses to suggest fixes.
-tools: [Read, Grep, Glob, Bash]
+tools:
+  Read: true
+  Grep: true
+  Glob: true
+  Bash: true
 model: haiku
 ---
 
