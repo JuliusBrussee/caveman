@@ -231,6 +231,7 @@ const PROVIDERS = [
   { id: 'claude',     label: 'Claude Code',         mech: 'claude plugin install',         detect: 'command:claude' },
   { id: 'gemini',     label: 'Gemini CLI',          mech: 'gemini extensions install',     detect: 'command:gemini' },
   { id: 'opencode',   label: 'opencode',            mech: 'native opencode plugin',        detect: 'command:opencode' },
+  { id: 'omp',        label: 'Oh My Pi (OMP)',      mech: 'native OMP plugin',             detect: 'command:omp' },
   { id: 'openclaw',   label: 'OpenClaw',            mech: 'workspace skill + SOUL.md',     detect: 'command:openclaw||dir:$HOME/.openclaw/workspace' },
   { id: 'codex',      label: 'Codex CLI',           mech: 'npx skills add (codex)',        detect: 'command:codex',           profile: 'codex' },
 
@@ -710,6 +711,185 @@ function countOccurrences(haystack, needle) {
   let n = 0;
   for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + needle.length)) n++;
   return n;
+}
+
+// ── Oh My Pi native install ────────────────────────────────────────────────
+// OMP local-path installs intentionally route through its plugin manager:
+// `omp plugin install <path>` symlinks the package into ~/.omp/plugins/
+// node_modules and records runtime state in omp-plugins.lock.json. We prepare
+// a stable managed plugin package under ~/.omp/ so the symlink never points at
+// an npx cache directory that may disappear after install.
+const OMP_PLUGIN_NAME = 'caveman';
+const OMP_PLUGIN_DIRNAME = 'caveman-plugin';
+const OMP_STAGING_PREFIX = 'caveman-plugin-staging-';
+const OMP_BACKUP_SUFFIX = '.previous';
+const OMP_EXTENSION_ENTRY = './index.js';
+const OMP_SKILL_DIRS = OPENCODE_SKILL_DIRS;
+const OMP_AGENT_FILES = OPENCODE_AGENT_FILES;
+const OMP_COMMAND_FILES = OPENCODE_COMMAND_FILES;
+const OMP_RULE_FILE = 'caveman.md';
+const OMP_PACKAGE_FILE = 'package.json';
+const OMP_INDEX_FILE = 'index.js';
+const OMP_PACKAGE_VERSION = '0.1.0';
+const OMP_PLUGIN_DESCRIPTION = 'Caveman terse communication mode for Oh My Pi';
+const OMP_RULE_COUNT = 1;
+const OMP_EXTENSION_SOURCE = `'use strict';
+
+const STATUS_LABEL = 'caveman';
+const STATUS_TEXT = 'CAVEMAN';
+
+module.exports = function cavemanPlugin(pi) {
+  if (!pi || typeof pi.on !== 'function') return;
+  pi.on('session_start', async (_event, ctx) => {
+    if (ctx && ctx.ui && typeof ctx.ui.setStatus === 'function') {
+      ctx.ui.setStatus(STATUS_LABEL, STATUS_TEXT);
+    }
+  });
+};
+`;
+
+function ompPluginDir() {
+  return path.join(os.homedir(), '.omp', OMP_PLUGIN_DIRNAME);
+}
+
+function packageVersion(repoRoot) {
+  if (!repoRoot) return OMP_PACKAGE_VERSION;
+  try {
+    const raw = fs.readFileSync(path.join(repoRoot, OMP_PACKAGE_FILE), 'utf8');
+    const pkg = JSON.parse(raw);
+    return typeof pkg.version === 'string' && pkg.version ? pkg.version : OMP_PACKAGE_VERSION;
+  } catch (_) {
+    return OMP_PACKAGE_VERSION;
+  }
+}
+
+function writeOmpPluginPackage(ctx, pluginDir) {
+  const { repoRoot } = ctx;
+  if (!repoRoot) throw new Error('native install requires local repo clone');
+
+  fs.mkdirSync(pluginDir, { recursive: true });
+
+  const pkg = {
+    name: OMP_PLUGIN_NAME,
+    version: packageVersion(repoRoot),
+    description: OMP_PLUGIN_DESCRIPTION,
+    omp: {
+      description: OMP_PLUGIN_DESCRIPTION,
+      extensions: [OMP_EXTENSION_ENTRY],
+    },
+  };
+  fs.writeFileSync(path.join(pluginDir, OMP_PACKAGE_FILE), JSON.stringify(pkg, null, 2) + '\n');
+  fs.writeFileSync(path.join(pluginDir, OMP_INDEX_FILE), OMP_EXTENSION_SOURCE);
+
+  const skillsRoot = path.join(pluginDir, 'skills');
+  for (const name of OMP_SKILL_DIRS) {
+    const src = path.join(repoRoot, 'skills', name);
+    if (fs.existsSync(src)) fs.cpSync(src, path.join(skillsRoot, name), { recursive: true });
+  }
+
+  const commandsRoot = path.join(pluginDir, 'commands');
+  fs.mkdirSync(commandsRoot, { recursive: true });
+  const commandSrcRoot = path.join(repoRoot, 'src', 'plugins', 'opencode', 'commands');
+  for (const name of OMP_COMMAND_FILES) {
+    const src = path.join(commandSrcRoot, name);
+    if (fs.existsSync(src)) fs.copyFileSync(src, path.join(commandsRoot, name));
+  }
+
+  const agentsRoot = path.join(pluginDir, 'agents');
+  fs.mkdirSync(agentsRoot, { recursive: true });
+  const agentSrcRoot = path.join(repoRoot, 'agents');
+  for (const name of OMP_AGENT_FILES) {
+    const src = path.join(agentSrcRoot, name);
+    if (fs.existsSync(src)) {
+      fs.writeFileSync(path.join(agentsRoot, name), transformOpencodeAgentFrontmatter(fs.readFileSync(src, 'utf8')));
+    }
+  }
+
+  const rulesRoot = path.join(pluginDir, 'rules');
+  fs.mkdirSync(rulesRoot, { recursive: true });
+  const ruleBody = fs.readFileSync(path.join(repoRoot, 'src', 'rules', 'caveman-activate.md'), 'utf8');
+  fs.writeFileSync(path.join(rulesRoot, OMP_RULE_FILE), ruleBody);
+}
+
+function prepareOmpPluginPackage(ctx, pluginDir) {
+  const parentDir = path.dirname(pluginDir);
+  fs.mkdirSync(parentDir, { recursive: true });
+  const stagingDir = fs.mkdtempSync(path.join(parentDir, OMP_STAGING_PREFIX));
+  try {
+    writeOmpPluginPackage(ctx, stagingDir);
+    return stagingDir;
+  } catch (err) {
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+function replaceOmpPluginPackage(stagingDir, pluginDir) {
+  const backupDir = pluginDir + OMP_BACKUP_SUFFIX;
+  fs.rmSync(backupDir, { recursive: true, force: true });
+  const hadPrevious = fs.existsSync(pluginDir);
+  if (hadPrevious) fs.renameSync(pluginDir, backupDir);
+  try {
+    fs.renameSync(stagingDir, pluginDir);
+  } catch (err) {
+    if (hadPrevious) fs.renameSync(backupDir, pluginDir);
+    throw err;
+  }
+  return hadPrevious ? backupDir : null;
+}
+
+function restoreOmpPluginPackage(pluginDir, backupDir) {
+  fs.rmSync(pluginDir, { recursive: true, force: true });
+  if (backupDir && fs.existsSync(backupDir)) fs.renameSync(backupDir, pluginDir);
+}
+
+function installOmp(ctx) {
+  const { say, note, warn, opts, repoRoot, results } = ctx;
+  results.detected++;
+  say('→ Oh My Pi (OMP) detected');
+
+  if (!repoRoot) {
+    warn('  OMP native install requires a local clone of the caveman repo.');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only omp');
+    results.failed.push(['omp', 'native install requires local repo clone']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  const pluginDir = ompPluginDir();
+  if (opts.dryRun) {
+    note(`  would prepare OMP plugin package at ${pluginDir}/`);
+    note(`  would copy ${OMP_SKILL_DIRS.length} skill dirs, ${OMP_COMMAND_FILES.length} commands, ${OMP_AGENT_FILES.length} agents, and ${OMP_RULE_COUNT} rule`);
+    runSpawn('omp', ['plugin', 'install', pluginDir], null, true);
+    results.installed.push('omp');
+    process.stdout.write('\n');
+    return;
+  }
+
+  let stagingDir = null;
+  let backupDir = null;
+  let packageReplaced = false;
+  try {
+    stagingDir = prepareOmpPluginPackage(ctx, pluginDir);
+    backupDir = replaceOmpPluginPackage(stagingDir, pluginDir);
+    stagingDir = null;
+    packageReplaced = true;
+    process.stdout.write(`  prepared: ${pluginDir}/\n`);
+    const r = runSpawn('omp', ['plugin', 'install', pluginDir], null, false);
+    if (spawnOk(r)) {
+      if (backupDir) fs.rmSync(backupDir, { recursive: true, force: true });
+      results.installed.push('omp');
+    } else {
+      restoreOmpPluginPackage(pluginDir, backupDir);
+      results.failed.push(['omp', 'omp plugin install failed']);
+    }
+  } catch (e) {
+    if (packageReplaced) restoreOmpPluginPackage(pluginDir, backupDir);
+    if (stagingDir) fs.rmSync(stagingDir, { recursive: true, force: true });
+    warn('  OMP install failed: ' + (e && e.message || e));
+    results.failed.push(['omp', (e && e.message) || 'unknown error']);
+  }
+  process.stdout.write('\n');
 }
 
 function opencodeConfigDir() {
@@ -1430,6 +1610,17 @@ function uninstall(ctx) {
     }
   }
 
+  // Oh My Pi native plugin — delegate lifecycle removal to OMP, then remove
+  // the managed local package source we prepared for its plugin-manager link.
+  const ompDir = ompPluginDir();
+  if (hasCmd('omp')) {
+    runSpawn('omp', ['plugin', 'uninstall', OMP_PLUGIN_NAME], null, opts.dryRun);
+  }
+  if (fs.existsSync(ompDir)) {
+    if (!opts.dryRun) { try { fs.rmSync(ompDir, { recursive: true, force: true }); } catch (_) {} }
+    note(`  removed ${ompDir}`);
+  }
+
   // Hermes native install — same journal/digest contract as opencode.
   const hermesRoot = path.join(hermesConfigDir(), 'productivity');
   try {
@@ -1549,8 +1740,9 @@ FLAGS
   --config-dir <path>   Claude Code config dir for hook files + settings.json.
                         Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT
                         scope \`claude plugin install\`, \`gemini extensions
-                        install\`, opencode (XDG_CONFIG_HOME), or openclaw
-                        (OPENCLAW_WORKSPACE) — those use their own paths.
+                        install\`, OMP (~/.omp/), opencode (XDG_CONFIG_HOME),
+                        or openclaw (OPENCLAW_WORKSPACE) — those use their
+                        own paths.
   --non-interactive     Never prompt; use defaults. (Auto when stdin is not a TTY.)
   --list                Print provider matrix and exit.
   --no-color            Disable ANSI colors.
@@ -1623,6 +1815,7 @@ async function main() {
     if (prov.id === 'claude')   { await installClaude(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
+    if (prov.id === 'omp')      { installOmp(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
     if (prov.id === 'hermes')   { installHermes(ctx); continue; }
     if (prov.profile)           { installViaSkills(ctx, prov); continue; }
