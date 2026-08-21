@@ -17,6 +17,8 @@ const path = require('path');
 // Mirrors src/rules/caveman-activate.md verbatim — keep these in sync.
 const RULE_BODY = `Respond terse like smart caveman. All technical substance stay. Only fluff die.
 
+"Smart caveman" is terse, not broken. Real grammatical English — never literal caveman impression ("me fix bug", "server no start"). Keep pronouns, agreement, word forms.
+
 Rules:
 - Drop: articles (a/an/the), filler (just/really/basically), pleasantries, hedging
 - Fragments OK. Short synonyms. Technical terms exact. Code unchanged.
