@@ -439,6 +439,11 @@ def compress_file(filepath: Path) -> bool:
         print("   already in caveman form. Original file is untouched (no backup created).")
         return False
 
+    if len(compressed_body.strip()) > len(body.strip()):
+        print(f"❌ Compression aborted: output expanded ({len(compressed_body.strip())} > {len(body.strip())} bytes).")
+        print("   Original file is untouched (no backup created).")
+        return False
+
     # Reassemble: frontmatter (verbatim) + compressed body
     compressed = frontmatter + compressed_body
 

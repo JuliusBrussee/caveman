@@ -185,3 +185,14 @@ upstream.stdin.on('error', err => {
 });
 process.stdin.on('data', forwardInput);
 process.stdin.on('end', endInput);
+
+// Forward termination signals to upstream process so it does not get orphaned (issue #742)
+const forwardSignal = signal => {
+  if (upstream && !upstream.killed) {
+    try {
+      upstream.kill(signal);
+    } catch (_) {}
+  }
+};
+process.on('SIGTERM', () => forwardSignal('SIGTERM'));
+process.on('SIGINT', () => forwardSignal('SIGINT'));

@@ -152,11 +152,22 @@ function parseSession(filePath) {
   let turns = 0;
   let model = null;
   const messages = []; // per-message {ts, outputTokens} for mode attribution (#601)
+  const seenMessageIds = new Set();
+
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
     if (entry.type !== 'assistant' || !entry.message) continue;
+
+    // Claude Code JSONL logs can contain multiple lines per assistant turn (multi-block responses).
+    // Deduplicate by message ID / uuid so tokens and turns aren't inflated (issue #793).
+    const msgId = entry.message.id || entry.uuid || null;
+    if (msgId) {
+      if (seenMessageIds.has(msgId)) continue;
+      seenMessageIds.add(msgId);
+    }
+
     const usage = entry.message.usage;
     if (!usage) continue;
     outputTokens    += usage.output_tokens           || 0;

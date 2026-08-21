@@ -65,6 +65,7 @@ test('writes flag when parent directory is a symlink owned by current user', (tm
 });
 
 test('readFlag works through symlinked parent directory', (tmp) => {
+  if (process.platform === 'win32') return; // skip on Windows
   const realDir = path.join(tmp, 'real-claude-config');
   fs.mkdirSync(realDir, { recursive: true });
   const symlinkDir = path.join(tmp, 'claude-symlink');
@@ -94,6 +95,7 @@ test('safeWriteFlag then readFlag round-trip through symlink', (tmp) => {
 });
 
 test('refuses flag file that is itself a symlink (even through symlinked parent)', (tmp) => {
+  if (process.platform === 'win32') return; // skip on Windows
   const realDir = path.join(tmp, 'real-config');
   fs.mkdirSync(realDir, { recursive: true });
   const symlinkDir = path.join(tmp, 'link-config');
@@ -112,6 +114,7 @@ test('refuses flag file that is itself a symlink (even through symlinked parent)
 });
 
 test('readFlag refuses flag file that is a symlink', (tmp) => {
+  if (process.platform === 'win32') return; // skip on Windows
   const realDir = path.join(tmp, 'real-config');
   fs.mkdirSync(realDir, { recursive: true });
 
