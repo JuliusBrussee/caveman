@@ -1,0 +1,66 @@
+# Dependabot — automated dependency + action updates.
+#
+# NOTE: this repo ships BOTH a dependabot.yml and a renovate.json as part of the
+# security donation. They do the same job — pick ONE and delete the other.
+# Recommendation: Renovate (renovate.json) for its cross-ecosystem cooldown and
+# grouping; Dependabot here is the zero-extra-setup alternative if you'd rather
+# stay fully GitHub-native. Do not run both at once (duplicate PRs).
+version: 2
+updates:
+  # ── GitHub Actions (all workflows) ──
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # ── npm: root installer (caveman-installer) ──
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  # ── npm: bundled MCP server (caveman-shrink) ──
+  - package-ecosystem: "npm"
+    directory: "/src/mcp-servers/caveman-shrink"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(caveman-shrink)"
+
+  # ── npm: opencode plugin ──
+  - package-ecosystem: "npm"
+    directory: "/src/plugins/opencode"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(opencode)"
+
+  # ── pip: benchmarks (anthropic) ──
+  - package-ecosystem: "pip"
+    directory: "/benchmarks"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(benchmarks)"
