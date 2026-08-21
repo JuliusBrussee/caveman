@@ -273,6 +273,14 @@ Local runtime results report `inferred`; controlled benchmark results report `be
 
 Your agent still talks to the provider you chose. Local compression needs no Caveman account. The `caveman` CLI sends anonymous usage stats by default: which commands ran, plus token counts through and cut. Never your prompts, code, or file paths. It says so on first run, and one command turns it off forever: `caveman telemetry off` (or `DO_NOT_TRACK=1`). Skill and hooks run locally; the proxy forwards provider traffic; CCR stays in a SQLite file on your disk. Exact network, telemetry, and storage boundaries: [SECURITY.md](./SECURITY.md).
 
+
+## Companion tools
+
+Community-built MIT tools that pair with caveman:
+
+- **[savings-mirror](https://github.com/sovareq/savings-mirror)** — read-only Rust dashboard. Parses `~/.claude/projects/**/*.jsonl` and shows per-day / 7-day / cumulative / per-mode caveman savings. Auto-detects Anthropic API vs Pro/Max subscription billing and switches metric: USD against the public price table (API) or tokens-saved + 5h/7d cap utilization (subscription). No telemetry, no write-back.
+- **[sovacount](https://github.com/sovareq/sovacount)** — scope-level LLM tier-router (Haiku/Sonnet/Opus). Stacks with caveman: tier-routing cuts cost on *which model* runs; caveman cuts cost on *which tokens* are sent. Includes [real-Anthropic benchmark](https://github.com/sovareq/sovacount/tree/main/benchmark) — 88.1% saved on a 5-task sample (raw data + methodology committed, reproducible).
+
 ## License
 
 Split license. Skill and adoption surfaces are [MIT](./LICENSE). Engine-linked runtime is BSL-1.1 source-available, not OSI Open Source before Change Date.
