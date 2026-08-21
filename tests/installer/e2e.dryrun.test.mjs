@@ -32,7 +32,7 @@ test('dry-run --only claude prints plan and writes nothing', () => {
     assert.match(r.stdout, /would run: claude plugin install caveman@caveman/);
     assert.match(r.stdout, /would mkdir -p .*[\\\/]hooks/);
     assert.match(r.stdout, /would install .*caveman-activate\.js/);
-    assert.match(r.stdout, /would merge SessionStart \+ UserPromptSubmit \+ statusline/);
+    assert.match(r.stdout, /would merge SessionStart \+ UserPromptSubmit \+ SessionEnd \+ statusline/);
   }
   // Nothing should have been written.
   assert.equal(fs.existsSync(path.join(cfg, 'settings.json')), false);
