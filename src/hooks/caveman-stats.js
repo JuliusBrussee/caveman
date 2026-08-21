@@ -91,6 +91,11 @@ function ruleOverheadPerTurn() {
 // https://www.anthropic.com/pricing if a release changes the tier.
 // Most-specific prefixes MUST come first — priceForModel returns the first match.
 const MODEL_OUTPUT_PRICE_PER_M = [
+  // Claude 5 generation.
+  ['claude-fable-5',     50.00],   // Fable 5  = $50/M output
+  ['claude-mythos-5',    50.00],   // Mythos 5 = same rate card as Fable 5
+  ['claude-opus-5',      25.00],   // Opus 5   = $25/M output (Opus tier unchanged since 4.5)
+  ['claude-sonnet-5',    15.00],   // Sonnet 5 = $15/M list ($10/M intro through 2026-08-31)
   // Legacy Opus 4.0 / 4.1 (pre-4.5) billed at the old $75/M output tier,
   // including the dated ids (e.g. claude-opus-4-20250514).
   ['claude-opus-4-0',    75.00],

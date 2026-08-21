@@ -171,6 +171,18 @@ test('priceForModel matches by prefix across point releases', () => {
   assert.strictEqual(priceForModel('gpt-4'), null);
 });
 
+test('priceForModel covers the Claude 5 generation', () => {
+  const { priceForModel } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
+  assert.strictEqual(priceForModel('claude-opus-5'), 25.00);
+  assert.strictEqual(priceForModel('claude-sonnet-5'), 15.00);
+  assert.strictEqual(priceForModel('claude-fable-5'), 50.00);
+  assert.strictEqual(priceForModel('claude-mythos-5'), 50.00);
+  // Claude Code reports the 1M-context variant with a bracket suffix.
+  assert.strictEqual(priceForModel('claude-opus-5[1m]'), 25.00);
+  // Claude 5 entries must not shadow the Claude 4 prefixes.
+  assert.strictEqual(priceForModel('claude-opus-4-8'), 25.00);
+});
+
 test('formatStats handles empty session gracefully', () => {
   const { formatStats } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
   const out = formatStats({ outputTokens: 0, cacheReadTokens: 0, turns: 0, mode: 'full', model: null });
