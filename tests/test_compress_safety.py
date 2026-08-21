@@ -13,6 +13,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -20,6 +21,40 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "skills" / "caveman-compress"))
 
 from scripts import compress as compress_mod  # noqa: E402
+
+LLM_ENV_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "CAVEMAN_MODEL",
+    "CAVEMAN_PROVIDER",
+    "CAVEMAN_COMPRESS_MODEL",
+    "CAVEMAN_COMPRESS_PROVIDER",
+)
+OPENCODE_PROVIDER = "opencode"
+OPENCODE_MODEL = "github-copilot/gpt-4.1"
+PROMPT_TEXT = "Compress this memory."
+OPENCODE_OUTPUT = "Memory compressed."
+OPENCODE_BIN = "/usr/local/bin/opencode"
+OPENCODE_PROMPT_MESSAGE = "Follow the attached prompt exactly. Return only the final answer."
+OPENCODE_FILE_ARG = "--file"
+CLAUDE_MODEL = "claude-haiku-4-5"
+CLAUDE_OUTPUT = "Claude compressed."
+CLAUDE_BIN = "/usr/local/bin/claude"
+
+
+@contextmanager
+def llm_env(**overrides):
+    original = {key: os.environ.get(key) for key in LLM_ENV_KEYS}
+    try:
+        for key in LLM_ENV_KEYS:
+            os.environ.pop(key, None)
+        os.environ.update(overrides)
+        yield
+    finally:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 class CompressSafetyTests(unittest.TestCase):
@@ -268,8 +303,65 @@ class CompressSafetyTests(unittest.TestCase):
             backup = compress_mod.backup_dir_for(path) / "task.original.md"
             self.assertEqual(backup.read_bytes(), raw)
             backup.unlink()
+    def test_opencode_provider_uses_configured_model(self):
+        def run_opencode(command, **kwargs):
+            prompt_path = Path(command[command.index(OPENCODE_FILE_ARG) + 1])
+            self.assertEqual(prompt_path.read_text(), PROMPT_TEXT)
+            return mock.Mock(stdout=OPENCODE_OUTPUT)
 
+        with llm_env(
+            CAVEMAN_COMPRESS_PROVIDER=OPENCODE_PROVIDER,
+            CAVEMAN_COMPRESS_MODEL=OPENCODE_MODEL,
+        ), \
+             mock.patch.object(compress_mod.shutil, "which", return_value=OPENCODE_BIN), \
+             mock.patch.object(compress_mod.subprocess, "run", side_effect=run_opencode) as run:
+            output = compress_mod.call_claude(PROMPT_TEXT)
 
+        self.assertEqual(output, OPENCODE_OUTPUT)
+        run.assert_called_once()
+        command = run.call_args.args[0]
+        prompt_path = Path(command[command.index(OPENCODE_FILE_ARG) + 1])
+        self.assertEqual(command[:4], [OPENCODE_BIN, "run", "--model", OPENCODE_MODEL])
+        self.assertEqual(command[-1], OPENCODE_PROMPT_MESSAGE)
+        self.assertNotIn(PROMPT_TEXT, command)
+        self.assertNotEqual(prompt_path.parent, Path.cwd())
+        self.assertFalse(prompt_path.exists())
+        self.assertEqual(
+            run.call_args.kwargs,
+            {
+                "text": True,
+                "capture_output": True,
+                "check": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+            },
+        )
+
+    def test_claude_cli_uses_configured_model(self):
+        completed = mock.Mock(stdout=CLAUDE_OUTPUT)
+        with llm_env(CAVEMAN_COMPRESS_MODEL=CLAUDE_MODEL), \
+             mock.patch.object(compress_mod.shutil, "which", return_value=CLAUDE_BIN), \
+             mock.patch.object(compress_mod.subprocess, "run", return_value=completed) as run:
+            output = compress_mod.call_claude(PROMPT_TEXT)
+
+        self.assertEqual(output, CLAUDE_OUTPUT)
+        run.assert_called_once_with(
+            [CLAUDE_BIN, "--model", CLAUDE_MODEL, "--print"],
+            input=PROMPT_TEXT,
+            text=True,
+            capture_output=True,
+            check=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    def test_unknown_provider_is_rejected_before_subprocess(self):
+        with llm_env(CAVEMAN_COMPRESS_PROVIDER="bogus"), \
+             mock.patch.object(compress_mod.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "Unsupported caveman-compress provider"):
+                compress_mod.call_claude(PROMPT_TEXT)
+
+        run.assert_not_called()
 if __name__ == "__main__":
     unittest.main()
 
