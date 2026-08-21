@@ -67,7 +67,10 @@ SENSITIVE_BASENAME_REGEX = re.compile(
     r")$"
 )
 
-SENSITIVE_PATH_COMPONENTS = frozenset({".ssh", ".aws", ".gnupg", ".kube", ".docker"})
+SENSITIVE_PATH_COMPONENTS = frozenset({
+    ".ssh", ".aws", ".gnupg", ".kube", ".docker",
+    "credentials", "secrets",
+})
 
 SENSITIVE_NAME_TOKENS = (
     "secret", "credential", "password", "passwd",

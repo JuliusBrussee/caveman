@@ -230,6 +230,13 @@ class CompressSafetyTests(unittest.TestCase):
             backup_dir = compress_mod.backup_dir_for(path)
             self.assertFalse((backup_dir / "task.original.md").exists())
 
+    def test_sensitive_directory_names_are_blocked(self):
+        self.assertTrue(
+            compress_mod.is_sensitive_path(Path("C:/dev/CREDENTIALS/hetzner/webhosting.md"))
+        )
+        self.assertTrue(compress_mod.is_sensitive_path(Path("project/secrets/service-notes.md")))
+        self.assertFalse(compress_mod.is_sensitive_path(Path("project/docs/service-notes.md")))
+
     def test_crlf_line_endings_survive_the_round_trip(self):
         """Reading with universal newlines and writing back "\n" rewrote every
         line ending in every file the tool touched (issue #762)."""
