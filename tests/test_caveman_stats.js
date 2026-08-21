@@ -54,6 +54,55 @@ test('reads --session-file directly and sums output tokens', (tmp) => {
   assert.match(out, /Cache-read tokens:\s+250/);
 });
 
+test('counts a multi-block API response once, not once per JSONL line', (tmp) => {
+  // Claude Code writes one assistant line per content block (text + each
+  // tool_use) of the same API response — same message.id + requestId, same
+  // usage repeated. Only one line per response may count.
+  const usage = { output_tokens: 487, cache_read_input_tokens: 1000 };
+  const sess = makeSession(tmp, [
+    { type: 'assistant', requestId: 'req_1', message: { id: 'msg_a', usage } },
+    { type: 'assistant', requestId: 'req_1', message: { id: 'msg_a', usage } },
+    { type: 'assistant', requestId: 'req_1', message: { id: 'msg_a', usage } },
+    { type: 'user', message: { content: 'tool result' } },
+    { type: 'assistant', requestId: 'req_2', message: { id: 'msg_b', usage: { output_tokens: 13, cache_read_input_tokens: 500 } } },
+  ]);
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(tmp, '.claude') },
+  });
+  assert.match(out, /Turns:\s+2/);
+  assert.match(out, /Output tokens:\s+500\b/);
+  assert.match(out, /Cache-read tokens:\s+1,?\.?500\b/);
+});
+
+test('same message.id under different requestIds counts per response (retry path)', (tmp) => {
+  // A retried request re-sends the same message.id under a new requestId —
+  // those are distinct billed responses and must both count.
+  const sess = makeSession(tmp, [
+    { type: 'assistant', requestId: 'req_1', message: { id: 'msg_a', usage: { output_tokens: 100 } } },
+    { type: 'assistant', requestId: 'req_2', message: { id: 'msg_a', usage: { output_tokens: 100 } } },
+  ]);
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(tmp, '.claude') },
+  });
+  assert.match(out, /Turns:\s+2/);
+  assert.match(out, /Output tokens:\s+200\b/);
+});
+
+test('entries without message.id keep per-line counting (no dedupe key)', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 100 } } },
+    { type: 'assistant', message: { usage: { output_tokens: 100 } } },
+  ]);
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(tmp, '.claude') },
+  });
+  assert.match(out, /Turns:\s+2/);
+  assert.match(out, /Output tokens:\s+200\b/);
+});
+
 test('shows full-mode savings estimate when flag is full', (tmp) => {
   const sess = makeSession(tmp, [
     { type: 'assistant', message: { usage: { output_tokens: 350 } } },
