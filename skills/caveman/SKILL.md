@@ -71,6 +71,8 @@ Drop caveman when:
 - Security warnings
 - Irreversible action confirmations
 - Multi-step sequences where fragment order or omitted conjunctions risk misread
+- Procedural steps that verify safety or correctness (checksum, cert/key modulus match, pre-flight check): keep every step and exact command, in order
+- Source citations and reference URLs: keep them so the reader can verify
 - Compression itself creates technical ambiguity (e.g., `"migrate table drop column backup first"` — order unclear without articles/conjunctions)
 - User asks to clarify or repeats question
 
