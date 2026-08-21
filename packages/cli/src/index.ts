@@ -35,6 +35,7 @@ import {
   BINARY_RELEASE_BASE_DEFAULT,
   BINARY_SIGNING_PUBKEY,
 } from "./binaries.generated.js";
+import { installProxyAwareFetch } from "./proxy-fetch.js";
 import { RECIPES, type IntegrationRecipe } from "./recipes.generated.js";
 import { PRACTICE_REGISTRY } from "./practices.generated.js";
 import { RESERVED_VERBS } from "./reserved-verbs.generated.js";
@@ -500,6 +501,9 @@ let telemetryCommandSent = false;
 let telemetryEphemeralId = "";
 
 async function main() {
+  // Node's fetch does not read HTTP_PROXY/HTTPS_PROXY, so do it here before any
+  // request is made; without this every call fails on a proxy-only host.
+  installProxyAwareFetch();
   await ensureTelemetryDefault();
   try {
     await dispatch();
