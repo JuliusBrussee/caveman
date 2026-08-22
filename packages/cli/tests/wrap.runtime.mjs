@@ -489,6 +489,68 @@ test("profiled wrap attributes generic provider base URL union", async () => {
   }
 });
 
+// Claude Code drops first-party-only capabilities (1M context window → ~600k
+// auto-compact window) whenever ANTHROPIC_BASE_URL is not api.anthropic.com.
+// The local wrap targets a byte-safe pass-through whose anthropic upstream IS
+// api.anthropic.com by default, so it must assert first-party through Claude
+// Code's own escape hatch or every wrapped session shrinks to 200k (#865).
+const ASSUME_FIRST_PARTY = "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL";
+
+test("local claude wrap asserts the first-party base URL escape hatch", async () => {
+  const out = await wrapAndEchoEnvJson("claude", [ASSUME_FIRST_PARTY], { [ASSUME_FIRST_PARTY]: undefined });
+  assert.equal(out.code, 0, `wrap claude exited ${out.code}: ${out.stderr}`);
+  assert.equal(JSON.parse(out.stdout)[ASSUME_FIRST_PARTY], "1");
+});
+
+test("a user-exported first-party assertion value is never overridden", async () => {
+  const out = await wrapAndEchoEnvJson("claude", [ASSUME_FIRST_PARTY], { [ASSUME_FIRST_PARTY]: "0" });
+  assert.equal(out.code, 0, out.stderr);
+  assert.equal(JSON.parse(out.stdout)[ASSUME_FIRST_PARTY], "0");
+});
+
+test("an anthropic upstream override in caveman.yaml withholds the first-party assertion", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "cave-yaml-"));
+  const config = join(dir, "caveman.yaml");
+  writeFileSync(config, "mode: record\nproviders:\n  anthropic:\n    base_url: https://claude-mirror.example.com\n");
+  const out = await wrapAndEchoEnvJson("claude", [ASSUME_FIRST_PARTY], { [ASSUME_FIRST_PARTY]: undefined, CAVEMAN_CONFIG: config });
+  assert.equal(out.code, 0, out.stderr);
+  assert.equal(JSON.parse(out.stdout)[ASSUME_FIRST_PARTY], null);
+});
+
+test("an explicit api.anthropic.com upstream override keeps the first-party assertion", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "cave-yaml-fp-"));
+  const config = join(dir, "caveman.yaml");
+  // Sibling provider overrides must not disturb the anthropic answer.
+  writeFileSync(config, "providers:\n  openai:\n    base_url: https://openai-mirror.example.com\n  anthropic:\n    base_url: \"https://api.anthropic.com\"\n");
+  const out = await wrapAndEchoEnvJson("claude", [ASSUME_FIRST_PARTY], { [ASSUME_FIRST_PARTY]: undefined, CAVEMAN_CONFIG: config });
+  assert.equal(out.code, 0, out.stderr);
+  assert.equal(JSON.parse(out.stdout)[ASSUME_FIRST_PARTY], "1");
+});
+
+test("a flow-style providers block is unverifiable and withholds the assertion", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "cave-yaml-flow-"));
+  const config = join(dir, "caveman.yaml");
+  writeFileSync(config, "providers: {anthropic: {base_url: https://claude-mirror.example.com}}\n");
+  const out = await wrapAndEchoEnvJson("claude", [ASSUME_FIRST_PARTY], { [ASSUME_FIRST_PARTY]: undefined, CAVEMAN_CONFIG: config });
+  assert.equal(out.code, 0, out.stderr);
+  assert.equal(JSON.parse(out.stdout)[ASSUME_FIRST_PARTY], null);
+});
+
+test("managed claude wrap does not assert first-party (upstream unverifiable)", async () => {
+  const out = await wrapAndEchoEnvJson("claude", [ASSUME_FIRST_PARTY], {
+    [ASSUME_FIRST_PARTY]: undefined,
+    CAVE_GATEWAY_URL: "https://gateway.example.com",
+  });
+  assert.equal(out.code, 0, out.stderr);
+  assert.equal(JSON.parse(out.stdout)[ASSUME_FIRST_PARTY], null);
+});
+
 test("gemini profile injects distinct Gemini and Vertex local routes", async () => {
   const gemini = PROFILES.find((p) => p.id === "gemini");
   assert.ok(gemini, "missing gemini profile");

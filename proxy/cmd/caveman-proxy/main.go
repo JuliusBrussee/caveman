@@ -10,8 +10,8 @@
 //	caveman-proxy stats    print local spend summary JSON; --recent N prints newest rows
 //	caveman-proxy trial    analyze/report/export local trial data
 //	caveman-proxy usage    import/link/refresh/unlink local usage data
-//	caveman-proxy learn    scan/report/apply the local setup profiler (Cave Score + token sinks)
-//	                       scan --retro [--behavior-budget-ms N] [--retro-budget-ms N]
+//	caveman-proxy learn    scan/report/apply/applied/simulate the local setup profiler
+//	                       scan [--repo substring] --retro [--behavior-budget-ms N] [--retro-budget-ms N]
 //	                       bounds both passes and adds the retrospective
 //	                       "would-have-saved" block for the scanned window
 package main
@@ -225,9 +225,25 @@ func runServe(logger *slog.Logger) {
 		}
 	}
 
+	handler := server.Handler()
+	if nativeRuntime != nil {
+		// Loopback liveness beacon for the wrap CLI: while a wrapped agent
+		// process is alive its wrap heartbeats here, which holds off the
+		// wrap-owned idle exit above (issue #860). It only refreshes the idle
+		// clock — no session state, no metering, nothing recorded.
+		proxied := handler
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/caveman/keepalive" && r.Method == http.MethodPost {
+				nativeRuntime.Keepalive()
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			proxied.ServeHTTP(w, r)
+		})
+	}
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           server.Handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
@@ -544,8 +560,12 @@ func runLearn(logger *slog.Logger, args []string) {
 	spend := mustStore(logger, home)
 	defer spend.Close()
 	cwd, _ := os.Getwd()
-	sources := strings.Split(argFlag(args, "--sources", "codex,claude,caveman"), ",")
+	// Empty default defers to the store's normalizeSources default set, so new
+	// session sources (gemini/opencode/aider) are scanned without this flag
+	// needing to chase the adapter list.
+	sources := strings.Split(argFlag(args, "--sources", ""), ",")
 	since := argFlag(args, "--since", "30d")
+	repoFilter := argFlag(args, "--repo", "")
 
 	switch sub {
 	case "scan":
@@ -554,7 +574,7 @@ func runLearn(logger *slog.Logger, args []string) {
 		// both passes are independently bounded so a cold base scan cannot consume
 		// the child deadline before retro returns partial measured coverage.
 		retro := learnRetroOptions(args)
-		plan, err := spend.LearnScanWithRetro(sources, since, retro)
+		plan, err := spend.LearnScanFilteredWithRetro(sources, since, retro, repoFilter)
 		if err != nil {
 			fatalJSON(logger, err)
 		}
@@ -574,7 +594,7 @@ func runLearn(logger *slog.Logger, args []string) {
 	case "report":
 		// --retro is the same opt-in as on scan: without it the report builds
 		// exactly as before; with it the "would have saved" replay block renders.
-		plan, err := spend.BuildLearnPlanWithRetro(cwd, sources, since, learnRetroOptions(args))
+		plan, err := spend.BuildLearnPlanFilteredWithRetro(cwd, sources, since, learnRetroOptions(args), repoFilter)
 		if err != nil {
 			fatalJSON(logger, err)
 		}
@@ -601,9 +621,57 @@ func runLearn(logger *slog.Logger, args []string) {
 			fatalJSON(logger, err)
 		}
 		applyLearnSink(logger, home, sinkID, hasArg(args, "--dry-run"), plan)
+	case "applied":
+		sinkID := firstPositional(args)
+		if sinkID == "" {
+			fatalJSON(logger, fmt.Errorf("usage: caveman-proxy learn applied <sink_id> [--fix-kind <k>] [--note <s>]"))
+		}
+		plan, err := spend.BuildLearnPlanFilteredWithRetro(cwd, sources, since, store.RetroOptions{}, repoFilter)
+		if err != nil {
+			fatalJSON(logger, err)
+		}
+		recorded, err := spend.RecordAppliedFix(plan, sinkID, argFlag(args, "--fix-kind", ""), argFlag(args, "--note", ""))
+		if err != nil {
+			fatalJSON(logger, err)
+		}
+		printJSON(recorded)
+	case "simulate":
+		sinkIDs := learnSinkPositionals(args)
+		if len(sinkIDs) == 0 {
+			fatalJSON(logger, fmt.Errorf("usage: caveman-proxy learn simulate <sink_id> [<sink_id>...] [--sources <list>] [--since <window>]"))
+		}
+		simulation, err := spend.BuildLearnSimulationFiltered(cwd, sources, since, sinkIDs, repoFilter)
+		if err != nil {
+			fatalJSON(logger, err)
+		}
+		printJSON(simulation)
 	default:
 		fatalJSON(logger, fmt.Errorf("unknown learn subcommand: %s", sub))
 	}
+}
+
+var positionalValueFlags = map[string]bool{
+	"--agent": true, "--behavior-budget-ms": true, "--build": true,
+	"--command": true, "--decision": true, "--exit-code": true,
+	"--fix-kind": true, "--note": true, "--out": true, "--path": true,
+	"--plan": true, "--port": true, "--recent": true, "--repo": true,
+	"--retro-budget-ms": true, "--session": true, "--since": true,
+	"--sources": true, "--trial-id": true, "--write-report-token": true,
+}
+
+func learnSinkPositionals(args []string) []string {
+	var ids []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "--") {
+			if !strings.Contains(arg, "=") && positionalValueFlags[arg] && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		ids = append(ids, arg)
+	}
+	return ids
 }
 
 func learnRetroOptions(args []string) store.RetroOptions {
@@ -831,7 +899,7 @@ func hasArg(args []string, name string) bool {
 func firstPositional(args []string) string {
 	for i := 0; i < len(args); i++ {
 		if strings.HasPrefix(args[i], "--") {
-			if !strings.Contains(args[i], "=") {
+			if !strings.Contains(args[i], "=") && positionalValueFlags[args[i]] {
 				i++
 			}
 			continue

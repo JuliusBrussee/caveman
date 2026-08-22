@@ -7,6 +7,7 @@ on:
       - "sdk-python-v*"
       - "agent-v*"
       - "create-agent-v*"
+      - "pi-v*"
 
 permissions:
   contents: read
@@ -76,6 +77,12 @@ jobs:
               version="${GITHUB_REF_NAME#create-agent-v}"
               actual="$(node -p "require('./$package/package.json').version")"
               ;;
+            pi-v*)
+              package="packages/pi-extension"
+              ecosystem="npm"
+              version="${GITHUB_REF_NAME#pi-v}"
+              actual="$(node -p "require('./$package/package.json').version")"
+              ;;
             *)
               echo "unsupported package release tag: $GITHUB_REF_NAME" >&2
               exit 2
@@ -116,6 +123,11 @@ jobs:
             packages/agent)
               (cd "$smoke" && node --input-type=module -e 'const m=await import("@caveman-ai/agent"); if(typeof m.agent!=="function") process.exit(1)')
               "$smoke/node_modules/.bin/caveman-agent" --version
+              ;;
+            packages/pi-extension)
+              # The whole point: the published tarball must actually carry the
+              # bundled extension that package.json's `pi.extensions` names.
+              test -s "$smoke/node_modules/@caveman-ai/pi/dist/index.mjs"
               ;;
             packages/create-caveman-agent)
               generated="$smoke/generated-agent"
@@ -161,7 +173,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: npm
-      url: https://www.npmjs.com/package/${{ needs.build.outputs.package == 'packages/agent' && '@caveman-ai/agent' || needs.build.outputs.package == 'packages/create-caveman-agent' && '@caveman-ai/create-agent' || '@caveman-ai/sdk' }}
+      url: https://www.npmjs.com/package/${{ needs.build.outputs.package == 'packages/agent' && '@caveman-ai/agent' || needs.build.outputs.package == 'packages/create-caveman-agent' && '@caveman-ai/create-agent' || needs.build.outputs.package == 'packages/pi-extension' && '@caveman-ai/pi' || '@caveman-ai/sdk' }}
     permissions:
       contents: read
       id-token: write
@@ -178,7 +190,7 @@ jobs:
         run: |
           set -euo pipefail
           npm install --global npm@11.5.1
-          npm publish dist/*.tgz --access public
+          npm publish ./dist/*.tgz --access public
 
   publish-pypi:
     if: needs.build.outputs.ecosystem == 'pypi'

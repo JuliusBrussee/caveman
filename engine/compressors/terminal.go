@@ -60,35 +60,33 @@ func (c *terminalCompressor) Compress(input []byte) ([]byte, bool) {
 		return nil, false // empty or binary-ish content → pass-through
 	}
 
-	// Normalize CRLF to LF for analysis; the file's separator is restored on
-	// output so we never silently rewrite line endings.
-	crlf := bytes.Contains(input, []byte("\r\n"))
-	work := input
-	if crlf {
-		work = bytes.ReplaceAll(work, []byte("\r\n"), []byte("\n"))
+	// Clean each line independently, detaching that line's own CR first so a CRLF
+	// break is never mistaken for an intra-line redraw. Re-attaching it per line
+	// means a document with mixed endings keeps every one of them; the old code
+	// normalized the whole buffer and re-terminated it from a single
+	// `Contains("\r\n")` flag, so one embedded CRLF (what `curl -i` emits, or a
+	// Windows tool's output inside a Unix CI log) rewrote every line in the file.
+	lines, trailing := splitLines(input)
+	cr := crSuffix(input)
+	for i, ln := range lines {
+		lineCR := bytes.HasSuffix(ln, []byte("\r"))
+		if lineCR {
+			ln = ln[:len(ln)-1]
+		}
+		ln = collapseCarriageReturns(ln) // intra-line \r redraws → final state
+		ln = ansiRe.ReplaceAll(ln, nil)  // strip display control sequences
+		if lineCR {
+			ln = append(append(make([]byte, 0, len(ln)+1), ln...), '\r')
+		}
+		lines[i] = ln
 	}
-	work = collapseCarriageReturns(work) // intra-line \r redraws → final state
-	work = ansiRe.ReplaceAll(work, nil)  // strip display control sequences
-
-	trailing := bytes.HasSuffix(work, []byte("\n"))
-	body := work
-	if trailing {
-		body = body[:len(body)-1]
-	}
-	lines := bytes.Split(body, []byte("\n"))
 
 	out := lines // < 4 lines: ANSI/\r cleanup alone may still have shrunk it
 	if len(lines) >= 4 {
-		out = elideMiddle(lines, c.keepHead, c.keepTail)
+		out = elideMiddle(lines, c.keepHead, c.keepTail, cr)
 	}
 
-	result := bytes.Join(out, []byte("\n"))
-	if trailing {
-		result = append(result, '\n')
-	}
-	if crlf {
-		result = bytes.ReplaceAll(result, []byte("\n"), []byte("\r\n"))
-	}
+	result := joinLines(out, trailing)
 	if bytes.Equal(result, input) {
 		return nil, false // cleanup and elision changed nothing → claim nothing
 	}
@@ -123,7 +121,7 @@ func collapseCarriageReturns(b []byte) []byte {
 // each run of dropped lines into a single marker. It mirrors the log compressor's
 // proven head/tail/importance pass so terminal output and build logs elide the
 // same way once the terminal-specific ANSI/\r noise is gone.
-func elideMiddle(lines [][]byte, head, tail int) [][]byte {
+func elideMiddle(lines [][]byte, head, tail int, cr []byte) [][]byte {
 	keep := make([]bool, len(lines))
 	for i, ln := range lines {
 		if i < head || i >= len(lines)-tail || termImportantRe.Match(ln) || termMarkerRe.Match(ln) {
@@ -135,7 +133,7 @@ func elideMiddle(lines [][]byte, head, tail int) [][]byte {
 	dropped := 0
 	flush := func() {
 		if dropped > 0 {
-			out = append(out, []byte(termMarker(dropped)))
+			out = append(out, synthLine(termMarker(dropped), cr))
 			dropped = 0
 		}
 	}

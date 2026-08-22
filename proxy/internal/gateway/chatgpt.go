@@ -148,7 +148,26 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 		}, wholeBody(originalBody), wholeBody(transform.Body))
 	}
 
-	resp, err := s.httpClient.Do(upReq)
+	// The fully-buffered path can rebuild its body per attempt, so transient
+	// transport failures retry instead of surfacing a terminal 502. The
+	// streaming path has a partially-consumed body and cannot replay.
+	var resp *http.Response
+	if transform.Body != nil {
+		resp, err = s.doUpstream(r.Context(), func() (*http.Request, error) {
+			req, buildErr := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(transform.Body))
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			req.ContentLength = int64(len(transform.Body))
+			req.Header = chatGPTRequestHeaders(r.Header)
+			if comp != nil {
+				req.Header.Del("Content-Length")
+			}
+			return req, nil
+		})
+	} else {
+		resp, err = s.httpClient.Do(upReq)
+	}
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unreachable", "ChatGPT upstream is unreachable.")
 		requestHashComplete := chatGPTRequestHashComplete(requestBodyFullyRead, r.ContentLength, reqCapture, requestBodyTracker)
@@ -160,31 +179,33 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && comp != nil && originalBody != nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
-		retryReq, retryErr := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(originalBody))
-		if retryErr == nil {
+		retryResp, doErr := s.doUpstream(r.Context(), func() (*http.Request, error) {
+			retryReq, retryErr := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(originalBody))
+			if retryErr != nil {
+				return nil, retryErr
+			}
 			retryReq.Header = chatGPTRequestHeaders(r.Header)
 			retryReq.Header.Del("Content-Length")
-			retryResp, doErr := s.httpClient.Do(retryReq)
-			if doErr == nil {
-				resp = retryResp
-				transform = providers.TransformResult{Body: originalBody, OptimizerIDs: []string{}}
-				comp = nil
-				// The original bytes served the request; the capture written before
-				// the first attempt describes bytes the upstream rejected. Both
-				// attempts stay on disk, and this one says which served.
-				s.capture.record(captureMeta{
-					RequestID:     requestID,
-					Provider:      "chatgpt-subscription",
-					Endpoint:      suffix,
-					RuntimeMode:   rc.RuntimeMode,
-					RetryOriginal: true,
-				}, wholeBody(originalBody), wholeBody(originalBody))
-			} else {
-				httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unreachable", "ChatGPT upstream is unreachable.")
-				s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, reqHash.Sum(nil), reqHash.Sum(nil), true, nil, 0, false, nil, nil)
-				return
-			}
+			return retryReq, nil
+		})
+		if doErr != nil {
+			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unreachable", "ChatGPT upstream is unreachable.")
+			s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, reqHash.Sum(nil), reqHash.Sum(nil), true, nil, 0, false, nil, nil)
+			return
 		}
+		resp = retryResp
+		transform = providers.TransformResult{Body: originalBody, OptimizerIDs: []string{}}
+		comp = nil
+		// The original bytes served the request; the capture written before
+		// the first attempt describes bytes the upstream rejected. Both
+		// attempts stay on disk, and this one says which served.
+		s.capture.record(captureMeta{
+			RequestID:     requestID,
+			Provider:      "chatgpt-subscription",
+			Endpoint:      suffix,
+			RuntimeMode:   rc.RuntimeMode,
+			RetryOriginal: true,
+		}, wholeBody(originalBody), wholeBody(originalBody))
 	}
 	defer resp.Body.Close()
 
@@ -300,7 +321,10 @@ func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, tr
 		}
 	}
 	s.sink.Record(RequestRecord{
-		Timestamp:                start.UTC().Format(time.RFC3339Nano),
+		// storeTSLayout, not RFC3339Nano: the store's `ts` column is space-separated
+		// and compared/ordered as text. 'T' sorts after ' ', so RFC3339 rows landed
+		// on the wrong side of every `--since` bound and mis-sorted under ORDER BY ts.
+		Timestamp:                start.UTC().Format("2006-01-02 15:04:05.000"),
 		RequestID:                requestID,
 		TraceID:                  traceID,
 		Label:                    labelOrDefault(rc.Label, "local"),

@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -53,6 +54,44 @@ class ModeTrackerTests(unittest.TestCase):
 
     def flag_value(self):
         return self.flag.read_text(encoding="utf-8") if self.flag.exists() else None
+
+    # ── hook budget: act on the first complete payload, not on EOF ──────
+
+    def test_acts_on_first_complete_payload_without_waiting_for_eof(self):
+        """The hook is registered with a 5s host budget. Blocking until stdin
+        EOF spends that budget waiting for a close it already has all the data
+        for — the Windows pipe implementation can lag that close arbitrarily
+        (#729/#833). Write one complete object, hold the pipe open, and the
+        flag must land anyway."""
+        env = os.environ.copy()
+        env.pop("CAVEMAN_DEFAULT_MODE", None)
+        env["HOME"] = self._tmp.name
+        env["USERPROFILE"] = self._tmp.name
+        env["CLAUDE_CONFIG_DIR"] = str(self.claude_dir)
+
+        proc = subprocess.Popen(
+            ["node", str(TRACKER)],
+            cwd=REPO_ROOT,
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            proc.stdin.write(json.dumps({"prompt": "/caveman ultra"}))
+            proc.stdin.flush()  # deliberately NOT closed
+            deadline = time.time() + 5
+            while time.time() < deadline and self.flag_value() is None:
+                time.sleep(0.05)
+            self.assertEqual(self.flag_value(), "ultra")
+        finally:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+            proc.kill()
+            proc.wait(timeout=5)
 
     # ── #598: deactivation word orders ──────────────────────────────────
 

@@ -60,4 +60,4 @@ jobs:
       - name: Build CLI
         run: npm --prefix packages/cli run build
       - name: Run fake-harness matrix and help fixture
-        run: node --test packages/cli/tests/agent-registry.runtime.mjs packages/cli/tests/agent-shortcut.runtime.mjs packages/cli/tests/porcelain.runtime.mjs
+        run: node --test --test-force-exit packages/cli/tests/agent-registry.runtime.mjs packages/cli/tests/agent-shortcut.runtime.mjs packages/cli/tests/porcelain.runtime.mjs

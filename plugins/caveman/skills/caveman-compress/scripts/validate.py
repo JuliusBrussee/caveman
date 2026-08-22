@@ -24,10 +24,20 @@ FENCE_MARKER_LINE_REGEX = re.compile(r"^\s*(?:`{3,}|~{3,})[^`~]*$")
 MAX_REPORTED_SPAN = 60
 HEADING_REGEX = re.compile(r"^(#{1,6})\s+(.*)", re.MULTILINE)
 BULLET_REGEX = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
+# Any list item, ordered or not. Four spaces inside a list item is the item's
+# content indentation, never an indented code block.
+LIST_ITEM_REGEX = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
 
 # crude but effective path detection
 # Requires either a path prefix (./ ../ / or drive letter) or a slash/backslash within the match
 PATH_REGEX = re.compile(r"(?:\./|\.\./|/|[A-Za-z]:\\)[\w\-/\\\.]+|[\w\-\.]+[/\\][\w\-/\\\.]+")
+
+# PATH_REGEX is crude on purpose and also matches ordinary prose pairs —
+# "pros/cons", "Node/browser", "state/lifecycle". Caveman prose ADDS those
+# constructions freely and dropping one breaks nothing, so only an unambiguous
+# path — a leading ./ ../ / or drive letter, or a dotted filename in the last
+# component — is treated as a hard loss.
+DEFINITE_PATH_REGEX = re.compile(r"^(?:\./|\.\./|/|[A-Za-z]:\\)|[^/\\]*\.[A-Za-z0-9]{1,8}$")
 
 
 class ValidationResult:
@@ -96,7 +106,106 @@ def extract_code_blocks(text):
             blocks.append("\n".join(block_lines))
         # Unclosed fences are silently skipped — they indicate malformed markdown
         # and including them would cause false-positive validation failures.
+    return blocks + extract_indented_code_blocks(text)
+
+
+def extract_indented_code_blocks(text):
+    """CommonMark indented code blocks — 4-space-indented runs outside any fence.
+
+    Without these, `    kubectl delete pod --all -n prod` was prose to the
+    validator: "code blocks preserved exactly" compared empty to empty and
+    PASSED while the compressor rewrote the command to
+    `kubectl delete pod -n dev`. A clean pass on a mutated destructive command
+    is the worst failure this tool has, because it overwrites the user's file.
+
+    Deliberately conservative about lists: inside a list item, four spaces are
+    the item's content indentation, not code, and nested bullets are ordinary
+    prose the compressor SHOULD rewrite. A run is only treated as code when the
+    document is not inside a list and the run is preceded by a blank line — so
+    this adds detections, it never turns existing passes into false failures.
+    """
+    blocks = []
+    lines = text.split("\n")
+    fenced = set()
+    for block in extract_fenced_spans(lines):
+        fenced.update(block)
+    in_list = False
+    previous_blank = True
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        if i in fenced:
+            in_list, previous_blank = in_list, False
+            i += 1
+            continue
+        if not stripped:
+            previous_blank = True
+            i += 1
+            continue
+        indent = len(line) - len(line.lstrip(" \t"))
+        if LIST_ITEM_REGEX.match(line):
+            in_list = True
+        elif indent == 0:
+            in_list = False
+        if not in_list and previous_blank and indent >= 4:
+            run = []
+            while i < n and i not in fenced:
+                current = lines[i]
+                if not current.strip():
+                    # A blank line continues an indented block only if more
+                    # indented content follows.
+                    lookahead = i + 1
+                    while lookahead < n and not lines[lookahead].strip():
+                        lookahead += 1
+                    if lookahead < n and lookahead not in fenced and \
+                            len(lines[lookahead]) - len(lines[lookahead].lstrip(" \t")) >= 4:
+                        run.extend(lines[i:lookahead])
+                        i = lookahead
+                        continue
+                    break
+                if len(current) - len(current.lstrip(" \t")) < 4:
+                    break
+                run.append(current)
+                i += 1
+            if run:
+                blocks.append("\n".join(run))
+            previous_blank = False
+            continue
+        previous_blank = False
+        i += 1
     return blocks
+
+
+def extract_fenced_spans(lines):
+    """Line-index ranges covered by fenced blocks, so indented-code detection
+    never reaches inside one."""
+    spans = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        m = FENCE_OPEN_REGEX.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        fence_char = m.group(2)[0]
+        fence_len = len(m.group(2))
+        start = i
+        i += 1
+        while i < n:
+            close_m = FENCE_OPEN_REGEX.match(lines[i])
+            if (
+                close_m
+                and close_m.group(2)[0] == fence_char
+                and len(close_m.group(2)) >= fence_len
+                and close_m.group(3).strip() == ""
+            ):
+                i += 1
+                break
+            i += 1
+        spans.append(range(start, i))
+    return spans
 
 
 def extract_urls(text):
@@ -150,11 +259,26 @@ def validate_headings(orig, comp, result):
     h1 = extract_headings(orig)
     h2 = extract_headings(comp)
 
+    # Changed heading TEXT is an error, not a warning. Every in-document anchor
+    # link points at a heading's slug, so renaming "# Configuration Options" to
+    # "# Config" silently breaks all of them — and SKILL.md and CLAUDE.md both
+    # state headings are preserved. Only counts used to gate the overwrite, so
+    # a run that renamed every heading reported "Validation passed". A level-only
+    # change keeps every slug intact and stays a warning.
     if len(h1) != len(h2):
         result.add_error(f"Heading count mismatch: {len(h1)} vs {len(h2)}")
+        return
 
-    if h1 != h2:
-        result.add_warning("Heading text/order changed")
+    t1 = [text for _, text in h1]
+    t2 = [text for _, text in h2]
+    if t1 != t2:
+        lost = [t for t in t1 if t not in t2]
+        added = [t for t in t2 if t not in t1]
+        result.add_error(f"Heading text/order changed: lost={lost}, added={added}")
+    elif h1 != h2:
+        # Same text, different level. The outline moved but no anchor broke —
+        # slugs come from the text, so links still resolve.
+        result.add_warning("Heading levels changed")
 
 
 def validate_code_blocks(orig, comp, result):
@@ -174,11 +298,23 @@ def validate_urls(orig, comp, result):
 
 
 def validate_paths(orig, comp, result):
+    """File paths are preserved — an error, never a warning.
+
+    This validator never called add_error at all, so a compressed file that had
+    dropped `src/hooks/caveman-config.js` still reported "Validation passed" and
+    the in-place overwrite stood. SKILL.md and CLAUDE.md both promise paths
+    survive compression; nothing enforced it.
+    """
     p1 = extract_paths(orig)
     p2 = extract_paths(comp)
+    lost = p1 - p2
+    added = p2 - p1
 
-    if p1 != p2:
-        result.add_warning(f"Path mismatch: lost={p1 - p2}, added={p2 - p1}")
+    definite = {p for p in lost if DEFINITE_PATH_REGEX.search(p)}
+    if definite:
+        result.add_error(f"File paths lost: {sorted(definite)}")
+    if (lost - definite) or added:
+        result.add_warning(f"Path mismatch: lost={sorted(lost)}, added={sorted(added)}")
 
 
 def validate_bullets(orig, comp, result):

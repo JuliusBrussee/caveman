@@ -22,6 +22,12 @@ at a time.
      a confirming recall proves the content still comes back.
    - **load_bearing** → never touched.
 
+After an approved edit passes its re-measure gate, `caveman learn applied
+<sink_id>` records the sink, fix kind, application time, and before-value in
+Caveman's own outcome store. Later scans compare post-fix sessions and report
+`improved`, `unchanged`, `regressed`, or `insufficient_data`. This ledger does
+not edit user or repository config.
+
 ## Honesty
 
 Everything is `inferred` — no currency, no "verified". Every edit is consent-gated and

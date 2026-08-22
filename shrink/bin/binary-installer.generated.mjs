@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, verify } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import {
   accessSync,
   chmodSync,
@@ -152,6 +152,26 @@ async function download(url, part, timeout) {
   return hash.digest("hex");
 }
 
+// Windows refuses to replace a file another process holds open, and the
+// binaries this installs (caveman-proxy, cavemem) are long-lived daemons — an
+// update issued while one is running failed the rename outright and then the
+// catch deleted the verified download, so the user was left with neither the
+// new binary nor a retry (#657). Back off and try again; the daemon usually
+// exits within a second or two of being asked to.
+async function replaceWithRetry(part, target, attempts = 6) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(part, target);
+      return;
+    } catch (error) {
+      const locked = error.code === "EPERM" || error.code === "EBUSY" ||
+                     error.code === "EACCES" || error.code === "ETXTBSY";
+      if (!locked || attempt >= attempts - 1) throw error;
+      await new Promise((done) => setTimeout(done, 100 * 2 ** attempt));
+    }
+  }
+}
+
 export async function ensureBinary({ name, envVar }) {
   const explicit = process.env[envVar];
   if (explicit) {
@@ -179,13 +199,24 @@ export async function ensureBinary({ name, envVar }) {
   }
   const expected = expectedDigest(checksums, artifact);
   mkdirSync(binDir, { recursive: true });
-  const part = `${target}.part`;
-  cleanup(part);
+  // Per-process part path, and NO pre-unlink. A fixed `${target}.part` plus a
+  // cleanup() immediately before an O_CREAT|O_EXCL open made the exclusivity
+  // guard unreachable: two concurrent installs (npx -y caveman-mcp is registered
+  // per MCP session, so several agents can start one at once) raced — B unlinked
+  // A's directory entry and created its own inode, A hashed ITS OWN bytes and
+  // matched, and then the PATH-based chmod+rename published B's half-written file
+  // as "checksum verified". Both the chmod and the rename now act on a name only
+  // this process can own.
+  //
+  // ponytail: a SIGKILL mid-download now leaves one stray .part behind instead of
+  // reusing the fixed name. Sweep binDir for stale .part files if that ever shows
+  // up in the wild.
+  const part = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.part`;
   try {
     const actual = await download(`${release}/${artifact}`, part, timeout);
     if (actual !== expected) throw new Error(`signature check failed for ${artifact} — partial download deleted`);
     chmodSync(part, 0o755);
-    renameSync(part, target);
+    await replaceWithRetry(part, target);
   } catch (error) {
     cleanup(part);
     throw error;

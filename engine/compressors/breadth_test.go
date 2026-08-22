@@ -39,6 +39,31 @@ func TestDiffCompressorKeepsChangesAndElidesContext(t *testing.T) {
 	}
 }
 
+// A bare "-" or "+" is how git renders the deletion or addition of a blank
+// line. It was elided as context under a marker claiming only context was
+// dropped — the change vanished with nothing saying so.
+func TestDiffCompressorKeepsBlankLineChanges(t *testing.T) {
+	for _, change := range []string{"-", "+"} {
+		var b strings.Builder
+		b.WriteString("diff --git a/app.go b/app.go\nindex 111..222 100644\n--- a/app.go\n+++ b/app.go\n@@ -1,30 +1,30 @@\n")
+		for i := 0; i < 18; i++ {
+			fmt.Fprintf(&b, " unchanged line %02d\n", i)
+		}
+		b.WriteString(change + "\n")
+		for i := 18; i < 36; i++ {
+			fmt.Fprintf(&b, " unchanged line %02d\n", i)
+		}
+
+		out, ok := compressors.NewDiff().Compress([]byte(b.String()))
+		if !ok {
+			continue // pass-through keeps the change by definition
+		}
+		if !bytes.Contains(out, []byte("\n"+change+"\n")) {
+			t.Fatalf("compressed diff dropped the bare %q change line:\n%s", change, out)
+		}
+	}
+}
+
 func TestSearchResultCompressorKeepsImportantHits(t *testing.T) {
 	var b strings.Builder
 	for i := 1; i <= 28; i++ {

@@ -247,11 +247,15 @@ func parseTable(input []byte) (parsedTable, bool) {
 			return parsedTable{}, false
 		}
 	}
-	return parsedTable{kind: kind, rows: rows, delimiter: delimiter, crlf: bytes.Contains(input, []byte("\r\n"))}, true
+	return parsedTable{kind: kind, rows: rows, delimiter: delimiter, crlf: majorityCRLF(input)}, true
 }
 
 func parseMarkdownTable(input []byte) (parsedTable, bool) {
-	crlf := bytes.Contains(input, []byte("\r\n"))
+	// ponytail: majority, not "contains any" — one stray CRLF must not re-terminate
+	// the file. This compressor re-encodes the table from parsed rows, so unlike the
+	// line-oriented compressors it cannot preserve each line's own ending; a truly
+	// mixed table still comes out uniform. Track per-row endings if that ever matters.
+	crlf := majorityCRLF(input)
 	normalized := bytes.ReplaceAll(input, []byte("\r\n"), []byte("\n"))
 	raw := bytes.Split(bytes.TrimSuffix(normalized, []byte("\n")), []byte("\n"))
 	if len(raw) < 3 {

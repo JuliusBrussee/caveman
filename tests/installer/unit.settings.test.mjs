@@ -225,13 +225,20 @@ test('rewriteLegacyManagedHookCommands rewrites bare-node managed scripts', () =
       ] }],
     },
   };
-  const n = SETTINGS.rewriteLegacyManagedHookCommands(s, '/usr/local/bin/node');
+  // Pin the platform: this asserts the POSIX quoting shape, which the host
+  // default would silently swap for PowerShell on a Windows CI box (the
+  // Windows shape has its own test below).
+  const n = SETTINGS.rewriteLegacyManagedHookCommands(s, '/usr/local/bin/node', 'linux');
   assert.equal(n, 1);
   assert.match(s.hooks.SessionStart[0].hooks[0].command, /"\/usr\/local\/bin\/node" "\/abs\/hooks\/caveman-activate\.js"/);
   assert.equal(s.hooks.SessionStart[0].hooks[1].command, 'node /abs/hooks/some-user-hook.js');
 });
 
-test('rewriteLegacyManagedHookCommands emits PowerShell invocation on Windows', () => {
+// #835: Git Bash is Claude Code's default hook shell on Windows, so the
+// rewrite must emit a bash-parseable command. The old PowerShell
+// call-operator shape (`& 'x' 'y'`) was a bash syntax error, meaning the
+// "migration" rewrote a working bare-node hook into a broken one.
+test('rewriteLegacyManagedHookCommands emits a bash-safe command on Windows', () => {
   const s = {
     hooks: {
       SessionStart: [{ hooks: [{ type: 'command', command: "node \"C:/Users/O'Brien/.claude/hooks/caveman-activate.js\"" }] }],
@@ -241,7 +248,7 @@ test('rewriteLegacyManagedHookCommands emits PowerShell invocation on Windows', 
   assert.equal(n, 1);
   assert.equal(
     s.hooks.SessionStart[0].hooks[0].command,
-    "& 'C:/Program Files/nodejs/node.exe' 'C:/Users/O''Brien/.claude/hooks/caveman-activate.js'",
+    '"C:/Program Files/nodejs/node.exe" "C:/Users/O\'Brien/.claude/hooks/caveman-activate.js"',
   );
 });
 
@@ -280,6 +287,23 @@ test('pruneOrphanedManagedHooks removes managed hook whose target is missing (ab
   const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
   assert.equal(removed, 1);
   assert.equal(s.hooks, undefined);
+});
+
+test('pruneOrphanedManagedHooks keeps a foreign-platform absolute path it cannot judge', () => {
+  // A roaming settings.json written on Windows, processed on POSIX: path
+  // .isAbsolute() says false for `C:\...`, so the old code joined it under
+  // baseDir, found nothing, and pruned a hook that is live on the machine that
+  // wrote it. Existence is only knowable for paths of our own platform.
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\.claude\\hooks\\caveman-activate.js"' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 0, 'must not prune a hook whose path belongs to another platform');
+  assert.equal(s.hooks.SessionStart[0].hooks.length, 1);
 });
 
 test('pruneOrphanedManagedHooks removes orphan bare-node managed hook', () => {

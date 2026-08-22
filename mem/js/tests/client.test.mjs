@@ -10,6 +10,12 @@ test("JS client exports the too-large process exit contract", () => {
   assert.equal(MEMORY_TOO_LARGE_EXIT_CODE, 65);
 });
 
+// The fake binary is a POSIX shebang script, which Windows cannot exec (and
+// execFile refuses .cmd shims); the shipped cavemem there is a real Go .exe.
+// Tests that must EXECUTE the stub skip on win32 — contract and failure-path
+// tests still run everywhere.
+const stubExecutable = process.platform !== "win32";
+
 async function fakeBinary() {
   const directory = await mkdtemp(join(tmpdir(), "cavemem-js-"));
   const path = join(directory, "cavemem");
@@ -26,7 +32,7 @@ else process.stdout.write(JSON.stringify({ args, basis: "inferred" }));
   return { directory, path };
 }
 
-test("JS client forwards every command and preserves JSON response", async (t) => {
+test("JS client forwards every command and preserves JSON response", { skip: !stubExecutable }, async (t) => {
   const previous = process.env.CAVEMEM_BIN;
   const { path } = await fakeBinary();
   process.env.CAVEMEM_BIN = path;
@@ -45,7 +51,7 @@ test("JS client forwards every command and preserves JSON response", async (t) =
   assert.deepEqual(await forget("mem_1"), { args: ["forget", "mem_1"], basis: "inferred" });
 });
 
-test("JS client propagates binary and JSON failures", async (t) => {
+test("JS client propagates binary and JSON failures", { skip: !stubExecutable }, async (t) => {
   const previous = process.env.CAVEMEM_BIN;
   const { path } = await fakeBinary();
   process.env.CAVEMEM_BIN = path;
@@ -77,7 +83,7 @@ test("explicit missing CAVEMEM_BIN fails instead of silently executing PATH bina
   await assert.rejects(remember("must not reach PATH"), (error) => error.code === "ENOENT");
 });
 
-test("unset CAVEMEM_BIN resolves cavemem from PATH", async (t) => {
+test("unset CAVEMEM_BIN resolves cavemem from PATH", { skip: !stubExecutable }, async (t) => {
   const previousBinary = process.env.CAVEMEM_BIN;
   const previousPath = process.env.PATH;
   const { directory } = await fakeBinary();

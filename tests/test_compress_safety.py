@@ -25,7 +25,12 @@ from scripts import compress as compress_mod  # noqa: E402
 class CompressSafetyTests(unittest.TestCase):
     def _file_with(self, dirpath: Path, text: str) -> Path:
         path = dirpath / "task.md"
-        path.write_text(text, encoding="utf-8")
+        # newline="" or Python's text mode rewrites every \n as \r\n on Windows,
+        # so the fixture would land as CRLF. compress.py then correctly
+        # PRESERVES the source's line endings (issue #762) and the assertions
+        # below, which compare against LF strings, fail — measuring the
+        # fixture's line endings rather than the compressor's behaviour.
+        path.write_text(text, encoding="utf-8", newline="")
         return path
 
     def test_empty_input_refused(self):
@@ -140,10 +145,10 @@ class CompressSafetyTests(unittest.TestCase):
             target = path.resolve()
             real_write_text_atomic = compress_mod.write_text_atomic
 
-            def flaky_write(write_path, text):
+            def flaky_write(write_path, text, newline="\n"):
                 if write_path == target:
                     raise UnicodeEncodeError("utf-8", text, 0, 1, "forced failure")
-                return real_write_text_atomic(write_path, text)
+                return real_write_text_atomic(write_path, text, newline)
 
             with mock.patch.object(compress_mod, "call_claude", return_value=compressed), \
                  mock.patch.object(compress_mod, "validate") as v, \
@@ -191,9 +196,9 @@ class CompressSafetyTests(unittest.TestCase):
             written_texts = []
             real_write_target = compress_mod._write_target
 
-            def spy_write_target(target_path, text, backup_path):
+            def spy_write_target(target_path, text, backup_path, newline="\n"):
                 written_texts.append(text)
-                return real_write_target(target_path, text, backup_path)
+                return real_write_target(target_path, text, backup_path, newline)
 
             with mock.patch.object(
                 compress_mod, "call_claude", side_effect=[first_pass, preamble_fix]
@@ -205,6 +210,91 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertNotIn(preamble_fix, written_texts)
             self.assertEqual(path.read_text(encoding="utf-8"), original)
 
+    def test_non_utf8_input_refused_before_anything_is_written(self):
+        """errors="ignore" used to drop the undecodable byte, write the mangled
+        text to the backup, pass the mangled-vs-mangled readback check, then
+        overwrite the original — losing the byte with no error (issue #686)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "task.md"
+            # cp1252 "caf<e-acute>" — 0xe9 is not valid UTF-8.
+            raw = b"# Notes\n\nCaf\xe9 build steps are long and prose-like.\n"
+            path.write_bytes(raw)
+
+            with mock.patch.object(compress_mod, "call_claude") as call:
+                with self.assertRaises(ValueError) as ctx:
+                    compress_mod.compress_file(path)
+
+            call.assert_not_called()
+            self.assertIn("not valid UTF-8", str(ctx.exception))
+            self.assertEqual(path.read_bytes(), raw)
+            backup_dir = compress_mod.backup_dir_for(path)
+            self.assertFalse((backup_dir / "task.original.md").exists())
+
+    def test_crlf_line_endings_survive_the_round_trip(self):
+        """Reading with universal newlines and writing back "\n" rewrote every
+        line ending in every file the tool touched (issue #762)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "task.md"
+            path.write_bytes(b"# Title\r\n\r\nSome long prose body to compress here.\r\n")
+            compressed = "# Title\n\nShort body.\n"
+
+            with mock.patch.object(compress_mod, "call_claude", return_value=compressed), \
+                 mock.patch.object(compress_mod, "validate") as v:
+                v.return_value = mock.Mock(is_valid=True, errors=[], warnings=[])
+                ok = compress_mod.compress_file(path)
+
+            self.assertTrue(ok)
+            out = path.read_bytes()
+            self.assertNotIn(b"\n", out.replace(b"\r\n", b""))
+            backup = compress_mod.backup_dir_for(path) / "task.original.md"
+            self.assertIn(b"\r\n", backup.read_bytes())
+            backup.unlink()
+
+    def test_one_crlf_line_does_not_convert_an_lf_document(self):
+        """A single pasted CRLF line used to rewrite every ending in the file —
+        and the backup with it, so the original bytes were unrecoverable."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "task.md"
+            raw = b"# Title\nline one\r\nline two\nlong prose body to compress.\n"
+            path.write_bytes(raw)
+
+            with mock.patch.object(compress_mod, "call_claude", return_value="# Title\n\nShort body.\n"), \
+                 mock.patch.object(compress_mod, "validate") as v:
+                v.return_value = mock.Mock(is_valid=True, errors=[], warnings=[])
+                ok = compress_mod.compress_file(path)
+
+            self.assertTrue(ok)
+            self.assertNotIn(b"\r\n", path.read_bytes())
+            backup = compress_mod.backup_dir_for(path) / "task.original.md"
+            self.assertEqual(backup.read_bytes(), raw)
+            backup.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOuterWrapperStripping(unittest.TestCase):
+    """strip_llm_wrapper removes an outer ```markdown fence the model added
+    around the WHOLE output. It must not fire on a document that merely starts
+    and ends with a fence.
+
+    The old regex (\\A\\s*(fence)[^\\n]*\\n(.*)\\n\\1\\s*\\Z with DOTALL and a greedy
+    .*) never checked the two fences were the same block, so an ordinary README
+    section came back with its first and last fence markers deleted and its two
+    code blocks merged into prose. Validation then failed on both the compress
+    and the fix path, and the section was permanently uncompressible after three
+    paid API calls.
+    """
+
+    def test_two_separate_blocks_are_left_alone(self):
+        text = "```bash\nnpm install\n```\n\nSome prose.\n\n```bash\nnpm test\n```"
+        self.assertEqual(compress_mod.strip_llm_wrapper(text), text)
+
+    def test_a_real_wrapper_is_stripped(self):
+        text = "```markdown\n# Title\n\nbody text\n```"
+        self.assertEqual(compress_mod.strip_llm_wrapper(text), "# Title\n\nbody text")
+
+    def test_a_longer_wrapper_around_inner_fences_is_stripped(self):
+        text = "````markdown\n# Title\n\n```bash\nls\n```\n````"
+        self.assertEqual(compress_mod.strip_llm_wrapper(text), "# Title\n\n```bash\nls\n```")

@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "prepack": "node ../packages/cli/scripts/gen-wedge-installer.mjs",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test --test-force-exit tests/*.test.mjs"
   },
   "engines": {
     "node": ">=18"

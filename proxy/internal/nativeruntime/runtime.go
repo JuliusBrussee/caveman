@@ -321,7 +321,7 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 
 func directOutputRewriteAgent(agentID string) bool {
 	switch strings.ToLower(strings.TrimSpace(agentID)) {
-	case "claude", "opencode":
+	case "claude", "opencode", "pi":
 		return true
 	default:
 		return false
@@ -479,6 +479,17 @@ func (r *Runtime) UniqueRecentSession(now time.Time, window time.Duration, provi
 	return candidate, "unique_recent_session"
 }
 
+// Keepalive marks the runtime active without a session event. The wrap CLI
+// heartbeats this for as long as its agent process is alive, so a wrap-owned
+// proxy cannot idle-exit under an open-but-quiet session whose
+// ANTHROPIC_BASE_URL still points at it (issue #860). Idle exit then means
+// "no live wrap has heartbeat and no session has spoken for a full timeout".
+func (r *Runtime) Keepalive() {
+	r.mu.Lock()
+	r.lastActivity = time.Now()
+	r.mu.Unlock()
+}
+
 // WaitForIdle returns true only after every observed session ended and timeout
 // elapsed. Explicit long-running gateway owners do not call it.
 func (r *Runtime) WaitForIdle(ctx context.Context, idleTimeout time.Duration) bool {
@@ -523,14 +534,19 @@ func (r *Runtime) startRepositoryEvidence(request Request) {
 	}
 	key := repositoryKey(request.Session)
 	r.repositoryMu.Lock()
+	// Check the bail-out BEFORE creating the entry. Inserting first meant a second
+	// CWD in an already-warming session left a repositoryMaps entry whose `done`
+	// was never closed (the warming goroutine below only starts when !exists), so
+	// the next request for that key blocked its waiter forever and
+	// repositoryWarming stayed true for the rest of the session.
+	if r.repositorySessionRefs[request.Session.ID] != "" || r.repositoryWarming[request.Session.ID] {
+		r.repositoryMu.Unlock()
+		return
+	}
 	entry, exists := r.repositoryMaps[key]
 	if !exists {
 		entry = &repositoryMapEntry{done: make(chan struct{})}
 		r.repositoryMaps[key] = entry
-	}
-	if r.repositorySessionRefs[request.Session.ID] != "" || r.repositoryWarming[request.Session.ID] {
-		r.repositoryMu.Unlock()
-		return
 	}
 	r.repositoryWarming[request.Session.ID] = true
 	r.repositoryMu.Unlock()

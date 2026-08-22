@@ -39,9 +39,9 @@ from caveman_cloud.core import (
 )
 
 PARITY_DIR = Path(__file__).resolve().parents[2] / "parity"
-FIXTURES = json.loads((PARITY_DIR / "runtime-policy.fixtures.json").read_text())
-CONFIG = json.loads((PARITY_DIR / "fixtures.json").read_text())["config"]
-STD_HEADERS = json.loads((PARITY_DIR / "fixtures.json").read_text())["std_headers"]
+FIXTURES = json.loads((PARITY_DIR / "runtime-policy.fixtures.json").read_text(encoding="utf-8"))
+CONFIG = json.loads((PARITY_DIR / "fixtures.json").read_text(encoding="utf-8"))["config"]
+STD_HEADERS = json.loads((PARITY_DIR / "fixtures.json").read_text(encoding="utf-8"))["std_headers"]
 
 FETCH = FIXTURES["fetch"]
 RESPONSE = FETCH["response"]

@@ -16,7 +16,7 @@ var (
 	htmlStyleRe     = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style>`)
 	htmlSVGRe       = regexp.MustCompile(`(?is)<svg\b[^>]*>.*?</svg>`)
 	htmlCommentRe   = regexp.MustCompile(`(?s)<!--.*?-->`)
-	paragraphSplit  = regexp.MustCompile(`\n\s*\n+`)
+	fenceRe         = regexp.MustCompile("^\\s{0,3}(`{3,}|~{3,})")
 	textImportantRe = regexp.MustCompile(`(?i)\b(ERROR|WARNING|IMPORTANT|NOTE|ACTION|FOLLOWUP|SECURITY|SUMMARY|CONCLUSION|DECISION|RECOMMENDATION)\b`)
 )
 
@@ -106,24 +106,59 @@ func compressHTMLNoise(input []byte) []byte {
 	return out
 }
 
+// splitTextSections cuts input into the units the compressor may independently
+// drop. A fenced code block is always ONE unit, however many blank lines it
+// contains: this is the fallback compressor for anything Detect does not
+// recognise, so ordinary Markdown routes here, and splitting on blank lines
+// alone turned a code block with a blank line in it into two or three separate
+// sections. Each was separately elidable and separately TrimSpace'd, so a
+// pasted function came back with lines missing and its indentation stripped —
+// under a marker claiming only prose had been dropped.
 func splitTextSections(input []byte) [][]byte {
-	if bytes.Contains(input, []byte("\n\n")) || bytes.Contains(input, []byte("\r\n\r\n")) {
-		raw := paragraphSplit.Split(string(input), -1)
-		sections := make([][]byte, 0, len(raw))
-		for _, part := range raw {
-			if trimmed := strings.TrimSpace(part); trimmed != "" {
-				sections = append(sections, []byte(trimmed))
-			}
-		}
-		return sections
-	}
-	lines := bytes.Split(input, []byte("\n"))
+	// Paragraph mode when the document has blank lines; otherwise every line is
+	// its own section, or a blank-line-free document would collapse to one unit
+	// and never compress.
+	paragraphs := bytes.Contains(input, []byte("\n\n")) || bytes.Contains(input, []byte("\r\n\r\n"))
+	lines, _ := splitLines(input)
 	sections := make([][]byte, 0, len(lines))
+	buf := make([][]byte, 0, 8)
+	flush := func() {
+		if len(buf) == 0 {
+			return
+		}
+		if joined := bytes.TrimSpace(bytes.Join(buf, []byte("\n"))); len(joined) > 0 {
+			sections = append(sections, joined)
+		}
+		buf = buf[:0]
+	}
+	var openFence []byte
 	for _, line := range lines {
-		if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
-			sections = append(sections, trimmed)
+		marker := fenceRe.FindSubmatch(line)
+		if openFence != nil {
+			buf = append(buf, line)
+			// A closing fence is the same character, at least as long as the opener.
+			if marker != nil && marker[1][0] == openFence[0] && len(marker[1]) >= len(openFence) {
+				openFence = nil
+				flush()
+			}
+			continue
+		}
+		if marker != nil {
+			flush()
+			openFence = marker[1]
+			buf = append(buf, line)
+			continue
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
+			flush()
+			continue
+		}
+		buf = append(buf, line)
+		if !paragraphs {
+			flush()
 		}
 	}
+	flush() // unterminated fence: the rest of the document is one unit
 	return sections
 }
 

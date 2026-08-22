@@ -53,7 +53,11 @@ jobs:
           cp agents/cavecrew-reviewer.md plugins/caveman/agents/cavecrew-reviewer.md
 
       - name: Rebuild caveman.skill ZIP
-        run: mkdir -p dist && cd skills && zip -r ../dist/caveman.skill caveman/
+        # `zip -r` ADDS to an existing archive, and dist/caveman.skill is tracked
+        # (.gitignore keeps it with `!dist/caveman.skill`), so a file deleted from
+        # skills/caveman/ never left the shipped ZIP — it just stopped being
+        # updated. Delete first so the archive is genuinely rebuilt.
+        run: mkdir -p dist && rm -f dist/caveman.skill && cd skills && zip -r ../dist/caveman.skill caveman/
 
       - name: Commit and push if changed
         env:

@@ -65,19 +65,11 @@ func (c *logCompressor) compress(input []byte, query string) ([]byte, bool) {
 	if !utf8.Valid(input) {
 		return nil, false // binary-ish content → pass-through
 	}
-	sep := []byte("\n")
-	if bytes.Contains(input, []byte("\r\n")) {
-		sep = []byte("\r\n")
-	}
-	trailing := bytes.HasSuffix(input, sep)
-	body := input
-	if trailing {
-		body = body[:len(body)-len(sep)]
-	}
-	lines := bytes.Split(body, sep)
+	lines, trailing := splitLines(input)
 	if len(lines) < 4 {
 		return nil, false // too small to be worth compressing
 	}
+	cr := crSuffix(input)
 
 	keep := make([]bool, len(lines))
 	for i, ln := range lines {
@@ -115,7 +107,7 @@ func (c *logCompressor) compress(input []byte, query string) ([]byte, bool) {
 		}
 		runBytes := 0
 		for _, ln := range run {
-			runBytes += len(ln) + len(sep)
+			runBytes += len(ln) + 1
 		}
 		summary := summarizeLogRun(run)
 		marker := logMarker(len(run), summary)
@@ -126,7 +118,7 @@ func (c *logCompressor) compress(input []byte, query string) ([]byte, bool) {
 			run = run[:0]
 			return
 		}
-		out = append(out, []byte(marker))
+		out = append(out, synthLine(marker, cr))
 		elidedBytes += runBytes
 		run = run[:0]
 	}
@@ -143,12 +135,8 @@ func (c *logCompressor) compress(input []byte, query string) ([]byte, bool) {
 	// to afford it. A payload that already carries it is being re-compressed, so
 	// the line is left where it is rather than duplicated.
 	if wantsElisionNote(elidedBytes) && !bytes.Contains(input, []byte(elisionNotePrefix)) {
-		out = append(out, []byte(elisionNote("lines")))
+		out = append(out, synthLine(elisionNote("lines"), cr))
 	}
 
-	result := bytes.Join(out, sep)
-	if trailing {
-		result = append(result, sep...)
-	}
-	return result, true
+	return joinLines(out, trailing), true
 }

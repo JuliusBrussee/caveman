@@ -6,7 +6,7 @@ import { connect as netConnect } from "node:net";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-type NativeAgent = "claude" | "codex" | "hermes" | "gemini" | "opencode";
+type NativeAgent = "claude" | "codex" | "hermes" | "gemini" | "opencode" | "pi";
 type NativePolicyMode = "record" | "safe" | "max";
 type NativeProfile = "record-only" | "core" | "core-lean-build" | "ledger" | "ccr-masking" | "cache-aware" | "full-safe" | "full-max";
 type RuntimeResponse = {
@@ -91,6 +91,11 @@ function profile(): NativeProfile {
   return mode === "record" ? "record-only" : mode === "max" ? "full-max" : "full-safe";
 }
 
+// Return as soon as the accumulated bytes parse as one complete JSON payload
+// instead of waiting for EOF. The host writes one object and closes, but under
+// the Windows pipe implementation that close can lag arbitrarily (#729/#833),
+// and a hook that blocks on EOF spends the host's whole budget waiting for a
+// close it already has all the data for.
 async function stdin(): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let bytes = 0;
@@ -99,6 +104,10 @@ async function stdin(): Promise<Buffer> {
     bytes += value.length;
     if (bytes > 2 * 1024 * 1024) throw new Error("hook payload too large");
     chunks.push(value);
+    const joined = Buffer.concat(chunks);
+    // A partial payload throws and we wait for more bytes.
+    try { JSON.parse(joined.toString("utf8")); } catch { continue; }
+    return joined;
   }
   return Buffer.concat(chunks);
 }
@@ -348,9 +357,17 @@ function fallback(entry: Record<string, unknown>): void {
   } catch { /* host remains fail-open */ }
 }
 
+// Budget for the delegated child. This runs inside a host hook, so an
+// unbounded spawnSync could block the user's turn forever if index.js stalls,
+// and on Windows process spawn is ~10x macOS before antivirus (#819) — the
+// double-spawn alone can exceed the host's cap. Cap it below the host's and
+// fall through to the fail-open path on expiry, the way every other subprocess
+// in this package already does (#799).
+const DELEGATE_TIMEOUT_MS = 3000;
+
 function delegateToFullCLI(raw: Buffer, agent: NativeAgent): void {
   const cli = join(dirname(fileURLToPath(import.meta.url)), "index.js");
-  const result = spawnSync(process.execPath, [cli, "native-hook", agent], { input: raw, maxBuffer: 3 * 1024 * 1024, env: process.env });
+  const result = spawnSync(process.execPath, [cli, "native-hook", agent], { input: raw, maxBuffer: 3 * 1024 * 1024, env: process.env, timeout: DELEGATE_TIMEOUT_MS });
   if (!result.error && result.status === 0) {
     if (result.stdout?.length) process.stdout.write(result.stdout);
     if (result.stderr?.length) process.stderr.write(result.stderr);
@@ -359,7 +376,7 @@ function delegateToFullCLI(raw: Buffer, agent: NativeAgent): void {
 
 async function main(): Promise<void> {
   const agentArg = process.argv[2] === "native-hook" ? process.argv[3] : process.argv[2];
-  const agent = agentArg === "claude" || agentArg === "codex" || agentArg === "hermes" || agentArg === "gemini" || agentArg === "opencode" ? agentArg : undefined;
+  const agent = agentArg === "claude" || agentArg === "codex" || agentArg === "hermes" || agentArg === "gemini" || agentArg === "opencode" || agentArg === "pi" ? agentArg : undefined;
   if (!agent) return;
   let raw: Buffer;
   let event: Record<string, unknown>;
@@ -404,7 +421,7 @@ async function main(): Promise<void> {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext: context } }));
   } else if (mode !== "record" && agent === "claude" && eventName === "PostToolUse" && response?.output_replacement) {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: response.output_replacement } }));
-  } else if (mode !== "record" && agent === "opencode" && eventName === "PostToolUse" && response) {
+  } else if (mode !== "record" && (agent === "opencode" || agent === "pi") && (eventName === "PostToolUse" || eventName === "PostToolUseFailure") && response) {
     process.stdout.write(JSON.stringify(response));
   }
 }

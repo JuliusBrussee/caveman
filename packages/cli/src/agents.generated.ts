@@ -6,7 +6,8 @@ export type WireProtocol = "anthropic-messages" | "openai-chat" | "openai-respon
 export type Injection =
   | { method: "env"; env: Record<string, string> }
   | { method: "config-env-content"; env_var: string; config_content: { local: unknown; managed?: unknown } }
-  | { method: "config-file"; env_var: string; base_config?: { path: string; env_var?: string; state_dir?: { env_var: string; filename: string } }; config_overlay: { local: unknown; managed?: unknown } };
+  | { method: "config-file"; env_var: string; base_config?: { path: string; env_var?: string; state_dir?: { env_var: string; filename: string } }; config_overlay: { local: unknown; managed?: unknown } }
+  | { method: "native-extension"; host: string; asset: string; loader_flag: string };
 
 export type CommandHook =
   | { method: "claude-pretooluse" }
@@ -15,6 +16,7 @@ export type CommandHook =
   | { method: "opencode-plugin" }
   | { method: "hermes-plugin" }
   | { method: "openclaw-plugin" }
+  | { method: "pi-extension" }
   | { method: "instruction-note"; file: string };
 
 export type MemoryHook =
@@ -355,6 +357,34 @@ export const PROFILES: AgentProfile[] = [
     "tested_agent_version": "1.18.11",
     "injection_completeness": "declarative",
     "fallback": "generic-env",
+    "maintainer": null
+  },
+  {
+    "schema_version": "1",
+    "id": "pi",
+    "display_name": "Pi",
+    "vendor": "pi.dev",
+    "homepage": "https://pi.dev/",
+    "binary_names": [
+      "pi"
+    ],
+    "args": [],
+    "install": "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
+    "wire_protocol": "openai-chat",
+    "injection": {
+      "method": "native-extension",
+      "host": "pi",
+      "asset": "caveman-pi-extension",
+      "loader_flag": "--extension"
+    },
+    "command_hook": {
+      "method": "pi-extension"
+    },
+    "tested_agent_version": "0.84.2",
+    "injection_completeness": "builder-assisted",
+    "last_verified_at": "2026-08-19",
+    "verified_by": "local pinned-binary probe (pi 0.84.2, extension API types read from the installed package)",
+    "fallback": "none",
     "maintainer": null
   }
 ];

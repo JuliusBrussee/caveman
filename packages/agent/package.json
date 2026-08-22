@@ -56,7 +56,7 @@
     "build": "tsc",
     "prepack": "npm run build",
     "lint": "tsc --noEmit",
-    "test": "tsc --project tsconfig.test.json && tsc && node --test tests/*.runtime.mjs",
+    "test": "tsc --project tsconfig.test.json && tsc && node --test --test-force-exit tests/*.runtime.mjs",
     "test:types": "tsc --project tsconfig.test.json"
   },
   "dependencies": {

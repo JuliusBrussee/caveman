@@ -1,6 +1,6 @@
 {
   "name": "caveman-installer",
-  "version": "2.0.0",
+  "version": "2.2.0",
   "description": "Caveman installer — detects your AI coding agents and installs caveman for each one.",
   "license": "MIT",
   "author": "Julius Brussee",
@@ -19,7 +19,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test tests/installer/*.test.mjs",
+    "test": "node --test --test-force-exit tests/installer/*.test.mjs",
     "test:windows": "node scripts/test-windows-compat.mjs"
   },
   "files": [

@@ -20,8 +20,20 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node-version }}
+      # package.json's "test" passes --test-force-exit, which needs Node >=20.14.
+      # Node 18 is still a supported RUNTIME (engines ">=18"; bin/install.js
+      # refuses to run below 18), so it stays in the matrix and runs the suite
+      # without the flag rather than being dropped — testing a version we claim
+      # to support matters more than uniform invocation. Verified flagless on
+      # 18.20.8: 172/172, no hang. The job timeout is the backstop the flag
+      # would otherwise provide.
       - name: Installer test suite
-        run: npm test
+        run: |
+          if node -e 'process.exit(process.versions.node.split(".")[0] >= 20 ? 0 : 1)'; then
+            npm test
+          else
+            node --test tests/installer/*.test.mjs
+          fi
       - name: Standalone hook/tool tests
         run: |
           for f in tests/test_*.js; do
@@ -44,3 +56,120 @@ jobs:
           node-version: 20
       - name: Python test suite
         run: python -m unittest discover -s tests -v
+
+  # The Windows surface nothing else covers.
+  #
+  # engine-ci.yml already runs npm test, tests/*.js, the Python suites and
+  # verify_repo.py on windows-latest — that is not duplicated here. What it
+  # never exercised is the PowerShell installer and the shell contract for the
+  # hook commands we write, which is how #835 shipped: settings.json got
+  # PowerShell call-operator syntax that Git Bash — Claude Code's actual
+  # Windows hook shell — rejects with a syntax error, so every standalone
+  # Windows install had two dead hooks and no test noticed.
+  #
+  # tests/test_hooks.py skips its install flow on Windows ("POSIX shell install
+  # path; Windows uses install.ps1"). That skip is correct, and this job is what
+  # makes it safe: it covers the install.ps1 path the skip hands off to.
+  #
+  # Kept deliberately small so it runs in a few minutes and a red here means
+  # something real.
+  windows-powershell:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      # The hook runner Claude Code uses on Windows IS Git Bash. Windows runners
+      # ship Git for Windows, so this is the real shell, not a stand-in.
+      - name: Git Bash is present (Claude Code's Windows hook shell)
+        shell: pwsh
+        run: |
+          $bash = Get-Command bash -ErrorAction Stop
+          Write-Host "bash: $($bash.Source)"
+          bash --version
+      # Hook-command shape is asserted cross-platform in
+      # tests/installer/platform-paths.test.mjs, but only here does it face the
+      # real Git Bash build that ships on Windows.
+      - name: Hook command shape parses under the real Git Bash
+        shell: pwsh
+        run: node --test --test-force-exit tests/installer/platform-paths.test.mjs
+      - name: Hook stdin lifecycle (no waiting on a lagging pipe close)
+        shell: pwsh
+        run: node tests/test_hook_stdin_lifecycle.js
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $bad = 0
+          Get-ChildItem -Recurse -Filter *.ps1 -File |
+            Where-Object { $_.FullName -notmatch 'node_modules' } |
+            ForEach-Object {
+              $errors = $null; $tokens = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                $_.FullName, [ref]$tokens, [ref]$errors)
+              if ($errors.Count -gt 0) {
+                $bad++
+                Write-Host "PARSE FAIL: $($_.FullName)"
+                $errors | ForEach-Object { Write-Host "   $($_.Message)" }
+              }
+            }
+          if ($bad -gt 0) { exit 1 }
+      - name: Standalone hook install/uninstall round trip
+        shell: pwsh
+        env:
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}\caveman-hooks-test
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CLAUDE_CONFIG_DIR | Out-Null
+          '{ "theme": "dark" }' | Set-Content "$env:CLAUDE_CONFIG_DIR\settings.json"
+          ./src/hooks/install.ps1
+          $s = Get-Content "$env:CLAUDE_CONFIG_DIR\settings.json" -Raw | ConvertFrom-Json
+          if (-not $s.hooks.SessionStart) { throw "SessionStart hook was not wired" }
+          # Every hook command we write is evaluated by Git Bash. If bash cannot
+          # parse it, the hook is dead on arrival for every session (#835).
+          foreach ($event in $s.hooks.PSObject.Properties.Name) {
+            foreach ($entry in $s.hooks.$event) {
+              foreach ($h in $entry.hooks) {
+                bash -n -c $h.command
+                if ($LASTEXITCODE -ne 0) { throw "bash cannot parse hook command: $($h.command)" }
+              }
+            }
+          }
+          ./src/hooks/uninstall.ps1
+          $after = Get-Content "$env:CLAUDE_CONFIG_DIR\settings.json" -Raw | ConvertFrom-Json
+          if ($after.hooks) { throw "uninstall left caveman hooks behind" }
+          if ($after.theme -ne 'dark') { throw "uninstall destroyed the user's own settings" }
+
+  # macOS is the primary development platform and had no runner at all: every
+  # `runs-on:` in this repo was ubuntu-latest plus one windows-latest, so "CI
+  # passes" proved nothing about the platform most of this code is written on.
+  # bash 3.2, BSD sed/find/readlink, and the POSIX install path all live here.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - name: Bash version (macOS ships 3.2 — no bash 4+ syntax may creep in)
+        run: bash --version
+      - name: Installer test suite
+        run: npm test
+      - name: Standalone hook/tool tests
+        run: node --test --test-force-exit tests/*.js
+      - name: Python test suite
+        run: python -m unittest discover -s tests
+      - name: Repo verification
+        run: python tests/verify_repo.py
+      # Without this the macOS runner touches no Go at all, so a BSD-only path,
+      # spawn or timer regression in the engine/proxy ships fully green on the
+      # platform this job exists to cover.
+      - name: Go test suite
+        run: go test ./engine/... ./proxy/... ./shared/...

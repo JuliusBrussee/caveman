@@ -524,7 +524,11 @@ func learnTLDR(plan LearnPlan) string {
 	}
 	fmt.Fprintf(&b, " Found %s across %s.", plural(len(plan.Sinks), "token sink"), plural(plan.SessionsScanned, "scanned session"))
 	top := plan.Sinks[0]
-	fmt.Fprintf(&b, " Biggest: %s, at %s tokens per turn.", top.Title, commaInt(top.TokensPerTurn))
+	if top.TokensObserved > 0 {
+		fmt.Fprintf(&b, " Top sink by daily equivalent: %s, with %s tokens observed in the window (basis: %s).", top.Title, commaInt(top.TokensObserved), observedTokenBasis(top))
+	} else {
+		fmt.Fprintf(&b, " Top sink by daily equivalent: %s, at %s tokens/day.", top.Title, commaInt(top.TokensPerDayRate))
+	}
 	if red > 0 {
 		fmt.Fprintf(&b, " %s safe to make now, worth ~%s tokens per turn.", plural(red, "fix"), commaInt(redPerTurn))
 	}
@@ -540,6 +544,13 @@ func learnTLDR(plan LearnPlan) string {
 	savingsTLDR(&b, plan)
 	b.WriteString(" Cost chart below. Approve fixes one by one. Cost go down.")
 	return b.String()
+}
+
+func observedTokenBasis(sink Sink) string {
+	if basis, _ := sink.Evidence["tokens_observed_basis"].(string); basis != "" {
+		return basis
+	}
+	return sink.Basis
 }
 
 // savingsTLDR appends the wrap-measured and retro-replay sentences. Token-only,
@@ -569,13 +580,14 @@ var learnTemplate = template.Must(template.New("learn").Funcs(template.FuncMap{
 		}
 		return fmt.Sprintf("%v", v)
 	},
-	"plural":       plural,
-	"costFamilies": costFamilies,
-	"sumPerDay":    sumPerDay,
-	"depthBars":    depthBars,
-	"pctOf":        pctOf,
-	"famSegs":      famSegs,
-	"human":        humanTokens,
+	"plural":        plural,
+	"costFamilies":  costFamilies,
+	"sumPerDay":     sumPerDay,
+	"depthBars":     depthBars,
+	"pctOf":         pctOf,
+	"famSegs":       famSegs,
+	"human":         humanTokens,
+	"observedBasis": observedTokenBasis,
 	"classClass": func(class string) string {
 		switch class {
 		case classReducible:
@@ -812,14 +824,14 @@ ul.caveats li{margin:6px 0}
 </div>
 
 <h2>Token Sinks</h2>
-<p class="note">Ranked by forward tokens/day. Open a row for the evidence and the suggested fix. Load-bearing rows are listed for honesty and never touched.</p>
+<p class="note">Ranked by daily-equivalent magnitude. Behavioral token totals remain historical observations, never rates. Open a row for evidence and suggested fix. Load-bearing rows are listed for honesty and never touched.</p>
 {{if .Plan.Sinks}}
 {{range .Plan.Sinks}}
 <details>
-  <summary><span class="caret">▶</span><span class="pill {{classClass .Class}}">{{classLabel .Class}}</span><span class="title">{{.Title}}</span><span class="num">{{comma .TokensPerTurn}} / turn</span></summary>
+  <summary><span class="caret">▶</span><span class="pill {{classClass .Class}}">{{classLabel .Class}}</span><span class="title">{{.Title}}</span><span class="num">{{if .TokensObserved}}{{comma .TokensObserved}} observed · {{observedBasis .}}{{else}}{{comma .TokensPerTurn}} / turn{{end}}</span></summary>
   <div class="body">
     {{if .Suggestion}}<p>{{.Suggestion}}</p>{{end}}
-    <p class="kv">{{comma .TokensPerDayRate}} tokens/day · basis {{.Basis}}{{if .Evidence}} · {{evidence .Evidence}}{{end}}</p>
+    <p class="kv">{{if .TokensObserved}}{{comma .TokensObserved}} tokens observed in window · basis {{observedBasis .}}{{else}}{{comma .TokensPerDayRate}} tokens/day · basis {{.Basis}}{{end}}{{if .Evidence}} · {{evidence .Evidence}}{{end}}</p>
     <p class="mono">{{.SinkID}}</p>
   </div>
 </details>

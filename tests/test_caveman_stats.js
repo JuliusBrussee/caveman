@@ -358,51 +358,53 @@ test('humanizeTokens formats small/medium/large correctly', () => {
   assert.strictEqual(humanizeTokens(1_250_000), '1.3M');
 });
 
-test('statusline.sh appends savings when CAVEMAN_STATUSLINE_SAVINGS=1', (tmp) => {
-  if (process.platform === 'win32') return; // bash test
+// The statusline ships as two scripts with one contract: caveman-statusline.sh
+// for POSIX hosts and caveman-statusline.ps1 for Windows. These tests used to
+// bail out on win32, which left the .ps1 — the script Windows users actually
+// run — with no coverage at all, including its control-byte stripping. Run
+// whichever script the host would run instead.
+const STATUSLINE = process.platform === 'win32'
+  ? { command: 'powershell', args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+      path.join(ROOT, 'src', 'hooks', 'caveman-statusline.ps1')] }
+  : { command: 'bash', args: [path.join(ROOT, 'src', 'hooks', 'caveman-statusline.sh')] };
+
+function runStatusline(env) {
+  return execFileSync(STATUSLINE.command, STATUSLINE.args, { encoding: 'utf8', env });
+}
+
+test('statusline appends savings when CAVEMAN_STATUSLINE_SAVINGS=1', (tmp) => {
   const claudeDir = path.join(tmp, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
   fs.writeFileSync(path.join(claudeDir, '.caveman-statusline-suffix'), '⛏ 2.8k');
-  const out = execFileSync('bash', [path.join(ROOT, 'src', 'hooks', 'caveman-statusline.sh')], {
-    encoding: 'utf8',
-    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_STATUSLINE_SAVINGS: '1' },
-  });
+  const out = runStatusline({ ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_STATUSLINE_SAVINGS: '1' });
   assert.match(out, /\[CAVEMAN\]/);
   assert.match(out, /⛏ 2\.8k/);
 });
 
-test('statusline.sh renders savings by default when env var is unset', (tmp) => {
-  if (process.platform === 'win32') return;
+test('statusline renders savings by default when env var is unset', (tmp) => {
   const claudeDir = path.join(tmp, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
   fs.writeFileSync(path.join(claudeDir, '.caveman-statusline-suffix'), '⛏ 2.8k');
   const env = { ...process.env, CLAUDE_CONFIG_DIR: claudeDir };
   delete env.CAVEMAN_STATUSLINE_SAVINGS;
-  const out = execFileSync('bash', [path.join(ROOT, 'src', 'hooks', 'caveman-statusline.sh')], {
-    encoding: 'utf8', env,
-  });
+  const out = runStatusline(env);
   assert.match(out, /\[CAVEMAN\]/);
   assert.match(out, /⛏ 2\.8k/);
 });
 
-test('statusline.sh omits savings when CAVEMAN_STATUSLINE_SAVINGS=0', (tmp) => {
-  if (process.platform === 'win32') return;
+test('statusline omits savings when CAVEMAN_STATUSLINE_SAVINGS=0', (tmp) => {
   const claudeDir = path.join(tmp, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
   fs.writeFileSync(path.join(claudeDir, '.caveman-statusline-suffix'), '⛏ 2.8k');
-  const out = execFileSync('bash', [path.join(ROOT, 'src', 'hooks', 'caveman-statusline.sh')], {
-    encoding: 'utf8',
-    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_STATUSLINE_SAVINGS: '0' },
-  });
+  const out = runStatusline({ ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_STATUSLINE_SAVINGS: '0' });
   assert.match(out, /\[CAVEMAN\]/);
   assert.doesNotMatch(out, /⛏/);
 });
 
-test('statusline.sh omits savings when suffix file is missing (fresh install)', (tmp) => {
-  if (process.platform === 'win32') return;
+test('statusline omits savings when suffix file is missing (fresh install)', (tmp) => {
   const claudeDir = path.join(tmp, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
@@ -410,31 +412,29 @@ test('statusline.sh omits savings when suffix file is missing (fresh install)', 
   // /caveman-stats has run. Default-on must NOT fabricate a number.
   const env = { ...process.env, CLAUDE_CONFIG_DIR: claudeDir };
   delete env.CAVEMAN_STATUSLINE_SAVINGS;
-  const out = execFileSync('bash', [path.join(ROOT, 'src', 'hooks', 'caveman-statusline.sh')], {
-    encoding: 'utf8', env,
-  });
+  const out = runStatusline(env);
   assert.match(out, /\[CAVEMAN\]/);
   assert.doesNotMatch(out, /⛏/);
 });
 
-test('statusline.sh strips control bytes from suffix', (tmp) => {
-  if (process.platform === 'win32') return;
+test('statusline strips control bytes from suffix', (tmp) => {
   const claudeDir = path.join(tmp, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
   // Plant a malicious suffix with ANSI escape (control byte \x1b).
   fs.writeFileSync(path.join(claudeDir, '.caveman-statusline-suffix'), '\x1b[31mEVIL');
-  const out = execFileSync('bash', [path.join(ROOT, 'src', 'hooks', 'caveman-statusline.sh')], {
-    encoding: 'utf8',
-    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_STATUSLINE_SAVINGS: '1' },
-  });
+  const out = runStatusline({ ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_STATUSLINE_SAVINGS: '1' });
   // Escape byte stripped; "[31mEVIL" remains, but the leading \x1b is gone so
   // the user's terminal won't be hijacked.
   assert.doesNotMatch(out, /\x1b\[31m/);
 });
 
 test('appendFlag is symlink-safe (refuses symlinked target)', (tmp) => {
-  if (process.platform === 'win32') return; // symlink semantics differ
+  // Creating a symlink on Windows needs Developer Mode or admin (#115), so the
+  // fixture cannot be built here. The Windows guard is the ReparsePoint check in
+  // caveman-statusline.ps1 and the O_NOFOLLOW path in caveman-config.js; both are
+  // exercised by tests/test_symlink_flag.js on POSIX. Accepted platform gap.
+  if (process.platform === 'win32') return;
   const { appendFlag } = require(path.join(ROOT, 'src', 'hooks', 'caveman-config.js'));
   const target = path.join(tmp, 'real-target');
   fs.writeFileSync(target, 'do-not-clobber\n');

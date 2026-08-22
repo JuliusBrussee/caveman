@@ -49,7 +49,14 @@ class TestIndentedFenceDoesNotSwallow(unittest.TestCase):
 
     def test_lone_indented_marker_does_not_capture_the_real_block(self):
         doc = "To open a fence write:\n\n    ```\n\nThen prose with `alpha`.\n\n```js\nreal = 1\n```\n"
-        self.assertEqual(extract_code_blocks(doc), ["```js\nreal = 1\n```"])
+        # The lone indented marker is itself a CommonMark indented code block, so
+        # it is now extracted as one (and must be preserved — it is literal
+        # content the document is SHOWING). What must never happen is it opening
+        # a fence that swallows the real block: `real = 1` stays its own entry.
+        self.assertEqual(
+            extract_code_blocks(doc),
+            ["```js\nreal = 1\n```", "    ```"],
+        )
         self.assertEqual(extract_inline_codes(doc), ["alpha"])
 
     def test_content_loss_after_an_indented_marker_still_fails(self):
@@ -148,3 +155,51 @@ class TestValidateIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIndentedCodeIsValidated(unittest.TestCase):
+    """A 4-space-indented code block is code. It used to be prose to the
+    validator: extract_code_blocks saw only fenced blocks, so "code blocks
+    preserved exactly" compared empty to empty and PASSED while the compressor
+    rewrote the command. A clean pass on a mutated destructive command is the
+    worst failure mode this tool has — it overwrites the user's file."""
+
+    def test_mutated_indented_command_fails(self):
+        orig = "# Cleanup\n\nRun this:\n\n    kubectl delete pod --all -n prod\n\nDone.\n"
+        comp = "# Cleanup\n\nRun this:\n\n    kubectl delete pod -n dev\n\nDone.\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            o, c = Path(tmp) / "o.md", Path(tmp) / "c.md"
+            o.write_text(orig, encoding="utf-8")
+            c.write_text(comp, encoding="utf-8")
+            result = validate(o, c)
+            self.assertFalse(result.is_valid, "a mutated indented command must not pass")
+
+    def test_nested_bullets_are_not_code(self):
+        """Four spaces inside a list item is the item's content indentation.
+        Treating it as code would make ordinary nested prose uncompressible."""
+        doc = "# Doc\n\n- a bullet\n    - nested prose that should stay compressible\n"
+        self.assertEqual(extract_code_blocks(doc), [])
+
+
+class TestPreservationPromisesAreErrors(unittest.TestCase):
+    """SKILL.md and CLAUDE.md both state headings and file paths survive
+    compression. Only heading COUNT was enforced; heading text and paths were
+    warnings, so a run that renamed every heading and dropped a referenced path
+    reported "Validation passed" and the in-place overwrite stood."""
+
+    def _validate(self, orig, comp):
+        with tempfile.TemporaryDirectory() as tmp:
+            o, c = Path(tmp) / "o.md", Path(tmp) / "c.md"
+            o.write_text(orig, encoding="utf-8")
+            c.write_text(comp, encoding="utf-8")
+            return validate(o, c)
+
+    def test_renamed_heading_fails(self):
+        orig = "# Configuration Options\n\nSome prose about the options here.\n"
+        comp = "# Config\n\nOptions prose.\n"
+        self.assertFalse(self._validate(orig, comp).is_valid)
+
+    def test_dropped_path_fails(self):
+        orig = "# Hooks\n\nThe shared module lives at src/hooks/caveman-config.js and is required.\n"
+        comp = "# Hooks\n\nShared module required.\n"
+        self.assertFalse(self._validate(orig, comp).is_valid)

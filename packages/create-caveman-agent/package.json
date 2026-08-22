@@ -32,7 +32,7 @@
     "build": "tsc",
     "prepack": "npm run build",
     "lint": "tsc --noEmit",
-    "test": "tsc && node --test tests/*.test.mjs"
+    "test": "tsc && node --test --test-force-exit tests/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "24.10.1",

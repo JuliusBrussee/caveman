@@ -37,7 +37,7 @@ const REPO = 'JuliusBrussee/caveman';
 // the new tag on every release (CI release step) AFTER regenerating
 // src/hooks/checksums.sha256 so the integrity manifest matches the ref.
 // Overridable via CAVEMAN_REF for testing against a branch.
-const PINNED_REF = process.env.CAVEMAN_REF || 'v2.1.0';
+const PINNED_REF = process.env.CAVEMAN_REF || 'v2.2.0';
 const OPENCLAW_SKILL_VERSION = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(PINNED_REF)
   ? PINNED_REF.replace(/^v/, '')
   : undefined;
@@ -59,6 +59,23 @@ const HOOK_FILES = [
   'caveman-statusline.ps1',
   'cavecrew-model-overrides.js',
 ];
+
+// hooks/package.json is the ONE entry in HOOK_FILES with no `caveman` in its
+// name, because it is not ours: it pins the module system for EVERY plugin's
+// .js hooks in that directory. We used to copy it in unconditionally and delete
+// it outright on uninstall, so a co-installed plugin shipping ESM hooks had its
+// {"type":"module"} silently replaced with {"type":"commonjs"} — and then removed
+// altogether. Install leaves a foreign manifest alone; uninstall deletes only a
+// manifest whose content is exactly the one we ship.
+const HOOKS_MANIFEST = 'package.json';
+function hooksManifestIsOurs(p) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return !!parsed && parsed.type === 'commonjs' && Object.keys(parsed).length === 1;
+  } catch (_) {
+    return false;
+  }
+}
 
 // ── Argv ───────────────────────────────────────────────────────────────────
 function tokenizeArgvValue(raw) {
@@ -669,11 +686,25 @@ const OPENCODE_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
 const OPENCODE_AGENTS_MD_BEGIN = '<!-- caveman-begin -->';
 const OPENCODE_AGENTS_MD_END = '<!-- caveman-end -->';
 
+function countOccurrences(haystack, needle) {
+  let n = 0;
+  for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + needle.length)) n++;
+  return n;
+}
+
 function opencodeConfigDir() {
   // opencode uses ~/.config/opencode on every platform (on Windows that's
   // %USERPROFILE%\.config\opencode via os.homedir()), NOT %APPDATA% (#376).
   if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
   return path.join(os.homedir(), '.config', 'opencode');
+}
+
+function opencodeConfigPath(dir) {
+  const jsonc = path.join(dir, 'opencode.jsonc');
+  const json  = path.join(dir, 'opencode.json');
+  if (fs.existsSync(jsonc)) return jsonc;
+  if (fs.existsSync(json))  return json;
+  return jsonc;
 }
 
 function installOpencode(ctx) {
@@ -694,7 +725,7 @@ function installOpencode(ctx) {
   const commandsDir = path.join(dir, 'commands');
   const agentsDir   = path.join(dir, 'agents');
   const skillsDir   = path.join(dir, 'skills');
-  const opencodeJson = path.join(dir, 'opencode.json');
+  const opencodeJson = opencodeConfigPath(dir);
   const agentsMd     = path.join(dir, 'AGENTS.md');
 
   if (opts.dryRun) {
@@ -783,11 +814,37 @@ function installOpencode(ctx) {
     const fencedBlock = `${OPENCODE_AGENTS_MD_BEGIN}\n${ruleBody}${OPENCODE_AGENTS_MD_END}\n`;
     if (fs.existsSync(agentsMd)) {
       const existing = fs.readFileSync(agentsMd, 'utf8');
-      const alreadyFenced = existing.includes(OPENCODE_AGENTS_MD_BEGIN)
-        && existing.includes(OPENCODE_AGENTS_MD_END);
-      const alreadyByLegacySentinel = !alreadyFenced && existing.includes(OPENCODE_AGENTS_MD_SENTINEL);
-      if (alreadyFenced) {
-        note(`  ${agentsMd} already contains caveman ruleset`);
+      // Both markers present is not enough: they must be exactly one matched
+      // pair, in order. An END above a BEGIN (or an orphan BEGIN) made the
+      // slice arithmetic below run on end === -1, which re-appended the whole
+      // file from byte 19 and compounded on every re-run.
+      const begin = existing.indexOf(OPENCODE_AGENTS_MD_BEGIN);
+      const end = begin === -1 ? -1 : existing.indexOf(OPENCODE_AGENTS_MD_END, begin);
+      const alreadyFenced = begin !== -1 && end > begin
+        && countOccurrences(existing, OPENCODE_AGENTS_MD_BEGIN) === 1
+        && countOccurrences(existing, OPENCODE_AGENTS_MD_END) === 1;
+      const damagedFence = !alreadyFenced
+        && (existing.includes(OPENCODE_AGENTS_MD_BEGIN) || existing.includes(OPENCODE_AGENTS_MD_END));
+      const alreadyByLegacySentinel = !alreadyFenced && !damagedFence
+        && existing.includes(OPENCODE_AGENTS_MD_SENTINEL);
+      if (damagedFence) {
+        note(`  ${agentsMd} has unmatched caveman markers — leaving it untouched`);
+        note('  remove the stray <!-- caveman-begin/end --> marker, then re-run');
+      } else if (alreadyFenced) {
+        // Refresh in place when the shipped ruleset has changed. The old
+        // presence-only check meant a ruleset edit never reached anyone who
+        // had already installed — the block went stale forever. Only the
+        // bytes between our own markers are touched; user content around
+        // them is preserved exactly.
+        const currentBlock = existing.slice(begin, end + OPENCODE_AGENTS_MD_END.length + 1);
+        if (currentBlock === fencedBlock) {
+          note(`  ${agentsMd} already contains the current caveman ruleset`);
+        } else {
+          const next = existing.slice(0, begin) + fencedBlock
+            + existing.slice(end + OPENCODE_AGENTS_MD_END.length).replace(/^\n/, '');
+          fs.writeFileSync(agentsMd, next, { mode: 0o644 });
+          process.stdout.write(`  refreshed caveman ruleset in ${agentsMd}\n`);
+        }
       } else if (alreadyByLegacySentinel) {
         if (!opts.force) {
           note(`  ${agentsMd} contains a legacy (un-fenced) caveman block — leaving as-is`);
@@ -831,7 +888,8 @@ function installOpencode(ctx) {
     }
 
     // 6. opencode.json — add plugin entry; optional caveman-shrink MCP.
-    let cfg = SETTINGS.readSettings(opencodeJson);
+    const ocMeta = {};
+    let cfg = SETTINGS.readSettings(opencodeJson, ocMeta);
     if (cfg === null) {
       warn(`  ${opencodeJson} unparseable; will not touch it. Edit manually then re-run.`);
       results.failed.push(['opencode', 'opencode.json unparseable']);
@@ -843,6 +901,11 @@ function installOpencode(ctx) {
     const opencodeBak = opencodeJson + '.bak';
     if (fs.existsSync(opencodeJson) && !fs.existsSync(opencodeBak)) {
       try { fs.copyFileSync(opencodeJson, opencodeBak); } catch (_) {}
+    }
+    // opencode.jsonc legitimately carries comments; we re-serialize plain JSON.
+    if (ocMeta.jsonc) {
+      warn(`  note: ${opencodeJson} contains comments — rewriting it drops them.`);
+      warn(`        Your original (with comments) is preserved at ${opencodeBak}`);
     }
     if (!Array.isArray(cfg.plugin)) cfg.plugin = [];
     if (!cfg.plugin.includes(OPENCODE_PLUGIN_REL)) {
@@ -931,6 +994,11 @@ async function installHooks(ctx) {
   let warnedNoChecksums = false;
   for (const f of HOOK_FILES) {
     const dest = path.join(hooksDir, f);
+    if (f === HOOKS_MANIFEST && fs.existsSync(dest) && !hooksManifestIsOurs(dest)) {
+      warn(`  ${dest} belongs to another plugin — left untouched.`);
+      warn("  caveman's hooks are CommonJS; if that file declares \"type\":\"module\" they will not load.");
+      continue;
+    }
     if (sourceDir && fs.existsSync(path.join(sourceDir, f))) {
       fs.copyFileSync(path.join(sourceDir, f), dest);
     } else {
@@ -957,7 +1025,8 @@ async function installHooks(ctx) {
   try { fs.chmodSync(path.join(hooksDir, 'caveman-statusline.sh'), 0o755); } catch (_) {}
 
   // Merge into settings.json
-  let settings = SETTINGS.readSettings(settingsPath);
+  const settingsMeta = {};
+  let settings = SETTINGS.readSettings(settingsPath, settingsMeta);
   if (settings === null) {
     warn('  settings.json unparseable; will not touch it. Edit manually then re-run.');
     return 'settings.json unparseable';
@@ -968,6 +1037,12 @@ async function installHooks(ctx) {
   const bak = settingsPath + '.bak';
   if (fs.existsSync(settingsPath) && !fs.existsSync(bak)) {
     try { fs.copyFileSync(settingsPath, bak); } catch (_) {}
+  }
+  // We re-serialize plain JSON, so // and /* */ comments do not survive. Say
+  // so rather than deleting a user's annotations silently.
+  if (settingsMeta.jsonc) {
+    warn(`  note: ${settingsPath} contains comments — rewriting it drops them.`);
+    warn(`        Your original (with comments) is preserved at ${bak}`);
   }
 
   const node = absoluteNodePath();
@@ -999,7 +1074,7 @@ async function installHooks(ctx) {
   const psHost = IS_WIN && hasCmd('pwsh') ? 'pwsh' : (IS_WIN ? 'powershell' : null);
   const slCmd = IS_WIN
     ? PLATFORM_PATHS.hookCommand(psHost, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(hooksDir, 'caveman-statusline.ps1')])
-    : `bash "${statusline}"`;
+    : PLATFORM_PATHS.hookCommand('bash', [statusline]);
   if (!settings.statusLine) {
     settings.statusLine = { type: 'command', command: slCmd };
     process.stdout.write('  statusline badge configured.\n');
@@ -1076,16 +1151,27 @@ async function runInit(ctx) {
     note(`  would download ${INIT_SCRIPT_URL} and run it on ${process.cwd()}`);
     return true;
   }
+  const scratch = privateTmpDir();
   try {
-    const tmp = path.join(os.tmpdir(), `caveman-init-${process.pid}.js`);
+    const tmp = path.join(scratch, 'caveman-init.js');
     await downloadTo(INIT_SCRIPT_URL, tmp);
     const r = child_process.spawnSync(absoluteNodePath(), [tmp, ...args], { stdio: 'inherit' });
-    try { fs.unlinkSync(tmp); } catch (_) {}
     return spawnOk(r);
   } catch (e) {
     warn('  ' + e.message);
     return false;
+  } finally {
+    try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (_) { /* best effort */ }
   }
+}
+
+// privateTmpDir returns a fresh 0700 directory with an unguessable name. The old
+// predictable paths (`caveman-init-<pid>.js`, `caveman-checksums-<pid>-<ms>`)
+// could be pre-planted as symlinks by any local user, and `curl -o` follows a
+// symlink — so the installer wrote through it and, for the init script, then
+// EXECUTED what landed there.
+function privateTmpDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-'));
 }
 
 // ── HTTPS download via stdlib ─────────────────────────────────────────────
@@ -1126,7 +1212,8 @@ function sha256File(p) {
 // the standard `sha256sum` text format: "<64-hex>  <path>" (two spaces, or
 // " *<path>" binary marker).
 async function loadRemoteHookChecksums() {
-  const tmp = path.join(os.tmpdir(), `caveman-checksums-${process.pid}-${Date.now()}.sha256`);
+  const scratch = privateTmpDir();
+  const tmp = path.join(scratch, 'checksums.sha256');
   try {
     await downloadTo(`${HOOKS_REMOTE}/checksums.sha256`, tmp);
     const txt = fs.readFileSync(tmp, 'utf8');
@@ -1139,7 +1226,7 @@ async function loadRemoteHookChecksums() {
   } catch (_) {
     return null;
   } finally {
-    try { fs.unlinkSync(tmp); } catch (_) { /* best effort */ }
+    try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (_) { /* best effort */ }
   }
 }
 
@@ -1154,8 +1241,20 @@ function uninstall(ctx) {
   // Hooks: remove from settings.json + delete hook files.
   const hooksDir = path.join(configDir, 'hooks');
   const settingsPath = path.join(configDir, 'settings.json');
+  // settingsClean gates the file deletion below. Deleting the hook scripts while
+  // settings.json still points at them is issue #471's exact shape: Claude Code
+  // dies with `Cannot find module …caveman-activate.js` on EVERY session start
+  // afterwards. So a settings.json we could not read (malformed) or could not
+  // write is a hard stop for the deletion, not a warning to continue past.
+  let settingsClean = true;
   if (fs.existsSync(settingsPath)) {
     const settings = SETTINGS.readSettings(settingsPath);
+    if (!settings) {
+      settingsClean = false;
+      cleanupFailed = true;
+      warn(`  could not parse ${settingsPath} — leaving the hook files in place.`);
+      warn('  Remove the caveman entries from it by hand, then re-run --uninstall.');
+    }
     if (settings) {
       const removed = SETTINGS.removeCavemanHooks(settings);
       // Drop our statusline if it points at our script
@@ -1168,15 +1267,22 @@ function uninstall(ctx) {
         if (!opts.dryRun) SETTINGS.writeSettings(settingsPath, settings);
         ok(`  removed ${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`);
       } catch (e) {
-        warn(`  could not update ${settingsPath}; continuing other cleanup: ${e && e.message || e}`);
+        settingsClean = false;
+        cleanupFailed = true;
+        warn(`  could not update ${settingsPath}: ${e && e.message || e}`);
+        warn('  leaving the hook files in place so the entries it still holds keep resolving.');
       }
     }
   }
 
-  if (fs.existsSync(hooksDir)) {
+  if (settingsClean && fs.existsSync(hooksDir)) {
     for (const f of HOOK_FILES) {
       const p = path.join(hooksDir, f);
       if (!fs.existsSync(p)) continue;
+      if (f === HOOKS_MANIFEST && !hooksManifestIsOurs(p)) {
+        note(`  left ${p} (another plugin's)`);
+        continue;
+      }
       if (opts.dryRun) {
         note(`  would remove ${p}`);
       } else {
@@ -1233,7 +1339,7 @@ function uninstall(ctx) {
     warn(`  opencode ownership journal invalid; left integration untouched: ${error.message}`);
   }
   if (ocOwnership.hadJournal) {
-    const ocJson = path.join(ocDir, 'opencode.json');
+    const ocJson = opencodeConfigPath(ocDir);
     if (fs.existsSync(ocJson)) {
       const cfg = SETTINGS.readSettings(ocJson);
       if (cfg) {

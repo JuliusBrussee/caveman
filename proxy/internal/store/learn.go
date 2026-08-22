@@ -1,21 +1,19 @@
 package store
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
+	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/mem"
+	"github.com/JuliusBrussee/caveman/shared/platform/catalog"
 )
 
 func hashText(text string) string {
@@ -45,21 +43,33 @@ const (
 	claudeMDTokenAlarm  = 2000 // CLAUDE.md token tax that warrants a reducible sink
 	dumbzonePctFloor    = 10.0 // only surface a dumbzone sink above this share
 	maxLearnScanWorkers = 16   // bound file descriptors and per-parser buffers on large machines
+	// maxRecurringSinkRows caps how many repaste fingerprints become sinks; the
+	// remainder is disclosed in a caveat and still weighs into the Cave Score.
+	maxRecurringSinkRows = 24
 )
 
 // behaviorScan is the at-the-time picture extracted from real session transcripts.
 type behaviorScan struct {
-	Turns             int
-	DumbzoneTurns     int
-	Contexts          []int
-	SessionPeakPct    []int // per session: peak context as a percent of the assumed model window
-	TaskSpawns        int
-	SessionsScanned   int
-	SessionsBySource  map[string]int
-	SessionsWithTasks int
-	SkillUse          map[string]int
-	LearningLoops     []learningLoop
-	From, To          string
+	Turns                  int
+	DumbzoneTurns          int
+	DumbzoneExcessTokens   int64
+	Contexts               []int
+	PrefixContexts         map[string][]int // first deduplicated provider-counted turn per session, grouped by source
+	SessionPeakPct         []int            // per session: peak context as a percent of the assumed model window
+	SessionPeakPctBySource map[string][]int // usage-bearing session peaks grouped by normalized source
+	TaskSpawns             int
+	SessionsScanned        int
+	SessionsBySource       map[string]int
+	SessionsWithTasks      int
+	SkillUse               map[string]int
+	LearningLoops          []learningLoop
+	CacheHygieneSessions   []cacheHygieneSession
+	RereadSessions         []rereadSession
+	CompactionSessions     []compactionSession
+	SessionTexts           []sessionTextObservation
+	SessionMetrics         []learnSessionMetric
+	FallbackWindowSources  map[string]bool
+	From, To               string
 }
 
 func (b *behaviorScan) recordSession(source string) {
@@ -102,9 +112,36 @@ func (b behaviorScan) medianContext() int {
 	return sorted[len(sorted)/2]
 }
 
+func (b *behaviorScan) recordPrefix(source string, tokens int) {
+	if tokens <= 0 {
+		return
+	}
+	if b.PrefixContexts == nil {
+		b.PrefixContexts = map[string][]int{}
+	}
+	b.PrefixContexts[source] = append(b.PrefixContexts[source], tokens)
+}
+
+func (b behaviorScan) measuredPrefix() (tokens, sessions int) {
+	var measured []int
+	sources := make([]string, 0, len(b.PrefixContexts))
+	for source := range b.PrefixContexts {
+		sources = append(sources, source)
+	}
+	sort.Strings(sources)
+	for _, source := range sources {
+		measured = append(measured, b.PrefixContexts[source]...)
+	}
+	if len(measured) == 0 {
+		return 0, 0
+	}
+	sort.Ints(measured)
+	return measured[len(measured)/2], len(measured)
+}
+
 // BuildLearnPlan is the front-door analyzer: scan config + real history, compute the
-// detectors, the Cave Score, rank by tokens/day, and persist sinks. Read-only over
-// user config — it never edits a config file.
+// detectors, the Cave Score, rank by daily-equivalent magnitude, and persist
+// sinks. Read-only over user config — it never edits a config file.
 func (s *Store) BuildLearnPlan(cwd string, sources []string, sinceExpr string) (LearnPlan, error) {
 	return s.BuildLearnPlanWithRetro(cwd, sources, sinceExpr, RetroOptions{})
 }
@@ -112,6 +149,17 @@ func (s *Store) BuildLearnPlan(cwd string, sources []string, sinceExpr string) (
 // BuildLearnPlanWithRetro is BuildLearnPlan plus the opt-in retrospective pass.
 // With retro disabled the two are the same code path and the same output bytes.
 func (s *Store) BuildLearnPlanWithRetro(cwd string, sources []string, sinceExpr string, retro RetroOptions) (LearnPlan, error) {
+	return s.buildLearnPlan(cwd, sources, sinceExpr, retro, "")
+}
+
+// BuildLearnPlanFilteredWithRetro applies a repository substring before turn
+// events reach behavioral detectors. Config scanning intentionally remains
+// rooted at cwd because --repo selects transcript history, not another config.
+func (s *Store) BuildLearnPlanFilteredWithRetro(cwd string, sources []string, sinceExpr string, retro RetroOptions, repoFilter string) (LearnPlan, error) {
+	return s.buildLearnPlan(cwd, sources, sinceExpr, retro, repoFilter)
+}
+
+func (s *Store) buildLearnPlan(cwd string, sources []string, sinceExpr string, retro RetroOptions, repoFilter string) (LearnPlan, error) {
 	sourceSet := normalizeSources(sources)
 	since := parseSince(sinceExpr)
 
@@ -122,14 +170,16 @@ func (s *Store) BuildLearnPlanWithRetro(cwd string, sources []string, sinceExpr 
 
 	beh, rec := behaviorScan{}, recurringResult{}
 	behaviorTimeBoxed := false
+	var deadline *behaviorDeadline
 	if retro.Enabled {
 		budgetMS := retro.BehaviorBudgetMS
 		if budgetMS <= 0 {
 			budgetMS = behaviorDefaultBudgetMS
 		}
-		beh, rec, behaviorTimeBoxed = s.scanBehaviorWithBudget(sourceSet, since, cfg, time.Duration(budgetMS)*time.Millisecond)
+		deadline = &behaviorDeadline{at: behaviorClock().Add(time.Duration(budgetMS) * time.Millisecond)}
+		beh, rec, behaviorTimeBoxed = s.scanBehaviorUntilForRepo(sourceSet, since, cfg, deadline, repoFilter)
 	} else {
-		beh, rec = s.scanBehavior(sourceSet, since, cfg)
+		beh, rec = s.scanBehaviorForRepo(sourceSet, since, cfg, repoFilter)
 	}
 
 	days := windowDays(sinceExpr, beh.From, beh.To)
@@ -145,11 +195,16 @@ func (s *Store) BuildLearnPlanWithRetro(cwd string, sources []string, sinceExpr 
 		SessionsScanned:  beh.SessionsScanned,
 		SessionsBySource: beh.SessionsBySource,
 		ContextDepth:     contextDepth(beh),
+		observedTurns:    beh.Turns,
+		computedAt:       time.Now().UTC().Format(time.RFC3339Nano),
 		Sinks:            []Sink{},
 		Caveats: []string{
 			"Local learn results are inferred. No local number is promoted to verified; Cloud additionally requires supported provider-causal, provider-complete, catalog-priced active evidence.",
-			"Config tax is reported as a forward rate from your current setup, never as tokens already wasted. Context window sizes are assumed per-provider defaults.",
+			"Config tax is reported as a forward rate from your current setup, never as tokens already wasted.",
 		},
+	}
+	if len(beh.FallbackWindowSources) > 0 {
+		plan.Caveats = append(plan.Caveats, "Some context window sizes are assumed per-provider defaults because exact shared-catalog matches were unavailable. Those turns still count toward depth percentages, but contribute no excess-token floor or cross-provider depth comparison.")
 	}
 
 	deadTokens, deadSkills := deadLoadSkills(cfg, beh)
@@ -159,39 +214,77 @@ func (s *Store) BuildLearnPlanWithRetro(cwd string, sources []string, sinceExpr 
 		recurPerTurn += recurringPerTurn(e, beh.Turns)
 	}
 
-	plan.Sinks = append(plan.Sinks, configSinks(cfg, turnsPerDay)...)
-	plan.Sinks = append(plan.Sinks, recurringSinks(rec, beh, turnsPerDay)...)
+	plan.Sinks = append(plan.Sinks, configSinksWithBehavior(cfg, beh, turnsPerDay)...)
+	// Cap emitted repaste sinks to the heaviest fingerprints so a long history
+	// cannot flood the report; the Cave Score above still folds in the full
+	// recurring weight, and the cap is disclosed (no silent truncation).
+	cappedRec := rec
+	if len(rec.Repaste) > maxRecurringSinkRows {
+		cappedRec = recurringResult{Repaste: rec.Repaste[:maxRecurringSinkRows]}
+		plan.Caveats = appendUnique(plan.Caveats, fmt.Sprintf(
+			"%d additional recurring-context fingerprints below the top %d by recurring weight were omitted from the sink list; the Cave Score still counts their full weight.",
+			len(rec.Repaste)-maxRecurringSinkRows, maxRecurringSinkRows))
+	}
+	plan.Sinks = append(plan.Sinks, recurringSinks(cappedRec, beh, turnsPerDay)...)
 	plan.Sinks = append(plan.Sinks, learningLoopSinks(beh.LearningLoops)...)
 	plan.Sinks = append(plan.Sinks, dumbzoneSink(beh)...)
 	plan.Sinks = append(plan.Sinks, deadLoadSink(deadTokens, deadSkills, beh, turnsPerDay)...)
 	plan.Sinks = append(plan.Sinks, subagentSink(beh)...)
 	plan.Sinks = append(plan.Sinks, surfaceSink(cfg)...)
+	plan.Sinks = append(plan.Sinks, crossProviderSinks(rec, beh)...)
+	plan.Sinks = append(plan.Sinks, cacheChurnSink(beh.CacheHygieneSessions)...)
+	plan.Sinks = append(plan.Sinks, rereadWasteSink(beh.RereadSessions)...)
+	plan.Sinks = append(plan.Sinks, compactionChurnSink(beh.CompactionSessions)...)
+	plan.Sinks = append(plan.Sinks, mcpSurfaceSink(cfg, plan.Sinks)...)
+	sectionsTimeBoxed := deadline != nil && deadline.expired()
+	if !sectionsTimeBoxed {
+		plan.Sinks = append(plan.Sinks, claudeMDSectionSinks(cfg, beh.SessionTexts)...)
+	} else {
+		plan.Caveats = appendUnique(plan.Caveats, "CLAUDE.md section-echo findings were omitted because the shared behavioral deadline expired before that corpus pass.")
+	}
+	addSectionConfigPaths(plan.Sinks, cfg)
 	for i := range plan.Sinks {
 		plan.Sinks[i].PracticeID = practiceIDForSink(plan.Sinks[i].SinkID)
 	}
 
-	// Rank by forward tokens/day rate (reducible movers first); behavioral sinks
-	// (rate 0) keep their relative order after.
-	sort.SliceStable(plan.Sinks, func(i, j int) bool {
-		return plan.Sinks[i].TokensPerDayRate > plan.Sinks[j].TokensPerDayRate
-	})
+	rankLearnSinks(plan.Sinks, days)
+	if prefix, sessions := beh.measuredPrefix(); prefix > 0 && sessions > 0 && cfg.configTaxPerTurn() > 0 {
+		plan.Caveats = appendUnique(plan.Caveats, "Turn-1 context includes the first user prompt, so measured prefix is an upper bound of fixed prefix; median across sessions mitigates.")
+	}
 
 	plan.CaveScore = caveScore(cfg, beh, deadTokens, recurPerTurn)
+	plan.Portfolio = buildLearnPortfolio(plan.Sinks, days)
+	if !behaviorTimeBoxed {
+		plan.Repos = learnRepos(beh.SessionMetrics)
+	} else {
+		plan.Caveats = appendUnique(plan.Caveats, "Repository summaries were omitted because the shared behavioral deadline truncated their primary event scan.")
+	}
+	confirmed, confirmedTimeBoxed := s.confirmedFixes(cfg, sourceSet, repoFilter, deadline)
+	if !confirmedTimeBoxed {
+		plan.Confirmed = confirmed
+	} else {
+		plan.Caveats = appendUnique(plan.Caveats, "Applied-fix confirmations were omitted because their single shared-deadline after-metrics scan was truncated.")
+	}
+	if strings.TrimSpace(repoFilter) != "" {
+		plan.Caveats = appendUnique(plan.Caveats, fmt.Sprintf("Session history was filtered by repository substring %q before behavioral detection. Config scan still reads the invoking cwd.", repoFilter))
+	}
 
 	if len(plan.Sinks) == 0 {
-		plan.Caveats = appendUnique(plan.Caveats, "No config-tax or behavioral sink found yet. Run caveman learn after some Claude/Codex sessions exist on disk, or from a repo with a CLAUDE.md.")
+		plan.Caveats = appendUnique(plan.Caveats, "No config-tax or behavioral sink found yet. Run caveman learn after supported agent sessions exist on disk, or from a repo with a CLAUDE.md.")
 	}
 	if beh.SessionsScanned == 0 {
 		plan.Caveats = appendUnique(plan.Caveats, "No local session transcripts were scanned, so behavioral findings (dumbzone, subagents, dead-skill use) are not measured.")
 	}
 	if behaviorTimeBoxed {
-		plan.Caveats = appendUnique(plan.Caveats, "The base behavioral scan hit its time budget, so Cave Score and behavioral findings cover partial history. The independent retro totals still name only sessions they measured.")
+		plan.Caveats = appendUnique(plan.Caveats, "The base behavioral scan hit its time budget, so Cave Score and behavioral findings cover partial history. Deadline-truncated repository, section-echo, and applied-fix blocks are omitted rather than zero-filled. The independent retro totals still name only sessions they measured.")
 	}
 
 	// The retro pass is a second, budget-bounded walk so the base scan above keeps
 	// its exact timing and its exact output when --retro is absent.
-	if retro.Enabled {
+	if retro.Enabled && strings.TrimSpace(repoFilter) == "" {
 		plan.Retro = s.buildLearnRetro(sourceSet, since, sinceExpr, cfg.configTaxPerTurn(), retro)
+	} else if retro.Enabled {
+		plan.Caveats = appendUnique(plan.Caveats, "Retrospective replay is omitted with --repo because its independent file walker cannot apply the repository filter without changing learn_retro.go.")
 	}
 
 	if plan.WrapMeasured = s.wrapMeasuredSince(since); plan.WrapMeasured != nil {
@@ -265,8 +358,14 @@ func (s *Store) LearnScan(sources []string, sinceExpr string) (LearnPlan, error)
 
 // LearnScanWithRetro is LearnScan plus the opt-in retrospective pass.
 func (s *Store) LearnScanWithRetro(sources []string, sinceExpr string, retro RetroOptions) (LearnPlan, error) {
+	return s.LearnScanFilteredWithRetro(sources, sinceExpr, retro, "")
+}
+
+// LearnScanFilteredWithRetro is LearnScanWithRetro plus pre-detection repo
+// filtering. Durable learnings are generated only from the filtered plan.
+func (s *Store) LearnScanFilteredWithRetro(sources []string, sinceExpr string, retro RetroOptions, repoFilter string) (LearnPlan, error) {
 	cwd, _ := os.Getwd()
-	plan, err := s.BuildLearnPlanWithRetro(cwd, sources, sinceExpr, retro)
+	plan, err := s.BuildLearnPlanFilteredWithRetro(cwd, sources, sinceExpr, retro, repoFilter)
 	if err != nil {
 		return plan, err
 	}
@@ -312,6 +411,10 @@ func (s *Store) writeCavememLearnings(plan LearnPlan) {
 // --- detectors -------------------------------------------------------------
 
 func configSinks(cfg configScan, turnsPerDay float64) []Sink {
+	return configSinksWithBehavior(cfg, behaviorScan{}, turnsPerDay)
+}
+
+func configSinksWithBehavior(cfg configScan, beh behaviorScan, turnsPerDay float64) []Sink {
 	tax := cfg.configTaxPerTurn()
 	var sinks []Sink
 	if tax > 0 {
@@ -322,6 +425,21 @@ func configSinks(cfg configScan, turnsPerDay float64) []Sink {
 		if cfg.ClaudeMDProject != nil {
 			projectTokens = cfg.ClaudeMDProject.Tokens
 		}
+		evidence := map[string]any{
+			"claude_md_user_tokens":    userTokens,
+			"claude_md_project_tokens": projectTokens,
+			"skill_desc_tokens":        cfg.SkillDescTokens,
+			"skill_count":              len(cfg.Skills),
+			"hook_count":               cfg.HookCount,
+			"plugin_count":             cfg.PluginCount,
+			"token_basis":              cfg.TokenBasis,
+		}
+		if prefix, sessions := beh.measuredPrefix(); prefix > 0 && sessions > 0 {
+			evidence["measured_prefix_tokens"] = prefix
+			evidence["measured_prefix_sessions"] = sessions
+			evidence["measured_prefix_source"] = retroSourceSessionUsage
+			evidence["unexplained_prefix_tokens"] = max(0, prefix-tax)
+		}
 		sinks = append(sinks, Sink{
 			SinkID:           "config_tax:baseline",
 			Title:            fmt.Sprintf("Your agent config loads ~%d tokens into every turn", tax),
@@ -331,14 +449,7 @@ func configSinks(cfg configScan, turnsPerDay float64) []Sink {
 			TokensPerDayRate: rate(tax, turnsPerDay),
 			Framing:          framingForward,
 			Suggestion:       "Some of this is load-bearing. The reducible parts are broken out as their own sinks below.",
-			Evidence: map[string]any{
-				"claude_md_user_tokens":    userTokens,
-				"claude_md_project_tokens": projectTokens,
-				"skill_desc_tokens":        cfg.SkillDescTokens,
-				"skill_count":              len(cfg.Skills),
-				"hook_count":               cfg.HookCount,
-				"plugin_count":             cfg.PluginCount,
-			},
+			Evidence:         evidence,
 		})
 	}
 	sinks = append(sinks, claudeMDSink(cfg.ClaudeMDUser, "user", turnsPerDay)...)
@@ -386,20 +497,26 @@ func dumbzoneSink(beh behaviorScan) []Sink {
 	if pct < dumbzonePctFloor {
 		return nil
 	}
+	evidence := map[string]any{
+		"turns_over_50pct": beh.DumbzoneTurns,
+		"total_turns":      beh.Turns,
+		"pct":              int(pct + 0.5),
+		"median_context":   beh.medianContext(),
+	}
+	if beh.DumbzoneExcessTokens > 0 {
+		evidence["excess_tokens_observed"] = beh.DumbzoneExcessTokens
+		evidence["excess_tokens_basis"] = "sum of provider-counted context above 50% of each model window"
+	}
 	return []Sink{{
 		SinkID:        "context_dumbzone",
 		Title:         fmt.Sprintf("%.0f%% of turns ran over %.0f%% of the model window", pct, dumbzoneFraction*100),
 		Class:         classBehavioral,
 		Basis:         observedLocal,
 		TokensPerTurn: 0, TokensPerDayRate: 0,
-		Framing:    framingHistorical,
-		Suggestion: "Compact or split long sessions before the dumbzone; large context degrades quality well before the window limit.",
-		Evidence: map[string]any{
-			"turns_over_50pct": beh.DumbzoneTurns,
-			"total_turns":      beh.Turns,
-			"pct":              int(pct + 0.5),
-			"median_context":   beh.medianContext(),
-		},
+		TokensObserved: beh.DumbzoneExcessTokens,
+		Framing:        framingHistorical,
+		Suggestion:     "Compact or split long sessions before the dumbzone; large context degrades quality well before the window limit.",
+		Evidence:       evidence,
 	}}
 }
 
@@ -445,8 +562,31 @@ func deadLoadSink(deadTokens int, deadSkills []string, beh behaviorScan, turnsPe
 			"skill_count":      len(deadSkills),
 			"sessions_scanned": beh.SessionsScanned,
 			"skills":           sample,
+			"detection":        "structured+substring_guard",
 		},
 	}}
+}
+
+func rankLearnSinks(sinks []Sink, windowDays float64) {
+	sort.SliceStable(sinks, func(i, j int) bool {
+		iForward := sinks[i].TokensPerDayRate > 0
+		jForward := sinks[j].TokensPerDayRate > 0
+		if iForward != jForward {
+			return iForward
+		}
+		if iForward {
+			return sinks[i].TokensPerDayRate > sinks[j].TokensPerDayRate
+		}
+		return sinks[i].TokensObserved > sinks[j].TokensObserved
+	})
+}
+
+func learnSinkDailyEquivalent(sink Sink, windowDays float64) float64 {
+	if windowDays <= 0 {
+		windowDays = 1
+	}
+	observedPerDay := float64(sink.TokensObserved) / windowDays
+	return max(float64(sink.TokensPerDayRate), observedPerDay)
 }
 
 func subagentSink(beh behaviorScan) []Sink {
@@ -492,6 +632,111 @@ func surfaceSink(cfg configScan) []Sink {
 			"plugin_count": cfg.PluginCount,
 		},
 	}}
+}
+
+func crossProviderSinks(rec recurringResult, beh behaviorScan) []Sink {
+	measuredSources := 0
+	for _, count := range beh.SessionsBySource {
+		if count > 0 {
+			measuredSources++
+		}
+	}
+	if measuredSources < 2 {
+		return nil
+	}
+
+	var sinks []Sink
+	type sourceDepth struct {
+		id       string
+		median   int
+		sessions int
+	}
+	var depths []sourceDepth
+	for source, peaks := range beh.SessionPeakPctBySource {
+		if len(peaks) == 0 || beh.SessionsBySource[source] == 0 || beh.FallbackWindowSources[source] {
+			continue
+		}
+		depths = append(depths, sourceDepth{id: source, median: medianInts(peaks), sessions: len(peaks)})
+	}
+	sort.Slice(depths, func(i, j int) bool {
+		if depths[i].median != depths[j].median {
+			return depths[i].median < depths[j].median
+		}
+		return depths[i].id < depths[j].id
+	})
+	if len(depths) >= 2 {
+		shallower, deeper := depths[0], depths[len(depths)-1]
+		if deeper.median > shallower.median && shallower.median > 0 {
+			ratio := float64(deeper.median) / float64(shallower.median)
+			sinks = append(sinks, Sink{
+				SinkID: "cross_provider:depth",
+				Title:  fmt.Sprintf("On this machine, your %s sessions peaked about %.1fx deeper into the model window than %s sessions", sourceDisplayName(deeper.id), ratio, sourceDisplayName(shallower.id)),
+				Class:  classBehavioral, Basis: observedLocal, Framing: framingHistorical,
+				Suggestion: "This local median comparison may help identify which agent workflows reach deep context; it does not prove the agent caused the difference.",
+				Evidence: map[string]any{
+					"comparison": "median_session_peak_pct", "deeper_source": deeper.id,
+					"deeper_median_peak_pct": deeper.median, "deeper_sessions": deeper.sessions,
+					"shallower_source": shallower.id, "shallower_median_peak_pct": shallower.median,
+					"shallower_sessions": shallower.sessions,
+				},
+			})
+		}
+	}
+
+	for _, entry := range rec.Repaste {
+		rootSet := map[string]bool{}
+		for _, locator := range entry.Locators {
+			if locator.RootKind != "" && beh.SessionsBySource[locator.RootKind] > 0 {
+				rootSet[locator.RootKind] = true
+			}
+		}
+		if len(rootSet) < 2 {
+			continue
+		}
+		roots := make([]string, 0, len(rootSet))
+		for root := range rootSet {
+			roots = append(roots, root)
+		}
+		sort.Strings(roots)
+		sinks = append(sinks, Sink{
+			SinkID: "cross_provider:repaste",
+			Title:  fmt.Sprintf("Recurring block %s appeared in %d agents — one cavemem offload could cover all of them", entry.Fingerprint, len(roots)),
+			Class:  classBehavioral, Basis: observedLocal, Framing: framingHistorical,
+			Suggestion: "Consider one shared cavemem offload after verifying a sampled locator; recurrence is window-bounded, not proof the block is unneeded.",
+			Evidence: map[string]any{
+				"fingerprint": entry.Fingerprint, "root_kinds": roots,
+				"agent_count": len(roots), "recurrence_sessions": entry.Sessions,
+			},
+		})
+		break
+	}
+	return sinks
+}
+
+func medianInts(values []int) int {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := append([]int(nil), values...)
+	sort.Ints(sorted)
+	return sorted[len(sorted)/2]
+}
+
+func sourceDisplayName(source string) string {
+	switch source {
+	case "claude":
+		return "Claude"
+	case "codex":
+		return "Codex"
+	case "gemini":
+		return "Gemini"
+	case "opencode":
+		return "opencode"
+	case "aider":
+		return "aider"
+	default:
+		return source
+	}
 }
 
 // --- Cave Score ------------------------------------------------------------
@@ -588,83 +833,62 @@ func (d *behaviorDeadline) expired() bool {
 }
 
 func (s *Store) scanBehavior(sourceSet map[string]bool, since time.Time, cfg configScan) (behaviorScan, recurringResult) {
-	beh, rec, _ := s.scanBehaviorUntil(sourceSet, since, cfg, nil)
+	return s.scanBehaviorForRepo(sourceSet, since, cfg, "")
+}
+
+func (s *Store) scanBehaviorForRepo(sourceSet map[string]bool, since time.Time, cfg configScan, repoFilter string) (behaviorScan, recurringResult) {
+	beh, rec, _ := s.scanBehaviorUntilForRepo(sourceSet, since, cfg, nil, repoFilter)
 	return beh, rec
 }
 
 func (s *Store) scanBehaviorWithBudget(sourceSet map[string]bool, since time.Time, cfg configScan, budget time.Duration) (behaviorScan, recurringResult, bool) {
+	return s.scanBehaviorWithBudgetForRepo(sourceSet, since, cfg, budget, "")
+}
+
+func (s *Store) scanBehaviorWithBudgetForRepo(sourceSet map[string]bool, since time.Time, cfg configScan, budget time.Duration, repoFilter string) (behaviorScan, recurringResult, bool) {
 	deadline := &behaviorDeadline{at: behaviorClock().Add(budget)}
-	return s.scanBehaviorUntil(sourceSet, since, cfg, deadline)
+	return s.scanBehaviorUntilForRepo(sourceSet, since, cfg, deadline, repoFilter)
 }
 
 func (s *Store) scanBehaviorUntil(sourceSet map[string]bool, since time.Time, cfg configScan, deadline *behaviorDeadline) (behaviorScan, recurringResult, bool) {
-	beh := behaviorScan{SkillUse: map[string]int{}, SessionsBySource: map[string]int{}}
+	return s.scanBehaviorUntilForRepo(sourceSet, since, cfg, deadline, "")
+}
+
+func (s *Store) scanBehaviorUntilForRepo(sourceSet map[string]bool, since time.Time, cfg configScan, deadline *behaviorDeadline, repoFilter string) (behaviorScan, recurringResult, bool) {
+	beh := behaviorScan{SkillUse: map[string]int{}, SessionsBySource: map[string]int{}, SessionPeakPctBySource: map[string][]int{}}
 	miner := newRecurringMiner()
 	timeBoxed := false
 	slugs := make([]string, 0, len(cfg.Skills))
 	for _, sk := range cfg.Skills {
 		slugs = append(slugs, strings.ToLower(filepath.Base(filepath.Dir(sk.Path))))
 	}
-	if sourceSet["claude"] {
-		timeBoxed = scanClaudeSessionsUntil(claudeRoot(), since, slugs, &beh, miner, deadline) || timeBoxed
+	for _, base := range learnSessionSources() {
+		if !sourceSet[base.id()] {
+			continue
+		}
+		source := sessionSource(base)
+		if strings.TrimSpace(repoFilter) != "" {
+			source = repoFilteredSource{sessionSource: base, filter: repoFilter}
+		}
+		if deadline != nil && deadline.expired() {
+			timeBoxed = true
+			continue
+		}
+		peakStart := len(beh.SessionPeakPct)
+		timeBoxed = scanSessionSourceUntil(source, since, slugs, &beh, miner, deadline) || timeBoxed
+		if peakStart < len(beh.SessionPeakPct) {
+			beh.SessionPeakPctBySource[source.id()] = append(
+				beh.SessionPeakPctBySource[source.id()], beh.SessionPeakPct[peakStart:]...,
+			)
+		}
 	}
-	if sourceSet["codex"] && (deadline == nil || !deadline.expired()) {
-		// Codex repaste mining is deferred (its payload content shape differs);
-		// behavioral counts are still scanned below.
-		timeBoxed = scanCodexSessionsUntil(codexRoot(), since, &beh, deadline) || timeBoxed
-	} else if sourceSet["codex"] {
-		timeBoxed = true
-	}
-	return beh, miner.result(), timeBoxed
+	rec := miner.result()
+	canonicalizeAiderRecurringResult(&rec)
+	return beh, rec, timeBoxed
 }
 
 func scanClaudeSessionsUntil(root string, since time.Time, slugs []string, beh *behaviorScan, miner *recurringMiner, deadline *behaviorDeadline) bool {
-	if root == "" {
-		return false
-	}
-	projects := filepath.Join(root, "projects")
-	var paths []string
-	timeBoxed := false
-	_ = filepath.WalkDir(projects, func(path string, d os.DirEntry, err error) error {
-		if deadline != nil && deadline.expired() {
-			timeBoxed = true
-			return fs.SkipAll
-		}
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		paths = append(paths, path)
-		return nil
-	})
-	sort.Strings(paths)
-
-	type result struct {
-		behavior  behaviorScan
-		miner     *recurringMiner
-		timeBoxed bool
-	}
-	results := make([]result, len(paths))
-	parallelSessionScan(len(paths), func(i int) {
-		if deadline != nil && deadline.expired() {
-			results[i].timeBoxed = true
-			return
-		}
-		path := paths[i]
-		relPath, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			relPath = filepath.Base(path)
-		}
-		localBehavior := behaviorScan{SkillUse: map[string]int{}, SessionsBySource: map[string]int{}}
-		localMiner := newRecurringMiner()
-		truncated := scanClaudeTranscriptBehaviorUntil(path, relPath, since, slugs, &localBehavior, localMiner, deadline)
-		results[i] = result{behavior: localBehavior, miner: localMiner, timeBoxed: truncated}
-	})
-	for i := range results {
-		mergeBehaviorScan(beh, &results[i].behavior)
-		miner.merge(results[i].miner)
-		timeBoxed = results[i].timeBoxed || timeBoxed
-	}
-	return timeBoxed
+	return scanSessionSourceUntil(claudeSessionSource{root: root}, since, slugs, beh, miner, deadline)
 }
 
 func scanClaudeTranscriptBehavior(path, relPath string, since time.Time, slugs []string, beh *behaviorScan, miner *recurringMiner) {
@@ -672,90 +896,64 @@ func scanClaudeTranscriptBehavior(path, relPath string, since time.Time, slugs [
 }
 
 func scanClaudeTranscriptBehaviorUntil(path, relPath string, since time.Time, slugs []string, beh *behaviorScan, miner *recurringMiner, deadline *behaviorDeadline) bool {
-	if deadline != nil && deadline.expired() {
-		return true
+	ref := sessionRef{path: path, relPath: relPath, repo: claudeRepoFromRelPath(relPath)}
+	return scanOneSessionUntil(claudeSessionSource{}, ref, since, slugs, beh, miner, deadline)
+}
+
+var commandNameMarker = regexp.MustCompile(`(?i)<command-name>\s*/?([^<\s]+)\s*</command-name>`)
+
+// recordClaudeStructuredSkillUse recognizes Claude Code's explicit skill-use
+// surfaces. The caller still runs the raw substring guard after this parser so
+// a future transcript shape cannot create a false dead-skill finding.
+func knownSkillSlugs(slugs []string) map[string]string {
+	known := make(map[string]string, len(slugs))
+	for _, slug := range slugs {
+		if normalized := normalizeSkillReference(slug); normalized != "" {
+			known[normalized] = slug
+		}
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return false
+	return known
+}
+
+func recordClaudeStructuredSkillUse(obj map[string]any, known map[string]string, seen map[string]bool) {
+	if len(known) == 0 {
+		return
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
-	beh.recordSession("claude")
-	sessionTasks := 0
-	sessionPeakPct := 0
-	seenSlugs := map[string]bool{}
-	seenUsage := map[string]bool{}
-	pendingTools := map[string]learnToolCall{}
-	var sessionToolCalls []learnToolCall
-	lineNo := 0
-	for sc.Scan() {
-		lineNo++
-		if deadline != nil && deadline.expired() {
-			return true
+	for _, raw := range claudeStructuredSkillReferences(obj) {
+		if slug, ok := known[normalizeSkillReference(raw)]; ok {
+			seen[slug] = true
 		}
-		line := sc.Bytes()
-		var obj map[string]any
-		if json.Unmarshal(line, &obj) != nil {
-			continue
-		}
-		ts := timestampFromObject(obj)
-		if !since.IsZero() && !ts.IsZero() && ts.Before(since) {
-			continue
-		}
-		tsStr := ""
-		if !ts.IsZero() {
-			tsStr = ts.UTC().Format(time.RFC3339)
-			if beh.From == "" || tsStr < beh.From {
-				beh.From = tsStr
-			}
-			if beh.To == "" || tsStr > beh.To {
-				beh.To = tsStr
-			}
-		}
-		miner.observeTurn("claude", relPath, lineNo, tsStr, obj)
-		sessionToolCalls = append(sessionToolCalls, claudeToolCalls(obj, pendingTools, lineNo)...)
-		if ctx, ok := claudeTurnContext(obj); ok {
-			if id := claudeUsageMessageID(obj); id == "" || !seenUsage[id] {
-				if id != "" {
-					seenUsage[id] = true
-				}
-				beh.Turns++
-				beh.Contexts = append(beh.Contexts, ctx)
-				window := contextWindow("anthropic", claudeModel(obj))
-				if pct := ctx * 100 / window; pct > sessionPeakPct {
-					sessionPeakPct = pct
-				}
-				if ctx > int(dumbzoneFraction*float64(window)) {
-					beh.DumbzoneTurns++
-				}
+	}
+}
+
+func claudeMessageTexts(content any) []string {
+	switch typed := content.(type) {
+	case string:
+		return []string{typed}
+	case []any:
+		var texts []string
+		for _, raw := range typed {
+			block := asMap(raw)
+			if text := firstString(block["text"]); text != "" {
+				texts = append(texts, text)
 			}
 		}
-		lower := strings.ToLower(string(line))
-		if strings.Contains(lower, `"name":"task"`) {
-			sessionTasks += strings.Count(lower, `"name":"task"`)
-		}
-		for _, slug := range slugs {
-			if slug != "" && !seenSlugs[slug] && strings.Contains(lower, slug) {
-				seenSlugs[slug] = true
-			}
-		}
+		return texts
+	default:
+		return nil
 	}
-	for slug := range seenSlugs {
-		beh.SkillUse[slug]++
+}
+
+func normalizeSkillReference(raw string) string {
+	ref := strings.ToLower(strings.TrimSpace(raw))
+	if fields := strings.Fields(ref); len(fields) > 0 {
+		ref = fields[0]
 	}
-	if sessionTasks > 0 {
-		beh.TaskSpawns += sessionTasks
-		beh.SessionsWithTasks++
+	ref = strings.TrimPrefix(ref, "/")
+	if i := strings.LastIndex(ref, ":"); i >= 0 {
+		ref = ref[i+1:]
 	}
-	if sessionPeakPct > 0 {
-		beh.SessionPeakPct = append(beh.SessionPeakPct, sessionPeakPct)
-	}
-	sessionSum := sha256.Sum256([]byte(relPath))
-	sessionRef := hex.EncodeToString(sessionSum[:8])
-	beh.LearningLoops = append(beh.LearningLoops, detectLearningLoops(sessionToolCalls, sessionRef)...)
-	return false
+	return strings.Trim(ref, `"'`)
 }
 
 // claudeUsageMessageID identifies the API response a usage block belongs to.
@@ -797,30 +995,7 @@ func claudeModel(obj map[string]any) string {
 }
 
 func scanCodexSessionsUntil(root string, since time.Time, beh *behaviorScan, deadline *behaviorDeadline) bool {
-	if root == "" {
-		return false
-	}
-	paths, timeBoxed, _ := codexPathsUntil(root, func() bool { return deadline != nil && deadline.expired() })
-	sort.Strings(paths)
-	type result struct {
-		behavior  behaviorScan
-		timeBoxed bool
-	}
-	results := make([]result, len(paths))
-	parallelSessionScan(len(paths), func(i int) {
-		if deadline != nil && deadline.expired() {
-			results[i].timeBoxed = true
-			return
-		}
-		local := behaviorScan{SkillUse: map[string]int{}, SessionsBySource: map[string]int{}}
-		truncated := scanCodexSessionBehaviorUntil(paths[i], since, &local, deadline)
-		results[i] = result{behavior: local, timeBoxed: truncated}
-	})
-	for i := range results {
-		mergeBehaviorScan(beh, &results[i].behavior)
-		timeBoxed = results[i].timeBoxed || timeBoxed
-	}
-	return timeBoxed
+	return scanSessionSourceUntil(codexSessionSource{root: root}, since, nil, beh, newRecurringMiner(), deadline)
 }
 
 func scanCodexSessionBehavior(path string, since time.Time, beh *behaviorScan) {
@@ -828,98 +1003,8 @@ func scanCodexSessionBehavior(path string, since time.Time, beh *behaviorScan) {
 }
 
 func scanCodexSessionBehaviorUntil(path string, since time.Time, beh *behaviorScan, deadline *behaviorDeadline) bool {
-	if deadline != nil && deadline.expired() {
-		return true
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
-	beh.recordSession("codex")
-	lineNo := 0
-	sessionPeakPct := 0
-	for sc.Scan() {
-		lineNo++
-		if deadline != nil && deadline.expired() {
-			return true
-		}
-		var obj map[string]any
-		if json.Unmarshal(sc.Bytes(), &obj) != nil {
-			continue
-		}
-		ts := timestampFromObject(obj)
-		if !since.IsZero() && !ts.IsZero() && ts.Before(since) {
-			continue
-		}
-		payload := asMap(obj["payload"])
-		info := asMap(payload["info"])
-		usage := asMap(info["last_token_usage"])
-		if len(usage) == 0 {
-			usage = asMap(payload["last_token_usage"])
-		}
-		if len(usage) == 0 {
-			continue
-		}
-		// Codex mirrors OpenAI usage: input_tokens is already the total
-		// effective prompt size and cached_input_tokens is a subset. Adding the
-		// cache detail again inflates context and false-triggers the dumbzone.
-		ctx64 := int64FromAny(usage["input_tokens"])
-		if uint64(ctx64) > uint64(^uint(0)>>1) {
-			continue
-		}
-		ctx := int(ctx64)
-		if ctx <= 0 {
-			continue
-		}
-		beh.Turns++
-		beh.Contexts = append(beh.Contexts, ctx)
-		model := firstString(payload["model"], info["model"], obj["model"])
-		window := contextWindow("openai", model)
-		if pct := ctx * 100 / window; pct > sessionPeakPct {
-			sessionPeakPct = pct
-		}
-		if ctx > int(dumbzoneFraction*float64(window)) {
-			beh.DumbzoneTurns++
-		}
-	}
-	if sessionPeakPct > 0 {
-		beh.SessionPeakPct = append(beh.SessionPeakPct, sessionPeakPct)
-	}
-	return false
-}
-
-// parallelSessionScan bounds file-level concurrency to available Go schedulers.
-// Each worker owns its parser state; results merge later in sorted path order.
-func parallelSessionScan(count int, scan func(int)) {
-	if count <= 0 {
-		return
-	}
-	workers := runtime.GOMAXPROCS(0)
-	if workers > maxLearnScanWorkers {
-		workers = maxLearnScanWorkers
-	}
-	if workers > count {
-		workers = count
-	}
-	jobs := make(chan int)
-	var wg sync.WaitGroup
-	wg.Add(workers)
-	for range workers {
-		go func() {
-			defer wg.Done()
-			for i := range jobs {
-				scan(i)
-			}
-		}()
-	}
-	for i := range count {
-		jobs <- i
-	}
-	close(jobs)
-	wg.Wait()
+	ref := sessionRef{path: path, relPath: filepath.Base(path)}
+	return scanOneSessionUntil(codexSessionSource{}, ref, since, nil, beh, newRecurringMiner(), deadline)
 }
 
 func mergeBehaviorScan(dst, src *behaviorScan) {
@@ -928,12 +1013,44 @@ func mergeBehaviorScan(dst, src *behaviorScan) {
 	}
 	dst.Turns += src.Turns
 	dst.DumbzoneTurns += src.DumbzoneTurns
+	if sum, ok := checkedNonNegativeSum(dst.DumbzoneExcessTokens, src.DumbzoneExcessTokens); ok {
+		dst.DumbzoneExcessTokens = sum
+	}
 	dst.Contexts = append(dst.Contexts, src.Contexts...)
+	if dst.PrefixContexts == nil {
+		dst.PrefixContexts = map[string][]int{}
+	}
+	for source, contexts := range src.PrefixContexts {
+		dst.PrefixContexts[source] = append(dst.PrefixContexts[source], contexts...)
+	}
 	dst.SessionPeakPct = append(dst.SessionPeakPct, src.SessionPeakPct...)
+	if dst.SessionPeakPctBySource == nil {
+		dst.SessionPeakPctBySource = map[string][]int{}
+	}
+	for source, peaks := range src.SessionPeakPctBySource {
+		dst.SessionPeakPctBySource[source] = append(dst.SessionPeakPctBySource[source], peaks...)
+	}
 	dst.TaskSpawns += src.TaskSpawns
 	dst.SessionsScanned += src.SessionsScanned
 	dst.SessionsWithTasks += src.SessionsWithTasks
 	dst.LearningLoops = append(dst.LearningLoops, src.LearningLoops...)
+	dst.CacheHygieneSessions = append(dst.CacheHygieneSessions, src.CacheHygieneSessions...)
+	dst.RereadSessions = append(dst.RereadSessions, src.RereadSessions...)
+	dst.CompactionSessions = append(dst.CompactionSessions, src.CompactionSessions...)
+	remainingTexts := maxSectionSessions - len(dst.SessionTexts)
+	if remainingTexts > len(src.SessionTexts) {
+		remainingTexts = len(src.SessionTexts)
+	}
+	if remainingTexts > 0 {
+		dst.SessionTexts = append(dst.SessionTexts, src.SessionTexts[:remainingTexts]...)
+	}
+	dst.SessionMetrics = append(dst.SessionMetrics, src.SessionMetrics...)
+	if dst.FallbackWindowSources == nil {
+		dst.FallbackWindowSources = map[string]bool{}
+	}
+	for source := range src.FallbackWindowSources {
+		dst.FallbackWindowSources[source] = true
+	}
 	if dst.SessionsBySource == nil {
 		dst.SessionsBySource = map[string]int{}
 	}
@@ -961,15 +1078,16 @@ func (s *Store) upsertSinks(sinks []Sink) error {
 		evidence, _ := json.Marshal(sink.Evidence)
 		if _, err := s.db.Exec(
 			`INSERT INTO learn_sinks
-			  (sink_id, title, class, basis, tokens_per_turn, tokens_per_day_rate, framing, evidence_json, suggestion, computed_at)
-			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			  (sink_id, title, class, basis, tokens_per_turn, tokens_per_day_rate, tokens_observed, framing, evidence_json, suggestion, computed_at)
+			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			  ON CONFLICT(sink_id) DO UPDATE SET
 			    title = excluded.title, class = excluded.class, basis = excluded.basis,
 			    tokens_per_turn = excluded.tokens_per_turn, tokens_per_day_rate = excluded.tokens_per_day_rate,
+			    tokens_observed = excluded.tokens_observed,
 			    framing = excluded.framing, evidence_json = excluded.evidence_json,
 			    suggestion = excluded.suggestion, computed_at = excluded.computed_at`,
 			sink.SinkID, sink.Title, sink.Class, sink.Basis, sink.TokensPerTurn, sink.TokensPerDayRate,
-			sink.Framing, string(evidence), sink.Suggestion, time.Now().UTC().Format(time.RFC3339),
+			sink.TokensObserved, sink.Framing, string(evidence), sink.Suggestion, time.Now().UTC().Format(time.RFC3339),
 		); err != nil {
 			return err
 		}
@@ -987,21 +1105,26 @@ func normalizeSources(sources []string) map[string]bool {
 		}
 	}
 	if len(set) == 0 {
-		set = map[string]bool{"codex": true, "claude": true, "caveman": true}
+		set = map[string]bool{"codex": true, "claude": true, "gemini": true, "opencode": true, "aider": true, "caveman": true}
 	}
 	return set
 }
 
-func contextWindow(provider, model string) int {
+func contextWindow(provider, model string) (int, bool) {
+	if window, ok := catalog.ContextWindowTokens(provider, model); ok {
+		return window, true
+	}
 	m := strings.ToLower(model)
 	if strings.Contains(m, "1m") || strings.Contains(m, "[1m]") {
-		return 1_000_000
+		return 1_000_000, false
 	}
 	switch provider {
 	case "openai":
-		return 400_000
+		return 400_000, false
+	case "gemini":
+		return 1_048_576, false
 	default:
-		return 200_000
+		return 200_000, false
 	}
 }
 

@@ -32,9 +32,15 @@ runPnpm("build CLI", ["--dir", "packages/cli", "build"]);
 runPnpm("build agent", ["--dir", "packages/agent", "build"]);
 run("Node Windows contracts", process.execPath, [
   "--test",
+  "--test-force-exit",
   "packages/cli/tests/windows-platform.runtime.mjs",
   "packages/cli/tests/portable-command.runtime.mjs",
   "packages/cli/tests/delegate-windows.runtime.mjs",
+  // Full CLI round trips, not unit contracts: both spawn the built CLI against
+  // stub binaries (tests/harness/stub-bin.mjs) that are real .exe/.cmd on
+  // Windows, so `enable pi` and `wrap pi` are exercised end to end there.
+  "packages/cli/tests/pi-enable.runtime.mjs",
+  "packages/cli/tests/pi-wrap.runtime.mjs",
   "tests/installer/binary-installer-platform.test.mjs",
   "tests/installer/release-binaries.test.mjs",
   "tests/installer/windows-source-install.test.mjs",

@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc",
     "lint": "tsc --noEmit",
-    "test": "tsc && tsc --project tsconfig.test.json && node --test tests/grade.runtime.mjs tests/localization_f1.parity.runtime.mjs tests/langevals-port.parity.runtime.mjs tests/langevals-judge.parity.runtime.mjs tests/grader-registry.parity.runtime.mjs"
+    "test": "tsc && tsc --project tsconfig.test.json && node --test --test-force-exit tests/grade.runtime.mjs tests/localization_f1.parity.runtime.mjs tests/langevals-port.parity.runtime.mjs tests/langevals-judge.parity.runtime.mjs tests/grader-registry.parity.runtime.mjs"
   },
   "devDependencies": {
     "@types/node": "24.10.1",

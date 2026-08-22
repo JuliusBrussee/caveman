@@ -19,49 +19,22 @@ const store =
         },
       };
 
-// ── pixel-flame logo (PixelMark 8×8), colored by the favicon ember gradient ──
+// ── pixel-flame logo (the CaveMark, 8×8) — white on onyx, no colour ─────────
 const FLAME = [
   "00011000",
   "00111100",
   "00111100",
-  "01122110",
-  "01122110",
-  "11222211",
-  "01122110",
+  "01100110",
+  "01100110",
+  "11000011",
+  "01100110",
   "00111100",
 ];
-const STOPS = [
-  [0.0, [255, 206, 107]],
-  [0.55, [242, 121, 43]],
-  [1.0, [207, 74, 31]],
-];
-function ember(t) {
-  for (let i = 1; i < STOPS.length; i++) {
-    if (t <= STOPS[i][0]) {
-      const [t0, c0] = STOPS[i - 1];
-      const [t1, c1] = STOPS[i];
-      const k = (t - t0) / (t1 - t0);
-      return c0.map((v, j) => Math.round(v + (c1[j] - v) * k));
-    }
-  }
-  return STOPS[STOPS.length - 1][1];
-}
 function buildFlame(target) {
-  const rows = FLAME.length;
-  FLAME.forEach((row, r) => {
+  FLAME.forEach((row) => {
     row.split("").forEach((ch) => {
       const s = document.createElement("span");
-      if (ch !== "0") {
-        const [R, G, B] = ember(r / (rows - 1));
-        // core pixels (2) sit a touch brighter
-        const lift = ch === "2" ? 28 : 0;
-        s.style.background = `rgb(${Math.min(255, R + lift)},${Math.min(
-          255,
-          G + lift
-        )},${Math.min(255, B + lift)})`;
-      } else {
-        s.style.background = "transparent";
-      }
+      s.style.background = ch === "0" ? "transparent" : "#ffffff";
       target.appendChild(s);
     });
   });

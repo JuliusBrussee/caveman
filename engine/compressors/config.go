@@ -65,6 +65,7 @@ func (c *configCompressor) compress(input []byte, query string) ([]byte, bool) {
 	if !ok || len(lines) < c.minLines {
 		return nil, false
 	}
+	cr := crSuffix(input)
 	keep := make([]bool, len(lines))
 	for i := 0; i < c.keepHead && i < len(lines); i++ {
 		keep[i] = true
@@ -98,7 +99,7 @@ func (c *configCompressor) compress(input []byte, query string) ([]byte, bool) {
 		if dropped == 0 {
 			return
 		}
-		out = append(out, []byte(fmt.Sprintf("# … %d config lines elided (caveman) …", dropped)))
+		out = append(out, synthLine(fmt.Sprintf("# … %d config lines elided (caveman) …", dropped), cr))
 		dropped = 0
 	}
 	for i, line := range lines {
@@ -113,14 +114,7 @@ func (c *configCompressor) compress(input []byte, query string) ([]byte, bool) {
 	if len(out) >= len(lines) {
 		return nil, false
 	}
-	sep := []byte("\n")
-	if bytes.Contains(input, []byte("\r\n")) {
-		sep = []byte("\r\n")
-	}
-	result := bytes.Join(out, sep)
-	if bytes.HasSuffix(input, sep) {
-		result = append(result, sep...)
-	}
+	result := joinLines(out, bytes.HasSuffix(input, []byte("\n")))
 	if len(result) >= len(input) {
 		return nil, false
 	}
@@ -134,8 +128,7 @@ func parseConfig(input []byte) (configKind, [][]byte, bool) {
 	if !utf8.Valid(input) || len(bytes.TrimSpace(input)) == 0 {
 		return 0, nil, false
 	}
-	normalized := bytes.ReplaceAll(input, []byte("\r\n"), []byte("\n"))
-	lines := bytes.Split(bytes.TrimSuffix(normalized, []byte("\n")), []byte("\n"))
+	lines, _ := splitLines(input)
 	yamlKeys, assignments, sections, prose := 0, 0, 0, 0
 	yamlBlockScalar := false
 	for _, raw := range lines {

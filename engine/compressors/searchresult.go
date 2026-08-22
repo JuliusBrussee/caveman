@@ -1,7 +1,6 @@
 package compressors
 
 import (
-	"bytes"
 	"fmt"
 	"regexp"
 	"unicode/utf8"
@@ -46,19 +45,11 @@ func (c *searchResultCompressor) compress(input []byte, query string) ([]byte, b
 	if !utf8.Valid(input) {
 		return nil, false
 	}
-	sep := []byte("\n")
-	if bytes.Contains(input, []byte("\r\n")) {
-		sep = []byte("\r\n")
-	}
-	trailing := bytes.HasSuffix(input, sep)
-	body := input
-	if trailing {
-		body = body[:len(body)-len(sep)]
-	}
-	lines := bytes.Split(body, sep)
+	lines, trailing := splitLines(input)
 	if len(lines) < c.minLines {
 		return nil, false
 	}
+	cr := crSuffix(input)
 
 	keep := make([]bool, len(lines))
 	for i, line := range lines {
@@ -78,7 +69,7 @@ func (c *searchResultCompressor) compress(input []byte, query string) ([]byte, b
 	for i, line := range lines {
 		if keep[i] {
 			if dropped > 0 {
-				out = append(out, []byte(searchResultMarker(dropped)))
+				out = append(out, synthLine(searchResultMarker(dropped), cr))
 				dropped = 0
 			}
 			out = append(out, line)
@@ -87,14 +78,10 @@ func (c *searchResultCompressor) compress(input []byte, query string) ([]byte, b
 		}
 	}
 	if dropped > 0 {
-		out = append(out, []byte(searchResultMarker(dropped)))
+		out = append(out, synthLine(searchResultMarker(dropped), cr))
 	}
 	if len(out) == len(lines) {
 		return nil, false
 	}
-	result := bytes.Join(out, sep)
-	if trailing {
-		result = append(result, sep...)
-	}
-	return result, true
+	return joinLines(out, trailing), true
 }

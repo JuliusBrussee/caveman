@@ -84,10 +84,32 @@ function patchFrontmatterModel(content, modelValue) {
   return fmRaw + nl + modelLine + after;
 }
 
+// insideGitWorkTree reports whether `dir` sits inside a git working tree.
+//
+// A plugin root inside one is a SOURCE CHECKOUT, not an installed plugin:
+// resolvePluginRoot returns the repo root when this hook runs from a clone, so
+// with any CAVECREW_*_MODEL set, EVERY SessionStart rewrote tracked agents/*.md
+// and dirtied the working tree just by opening the repo. An installed plugin
+// lives under $CLAUDE_CONFIG_DIR with no .git above it, so overrides still apply
+// there — the one place they can be applied without editing someone's source.
+function insideGitWorkTree(dir) {
+  let current = path.resolve(dir);
+  for (let i = 0; i < 64; i++) {
+    try {
+      if (fs.existsSync(path.join(current, '.git'))) return true;
+    } catch (e) { /* unreadable ancestor → keep walking */ }
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+  return false;
+}
+
 // Apply all env-var overrides to agent files under `pluginRoot`.
 // `env` defaults to process.env; pass an object in tests.
 function applyOverrides(pluginRoot, env) {
   const envArg = env || process.env;
+  if (insideGitWorkTree(pluginRoot)) return;
   for (const { envVar, file } of AGENT_ENV_MAP) {
     const raw = envArg[envVar];
     if (!raw || !raw.trim()) continue;
@@ -114,4 +136,4 @@ function applyOverrides(pluginRoot, env) {
   }
 }
 
-module.exports = { resolvePluginRoot, patchFrontmatterModel, applyOverrides, AGENT_ENV_MAP };
+module.exports = { resolvePluginRoot, patchFrontmatterModel, applyOverrides, insideGitWorkTree, AGENT_ENV_MAP };

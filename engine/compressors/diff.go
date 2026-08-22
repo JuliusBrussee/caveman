@@ -30,19 +30,11 @@ func (c *diffCompressor) Compress(input []byte) ([]byte, bool) {
 	if !utf8.Valid(input) {
 		return nil, false
 	}
-	sep := []byte("\n")
-	if bytes.Contains(input, []byte("\r\n")) {
-		sep = []byte("\r\n")
-	}
-	trailing := bytes.HasSuffix(input, sep)
-	body := input
-	if trailing {
-		body = body[:len(body)-len(sep)]
-	}
-	lines := bytes.Split(body, sep)
+	lines, trailing := splitLines(input)
 	if len(lines) < c.minLines {
 		return nil, false
 	}
+	cr := crSuffix(input)
 
 	keep := make([]bool, len(lines))
 	for i, line := range lines {
@@ -59,7 +51,7 @@ func (c *diffCompressor) Compress(input []byte) ([]byte, bool) {
 	for i, line := range lines {
 		if keep[i] {
 			if dropped > 0 {
-				out = append(out, []byte(diffMarker(dropped)))
+				out = append(out, synthLine(diffMarker(dropped), cr))
 				dropped = 0
 			}
 			out = append(out, line)
@@ -68,16 +60,12 @@ func (c *diffCompressor) Compress(input []byte) ([]byte, bool) {
 		}
 	}
 	if dropped > 0 {
-		out = append(out, []byte(diffMarker(dropped)))
+		out = append(out, synthLine(diffMarker(dropped), cr))
 	}
 	if len(out) == len(lines) {
 		return nil, false
 	}
-	result := bytes.Join(out, sep)
-	if trailing {
-		result = append(result, sep...)
-	}
-	return result, true
+	return joinLines(out, trailing), true
 }
 
 func isDiffStructuralLine(line []byte) bool {
@@ -89,12 +77,18 @@ func isDiffStructuralLine(line []byte) bool {
 		(isChangedDiffLine(line))
 }
 
+// isChangedDiffLine reports whether line is an added/removed hunk line.
+//
+// It deliberately does NOT exclude lines whose second byte is '+'/'-'. That test
+// was meant to skip the "--- a/x" / "+++ b/x" file headers, but those are
+// already matched by prefix above — and it also swallowed every real change
+// whose own content starts with '-' or '+' ("-  - name: build" in YAML,
+// "+--verbose" in a shell script, a deleted "----" rule in markdown). Those
+// lines were classified as context and elided under a marker claiming only
+// context was dropped.
+//
+// A bare "-" or "+" is a change too — it is how git renders the deletion or
+// addition of a blank line — so the length floor is 1, not 2.
 func isChangedDiffLine(line []byte) bool {
-	if len(line) < 2 {
-		return false
-	}
-	if line[0] != '+' && line[0] != '-' {
-		return false
-	}
-	return line[1] != '+' && line[1] != '-'
+	return len(line) >= 1 && (line[0] == '+' || line[0] == '-')
 }
