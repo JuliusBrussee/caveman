@@ -297,6 +297,8 @@ def call_claude(prompt: str) -> str:
             client = None  # no credentials configured, fall back to CLI
     except ImportError:
         pass  # anthropic not installed, fall back to CLI
+    except Exception:
+        client = None  # older SDKs raise at construction without credentials
     if client is not None:
         msg = client.messages.create(
             model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
