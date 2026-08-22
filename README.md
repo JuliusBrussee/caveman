@@ -296,6 +296,7 @@ Caveman save you token, save you money. Star cost zero. Fair trade. ⭐
 <sub>
 <strong>Docs:</strong>
 <a href="./docs/README.md">Technical manual</a> ·
+<a href="https://caveman.sharonwang.me/">Community docs</a> ·
 <a href="./INSTALL.md">Install matrix</a> ·
 <a href="./docs/HONEST-NUMBERS.md">Honest numbers</a> ·
 <a href="./LICENSE">License</a> ·
