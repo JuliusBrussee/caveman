@@ -235,6 +235,18 @@ if (process.stdin.isTTY) {
   process.stdin.on('end', () => finish());
 }
 
+// Emit a merged JSON output to match Claude Code hookSpecificOutput.additionalContext
+// and Copilot top-level additionalContext (#88).
+function emitContext(context) {
+  process.stdout.write(JSON.stringify({
+    additionalContext: context,
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: context,
+    },
+  }));
+}
+
 function run(source, sessionCwd) {
 let mode = getDefaultMode(sessionCwd);
 if (source !== 'startup') {
@@ -246,7 +258,6 @@ if (source !== 'startup') {
 if (mode === 'off') {
   recordModeChange(claudeDir, null); // #601: timestamped transition log
   removeFlag(flagPath);
-  process.stdout.write('OK');
   process.exit(0);
 }
 
@@ -267,7 +278,7 @@ safeWriteFlag(flagPath, mode);
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 if (INDEPENDENT_MODES.has(mode)) {
-  process.stdout.write('CAVEMAN MODE ACTIVE — level: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill.');
+  emitContext('CAVEMAN MODE ACTIVE — level: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill.');
   process.exit(0);
 }
 
@@ -397,5 +408,5 @@ try {
   // Silent fail — don't block session start over statusline detection
 }
 
-process.stdout.write(output);
+emitContext(output);
 } // end run()

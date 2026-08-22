@@ -92,7 +92,9 @@ SessionStart hook ──writes "full"──▶ $CLAUDE_CONFIG_DIR/.caveman-activ
                                     [CAVEMAN:ULTRA] │ ...
 ```
 
-SessionStart stdout is injected as hidden system context — Claude sees it, users don't. The statusline runs as a separate process. The flag file is the bridge.
+SessionStart stdout is one JSON object injected as hidden system context (the agent sees it, users don't).
+It carries `additionalContext` twice: nested under `hookSpecificOutput`, where Claude Code reads it,
+and at the top level, where GitHub Copilot reads it. The statusline runs as a separate process. The flag file is the bridge.
 
 ## Uninstall
 
