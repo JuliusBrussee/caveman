@@ -238,7 +238,9 @@ Exports:
 
 Runs once per Claude Code session start. Three things:
 1. Writes the active mode to `$CLAUDE_CONFIG_DIR/.caveman-active` via `safeWriteFlag` (creates if missing)
-2. Emits caveman ruleset as hidden stdout — Claude Code injects SessionStart hook stdout as system context, invisible to user
+2. Emits caveman ruleset as hidden context, invisible to user. Hosts disagree on where that context lives in a hook's JSON:
+   - Claude Code reads `hookSpecificOutput.additionalContext`
+   - GitHub Copilot reads a top-level `additionalContext`.
 3. Checks `settings.json` for statusline config; if missing, appends nudge to offer setup on first interaction
 
 Silent-fails on all filesystem errors — never blocks session start.
