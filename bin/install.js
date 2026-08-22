@@ -24,6 +24,7 @@ const crypto = require('crypto');
 
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
+const HERMES = require('./lib/hermes');
 const OWNED = require('./lib/owned-install');
 const { transformOpencodeAgentFrontmatter } = require('./lib/opencode-agent');
 const PORTABLE = require('./lib/portable-process');
@@ -77,12 +78,42 @@ function hooksManifestIsOurs(p) {
 }
 
 // ── Argv ───────────────────────────────────────────────────────────────────
+function tokenizeArgvValue(raw) {
+  const tokens = [];
+  let token = '';
+  let quote = null;
+  let started = false;
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+    if (quote) {
+      if (char === quote) { quote = null; started = true; continue; }
+      if (char === '\\' && quote === '"' && i + 1 < raw.length && /[\\"\s]/.test(raw[i + 1])) {
+        token += raw[++i]; started = true; continue;
+      }
+      token += char; started = true; continue;
+    }
+    if (char === '"' || char === "'") { quote = char; started = true; continue; }
+    if (/\s/.test(char)) {
+      if (started) { tokens.push(token); token = ''; started = false; }
+      continue;
+    }
+    if (char === '\\' && i + 1 < raw.length && /[\\'"\s]/.test(raw[i + 1])) {
+      token += raw[++i]; started = true; continue;
+    }
+    token += char; started = true;
+  }
+  if (quote) die('error: unmatched quote in --with-mcp-shrink value');
+  if (started) tokens.push(token);
+  return tokens;
+}
+
 function parseArgs(argv) {
   const opts = {
     dryRun: false, force: false, skipSkills: false,
-    withHooks: 'auto', withInit: false, withMcpShrink: false,
+    withHooks: 'auto', withInit: false, withMcpShrink: null,
     all: false, minimal: false, listOnly: false, noColor: false,
-    only: [], uninstall: false, nonInteractive: false,
+    only: [], uninstall: false, disable: false, purgeHistory: false,
+    mcpShrinkName: 'caveman-shrink', nonInteractive: false,
     configDir: null, help: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -93,7 +124,7 @@ function parseArgs(argv) {
     // and a stub registration just lands the user in a broken-MCP loop (#474).
     if (a.startsWith('--with-mcp-shrink=')) {
       const raw = a.slice('--with-mcp-shrink='.length);
-      const tokens = raw.trim().split(/\s+/).filter(Boolean);
+      const tokens = tokenizeArgvValue(raw);
       if (tokens.length === 0) {
         die('error: --with-mcp-shrink requires an upstream command\n' +
             '  example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /path"');
@@ -112,7 +143,7 @@ function parseArgs(argv) {
         const v = argv[i + 1];
         if (v && !v.startsWith('--')) {
           i++;
-          const tokens = v.trim().split(/\s+/).filter(Boolean);
+          const tokens = tokenizeArgvValue(v);
           if (tokens.length === 0) {
             die('error: --with-mcp-shrink requires an upstream command\n' +
                 '  example: --with-mcp-shrink "npx @modelcontextprotocol/server-filesystem /path"');
@@ -131,6 +162,14 @@ function parseArgs(argv) {
       case '--list': opts.listOnly = true; break;
       case '--no-color': opts.noColor = true; break;
       case '--uninstall': case '-u': opts.uninstall = true; break;
+      case '--disable': opts.disable = true; break;
+      case '--purge-history': opts.purgeHistory = true; break;
+      case '--mcp-shrink-name': {
+        const value = argv[++i];
+        if (!value || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) die('error: --mcp-shrink-name requires letters, digits, underscore, or hyphen');
+        opts.mcpShrinkName = value;
+        break;
+      }
       case '--non-interactive': opts.nonInteractive = true; break;
       case '-h': case '--help': opts.help = true; break;
       // POSIX end-of-options marker. Older curl|bash flows pipe `-- --only foo`
@@ -154,6 +193,9 @@ function parseArgs(argv) {
     }
   }
   if (opts.all && opts.minimal) die('error: --all and --minimal are mutually exclusive');
+  if (opts.uninstall && opts.disable) die('error: --uninstall and --disable are mutually exclusive');
+  if (opts.purgeHistory && !opts.uninstall) die('error: --purge-history requires --uninstall');
+  if (opts.disable && opts.only.some(id => id !== 'hermes')) die('error: --disable supports only --only hermes');
   // --all turns on per-repo init only. It deliberately does NOT force:
   //   • withHooks — left at 'auto' so installClaude() can skip standalone
   //     settings.json wiring when the plugin manifest already wires the hooks
@@ -253,7 +295,7 @@ const PROVIDERS = [
   // CLI agents — require the binary. The `||dir:~/.foo` fallbacks were the
   // main source of false positives (warp, kiro, junie etc. leave config dirs
   // behind on uninstall).
-  { id: 'hermes',     label: 'Hermes Agent',        mech: 'native hermes skills copy',     detect: 'command:hermes' },
+  { id: 'hermes',     label: 'Hermes Agent',        mech: 'native plugin + skills',     detect: 'command:hermes' },
   { id: 'aider-desk', label: 'Aider Desk',          mech: 'npx skills add (aider-desk)',   detect: 'command:aider', profile: 'aider-desk' },
   { id: 'amp',        label: 'Sourcegraph Amp',     mech: 'npx skills add (amp)',          detect: 'command:amp',             profile: 'amp' },
   { id: 'bob',        label: 'IBM Bob',             mech: 'npx skills add (bob)',          detect: 'command:bob', profile: 'bob' },
@@ -624,68 +666,6 @@ function installViaSkills(ctx, prov) {
   const r = runSpawn('npx', args, null, opts.dryRun);
   if (spawnOk(r)) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
-  process.stdout.write('\n');
-}
-
-// ── hermes native install ──────────────────────────────────────────────────
-// Drops the caveman skills into ~/.hermes/skills/productivity/ (or HERMES_HOME if set).
-const HERMES_SKILL_DIRS = ['caveman', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
-
-function hermesConfigDir() {
-  // Hermes uses ~/.hermes by default, or HERMES_HOME env var.
-  if (process.env.HERMES_HOME) return path.join(process.env.HERMES_HOME, 'skills');
-  return path.join(os.homedir(), '.hermes', 'skills');
-}
-
-function installHermes(ctx) {
-  const { say, note, warn, opts, repoRoot, results } = ctx;
-  results.detected++;
-  say('→ Hermes Agent detected');
-
-  if (!repoRoot) {
-    warn('  Hermes native install requires a local clone of the caveman repo.');
-    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only hermes');
-    results.failed.push(['hermes', 'native install requires local repo clone']);
-    process.stdout.write('\n');
-    return;
-  }
-
-  const skillsRoot = path.join(hermesConfigDir(), 'productivity');
-
-  if (opts.dryRun) {
-    note(`  would mkdir ${skillsRoot}/`);
-    note(`  would copy ${HERMES_SKILL_DIRS.length} skill dirs into ${skillsRoot}/`);
-    results.installed.push('hermes');
-    process.stdout.write('\n');
-    return;
-  }
-
-  try {
-    const operations = [];
-    for (const skillDir of HERMES_SKILL_DIRS) {
-      const srcDir = path.join(repoRoot, 'skills', skillDir);
-      if (!fs.existsSync(srcDir)) {
-        warn(`  skill dir not found: ${srcDir}`);
-        continue;
-      }
-      operations.push({
-        relativePath: skillDir,
-        write: (stage) => OWNED.copyPath(srcDir, stage),
-      });
-    }
-    OWNED.installOwned({
-      root: skillsRoot,
-      integration: 'hermes',
-      operations,
-      force: opts.force,
-      note,
-    });
-
-    results.installed.push('hermes');
-  } catch (err) {
-    results.failed.push(['hermes', 'copy failed: ' + err.message]);
-  }
-
   process.stdout.write('\n');
 }
 
@@ -1430,19 +1410,14 @@ function uninstall(ctx) {
     }
   }
 
-  // Hermes native install — same journal/digest contract as opencode.
-  const hermesRoot = path.join(hermesConfigDir(), 'productivity');
-  try {
-    const hermesOwnership = OWNED.uninstallOwned({
-      root: hermesRoot,
-      integration: 'hermes',
-      dryRun: opts.dryRun,
-      note,
-      warn,
-    });
-    if (hermesOwnership.hadJournal) ok('  pruned owned caveman skills from Hermes');
-  } catch (error) {
-    warn(`  Hermes ownership journal invalid; left integration untouched: ${error.message}`);
+  // Hermes native plugin lifecycle owns its files, config leaves, and state.
+  // Do not require Hermes CLI for a global uninstall on machines without it.
+  if (hasCmd('hermes')) {
+    const hermesStatus = HERMES.uninstallHermes(ctx);
+    if (hermesStatus !== 0) {
+      cleanupFailed = true;
+      warn('  Hermes uninstall completed with preserved/unsafe paths; see messages above.');
+    }
   }
 
   // Per-session state. Keep lifetime savings history unless user removes it.
@@ -1545,7 +1520,9 @@ FLAGS
                         is required. The value is whitespace-tokenized.
                         Example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"
   --no-mcp-shrink       Skip MCP shrink. (Default.)
+  --disable             Disable native Hermes plugin; preserve files and state.
   --uninstall, -u       Remove caveman from this machine.
+  --purge-history       With --uninstall, delete regular Hermes Caveman history.
   --config-dir <path>   Claude Code config dir for hook files + settings.json.
                         Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT
                         scope \`claude plugin install\`, \`gemini extensions
@@ -1588,6 +1565,8 @@ async function main() {
     results: { installed: [], skipped: [], failed: [], detected: 0 },
   };
 
+  if (opts.disable) return HERMES.disableHermes(ctx);
+  if (opts.uninstall && opts.only.length === 1 && opts.only[0] === 'hermes') return HERMES.uninstallHermes(ctx);
   if (opts.uninstall) return uninstall(ctx);
 
   ctx.say('🪨 caveman installer');
@@ -1624,7 +1603,7 @@ async function main() {
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
-    if (prov.id === 'hermes')   { installHermes(ctx); continue; }
+    if (prov.id === 'hermes')   { HERMES.installHermes(ctx); continue; }
     if (prov.profile)           { installViaSkills(ctx, prov); continue; }
   }
 

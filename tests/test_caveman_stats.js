@@ -65,7 +65,7 @@ test('shows full-mode savings estimate when flag is full', (tmp) => {
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
   });
   // 350 / 0.35 = 1000, saved = 650, ~65%
-  assert.match(out, /Est\. without caveman:\s+1,000/);
+  assert.ok(out.includes(`Est. without caveman:  ${(1000).toLocaleString()}`), out);
   assert.match(out, /Est\. tokens saved:\s+650 \(~65% of output\)/);
 });
 

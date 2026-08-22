@@ -104,6 +104,13 @@ gemini extensions install https://github.com/JuliusBrussee/caveman
 npx skills add JuliusBrussee/caveman --skill '*' -a codex --yes  # replace codex with your agent profile
 ```
 
+Hermes Agent also has a native plugin path (Linux/macOS/WSL2): `node bin/install.js --only hermes` from a local clone. It installs native plugin + skills; see [INSTALL.md](./INSTALL.md).
+
+See [INSTALL.md](./INSTALL.md) for the full 30+ agent matrix, dry run, flags, verification, and uninstall.
+Full 30+ agent matrix, dry run, flags, verification, and uninstall: [INSTALL.md](./INSTALL.md).
+
+Prefer building the proxy from source instead of signed binaries? `scripts/install-local-cli.sh` (macOS/Linux) or `pwsh -File scripts/install-local-cli.ps1` (Windows); needs Go and `pnpm`.
+
 </details>
 
 Full 30+ agent matrix, dry run, flags, verification, and uninstall: [INSTALL.md](./INSTALL.md).

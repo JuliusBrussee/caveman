@@ -34,6 +34,16 @@ Want to preview before installing? Use `--dry-run`:
 curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.2.0/install.sh | bash -s -- --dry-run
 ```
 
+## Hermes Agent
+
+Native Hermes integration is available from a local clone on Linux, macOS, and WSL2:
+
+```bash
+node bin/install.js --only hermes
+```
+
+It installs Caveman native plugin, seven skills, and ownership manifest under active Hermes profile. Native Windows is unsupported; use WSL2. See `hermes plugins list` to verify plugin activation.
+
 ## Per-agent install
 
 If you want to install for one agent (or want to know exactly what command runs under the hood), use the table below. Every row also works as `--only <id>` to the unified installer.
