@@ -290,10 +290,12 @@ test('pruneOrphanedManagedHooks removes managed hook whose target is missing (ab
 });
 
 test('pruneOrphanedManagedHooks keeps a foreign-platform absolute path it cannot judge', () => {
-  // A roaming settings.json written on Windows, processed on POSIX: path
+  // A roaming settings.json written on Windows, processed on POSIX: posix
   // .isAbsolute() says false for `C:\...`, so the old code joined it under
   // baseDir, found nothing, and pruned a hook that is live on the machine that
   // wrote it. Existence is only knowable for paths of our own platform.
+  // Platform is passed explicitly because a Windows runner resolves `C:\...`
+  // natively and would prune it — the scenario only exists POSIX-side.
   const s = {
     hooks: {
       SessionStart: [{ hooks: [
@@ -301,9 +303,25 @@ test('pruneOrphanedManagedHooks keeps a foreign-platform absolute path it cannot
       ] }],
     },
   };
-  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing', 'linux');
   assert.equal(removed, 0, 'must not prune a hook whose path belongs to another platform');
   assert.equal(s.hooks.SessionStart[0].hooks.length, 1);
+});
+
+test('pruneOrphanedManagedHooks judges a Windows path natively when platform is win32', () => {
+  // Same settings as above, own-platform side: `C:\...` is absolute for a
+  // Windows host, so the foreign-path guard must not fire and the missing
+  // target is a real orphan.
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: '"C:\\Program Files\\nodejs\\node.exe" "C:\\no\\such\\dir\\caveman-activate.js"' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing', 'win32');
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
 });
 
 test('pruneOrphanedManagedHooks removes orphan bare-node managed hook', () => {

@@ -304,9 +304,10 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode, platform = pro
 // and drop the hook only when its target is genuinely absent. A managed hook
 // whose script still exists is left untouched, so this is safe to run on
 // every install.
-function pruneOrphanedManagedHooks(settings, configDir) {
+function pruneOrphanedManagedHooks(settings, configDir, platform = process.platform) {
   if (!settings || typeof settings !== 'object') return 0;
   const baseDir = configDir || claudeConfigDir();
+  const host = platform === 'win32' ? path.win32 : path.posix;
   let removed = 0;
 
   // A command is a missing managed target iff some token's BASENAME exactly
@@ -323,11 +324,16 @@ function pruneOrphanedManagedHooks(settings, configDir) {
         // command when a roaming $CLAUDE_CONFIG_DIR is processed on POSIX.
         if (!MANAGED_HOOK_BASENAMES.has(path.win32.basename(tok))) continue;
         // A path absolute on the OTHER platform (`C:\...` seen from POSIX) is
-        // not ours to judge: path.isAbsolute() says false, we would join it
+        // not ours to judge: posix isAbsolute() says false, we would join it
         // under baseDir, find nothing, and prune a hook that is live on the
         // machine that wrote it. Existence is only knowable for our own paths.
-        if (path.isAbsolute(tok) !== path.win32.isAbsolute(tok)) return false;
-        const scriptPath = path.isAbsolute(tok) ? tok : path.join(baseDir, tok);
+        // The check is one-directional by construction: win32's absolute set is
+        // a superset of posix's, so from Windows `/home/me/x.js` is
+        // indistinguishable from a drive-relative rooted path and gets judged
+        // natively. Flavour comes from `platform`, not the host, so the POSIX
+        // side of that asymmetry stays reachable from a Windows test runner.
+        if (host.isAbsolute(tok) !== path.win32.isAbsolute(tok)) return false;
+        const scriptPath = host.isAbsolute(tok) ? tok : host.join(baseDir, tok);
         return !fs.existsSync(scriptPath);
       }
     } catch (_) { /* silent-fail: never block install on a parse/fs hiccup */ }
