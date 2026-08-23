@@ -673,7 +673,11 @@ func (r *Runtime) repositoryEvidenceContext(request Request) (string, string, er
 			terms = request.TaskProfile.Terms
 		}
 		bundle := repointel.Evidence(repoMap, terms)
-		if bundle.Scout.Status == repointel.ScoutNotConfigured {
+		// Only a path or symbol that actually carries a task term is shown.
+		// BM25 metadata proximity ranked unrelated dependency files highly and
+		// handed them to the model every turn behind a ccr:// handle that read
+		// as authoritative; a low-confidence guess is worth less than silence.
+		if !bundle.HasDirectEvidence() {
 			return "", "", nil
 		}
 		data, err := json.Marshal(bundle)
@@ -696,16 +700,18 @@ func (r *Runtime) repositoryEvidenceContext(request Request) (string, string, er
 }
 
 func renderRepositoryEvidence(bundle repointel.Bundle, ref string) string {
-	if bundle.Scout.Status == repointel.ScoutNotConfigured {
+	if !bundle.HasDirectEvidence() {
 		return ""
-	}
-	if len(bundle.Items) == 0 {
-		return "Likely implementation path (observed local metadata): no task-specific match; inspect directly before editing. Evidence: " + ref
 	}
 	var out strings.Builder
 	out.WriteString("Likely implementation path (observed local metadata):")
-	for index, item := range bundle.Items[:min(5, len(bundle.Items))] {
-		fmt.Fprintf(&out, "\n%d. %s", index+1, item.Path)
+	shown := 0
+	for _, item := range bundle.Items {
+		if !item.Direct || shown == 5 {
+			continue
+		}
+		shown++
+		fmt.Fprintf(&out, "\n%d. %s", shown, item.Path)
 		if item.LineStart > 0 {
 			fmt.Fprintf(&out, ":%d", item.LineStart)
 			if item.LineEnd > item.LineStart {

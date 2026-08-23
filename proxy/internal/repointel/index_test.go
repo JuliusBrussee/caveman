@@ -2,12 +2,23 @@ package repointel
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func runGitIn(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=RepoIntel", "GIT_AUTHOR_EMAIL=repo@example.test", "GIT_COMMITTER_NAME=RepoIntel", "GIT_COMMITTER_EMAIL=repo@example.test")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+}
 
 func TestBuildCreatesDeterministicMapAndTaskEvidenceWithoutSensitiveContent(t *testing.T) {
 	root := t.TempDir()
@@ -26,16 +37,9 @@ func TestBuildCreatesDeterministicMapAndTaskEvidenceWithoutSensitiveContent(t *t
 	write("auth/refresh_test.go", "package auth\n\nfunc TestRotateToken() {}\n")
 	write("AGENTS.md", "Never invent auth behavior.\n")
 	write(".env", "SECRET_TOKEN=must-not-enter-map\n")
-	runGit := func(args ...string) {
-		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=RepoIntel", "GIT_AUTHOR_EMAIL=repo@example.test", "GIT_COMMITTER_NAME=RepoIntel", "GIT_COMMITTER_EMAIL=repo@example.test")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, output)
-		}
-	}
-	runGit("init", "-q")
-	runGit("add", ".")
-	runGit("commit", "-qm", "auth refresh")
+	runGitIn(t, root, "init", "-q")
+	runGitIn(t, root, "add", ".")
+	runGitIn(t, root, "commit", "-qm", "auth refresh")
 
 	repoMap, bundle, err := Build(context.Background(), root, "git:abc", []string{"auth", "rotate", "token"})
 	if err != nil {
@@ -81,10 +85,9 @@ func TestBuildCreatesDeterministicMapAndTaskEvidenceWithoutSensitiveContent(t *t
 	}
 }
 
-func TestBuildSkipsDependencyAndVendorTrees(t *testing.T) {
-	root := t.TempDir()
-	write := func(path, body string) {
-		t.Helper()
+func writeTree(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for path, body := range files {
 		full := filepath.Join(root, filepath.FromSlash(path))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatal(err)
@@ -93,35 +96,131 @@ func TestBuildSkipsDependencyAndVendorTrees(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("src/proxy.py", "def proxy():\n    return 1\n")
-	write(".pixi/envs/default/lib/python3.14/site-packages/zmq/devices/proxydevice.py", "class ProxyDevice:\n    pass\n")
-	write(".pixi/envs/default/lib/python3.14/xml/sax/xmlreader.py", "class XMLReader:\n    def parse(self):\n        pass\n")
-	write("node_modules/leftpad/index.js", "export function proxy() {}\n")
-	write(".venv/lib/python3.14/site-packages/foo.py", "def proxy():\n    pass\n")
-	write("vendor/other.go", "package vendor\nfunc Proxy() {}\n")
-	write("site-packages/email/mime/image.py", "def proxy():\n    pass\n")
-	write("__pycache__/proxy.cpython-314.pyc", "not-source")
+}
 
-	repoMap, bundle, err := Build(context.Background(), root, "git:pixi", []string{"proxy"})
+func mappedPaths(repoMap Map) []string {
+	out := make([]string, 0, len(repoMap.Files))
+	for _, file := range repoMap.Files {
+		out = append(out, file.Path)
+	}
+	return out
+}
+
+// Dependency trees are identified by their contents, not by a name list: a
+// pixi/conda prefix and a virtualenv are excluded under any directory name,
+// including the interpreter standard library they carry.
+func TestWalkExcludesInstalledEnvironmentsByMarkerNotName(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"src/proxy.py":                         "def proxy():\n    return 1\n",
+		"src/env/settings.py":                  "def proxy_settings():\n    return 2\n",
+		".pixi/envs/default/conda-meta/x.json": "{}",
+		".pixi/envs/default/lib/python3.14/site-packages/zmq/proxydevice.py": "class ProxyDevice:\n    pass\n",
+		".pixi/envs/default/lib/python3.14/xml/sax/xmlreader.py":             "class XMLReader:\n    pass\n",
+		// A conda prefix under an ordinary name: only the marker gives it away.
+		"envs/py314/conda-meta/history":                 "",
+		"envs/py314/lib/python3.14/email/mime/image.py": "def proxy():\n    pass\n",
+		// A virtualenv that is not called venv.
+		"toolchain/pyvenv.cfg":                                 "home = /usr\n",
+		"toolchain/lib/python3.14/site-packages/proxy_util.py": "def proxy():\n    pass\n",
+		"node_modules/leftpad/index.js":                        "export function proxy() {}\n",
+	})
+
+	repoMap, bundle, err := Build(context.Background(), root, "git:markers", []string{"proxy"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range repoMap.Files {
-		if excludedPath(file.Path) {
-			t.Fatalf("indexed vendored path: %s", file.Path)
+	got := strings.Join(mappedPaths(repoMap), ",")
+	if got != "src/env/settings.py,src/proxy.py" {
+		t.Fatalf("map should hold project source only, got: %s", got)
+	}
+	if len(bundle.Items) == 0 || bundle.Items[0].Path != "src/proxy.py" || !bundle.Items[0].Direct {
+		t.Fatalf("evidence should rank project source directly: %+v", bundle.Items)
+	}
+	if bundle.Strength != StrengthDirect || !bundle.HasDirectEvidence() {
+		t.Fatalf("path-term match must count as direct evidence: %+v", bundle)
+	}
+}
+
+// git already knows which files are source: an ignored dependency tree never
+// reaches the index even when its directory name is unknown to us.
+func TestBuildPrefersGitIgnoreRulesOverNameHeuristics(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		".gitignore":                    "/deps-cache/\n",
+		"src/proxy.go":                  "package src\n\nfunc Proxy() {}\n",
+		"deps-cache/zmq/proxydevice.go": "package zmq\n\nfunc Proxy() {}\n",
+		"deps-cache/xml/xmlreader.go":   "package xml\n\nfunc Proxy() {}\n",
+	})
+	runGitIn(t, root, "init", "-q")
+	runGitIn(t, root, "add", ".")
+	runGitIn(t, root, "commit", "-qm", "source")
+
+	repoMap, _, err := Build(context.Background(), root, "git:ignored", []string{"proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range mappedPaths(repoMap) {
+		if strings.HasPrefix(path, "deps-cache/") {
+			t.Fatalf("gitignored dependency tree entered the map: %v", mappedPaths(repoMap))
 		}
-		if strings.Contains(file.Path, ".pixi") || strings.Contains(file.Path, "node_modules") || strings.Contains(file.Path, "site-packages") || strings.Contains(file.Path, ".venv") || strings.Contains(file.Path, "vendor/") {
-			t.Fatalf("indexed dependency path: %s", file.Path)
+	}
+	if !slices.Contains(mappedPaths(repoMap), "src/proxy.go") {
+		t.Fatalf("tracked source missing: %v", mappedPaths(repoMap))
+	}
+}
+
+// Ambiguous names are first-party until an ecosystem manifest says otherwise,
+// so `internal/build` and a hand-written `vendor/` are not silently dropped.
+func TestAmbiguousDirectoriesNeedEcosystemEvidence(t *testing.T) {
+	kept := t.TempDir()
+	writeTree(t, kept, map[string]string{
+		"build/proxy_rules.py": "def proxy():\n    return 1\n",
+		"vendor/proxy_shim.py": "def proxy():\n    return 2\n",
+		"target/proxy_spec.py": "def proxy():\n    return 3\n",
+	})
+	repoMap, _, err := Build(context.Background(), kept, "git:ambiguous", []string{"proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repoMap.Files) != 3 {
+		t.Fatalf("first-party dirs named build/vendor/target must survive: %v", mappedPaths(repoMap))
+	}
+
+	dropped := t.TempDir()
+	writeTree(t, dropped, map[string]string{
+		"go.mod":                "module example.test/repo\n\ngo 1.26\n",
+		"Cargo.toml":            "[package]\nname = \"repo\"\n",
+		"src/proxy.go":          "package src\n\nfunc Proxy() {}\n",
+		"vendor/dep/proxy.go":   "package dep\n\nfunc Proxy() {}\n",
+		"target/debug/proxy.go": "package debug\n\nfunc Proxy() {}\n",
+	})
+	repoMap, _, err = Build(context.Background(), dropped, "git:ambiguous", []string{"proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range mappedPaths(repoMap) {
+		if strings.HasPrefix(path, "vendor/") || strings.HasPrefix(path, "target/") {
+			t.Fatalf("manifest-proven build output must be excluded: %v", mappedPaths(repoMap))
 		}
 	}
-	if len(repoMap.Files) != 1 || repoMap.Files[0].Path != "src/proxy.py" {
-		t.Fatalf("map should be project source only: %+v", repoMap.Files)
+}
+
+func TestExcludedPathFoldsCaseForUnambiguousNames(t *testing.T) {
+	for _, path := range []string{
+		".Pixi/envs/default/lib/x.py",
+		"lib/Site-Packages/zmq/proxydevice.py",
+		"Node_Modules/leftpad/index.js",
+		"VENV/lib/python3.14/foo.py",
+	} {
+		if !excludedPath(path) {
+			t.Fatalf("case variant not excluded: %s", path)
+		}
 	}
-	if len(bundle.Items) == 0 || bundle.Items[0].Path != "src/proxy.py" {
-		t.Fatalf("evidence should rank project source, not vendored deps: %+v", bundle.Items)
-	}
-	if bundle.Scout.Status == ScoutNotConfigured {
-		t.Fatalf("small filtered map should not recommend unconfigured scout: %+v", bundle.Scout)
+	for _, path := range []string{"src/env/settings.py", "internal/build/rules.go", "src/vendor_client.go"} {
+		if excludedPath(path) {
+			t.Fatalf("first-party path excluded: %s", path)
+		}
 	}
 }
 
@@ -138,6 +237,53 @@ func TestEvidenceSkipsVendoredPathsAlreadyPresentInMap(t *testing.T) {
 		if excludedPath(item.Path) {
 			t.Fatalf("vendored path leaked into evidence: %s", item.Path)
 		}
+	}
+}
+
+// A truncated or large map used to silence every hit through Scout status.
+// Scout advice and injection eligibility are now separate judgements.
+func TestTruncatedMapKeepsDirectEvidenceUsable(t *testing.T) {
+	files := []File{{Path: "src/auth/rotate.go", Symbols: []Symbol{{Name: "RotateToken", Kind: "function", LineStart: 12, LineEnd: 20}}}}
+	for i := 0; i < 1600; i++ {
+		files = append(files, File{Path: fmt.Sprintf("pkg/mod%04d/file.go", i)})
+	}
+	bundle := Evidence(Map{Files: files, Truncated: true}, []string{"rotate"})
+	if !bundle.HasDirectEvidence() || bundle.Strength != StrengthDirect {
+		t.Fatalf("direct hit in a truncated map must stay usable: %+v", bundle)
+	}
+	if bundle.Items[0].Path != "src/auth/rotate.go" {
+		t.Fatalf("wrong top item: %+v", bundle.Items)
+	}
+}
+
+// The BM25-metadata-only shape is what produced the unrelated file:line
+// guesses; it must never qualify as showable evidence.
+func TestMetadataOnlyRelevanceIsNotDirectEvidence(t *testing.T) {
+	bundle := Evidence(Map{Files: []File{
+		{Path: "src/handler.go", Package: "src", Imports: []string{"net/http/httputil"}, Symbols: []Symbol{{Name: "Serve", Kind: "function", LineStart: 4, LineEnd: 9}}},
+	}}, []string{"httputil"})
+	if len(bundle.Items) == 0 {
+		t.Skip("no candidate ranked; nothing to assert")
+	}
+	if bundle.HasDirectEvidence() || bundle.Strength != StrengthMetadata {
+		t.Fatalf("import-only proximity must not be direct evidence: %+v", bundle)
+	}
+}
+
+func TestEmptyEvidenceIsNotShowable(t *testing.T) {
+	bundle := Evidence(Map{Files: []File{{Path: "src/handler.go"}}}, []string{"nomatchterm"})
+	if len(bundle.Items) != 0 || bundle.Strength != StrengthNone || bundle.HasDirectEvidence() {
+		t.Fatalf("empty evidence must not be showable: %+v", bundle)
+	}
+}
+
+func TestBundleReportsScannedAndRankedCountsSeparately(t *testing.T) {
+	bundle := Evidence(Map{Files: []File{
+		{Path: "node_modules/leftpad/index.js"},
+		{Path: "src/proxy.go", Symbols: []Symbol{{Name: "Proxy", Kind: "function", LineStart: 1, LineEnd: 3}}},
+	}}, []string{"proxy"})
+	if bundle.FilesScanned != 2 || bundle.FilesRanked != 1 {
+		t.Fatalf("scanned/ranked counts must be distinct: scanned=%d ranked=%d", bundle.FilesScanned, bundle.FilesRanked)
 	}
 }
 
