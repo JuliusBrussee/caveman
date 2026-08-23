@@ -271,6 +271,12 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 			evidenceContext, evidenceRef, err = r.repositoryEvidenceContext(request)
 			response.Context = joinContext(response.Context, evidenceContext)
 			response.RecoveryRef = evidenceRef
+			// A silent turn is the intended outcome when nothing was proven,
+			// but the ledger must still separate "declined, evidence weak"
+			// from "mechanism off or broken".
+			if err == nil && evidenceRef == "" && evidenceContext == "" {
+				response.decisionReason = "repository_evidence_declined_no_direct_match"
+			}
 		}
 		if err == nil && features.mask && !directOutputRewriteAgent(request.Agent.ID) {
 			var deferred string

@@ -536,6 +536,20 @@ func TestRepositoryEvidenceInjectsNothingWithoutDirectMatch(t *testing.T) {
 	if containsType(objects, ccr.ObjectEvidenceBundle) {
 		t.Fatalf("weak evidence bundle must not be recorded as shown evidence: %+v", objects)
 	}
+
+	// Positive control: the same warmed session must still inject when a term
+	// actually matches, so the assertions above cannot pass on a dead path.
+	matched, err := runtime.Handle(context.Background(), Request{
+		ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "claude"},
+		Session: session, Event: Event{Type: "prompt.submit"}, Prompt: &PayloadDigest{Bytes: 20, SHA256: "sha256:matched"},
+		TaskProfile: &TaskProfile{Type: "bugfix", Terms: []string{"handler"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(matched.Context, "handler.go") || matched.RecoveryRef == "" {
+		t.Fatalf("direct match must still inject evidence: context=%q ref=%q", matched.Context, matched.RecoveryRef)
+	}
 }
 
 func TestRepositoryEvidenceIgnoresPixiVendorTree(t *testing.T) {
