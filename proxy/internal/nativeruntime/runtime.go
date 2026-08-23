@@ -673,6 +673,9 @@ func (r *Runtime) repositoryEvidenceContext(request Request) (string, string, er
 			terms = request.TaskProfile.Terms
 		}
 		bundle := repointel.Evidence(repoMap, terms)
+		if bundle.Scout.Status == repointel.ScoutNotConfigured {
+			return "", "", nil
+		}
 		data, err := json.Marshal(bundle)
 		if err != nil {
 			return "", "", err
@@ -693,6 +696,9 @@ func (r *Runtime) repositoryEvidenceContext(request Request) (string, string, er
 }
 
 func renderRepositoryEvidence(bundle repointel.Bundle, ref string) string {
+	if bundle.Scout.Status == repointel.ScoutNotConfigured {
+		return ""
+	}
 	if len(bundle.Items) == 0 {
 		return "Likely implementation path (observed local metadata): no task-specific match; inspect directly before editing. Evidence: " + ref
 	}

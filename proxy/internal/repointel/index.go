@@ -22,9 +22,12 @@ import (
 const (
 	MapSchema    = "caveman.repository-map.v1"
 	BundleSchema = "caveman.repository-evidence.v1"
-	maxFiles     = 20_000
-	maxFileBytes = 2 << 20
-	maxEvidence  = 8
+	// ScoutNotConfigured is set when the map is large or truncated and no
+	// local Scout is wired. The native runtime must not inject path guesses.
+	ScoutNotConfigured = "not_started_no_configured_local_scout"
+	maxFiles           = 20_000
+	maxFileBytes       = 2 << 20
+	maxEvidence        = 8
 )
 
 type Symbol struct {
@@ -209,7 +212,11 @@ func listFiles(ctx context.Context, root string) ([]string, bool, error) {
 		if relErr != nil || relative == "." || strings.HasPrefix(relative, "..") {
 			return nil
 		}
-		files = append(files, filepath.ToSlash(relative))
+		relative = filepath.ToSlash(relative)
+		if excludedPath(relative) {
+			return nil
+		}
+		files = append(files, relative)
 		if len(files) >= maxFiles {
 			truncated = true
 			return filepath.SkipAll
@@ -222,11 +229,22 @@ func listFiles(ctx context.Context, root string) ([]string, bool, error) {
 
 func excludedDirectory(name string) bool {
 	switch name {
-	case ".git", "node_modules", "vendor", ".venv", "venv", "dist", "build", ".next", "target", "coverage", ".cache":
+	case ".git", "node_modules", "vendor", ".venv", "venv", "dist", "build", ".next", "target", "coverage", ".cache",
+		".pixi", "site-packages", "__pycache__", "__pypackages__", ".tox", ".nox", ".conda", ".mamba",
+		".direnv", ".eggs", ".bundle", ".pnpm-store", "bower_components", "Pods", "elm-stuff", ".gradle":
 		return true
 	default:
 		return false
 	}
+}
+
+func excludedPath(relative string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(relative), "/") {
+		if excludedDirectory(part) {
+			return true
+		}
+	}
+	return false
 }
 
 func packageBoundaries(files []string) []string {
@@ -353,9 +371,16 @@ func gitActivity(parent context.Context, root string) map[string]int {
 }
 
 func buildBundle(repoMap Map, terms []string) Bundle {
+	files := make([]File, 0, len(repoMap.Files))
+	for _, file := range repoMap.Files {
+		if excludedPath(file.Path) {
+			continue
+		}
+		files = append(files, file)
+	}
 	query := strings.Join(terms, " ")
-	docs := make([]string, len(repoMap.Files))
-	for i, file := range repoMap.Files {
+	docs := make([]string, len(files))
+	for i, file := range files {
 		var symbols []string
 		for _, symbol := range file.Symbols {
 			symbols = append(symbols, symbol.Name, symbol.Kind)
@@ -372,21 +397,21 @@ func buildBundle(repoMap Map, terms []string) Bundle {
 		if score <= 0 {
 			continue
 		}
-		score += 0.05 * float64(min(repoMap.Files[i].RecentChanges, 10))
-		if repoMap.Files[i].TestFor != "" {
+		score += 0.05 * float64(min(files[i].RecentChanges, 10))
+		if files[i].TestFor != "" {
 			score += 0.1
 		}
 		candidates = append(candidates, candidate{i, score})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].score == candidates[j].score {
-			return repoMap.Files[candidates[i].index].Path < repoMap.Files[candidates[j].index].Path
+			return files[candidates[i].index].Path < files[candidates[j].index].Path
 		}
 		return candidates[i].score > candidates[j].score
 	})
 	items := make([]EvidenceItem, 0, min(maxEvidence, len(candidates)))
 	for _, candidate := range candidates[:min(maxEvidence, len(candidates))] {
-		file := repoMap.Files[candidate.index]
+		file := files[candidate.index]
 		item := EvidenceItem{Path: file.Path, Kind: "file", Score: candidate.score, Reasons: evidenceReasons(file, terms)}
 		for _, symbol := range file.Symbols {
 			if containsAny(strings.ToLower(symbol.Name), terms) {
@@ -402,16 +427,16 @@ func buildBundle(repoMap Map, terms []string) Bundle {
 	for _, item := range items {
 		dirs[filepath.Dir(item.Path)] = true
 	}
-	recommended := repoMap.Truncated || len(repoMap.Files) > 1500 && (len(items) < 3 || len(dirs) > 4)
+	recommended := repoMap.Truncated || len(files) > 1500 && (len(items) < 3 || len(dirs) > 4)
 	reason := "direct deterministic evidence sufficient"
 	status := "not_needed"
 	if recommended {
 		reason = "repository large/distributed and direct evidence weak; Scout may be net-positive"
-		status = "not_started_no_configured_local_scout"
+		status = ScoutNotConfigured
 	}
 	return Bundle{
 		Schema: BundleSchema, RepositoryState: repoMap.RepositoryState, QueryTerms: terms, Items: items,
-		FilesScanned: len(repoMap.Files), Candidates: len(candidates), MapTruncated: repoMap.Truncated,
+		FilesScanned: len(files), Candidates: len(candidates), MapTruncated: repoMap.Truncated,
 		Scout:          ScoutDecision{Recommended: recommended, Status: status, Reason: reason},
 		EvidenceStatus: "observed_local_repository_metadata",
 	}
