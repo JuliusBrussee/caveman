@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { stubEnv } from "./harness/index.mjs";
 import {
   binaryInstallFilename,
   commandHasPath,
@@ -99,6 +100,19 @@ test("generated plugins bake Node target instead of a Windows CMD shim", () => {
   const invocation = generatedPluginInvocation(shim, "ignored.js", "win32");
   assert.equal(invocation.cmd, process.execPath);
   assert.deepEqual(invocation.pre, [target]);
+});
+
+test("stub preload path survives Node's own NODE_OPTIONS parsing", { skip: process.platform !== "win32" }, () => {
+  // Node unescapes backslashes inside a quoted NODE_OPTIONS value, so an
+  // unescaped Windows path reaches --require as `C:UsersRUNNER~1AppData…` and
+  // every stub-backed suite dies in the preload with MODULE_NOT_FOUND before
+  // the CLI under test runs a line. The space in the directory is why the
+  // quotes cannot simply be dropped.
+  const dir = join(mkdtempSync(join(tmpdir(), "caveman-stub-env-")), "Program Files", "bin");
+  const env = stubEnv({ ...process.env }, dir);
+  const result = spawnSync(process.execPath, ["-e", "process.stdout.write('ok')"], { env, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "ok");
 });
 
 test("native PowerShell executes generated lifecycle hook commands", { skip: process.platform !== "win32" }, () => {
