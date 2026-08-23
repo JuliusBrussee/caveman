@@ -3,6 +3,8 @@
 package repointel
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -32,9 +34,17 @@ const (
 	// alone — the shape that produced unrelated vendored-file guesses.
 	StrengthMetadata = "metadata_only"
 	StrengthNone     = "none"
-	maxFiles         = 20_000
-	maxFileBytes     = 2 << 20
-	maxEvidence      = 8
+	// ListingGit and ListingWalk disclose how the file set was obtained. The
+	// two can disagree (git omits submodule contents; the walk sees them), so
+	// the basis is part of the map and of its content hash.
+	ListingGit   = "git_index_and_untracked_excluding_ignored"
+	ListingWalk  = "filesystem_walk_dependency_marker_filtered"
+	maxFiles     = 20_000
+	maxFileBytes = 2 << 20
+	maxEvidence  = 8
+	// gitListTimeout stays inside the caller's repository-warm budget so a
+	// slow listing degrades to the walk instead of failing the whole map.
+	gitListTimeout = 2 * time.Second
 )
 
 type Symbol struct {
@@ -62,6 +72,7 @@ type Map struct {
 	Files           []File `json:"files"`
 	Truncated       bool   `json:"truncated"`
 	ParserBasis     string `json:"parser_basis"`
+	ListingBasis    string `json:"listing_basis"`
 }
 
 type EvidenceItem struct {
@@ -124,7 +135,7 @@ func Build(ctx context.Context, root, repositoryState string, queryTerms []strin
 	if err != nil || !info.IsDir() {
 		return Map{}, Bundle{}, errors.New("repository intelligence: cwd is not a directory")
 	}
-	files, truncated, err := listFiles(ctx, resolved)
+	files, truncated, listingBasis, err := listFiles(ctx, resolved)
 	if err != nil {
 		return Map{}, Bundle{}, err
 	}
@@ -146,10 +157,10 @@ func Build(ctx context.Context, root, repositoryState string, queryTerms []strin
 		mapped = append(mapped, entry)
 	}
 	parserBasis := symbolParserBasis()
-	contentHash := mapHash(repositoryState, mapped, truncated, parserBasis)
+	contentHash := mapHash(repositoryState, mapped, truncated, parserBasis, listingBasis)
 	repoMap := Map{
 		Schema: MapSchema, RepositoryState: repositoryState, ContentSHA256: contentHash,
-		Files: mapped, Truncated: truncated, ParserBasis: parserBasis,
+		Files: mapped, Truncated: truncated, ParserBasis: parserBasis, ListingBasis: listingBasis,
 	}
 	bundle := Evidence(repoMap, queryTerms)
 	return repoMap, bundle, nil
@@ -205,38 +216,85 @@ func ImpactTests(repoMap Map, changedPaths []string) TestImpact {
 	}
 }
 
+// gitListFiles is a seam: tests force the filesystem walk by replacing it.
+var gitListFiles = gitTrackedFiles
+
 // listFiles prefers git's own ignore rules over any name list we could write:
 // a dependency tree the project installs (node_modules, .pixi/envs, .venv,
 // a conda prefix under any name) is ignored by that project's .gitignore, so
-// git already knows which files are source. Checkouts without git, and any git
-// failure, fall back to a filesystem walk.
-func listFiles(ctx context.Context, root string) ([]string, bool, error) {
-	if files, truncated, ok := gitTrackedFiles(ctx, root); ok {
-		return files, truncated, nil
+// git already knows which files are source. Checkouts without git, any git
+// failure, and an empty git listing all fall back to a filesystem walk — an
+// empty answer is indistinguishable from "this directory is itself ignored by
+// an enclosing repository", which must not be reported as a complete map.
+func listFiles(ctx context.Context, root string) ([]string, bool, string, error) {
+	if files, truncated, ok := gitListFiles(ctx, root); ok && len(files) > 0 {
+		return files, truncated, ListingGit, nil
 	}
-	return walkFiles(ctx, root)
+	files, truncated, err := walkFiles(ctx, root)
+	return files, truncated, ListingWalk, err
+}
+
+// gitCommand builds a git invocation that the repository it is pointed at
+// cannot steer. A repository's own .git/config may name programs git will run
+// — core.fsmonitor runs while the index is read, so `ls-files` alone is
+// enough — which would let merely opening a session inside a freshly cloned
+// untrusted repository execute code. Command-line -c overrides repository
+// config, and inherited GIT_* variables are dropped so an outer environment
+// cannot redirect the index, config, or work tree either.
+func gitCommand(ctx context.Context, root string, args ...string) *exec.Cmd {
+	hardened := []string{
+		"-C", root, "--no-pager",
+		"-c", "core.fsmonitor=false",
+		"-c", "core.hooksPath=/dev/null",
+		"-c", "core.sshCommand=",
+		"-c", "core.askPass=",
+		"-c", "core.editor=true",
+		"-c", "core.pager=cat",
+		"-c", "core.alternateRefsCommand=",
+		"-c", "diff.external=",
+		"-c", "credential.helper=",
+		"-c", "protocol.ext.allow=never",
+		"-c", "uploadpack.packObjectsHook=",
+	}
+	cmd := exec.CommandContext(ctx, "git", append(hardened, args...)...)
+	env := make([]string, 0, len(os.Environ())+3)
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "GIT_") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	cmd.Env = append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	return cmd
 }
 
 func gitTrackedFiles(parent context.Context, root string) ([]string, bool, bool) {
-	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, gitListTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	raw, err := cmd.Output()
-	if err != nil {
+	cmd := gitCommand(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	stdout, pipeErr := cmd.StdoutPipe()
+	if pipeErr != nil {
 		return nil, false, false
 	}
+	if startErr := cmd.Start(); startErr != nil {
+		return nil, false, false
+	}
+	// git knows which files exist, not which of them are dependency trees a
+	// .gitignore forgot, so the same content-based filter the walk uses runs
+	// over every listed path, memoised per directory.
+	filter := newDirectoryFilter(root)
 	files := make([]string, 0, 1024)
-	truncated := false
 	seen := map[string]bool{}
-	for _, entry := range strings.Split(string(raw), "\x00") {
-		if entry == "" {
+	truncated := false
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxFileBytes)
+	scanner.Split(scanNULSeparated)
+	for scanner.Scan() {
+		relative := filepath.ToSlash(scanner.Text())
+		if relative == "" || relative == "." || filepath.IsAbs(relative) || strings.HasPrefix(relative, "../") || seen[relative] {
 			continue
 		}
-		relative := filepath.ToSlash(entry)
-		if filepath.IsAbs(relative) || relative == "." || strings.HasPrefix(relative, "../") || seen[relative] {
-			continue
-		}
-		if excludedPath(relative) {
+		if filter.excludes(relative) {
 			continue
 		}
 		// ls-files also reports submodule gitlinks and symlinks; only regular
@@ -245,15 +303,33 @@ func gitTrackedFiles(parent context.Context, root string) ([]string, bool, bool)
 		if statErr != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		seen[relative] = true
-		files = append(files, relative)
-		if len(files) >= maxFiles {
+		if len(files) == maxFiles {
 			truncated = true
 			break
 		}
+		seen[relative] = true
+		files = append(files, relative)
+	}
+	scanErr := scanner.Err()
+	if truncated {
+		cancel()
+	}
+	waitErr := cmd.Wait()
+	if scanErr != nil || (waitErr != nil && !truncated) {
+		return nil, false, false
 	}
 	sort.Strings(files)
 	return files, truncated, true
+}
+
+func scanNULSeparated(data []byte, atEOF bool) (int, []byte, error) {
+	if index := bytes.IndexByte(data, 0); index >= 0 {
+		return index + 1, data[:index], nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }
 
 func walkFiles(ctx context.Context, root string) ([]string, bool, error) {
@@ -286,19 +362,51 @@ func walkFiles(ctx context.Context, root string) ([]string, bool, error) {
 		if relErr != nil || relative == "." || strings.HasPrefix(relative, "..") {
 			return nil
 		}
-		relative = filepath.ToSlash(relative)
-		if excludedPath(relative) {
-			return nil
-		}
-		files = append(files, relative)
-		if len(files) >= maxFiles {
+		if len(files) == maxFiles {
 			truncated = true
 			return filepath.SkipAll
 		}
+		files = append(files, filepath.ToSlash(relative))
 		return nil
 	})
 	sort.Strings(files)
 	return files, truncated, err
+}
+
+// directoryFilter answers "is this path inside a dependency tree" for a list
+// of paths, probing each distinct directory at most once. A listing of N files
+// costs one decision per directory rather than per file.
+type directoryFilter struct {
+	root     string
+	decision map[string]bool
+}
+
+func newDirectoryFilter(root string) *directoryFilter {
+	return &directoryFilter{root: root, decision: map[string]bool{}}
+}
+
+func (f *directoryFilter) excludes(relative string) bool {
+	segments := strings.Split(relative, "/")
+	if len(segments) < 2 {
+		return false
+	}
+	current := ""
+	for _, segment := range segments[:len(segments)-1] {
+		if current == "" {
+			current = segment
+		} else {
+			current += "/" + segment
+		}
+		decided, known := f.decision[current]
+		if !known {
+			decided = excludedDirectory(segment, filepath.Join(f.root, filepath.FromSlash(current)))
+			f.decision[current] = decided
+		}
+		if decided {
+			return true
+		}
+	}
+	return false
 }
 
 // dependencyDirectoryNames are directory names that are never first-party
@@ -484,7 +592,7 @@ func testTarget(path string, files []string) string {
 func gitActivity(parent context.Context, root string) map[string]int {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "log", "-n", "50", "--format=", "--name-only", "--", ".")
+	cmd := gitCommand(ctx, root, "log", "-n", "50", "--format=", "--name-only", "--", ".")
 	raw, err := cmd.Output()
 	if err != nil {
 		return map[string]int{}
@@ -542,7 +650,7 @@ func buildBundle(repoMap Map, terms []string) Bundle {
 	for _, candidate := range candidates[:min(maxEvidence, len(candidates))] {
 		file := files[candidate.index]
 		item := EvidenceItem{Path: file.Path, Kind: "file", Score: candidate.score, Reasons: evidenceReasons(file, terms)}
-		item.Direct = containsAny(strings.ToLower(file.Path), terms)
+		item.Direct = fileNameMatches(file.Path, terms)
 		for _, symbol := range file.Symbols {
 			if containsAny(strings.ToLower(symbol.Name), terms) {
 				item.Kind = symbol.Kind
@@ -589,10 +697,18 @@ func buildBundle(repoMap Map, terms []string) Bundle {
 	}
 }
 
+// fileNameMatches deliberately tests the final path component only. Matching
+// the whole path made a term naming any ancestor directory ("src", "internal",
+// "lib" — ordinary words in a prompt) mark every file beneath it as a direct
+// hit, which is no gate at all.
+func fileNameMatches(path string, terms []string) bool {
+	return containsAny(strings.ToLower(filepath.Base(path)), terms)
+}
+
 func evidenceReasons(file File, terms []string) []string {
 	var reasons []string
-	if containsAny(strings.ToLower(file.Path), terms) {
-		reasons = append(reasons, "path matches task terms")
+	if fileNameMatches(file.Path, terms) {
+		reasons = append(reasons, "file name matches task terms")
 	}
 	for _, symbol := range file.Symbols {
 		if containsAny(strings.ToLower(symbol.Name), terms) {
@@ -648,11 +764,13 @@ func safeTerm(value string) bool {
 	return true
 }
 
-func mapHash(repositoryState string, files []File, truncated bool, basis string) string {
+func mapHash(repositoryState string, files []File, truncated bool, basis, listingBasis string) string {
 	hash := sha256.New()
 	hash.Write([]byte(repositoryState))
 	hash.Write([]byte{0})
 	hash.Write([]byte(basis))
+	hash.Write([]byte{0})
+	hash.Write([]byte(listingBasis))
 	for _, file := range files {
 		hash.Write([]byte{0})
 		hash.Write([]byte(file.Path))

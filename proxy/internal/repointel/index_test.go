@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -106,10 +107,20 @@ func mappedPaths(repoMap Map) []string {
 	return out
 }
 
+// forceWalkListing removes the git listing so a test provably exercises the
+// filesystem walk, instead of depending on TMPDIR not sitting in a checkout.
+func forceWalkListing(t *testing.T) {
+	t.Helper()
+	original := gitListFiles
+	gitListFiles = func(context.Context, string) ([]string, bool, bool) { return nil, false, false }
+	t.Cleanup(func() { gitListFiles = original })
+}
+
 // Dependency trees are identified by their contents, not by a name list: a
 // pixi/conda prefix and a virtualenv are excluded under any directory name,
 // including the interpreter standard library they carry.
 func TestWalkExcludesInstalledEnvironmentsByMarkerNotName(t *testing.T) {
+	forceWalkListing(t)
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{
 		"src/proxy.py":                         "def proxy():\n    return 1\n",
@@ -168,11 +179,113 @@ func TestBuildPrefersGitIgnoreRulesOverNameHeuristics(t *testing.T) {
 	if !slices.Contains(mappedPaths(repoMap), "src/proxy.go") {
 		t.Fatalf("tracked source missing: %v", mappedPaths(repoMap))
 	}
+	if repoMap.ListingBasis != ListingGit {
+		t.Fatalf("listing basis must disclose the git path: %q", repoMap.ListingBasis)
+	}
+}
+
+// Everything git lists still goes through the content-based filter: a
+// .gitignore that forgot an installed environment, or a committed dependency
+// tree, must not reach the model just because git reported the file.
+func TestGitListedPathsStillGetDependencyFiltering(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"go.mod":       "module example.test/repo\n\ngo 1.26\n",
+		"src/proxy.go": "package src\n\nfunc Proxy() {}\n",
+		// Untracked, un-ignored conda prefix under a name no list contains.
+		"toolbox/py314/conda-meta/history":                    "",
+		"toolbox/py314/lib/python3.14/xml/sax/xmlreader.py":   "class XMLReader:\n    pass\n",
+		"toolbox/py314/lib/python3.14/site-packages/proxy.py": "def proxy():\n    pass\n",
+		// Committed Go vendor tree: tracked, so only the manifest rule catches it.
+		"vendor/modules.txt":                     "# example\n",
+		"vendor/github.com/x/zmq/proxydevice.go": "package zmq\n\nfunc Proxy() {}\n",
+	})
+	runGitIn(t, root, "init", "-q")
+	runGitIn(t, root, "add", ".")
+	runGitIn(t, root, "commit", "-qm", "source and vendor")
+
+	repoMap, bundle, err := Build(context.Background(), root, "git:filtered", []string{"proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repoMap.ListingBasis != ListingGit {
+		t.Fatalf("expected the git listing path: %q", repoMap.ListingBasis)
+	}
+	for _, path := range mappedPaths(repoMap) {
+		if strings.HasPrefix(path, "toolbox/") || strings.HasPrefix(path, "vendor/") {
+			t.Fatalf("dependency tree survived the git listing: %v", mappedPaths(repoMap))
+		}
+	}
+	if !slices.Contains(mappedPaths(repoMap), "src/proxy.go") {
+		t.Fatalf("project source missing: %v", mappedPaths(repoMap))
+	}
+	if len(bundle.Items) == 0 || bundle.Items[0].Path != "src/proxy.go" {
+		t.Fatalf("evidence must rank project source: %+v", bundle.Items)
+	}
+}
+
+// A directory that an enclosing repository ignores makes `git ls-files` exit 0
+// with no output. Accepting that as a complete map silently disabled the whole
+// mechanism, so an empty listing falls back to the walk.
+func TestEmptyGitListingFallsBackToWalk(t *testing.T) {
+	outer := t.TempDir()
+	writeTree(t, outer, map[string]string{
+		".gitignore":            "/scratch/\n",
+		"outer.go":              "package outer\n",
+		"scratch/proj/proxy.go": "package proj\n\nfunc Proxy() {}\n",
+	})
+	runGitIn(t, outer, "init", "-q")
+	runGitIn(t, outer, "add", ".")
+	runGitIn(t, outer, "commit", "-qm", "outer")
+
+	root := filepath.Join(outer, "scratch", "proj")
+	repoMap, bundle, err := Build(context.Background(), root, "git:nested", []string{"proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repoMap.ListingBasis != ListingWalk {
+		t.Fatalf("empty git listing must fall back to the walk: %q", repoMap.ListingBasis)
+	}
+	if !slices.Contains(mappedPaths(repoMap), "proxy.go") {
+		t.Fatalf("source in an ignored subdirectory must still be indexed: %v", mappedPaths(repoMap))
+	}
+	if !bundle.HasDirectEvidence() {
+		t.Fatalf("direct hit lost to the empty-listing path: %+v", bundle)
+	}
+}
+
+// Running git inside a repository executes what that repository's config says
+// to execute. core.fsmonitor runs during an index read, so `ls-files` alone
+// would be enough for a freshly cloned untrusted repository to run code.
+func TestGitListingIgnoresRepositoryControlledCommands(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture")
+	}
+	root := t.TempDir()
+	sentinel := filepath.Join(t.TempDir(), "executed")
+	hook := filepath.Join(root, "fsmonitor-hook.sh")
+	writeTree(t, root, map[string]string{"src/proxy.go": "package src\n\nfunc Proxy() {}\n"})
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\ntouch "+sentinel+"\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitIn(t, root, "init", "-q")
+	runGitIn(t, root, "add", ".")
+	runGitIn(t, root, "commit", "-qm", "source")
+	runGitIn(t, root, "config", "core.fsmonitor", hook)
+	runGitIn(t, root, "config", "core.hooksPath", root)
+
+	if _, _, err := Build(context.Background(), root, "git:hostile", []string{"proxy"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sentinel); err == nil {
+		t.Fatal("repository-controlled command executed during repository intelligence")
+	}
 }
 
 // Ambiguous names are first-party until an ecosystem manifest says otherwise,
 // so `internal/build` and a hand-written `vendor/` are not silently dropped.
 func TestAmbiguousDirectoriesNeedEcosystemEvidence(t *testing.T) {
+	forceWalkListing(t)
 	kept := t.TempDir()
 	writeTree(t, kept, map[string]string{
 		"build/proxy_rules.py": "def proxy():\n    return 1\n",
@@ -203,6 +316,9 @@ func TestAmbiguousDirectoriesNeedEcosystemEvidence(t *testing.T) {
 		if strings.HasPrefix(path, "vendor/") || strings.HasPrefix(path, "target/") {
 			t.Fatalf("manifest-proven build output must be excluded: %v", mappedPaths(repoMap))
 		}
+	}
+	if !slices.Contains(mappedPaths(repoMap), "src/proxy.go") {
+		t.Fatalf("exclusion must not empty the map: %v", mappedPaths(repoMap))
 	}
 }
 
@@ -263,10 +379,25 @@ func TestMetadataOnlyRelevanceIsNotDirectEvidence(t *testing.T) {
 		{Path: "src/handler.go", Package: "src", Imports: []string{"net/http/httputil"}, Symbols: []Symbol{{Name: "Serve", Kind: "function", LineStart: 4, LineEnd: 9}}},
 	}}, []string{"httputil"})
 	if len(bundle.Items) == 0 {
-		t.Skip("no candidate ranked; nothing to assert")
+		t.Fatal("import proximity should still rank a candidate; otherwise this guarantee is untested")
 	}
 	if bundle.HasDirectEvidence() || bundle.Strength != StrengthMetadata {
 		t.Fatalf("import-only proximity must not be direct evidence: %+v", bundle)
+	}
+}
+
+// A term naming an ancestor directory ("src", "internal", "lib" — ordinary
+// prompt words) must not mark every file beneath it as a direct hit.
+func TestDirectMatchTestsFileNameNotWholePath(t *testing.T) {
+	bundle := Evidence(Map{Files: []File{
+		{Path: "src/billing/invoice.go", Package: "src", Symbols: []Symbol{{Name: "Total", Kind: "function", LineStart: 3, LineEnd: 8}}},
+		{Path: "src/billing/slow_query.go", Package: "src", Symbols: []Symbol{{Name: "Total", Kind: "function", LineStart: 3, LineEnd: 8}}},
+	}}, []string{"src", "slow"})
+	for _, item := range bundle.Items {
+		wantDirect := item.Path == "src/billing/slow_query.go"
+		if item.Direct != wantDirect {
+			t.Fatalf("%s direct=%t want=%t (ancestor-directory term must not qualify)", item.Path, item.Direct, wantDirect)
+		}
 	}
 }
 
