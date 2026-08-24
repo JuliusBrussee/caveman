@@ -26,13 +26,15 @@ export function hardenedGitArgs(cwd: string, ...args: string[]): string[] {
 }
 
 // Inherited GIT_* variables are dropped so an outer environment cannot
-// redirect the index, config, or work tree either.
+// redirect the index, config, or work tree either. System config
+// (/etc/gitconfig) is deliberately still read — it is root-owned, so it is not
+// part of this threat, and skipping it would discard org-wide `safe.directory`
+// allowances and silently cost us repository state on shared machines.
 export function hardenedGitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(base)) {
     if (!key.startsWith("GIT_")) env[key] = value;
   }
-  env.GIT_CONFIG_NOSYSTEM = "1";
   env.GIT_TERMINAL_PROMPT = "0";
   env.GIT_OPTIONAL_LOCKS = "0";
   return env;

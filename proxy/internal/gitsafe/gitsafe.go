@@ -34,6 +34,13 @@ var hardened = []string{
 // Command builds a git invocation rooted at root that the repository cannot
 // steer. Inherited GIT_* variables are dropped so an outer environment cannot
 // redirect the index, config, or work tree either.
+//
+// System config (/etc/gitconfig) is deliberately still read. It is root-owned,
+// so it is not part of the threat this guards, and the -c overrides above beat
+// it anyway — while skipping it discards org-wide `safe.directory` allowances,
+// which turns `git status` into a "dubious ownership" failure on shared and CI
+// machines and silently costs us repository state. Do not add
+// GIT_CONFIG_NOSYSTEM back.
 func Command(ctx context.Context, root string, args ...string) *exec.Cmd {
 	full := make([]string, 0, len(hardened)+len(args)+2)
 	full = append(full, "-C", root)
@@ -47,6 +54,6 @@ func Command(ctx context.Context, root string, args ...string) *exec.Cmd {
 		}
 		env = append(env, entry)
 	}
-	cmd.Env = append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = append(env, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
 	return cmd
 }
