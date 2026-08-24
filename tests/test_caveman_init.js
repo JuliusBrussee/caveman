@@ -254,6 +254,21 @@ test('copilot-cli: refuses a conflicting marketplace source', (tmp) => {
   assert.strictEqual(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), body);
 });
 
+test('copilot-cli: refuses malformed settings field shapes', (tmp) => {
+  const dir = path.join(tmp, '.github/copilot');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const settings of [
+    { extraKnownMarketplaces: [] },
+    { enabledPlugins: 'enabled' },
+  ]) {
+    const body = JSON.stringify(settings);
+    fs.writeFileSync(path.join(dir, 'settings.json'), body);
+    const out = runInit(tmp, '--only', 'copilot-cli');
+    assert.match(out, /skipped-unparseable/);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), body);
+  }
+});
+
 test('copilot-cli: refuses a symlinked settings directory', (tmp) => {
   if (process.platform === 'win32') return;
   const external = path.join(tmp, 'external');
@@ -276,6 +291,40 @@ test('copilot-cli: refuses a symlinked settings file', (tmp) => {
   const out = runInit(tmp, '--only', 'copilot-cli');
   assert.match(out, /skipped-unsafe-path/);
   assert.strictEqual(fs.readFileSync(external, 'utf8'), '{"secret":"keep"}\n');
+});
+
+test('copilot-cli: exclusive temp creation refuses a pre-existing symlink', (tmp) => {
+  if (process.platform === 'win32') return;
+  const dir = path.join(tmp, '.github/copilot');
+  const settings = path.join(dir, 'settings.json');
+  const decoy = path.join(tmp, 'decoy.json');
+  const preload = path.join(tmp, 'preload.js');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(decoy, 'KEEP\n');
+  fs.writeFileSync(
+    preload,
+    [
+      "const crypto = require('crypto');",
+      "const fs = require('fs');",
+      "const path = require('path');",
+      "crypto.randomBytes = () => Buffer.alloc(8, 0xab);",
+      "const target = process.env.CAVEMAN_TEST_SETTINGS;",
+      "const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.abababababababab.tmp`);",
+      "fs.symlinkSync(process.env.CAVEMAN_TEST_DECOY, temporary);",
+    ].join('\n'),
+  );
+  const result = spawnSync(process.execPath, [INIT, tmp, '--only', 'copilot-cli'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CAVEMAN_TEST_SETTINGS: settings,
+      CAVEMAN_TEST_DECOY: decoy,
+      NODE_OPTIONS: `--require=${preload}`,
+      OPENCLAW_WORKSPACE: path.join(tmp, 'no-openclaw'),
+    },
+  });
+  assert.notStrictEqual(result.status, 0);
+  assert.strictEqual(fs.readFileSync(decoy, 'utf8'), 'KEEP\n');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

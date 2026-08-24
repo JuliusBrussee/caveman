@@ -246,7 +246,7 @@ const PROVIDERS = [
   { id: 'augment',    label: 'Augment Code',        mech: 'npx skills add (augment)',      detect: 'vscode-ext:augment||jetbrains-plugin:augment', profile: 'augment' },
 
   { id: 'copilot',     label: 'GitHub Copilot',      mech: 'npx skills add (github-copilot)', detect: 'vscode-ext:github.copilot||vscode-ext:github.copilot-chat||cursor-ext:github.copilot', profile: 'github-copilot' },
-  { id: 'copilot-cli', label: 'GitHub Copilot CLI',  mech: 'copilot plugin install',          detect: 'command:copilot' },
+  { id: 'copilot-cli', label: 'GitHub Copilot CLI',  mech: 'copilot plugin install',          detect: 'copilot-plugin-cli' },
 
   // CLI agents — require the binary. The `||dir:~/.foo` fallbacks were the
   // main source of false positives (warp, kiro, junie etc. leave config dirs
@@ -291,6 +291,12 @@ function hasCmd(cmd) {
     const r = child_process.spawnSync('sh', ['-c', `command -v ${shellEscape(cmd)}`], { stdio: 'ignore' });
     return r.status === 0;
   } catch (_) { return false; }
+}
+
+function hasCopilotPluginCli() {
+  if (!hasCmd('copilot')) return false;
+  const result = captureSpawn('copilot', ['plugin', '--help']);
+  return result.status === 0 && /Manage plugins/i.test(result.stdout || '');
 }
 
 function shellEscape(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
@@ -370,6 +376,7 @@ function detectMatch(spec) {
     let ok = false;
     switch (kind) {
       case 'command':           ok = hasCmd(val); break;
+      case 'copilot-plugin-cli': ok = hasCopilotPluginCli(); break;
       case 'dir':               ok = safeStat(val, 'isDirectory'); break;
       case 'file':              ok = safeStat(val, 'isFile'); break;
       case 'macapp':            ok = macAppPresent(val); break;

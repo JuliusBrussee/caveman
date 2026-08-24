@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // Embedded so the tool works standalone (npx-style) without the src/rules/ dir.
 // Mirrors src/rules/caveman-activate.md verbatim — keep these in sync.
@@ -57,9 +58,21 @@ function fencedBlock(ruleBody) {
 function writeAtomic(fullPath, content) {
   const dir = path.dirname(fullPath);
   fs.mkdirSync(dir, { recursive: true });
-  const tmp = path.join(dir, `.${path.basename(fullPath)}.${process.pid}.tmp`);
+  const tmp = path.join(
+    dir,
+    `.${path.basename(fullPath)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`,
+  );
+  let fd;
   try {
-    fs.writeFileSync(tmp, content, { mode: 0o644 });
+    const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+    fd = fs.openSync(
+      tmp,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow,
+      0o644,
+    );
+    fs.writeFileSync(fd, content);
+    fs.closeSync(fd);
+    fd = undefined;
     // rename onto an existing target needs DELETE access and no other handle
     // without FILE_SHARE_DELETE — OneDrive/Dropbox sync and AV scanners hold
     // exactly those, and the plain writeFileSync this replaced did not. Retry
@@ -77,6 +90,9 @@ function writeAtomic(fullPath, content) {
       }
     }
   } catch (error) {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch (_) {}
+    }
     try { fs.unlinkSync(tmp); } catch (_) {}
     throw error;
   }
@@ -303,11 +319,20 @@ function processCopilotCliSettings(targetDir, opts) {
     return { status: 'skipped-unparseable', label: '?',
       detail: `${COPILOT_CLI_SETTINGS_FILE} (expected a JSON object — left untouched)` };
   }
+  if (
+    settings.extraKnownMarketplaces !== undefined &&
+    !isObjectRecord(settings.extraKnownMarketplaces)
+  ) {
+    return { status: 'skipped-unparseable', label: '?',
+      detail: `${COPILOT_CLI_SETTINGS_FILE} (extraKnownMarketplaces must be an object)` };
+  }
+  if (settings.enabledPlugins !== undefined && !isObjectRecord(settings.enabledPlugins)) {
+    return { status: 'skipped-unparseable', label: '?',
+      detail: `${COPILOT_CLI_SETTINGS_FILE} (enabledPlugins must be an object)` };
+  }
 
-  const marketplaces = isObjectRecord(settings.extraKnownMarketplaces)
-    ? settings.extraKnownMarketplaces : {};
-  const plugins = isObjectRecord(settings.enabledPlugins)
-    ? settings.enabledPlugins : {};
+  const marketplaces = settings.extraKnownMarketplaces || {};
+  const plugins = settings.enabledPlugins || {};
 
   const mkt = marketplaces[COPILOT_MARKETPLACE_KEY];
   if (mkt !== undefined && (

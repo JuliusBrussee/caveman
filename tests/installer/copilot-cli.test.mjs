@@ -14,6 +14,7 @@ function shimCopilot({
   listsCaveman = false,
   disabled = false,
   listStatus = 0,
+  pluginHelpStatus = 0,
   uninstallStatus = 0,
 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-copilot-shim-'));
@@ -23,6 +24,7 @@ function shimCopilot({
       path.join(dir, 'copilot.js'),
       [
         "const args = process.argv.slice(2).join(' ');",
+        `if (args === 'plugin --help') { console.log('Manage plugins'); process.exit(${pluginHelpStatus}); }`,
         `if (args === 'plugin list') { if (${JSON.stringify(marker)}) console.log(${JSON.stringify(marker)}); process.exit(${listStatus}); }`,
         `if (args === 'plugin uninstall caveman') process.exit(${uninstallStatus});`,
       ].join('\n'),
@@ -33,7 +35,7 @@ function shimCopilot({
     const f = path.join(dir, 'copilot');
     fs.writeFileSync(
       f,
-      `#!/bin/sh\nif [ "$1 $2" = "plugin list" ]; then [ -n "${marker}" ] && echo "${marker}"; exit ${listStatus}; fi\nif [ "$1 $2 $3" = "plugin uninstall caveman" ]; then exit ${uninstallStatus}; fi\nexit 0\n`,
+      `#!/bin/sh\nif [ "$1 $2" = "plugin --help" ]; then echo "Manage plugins"; exit ${pluginHelpStatus}; fi\nif [ "$1 $2" = "plugin list" ]; then [ -n "${marker}" ] && echo "${marker}"; exit ${listStatus}; fi\nif [ "$1 $2 $3" = "plugin uninstall caveman" ]; then exit ${uninstallStatus}; fi\nexit 0\n`,
     );
     fs.chmodSync(f, 0o755);
   }
@@ -81,12 +83,26 @@ test('copilot-cli provider row renders in --list', () => {
   assert.match(r.stdout, /copilot-cli\s+GitHub Copilot CLI\s+copilot plugin install/);
 });
 
-test('copilot-cli is auto-detected when `copilot` is on PATH (command:copilot)', () => {
+test('copilot-cli is auto-detected when the plugin command is available', () => {
   const shim = shimCopilot();
   try {
     const r = runInstaller(['--dry-run'], { ...process.env, PATH: pathWith(shim), NO_COLOR: '1' });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /GitHub Copilot CLI detected/);
+  } finally {
+    fs.rmSync(shim, { recursive: true, force: true });
+  }
+});
+
+test('copilot-cli ignores an unrelated copilot executable', () => {
+  const shim = shimCopilot({ pluginHelpStatus: 1 });
+  try {
+    const r = runInstaller(
+      ['--dry-run', '--skip-skills'],
+      { ...process.env, PATH: pathWith(shim), NO_COLOR: '1' },
+    );
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stdout, /GitHub Copilot CLI detected/);
   } finally {
     fs.rmSync(shim, { recursive: true, force: true });
   }
