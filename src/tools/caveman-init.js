@@ -82,6 +82,11 @@ function writeAtomic(fullPath, content) {
   }
 }
 
+const REPO = 'JuliusBrussee/caveman';
+const COPILOT_CLI_SETTINGS_FILE = '.github/copilot/settings.json';
+const COPILOT_MARKETPLACE_KEY = 'caveman';
+const COPILOT_PLUGIN_KEY = 'caveman@caveman';
+
 // OpenClaw is a global workspace tool (not per-repo) and needs two write
 // targets — a skill folder + a SOUL.md bootstrap block. The shared helper
 // lives at bin/lib/openclaw.js; we require it lazily so caveman-init.js
@@ -89,6 +94,14 @@ function writeAtomic(fullPath, content) {
 function loadOpenclawHelper() {
   try {
     return require(path.join(__dirname, '..', '..', 'bin', 'lib', 'openclaw.js'));
+  } catch (_) { return null; }
+}
+
+// bin/lib/settings.js gives a JSONC-tolerant read; lazy-loaded like the
+// openclaw helper so the standalone curl|node path still works without it.
+function loadSettingsHelper() {
+  try {
+    return require(path.join(__dirname, '..', '..', 'bin', 'lib', 'settings.js'));
   } catch (_) { return null; }
 }
 
@@ -105,6 +118,8 @@ const AGENTS = [
   { id: 'copilot',  file: '.github/copilot-instructions.md',
     frontmatter: '',
     mode: 'append' },
+  { id: 'copilot-cli', file: COPILOT_CLI_SETTINGS_FILE,
+    installer: 'copilotCliSettings' },
   { id: 'opencode', file: '.opencode/AGENTS.md',
     frontmatter: '',
     mode: 'append' },
@@ -130,6 +145,9 @@ function loadRuleBody() {
 function processAgent(agent, targetDir, ruleBody, opts) {
   if (agent.installer === 'openclaw') {
     return processOpenclaw(opts);
+  }
+  if (agent.installer === 'copilotCliSettings') {
+    return processCopilotCliSettings(targetDir, opts);
   }
   const fullPath = path.join(targetDir, agent.file);
   const exists = fs.existsSync(fullPath);
@@ -228,6 +246,54 @@ function processOpenclaw(opts) {
   return { status: 'installed', label: '+', detail: helper.resolveWorkspace() };
 }
 
+function processCopilotCliSettings(targetDir, opts) {
+  const fullPath = path.join(targetDir, COPILOT_CLI_SETTINGS_FILE);
+  const existed = fs.existsSync(fullPath);
+  const meta = {};
+  const settings = readCopilotSettings(fullPath, meta);
+  if (settings === null) {
+    return { status: 'skipped-unparseable', label: '?',
+      detail: `${COPILOT_CLI_SETTINGS_FILE} (not valid JSON — left untouched)` };
+  }
+  if (meta.jsonc) {
+    return { status: 'skipped-jsonc', label: '?',
+      detail: `${COPILOT_CLI_SETTINGS_FILE} (contains comments — left untouched)` };
+  }
+
+  const marketplaces = (settings.extraKnownMarketplaces && typeof settings.extraKnownMarketplaces === 'object')
+    ? settings.extraKnownMarketplaces : {};
+  const plugins = (settings.enabledPlugins && typeof settings.enabledPlugins === 'object')
+    ? settings.enabledPlugins : {};
+
+  const mkt = marketplaces[COPILOT_MARKETPLACE_KEY];
+  const marketplaceSet = mkt && mkt.source && mkt.source.repo === REPO;
+  const pluginSet = plugins[COPILOT_PLUGIN_KEY] === true;
+  if (marketplaceSet && pluginSet) {
+    return { status: 'skipped-already-installed', label: '=' };
+  }
+
+  if (!opts.dryRun) {
+    marketplaces[COPILOT_MARKETPLACE_KEY] = { source: { source: 'github', repo: REPO } };
+    plugins[COPILOT_PLUGIN_KEY] = true;
+    settings.extraKnownMarketplaces = marketplaces;
+    settings.enabledPlugins = plugins;
+    writeAtomic(fullPath, JSON.stringify(settings, null, 2) + '\n');
+  }
+  return existed
+    ? { status: 'appended', label: '~' }
+    : { status: 'added', label: '+' };
+}
+
+function readCopilotSettings(p, meta) {
+  const helper = loadSettingsHelper();
+  if (helper && typeof helper.readSettings === 'function') return helper.readSettings(p, meta);
+  if (!fs.existsSync(p)) return {};
+  let raw;
+  try { raw = fs.readFileSync(p, 'utf8'); } catch (_) { return null; }
+  if (!raw.trim()) return {};
+  try { return JSON.parse(raw); } catch (_) { return null; }
+}
+
 function parseArgs(argv) {
   const opts = { dryRun: false, force: false, only: null, target: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
@@ -301,4 +367,4 @@ function main() {
 // no-ops with exit code 0 — the worst kind of failure.
 if (require.main === module || (!require.main && module.id === '[stdin]')) main();
 
-module.exports = { processAgent, loadRuleBody, AGENTS, SENTINEL, RULE_BODY };
+module.exports = { processAgent, processCopilotCliSettings, loadRuleBody, AGENTS, SENTINEL, RULE_BODY };

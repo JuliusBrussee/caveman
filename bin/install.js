@@ -245,13 +245,6 @@ const PROVIDERS = [
   { id: 'roo',        label: 'Roo Code',            mech: 'npx skills add (roo)',          detect: 'vscode-ext:roo||vscode-ext:rooveterinaryinc.roo-cline||cursor-ext:roo', profile: 'roo' },
   { id: 'augment',    label: 'Augment Code',        mech: 'npx skills add (augment)',      detect: 'vscode-ext:augment||jetbrains-plugin:augment', profile: 'augment' },
 
-  // GitHub Copilot — two distinct runtimes:
-  //   • `copilot` (this row): the editor extension (VS Code / Cursor). Detected
-  //     via the extension dir; installed as a `.github/copilot-instructions.md`
-  //     skill, since the editor has no CLI to call (issue #336).
-  //   • `copilot-cli` (next row): the standalone GitHub Copilot CLI
-  //     (`@github/copilot`, the `copilot` binary). It has a native plugin
-  //     system, so caveman installs as a plugin like Claude Code / Gemini do.
   { id: 'copilot',     label: 'GitHub Copilot',      mech: 'npx skills add (github-copilot)', detect: 'vscode-ext:github.copilot||vscode-ext:github.copilot-chat||cursor-ext:github.copilot', profile: 'github-copilot' },
   { id: 'copilot-cli', label: 'GitHub Copilot CLI',  mech: 'copilot plugin install',          detect: 'command:copilot' },
 
@@ -589,19 +582,6 @@ function installGemini(ctx) {
   process.stdout.write('\n');
 }
 
-// GitHub Copilot CLI native install. The standalone `@github/copilot` CLI has a
-// plugin system that reads the same `.claude-plugin/marketplace.json` Claude
-// Code uses, so the shape mirrors installClaude(): register the marketplace,
-// then install `caveman@caveman` from it. The marketplace form is the
-// future-proof one — a direct `copilot plugin install owner/repo` warns that
-// direct installs are deprecated.
-//
-// Activation differs from Claude Code: Copilot CLI loads plugin hooks from a
-// root `hooks.json` (not from the `hooks` block in `.claude-plugin/plugin.json`),
-// which caveman does not yet ship, so the SessionStart auto-on hook does not
-// fire here. The plugin still loads all skills and the `/caveman` command, so
-// activation is per-session via `/caveman` (or repo-wide via --with-init, which
-// writes `.github/copilot-instructions.md` + `AGENTS.md` — both read by the CLI).
 function installCopilotCli(ctx) {
   const { say, note, opts, results } = ctx;
   results.detected++;
@@ -616,13 +596,12 @@ function installCopilotCli(ctx) {
       return;
     }
   }
-  // `marketplace add` exits non-zero when the marketplace is already registered;
-  // that's fine, so gate success on the install step only (not the add step).
+  // An existing marketplace can make `marketplace add` fail; the install result is authoritative.
   runSpawn('copilot', ['plugin', 'marketplace', 'add', REPO], null, opts.dryRun);
   const r = runSpawn('copilot', ['plugin', 'install', 'caveman@caveman'], null, opts.dryRun);
-  if ((r.status || 0) === 0) {
+  if (spawnOk(r)) {
     results.installed.push('copilot-cli');
-    note("  activate per session with /caveman (Copilot CLI does not run caveman's SessionStart hook yet)");
+    note('  activate with /caveman or add repo instructions with --with-init');
   } else {
     results.failed.push(['copilot-cli', 'copilot plugin install failed']);
   }

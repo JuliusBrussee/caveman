@@ -1,12 +1,3 @@
-// GitHub Copilot CLI native provider — detection, install, idempotency, uninstall.
-//
-// The `copilot-cli` provider is gated behind `command:copilot` and shells out to
-// the standalone `@github/copilot` CLI (`copilot plugin marketplace add` +
-// `copilot plugin install`). To run on a CI box without that CLI, we prepend a
-// tmpdir with a throwaway `copilot` shim to PATH. The shim answers `plugin list`
-// with a controllable marker so the idempotency/uninstall probes are
-// deterministic; every other subcommand just exits 0.
-
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -19,16 +10,16 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const INSTALLER = path.resolve(HERE, '..', '..', 'bin', 'install.js');
 const IS_WIN = process.platform === 'win32';
 
-// Fake `copilot` binary on PATH. `listsCaveman` controls what `copilot plugin
-// list` prints, which drives the "already installed?" probe in both install and
-// uninstall; all other invocations exit 0 so the marketplace-add/install/
-// uninstall commands succeed against the shim.
 function shimCopilot({ listsCaveman = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-copilot-shim-'));
   const marker = listsCaveman ? 'caveman@caveman' : '';
   if (IS_WIN) {
+    fs.writeFileSync(
+      path.join(dir, 'copilot.js'),
+      `if (process.argv.slice(2).join(' ') === 'plugin list') console.log(${JSON.stringify(marker)});\n`,
+    );
     fs.writeFileSync(path.join(dir, 'copilot.cmd'),
-      `@echo off\r\nif "%1 %2"=="plugin list" echo ${marker}\r\nexit /b 0\r\n`);
+      '@echo off\r\nnode "%~dp0\\copilot.js" %*\r\n');
   } else {
     const f = path.join(dir, 'copilot');
     fs.writeFileSync(f, `#!/bin/sh\nif [ "$1 $2" = "plugin list" ]; then echo "${marker}"; fi\nexit 0\n`);
@@ -42,7 +33,7 @@ function pathWith(prependDir) {
 }
 
 function runInstaller(args, env) {
-  return spawnSync('node', [INSTALLER, ...args, '--non-interactive', '--no-mcp-shrink'], {
+  return spawnSync(process.execPath, [INSTALLER, ...args, '--non-interactive', '--no-mcp-shrink'], {
     env, encoding: 'utf8',
   });
 }
@@ -57,10 +48,8 @@ function isolatedEnv(extra) {
   };
 }
 
-// ── Detection ──────────────────────────────────────────────────────────────
-
 test('copilot-cli provider row renders in --list', () => {
-  const r = spawnSync('node', [INSTALLER, '--list'], {
+  const r = spawnSync(process.execPath, [INSTALLER, '--list'], {
     encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' },
   });
   assert.equal(r.status, 0, r.stderr);
@@ -78,8 +67,6 @@ test('copilot-cli is auto-detected when `copilot` is on PATH (command:copilot)',
   }
 });
 
-// ── Install ────────────────────────────────────────────────────────────────
-
 test('dry-run --only copilot-cli prints the marketplace add + plugin install plan', () => {
   // --force skips the "already installed?" probe, so this path is deterministic
   // even with no `copilot` binary on the runner.
@@ -92,9 +79,6 @@ test('dry-run --only copilot-cli prints the marketplace add + plugin install pla
 });
 
 test('copilot-cli reports success when `copilot plugin install` exits 0', () => {
-  // Real (non-dry) dispatch against the shim exercises the success branch that
-  // pushes copilot-cli onto results.installed — the dry-run path can't, since it
-  // always fakes status 0.
   const shim = shimCopilot({ listsCaveman: false });
   const { env, cleanup } = isolatedEnv({ PATH: pathWith(shim) });
   try {
@@ -109,8 +93,6 @@ test('copilot-cli reports success when `copilot plugin install` exits 0', () => 
 });
 
 test('copilot-cli install is idempotent when the plugin is already present', () => {
-  // Shim reports caveman in `plugin list`; without --force the probe should skip
-  // the install rather than re-run it.
   const shim = shimCopilot({ listsCaveman: true });
   try {
     const r = runInstaller(['--only', 'copilot-cli', '--dry-run'],
@@ -123,7 +105,27 @@ test('copilot-cli install is idempotent when the plugin is already present', () 
   }
 });
 
-// ── Uninstall ────────────────────────────────────────────────────────────────
+test('--with-init writes .github/copilot/settings.json to enable the plugin', () => {
+  const shim = shimCopilot();
+  const { env, cleanup } = isolatedEnv({ PATH: pathWith(shim) });
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-copilot-repo-'));
+  try {
+    const r = spawnSync('node',
+      [INSTALLER, '--only', 'copilot-cli', '--with-init', '--force', '--non-interactive', '--no-mcp-shrink'],
+      { cwd, env, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    const p = path.join(cwd, '.github', 'copilot', 'settings.json');
+    assert.ok(fs.existsSync(p), `expected ${p} to be written`);
+    const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+    assert.deepEqual(cfg.extraKnownMarketplaces.caveman.source,
+      { source: 'github', repo: 'JuliusBrussee/caveman' });
+    assert.equal(cfg.enabledPlugins['caveman@caveman'], true);
+  } finally {
+    cleanup();
+    fs.rmSync(shim, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test('uninstall removes the copilot-cli plugin when present', () => {
   const shim = shimCopilot({ listsCaveman: true });

@@ -55,13 +55,15 @@ test('greenfield: creates all rule files with proper frontmatter', (tmp) => {
   assert.match(agents, /Respond terse/);
   const opencode = fs.readFileSync(path.join(tmp, '.opencode/AGENTS.md'), 'utf8');
   assert.match(opencode, /Respond terse/);
+  const cli = JSON.parse(fs.readFileSync(path.join(tmp, '.github/copilot/settings.json'), 'utf8'));
+  assert.strictEqual(cli.extraKnownMarketplaces.caveman.source.repo, 'JuliusBrussee/caveman');
+  assert.strictEqual(cli.enabledPlugins['caveman@caveman'], true);
 });
 
 test('idempotent: re-running on a clean install skips all', (tmp) => {
   runInit(tmp);
   const out = runInit(tmp);
-  // 6 repo rule files skipped-already-installed + openclaw skipped (no workspace)
-  assert.match(out, /7 skipped/);
+  assert.match(out, /8 skipped/);
   assert.doesNotMatch(out, /[1-9]\d* added/);
 });
 
@@ -96,11 +98,12 @@ test('--force overwrites existing rule files', (tmp) => {
 test('--dry-run: announces but writes nothing', (tmp) => {
   const out = runInit(tmp, '--dry-run');
   assert.match(out, /\(dry run\)/);
-  assert.match(out, /6 added/);
+  assert.match(out, /7 added/);
   assert.ok(!fs.existsSync(path.join(tmp, '.cursor')));
   assert.ok(!fs.existsSync(path.join(tmp, '.windsurf')));
   assert.ok(!fs.existsSync(path.join(tmp, '.clinerules')));
   assert.ok(!fs.existsSync(path.join(tmp, '.github/copilot-instructions.md')));
+  assert.ok(!fs.existsSync(path.join(tmp, '.github/copilot/settings.json')));
   assert.ok(!fs.existsSync(path.join(tmp, '.opencode')));
   assert.ok(!fs.existsSync(path.join(tmp, 'AGENTS.md')));
 });
@@ -172,6 +175,61 @@ test('an end marker above the begin marker is refused, not spliced', (tmp) => {
   fs.writeFileSync(agents, original);
   assert.match(runInit(tmp, '--only', 'agents'), /skipped-damaged-fence/);
   assert.equal(fs.readFileSync(agents, 'utf8'), original);
+});
+
+test('copilot-cli: --only writes the repo-level settings.json', (tmp) => {
+  const out = runInit(tmp, '--only', 'copilot-cli');
+  assert.match(out, /1 added/);
+  const cli = JSON.parse(fs.readFileSync(path.join(tmp, '.github/copilot/settings.json'), 'utf8'));
+  assert.deepStrictEqual(cli.extraKnownMarketplaces.caveman.source,
+    { source: 'github', repo: 'JuliusBrussee/caveman' });
+  assert.strictEqual(cli.enabledPlugins['caveman@caveman'], true);
+});
+
+test('copilot-cli: merges into an existing settings.json without clobbering', (tmp) => {
+  const dir = path.join(tmp, '.github/copilot');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({
+    model: 'claude-sonnet-4.5',
+    enabledPlugins: { 'other@thing': true },
+    extraKnownMarketplaces: { thing: { source: { source: 'github', repo: 'acme/thing' } } },
+  }, null, 2));
+  const out = runInit(tmp, '--only', 'copilot-cli');
+  assert.match(out, /appended/);
+  const cli = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+  assert.strictEqual(cli.extraKnownMarketplaces.caveman.source.repo, 'JuliusBrussee/caveman');
+  assert.strictEqual(cli.enabledPlugins['caveman@caveman'], true);
+  assert.strictEqual(cli.model, 'claude-sonnet-4.5');
+  assert.strictEqual(cli.enabledPlugins['other@thing'], true);
+  assert.strictEqual(cli.extraKnownMarketplaces.thing.source.repo, 'acme/thing');
+});
+
+test('copilot-cli: idempotent when caveman is already enabled', (tmp) => {
+  runInit(tmp, '--only', 'copilot-cli');
+  const before = fs.readFileSync(path.join(tmp, '.github/copilot/settings.json'), 'utf8');
+  const out = runInit(tmp, '--only', 'copilot-cli');
+  assert.match(out, /skipped-already-installed/);
+  const after = fs.readFileSync(path.join(tmp, '.github/copilot/settings.json'), 'utf8');
+  assert.strictEqual(after, before);
+});
+
+test('copilot-cli: refuses to clobber an unparseable settings.json', (tmp) => {
+  const dir = path.join(tmp, '.github/copilot');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'settings.json'), '{ not valid json ');
+  const out = runInit(tmp, '--only', 'copilot-cli');
+  assert.match(out, /skipped-unparseable/);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), '{ not valid json ');
+});
+
+test('copilot-cli: refuses to rewrite JSONC settings', (tmp) => {
+  const dir = path.join(tmp, '.github/copilot');
+  fs.mkdirSync(dir, { recursive: true });
+  const body = '{\n  // keep this comment\n  \"enabledPlugins\": {}\n}\n';
+  fs.writeFileSync(path.join(dir, 'settings.json'), body);
+  const out = runInit(tmp, '--only', 'copilot-cli');
+  assert.match(out, /skipped-jsonc/);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), body);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
