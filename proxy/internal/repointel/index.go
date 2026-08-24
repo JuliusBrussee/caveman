@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/JuliusBrussee/caveman/engine/contextwindow"
+	"github.com/JuliusBrussee/caveman/proxy/internal/gitsafe"
 	"github.com/JuliusBrussee/caveman/shared/platform/redact"
 )
 
@@ -42,8 +42,11 @@ const (
 	maxFiles     = 20_000
 	maxFileBytes = 2 << 20
 	maxEvidence  = 8
-	// gitListTimeout stays inside the caller's repository-warm budget so a
-	// slow listing degrades to the walk instead of failing the whole map.
+	// gitListTimeout caps the listing so a slow one degrades to the walk. It is
+	// further capped at half the caller's remaining budget (gitListBudget): the
+	// fallback walk is the MORE expensive path, so spending most of the warm
+	// window on git leaves the walk unable to finish and the map fails closed —
+	// exactly the case the fallback exists for.
 	gitListTimeout = 2 * time.Second
 )
 
@@ -112,6 +115,21 @@ type Bundle struct {
 // symbol name. BM25 metadata proximity alone never qualifies — that is the
 // ranking that pointed at unrelated dependency files.
 func (b Bundle) HasDirectEvidence() bool { return b.Strength == StrengthDirect && len(b.Items) > 0 }
+
+// DirectOnly drops the items that ranked on metadata proximity alone. A bundle
+// qualifies on one direct item, so the rest ride along otherwise — into the
+// stored evidence object and behind the ccr:// handle the model is handed,
+// which is the same wrong-file claim the block refuses to render.
+func (b Bundle) DirectOnly() Bundle {
+	items := make([]EvidenceItem, 0, len(b.Items))
+	for _, item := range b.Items {
+		if item.Direct {
+			items = append(items, item)
+		}
+	}
+	b.Items = items
+	return b
+}
 
 type TestImpact struct {
 	Schema         string   `json:"schema"`
@@ -234,44 +252,22 @@ func listFiles(ctx context.Context, root string) ([]string, bool, string, error)
 	return files, truncated, ListingWalk, err
 }
 
-// gitCommand builds a git invocation that the repository it is pointed at
-// cannot steer. A repository's own .git/config may name programs git will run
-// — core.fsmonitor runs while the index is read, so `ls-files` alone is
-// enough — which would let merely opening a session inside a freshly cloned
-// untrusted repository execute code. Command-line -c overrides repository
-// config, and inherited GIT_* variables are dropped so an outer environment
-// cannot redirect the index, config, or work tree either.
-func gitCommand(ctx context.Context, root string, args ...string) *exec.Cmd {
-	hardened := []string{
-		"-C", root, "--no-pager",
-		"-c", "core.fsmonitor=false",
-		"-c", "core.hooksPath=/dev/null",
-		"-c", "core.sshCommand=",
-		"-c", "core.askPass=",
-		"-c", "core.editor=true",
-		"-c", "core.pager=cat",
-		"-c", "core.alternateRefsCommand=",
-		"-c", "diff.external=",
-		"-c", "credential.helper=",
-		"-c", "protocol.ext.allow=never",
-		"-c", "uploadpack.packObjectsHook=",
+// gitListBudget leaves the fallback walk at least as much time as git gets.
+func gitListBudget(parent context.Context) time.Duration {
+	deadline, ok := parent.Deadline()
+	if !ok {
+		return gitListTimeout
 	}
-	cmd := exec.CommandContext(ctx, "git", append(hardened, args...)...)
-	env := make([]string, 0, len(os.Environ())+3)
-	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "GIT_") {
-			continue
-		}
-		env = append(env, entry)
+	if half := time.Until(deadline) / 2; half < gitListTimeout {
+		return half
 	}
-	cmd.Env = append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
-	return cmd
+	return gitListTimeout
 }
 
 func gitTrackedFiles(parent context.Context, root string) ([]string, bool, bool) {
-	ctx, cancel := context.WithTimeout(parent, gitListTimeout)
+	ctx, cancel := context.WithTimeout(parent, gitListBudget(parent))
 	defer cancel()
-	cmd := gitCommand(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	cmd := gitsafe.Command(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	stdout, pipeErr := cmd.StdoutPipe()
 	if pipeErr != nil {
 		return nil, false, false
@@ -471,10 +467,13 @@ func hasDependencyMarker(path string) bool {
 	return false
 }
 
-// excludedPath is the content-blind fallback used where the filesystem is no
-// longer available: paths from a map built by an older version, and paths git
-// listed. It can only judge unambiguous names, so it is a safety net under
-// excludedDirectory, not a replacement for it.
+// excludedPath is the content-blind guard on the exported Evidence entry
+// point, which ranks a caller-supplied Map. No caller today feeds it anything
+// but a freshly built map that listFiles already filtered, so this fires only
+// for a map that reaches ranking some other way — a persisted
+// ObjectRepositoryMap replayed later, or a map built by an older version. It
+// can only judge unambiguous names, so it is a floor under excludedDirectory,
+// never a replacement for it.
 func excludedPath(relative string) bool {
 	for _, part := range strings.Split(filepath.ToSlash(relative), "/") {
 		if dependencyDirectoryNames[strings.ToLower(part)] {
@@ -592,7 +591,7 @@ func testTarget(path string, files []string) string {
 func gitActivity(parent context.Context, root string) map[string]int {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
-	cmd := gitCommand(ctx, root, "log", "-n", "50", "--format=", "--name-only", "--", ".")
+	cmd := gitsafe.Command(ctx, root, "log", "-n", "50", "--format=", "--name-only", "--", ".")
 	raw, err := cmd.Output()
 	if err != nil {
 		return map[string]int{}
@@ -735,7 +734,11 @@ func NormalizeTerms(values []string) []string {
 	for _, value := range values {
 		value = strings.ToLower(strings.TrimSpace(value))
 		_, secretRules := redact.String(value)
-		if len(value) < 2 || len(value) > 64 || !safeTerm(value) || len(secretRules) > 0 || seen[value] {
+		// Three characters, matching the hook that produces terms. Direct
+		// evidence is a substring test on a file's own name, so a two-letter
+		// term ("go", "py", "js") would mark every file of that language a
+		// direct hit and hand the gate away.
+		if len(value) < 3 || len(value) > 64 || !safeTerm(value) || len(secretRules) > 0 || seen[value] {
 			continue
 		}
 		seen[value] = true

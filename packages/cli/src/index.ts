@@ -52,6 +52,7 @@ import {
   type JSONValue,
 } from "./agent-mcp.js";
 import { portableInvocation } from "./portable-command.js";
+import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
 
 type TokenStore = "keychain" | "file";
 type TelemetryConfig = { enabled: boolean; anonymousId?: string; decidedAt: string; promptVersion: number };
@@ -10980,7 +10981,8 @@ function nativeGitDir(cwd: string): string | undefined {
 function nativeRepositoryState(cwd: string | undefined): string | undefined {
   if (!cwd) return undefined;
   try {
-    const status = execFileSync("git", ["-C", cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"], {
+    const status = execFileSync("git", hardenedGitArgs(cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"), {
+      env: hardenedGitEnv(),
       timeout: 100,
       maxBuffer: 8 * 1024 * 1024,
       encoding: "buffer",

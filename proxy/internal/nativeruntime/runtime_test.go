@@ -1411,3 +1411,70 @@ func containsType(objects []ccr.Object, objectType ccr.ObjectType) bool {
 	}
 	return false
 }
+
+// The rendered block drops metadata-only items, but the ccr:// handle it hands
+// the model must not carry them either: retrieving the bundle is one step away,
+// and the handle reads as authoritative.
+func TestStoredEvidenceBundleCarriesOnlyDirectItems(t *testing.T) {
+	root := t.TempDir()
+	// `handler.go` matches the term in its own name; `handler/serve.go` matches
+	// only because an ancestor directory does, which is the ranking that pointed
+	// at unrelated files. Fillers keep BM25 IDF positive.
+	files := map[string]string{
+		"handler.go":       "package main\n\nfunc Serve() {}\n",
+		"handler/serve.go": "package handler\n\nfunc Relay() {}\n",
+	}
+	for index := 0; index < 12; index++ {
+		files[filepath.Join("pkg", fmt.Sprintf("filler%d", index), "mod.go")] = "package filler\n"
+	}
+	for name, body := range files {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := ccr.Open(filepath.Join(t.TempDir(), "direct-only.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runtime := New(store)
+	session := Session{ID: "direct-only", CWD: root, RepositoryState: "git:direct-only"}
+	if _, err := runtime.Handle(context.Background(), Request{
+		ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "claude"},
+		Session: session, Event: Event{Type: "session.start"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRepositoryMap(t, store, session.ID)
+	response, err := runtime.Handle(context.Background(), Request{
+		ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "claude"},
+		Session: session, Event: Event{Type: "prompt.submit"}, Prompt: &PayloadDigest{Bytes: 20, SHA256: "sha256:direct"},
+		TaskProfile: &TaskProfile{Type: "bugfix", Terms: []string{"handler"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.RecoveryRef == "" {
+		t.Fatal("direct match published no recovery handle")
+	}
+	object, err := store.GetObject(strings.TrimPrefix(response.RecoveryRef, "ccr://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle repointel.Bundle
+	if err := json.Unmarshal(object.Data, &bundle); err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Items) == 0 {
+		t.Fatal("stored bundle has no items")
+	}
+	for _, item := range bundle.Items {
+		if !item.Direct {
+			t.Fatalf("metadata-only item stored behind the ccr:// handle: %+v", item)
+		}
+	}
+}

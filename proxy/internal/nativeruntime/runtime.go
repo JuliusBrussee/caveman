@@ -686,6 +686,11 @@ func (r *Runtime) repositoryEvidenceContext(request Request) (string, string, er
 		if !bundle.HasDirectEvidence() {
 			return "", "", nil
 		}
+		// The ccr:// handle reads as authoritative, so what sits behind it must
+		// be what the block claims. Dropping non-direct items only at render
+		// time left the BM25-proximity guesses stored in the bundle and one
+		// retrieval away from the model.
+		bundle = bundle.DirectOnly()
 		data, err := json.Marshal(bundle)
 		if err != nil {
 			return "", "", err

@@ -669,9 +669,49 @@ def verify_license_boundaries() -> None:
     print(f"{len(bsl_directories)} BSL directories carry canonical license; MIT installer boundary preserved")
 
 
+def verify_untrusted_git_invocations() -> None:
+    section("Untrusted Git Invocations")
+
+    # A repository's own .git/config names programs git will run — core.fsmonitor
+    # runs while the index is read or refreshed, so `ls-files` and `status` are
+    # each enough to execute attacker code the moment a session opens inside a
+    # freshly cloned repo. Every git call against a user working directory must
+    # go through the hardened wrappers, which pass `-c` overrides that beat
+    # repository config. This catches a NEW call site, which is how the guard
+    # was incomplete when it first landed.
+    wrappers = {
+        Path("proxy/internal/gitsafe/gitsafe.go"),
+        Path("packages/cli/src/git-safe.ts"),
+    }
+    sources = [
+        *(ROOT / "proxy").rglob("*.go"),
+        *(ROOT / "packages/cli/src").rglob("*.ts"),
+    ]
+    raw = re.compile(r'"git"\s*,\s*\[?\s*"-C"')
+    offenders = []
+    for path in sources:
+        relative = path.relative_to(ROOT)
+        if relative in wrappers or path.name.endswith("_test.go") or ".generated." in path.name:
+            continue
+        if raw.search(path.read_text(encoding="utf-8")):
+            offenders.append(str(relative))
+    ensure(
+        not offenders,
+        "git invoked against a working directory without the hardened wrapper: " + ", ".join(sorted(offenders)),
+    )
+
+    for wrapper in wrappers:
+        text = (ROOT / wrapper).read_text(encoding="utf-8")
+        for override in ("core.fsmonitor=false", "core.hooksPath=", "protocol.ext.allow=never"):
+            ensure(override in text, f"{wrapper} dropped a required git hardening override: {override}")
+
+    print(f"{len(sources)} sources checked; git only reaches untrusted repositories through {len(wrappers)} hardened wrappers")
+
+
 def main() -> int:
     checks = [
         verify_license_boundaries,
+        verify_untrusted_git_invocations,
         verify_shipped_skills_are_documented,
         verify_skill_frontmatter_upload_compatibility,
         verify_synced_files,

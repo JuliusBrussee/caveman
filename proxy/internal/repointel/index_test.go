@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func runGitIn(t *testing.T, root string, args ...string) {
@@ -438,5 +439,26 @@ func TestImpactTestsUsesDirectAndPackageRelationshipsWithoutCoverageClaims(t *te
 	}
 	if impact.Basis != "direct_test_to_source_plus_same_package_conservative" || !impact.Conservative || impact.EvidenceStatus != "observed_local_repository_metadata" {
 		t.Fatalf("impact overclaims basis: %+v", impact)
+	}
+}
+
+// The fallback walk is the more expensive path, so git must never be allowed to
+// spend the warm budget it needs: a listing that times out at 2s inside a 3s
+// window leaves the walk unable to finish and the map fails closed, which is
+// exactly the case the fallback exists for.
+func TestGitListingLeavesBudgetForTheWalkFallback(t *testing.T) {
+	if got := gitListBudget(context.Background()); got != gitListTimeout {
+		t.Fatalf("no deadline should use the full cap: %v", got)
+	}
+	tight, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	got := gitListBudget(tight)
+	if got > 1500*time.Millisecond {
+		t.Fatalf("git may take at most half a 3s warm budget, took %v", got)
+	}
+	generous, cancelGenerous := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelGenerous()
+	if got := gitListBudget(generous); got != gitListTimeout {
+		t.Fatalf("a generous budget should still cap at %v, got %v", gitListTimeout, got)
 	}
 }

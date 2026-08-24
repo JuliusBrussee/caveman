@@ -6,6 +6,8 @@ import { connect as netConnect } from "node:net";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
+import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
+
 type NativeAgent = "claude" | "codex" | "hermes" | "gemini" | "opencode" | "pi";
 type NativePolicyMode = "record" | "safe" | "max";
 type NativeProfile = "record-only" | "core" | "core-lean-build" | "ledger" | "ccr-masking" | "cache-aware" | "full-safe" | "full-max";
@@ -254,7 +256,8 @@ function gitDir(cwd: string): string | undefined {
 function repositoryState(cwd: string | undefined): string | undefined {
   if (!cwd) return undefined;
   try {
-    const status = execFileSync("git", ["-C", cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"], {
+    const status = execFileSync("git", hardenedGitArgs(cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"), {
+      env: hardenedGitEnv(),
       timeout: 100, maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"],
     });
     const directory = gitDir(cwd);
