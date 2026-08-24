@@ -582,6 +582,14 @@ function installGemini(ctx) {
   process.stdout.write('\n');
 }
 
+function getCopilotPluginState(output) {
+  const line = String(output || '').split(/\r?\n/).find(candidate =>
+    /^\s*[•*-]?\s*caveman(?:@caveman)?(?:\s|\(|$)/i.test(candidate));
+  if (!line) return null;
+  const name = (line.match(/\bcaveman(?:@caveman)?\b/i) || [])[0];
+  return { name, disabled: /\[disabled\]/i.test(line) };
+}
+
 function installCopilotCli(ctx) {
   const { say, note, opts, results } = ctx;
   results.detected++;
@@ -589,16 +597,31 @@ function installCopilotCli(ctx) {
 
   if (!opts.force) {
     const r = captureSpawn('copilot', ['plugin', 'list']);
-    if (r.status === 0 && /caveman/i.test(r.stdout || '')) {
+    const plugin = r.status === 0 ? getCopilotPluginState(r.stdout) : null;
+    if (plugin && plugin.disabled) {
+      const enabled = runSpawn(
+        'copilot',
+        ['plugins', 'enable', plugin.name, '--plugin'],
+        null,
+        opts.dryRun,
+      );
+      if (spawnOk(enabled)) {
+        results.installed.push('copilot-cli');
+        note('  enabled existing caveman plugin');
+      } else {
+        results.failed.push(['copilot-cli', 'copilot plugin enable failed']);
+      }
+      process.stdout.write('\n');
+      return;
+    }
+    if (plugin) {
       note('  caveman plugin already installed (use --force to reinstall)');
       results.skipped.push(['copilot-cli', 'plugin already installed']);
       process.stdout.write('\n');
       return;
     }
   }
-  // An existing marketplace can make `marketplace add` fail; the install result is authoritative.
-  runSpawn('copilot', ['plugin', 'marketplace', 'add', REPO], null, opts.dryRun);
-  const r = runSpawn('copilot', ['plugin', 'install', 'caveman@caveman'], null, opts.dryRun);
+  const r = runSpawn('copilot', ['plugin', 'install', REPO], null, opts.dryRun);
   if (spawnOk(r)) {
     results.installed.push('copilot-cli');
     note('  activate with /caveman or add repo instructions with --with-init');
@@ -1369,11 +1392,22 @@ function uninstall(ctx) {
 
   if (hasCmd('copilot')) {
     const probe = captureSpawn('copilot', ['plugin', 'list']);
-    if (probe.status === 0 && /caveman/i.test(probe.stdout || '')) {
-      const result = runSpawn('copilot', ['plugin', 'uninstall', 'caveman'], null, opts.dryRun);
-      if (spawnOk(result)) ok('  removed copilot cli plugin');
+    if (probe.status !== 0) {
+      cleanupFailed = true;
+      warn('  could not inspect Copilot CLI plugins; left them untouched');
     } else {
-      note('  copilot cli plugin not installed — skipping');
+      const plugin = getCopilotPluginState(probe.stdout);
+      if (!plugin) {
+        note('  copilot cli plugin not installed — skipping');
+      } else {
+        const result = runSpawn('copilot', ['plugin', 'uninstall', 'caveman'], null, opts.dryRun);
+        if (spawnOk(result)) {
+          ok('  removed copilot cli plugin');
+        } else {
+          cleanupFailed = true;
+          warn('  could not remove copilot cli plugin');
+        }
+      }
     }
   }
 

@@ -10,19 +10,31 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const INSTALLER = path.resolve(HERE, '..', '..', 'bin', 'install.js');
 const IS_WIN = process.platform === 'win32';
 
-function shimCopilot({ listsCaveman = false } = {}) {
+function shimCopilot({
+  listsCaveman = false,
+  disabled = false,
+  listStatus = 0,
+  uninstallStatus = 0,
+} = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-copilot-shim-'));
-  const marker = listsCaveman ? 'caveman@caveman' : '';
+  const marker = listsCaveman ? `  • caveman (v1.0.0)${disabled ? ' [disabled]' : ''}` : '';
   if (IS_WIN) {
     fs.writeFileSync(
       path.join(dir, 'copilot.js'),
-      `if (process.argv.slice(2).join(' ') === 'plugin list') console.log(${JSON.stringify(marker)});\n`,
+      [
+        "const args = process.argv.slice(2).join(' ');",
+        `if (args === 'plugin list') { if (${JSON.stringify(marker)}) console.log(${JSON.stringify(marker)}); process.exit(${listStatus}); }`,
+        `if (args === 'plugin uninstall caveman') process.exit(${uninstallStatus});`,
+      ].join('\n'),
     );
     fs.writeFileSync(path.join(dir, 'copilot.cmd'),
       '@echo off\r\nnode "%~dp0\\copilot.js" %*\r\n');
   } else {
     const f = path.join(dir, 'copilot');
-    fs.writeFileSync(f, `#!/bin/sh\nif [ "$1 $2" = "plugin list" ]; then echo "${marker}"; fi\nexit 0\n`);
+    fs.writeFileSync(
+      f,
+      `#!/bin/sh\nif [ "$1 $2" = "plugin list" ]; then [ -n "${marker}" ] && echo "${marker}"; exit ${listStatus}; fi\nif [ "$1 $2 $3" = "plugin uninstall caveman" ]; then exit ${uninstallStatus}; fi\nexit 0\n`,
+    );
     fs.chmodSync(f, 0o755);
   }
   return dir;
@@ -30,6 +42,10 @@ function shimCopilot({ listsCaveman = false } = {}) {
 
 function pathWith(prependDir) {
   return prependDir + (IS_WIN ? ';' : ':') + (process.env.PATH || '');
+}
+
+function isolatedPath(prependDir) {
+  return IS_WIN ? prependDir : `${prependDir}:/usr/bin:/bin`;
 }
 
 function runInstaller(args, env) {
@@ -43,7 +59,16 @@ function runInstaller(args, env) {
 function isolatedEnv(extra) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-copilot-home-'));
   return {
-    env: { ...process.env, NO_COLOR: '1', CLAUDE_CONFIG_DIR: home, XDG_CONFIG_HOME: home, ...extra },
+    env: {
+      ...process.env,
+      NO_COLOR: '1',
+      HOME: home,
+      USERPROFILE: home,
+      CLAUDE_CONFIG_DIR: home,
+      XDG_CONFIG_HOME: home,
+      OPENCLAW_WORKSPACE: path.join(home, 'no-openclaw'),
+      ...extra,
+    },
     cleanup: () => fs.rmSync(home, { recursive: true, force: true }),
   };
 }
@@ -67,15 +92,15 @@ test('copilot-cli is auto-detected when `copilot` is on PATH (command:copilot)',
   }
 });
 
-test('dry-run --only copilot-cli prints the marketplace add + plugin install plan', () => {
+test('dry-run --only copilot-cli prints the direct plugin install plan', () => {
   // --force skips the "already installed?" probe, so this path is deterministic
   // even with no `copilot` binary on the runner.
   const r = runInstaller(['--only', 'copilot-cli', '--force', '--dry-run'],
     { ...process.env, NO_COLOR: '1' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /GitHub Copilot CLI detected/);
-  assert.match(r.stdout, /would run: copilot plugin marketplace add JuliusBrussee\/caveman/);
-  assert.match(r.stdout, /would run: copilot plugin install caveman@caveman/);
+  assert.match(r.stdout, /would run: copilot plugin install JuliusBrussee\/caveman/);
+  assert.doesNotMatch(r.stdout, /plugin marketplace add/);
 });
 
 test('copilot-cli reports success when `copilot plugin install` exits 0', () => {
@@ -99,7 +124,20 @@ test('copilot-cli install is idempotent when the plugin is already present', () 
       { ...process.env, PATH: pathWith(shim), NO_COLOR: '1' });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /already installed/);
-    assert.doesNotMatch(r.stdout, /would run: copilot plugin install caveman@caveman/);
+    assert.doesNotMatch(r.stdout, /would run: copilot plugin install/);
+  } finally {
+    fs.rmSync(shim, { recursive: true, force: true });
+  }
+});
+
+test('copilot-cli enables an installed but disabled plugin', () => {
+  const shim = shimCopilot({ listsCaveman: true, disabled: true });
+  try {
+    const r = runInstaller(['--only', 'copilot-cli', '--dry-run'],
+      { ...process.env, PATH: pathWith(shim), NO_COLOR: '1' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /would run: copilot plugins enable caveman --plugin/);
+    assert.doesNotMatch(r.stdout, /would run: copilot plugin install/);
   } finally {
     fs.rmSync(shim, { recursive: true, force: true });
   }
@@ -148,6 +186,20 @@ test('uninstall skips copilot-cli cleanly when the plugin is not installed', () 
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /copilot cli plugin not installed — skipping/);
     assert.doesNotMatch(r.stdout, /would run: copilot plugin uninstall/);
+  } finally {
+    cleanup();
+    fs.rmSync(shim, { recursive: true, force: true });
+  }
+});
+
+test('uninstall reports a Copilot plugin removal failure', () => {
+  const shim = shimCopilot({ listsCaveman: true, uninstallStatus: 1 });
+  const { env, cleanup } = isolatedEnv({ PATH: isolatedPath(shim) });
+  try {
+    const r = runInstaller(['--uninstall'], env);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /could not remove copilot cli plugin/);
+    assert.match(r.stderr, /uninstall incomplete/);
   } finally {
     cleanup();
     fs.rmSync(shim, { recursive: true, force: true });

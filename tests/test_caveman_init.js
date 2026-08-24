@@ -192,7 +192,13 @@ test('copilot-cli: merges into an existing settings.json without clobbering', (t
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({
     model: 'claude-sonnet-4.5',
     enabledPlugins: { 'other@thing': true },
-    extraKnownMarketplaces: { thing: { source: { source: 'github', repo: 'acme/thing' } } },
+    extraKnownMarketplaces: {
+      caveman: {
+        autoUpdate: true,
+        source: { source: 'github', repo: 'JuliusBrussee/caveman', ref: 'v1' },
+      },
+      thing: { source: { source: 'github', repo: 'acme/thing' } },
+    },
   }, null, 2));
   const out = runInit(tmp, '--only', 'copilot-cli');
   assert.match(out, /appended/);
@@ -201,6 +207,8 @@ test('copilot-cli: merges into an existing settings.json without clobbering', (t
   assert.strictEqual(cli.enabledPlugins['caveman@caveman'], true);
   assert.strictEqual(cli.model, 'claude-sonnet-4.5');
   assert.strictEqual(cli.enabledPlugins['other@thing'], true);
+  assert.strictEqual(cli.extraKnownMarketplaces.caveman.autoUpdate, true);
+  assert.strictEqual(cli.extraKnownMarketplaces.caveman.source.ref, 'v1');
   assert.strictEqual(cli.extraKnownMarketplaces.thing.source.repo, 'acme/thing');
 });
 
@@ -230,6 +238,44 @@ test('copilot-cli: refuses to rewrite JSONC settings', (tmp) => {
   const out = runInit(tmp, '--only', 'copilot-cli');
   assert.match(out, /skipped-jsonc/);
   assert.strictEqual(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), body);
+});
+
+test('copilot-cli: refuses a conflicting marketplace source', (tmp) => {
+  const dir = path.join(tmp, '.github/copilot');
+  fs.mkdirSync(dir, { recursive: true });
+  const body = JSON.stringify({
+    extraKnownMarketplaces: {
+      caveman: { source: { source: 'github', repo: 'other/caveman' } },
+    },
+  }, null, 2);
+  fs.writeFileSync(path.join(dir, 'settings.json'), body);
+  const out = runInit(tmp, '--only', 'copilot-cli');
+  assert.match(out, /skipped-conflicting-marketplace/);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), body);
+});
+
+test('copilot-cli: refuses a symlinked settings directory', (tmp) => {
+  if (process.platform === 'win32') return;
+  const external = path.join(tmp, 'external');
+  const github = path.join(tmp, '.github');
+  fs.mkdirSync(external);
+  fs.mkdirSync(github);
+  fs.symlinkSync(external, path.join(github, 'copilot'), 'dir');
+  const out = runInit(tmp, '--only', 'copilot-cli');
+  assert.match(out, /skipped-unsafe-path/);
+  assert.ok(!fs.existsSync(path.join(external, 'settings.json')));
+});
+
+test('copilot-cli: refuses a symlinked settings file', (tmp) => {
+  if (process.platform === 'win32') return;
+  const dir = path.join(tmp, '.github/copilot');
+  const external = path.join(tmp, 'external.json');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(external, '{"secret":"keep"}\n');
+  fs.symlinkSync(external, path.join(dir, 'settings.json'));
+  const out = runInit(tmp, '--only', 'copilot-cli');
+  assert.match(out, /skipped-unsafe-path/);
+  assert.strictEqual(fs.readFileSync(external, 'utf8'), '{"secret":"keep"}\n');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

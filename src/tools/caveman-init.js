@@ -82,6 +82,40 @@ function writeAtomic(fullPath, content) {
   }
 }
 
+function getSafeRepoFilePath(root, relative) {
+  const realRoot = fs.realpathSync(path.resolve(root));
+  const target = path.resolve(realRoot, relative);
+  const check = path.relative(realRoot, target);
+  if (check === '..' || check.startsWith(`..${path.sep}`) || path.isAbsolute(check)) {
+    throw new Error(`path escapes repository: ${relative}`);
+  }
+
+  const parts = check.split(path.sep);
+  let current = realRoot;
+  for (let index = 0; index < parts.length; index++) {
+    current = path.join(current, parts[index]);
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if (error.code === 'ENOENT') break;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) throw new Error(`symbolic-link path refused: ${current}`);
+    if (index < parts.length - 1 && !stat.isDirectory()) {
+      throw new Error(`non-directory path component refused: ${current}`);
+    }
+    if (index === parts.length - 1 && !stat.isFile()) {
+      throw new Error(`non-file settings target refused: ${current}`);
+    }
+  }
+  return target;
+}
+
+function isObjectRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 const REPO = 'JuliusBrussee/caveman';
 const COPILOT_CLI_SETTINGS_FILE = '.github/copilot/settings.json';
 const COPILOT_MARKETPLACE_KEY = 'caveman';
@@ -247,7 +281,13 @@ function processOpenclaw(opts) {
 }
 
 function processCopilotCliSettings(targetDir, opts) {
-  const fullPath = path.join(targetDir, COPILOT_CLI_SETTINGS_FILE);
+  let fullPath;
+  try {
+    fullPath = getSafeRepoFilePath(targetDir, COPILOT_CLI_SETTINGS_FILE);
+  } catch (error) {
+    return { status: 'skipped-unsafe-path', label: '?',
+      detail: `${COPILOT_CLI_SETTINGS_FILE} (${error.message})` };
+  }
   const existed = fs.existsSync(fullPath);
   const meta = {};
   const settings = readCopilotSettings(fullPath, meta);
@@ -259,21 +299,42 @@ function processCopilotCliSettings(targetDir, opts) {
     return { status: 'skipped-jsonc', label: '?',
       detail: `${COPILOT_CLI_SETTINGS_FILE} (contains comments — left untouched)` };
   }
+  if (!isObjectRecord(settings)) {
+    return { status: 'skipped-unparseable', label: '?',
+      detail: `${COPILOT_CLI_SETTINGS_FILE} (expected a JSON object — left untouched)` };
+  }
 
-  const marketplaces = (settings.extraKnownMarketplaces && typeof settings.extraKnownMarketplaces === 'object')
+  const marketplaces = isObjectRecord(settings.extraKnownMarketplaces)
     ? settings.extraKnownMarketplaces : {};
-  const plugins = (settings.enabledPlugins && typeof settings.enabledPlugins === 'object')
+  const plugins = isObjectRecord(settings.enabledPlugins)
     ? settings.enabledPlugins : {};
 
   const mkt = marketplaces[COPILOT_MARKETPLACE_KEY];
-  const marketplaceSet = mkt && mkt.source && mkt.source.repo === REPO;
+  if (mkt !== undefined && (
+    !isObjectRecord(mkt) ||
+    !isObjectRecord(mkt.source) ||
+    mkt.source.source !== 'github' ||
+    mkt.source.repo !== REPO
+  )) {
+    return { status: 'skipped-conflicting-marketplace', label: '?',
+      detail: `${COPILOT_CLI_SETTINGS_FILE} (caveman marketplace points elsewhere)` };
+  }
+
+  const marketplaceSet = mkt && mkt.source.source === 'github' && mkt.source.repo === REPO;
   const pluginSet = plugins[COPILOT_PLUGIN_KEY] === true;
   if (marketplaceSet && pluginSet) {
     return { status: 'skipped-already-installed', label: '=' };
   }
 
   if (!opts.dryRun) {
-    marketplaces[COPILOT_MARKETPLACE_KEY] = { source: { source: 'github', repo: REPO } };
+    marketplaces[COPILOT_MARKETPLACE_KEY] = {
+      ...(mkt || {}),
+      source: {
+        ...((mkt && mkt.source) || {}),
+        source: 'github',
+        repo: REPO,
+      },
+    };
     plugins[COPILOT_PLUGIN_KEY] = true;
     settings.extraKnownMarketplaces = marketplaces;
     settings.enabledPlugins = plugins;
