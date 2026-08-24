@@ -591,9 +591,9 @@ function installGemini(ctx) {
 
 function getCopilotPluginState(output) {
   const line = String(output || '').split(/\r?\n/).find(candidate =>
-    /^\s*[•*-]?\s*caveman(?:@caveman)?(?:\s|\(|$)/i.test(candidate));
+    /^\s*[•*-]?\s*caveman(?:@(?:caveman|_direct))?(?:\s|\(|$)/i.test(candidate));
   if (!line) return null;
-  const name = (line.match(/\bcaveman(?:@caveman)?\b/i) || [])[0];
+  const name = (line.match(/\bcaveman(?:@(?:caveman|_direct))?\b/i) || [])[0];
   return { name, disabled: /\[disabled\]/i.test(line) };
 }
 
@@ -1397,7 +1397,7 @@ function uninstall(ctx) {
     }
   }
 
-  if (hasCmd('copilot')) {
+  if (hasCopilotPluginCli()) {
     const probe = captureSpawn('copilot', ['plugin', 'list']);
     if (probe.status !== 0) {
       cleanupFailed = true;
@@ -1407,7 +1407,7 @@ function uninstall(ctx) {
       if (!plugin) {
         note('  copilot cli plugin not installed — skipping');
       } else {
-        const result = runSpawn('copilot', ['plugin', 'uninstall', 'caveman'], null, opts.dryRun);
+        const result = runSpawn('copilot', ['plugin', 'uninstall', plugin.name], null, opts.dryRun);
         if (spawnOk(result)) {
           ok('  removed copilot cli plugin');
         } else {
