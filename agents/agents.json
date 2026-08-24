@@ -3,6 +3,48 @@
   "agents": [
     {
       "schema_version": "1",
+      "id": "agy",
+      "display_name": "Antigravity CLI",
+      "vendor": "Google",
+      "homepage": "https://github.com/google-gemini/antigravity",
+      "binary_names": [
+        "agy",
+        "antigravity"
+      ],
+      "args": [],
+      "install": "npm i -g @google/antigravity-cli",
+      "wire_protocol": "gemini-generatecontent",
+      "injection": {
+        "method": "env",
+        "env": {
+          "GOOGLE_GEMINI_BASE_URL": "{{cave_base_url}}",
+          "GOOGLE_VERTEX_BASE_URL": "{{cave_base_url}}/vertex"
+        }
+      },
+      "skills": {
+        "format": "skill-md",
+        "user_dirs": [
+          "~/.gemini/config/skills",
+          "~/.gemini/antigravity-cli/skills"
+        ],
+        "project_dirs": [
+          ".gemini/skills",
+          "skills"
+        ]
+      },
+      "command_hook": {
+        "method": "gemini-beforetool"
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "1.0.0",
+      "injection_completeness": "declarative",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
       "id": "aider",
       "display_name": "Aider",
       "vendor": "OpenAI / Anthropic",

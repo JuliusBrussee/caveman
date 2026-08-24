@@ -140,7 +140,7 @@ function parseArgs(argv) {
       case '--only': {
         const v = argv[++i];
         if (!v) die('error: --only requires an argument');
-        opts.only.push(v === 'aider' ? 'aider-desk' : v);
+        opts.only.push(v === 'aider' ? 'aider-desk' : (v === 'antigravity' ? 'agy' : v));
         break;
       }
       case '--config-dir': {
@@ -277,11 +277,10 @@ const PROVIDERS = [
   // junie: ships only as a JetBrains plugin; jetbrains-plugin probe walks
   //   ~/.config/JetBrains looking for "junie" — fires on stale plugin caches.
   // qoder: dir-only.
-  // antigravity: lives at ~/.gemini/antigravity which is created by the
-  //   gemini CLI on first use — not a reliable signal of antigravity itself.
+  { id: 'agy',        label: 'Antigravity CLI',     mech: 'native agy skills copy',        detect: 'command:agy||command:antigravity||dir:$HOME/.gemini/antigravity-cli||dir:$HOME/.gemini/config/skills' },
   { id: 'junie',      label: 'JetBrains Junie',     mech: 'npx skills add (junie)',        detect: 'jetbrains-plugin:junie', profile: 'junie', soft: true },
   { id: 'qoder',      label: 'Qoder',               mech: 'npx skills add (qoder)',        detect: 'dir:$HOME/.qoder', profile: 'qoder', soft: true },
-  { id: 'antigravity',label: 'Google Antigravity',  mech: 'npx skills add (antigravity)',  detect: 'dir:$HOME/.gemini/antigravity', profile: 'antigravity', soft: true },
+  { id: 'antigravity',label: 'Google Antigravity',  mech: 'native agy skills copy',        detect: 'command:agy||command:antigravity||dir:$HOME/.gemini/antigravity-cli||dir:$HOME/.gemini/antigravity', soft: true },
 ];
 
 // ── Detection ─────────────────────────────────────────────────────────────
@@ -684,6 +683,66 @@ function installHermes(ctx) {
     results.installed.push('hermes');
   } catch (err) {
     results.failed.push(['hermes', 'copy failed: ' + err.message]);
+  }
+
+  process.stdout.write('\n');
+}
+
+// ── agy (Antigravity CLI) native install ───────────────────────────────────
+// Drops the caveman skills into ~/.gemini/config/skills/
+const AGY_SKILL_DIRS = ['caveman', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
+
+function agyConfigDir() {
+  return path.join(os.homedir(), '.gemini', 'config', 'skills');
+}
+
+function installAgy(ctx) {
+  const { say, note, warn, opts, repoRoot, results } = ctx;
+  results.detected++;
+  say('→ Antigravity CLI detected');
+
+  if (!repoRoot) {
+    warn('  Antigravity native install requires a local clone of the caveman repo.');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only agy');
+    results.failed.push(['agy', 'native install requires local repo clone']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  const skillsRoot = agyConfigDir();
+
+  if (opts.dryRun) {
+    note(`  would mkdir ${skillsRoot}/`);
+    note(`  would copy ${AGY_SKILL_DIRS.length} skill dirs into ${skillsRoot}/`);
+    results.installed.push('agy');
+    process.stdout.write('\n');
+    return;
+  }
+
+  try {
+    const operations = [];
+    for (const skillDir of AGY_SKILL_DIRS) {
+      const srcDir = path.join(repoRoot, 'skills', skillDir);
+      if (!fs.existsSync(srcDir)) {
+        warn(`  skill dir not found: ${srcDir}`);
+        continue;
+      }
+      operations.push({
+        relativePath: skillDir,
+        write: (stage) => OWNED.copyPath(srcDir, stage),
+      });
+    }
+    OWNED.installOwned({
+      root: skillsRoot,
+      integration: 'agy',
+      operations,
+      force: opts.force,
+      note,
+    });
+
+    results.installed.push('agy');
+  } catch (err) {
+    results.failed.push(['agy', 'copy failed: ' + err.message]);
   }
 
   process.stdout.write('\n');
@@ -1622,6 +1681,7 @@ async function main() {
     if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
     if (prov.id === 'claude')   { await installClaude(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
+    if (prov.id === 'agy' || prov.id === 'antigravity') { installAgy(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
     if (prov.id === 'hermes')   { installHermes(ctx); continue; }
