@@ -274,8 +274,9 @@ MAX_RETRIES = 2
 def call_claude(prompt: str) -> str:
     """Send a prompt to Claude.
 
-    Prefers the Anthropic SDK when ANTHROPIC_API_KEY is set; otherwise falls
-    back to the ``claude --print`` CLI (which handles desktop auth).
+    Prefers the Anthropic SDK when it finds credentials (ANTHROPIC_API_KEY or
+    ANTHROPIC_AUTH_TOKEN); otherwise falls back to the ``claude --print`` CLI
+    (which handles desktop auth).
 
     On Windows the CLI subprocess decoding defaults to the system codepage
     (cp1251 / cp1252) and crashes on UTF-8 output — see issue #152. Pinning
