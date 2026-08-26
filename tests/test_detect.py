@@ -67,7 +67,7 @@ class DetectFileTypeTests(unittest.TestCase):
 
     def test_known_names_case_insensitive(self):
         with tempfile.TemporaryDirectory() as tmp:
-            for name in ("dockerfile", "MAKEFILE", "Jenkinsfile", "Vagrantfile"):
+            for name in ("dockerfile", "Containerfile", "MAKEFILE", "Jenkinsfile", "Vagrantfile", "Earthfile", "Fastfile", "Podfile"):
                 p = self._write(tmp, name, "irrelevant body\n")
                 self.assertEqual(detect_file_type(p), "code", name)
 
