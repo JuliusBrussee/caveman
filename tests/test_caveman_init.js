@@ -40,6 +40,17 @@ function test(name, fn) {
 
 console.log('caveman-init tests\n');
 
+test('RULE_BODY mirrors src/rules/caveman-activate.md verbatim', () => {
+  const { RULE_BODY } = require(INIT);
+  const onDisk = fs.readFileSync(path.join(ROOT, 'src', 'rules', 'caveman-activate.md'), 'utf8');
+  assert.strictEqual(
+    RULE_BODY.trimEnd(),
+    onDisk.trimEnd(),
+    'the embedded fallback drifted from src/rules/caveman-activate.md — every generated IDE rule file ' +
+    '(.cursor, .windsurf, .clinerules, copilot-instructions, AGENTS.md) would ship the stale ruleset',
+  );
+});
+
 test('greenfield: creates all rule files with proper frontmatter', (tmp) => {
   runInit(tmp);
   const cursor = fs.readFileSync(path.join(tmp, '.cursor/rules/caveman.mdc'), 'utf8');

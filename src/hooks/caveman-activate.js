@@ -342,7 +342,7 @@ if (skillContent) {
     'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
     '## Persistence\n\n' +
     'Default style for this whole session, every response, until user say "stop caveman" or "normal mode". Keep terse on long sessions — no filler drift.\n\n' +
-    'Current level: **' + modeLabel + '**. Switch: `/caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra`.\n\n' +
+    'Current level: **' + modeLabel + '**. Switch: `/caveman lite|full|ultra|dnd|wenyan-lite|wenyan-full|wenyan-ultra`.\n\n' +
     '## Rules\n\n' +
     'Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. ' +
     'Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Technical terms exact. Code blocks unchanged. Errors quoted exact.\n\n' +
