@@ -250,6 +250,7 @@ Reads JSON from stdin. Three responsibilities:
 - `/caveman` → configured default (see `caveman-config.js`, defaults to `full`)
 - `/caveman lite` → `lite`
 - `/caveman ultra` → `ultra`
+- `/caveman dnd` → `dnd` (silence while working)
 - `/caveman wenyan` or `/caveman wenyan-full` → `wenyan` (alias) / `wenyan-full`
 - `/caveman wenyan-lite` → `wenyan-lite`
 - `/caveman wenyan-ultra` → `wenyan-ultra`
@@ -291,7 +292,9 @@ Each skill has a human-facing `README.md` alongside the LLM-facing `SKILL.md`. T
 
 ### Intensity levels
 
-Defined in `skills/caveman/SKILL.md`. Six levels: `lite`, `full` (default), `ultra`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`. Persists until changed or session ends.
+Defined in `skills/caveman/SKILL.md`. Seven levels: `lite`, `full` (default), `ultra`, `dnd`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`. Persists until changed or session ends.
+
+`dnd` is a silence level, not a compression level: no prose between tool calls, speak only a final report, a question, or a confirm request. Auto-clarity still applies. It is a flat level (mutually exclusive with the others), so the flag file, statusline whitelist, and stats attribution need no special handling — only the intensity-table row in `SKILL.md`, which the activate hook filters to the active level.
 
 ### Auto-clarity rule
 

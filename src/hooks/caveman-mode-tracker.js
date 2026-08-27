@@ -202,7 +202,7 @@ function handle(raw) {
         // Levels are derived from VALID_MODES so they cannot drift from the
         // parser, minus 'off', the independent modes, and 'wenyan' — that is
         // the storage alias for wenyan-full, and listing both would advertise
-        // seven levels for a product documented as having six. The rejected
+        // eight levels for a product documented as having seven. The rejected
         // argument is never echoed: it is untrusted input headed for model
         // context.
         const levels = VALID_MODES.filter(m => m !== 'off' && m !== 'wenyan' && !INDEPENDENT_MODES.has(m));

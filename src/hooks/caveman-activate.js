@@ -65,7 +65,7 @@ function requireSibling(name, isUsable) {
 // Hand-copy of caveman-config.js VALID_MODES, used only when that module is
 // unavailable. tests/test_hook_missing_sibling.js asserts the two stay equal.
 const FALLBACK_VALID_MODES = [
-  'off', 'lite', 'full', 'ultra',
+  'off', 'lite', 'full', 'ultra', 'dnd',
   'wenyan-lite', 'wenyan', 'wenyan-full', 'wenyan-ultra',
   'commit', 'review', 'compress'
 ];
@@ -355,6 +355,16 @@ if (skillContent) {
     'Drop caveman for: security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread, user asks to clarify or repeats question. Resume caveman after clear part done.\n\n' +
     '## Boundaries\n\n' +
     'Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.';
+
+  // dnd is a silence level, not a compression level — the fallback ruleset
+  // above says nothing about when to speak, so append the rule that defines it.
+  if (mode === 'dnd') {
+    output +=
+      '\n\n## Do Not Disturb\n\n' +
+      'Silent while working. No prose between tool calls: no preamble, no plan, no progress note, no narration. ' +
+      'Thinking unrestricted. Speak only: one terse final report when job done, a question when request ambiguous, ' +
+      'a confirm request when action needs approval. Security warnings and irreversible-action confirms always speak.';
+  }
 }
 
 // 3. Detect missing statusline config — nudge Claude to help set it up.

@@ -48,6 +48,17 @@ test('slash level switch', () => {
   assert.deepStrictEqual(parseModeChange('/caveman ultra', defaultFull), { action: 'set', mode: 'ultra' });
 });
 
+test('/caveman dnd selects the silence level', () => {
+  assert.deepStrictEqual(parseModeChange('/caveman dnd', defaultFull), { action: 'set', mode: 'dnd' });
+  assert.deepStrictEqual(
+    parseModeChange('/caveman:caveman dnd', defaultFull),
+    { action: 'set', mode: 'dnd' }
+  );
+  // dnd is an ordinary intensity level, not a one-shot skill mode — it must
+  // persist and receive per-turn reinforcement like lite/full/ultra do.
+  assert.ok(!INDEPENDENT_MODES.has('dnd'));
+});
+
 test('bare /caveman activates at the configured default', () => {
   assert.deepStrictEqual(parseModeChange('/caveman', defaultFull), { action: 'set', mode: 'full' });
 });
@@ -354,6 +365,7 @@ test('a quoted level resolves (leading punctuation stripped too)', () => {
 
 const parityCases = [
   { prompt: '/caveman ultra', preset: null },
+  { prompt: '/caveman dnd', preset: null },
   { prompt: '/caveman off', preset: 'full' },
   { prompt: '/caveman not-a-real-level', preset: 'ultra' },
   { prompt: 'be brief', preset: null },

@@ -287,7 +287,7 @@ test('the rejected argument is never echoed back into model context', () => {
   }
 });
 
-test('the level list advertises the six documented levels, not the storage alias', () => {
+test('the level list advertises the seven documented levels, not the storage alias', () => {
   const cfg = makeConfigDir();
   try {
     const ctx = contextOf(send(cfg, { prompt: '/caveman nope' }));
@@ -296,8 +296,8 @@ test('the level list advertises the six documented levels, not the storage alias
     const levels = listed[1].split(',').map(v => v.trim());
     assert.deepStrictEqual(
       levels.sort(),
-      ['full', 'lite', 'ultra', 'wenyan-full', 'wenyan-lite', 'wenyan-ultra'],
-      'wenyan is the storage alias for wenyan-full — listing both advertises seven levels',
+      ['dnd', 'full', 'lite', 'ultra', 'wenyan-full', 'wenyan-lite', 'wenyan-ultra'],
+      'wenyan is the storage alias for wenyan-full — listing both advertises eight levels',
     );
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });

@@ -191,13 +191,13 @@ Measured on the caveman skill itself: **1,069 → 415 est. tokens, −61%**. Con
 
 The original, and still the fastest way to feel caveman. MIT forever. Works in [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex, Gemini, Cursor, Windsurf, Cline, Copilot, and 30+ other agents.
 
-Type `/caveman` if your agent does not activate it automatically. Switch with `/caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra`; turn it off with `/caveman off` or `normal mode`.
+Type `/caveman` if your agent does not activate it automatically. Switch with `/caveman lite|full|ultra|dnd|wenyan-lite|wenyan-full|wenyan-ultra`; turn it off with `/caveman off` or `normal mode`. `dnd` is the quiet one: same answers, but no running commentary while the agent works, just a report when it is done.
 
 One install also brings the small tools:
 
 | Tool / command | What you get |
 |---|---|
-| `/caveman [lite\|full\|ultra\|wenyan-lite\|wenyan-full\|wenyan-ultra\|off]` | Shorter replies at the intensity you choose. |
+| `/caveman [lite\|full\|ultra\|dnd\|wenyan-lite\|wenyan-full\|wenyan-ultra\|off]` | Shorter replies at the intensity you choose. `dnd` also silences the narration between tool calls. |
 | `cavecrew-investigator`, `cavecrew-builder`, `cavecrew-reviewer` | Compressed subagent presets for locating, editing, and reviewing code. |
 | `/caveman-commit` | Terse Conventional Commit messages. |
 | `/caveman-review` | One-line, actionable review findings. |

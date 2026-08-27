@@ -10,13 +10,14 @@ error strings, and symbols. Result depends on model and workload; no aggregate
 reduction or quality-equivalence claim is published, and mode persists until
 changed or stopped.
 
-Six intensity levels:
+Seven intensity levels:
 
 | Level | What change |
 |-------|-------------|
 | `lite` | Drop filler/hedging. Sentences stay full. Professional but tight. |
 | `full` | Default. Drop articles, fragments OK, short synonyms. |
 | `ultra` | Bare fragments. Abbreviations (DB, auth, fn). Arrows for causality. |
+| `dnd` | Do not disturb. Silent while working: no narration between tool calls. Speaks only a final report, a question, or a confirm request. |
 | `wenyan-lite` | Classical Chinese register, light compression. |
 | `wenyan-full` | Maximum 文言文 compression. |
 | `wenyan-ultra` | Extreme classical compression. |
@@ -29,6 +30,7 @@ Auto-clarity rule: caveman drops to normal prose for security warnings, irrevers
 /caveman              # full mode (default)
 /caveman lite         # lighter compression
 /caveman ultra        # extreme compression
+/caveman dnd          # silent work, report at end
 /caveman wenyan       # classical Chinese
 stop caveman          # back to normal prose
 ```
