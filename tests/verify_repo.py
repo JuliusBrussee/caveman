@@ -476,6 +476,7 @@ def verify_hook_install_flow() -> None:
         ensure(settings["statusLine"]["command"] == "bash /tmp/existing-statusline.sh", "install.sh clobbered existing statusLine")
         ensure("SessionStart" in hooks, "SessionStart hook missing after install")
         ensure("UserPromptSubmit" in hooks, "UserPromptSubmit hook missing after install")
+        ensure("SessionEnd" in hooks, "SessionEnd hook missing after install")
 
         activate = run(
             ["node", "src/hooks/caveman-activate.js"],

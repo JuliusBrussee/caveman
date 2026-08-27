@@ -24,7 +24,14 @@ If you installed caveman standalone (without the plugin), the unified Node insta
 
 - Reads `$CLAUDE_CONFIG_DIR/.caveman-active` (default `~/.claude/.caveman-active`) and outputs a colored badge
 - Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc.
-- Appends the lifetime savings suffix `⛏ 12.4k` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` (written by `caveman-stats.js` on each `/caveman-stats` run; absent until the first run, so fresh installs render no fake number). Opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`.
+- Appends the lifetime savings suffix `⛏ 12.4k` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` (written by `caveman-stats.js` after `/caveman-stats` and at SessionEnd; absent until the first snapshot, so fresh installs render no fake number). Opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`.
+
+### `caveman-stats.js --record` — SessionEnd hook
+
+- Runs when Claude Code ends a session
+- Reads `transcript_path` from hook stdin and appends the latest stats snapshot to `$CLAUDE_CONFIG_DIR/.caveman-history.jsonl`
+- Writes no stdout, so the hook does not interrupt shutdown
+- Keeps duplicate snapshots safe: lifetime views count only the newest row per `session_id`
 
 ## Statusline Badge
 
@@ -86,6 +93,8 @@ Badge examples:
 ```
 SessionStart hook ──writes "full"──▶ $CLAUDE_CONFIG_DIR/.caveman-active ◀──writes mode── UserPromptSubmit hook
                                               │
+                                     SessionEnd records stats
+                                              │
                                            reads
                                               ▼
                                      Statusline script
@@ -107,5 +116,5 @@ node bin/install.js --uninstall
 
 Or manually:
 1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-parse.js`, `caveman-stats.js`, `caveman-config.js`, `cavecrew-model-overrides.js`, and `caveman-statusline.{sh,ps1}`.
-2. Remove the SessionStart, UserPromptSubmit, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
+2. Remove the SessionStart, UserPromptSubmit, SessionEnd, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
 3. Delete `$CLAUDE_CONFIG_DIR/.caveman-active` (and `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if you ran `/caveman-stats`).

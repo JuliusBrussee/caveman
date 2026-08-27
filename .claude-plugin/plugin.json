@@ -29,6 +29,18 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/hooks/caveman-stats.js\" --record",
+            "timeout": 5,
+            "statusMessage": "Recording caveman stats..."
+          }
+        ]
+      }
     ]
   }
 }

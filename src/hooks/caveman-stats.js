@@ -64,6 +64,15 @@ if (configFailure) {
 }
 const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME } = cavemanConfig;
 
+const ARG_RECORD = '--record';
+const ARG_SESSION_FILE = '--session-file';
+const ARG_SHARE = '--share';
+const ARG_ALL = '--all';
+const ARG_SINCE = '--since';
+const HISTORY_BASENAME = '.caveman-history.jsonl';
+const ACTIVE_FLAG_BASENAME = '.caveman-active';
+const STATUSLINE_SUFFIX_BASENAME = '.caveman-statusline-suffix';
+
 // Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
 // 10 tasks, sonnet-4-20250514). Only 'full' has measured data; lite / ultra /
 // wenyan modes show no estimate until benchmarked. Add an entry here when a new
@@ -548,17 +557,74 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
     (footer ? footer + '\n' : '');
 }
 
+function readHookInput() {
+  if (process.stdin.isTTY) return {};
+  let raw;
+  try { raw = fs.readFileSync(0, 'utf8'); }
+  catch { return {}; }
+  if (!raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function recordSessionSnapshot({ claudeDir, historyPath, sessionFile, sessionId }) {
+  if (!sessionFile) return null;
+  const parsed = parseSession(sessionFile);
+  if (parsed.turns <= 0) return null;
+
+  const flagPath = path.join(claudeDir, ACTIVE_FLAG_BASENAME);
+  const mode = readFlag(flagPath);
+
+  let flagMtimeMs = null;
+  try { flagMtimeMs = fs.statSync(flagPath).mtimeMs; } catch (e) {}
+  const modeLog = readModeLog(path.join(claudeDir, MODE_LOG_BASENAME));
+  const attribution = attributeByMode({
+    messages: parsed.messages,
+    modeLog,
+    mode,
+    flagMtimeMs,
+    outputTokens: parsed.outputTokens,
+  });
+
+  const { estSavedTokens, estSavedUsd } = deriveSavings({ byMode: attribution.byMode, model: parsed.model });
+  appendFlag(historyPath, JSON.stringify({
+    ts: Date.now(),
+    session_id: sessionId || path.basename(sessionFile, '.jsonl'),
+    mode: mode || null,
+    model: parsed.model || null,
+    output_tokens: parsed.outputTokens,
+    turns: parsed.turns,
+    est_saved_tokens: estSavedTokens,
+    est_saved_usd: estSavedUsd,
+  }));
+
+  const agg = aggregateHistory(historyPath, null);
+  const suffix = agg.estSavedTokens > 0 ? `⛏  ${humanizeTokens(agg.estSavedTokens)}` : '';
+  safeWriteFlag(path.join(claudeDir, STATUSLINE_SUFFIX_BASENAME), suffix);
+
+  return { parsed, mode, attribution };
+}
+
 function main() {
   const args = process.argv.slice(2);
-  const i = args.indexOf('--session-file');
+  const i = args.indexOf(ARG_SESSION_FILE);
   const sessionFileArg = i !== -1 ? args[i + 1] : null;
-  const share = args.includes('--share');
-  const all = args.includes('--all');
-  const sinceIdx = args.indexOf('--since');
+  const record = args.includes(ARG_RECORD);
+  const share = args.includes(ARG_SHARE);
+  const all = args.includes(ARG_ALL);
+  const sinceIdx = args.indexOf(ARG_SINCE);
   const sinceArg = sinceIdx !== -1 ? args[sinceIdx + 1] : null;
 
   const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-  const historyPath = path.join(claudeDir, '.caveman-history.jsonl');
+  const historyPath = path.join(claudeDir, HISTORY_BASENAME);
+
+  const hookInput = record ? readHookInput() : {};
+  const hookTranscriptPath = typeof hookInput.transcript_path === 'string' ? hookInput.transcript_path : null;
+  const hookSessionId = typeof hookInput.session_id === 'string' ? hookInput.session_id : null;
 
   // Lifetime aggregation paths short-circuit before we need a live session.
   if (all || sinceArg) {
@@ -572,56 +638,22 @@ function main() {
     return;
   }
 
-  const sessionFile = sessionFileArg || findRecentSession(claudeDir);
+  const sessionFile = sessionFileArg || hookTranscriptPath || (record ? null : findRecentSession(claudeDir));
 
   if (!sessionFile) {
+    if (record) return;
     process.stderr.write('caveman-stats: no Claude Code session found.\n');
     process.exit(1);
   }
 
-  const parsed = parseSession(sessionFile);
-  const flagPath = path.join(claudeDir, '.caveman-active');
-  const mode = readFlag(flagPath);
-
-  // #601: attribute tokens to the mode active when each message happened,
-  // via the transition log the hooks maintain (fallbacks documented on
-  // attributeByMode). Never credit the whole session to the current flag.
-  let flagMtimeMs = null;
-  try { flagMtimeMs = fs.statSync(flagPath).mtimeMs; } catch (e) {}
-  const modeLog = readModeLog(path.join(claudeDir, MODE_LOG_BASENAME));
-  const attribution = attributeByMode({
-    messages: parsed.messages,
-    modeLog,
-    mode,
-    flagMtimeMs,
-    outputTokens: parsed.outputTokens,
-  });
-
   // Append a snapshot of this session's totals to the lifetime log. Multiple
-  // /caveman-stats calls in one session emit multiple lines for the same
-  // session_id; aggregateHistory keeps only the latest per session_id.
-  if (parsed.turns > 0) {
-    const { estSavedTokens, estSavedUsd } = deriveSavings({ byMode: attribution.byMode, model: parsed.model });
-    const sessionId = path.basename(sessionFile, '.jsonl');
-    appendFlag(historyPath, JSON.stringify({
-      ts: Date.now(),
-      session_id: sessionId,
-      mode: mode || null,
-      model: parsed.model || null,
-      output_tokens: parsed.outputTokens,
-      turns: parsed.turns,
-      est_saved_tokens: estSavedTokens,
-      est_saved_usd: estSavedUsd,
-    }));
-
-    // Statusline suffix: tiny pre-rendered string the shell statusline can
-    // cat without parsing JSONL. Updated on every /caveman-stats run.
-    // Routed through safeWriteFlag — the suffix path is predictable and
-    // user-owned, same symlink-clobber surface as the .caveman-active flag.
-    const agg = aggregateHistory(historyPath, null);
-    const suffix = agg.estSavedTokens > 0 ? `⛏  ${humanizeTokens(agg.estSavedTokens)}` : '';
-    safeWriteFlag(path.join(claudeDir, '.caveman-statusline-suffix'), suffix);
-  }
+  // /caveman-stats calls, plus the SessionEnd --record hook, can emit multiple
+  // lines for the same session_id; aggregateHistory keeps only the latest.
+  const snapshot = recordSessionSnapshot({ claudeDir, historyPath, sessionFile, sessionId: hookSessionId });
+  if (record) return;
+  const parsed = snapshot ? snapshot.parsed : parseSession(sessionFile);
+  const mode = snapshot ? snapshot.mode : readFlag(path.join(claudeDir, ACTIVE_FLAG_BASENAME));
+  const attribution = snapshot ? snapshot.attribution : wholeSessionAttribution(mode, parsed.outputTokens);
 
   if (share) {
     process.stdout.write(formatShare({ ...parsed, mode, attribution }) + '\n');
@@ -638,5 +670,5 @@ module.exports = {
   formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
   deriveNet, ruleOverheadPerTurn, parseSession, priceForModel, formatUsd, COMPRESSION,
   MODEL_OUTPUT_PRICE_PER_M, findCompressedPairs, summarizeCompressed, humanizeTokens,
-  outputReductionPct, readModeLog, attributeByMode,
+  outputReductionPct, readModeLog, attributeByMode, readHookInput, recordSessionSnapshot,
 };
