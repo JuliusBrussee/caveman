@@ -298,10 +298,19 @@ def call_claude(prompt: str) -> str:
     # shutil.which returns the same absolute path as the implicit lookup,
     # so this is a no-op there. Falls back to bare "claude" if not found
     # on PATH so subprocess raises a clear FileNotFoundError.
+    # --setting-sources "" and --strict-mcp-config keep this a plain text
+    # completion. Without them, `claude --print` boots a full session that
+    # inherits the caller's ~/.claude/settings.json hooks and MCP servers —
+    # a UserPromptSubmit hook injecting unrelated context, or the subprocess
+    # reaching for an inherited MCP tool and hitting a permission wall it
+    # can't resolve non-interactively, both leak narrated commentary into
+    # what is supposed to be pure compressed markdown. --bare would isolate
+    # more but requires ANTHROPIC_API_KEY/apiKeyHelper auth, unusable for
+    # OAuth-only desktop installs, which is exactly what this fallback is for.
     claude_bin = shutil.which("claude") or "claude"
     try:
         result = subprocess.run(
-            [claude_bin, "--print"],
+            [claude_bin, "--print", "--setting-sources", "", "--strict-mcp-config"],
             input=prompt,
             text=True,
             capture_output=True,
