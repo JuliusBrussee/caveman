@@ -27,11 +27,17 @@ python3 -m scripts <absolute_filepath>
 
 3. The CLI will:
 - detect file type (no tokens)
-- call Claude to compress
+- call configured provider to compress
 - validate output (no tokens)
-- if errors: cherry-pick fix with Claude (targeted fixes only, no recompression)
+- if errors: cherry-pick fix with configured provider (targeted fixes only, no recompression)
 - retry up to 2 times
 - if still failing after 2 retries: report error to user, leave original file untouched
+
+Provider config:
+- Default: Claude path. Uses `ANTHROPIC_API_KEY` + Anthropic SDK when set, else `claude --print`.
+- Set `CAVEMAN_COMPRESS_PROVIDER=opencode` to use `opencode run`.
+- Set `CAVEMAN_COMPRESS_MODEL=provider/model` for compress-specific model selection.
+- Fallback env: `CAVEMAN_PROVIDER` and `CAVEMAN_MODEL`.
 
 4. Return result to user
 
