@@ -230,6 +230,7 @@ All hooks honor `CLAUDE_CONFIG_DIR` for non-default Claude Code config locations
 
 Exports:
 - `getDefaultMode()` — resolves default mode in order: `CAVEMAN_DEFAULT_MODE` env var → repo-local config (`<cwd>/.caveman/config.json` or `<cwd>/.caveman.json`, walking up to the filesystem root) → user config (`$XDG_CONFIG_HOME/caveman/config.json` / `~/.config/caveman/config.json` / `%APPDATA%\caveman\config.json`) → `'full'`. The env var short-circuits before any cwd walk. Repo-local config lets a team check in a per-project default without polluting every contributor's env or user config.
+- `statuslineNudgeEnabled()`: resolves whether the statusline badge nudge may be emitted, reading `statuslineNudge` (boolean) from repo-local config then user config, same files as `getDefaultMode()` minus the env layer. Absent or malformed returns `true`, so the nudge only goes quiet on an explicit opt-out.
 - `findRepoConfigPath(start)` — walks up from `start` (default `process.cwd()`) looking for the first `.caveman/config.json` or `.caveman.json`. Bounded to 64 ancestors. Refuses symlinked files (symmetric with `safeWriteFlag` / `readFlag`).
 - `safeWriteFlag(flagPath, content)` — symlink-safe flag write. Refuses if flag target or its immediate parent is a symlink. Opens with `O_NOFOLLOW` where supported. Atomic temp + rename. Creates with `0600`. Protects against local attackers replacing the predictable flag path with a symlink to clobber files writable by the user. Used by both write hooks. Silent-fails on all filesystem errors.
 

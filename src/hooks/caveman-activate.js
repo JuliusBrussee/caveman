@@ -135,6 +135,15 @@ const { getDefaultMode, safeWriteFlag, recordModeChange, readFlag, VALID_MODES }
   VALID_MODES: FALLBACK_VALID_MODES,
 };
 
+// Resolved separately from the destructure above rather than folded into the
+// isUsable check: an older sibling that predates this key is still perfectly
+// usable for everything else, and demanding the function would demote the whole
+// module to the degraded stubs over one optional preference.
+const statuslineNudgeEnabled =
+  (cavemanConfig && typeof cavemanConfig.statuslineNudgeEnabled === 'function')
+    ? cavemanConfig.statuslineNudgeEnabled
+    : () => true;
+
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
@@ -376,7 +385,7 @@ try {
     }
   }
 
-  if (!hasStatusline && !fs.existsSync(nudgeMarkerPath)) {
+  if (!hasStatusline && statuslineNudgeEnabled() && !fs.existsSync(nudgeMarkerPath)) {
     safeWriteFlag(nudgeMarkerPath, '1');
     const isWindows = process.platform === 'win32';
     const scriptName = isWindows ? 'caveman-statusline.ps1' : 'caveman-statusline.sh';

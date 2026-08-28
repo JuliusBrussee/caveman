@@ -73,6 +73,28 @@ function findRepoConfigPath(start) {
   return null;
 }
 
+// #923: opt out of the statusline badge nudge from config, for users who want no
+// statusline at all. Resolution mirrors getDefaultMode's file order (repo-local
+// first, then user config) minus the env layer, so a team can check the
+// preference in alongside defaultMode. Absent or malformed leaves the nudge on:
+// erring toward the current behaviour keeps this from silently swallowing the
+// nudge for users who never opted out.
+function statuslineNudgeEnabled(startDir) {
+  const candidates = [findRepoConfigPath(startDir), getConfigPath()];
+  for (const configPath of candidates) {
+    if (!configPath) continue;
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (config && typeof config.statuslineNudge === 'boolean') {
+        return config.statuslineNudge;
+      }
+    } catch (e) {
+      // Missing / unreadable / invalid JSON, try the next candidate
+    }
+  }
+  return true;
+}
+
 function readModeFromConfigFile(configPath) {
   try {
     const raw = fs.readFileSync(configPath, 'utf8');
@@ -401,4 +423,4 @@ function readHistory(filePath) {
   }
 }
 
-module.exports = { getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory, recordModeChange, MODE_LOG_BASENAME };
+module.exports = { statuslineNudgeEnabled, getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES, safeWriteFlag, readFlag, appendFlag, readHistory, recordModeChange, MODE_LOG_BASENAME };

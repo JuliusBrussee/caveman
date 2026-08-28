@@ -179,6 +179,47 @@ class HookScriptTests(unittest.TestCase):
             self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
             self.assertEqual((claude_dir / ".caveman-active").read_text(encoding="utf-8"), "full")
 
+    # #923: "statuslineNudge": false in caveman's own config declines the badge.
+    # The one-shot marker must stay unwritten so the config key remains the only
+    # gate; consuming it would silently re-enable the nudge if the key were removed.
+    def _run_activate_with_nudge_config(self, tmp_prefix, config):
+        with tempfile.TemporaryDirectory(prefix=tmp_prefix) as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+            config_dir = home / ".config" / "caveman"
+            config_dir.mkdir(parents=True)
+            if config is not None:
+                (config_dir / "config.json").write_text(
+                    json.dumps(config) + "\n", encoding="utf-8"
+                )
+
+            result = self.run_cmd(
+                ["node", "src/hooks/caveman-activate.js"],
+                home,
+                extra_env={"XDG_CONFIG_HOME": str(home / ".config")},
+            )
+            return result, claude_dir
+
+    def test_activate_config_opt_out_suppresses_statusline_nudge(self):
+        result, claude_dir = self._run_activate_with_nudge_config(
+            "caveman-hooks-nudge-cfg-off-", {"statuslineNudge": False}
+        )
+        self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
+        self.assertFalse((claude_dir / ".caveman-nudge-shown").exists())
+
+    def test_activate_nudges_when_config_opts_in(self):
+        result, _ = self._run_activate_with_nudge_config(
+            "caveman-hooks-nudge-cfg-on-", {"statuslineNudge": True}
+        )
+        self.assertIn("STATUSLINE SETUP NEEDED", result.stdout)
+
+    def test_activate_nudges_when_config_omits_key(self):
+        result, _ = self._run_activate_with_nudge_config(
+            "caveman-hooks-nudge-cfg-absent-", {"defaultMode": "full"}
+        )
+        self.assertIn("STATUSLINE SETUP NEEDED", result.stdout)
+
     # Regression for #587/#589 — hook at <root>/src/hooks/ must resolve SKILL.md
     # at <root>/skills/caveman/, not the nonexistent <root>/src/skills/.
     def test_activate_emits_skill_md_not_fallback_from_repo_layout(self):
