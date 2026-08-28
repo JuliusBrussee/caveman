@@ -47,6 +47,9 @@ Default mode = `full`. Change it:
 **Environment variable** (highest priority):
 ```bash
 export CAVEMAN_DEFAULT_MODE=ultra
+
+# Never ask about the statusline badge
+export CAVEMAN_STATUSLINE_NUDGE=0
 ```
 
 **Config file** (`~/.config/caveman/config.json`):

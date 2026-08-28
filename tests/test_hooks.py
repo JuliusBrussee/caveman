@@ -179,6 +179,48 @@ class HookScriptTests(unittest.TestCase):
             self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
             self.assertEqual((claude_dir / ".caveman-active").read_text(encoding="utf-8"), "full")
 
+    # #923: CAVEMAN_STATUSLINE_NUDGE=0 declines the badge outright. The one-shot
+    # marker must stay unwritten, because the env var is the gate and consuming
+    # the marker would silently re-enable the nudge if the var were removed.
+    def test_activate_env_opt_out_suppresses_statusline_nudge(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-nudge-env-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+
+            result = self.run_cmd(
+                ["node", "src/hooks/caveman-activate.js"],
+                home,
+                extra_env={"CAVEMAN_STATUSLINE_NUDGE": "0"},
+            )
+
+            self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout)
+            self.assertFalse((claude_dir / ".caveman-nudge-shown").exists())
+
+    def test_activate_still_nudges_without_env_opt_out(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-nudge-default-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+
+            result = self.run_cmd(["node", "src/hooks/caveman-activate.js"], home)
+
+            self.assertIn("STATUSLINE SETUP NEEDED", result.stdout)
+
+    def test_activate_env_opt_out_ignores_unrecognised_value(self):
+        with tempfile.TemporaryDirectory(prefix="caveman-hooks-nudge-junk-") as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True)
+
+            result = self.run_cmd(
+                ["node", "src/hooks/caveman-activate.js"],
+                home,
+                extra_env={"CAVEMAN_STATUSLINE_NUDGE": "1"},
+            )
+
+            self.assertIn("STATUSLINE SETUP NEEDED", result.stdout)
+
     # Regression for #587/#589 — hook at <root>/src/hooks/ must resolve SKILL.md
     # at <root>/skills/caveman/, not the nonexistent <root>/src/skills/.
     def test_activate_emits_skill_md_not_fallback_from_repo_layout(self):

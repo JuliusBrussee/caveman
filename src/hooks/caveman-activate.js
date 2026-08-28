@@ -361,6 +361,18 @@ if (skillContent) {
 // One-shot (#661): the nudge costs ~90 tokens per session, so a marker file
 // gates it to the first session only. Users who declined stop paying for it.
 const nudgeMarkerPath = path.join(claudeDir, '.caveman-nudge-shown');
+
+// Explicit opt-out (#923): the one-shot marker still spends a first session on
+// users who will never want a statusline, and it does not survive a fresh
+// CLAUDE_CONFIG_DIR. An env var is settable from a dotfile, so the nudge can be
+// declined before it is ever shown. Accepts the usual falsy spellings; any
+// other value (including unset) leaves the existing behaviour untouched.
+function nudgeDisabledByEnv() {
+  const raw = process.env.CAVEMAN_STATUSLINE_NUDGE;
+  if (raw === undefined) return false;
+  return ['0', 'false', 'off', 'no'].indexOf(String(raw).trim().toLowerCase()) !== -1;
+}
+
 try {
   let hasStatusline = false;
   if (fs.existsSync(settingsPath)) {
@@ -376,7 +388,7 @@ try {
     }
   }
 
-  if (!hasStatusline && !fs.existsSync(nudgeMarkerPath)) {
+  if (!hasStatusline && !nudgeDisabledByEnv() && !fs.existsSync(nudgeMarkerPath)) {
     safeWriteFlag(nudgeMarkerPath, '1');
     const isWindows = process.platform === 'win32';
     const scriptName = isWindows ? 'caveman-statusline.ps1' : 'caveman-statusline.sh';
