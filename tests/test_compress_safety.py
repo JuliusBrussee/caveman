@@ -182,8 +182,8 @@ class CompressSafetyTests(unittest.TestCase):
 
     def test_retry_preamble_output_rejected_and_not_written(self):
         # A fix-retry response with a prose preamble ahead of the real content
-        # must never reach disk — only the restore-on-failure write should
-        # land, and it must restore the original (issue #588).
+        # must never reach disk, staging included, and the live file must be
+        # left holding the original (issue #588).
         with tempfile.TemporaryDirectory() as tmp, \
              tempfile.TemporaryDirectory() as data_home, \
              mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
@@ -209,6 +209,55 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertFalse(ok)
             self.assertNotIn(preamble_fix, written_texts)
             self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_live_file_never_holds_unvalidated_output_before_validation_passes(self):
+        # validate() must never see the live file already holding the
+        # un-validated candidate (issue #544).
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            original = "# Heading\n\nProse to compress, long enough to pass the identity check here.\n"
+            compressed = "# Heading\n\nProse.\n"
+            path = self._file_with(Path(tmp), original)
+
+            seen_live_contents = []
+
+            def spy_validate(orig_path, comp_path):
+                seen_live_contents.append(path.read_text(encoding="utf-8"))
+                return mock.Mock(is_valid=True, errors=[], warnings=[])
+
+            with mock.patch.object(compress_mod, "call_claude", return_value=compressed), \
+                 mock.patch.object(compress_mod, "validate", side_effect=spy_validate):
+                ok = compress_mod.compress_file(path)
+
+            self.assertTrue(ok)
+            self.assertEqual(seen_live_contents, [original])
+            self.assertEqual(path.read_text(encoding="utf-8"), compressed)
+            self.assertFalse((Path(tmp) / (path.name + ".caveman-staged")).exists())
+
+    def test_live_file_untouched_when_all_validation_attempts_fail(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            original = "# Heading\n\nProse to compress, long enough to pass the identity check here.\n"
+            compressed = "# Heading\n\nProse.\n"
+            path = self._file_with(Path(tmp), original)
+
+            invalid = mock.Mock(is_valid=False, errors=["some validation error"], warnings=[])
+            seen_live_contents = []
+
+            def spy_validate(orig_path, comp_path):
+                seen_live_contents.append(path.read_text(encoding="utf-8"))
+                return invalid
+
+            with mock.patch.object(compress_mod, "call_claude", return_value=compressed), \
+                 mock.patch.object(compress_mod, "validate", side_effect=spy_validate):
+                ok = compress_mod.compress_file(path)
+
+            self.assertFalse(ok)
+            self.assertEqual(seen_live_contents, [original] * compress_mod.MAX_RETRIES)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            self.assertFalse((Path(tmp) / (path.name + ".caveman-staged")).exists())
 
     def test_non_utf8_input_refused_before_anything_is_written(self):
         """errors="ignore" used to drop the undecodable byte, write the mangled
