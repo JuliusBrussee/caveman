@@ -1,4 +1,6 @@
 import importlib.util
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +14,17 @@ SPEC.loader.exec_module(BENCHMARK)
 
 
 class BenchmarkContractTests(unittest.TestCase):
+    def test_dry_run_defaults_to_supported_model(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "benchmarks" / "run.py"), "--dry-run", "--trials", "1"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines()[0], "Model:  claude-sonnet-4-6")
+
     def test_readme_has_one_replaceable_benchmark_region(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertEqual(readme.count(BENCHMARK.BENCHMARK_START), 1)
