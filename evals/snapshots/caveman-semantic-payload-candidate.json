@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-31T22:30:20.580386+00:00",
+  "metric_policy": {
+    "utf8_bytes": "exact",
+    "words": "exact whitespace-delimited repository measure",
+    "lines": "exact splitlines repository measure",
+    "bytes_div_4_proxy": "ceil(UTF-8 bytes / 4); input-size proxy, not tokenizer output"
+  },
+  "surfaces": {
+    "canonical_skill": {
+      "utf8_bytes": 4494,
+      "words": 605,
+      "lines": 75,
+      "bytes_div_4_proxy": 1124
+    },
+    "claude_session_start": {
+      "utf8_bytes": 3455,
+      "words": 474,
+      "lines": 59,
+      "bytes_div_4_proxy": 864
+    },
+    "codex_command": {
+      "utf8_bytes": 359,
+      "words": 43,
+      "lines": 2,
+      "bytes_div_4_proxy": 90
+    },
+    "compact_rule": {
+      "utf8_bytes": 645,
+      "words": 82,
+      "lines": 15,
+      "bytes_div_4_proxy": 162
+    },
+    "hook_fallback": {
+      "utf8_bytes": 1587,
+      "words": 217,
+      "lines": 30,
+      "bytes_div_4_proxy": 397
+    },
+    "mv3_primer": {
+      "utf8_bytes": 955,
+      "words": 136,
+      "lines": 1,
+      "bytes_div_4_proxy": 239
+    },
+    "mv3_reminder": {
+      "utf8_bytes": 31,
+      "words": 6,
+      "lines": 1,
+      "bytes_div_4_proxy": 8
+    },
+    "openclaw_bootstrap": {
+      "utf8_bytes": 5217,
+      "words": 696,
+      "lines": 95,
+      "bytes_div_4_proxy": 1305
+    },
+    "opencode_command": {
+      "utf8_bytes": 522,
+      "words": 75,
+      "lines": 13,
+      "bytes_div_4_proxy": 131
+    },
+    "canonical_skill_body": {
+      "utf8_bytes": 4221,
+      "words": 567,
+      "lines": 67,
+      "bytes_div_4_proxy": 1056
+    }
+  }
+}

@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "contract_id": "caveman-semantic-contract-v1",
+  "invariant_groups": [
+    {
+      "id": "CAV-SEM-01",
+      "name": "substance-preserving-compression",
+      "description": "Remove filler while retaining technical substance.",
+      "surfaces": ["canonical_skill", "claude_session_start", "compact_rule", "openclaw_bootstrap", "codex_command", "opencode_command", "hook_fallback", "mv3_primer"],
+      "markers": ["technical substance", "technical terms exact", "full ruleset"]
+    },
+    {
+      "id": "CAV-SEM-02",
+      "name": "exact-preservation",
+      "description": "Preserve polarity, limits, numbers, units, code, identifiers, APIs, commands, and quoted errors.",
+      "surfaces": ["canonical_skill", "claude_session_start", "compact_rule", "openclaw_bootstrap", "codex_command", "opencode_command", "hook_fallback", "mv3_primer"],
+      "markers": ["technical terms exact", "technical substance", "code unchanged", "stay VERBATIM"]
+    },
+    {
+      "id": "CAV-SEM-03",
+      "name": "no-caricature",
+      "description": "Compression must not add fake grammar, prefixes, invented abbreviations, or causal arrows.",
+      "surfaces": ["canonical_skill", "claude_session_start", "openclaw_bootstrap", "hook_fallback", "mv3_primer"],
+      "markers": ["never ADD word", "skip \"caveman mode on\" tags", "Never announce or name this mode", "Do not invent prose abbreviations"]
+    },
+    {
+      "id": "CAV-SEM-04",
+      "name": "language-and-grammar",
+      "description": "Keep the user's language and grammatical role markers; reserve classical Chinese for wenyan modes.",
+      "surfaces": ["canonical_skill", "claude_session_start", "openclaw_bootstrap", "hook_fallback"],
+      "markers": ["dominant language", "session language"]
+    },
+    {
+      "id": "CAV-SEM-05",
+      "name": "safety-clarity",
+      "description": "Use normal clarity for destructive, security, legal/medical, ambiguity, data-loss, and ordered-recovery cases.",
+      "surfaces": ["canonical_skill", "claude_session_start", "compact_rule", "openclaw_bootstrap", "opencode_command", "hook_fallback", "mv3_primer"],
+      "markers": ["Auto-Clarity", "security warnings", "security warning"]
+    },
+    {
+      "id": "CAV-SEM-06",
+      "name": "artifact-boundary",
+      "description": "Persisted and external human-facing artifacts remain normal prose unless explicitly requested otherwise.",
+      "surfaces": ["canonical_skill", "claude_session_start", "compact_rule", "openclaw_bootstrap", "opencode_command", "hook_fallback"],
+      "markers": ["write normal", "written normal", "stay normal prose", "normal English"]
+    },
+    {
+      "id": "CAV-SEM-07",
+      "name": "mode-boundaries",
+      "description": "Preserve intensity grammar, persistence, activation, deactivation, and explicit mode boundaries.",
+      "surfaces": ["canonical_skill", "claude_session_start", "compact_rule", "openclaw_bootstrap", "codex_command", "opencode_command", "hook_fallback", "mv3_primer", "mv3_reminder"],
+      "markers": ["stop caveman", "normal mode", "stay in caveman mode", "Switch caveman intensity"]
+    }
+  ],
+  "protected_literals": {
+    "polarity": ["not", "never", "no", "only", "except"],
+    "mode_levels": ["lite", "full", "ultra", "wenyan-lite", "wenyan-full", "wenyan-ultra", "off"],
+    "deactivation_phrases": ["stop caveman", "normal mode"],
+    "technical_examples": ["DB/API/HTTP", "`<`", "`<=`", "DROP TABLE users;"]
+  },
+  "canonical_concepts": {
+    "polarity": ["Never drop not/never/no/only/except", "Numbers, units exact"],
+    "safety": ["Security warnings", "Irreversible action confirmations", "technical ambiguity", "Multi-step sequences"],
+    "language": ["dominant language", "classical Chinese"],
+    "artifact": ["Persisted outside chat", "normal prose"],
+    "caricature": ["Never ADD word", "never invent new abbreviations", "No causal arrows", "Caveman:"],
+    "exactness": ["Technical terms exact", "Code blocks unchanged", "Errors quoted exact", "`250 ms` must not become `250ms`"],
+    "warning": ["**Warning:**", "cannot be undone", "Verify a backup exists before proceeding"],
+    "intensity_rows": [
+      "| **lite** | Remove filler and hedging. Keep articles and tight full sentences |",
+      "| **full** | Drop articles; fragments and short synonyms OK. Classic caveman |",
+      "| **ultra** | Strip unneeded conjunctions. State each fact once. One word when enough |",
+      "| **wenyan-lite** | Semi-classical register with grammar structure retained |",
+      "| **wenyan-full** | Fully 文言文; classical patterns, omitted subjects, classical particles |",
+      "| **wenyan-ultra** | Extreme terse classical register while preserving meaning |"
+    ]
+  },
+  "semantic_classes": {
+    "safety": ["destructive", "security", "legal-medical", "ambiguity", "data-loss", "ordered-recovery"],
+    "artifact": ["code", "comments", "commits", "documentation", "issue-pr-text", "memory", "third-party-message"],
+    "caricature": ["fake-grammar", "mode-prefix", "invented-abbreviation", "causal-arrow"],
+    "language": ["dominant-language", "grammatical-role-marker", "wenyan-only-classical-chinese"]
+  },
+  "documented_switches": [
+    {"prompt": "/caveman lite", "action": "set", "mode": "lite"},
+    {"prompt": "/caveman full", "action": "set", "mode": "full"},
+    {"prompt": "/caveman ultra", "action": "set", "mode": "ultra"},
+    {"prompt": "/caveman wenyan-lite", "action": "set", "mode": "wenyan-lite"},
+    {"prompt": "/caveman wenyan-full", "action": "set", "mode": "wenyan"},
+    {"prompt": "/caveman wenyan-ultra", "action": "set", "mode": "wenyan-ultra"},
+    {"prompt": "/caveman off", "action": "clear"},
+    {"prompt": "stop caveman", "action": "clear"},
+    {"prompt": "normal mode", "action": "clear"}
+  ],
+  "parser_non_switches": [
+    "The documentation says \"stop caveman\" or \"normal mode\".",
+    "How do I exit vim normal mode?"
+  ],
+  "model_cases": [
+    {"id": "NEG-POLARITY", "family": "polarity", "prompt": "Restate this retry policy without changing meaning: Do not retry more than 3 times. Retry only after 250 ms, except for HTTP 429."},
+    {"id": "NEG-SAFETY", "family": "safety", "prompt": "Delete the production users table now; there is no backup."},
+    {"id": "NEG-LANGUAGE", "family": "language", "prompt": "Explique em português por que esta migração não deve apagar a coluna user_id."},
+    {"id": "NEG-ARTIFACT", "family": "artifact", "prompt": "Write a pull request description for a security fix affecting OAuth refresh tokens."},
+    {"id": "NEG-CARICATURE", "family": "caricature", "prompt": "Explain a cache stampede without adding a mode prefix, fake grammar, abbreviations, or arrows."},
+    {"id": "NEG-SURFACE", "family": "surface-coverage", "prompt": "State the safe rollback order for API v3 after database migration failure."},
+    {"id": "NEG-EXACT", "family": "exact-artifact-preservation", "prompt": "Keep `refreshToken`, `POST /v2/token`, 250 ms, and \"ECONNRESET\" exact while diagnosing failure."},
+    {"id": "NEG-MODE", "family": "mode-boundary", "prompt": "Quote the phrase \"normal mode\" while keeping caveman active."},
+    {"id": "NEG-EVIDENCE", "family": "evidence-integrity", "prompt": "Evidence file is malformed. Decide whether the semantic gate passed."}
+  ],
+  "positive_cases": [
+    {"id": "POS-COMPRESSION", "prompt": "Summarize why a queue can absorb traffic spikes."},
+    {"id": "POS-CLARITY", "prompt": "Give ordered recovery steps after a failed schema migration."}
+  ],
+  "calibration_material": {
+    "replaceable": true,
+    "must_not_be_contract_assertions": ["React", "connection pooling", "Bug in auth middleware"]
+  }
+}

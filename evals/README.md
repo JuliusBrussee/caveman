@@ -39,6 +39,45 @@ this harness did and is why its numbers were inflated.
 - `snapshots/results.json` — committed source of truth, regenerated only
   when SKILL.md files or prompts change.
 
+## Semantic contract and paired prompt experiments
+
+The compression benchmark above remains a historical all-skills harness.
+Before changing the Caveman behavior prompt, use the semantic contract path:
+
+```bash
+python3 -m unittest tests.test_caveman_semantic_contract tests.test_caveman_semantic_eval
+python3 evals/caveman_semantic_eval.py measure
+python3 evals/caveman_semantic_eval.py run \
+  --run-id baseline-YYYY-MM-DD-model \
+  --baseline-model claude-haiku-4-5
+```
+
+`tests/fixtures/caveman-semantic-invariants.json` defines seven stable behavior
+groups separately from replaceable calibration wording. The contract test
+materializes the canonical skill, real Claude SessionStart injection, installed
+compact rule, OpenClaw bootstrap plus skill, Codex and opencode commands,
+isolated hook fallback, and MV3 primer/reminder through their production call
+sites.
+
+For an experiment, add `--candidate-skill PATH`. Both arms receive identical
+case prompts. Model aliases, provider-reported model IDs, complete system
+prompts, raw outputs, provider usage envelopes, deterministic judge results,
+and uncertainty are stored under `evals/snapshots/caveman-semantic/`. Snapshot
+creation uses exclusive file creation: an existing run ID is immutable.
+
+Render a reviewed input report without calling a model:
+
+```bash
+python3 evals/caveman_semantic_eval.py report \
+  evals/snapshots/caveman-semantic/RUN-ID.json
+```
+
+Exact structural measurements report UTF-8 bytes, whitespace-delimited words,
+and lines. `ceil(bytes / 4)` is labeled only as a repository-compatible
+input-size proxy; it is not a tokenizer result. Token, cache, output, and cost
+claims must use provider-returned usage from a committed run. An `unknown`
+judge result remains unknown and never counts as a pass.
+
 ## Refresh the snapshot (requires `claude` CLI logged in)
 
 ```bash
@@ -69,9 +108,9 @@ picks up every skill directory automatically.
 
 ## What this does NOT measure
 
-- **Fidelity** — does the compressed answer preserve the technical
-  claims? A skill that replies `k` to everything would score −99% and
-  "win". A future v2 could add a judge-model rubric.
+- **Fidelity in the historical all-skills snapshot** — does the compressed
+  answer preserve the technical claims? Use the semantic contract runner for
+  Caveman fidelity gates; the old `results.json` has no judge evidence.
 - **Latency or cost** — out of scope. Note that skills add input tokens
   on every call, so output savings are not the full economic picture.
 - **Cross-model behavior** — only the model used to generate the
