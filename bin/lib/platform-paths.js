@@ -26,4 +26,9 @@ function jetbrainsRoots(home, env = process.env) {
   return [...new Set(roots)];
 }
 
-module.exports = { hookCommand, jetbrainsRoots, powershellQuote };
+function normalizeConfigPath(filePath) {
+  if (typeof filePath !== 'string') return '';
+  return filePath.replace(/\\/g, '/');
+}
+
+module.exports = { hookCommand, jetbrainsRoots, powershellQuote, normalizeConfigPath };

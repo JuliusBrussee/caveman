@@ -37,3 +37,13 @@ test('JetBrains roots include Windows roaming and local AppData', () => {
     ],
   );
 });
+
+test('normalizeConfigPath converts Windows backslashes to POSIX slashes', () => {
+  const { normalizeConfigPath } = require('../../bin/lib/platform-paths.js');
+  assert.equal(
+    normalizeConfigPath('C:\\Users\\poorv\\.claude\\skills\\caveman.skill'),
+    'C:/Users/poorv/.claude/skills/caveman.skill',
+  );
+  assert.equal(normalizeConfigPath('/posix/path/to/skill'), '/posix/path/to/skill');
+});
+
