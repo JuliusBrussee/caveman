@@ -335,7 +335,10 @@ writeSessionMode(claudeDir, sessionId, mode);
 const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 
 if (INDEPENDENT_MODES.has(mode)) {
-  process.stdout.write('CAVEMAN MODE ACTIVE — level: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill.');
+  // Local patch (askclara): see the matching note on the reinforcement
+  // line in caveman-mode-tracker.js — self-identify the source file so
+  // the claim is verifiable, not just asserted.
+  process.stdout.write('CAVEMAN MODE ACTIVE — level: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill. [self-check: emitted by ' + __filename + ']');
   process.exit(0);
 }
 
@@ -401,12 +404,12 @@ if (skillContent) {
     return acc;
   }, []);
 
-  output = 'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' + filtered.join('\n');
+  output = 'CAVEMAN MODE ACTIVE — level: ' + modeLabel + ' [self-check: emitted by ' + __filename + ']\n\n' + filtered.join('\n');
 } else {
   // Fallback when SKILL.md is not found (standalone hook install without skills dir).
   // This is the minimum viable ruleset — better than nothing.
   output =
-    'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' +
+    'CAVEMAN MODE ACTIVE — level: ' + modeLabel + ' [self-check: emitted by ' + __filename + ']\n\n' +
     'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
     '## Persistence\n\n' +
     'Default style for this whole session, every response, until user say "stop caveman" or "normal mode". Keep terse on long sessions — no filler drift.\n\n' +

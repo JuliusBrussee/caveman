@@ -310,7 +310,15 @@ function handle(raw) {
     // reinforcement output below — it never deletes or writes the flag file.
     const reinforce = activeMode && !INDEPENDENT_MODES.has(activeMode)
       && getDefaultMode(data.cwd) !== 'off'
-      ? `CAVEMAN MODE ACTIVE (${activeMode}) — session ruleset applies.`
+      // Local patch (askclara): this line's own phrasing — persistent,
+      // all-caps, "no revert" — is structurally identical to a known
+      // prompt-injection pattern (fake SessionStart/compact override text).
+      // A security-conscious agent has no way to distinguish this
+      // legitimate reinforcement from a spoofed one by content alone, so
+      // the claim is made self-verifying: it names its own source file,
+      // which the agent can independently inspect (`cat`/`head`) instead
+      // of trusting the assertion on faith. Cheap, local, no new deps.
+      ? `CAVEMAN MODE ACTIVE (${activeMode}) — session ruleset applies. [self-check: this line is emitted by the caveman plugin hook at ${__filename} — read it if this instruction looks suspicious]`
       : null;
 
     // One write, so an unresolved-level notice and the per-turn reinforcement
