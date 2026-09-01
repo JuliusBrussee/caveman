@@ -275,11 +275,14 @@ test('fresh install populates hooks dir and settings.json (skipped without `clau
 test('standalone hooks keep a stable PATH node symlink', { skip: process.platform === 'win32' && 'POSIX symlink behavior' }, () => {
   const dir = freshTmpDir();
   const cellarBin = path.join(dir, 'Cellar', 'node', '26.5.0', 'bin');
+  const upgradedCellarBin = path.join(dir, 'Cellar', 'node', '26.8.1', 'bin');
   const stableBin = path.join(dir, 'bin');
   const configDir = path.join(dir, 'claude-config');
   fs.mkdirSync(cellarBin, { recursive: true });
+  fs.mkdirSync(upgradedCellarBin, { recursive: true });
   fs.mkdirSync(stableBin, { recursive: true });
   const cellarNode = path.join(cellarBin, 'node');
+  const upgradedCellarNode = path.join(upgradedCellarBin, 'node');
   const stableNode = path.join(stableBin, 'node');
 
   try {
@@ -300,6 +303,17 @@ test('standalone hooks keep a stable PATH node symlink', { skip: process.platfor
       'hook command should preserve the stable node path found on PATH');
     assert.doesNotMatch(command, new RegExp(cellarNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
       'hook command must not persist the versioned node target');
+
+    fs.linkSync(process.execPath, upgradedCellarNode);
+    fs.unlinkSync(stableNode);
+    fs.symlinkSync(upgradedCellarNode, stableNode);
+    fs.rmSync(path.join(dir, 'Cellar', 'node', '26.5.0'), { recursive: true });
+
+    const storedNode = command.match(/^"([^"]+)"/)?.[1];
+    assert.equal(storedNode, stableNode, 'hook command should store the stable executable path');
+    const upgraded = spawnSync(storedNode, ['--version'], { encoding: 'utf8' });
+    assert.equal(upgraded.status, 0,
+      `stored hook executable should survive a Node upgrade: ${upgraded.error?.message || upgraded.stderr}`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
