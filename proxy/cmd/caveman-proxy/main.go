@@ -81,6 +81,8 @@ func main() {
 	}
 }
 
+const nativeHookMaxPayloadBytes = 2 * 1024 * 1024
+
 func runNativeHookBridge(args []string) {
 	if len(args) == 0 {
 		return
@@ -95,11 +97,34 @@ func runNativeHookBridge(args []string) {
 		}
 		home = filepath.Join(userHome, ".caveman")
 	}
-	raw, err := io.ReadAll(io.LimitReader(os.Stdin, 2*1024*1024+1))
-	if err != nil || len(raw) > 2*1024*1024 {
+	raw, err := readNativeHookPayload(os.Stdin)
+	if err != nil || len(raw) > nativeHookMaxPayloadBytes {
 		return
 	}
 	_ = nativehook.Run(context.Background(), home, agent, adapter, raw, os.Stdout, os.Stderr)
+}
+
+func readNativeHookPayload(r io.Reader) ([]byte, error) {
+	raw := make([]byte, 0, 4096)
+	buf := make([]byte, 16*1024)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if len(raw)+n > nativeHookMaxPayloadBytes {
+				return nil, fmt.Errorf("native hook payload too large")
+			}
+			raw = append(raw, buf[:n]...)
+			if json.Valid(raw) {
+				return raw, nil
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return raw, nil
+			}
+			return nil, err
+		}
+	}
 }
 
 func runNativeWhy(logger *slog.Logger, args []string) {
