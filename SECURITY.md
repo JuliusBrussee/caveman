@@ -153,10 +153,10 @@ third-party tools trustworthy.
 
 Network installers fetch source from GitHub and may invoke npm or agent-specific
 registries. Per-agent installers can contact Anthropic/GitHub, Gemini extension,
-npm, or other configured registries. Detached hook installation downloads files
-from an immutable release tag and verifies SHA-256 manifest entries. Runtime
-companion setup downloads a signed checksum manifest and verifies each binary's
-signature and SHA-256 before installation.
+the Oh My Pi plugin manager, npm, or other configured registries. Detached hook
+installation downloads files from an immutable release tag and verifies SHA-256
+manifest entries. Runtime companion setup downloads a signed checksum manifest
+and verifies each binary's signature and SHA-256 before installation.
 
 For inspection-first installation, clone a pinned tag and run the local installer
 instead of piping a remote script into a shell. A source clone avoids installer
