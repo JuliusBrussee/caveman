@@ -13157,7 +13157,7 @@ function cavemanBinForHook(powershell: boolean = process.platform === "win32"): 
 async function shrinkHook() {
   if (nativePolicyMode() === "record" || !new Set(["full-safe", "full-max"]).has(nativeProfile())) process.exit(0);
   let raw: Buffer;
-  try { raw = await readStdin(); } catch { process.exit(0); }
+  try { raw = await readHookStdin(); } catch { process.exit(0); }
   let evt: { tool_name?: string; tool_input?: { command?: string } };
   try { evt = JSON.parse(raw.toString("utf8") || "{}"); } catch { process.exit(0); }
   const tool = evt?.tool_name;
@@ -13764,7 +13764,7 @@ async function nativeHook(argv: string[]) {
   const agent = argv[0] === "claude" || argv[0] === "codex" || argv[0] === "hermes" || argv[0] === "gemini" || argv[0] === "opencode" || argv[0] === "pi" ? argv[0] : undefined;
   if (!agent) process.exit(0);
   let raw: Buffer;
-  try { raw = await readStdin(); } catch { process.exit(0); }
+  try { raw = await readHookStdin(); } catch { process.exit(0); }
   if (raw.length > 2 * 1024 * 1024) process.exit(0);
   let event: Record<string, unknown>;
   try {
@@ -14149,7 +14149,7 @@ function writeRecallHookMarker(agentId: string) {
 // agent, never injects a guess).
 async function memRecallHook() {
   let raw: Buffer;
-  try { raw = await readStdin(); } catch { process.exit(0); }
+  try { raw = await readHookStdin(); } catch { process.exit(0); }
   let evt: { prompt?: string };
   try { evt = JSON.parse(raw.toString("utf8") || "{}"); } catch { process.exit(0); }
   const prompt = typeof evt.prompt === "string" ? evt.prompt.trim() : "";
@@ -16556,6 +16556,48 @@ function readStdin(): Promise<Buffer> {
     const chunks: Buffer[] = [];
     process.stdin.on("data", (chunk) => chunks.push(chunk));
     process.stdin.on("end", () => resolve(Buffer.concat(chunks)));
+    process.stdin.on("error", reject);
+  });
+}
+
+// readHookStdin is for host hook callbacks (shrink-hook, mem recall, native-hook):
+// the host writes ONE JSON object and closes, but under the Windows pipe
+// implementation that close can lag arbitrarily (#729/#833, #949), and a hook that
+// waits for EOF burns the host's whole budget with its work already done. Resolve
+// on the first complete JSON object; EOF still resolves for hosts that close
+// promptly. Same 2 MiB cap as native-hook-fast.
+function readHookStdin(): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    if (process.stdin.isTTY) {
+      reject(new Error("no hook payload on stdin"));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      // pause() stops the flow but the 'data' listener keeps the handle referenced;
+      // unref() lets the process exit as soon as stdout flushes.
+      process.stdin.pause();
+      try { process.stdin.unref(); } catch { /* not every stream type supports it */ }
+      resolve(Buffer.concat(chunks));
+    };
+    process.stdin.on("data", (chunk: Buffer) => {
+      if (done) return;
+      bytes += chunk.length;
+      if (bytes > 2 * 1024 * 1024) {
+        done = true;
+        reject(new Error("hook payload too large"));
+        return;
+      }
+      chunks.push(chunk);
+      // A partial payload throws here and we simply wait for more bytes.
+      try { JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return; }
+      finish();
+    });
+    process.stdin.on("end", finish);
     process.stdin.on("error", reject);
   });
 }
