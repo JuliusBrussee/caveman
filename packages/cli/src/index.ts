@@ -6442,15 +6442,29 @@ function nativeHooksDocument(agentId: "claude" | "codex" | "gemini", includeShri
     ? ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "PostToolUseFailure", "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"]
     : ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PreCompact", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"];
   const command = nativeHookCommand(agentId);
+  const identity = `native-hook:${agentId}`;
   for (const event of lifecycle) {
-    const list = Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [];
-    if (!list.some((entry) => hookEntryCommand(entry) === command)) list.push(nativeHookEntry(command, agentId));
+    // Replace, never accumulate: a caveman native-hook entry for this agent
+    // that points at another binary or adapter path (an upgrade, a moved
+    // install, a dev build) is the SAME hook, so it goes before ours is added.
+    // Matching on the exact command string alone appended a new set on every
+    // path change and the host ran three caveman hooks per event.
+    const list = (Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [])
+      .filter((entry) => managedHookIdentity(hookEntryCommand(entry) ?? "") !== identity);
+    list.push(nativeHookEntry(command, agentId));
     hooks[event] = list;
   }
   if (includeShrink) {
     const shrinkEvent = agentId === "gemini" ? "BeforeTool" : "PreToolUse";
     const list = Array.isArray(hooks[shrinkEvent]) ? hooks[shrinkEvent] as Array<Record<string, unknown>> : [];
     const shrinkCommand = `${cavemanBinForHook()} shrink-hook`;
+    // Same replace-not-accumulate rule as the native hook: a shrink-hook entry
+    // under another caveman path is ours.
+    for (let i = list.length - 1; i >= 0; i--) {
+      const entry = list[i];
+      const existing = entry ? hookEntryCommand(entry) : undefined;
+      if (existing !== undefined && existing !== shrinkCommand && managedHookIdentity(existing) === "shrink-hook") list.splice(i, 1);
+    }
     if (!list.some((entry) => hookEntryCommand(entry) === shrinkCommand)) {
       list.push(agentId === "gemini"
         ? { matcher: "run_shell_command", ...nativeHookEntry(shrinkCommand, agentId) }
@@ -7340,13 +7354,21 @@ function aiderNativeMutations(gw: string): NativeMutation[] {
 }
 
 function codexNativeConfig(source: string, gw: string, subscription: boolean, mcpBinary: string): { text: string; rootBlock: string; tablesBlock: string } {
-  let stripped = stripCodexCavemanMcpToml(stripCodexCavemanProviderToml(source));
+  // Remove caveman's own marker blocks FIRST. The legacy table strippers below
+  // skip every line after a caveman table until the next TOML header, and the
+  // tables block ends with [mcp_servers.caveman] followed by the end marker, so
+  // running them first ate "# <<< caveman:native-tables" and the block this
+  // function had itself written failed its own re-parse as "corrupted" on the
+  // next wrap (every `caveman codex` run fell back to session-only wrap and
+  // doctor reported drift).
+  let stripped = source;
   for (const [begin, end] of [[CODEX_NATIVE_ROOT_BEGIN, CODEX_NATIVE_ROOT_END], [CODEX_NATIVE_TABLES_BEGIN, CODEX_NATIVE_TABLES_END]] as const) {
     const start = stripped.indexOf(begin);
     const finish = stripped.indexOf(end);
-    if ((start === -1) !== (finish === -1)) throw new Error("existing Codex Caveman block is corrupted; run `caveman doctor codex`");
+    if ((start === -1) !== (finish === -1) || finish < start) throw new Error("existing Codex Caveman block is corrupted; run `caveman doctor codex`");
     if (start !== -1) stripped = `${stripped.slice(0, start)}${stripped.slice(finish + end.length)}`.trim();
   }
+  stripped = stripCodexCavemanMcpToml(stripCodexCavemanProviderToml(stripped));
   const rootBlock = `${CODEX_NATIVE_ROOT_BEGIN}\nmodel_provider = "caveman"\n${CODEX_NATIVE_ROOT_END}`;
   const providerLines = codexCavemanProviderToml(gw, subscription).split("\n").slice(1).join("\n");
   const tablesBlock = [

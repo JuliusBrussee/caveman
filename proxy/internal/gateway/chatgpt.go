@@ -173,7 +173,7 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unreachable", "ChatGPT upstream is unreachable.")
 		requestHashComplete := chatGPTRequestHashComplete(requestBodyFullyRead, r.ContentLength, reqCapture, requestBodyTracker)
-		s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, reqHash.Sum(nil), transformedChatGPTHash(reqHash.Sum(nil), transform.Body), requestHashComplete, nil, 0, false, transform.OptimizerIDs, comp)
+		s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, reqHash.Sum(nil), transformedChatGPTHash(reqHash.Sum(nil), transform.Body), requestHashComplete, nil, 0, false, transform.OptimizerIDs, comp, compressEligible)
 		return
 	}
 	// OAuth backends can reject byte-modified requests for undocumented reasons.
@@ -192,7 +192,7 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 		})
 		if doErr != nil {
 			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unreachable", "ChatGPT upstream is unreachable.")
-			s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, reqHash.Sum(nil), reqHash.Sum(nil), true, nil, 0, false, nil, nil)
+			s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, reqHash.Sum(nil), reqHash.Sum(nil), true, nil, 0, false, nil, nil, compressEligible)
 			return
 		}
 		resp = retryResp
@@ -244,7 +244,7 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestHashComplete := chatGPTRequestHashComplete(requestBodyFullyRead, r.ContentLength, reqCapture, requestBodyTracker)
-	s.recordChatGPT(rc, r, requestID, traceID, suffix, start, resp.StatusCode, "", reqCapture, reqHash.Sum(nil), transformedChatGPTHash(reqHash.Sum(nil), transform.Body), requestHashComplete, respCapture, respBytes, stream, transform.OptimizerIDs, comp)
+	s.recordChatGPT(rc, r, requestID, traceID, suffix, start, resp.StatusCode, "", reqCapture, reqHash.Sum(nil), transformedChatGPTHash(reqHash.Sum(nil), transform.Body), requestHashComplete, respCapture, respBytes, stream, transform.OptimizerIDs, comp, compressEligible)
 
 	// Path, status, and timing only — request headers carry the operator's
 	// OAuth credential and are never logged on this route.
@@ -289,7 +289,7 @@ func (s *Server) streamThrough(w http.ResponseWriter, body io.Reader) (int64, bo
 	}
 }
 
-func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, traceID, endpoint string, start time.Time, status int, errCode string, reqCapture *cappedBuffer, reqHash, transformedHash []byte, requestHashComplete bool, respCapture *cappedBuffer, respBytes int64, stream bool, optimizers []string, comp *compressionOutcome) {
+func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, traceID, endpoint string, start time.Time, status int, errCode string, reqCapture *cappedBuffer, reqHash, transformedHash []byte, requestHashComplete bool, respCapture *cappedBuffer, respBytes int64, stream bool, optimizers []string, comp *compressionOutcome, compressionEligible bool) {
 	if s.sink == nil {
 		return
 	}
@@ -326,7 +326,11 @@ func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, tr
 		// storeTSLayout, not RFC3339Nano: the store's `ts` column is space-separated
 		// and compared/ordered as text. 'T' sorts after ' ', so RFC3339 rows landed
 		// on the wrong side of every `--since` bound and mis-sorted under ORDER BY ts.
-		Timestamp:                start.UTC().Format("2006-01-02 15:04:05.000"),
+		Timestamp: start.UTC().Format("2006-01-02 15:04:05.000"),
+		// The route reached the compression candidate path; counted whether or not
+		// bytes shrank, so the CLI can tell "routing never applied" from "nothing
+		// to compress" (the generic route records the same denominator).
+		CompressionEligible:      compressionEligible,
 		RequestID:                requestID,
 		TraceID:                  traceID,
 		Label:                    labelOrDefault(rc.Label, "local"),

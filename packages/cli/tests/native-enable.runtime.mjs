@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -228,6 +228,52 @@ test("enable/disable codex owns marked config blocks and preserves unrelated dri
   assert.equal(afterHooks.extra, "keep");
   assert.match(JSON.stringify(afterHooks), /keep-codex/);
   assert.doesNotMatch(JSON.stringify(afterHooks), /native-hook|shrink-hook/);
+});
+
+// The tables block ends with [mcp_servers.caveman] followed by the end marker.
+// The legacy table stripper used to run before marker removal and swallowed
+// that end marker, so the block enable had itself written was rejected as
+// "corrupted" on the very next enable/wrap, and doctor reported drift forever.
+test("enable codex twice re-parses its own block instead of calling it corrupted", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(configPath, 'approval_policy = "never"\n');
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const first = readFileSync(configPath, "utf8");
+  const again = await run(["enable", "codex"], fx.env);
+  assert.equal(again.code, 0, again.stderr);
+  assert.doesNotMatch(again.stderr, /corrupted/);
+  const second = readFileSync(configPath, "utf8");
+  assert.equal(second.split("# >>> caveman:native-tables").length, 2, "exactly one tables begin marker");
+  assert.equal(second.split("# <<< caveman:native-tables").length, 2, "exactly one tables end marker");
+  assert.equal(second, first, "a second enable is byte-idempotent");
+});
+
+// An upgrade or a moved install changes the binary path inside the hook
+// command. That is the same hook, so enable must replace the stale entry, not
+// append a second (then third) caveman hook per event.
+test("enable codex after a binary path change keeps one caveman hook per event", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  writeFileSync(join(fx.home, ".codex", "config.toml"), 'approval_policy = "never"\n');
+  writeFileSync(join(fx.home, ".codex", "hooks.json"), JSON.stringify({ hooks: {} }, null, 2) + "\n");
+  const first = await run(["enable", "codex"], fx.env);
+  assert.equal(first.code, 0, first.stderr);
+  const movedProxy = join(fx.home, "moved-caveman-proxy");
+  writeFileSync(movedProxy, readFileSync(fx.env.CAVEMAN_PROXY_BIN), { mode: 0o755 });
+  // The journal from the earlier install is gone (a different CAVEMAN_HOME, a
+  // reinstall), so enable cannot refuse as "degraded" and must merge into the
+  // host file it finds. This is the flow that stacked three hook sets.
+  rmSync(join(fx.home, ".caveman", "integrations", "codex.json"), { force: true });
+  const again = await run(["enable", "codex"], { ...fx.env, CAVEMAN_PROXY_BIN: movedProxy });
+  assert.equal(again.code, 0, again.stderr);
+  const hooks = JSON.parse(readFileSync(join(fx.home, ".codex", "hooks.json"), "utf8")).hooks;
+  for (const [event, list] of Object.entries(hooks)) {
+    const native = list.filter((entry) => JSON.stringify(entry).includes("native-hook codex"));
+    assert.equal(native.length, 1, `${event} has ${native.length} caveman native hooks`);
+    assert.match(JSON.stringify(native[0]), /moved-caveman-proxy/, `${event} must point at the current binary`);
+  }
 });
 
 test("enable fails before host writes when current MCP binary is missing", async () => {
