@@ -9,10 +9,11 @@ Differences from the Chrome manifest:
 - `browser_specific_settings.gecko.id` — a UUID-style id (`{2bcb73e7-…}`). AMO add-on ids
   are permanent, and a UUID-style id makes no domain claim. Must not change once
   published.
-- `strict_min_version` 142.0 — the floor required by
+- `strict_min_version` 140.0 — the desktop floor required by
   `browser_specific_settings.gecko.data_collection_permissions` (mandatory AMO disclosure;
-  Firefox desktop 140+, Firefox for Android 142+). All runtime APIs used (content scripts,
-  storage, event-page background) are far older than 142.
+  Firefox desktop 140+, Firefox for Android would need 142+ and a `gecko_android` entry,
+  which this manifest does not declare). All runtime APIs used (content scripts,
+  storage, event-page background) are far older than 140.
 - Icons omit the non-standard 32px key.
 - Background uses the Firefox MV3 event-page form: `"background": { "scripts": ["src/background.js"] }`.
   Firefox does not run `background.service_worker`; the Chrome manifest keeps the

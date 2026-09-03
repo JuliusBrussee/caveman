@@ -37,7 +37,7 @@ test("firefox manifest template is AMO-safe and version-injected at pack time", 
   // must be >= 142 to keep addons-linter zero-warning (KB: measured 2026-09-03).
   assert.deepEqual(ff.browser_specific_settings.gecko.data_collection_permissions, { required: ["none"] });
   const minParts = String(ff.browser_specific_settings.gecko.strict_min_version).split(".").map(Number);
-  assert.ok(minParts[0] >= 142, "strict_min_version must be >= 142 for data_collection_permissions on desktop+Android");
+  assert.ok(minParts[0] >= 140, "strict_min_version must be >= 140 for data_collection_permissions on Firefox desktop (no gecko_android target)");
 });
 
 test("stage verifier rejects files outside explicit allowlist", () => {
