@@ -16,7 +16,9 @@ export class ProviderRouter {
   private overridden = new Set<string>();
   // originals keeps the base URL of each overridden provider. After an override,
   // the registry reports the gateway route for that provider, so the original
-  // is not available from the registry.
+  // is not available from the registry. Pi keeps extension overrides in memory
+  // only, so a new pi process always starts from the original base URL and this
+  // map never sees a stale override from an earlier process.
   private originals = new Map<string, string>();
   private applying = false;
   private warnedModels = new Set<string>();
