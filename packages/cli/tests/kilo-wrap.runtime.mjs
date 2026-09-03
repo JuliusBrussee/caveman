@@ -273,8 +273,10 @@ function writeKiloAccountState(path, { activeAccount = "account-1", activeOrg = 
 
 test("Kilo profile exposes both published CLI binaries", () => {
   assert.deepEqual(kilo.binary_names, ["kilo", "kilocode"]);
-  assert.equal(kilo.tested_agent_version, "7.5.6");
-  assert.equal(kilo.install, "npm install -g @kilocode/cli@7.5.6");
+  // The pin itself is owned by the nightly drift bump and guarded by
+  // agents/compile.mjs; here only the shape matters: install pins the tested version.
+  assert.match(kilo.tested_agent_version, /^\d+\.\d+\.\d+$/);
+  assert.equal(kilo.install, `npm install -g @kilocode/cli@${kilo.tested_agent_version}`);
   assert.equal(kilo.injection.method, "config-env-content");
   assert.equal(kilo.injection.env_var, "KILO_CONFIG_CONTENT");
   for (const content of [kilo.injection.config_content.local, kilo.injection.config_content.managed]) {
