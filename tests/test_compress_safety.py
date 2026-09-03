@@ -381,3 +381,50 @@ class TestOuterWrapperStripping(unittest.TestCase):
     def test_a_longer_wrapper_around_inner_fences_is_stripped(self):
         text = "````markdown\n# Title\n\n```bash\nls\n```\n````"
         self.assertEqual(compress_mod.strip_llm_wrapper(text), "# Title\n\n```bash\nls\n```")
+
+
+class FirstTextBlockTests(unittest.TestCase):
+    """The paid-call crash guard: ``content[0]`` must never be assumed text.
+
+    A tool_use/thinking block can order before the text block on tool-heavy
+    sessions; the old ``msg.content[0].text`` crashed AFTER the paid call with
+    AttributeError. The fix takes the first actual text block (Anthropic SDK
+    shape only — the only provider that reaches this call site).
+    """
+
+    def _run(self, blocks):
+        import types
+
+        fake_msg = types.SimpleNamespace(content=blocks)
+        fake_client = mock.Mock()
+        fake_client.messages.create.return_value = fake_msg
+        anthropic_stub = types.SimpleNamespace(Anthropic=mock.Mock(return_value=fake_client))
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}), \
+             mock.patch.dict(sys.modules, {"anthropic": anthropic_stub}):
+            return compress_mod.call_claude("prompt")
+
+    def test_tool_use_first_block_does_not_crash_and_returns_text(self):
+        # Regression: tool_use ordered before text used to crash after the
+        # paid call; now the first text block is selected.
+        self.assertEqual(
+            self._run([mock.Mock(type="tool_use", id="toolu_1"), mock.Mock(type="text", text="  compressed  ")]),
+            "compressed",
+        )
+
+    def test_thinking_first_block_skipped(self):
+        self.assertEqual(
+            self._run([mock.Mock(type="thinking", text="..."), mock.Mock(type="text", text="body")]),
+            "body",
+        )
+
+    def test_takes_first_text_when_multiple_text_blocks(self):
+        self.assertEqual(
+            self._run([mock.Mock(type="text", text="first"), mock.Mock(type="text", text="second")]),
+            "first",
+        )
+
+    def test_no_text_block_returns_empty_like_cli_arm(self):
+        # tool_use-only (or empty) replies return "", matching the CLI arm's
+        # contract, so the caller's "Claude returned an empty response"
+        # message applies instead of an unhandled AttributeError traceback.
+        self.assertEqual(self._run([mock.Mock(type="tool_use", id="toolu_1")]), "")
