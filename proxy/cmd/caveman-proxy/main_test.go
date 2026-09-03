@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/config"
 )
@@ -36,6 +37,39 @@ func TestInitializeNativePersistenceHealthyCCRRetainsRequestedMode(t *testing.T)
 	defer recovery.Close()
 	if len(key) != 32 || cfg.Mode != "compress" {
 		t.Fatalf("healthy persistence key=%d mode=%q", len(key), cfg.Mode)
+	}
+}
+
+func TestReadNativeHookPayloadReturnsBeforeEOF(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+
+	got := make(chan []byte, 1)
+	errs := make(chan error, 1)
+	go func() {
+		raw, err := readNativeHookPayload(reader)
+		if err != nil {
+			errs <- err
+			return
+		}
+		got <- raw
+	}()
+
+	payload := []byte(`{"hook_event_name":"SessionStart","session_id":"codex-1"}`)
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	case raw := <-got:
+		if string(raw) != string(payload) {
+			t.Fatalf("payload = %q, want %q", raw, payload)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("native hook payload read waited for EOF after a complete JSON object")
 	}
 }
 
