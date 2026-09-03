@@ -143,6 +143,52 @@ func TestUpstreamAuthFallbackHeaders(t *testing.T) {
 			wantLogCount: 1,
 		},
 		{
+			name: "named compat anthropic path placeholder bearer uses env x-api-key",
+			newAdapter: func(base string) providers.Adapter {
+				adapter, err := openaicompat.NewNamed("opencode-go", base)
+				if err != nil {
+					panic(err)
+				}
+				return adapter
+			},
+			path:         "/compat/opencode-go/v1/messages",
+			headers:      map[string]string{"authorization": "Bearer no-key-required"},
+			env:          map[string]string{"OPENAI_COMPAT_API_KEY": "sk-compat", "OPENAI_API_KEY": "sk-global"},
+			response:     `{"id":"compat","model":"minimax-m3","usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+			wantXAPIKey:  "sk-compat",
+			wantLogCount: 1,
+		},
+		{
+			name: "named compat anthropic path keeps a real inbound bearer",
+			newAdapter: func(base string) providers.Adapter {
+				adapter, err := openaicompat.NewNamed("opencode-go", base)
+				if err != nil {
+					panic(err)
+				}
+				return adapter
+			},
+			path:     "/compat/opencode-go/v1/messages",
+			headers:  map[string]string{"authorization": "Bearer sk-real-token"},
+			env:      map[string]string{"OPENAI_COMPAT_API_KEY": "sk-compat"},
+			response: `{"id":"compat","model":"minimax-m3","usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+			wantAuth: "Bearer sk-real-token",
+		},
+		{
+			name: "named compat anthropic path keeps inbound x-api-key",
+			newAdapter: func(base string) providers.Adapter {
+				adapter, err := openaicompat.NewNamed("opencode-go", base)
+				if err != nil {
+					panic(err)
+				}
+				return adapter
+			},
+			path:        "/compat/opencode-go/v1/messages",
+			headers:     map[string]string{"x-api-key": "sk-agent-opencode"},
+			env:         map[string]string{"OPENAI_COMPAT_API_KEY": "sk-compat"},
+			response:    `{"id":"compat","model":"minimax-m3","usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+			wantXAPIKey: "sk-agent-opencode",
+		},
+		{
 			name: "named compat explicit no-auth has no outbound auth",
 			newAdapter: func(base string) providers.Adapter {
 				adapter, err := openaicompat.NewNamed("ollama", base)

@@ -25,6 +25,7 @@ import (
 type captureUpstreamTransport struct {
 	body     []byte
 	headers  http.Header
+	url      string
 	status   int
 	response string
 }
@@ -33,6 +34,7 @@ func (t *captureUpstreamTransport) RoundTrip(r *http.Request) (*http.Response, e
 	body, _ := io.ReadAll(r.Body)
 	t.body = append([]byte(nil), body...)
 	t.headers = r.Header.Clone()
+	t.url = r.URL.String()
 	status := t.status
 	if status == 0 {
 		status = http.StatusOK
@@ -756,24 +758,57 @@ func TestBuildAdapters_RegistersNamedCompatBeforeLegacy(t *testing.T) {
 	}
 }
 
-func TestBuildAdapters_OpenCodeGoRouteUsesOpenCodeUpstream(t *testing.T) {
-	adapters := buildAdapters(config.Config{})
-	req := httptest.NewRequest(http.MethodPost, "/compat/opencode-go/v1/responses", nil)
-	for _, adapter := range adapters {
+// resolveCompatRoute resolves path through the one named compat adapter that
+// matches it. It fails the test if zero or more than one adapter matches.
+func resolveCompatRoute(t *testing.T, cfg config.Config, path string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	var resolved []string
+	for _, adapter := range buildAdapters(cfg) {
 		if adapter.Name() != "openai_compatible" || !adapter.MatchRoute(req.Method, req.URL.Path) {
 			continue
 		}
 		upstream, err := adapter.ResolveUpstreamURL(req.Context(), req, providers.RouteContext{})
 		if err != nil {
-			t.Fatalf("resolve OpenCode Go route: %v", err)
+			t.Fatalf("resolve %s: %v", path, err)
 		}
-		want := "https://opencode.ai/zen/go/v1/responses"
-		if got := upstream.String(); got != want {
-			t.Fatalf("OpenCode Go upstream = %q, want %q", got, want)
-		}
-		return
+		resolved = append(resolved, upstream.String())
 	}
-	t.Fatal("built-in OpenCode Go adapter was not registered")
+	if len(resolved) != 1 {
+		t.Fatalf("%s matched %d compat adapters, want exactly one: %v", path, len(resolved), resolved)
+	}
+	return resolved[0]
+}
+
+func TestBuildAdapters_OpenCodeGoRouteUsesOpenCodeUpstream(t *testing.T) {
+	cases := map[string]string{
+		"/compat/opencode-go/v1/responses":        "https://opencode.ai/zen/go/v1/responses",
+		"/compat/opencode-go/v1/chat/completions": "https://opencode.ai/zen/go/v1/chat/completions",
+		"/compat/opencode-go/v1/messages":         "https://opencode.ai/zen/go/v1/messages",
+	}
+	for path, want := range cases {
+		if got := resolveCompatRoute(t, config.Config{}, path); got != want {
+			t.Errorf("OpenCode Go upstream for %s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// TestBuildAdapters_OpenCodeGoUserEntryReplacesBuiltin shows that a user
+// `compat.opencode-go` entry replaces the built-in upstream on the adapter path.
+// This entry is the escape hatch if OpenCode moves the endpoint.
+func TestBuildAdapters_OpenCodeGoUserEntryReplacesBuiltin(t *testing.T) {
+	cfg := config.Config{Compat: map[string]config.CompatConfig{
+		"opencode-go": {BaseURL: "https://opencode.example.test/zen", APIKeyEnv: "OPENCODE_ZEN_API_KEY"},
+	}}
+	cases := map[string]string{
+		"/compat/opencode-go/v1/responses": "https://opencode.example.test/zen/v1/responses",
+		"/compat/opencode-go/v1/messages":  "https://opencode.example.test/zen/v1/messages",
+	}
+	for path, want := range cases {
+		if got := resolveCompatRoute(t, cfg, path); got != want {
+			t.Errorf("user OpenCode Go upstream for %s = %q, want %q", path, got, want)
+		}
+	}
 }
 
 // TestCreds_OpenCodeGoBuiltinCompatCredential proves that the built-in OpenCode
@@ -1065,5 +1100,105 @@ func TestCreds_BedrockInboundThenEnvironment(t *testing.T) {
 	got = c.Resolve("bedrock", noAuth)
 	if got.Key != "" || got.AuthKind != "" {
 		t.Fatalf("partial IAM credential = %+v, want fail-closed empty credential", got)
+	}
+}
+
+// TestStandaloneOpenCodeGoAuthEndToEnd drives the Pi wire shapes through the
+// full standalone handler: the /w/pi agent prefix, the built-in opencode-go
+// mount, and the header mapping. The Anthropic client in Pi sends x-api-key to
+// /v1/messages, and OpenCode Go rejects a Bearer header there. The OpenAI client
+// in Pi sends a Bearer token to /v1/chat/completions. A real inbound Bearer token
+// keeps its scheme on every path. The legacy compat secret must never reach this
+// mount.
+func TestStandaloneOpenCodeGoAuthEndToEnd(t *testing.T) {
+	const anthropicBody = `{"model":"minimax-m3","max_tokens":8,"messages":[{"role":"user","content":"Reply with OK"}]}`
+	const anthropicResponse = `{"id":"msg","type":"message","role":"assistant","model":"minimax-m3","content":[{"type":"text","text":"OK"}],"usage":{"input_tokens":1,"output_tokens":1}}`
+	const openAIBody = `{"model":"glm-5.2","messages":[{"role":"user","content":"Reply with OK"}]}`
+	const openAIResponse = `{"id":"chat","model":"glm-5.2","choices":[{"message":{"role":"assistant","content":"OK"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+
+	cases := []struct {
+		name       string
+		path       string
+		body       string
+		response   string
+		inbound    map[string]string
+		wantURL    string
+		wantAPIKey string
+		wantAuth   string
+	}{
+		{
+			name:       "messages with inbound x-api-key",
+			path:       "/w/pi/compat/opencode-go/v1/messages",
+			body:       anthropicBody,
+			response:   anthropicResponse,
+			inbound:    map[string]string{"x-api-key": "sk-inbound", "anthropic-version": "2023-06-01"},
+			wantURL:    "https://opencode.ai/zen/go/v1/messages",
+			wantAPIKey: "sk-inbound",
+		},
+		{
+			name:       "messages without inbound key uses OPENCODE_API_KEY",
+			path:       "/w/pi/compat/opencode-go/v1/messages",
+			body:       anthropicBody,
+			response:   anthropicResponse,
+			wantURL:    "https://opencode.ai/zen/go/v1/messages",
+			wantAPIKey: "sk-env-opencode",
+		},
+		{
+			name:     "messages with inbound bearer keeps bearer",
+			path:     "/w/pi/compat/opencode-go/v1/messages",
+			body:     anthropicBody,
+			response: anthropicResponse,
+			inbound:  map[string]string{"authorization": "Bearer sk-inbound"},
+			wantURL:  "https://opencode.ai/zen/go/v1/messages",
+			wantAuth: "Bearer sk-inbound",
+		},
+		{
+			name:     "chat completions with inbound bearer",
+			path:     "/w/pi/compat/opencode-go/v1/chat/completions",
+			body:     openAIBody,
+			response: openAIResponse,
+			inbound:  map[string]string{"authorization": "Bearer sk-inbound"},
+			wantURL:  "https://opencode.ai/zen/go/v1/chat/completions",
+			wantAuth: "Bearer sk-inbound",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("OPENCODE_API_KEY", "sk-env-opencode")
+			t.Setenv("OPENAI_COMPAT_API_KEY", "sk-legacy")
+			upstream := &captureUpstreamTransport{response: tc.response}
+			spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer spend.Close()
+			srv := New(config.Config{Mode: "record"}, spend, Options{HTTPClient: &http.Client{Transport: upstream}})
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set("content-type", "application/json")
+			for name, value := range tc.inbound {
+				req.Header.Set(name, value)
+			}
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			if upstream.url != tc.wantURL {
+				t.Errorf("upstream url = %q, want %q", upstream.url, tc.wantURL)
+			}
+			if got := upstream.headers.Get("x-api-key"); got != tc.wantAPIKey {
+				t.Errorf("upstream x-api-key = %q, want %q", got, tc.wantAPIKey)
+			}
+			if got := upstream.headers.Get("authorization"); got != tc.wantAuth {
+				t.Errorf("upstream authorization = %q, want %q", got, tc.wantAuth)
+			}
+			if strings.Contains(upstream.headers.Get("authorization")+upstream.headers.Get("x-api-key"), "sk-legacy") {
+				t.Fatal("OPENAI_COMPAT_API_KEY reached the opencode-go mount")
+			}
+			if !bytes.Equal(upstream.body, []byte(tc.body)) {
+				t.Fatalf("record mode changed the body:\n got %s\nwant %s", upstream.body, tc.body)
+			}
+		})
 	}
 }
