@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -85,7 +86,7 @@ func TestWriteIsAtomicAndReadableContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if got != state {
+	if !reflect.DeepEqual(got, state) {
 		t.Fatalf("read state = %+v, want %+v", got, state)
 	}
 	raw, err := os.ReadFile(Path(home, state.Port))
@@ -221,5 +222,52 @@ func TestProcessAndPortProbes(t *testing.T) {
 	}
 	if portBound(address) {
 		t.Fatalf("closed listener %s reported bound", address)
+	}
+}
+
+func TestCompatUpstreamsRoundTripAndAbsentFieldStaysNil(t *testing.T) {
+	home := t.TempDir()
+	state, err := New("127.0.0.1:8791", "record", "start", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.CompatUpstreams = map[string]string{
+		"opencode-go": "https://opencode.ai/zen/go",
+		"myprovider":  "http://127.0.0.1:4000",
+	}
+	if err := Write(home, state); err != nil {
+		t.Fatal(err)
+	}
+	got, err := read(home, state.Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.CompatUpstreams) != 2 ||
+		got.CompatUpstreams["opencode-go"] != "https://opencode.ai/zen/go" ||
+		got.CompatUpstreams["myprovider"] != "http://127.0.0.1:4000" {
+		t.Fatalf("compat upstreams round-trip = %v", got.CompatUpstreams)
+	}
+
+	// A file from a proxy that predates the field must still read.
+	old, err := New("127.0.0.1:8792", "record", "start", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(home, old); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(Path(home, old.Port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "compat_upstreams") {
+		t.Fatalf("empty compat upstreams must be omitted: %s", raw)
+	}
+	back, err := read(home, old.Port)
+	if err != nil {
+		t.Fatalf("run state without compat_upstreams must read: %v", err)
+	}
+	if back.CompatUpstreams != nil {
+		t.Fatalf("absent field = %v, want nil", back.CompatUpstreams)
 	}
 }

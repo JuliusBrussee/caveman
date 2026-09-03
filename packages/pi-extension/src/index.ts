@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { HookBridge, promptDigest, taskContinuation, taskTerms, taskType } from "./lifecycle.ts";
-import { MAX_CONTEXT_BYTES, additionalContextOf } from "./protocol.ts";
+import { COMPAT_NAME_RE, MAX_CONTEXT_BYTES, additionalContextOf } from "./protocol.ts";
 import { ProviderRouter } from "./provider.ts";
 import { RecoveryClient } from "./recovery.ts";
 import { shrinkToolResult } from "./tool-output.ts";
@@ -34,7 +34,30 @@ function gatewayUrl(): string {
   return "http://127.0.0.1:8787";
 }
 
-function runStateRecoveryViaMcp(gateway: string): boolean | undefined {
+type RunState = { recoveryViaMcp: boolean; compatUpstreams: Record<string, string> };
+
+// compatUpstreamsOf keeps only entries that could name a real mount: a
+// proxy-shaped name and an http(s) URL. A null-prototype object so a name like
+// "constructor" can never resolve to something inherited.
+function compatUpstreamsOf(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = Object.create(null);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [name, url] of Object.entries(raw as Record<string, unknown>)) {
+    if (!COMPAT_NAME_RE.test(name) || typeof url !== "string") continue;
+    try {
+      const protocol = new URL(url).protocol;
+      if (protocol !== "http:" && protocol !== "https:") continue;
+    } catch {
+      continue;
+    }
+    out[name] = url;
+  }
+  return out;
+}
+
+// readRunState returns the gate inputs the running proxy published, or undefined
+// when no valid run-state file for this gateway exists.
+function readRunState(gateway: string): RunState | undefined {
   let port: string;
   try {
     const url = new URL(gateway);
@@ -55,7 +78,8 @@ function runStateRecoveryViaMcp(gateway: string): boolean | undefined {
     } catch {
       return undefined;
     }
-    return Boolean(state.recovery_via_mcp);
+    // compat_upstreams is absent in files written by an older proxy.
+    return { recoveryViaMcp: Boolean(state.recovery_via_mcp), compatUpstreams: compatUpstreamsOf(state.compat_upstreams) };
   } catch {
     return undefined;
   }
@@ -176,18 +200,18 @@ export default function (pi: ExtensionAPI) {
     // session could never compress anything and must stay direct instead.
     const gateway = gatewayUrl();
     const alive = await proxyAlive(gateway);
-    const published = runStateRecoveryViaMcp(gateway);
+    const published = readRunState(gateway);
     const recoveryReady = alive ? await recovery.ensure() : false;
     gateDone = true;
-    if (!alive || published === undefined) {
+    if (!alive || !published) {
       notify(ctx, "Caveman: direct mode, no compression this session (local proxy not running)", "warning");
       return;
     }
-    if (!published || !recoveryReady) {
+    if (!published.recoveryViaMcp || !recoveryReady) {
       notify(ctx, "Caveman: direct mode, no compression this session (recovery not available — run `caveman doctor pi`)", "warning");
       return;
     }
-    await router.openGate(gateway, ctx);
+    await router.openGate(gateway, ctx, published.compatUpstreams);
   }));
 
   pi.on("model_select", GUARD_model_select(async (event: { model: ExtensionContext["model"] }, ctx: ExtensionContext) => {

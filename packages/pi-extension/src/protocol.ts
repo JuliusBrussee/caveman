@@ -114,24 +114,60 @@ export function upstreamHostFor(provider: string | undefined): string | undefine
   return provider ? UPSTREAM_HOSTS_BY_PROVIDER[provider] : undefined;
 }
 
-// hostOf returns the lowercase host name of a URL, or undefined for a value
-// that is not a URL. A caller compares the result with the table above.
+// hostOf returns the lowercase host of a URL — host name plus explicit port —
+// or undefined for a value that is not a URL. The port is part of the identity
+// on purpose: two loopback relays on different ports are different upstreams.
+// A host with no explicit port keeps its bare name (api.openai.com).
 export function hostOf(url: string | undefined): string | undefined {
   if (!url) return undefined;
   try {
-    return new URL(url).hostname;
+    return new URL(url).host.toLowerCase();
   } catch {
     return undefined;
   }
 }
 
+// A compat mount name is a path segment in /w/pi/compat/<name>, so it is held to
+// the same shape the proxy accepts. "constructor" passes this regex, which is
+// why compatUpstreamFor also demands a string value.
+export const COMPAT_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+// compatUpstreamFor returns the published base URL of the named compat mount, or
+// undefined when the proxy publishes no usable mount under that name.
+export function compatUpstreamFor(provider: string, compatUpstreams?: Readonly<Record<string, string>>): string | undefined {
+  if (!compatUpstreams || !COMPAT_NAME_RE.test(provider)) return undefined;
+  const url = compatUpstreams[provider];
+  return typeof url === "string" ? url : undefined;
+}
+
+// A named compat mount serves the OpenAI and Anthropic wire protocols from one
+// upstream. Google has no compat route.
+const COMPAT_SUFFIX_BY_API: Readonly<Record<string, string>> = {
+  "anthropic-messages": "",
+  "openai-completions": "/v1",
+  "openai-responses": "/v1",
+};
+
 // routeForApi gives the gateway route for one model, or undefined for a model
 // that must stay direct. With a provider, the provider must be in
 // UPSTREAM_HOSTS_BY_PROVIDER. With an original base URL, the host of that URL
 // must be the upstream host of the provider. Without a provider, the function
-// keeps the API-only behavior for existing callers.
-export function routeForApi(gateway: string, api: string | undefined, provider?: string, originalBaseUrl?: string): string | undefined {
+// keeps the API-only behavior for existing callers. With compatUpstreams, a
+// provider named by a mount the proxy published routes through that mount when
+// the original base URL points at the mount's own upstream host.
+export function routeForApi(gateway: string, api: string | undefined, provider?: string, originalBaseUrl?: string, compatUpstreams?: Readonly<Record<string, string>>): string | undefined {
   if (provider) {
+    // A mount published by the running proxy wins over the static table, so a
+    // caveman.yaml entry that repoints a built-in name (opencode-go) is gated
+    // against the endpoint the proxy actually forwards to.
+    const mount = compatUpstreamFor(provider, compatUpstreams);
+    if (mount !== undefined) {
+      const host = hostOf(mount);
+      if (!host) return undefined;
+      if (hostOf(originalBaseUrl) !== host) return undefined;
+      const suffix = api ? COMPAT_SUFFIX_BY_API[api] : undefined;
+      return suffix === undefined ? undefined : joinUrl(gateway, `/w/pi/compat/${provider}${suffix}`);
+    }
     const expected = UPSTREAM_HOSTS_BY_PROVIDER[provider];
     if (!expected) return undefined;
     if (originalBaseUrl !== undefined && hostOf(originalBaseUrl) !== expected) return undefined;

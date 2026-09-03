@@ -92,3 +92,19 @@ func TestFirstPositionalDoesNotConsumeValueAfterBooleanFlag(t *testing.T) {
 		t.Fatalf("value/boolean flag positionals = %q", got)
 	}
 }
+
+func TestCompatUpstreamsPublishesBuiltinAndUserMounts(t *testing.T) {
+	cfg := config.Config{Compat: map[string]config.CompatConfig{
+		"myprovider": {BaseURL: "http://127.0.0.1:4000", APIKeyEnv: "MYPROVIDER_API_KEY"},
+	}}
+	got := compatUpstreams(cfg)
+	if got["myprovider"] != "http://127.0.0.1:4000" {
+		t.Fatalf("user mount = %q", got["myprovider"])
+	}
+	if got["opencode-go"] != "https://opencode.ai/zen/go" {
+		t.Fatalf("built-in mount = %q", got["opencode-go"])
+	}
+	if len(got) != 2 {
+		t.Fatalf("published mounts = %v", got)
+	}
+}

@@ -9,8 +9,11 @@ One extension, four jobs:
   names, pricing, and `models.json`; nothing is copied or rewritten. The
   extension routes a provider only when its base URL points at the upstream
   host of the proxy route (`api.anthropic.com`, `api.openai.com`,
-  `generativelanguage.googleapis.com`, or `opencode.ai`). A provider that points
-  at a local relay or at another endpoint stays direct, with one notice.
+  `generativelanguage.googleapis.com`, or `opencode.ai`), or at a named
+  OpenAI-compatible mount the running proxy published under exactly that
+  provider name (`compat.<provider>.base_url` in `caveman.yaml`). Host and port
+  must match. A provider that points at any other endpoint stays direct, with
+  one notice saying why.
 - **Exact recovery** — registers a single model-visible tool, `caveman_retrieve`,
   backed by the local `caveman-mcp` binary and the shared CCR store. Compressed
   bytes are always recoverable, byte-exact.

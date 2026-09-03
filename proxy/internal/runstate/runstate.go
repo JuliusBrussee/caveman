@@ -32,6 +32,11 @@ type State struct {
 	StartedAt      time.Time `json:"started_at"`
 	Version        string    `json:"version"`
 	RecoveryViaMCP bool      `json:"recovery_via_mcp"`
+	// CompatUpstreams maps each named OpenAI-compatible mount this proxy serves
+	// at /compat/<name>/ to its upstream base URL. A client routes a custom
+	// provider through a mount only after matching this map, so an absent field
+	// (an older proxy) simply means "no custom mount is verifiable".
+	CompatUpstreams map[string]string `json:"compat_upstreams,omitempty"`
 }
 
 type PublicState struct {

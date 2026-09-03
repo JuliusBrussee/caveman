@@ -103,6 +103,24 @@ upstream `https://opencode.ai/zen/go` and the credential variable
 `OPENCODE_API_KEY`. A `compat` entry with the name `opencode-go` in
 `caveman.yaml` replaces the built-in mount and can set another endpoint.
 
+The Pi extension routes a provider through `/compat/<name>/` only when the
+running proxy publishes a compat mount whose name is exactly the provider name
+and whose `base_url` host and port match the provider's base URL. The proxy
+publishes its mounts in the run-state file it writes on start, so the extension
+can verify a mount instead of guessing one; a provider with no matching mount
+stays direct with a notice. The mount's `base_url` path is what the proxy
+forwards to: a provider on the same host but a different path is sent to the
+mount's path, not its own. A mount pointing at a loopback relay (litellm,
+ollama, llama.cpp) also needs a `CAVE_SSRF_ALLOWLIST` entry; see
+[Security and privacy](security-and-privacy.md).
+
+```yaml
+compat:
+  myprovider:
+    base_url: http://127.0.0.1:4000
+    api_key_env: MYPROVIDER_API_KEY
+```
+
 A named mount can serve two wire protocols from one upstream. The credential
 header follows the request path. A request to `/compat/{name}/v1/messages`
 (Anthropic protocol) carries the key in `x-api-key`. Every other path carries

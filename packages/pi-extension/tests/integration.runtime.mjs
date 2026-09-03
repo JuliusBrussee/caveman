@@ -99,6 +99,7 @@ process.stdin.unref();
       started_at: new Date().toISOString(),
       version: "test",
       recovery_via_mcp: recoveryViaMcp,
+      compat_upstreams: { "stub-relay": "http://127.0.0.1:1" },
     }));
   }
   const env = {
@@ -285,7 +286,50 @@ test("open gate: a provider with a custom endpoint stays direct with a notice", 
     ]);
     const providerHits = requests.filter((r) => r.method === "POST");
     assert.equal(providerHits.length, 0, `custom endpoint was routed: ${JSON.stringify(providerHits)}`);
-    assert.match(out.stderr + out.stdout, /pass-through for anthropic\/stub-local \(provider endpoint 127\.0\.0\.1 is not api\.anthropic\.com\)/, `stderr: ${out.stderr}`);
+    assert.match(out.stderr + out.stdout, /pass-through for anthropic\/stub-local \(provider endpoint 127\.0\.0\.1:1 is not api\.anthropic\.com\)/, `stderr: ${out.stderr}`);
+  } finally {
+    fx.cleanup();
+    server.close();
+  }
+});
+
+// A custom-named provider routes only when the running proxy published a compat
+// mount with that exact name. The stub gateway answers the routed request, so
+// the dead loopback endpoint of the provider is never reached.
+test("open gate: a published compat mount routes a custom provider", { skip: !havePi && "pi devDependency missing" }, async () => {
+  const { server, requests, port } = await startStub();
+  const fx = fixture(port);
+  try {
+    const out = await runPi(fx.env, [
+      "--extension", stubProviderExtension, "--extension", extension,
+      "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
+      "--provider", "stub-relay", "--model", "stub-relay-model",
+      "-p", "say hi",
+    ]);
+    assert.match(out.stdout, /CAVEMAN_STUB_OK/, `stdout: ${out.stdout}\nstderr: ${out.stderr}`);
+    const providerHits = requests.filter((r) => r.method === "POST");
+    assert.ok(providerHits.length >= 1, `no provider request reached the stub; all: ${JSON.stringify(requests)}`);
+    assert.equal(providerHits[0].path, "/w/pi/compat/stub-relay/v1/chat/completions");
+  } finally {
+    fx.cleanup();
+    server.close();
+  }
+});
+
+// Same endpoint, no published mount: direct, with a notice naming the fix.
+test("open gate: a custom provider with no compat mount stays direct and says why", { skip: !havePi && "pi devDependency missing" }, async () => {
+  const { server, requests, port } = await startStub();
+  const fx = fixture(port);
+  try {
+    const out = await runPi(fx.env, [
+      "--extension", stubProviderExtension, "--extension", extension,
+      "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
+      "--provider", "unlisted-relay", "--model", "stub-unlisted-model",
+      "-p", "say hi",
+    ]);
+    const providerHits = requests.filter((r) => r.method === "POST");
+    assert.equal(providerHits.length, 0, `unmounted provider was routed: ${JSON.stringify(providerHits)}`);
+    assert.match(out.stderr + out.stdout, /no compat mount named "unlisted-relay" in the local proxy; add compat\.unlisted-relay\.base_url to caveman\.yaml/, `stderr: ${out.stderr}`);
   } finally {
     fx.cleanup();
     server.close();

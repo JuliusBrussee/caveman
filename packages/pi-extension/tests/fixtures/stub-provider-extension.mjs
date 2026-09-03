@@ -1,4 +1,4 @@
-// Registers three test providers.
+// Registers four test providers.
 //
 // The gated arms ("openai" and "opencode-go") declare the real upstream hosts,
 // because the extension routes a provider only when its base URL points at the
@@ -33,6 +33,23 @@ export default function (pi) {
     apiKey: "dummy-key-for-stub",
     api: "openai-completions",
     models: [model("stub-go-model", "Stub Go Model")],
+  });
+  // Two custom-named providers on the same dead loopback endpoint. Only
+  // "stub-relay" is published as a compat mount by the run-state fixture, so it
+  // must route through /w/pi/compat/stub-relay; "unlisted-relay" must not.
+  pi.registerProvider("stub-relay", {
+    name: "Stub Relay",
+    baseUrl: "http://127.0.0.1:1/v1",
+    apiKey: "dummy-key-for-stub",
+    api: "openai-completions",
+    models: [model("stub-relay-model", "Stub Relay Model")],
+  });
+  pi.registerProvider("unlisted-relay", {
+    name: "Stub Unlisted Relay",
+    baseUrl: "http://127.0.0.1:1/v1",
+    apiKey: "dummy-key-for-stub",
+    api: "openai-completions",
+    models: [model("stub-unlisted-model", "Stub Unlisted Model")],
   });
   pi.registerProvider("anthropic", {
     name: "Stub Local Anthropic",
