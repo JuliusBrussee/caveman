@@ -97,17 +97,47 @@ const ROUTES_BY_PROVIDER_API: Readonly<Record<string, Readonly<Record<string, st
   },
 };
 
-// If the caller gives a provider, this function routes only the providers that the
-// local proxy can resolve. If the caller gives no provider, the function keeps the
-// API-only behavior for existing callers.
-export function routeForApi(gateway: string, api: string | undefined, provider?: string): string | undefined {
-  const providerRoutes = provider ? ROUTES_BY_PROVIDER_API[provider] : undefined;
-  if (provider && providerRoutes) {
-    const path = api ? providerRoutes[api] : undefined;
-    return path ? joinUrl(gateway, path) : undefined;
+// The proxy sends each route to one fixed upstream host. The extension routes a
+// provider only when the original base URL of the provider points at that host.
+// A provider with the name "openai" can point at a local relay (litellm, ollama)
+// or at Azure. Such a provider must keep its endpoint. If the pi catalog moves
+// opencode-go to another host, the stale built-in mount in the proxy must not
+// get the request. A provider that is not in this table never routes.
+export const UPSTREAM_HOSTS_BY_PROVIDER: Readonly<Record<string, string>> = {
+  anthropic: "api.anthropic.com",
+  openai: "api.openai.com",
+  google: "generativelanguage.googleapis.com",
+  "opencode-go": "opencode.ai",
+};
+
+export function upstreamHostFor(provider: string | undefined): string | undefined {
+  return provider ? UPSTREAM_HOSTS_BY_PROVIDER[provider] : undefined;
+}
+
+// hostOf returns the lowercase host name of a URL, or undefined for a value
+// that is not a URL. A caller compares the result with the table above.
+export function hostOf(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
   }
-  if (provider && provider !== "anthropic" && provider !== "openai" && provider !== "google") return undefined;
-  const path = api ? ROUTES_BY_API[api] : undefined;
+}
+
+// routeForApi gives the gateway route for one model, or undefined for a model
+// that must stay direct. With a provider, the provider must be in
+// UPSTREAM_HOSTS_BY_PROVIDER. With an original base URL, the host of that URL
+// must be the upstream host of the provider. Without a provider, the function
+// keeps the API-only behavior for existing callers.
+export function routeForApi(gateway: string, api: string | undefined, provider?: string, originalBaseUrl?: string): string | undefined {
+  if (provider) {
+    const expected = UPSTREAM_HOSTS_BY_PROVIDER[provider];
+    if (!expected) return undefined;
+    if (originalBaseUrl !== undefined && hostOf(originalBaseUrl) !== expected) return undefined;
+  }
+  const table = (provider ? ROUTES_BY_PROVIDER_API[provider] : undefined) ?? ROUTES_BY_API;
+  const path = api ? table[api] : undefined;
   return path ? joinUrl(gateway, path) : undefined;
 }
 
