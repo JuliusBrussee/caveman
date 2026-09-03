@@ -55,7 +55,8 @@ the managed gateway (the managed gateway imports them from here). `caveman start
 - **Auth scheme is preserved**: a key from an inbound `Authorization: Bearer` keeps `Scheme:"bearer"` on the `providers.Credential`; Anthropic and Gemini forward bearer credentials as bearer credentials (Claude/Gemini OAuth breaks if remapped to an API-key header). BYOK env keys and inbound `x-api-key` keep provider API-key mapping.
   On a named compat mount the header follows the wire protocol of the path:
   `/compat/<name>/v1/messages` gets `x-api-key` plus a default
-  `anthropic-version`, every other path gets Bearer. OpenCode Go rejects Bearer
+  `anthropic-version`, every other path gets Bearer. A real inbound Bearer stays
+  Bearer on every path. OpenCode Go rejects Bearer
   on `/v1/messages` (401 `Missing API key.`, 2026-09-03). The gateway env
   fallback puts the key in the header that the adapter emitted, so the upstream
   never gets two credentials.

@@ -225,21 +225,26 @@ func TestNewNamed_RejectsInvalidAndReservedNames(t *testing.T) {
 // one upstream and rejects a Bearer header on /v1/messages.
 func TestNewNamed_AnthropicMessagesPathUsesAPIKeyHeader(t *testing.T) {
 	adapter := mustNamed(t, "opencode-go", "https://opencode.ai/zen/go")
-	credential := providers.Credential{Mode: "ephemeral_header", Key: "sk-test"}
+	apiKey := providers.Credential{Mode: "ephemeral_header", Key: "sk-test"}
+	realBearer := providers.Credential{Mode: "ephemeral_header", Key: "sk-oauth", Scheme: "bearer"}
+	placeholder := providers.Credential{Mode: "ephemeral_header", Key: "no-key-required", Scheme: "bearer"}
 
 	cases := []struct {
 		name        string
 		path        string
+		credential  providers.Credential
 		inbound     map[string]string
 		wantAuth    string
 		wantAPIKey  string
 		wantVersion string
 	}{
-		{name: "messages", path: "/compat/opencode-go/v1/messages", wantAPIKey: "sk-test", wantVersion: "2023-06-01"},
-		{name: "messages sub-path", path: "/compat/opencode-go/v1/messages/count_tokens", wantAPIKey: "sk-test", wantVersion: "2023-06-01"},
-		{name: "messages keeps inbound version", path: "/compat/opencode-go/v1/messages", inbound: map[string]string{"anthropic-version": "2024-01-01"}, wantAPIKey: "sk-test", wantVersion: "2024-01-01"},
-		{name: "chat completions", path: "/compat/opencode-go/v1/chat/completions", wantAuth: "Bearer sk-test"},
-		{name: "responses", path: "/compat/opencode-go/v1/responses", wantAuth: "Bearer sk-test"},
+		{name: "messages", path: "/compat/opencode-go/v1/messages", credential: apiKey, wantAPIKey: "sk-test", wantVersion: "2023-06-01"},
+		{name: "messages keeps a real bearer", path: "/compat/opencode-go/v1/messages", credential: realBearer, wantAuth: "Bearer sk-oauth", wantVersion: "2023-06-01"},
+		{name: "messages remaps the placeholder", path: "/compat/opencode-go/v1/messages", credential: placeholder, wantAPIKey: "no-key-required", wantVersion: "2023-06-01"},
+		{name: "messages sub-path", path: "/compat/opencode-go/v1/messages/count_tokens", credential: apiKey, wantAPIKey: "sk-test", wantVersion: "2023-06-01"},
+		{name: "messages keeps inbound version", path: "/compat/opencode-go/v1/messages", credential: apiKey, inbound: map[string]string{"anthropic-version": "2024-01-01"}, wantAPIKey: "sk-test", wantVersion: "2024-01-01"},
+		{name: "chat completions", path: "/compat/opencode-go/v1/chat/completions", credential: apiKey, wantAuth: "Bearer sk-test"},
+		{name: "responses", path: "/compat/opencode-go/v1/responses", credential: apiKey, wantAuth: "Bearer sk-test"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -247,7 +252,7 @@ func TestNewNamed_AnthropicMessagesPathUsesAPIKeyHeader(t *testing.T) {
 			for name, value := range tc.inbound {
 				req.Header.Set(name, value)
 			}
-			out, err := adapter.SanitizeAndMapHeaders(context.Background(), req, credential, nil)
+			out, err := adapter.SanitizeAndMapHeaders(context.Background(), req, tc.credential, nil)
 			if err != nil {
 				t.Fatalf("SanitizeAndMapHeaders: %v", err)
 			}

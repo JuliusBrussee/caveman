@@ -106,8 +106,9 @@ upstream `https://opencode.ai/zen/go` and the credential variable
 A named mount can serve two wire protocols from one upstream. The credential
 header follows the request path. A request to `/compat/{name}/v1/messages`
 (Anthropic protocol) carries the key in `x-api-key`. Every other path carries
-the key in `Authorization: Bearer`. OpenCode Go rejects a Bearer header on its
-Anthropic path, so this rule is necessary for the `anthropic-messages` models.
+the key in `Authorization: Bearer`. A real inbound Bearer token keeps its header
+on every path. OpenCode Go rejects a Bearer header on its Anthropic path, so
+this rule is necessary for the `anthropic-messages` models.
 
 ## Modes
 

@@ -176,8 +176,11 @@ func (a namedAdapter) InspectRequest(ctx context.Context, body providers.BodyRea
 // x-api-key and a default anthropic-version, because the Anthropic protocol
 // defines these headers. OpenCode Go rejects a Bearer header on /v1/messages
 // (test of 2026-09-03: 401 "Missing API key."). The mapping follows the path,
-// not the inbound header, so an env-key fallback behaves the same as an inbound
-// key.
+// so an env-key fallback behaves the same as an inbound x-api-key. A real
+// inbound Bearer token keeps its scheme on every path, as the repository
+// preserves the auth scheme of an inbound credential. The placeholder token is
+// not a real credential. The gateway replaces it from the environment after
+// this mapping, so it must land in the header of the wire protocol.
 func (a namedAdapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, credential providers.Credential, upstream *url.URL) (http.Header, error) {
 	out, err := a.Base.SanitizeAndMapHeaders(ctx, req, credential, upstream)
 	if err != nil {
@@ -186,7 +189,7 @@ func (a namedAdapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Reque
 	if req == nil || req.URL == nil || !a.anthropicMessagesPath(req.URL.Path) {
 		return out, nil
 	}
-	if credential.Key != "" {
+	if credential.Key != "" && !realBearer(credential) {
 		out.Del("authorization")
 		out.Set("x-api-key", credential.Key)
 	}
@@ -194,6 +197,12 @@ func (a namedAdapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Reque
 		out.Set("anthropic-version", "2023-06-01")
 	}
 	return out, nil
+}
+
+// realBearer reports whether the credential is a Bearer token from the inbound
+// request and not the gateway placeholder.
+func realBearer(credential providers.Credential) bool {
+	return credential.Scheme == "bearer" && credential.Key != "no-key-required"
 }
 
 // anthropicMessagesPath reports whether the request path, without the mount

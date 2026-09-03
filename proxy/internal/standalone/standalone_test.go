@@ -1107,8 +1107,9 @@ func TestCreds_BedrockInboundThenEnvironment(t *testing.T) {
 // full standalone handler: the /w/pi agent prefix, the built-in opencode-go
 // mount, and the header mapping. The Anthropic client in Pi sends x-api-key to
 // /v1/messages, and OpenCode Go rejects a Bearer header there. The OpenAI client
-// in Pi sends a Bearer token to /v1/chat/completions. The legacy compat secret
-// must never reach this mount.
+// in Pi sends a Bearer token to /v1/chat/completions. A real inbound Bearer token
+// keeps its scheme on every path. The legacy compat secret must never reach this
+// mount.
 func TestStandaloneOpenCodeGoAuthEndToEnd(t *testing.T) {
 	const anthropicBody = `{"model":"minimax-m3","max_tokens":8,"messages":[{"role":"user","content":"Reply with OK"}]}`
 	const anthropicResponse = `{"id":"msg","type":"message","role":"assistant","model":"minimax-m3","content":[{"type":"text","text":"OK"}],"usage":{"input_tokens":1,"output_tokens":1}}`
@@ -1141,6 +1142,15 @@ func TestStandaloneOpenCodeGoAuthEndToEnd(t *testing.T) {
 			response:   anthropicResponse,
 			wantURL:    "https://opencode.ai/zen/go/v1/messages",
 			wantAPIKey: "sk-env-opencode",
+		},
+		{
+			name:     "messages with inbound bearer keeps bearer",
+			path:     "/w/pi/compat/opencode-go/v1/messages",
+			body:     anthropicBody,
+			response: anthropicResponse,
+			inbound:  map[string]string{"authorization": "Bearer sk-inbound"},
+			wantURL:  "https://opencode.ai/zen/go/v1/messages",
+			wantAuth: "Bearer sk-inbound",
 		},
 		{
 			name:     "chat completions with inbound bearer",
