@@ -46,9 +46,20 @@ function resultFor(artifact, id = profile.id) {
   return result;
 }
 
-function runReporter(t, artifact, { expectedId = profile.id, inputBasename = `${expectedId}.json`, includeExpectedId = true } = {}) {
+function runReporter(t, artifact, { expectedId = profile.id, inputBasename = `${expectedId}.json`, includeExpectedId = true, registryOverride } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "caveman-drift-report-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
+  // The reporter reads agents.json from its own directory. A test that needs a
+  // registry shape the live one may not have (a prerelease pin) runs a copy of
+  // the reporter next to a synthesized registry instead of depending on live data.
+  let reporterPath = reporter;
+  if (registryOverride) {
+    const agentsDir = join(dir, "agents");
+    mkdirSync(agentsDir);
+    writeFileSync(join(agentsDir, "drift-report.mjs"), readFileSync(reporter));
+    writeFileSync(join(agentsDir, "agents.json"), JSON.stringify(registryOverride));
+    reporterPath = join(agentsDir, "drift-report.mjs");
+  }
   const input = join(dir, inputBasename);
   const calls = join(dir, "gh-called");
   const bin = join(dir, "bin");
@@ -57,7 +68,7 @@ function runReporter(t, artifact, { expectedId = profile.id, inputBasename = `${
   const gh = join(bin, "gh");
   writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$GH_CALLED_FILE"\nif [ "$1 $2" = "issue list" ]; then printf '[]'; fi\n`);
   chmodSync(gh, 0o755);
-  const argv = [reporter, "--input", input];
+  const argv = [reporterPath, "--input", input];
   if (includeExpectedId) argv.push("--expected-id", expectedId);
   const result = spawnSync(process.execPath, argv, {
     encoding: "utf8",
@@ -93,21 +104,24 @@ test("complete matching non-drift artifact performs no gh operation", (t) => {
 });
 
 test("release version outranks matching prerelease", { skip: process.platform === "win32" && "gh stub is a sh script; the reporter runs on POSIX CI only" }, (t) => {
-  const prereleaseProfile = registry.agents.find((candidate) => candidate.tested_agent_version.includes("-"));
-  if (!prereleaseProfile) throw new Error("prerelease profile pin missing from registry fixture");
+  // Synthesize the prerelease pin on kilo rather than hunting the live registry
+  // for one: whether any shipped pin is a prerelease changes with every drift bump.
+  const prereleasePin = `${profile.tested_agent_version}-rc.1`;
+  const registryOverride = structuredClone(registry);
+  const prereleaseProfile = registryOverride.agents.find((candidate) => candidate.id === profile.id);
+  prereleaseProfile.tested_agent_version = prereleasePin;
   const artifact = validDrift();
-  const kiloIndex = artifact.results.findIndex((candidate) => candidate.id === profile.id);
-  artifact.results[kiloIndex] = { id: profile.id, status: "not-installed", tested: profile.tested_agent_version };
   const expected = resultFor(artifact, prereleaseProfile.id);
   Object.assign(expected, {
     status: "drift",
     binary: `/tmp/${prereleaseProfile.id}`,
-    observed: prereleaseProfile.tested_agent_version.split("-")[0],
+    tested: prereleasePin,
+    observed: profile.tested_agent_version,
     version_ok: true,
     help_ok: true,
     version_matches: false,
   });
-  const result = runReporter(t, artifact, { expectedId: prereleaseProfile.id });
+  const result = runReporter(t, artifact, { expectedId: prereleaseProfile.id, registryOverride });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.ghCalls, /^issue create/m);
 });

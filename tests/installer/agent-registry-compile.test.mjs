@@ -43,6 +43,17 @@ function compile(repo) {
   });
 }
 
+// Pins come from the profiles, never from literals here: the nightly drift
+// workflow bumps tested_agent_version, and a literal in this file turned every
+// legitimate bump into a red main (2026-09-03).
+function pinOf(id) {
+  return JSON.parse(readFileSync(join(root, "agents", "profiles", `${id}.json`), "utf8")).tested_agent_version;
+}
+const KILO_PIN = pinOf("kilo");
+const QWEN_PIN = pinOf("qwen");
+const KILO_BUMPED = KILO_PIN.replace(/(\d+)$/, (n) => String(Number(n) + 1));
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 function replaceExactly(text, from, to) {
   assert.equal(text.split(from).length, 2, `fixture expected one ${JSON.stringify(from)}`);
   return text.replace(from, to);
@@ -50,12 +61,12 @@ function replaceExactly(text, from, to) {
 
 test("compiler resolves default conformance workflow inside repository and catches pin mismatch", (t) => {
   const repo = fixtureRepo({
-    workflow: (text) => replaceExactly(text, "@kilocode/cli@7.5.6", "@kilocode/cli@7.5.7"),
+    workflow: (text) => replaceExactly(text, `@kilocode/cli@${KILO_PIN}`, `@kilocode/cli@${KILO_BUMPED}`),
   });
   t.after(() => rmSync(repo, { recursive: true, force: true }));
   const result = compile(repo);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /pins kilo@7\.5\.7 but profile tested_agent_version is 7\.5\.6/);
+  assert.match(result.stderr, new RegExp(`pins kilo@${escapeRegExp(KILO_BUMPED)} but profile tested_agent_version is ${escapeRegExp(KILO_PIN)}`));
 });
 
 test("compiler fails closed when conformance workflow is missing", (t) => {
@@ -68,7 +79,7 @@ test("compiler fails closed when conformance workflow is missing", (t) => {
 
 test("compiler rejects unparseable pinned install", (t) => {
   const repo = fixtureRepo({
-    workflow: (text) => replaceExactly(text, "@kilocode/cli@7.5.6", "@kilocode/cli@latest"),
+    workflow: (text) => replaceExactly(text, `@kilocode/cli@${KILO_PIN}`, "@kilocode/cli@latest"),
   });
   t.after(() => rmSync(repo, { recursive: true, force: true }));
   const result = compile(repo);
@@ -80,8 +91,8 @@ test("compiler rejects duplicate pinned profile id", (t) => {
   const repo = fixtureRepo({
     workflow: (text) => replaceExactly(
       text,
-      "          - id: kilo\n            install: npm install -g @kilocode/cli@7.5.6",
-      "          - id: kilo\n            install: npm install -g @kilocode/cli@7.5.6\n          - id: kilo\n            install: npm install -g @kilocode/cli@7.5.6",
+      `          - id: kilo\n            install: npm install -g @kilocode/cli@${KILO_PIN}`,
+      `          - id: kilo\n            install: npm install -g @kilocode/cli@${KILO_PIN}\n          - id: kilo\n            install: npm install -g @kilocode/cli@${KILO_PIN}`,
     ),
   });
   t.after(() => rmSync(repo, { recursive: true, force: true }));
@@ -91,8 +102,8 @@ test("compiler rejects duplicate pinned profile id", (t) => {
 });
 
 for (const [id, block] of [
-  ["kilo", "          - id: kilo\n            install: npm install -g @kilocode/cli@7.5.6\n"],
-  ["qwen", "          - id: qwen\n            install: npm install -g @qwen-code/qwen-code@0.22.3\n"],
+  ["kilo", `          - id: kilo\n            install: npm install -g @kilocode/cli@${KILO_PIN}\n`],
+  ["qwen", `          - id: qwen\n            install: npm install -g @qwen-code/qwen-code@${QWEN_PIN}\n`],
 ]) {
   test(`compiler rejects missing shipped ${id} pin entry`, (t) => {
     const repo = fixtureRepo({ workflow: (text) => replaceExactly(text, block, "") });
