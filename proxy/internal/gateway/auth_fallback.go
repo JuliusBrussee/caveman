@@ -31,8 +31,17 @@ func (s *Server) applyUpstreamAuthFallback(provider string, credential providers
 		headers.Del("authorization")
 		headers.Del("api-key")
 		headers.Set("api-key", key)
-	case "openai", "openai_compatible":
+	case "openai":
 		headers.Set("authorization", "Bearer "+key)
+	case "openai_compatible":
+		// A named compat mount maps an Anthropic-protocol path to x-api-key. The
+		// fallback key must go in the same header, so the upstream never gets
+		// two credentials.
+		if _, apiKeyHeader := headers["X-Api-Key"]; apiKeyHeader {
+			headers.Set("x-api-key", key)
+		} else {
+			headers.Set("authorization", "Bearer "+key)
+		}
 	default:
 		return
 	}
@@ -79,7 +88,7 @@ func fallbackKey(provider string, credential providers.Credential, headers http.
 		}
 		return firstEnv(envName), true
 	case "openai", "openai_compatible":
-		if hasUsableAuthorization(headers) {
+		if hasUsableAuthorization(headers) || hasUsableProviderKey(headers.Get("x-api-key")) {
 			return "", false
 		}
 		if provider == "openai" && envName != "OPENAI_API_KEY" {

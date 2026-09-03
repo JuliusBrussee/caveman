@@ -169,6 +169,40 @@ func (a namedAdapter) InspectRequest(ctx context.Context, body providers.BodyRea
 	return inspectOpenAICompatible(ctx, a.Base, body, headers)
 }
 
+// SanitizeAndMapHeaders puts the credential in the header that the wire protocol
+// of the request expects. A named mount can serve two protocols from one
+// upstream. OpenAI-protocol paths keep the Bearer mapping of the base adapter.
+// Anthropic-protocol paths (/v1/messages and its sub-paths) get the key in
+// x-api-key and a default anthropic-version, because the Anthropic protocol
+// defines these headers. OpenCode Go rejects a Bearer header on /v1/messages
+// (test of 2026-09-03: 401 "Missing API key."). The mapping follows the path,
+// not the inbound header, so an env-key fallback behaves the same as an inbound
+// key.
+func (a namedAdapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, credential providers.Credential, upstream *url.URL) (http.Header, error) {
+	out, err := a.Base.SanitizeAndMapHeaders(ctx, req, credential, upstream)
+	if err != nil {
+		return nil, err
+	}
+	if req == nil || req.URL == nil || !a.anthropicMessagesPath(req.URL.Path) {
+		return out, nil
+	}
+	if credential.Key != "" {
+		out.Del("authorization")
+		out.Set("x-api-key", credential.Key)
+	}
+	if out.Get("anthropic-version") == "" {
+		out.Set("anthropic-version", "2023-06-01")
+	}
+	return out, nil
+}
+
+// anthropicMessagesPath reports whether the request path, without the mount
+// prefix, is the Anthropic Messages endpoint or one of its sub-paths.
+func (a namedAdapter) anthropicMessagesPath(path string) bool {
+	rest := strings.TrimPrefix(path, a.prefix)
+	return rest == "/v1/messages" || strings.HasPrefix(rest, "/v1/messages/")
+}
+
 func inspectOpenAICompatible(ctx context.Context, base providers.Base, body providers.BodyReader, headers http.Header) (providers.RequestMetadata, error) {
 	meta, err := base.InspectRequest(ctx, body, headers)
 	if path := headers.Get("x-cave-route-path"); path != "" {

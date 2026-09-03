@@ -103,6 +103,12 @@ upstream `https://opencode.ai/zen/go` and the credential variable
 `OPENCODE_API_KEY`. A `compat` entry with the name `opencode-go` in
 `caveman.yaml` replaces the built-in mount and can set another endpoint.
 
+A named mount can serve two wire protocols from one upstream. The credential
+header follows the request path. A request to `/compat/{name}/v1/messages`
+(Anthropic protocol) carries the key in `x-api-key`. Every other path carries
+the key in `Authorization: Bearer`. OpenCode Go rejects a Bearer header on its
+Anthropic path, so this rule is necessary for the `anthropic-messages` models.
+
 ## Modes
 
 | Mode | Request behavior |

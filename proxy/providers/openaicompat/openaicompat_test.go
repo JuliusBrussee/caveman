@@ -1,6 +1,7 @@
 package openaicompat
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -216,5 +217,58 @@ func TestNewNamed_RejectsInvalidAndReservedNames(t *testing.T) {
 				t.Fatalf("NewNamed(%q) succeeded, want error", name)
 			}
 		})
+	}
+}
+
+// TestNewNamed_AnthropicMessagesPathUsesAPIKeyHeader shows that a named mount
+// maps the credential by wire protocol. OpenCode Go serves both protocols from
+// one upstream and rejects a Bearer header on /v1/messages.
+func TestNewNamed_AnthropicMessagesPathUsesAPIKeyHeader(t *testing.T) {
+	adapter := mustNamed(t, "opencode-go", "https://opencode.ai/zen/go")
+	credential := providers.Credential{Mode: "ephemeral_header", Key: "sk-test"}
+
+	cases := []struct {
+		name        string
+		path        string
+		inbound     map[string]string
+		wantAuth    string
+		wantAPIKey  string
+		wantVersion string
+	}{
+		{name: "messages", path: "/compat/opencode-go/v1/messages", wantAPIKey: "sk-test", wantVersion: "2023-06-01"},
+		{name: "messages sub-path", path: "/compat/opencode-go/v1/messages/count_tokens", wantAPIKey: "sk-test", wantVersion: "2023-06-01"},
+		{name: "messages keeps inbound version", path: "/compat/opencode-go/v1/messages", inbound: map[string]string{"anthropic-version": "2024-01-01"}, wantAPIKey: "sk-test", wantVersion: "2024-01-01"},
+		{name: "chat completions", path: "/compat/opencode-go/v1/chat/completions", wantAuth: "Bearer sk-test"},
+		{name: "responses", path: "/compat/opencode-go/v1/responses", wantAuth: "Bearer sk-test"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, nil)
+			for name, value := range tc.inbound {
+				req.Header.Set(name, value)
+			}
+			out, err := adapter.SanitizeAndMapHeaders(context.Background(), req, credential, nil)
+			if err != nil {
+				t.Fatalf("SanitizeAndMapHeaders: %v", err)
+			}
+			if got := out.Get("authorization"); got != tc.wantAuth {
+				t.Errorf("authorization = %q, want %q", got, tc.wantAuth)
+			}
+			if got := out.Get("x-api-key"); got != tc.wantAPIKey {
+				t.Errorf("x-api-key = %q, want %q", got, tc.wantAPIKey)
+			}
+			if got := out.Get("anthropic-version"); got != tc.wantVersion {
+				t.Errorf("anthropic-version = %q, want %q", got, tc.wantVersion)
+			}
+		})
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/compat/opencode-go/v1/messages", nil)
+	out, err := adapter.SanitizeAndMapHeaders(context.Background(), req, providers.Credential{Mode: "ephemeral_header"}, nil)
+	if err != nil {
+		t.Fatalf("SanitizeAndMapHeaders without key: %v", err)
+	}
+	if out.Get("authorization") != "" || out.Get("x-api-key") != "" {
+		t.Fatalf("empty credential produced auth headers: %v", out)
 	}
 }
