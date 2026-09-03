@@ -4,7 +4,7 @@
 // flags, context sizes, and model names.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isLoopbackUrl, routeForApi } from "./protocol.ts";
+import { hostOf, isLoopbackUrl, routeForApi, upstreamHostFor } from "./protocol.ts";
 
 type Notify = (message: string, kind: "warning" | "info") => void;
 
@@ -14,6 +14,12 @@ export class ProviderRouter {
   private gateway: string | undefined;
   private gateOpen = false;
   private overridden = new Set<string>();
+  // originals keeps the base URL of each overridden provider. After an override,
+  // the registry reports the gateway route for that provider, so the original
+  // is not available from the registry. Pi keeps extension overrides in memory
+  // only, so a new pi process always starts from the original base URL and this
+  // map never sees a stale override from an earlier process.
+  private originals = new Map<string, string>();
   private applying = false;
   private warnedModels = new Set<string>();
 
@@ -49,7 +55,8 @@ export class ProviderRouter {
   async apply(model: ExtensionContext["model"], ctx: ExtensionContext): Promise<void> {
     if (!this.gateOpen || this.applying || !this.gateway) return;
     if (!model) return;
-    const route = routeForApi(this.gateway, model.api, model.provider);
+    const original = this.overridden.has(model.provider) ? this.originals.get(model.provider) ?? model.baseUrl : model.baseUrl;
+    const route = routeForApi(this.gateway, model.api, model.provider, original);
     let oauth = true;
     try {
       oauth = ctx.modelRegistry.isUsingOAuth(model);
@@ -61,9 +68,13 @@ export class ProviderRouter {
       const key = `${model.provider}/${model.id}`;
       if (!this.warnedModels.has(key)) {
         this.warnedModels.add(key);
+        const expected = upstreamHostFor(model.provider);
+        const endpointMismatch = expected !== undefined && hostOf(original) !== expected;
         const reason = oauth
           ? "OAuth/subscription credentials are not routed"
-          : `unsupported provider/API "${model.provider}/${model.api}"`;
+          : endpointMismatch
+            ? `provider endpoint ${hostOf(original) ?? original} is not ${expected}`
+            : `unsupported provider/API "${model.provider}/${model.api}"`;
         this.notify(`Caveman: pass-through for ${key} (${reason}); no compression`, "warning");
       }
       return;
@@ -76,6 +87,7 @@ export class ProviderRouter {
           this.overridden.delete(provider);
         }
       }
+      this.originals.set(model.provider, original);
       this.pi.registerProvider(model.provider, { baseUrl: route });
       this.overridden.add(model.provider);
       // Re-resolve so the FIRST request uses the refreshed model object. A
@@ -102,5 +114,6 @@ export class ProviderRouter {
       } catch { /* restoring direct is best-effort */ }
     }
     this.overridden.clear();
+    this.originals.clear();
   }
 }

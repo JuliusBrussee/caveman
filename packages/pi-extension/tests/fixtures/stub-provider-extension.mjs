@@ -1,21 +1,44 @@
-// Registers a loopback test provider so integration runs never leave the
-// machine: direct (ungated) traffic fast-fails on a dead local port, and gated
-// traffic goes wherever the caveman extension routes it. The provider id is
-// "openai" because routeForApi routes only allowlisted provider names.
+// Registers three test providers.
+//
+// The gated arms ("openai" and "opencode-go") declare the real upstream hosts,
+// because the extension routes a provider only when its base URL points at the
+// host that the proxy sends to. With an open gate, the extension re-points them
+// at the stub gateway, so a passing run never leaves the machine. If routing
+// regresses, the dummy key reaches the real host and the request fails with a
+// 401 error or a DNS error.
+//
+// The loopback arm ("anthropic") points at a dead local port. The closed-gate
+// tests use it, so direct traffic fast-fails locally. The open-gate test for a
+// custom endpoint uses it too: the extension must keep it direct.
 export default function (pi) {
+  const model = (id, name) => ({
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32768,
+    maxTokens: 1024,
+  });
   pi.registerProvider("openai", {
-    name: "Stub Provider",
-    baseUrl: "http://127.0.0.1:1",
+    name: "Stub OpenAI",
+    baseUrl: "https://api.openai.com/v1",
     apiKey: "dummy-key-for-stub",
     api: "openai-completions",
-    models: [{
-      id: "stub-model",
-      name: "Stub Model",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32768,
-      maxTokens: 1024,
-    }],
+    models: [model("stub-model", "Stub Model")],
+  });
+  pi.registerProvider("opencode-go", {
+    name: "Stub OpenCode Go",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    apiKey: "dummy-key-for-stub",
+    api: "openai-completions",
+    models: [model("stub-go-model", "Stub Go Model")],
+  });
+  pi.registerProvider("anthropic", {
+    name: "Stub Local Anthropic",
+    baseUrl: "http://127.0.0.1:1",
+    apiKey: "dummy-key-for-stub",
+    api: "anthropic-messages",
+    models: [model("stub-local", "Stub Local Model")],
   });
 }
