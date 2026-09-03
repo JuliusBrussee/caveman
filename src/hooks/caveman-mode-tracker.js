@@ -100,6 +100,22 @@ const flagPath = path.join(claudeDir, '.caveman-active');
 // (/caveman-commit etc.) so the next ordinary prompt can restore it (#599).
 const prevPath = path.join(claudeDir, '.caveman-active.prev');
 
+const REINFORCEMENT_RULES = {
+  lite: 'No filler, hedging, or pleasantries. Keep articles and full sentences OK, but stay tight.',
+  full: 'Drop articles (a/an/the), filler, pleasantries, and hedging. Prefer fragments over full natural-prose sentences. No preamble or recap.',
+  ultra: 'Drop articles, filler, pleasantries, hedging, and excess conjunctions. Prefer fragments over full natural-prose sentences. State each fact once. No preamble or recap.',
+  'wenyan-lite': 'Use wenyan-lite: semi-classical terse register. Drop filler and hedging. Keep meaning exact.',
+  'wenyan-full': 'Use wenyan-full: maximum classical terseness. Drop filler and hedging. Keep meaning exact.',
+  'wenyan-ultra': 'Use wenyan-ultra: extreme classical terseness. Drop filler and hedging. Keep meaning exact.',
+};
+
+function reinforcementForMode(mode) {
+  const canonical = mode === 'wenyan' ? 'wenyan-full' : mode;
+  const rules = REINFORCEMENT_RULES[canonical] || REINFORCEMENT_RULES.full;
+  return 'CAVEMAN MODE ACTIVE (' + mode + '). Enforce this reply: ' + rules +
+    ' Technical terms, code, commands, paths, and errors stay exact.';
+}
+
 function removeFlag(path) {
   try {
     fs.unlinkSync(path);
@@ -310,7 +326,7 @@ function handle(raw) {
     // reinforcement output below — it never deletes or writes the flag file.
     const reinforce = activeMode && !INDEPENDENT_MODES.has(activeMode)
       && getDefaultMode(data.cwd) !== 'off'
-      ? `CAVEMAN MODE ACTIVE (${activeMode}) — session ruleset applies.`
+      ? reinforcementForMode(activeMode)
       : null;
 
     // One write, so an unresolved-level notice and the per-turn reinforcement
