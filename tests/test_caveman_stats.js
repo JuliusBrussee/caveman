@@ -921,6 +921,28 @@ test('lifetime view omits net for legacy history rows that never logged turns', 
   assert.doesNotMatch(out, /Est\. net:/);
 });
 
+test('number formatting is pinned to en-US even under a dot-grouping locale', (tmp) => {
+  // Regression for the locale pin: toLocaleString() alone inherits the host OS
+  // locale (de-DE renders 1234 as "1.234"), which would break machine-readable
+  // output and any test oracle. fmt() forces 'en-US' grouping everywhere.
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 1234, cache_read_input_tokens: 5678 } } },
+  ]);
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: path.join(tmp, '.claude'),
+      LANG: 'de-DE.UTF-8',
+      LC_ALL: 'de-DE.UTF-8',
+    },
+  });
+  // en-US grouping: commas, never the de-DE dot separator.
+  assert.match(out, /Output tokens:\s+1,234/);
+  assert.match(out, /Cache-read tokens:\s+5,678/);
+  assert.doesNotMatch(out, /Output tokens:\s+1\.234/);
+});
+
 test('lifetime view excludes legacy rows from net even when mixed with rows that logged turns', (tmp) => {
   const claudeDir = path.join(tmp, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });

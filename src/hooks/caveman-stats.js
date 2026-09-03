@@ -368,14 +368,21 @@ function deriveNet({ estSavedTokens, turns }) {
 }
 
 // Shared "rule overhead" + "net" lines for the session and lifetime views.
+// Deterministic number formatting. toLocaleString() alone inherits the host OS
+// locale, which varies thousands separators between machines (1,250 vs 1.250)
+// and makes CLI output — and the test suite — locale-dependent. Pin en-US so
+// caveman-stats prints the same numbers everywhere, matching the rest of the
+// tool's English output.
+const fmt = (n) => n.toLocaleString('en-US');
+
 function netLines({ estSavedTokens, turns }) {
   const perTurn = ruleOverheadPerTurn();
   const { overheadTokens, netTokens } = deriveNet({ estSavedTokens, turns });
-  const overhead = `Est. rule overhead:    ${overheadTokens.toLocaleString()} ` +
-    `(input, ~${perTurn.toLocaleString()}/turn over ${turns} turn${turns === 1 ? '' : 's'})`;
+  const overhead = `Est. rule overhead:    ${fmt(overheadTokens)} ` +
+    `(input, ~${fmt(perTurn)}/turn over ${turns} turn${turns === 1 ? '' : 's'})`;
   const net = netTokens >= 0
-    ? `Est. net:              +${netTokens.toLocaleString()} (net saving after rule overhead)`
-    : `Est. net:              ${netTokens.toLocaleString()} (caveman cost more than it saved for this workload — consider turning it off)`;
+    ? `Est. net:              +${fmt(netTokens)} (net saving after rule overhead)`
+    : `Est. net:              ${fmt(netTokens)} (caveman cost more than it saved for this workload — consider turning it off)`;
   return `${overhead}\n${net}`;
 }
 
@@ -460,9 +467,9 @@ function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, ne
   // predate #145) — omit rather than understate the overhead.
   const netBlock = netTurns > 0 ? netLines({ estSavedTokens: netSavedTokens, turns: netTurns }) + '\n' : '';
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
-    `Sessions:   ${sessions.toLocaleString()}\n${sep}\n` +
-    `Output tokens:         ${outputTokens.toLocaleString()}\n` +
-    `Est. tokens saved:     ${estSavedTokens.toLocaleString()}\n` +
+    `Sessions:   ${fmt(sessions)}\n${sep}\n` +
+    `Output tokens:         ${fmt(outputTokens)}\n` +
+    `Est. tokens saved:     ${fmt(estSavedTokens)}\n` +
     netBlock + budgetLine + usdLine + sep + '\n';
 }
 
@@ -478,9 +485,9 @@ function formatShare({ outputTokens, turns, mode, model, attribution }) {
 
   if (estSavedTokens > 0) {
     const usd = estSavedUsd > 0 ? ` (~${formatUsd(estSavedUsd)})` : '';
-    return `🪨 Saved ${estSavedTokens.toLocaleString()} output tokens${usd} across ${turns} turns this session — caveman.sh`;
+    return `🪨 Saved ${fmt(estSavedTokens)} output tokens${usd} across ${turns} turns this session — caveman.sh`;
   }
-  return `🪨 ${turns} turns, ${outputTokens.toLocaleString()} output tokens this session — caveman.sh`;
+  return `🪨 ${turns} turns, ${fmt(outputTokens)} output tokens this session — caveman.sh`;
 }
 
 // Pure formatter — separated from main() so tests can pass synthetic inputs.
@@ -519,14 +526,14 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
       const r = COMPRESSION[key];
       const label = key === 'none' ? 'caveman off' : key;
       const note = r != null
-        ? `est. ${(Math.round(tokens / (1 - r)) - tokens).toLocaleString()} saved`
+        ? `est. ${fmt(Math.round(tokens / (1 - r)) - tokens)} saved`
         : 'no benchmark estimate';
-      lines.push(`  ${label}: ${tokens.toLocaleString()} tokens (${note})`);
+      lines.push(`  ${label}: ${fmt(tokens)} tokens (${note})`);
     }
     if (attr.unknownTokens > 0) {
-      lines.push(`  unattributed: ${attr.unknownTokens.toLocaleString()} tokens (mode unknown — excluded from estimate)`);
+      lines.push(`  unattributed: ${fmt(attr.unknownTokens)} tokens (mode unknown — excluded from estimate)`);
     }
-    lines.push(`Est. tokens saved:     ${estSavedTokens.toLocaleString()}`);
+    lines.push(`Est. tokens saved:     ${fmt(estSavedTokens)}`);
     if (estSavedUsd > 0) lines.push(`Est. saved (USD):      ~${formatUsd(estSavedUsd)}`);
     savings = lines.join('\n');
 
@@ -556,9 +563,9 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
     // any session-usage % would overstate real limit relief. See
     // docs/HONEST-NUMBERS.md.
     footer += ' Reduction is of output tokens only; input/cache usage is unchanged.';
-    footer += ` Net subtracts the rules' est. input cost (~${ruleOverheadPerTurn().toLocaleString()}/turn — docs/HONEST-NUMBERS.md).`;
-    savings = (`Est. without caveman:  ${estNormal.toLocaleString()}\n` +
-              `Est. tokens saved:     ${estSaved.toLocaleString()} (~${Math.round(ratio * 100)}% of output)\n` +
+    footer += ` Net subtracts the rules' est. input cost (~${fmt(ruleOverheadPerTurn())}/turn — docs/HONEST-NUMBERS.md).`;
+    savings = (`Est. without caveman:  ${fmt(estNormal)}\n` +
+              `Est. tokens saved:     ${fmt(estSaved)} (~${Math.round(ratio * 100)}% of output)\n` +
               usdLine).replace(/\n$/, '');
     // Net only makes sense where the savings figure above is unambiguous: a
     // single benchmarked mode ran the whole span (uniform) with a known turn
@@ -573,7 +580,7 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
 
   let memoryLine = '';
   if (compressed && compressed.count > 0) {
-    const tokensApprox = compressed.tokensSaved.toLocaleString();
+    const tokensApprox = fmt(compressed.tokensSaved);
     memoryLine = `${sep}\nMemory compressed:     ${compressed.count} file${compressed.count === 1 ? '' : 's'}, ` +
       `~${tokensApprox} tokens saved per session start (approx)\n`;
   }
@@ -581,8 +588,8 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
   return `\nCaveman Stats\n${sep}\n` +
     (shortPath ? `Session:  ${shortPath}\n` : '') +
     `Turns:    ${turns}\n${sep}\n` +
-    `Output tokens:         ${outputTokens.toLocaleString()}\n` +
-    `Cache-read tokens:     ${cacheReadTokens.toLocaleString()}\n${sep}\n` +
+    `Output tokens:         ${fmt(outputTokens)}\n` +
+    `Cache-read tokens:     ${fmt(cacheReadTokens)}\n${sep}\n` +
     `${savings}\n` +
     memoryLine +
     (footer ? footer + '\n' : '');
