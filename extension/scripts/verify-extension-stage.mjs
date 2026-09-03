@@ -51,6 +51,10 @@ function manifestReferences(manifest) {
   const refs = [];
   if (manifest.action?.default_popup) refs.push(manifest.action.default_popup);
   if (manifest.background?.service_worker) refs.push(manifest.background.service_worker);
+  // Firefox MV3 runs background event pages via `background.scripts` (no service_worker
+  // support); validate those references too so the Firefox-staged manifest cannot
+  // reference a file outside the allowlist.
+  for (const script of manifest.background?.scripts ?? []) refs.push(script);
   refs.push(...Object.values(manifest.icons ?? {}));
   refs.push(...Object.values(manifest.action?.default_icon ?? {}));
   for (const script of manifest.content_scripts ?? []) {
@@ -92,7 +96,38 @@ export function verifyExtensionRoot(root, { exact = false } = {}) {
   const manifest = JSON.parse(readFileSync(resolve(absoluteRoot, "manifest.json"), "utf8"));
   if (manifest.manifest_version !== 3) throw new Error("manifest_version must be 3");
   const references = new Set(manifestReferences(manifest));
-  for (const file of ["popup.html", "popup.css", "src/indicator.css"]) {
+
+  // Content-script CSS is injected INTO chat pages, where a relative url()
+  // resolves against the PAGE origin and can never load from the extension
+  // (measured 404/403 on the old indicator font-face, KB #6441). Extension-page
+  // CSS (popup.css) is NOT in scope: its relative urls resolve against the
+  // extension origin and are validated against the allowlist below.
+  const contentCss = [...new Set((manifest.content_scripts ?? []).flatMap((cs) => cs.css ?? []))];
+  for (const file of contentCss) {
+    if (!allowed.has(file)) throw new Error(`content-script stylesheet not in package allowlist: ${file}`);
+    const body = readFileSync(resolve(absoluteRoot, file), "utf8");
+    for (const match of body.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) {
+      const value = match[1].trim();
+      // localReference() returns null for fragment / data: / https: / // refs;
+      // anything else is a relative path that would resolve against the page —
+      // including ../ escapes, which localReference() throws on. Treat every
+      // non-absolute-local outcome as the same guard failure.
+      let local = null;
+      try {
+        local = localReference(file, value);
+      } catch {
+        local = "escape";
+      }
+      if (local !== null) {
+        throw new Error(
+          `content-script stylesheet ${file} references "${value}" with a relative url(); ` +
+            "injected css resolves url() against the page origin, so it can never load from the extension (KB #6441)",
+        );
+      }
+    }
+  }
+
+  for (const file of ["popup.html", "popup.css", ...contentCss]) {
     const body = readFileSync(resolve(absoluteRoot, file), "utf8");
     for (const value of textReferences(file, body)) {
       const ref = localReference(file, value);
