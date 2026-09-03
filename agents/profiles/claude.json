@@ -23,10 +23,10 @@
   "command_hook": { "method": "claude-pretooluse" },
   "memory_hook": { "method": "claude-userpromptsubmit" },
   "attribution": { "header": "x-cave-agent" },
-  "tested_agent_version": "2.1.226",
+  "tested_agent_version": "2.1.259",
   "injection_completeness": "builder-assisted",
-  "last_verified_at": "2026-08-08",
-  "verified_by": "ground-truth-2026-08-08",
+  "last_verified_at": "2026-09-03",
+  "verified_by": "local pinned-binary probe (claude 2.1.259, agents/probe-installed.mjs)",
   "fallback": "generic-env",
   "maintainer": null
 }

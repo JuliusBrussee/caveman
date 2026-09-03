@@ -65,21 +65,21 @@ jobs:
           - id: aider
             install: python -m pip install aider-chat==0.86.2
           - id: claude
-            install: npm install -g @anthropic-ai/claude-code@2.1.226
+            install: npm install -g @anthropic-ai/claude-code@2.1.259
           - id: codex
-            install: npm install -g @openai/codex@0.146.0
+            install: npm install -g @openai/codex@0.153.0
           - id: gemini
-            install: npm install -g @google/gemini-cli@0.53.1
+            install: npm install -g @google/gemini-cli@0.58.0
           - id: hermes
             install: python -m pip install "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@1f8acb340f9c72aec1426248cca54139816a77f5" # immutable source version @0.19.1; PyPI currently ends at 0.19.0
           - id: kilo
-            install: npm install -g @kilocode/cli@7.5.6
+            install: npm install -g @kilocode/cli@7.5.9
           - id: openclaw
-            install: npm install -g openclaw@2026.7.1-2
+            install: npm install -g openclaw@2026.8.2
           - id: opencode
-            install: npm install -g opencode-ai@1.18.11
+            install: npm install -g opencode-ai@1.18.27
           - id: pi
-            install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.2
+            install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
           - id: qwen
             install: npm install -g @qwen-code/qwen-code@0.22.3
     steps:

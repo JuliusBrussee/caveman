@@ -111,10 +111,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "2.1.226",
+    "tested_agent_version": "2.1.259",
     "injection_completeness": "builder-assisted",
-    "last_verified_at": "2026-08-08",
-    "verified_by": "ground-truth-2026-08-08",
+    "last_verified_at": "2026-09-03",
+    "verified_by": "local pinned-binary probe (claude 2.1.259, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -148,8 +148,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "0.146.0",
+    "tested_agent_version": "0.153.0",
     "injection_completeness": "code-only",
+    "last_verified_at": "2026-09-03",
+    "verified_by": "local pinned-binary probe (codex 0.153.0, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -178,8 +180,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "0.53.1",
+    "tested_agent_version": "0.58.0",
     "injection_completeness": "declarative",
+    "last_verified_at": "2026-09-03",
+    "verified_by": "local pinned-binary probe (gemini 0.58.0, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -227,7 +231,7 @@ export const PROFILES: AgentProfile[] = [
       "kilocode"
     ],
     "args": [],
-    "install": "npm install -g @kilocode/cli@7.5.6",
+    "install": "npm install -g @kilocode/cli@7.5.9",
     "wire_protocol": "openai-chat",
     "injection": {
       "method": "config-env-content",
@@ -313,10 +317,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "X-Cave-Agent"
     },
-    "tested_agent_version": "7.5.6",
+    "tested_agent_version": "7.5.9",
     "injection_completeness": "declarative",
-    "last_verified_at": "2026-08-30",
-    "verified_by": "local pinned-binary route probe (@kilocode/cli 7.5.6)",
+    "last_verified_at": "2026-09-03",
+    "verified_by": "local pinned-binary probe (kilo 7.5.9, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -374,8 +378,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "2026.7.1-2",
+    "tested_agent_version": "2026.8.2",
     "injection_completeness": "builder-assisted",
+    "last_verified_at": "2026-09-03",
+    "verified_by": "local pinned-binary probe (openclaw 2026.8.2, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -458,8 +464,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "X-Cave-Agent"
     },
-    "tested_agent_version": "1.18.11",
+    "tested_agent_version": "1.18.27",
     "injection_completeness": "declarative",
+    "last_verified_at": "2026-09-03",
+    "verified_by": "local pinned-binary probe (opencode 1.18.27, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -484,10 +492,10 @@ export const PROFILES: AgentProfile[] = [
     "command_hook": {
       "method": "pi-extension"
     },
-    "tested_agent_version": "0.84.2",
+    "tested_agent_version": "0.84.4",
     "injection_completeness": "builder-assisted",
-    "last_verified_at": "2026-08-19",
-    "verified_by": "local pinned-binary probe (pi 0.84.2, extension API types read from the installed package)",
+    "last_verified_at": "2026-09-03",
+    "verified_by": "local pinned-binary probe (pi 0.84.4, agents/probe-installed.mjs)",
     "fallback": "none",
     "maintainer": null
   },

@@ -15,10 +15,10 @@
     "loader_flag": "--extension"
   },
   "command_hook": { "method": "pi-extension" },
-  "tested_agent_version": "0.84.2",
+  "tested_agent_version": "0.84.4",
   "injection_completeness": "builder-assisted",
-  "last_verified_at": "2026-08-19",
-  "verified_by": "local pinned-binary probe (pi 0.84.2, extension API types read from the installed package)",
+  "last_verified_at": "2026-09-03",
+  "verified_by": "local pinned-binary probe (pi 0.84.4, agents/probe-installed.mjs)",
   "fallback": "none",
   "maintainer": null
 }

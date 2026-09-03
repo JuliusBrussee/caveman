@@ -61,8 +61,10 @@
   },
   "command_hook": { "method": "opencode-plugin" },
   "attribution": { "header": "X-Cave-Agent" },
-  "tested_agent_version": "1.18.11",
+  "tested_agent_version": "1.18.27",
   "injection_completeness": "declarative",
+  "last_verified_at": "2026-09-03",
+  "verified_by": "local pinned-binary probe (opencode 1.18.27, agents/probe-installed.mjs)",
   "fallback": "generic-env",
   "maintainer": null
 }
