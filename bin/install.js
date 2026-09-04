@@ -578,7 +578,49 @@ function installGemini(ctx) {
       return;
     }
   }
-  const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`], null, opts.dryRun);
+  // Under `curl | bash`, stdin is the script, not a terminal. Gemini CLI reads
+  // its workspace-trust and extension-consent answers from stdin, so the
+  // install never ends. See issues #400 and #676. Two parts remove the two
+  // prompts.
+  //   GEMINI_CLI_TRUST_WORKSPACE=true trusts cwd for this process only. It is
+  //     what `--skip-trust` sets. That flag belongs to the root chat command
+  //     and never reaches the `extensions` subcommand.
+  //   --consent answers the extension-install warning. Do not pass it without
+  //     the variable. Alone, it also answers the trust prompt with yes, and
+  //     that writes cwd into trustedFolders.json permanently.
+  // A trusted cwd lets Gemini CLI load .gemini/ config and .env files. Gemini
+  // CLI also searches every parent directory up to the root for those files.
+  // So run the install from a new empty scratch directory below the user's
+  // own ~/.caveman/tmp. Every parent then belongs to the user or to root, and
+  // trust covers nothing. A directory below /tmp is not safe, because another
+  // local user can plant /tmp/.env. A directory below ~/.gemini/tmp is not
+  // safe, because Gemini CLI keeps per-project state there under the cwd
+  // name. The scratch directory comes from mkdtemp, so this run owns it and
+  // removes only it. Never remove a fixed path, because it can hold data from
+  // an earlier process. If the directory cannot be made, report a failure and
+  // do not start Gemini CLI. A GitHub source does not use cwd.
+  // A Gemini CLI before v0.7.0 rejects `--consent` with exit 1. The installer
+  // then reports a failure and does not wait.
+  const env = Object.assign({}, process.env, { GEMINI_CLI_TRUST_WORKSPACE: 'true' });
+  const scratchParent = path.join(os.homedir(), '.caveman', 'tmp');
+  note(`  env: GEMINI_CLI_TRUST_WORKSPACE=true. Trust applies to this process only, in a new empty scratch directory below ${scratchParent}. trustedFolders.json stays unchanged.`);
+  let cwd;
+  if (!opts.dryRun) {
+    try {
+      fs.mkdirSync(scratchParent, { recursive: true });
+      cwd = fs.mkdtempSync(path.join(scratchParent, 'gemini-install-'));
+    } catch (e) {
+      results.failed.push(['gemini', `could not create scratch directory below ${scratchParent}: ${e.message}`]);
+      process.stdout.write('\n');
+      return;
+    }
+  }
+  let r;
+  try {
+    r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`, '--consent'], { env, cwd }, opts.dryRun);
+  } finally {
+    if (cwd) { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch (_) {} }
+  }
   if (spawnOk(r)) results.installed.push('gemini');
   else results.failed.push(['gemini', 'gemini extensions install failed']);
   process.stdout.write('\n');
