@@ -75,6 +75,19 @@ upstream.on('close', (code, signal) => {
   }
 });
 
+// Registering a handler here suppresses Node's default terminate-on-signal
+// behavior, so we must forward the signal to the child ourselves — otherwise
+// the wrapper would catch SIGTERM/SIGINT and never pass it on, leaving the
+// upstream process running, reparented to PID 1. Node keeps the process
+// alive only as long as something needs it to, so once `close` fires above
+// and removes the stdin listeners, the event loop drains and we exit with
+// the code/signal set there.
+function forwardSignalToUpstream(signal) {
+  if (!upstream.killed) upstream.kill(signal);
+}
+process.on('SIGTERM', () => forwardSignalToUpstream('SIGTERM'));
+process.on('SIGINT', () => forwardSignalToUpstream('SIGINT'));
+
 // JSON-RPC framing over stdio: messages are separated by newlines (the
 // MCP stdio transport uses LSP-like content but most servers emit one JSON
 // object per line). We line-buffer in both directions and parse opportunistically.
