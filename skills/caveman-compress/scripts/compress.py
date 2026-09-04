@@ -649,6 +649,22 @@ def _compress_file_locked(filepath: Path) -> bool:
         print("   already in caveman form. Original file is untouched (no backup created).")
         return False
 
+    # A rewrite that is structurally faithful but LONGER than the input passes
+    # every check below (validate() only checks structural invariants, not
+    # length) and would otherwise be written over the original and reported
+    # as a successful compression — the opposite of what this tool exists to
+    # do (issue #776). Same length is also a reject: a compression that saved
+    # nothing isn't a compression.
+    compressed_len = len(compressed_body.strip())
+    body_len = len(body.strip())
+    if compressed_len >= body_len:
+        print(
+            "❌ Compression aborted: output is not smaller than input "
+            f"({compressed_len} >= {body_len} chars)."
+        )
+        print("   Original file is untouched (no backup created).")
+        return False
+
     # Reassemble: frontmatter (verbatim) + compressed body
     compressed = frontmatter + compressed_body
 
