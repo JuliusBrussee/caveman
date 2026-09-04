@@ -1,0 +1,17 @@
+# Gitleaks config — extends the built-in ruleset, adds allowlist entries for this
+# repo's non-secret fixtures so the scan doesn't flag documented example tokens.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Ignore test/benchmark fixtures and documented example tokens."
+paths = [
+  '''tests/.*''',
+  '''benchmarks/.*''',
+  '''evals/.*''',
+]
+# Obvious placeholder/example tokens used in docs and tests (never real).
+regexes = [
+  '''sk-(TEST|FAKE|SECRET|EXAMPLE)[-A-Za-z0-9]*''',
+  '''(?i)your[-_]?api[-_]?key[-_]?here''',
+]
