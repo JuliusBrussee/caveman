@@ -625,6 +625,105 @@ function readHistory(filePath) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Caveman ruleset — SKILL.md read + intensity filter
+//
+// SKILL.md is the single source of truth for caveman behavior, and BOTH loaders
+// need it filtered to one level. caveman-activate.js injects it at SessionStart;
+// caveman-mode-tracker.js re-injects it when the user switches level mid-session
+// (#975). Before that, a switch moved the banner and the stored mode while the
+// model kept whatever level SessionStart had given it — `/caveman ultra` was a
+// no-op on behavior.
+//
+// It lives here rather than in a new `caveman-ruleset.js` sibling for the reason
+// the "Keep mode-state logic in caveman-config.js" rule gives: the hook file set
+// is pinned in three places (checksums.sha256, verify_repo.py, the install
+// lists) and src/plugins/opencode/plugin.js can only evaluate files it knows by
+// name, so a second shared sibling is a standing drift risk. This module is
+// already the one file every loader resolves.
+
+// The wenyan storage alias: config stores wenyan-full as 'wenyan', while
+// SKILL.md spells the row 'wenyan-full'. Filtering on the raw stored value
+// would match no row and emit a ruleset with no intensity line at all.
+function canonicalModeLabel(mode) {
+  return mode === 'wenyan' ? 'wenyan-full' : mode;
+}
+
+// Candidate locations, tried in order (#587/#589 — the old single '..' path
+// resolved to <plugin_root>/src/skills/, which does not exist, so plugin
+// installs silently used the stale fallback ruleset):
+//   1. $CLAUDE_PLUGIN_ROOT/skills/caveman/SKILL.md — Claude Code sets
+//      CLAUDE_PLUGIN_ROOT when invoking plugin hooks; authoritative when present.
+//   2. ../../skills/caveman/SKILL.md — hook at <plugin_root>/src/hooks/
+//      (plugin.json layout) or a repo checkout.
+//   3. ../skills/caveman/SKILL.md — standalone install with hooks at
+//      $CLAUDE_CONFIG_DIR/hooks/ and the skill at
+//      $CLAUDE_CONFIG_DIR/skills/caveman/.
+function skillPathCandidates(hookDir) {
+  const dir = hookDir || __dirname;
+  const candidates = [];
+  if (process.env.CLAUDE_PLUGIN_ROOT) {
+    candidates.push(path.join(process.env.CLAUDE_PLUGIN_ROOT, 'skills', 'caveman', 'SKILL.md'));
+  }
+  candidates.push(
+    path.join(dir, '..', '..', 'skills', 'caveman', 'SKILL.md'),
+    path.join(dir, '..', 'skills', 'caveman', 'SKILL.md')
+  );
+  return candidates;
+}
+
+// Reads SKILL.md and keeps only `mode`'s row of the intensity table and only
+// its example lines, so the model is never handed a second level's rules to
+// choose between. Returns null when SKILL.md cannot be read from any candidate
+// — callers decide what to do with that (activate.js has a hardcoded fallback
+// ruleset; the tracker degrades to its one-line reinforcement).
+function loadFilteredRuleset(mode, hookDir) {
+  const modeLabel = canonicalModeLabel(mode);
+  let skillContent = '';
+  for (const candidate of skillPathCandidates(hookDir)) {
+    try {
+      skillContent = fs.readFileSync(candidate, 'utf8');
+      break;
+    } catch (e) { /* try next candidate */ }
+  }
+  if (!skillContent) return null;
+
+  // Strip YAML frontmatter
+  const body = skillContent.replace(/^---[\s\S]*?---\s*/, '');
+
+  const filtered = body.split('\n').reduce((acc, line) => {
+    // Intensity table rows start with | **level** |
+    const tableRowMatch = line.match(/^\|\s*\*\*(\S+?)\*\*\s*\|/);
+    if (tableRowMatch) {
+      // Keep only the active level's row (and always keep header/separator)
+      if (tableRowMatch[1] === modeLabel) {
+        acc.push(line);
+      }
+      return acc;
+    }
+
+    // Example lines start with "- level:" — keep only lines matching active level
+    const exampleMatch = line.match(/^- (\S+?):\s/);
+    if (exampleMatch) {
+      if (exampleMatch[1] === modeLabel) {
+        acc.push(line);
+      }
+      return acc;
+    }
+
+    acc.push(line);
+    return acc;
+  }, []);
+
+  return filtered.join('\n');
+}
+
+// The banner both loaders put above the ruleset, so the label the model reads
+// cannot drift between SessionStart and a mid-session switch.
+function rulesetBanner(mode) {
+  return 'CAVEMAN MODE ACTIVE — level: ' + canonicalModeLabel(mode);
+}
+
 module.exports = {
   getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES,
   safeWriteFlag, readFlag, appendFlag, readHistory,
@@ -636,4 +735,6 @@ module.exports = {
   resolveActiveMode, readSessionModeRaw, writeSessionMode,
   writeSessionPrev, readSessionPrev, clearSessionPrev,
   gcSessionStore,
+  // Ruleset injection
+  canonicalModeLabel, loadFilteredRuleset, rulesetBanner,
 };
