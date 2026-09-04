@@ -115,8 +115,75 @@ function removeFlag() {
   }
 }
 
-function reinforcementLine(mode) {
+function reinforcementBanner(mode) {
   return 'CAVEMAN MODE ACTIVE (' + mode + ') — session ruleset applies.';
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Derived from reinforcementBanner() itself (split on a sentinel) rather than
+// re-spelling the banner text as a second regex literal: one source of truth,
+// and it stays in sync if the wording above ever changes.
+const [bannerPrefix, bannerSuffix] = reinforcementBanner('\0').split('\0');
+const staleBlock = new RegExp(
+  escapeRegExp(bannerPrefix) + '[a-z-]+' + escapeRegExp(bannerSuffix) + '[\\s\\S]*$'
+);
+
+// SKILL.md is the single source of truth for caveman behavior, filtered to
+// the active level the same way caveman-activate.js does (#792 priority-2;
+// #909 already shipped priority-1). Kept local, not bridged via loadConfig().
+function canonicalModeLabel(mode) {
+  return mode === 'wenyan' ? 'wenyan-full' : mode;
+}
+
+function loadFilteredRuleset(mode) {
+  const modeLabel = canonicalModeLabel(mode);
+  // Two layouts, no CLAUDE_PLUGIN_ROOT-style env var for opencode: installed
+  // (plugins/caveman/plugin.js, skills at ../../skills/caveman/) and dev tree
+  // (src/plugins/opencode/plugin.js, skills three levels up at repo root).
+  const candidates = [
+    join(here, '..', '..', 'skills', 'caveman', 'SKILL.md'),
+    join(here, '..', '..', '..', 'skills', 'caveman', 'SKILL.md'),
+  ];
+  let skillContent = '';
+  for (const candidate of candidates) {
+    try {
+      skillContent = readFileSync(candidate, 'utf8');
+      break;
+    } catch (e) { /* try next candidate */ }
+  }
+  if (!skillContent) return null;
+
+  const body = skillContent.replace(/^---[\s\S]*?---\s*/, '');
+  const filtered = body.split('\n').reduce((acc, line) => {
+    // Intensity table rows start with | **level** |: keep only the active
+    // level's row (plus header/separator, which do not match this pattern).
+    const tableRowMatch = line.match(/^\|\s*\*\*(\S+?)\*\*\s*\|/);
+    if (tableRowMatch) {
+      if (tableRowMatch[1] === modeLabel) acc.push(line);
+      return acc;
+    }
+    // Example lines start with "- level:", keep only the active level's.
+    const exampleMatch = line.match(/^- (\S+?):\s/);
+    if (exampleMatch) {
+      if (exampleMatch[1] === modeLabel) acc.push(line);
+      return acc;
+    }
+    acc.push(line);
+    return acc;
+  }, []);
+  return filtered.join('\n');
+}
+
+function reinforcementLine(mode) {
+  const banner = reinforcementBanner(mode);
+  const ruleset = loadFilteredRuleset(mode);
+  // No SKILL.md reachable (a standalone hook install without the skills
+  // dir): fall back to the banner alone, the same degrade caveman-activate.js
+  // uses for the same case.
+  return ruleset ? banner + '\n\n' + ruleset : banner;
 }
 
 function applyModeChange(change) {
@@ -190,15 +257,15 @@ export const CavemanPlugin = async (_ctx) => {
       // append grows the system prompt without bound — silently eating the
       // context window. Rewrite any line we already left instead of stacking
       // another, so a mode switch updates in place rather than accumulating.
-      const stale = /CAVEMAN MODE ACTIVE \([a-z-]+\) — session ruleset applies\./g;
+      // staleBlock matches to end of string: `line` now carries the ruleset
+      // appended after the banner, and that content is always the last thing
+      // this hook writes into an entry, so replacing from the banner on is safe.
       let found = false;
       for (let i = 0; i < output.system.length; i++) {
-        if (typeof output.system[i] === 'string' && stale.test(output.system[i])) {
-          stale.lastIndex = 0;
-          output.system[i] = output.system[i].replace(stale, line);
+        if (typeof output.system[i] === 'string' && staleBlock.test(output.system[i])) {
+          output.system[i] = output.system[i].replace(staleBlock, line);
           found = true;
         }
-        stale.lastIndex = 0;
       }
       if (found) return;
       if (output.system.length > 0) {

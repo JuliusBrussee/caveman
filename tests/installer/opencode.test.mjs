@@ -450,6 +450,66 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
   }
 });
 
+// ── system.transform must inject the ACTIVE LEVEL's filtered ruleset ─────
+// Checks injected content differs per level and a mid-session switch
+// replaces the whole block rather than stacking behind the prior one (#792).
+test('opencode system.transform injects the active level\'s filtered SKILL.md rules, not just the banner', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    const r = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r.status, 2);
+
+    const pluginPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'plugin.js');
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.CAVEMAN_DEFAULT_MODE = 'full';
+
+    const mod = await import(pathToFileURL(pluginPath).href);
+    const factory = mod.default || mod.CavemanPlugin;
+    const handlers = await factory({});
+
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
+    const sysUltra = { system: [] };
+    await handlers['experimental.chat.system.transform']({}, sysUltra);
+    assert.match(sysUltra.system[0], /CAVEMAN MODE ACTIVE \(ultra\)/);
+    // The ultra row's own text, present ONLY on the ultra intensity-table row.
+    assert.match(sysUltra.system[0], /NO prose abbreviations/,
+      'ultra should carry its own SKILL.md row, not just the banner');
+    assert.doesNotMatch(sysUltra.system[0], /No filler\/hedging\. Keep articles/,
+      'ultra must not carry the lite row');
+
+    // Switching level mid-session must swap in the NEW level's rules, not
+    // leave ultra's stacked behind lite's (the idempotent-rewrite path).
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman lite' }] });
+    const sysLite = { system: [] };
+    await handlers['experimental.chat.system.transform']({}, sysLite);
+    await handlers['experimental.chat.system.transform']({}, sysLite); // reuse same array, as opencode may
+    assert.match(sysLite.system[0], /CAVEMAN MODE ACTIVE \(lite\)/);
+    assert.match(sysLite.system[0], /No filler\/hedging\. Keep articles/,
+      'lite should carry its own SKILL.md row');
+    assert.doesNotMatch(sysLite.system[0], /NO prose abbreviations/,
+      'switching to lite must drop ultra\'s row, not accumulate it');
+    assert.equal((sysLite.system[0].match(/CAVEMAN MODE ACTIVE/g) || []).length, 1,
+      'banner must not duplicate across repeated transforms');
+
+    // wenyan (bare, the stored flag value) must resolve to the wenyan-full
+    // SKILL.md row via the same alias caveman-activate.js uses, not emit an
+    // empty intensity section.
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman wenyan' }] });
+    const sysWenyan = { system: [] };
+    await handlers['experimental.chat.system.transform']({}, sysWenyan);
+    assert.match(sysWenyan.system[0], /Maximum classical terseness/,
+      'bare wenyan flag should resolve to the wenyan-full row');
+  } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
 // ── AGENTS.md marker damage must not splice the file ─────────────────────
 // Both markers present is not enough: they must be one matched pair, in order.
 // An END above a BEGIN made `existing.indexOf(END, begin)` return -1, and the
