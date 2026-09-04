@@ -1,4 +1,4 @@
-"""Tests for caveman-mode-tracker.js prompt parsing (issues #598, #599).
+"""Tests for caveman-mode-tracker.js prompt parsing (issues #598, #599, #856).
 
 Drives the UserPromptSubmit hook with real prompts over stdin against an
 isolated CLAUDE_CONFIG_DIR and asserts the flag-file state afterwards.
@@ -182,6 +182,91 @@ class ModeTrackerTests(unittest.TestCase):
         self.send("/caveman off")
         self.assertIsNone(self.flag_value())
 
+    # ── #856: read-only mode status ──────────────────────────────────────
+
+    def test_status_reports_active_mode_without_mutating_state(self):
+        self.flag.write_text("ultra", encoding="utf-8")
+        before = self.flag.read_text(encoding="utf-8")
+
+        result = self.send("/caveman status")
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(
+            payload["hookSpecificOutput"]["additionalContext"],
+            "Caveman mode: ultra",
+        )
+        self.assertEqual(self.flag_value(), before)
+        self.assertFalse(
+            (self.claude_dir / ".caveman-mode-log.jsonl").exists(),
+            "status must not record a mode transition",
+        )
+
+    def test_namespaced_status_reports_canonical_wenyan_mode(self):
+        self.flag.write_text("wenyan", encoding="utf-8")
+
+        result = self.send("/caveman:caveman status")
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(
+            payload["hookSpecificOutput"]["additionalContext"],
+            "Caveman mode: wenyan-full",
+        )
+        self.assertEqual(self.flag_value(), "wenyan")
+
+    def test_status_reports_independent_modes(self):
+        for mode in ("commit", "review", "compress"):
+            with self.subTest(mode=mode):
+                self.flag.write_text(mode, encoding="utf-8")
+                result = self.send("/caveman status")
+                payload = json.loads(result.stdout)
+                self.assertEqual(
+                    payload["hookSpecificOutput"]["additionalContext"],
+                    "Caveman mode: " + mode,
+                )
+                self.assertEqual(self.flag_value(), mode)
+
+    def test_quoted_status_is_read_only(self):
+        self.flag.write_text("full", encoding="utf-8")
+
+        result = self.send('"/caveman status"')
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(
+            payload["hookSpecificOutput"]["additionalContext"],
+            "Caveman mode: full",
+        )
+        self.assertEqual(self.flag_value(), "full")
+
+    def test_status_reports_off_for_missing_and_durable_off_state(self):
+        missing = json.loads(self.send("/caveman status").stdout)
+        self.assertEqual(
+            missing["hookSpecificOutput"]["additionalContext"],
+            "Caveman mode: off",
+        )
+
+        self.flag.write_text("off", encoding="utf-8")
+        durable_off = json.loads(self.send("/caveman status").stdout)
+        self.assertEqual(
+            durable_off["hookSpecificOutput"]["additionalContext"],
+            "Caveman mode: off",
+        )
+        self.assertEqual(self.flag_value(), "off")
+
+    def test_status_does_not_consume_one_shot_restore(self):
+        self.flag.write_text("ultra", encoding="utf-8")
+        self.send("/caveman-commit")
+        prev = self.prev.read_text(encoding="utf-8")
+
+        result = self.send("/caveman status")
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(
+            payload["hookSpecificOutput"]["additionalContext"],
+            "Caveman mode: commit",
+        )
+        self.assertEqual(self.flag_value(), "commit")
+        self.assertEqual(self.prev.read_text(encoding="utf-8"), prev)
+
     # ── #599: one-shot independent modes ────────────────────────────────
 
     def test_commit_restores_prior_level_on_next_prompt(self):
@@ -277,6 +362,22 @@ class SessionScopedModeTests(unittest.TestCase):
         self.send("/caveman lite", "sessB")
         self.assertEqual(self.mode_of("sessA"), "ultra")
         self.assertEqual(self.mode_of("sessB"), "lite")
+
+    def test_status_uses_session_mode_before_legacy_fallback(self):
+        self.send("/caveman ultra", "sessA")
+        self.send("/caveman lite", "sessB")
+
+        status_a = json.loads(self.send("/caveman status", "sessA").stdout)
+        status_b = json.loads(self.send("/caveman status", "sessB").stdout)
+
+        self.assertEqual(
+            status_a["hookSpecificOutput"]["additionalContext"],
+            "Caveman mode: ultra",
+        )
+        self.assertEqual(
+            status_b["hookSpecificOutput"]["additionalContext"],
+            "Caveman mode: lite",
+        )
 
     def test_reinforcement_reflects_own_session(self):
         self.send("/caveman ultra", "sessA")

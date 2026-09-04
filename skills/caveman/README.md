@@ -27,11 +27,14 @@ Auto-clarity rule: caveman drops to normal prose for security warnings, irrevers
 
 ```
 /caveman              # full mode (default)
+/caveman status       # show current mode
 /caveman lite         # lighter compression
 /caveman ultra        # extreme compression
 /caveman wenyan       # classical Chinese
 stop caveman          # back to normal prose
 ```
+
+`/caveman status` only reports the current mode; it does not change it.
 
 ## Example output
 

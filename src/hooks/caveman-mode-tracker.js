@@ -225,6 +225,23 @@ function handle(raw) {
       return;
     }
 
+    // /caveman status — report the effective mode without changing state.
+    // Handle bare, plugin-namespaced, and quoted command forms. Resolve through
+    // the shared state helper so session files, legacy fallback, durable `off`,
+    // and validated modes keep the same semantics as reinforcement/statusline.
+    const statusMatch = /^["']?\/caveman(?::caveman)?\s+status["']?$/.exec(prompt);
+    if (statusMatch) {
+      const activeMode = resolveActiveMode(claudeDir, sessionId);
+      const modeLabel = activeMode === 'wenyan' ? 'wenyan-full' : (activeMode || 'off');
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: 'Caveman mode: ' + modeLabel
+        }
+      }));
+      return;
+    }
+
     // Shared mode-change parser (#602) — single source of truth with the
     // opencode plugin for slash commands, namespaced /caveman:caveman-*,
     // natural-language activation/deactivation, and brevity triggers.
