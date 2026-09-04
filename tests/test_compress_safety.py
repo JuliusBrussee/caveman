@@ -73,6 +73,29 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
+    def test_expanded_compressed_output_does_not_touch_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = "# Heading\n\nFox jump dog.\n"
+            expanded = "# Heading\n\nThe quick brown fox jumps over the lazy dog, repeatedly.\n"
+            path = self._file_with(Path(tmp), original)
+            with mock.patch.object(compress_mod, "call_claude", return_value=expanded):
+                ok = compress_mod.compress_file(path)
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            self.assertFalse((Path(tmp) / "task.original.md").exists())
+
+    def test_same_length_compressed_output_does_not_touch_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = "# Heading\n\nFox jump dog now.\n"
+            same_length = "# Heading\n\nDog jump fox now.\n"
+            self.assertEqual(len(original.strip()), len(same_length.strip()))
+            path = self._file_with(Path(tmp), original)
+            with mock.patch.object(compress_mod, "call_claude", return_value=same_length):
+                ok = compress_mod.compress_file(path)
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            self.assertFalse((Path(tmp) / "task.original.md").exists())
+
     def test_real_compression_writes_backup_and_target(self):
         # Isolate the backup data dir to a temp location so the out-of-tree
         # backup (issue #420) never lands in the developer's real home dir.
