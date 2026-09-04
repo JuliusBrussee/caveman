@@ -339,69 +339,27 @@ if (INDEPENDENT_MODES.has(mode)) {
   process.exit(0);
 }
 
-// Resolve the canonical label for wenyan alias
-const modeLabel = mode === 'wenyan' ? 'wenyan-full' : mode;
+// Resolve the canonical label for wenyan alias, and read SKILL.md — the single
+// source of truth for caveman behavior, filtered to this level's intensity row.
+//
+// Both live in caveman-config.js so caveman-mode-tracker.js can inject the SAME
+// ruleset when the user switches level mid-session (#975). Each is resolved
+// individually against a local stand-in, for the reason the per-session helpers
+// above are: a caveman-config.js predating these exports loads fine and passes
+// the shape check, and failing the whole module over them would trade this
+// hook's ruleset for no flag write at all. A missing loader degrades to the
+// hardcoded fallback ruleset below, which is what a missing SKILL.md already did.
+const canonicalModeLabel = cfg.canonicalModeLabel || ((m) => (m === 'wenyan' ? 'wenyan-full' : m));
+const rulesetBanner = cfg.rulesetBanner || ((m) => 'CAVEMAN MODE ACTIVE — level: ' + canonicalModeLabel(m));
+const loadFilteredRuleset = cfg.loadFilteredRuleset || (() => null);
 
-// Read SKILL.md — the single source of truth for caveman behavior.
-// Candidate locations, tried in order (#587/#589 — the old single '..' path
-// resolved to <plugin_root>/src/skills/, which doesn't exist, so plugin
-// installs silently used the stale fallback ruleset):
-//   1. $CLAUDE_PLUGIN_ROOT/skills/caveman/SKILL.md — Claude Code sets
-//      CLAUDE_PLUGIN_ROOT when invoking plugin hooks; authoritative when present.
-//   2. ../../skills/caveman/SKILL.md — hook at <plugin_root>/src/hooks/
-//      (plugin.json layout) or a repo checkout.
-//   3. ../skills/caveman/SKILL.md — standalone install with hooks at
-//      $CLAUDE_CONFIG_DIR/hooks/ and the skill at $CLAUDE_CONFIG_DIR/skills/caveman/.
-// All misses fall through to the hardcoded fallback ruleset below.
-const skillCandidates = [];
-if (process.env.CLAUDE_PLUGIN_ROOT) {
-  skillCandidates.push(path.join(process.env.CLAUDE_PLUGIN_ROOT, 'skills', 'caveman', 'SKILL.md'));
-}
-skillCandidates.push(
-  path.join(__dirname, '..', '..', 'skills', 'caveman', 'SKILL.md'),
-  path.join(__dirname, '..', 'skills', 'caveman', 'SKILL.md')
-);
-
-let skillContent = '';
-for (const candidate of skillCandidates) {
-  try {
-    skillContent = fs.readFileSync(candidate, 'utf8');
-    break;
-  } catch (e) { /* try next candidate */ }
-}
+const modeLabel = canonicalModeLabel(mode);
+const skillContent = loadFilteredRuleset(mode, __dirname);
 
 let output;
 
 if (skillContent) {
-  // Strip YAML frontmatter
-  const body = skillContent.replace(/^---[\s\S]*?---\s*/, '');
-
-  // Filter intensity table: keep header rows + only the active level's row
-  const filtered = body.split('\n').reduce((acc, line) => {
-    // Intensity table rows start with | **level** |
-    const tableRowMatch = line.match(/^\|\s*\*\*(\S+?)\*\*\s*\|/);
-    if (tableRowMatch) {
-      // Keep only the active level's row (and always keep header/separator)
-      if (tableRowMatch[1] === modeLabel) {
-        acc.push(line);
-      }
-      return acc;
-    }
-
-    // Example lines start with "- level:" — keep only lines matching active level
-    const exampleMatch = line.match(/^- (\S+?):\s/);
-    if (exampleMatch) {
-      if (exampleMatch[1] === modeLabel) {
-        acc.push(line);
-      }
-      return acc;
-    }
-
-    acc.push(line);
-    return acc;
-  }, []);
-
-  output = 'CAVEMAN MODE ACTIVE — level: ' + modeLabel + '\n\n' + filtered.join('\n');
+  output = rulesetBanner(mode) + '\n\n' + skillContent;
 } else {
   // Fallback when SKILL.md is not found (standalone hook install without skills dir).
   // This is the minimum viable ruleset — better than nothing.
