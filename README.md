@@ -89,13 +89,13 @@ They stack. Most people start with the skill and graduate.
 The full installer wires up Claude Code hooks and the statusline badge, detects every supported agent on your machine, and reruns safely (Node.js 22.13+):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.5.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.6.0/install.sh | bash
 ```
 
 On Windows (PowerShell 5.1+):
 
 ```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.5.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.6.0/install.ps1 | iex
 ```
 
 Just one agent:
