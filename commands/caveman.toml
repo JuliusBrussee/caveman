@@ -1,2 +1,2 @@
 description = "Switch caveman intensity level (lite/full/ultra/wenyan-lite/wenyan-full/wenyan-ultra/off)"
-prompt = "Switch to caveman {{args}} mode. If no level specified, use full. Respond terse like smart caveman — drop articles, filler, pleasantries. Fragments OK. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step]."
+prompt = "Switch to caveman {{args}} mode. If no level specified, use full. Apply that level's rules from the caveman skill — the hooks inject them for you. Never substitute another level's rules for the one named. True at every level: no filler, no hedging, no pleasantries, no preamble or recap. Technical terms exact. Code unchanged."
