@@ -55,7 +55,7 @@ test('caveman-shrink preserves UTF-8 code points split across upstream chunks', 
   assert.equal(JSON.parse(result.stdout).result.payload, '🙂');
 });
 
-for (const signal of ['SIGTERM', 'SIGINT']) {
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   test(`caveman-shrink forwards ${signal} to its spawned upstream process`, async () => {
     const pidFile = path.join(os.tmpdir(), `caveman-shrink-${signal}-${process.pid}-${Date.now()}.pid`);
     const upstream = [
