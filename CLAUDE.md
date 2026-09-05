@@ -300,7 +300,7 @@ Reads the session JSON Claude Code pipes to it on stdin, extracts `session_id` (
 
 Stdin is bounded the same way as the SessionStart hook: `[ ! -t 0 ]` skips an interactive terminal, and `read -r -d '' -t 1` caps the wait. The timeout is an **integer on purpose** — macOS ships bash 3.2, which rejects `-t 0.3` with `invalid timeout specification`.
 
-Then appends the lifetime-savings suffix (`⛏ 12.4k`) read from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` — written by `caveman-stats.js` on every `/caveman-stats` run. **Default on**; users opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`. The suffix file is absent until `/caveman-stats` runs at least once, so fresh installs render no fake number.
+Then appends a savings suffix read from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if `CAVEMAN_STATUSLINE_SAVINGS` is not `0`. `caveman-stats.js` writes that file empty on every `/caveman-stats` run (docs/HONEST-NUMBERS.md: no output-savings estimate is published), so the suffix is currently always absent.
 
 Configured in `settings.json` under `statusLine.command`. PowerShell counterpart at `src/hooks/caveman-statusline.ps1` for Windows. Both scripts symlink-refuse and whitelist-validate the flag/suffix file contents — never echo arbitrary bytes.
 
