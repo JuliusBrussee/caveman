@@ -1175,6 +1175,30 @@ async function runInit(ctx) {
   try {
     const tmp = path.join(scratch, 'caveman-init.js');
     await downloadTo(INIT_SCRIPT_URL, tmp);
+    // Verified against the same SHA-256 manifest as HOOK_FILES (#262) — a
+    // curl-pipe install executes this script immediately, so it needs the
+    // same integrity guarantee, not just the symlink-safe scratch dir.
+    //
+    // Unlike the HOOK_FILES loop, a present-but-missing manifest ENTRY is
+    // treated the same as no manifest at all (warn, don't fail): every
+    // PINNED_REF up to and including the one this shipped in has a
+    // checksums.sha256 with no caveman-init.js line, since the entry is only
+    // added starting from this change. Until a release cuts a manifest that
+    // includes it, "not in manifest" would otherwise hard-fail every
+    // curl-pipe install. HOOK_FILES entries don't have this transition —
+    // they're added to the manifest in the same release that adds the file.
+    const checksums = await loadRemoteHookChecksums();
+    if (checksums && checksums.has('caveman-init.js')) {
+      const want = checksums.get('caveman-init.js');
+      const got = sha256File(tmp);
+      if (want !== got) {
+        warn(`  integrity check failed for caveman-init.js (expected ${want}, got ${got}) — ` +
+             `refusing to run a script that doesn't match pinned release ${PINNED_REF}`);
+        return false;
+      }
+    } else {
+      warn(`  note: no integrity manifest entry for caveman-init.js at ${PINNED_REF} — executed unverified.`);
+    }
     const r = child_process.spawnSync(absoluteNodePath(), [tmp, ...args], { stdio: 'inherit' });
     return spawnOk(r);
   } catch (e) {
