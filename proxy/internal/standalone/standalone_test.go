@@ -1202,3 +1202,76 @@ func TestStandaloneOpenCodeGoAuthEndToEnd(t *testing.T) {
 		})
 	}
 }
+
+// The production SSRF-guarded client must permit a response to remain open
+// beyond the old request cap. Explicit operator deadlines remain supported.
+func TestStandaloneClientLifetimeAndCancellation(t *testing.T) {
+	t.Setenv("CAVE_SSRF_ALLOWLIST", "localhost")
+	client := StandaloneHTTPClient(0)
+	defer client.CloseIdleConnections()
+	if client.Timeout != 0 {
+		t.Fatalf("total timeout = %v", client.Timeout)
+	}
+	transport := client.Transport.(*http.Transport)
+	if transport.ResponseHeaderTimeout != 0 || !transport.DisableCompression {
+		t.Fatalf("unexpected streaming transport: header timeout=%v compression=%v", transport.ResponseHeaderTimeout, transport.DisableCompression)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: first\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-time.After(75 * time.Millisecond):
+			_, _ = io.WriteString(w, "data: last\n\n")
+		case <-r.Context().Done():
+		}
+	}))
+	defer upstream.Close()
+	resp, err := client.Get(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil || string(data) != "data: first\n\ndata: last\n\n" {
+		t.Fatalf("long stream cut: body=%q error=%v", data, err)
+	}
+	bounded := StandaloneHTTPClient(25 * time.Millisecond)
+	defer bounded.CloseIdleConnections()
+	resp, err = bounded.Get(upstream.URL)
+	if err == nil {
+		_, err = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("explicit operator deadline was ignored")
+	}
+}
+
+func TestLongSessionUsesFreshInboundOAuthAndPreservesProviderErrors(t *testing.T) {
+	for _, path := range []string{"/v1/messages", "/v1/responses", "/chatgpt/responses", "/v1beta/models/gemini-2.5-flash:generateContent", "/compat/opencode-go/v1/messages"} {
+		t.Run(path, func(t *testing.T) {
+			transport := &captureUpstreamTransport{}
+			s := New(config.Config{Mode: "record"}, nil, Options{HTTPClient: &http.Client{Transport: transport}})
+			for i, token := range []string{"old-token", "refreshed-token"} {
+				transport.status = []int{http.StatusUnauthorized, http.StatusOK}[i]
+				transport.response = []string{`{"error":{"type":"authentication_error","message":"expired"}}`, `{"ok":true}`}[i]
+				r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"test","messages":[]}`))
+				r.Header.Set("Authorization", "Bearer "+token)
+				r.Header.Set("ChatGPT-Account-ID", "account-test")
+				r.Header.Set("x-goog-user-project", "project-test")
+				w := httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, r)
+				if transport.headers.Get("Authorization") != "Bearer "+token || transport.headers.Get("x-api-key") != "" {
+					t.Fatalf("fresh inbound bearer not preserved: %v", transport.headers)
+				}
+				if w.Code != transport.status || w.Body.String() != transport.response {
+					t.Fatalf("provider auth response changed: status=%d body=%s", w.Code, w.Body.String())
+				}
+				if path == "/chatgpt/responses" && transport.headers.Get("ChatGPT-Account-ID") != "account-test" {
+					t.Fatal("subscription account identity lost")
+				}
+			}
+		})
+	}
+}

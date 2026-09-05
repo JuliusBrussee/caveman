@@ -3616,23 +3616,13 @@ export const OFF_STATES = {
   },
   runningModeMismatch: (running: string, resolvedMode: string): OffState => ({
     id: "running-mode-mismatch",
-    line: `a caveman proxy is already running in ${running} mode — this session is not compressed; the next run restarts it to pick up ${resolvedMode}`,
-    fix: "caveman run -- <your agent>",
-  }),
-  runningModeHeld: (running: string, resolvedMode: string): OffState => ({
-    id: "running-mode-mismatch",
-    line: `a caveman proxy is already running in ${running} mode — another live session holds it, so this session keeps that mode instead of restarting to ${resolvedMode}`,
-    fix: "caveman run -- <your agent>",
+    line: `a caveman proxy is already running in ${running} mode; keeping it running to protect existing sessions instead of switching to ${resolvedMode}`,
+    fix: "restart the proxy explicitly after existing sessions finish, then retry",
   }),
   runningGateMismatch: {
     id: "running-gate-mismatch",
     line: "running caveman proxy has stale recovery state — launching this agent direct to avoid unsafe compression",
-    fix: "stop other wrapped sessions, then run this command again",
-  },
-  runningGateHeld: {
-    id: "running-gate-mismatch",
-    line: "another live session holds a caveman proxy with different recovery state — launching this agent direct to avoid unsafe compression",
-    fix: "stop other wrapped sessions, then run this command again",
+    fix: "restart the proxy explicitly after existing sessions finish, then retry",
   },
   foreignProcess: (host: string, port: number): OffState => ({
     id: "foreign-process",
@@ -5267,74 +5257,21 @@ async function spawnWrapped(
         ? OFF_STATES.foreignProcess(host, port)
         : OFF_STATES.staleBinary("caveman-proxy", proxyVersion?.version ?? "unknown", cliVersion());
     } else if (!proxyRuntimeMatches(runtime, effectiveMode, desiredRecoveryViaMCP)) {
-      if (countOtherLiveProxySessions(port, sessionMarker) > 0) {
-        runtimeState = !proxyRuntimeGateMatches(runtime, desiredRecoveryViaMCP)
-          ? OFF_STATES.runningGateHeld
-          : OFF_STATES.runningModeHeld(runtime.mode ?? "unknown", effectiveMode);
-      } else {
-        const beforeSignal = readRawProxyRunState(port);
-        const sameGeneration = beforeSignal.owner !== "unknown"
-          && beforeSignal.instance_token === runtime.instance_token
-          && beforeSignal.pid === runtime.pid;
-        if (sameGeneration && typeof runtime.pid === "number") {
-          try {
-            process.kill(runtime.pid, "SIGTERM");
-            const deadline = Date.now() + proxyRestartTimeoutMs();
-            let successor = false;
-            while (Date.now() < deadline) {
-              await sleep(100);
-              const generation = readRawProxyRunState(port);
-              if (generation.owner !== "unknown" && generation.instance_token !== runtime.instance_token) {
-                successor = true;
-                break;
-              }
-              if (!(await portListening(host, port))) break;
-            }
-            proxyReady = await portListening(host, port);
-            if (!proxyReady && !successor) {
-              proxyStarted = await startWrapProxy(
-                effectiveMode,
-                desiredRecoveryViaMCP,
-                codexSubscription ? false : observeEstimate ? false : opts.toon,
-                opts.pixelModels,
-                opts.pixelDensity,
-                gw,
-                codexSubscription ? "codex-subscription" : "standard",
-                observeEstimate,
-              );
-              proxyReady = await portListening(host, port);
-            }
-            runtime = proxyReady ? await awaitProxyRuntimeState(port, proxyVersion) : { owner: "unknown" };
-            if (runtime.owner === "unknown" || !proxyRuntimeMatches(runtime, effectiveMode, desiredRecoveryViaMCP)) {
-              runtimeState = runtime.owner === "unknown"
-                ? OFF_STATES.foreignProcess(host, port)
-                : !proxyRuntimeGateMatches(runtime, desiredRecoveryViaMCP)
-                  ? OFF_STATES.runningGateMismatch
-                  : OFF_STATES.runningModeMismatch(runtime.mode ?? "unknown", effectiveMode);
-            }
-          } catch {
-            runtime = readProxyRuntimeState(port, proxyVersion);
-            runtimeState = runtime.owner === "unknown"
-              ? OFF_STATES.foreignProcess(host, port)
-              : !proxyRuntimeMatches(runtime, effectiveMode, desiredRecoveryViaMCP)
-                ? !proxyRuntimeGateMatches(runtime, desiredRecoveryViaMCP)
-                  ? OFF_STATES.runningGateMismatch
-                  : OFF_STATES.runningModeMismatch(runtime.mode ?? "unknown", effectiveMode)
-                : null;
-          }
-        } else {
-          runtime = readProxyRuntimeState(port, proxyVersion);
-          runtimeState = runtime.owner === "unknown"
-            ? OFF_STATES.foreignProcess(host, port)
-            : !proxyRuntimeMatches(runtime, effectiveMode, desiredRecoveryViaMCP)
-              ? !proxyRuntimeGateMatches(runtime, desiredRecoveryViaMCP)
-                ? OFF_STATES.runningGateMismatch
-                : OFF_STATES.runningModeMismatch(runtime.mode ?? "unknown", effectiveMode)
-              : null;
-        }
-      }
+      // A missing wrapper marker does not prove this listener is unused:
+      // native hooks, IDEs, and resumed sessions retain its base URL. Never
+      // signal a shared proxy to change this new session's mode or recovery.
+      // Re-read once in case another operator already replaced the generation.
+      runtime = readProxyRuntimeState(port, proxyVersion);
+      runtimeState = runtime.owner === "unknown"
+        ? OFF_STATES.foreignProcess(host, port)
+        : !proxyRuntimeMatches(runtime, effectiveMode, desiredRecoveryViaMCP)
+          ? !proxyRuntimeGateMatches(runtime, desiredRecoveryViaMCP)
+            ? OFF_STATES.runningGateMismatch
+            : OFF_STATES.runningModeMismatch(runtime.mode ?? "unknown", effectiveMode)
+          : null;
     }
   }
+
   if (!proxyReady && !direct) {
     if (local && !opts.noProxy) {
       proxyStarted = codexSubscription
@@ -5355,6 +5292,11 @@ async function spawnWrapped(
       if (codexSubscription && opts.noProxy) {
         // Explicit proxy:false leaves subscription Codex in pass-through launch mode
         // without extra status noise; useful for tests and managed launchers.
+      } else if (local && !opts.noProxy) {
+        // A failed local optimization layer must not wire the agent to a dead
+        // listener. Direct launch preserves the agent's own provider setup.
+        direct = true;
+        process.stderr.write(`${mark("warn")} Caveman proxy not reachable on ${host}:${port}; launching directly without compression or metering\n`);
       } else if (interactive()) {
         // The proxy is down and we couldn't bring it up. Launching the agent now
         // would wire it to a dead endpoint (every request fails), so offer to run
@@ -5383,7 +5325,7 @@ async function spawnWrapped(
   // A foreign listener on the proxy port is the same failure as a gate
   // mismatch, with a worse consequence: launching routed would hand the
   // operator's provider keys to a process caveman does not own (#945).
-  if (runtimeState?.id === "running-gate-mismatch") {
+  if (runtimeState?.id === "running-gate-mismatch" || runtimeState?.id === "running-mode-mismatch") {
     process.stderr.write(`${mark("warn")} ${runtimeState.line}\n`);
     direct = true;
   } else if (proxyReady && gateApplies && !proxyStarted && runtime.owner === "unknown") {
@@ -5737,8 +5679,8 @@ async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon:
 }
 
 // startProxyKeepalive heartbeats the local proxy while the wrapped agent process
-// is alive, so a wrap-owned proxy's idle exit cannot fire under an open-but-quiet
-// session whose ANTHROPIC_BASE_URL still points at it (#860). The proxy treats
+// is alive, for compatibility with older proxies that still idle-exit (#860).
+// Current proxy versions never idle-exit. The proxy treats
 // the beat as activity only — nothing is recorded. No immediate beat: launching
 // is already activity, and short-lived runs should never touch the port. The
 // timer is unref'd and every failure is ignored (fail-open, like the hooks).
@@ -13822,10 +13764,10 @@ async function nativeHook(argv: string[]) {
   if (toolName) entry.tool_name = toolName;
   if (cwd) entry.cwd_sha256 = `sha256:${createHash("sha256").update(cwd).digest("hex")}`;
   // SessionStart revives a missing local proxy, but native routing points every
-  // LATER turn of the session at that proxy too, and a wrap-owned instance
-  // idle-exits ~30m after its wrap dies. A plain (unwrapped) session then
-  // hard-fails with ConnectionRefused on its next prompt, with nothing left to
-  // restart the proxy. The port check below makes the revive idempotent, so run
+  // LATER turn of the session at that proxy too. Current proxies never expire,
+  // but crashes and older binaries can still leave a dead base URL. A plain
+  // session needs prompt-time recovery as well. The port check makes revival
+  // idempotent, so run
   // it for the mid-session events that reach the full CLI as well.
   if (normalizedEvent === "SessionStart" || normalizedEvent === "UserPromptSubmit" || normalizedEvent === "PostCompact") {
     try {
@@ -16711,6 +16653,8 @@ function processAlive(pid: number): boolean {
 }
 
 function createProxySessionMarker(port: number): string | null {
+  // Prune crashed wrapper markers; their absence never authorizes a restart.
+  countOtherLiveProxySessions(port, null);
   const dir = proxySessionDir(port);
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -16728,17 +16672,6 @@ function createProxySessionMarker(port: number): string | null {
     }
   }
   return null;
-}
-
-function removeProxySessionMarker(marker: string | null): void {
-  if (!marker) return;
-  try {
-    unlinkSync(marker);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      // Marker cleanup is best-effort; the next reader prunes a dead owner.
-    }
-  }
 }
 
 function countOtherLiveProxySessions(port: number, ownMarker: string | null): number {
@@ -16767,11 +16700,17 @@ function countOtherLiveProxySessions(port: number, ownMarker: string | null): nu
   return live;
 }
 
-function proxyRestartTimeoutMs(): number {
-  const seconds = Number(process.env.CAVE_PROXY_RESTART_TIMEOUT ?? "10");
-  if (!Number.isFinite(seconds)) return 10_000;
-  return Math.max(100, Math.min(60_000, Math.round(seconds * 1000)));
+function removeProxySessionMarker(marker: string | null): void {
+  if (!marker) return;
+  try {
+    unlinkSync(marker);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      // Marker cleanup is best-effort; the next reader prunes a dead owner.
+    }
+  }
 }
+
 
 type StatusView = {
   mode: string | null;

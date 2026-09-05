@@ -400,7 +400,7 @@ func (s *Server) prefixStabilized(adapter providers.Adapter) bool {
 }
 
 // Config injects the three seams plus the upstream HTTP client. A nil HTTPClient
-// defaults to a plain client with the standard upstream timeout; the standalone
+// defaults to a plain client with no total request deadline; the standalone
 // binary passes an SSRF-guarded client (see StandaloneHTTPClient).
 type Config struct {
 	Adapters   []providers.Adapter
@@ -451,7 +451,9 @@ type Config struct {
 func New(cfg Config) *Server {
 	client := cfg.HTTPClient
 	if client == nil {
-		timeout := time.Duration(env.Int("CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS", 900000)) * time.Millisecond
+		// Client.Timeout includes the entire response body, including active SSE.
+		// Default to client cancellation; a positive env value is an explicit cap.
+		timeout := time.Duration(env.Int("CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS", 0)) * time.Millisecond
 		client = &http.Client{Timeout: timeout}
 	}
 	upstream := cfg.ChatGPTUpstream

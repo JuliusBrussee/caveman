@@ -150,7 +150,7 @@ type Options struct {
 func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.Server {
 	client := opts.HTTPClient
 	if client == nil {
-		client = StandaloneHTTPClient(time.Duration(env.Int("CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS", 900000)) * time.Millisecond)
+		client = StandaloneHTTPClient(time.Duration(env.Int("CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS", 0)) * time.Millisecond)
 	}
 	return gateway.New(gateway.Config{
 		Adapters:             buildAdapters(cfg),

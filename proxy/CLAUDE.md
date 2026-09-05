@@ -14,7 +14,7 @@ the managed gateway (the managed gateway imports them from here). `caveman start
 - `internal/standalone/` — wiring: static `Auth`, BYOK `Creds`, adapter set, and the always-on SSRF-guarded client.
 - `internal/nativeruntime/` — normalized local-agent lifecycle, Task Contract,
   Decision Ledger, typed CCR capture/masking, child evidence merge, honest
-  receipts, user-only Unix socket / Windows named pipe, and wrap-owned idle exit.
+  receipts, user-only Unix socket / Windows named pipe, and persistent listener lifetime.
 - `internal/repointel/` — deterministic local repository map, task evidence,
   conservative test impact, and optional-Scout recommendation. No model/network.
 - `internal/nativepack/` — embedded compiled Core/skill policy; generated from
@@ -31,6 +31,27 @@ the managed gateway (the managed gateway imports them from here). `caveman start
 - New provider/optimizer work goes in `providers/` (shared) — change it once, both proxies get it.
 
 ## Gotchas (honesty invariants — correctness, not style)
+
+- **listener lifetime is not session lifetime**: `serve` never exits because a
+  wrapper, native session, heartbeat, or idle timer expires. Legacy
+  `CAVEMAN_NATIVE_IDLE_TIMEOUT` does not arm shutdown. The CLI never restarts a
+  shared listener to change mode/recovery; an incompatible new wrap runs direct.
+  Failed local startup also runs direct. Native session correlation entries may
+  age out without affecting API traffic.
+- **no default generation deadline**: `CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS` defaults
+  to `0` (no total request deadline). A positive value is an explicit operator
+  cap and includes response streaming. Client cancellation still cancels upstream;
+  connection setup, inbound header/upload limits, and idle keep-alive socket
+  cleanup remain bounded separately.
+- **response protocol controls streaming**: SSE/event-stream responses flush
+  headers and chunks even without a JSON `stream` flag. Encoded requests keep
+  `Content-Encoding` and bypass transforms. Interrupted response copies record
+  an error and abort HTTP framing; they never become a clean successful EOF.
+- **replay only when non-delivery is proven**: proxy transport retries are
+  limited to dial failures. A failed upload/header read or truncated response
+  does not prove an inference was unprocessed; do not automatically replay it.
+  An explicit transformed-request 4xx still retries once with original bytes.
+  See `docs/technical/proxy-reliability.md` at the repository root.
 - **byte-safe**: `record` mode never transforms; on transform error the ORIGINAL bytes are forwarded (HTTP 200, fail-open) — never a 400.
 - **native marker is local-route-only**: HMAC session marker is emitted only
   after local runtime + route proof and stripped before capture/hash/provider.

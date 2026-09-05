@@ -7,8 +7,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,13 +29,10 @@ import (
 	"github.com/JuliusBrussee/caveman/shared/platform/redact"
 )
 
-// doUpstream sends a freshly built request, retrying transient transport
-// failures with short backoff. Replay is safe by construction: an error from
-// httpClient.Do means zero response bytes were received — the failure happened
-// during dial or request upload — and nothing has been written to the client
-// yet. Without this, large uploads hitting a connection reset (~0.9% of >400KB
-// requests, issue #860 sibling) surfaced as a terminal 502 to the agent. No
-// retry after the client context ends: the caller is gone or out of time.
+// doUpstream retries only dial failures: the provider has not received a request.
+// A missing response does NOT prove an inference POST was unprocessed. Upload,
+// header-read and body-read failures must not silently duplicate a billable call.
+// The Go transport separately handles safe retries on stale pooled connections.
 func (s *Server) doUpstream(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
 	for attempt := 0; ; attempt++ {
 		req, err := build()
@@ -44,7 +43,8 @@ func (s *Server) doUpstream(ctx context.Context, build func() (*http.Request, er
 		if err == nil {
 			return resp, nil
 		}
-		if attempt >= 2 || ctx.Err() != nil {
+		var dialErr *net.OpError
+		if attempt >= 2 || ctx.Err() != nil || !errors.As(err, &dialErr) || dialErr.Op != "dial" {
 			return nil, err
 		}
 		if s.logger != nil {
@@ -90,7 +90,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	maxBytes := int64(env.Int("CAVE_MAX_REQUEST_BYTES", 33554432))
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
 	_ = r.Body.Close()
-	if err != nil || int64(len(body)) > maxBytes {
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "cave_request_read_failed", "Request body could not be read completely.")
+		return
+	}
+	if int64(len(body)) > maxBytes {
 		httpx.Error(w, r, http.StatusRequestEntityTooLarge, "cave_request_too_large", "Request body exceeds the proxy limit.")
 		return
 	}
@@ -152,7 +156,8 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	retrieveInjected := false
 	compressionEligible := false
 	effectiveRuntimeMode := rc.RuntimeMode
-	if strings.TrimSpace(r.Header.Get("x-cave-transforms")) == "caveman.pass-through.v1" {
+	if strings.TrimSpace(r.Header.Get("x-cave-transforms")) == "caveman.pass-through.v1" ||
+		(strings.TrimSpace(r.Header.Get("Content-Encoding")) != "" && !strings.EqualFold(strings.TrimSpace(r.Header.Get("Content-Encoding")), "identity")) {
 		// Framework callers use this request-wide opt-out when their result contract
 		// cannot observe or recover transformed bytes. It suppresses compression,
 		// pixel, and provider-native transforms while preserving configured mode in
@@ -345,7 +350,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return nil, err
 			}
-			req.Header = header
+			req.Header = header.Clone()
 			return req, nil
 		}
 	}
@@ -402,6 +407,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resp = retryResp
+		upstreamHeaders = retryHeaders
 		transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}
 		transformedHash = rawHash
 		providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, body, meta)
@@ -444,28 +450,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			RetryOriginal: true,
 		}, wholeBody(body), wholeBody(body))
 	}
-	// Non-streaming responses are one JSON document: read the whole upstream
-	// body BEFORE the client sees any header. Forwarding chunk-by-chunk meant a
-	// mid-body upstream failure (HTTP/2 stream reset, GOAWAY, connection loss
-	// under concurrent subagent load) surfaced as a 200 with a truncated gzip
-	// payload — the client's ZlibError in #897 — instead of an error it can
-	// retry. One upstream retry, then a clean 502.
+	// The response protocol is authoritative: Vertex and compressed requests may
+	// stream without a readable JSON stream flag. Never buffer their SSE/events.
+	meta.Stream = meta.Stream || streamingResponse(resp.Header)
+	// Buffer non-streaming JSON before committing headers so a broken body is a
+	// clean 502. Do not replay: the provider may already have finished/billed it.
 	if !meta.Stream {
 		data, rerr := readUpstreamBody(resp)
-		if rerr != nil && r.Context().Err() == nil {
-			if s.logger != nil {
-				s.logger.Warn("upstream body read failed; retrying once", "error", redact.Error(rerr), "request_id", requestID)
-			}
-			s.inflight.Add(1)
-			retryResp, derr := s.doUpstream(r.Context(), buildUpstream(transform.Body, upstreamHeaders))
-			s.inflight.Add(-1)
-			if derr == nil {
-				resp = retryResp
-				data, rerr = readUpstreamBody(resp)
-			} else {
-				rerr = derr
-			}
-		}
 		if rerr != nil {
 			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_body_read_failed", "Upstream response could not be read completely.")
 			estimateWG.Wait()
@@ -509,6 +500,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-caveman-tripwire", tripwire)
 	}
 	w.WriteHeader(resp.StatusCode)
+	if meta.Stream {
+		_ = http.NewResponseController(w).Flush()
+	}
 
 	counter := &countingWriter{w: w}
 	usageScanner := adapter.NewUsageScanner(resp.Header)
@@ -523,6 +517,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	errCode := ""
 	if resp.StatusCode >= 400 {
 		errCode = fmt.Sprintf("provider_%d", resp.StatusCode)
+	}
+	if copyErr != nil {
+		errCode = "cave_upstream_body_read_failed"
+		if r.Context().Err() != nil {
+			errCode = "cave_client_canceled"
+		}
 	}
 	finalUsage := usageScanner.Usage()
 	// The session ledger sees the provider's own numbers for the upstream call the
@@ -546,6 +546,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	estimateWG.Wait() // join the observe estimate; overlapped the upstream round-trip + response stream
 	s.record(start, ttfb, requestID, traceID, rc, meta, authMode, resp.StatusCode, counter.n, len(body), rawHash, transformedHash, errCode, transform.OptimizerIDs, combinedUsage, comp, toolSchemaHandle, retrieved, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBust, compressionEligible)
+	if copyErr != nil {
+		// Headers are committed. Abort HTTP framing instead of returning a clean
+		// EOF for an incomplete SSE/gzip body; never replay a partial response.
+		panic(http.ErrAbortHandler)
+	}
 }
 
 func providerPrefixEvidence(adapter providers.Adapter, body []byte, meta providers.RequestMetadata) (string, string, bool) {
@@ -1208,6 +1213,9 @@ func (s *Server) matchAdapter(r *http.Request) providers.Adapter {
 // record prices the request from the catalog and writes one truthful row to the
 // sink. Standalone savings are always labeled "inferred".
 func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, rc RequestContext, meta providers.RequestMetadata, authMode AuthMode, status int, responseBytes int64, requestBytes int, rawHash, transformedHash [32]byte, errorCode string, optimizers []string, usage providers.UsageObservation, comp *compressionOutcome, toolSchemaHandle string, retrieved bool, estimate *estimateOutcome, evidence requestEvidence, providerCachePrefixSHA256, providerCacheComponentSHA256 string, cacheBoundaryKnown, cacheBust, compressionEligible bool) {
+	if s.sink == nil {
+		return
+	}
 	price := standalonePriceForUsage(meta, usage)
 	if !providers.ListPriceEligible(meta.Provider, string(authMode)) || !usage.Complete() {
 		price = cost.Price{}

@@ -433,6 +433,7 @@ func (b Base) ResolveUpstreamURL(ctx context.Context, req *http.Request, route R
 func (b Base) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, credential Credential, _ *url.URL) (http.Header, error) {
 	out := http.Header{}
 	copyIfPresent(out, req.Header, "content-type")
+	copyIfPresent(out, req.Header, "content-encoding")
 	copyIfPresent(out, req.Header, "accept")
 	copyIfPresent(out, req.Header, "accept-encoding")
 	copyIfPresent(out, req.Header, "idempotency-key")

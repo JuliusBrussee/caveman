@@ -145,7 +145,7 @@ function baseEnv(home, binDir, port, binary = proxyBin) {
   };
 }
 
-test("leftover record proxy is SIGTERM-restarted into live compress mode", async (t) => {
+test("untracked sessions keep their record proxy when a new wrap requests compression", async (t) => {
   if (!proxyBuilt) return t.skip("go toolchain not found");
   const dir = mkdtempSync(join(suiteDir, "flip-"));
   const home = join(dir, "home");
@@ -155,7 +155,7 @@ test("leftover record proxy is SIGTERM-restarted into live compress mode", async
   writeEntitledConfig(home);
   const port = await freePort();
   const original = await startRealProxy(home, port);
-  let successorPid = original.state.pid;
+  const successorPid = original.state.pid;
   try {
     const out = await runCli(cli, ["wrap", "agent"], {
       env: baseEnv(home, binDir, port),
@@ -163,20 +163,13 @@ test("leftover record proxy is SIGTERM-restarted into live compress mode", async
       timeoutMs: 12_000,
     });
     assert.equal(out.code, 0, out.stderr);
-    const successor = await waitFor(() => {
-      try {
-        const state = runState(home, port);
-        return state.pid !== original.state.pid ? state : null;
-      } catch {
-        return null;
-      }
-    });
-    successorPid = successor.pid;
-    assert.equal(successor.mode, "compress");
-    assert.equal(successor.owner, "wrap");
-    assert.equal(alive(original.state.pid), false, "pre-login generation must exit");
-    assert.match(out.stderr, /caveman · compress · agent/);
-    assert.doesNotMatch(out.stderr, /already running in record mode/);
+    const current = runState(home, port);
+    assert.equal(current.pid, original.state.pid);
+    assert.equal(current.instance_token, original.state.instance_token);
+    assert.equal(current.mode, "record");
+    assert.equal(alive(original.state.pid), true, "untracked sessions may still use this proxy");
+    assert.match(out.stderr, /direct \(no Caveman this run\)/);
+    assert.match(out.stderr, /keeping it running to protect existing sessions/);
     const markers = join(home, "run", `${port}.sessions`);
     assert.equal(existsSync(markers) ? readdirSync(markers).length : 0, 0);
   } finally {
@@ -184,7 +177,7 @@ test("leftover record proxy is SIGTERM-restarted into live compress mode", async
   }
 });
 
-test("same-mode proxy is restarted when the recovery gate is stale", async (t) => {
+test("untracked sessions keep their proxy when a new wrap changes recovery", async (t) => {
   if (!proxyBuilt) return t.skip("go toolchain not found");
   const dir = mkdtempSync(join(suiteDir, "gate-flip-"));
   const home = join(dir, "home");
@@ -195,7 +188,7 @@ test("same-mode proxy is restarted when the recovery gate is stale", async (t) =
   installMcpRecovery(home, binDir, "claude");
   const port = await freePort();
   const original = await startRealProxy(home, port, "compress");
-  let successorPid = original.state.pid;
+  const successorPid = original.state.pid;
   try {
     assert.equal(original.state.wrap_entitled, undefined, "no account signal in run state");
     assert.equal(original.state.recovery_via_mcp, false);
@@ -205,20 +198,14 @@ test("same-mode proxy is restarted when the recovery gate is stale", async (t) =
       timeoutMs: 12_000,
     });
     assert.equal(out.code, 0, out.stderr);
-    const successor = await waitFor(() => {
-      try {
-        const state = runState(home, port);
-        return state.pid !== original.state.pid ? state : null;
-      } catch {
-        return null;
-      }
-    });
-    successorPid = successor.pid;
-    assert.equal(successor.mode, "compress");
-    assert.equal(successor.wrap_entitled, undefined);
-    assert.equal(successor.recovery_via_mcp, true);
-    assert.match(out.stderr, /compress locally too/);
-    assert.doesNotMatch(out.stderr, /stale recovery state/);
+    const current = runState(home, port);
+    assert.equal(current.pid, original.state.pid);
+    assert.equal(current.instance_token, original.state.instance_token);
+    assert.equal(current.recovery_via_mcp, false);
+    assert.equal(alive(original.state.pid), true);
+    assert.match(out.stderr, /direct \(no Caveman this run\)/);
+    assert.match(out.stderr, /stale recovery state/);
+    assert.doesNotMatch(out.stderr, /compress locally too/);
   } finally {
     await stopPid(successorPid);
   }
@@ -247,8 +234,8 @@ test("another live session marker prevents restart and preserves running mode", 
     assert.equal(out.code, 0, out.stderr);
     assert.equal(runState(home, port).pid, original.state.pid);
     assert.equal(alive(original.state.pid), true);
-    assert.match(out.stderr, /caveman · record · agent/);
-    assert.match(out.stderr, /another live session holds it/);
+    assert.match(out.stderr, /direct \(no Caveman this run\)/);
+    assert.match(out.stderr, /keeping it running to protect existing sessions/);
   } finally {
     rmSync(held, { force: true });
     await stopPid(original.state.pid);
@@ -286,7 +273,7 @@ test("another live session with incompatible recovery gate makes new agent run d
   }
 });
 
-test("restart timeout never escalates to SIGKILL and still launches agent", async (t) => {
+test("mode mismatch sends no signal and still launches agent", async (t) => {
   if (!proxyBuilt) return t.skip("go toolchain not found");
   const dir = mkdtempSync(join(suiteDir, "timeout-"));
   const home = join(dir, "home");
@@ -297,7 +284,7 @@ test("restart timeout never escalates to SIGKILL and still launches agent", asyn
   const port = await freePort();
   const listener = spawn(process.execPath, ["-e", `
     const {createServer}=require("node:net");
-    process.on("SIGTERM",()=>{});
+    process.on("SIGTERM",()=>process.exit(42));
     createServer(()=>{}).listen(${port},"127.0.0.1");
   `], { stdio: "ignore" });
   await waitFor(() => alive(listener.pid));
@@ -334,7 +321,7 @@ process.exit(0);
     });
     assert.equal(out.code, 0, out.stderr);
     assert.ok(Date.now() - started < 6000, "restart wait must remain bounded");
-    assert.equal(alive(listener.pid), true, "a surviving process proves no SIGKILL escalation");
+    assert.equal(alive(listener.pid), true, "a surviving process proves no SIGTERM or SIGKILL");
     assert.match(out.stderr, /already running in record mode/);
   } finally {
     if (alive(listener.pid)) process.kill(listener.pid, "SIGKILL");
@@ -447,4 +434,28 @@ process.exit(0);
   } finally {
     if (alive(listener.pid)) process.kill(listener.pid, "SIGKILL");
   }
+});
+
+test("failed local proxy startup launches agent without a dead proxy base URL", async (t) => {
+  if (!proxyBuilt) return t.skip("go toolchain not found");
+  const dir = mkdtempSync(join(suiteDir, "startup-failed-"));
+  const home = join(dir, "home");
+  const binDir = join(dir, "bin");
+  const envFile = join(dir, "agent-env");
+  const badConfig = join(dir, "invalid.yaml");
+  mkdirSync(binDir, { recursive: true });
+  writeEntitledConfig(home);
+  writeFileSync(badConfig, "mode: [\n");
+  writeFileSync(join(binDir, "agent"), `#!/usr/bin/env node
+require("node:fs").writeFileSync(${JSON.stringify(envFile)}, process.env.ANTHROPIC_BASE_URL || "");
+`, { mode: 0o755 });
+  const port = await freePort();
+  const out = await runCli(cli, ["wrap", "agent"], {
+    env: { ...baseEnv(home, binDir, port), CAVEMAN_CONFIG: badConfig, ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}/w/agent` },
+    cwd: dir,
+    timeoutMs: 8000,
+  });
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stderr, /launching directly without compression or metering/);
+  assert.equal(readFileSync(envFile, "utf8"), "", "agent must not inherit the dead local route");
 });

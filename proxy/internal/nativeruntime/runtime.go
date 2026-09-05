@@ -232,6 +232,14 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 	request.Profile = profile
 	r.mu.Lock()
 	r.lastActivity = time.Now()
+	// Listener lifetime is independent of session bookkeeping. Prune abandoned
+	// correlation entries lazily so a persistent proxy does not retain them
+	// forever when a host disappears without session.end.
+	for sessionID, activity := range r.activeSessions {
+		if r.lastActivity.Sub(activity.At) >= 30*time.Minute {
+			delete(r.activeSessions, sessionID)
+		}
+	}
 	if request.Event.Type == "session.end" {
 		delete(r.activeSessions, request.Session.ID)
 	} else {

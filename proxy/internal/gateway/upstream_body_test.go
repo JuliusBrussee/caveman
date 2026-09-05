@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -15,8 +14,8 @@ import (
 
 // #897: a non-streaming upstream body cut mid-transfer must never reach the
 // client as a 200 with a truncated (undecodable) gzip payload. The proxy reads
-// the whole body first, retries once, and otherwise answers a clean 502.
-func TestNonStreamingTruncatedUpstreamBodyRetriesThenFails(t *testing.T) {
+// the whole body first and answers a clean 502 without repeating a billable POST.
+func TestNonStreamingTruncatedUpstreamBodyFailsWithoutReplay(t *testing.T) {
 	var gz bytes.Buffer
 	zw := gzip.NewWriter(&gz)
 	_, _ = zw.Write([]byte(`{"id":"msg_1","type":"message","content":[{"type":"text","text":"` + string(bytes.Repeat([]byte("x"), 20000)) + `"}],"usage":{"input_tokens":1,"output_tokens":2}}`))
@@ -51,20 +50,15 @@ func TestNonStreamingTruncatedUpstreamBodyRetriesThenFails(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader([]byte(`{"model":"claude-sonnet-5","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`)))
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, req)
+		if got := atomic.LoadInt32(&calls); got != 1 {
+			t.Fatalf("provider calls = %d, want 1; response failure must not replay inference", got)
+		}
 		return rec
 	}
 
 	rec := run(t, 1)
-	if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), full) {
-		t.Fatalf("one upstream cut must be retried transparently: status=%d bytes=%d want=%d", rec.Code, rec.Body.Len(), len(full))
-	}
-	if got := rec.Header().Get("Content-Length"); got != strconv.Itoa(len(full)) {
-		t.Fatalf("content-length = %q, want %d", got, len(full))
-	}
-
-	rec = run(t, 2)
 	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("two upstream cuts must surface as 502, got %d (%d bytes)", rec.Code, rec.Body.Len())
+		t.Fatalf("upstream cut must surface as 502, got %d (%d bytes)", rec.Code, rec.Body.Len())
 	}
 	if rec.Header().Get("Content-Encoding") != "" {
 		t.Fatal("502 must not carry the upstream content-encoding")

@@ -224,7 +224,19 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	respCapture := &cappedBuffer{limit: chatGPTCaptureLimit}
-	respBytes, stream := s.streamThrough(w, io.TeeReader(resp.Body, respCapture))
+	stream := streamingResponse(resp.Header)
+	if stream {
+		_ = http.NewResponseController(w).Flush()
+	}
+	counter := &countingWriter{w: w}
+	respBytes, copyErr := copyFlush(counter, io.TeeReader(resp.Body, respCapture))
+	errCode := ""
+	if copyErr != nil {
+		errCode = "cave_upstream_body_read_failed"
+		if r.Context().Err() != nil {
+			errCode = "cave_client_canceled"
+		}
+	}
 
 	// The streaming path forwarded the request without ever holding it whole, so it
 	// captures only what it can state truthfully: the whole body's length and hash,
@@ -244,14 +256,17 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestHashComplete := chatGPTRequestHashComplete(requestBodyFullyRead, r.ContentLength, reqCapture, requestBodyTracker)
-	s.recordChatGPT(rc, r, requestID, traceID, suffix, start, resp.StatusCode, "", reqCapture, reqHash.Sum(nil), transformedChatGPTHash(reqHash.Sum(nil), transform.Body), requestHashComplete, respCapture, respBytes, stream, transform.OptimizerIDs, comp, compressEligible)
+	s.recordChatGPT(rc, r, requestID, traceID, suffix, start, resp.StatusCode, errCode, reqCapture, reqHash.Sum(nil), transformedChatGPTHash(reqHash.Sum(nil), transform.Body), requestHashComplete, respCapture, respBytes, stream, transform.OptimizerIDs, comp, compressEligible)
 
 	// Path, status, and timing only — request headers carry the operator's
 	// OAuth credential and are never logged on this route.
 	if s.logger != nil {
 		s.logger.Info("chatgpt_proxy",
 			"path", suffix, "status", resp.StatusCode,
-			"latency_ms", time.Since(start).Milliseconds(), "stream", stream, "compressed", comp != nil)
+			"latency_ms", time.Since(start).Milliseconds(), "stream", stream, "compressed", comp != nil, "error_code", errCode)
+	}
+	if copyErr != nil {
+		panic(http.ErrAbortHandler)
 	}
 }
 
@@ -261,32 +276,6 @@ func transformedChatGPTHash(raw []byte, transformed []byte) []byte {
 	}
 	sum := sha256.Sum256(transformed)
 	return sum[:]
-}
-
-// streamThrough copies upstream bytes to the client, flushing per chunk so SSE
-// arrives unbuffered. It returns the byte count and whether flushing happened
-// mid-stream (a streaming response).
-func (s *Server) streamThrough(w http.ResponseWriter, body io.Reader) (int64, bool) {
-	flusher, canFlush := w.(http.Flusher)
-	var total int64
-	chunks := 0
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := body.Read(buf)
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return total, chunks > 1
-			}
-			total += int64(n)
-			chunks++
-			if canFlush {
-				flusher.Flush()
-			}
-		}
-		if err != nil {
-			return total, chunks > 1
-		}
-	}
 }
 
 func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, traceID, endpoint string, start time.Time, status int, errCode string, reqCapture *cappedBuffer, reqHash, transformedHash []byte, requestHashComplete bool, respCapture *cappedBuffer, respBytes int64, stream bool, optimizers []string, comp *compressionOutcome, compressionEligible bool) {

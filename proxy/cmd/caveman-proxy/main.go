@@ -237,32 +237,14 @@ func runServe(logger *slog.Logger) {
 			}
 		}()
 	}
-	if env.String("CAVEMAN_PROXY_OWNER", "start") == "wrap" {
-		idleTimeout := 30 * time.Minute
-		if raw := env.String("CAVEMAN_NATIVE_IDLE_TIMEOUT", ""); raw != "" {
-			parsed, parseErr := time.ParseDuration(raw)
-			if parseErr != nil || parsed <= 0 {
-				logger.Warn("invalid native idle timeout; using default", "value", raw, "default", idleTimeout)
-			} else {
-				idleTimeout = parsed
-			}
-		}
-		if nativeRuntime != nil {
-			go func() {
-				if nativeRuntime.WaitForIdle(ctx, idleTimeout) {
-					logger.Info("caveman proxy idle; shutting down", "idle_timeout", idleTimeout)
-					cancel()
-				}
-			}()
-		}
-	}
+	// A base URL can outlive the wrapper or any observed hook session. Never
+	// retire its listener on an idle clock, even when an old install exports
+	// CAVEMAN_NATIVE_IDLE_TIMEOUT. Only an explicit stop or process failure ends it.
 
 	handler := server.Handler()
 	if nativeRuntime != nil {
-		// Loopback liveness beacon for the wrap CLI: while a wrapped agent
-		// process is alive its wrap heartbeats here, which holds off the
-		// wrap-owned idle exit above (issue #860). It only refreshes the idle
-		// clock — no session state, no metering, nothing recorded.
+		// Keep accepting heartbeats from older CLIs. Listener lifetime no longer
+		// depends on these beacons or on native session tracking.
 		proxied := handler
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/caveman/keepalive" && r.Method == http.MethodPost {

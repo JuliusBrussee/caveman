@@ -1478,3 +1478,27 @@ func TestStoredEvidenceBundleCarriesOnlyDirectItems(t *testing.T) {
 		}
 	}
 }
+
+func TestPersistentRuntimePrunesAbandonedCorrelationEntries(t *testing.T) {
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	r := New(store)
+	r.activeSessions["abandoned"] = sessionActivity{At: time.Now().Add(-time.Hour)}
+	r.activeSessions["recent"] = sessionActivity{At: time.Now()}
+	_, err = r.Handle(context.Background(), Request{
+		ProtocolVersion: 1, Agent: Agent{ID: "claude", Surface: "cli"},
+		Session: Session{ID: "new"}, Event: Event{Type: "prompt.submit"}, PolicyMode: "record",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.activeSessions["abandoned"]; ok {
+		t.Fatal("abandoned session retained forever")
+	}
+	if active, _ := r.IdleSnapshot(); active != 2 {
+		t.Fatalf("active correlation entries = %d, want recent and new", active)
+	}
+}

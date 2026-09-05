@@ -1,21 +1,21 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/anthropic"
 )
 
-// A transport failure before any response byte (connection reset during a large
-// upload) must be replayed by the proxy, not surfaced as a terminal 502 that
-// kills the agent. Zero bytes have reached the client at that point, so the
-// retry is invisible on success.
+// Dial failures occur before the request reaches the provider and can be retried.
 func TestUpstreamTransportErrorRetries(t *testing.T) {
 	const body = `{"model":"claude-sonnet-5","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}`
 	const response = `{"id":"msg","type":"message","model":"claude-sonnet-5","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`
@@ -30,13 +30,13 @@ func TestUpstreamTransportErrorRetries(t *testing.T) {
 		})
 	}
 
-	t.Run("succeeds after transient resets", func(t *testing.T) {
+	t.Run("succeeds after transient dial failures", func(t *testing.T) {
 		attempts := 0
 		srv := newServer(func(r *http.Request) (*http.Response, error) {
 			attempts++
 			if attempts <= 2 {
 				_, _ = io.Copy(io.Discard, r.Body)
-				return nil, errors.New("write tcp: connection reset by peer")
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
 			}
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -61,7 +61,7 @@ func TestUpstreamTransportErrorRetries(t *testing.T) {
 		attempts := 0
 		srv := newServer(func(r *http.Request) (*http.Response, error) {
 			attempts++
-			return nil, errors.New("write tcp: connection reset by peer")
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
 		})
 		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
 		req.Header.Set("x-api-key", "sk-test")
@@ -74,4 +74,28 @@ func TestUpstreamTransportErrorRetries(t *testing.T) {
 			t.Fatalf("attempts = %d, want 3", attempts)
 		}
 	})
+}
+
+func TestUpstreamAmbiguousFailureNeverReplaysInference(t *testing.T) {
+	for _, failure := range []error{
+		io.ErrUnexpectedEOF,
+		&net.OpError{Op: "write", Net: "tcp", Err: syscall.ECONNRESET},
+		context.DeadlineExceeded,
+		errors.New("http2: stream error after request upload"),
+	} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			attempts := 0
+			s := New(Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				attempts++
+				_, _ = io.Copy(io.Discard, r.Body)
+				return nil, failure
+			})}})
+			_, err := s.doUpstream(context.Background(), func() (*http.Request, error) {
+				return http.NewRequest(http.MethodPost, "https://provider.test/v1/messages", strings.NewReader(`{"model":"test"}`))
+			})
+			if err == nil || attempts != 1 {
+				t.Fatalf("ambiguous inference replayed: attempts=%d error=%v", attempts, err)
+			}
+		})
+	}
 }
