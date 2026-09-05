@@ -59,7 +59,7 @@ since it is an explicit user reset.
 - Reads the session JSON Claude Code sends on stdin, takes `session_id`, and renders **that window's** mode; falls back to the legacy mirror when there is no usable id
 - Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc. A deactivated session renders nothing at all — never `[CAVEMAN:OFF]`
 - Never blocks: an interactive terminal is not read from, and the stdin read has a 1s ceiling (integer, because macOS ships bash 3.2 and it rejects fractional `read -t`)
-- Appends the lifetime savings suffix `⛏ 12.4k` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` (written by `caveman-stats.js` on each `/caveman-stats` run; absent until the first run, so fresh installs render no fake number). Opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`.
+- Reads a statusline savings suffix from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if `CAVEMAN_STATUSLINE_SAVINGS` is not `0`; `caveman-stats.js` writes that file empty on every `/caveman-stats` run (see docs/HONEST-NUMBERS.md: no output-savings estimate is published), so the suffix is currently always absent in practice.
 
 ## Statusline Badge
 
@@ -223,7 +223,7 @@ since it is an explicit user reset.
 - Reads the session JSON Claude Code sends on stdin, takes `session_id`, and renders **that window's** mode; falls back to the legacy mirror when there is no usable id
 - Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc. A deactivated session renders nothing at all — never `[CAVEMAN:OFF]`
 - Never blocks: an interactive terminal is not read from, and the stdin read has a 1s ceiling (integer, because macOS ships bash 3.2 and it rejects fractional `read -t`)
-- Appends the lifetime savings suffix `⛏ 12.4k` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` (written by `caveman-stats.js` on each `/caveman-stats` run; absent until the first run, so fresh installs render no fake number). Opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`.
+- Reads a statusline savings suffix from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if `CAVEMAN_STATUSLINE_SAVINGS` is not `0`; `caveman-stats.js` writes that file empty on every `/caveman-stats` run (see docs/HONEST-NUMBERS.md: no output-savings estimate is published), so the suffix is currently always absent in practice.
 
 ## Statusline Badge
 
@@ -325,5 +325,5 @@ Or manually:
 3. Delete the mode state from `$CLAUDE_CONFIG_DIR`: the `.caveman-sessions/` directory, `.caveman-active`, `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`, and `.caveman-nudge-shown`.
 
 The uninstaller does all of step 3 for you, but deliberately leaves
-`.caveman-history.jsonl` alone — that is your accumulated lifetime savings
+`.caveman-history.jsonl` alone: that is your accumulated lifetime usage
 record, not caveman plumbing. Delete it by hand if you want it gone.
