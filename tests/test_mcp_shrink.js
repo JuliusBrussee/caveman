@@ -84,6 +84,22 @@ test('preserves identifiers in CONST_CASE / dotted form', () => {
   assert.match(compressed, /config\.api\.endpoint\(\)/);
 });
 
+test('compresses a pleasantry/filler sitting inside an English parenthetical (#999)', () => {
+  // A word directly followed by a space and "(...)" is prose, not a call:
+  // real function-call syntax never has a space before the paren.
+  const cases = [
+    { in: 'This tool is useful (please read carefully) before continuing.', banned: /\bplease\b/i },
+    { in: 'Please use the option (basically the default) to enable this.', banned: /\bbasically\b/i },
+  ];
+  for (const c of cases) {
+    const { compressed } = compress(c.in);
+    assert.doesNotMatch(compressed, c.banned, `parenthetical was over-protected: "${compressed}"`);
+  }
+  // Real function calls, which never have a space before "(", still protect.
+  const { compressed } = compress('Run compress(text, opts) to process the payload.');
+  assert.match(compressed, /compress\(text, opts\)/);
+});
+
 test('compresses real MCP-style description', () => {
   const input = 'Get the current weather for a given location. ' +
     'Returns the temperature in Fahrenheit. ' +
