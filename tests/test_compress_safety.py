@@ -73,6 +73,60 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), original)
             self.assertFalse((Path(tmp) / "task.original.md").exists())
 
+    def test_expanded_compressed_output_does_not_touch_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = "# Heading\n\nFox jump dog.\n"
+            expanded = "# Heading\n\nThe quick brown fox jumps over the lazy dog, repeatedly.\n"
+            path = self._file_with(Path(tmp), original)
+            with mock.patch.object(compress_mod, "call_claude", return_value=expanded):
+                ok = compress_mod.compress_file(path)
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            self.assertFalse((Path(tmp) / "task.original.md").exists())
+
+    def test_same_length_compressed_output_does_not_touch_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = "# Heading\n\nFox jump dog now.\n"
+            same_length = "# Heading\n\nDog jump fox now.\n"
+            self.assertEqual(len(original.strip()), len(same_length.strip()))
+            path = self._file_with(Path(tmp), original)
+            with mock.patch.object(compress_mod, "call_claude", return_value=same_length):
+                ok = compress_mod.compress_file(path)
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            self.assertFalse((Path(tmp) / "task.original.md").exists())
+
+    def test_expanded_retry_candidate_does_not_touch_disk(self):
+        # The size guard runs once, on the FIRST candidate. If that candidate
+        # fails validation, build_fix_prompt's repaired candidate is assigned
+        # straight to `compressed` and validated — so a repair that is longer
+        # than the original could still be written over the source and
+        # reported as a successful compression, which is #776 again on the
+        # retry path. Here the first candidate is smaller but drops a heading
+        # (so validate() rejects it), and the repair restores the heading
+        # while being longer than the input.
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            original = "# Heading\n\n## Sub\n\nThe quick brown fox jumps over the lazy dog.\n"
+            # Structurally invalid (## Sub missing) but shorter — passes the
+            # size guard, fails validate().
+            first = "# Heading\n\nFox jump dog.\n"
+            # Structurally faithful, and longer than the original.
+            repair = (
+                "# Heading\n\n## Sub\n\nThe quick brown fox jumps over the lazy dog, "
+                "and then jumps over it again, repeatedly and at length.\n"
+            )
+            self.assertGreater(len(repair.strip()), len(original.strip()))
+            path = self._file_with(Path(tmp), original)
+            with mock.patch.object(compress_mod, "call_claude", side_effect=[first, repair, repair]):
+                ok = compress_mod.compress_file(path)
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            backup = compress_mod.backup_dir_for(path.resolve()) / "task.original.md"
+            self.assertFalse(backup.exists())
+            self.assertFalse((Path(tmp) / "task.md.caveman-staged").exists())
+
     def test_real_compression_writes_backup_and_target(self):
         # Isolate the backup data dir to a temp location so the out-of-tree
         # backup (issue #420) never lands in the developer's real home dir.

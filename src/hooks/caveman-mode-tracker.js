@@ -88,6 +88,14 @@ const writeSessionMode = cfg.writeSessionMode || ((dir, sid, modeOrNull) => {
 const writeSessionPrev = cfg.writeSessionPrev || ((dir, sid, mode) => safeWriteFlag(prevPath, mode));
 const readSessionPrev = cfg.readSessionPrev || (() => readFlag(prevPath));
 const clearSessionPrev = cfg.clearSessionPrev || (() => removeFlag(prevPath));
+// Ruleset injection helpers, shared with caveman-activate.js so a mid-session
+// switch delivers the SAME ruleset SessionStart does (#975). Resolved
+// individually like the per-session helpers above: a caveman-config.js
+// predating them passes the shape check, and the stand-ins below degrade this
+// hook to exactly its pre-#975 behavior — the one-line reminder, nothing more.
+const canonicalModeLabel = cfg.canonicalModeLabel || ((m) => (m === 'wenyan' ? 'wenyan-full' : m));
+const rulesetBanner = cfg.rulesetBanner || ((m) => 'CAVEMAN MODE ACTIVE — level: ' + canonicalModeLabel(m));
+const loadFilteredRuleset = cfg.loadFilteredRuleset || (() => null);
 const { parseModeChange, INDEPENDENT_MODES } = requireSibling('caveman-parse', (m) =>
   m && typeof m.parseModeChange === 'function' && m.INDEPENDENT_MODES instanceof Set) || {
   parseModeChange: () => null,
@@ -257,22 +265,40 @@ function handle(raw) {
       }
     }
 
+    // The level the model is actually holding rules for, read BEFORE any write:
+    // a switch can only be detected against this, never against the value we
+    // are about to store. Read only on a `set`, so an ordinary turn — every
+    // turn, on the hot path — still makes the single state read it always did.
+    const modeBeforeChange = change && change.action === 'set'
+      ? resolveActiveMode(claudeDir, sessionId)
+      : null;
+
     // Independent one-shot modes remember the prose mode active before them
     // so the next ordinary prompt restores it (#599) — SKILL.md promises
     // "Level persist until changed or session end", and a one-shot skill
     // invocation should not count as "changed" forever.
     let setIndependentThisTurn = false;
+    // Set to the new level only when this prompt genuinely CHANGES it, so the
+    // ruleset re-injection below is paid for by an actual switch and nothing
+    // else (#975). Compared through canonicalModeLabel because the two
+    // spellings of wenyan-full both reach storage — parseModeChange writes the
+    // 'wenyan' alias while getDefaultMode accepts either — and a raw compare
+    // would read that no-op as a switch. A null previous mode (caveman was
+    // off) counts as a change: the model holds no ruleset at all in that case,
+    // which is the strongest reason to send one.
+    let switchedToLevel = null;
     if (change && change.action === 'set') {
       const mode = change.mode;
       if (INDEPENDENT_MODES.has(mode)) {
         // Save the prose mode being displaced — but never overwrite an
         // already-saved one with another independent mode (/caveman-commit
         // followed by /caveman-review must still restore the original).
-        const current = resolveActiveMode(claudeDir, sessionId);
-        if (current && !INDEPENDENT_MODES.has(current)) {
-          writeSessionPrev(claudeDir, sessionId, current);
+        if (modeBeforeChange && !INDEPENDENT_MODES.has(modeBeforeChange)) {
+          writeSessionPrev(claudeDir, sessionId, modeBeforeChange);
         }
         setIndependentThisTurn = true;
+      } else if (canonicalModeLabel(mode) !== canonicalModeLabel(modeBeforeChange)) {
+        switchedToLevel = mode;
       }
       recordModeChange(claudeDir, mode, sessionId); // #601: timestamped transition log
       writeSessionMode(claudeDir, sessionId, mode);
@@ -329,10 +355,32 @@ function handle(raw) {
       ? reinforcementForMode(activeMode)
       : null;
 
-    // One write, so an unresolved-level notice and the per-turn reinforcement
-    // can both land on the same turn. Only one hookSpecificOutput per hook run
-    // is read, so emitting them separately would drop whichever came second.
-    const context = [notice, reinforce].filter(Boolean).join('\n\n');
+    // A level switch has to carry the new level's RULES, not just relabel the
+    // banner (#975). SessionStart injected exactly one level's ruleset and it
+    // is still the previous level's in the model's context — its intensity row
+    // and its "Default: **full**" line included — so a reminder that merely
+    // names the new level leaves the model working from the old one's rules,
+    // silently and self-confirmingly: the banner agrees with the user while
+    // the output does not.
+    //
+    // `reinforce` is the gate as well as the reminder: it already encodes both
+    // "caveman is active and not an independent mode" and the #634 repo
+    // opt-out, so a project with defaultMode "off" gets neither line.
+    // A SKILL.md that cannot be read degrades to the reminder alone — the
+    // standalone hook install with no skills dir, the case activate.js covers
+    // with its hardcoded fallback.
+    let ruleset = null;
+    if (switchedToLevel && reinforce) {
+      const body = loadFilteredRuleset(switchedToLevel, __dirname);
+      if (body) ruleset = rulesetBanner(switchedToLevel) + '\n\n' + body;
+    }
+
+    // One write, so an unresolved-level notice, a switch's ruleset and the
+    // per-turn reinforcement can all land on the same turn. Only one
+    // hookSpecificOutput per hook run is read, so emitting them separately
+    // would drop whichever came second. The reminder goes last: it is the
+    // directive for THIS reply, and recency is the point of it.
+    const context = [notice, ruleset, reinforce].filter(Boolean).join('\n\n');
     if (context) {
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {

@@ -115,8 +115,56 @@ function removeFlag() {
   }
 }
 
-function reinforcementLine(mode) {
+function reinforcementBanner(mode) {
   return 'CAVEMAN MODE ACTIVE (' + mode + ') — session ruleset applies.';
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Derived from reinforcementBanner() itself (split on a sentinel) rather than
+// re-spelling the banner text as a second regex literal: one source of truth,
+// and it stays in sync if the wording above ever changes.
+const [bannerPrefix, bannerSuffix] = reinforcementBanner('\0').split('\0');
+const staleBlock = new RegExp(
+  escapeRegExp(bannerPrefix) + '[a-z-]+' + escapeRegExp(bannerSuffix) + '[\\s\\S]*$'
+);
+
+// SKILL.md is the single source of truth for caveman behavior, filtered to the
+// active level the same way caveman-activate.js and caveman-mode-tracker.js do.
+// The filter itself is NOT re-implemented here: it lives in caveman-config.js,
+// which loadConfig() already evaluates, so all three loaders share one copy of
+// the intensity-table parsing. A local copy here is the exact drift risk
+// CLAUDE.md's "keep it in caveman-config.js" rule exists to prevent — SKILL.md's
+// table format would then have two parsers to keep in step.
+//
+// Resolved off `config` rather than destructured at module scope because the
+// installed caveman-config.cjs is a COPY: a user whose opencode plugin dir
+// still holds a pre-#975 copy gets a config without these exports, and the
+// stand-ins below degrade to the banner alone rather than throwing inside a
+// system-prompt hook.
+function loadFilteredRuleset(mode) {
+  if (typeof config.loadFilteredRuleset !== 'function') return null;
+  // The shared loader probes <base>/../../skills and <base>/../skills. opencode
+  // has no CLAUDE_PLUGIN_ROOT equivalent and two layouts to cover, so it is
+  // called once per base — `here` resolves the installed tree
+  // (~/.config/opencode/plugins/caveman → ~/.config/opencode/skills) and the
+  // parent resolves the dev tree (src/plugins/opencode → repo-root skills).
+  for (const base of [here, join(here, '..')]) {
+    const ruleset = config.loadFilteredRuleset(mode, base);
+    if (ruleset) return ruleset;
+  }
+  return null;
+}
+
+function reinforcementLine(mode) {
+  const banner = reinforcementBanner(mode);
+  const ruleset = loadFilteredRuleset(mode);
+  // No SKILL.md reachable (a standalone hook install without the skills
+  // dir): fall back to the banner alone, the same degrade caveman-activate.js
+  // uses for the same case.
+  return ruleset ? banner + '\n\n' + ruleset : banner;
 }
 
 function applyModeChange(change) {
@@ -190,15 +238,15 @@ export const CavemanPlugin = async (_ctx) => {
       // append grows the system prompt without bound — silently eating the
       // context window. Rewrite any line we already left instead of stacking
       // another, so a mode switch updates in place rather than accumulating.
-      const stale = /CAVEMAN MODE ACTIVE \([a-z-]+\) — session ruleset applies\./g;
+      // staleBlock matches to end of string: `line` now carries the ruleset
+      // appended after the banner, and that content is always the last thing
+      // this hook writes into an entry, so replacing from the banner on is safe.
       let found = false;
       for (let i = 0; i < output.system.length; i++) {
-        if (typeof output.system[i] === 'string' && stale.test(output.system[i])) {
-          stale.lastIndex = 0;
-          output.system[i] = output.system[i].replace(stale, line);
+        if (typeof output.system[i] === 'string' && staleBlock.test(output.system[i])) {
+          output.system[i] = output.system[i].replace(staleBlock, line);
           found = true;
         }
-        stale.lastIndex = 0;
       }
       if (found) return;
       if (output.system.length > 0) {

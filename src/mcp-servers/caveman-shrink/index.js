@@ -75,6 +75,31 @@ upstream.on('close', (code, signal) => {
   }
 });
 
+// Registering a handler here suppresses Node's default terminate-on-signal
+// behavior, so we must forward the signal to the child ourselves — otherwise
+// the wrapper would catch SIGTERM/SIGINT and never pass it on, leaving the
+// upstream process running, reparented to PID 1. Node keeps the process
+// alive only as long as something needs it to, so once `close` fires above
+// and removes the stdin listeners, the event loop drains and we exit with
+// the code/signal set there.
+// SIGHUP is forwarded for the same reason and is not hypothetical: it is what
+// a closing terminal or a disconnecting supervisor sends, and Node's default
+// disposition for it is also terminate — so leaving it unregistered orphaned
+// the upstream on exactly the teardown a user is most likely to trigger by
+// hand. Registering it here keeps that on the one code path the other two use.
+//
+// SIGKILL is deliberately absent: it cannot be trapped, and on that path the
+// upstream is orphaned by the OS with nothing this process can do about it.
+// Windows has no real signals — process.kill() there terminates the target
+// without running handlers — so teardown on that platform goes through the
+// stdin EOF the `close` handler above already forwards.
+function forwardSignalToUpstream(signal) {
+  if (!upstream.killed) upstream.kill(signal);
+}
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  process.on(signal, () => forwardSignalToUpstream(signal));
+}
+
 // JSON-RPC framing over stdio: messages are separated by newlines (the
 // MCP stdio transport uses LSP-like content but most servers emit one JSON
 // object per line). We line-buffer in both directions and parse opportunistically.
