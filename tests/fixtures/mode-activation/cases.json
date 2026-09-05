@@ -1,0 +1,220 @@
+[
+  {
+    "id": 1,
+    "prompt": "activate caveman",
+    "expected": {
+      "action": "set",
+      "mode": "full"
+    },
+    "issue": null,
+    "reason": "Direct natural-language activation command",
+    "category": "intended_activation",
+    "known_failing": false
+  },
+  {
+    "id": 2,
+    "prompt": "turn on caveman mode",
+    "expected": {
+      "action": "set",
+      "mode": "full"
+    },
+    "issue": null,
+    "reason": "Natural-language turn-on phrase",
+    "category": "intended_activation",
+    "known_failing": false
+  },
+  {
+    "id": 3,
+    "prompt": "talk like caveman",
+    "expected": {
+      "action": "set",
+      "mode": "full"
+    },
+    "issue": null,
+    "reason": "Persona activation phrase",
+    "category": "intended_activation",
+    "known_failing": false
+  },
+  {
+    "id": 4,
+    "prompt": "stop caveman",
+    "expected": {
+      "action": "clear"
+    },
+    "issue": null,
+    "reason": "Direct natural-language deactivation command",
+    "category": "intended_deactivation",
+    "known_failing": false
+  },
+  {
+    "id": 5,
+    "prompt": "back to normal mode",
+    "expected": {
+      "action": "clear"
+    },
+    "issue": null,
+    "reason": "Natural-language return to normal mode",
+    "category": "intended_deactivation",
+    "known_failing": false
+  },
+  {
+    "id": 6,
+    "prompt": "be brief",
+    "expected": {
+      "action": "set",
+      "mode": "full"
+    },
+    "issue": null,
+    "reason": "Brevity shortcut trigger",
+    "category": "intended_activation",
+    "known_failing": false
+  },
+  {
+    "id": 7,
+    "prompt": "/caveman ultra",
+    "expected": {
+      "action": "set",
+      "mode": "ultra"
+    },
+    "issue": 975,
+    "reason": "Slash command setting specific intensity level",
+    "category": "slash_command",
+    "known_failing": false
+  },
+  {
+    "id": 8,
+    "prompt": "/caveman off",
+    "expected": {
+      "action": "clear"
+    },
+    "issue": null,
+    "reason": "Slash command clearing active mode",
+    "category": "slash_command",
+    "known_failing": false
+  },
+  {
+    "id": 9,
+    "prompt": "what is caveman mode?",
+    "expected": null,
+    "issue": 598,
+    "reason": "Question about caveman must not activate mode",
+    "category": "question_guard",
+    "known_failing": false
+  },
+  {
+    "id": 10,
+    "prompt": "how does caveman work?",
+    "expected": null,
+    "issue": 598,
+    "reason": "Informational question about caveman behavior",
+    "category": "question_guard",
+    "known_failing": false
+  },
+  {
+    "id": 11,
+    "prompt": "I was reading about caveman art and stone tools",
+    "expected": null,
+    "issue": null,
+    "reason": "Historical prose mentioning caveman without command intent",
+    "category": "negative_prose",
+    "known_failing": false
+  },
+  {
+    "id": 12,
+    "prompt": "the ultra-wide monitor setup is great for development",
+    "expected": null,
+    "issue": null,
+    "reason": "Hardware discussion mentioning ultra without slash command",
+    "category": "negative_prose",
+    "known_failing": false
+  },
+  {
+    "id": 13,
+    "prompt": "switch to a different branch in git",
+    "expected": null,
+    "issue": null,
+    "reason": "Git branch command containing switch to",
+    "category": "negative_prose",
+    "known_failing": false
+  },
+  {
+    "id": 14,
+    "prompt": "switch from normal mode to debug mode",
+    "expected": null,
+    "issue": 187,
+    "reason": "Editor mode discussion without caveman context",
+    "category": "negative_prose",
+    "known_failing": false
+  },
+  {
+    "id": 15,
+    "prompt": "use normal mode for this task",
+    "expected": null,
+    "issue": 187,
+    "reason": "Normal mode mention without caveman context",
+    "category": "negative_prose",
+    "known_failing": false
+  },
+  {
+    "id": 16,
+    "prompt": "I want to start building a caveman-themed game",
+    "expected": null,
+    "current": {
+      "action": "set",
+      "mode": "full"
+    },
+    "issue": 187,
+    "reason": "Natural prose matches broad want.*caveman regex",
+    "category": "false_activation",
+    "known_failing": true
+  },
+  {
+    "id": 17,
+    "prompt": "don't activate caveman",
+    "expected": null,
+    "current": {
+      "action": "set",
+      "mode": "full"
+    },
+    "issue": 187,
+    "reason": "Negated command matches activate.*caveman without negative prefix guard",
+    "category": "false_activation",
+    "known_failing": true
+  },
+  {
+    "id": 18,
+    "prompt": "fix(caveman): stop caveman being disabled by ordinary prose",
+    "expected": null,
+    "current": {
+      "action": "clear"
+    },
+    "issue": 187,
+    "reason": "Commit message discussing stop caveman regex falsely clears active mode",
+    "category": "false_deactivation",
+    "known_failing": true
+  },
+  {
+    "id": 19,
+    "prompt": "The plugin unlinks the host-global flag whenever a prompt matches the regex that is supposed to detect a request to disable caveman. Fix that.",
+    "expected": null,
+    "current": {
+      "action": "clear"
+    },
+    "issue": 187,
+    "reason": "Technical issue report discussing disable caveman triggers deactivation",
+    "category": "false_deactivation",
+    "known_failing": true
+  },
+  {
+    "id": 20,
+    "prompt": "Should we turn off caveman for subagents? I am not asking you to do it, just asking.",
+    "expected": null,
+    "current": {
+      "action": "clear"
+    },
+    "issue": 187,
+    "reason": "Question about deactivation clears mode because isQuestion only guards activation",
+    "category": "false_deactivation",
+    "known_failing": true
+  }
+]
