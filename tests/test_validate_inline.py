@@ -53,9 +53,11 @@ class TestIndentedFenceDoesNotSwallow(unittest.TestCase):
         # it is now extracted as one (and must be preserved — it is literal
         # content the document is SHOWING). What must never happen is it opening
         # a fence that swallows the real block: `real = 1` stays its own entry.
+        # Order is document position (the indented marker appears before the
+        # real fenced block), not extraction type.
         self.assertEqual(
             extract_code_blocks(doc),
-            ["```js\nreal = 1\n```", "    ```"],
+            ["    ```", "```js\nreal = 1\n```"],
         )
         self.assertEqual(extract_inline_codes(doc), ["alpha"])
 
@@ -179,6 +181,46 @@ class TestIndentedCodeIsValidated(unittest.TestCase):
         Treating it as code would make ordinary nested prose uncompressible."""
         doc = "# Doc\n\n- a bullet\n    - nested prose that should stay compressible\n"
         self.assertEqual(extract_code_blocks(doc), [])
+
+
+class TestCrossTypeBlockOrderIsValidated(unittest.TestCase):
+    """extract_code_blocks used to return all fenced blocks (in doc order)
+    followed by all indented blocks (in doc order), so a fenced block and an
+    indented block swapping RELATIVE position produced the same concatenated
+    list on both sides of the diff. validate_code_blocks compares this list
+    positionally, so the swap passed silently even though the invariant it
+    checks (code block order preserved) was violated."""
+
+    ORIG = "Intro.\n\n```python\nprint('hi')\n```\n\nMiddle.\n\n    kubectl delete pod --all -n prod\n\nEnd.\n"
+    # Same two blocks, unchanged content, but the indented block now comes
+    # BEFORE the fenced block instead of after it.
+    SWAPPED = "Intro.\n\n    kubectl delete pod --all -n prod\n\nMiddle.\n\n```python\nprint('hi')\n```\n\nEnd.\n"
+
+    def test_extraction_reflects_document_order(self):
+        self.assertEqual(
+            extract_code_blocks(self.ORIG),
+            ["```python\nprint('hi')\n```", "    kubectl delete pod --all -n prod"],
+        )
+        self.assertEqual(
+            extract_code_blocks(self.SWAPPED),
+            ["    kubectl delete pod --all -n prod", "```python\nprint('hi')\n```"],
+        )
+
+    def test_swapped_block_order_fails_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            o, c = Path(tmp) / "o.md", Path(tmp) / "c.md"
+            o.write_text(self.ORIG, encoding="utf-8")
+            c.write_text(self.SWAPPED, encoding="utf-8")
+            result = validate(o, c)
+            self.assertFalse(result.is_valid, "a swapped block order must not pass")
+
+    def test_identical_document_still_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            o, c = Path(tmp) / "o.md", Path(tmp) / "c.md"
+            o.write_text(self.ORIG, encoding="utf-8")
+            c.write_text(self.ORIG, encoding="utf-8")
+            result = validate(o, c)
+            self.assertTrue(result.is_valid, result.errors)
 
 
 class TestPreservationPromisesAreErrors(unittest.TestCase):
