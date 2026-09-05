@@ -131,50 +131,31 @@ const staleBlock = new RegExp(
   escapeRegExp(bannerPrefix) + '[a-z-]+' + escapeRegExp(bannerSuffix) + '[\\s\\S]*$'
 );
 
-// SKILL.md is the single source of truth for caveman behavior, filtered to
-// the active level the same way caveman-activate.js does (#792 priority-2;
-// #909 already shipped priority-1). Kept local, not bridged via loadConfig().
-function canonicalModeLabel(mode) {
-  return mode === 'wenyan' ? 'wenyan-full' : mode;
-}
-
+// SKILL.md is the single source of truth for caveman behavior, filtered to the
+// active level the same way caveman-activate.js and caveman-mode-tracker.js do.
+// The filter itself is NOT re-implemented here: it lives in caveman-config.js,
+// which loadConfig() already evaluates, so all three loaders share one copy of
+// the intensity-table parsing. A local copy here is the exact drift risk
+// CLAUDE.md's "keep it in caveman-config.js" rule exists to prevent — SKILL.md's
+// table format would then have two parsers to keep in step.
+//
+// Resolved off `config` rather than destructured at module scope because the
+// installed caveman-config.cjs is a COPY: a user whose opencode plugin dir
+// still holds a pre-#975 copy gets a config without these exports, and the
+// stand-ins below degrade to the banner alone rather than throwing inside a
+// system-prompt hook.
 function loadFilteredRuleset(mode) {
-  const modeLabel = canonicalModeLabel(mode);
-  // Two layouts, no CLAUDE_PLUGIN_ROOT-style env var for opencode: installed
-  // (plugins/caveman/plugin.js, skills at ../../skills/caveman/) and dev tree
-  // (src/plugins/opencode/plugin.js, skills three levels up at repo root).
-  const candidates = [
-    join(here, '..', '..', 'skills', 'caveman', 'SKILL.md'),
-    join(here, '..', '..', '..', 'skills', 'caveman', 'SKILL.md'),
-  ];
-  let skillContent = '';
-  for (const candidate of candidates) {
-    try {
-      skillContent = readFileSync(candidate, 'utf8');
-      break;
-    } catch (e) { /* try next candidate */ }
+  if (typeof config.loadFilteredRuleset !== 'function') return null;
+  // The shared loader probes <base>/../../skills and <base>/../skills. opencode
+  // has no CLAUDE_PLUGIN_ROOT equivalent and two layouts to cover, so it is
+  // called once per base — `here` resolves the installed tree
+  // (~/.config/opencode/plugins/caveman → ~/.config/opencode/skills) and the
+  // parent resolves the dev tree (src/plugins/opencode → repo-root skills).
+  for (const base of [here, join(here, '..')]) {
+    const ruleset = config.loadFilteredRuleset(mode, base);
+    if (ruleset) return ruleset;
   }
-  if (!skillContent) return null;
-
-  const body = skillContent.replace(/^---[\s\S]*?---\s*/, '');
-  const filtered = body.split('\n').reduce((acc, line) => {
-    // Intensity table rows start with | **level** |: keep only the active
-    // level's row (plus header/separator, which do not match this pattern).
-    const tableRowMatch = line.match(/^\|\s*\*\*(\S+?)\*\*\s*\|/);
-    if (tableRowMatch) {
-      if (tableRowMatch[1] === modeLabel) acc.push(line);
-      return acc;
-    }
-    // Example lines start with "- level:", keep only the active level's.
-    const exampleMatch = line.match(/^- (\S+?):\s/);
-    if (exampleMatch) {
-      if (exampleMatch[1] === modeLabel) acc.push(line);
-      return acc;
-    }
-    acc.push(line);
-    return acc;
-  }, []);
-  return filtered.join('\n');
+  return null;
 }
 
 function reinforcementLine(mode) {

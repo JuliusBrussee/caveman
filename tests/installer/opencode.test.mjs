@@ -510,6 +510,54 @@ test('opencode system.transform injects the active level\'s filtered SKILL.md ru
   }
 });
 
+// ── a stale caveman-config.cjs must degrade, not throw ───────────────────
+// plugin.js reads the intensity filter out of caveman-config.js instead of
+// keeping its own copy, and the installed caveman-config.cjs is a COPY: an
+// opencode plugin dir left over from before the shared loader existed has no
+// loadFilteredRuleset export. That is plugin-cache drift, the same case the
+// hooks guard against, and it lands inside a system-prompt hook — throwing
+// there costs the user the banner too, not just the ruleset.
+test('opencode system.transform degrades to the banner when caveman-config.cjs predates the shared ruleset loader', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    assert.notEqual(runInstaller(['--only', 'opencode'], env).status, 2);
+
+    // Roll the installed copy back to a pre-shared-loader shape by dropping
+    // the export line, exactly as tests/test_mode_tracker_ruleset.js does for
+    // the hook side. The rest of the module — the flag helpers plugin.js
+    // destructures at load — stays intact, which is what makes this drift
+    // rather than a corrupt file.
+    const cfgPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'caveman-config.cjs');
+    const body = fs.readFileSync(cfgPath, 'utf8');
+    const stripped = body.replace(/^\s*canonicalModeLabel, loadFilteredRuleset, rulesetBanner,\n/m, '');
+    assert.notEqual(stripped, body, 'export line to strip not found — test is stale');
+    fs.writeFileSync(cfgPath, stripped);
+
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.CAVEMAN_DEFAULT_MODE = 'full';
+    const pluginPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'plugin.js');
+    const mod = await import(pathToFileURL(pluginPath).href + '?stale');
+    const handlers = await (mod.default || mod.CavemanPlugin)({});
+
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
+    const sys = { system: [] };
+    await handlers['experimental.chat.system.transform']({}, sys);
+
+    assert.match(sys.system[0], /CAVEMAN MODE ACTIVE \(ultra\)/,
+      'a stale config must still leave the user the banner');
+    assert.doesNotMatch(sys.system[0], /NO prose abbreviations/,
+      'a config with no loader cannot have produced a ruleset');
+  } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
 // ── AGENTS.md marker damage must not splice the file ─────────────────────
 // Both markers present is not enough: they must be one matched pair, in order.
 // An END above a BEGIN made `existing.indexOf(END, begin)` return -1, and the
