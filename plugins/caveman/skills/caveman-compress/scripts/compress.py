@@ -362,6 +362,32 @@ from .validate import validate
 
 MAX_RETRIES = 2
 
+
+def _is_smaller_than_body(candidate_body: str, body: str) -> bool:
+    """True when `candidate_body` actually compresses `body`.
+
+    The non-expansion invariant for #776. It lives in a helper because it has
+    to hold for EVERY candidate, not just the first one: a candidate that fails
+    validation is sent back to Claude for repair, and the repaired text is what
+    gets written if it validates. Checking only the first candidate left the
+    retry path able to write a longer file and report it as a successful
+    compression — the original bug, one branch over.
+
+    Always compares bodies with frontmatter already removed. Frontmatter is
+    preserved verbatim, so counting it on one side and not the other would
+    measure the wrong thing.
+    """
+    candidate_len = len(candidate_body.strip())
+    body_len = len(body.strip())
+    if candidate_len >= body_len:
+        print(
+            "❌ Compression aborted: output is not smaller than input "
+            f"({candidate_len} >= {body_len} chars)."
+        )
+        return False
+    return True
+
+
 # Bounds each individual Claude call so a stalled CLI (dropped network, an
 # auth prompt with no TTY to answer it) can't hang past what LOCK_WAIT_SECONDS
 # assumes for the whole run's worst case (MAX_RETRIES+1 calls).
@@ -649,6 +675,16 @@ def _compress_file_locked(filepath: Path) -> bool:
         print("   already in caveman form. Original file is untouched (no backup created).")
         return False
 
+    # A rewrite that is structurally faithful but LONGER than the input passes
+    # every check below (validate() only checks structural invariants, not
+    # length) and would otherwise be written over the original and reported
+    # as a successful compression — the opposite of what this tool exists to
+    # do (issue #776). Same length is also a reject: a compression that saved
+    # nothing isn't a compression.
+    if not _is_smaller_than_body(compressed_body, body):
+        print("   Original file is untouched (no backup created).")
+        return False
+
     # Reassemble: frontmatter (verbatim) + compressed body
     compressed = frontmatter + compressed_body
 
@@ -710,6 +746,18 @@ def _compress_file_locked(filepath: Path) -> bool:
         if anchor.startswith(("---", "#")) and first_nonblank_line(fixed) != anchor:
             print("❌ Fix attempt aborted: output does not start with the original's first line.")
             print("   Possible preamble leak. Skipping this attempt.")
+            continue
+
+        # The repaired candidate is what gets written if it validates, so the
+        # non-expansion invariant has to hold for it too — a repair that
+        # restores the structure validate() asked for by padding the prose back
+        # out is exactly the "compression" #776 is about. `fixed` is a whole
+        # file (build_fix_prompt is given one, and the anchor check above
+        # requires it to start with the original's first line), so its
+        # frontmatter is split off to compare like against like.
+        _, fixed_body = split_frontmatter(fixed)
+        if not _is_smaller_than_body(fixed_body, body):
+            print("   Skipping this attempt.")
             continue
 
         compressed = fixed
