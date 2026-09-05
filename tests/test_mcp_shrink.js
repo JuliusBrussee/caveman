@@ -13,6 +13,9 @@ const { compress, compressDescriptionsInPlace } = require(
 const { getSpawnOptions } = require(
   path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink', 'spawn-options.js')
 );
+const { createShutdown, DEFAULT_GRACE_MS } = require(
+  path.join(ROOT, 'src', 'mcp-servers', 'caveman-shrink', 'shutdown.js')
+);
 
 let passed = 0;
 let failed = 0;
@@ -215,6 +218,120 @@ test('package.json "files" ships every module the entry points require (#597)', 
       queue.push(dep);
     }
   }
+});
+
+
+// ── Teardown (shutdown.js) ──────────────────────────────────────────────────
+// A stand-in for the spawned upstream. Node sets exitCode/signalCode on a
+// ChildProcess once it has gone; before that both are null, which is what
+// createShutdown reads to decide whether anything is still worth killing.
+function fakeChild({ exitCode = null, signalCode = null, killed = false } = {}) {
+  return {
+    exitCode,
+    signalCode,
+    killed,
+    signals: [],
+    kill(sig) {
+      this.signals.push(sig);
+      this.killed = true;
+      return true;
+    },
+  };
+}
+
+// Hand-driven clock: nothing here waits on a real timer, so the escalation
+// tests stay synchronous and cannot flake under a loaded CI box.
+function fakeTimers() {
+  const pending = new Map();
+  let next = 1;
+  return {
+    setTimeout(fn) { pending.set(next, fn); return next++; },
+    clearTimeout(id) { pending.delete(id); },
+    get armed() { return pending.size; },
+    fire() {
+      const fns = [...pending.values()];
+      pending.clear();
+      for (const fn of fns) fn();
+    },
+  };
+}
+
+test('forwards a termination signal to a live upstream', () => {
+  const child = fakeChild();
+  const shutdown = createShutdown({ child, timers: fakeTimers() });
+  shutdown.forward('SIGTERM');
+  assert.deepEqual(child.signals, ['SIGTERM']);
+});
+
+test('escalates to SIGKILL when the upstream ignores the signal', () => {
+  // The whole point of the grace period: a server that traps SIGTERM and
+  // declines to exit would otherwise keep the wrapper alive alongside it.
+  const child = fakeChild();
+  const timers = fakeTimers();
+  const shutdown = createShutdown({ child, timers });
+  shutdown.forward('SIGTERM');
+  assert.equal(shutdown.pendingEscalation, true);
+  timers.fire();
+  assert.deepEqual(child.signals, ['SIGTERM', 'SIGKILL']);
+});
+
+test('does not escalate when the upstream exits inside the grace period', () => {
+  const child = fakeChild();
+  const timers = fakeTimers();
+  const shutdown = createShutdown({ child, timers });
+  shutdown.forward('SIGTERM');
+  child.exitCode = 0;            // upstream honoured the signal
+  timers.fire();
+  assert.deepEqual(child.signals, ['SIGTERM'], 'SIGKILL sent to an already-exited child');
+});
+
+test('a second signal is a no-op, not a duplicate kill and a second timer', () => {
+  // An impatient double Ctrl-C must not re-signal a child that is already
+  // being torn down, nor leave a second escalation timer behind it.
+  const child = fakeChild();
+  const timers = fakeTimers();
+  const shutdown = createShutdown({ child, timers });
+  shutdown.forward('SIGINT');
+  shutdown.forward('SIGINT');
+  assert.deepEqual(child.signals, ['SIGINT'], 'second Ctrl-C re-signalled the child');
+  assert.equal(timers.armed, 1, 'second Ctrl-C armed another timer');
+});
+
+test('leaves an already-exited upstream alone', () => {
+  const child = fakeChild({ exitCode: 0 });
+  const timers = fakeTimers();
+  const shutdown = createShutdown({ child, timers });
+  shutdown.forward('SIGTERM');
+  assert.deepEqual(child.signals, []);
+  assert.equal(timers.armed, 0);
+});
+
+test('close clears a pending escalation and detaches client input', () => {
+  const child = fakeChild();
+  const timers = fakeTimers();
+  let detached = 0;
+  const shutdown = createShutdown({ child, timers, detachInput: () => { detached++; } });
+  shutdown.forward('SIGTERM');
+  shutdown.onClose(0, null);
+  assert.equal(shutdown.pendingEscalation, false);
+  assert.equal(detached, 1);
+  timers.fire();
+  assert.deepEqual(child.signals, ['SIGTERM'], 'stale timer fired after close');
+});
+
+test('close reports the upstream exit code, or 128+signal when it was killed', () => {
+  const mk = extra => createShutdown({ child: fakeChild(), timers: fakeTimers(), ...extra });
+  assert.equal(mk().onClose(0, null), 0);
+  assert.equal(mk().onClose(3, null), 3);
+  assert.equal(mk().onClose(null, 'SIGTERM'), 143);
+  assert.equal(mk().onClose(null, 'SIGINT'), 130);
+  assert.equal(mk({ spawnFailed: () => true }).onClose(0, null), 1, 'spawn failure must not report success');
+});
+
+test('the default grace period is a real duration', () => {
+  // Guards against a refactor that drops the default to 0 and turns every
+  // teardown into an immediate SIGKILL.
+  assert.ok(DEFAULT_GRACE_MS >= 1000, `grace period too short: ${DEFAULT_GRACE_MS}ms`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

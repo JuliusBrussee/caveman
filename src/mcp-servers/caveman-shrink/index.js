@@ -27,9 +27,9 @@
 //   CAVEMAN_SHRINK_DEBUG=1  log compression deltas to stderr
 
 const { spawn } = require('child_process');
-const { constants: osConstants } = require('os');
 const { StringDecoder } = require('string_decoder');
 const { compressDescriptionsInPlace, compress } = require('./compress');
+const { createShutdown } = require('./shutdown');
 
 const args = process.argv.slice(2);
 if (args.length === 0) {
@@ -59,20 +59,21 @@ upstream.on('error', err => {
   process.stderr.write(`caveman-shrink: failed to spawn upstream: ${err.message}\n`);
 });
 
+const shutdown = createShutdown({
+  child: upstream,
+  spawnFailed: () => spawnFailed,
+  detachInput: () => {
+    process.stdin.pause();
+    process.stdin.removeListener('data', forwardInput);
+    process.stdin.removeListener('end', endInput);
+  },
+});
+
 // `exit` can fire while stdout still has unread data and while our own stdout
 // is backpressured. Wait for child `close`, stop accepting client input, then
 // let Node exit naturally so every transformed byte drains.
 upstream.on('close', (code, signal) => {
-  process.stdin.pause();
-  process.stdin.removeListener('data', forwardInput);
-  process.stdin.removeListener('end', endInput);
-  if (spawnFailed) {
-    process.exitCode = 1;
-  } else if (signal) {
-    process.exitCode = 128 + (osConstants.signals[signal] || 1);
-  } else {
-    process.exitCode = code || 0;
-  }
+  process.exitCode = shutdown.onClose(code, signal);
 });
 
 // Registering a handler here suppresses Node's default terminate-on-signal
@@ -88,16 +89,18 @@ upstream.on('close', (code, signal) => {
 // the upstream on exactly the teardown a user is most likely to trigger by
 // hand. Registering it here keeps that on the one code path the other two use.
 //
-// SIGKILL is deliberately absent: it cannot be trapped, and on that path the
-// upstream is orphaned by the OS with nothing this process can do about it.
-// Windows has no real signals — process.kill() there terminates the target
-// without running handlers — so teardown on that platform goes through the
-// stdin EOF the `close` handler above already forwards.
-function forwardSignalToUpstream(signal) {
-  if (!upstream.killed) upstream.kill(signal);
-}
+// Forwarding alone is not enough for a server that traps the signal and
+// declines to exit: nothing would ever fire `close`, and the wrapper would sit
+// there as long as the upstream did. `shutdown.forward` escalates to SIGKILL
+// after a grace period so teardown terminates either way.
+//
+// SIGKILL is deliberately absent from the list below: it cannot be trapped, and
+// on that path the upstream is orphaned by the OS with nothing this process can
+// do about it. Windows has no real signals — process.kill() there terminates
+// the target without running handlers — so teardown on that platform goes
+// through the stdin EOF the `close` handler above already forwards.
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
-  process.on(signal, () => forwardSignalToUpstream(signal));
+  process.on(signal, () => shutdown.forward(signal));
 }
 
 // JSON-RPC framing over stdio: messages are separated by newlines (the
