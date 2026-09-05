@@ -458,6 +458,13 @@ function spawnOk(r) {
 }
 
 function absoluteNodePath() {
+  if (!IS_WIN) {
+    try {
+      const r = child_process.spawnSync('/bin/sh', ['-c', 'command -v node'], { encoding: 'utf8' });
+      const candidate = (r.stdout || '').trim().split(/\r?\n/, 1)[0];
+      if (r.status === 0 && candidate) return path.resolve(candidate);
+    } catch (_) {}
+  }
   return process.execPath;
 }
 
