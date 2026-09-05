@@ -129,6 +129,13 @@ caveman qwen
 npx skills add JuliusBrussee/caveman --skill '*' -a codex --yes  # replace codex with your agent profile
 ```
 
+Already inside a Claude Code session? Same thing with the `/plugin` command:
+
+```bash
+/plugin marketplace add JuliusBrussee/caveman
+/plugin install caveman@caveman
+```
+
 **Install broke?** Open your agent in this repo and say: *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent read repo, agent fix own brain. Snake eat tail.
 
 Changed your mind: `npx -y github:JuliusBrussee/caveman -- --uninstall`
