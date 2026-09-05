@@ -76,6 +76,14 @@ var stringCases = []stringCase{
 		wantClean: true,
 		ruleHit:   "sk-prefixed-key",
 	},
+	// GitHub App installation token, stateless JWT format (dotted segments).
+	// Split mid-token so push protection never sees a contiguous secret.
+	{
+		name:      "GitHub App installation token (stateless JWT)",
+		input:     "seen in CI transcript: " + "ghs_" + "1eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJnaXRodWIifQ.c2lnbmF0dXJlLXBhcnQ",
+		wantClean: true,
+		ruleHit:   "credential-prefix-token",
+	},
 	// PEM private key
 	{
 		name: "PEM RSA private key block",

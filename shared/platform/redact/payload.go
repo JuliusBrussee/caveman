@@ -222,7 +222,7 @@ var builtinNeedles = map[string][]string{
 	"pem-private-key":         {"-----end "},
 	"dsn-with-credentials":    {"postgres", "mysql", "mongodb", "redis"},
 	"sk-prefixed-key":         {"sk-"},
-	"credential-prefix-token": {"xox", "sk_live_", "rk_live_", "ghp_", "github_pat_", "aiza", "sk-proj-"},
+	"credential-prefix-token": {"xox", "sk_live_", "rk_live_", "ghp_", "github_pat_", "ghs_", "aiza", "sk-proj-"},
 }
 
 func needles(lits ...string) [][]byte {

@@ -127,6 +127,7 @@ var (
 		`|rk_live_[A-Za-z0-9]{16,}` +
 		`|ghp_[A-Za-z0-9]{20,}` +
 		`|github_pat_[A-Za-z0-9_]{20,}` +
+		`|ghs_[A-Za-z0-9._-]{36,}` +
 		`|AIza[A-Za-z0-9_\-]{30,}` +
 		`|sk-proj-[A-Za-z0-9_\-]{20,})`)
 )

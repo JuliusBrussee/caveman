@@ -21,6 +21,15 @@ test("redactBody scrubs emails and credential-shaped strings, keeps JSON valid",
   assert.ok(out.system.includes("/Users/x stays"), "non-secret content untouched");
 });
 
+test("redactBody scrubs a GitHub App installation token (stateless JWT format)", () => {
+  const token = "ghs_" + "1eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJnaXRodWIifQ.c2lnbmF0dXJlLXBhcnQ";
+  const body = { model: "m", system: `installation token: ${token} in transcript`, messages: [] };
+  const out = redactBody(body);
+  assert.ok(!JSON.stringify(out).includes(token));
+  assert.match(out.system, /redacted:key:[0-9a-f]{8}/);
+  assert.ok(out.system.includes("installation token:") && out.system.includes("in transcript"));
+});
+
 test("classifyRequest routes every protocol", () => {
   assert.equal(classifyRequest("POST", "/v1/messages"), "anthropic-messages");
   assert.equal(classifyRequest("POST", "/v1/messages/count_tokens"), "anthropic-count-tokens");

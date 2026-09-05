@@ -663,6 +663,7 @@ func TestPayloadRedactsVendorPrefixedTokens(t *testing.T) {
 		"github pat":        "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
 		"github fine grain": "github_pat_11ABCDEFG0abcdefghijkl_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
 		"google api key":    "AIzaSyD-1234567890abcdefghijklmnopqrstuv",
+		"github app installation token (stateless JWT)": "ghs_" + "1eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJnaXRodWIifQ.c2lnbmF0dXJlLXBhcnQ",
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := []byte("pasted " + token + " into the prompt")
