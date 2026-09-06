@@ -342,6 +342,48 @@ test('standalone hooks keep a stable PATH node symlink', { skip: process.platfor
   }
 });
 
+// Preferring the PATH node over process.execPath is only an improvement while
+// that node RUNS. `command -v node` names stale version-manager shims and
+// dangling symlinks just as readily as real binaries, and baking one of those
+// into settings.json breaks every session — a worse failure than the #805
+// upgrade drift it is meant to fix, because process.execPath was by
+// construction a working node. So a candidate that cannot report a version
+// must lose to process.execPath.
+test('a PATH node that does not run loses to the running node (#805)', { skip: process.platform === 'win32' && 'POSIX shim behavior' }, () => {
+  const dir = freshTmpDir();
+  const brokenBin = path.join(dir, 'broken-bin');
+  const configDir = path.join(dir, 'claude-config');
+  fs.mkdirSync(brokenBin, { recursive: true });
+  // A shim that exists and is executable but always fails — the shape a stale
+  // nvm/asdf shim takes once its target version is uninstalled.
+  const brokenNode = path.join(brokenBin, 'node');
+  fs.writeFileSync(brokenNode, '#!/bin/sh\necho "node: version not installed" 1>&2\nexit 1\n');
+  fs.chmodSync(brokenNode, 0o755);
+
+  try {
+    const r = spawnSync(process.execPath, [
+      INSTALLER, '--only', 'claude', '--with-hooks', '--skip-skills',
+      '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink',
+    ], {
+      env: { ...process.env, PATH: `${brokenBin}:${process.env.PATH || ''}`, CLAUDE_CONFIG_DIR: configDir, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+
+    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    const command = cavemanHookCommands(settings, 'SessionStart', 'caveman-activate')[0]?.command || '';
+    const storedNode = command.match(/^"([^"]+)"/)?.[1];
+    assert.ok(storedNode, `no node path in hook command: ${command}`);
+    assert.notEqual(storedNode, brokenNode, 'installer baked a node that cannot run');
+
+    const probe = spawnSync(storedNode, ['--version'], { encoding: 'utf8' });
+    assert.equal(probe.status, 0,
+      `stored hook executable must run: ${probe.error?.message || probe.stderr}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Test: idempotent install (run twice, no duplication) ───────────────────
 test('idempotent install does not duplicate hook entries (skipped without `claude` CLI)', { skip: !hasClaudeCli() && 'claude CLI not on PATH' }, () => {
   const dir = freshTmpDir();

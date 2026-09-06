@@ -457,12 +457,30 @@ function spawnOk(r) {
   return !!r && !r.error && r.status === 0;
 }
 
+// The absolute node path baked into settings.json at install time. Preferring
+// the PATH entry over process.execPath is what survives a `brew upgrade node`
+// (#805): Homebrew runs the installer as the versioned Cellar binary
+// (/opt/homebrew/Cellar/node/26.5.0/bin/node), which stops existing on the next
+// upgrade, while /opt/homebrew/bin/node is the stable symlink that follows it.
+//
+// The candidate has to be EXERCISED, not just located. `command -v node` will
+// happily name a stale version-manager shim, a dangling symlink, or a shell
+// function, and a path that is merely on PATH but does not run is strictly
+// worse than what it replaces — process.execPath is by construction a working
+// node, since it is the one executing this line. So a candidate is only
+// preferred once it has actually reported a version; anything else falls back.
+// Same reason the result is not symlink-resolved: the stable symlink IS the
+// wanted answer, and realpath would walk it straight back to the Cellar path.
 function absoluteNodePath() {
   if (!IS_WIN) {
     try {
       const r = child_process.spawnSync('/bin/sh', ['-c', 'command -v node'], { encoding: 'utf8' });
       const candidate = (r.stdout || '').trim().split(/\r?\n/, 1)[0];
-      if (r.status === 0 && candidate) return path.resolve(candidate);
+      if (r.status === 0 && candidate && path.isAbsolute(candidate)) {
+        const resolved = path.resolve(candidate);
+        const probe = child_process.spawnSync(resolved, ['--version'], { encoding: 'utf8' });
+        if (spawnOk(probe) && /^v\d+\./.test((probe.stdout || '').trim())) return resolved;
+      }
     } catch (_) {}
   }
   return process.execPath;
