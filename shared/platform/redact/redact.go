@@ -25,7 +25,7 @@
 //   - AWS access key IDs (AKIA/ASIA/AROA)
 //   - AWS secret access keys, when labelled (aws_secret_access_key = …)
 //   - Vendor-prefixed tokens: xox[baprs]-, sk_live_, rk_live_, ghp_,
-//     github_pat_, AIza, sk-proj-, and any sk- key of 20+ chars
+//     github_pat_, ghs_, AIza, sk-proj-, and any sk- key of 20+ chars
 //   - Bearer tokens of 20+ chars
 //   - Key/secret/token/password assignments, including an intervening name
 //     fragment (SECRET_ACCESS_KEY=, GITHUB_TOKEN_FOR_CI=) and JSON-escaped
