@@ -1115,16 +1115,19 @@ func TestStandaloneOpenCodeGoAuthEndToEnd(t *testing.T) {
 	const anthropicResponse = `{"id":"msg","type":"message","role":"assistant","model":"minimax-m3","content":[{"type":"text","text":"OK"}],"usage":{"input_tokens":1,"output_tokens":1}}`
 	const openAIBody = `{"model":"glm-5.2","messages":[{"role":"user","content":"Reply with OK"}]}`
 	const openAIResponse = `{"id":"chat","model":"glm-5.2","choices":[{"message":{"role":"assistant","content":"OK"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+	const responsesBody = `{"model":"glm-5.2","input":"Reply with OK"}`
+	const responsesResponse = `{"id":"resp","model":"glm-5.2","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`
 
 	cases := []struct {
-		name       string
-		path       string
-		body       string
-		response   string
-		inbound    map[string]string
-		wantURL    string
-		wantAPIKey string
-		wantAuth   string
+		name        string
+		path        string
+		body        string
+		response    string
+		inbound     map[string]string
+		wantURL     string
+		wantAPIKey  string
+		wantAuth    string
+		wantHeaders map[string]string
 	}{
 		{
 			name:       "messages with inbound x-api-key",
@@ -1161,6 +1164,57 @@ func TestStandaloneOpenCodeGoAuthEndToEnd(t *testing.T) {
 			wantURL:  "https://opencode.ai/zen/go/v1/chat/completions",
 			wantAuth: "Bearer sk-inbound",
 		},
+		{
+			name:     "messages forwards the OpenCode session headers",
+			path:     "/w/pi/compat/opencode-go/v1/messages",
+			body:     anthropicBody,
+			response: anthropicResponse,
+			inbound: map[string]string{
+				"x-api-key":          "sk-inbound",
+				"x-opencode-session": "ses_messages",
+				"x-opencode-client":  "pi",
+			},
+			wantURL:    "https://opencode.ai/zen/go/v1/messages",
+			wantAPIKey: "sk-inbound",
+			wantHeaders: map[string]string{
+				"x-opencode-session": "ses_messages",
+				"x-opencode-client":  "pi",
+			},
+		},
+		{
+			name:     "chat completions forwards the OpenCode session headers",
+			path:     "/w/pi/compat/opencode-go/v1/chat/completions",
+			body:     openAIBody,
+			response: openAIResponse,
+			inbound: map[string]string{
+				"authorization":      "Bearer sk-inbound",
+				"x-opencode-session": "ses_chat",
+				"x-opencode-client":  "pi",
+			},
+			wantURL:  "https://opencode.ai/zen/go/v1/chat/completions",
+			wantAuth: "Bearer sk-inbound",
+			wantHeaders: map[string]string{
+				"x-opencode-session": "ses_chat",
+				"x-opencode-client":  "pi",
+			},
+		},
+		{
+			name:     "responses forwards the OpenCode session headers",
+			path:     "/w/pi/compat/opencode-go/v1/responses",
+			body:     responsesBody,
+			response: responsesResponse,
+			inbound: map[string]string{
+				"authorization":      "Bearer sk-inbound",
+				"x-opencode-session": "ses_responses",
+				"x-opencode-client":  "pi",
+			},
+			wantURL:  "https://opencode.ai/zen/go/v1/responses",
+			wantAuth: "Bearer sk-inbound",
+			wantHeaders: map[string]string{
+				"x-opencode-session": "ses_responses",
+				"x-opencode-client":  "pi",
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1195,6 +1249,15 @@ func TestStandaloneOpenCodeGoAuthEndToEnd(t *testing.T) {
 			}
 			if strings.Contains(upstream.headers.Get("authorization")+upstream.headers.Get("x-api-key"), "sk-legacy") {
 				t.Fatal("OPENAI_COMPAT_API_KEY reached the opencode-go mount")
+			}
+			for name, want := range tc.wantHeaders {
+				if got := upstream.headers.Get(name); got != want {
+					t.Errorf("upstream %s = %q, want %q", name, got, want)
+				}
+			}
+			// A case that sends no OpenCode header must not gain one.
+			if tc.wantHeaders["x-opencode-session"] == "" && upstream.headers.Get("x-opencode-session") != "" {
+				t.Errorf("upstream x-opencode-session = %q, want no header", upstream.headers.Get("x-opencode-session"))
 			}
 			if !bytes.Equal(upstream.body, []byte(tc.body)) {
 				t.Fatalf("record mode changed the body:\n got %s\nwant %s", upstream.body, tc.body)

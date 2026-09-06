@@ -180,13 +180,19 @@ func (a namedAdapter) InspectRequest(ctx context.Context, body providers.BodyRea
 // inbound Bearer token keeps its scheme on every path, as the repository
 // preserves the auth scheme of an inbound credential. The placeholder token is
 // not a real credential. The gateway replaces it from the environment after
-// this mapping, so it must land in the header of the wire protocol.
+// this mapping, so it must land in the header of the wire protocol. The method
+// also forwards the OpenCode session headers on every path of the opencode-go
+// mount. See openCodeSessionHeaders.
 func (a namedAdapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, credential providers.Credential, upstream *url.URL) (http.Header, error) {
 	out, err := a.Base.SanitizeAndMapHeaders(ctx, req, credential, upstream)
 	if err != nil {
 		return nil, err
 	}
-	if req == nil || req.URL == nil || !a.anthropicMessagesPath(req.URL.Path) {
+	if req == nil || req.URL == nil {
+		return out, nil
+	}
+	a.forwardOpenCodeHeaders(out, req.Header)
+	if !a.anthropicMessagesPath(req.URL.Path) {
 		return out, nil
 	}
 	if credential.Key != "" && !realBearer(credential) {
@@ -197,6 +203,37 @@ func (a namedAdapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Reque
 		out.Set("anthropic-version", "2023-06-01")
 	}
 	return out, nil
+}
+
+// openCodeGoPrefix is the mount of the built-in OpenCode Go upstream. The
+// session headers below are forwarded on this mount only.
+const openCodeGoPrefix = "/compat/opencode-go"
+
+// openCodeSessionHeaders are the headers that OpenCode reads for session
+// attribution. Pi sends x-opencode-session and x-opencode-client. The OpenCode
+// CLI sends all four. OpenCode announced that from 2026-09-06 a request without
+// x-opencode-session can get an error. The shared allowlist of the base adapter
+// drops every x-opencode-* header, thus this mount puts them back.
+var openCodeSessionHeaders = []string{
+	"x-opencode-session",
+	"x-opencode-client",
+	"x-opencode-project",
+	"x-opencode-request",
+}
+
+// forwardOpenCodeHeaders copies the OpenCode session headers from the inbound
+// request to the upstream headers. The copy is gated on the opencode-go mount.
+// Another named mount has no use for these headers. It must not learn the
+// session identity of the caller.
+func (a namedAdapter) forwardOpenCodeHeaders(out, inbound http.Header) {
+	if a.prefix != openCodeGoPrefix {
+		return
+	}
+	for _, name := range openCodeSessionHeaders {
+		for _, value := range inbound.Values(name) {
+			out.Add(name, value)
+		}
+	}
 }
 
 // realBearer reports whether the credential is a Bearer token from the inbound

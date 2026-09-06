@@ -277,3 +277,88 @@ func TestNewNamed_AnthropicMessagesPathUsesAPIKeyHeader(t *testing.T) {
 		t.Fatalf("empty credential produced auth headers: %v", out)
 	}
 }
+
+// TestNewNamed_ForwardsOpenCodeSessionHeaders pins the session headers that
+// OpenCode reads for attribution. The shared allowlist of the base adapter
+// drops every x-opencode-* header, and OpenCode can reject a request without
+// x-opencode-session. The forward covers the three Pi paths and stops at the
+// opencode-go mount.
+func TestNewNamed_ForwardsOpenCodeSessionHeaders(t *testing.T) {
+	adapter := mustNamed(t, "opencode-go", "https://opencode.ai/zen/go")
+	credential := providers.Credential{Mode: "ephemeral_header", Key: "sk-test"}
+	inbound := map[string]string{
+		"x-opencode-session": "ses_123",
+		"x-opencode-client":  "pi",
+		"x-opencode-project": "prj_456",
+		"x-opencode-request": "req_789",
+	}
+	paths := []string{
+		"/compat/opencode-go/v1/messages",
+		"/compat/opencode-go/v1/chat/completions",
+		"/compat/opencode-go/v1/responses",
+	}
+	for _, path := range paths {
+		t.Run("forwards "+path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, path, nil)
+			for name, value := range inbound {
+				req.Header.Set(name, value)
+			}
+			out, err := adapter.SanitizeAndMapHeaders(context.Background(), req, credential, nil)
+			if err != nil {
+				t.Fatalf("SanitizeAndMapHeaders: %v", err)
+			}
+			for name, want := range inbound {
+				if got := out.Get(name); got != want {
+					t.Errorf("%s = %q, want %q", name, got, want)
+				}
+			}
+		})
+		t.Run("omits "+path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, path, nil)
+			out, err := adapter.SanitizeAndMapHeaders(context.Background(), req, credential, nil)
+			if err != nil {
+				t.Fatalf("SanitizeAndMapHeaders: %v", err)
+			}
+			for name := range inbound {
+				if got := out.Get(name); got != "" {
+					t.Errorf("%s = %q, want no header", name, got)
+				}
+			}
+		})
+	}
+
+	// The messages path keeps the credential mapping of the wire protocol.
+	req := httptest.NewRequest(http.MethodPost, "/compat/opencode-go/v1/messages", nil)
+	for name, value := range inbound {
+		req.Header.Set(name, value)
+	}
+	out, err := adapter.SanitizeAndMapHeaders(context.Background(), req, credential, nil)
+	if err != nil {
+		t.Fatalf("SanitizeAndMapHeaders: %v", err)
+	}
+	if got := out.Get("x-api-key"); got != "sk-test" {
+		t.Errorf("x-api-key = %q, want %q", got, "sk-test")
+	}
+	if got := out.Get("authorization"); got != "" {
+		t.Errorf("authorization = %q, want no header", got)
+	}
+	if got := out.Get("anthropic-version"); got != "2023-06-01" {
+		t.Errorf("anthropic-version = %q, want %q", got, "2023-06-01")
+	}
+
+	// Another named mount gets none of the headers.
+	other := mustNamed(t, "other", "https://api.example.test")
+	otherReq := httptest.NewRequest(http.MethodPost, "/compat/other/v1/chat/completions", nil)
+	for name, value := range inbound {
+		otherReq.Header.Set(name, value)
+	}
+	otherOut, err := other.SanitizeAndMapHeaders(context.Background(), otherReq, credential, nil)
+	if err != nil {
+		t.Fatalf("SanitizeAndMapHeaders on the other mount: %v", err)
+	}
+	for name := range inbound {
+		if got := otherOut.Get(name); got != "" {
+			t.Errorf("other mount %s = %q, want no header", name, got)
+		}
+	}
+}
