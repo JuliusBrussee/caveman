@@ -79,6 +79,37 @@ const QUOTED_SPAN_REGEX = /(["`])(?:(?!\1).)*\1/g;
 // Trailing punctuation only. A leading quote or bracket is stripped too so
 // `/caveman "ultra"` resolves — asymmetric handling would leave a second,
 // equally silent failure right next to the one being fixed.
+// The span between an activation verb and "caveman" used to be any 40
+// characters (`[^.]{0,40}`), which made ordinary prose an activation command:
+// "i want to start building a caveman-themed game" is `want` … `caveman` with
+// nothing but prose in between (#187). Real activation phrases only ever put
+// determiners and particles in that gap ("turn on THE caveman mode", "switch
+// TO caveman"), so the gap is a whitelist now rather than a length budget.
+//
+// "a"/"an" are deliberately absent. No genuine activation phrase needs one,
+// and admitting them is exactly what makes "start a caveman fire" read as a
+// command — the question guard catches that phrasing only while it happens to
+// be spelled as a question.
+const ACTIVATION_VERBS = '(?:activate|enable|start|turn on|use|switch to|want|give me)';
+const ACTIVATION_GAP = '(?:\\s+(?:the|to|into|on|in|please|now|it|me|my|this|that|mode))*';
+const ACTIVATION_VERB_PHRASE = new RegExp(
+  '\\b' + ACTIVATION_VERBS + '\\b' + ACTIVATION_GAP + '\\s+caveman\\b'
+);
+// "talk like caveman" / "talk like a caveman" — same tightening, but this one
+// keeps the article: it is the idiomatic form of the phrase.
+const ACTIVATION_TALK_LIKE = /\btalk\s+like\s+(?:a\s+|an\s+|the\s+)?caveman\b/;
+
+// A negated activation is not an activation ("don't activate caveman"). This
+// guard is deliberately ASYMMETRIC — the deactivation side keeps firing on
+// "don't stop caveman", per the committed behavior in #838: a dropped
+// deactivation is silent and leaves the user unable to escape the mode, while
+// a spurious one costs a single "/caveman" to undo.
+const NEGATED_ACTIVATION = new RegExp(
+  "\\b(?:don['\u2019]?t|do not|doesn['\u2019]?t|does not|won['\u2019]?t|will not|never|no need to|rather not)\\s+" +
+  '(?:\\w+\\s+){0,2}' +
+  '(?:' + ACTIVATION_VERBS + '|talk\\s+like)\\b' + ACTIVATION_GAP + '\\s+(?:a\\s+|an\\s+|the\\s+)?caveman\\b'
+);
+
 function normalizeModeArg(arg) {
   return (arg || '').replace(/^[^a-z0-9]+/, '').replace(/[^a-z0-9-]+$/, '');
 }
@@ -192,9 +223,9 @@ function parseModeChange(promptRaw, options) {
     // "be brief/terse", "fewer tokens", "shorter answers") — but not when
     // scoped to a single section ("be brief in the summary"), which is a
     // one-off instruction, not a session-wide mode switch.
-    if (!isQuestion) {
-      if (/\b(activate|enable|start|turn on|use|switch to|want|give me)\b[^.]{0,40}\bcaveman\b/.test(nlPrompt) ||
-          /\btalk like\b[^.]{0,40}\bcaveman\b/.test(nlPrompt) ||
+    if (!isQuestion && !NEGATED_ACTIVATION.test(nlPrompt)) {
+      if (ACTIVATION_VERB_PHRASE.test(nlPrompt) ||
+          ACTIVATION_TALK_LIKE.test(nlPrompt) ||
           /\bcaveman\s+mode\s+(on|please|now)\b/.test(nlPrompt) ||
           /^caveman(\s+mode)?\s*[.!]*$/.test(nlPrompt) ||
           /\b(less tokens|fewer tokens|be brief|be terse|shorter answers)\b(?!\s+(in|for|on|about|when|during|with)\b)/.test(nlPrompt)) {

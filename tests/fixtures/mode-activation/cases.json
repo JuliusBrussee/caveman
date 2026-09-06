@@ -159,27 +159,19 @@
     "id": 16,
     "prompt": "I want to start building a caveman-themed game",
     "expected": null,
-    "current": {
-      "action": "set",
-      "mode": "full"
-    },
     "issue": 187,
-    "reason": "Natural prose matches broad want.*caveman regex",
-    "category": "false_activation",
-    "known_failing": true
+    "reason": "Caveman as an adjective in ordinary prose must not activate (#187)",
+    "category": "negative_prose",
+    "known_failing": false
   },
   {
     "id": 17,
     "prompt": "don't activate caveman",
     "expected": null,
-    "current": {
-      "action": "set",
-      "mode": "full"
-    },
     "issue": 187,
-    "reason": "Negated command matches activate.*caveman without negative prefix guard",
-    "category": "false_activation",
-    "known_failing": true
+    "reason": "Negated activation command must not activate (#187)",
+    "category": "negation_guard",
+    "known_failing": false
   },
   {
     "id": 18,

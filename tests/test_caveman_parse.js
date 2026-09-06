@@ -150,6 +150,55 @@ test('questions about caveman do not activate', () => {
   assert.strictEqual(parseModeChange('what is caveman mode?', defaultFull), null);
 });
 
+// #187: the gap between the activation verb and "caveman" was any 40
+// characters, so ordinary prose that merely mentioned caveman downstream of a
+// common verb switched the mode on. The gap is a whitelist of determiners and
+// particles now.
+test('prose with a verb and a downstream "caveman" does not activate (#187)', () => {
+  for (const prompt of [
+    'i want to start building a caveman-themed game',
+    'help me start a caveman fire for the demo scene',
+    'we should use the sprite sheet from the caveman assets folder',
+    'switch to the branch that renames the caveman skill directory',
+  ]) {
+    assert.strictEqual(parseModeChange(prompt, defaultFull), null, prompt);
+  }
+});
+
+test('real activation phrasings still activate (positive control, #187)', () => {
+  for (const prompt of [
+    'activate caveman',
+    'activate caveman mode',
+    'enable the caveman mode',
+    'turn on caveman',
+    'turn on the caveman mode please',
+    'switch to caveman',
+    'i want caveman mode',
+    'give me caveman',
+    'please use caveman now',
+    'talk like caveman',
+    'talk like a caveman',
+  ]) {
+    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'full' }, prompt);
+  }
+});
+
+// #187: "don't activate caveman" activated. The guard is activation-only —
+// see the asymmetry note in caveman-parse.js and the #838 test below, which
+// keeps "don't stop caveman" deactivating on purpose.
+test('a negated activation does not activate (#187)', () => {
+  for (const prompt of [
+    "don't activate caveman",
+    'do not turn on caveman',
+    'never enable caveman mode',
+    "i don't want caveman for this file",
+    "please don't talk like a caveman",
+    'no need to use caveman here',
+  ]) {
+    assert.strictEqual(parseModeChange(prompt, defaultFull), null, prompt);
+  }
+});
+
 test('natural-language deactivation', () => {
   assert.deepStrictEqual(parseModeChange('turn caveman mode off', defaultFull), { action: 'clear' });
   assert.deepStrictEqual(parseModeChange('normal mode', defaultFull), { action: 'clear' });
