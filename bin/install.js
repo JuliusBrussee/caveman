@@ -30,6 +30,11 @@ const PORTABLE = require('./lib/portable-process');
 const PLATFORM_PATHS = require('./lib/platform-paths');
 
 const REPO = 'JuliusBrussee/caveman';
+// Mirrors the `engines.node` floor in package.json. Hardcoded rather than read
+// from disk because this file also runs detached from a checkout (the curl
+// fallback path); `tests/installer/node-floor.test.mjs` fails the build if the
+// two drift apart.
+const MIN_NODE_MAJOR = 18;
 // Pin remote fetches to an immutable release tag, not the moving `main`
 // branch (issue #261). A push to main must never silently change what a
 // curl|bash / detached-script install downloads and executes. Bump this to
@@ -479,7 +484,12 @@ function absoluteNodePath() {
       if (r.status === 0 && candidate && path.isAbsolute(candidate)) {
         const resolved = path.resolve(candidate);
         const probe = child_process.spawnSync(resolved, ['--version'], { encoding: 'utf8' });
-        if (spawnOk(probe) && /^v\d+\./.test((probe.stdout || '').trim())) return resolved;
+        const major = /^v(\d+)\./.exec((probe.stdout || '').trim());
+        // Running is necessary but not sufficient: a PATH node below the
+        // package's `engines` floor would be persisted into settings.json and
+        // run every hook on an unsupported runtime. process.execPath already
+        // satisfies the floor, since it is running this installer.
+        if (spawnOk(probe) && major && Number(major[1]) >= MIN_NODE_MAJOR) return resolved;
       }
     } catch (_) {}
   }

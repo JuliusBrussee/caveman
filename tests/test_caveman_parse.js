@@ -199,6 +199,35 @@ test('a negated activation does not activate (#187)', () => {
   }
 });
 
+// The negator does not always sit next to the verb it negates: "don't want you
+// to use caveman" negates `want`, while the trigger that actually matches is
+// the `use` in the complement clause. Scoping the guard to the clause rather
+// than to a fixed word window is what catches these.
+test('a negated activation with a complement clause does not activate (#187)', () => {
+  for (const prompt of [
+    "i don't want you to use caveman",
+    "don't ask me to enable caveman",
+    "please don't switch me to caveman",
+    "i don't need you to talk like a caveman",
+    'never ask me to turn on caveman mode',
+  ]) {
+    assert.strictEqual(parseModeChange(prompt, defaultFull), null, prompt);
+  }
+});
+
+// The other half of clause scoping: a negation must not swallow a LATER,
+// independent positive command. Widening the guard to "a negator appears
+// anywhere earlier in the prompt" would break exactly these.
+test('a negated clause does not suppress a later activation (#187)', () => {
+  for (const prompt of [
+    "don't use vim, activate caveman",
+    "i don't like verbose output. activate caveman",
+    "never mind the linter — turn on caveman",
+  ]) {
+    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'full' }, prompt);
+  }
+});
+
 test('natural-language deactivation', () => {
   assert.deepStrictEqual(parseModeChange('turn caveman mode off', defaultFull), { action: 'clear' });
   assert.deepStrictEqual(parseModeChange('normal mode', defaultFull), { action: 'clear' });

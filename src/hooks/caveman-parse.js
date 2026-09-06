@@ -104,11 +104,59 @@ const ACTIVATION_TALK_LIKE = /\btalk\s+like\s+(?:a\s+|an\s+|the\s+)?caveman\b/;
 // "don't stop caveman", per the committed behavior in #838: a dropped
 // deactivation is silent and leaves the user unable to escape the mode, while
 // a spurious one costs a single "/caveman" to undo.
-const NEGATED_ACTIVATION = new RegExp(
-  "\\b(?:don['\u2019]?t|do not|doesn['\u2019]?t|does not|won['\u2019]?t|will not|never|no need to|rather not)\\s+" +
-  '(?:\\w+\\s+){0,2}' +
-  '(?:' + ACTIVATION_VERBS + '|talk\\s+like)\\b' + ACTIVATION_GAP + '\\s+(?:a\\s+|an\\s+|the\\s+)?caveman\\b'
-);
+const NEGATOR = /\b(?:don['’]?t|do not|doesn['’]?t|does not|won['’]?t|will not|never|no need to|rather not)\b/;
+
+// The negator does not reliably sit next to the verb it negates. In "don't
+// want you to use caveman" it attaches to `want`, while the trigger that
+// actually matches is the `use` inside the complement clause — so a fixed
+// "negator, then up to N words, then the verb" window misses it, and widening
+// that window far enough to catch it starts swallowing unrelated text.
+//
+// Scope the guard to the CLAUSE instead: a trigger is negated when a negator
+// appears between the last clause boundary and the trigger itself. That is
+// what keeps a later independent command alive — in "don't use vim, activate
+// caveman" the comma ends the negated clause, so the activation still stands.
+// Dashes and colons separate clauses the same way a comma does ("never mind
+// the linter — turn on caveman"), so they end a negated clause too.
+const CLAUSE_BOUNDARY = /[.;!?,:—–]|\s-+\s|\bbut\b|\bthen\b/g;
+
+function negatedBefore(text, index) {
+  CLAUSE_BOUNDARY.lastIndex = 0;
+  let clauseStart = 0;
+  let m;
+  while ((m = CLAUSE_BOUNDARY.exec(text)) !== null) {
+    if (m.index >= index) break;
+    clauseStart = m.index + m[0].length;
+  }
+  return NEGATOR.test(text.slice(clauseStart, index));
+}
+
+// Every phrasing that means "switch caveman on". Kept as one list so the
+// negation check applies uniformly — a guard on only the verb form would let
+// "don't put caveman mode on" through.
+const BREVITY_TRIGGER = /\b(less tokens|fewer tokens|be brief|be terse|shorter answers)\b(?!\s+(in|for|on|about|when|during|with)\b)/;
+const ACTIVATION_TRIGGERS = [
+  ACTIVATION_VERB_PHRASE,
+  ACTIVATION_TALK_LIKE,
+  /\bcaveman\s+mode\s+(on|please|now)\b/,
+  /^caveman(\s+mode)?\s*[.!]*$/,
+  BREVITY_TRIGGER,
+].map(re => new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g'));
+
+// True when any trigger matches outside a negated clause. Every match is
+// examined, not just the first: the first may be negated while a later,
+// independent one is not.
+function wantsActivation(text) {
+  for (const re of ACTIVATION_TRIGGERS) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (!negatedBefore(text, m.index)) return true;
+      if (m.index === re.lastIndex) re.lastIndex++;
+    }
+  }
+  return false;
+}
 
 function normalizeModeArg(arg) {
   return (arg || '').replace(/^[^a-z0-9]+/, '').replace(/[^a-z0-9-]+$/, '');
@@ -223,12 +271,8 @@ function parseModeChange(promptRaw, options) {
     // "be brief/terse", "fewer tokens", "shorter answers") — but not when
     // scoped to a single section ("be brief in the summary"), which is a
     // one-off instruction, not a session-wide mode switch.
-    if (!isQuestion && !NEGATED_ACTIVATION.test(nlPrompt)) {
-      if (ACTIVATION_VERB_PHRASE.test(nlPrompt) ||
-          ACTIVATION_TALK_LIKE.test(nlPrompt) ||
-          /\bcaveman\s+mode\s+(on|please|now)\b/.test(nlPrompt) ||
-          /^caveman(\s+mode)?\s*[.!]*$/.test(nlPrompt) ||
-          /\b(less tokens|fewer tokens|be brief|be terse|shorter answers)\b(?!\s+(in|for|on|about|when|during|with)\b)/.test(nlPrompt)) {
+    if (!isQuestion) {
+      if (wantsActivation(nlPrompt)) {
         const mode = getDefaultMode();
         // Mirrors the tracker exactly: a configured-off default makes this a
         // no-op (leave whatever flag state already exists), NOT a clear —
