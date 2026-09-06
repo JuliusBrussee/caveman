@@ -1264,7 +1264,7 @@ async function runInit(ctx) {
   if (opts.dryRun) args.push('--dry-run');
   if (opts.force)  args.push('--force');
   if (local && fs.existsSync(local)) {
-    const r = runSpawn(absoluteNodePath(), [local, ...args], null, opts.dryRun);
+    const r = runSpawn(process.execPath, [local, ...args], null, opts.dryRun);
     return spawnOk(r);
   }
   // Curl-pipe fallback
@@ -1276,7 +1276,7 @@ async function runInit(ctx) {
   try {
     const tmp = path.join(scratch, 'caveman-init.js');
     await downloadTo(INIT_SCRIPT_URL, tmp);
-    const r = child_process.spawnSync(absoluteNodePath(), [tmp, ...args], { stdio: 'inherit' });
+    const r = child_process.spawnSync(process.execPath, [tmp, ...args], { stdio: 'inherit' });
     return spawnOk(r);
   } catch (e) {
     warn('  ' + e.message);

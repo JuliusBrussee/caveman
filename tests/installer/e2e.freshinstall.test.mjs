@@ -384,6 +384,61 @@ test('a PATH node that does not run loses to the running node (#805)', { skip: p
   }
 });
 
+// absoluteNodePath() answers "which node do we WRITE INTO settings.json", where
+// the stable PATH symlink is what survives a `brew upgrade node` (#805). The
+// two runInit() spawns are a different question — they execute caveman-init
+// right now, in this process's lifetime — and there the answer is
+// process.execPath: the interpreter already known to work, the one running the
+// installer. Routing those through absoluteNodePath() broadened the persisted-
+// hook fix into same-process execution and broke launching the installer with
+// an explicit good Node while PATH resolves to a different or stale one.
+//
+// The fake node reports a CURRENT version for `--version` on purpose, so it
+// passes the MIN_NODE_MAJOR probe and absoluteNodePath() genuinely SELECTS it.
+// A fixture that fails outright also catches the regression, but only because
+// the version probe invokes it on the way to rejecting it — the marker records
+// the probe rather than caveman-init actually running on the wrong Node. This
+// shape exercises the real failure, so it keeps its meaning if the probe ever
+// changes. The marker is written only when the fake is handed a script, which
+// is what running caveman-init looks like.
+test('caveman-init runs on the installer\'s own Node, not the PATH one (#805)', { skip: process.platform === 'win32' && 'POSIX executable fixture' }, () => {
+  const dir = freshTmpDir();
+  const fakeBin = path.join(dir, 'fake-bin');
+  const fakeNodeCalled = path.join(dir, 'fake-node-called');
+  fs.mkdirSync(fakeBin);
+  const major = Number(process.versions.node.split('.')[0]);
+  fs.writeFileSync(path.join(fakeBin, 'node'),
+    '#!/bin/sh\n'
+    + `if [ "$1" = --version ]; then echo "v${major}.0.0"; exit 0; fi\n`
+    + `: > "${fakeNodeCalled}"\n`
+    + 'exit 1\n');
+  fs.chmodSync(path.join(fakeBin, 'node'), 0o755);
+
+  try {
+    const r = spawnSync(process.execPath, [
+      INSTALLER, '--with-init', '--skip-skills', '--non-interactive',
+      '--no-mcp-shrink', '--config-dir', path.join(dir, 'claude-config'),
+    ], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        HOME: path.join(dir, 'home'),
+        PATH: fakeBin,
+        NO_COLOR: '1',
+      },
+      encoding: 'utf8',
+    });
+
+    assert.equal(r.status, 0, r.stderr || r.stdout);
+    assert.equal(fs.existsSync(fakeNodeCalled), false,
+      'caveman-init must not use a different Node executable found on PATH');
+    assert.ok(fs.existsSync(path.join(dir, '.cursor', 'rules', 'caveman.mdc')),
+      'caveman-init did not write the per-repo rule files');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Test: idempotent install (run twice, no duplication) ───────────────────
 test('idempotent install does not duplicate hook entries (skipped without `claude` CLI)', { skip: !hasClaudeCli() && 'claude CLI not on PATH' }, () => {
   const dir = freshTmpDir();
