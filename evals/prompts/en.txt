@@ -8,3 +8,5 @@ Why am I getting CORS errors in my browser console?
 What's the point of using a debouncer on a search input?
 How does git rebase differ from git merge?
 When should I use a queue vs a topic in messaging systems?
+Stack trace ends in `TypeError: Cannot read property 'email' of undefined at UserController.show (controllers/user.js:42:18)`. Where do I look first?
+A test passes locally but fails in CI with `ECONNREFUSED 127.0.0.1:5432`. How do I debug it?
