@@ -95,6 +95,17 @@ class DetectFileTypeTests(unittest.TestCase):
             self.assertEqual(detect_file_type(p), "natural_language")
             self.assertTrue(should_compress(p))
 
+    def test_cursor_rule_mdc_is_natural_language(self):
+        """A Cursor rule (.mdc) is prose with YAML frontmatter, the same shape a
+        SKILL.md already has. Content sniffing only runs for extensionless
+        files, so an unlisted extension fell through to 'unknown' and the rule
+        file caveman itself writes was not compressible."""
+        body = '---\ndescription: Example rule\nalwaysApply: true\n---\n\n' + PROSE_BODY
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, "caveman.mdc", body)
+            self.assertEqual(detect_file_type(p), "natural_language")
+            self.assertTrue(should_compress(p))
+
 
 if __name__ == "__main__":
     unittest.main()
