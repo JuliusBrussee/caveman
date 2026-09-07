@@ -48,6 +48,15 @@ self-hosted provider needs explicit `CAVE_SSRF_ALLOWLIST` configuration.
 Allow only exact hosts needed. Broad private-network ranges can let prompt-driven
 requests reach unrelated local services.
 
+When an outbound proxy is in use (`upstream_proxy`, which by default honours
+`HTTPS_PROXY`), that proxy connects to providers on Caveman's behalf, so the
+boundary moves to it. Caveman still rejects IP-literal and
+`localhost` destinations before selecting it, but hostnames are resolved by the
+proxy, so hostname-level policy is the proxy's own access control. The proxy
+address is operator configuration and is dialed without an allowlist entry.
+Destinations that `NO_PROXY` sends direct keep the full guard and still need a
+`CAVE_SSRF_ALLOWLIST` entry when they are private or loopback.
+
 ## Lossy transforms
 
 Engine, TOON, pixel, output shrinker, and trajectory rewriter can change

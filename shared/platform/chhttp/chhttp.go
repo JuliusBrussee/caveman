@@ -20,20 +20,18 @@
 package chhttp
 
 import (
-	"bytes"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/JuliusBrussee/caveman/shared/platform/cabundle"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
 )
 
@@ -145,50 +143,12 @@ func tlsClientConfig() (*tls.Config, error) {
 	return cfg, nil
 }
 
-// rootsWithCAFile returns the system pool with the PEM bundle at path appended.
-// Appending (rather than replacing) keeps a public managed endpoint verifiable
-// while a private CA is trusted for the internal one.
-//
-// The bundle is parsed block by block instead of via CertPool.AppendCertsFromPEM,
-// which reports success as soon as ONE certificate parses and silently drops the
-// rest. A secret mount that is truncated mid-bundle, or corrupt after the first
-// entry, would then be half-trusted: the endpoints whose issuer survived keep
-// verifying and the ones whose issuer was dropped fail later, at the first
-// telemetry flush, looking like a network fault. Any unusable certificate block —
-// or a trailing PEM header with no complete block behind it — fails the whole
-// bundle CLOSED at boot instead.
+// rootsWithCAFile returns the system pool with the PEM bundle at path appended,
+// failing CLOSED on any unusable or truncated block (see cabundle.Pool).
 func rootsWithCAFile(path string) (*x509.CertPool, error) {
-	bundle, err := os.ReadFile(path)
+	roots, err := cabundle.Pool(path)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", caFileEnv, err)
-	}
-	roots, err := x509.SystemCertPool()
-	if err != nil {
-		return nil, fmt.Errorf("%s: load system certificate pool: %w", caFileEnv, err)
-	}
-	added := 0
-	rest := bundle
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		if block.Type != "CERTIFICATE" {
-			continue
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("%s (%s): certificate %d is unparseable, so the bundle is incomplete and must not be half-trusted: %w", caFileEnv, path, added+1, err)
-		}
-		roots.AddCert(cert)
-		added++
-	}
-	if bytes.Contains(rest, []byte("-----BEGIN")) {
-		return nil, fmt.Errorf("%s (%s): trailing PEM block is truncated after %d certificate(s), so the bundle is incomplete and must not be half-trusted", caFileEnv, path, added)
-	}
-	if added == 0 {
-		return nil, fmt.Errorf("%s (%s) contains no valid PEM certificate", caFileEnv, path)
 	}
 	return roots, nil
 }

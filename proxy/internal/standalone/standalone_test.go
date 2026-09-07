@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,6 +54,15 @@ func (t *captureUpstreamTransport) RoundTrip(r *http.Request) (*http.Response, e
 // — config + BYOK + SQLite — with no Valkey/Postgres/ClickHouse anywhere, proxies
 // one request to a loopback upstream, and asserts the persisted spend row is
 // labeled `inferred` with a positive cost.
+// TestMain isolates the suite from the host's corporate-network variables,
+// which config.Load now reads (#1001).
+func TestMain(m *testing.M) {
+	for _, name := range []string{"CAVE_UPSTREAM_PROXY", "CAVE_CA_BUNDLE", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"} {
+		os.Unsetenv(name)
+	}
+	os.Exit(m.Run())
+}
+
 func TestStandaloneBoot_ZeroCloudDeps_InferredRows(t *testing.T) {
 	const respBody = `{"id":"resp_stub","model":"gpt-5.5","output":[{"type":"message","content":[{"type":"output_text","text":"hi"}]}],"usage":{"input_tokens":1000,"output_tokens":120,"input_tokens_details":{"cached_tokens":0}}}`
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -312,7 +323,7 @@ func TestStandaloneProductionTransportPreservesEncodedResponseWireBytes(t *testi
 	srv := New(config.Config{
 		Mode:      "record",
 		Providers: map[string]config.ProviderConfig{"openai": {BaseURL: upstream.URL}},
-	}, spend, Options{HTTPClient: StandaloneHTTPClient(time.Minute)})
+	}, spend, Options{HTTPClient: StandaloneHTTPClient(time.Minute, nil, nil)})
 
 	for _, tc := range []struct {
 		name           string
@@ -1207,7 +1218,7 @@ func TestStandaloneOpenCodeGoAuthEndToEnd(t *testing.T) {
 // beyond the old request cap. Explicit operator deadlines remain supported.
 func TestStandaloneClientLifetimeAndCancellation(t *testing.T) {
 	t.Setenv("CAVE_SSRF_ALLOWLIST", "localhost")
-	client := StandaloneHTTPClient(0)
+	client := StandaloneHTTPClient(0, nil, nil)
 	defer client.CloseIdleConnections()
 	if client.Timeout != 0 {
 		t.Fatalf("total timeout = %v", client.Timeout)
@@ -1236,7 +1247,7 @@ func TestStandaloneClientLifetimeAndCancellation(t *testing.T) {
 	if err != nil || string(data) != "data: first\n\ndata: last\n\n" {
 		t.Fatalf("long stream cut: body=%q error=%v", data, err)
 	}
-	bounded := StandaloneHTTPClient(25 * time.Millisecond)
+	bounded := StandaloneHTTPClient(25*time.Millisecond, nil, nil)
 	defer bounded.CloseIdleConnections()
 	resp, err = bounded.Get(upstream.URL)
 	if err == nil {
@@ -1271,6 +1282,93 @@ func TestLongSessionUsesFreshInboundOAuthAndPreservesProviderErrors(t *testing.T
 				if path == "/chatgpt/responses" && transport.headers.Get("ChatGPT-Account-ID") != "account-test" {
 					t.Fatal("subscription account identity lost")
 				}
+			}
+		})
+	}
+}
+
+// TestStandaloneUpstreamProxy_RoutesProviderTrafficThroughProxy is the #1001
+// path end to end: caveman.yaml upstream_proxy sends provider traffic to a
+// corporate-style forward proxy that the client could not reach directly (it is
+// on loopback and NOT allowlisted), and the provider hostname is left for the
+// proxy to resolve.
+func TestStandaloneUpstreamProxy_RoutesProviderTrafficThroughProxy(t *testing.T) {
+	hosts := make(chan string, 1)
+	forward := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hosts <- r.Host
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_proxied","model":"gpt-5.5","usage":{"input_tokens":3,"output_tokens":2}}`))
+	}))
+	defer forward.Close()
+
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spend.Close()
+	srv := New(config.Config{
+		Mode:          "record",
+		UpstreamProxy: forward.URL,
+		Providers:     map[string]config.ProviderConfig{"openai": {BaseURL: "http://api.openai.invalid"}},
+	}, spend, Options{})
+
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"via proxy"}`))
+	req.Header.Set("authorization", "Bearer sk-openai-test")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.Bytes())
+	}
+	if got := <-hosts; got != "api.openai.invalid" {
+		t.Fatalf("forward proxy saw Host %q, want api.openai.invalid", got)
+	}
+}
+
+// TestStandaloneCABundle_TrustsPrivateRootForProviderTLS is the corporate TLS
+// inspection shape: the provider presents a certificate from a root that only
+// the operator's bundle knows. With ca_bundle the request succeeds; without it
+// the same upstream is rejected, proving the bundle is what made the difference.
+func TestStandaloneCABundle_TrustsPrivateRootForProviderTLS(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_tls","model":"gpt-5.5","usage":{"input_tokens":3,"output_tokens":2}}`))
+	}))
+	defer upstream.Close()
+	bundle := filepath.Join(t.TempDir(), "corp-root.pem")
+	if err := os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CAVE_SSRF_ALLOWLIST", "127.0.0.1")
+	t.Setenv("CAVE_UPSTREAM_PROXY", "off")
+
+	for _, tc := range []struct {
+		name   string
+		bundle string
+		want   int
+	}{
+		{name: "without bundle", want: http.StatusBadGateway},
+		{name: "with ca_bundle", bundle: bundle, want: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CAVE_CA_BUNDLE", tc.bundle)
+			cfg, err := config.Load(filepath.Join(t.TempDir(), "absent.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Providers = map[string]config.ProviderConfig{"openai": {BaseURL: upstream.URL}}
+			spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer spend.Close()
+			srv := New(cfg, spend, Options{})
+
+			req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"tls"}`))
+			req.Header.Set("authorization", "Bearer sk-openai-test")
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status=%d want %d body=%q", rec.Code, tc.want, rec.Body.Bytes())
 			}
 		})
 	}

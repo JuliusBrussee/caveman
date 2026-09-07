@@ -193,6 +193,9 @@ func runServe(logger *slog.Logger) {
 		logger.Error("cannot load caveman.yaml", "error", err)
 		os.Exit(1)
 	}
+	for _, skipped := range cfg.SkippedCABundles {
+		logger.Warn("CA bundle env var names a missing file; skipped", "bundle", skipped)
+	}
 	spend, err := store.Open(dbPath(home), logger)
 	if err != nil {
 		logger.Error("cannot open local spend store", "error", err)
@@ -345,16 +348,19 @@ func runStatus(logger *slog.Logger, args []string) {
 		}
 		port = parsed
 	} else {
-		cfg, err := config.Load(env.String("CAVEMAN_CONFIG", filepath.Join(home, "caveman.yaml")))
+		// Status only needs the listen port. A config error elsewhere (a typo'd
+		// CAVE_UPSTREAM_PROXY, say) must not hide the proxy's real state from the
+		// operator who is debugging exactly that.
+		listen := config.DefaultListen
+		if cfg, err := config.Load(env.String("CAVEMAN_CONFIG", filepath.Join(home, "caveman.yaml"))); err == nil {
+			listen = cfg.Listen
+		}
+		parsed, err := runstate.PortFromListen(listen)
 		if err != nil {
 			printJSON(runstate.Unknown())
 			return
 		}
-		port, err = runstate.PortFromListen(cfg.Listen)
-		if err != nil {
-			printJSON(runstate.Unknown())
-			return
-		}
+		port = parsed
 	}
 	printJSON(runstate.ReadValidated(home, port))
 }

@@ -1,13 +1,32 @@
 package config
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers/openaicompat"
 )
+
+// TestMain isolates the suite from the host's corporate-network variables,
+// which Load now reads (#1001).
+func TestMain(m *testing.M) {
+	for _, name := range []string{"CAVE_UPSTREAM_PROXY", "CAVE_CA_BUNDLE", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"} {
+		os.Unsetenv(name)
+	}
+	os.Exit(m.Run())
+}
 
 func TestLoad_MissingFileYieldsRecordDefaults(t *testing.T) {
 	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
@@ -483,4 +502,127 @@ func TestLoad_BreakpointPlanDefaultsFrontierAndFailsClosed(t *testing.T) {
 	if cfg.BreakpointPlan != "off" {
 		t.Fatalf("env override breakpoint_plan = %q, want off", cfg.BreakpointPlan)
 	}
+}
+
+func TestLoad_UpstreamProxy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "caveman.yaml")
+	if err := os.WriteFile(path, []byte("upstream_proxy: http://proxy.corp.example:3128\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	u, err := cfg.UpstreamProxyFunc()(&http.Request{URL: &url.URL{Scheme: "https", Host: "api.openai.com"}})
+	if err != nil || u == nil || u.Host != "proxy.corp.example:3128" {
+		t.Fatalf("proxy selector = %v, %v; want the yaml proxy", u, err)
+	}
+
+	t.Setenv("CAVE_UPSTREAM_PROXY", "off")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load with env override: %v", err)
+	}
+	if cfg.UpstreamProxy != "off" || cfg.UpstreamProxyFunc() != nil {
+		t.Fatalf("env override not applied: %q", cfg.UpstreamProxy)
+	}
+	t.Setenv("CAVE_UPSTREAM_PROXY", "OFF")
+	if cfg, err := Load(path); err != nil || cfg.UpstreamProxyFunc() != nil {
+		t.Fatalf("keywords are case-insensitive: %q err=%v", cfg.UpstreamProxy, err)
+	}
+
+	// A pinned proxy keeps env-mode's direct exemptions: loopback (an allowlisted
+	// local model server) and NO_PROXY are never handed to the corporate proxy.
+	t.Setenv("CAVE_UPSTREAM_PROXY", "http://proxy.corp.example:3128")
+	t.Setenv("NO_PROXY", "internal.example")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for host, wantDirect := range map[string]bool{"api.openai.com": false, "127.0.0.1:11434": true, "localhost:11434": true, "models.internal.example": true} {
+		u, err := cfg.UpstreamProxyFunc()(&http.Request{URL: &url.URL{Scheme: "http", Host: host}})
+		if err != nil || (u == nil) != wantDirect {
+			t.Fatalf("%s: proxy=%v err=%v, want direct=%v", host, u, err, wantDirect)
+		}
+	}
+
+	// Default: honour the environment like every other tool on the host (#1001).
+	t.Setenv("CAVE_UPSTREAM_PROXY", "")
+	if cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml")); err != nil || cfg.UpstreamProxyFunc() == nil {
+		t.Fatalf("default must be the environment selector: cfg=%q err=%v", cfg.UpstreamProxy, err)
+	}
+
+	for _, bad := range []string{"ftp://proxy:21", "proxy.corp.example:3128", "not a url"} {
+		t.Setenv("CAVE_UPSTREAM_PROXY", bad)
+		if _, err := Load(path); err == nil {
+			t.Fatalf("upstream_proxy %q must be rejected", bad)
+		}
+	}
+}
+
+func TestLoad_CABundle(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "corp-root.pem")
+	if err := os.WriteFile(good, selfSignedPEM(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	garbage := filepath.Join(dir, "garbage.pem")
+	if err := os.WriteFile(garbage, []byte("not a certificate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	absent := filepath.Join(dir, "absent.pem")
+	yaml := filepath.Join(dir, "caveman.yaml")
+	for _, name := range append([]string{"CAVE_CA_BUNDLE"}, inheritedCABundleEnv...) {
+		t.Setenv(name, "")
+	}
+
+	if cfg, err := Load(yaml); err != nil || cfg.RootCAs() != nil {
+		t.Fatalf("no bundle configured: roots=%v err=%v, want nil (Go default verification)", cfg.RootCAs(), err)
+	}
+
+	if err := os.WriteFile(yaml, []byte("ca_bundle: "+good+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(yaml)
+	if err != nil || cfg.RootCAs() == nil {
+		t.Fatalf("ca_bundle: roots=%v err=%v", cfg.RootCAs(), err)
+	}
+
+	for _, bad := range []string{absent, garbage} {
+		t.Setenv("CAVE_CA_BUNDLE", bad)
+		if _, err := Load(yaml); err == nil {
+			t.Fatalf("ca_bundle %s must fail Load closed", bad)
+		}
+	}
+	t.Setenv("CAVE_CA_BUNDLE", "")
+
+	// Inherited toolchain variables: a missing, corrupt, or directory-valued file
+	// is skipped and reported (never a startup failure, never partially trusted);
+	// a good one is trusted additively.
+	for _, bad := range []string{absent, garbage, dir} {
+		t.Setenv("NODE_EXTRA_CA_CERTS", bad)
+		cfg, err = Load(yaml)
+		if err != nil || len(cfg.SkippedCABundles) != 1 || cfg.RootCAs() == nil {
+			t.Fatalf("NODE_EXTRA_CA_CERTS=%s: skipped=%v roots=%v err=%v", bad, cfg.SkippedCABundles, cfg.RootCAs(), err)
+		}
+	}
+	t.Setenv("NODE_EXTRA_CA_CERTS", "")
+	t.Setenv("REQUESTS_CA_BUNDLE", good)
+	if cfg, err := Load(filepath.Join(dir, "absent.yaml")); err != nil || cfg.RootCAs() == nil {
+		t.Fatalf("REQUESTS_CA_BUNDLE alone: roots=%v err=%v", cfg.RootCAs(), err)
+	}
+}
+
+func selfSignedPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "corp-root"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }

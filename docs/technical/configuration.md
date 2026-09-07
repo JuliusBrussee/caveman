@@ -90,6 +90,8 @@ toolschema_strip: false
 breakpoint_plan: frontier
 providers: {}
 compat: {}
+upstream_proxy: env
+ca_bundle: ""
 ```
 
 ### Main fields
@@ -105,6 +107,8 @@ compat: {}
 | `breakpoint_plan` | Cache breakpoint plan; defaults to `frontier`, with `off` as explicit off-switch |
 | `providers` | Provider endpoint, billing tier and region overrides |
 | `compat` | Named OpenAI-compatible provider mounts |
+| `upstream_proxy` | Outbound proxy for provider traffic: `env` (default, honours `HTTPS_PROXY`), `off`, or a proxy URL |
+| `ca_bundle` | Extra PEM roots to trust for provider TLS, on top of the system store |
 
 Accepted internal proxy modes are `record`, `recommend`, `shadow`, `canary`,
 `active`, `compress`, and `pixel`. Unknown values resolve to `record`.
@@ -132,6 +136,60 @@ compat:
 
 Self-hosted private or loopback upstreams require an explicit
 `CAVE_SSRF_ALLOWLIST` entry. See [Security and privacy](security-and-privacy.md).
+
+### Corporate networks: proxies and TLS inspection
+
+Provider traffic honours the standard `HTTPS_PROXY`, `HTTP_PROXY`, and
+`NO_PROXY` variables by default, the same way curl, Python, and Node do. On a
+host that only reaches the internet through a corporate proxy nothing extra is
+needed. `upstream_proxy` changes that:
+
+```yaml
+upstream_proxy: env                              # default
+upstream_proxy: off                              # always dial providers directly
+upstream_proxy: http://proxy.corp.example:3128   # provider traffic only
+upstream_proxy: http://user:pass@proxy.corp.example:3128
+```
+
+A URL pins one proxy (`http://`, `https://`, or `socks5://`) for provider
+requests without exporting process-wide proxy variables that the wrapped agent's
+shell commands would inherit. In both modes `localhost`, loopback addresses, and
+`NO_PROXY` matches are dialed directly, so an allowlisted local model server
+keeps working next to a corporate proxy. `CAVE_UPSTREAM_PROXY` overrides the
+YAML value.
+HTTPS providers tunnel through the proxy with `CONNECT`, so a plain forward
+proxy never sees request bodies or credentials. A proxy that performs TLS
+inspection (below) terminates TLS itself and does see them. The proxy address itself needs no
+`CAVE_SSRF_ALLOWLIST` entry; see
+[Security and privacy](security-and-privacy.md#ssrf-protection) for what the
+guard still checks when a proxy is in use.
+
+TLS inspection (Zscaler, Netskope, and similar) presents provider certificates
+signed by a company root. Trust it by pointing `ca_bundle` or `CAVE_CA_BUNDLE`
+at the PEM file:
+
+```yaml
+ca_bundle: /etc/ssl/corp-root.pem
+```
+
+Bundles already exported for other toolchains are picked up too, so an
+environment set up for curl, Python, or Claude Code works unchanged:
+
+| Variable | Read by |
+|---|---|
+| `SSL_CERT_FILE` | OpenSSL, Go on Linux |
+| `REQUESTS_CA_BUNDLE` | Python `requests` |
+| `NODE_EXTRA_CA_CERTS` | Node.js, Claude Code |
+
+Every bundle is additive on top of the system store, so public providers keep
+verifying when a bundle holds only the private root. A bundle that is corrupt or
+truncated fails startup rather than being half-trusted. An inherited variable
+that names a missing file is skipped with a startup warning; a missing
+`ca_bundle` is an error.
+
+The wrapped agent talks to the local proxy on loopback. If the agent itself
+reads `HTTPS_PROXY` (Claude Code does), keep `localhost,127.0.0.1` in `NO_PROXY`
+so that hop is not sent to the corporate proxy.
 
 ## Provider credentials
 

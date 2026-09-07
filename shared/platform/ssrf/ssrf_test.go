@@ -2,13 +2,17 @@ package ssrf_test
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/JuliusBrussee/caveman/shared/platform/ssrf"
+	"golang.org/x/net/http/httpproxy"
 )
 
 // managedCfg is the strict production configuration used in most tests.
@@ -705,6 +709,154 @@ func TestManagedBlockDoesNotAdvertiseAllowlist(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "CAVE_SSRF_ALLOWLIST") {
 			t.Fatalf("managed mode must not advertise a no-op setting, got: %v", err)
+		}
+	}
+}
+
+// TestNewHTTPClient_ProxyRoutesViaOperatorProxyAndKeepsLiteralGuard covers the
+// cfg.Proxy opt-in (#1001): a proxy on a loopback address is dialed without an
+// allowlist entry because it is operator configuration, hostnames are handed to
+// the proxy unresolved, and IP-literal / localhost destinations are still
+// rejected before any proxy is selected.
+func TestNewHTTPClient_ProxyRoutesViaOperatorProxyAndKeepsLiteralGuard(t *testing.T) {
+	seen := make(chan string, 8)
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Host
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(proxyServer.Close)
+	proxyURL, err := url.Parse(proxyServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := ssrf.SelfHostedConfig()
+	cfg.Proxy = http.ProxyURL(proxyURL)
+	client := ssrf.NewHTTPClient(cfg)
+
+	resp, err := client.Get("http://provider.invalid/v1/models")
+	if err != nil {
+		t.Fatalf("proxied request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if got := <-seen; got != "provider.invalid" {
+		t.Fatalf("proxy saw Host %q, want provider.invalid", got)
+	}
+
+	for _, blocked := range []string{"http://169.254.169.254/latest/meta-data/", "http://127.0.0.1:9/", "http://localhost:9/"} {
+		resp, err := client.Get(blocked)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		if err == nil || !strings.Contains(err.Error(), "ssrf:") {
+			t.Fatalf("%s: err = %v, want ssrf block before proxy selection", blocked, err)
+		}
+		select {
+		case host := <-seen:
+			t.Fatalf("%s reached the proxy (Host %q)", blocked, host)
+		default:
+		}
+	}
+
+	managed := ssrf.ManagedConfig()
+	managed.Proxy = http.ProxyURL(proxyURL)
+	if tr := ssrf.NewHTTPClient(managed).Transport.(*http.Transport); tr.Proxy != nil {
+		t.Fatal("managed mode must ignore cfg.Proxy")
+	}
+}
+
+// TestNewHTTPClient_ProxyConnectTunnelsHTTPSWithoutResolvingTarget pins the
+// production #1001 shape: an https provider reached through CONNECT. The target
+// hostname is never resolved or dialed by the client; only the proxy is.
+func TestNewHTTPClient_ProxyConnectTunnelsHTTPSWithoutResolvingTarget(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("via-tunnel"))
+	}))
+	t.Cleanup(origin.Close)
+
+	connects := make(chan string, 1)
+	tunnel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "expected CONNECT", http.StatusBadRequest)
+			return
+		}
+		connects <- r.Host
+		upstream, err := net.Dial("tcp", origin.Listener.Addr().String())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		client, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		go func() { _, _ = io.Copy(upstream, client); _ = upstream.Close() }()
+		_, _ = io.Copy(client, upstream)
+		_ = client.Close()
+	}))
+	t.Cleanup(tunnel.Close)
+	proxyURL, _ := url.Parse(tunnel.URL)
+
+	cfg := ssrf.SelfHostedConfig()
+	cfg.Proxy = http.ProxyURL(proxyURL)
+	client := ssrf.NewHTTPClient(cfg)
+	// example.com is on the httptest certificate; the tunnel ignores the target
+	// and pipes to the local TLS origin, so no resolution of example.com happens.
+	client.Transport.(*http.Transport).TLSClientConfig = origin.Client().Transport.(*http.Transport).TLSClientConfig
+
+	resp, err := client.Get("https://example.com/v1/models")
+	if err != nil {
+		t.Fatalf("CONNECT request failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if string(body) != "via-tunnel" {
+		t.Fatalf("body = %q, want via-tunnel", body)
+	}
+	if got := <-connects; got != "example.com:443" {
+		t.Fatalf("CONNECT target = %q, want example.com:443", got)
+	}
+}
+
+// TestNewHTTPClient_ProxyDirectFallbackKeepsGuardAndRefusesProxyAddress covers
+// the nil-proxy branch of an environment-style selector: a NO_PROXY (or loopback,
+// which httpproxy always sends direct) destination gets the full guard, and a
+// direct request aimed at the memoized proxy address is refused rather than
+// riding the proxy hop's unguarded dial.
+func TestNewHTTPClient_ProxyDirectFallbackKeepsGuardAndRefusesProxyAddress(t *testing.T) {
+	seen := make(chan string, 8)
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Host + r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(proxyServer.Close)
+	selector := (&httpproxy.Config{HTTPProxy: proxyServer.URL, NoProxy: "direct.invalid"}).ProxyFunc()
+
+	cfg := ssrf.SelfHostedConfig()
+	cfg.Proxy = func(req *http.Request) (*url.URL, error) { return selector(req.URL) }
+	client := ssrf.NewHTTPClient(cfg)
+
+	resp, err := client.Get("http://provider.invalid/v1/models")
+	if err != nil {
+		t.Fatalf("proxied request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	<-seen
+
+	for _, direct := range []string{"http://direct.invalid/", "http://" + proxyServer.Listener.Addr().String() + "/pwned"} {
+		resp, err := client.Get(direct)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		if err == nil || !strings.Contains(err.Error(), "ssrf:") {
+			t.Fatalf("%s: err = %v, want the direct path guarded", direct, err)
+		}
+		select {
+		case got := <-seen:
+			t.Fatalf("%s reached the proxy unguarded (%s)", direct, got)
+		default:
 		}
 	}
 }

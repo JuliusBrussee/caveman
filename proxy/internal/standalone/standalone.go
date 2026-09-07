@@ -7,8 +7,11 @@ package standalone
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -150,7 +153,7 @@ type Options struct {
 func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.Server {
 	client := opts.HTTPClient
 	if client == nil {
-		client = StandaloneHTTPClient(time.Duration(env.Int("CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS", 0)) * time.Millisecond)
+		client = StandaloneHTTPClient(time.Duration(env.Int("CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS", 0))*time.Millisecond, cfg.UpstreamProxyFunc(), cfg.RootCAs())
 	}
 	return gateway.New(gateway.Config{
 		Adapters:             buildAdapters(cfg),
@@ -319,8 +322,11 @@ func buildAdapters(cfg config.Config) []providers.Adapter {
 // which requires self-hosted mode: managed mode ignores the allowlist by
 // contract, so building on ManagedConfig here would make the documented escape
 // hatch a silent no-op (loopback/private stay blocked unless allowlisted).
-func StandaloneHTTPClient(timeout time.Duration) *http.Client {
+// proxy (config.Config.UpstreamProxyFunc) is nil for a direct client; rootCAs
+// (config.Config.RootCAs) is nil for Go's default verification.
+func StandaloneHTTPClient(timeout time.Duration, proxy func(*http.Request) (*url.URL, error), rootCAs *x509.CertPool) *http.Client {
 	cfg := ssrf.SelfHostedConfig()
+	cfg.Proxy = proxy
 	if raw := env.String("CAVE_SSRF_ALLOWLIST", ""); raw != "" {
 		cfg.AllowList = strings.Split(raw, ",")
 	}
@@ -330,6 +336,9 @@ func StandaloneHTTPClient(timeout time.Duration) *http.Client {
 	// exact response wire bytes, so transport compression must stay disabled.
 	if transport, ok := client.Transport.(*http.Transport); ok {
 		transport.DisableCompression = true
+		if rootCAs != nil {
+			transport.TLSClientConfig = &tls.Config{RootCAs: rootCAs, MinVersion: tls.VersionTLS12}
+		}
 	}
 	client.Timeout = timeout
 	return client

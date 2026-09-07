@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -139,6 +140,17 @@ type Config struct {
 	// ConnectTimeout bounds the TCP connect phase. Zero selects 3 seconds in
 	// managed mode and 30 seconds in self-hosted mode.
 	ConnectTimeout time.Duration
+
+	// Proxy selects an outbound HTTP proxy per request, with the contract of
+	// http.Transport.Proxy (http.ProxyFromEnvironment, http.ProxyURL). Nil keeps
+	// the client direct. When a proxy is returned the guarded dial only ever
+	// sees the proxy address, so the boundary moves to the proxy: the client
+	// still rejects IP-literal and localhost destinations before selecting it,
+	// but hostnames resolve at the proxy and hostname policy is the proxy's
+	// ACL. The proxy address itself is dialed unguarded — it is operator
+	// configuration, not request data, and corporate proxies routinely live on
+	// private ranges. Ignored when ManagedMode is true.
+	Proxy func(*http.Request) (*url.URL, error)
 }
 
 // ManagedConfig returns a Config with ManagedMode enabled and no allowlist.
@@ -370,6 +382,10 @@ func isInAllowList(host, port string, list []string) bool {
 // ValidateURL passed, a rebind that returns a blocked IP by the time the
 // transport dials will be caught here.
 func DialContext(cfg Config) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return dialContextWith(cfg, net.DefaultResolver.LookupNetIP, newDialer(cfg).DialContext)
+}
+
+func newDialer(cfg Config) *net.Dialer {
 	connectTimeout := cfg.ConnectTimeout
 	if connectTimeout <= 0 {
 		connectTimeout = 30 * time.Second
@@ -377,11 +393,10 @@ func DialContext(cfg Config) func(ctx context.Context, network, addr string) (ne
 			connectTimeout = 3 * time.Second
 		}
 	}
-	dialer := &net.Dialer{
+	return &net.Dialer{
 		Timeout:   connectTimeout,
 		KeepAlive: 30 * time.Second,
 	}
-	return dialContextWith(cfg, net.DefaultResolver.LookupNetIP, dialer.DialContext)
 }
 
 type lookupNetIPFunc func(context.Context, string, string) ([]netip.Addr, error)
@@ -454,10 +469,9 @@ func NewHTTPClient(cfg Config) *http.Client {
 	// SSRF enforcement observes the address passed to DialContext. Go's
 	// default transport may instead dial an HTTP(S)_PROXY address and leave the
 	// proxy to connect to the request destination, which would move the guarded
-	// boundary away from the host this client was built to protect. This package
-	// has no destination-aware proxy contract, so protected clients are direct
-	// by construction; callers that need a proxy must provide a separate,
-	// explicitly validated client.
+	// boundary away from the host this client was built to protect. Protected
+	// clients are therefore direct unless the caller opts in through cfg.Proxy,
+	// which wraps the proxy selection in a destination check (see proxiedHooks).
 	t.Proxy = nil
 	// Do not inherit alternate dial hooks from a process-mutated default
 	// transport. DialTLS* can bypass DialContext entirely for HTTPS, and the
@@ -466,6 +480,9 @@ func NewHTTPClient(cfg Config) *http.Client {
 	t.DialTLSContext = nil
 	t.DialTLS = nil
 	t.DialContext = DialContext(cfg)
+	if cfg.Proxy != nil && !cfg.ManagedMode {
+		t.Proxy, t.DialContext = proxiedHooks(cfg, t.DialContext)
+	}
 	return &http.Client{
 		Transport: t,
 		// Provider and webhook clients must not carry credentials across redirects.
@@ -475,4 +492,85 @@ func NewHTTPClient(cfg Config) *http.Client {
 			return http.ErrUseLastResponse
 		},
 	}
+}
+
+// proxiedHooks returns the Transport.Proxy and DialContext pair for a client
+// with cfg.Proxy set. The proxy hook validates what it can about the request
+// destination without DNS (the proxy resolves hostnames, often on a network the
+// client cannot see), then remembers the proxy address it chose so the dial hook
+// can pass that one address through unguarded. Every other address — including
+// a direct dial when cfg.Proxy returns nil, e.g. a NO_PROXY match — still goes
+// through the full guard. The dial hook cannot tell a proxied dial from a direct
+// one to the same host:port, so a direct request whose destination collides with
+// a remembered proxy address is refused here instead of reaching that pass-through.
+func proxiedHooks(cfg Config, guarded func(context.Context, string, string) (net.Conn, error)) (func(*http.Request) (*url.URL, error), func(context.Context, string, string) (net.Conn, error)) {
+	var proxyAddrs sync.Map // host:port as Transport dials it → struct{}
+	proxy := func(req *http.Request) (*url.URL, error) {
+		u, err := cfg.Proxy(req)
+		if err != nil {
+			return nil, err
+		}
+		if u == nil {
+			if _, collides := proxyAddrs.Load(proxyDialAddr(req.URL)); collides {
+				return nil, errors.New("ssrf: direct request to the configured proxy address is not permitted")
+			}
+			return nil, nil
+		}
+		if err := validateProxiedDestination(req.URL, cfg); err != nil {
+			return nil, err
+		}
+		proxyAddrs.Store(proxyDialAddr(u), struct{}{})
+		return u, nil
+	}
+	raw := newDialer(cfg).DialContext
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if _, ok := proxyAddrs.Load(addr); ok {
+			return raw(ctx, network, addr)
+		}
+		return guarded(ctx, network, addr)
+	}
+	return proxy, dial
+}
+
+// validateProxiedDestination applies the parts of the policy that need no
+// resolution: host syntax, the localhost block, and range checks on IP literals.
+func validateProxiedDestination(u *url.URL, cfg Config) error {
+	host := u.Hostname()
+	if err := validateHostInput(host); err != nil {
+		return err
+	}
+	port := u.Port()
+	if port == "" {
+		port = defaultPort(u.Scheme)
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return checkAddr(addr, host, port, cfg)
+	}
+	if strings.EqualFold(host, "localhost") && !isInAllowList(host, port, cfg.AllowList) {
+		return fmt.Errorf("ssrf: host %q is blocked (loopback)", host)
+	}
+	return nil
+}
+
+// proxyDialAddr mirrors net/http's canonicalAddr: the host:port Transport hands
+// to DialContext for a proxy URL, with the scheme's default port filled in.
+// ponytail: no IDNA folding; a non-ASCII proxy hostname falls back to the guarded dial.
+func proxyDialAddr(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		port = defaultPort(u.Scheme)
+	}
+	return net.JoinHostPort(u.Hostname(), port)
+}
+
+func defaultPort(scheme string) string {
+	switch scheme {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	case "socks5", "socks5h":
+		return "1080"
+	}
+	return ""
 }

@@ -5,14 +5,19 @@
 package config
 
 import (
+	"crypto/x509"
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/openaicompat"
+	"github.com/JuliusBrussee/caveman/shared/platform/cabundle"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
+	"golang.org/x/net/http/httpproxy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -65,6 +70,30 @@ type Config struct {
 	Providers map[string]ProviderConfig `yaml:"providers"`
 	// Compat carries named OpenAI-compatible upstreams mounted at /compat/<name>/.
 	Compat map[string]CompatConfig `yaml:"compat"`
+	// UpstreamProxy routes provider traffic through an HTTP proxy. Empty and
+	// "env" (the default) honour HTTPS_PROXY/HTTP_PROXY/NO_PROXY like curl and
+	// every other tool on the host; "off" dials providers directly regardless;
+	// a URL (http://, https://, socks5://, optional user:pass@) pins one proxy
+	// for provider traffic only, without exporting process-wide proxy variables
+	// that the wrapped agent's tool executions would inherit. Also set via
+	// CAVE_UPSTREAM_PROXY. See ssrf.Config.Proxy for the guard contract.
+	UpstreamProxy string `yaml:"upstream_proxy"`
+	// CABundle is a PEM file of extra roots to trust for provider TLS, on top of
+	// the system store — what corporate TLS inspection (Zscaler, Netskope, …)
+	// needs. Also set via CAVE_CA_BUNDLE. Independently of this key, bundles
+	// named by SSL_CERT_FILE, REQUESTS_CA_BUNDLE and NODE_EXTRA_CA_CERTS are
+	// appended too, so an environment already set up for curl, Python or Claude
+	// Code works unchanged. All bundles are additive; a corrupt one fails Load.
+	CABundle string `yaml:"ca_bundle"`
+	// SkippedCABundles lists inherited CA env vars (never ca_bundle itself)
+	// whose file was missing or unusable. Load skips them rather than refusing
+	// to start — Go's own loader and Node both tolerate a bad inherited bundle,
+	// and the SSL_CERT_FILE-points-at-a-directory mixup is common — and the
+	// binary logs them at startup. An unusable bundle contributes nothing, never
+	// a partial set of roots.
+	SkippedCABundles []string `yaml:"-"`
+
+	rootCAs *x509.CertPool
 }
 
 // ProviderConfig is the per-provider configuration in caveman.yaml.
@@ -112,7 +141,94 @@ func Load(path string) (Config, error) {
 	if err := cfg.validateCompat(); err != nil {
 		return Config{}, err
 	}
+	if _, err := parseUpstreamProxy(cfg.UpstreamProxy); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.loadRootCAs(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// inheritedCABundleEnv names the CA bundle variables other toolchains already
+// read: Go/OpenSSL, Python requests, and Node (which Claude Code runs on).
+var inheritedCABundleEnv = []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"}
+
+// loadRootCAs builds the provider trust store. It stays nil — Go's default
+// verification — when no bundle is configured, so the common case keeps the
+// platform verifier untouched.
+func (c *Config) loadRootCAs() error {
+	var certs []*x509.Certificate
+	if c.CABundle = strings.TrimSpace(c.CABundle); c.CABundle != "" {
+		loaded, err := cabundle.Certificates(c.CABundle)
+		if err != nil {
+			return fmt.Errorf("ca_bundle: %w", err)
+		}
+		certs = append(certs, loaded...)
+	}
+	for _, name := range inheritedCABundleEnv {
+		path := strings.TrimSpace(env.String(name, ""))
+		if path == "" {
+			continue
+		}
+		loaded, err := cabundle.Certificates(path)
+		if err != nil {
+			c.SkippedCABundles = append(c.SkippedCABundles, name+": "+err.Error())
+			continue
+		}
+		certs = append(certs, loaded...)
+	}
+	if len(certs) == 0 {
+		return nil
+	}
+	pool, err := cabundle.PoolOf(certs)
+	if err != nil {
+		return fmt.Errorf("ca bundle: %w", err)
+	}
+	c.rootCAs = pool
+	return nil
+}
+
+// RootCAs returns the provider TLS trust store, or nil for Go's default.
+func (c Config) RootCAs() *x509.CertPool { return c.rootCAs }
+
+// UpstreamProxyFunc returns the Transport.Proxy selector for UpstreamProxy, or
+// nil for a direct client. Load has already rejected unparseable values; a
+// Config built by hand with a bad value panics rather than silently dialing
+// direct, which would be #1001's symptom with no diagnostic.
+func (c Config) UpstreamProxyFunc() func(*http.Request) (*url.URL, error) {
+	fn, err := parseUpstreamProxy(c.UpstreamProxy)
+	if err != nil {
+		panic(err)
+	}
+	return fn
+}
+
+func parseUpstreamProxy(raw string) (func(*http.Request) (*url.URL, error), error) {
+	raw = strings.TrimSpace(raw)
+	switch strings.ToLower(raw) {
+	case "", "env":
+		// ProxyFromEnvironment snapshots the proxy variables once per process
+		// (sync.Once), so a test that t.Setenv's HTTPS_PROXY must build its own
+		// httpproxy.Config selector instead — see ssrf_test.go.
+		return http.ProxyFromEnvironment, nil
+	case "off":
+		return nil, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("upstream_proxy %q must be \"env\", \"off\" or a proxy URL", raw)
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return nil, fmt.Errorf("upstream_proxy %q: unsupported scheme %q", raw, u.Scheme)
+	}
+	// Same selector semantics as env mode: localhost/loopback destinations (an
+	// allowlisted Ollama) and NO_PROXY matches are dialed direct rather than
+	// handed to a corporate proxy that cannot reach them.
+	selector := (&httpproxy.Config{HTTPProxy: raw, HTTPSProxy: raw, NoProxy: env.String("NO_PROXY", env.String("no_proxy", ""))}).ProxyFunc()
+	return func(req *http.Request) (*url.URL, error) { return selector(req.URL) }, nil
 }
 
 // validateListen keeps standalone's unauthenticated BYOK proxy local to one
@@ -157,6 +273,12 @@ func (c Config) withDefaults() Config {
 	}
 	if env.Bool("CAVEMAN_OBSERVE_ESTIMATE", false) {
 		c.ObserveEstimate = true
+	}
+	if proxy := env.String("CAVE_UPSTREAM_PROXY", ""); proxy != "" {
+		c.UpstreamProxy = proxy
+	}
+	if bundle := env.String("CAVE_CA_BUNDLE", ""); bundle != "" {
+		c.CABundle = bundle
 	}
 	if c.Listen == "" {
 		c.Listen = DefaultListen
