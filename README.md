@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/juliusbrussee-caveman-badge.png)](https://mseep.ai/app/juliusbrussee-caveman)
+
 <p align="center">
   <img src="docs/assets/caveman-logo-banner.png" alt="Caveman" width="720">
 </p>
