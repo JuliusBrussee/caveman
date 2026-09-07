@@ -141,8 +141,8 @@ the session that chose it, not to the machine. `/clear` is the other deliberate
 reset, since nothing else in the conversation survives it either.
 
 **E. Token attribution.** Switch modes a few times in one window, run
-`/caveman-stats`, and check the savings figure is not distorted by what the other
-window was doing. `readModeLog` filters the transition log on `session_id`.
+`/caveman-stats`, and check the per-mode token breakdown is not distorted by what
+the other window was doing. `readModeLog` filters the transition log on `session_id`.
 
 **F. Uninstall.**
 
@@ -153,8 +153,8 @@ ls -a ~/.claude-cavemantest
 
 `.caveman-active`, `.caveman-active.prev`, `.caveman-mode-log.jsonl`,
 `.caveman-statusline-suffix`, `.caveman-nudge-shown` and the `.caveman-sessions/`
-directory are all gone. `.caveman-history.jsonl` remains on purpose — it is the
-user's accumulated lifetime savings, not caveman plumbing. Then
+directory are all gone. `.caveman-history.jsonl` remains on purpose: it is the
+user's accumulated lifetime usage record, not caveman plumbing. Then
 `rm -rf ~/.claude-cavemantest`. (The same list lives in `src/hooks/uninstall.sh`
 and `.ps1` — worth running one of those too if you touched it, since they are
 still shipped for people who installed via the shell script.)

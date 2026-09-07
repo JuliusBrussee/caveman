@@ -4,11 +4,11 @@ Real session token receipts. No AI estimation.
 
 ## What it does
 
-Reads the current Claude Code session log directly and reports actual input/output token usage plus estimated savings versus a non-caveman baseline. Numbers come from the JSONL session log on disk — the model itself does not compute or estimate them. Output is injected by the `caveman-mode-tracker` hook, which intercepts `/caveman-stats` and returns the formatted stats as a blocked-decision reason.
+Reads the current Claude Code session log directly and reports actual input/output token usage. Numbers come from the JSONL session log on disk: the model itself does not compute or estimate them. Output is injected by the `caveman-mode-tracker` hook, which intercepts `/caveman-stats` and returns the formatted stats as a blocked-decision reason.
 
-Output also includes an `Est. rule overhead` and `Est. net` line whenever the savings figure above them is unambiguous (a single benchmarked mode with a known turn count — no guessing across mixed or unattributed spans). Overhead estimates the per-turn INPUT-token cost of the rules the skill injects every turn — default 1,250 tokens/turn, override with `CAVEMAN_RULE_OVERHEAD_TOKENS` if you've measured your own setup. Net is savings minus that overhead. On short, terse replies this can go negative — caveman's OUTPUT savings don't clear its INPUT cost — and the line says so directly instead of hiding it behind a gross-savings number. Background: `docs/HONEST-NUMBERS.md`.
+Output also includes an `Est. rule overhead` line whenever caveman was active with a known turn count. That estimates the per-turn INPUT-token cost of the rules the skill injects every turn: default 1,250 tokens/turn, override with `CAVEMAN_RULE_OVERHEAD_TOKENS` if you've measured your own setup. Background: `docs/HONEST-NUMBERS.md`.
 
-Each run also writes a lifetime-savings suffix file used by the statusline badge (`⛏ 12.4k`). That badge stays a gross-savings figure on purpose — it is a glanceable summary, not a full accounting; run `/caveman-stats` for the net picture.
+No output-savings estimate is printed. The repository has no committed reviewed benchmark result to back a counterfactual "saved N tokens" figure, so the output points at `docs/HONEST-NUMBERS.md` instead of guessing: compare your own provider-billed totals with and without caveman. The statusline suffix that used to show a gross-savings number is written empty for the same reason.
 
 ## How to invoke
 
@@ -19,16 +19,18 @@ Each run also writes a lifetime-savings suffix file used by the statusline badge
 ## Example output
 
 ```
-Session: 47 turns
-Input:   12,304 tokens
-Output:   3,891 tokens (caveman)
-Baseline: 11,247 tokens (estimated without caveman)
-Saved:    7,356 tokens (~65%)
-Est. rule overhead: 58,750 (input, ~1,250/turn over 47 turns)
-Est. net: -51,394 (caveman cost more than it saved for this workload — consider turning it off)
+Caveman Stats
+──────────────────────────────────
+Turns:    47
+──────────────────────────────────
+Output tokens:         3,891
+Cache-read tokens:     12,304
+──────────────────────────────────
+Est. rule overhead:    58,750 (input, ~1,250/turn over 47 turns)
+No output-savings estimate is published (docs/HONEST-NUMBERS.md): compare provider-billed totals with and without caveman for your own workload.
 ```
 
-(Numbers above are illustrative — see `docs/HONEST-NUMBERS.md` for why short, terse-reply sessions tend to land net-negative even at a healthy output-savings percentage.)
+(Numbers above are illustrative. See `docs/HONEST-NUMBERS.md` for why an output-savings estimate is not published.)
 
 ## See also
 

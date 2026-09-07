@@ -187,7 +187,7 @@ ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-sessions/"
 A window where you said "stop caveman" stores `off` and stays off — including
 across the automatic context compaction that happens in long sessions.
 
-Statusline should show `[CAVEMAN]` (orange) at the bottom of Claude Code. After your first `/caveman-stats` run it appends a savings counter like `[CAVEMAN] ⛏ 12.4k`.
+Statusline should show `[CAVEMAN]` (orange) at the bottom of Claude Code. No savings counter is appended: see docs/HONEST-NUMBERS.md for why.
 
 ## Uninstall
 

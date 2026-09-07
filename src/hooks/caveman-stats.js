@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // caveman-stats — read the active Claude Code session log, print real token
-// usage plus an estimated savings figure from the benchmark in benchmarks/.
+// usage. No counterfactual savings figure is published until a reviewed
+// benchmark result is committed (see docs/HONEST-NUMBERS.md).
 //
 // Run directly:    node hooks/caveman-stats.js
 // Inside Claude:   /caveman-stats triggers this via the UserPromptSubmit hook.
@@ -73,12 +74,6 @@ const resolveActiveMode = cavemanConfig.resolveActiveMode
 const validateSessionId = cavemanConfig.validateSessionId || (() => null);
 const sessionActivePath = cavemanConfig.sessionActivePath || (() => null);
 const legacyFlagPath = cavemanConfig.legacyFlagPath || ((dir) => path.join(dir, '.caveman-active'));
-
-// Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
-// 10 tasks, sonnet-4-20250514). Only 'full' has measured data; lite / ultra /
-// wenyan modes show no estimate until benchmarked. Add an entry here when a new
-// run is committed.
-const COMPRESSION = { 'full': 0.65 };
 
 // Per-turn INPUT cost the rules add: SKILL.md (~5 KB) is injected into
 // context, plus the per-turn reinforcement the mode tracker emits. This is
@@ -342,32 +337,6 @@ function wholeSessionAttribution(mode, outputTokens) {
   return { byMode: { [mode || 'none']: outputTokens || 0 }, unknownTokens: 0, basis: 'whole-session' };
 }
 
-// Compute the savings figures we want to log/share for one session snapshot.
-// Sums per-mode: only spans whose mode has benchmark data earn an estimate;
-// unknown spans earn nothing.
-function deriveSavings({ byMode, model }) {
-  let estSavedTokens = 0;
-  for (const [key, tokens] of Object.entries(byMode || {})) {
-    const ratio = COMPRESSION[key];
-    if (ratio == null || tokens <= 0) continue;
-    estSavedTokens += Math.round(tokens / (1 - ratio)) - tokens;
-  }
-  const price = priceForModel(model);
-  const estSavedUsd = price !== null ? (estSavedTokens / 1_000_000) * price : 0;
-  return { estSavedTokens, estSavedUsd };
-}
-
-// Net token effect = output tokens saved minus the input tokens the rules
-// cost. Savings are OUTPUT tokens, overhead is INPUT tokens — different
-// buckets, but summing them is the only honest whole-budget delta (see
-// docs/HONEST-NUMBERS.md). Never called with an unattributed savings figure —
-// callers only invoke this where mode attribution and turn counts both exist.
-function deriveNet({ estSavedTokens, turns }) {
-  const overheadTokens = Math.max(0, turns || 0) * ruleOverheadPerTurn();
-  return { overheadTokens, netTokens: (estSavedTokens || 0) - overheadTokens };
-}
-
-// Shared "rule overhead" + "net" lines for the session and lifetime views.
 // Deterministic number formatting. toLocaleString() alone inherits the host OS
 // locale, which varies thousands separators between machines (1,250 vs 1.250)
 // and makes CLI output — and the test suite — locale-dependent. Pin en-US so
@@ -375,15 +344,13 @@ function deriveNet({ estSavedTokens, turns }) {
 // tool's English output.
 const fmt = (n) => n.toLocaleString('en-US');
 
-function netLines({ estSavedTokens, turns }) {
+// Rule overhead is a sourced estimate (docs/HONEST-NUMBERS.md), independent
+// of any per-mode benchmark, so it applies whenever caveman ran this session.
+function overheadLine(turns) {
   const perTurn = ruleOverheadPerTurn();
-  const { overheadTokens, netTokens } = deriveNet({ estSavedTokens, turns });
-  const overhead = `Est. rule overhead:    ${fmt(overheadTokens)} ` +
+  const overheadTokens = Math.max(0, turns || 0) * perTurn;
+  return `Est. rule overhead:    ${fmt(overheadTokens)} ` +
     `(input, ~${fmt(perTurn)}/turn over ${turns} turn${turns === 1 ? '' : 's'})`;
-  const net = netTokens >= 0
-    ? `Est. net:              +${fmt(netTokens)} (net saving after rule overhead)`
-    : `Est. net:              ${fmt(netTokens)} (caveman cost more than it saved for this workload — consider turning it off)`;
-  return `${overhead}\n${net}`;
 }
 
 // Parse "7d", "12h" etc. to milliseconds. Returns null on invalid input.
@@ -396,7 +363,7 @@ function parseDuration(spec) {
 }
 
 // Aggregate history into latest-per-session totals, optionally filtered to a
-// time window. Returns { sessions, outputTokens, estSavedTokens, estSavedUsd }.
+// time window. Returns { sessions, outputTokens, overheadTurns }.
 function aggregateHistory(historyPath, sinceMs) {
   const lines = readHistory(historyPath);
   const cutoff = sinceMs ? Date.now() - sinceMs : null;
@@ -410,39 +377,16 @@ function aggregateHistory(historyPath, sinceMs) {
     const prev = latestPerSession.get(id);
     if (!prev || (entry.ts || 0) >= (prev.ts || 0)) latestPerSession.set(id, entry);
   }
-  let outputTokens = 0, estSavedTokens = 0, estSavedUsd = 0;
-  // Net (rule-overhead) figures only ever sum rows that actually logged a
-  // turn count. Legacy history rows predate #145's `turns` field — folding
-  // their savings into a net computed from someone else's turns would either
-  // over- or under-state the overhead, so they're excluded from net entirely
-  // (they still count toward the plain gross totals above, unchanged).
-  let netSavedTokens = 0, netTurns = 0;
+  let outputTokens = 0;
+  // Rule-overhead accounting only ever sums rows that actually logged a turn
+  // count: legacy history rows predate #145's `turns` field, so they count
+  // toward the plain gross total above but are excluded here.
+  let overheadTurns = 0;
   for (const e of latestPerSession.values()) {
-    outputTokens   += e.output_tokens     || 0;
-    estSavedTokens += e.est_saved_tokens  || 0;
-    estSavedUsd    += e.est_saved_usd     || 0;
-    if (e.turns != null) {
-      netSavedTokens += e.est_saved_tokens || 0;
-      netTurns       += e.turns            || 0;
-    }
+    outputTokens += e.output_tokens || 0;
+    if (e.turns != null) overheadTurns += e.turns || 0;
   }
-  return { sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd, netSavedTokens, netTurns };
-}
-
-// Output-reduction share: saved / (saved + used) = the fraction of the
-// would-be OUTPUT tokens that caveman avoided. That is the only ratio we can
-// honestly compute from output counts alone. It is NOT a share of session or
-// limit usage — input + cache tokens dominate agentic sessions, count against
-// Pro/Max limits, and are not reduced by caveman, so real limit relief is far
-// smaller (docs/HONEST-NUMBERS.md: session-level totals land ~14–21%, below
-// zero on terse workloads). Never label this "usage" or "budget". Returns a
-// rounded percent, or null when there is nothing measured to divide.
-function outputReductionPct(savedTokens, usedTokens) {
-  if (!Number.isFinite(savedTokens) || !Number.isFinite(usedTokens)) return null;
-  if (savedTokens <= 0 || usedTokens < 0) return null;
-  const total = savedTokens + usedTokens;
-  if (total <= 0) return null;
-  return Math.round((savedTokens / total) * 100);
+  return { sessions: latestPerSession.size, outputTokens, overheadTurns };
 }
 
 function humanizeTokens(n) {
@@ -452,40 +396,27 @@ function humanizeTokens(n) {
   return String(Math.round(n));
 }
 
-function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, netSavedTokens, netTurns, since }) {
+function formatHistory({ sessions, outputTokens, overheadTurns, since }) {
   const sep = '──────────────────────────────────';
   const window = since ? ` (last ${since})` : '';
   if (sessions === 0) {
     return `\nCaveman Stats — Lifetime${window}\n${sep}\nNo sessions logged yet — run /caveman-stats inside any session to start tracking.\n${sep}\n`;
   }
-  const usdLine = estSavedUsd > 0 ? `Est. saved (USD):      ~${formatUsd(estSavedUsd)}\n` : '';
-  const pct = outputReductionPct(estSavedTokens, outputTokens);
-  const budgetLine = pct !== null
-    ? `Est. output reduction: ~${pct}% (output tokens only, est.)\n`
-    : '';
-  // Only sessions that logged a turn count feed the net figure (older rows
-  // predate #145) — omit rather than understate the overhead.
-  const netBlock = netTurns > 0 ? netLines({ estSavedTokens: netSavedTokens, turns: netTurns }) + '\n' : '';
+  // Only sessions that logged a turn count feed the overhead figure (older
+  // rows predate #145): omit rather than understate it.
+  const overheadBlock = overheadTurns > 0 ? overheadLine(overheadTurns) + '\n' : '';
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
     `Sessions:   ${fmt(sessions)}\n${sep}\n` +
     `Output tokens:         ${fmt(outputTokens)}\n` +
-    `Est. tokens saved:     ${fmt(estSavedTokens)}\n` +
-    netBlock + budgetLine + usdLine + sep + '\n';
+    overheadBlock +
+    'No output-savings estimate is published (docs/HONEST-NUMBERS.md): compare provider-billed totals with and without caveman for your own workload.\n' +
+    sep + '\n';
 }
 
-// Single-line tweetable summary. Stays human-friendly when no ratio is known.
-// Savings come from per-mode attribution (#601) so a mid-session mode change
-// never inflates the shared number.
-function formatShare({ outputTokens, turns, mode, model, attribution }) {
+// Single-line tweetable summary.
+function formatShare({ outputTokens, turns }) {
   if (turns === 0) {
     return '🪨 caveman armed but no turns yet — caveman.sh';
-  }
-  const attr = attribution || wholeSessionAttribution(mode, outputTokens);
-  const { estSavedTokens, estSavedUsd } = deriveSavings({ byMode: attr.byMode, model });
-
-  if (estSavedTokens > 0) {
-    const usd = estSavedUsd > 0 ? ` (~${formatUsd(estSavedUsd)})` : '';
-    return `🪨 Saved ${fmt(estSavedTokens)} output tokens${usd} across ${turns} turns this session — caveman.sh`;
   }
   return `🪨 ${turns} turns, ${fmt(outputTokens)} output tokens this session — caveman.sh`;
 }
@@ -493,7 +424,7 @@ function formatShare({ outputTokens, turns, mode, model, attribution }) {
 // Pure formatter — separated from main() so tests can pass synthetic inputs.
 // `attribution` (from attributeByMode, #601) splits output tokens per mode;
 // when omitted, the current mode is assumed for the whole session.
-function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessionPath, compressed, attribution }) {
+function formatStats({ outputTokens, cacheReadTokens, turns, mode, sessionPath, compressed, attribution }) {
   const sep = '──────────────────────────────────';
   const shortPath = sessionPath && sessionPath.length > 45
     ? '...' + sessionPath.slice(-45)
@@ -511,69 +442,27 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
   const uniform = attr.unknownTokens === 0 &&
     (activeKeys.length === 0 || (activeKeys.length === 1 && activeKeys[0] === (mode || 'none')));
 
-  const ratio = COMPRESSION[mode] != null ? COMPRESSION[mode] : null;
-  const price = priceForModel(model);
-
   let savings;
   let footer = '';
   if (!uniform) {
-    const { estSavedTokens, estSavedUsd } = deriveSavings({ byMode: attr.byMode, model });
     const lines = [attr.basis === 'flag-mtime'
       ? 'Mode was set mid-session — only output after the change is attributed:'
       : 'Mode changed mid-session — output attributed per mode:'];
     for (const key of activeKeys) {
       const tokens = attr.byMode[key];
-      const r = COMPRESSION[key];
       const label = key === 'none' ? 'caveman off' : key;
-      const note = r != null
-        ? `est. ${fmt(Math.round(tokens / (1 - r)) - tokens)} saved`
-        : 'no benchmark estimate';
-      lines.push(`  ${label}: ${fmt(tokens)} tokens (${note})`);
+      lines.push(`  ${label}: ${fmt(tokens)} tokens`);
     }
     if (attr.unknownTokens > 0) {
-      lines.push(`  unattributed: ${fmt(attr.unknownTokens)} tokens (mode unknown — excluded from estimate)`);
+      lines.push(`  unattributed: ${fmt(attr.unknownTokens)} tokens (mode unknown)`);
     }
-    lines.push(`Est. tokens saved:     ${fmt(estSavedTokens)}`);
-    if (estSavedUsd > 0) lines.push(`Est. saved (USD):      ~${formatUsd(estSavedUsd)}`);
     savings = lines.join('\n');
-
-    footer = 'Savings est. from benchmarks/ (mean per-task), applied only to spans whose mode is known.';
-    if (estSavedUsd > 0) footer += ` Pricing for ${model}.`;
-    if (attr.basis === 'flag-mtime') {
-      footer += ' Tokens before the mode change could not be attributed and are excluded rather than guessed.';
-    } else if (attr.unknownTokens > 0) {
-      footer += ' Unattributed tokens are excluded rather than guessed.';
-    }
-    footer += ' Reduction is of output tokens only; input/cache usage is unchanged.';
-  } else if (ratio !== null) {
-    const estNormal = Math.round(outputTokens / (1 - ratio));
-    const estSaved = estNormal - outputTokens;
-    let usdLine = '';
-    if (price !== null) {
-      const usd = (estSaved / 1_000_000) * price;
-      usdLine = `Est. saved (USD):      ~${formatUsd(usd)}\n`;
-      footer = `Savings est. from benchmarks/ (mean per-task). Pricing for ${model}. Actual varies by task.`;
-    } else {
-      footer = 'Savings est. from benchmarks/ (mean per-task). Actual varies by task.';
-    }
-    // No "% of your usage/budget" line here on purpose: from output tokens
-    // alone the only computable ratio is the output reduction already shown
-    // on the line above, and input + cache tokens (which dominate agentic
-    // sessions and count against Pro/Max limits) are untouched by caveman —
-    // any session-usage % would overstate real limit relief. See
-    // docs/HONEST-NUMBERS.md.
-    footer += ' Reduction is of output tokens only; input/cache usage is unchanged.';
-    footer += ` Net subtracts the rules' est. input cost (~${fmt(ruleOverheadPerTurn())}/turn — docs/HONEST-NUMBERS.md).`;
-    savings = (`Est. without caveman:  ${fmt(estNormal)}\n` +
-              `Est. tokens saved:     ${fmt(estSaved)} (~${Math.round(ratio * 100)}% of output)\n` +
-              usdLine).replace(/\n$/, '');
-    // Net only makes sense where the savings figure above is unambiguous: a
-    // single benchmarked mode ran the whole span (uniform) with a known turn
-    // count. Mixed-mode or partially-unattributed spans (the !uniform branch
-    // above) intentionally get no net line rather than a guessed one.
-    if (turns > 0) savings += '\n' + netLines({ estSavedTokens: estSaved, turns });
   } else if (mode && mode !== 'off') {
-    savings = `No savings estimate for '${mode}' mode — only 'full' has benchmark data.`;
+    // Rule overhead is independent of which benchmarked mode ran (see
+    // overheadLine): the SKILL.md injection cost applies to any active mode.
+    savings = overheadLine(turns);
+    footer = 'No output-savings estimate is published (docs/HONEST-NUMBERS.md): ' +
+      'compare provider-billed totals with and without caveman for your own workload.';
   } else {
     savings = 'Caveman not active this session.';
   }
@@ -665,7 +554,6 @@ function main() {
   // /caveman-stats calls in one session emit multiple lines for the same
   // session_id; aggregateHistory keeps only the latest per session_id.
   if (parsed.turns > 0) {
-    const { estSavedTokens, estSavedUsd } = deriveSavings({ byMode: attribution.byMode, model: parsed.model });
     appendFlag(historyPath, JSON.stringify({
       ts: Date.now(),
       session_id: sessionId || path.basename(sessionFile, '.jsonl'),
@@ -673,17 +561,11 @@ function main() {
       model: parsed.model || null,
       output_tokens: parsed.outputTokens,
       turns: parsed.turns,
-      est_saved_tokens: estSavedTokens,
-      est_saved_usd: estSavedUsd,
     }));
 
-    // Statusline suffix: tiny pre-rendered string the shell statusline can
-    // cat without parsing JSONL. Updated on every /caveman-stats run.
-    // Routed through safeWriteFlag — the suffix path is predictable and
-    // user-owned, same symlink-clobber surface as the .caveman-active flag.
-    const agg = aggregateHistory(historyPath, null);
-    const suffix = agg.estSavedTokens > 0 ? `⛏  ${humanizeTokens(agg.estSavedTokens)}` : '';
-    safeWriteFlag(path.join(claudeDir, '.caveman-statusline-suffix'), suffix);
+    // Always empty now (routed through safeWriteFlag, same symlink-clobber
+    // guard as .caveman-active) so no stale savings figure lingers on disk.
+    safeWriteFlag(path.join(claudeDir, '.caveman-statusline-suffix'), '');
   }
 
   if (share) {
@@ -698,8 +580,8 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
-  deriveNet, ruleOverheadPerTurn, parseSession, priceForModel, formatUsd, COMPRESSION,
+  formatStats, formatShare, formatHistory, aggregateHistory, parseDuration,
+  overheadLine, ruleOverheadPerTurn, parseSession, priceForModel, formatUsd,
   MODEL_OUTPUT_PRICE_PER_M, findCompressedPairs, summarizeCompressed, humanizeTokens,
-  outputReductionPct, readModeLog, attributeByMode,
+  readModeLog, attributeByMode,
 };
