@@ -26,6 +26,7 @@
     "index.js",
     "compress.js",
     "spawn-options.js",
+    "shutdown.js",
     "README.md"
   ]
 }
