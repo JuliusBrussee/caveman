@@ -93,6 +93,30 @@ test('--force overwrites existing rule files', (tmp) => {
   assert.match(after, /Respond terse/);
 });
 
+for (const [agent, file] of [
+  ['cursor', '.cursor/rules/caveman.mdc'],
+  ['windsurf', '.windsurf/rules/caveman.md'],
+  ['cline', '.clinerules/caveman.md'],
+]) {
+  test(`--force refreshes an installed ${agent} rule; default and dry-run preserve it`, (tmp) => {
+    runInit(tmp, '--only', agent);
+    const target = path.join(tmp, file);
+    const current = fs.readFileSync(target, 'utf8');
+    const stale = current + '\nOld rule removed upstream.\n';
+    fs.writeFileSync(target, stale);
+
+    assert.match(runInit(tmp, '--only', agent), /skipped-already-installed/);
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), stale);
+
+    const preview = runInit(tmp, '--only', agent, '--force', '--dry-run');
+    assert.match(preview, /1 overwritten/);
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), stale);
+
+    assert.match(runInit(tmp, '--only', agent, '--force'), /1 overwritten/);
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), current);
+  });
+}
+
 test('--dry-run: announces but writes nothing', (tmp) => {
   const out = runInit(tmp, '--dry-run');
   assert.match(out, /\(dry run\)/);
