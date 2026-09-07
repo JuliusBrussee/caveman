@@ -18,6 +18,14 @@ func elidedBytesFor(want int) int {
 	return 4 * want
 }
 
+// withOmitted is the summary a shedding budget produces: the surviving facts,
+// then the notice stating how many entries the budget dropped. A trimmed
+// summary always carries one, so a shed-priority test states the facts it
+// expects to survive AND the count it expects to be told about.
+func withOmitted(facts string, n int) string {
+	return facts + "; +" + strconv.Itoa(n) + " omitted"
+}
+
 func fields(pairs ...string) []field {
 	out := make([]field, 0, len(pairs)/2)
 	for i := 0; i+1 < len(pairs); i += 2 {
@@ -253,8 +261,11 @@ func TestSummarizeElidedRespectsItsBudget(t *testing.T) {
 	if len(got) > invariantMaxBytes {
 		t.Fatalf("summary is %d bytes, over the %d cap: %q", len(got), invariantMaxBytes, got)
 	}
-	// Every entry that did survive the cap must still be a whole, true fact.
-	for _, entry := range strings.Fields(strings.TrimPrefix(got, "all ")) {
+	// Every entry that did survive the cap must still be a whole, true fact. The
+	// trailing omission notice is not one, so it is cut before the check; that
+	// the cap sheds here at all is exactly what it reports.
+	facts, _, _ := strings.Cut(got, "; +")
+	for _, entry := range strings.Fields(strings.TrimPrefix(facts, "all ")) {
 		name, value, ok := strings.Cut(entry, "=")
 		if !ok || !strings.HasPrefix(name, "field_") || value != strings.Repeat("v", 30) {
 			t.Fatalf("cap truncated a fact into %q", entry)
@@ -293,8 +304,8 @@ func TestIdentifierEnumerationsAreShedFirst(t *testing.T) {
 	if !strings.Contains(full, "status: fulfilled×6 shipped×2") || !strings.Contains(full, "batch:") {
 		t.Fatalf("both enumerations should render unconstrained, got %q", full)
 	}
-	tight := summarizeElided(units, elidedBytesFor(len("status: fulfilled×6 shipped×2")))
-	if tight != "status: fulfilled×6 shipped×2" {
+	want := withOmitted("status: fulfilled×6 shipped×2", 1)
+	if tight := summarizeElided(units, elidedBytesFor(len(want))); tight != want {
 		t.Fatalf("the weak enumeration must be shed before the strong one, got %q", tight)
 	}
 }
@@ -319,8 +330,8 @@ func TestBudgetShedsRangesBeforeEnumerations(t *testing.T) {
 		t.Fatalf("expected both an enumeration and ranges unconstrained, got %q", full)
 	}
 	// A budget too tight for everything must keep the enumeration.
-	tight := summarizeElided(units, elidedBytesFor(len("status: fulfilled×4 shipped×2")))
-	if tight != "status: fulfilled×4 shipped×2" {
+	want := withOmitted("status: fulfilled×4 shipped×2", 2)
+	if tight := summarizeElided(units, elidedBytesFor(len(want))); tight != want {
 		t.Fatalf("under pressure the enumeration must be what survives, got %q", tight)
 	}
 }
@@ -735,15 +746,16 @@ func TestCoverageShedPriority(t *testing.T) {
 				t.Fatalf("unconstrained summary is missing %q: %q", want, full)
 			}
 		}
-		want := "all currency=EUR; " + enum + "; " + denseCov
+		want := withOmitted("all currency=EUR; "+enum+"; "+denseCov, 1)
 		if got := summarizeElided(units, elidedBytesFor(len(want))); got != want {
 			t.Fatalf("the range must be shed first, got %q", got)
 		}
-		want = enum + "; " + denseCov
+		want = withOmitted(enum+"; "+denseCov, 2)
 		if got := summarizeElided(units, elidedBytesFor(len(want))); got != want {
 			t.Fatalf("a dense coverage must outlive the constant, got %q", got)
 		}
-		if got := summarizeElided(units, elidedBytesFor(len(enum))); got != enum {
+		want = withOmitted(enum, 3)
+		if got := summarizeElided(units, elidedBytesFor(len(want))); got != want {
 			t.Fatalf("the class enumeration must be the last survivor, got %q", got)
 		}
 	})
@@ -757,7 +769,7 @@ func TestCoverageShedPriority(t *testing.T) {
 		if strings.Contains(full, "present") {
 			t.Fatalf("a gapped run must never claim density: %q", full)
 		}
-		want := "all currency=EUR; " + enum
+		want := withOmitted("all currency=EUR; "+enum, 2)
 		if got := summarizeElided(units, elidedBytesFor(len(want))); got != want {
 			t.Fatalf("a bounded coverage must be shed before the constant, got %q", got)
 		}
@@ -873,5 +885,75 @@ func TestNDJSONLinesSummarizeAsEvents(t *testing.T) {
 	}
 	if !strings.Contains(text, "status: ") {
 		t.Fatalf("an NDJSON event run must state its status classes: %q", text)
+	}
+}
+
+// TestTrimmedSummaryDeclaresWhatItShed is the honesty gate for shedding, the
+// same one TestEnumeratedCountsCoverEveryElidedUnit applies to enumeration.
+// summarizeElided drops whole entries until the render fits the budget, so a
+// trimmed `all …` list used to be indistinguishable from a complete one. Reading
+// a field's absence as "it wasn't constant everywhere" is most of what the
+// marker is good for, so a summary that sheds must say that it did.
+func TestTrimmedSummaryDeclaresWhatItShed(t *testing.T) {
+	// Six constant fields, plus class-enumeration fields that compete for the
+	// same budget. Constants shed 4th of six kinds, so raising the number of
+	// enumerations squeezes them out one at a time.
+	build := func(enums int) [][]field {
+		var units [][]field
+		for i := 0; i < 8; i++ {
+			pairs := []string{
+				"state", "charged", "note", "ok", "region", "eu",
+				"tier", "gold", "channel", "web", "currency", "usd",
+			}
+			for e := 0; e < enums; e++ {
+				pairs = append(pairs, fmt.Sprintf("class%d", e), fmt.Sprintf("v%d", i%2))
+			}
+			units = append(units, fields(pairs...))
+		}
+		return units
+	}
+
+	full := summarizeElided(build(0), 1<<20)
+	if strings.Contains(full, "omitted") {
+		t.Fatalf("a complete summary must not claim omissions: %q", full)
+	}
+	for _, constant := range []string{"state=charged", "note=ok", "region=eu", "tier=gold", "channel=web", "currency=usd"} {
+		if !strings.Contains(full, constant) {
+			t.Fatalf("unconstrained summary should carry %s: %q", constant, full)
+		}
+	}
+
+	// Each step of pressure drops more constants. Every trimmed render must
+	// declare the shortfall, and must stay inside its budget with the suffix.
+	for enums := 1; enums <= 3; enums++ {
+		units := build(enums)
+		unconstrained := summarizeElided(units, 1<<20)
+		budget := elidedBytesFor(len("state=charged note=ok region=eu") + 24)
+		tight := summarizeElided(units, budget)
+		if tight == "" || tight == unconstrained {
+			continue // nothing was shed at this step; nothing to declare
+		}
+		if !strings.Contains(tight, "omitted") {
+			t.Errorf("enums=%d: trimmed summary sheds silently: %q", enums, tight)
+		}
+		// The notice rides outside the fact budget, so the facts alone must still
+		// fit and the whole render may exceed it only by the notice.
+		facts, notice, ok := strings.Cut(tight, "; +")
+		if !ok {
+			t.Errorf("enums=%d: expected a trailing omission notice: %q", enums, tight)
+			continue
+		}
+		if len(facts) > summaryBudget(budget) {
+			t.Errorf("enums=%d: facts overrun the budget: %d > %d (%q)",
+				enums, len(facts), summaryBudget(budget), facts)
+		}
+		if !strings.HasSuffix(notice, " omitted") {
+			t.Errorf("enums=%d: malformed omission notice %q", enums, notice)
+		}
+		// The count must match the facts actually missing from the render.
+		n, err := strconv.Atoi(strings.TrimSuffix(notice, " omitted"))
+		if err != nil || n < 1 {
+			t.Errorf("enums=%d: unreadable omission count %q", enums, notice)
+		}
 	}
 }
