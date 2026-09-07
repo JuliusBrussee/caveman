@@ -24,8 +24,9 @@
 //   - cave_live_ project keys
 //   - AWS access key IDs (AKIA/ASIA/AROA)
 //   - AWS secret access keys, when labelled (aws_secret_access_key = …)
-//   - Vendor-prefixed tokens: xox[baprs]-, sk_live_, rk_live_, ghp_,
-//     github_pat_, ghs_, AIza, sk-proj-, and any sk- key of 20+ chars
+//   - Vendor-prefixed tokens: xox[baprs]-, sk_live_, rk_live_, ghp_, gho_,
+//     ghu_, ghr_, github_pat_, ghs_, AIza, sk-proj-, and any sk- key of
+//     20+ chars
 //   - Bearer tokens of 20+ chars
 //   - Key/secret/token/password assignments, including an intervening name
 //     fragment (SECRET_ACCESS_KEY=, GITHUB_TOKEN_FOR_CI=) and JSON-escaped
@@ -126,6 +127,9 @@ var (
 		`|sk_live_[A-Za-z0-9]{16,}` +
 		`|rk_live_[A-Za-z0-9]{16,}` +
 		`|ghp_[A-Za-z0-9]{20,}` +
+		`|gho_[A-Za-z0-9]{20,}` +
+		`|ghu_[A-Za-z0-9]{20,}` +
+		`|ghr_[A-Za-z0-9]{20,}` +
 		`|github_pat_[A-Za-z0-9_]{20,}` +
 		`|ghs_[A-Za-z0-9._-]{36,}` +
 		`|AIza[A-Za-z0-9_\-]{30,}` +

@@ -84,6 +84,26 @@ var stringCases = []stringCase{
 		wantClean: true,
 		ruleHit:   "credential-prefix-token",
 	},
+	// gho_/ghu_/ghr_ stay plain alphanumeric like ghp_, unlike migrating ghs_.
+	// Split mid-token for push protection.
+	{
+		name:      "OAuth access token",
+		input:     "seen in CI transcript: " + "gho_" + "16C7e42F292c6912E7710c838347Ae178B4a",
+		wantClean: true,
+		ruleHit:   "credential-prefix-token",
+	},
+	{
+		name:      "GitHub App user-to-server token",
+		input:     "seen in CI transcript: " + "ghu_" + "16C7e42F292c6912E7710c838347Ae178B4a",
+		wantClean: true,
+		ruleHit:   "credential-prefix-token",
+	},
+	{
+		name:      "GitHub App refresh token",
+		input:     "seen in CI transcript: " + "ghr_" + "16C7e42F292c6912E7710c838347Ae178B4a",
+		wantClean: true,
+		ruleHit:   "credential-prefix-token",
+	},
 	// PEM private key
 	{
 		name: "PEM RSA private key block",

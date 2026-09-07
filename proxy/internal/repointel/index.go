@@ -754,7 +754,7 @@ func safeTerm(value string) bool {
 	if strings.Contains(value, "..") || strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") {
 		return false
 	}
-	for _, prefix := range []string{"sk-", "pk-", "rk-", "ghp-", "ghp_", "ghs_", "github_pat-", "github_pat_", "xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-", "akia-", "akia_"} {
+	for _, prefix := range []string{"sk-", "pk-", "rk-", "ghp-", "ghp_", "gho_", "ghu_", "ghr_", "ghs_", "github_pat-", "github_pat_", "xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-", "akia-", "akia_"} {
 		if strings.HasPrefix(value, prefix) {
 			return false
 		}
