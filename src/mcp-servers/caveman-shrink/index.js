@@ -92,7 +92,18 @@ upstream.on('close', (code, signal) => {
 // Forwarding alone is not enough for a server that traps the signal and
 // declines to exit: nothing would ever fire `close`, and the wrapper would sit
 // there as long as the upstream did. `shutdown.forward` escalates to SIGKILL
-// after a grace period so teardown terminates either way.
+// after a grace period so teardown terminates anyway.
+//
+// That escalation reaches the DIRECT child only. getSpawnOptions() sets no
+// `detached`, so there is no process group to signal, and an upstream that is
+// really a launcher (`npx <server>`, a shell wrapper) can leave the actual
+// server running as a descendant holding the inherited stdout pipe — which
+// also keeps `close` from firing. Measured, with a descendant that traps
+// SIGTERM: the wrapper hangs and the descendant is orphaned, identically
+// before and after this escalation existed. Closing that gap means owning the
+// whole process tree (`detached` + `process.kill(-pid)` on POSIX, `taskkill
+// /T` on Windows), which changes how tty signals reach the child and is a
+// larger change than this one — deliberately not attempted here.
 //
 // SIGKILL is deliberately absent from the list below: it cannot be trapped, and
 // on that path the upstream is orphaned by the OS with nothing this process can
