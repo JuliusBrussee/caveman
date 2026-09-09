@@ -2,7 +2,8 @@
 // caveman-stats — read the active Claude Code session log, print real token
 // usage plus an estimated savings figure from the benchmark in benchmarks/.
 //
-// Run directly:    node hooks/caveman-stats.js
+// Run directly:    node src/hooks/caveman-stats.js  (installed: next to the
+//                  other hooks, wherever the installer or plugin put them)
 // Inside Claude:   /caveman-stats triggers this via the UserPromptSubmit hook.
 // Hook integration passes --session-file <transcript_path> so we always read
 // the active session, not whichever JSONL was modified most recently.

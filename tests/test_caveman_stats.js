@@ -963,5 +963,82 @@ test('lifetime view excludes legacy rows from net even when mixed with rows that
   assert.match(out, /Est\. net:\s+\+1,536/);
 });
 
+// #789 — the two caveman-stats docs describe the delivery mechanism the hook
+// actually uses. This is drift, not prose: SKILL.md is loaded into the model's
+// context when /caveman-stats fires, so "the hook returns decision: block, the
+// model does not need to do anything" tells the model to stay silent at the
+// exact moment additionalContext is asking it to print the block. The hook has
+// emitted no `decision` since #618; `grep decision src/hooks/*.js` finds none.
+//
+// Ground truth comes from running the real hook rather than from a second
+// hardcoded string, so this case cannot pass a doc that agrees with a contract
+// the code has moved off.
+test('caveman-stats docs describe the delivery mechanism the hook actually uses', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 100 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [TRACKER], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, HOME: tmp },
+    input: JSON.stringify({ prompt: '/caveman-stats', transcript_path: sess }),
+  });
+  const parsed = JSON.parse(out);
+  assert.strictEqual(parsed.decision, undefined,
+    'ground truth: the hook does not block, so no doc may say it does');
+  assert.ok(parsed.hookSpecificOutput && parsed.hookSpecificOutput.additionalContext,
+    'ground truth: the hook delivers through additionalContext');
+
+  for (const rel of ['skills/caveman-stats/SKILL.md', 'skills/caveman-stats/README.md']) {
+    const doc = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+    assert.ok(!/decision:\s*"?block/i.test(doc) && !/blocked-decision/i.test(doc),
+      `${rel} still describes the retired decision:"block" delivery`);
+    assert.ok(!/does not need to do anything/i.test(doc),
+      `${rel} still tells the model to do nothing, while the hook asks it to print the block`);
+    assert.match(doc, /additionalContext/,
+      `${rel} must name the additionalContext delivery the hook actually uses`);
+  }
+});
+
+// The same #789 report also flagged the `hooks/…` paths in these docs. They are
+// not wrong — the installer copies HOOK_FILES into $CLAUDE_CONFIG_DIR/hooks/,
+// so that IS the installed layout — but they leave a repo reader with no path
+// that exists here. Both spellings have to be reachable, so pin that the doc
+// names the repo source and that the file is really there.
+test('caveman-stats docs point a repo reader at a path that exists', () => {
+  const doc = fs.readFileSync(path.join(ROOT, 'skills/caveman-stats/SKILL.md'), 'utf8');
+  const referenced = [...doc.matchAll(/`(src\/hooks\/[A-Za-z0-9._-]+)`/g)].map(m => m[1]);
+  assert.ok(referenced.includes('src/hooks/caveman-stats.js'),
+    'SKILL.md must name the repo source of the stats script');
+  for (const rel of referenced) {
+    assert.ok(fs.existsSync(path.join(ROOT, rel)), `SKILL.md references a missing path: ${rel}`);
+  }
+});
+
+// Third site of the same #789 root cause: when the stats script cannot run, the
+// hook told the user to `node hooks/caveman-stats.js`. That relative path is
+// only real for a standalone install rooted at $CLAUDE_CONFIG_DIR; a plugin
+// user has no `hooks/` directory to run it from, and neither does anyone whose
+// cwd is not the config dir. The hook already knows the resolved path.
+test('stats fallback message names the script path that actually exists', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  // No transcript_path and an empty config dir: the stats child exits non-zero,
+  // which is the branch that produces the fallback message.
+  const out = execFileSync(process.execPath, [TRACKER], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, HOME: tmp },
+    input: JSON.stringify({ prompt: '/caveman-stats' }),
+    stdio: ['pipe', 'pipe', 'pipe'], // the failing child's stderr is expected noise
+  });
+  const ctx = JSON.parse(out).hookSpecificOutput.additionalContext;
+  assert.match(ctx, /could not run stats script/);
+  const suggested = /Try manually: node (.+)$/m.exec(ctx);
+  assert.ok(suggested, `fallback must suggest a command: ${ctx}`);
+  assert.ok(fs.existsSync(suggested[1].trim()),
+    `fallback suggests a path that does not exist: ${suggested[1].trim()}`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

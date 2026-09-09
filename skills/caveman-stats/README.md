@@ -4,7 +4,7 @@ Real session token receipts. No AI estimation.
 
 ## What it does
 
-Reads the current Claude Code session log directly and reports actual input/output token usage plus estimated savings versus a non-caveman baseline. Numbers come from the JSONL session log on disk — the model itself does not compute or estimate them. Output is injected by the `caveman-mode-tracker` hook, which intercepts `/caveman-stats` and returns the formatted stats as a blocked-decision reason.
+Reads the current Claude Code session log directly and reports actual input/output token usage plus estimated savings versus a non-caveman baseline. Numbers come from the JSONL session log on disk — the model itself does not compute or estimate them. Output is injected by the `caveman-mode-tracker` hook, which intercepts `/caveman-stats`, runs the stats script, and hands the formatted block back as `additionalContext` with an instruction to print it verbatim.
 
 Output also includes an `Est. rule overhead` and `Est. net` line whenever the savings figure above them is unambiguous (a single benchmarked mode with a known turn count — no guessing across mixed or unattributed spans). Overhead estimates the per-turn INPUT-token cost of the rules the skill injects every turn — default 1,250 tokens/turn, override with `CAVEMAN_RULE_OVERHEAD_TOKENS` if you've measured your own setup. Net is savings minus that overhead. On short, terse replies this can go negative — caveman's OUTPUT savings don't clear its INPUT cost — and the line says so directly instead of hiding it behind a gross-savings number. Background: `docs/HONEST-NUMBERS.md`.
 

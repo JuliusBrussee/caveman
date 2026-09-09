@@ -200,9 +200,13 @@ function handle(raw) {
     const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
     if (statsMatch) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
+      // Resolved once, outside the try, because the failure message needs it
+      // too. A hardcoded `hooks/caveman-stats.js` is only real for a standalone
+      // install rooted at $CLAUDE_CONFIG_DIR — a plugin user has no such
+      // directory to run it from (#789).
+      const statsPath = path.join(__dirname, 'caveman-stats.js');
       let block;
       try {
-        const statsPath = path.join(__dirname, 'caveman-stats.js');
         const argv = [statsPath];
         if (data.transcript_path) argv.push('--session-file', data.transcript_path);
         // Lets stats drop mode-log rows belonging to other windows instead of
@@ -222,7 +226,7 @@ function handle(raw) {
         // spawn is ~10x macOS before antivirus (#819), so the margin is real.
         block = execFileSync(process.execPath, argv, { encoding: 'utf8', timeout: 2500 }).trim();
       } catch (e) {
-        block = 'caveman-stats: could not run stats script.\nTry manually: node hooks/caveman-stats.js';
+        block = 'caveman-stats: could not run stats script.\nTry manually: node ' + statsPath;
       }
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
