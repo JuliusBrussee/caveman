@@ -19,6 +19,7 @@ const REPO_ROOT = path.resolve(HERE, '..', '..');
 const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
 const requireCjs = createRequire(import.meta.url);
 const SETTINGS = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'settings.js'));
+const MODE_LOG_BASENAME = '.caveman-mode-log.jsonl';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -357,6 +358,7 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
 
     const pluginPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'plugin.js');
     const flagPath = path.join(xdg, 'opencode', '.caveman-active');
+    const modeLogPath = path.join(xdg, 'opencode', MODE_LOG_BASENAME);
 
     // Set XDG_CONFIG_HOME so the plugin's flagPath resolves to our temp dir,
     // and pin the default mode so session-init is deterministic regardless of
@@ -379,6 +381,9 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     // Slash command in a chat.message text part activates ultra.
     await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
     assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultra');
+    assert.ok(fs.existsSync(modeLogPath), 'mode log missing after slash activation');
+    const activationRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(activationRows.at(-1).mode, 'ultra');
 
     // opencode expands "/caveman <level>" into the command template before
     // chat.message fires — the level must be recovered from the expanded text.
@@ -430,6 +435,8 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     // Natural-language deactivation removes the flag.
     await handlers['chat.message']({}, { parts: [{ type: 'text', text: 'stop caveman please' }] });
     assert.equal(fs.existsSync(flagPath), false, 'flag should be deleted after deactivation');
+    const deactivationRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(deactivationRows.at(-1).mode, null);
 
     // No reinforcement injected when inactive.
     const sys2 = { system: [] };
@@ -442,6 +449,23 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     assert.equal(fs.existsSync(flagPath), false, 'non-session.created event must not write the flag');
     await handlers.event({ event: { type: 'session.created' } });
     assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full');
+    const sessionInitRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(
+      { mode: sessionInitRows.at(-1).mode, prev: sessionInitRows.at(-1).prev },
+      { mode: 'full', prev: null },
+    );
+
+    // A session starting with the default resolved to "off" turns caveman off,
+    // and that transition is a mode change like any other — stats must be able
+    // to attribute the messages that follow to caveman being inactive.
+    process.env.CAVEMAN_DEFAULT_MODE = 'off';
+    await handlers.event({ event: { type: 'session.created' } });
+    assert.equal(fs.existsSync(flagPath), false, 'session init with default off should delete the flag');
+    const sessionOffRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(
+      { mode: sessionOffRows.at(-1).mode, prev: sessionOffRows.at(-1).prev },
+      { mode: null, prev: 'full' },
+    );
   } finally {
     if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
     else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
