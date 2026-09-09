@@ -128,7 +128,30 @@ compat:
   local-model:
     base_url: http://127.0.0.1:11434/v1
     api_key_env: LOCAL_MODEL_API_KEY
+  zai:
+    base_url: https://api.z.ai/api/anthropic
+    wire_dialect: anthropic
 ```
+
+`wire_dialect` declares the wire grammar the mount's upstream actually speaks.
+Empty (the default) keeps the shared OpenAI shape everywhere. Set `anthropic`
+only when the upstream answers the Anthropic Messages protocol on the mount.
+It changes two behaviors, both scoped to Anthropic Messages-path requests:
+
+- Usage accounting parses with the Anthropic dialect. Such an endpoint reports
+  `input_tokens` exclusive of cache reads/writes, which the OpenAI-shape
+  contradiction check misreads as malformed usage on every cache-warm
+  response, so token accounting (and with it cache status and compression
+  eligibility) silently drops those rows.
+- Compression zones follow the Anthropic Messages grammar, which keys the
+  live/frozen boundary on the request's own `cache_control` breakpoints. The
+  OpenAI grammar would mark only the latest messages live, leaving the
+  uncached post-breakpoint tail frozen or rewriting a block the provider
+  already cached.
+
+Routing, headers, and pricing keep the mount's OpenAI-compatible identity in
+every dialect, and OpenAI-protocol paths on the same mount keep the OpenAI
+grammar.
 
 Self-hosted private or loopback upstreams require an explicit
 `CAVE_SSRF_ALLOWLIST` entry. See [Security and privacy](security-and-privacy.md).
