@@ -758,6 +758,50 @@ func TestBuildAdapters_RegistersNamedCompatBeforeLegacy(t *testing.T) {
 	}
 }
 
+// TestBuildAdapters_PassesCompatWireDialect verifies the mount's configured
+// usage dialect reaches the adapter's usage scanner (issue #1026): an
+// anthropic-dialect mount must account a cache-warm Anthropic-shape stream —
+// input_tokens excluding the cache read — as provider-complete, while the same
+// body on a dialect-less mount keeps the legacy malformed verdict.
+func TestBuildAdapters_PassesCompatWireDialect(t *testing.T) {
+	const warmStream = "event: message_start\n" +
+		`data: {"type": "message_start", "message": {"id": "msg_warm", "usage": {"input_tokens": 0, "output_tokens": 0}}}` + "\n" +
+		"event: message_delta\n" +
+		`data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"input_tokens": 36, "output_tokens": 4, "cache_read_input_tokens": 1280, "server_tool_use": {"web_search_requests": 0}, "service_tier": "standard"}}` + "\n" +
+		"event: message_stop\n" +
+		`data: {"type": "message_stop"}` + "\n"
+	cfg := config.Config{
+		Compat: map[string]config.CompatConfig{
+			"zai":     {BaseURL: "https://api.z.ai/api/anthropic", WireDialect: "anthropic"},
+			"plainai": {BaseURL: "https://api.example.test"},
+		},
+	}
+	scan := func(t *testing.T, path string) providers.UsageObservation {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		for _, adapter := range buildAdapters(cfg) {
+			if !adapter.MatchRoute(req.Method, req.URL.Path) {
+				continue
+			}
+			scanner := adapter.NewUsageScanner(http.Header{})
+			if _, err := scanner.Write([]byte(warmStream)); err != nil {
+				t.Fatalf("scanner write: %v", err)
+			}
+			return scanner.Usage()
+		}
+		t.Fatalf("no adapter matched %s", path)
+		return providers.UsageObservation{}
+	}
+	dialect := scan(t, "/compat/zai/v1/messages")
+	if dialect.Malformed || !dialect.Complete() || dialect.InputTokens != 1316 || dialect.CacheStatus != "hit" {
+		t.Errorf("anthropic-dialect usage = %+v, want complete input 1316 hit", dialect)
+	}
+	plain := scan(t, "/compat/plainai/v1/messages")
+	if !plain.Malformed {
+		t.Errorf("dialect-less usage = %+v, want legacy malformed verdict preserved", plain)
+	}
+}
+
 // resolveCompatRoute resolves path through the one named compat adapter that
 // matches it. It fails the test if zero or more than one adapter matches.
 func resolveCompatRoute(t *testing.T, cfg config.Config, path string) string {

@@ -383,6 +383,25 @@ type Base struct {
 	Provider string
 	BaseURL  string
 	Routes   []string
+	// UsageProvider overrides which provider's dialect USAGE ACCOUNTING parses
+	// with (ParseUsage and NewUsageScanner key on it instead of Provider).
+	// Empty keeps Provider itself, so every existing adapter is unchanged. It
+	// exists for named compatibility mounts whose upstream answers one
+	// provider's wire protocol on another provider's route set — an
+	// Anthropic-protocol compat endpoint reports input_tokens EXCLUSIVE of
+	// cache reads/writes, and the shared OpenAI-shape parser reads that shape
+	// as a cache-total-over-input contradiction (issue #1026). Telemetry,
+	// header mapping, and pricing keep following Provider; only the usage
+	// parser follows this override.
+	UsageProvider string
+}
+
+// usageParseProvider is the provider key usage accounting parses with.
+func (b Base) usageParseProvider() string {
+	if b.UsageProvider != "" {
+		return b.UsageProvider
+	}
+	return b.Provider
 }
 
 func (b Base) Name() string { return b.Provider }
@@ -592,14 +611,14 @@ func (b Base) ParseUsage(ctx context.Context, responseHeaders http.Header, strea
 		usage.PricingUnsupportedReason = reason
 		return usage, bytes.NewReader(data), nil
 	}
-	ParseUsageBytes(b.Provider, accountingBody, &usage)
+	ParseUsageBytes(b.usageParseProvider(), accountingBody, &usage)
 	usage.CacheStatus = cacheStatusFor(usage)
 	return usage, bytes.NewReader(data), nil
 }
 
 func (b Base) NewUsageScanner(responseHeaders http.Header) *UsageScanner {
 	return &UsageScanner{
-		provider:    b.Provider,
+		provider:    b.usageParseProvider(),
 		requestID:   providerRequestID(responseHeaders),
 		serviceTier: responseServiceTier(responseHeaders),
 		encoding:    responseHeaders.Get("Content-Encoding"),

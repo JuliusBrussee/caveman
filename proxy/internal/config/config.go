@@ -78,6 +78,14 @@ type ProviderConfig struct {
 type CompatConfig struct {
 	BaseURL   string `yaml:"base_url"`
 	APIKeyEnv string `yaml:"api_key_env"`
+	// WireDialect selects which provider's usage-accounting dialect the mount
+	// parses responses with. Empty keeps the shared OpenAI-shape parser.
+	// "anthropic" is for a mount whose upstream answers the Anthropic Messages
+	// wire shape: its usage block reports input_tokens exclusive of cache
+	// reads/writes, which the OpenAI-shape contradiction check misreads as
+	// malformed on every cache-warm row (issue #1026). Applies to the whole
+	// mount, not per path. Unknown values fail config load.
+	WireDialect string `yaml:"wire_dialect"`
 }
 
 // knownModes is the set of accepted runtime modes; anything else fails closed to
@@ -254,6 +262,9 @@ func (c Config) validateCompat() error {
 		}
 		if err := openaicompat.ValidateBaseURL(upstream.BaseURL); err != nil {
 			return fmt.Errorf("compat upstream %q: base_url: %w", name, err)
+		}
+		if err := openaicompat.ValidateWireDialect(upstream.WireDialect); err != nil {
+			return fmt.Errorf("compat upstream %q: %w", name, err)
 		}
 	}
 	return nil
