@@ -173,6 +173,10 @@ func openWithBudget(path string, maxBytes int64, afterPrepare func()) (*Store, e
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate sqlite metadata %q: %w", canonicalPath, err)
 	}
+	if err := RetryOnBusy(func() error { return ensureDataRefColumn(db) }); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate sqlite data_ref %q: %w", canonicalPath, err)
+	}
 	if err := configureStorageBudget(db, maxBytes); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("configure sqlite storage budget %q: %w", canonicalPath, err)
@@ -342,6 +346,39 @@ func ensureMetadataColumn(db *sql.DB) error {
 	return err
 }
 
+func ensureDataRefColumn(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(typed_objects)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == "data_ref" {
+			return rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE typed_objects ADD COLUMN data_ref TEXT NOT NULL DEFAULT ''`)
+	if err != nil && isDuplicateColumn(err) {
+		// A concurrent process's Open() already added it.
+		return nil
+	}
+	return err
+}
+
+func isDuplicateColumn(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "duplicate column name")
+}
+
 // OpenMemory opens an ephemeral in-memory store.
 func OpenMemory() (*Store, error) { return OpenWithBudget(":memory:", DefaultMaxStorageBytes) }
 
@@ -488,7 +525,8 @@ func (s *Store) GetMetadata(handle string) ([]byte, error) {
 
 // PutObject stores one immutable typed working-memory object. Repeated puts of
 // the same content-derived ID are idempotent; currentness changes use
-// SetObjectCurrentness so invalidation stays explicit.
+// SetObjectCurrentness so invalidation stays explicit. A RepositoryMap put
+// matching an earlier session's content is stored as a reference to it instead.
 func (s *Store) PutObject(input Object) (string, error) {
 	obj, err := prepareObject(input)
 	if err != nil {
@@ -497,6 +535,26 @@ func (s *Store) PutObject(input Object) (string, error) {
 	deps, err := json.Marshal(obj.Dependencies)
 	if err != nil {
 		return "", fmt.Errorf("ccr typed object dependencies: %w", err)
+	}
+	storedData := obj.Data
+	var dataRef string
+	if obj.Type == ObjectRepositoryMap {
+		err = s.db.QueryRow(
+			`SELECT object_id FROM typed_objects
+			 WHERE object_type = ? AND source = ? AND repository_state = ? AND content_hash = ?
+			   AND data_ref = '' AND object_id != ?
+			 ORDER BY created_at ASC LIMIT 1`,
+			obj.Type, obj.Source, obj.RepositoryState, obj.ContentHash, obj.ID,
+		).Scan(&dataRef)
+		if errors.Is(err, sql.ErrNoRows) {
+			dataRef, err = "", nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("ccr typed object dedup lookup: %w", err)
+		}
+		if dataRef != "" {
+			storedData = []byte{}
+		}
 	}
 	used, err := s.storageBytes()
 	if err != nil {
@@ -509,19 +567,19 @@ func (s *Store) PutObject(input Object) (string, error) {
 	} else if err != nil {
 		return "", fmt.Errorf("ccr typed object budget: %w", err)
 	}
-	if used-existingBytes+int64(len(obj.Data)+len(deps)) > s.maxBytes {
+	if used-existingBytes+int64(len(storedData)+len(deps)) > s.maxBytes {
 		return "", fmt.Errorf("ccr typed object put: %w", ErrBudgetExceeded)
 	}
 	result, err := s.db.Exec(
 		`INSERT INTO typed_objects (
 		 object_id, object_type, content_hash, source, created_at, repository_state,
 		 session_id, transform_version, currentness, lifecycle, dependencies_json,
-		 original_byte_length, stored_byte_length, data
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 original_byte_length, stored_byte_length, data, data_ref
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(object_id) DO NOTHING`,
 		obj.ID, obj.Type, obj.ContentHash, obj.Source, obj.CreatedAt.Format(time.RFC3339Nano),
 		obj.RepositoryState, obj.SessionID, obj.TransformVersion, obj.Currentness,
-		obj.Lifecycle, string(deps), obj.OriginalByteLength, obj.StoredByteLength, obj.Data,
+		obj.Lifecycle, string(deps), obj.OriginalByteLength, obj.StoredByteLength, storedData, dataRef,
 	)
 	if err != nil {
 		if isFull(err) {
@@ -545,40 +603,55 @@ func (s *Store) PutObject(input Object) (string, error) {
 	return obj.ID, nil
 }
 
-func scanObject(scanner interface{ Scan(...any) error }) (Object, error) {
+func scanObject(scanner interface{ Scan(...any) error }) (Object, string, error) {
 	var obj Object
-	var created, deps string
+	var created, deps, dataRef string
 	if err := scanner.Scan(
 		&obj.ID, &obj.Type, &obj.ContentHash, &obj.Source, &created, &obj.RepositoryState,
 		&obj.SessionID, &obj.TransformVersion, &obj.Currentness, &obj.Lifecycle, &deps,
-		&obj.OriginalByteLength, &obj.StoredByteLength, &obj.Data,
+		&obj.OriginalByteLength, &obj.StoredByteLength, &obj.Data, &dataRef,
 	); err != nil {
-		return Object{}, err
+		return Object{}, "", err
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, created)
 	if err != nil {
-		return Object{}, fmt.Errorf("ccr typed object created_at: %w", err)
+		return Object{}, "", fmt.Errorf("ccr typed object created_at: %w", err)
 	}
 	obj.CreatedAt = parsed
 	if err := json.Unmarshal([]byte(deps), &obj.Dependencies); err != nil {
-		return Object{}, fmt.Errorf("ccr typed object dependencies decode: %w", err)
+		return Object{}, "", fmt.Errorf("ccr typed object dependencies decode: %w", err)
 	}
-	return obj, nil
+	return obj, dataRef, nil
 }
 
 const objectColumns = `object_id, object_type, content_hash, source, created_at,
  repository_state, session_id, transform_version, currentness, lifecycle,
- dependencies_json, original_byte_length, stored_byte_length, data`
+ dependencies_json, original_byte_length, stored_byte_length, data, data_ref`
+
+// resolveObjectData fills obj.Data from the row it references when obj was
+// stored as a dedup pointer (see PutObject); dataRef == "" means obj already
+// carries its own data and is returned unchanged.
+func (s *Store) resolveObjectData(obj Object, dataRef string) (Object, error) {
+	if dataRef == "" {
+		return obj, nil
+	}
+	var data []byte
+	if err := s.db.QueryRow(`SELECT data FROM typed_objects WHERE object_id = ?`, dataRef).Scan(&data); err != nil {
+		return Object{}, fmt.Errorf("ccr typed object dedup resolve: %w", err)
+	}
+	obj.Data = data
+	return obj, nil
+}
 
 func (s *Store) GetObject(id string) (Object, error) {
-	obj, err := scanObject(s.db.QueryRow(`SELECT `+objectColumns+` FROM typed_objects WHERE object_id = ?`, id))
+	obj, dataRef, err := scanObject(s.db.QueryRow(`SELECT `+objectColumns+` FROM typed_objects WHERE object_id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Object{}, ErrNotFound
 	}
 	if err != nil {
 		return Object{}, fmt.Errorf("ccr typed object get: %w", err)
 	}
-	return obj, nil
+	return s.resolveObjectData(obj, dataRef)
 }
 
 func (s *Store) SetObjectCurrentness(id string, currentness Currentness) error {
@@ -631,9 +704,13 @@ func (s *Store) ListSessionObjects(sessionID string, limit int) ([]Object, error
 	defer rows.Close()
 	objects := make([]Object, 0)
 	for rows.Next() {
-		obj, err := scanObject(rows)
+		obj, dataRef, err := scanObject(rows)
 		if err != nil {
 			return nil, fmt.Errorf("ccr typed object list scan: %w", err)
+		}
+		obj, err = s.resolveObjectData(obj, dataRef)
+		if err != nil {
+			return nil, err
 		}
 		objects = append(objects, obj)
 	}
@@ -646,7 +723,7 @@ func (s *Store) ListSessionObjects(sessionID string, limit int) ([]Object, error
 // FindTaskDecision returns one Decision Ledger object by its stable decision
 // ID. Callers still validate the versioned decision schema before rendering it.
 func (s *Store) FindTaskDecision(decisionID string) (Object, error) {
-	obj, err := scanObject(s.db.QueryRow(
+	obj, dataRef, err := scanObject(s.db.QueryRow(
 		`SELECT `+objectColumns+` FROM typed_objects
 		 WHERE object_type = ? AND json_extract(CAST(data AS TEXT), '$.decision_id') = ?
 		 ORDER BY created_at DESC, object_id DESC LIMIT 1`,
@@ -658,7 +735,7 @@ func (s *Store) FindTaskDecision(decisionID string) (Object, error) {
 	if err != nil {
 		return Object{}, fmt.Errorf("ccr task decision find: %w", err)
 	}
-	return obj, nil
+	return s.resolveObjectData(obj, dataRef)
 }
 
 // Summary aggregates stored recoveries into totals + per-content-type buckets.
