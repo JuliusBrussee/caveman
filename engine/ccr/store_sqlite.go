@@ -526,7 +526,9 @@ func (s *Store) GetMetadata(handle string) ([]byte, error) {
 // PutObject stores one immutable typed working-memory object. Repeated puts of
 // the same content-derived ID are idempotent; currentness changes use
 // SetObjectCurrentness so invalidation stays explicit. A RepositoryMap put
-// matching an earlier session's content is stored as a reference to it instead.
+// whose content is already stored under any other object ID is stored as a
+// reference to that row instead of a second copy of the bytes; readers resolve
+// the reference, so callers still see a byte-exact Data on every object.
 func (s *Store) PutObject(input Object) (string, error) {
 	obj, err := prepareObject(input)
 	if err != nil {
@@ -539,12 +541,21 @@ func (s *Store) PutObject(input Object) (string, error) {
 	storedData := obj.Data
 	var dataRef string
 	if obj.Type == ObjectRepositoryMap {
+		// content_hash is sha256 of data, checked in prepareObject, so an equal
+		// hash means byte-equal content and nothing else needs to match. The
+		// lookup deliberately does NOT filter on session_id, source or
+		// repository_state: all three are part of the object ID, so all three
+		// mint a fresh row for content already stored. repository_state is the
+		// one that bites hardest — it advances on every commit while the map
+		// itself is often unchanged, so a long session re-stores the same
+		// multi-MB map per commit even though the session never changed
+		// (issue #1023).
 		err = s.db.QueryRow(
 			`SELECT object_id FROM typed_objects
-			 WHERE object_type = ? AND source = ? AND repository_state = ? AND content_hash = ?
+			 WHERE object_type = ? AND content_hash = ?
 			   AND data_ref = '' AND object_id != ?
 			 ORDER BY created_at ASC LIMIT 1`,
-			obj.Type, obj.Source, obj.RepositoryState, obj.ContentHash, obj.ID,
+			obj.Type, obj.ContentHash, obj.ID,
 		).Scan(&dataRef)
 		if errors.Is(err, sql.ErrNoRows) {
 			dataRef, err = "", nil
@@ -703,19 +714,32 @@ func (s *Store) ListSessionObjects(sessionID string, limit int) ([]Object, error
 	}
 	defer rows.Close()
 	objects := make([]Object, 0)
+	// Drain the cursor BEFORE resolving any data_ref. The store runs on a
+	// single serialized connection (SetMaxOpenConns(1)), so a query issued
+	// while this cursor is still open waits forever for a connection the
+	// cursor itself holds — a deadlock, not a slow path. Resolution therefore
+	// happens after the rows are closed, below.
+	refs := make([]string, 0)
 	for rows.Next() {
 		obj, dataRef, err := scanObject(rows)
 		if err != nil {
 			return nil, fmt.Errorf("ccr typed object list scan: %w", err)
 		}
-		obj, err = s.resolveObjectData(obj, dataRef)
-		if err != nil {
-			return nil, err
-		}
 		objects = append(objects, obj)
+		refs = append(refs, dataRef)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("ccr typed object list rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("ccr typed object list close: %w", err)
+	}
+	for i := range objects {
+		resolved, err := s.resolveObjectData(objects[i], refs[i])
+		if err != nil {
+			return nil, err
+		}
+		objects[i] = resolved
 	}
 	return objects, nil
 }
