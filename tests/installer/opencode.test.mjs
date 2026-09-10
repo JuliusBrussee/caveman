@@ -582,6 +582,53 @@ test('opencode system.transform degrades to the banner when caveman-config.cjs p
   }
 });
 
+// ── a caveman-config.cjs with no recordModeChange must not break the plugin ─
+// The mode-history log is the NEWEST thing plugin.js pulls out of
+// caveman-config, and handleSessionCreated() runs at factory time, outside any
+// try. So an installed plugin dir that predates the export would throw during
+// plugin construction rather than in a handler: the user loses activation
+// entirely, not just the history line. The log is best-effort by its own
+// design (recordModeChange silent-fails internally), so the correct
+// degradation is a no-op, and the mode flag must still be written.
+test('opencode session init still activates when caveman-config.cjs predates recordModeChange', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    assert.notEqual(runInstaller(['--only', 'opencode'], env).status, 2);
+
+    const pluginDir = path.join(xdg, 'opencode', 'plugins', 'caveman');
+    const cfgPath = path.join(pluginDir, 'caveman-config.cjs');
+    const body = fs.readFileSync(cfgPath, 'utf8');
+    const stripped = body.replace(/^\s*recordModeChange, MODE_LOG_BASENAME,\n/m, '  MODE_LOG_BASENAME,\n');
+    assert.notEqual(stripped, body, 'export line to strip not found — test is stale');
+    fs.writeFileSync(cfgPath, stripped);
+
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.CAVEMAN_DEFAULT_MODE = 'full';
+    const pluginPath = path.join(pluginDir, 'plugin.js');
+    // Factory construction is where the unguarded call would throw.
+    const mod = await import(pathToFileURL(pluginPath).href + '?norecord');
+    const handlers = await (mod.default || mod.CavemanPlugin)({});
+
+    assert.equal(fs.readFileSync(path.join(xdg, 'opencode', '.caveman-active'), 'utf8').trim(), 'full',
+      'session init must still write the mode flag with no recordModeChange export');
+
+    // And a later mode change must still take effect rather than throwing.
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
+    assert.equal(fs.readFileSync(path.join(xdg, 'opencode', '.caveman-active'), 'utf8').trim(), 'ultra',
+      'a mode change must still apply with no recordModeChange export');
+    assert.ok(!fs.existsSync(path.join(xdg, 'opencode', MODE_LOG_BASENAME)),
+      'a stripped config cannot have written a history log');
+  } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
 // ── AGENTS.md marker damage must not splice the file ─────────────────────
 // Both markers present is not enough: they must be one matched pair, in order.
 // An END above a BEGIN made `existing.indexOf(END, begin)` return -1, and the
