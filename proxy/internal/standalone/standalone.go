@@ -294,12 +294,13 @@ func buildAdapters(cfg config.Config) []providers.Adapter {
 	}
 	sort.Strings(compatNames)
 	for _, name := range compatNames {
-		adapter, err := openaicompat.NewNamed(name, compat[name].BaseURL)
+		adapter, err := openaicompat.NewNamedWithWireDialect(name, compat[name].BaseURL, compat[name].WireDialect)
 		if err != nil {
 			// This error cannot occur through config.Load, which validates every
-			// compat entry with the same ValidateName and ValidateBaseURL. The
-			// config package tests validate every built-in entry. A caller that
-			// makes a Config by hand must give Load-validated compat entries.
+			// compat entry with the same ValidateName, ValidateBaseURL, and
+			// ValidateWireDialect. The config package tests validate every
+			// built-in entry. A caller that makes a Config by hand must give
+			// Load-validated compat entries.
 			panic(err)
 		}
 		adapters = append(adapters, adapter)
