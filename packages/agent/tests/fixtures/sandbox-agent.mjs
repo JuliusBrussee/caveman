@@ -159,12 +159,29 @@ export default agent({
       description: "Ignore SIGTERM and tool timeout.",
       input: schema.object({}),
       effect: "read",
-      // Leave worker startup outside timing race so SIGTERM handler is active
-      // before timeout proves SIGKILL escalation and close-wait behavior.
-      timeoutMs: 1_000,
+      // The timeout is long on purpose. A fixed allowance cannot guarantee
+      // that worker startup completes first. The test aborts the run when the
+      // readiness marker below arrives, thus the SIGTERM handler is always
+      // installed before the escalation starts.
+      timeoutMs: 10_000,
       async execute() {
         process.on("SIGTERM", () => undefined);
+        // One marker line on stderr. The runtime sends each stderr chunk to
+        // its lifecycle observer as the data arrives.
+        process.stderr.write("cave-sandbox-ready\n");
         setInterval(() => undefined, 1_000);
+        await new Promise(() => undefined);
+      },
+    }),
+    tool({
+      name: "startup_timeout",
+      description: "Hang with a deadline shorter than worker startup.",
+      input: schema.object({}),
+      effect: "read",
+      // The deadline expires during worker startup. No SIGTERM handler exists
+      // at that time, thus a prompt exit on SIGTERM is correct here.
+      timeoutMs: 1,
+      async execute() {
         await new Promise(() => undefined);
       },
     }),

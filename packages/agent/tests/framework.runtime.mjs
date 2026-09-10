@@ -50,6 +50,7 @@ import {
   resolveCaveRoute,
   runAgentInternal,
   sandboxSourceReadFlags,
+  setSandboxLifecycleObserver,
 } from "../dist/runtime.js";
 import { memoryFilePath, mutateMemories, readMemories } from "../dist/memory-store.js";
 import { sourceGraphSHA256 } from "../dist/source-graph.js";
@@ -5827,27 +5828,88 @@ test("sandbox fails closed on child-process permission without OS tree containme
   }
 });
 
-test("sandbox timeout waits for stubborn worker close after SIGKILL escalation", async () => {
+test("sandbox abort waits for stubborn worker close after SIGKILL escalation", { timeout: 15_000 }, async () => {
+  const faux = fauxProvider();
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall("ignore_timeout", {}, { id: "ignore-timeout" })),
+    () => fauxAssistantMessage("terminated"),
+  ]);
+  const controller = new AbortController();
+  // A sequence counter proves event ORDER. Wall-clock windows cannot: a loaded
+  // runner changes every duration but never the order of these events.
+  let step = 0;
+  const events = [];
+  let readyText = "";
+  let aborted = false;
+  setSandboxLifecycleObserver((event) => {
+    if (event.kind === "stderr") {
+      readyText += event.chunk.toString("utf8");
+      // Abort only after the worker reports that its SIGTERM handler is live.
+      // This removes the startup race from the escalation scenario.
+      if (!aborted && readyText.includes("cave-sandbox-ready")) {
+        aborted = true;
+        events.push({ at: ++step, kind: "ready" });
+        controller.abort(new Error("cave_test_abort"));
+      }
+      return;
+    }
+    events.push({ at: ++step, ...event });
+  });
+  let settledAt = 0;
+  let failure;
+  try {
+    await run(sandboxAgent, "timeout", {
+      ensureRuntime: false,
+      entryPath: "tests/fixtures/sandbox-agent.mjs",
+      model: faux.getModel(),
+      streamFn: faux.provider.streamSimple.bind(faux.provider),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    failure = error;
+  } finally {
+    settledAt = ++step;
+    setSandboxLifecycleObserver(undefined);
+  }
+  // The abort reaches the tool, thus the run rejects instead of returning text.
+  assert.notEqual(failure, undefined);
+  const ready = events.find((event) => event.kind === "ready");
+  const sigterm = events.find((event) => event.kind === "signal" && event.signal === "SIGTERM");
+  const sigkill = events.find((event) => event.kind === "signal" && event.signal === "SIGKILL");
+  const close = events.find((event) => event.kind === "close");
+  assert.notEqual(ready, undefined);
+  assert.notEqual(sigterm, undefined);
+  assert.notEqual(sigkill, undefined);
+  assert.notEqual(close, undefined);
+  // The worker ignored SIGTERM, thus the runtime escalated to SIGKILL.
+  assert.equal(ready.at < sigterm.at, true);
+  assert.equal(sigterm.at < sigkill.at, true);
+  assert.equal(sigkill.at < close.at, true);
+  assert.equal(close.signal, "SIGKILL");
+  // The run must not settle before the child closes.
+  assert.equal(close.at < settledAt, true);
+});
+
+test("sandbox timeout during worker startup settles the run", { timeout: 15_000 }, async () => {
   const faux = fauxProvider();
   let observed = "";
   faux.setResponses([
-    fauxAssistantMessage(fauxToolCall("ignore_timeout", {}, { id: "ignore-timeout" })),
+    fauxAssistantMessage(fauxToolCall("startup_timeout", {}, { id: "startup-timeout" })),
     (context) => {
       observed = JSON.stringify(context.messages);
       return fauxAssistantMessage("terminated");
     },
   ]);
-  const started = Date.now();
+  // The deadline expires during startup. A prompt exit on SIGTERM is correct
+  // here, thus this test asserts no SIGKILL escalation.
   const result = await run(sandboxAgent, "timeout", {
     ensureRuntime: false,
     entryPath: "tests/fixtures/sandbox-agent.mjs",
     model: faux.getModel(),
     streamFn: faux.provider.streamSimple.bind(faux.provider),
   });
-  const elapsed = Date.now() - started;
   assert.equal(result.text, "terminated");
   assert.match(observed, /cave_sandbox_timeout/);
-  assert.equal(elapsed >= 1_200 && elapsed < 3_000, true);
 });
 
 test("sandbox rejects parent and worker definition drift before tool execution", async () => {
