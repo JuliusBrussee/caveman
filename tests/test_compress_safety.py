@@ -561,6 +561,77 @@ class CompressSafetyTests(unittest.TestCase):
                 compress_mod.call_claude(PROMPT_TEXT)
 
         run.assert_not_called()
+
+    def test_missing_provider_cli_has_actionable_error(self):
+        with llm_env(CAVEMAN_COMPRESS_PROVIDER=OPENCODE_PROVIDER), \
+             mock.patch.object(compress_mod.shutil, "which", return_value=None), \
+             mock.patch.object(
+                 compress_mod.subprocess,
+                 "run",
+                 side_effect=FileNotFoundError,
+             ):
+            with self.assertRaisesRegex(RuntimeError, "opencode CLI not found on PATH"):
+                compress_mod.call_claude(PROMPT_TEXT)
+
+    def test_provider_cli_failure_includes_stderr(self):
+        failure = compress_mod.subprocess.CalledProcessError(
+            1,
+            [OPENCODE_BIN, "run"],
+            stderr="authentication failed",
+        )
+        with llm_env(CAVEMAN_COMPRESS_PROVIDER=OPENCODE_PROVIDER), \
+             mock.patch.object(
+                 compress_mod.subprocess,
+                 "run",
+                 side_effect=failure,
+             ):
+            with self.assertRaisesRegex(RuntimeError, "authentication failed"):
+                compress_mod.call_claude(PROMPT_TEXT)
+
+    def test_default_provider_falls_back_when_anthropic_sdk_is_missing(self):
+        completed = mock.Mock(stdout=CLAUDE_OUTPUT)
+        with llm_env(ANTHROPIC_API_KEY="test-key"), \
+             mock.patch.dict(sys.modules, {"anthropic": None}), \
+             mock.patch.object(compress_mod.subprocess, "run", return_value=completed):
+            self.assertEqual(compress_mod.call_claude(PROMPT_TEXT), CLAUDE_OUTPUT)
+
+    def test_unknown_provider_code_marker_is_rejected(self):
+        unknown_marker = f"{compress_mod.CODE_MARKER_PREFIX}unknown@@"
+        with self.assertRaisesRegex(ValueError, "unknown Caveman code-preservation marker"):
+            compress_mod.restore_code_blocks(unknown_marker, [])
+
+    def test_oversized_file_is_rejected_before_provider_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "task.md"
+            path.write_bytes(b"x" * (compress_mod.MAX_FILE_SIZE_BYTES + 1))
+            with mock.patch.object(compress_mod, "call_claude") as call:
+                with self.assertRaisesRegex(ValueError, compress_mod.MAX_FILE_SIZE_LABEL):
+                    compress_mod.compress_file(path)
+
+        call.assert_not_called()
+
+    def test_empty_fix_response_names_configured_provider(self):
+        invalid = mock.Mock(is_valid=False, errors=["heading mismatch"], warnings=[])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._file_with(
+                Path(tmp),
+                "# Title\n\nA sufficiently long body that needs a structural repair.\n",
+            )
+            with llm_env(CAVEMAN_COMPRESS_PROVIDER=OPENCODE_PROVIDER), \
+                 mock.patch.object(
+                     compress_mod,
+                     "call_claude",
+                     side_effect=["# Title\n\nShort.\n", ""],
+                 ), \
+                 mock.patch.object(compress_mod, "validate", return_value=invalid), \
+                 mock.patch("builtins.print") as print_message:
+                ok = compress_mod.compress_file(path)
+
+        self.assertFalse(ok)
+        print_message.assert_any_call("Fixing with opencode...")
+        print_message.assert_any_call(
+            "❌ Fix attempt aborted: opencode returned an empty response."
+        )
 if __name__ == "__main__":
     unittest.main()
 
