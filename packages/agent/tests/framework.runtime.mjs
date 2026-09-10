@@ -5900,16 +5900,41 @@ test("sandbox timeout during worker startup settles the run", { timeout: 15_000 
       return fauxAssistantMessage("terminated");
     },
   ]);
-  // The deadline expires during startup. A prompt exit on SIGTERM is correct
-  // here, thus this test asserts no SIGKILL escalation.
-  const result = await run(sandboxAgent, "timeout", {
-    ensureRuntime: false,
-    entryPath: "tests/fixtures/sandbox-agent.mjs",
-    model: faux.getModel(),
-    streamFn: faux.provider.streamSimple.bind(faux.provider),
+  // The deadline expires during startup. No SIGTERM handler exists, thus the
+  // worker must die on SIGTERM. The exit signal proves that. This test does
+  // not assert the absence of a SIGKILL event: the SIGKILL timer runs on time,
+  // not on child state, and under load it can fire after the child is already
+  // dead of SIGTERM but before the parent processes the close event.
+  let step = 0;
+  const events = [];
+  setSandboxLifecycleObserver((event) => {
+    if (event.kind !== "stderr") events.push({ at: ++step, ...event });
   });
+  let settledAt = 0;
+  let result;
+  try {
+    result = await run(sandboxAgent, "timeout", {
+      ensureRuntime: false,
+      entryPath: "tests/fixtures/sandbox-agent.mjs",
+      model: faux.getModel(),
+      streamFn: faux.provider.streamSimple.bind(faux.provider),
+    });
+  } finally {
+    settledAt = ++step;
+    setSandboxLifecycleObserver(undefined);
+  }
   assert.equal(result.text, "terminated");
   assert.match(observed, /cave_sandbox_timeout/);
+  const sigterm = events.find((event) => event.kind === "signal" && event.signal === "SIGTERM");
+  const close = events.find((event) => event.kind === "close");
+  assert.notEqual(sigterm, undefined);
+  assert.notEqual(close, undefined);
+  assert.equal(sigterm.at < close.at, true);
+  // The worker exited on SIGTERM: no handler was installed, thus no escalation
+  // was needed to end it.
+  assert.equal(close.signal, "SIGTERM");
+  // The run must not settle before the child closes.
+  assert.equal(close.at < settledAt, true);
 });
 
 test("sandbox rejects parent and worker definition drift before tool execution", async () => {
