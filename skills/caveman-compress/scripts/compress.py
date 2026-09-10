@@ -554,8 +554,8 @@ def call_opencode_cli(prompt: str) -> str:
             suffix=OPENCODE_PROMPT_SUFFIX,
             delete=False,
         ) as prompt_file:
-            prompt_file.write(prompt)
             prompt_path = Path(prompt_file.name)
+            prompt_file.write(prompt)
         args.extend(
             [OPENCODE_FILE_ARG, str(prompt_path), OPENCODE_PROMPT_MESSAGE]
         )

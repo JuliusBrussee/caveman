@@ -554,6 +554,41 @@ class CompressSafetyTests(unittest.TestCase):
             for prompt_path in prompt_paths:
                 prompt_path.unlink(missing_ok=True)
 
+    def test_opencode_prompt_is_removed_when_write_fails(self):
+        prompt_paths = []
+        named_temporary_file = tempfile.NamedTemporaryFile
+
+        class FailingPromptFile:
+            def __init__(self, *args, **kwargs):
+                self._prompt_file = named_temporary_file(*args, **kwargs)
+                self.name = self._prompt_file.name
+                prompt_paths.append(Path(self.name))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return self._prompt_file.__exit__(exc_type, exc_value, traceback)
+
+            def write(self, _prompt):
+                raise OSError("prompt write failed")
+
+        try:
+            with llm_env(CAVEMAN_COMPRESS_PROVIDER=OPENCODE_PROVIDER), \
+                 mock.patch.object(
+                     compress_mod.tempfile,
+                     "NamedTemporaryFile",
+                     side_effect=FailingPromptFile,
+                 ):
+                with self.assertRaisesRegex(OSError, "prompt write failed"):
+                    compress_mod.call_claude(PROMPT_TEXT)
+
+            self.assertEqual(len(prompt_paths), 1)
+            self.assertFalse(prompt_paths[0].exists())
+        finally:
+            for prompt_path in prompt_paths:
+                prompt_path.unlink(missing_ok=True)
+
     def test_unknown_provider_is_rejected_before_subprocess(self):
         with llm_env(CAVEMAN_COMPRESS_PROVIDER="bogus"), \
              mock.patch.object(compress_mod.subprocess, "run") as run:
