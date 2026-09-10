@@ -475,6 +475,23 @@ class CompressSafetyTests(unittest.TestCase):
             },
         )
 
+    def test_compression_status_names_configured_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._file_with(
+                Path(tmp),
+                "# Title\n\nA sufficiently long body for provider status testing.\n",
+            )
+            with llm_env(CAVEMAN_COMPRESS_PROVIDER=OPENCODE_PROVIDER), \
+                 mock.patch.object(compress_mod, "call_claude", return_value=""), \
+                 mock.patch("builtins.print") as print_message:
+                ok = compress_mod.compress_file(path)
+
+        self.assertFalse(ok)
+        print_message.assert_any_call("Compressing with opencode...")
+        print_message.assert_any_call(
+            "❌ Compression aborted: opencode returned an empty response."
+        )
+
     def test_claude_cli_uses_configured_model(self):
         completed = mock.Mock(stdout=CLAUDE_OUTPUT)
         with llm_env(CAVEMAN_COMPRESS_MODEL=CLAUDE_MODEL), \

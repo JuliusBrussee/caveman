@@ -399,7 +399,7 @@ def _is_smaller_than_body(candidate_body: str, body: str) -> bool:
 
     The non-expansion invariant for #776. It lives in a helper because it has
     to hold for EVERY candidate, not just the first one: a candidate that fails
-    validation is sent back to Claude for repair, and the repaired text is what
+    validation is sent back to the provider for repair, and the repaired text is what
     gets written if it validates. Checking only the first candidate left the
     retry path able to write a longer file and report it as a successful
     compression — the original bug, one branch over.
@@ -705,7 +705,7 @@ def restore_code_blocks(text: str, blocks: List[Tuple[str, str]]) -> str:
     for marker, block in blocks:
         if restored.count(marker) != 1:
             raise ValueError(
-                f"Claude changed preserved code marker {marker}; refusing to write"
+                f"Provider changed preserved code marker {marker}; refusing to write"
             )
         # Masking gives marker its own transport newline. Consume that wrapper
         # when present so restoring a block that already ended in newline does
@@ -717,7 +717,7 @@ def restore_code_blocks(text: str, blocks: List[Tuple[str, str]]) -> str:
         else:
             restored = restored.replace(marker, block, 1)
     if CODE_MARKER_PREFIX in restored:
-        raise ValueError("Claude returned an unknown Caveman code-preservation marker")
+        raise ValueError("Provider returned an unknown Caveman code-preservation marker")
     return restored
 
 
@@ -779,7 +779,7 @@ def _compress_file_locked(filepath: Path) -> bool:
         print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
         return False
 
-    # Split YAML frontmatter off before compression. Claude tends to strip or
+    # Split YAML frontmatter off before compression. LLMs tend to strip or
     # rewrite frontmatter despite preserve-structure rules; we keep it verbatim
     # by removing it from the input and re-prepending it to the output.
     frontmatter, body = split_frontmatter(original_text)
@@ -791,7 +791,8 @@ def _compress_file_locked(filepath: Path) -> bool:
         return False
 
     # Step 1: Compress (body only, frontmatter excluded)
-    print("Compressing with Claude...")
+    provider = configured_provider()
+    print(f"Compressing with {provider}...")
     masked_body, code_blocks = mask_code_blocks(body)
     masked_compressed = call_claude(build_compress_prompt(masked_body))
     try:
@@ -802,7 +803,7 @@ def _compress_file_locked(filepath: Path) -> bool:
         return False
 
     if compressed_body is None or not compressed_body.strip():
-        print("❌ Compression aborted: Claude returned an empty response.")
+        print(f"❌ Compression aborted: {provider} returned an empty response.")
         print("   Original file is untouched (no backup created).")
         return False
 
@@ -810,7 +811,7 @@ def _compress_file_locked(filepath: Path) -> bool:
     # and would never change, so identity must be judged on the compressible part.
     if compressed_body.strip() == body.strip():
         print("❌ Compression aborted: output is identical to input.")
-        print("   Likely causes: Claude refused, returned the prompt verbatim, or the file is")
+        print(f"   Likely causes: {provider} refused, returned the prompt verbatim, or the file is")
         print("   already in caveman form. Original file is untouched (no backup created).")
         return False
 
@@ -866,13 +867,13 @@ def _compress_file_locked(filepath: Path) -> bool:
             print("Failed after retries: original left untouched")
             return False
 
-        print("Fixing with Claude...")
+        print(f"Fixing with {provider}...")
         fixed = call_claude(
             build_fix_prompt(original_text, compressed, result.errors)
         )
 
         if fixed is None or not fixed.strip():
-            print("❌ Fix attempt aborted: Claude returned an empty response.")
+            print(f"❌ Fix attempt aborted: {provider} returned an empty response.")
             print("   Skipping this attempt.")
             continue
 
