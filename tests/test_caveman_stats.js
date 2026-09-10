@@ -963,5 +963,125 @@ test('lifetime view excludes legacy rows from net even when mixed with rows that
   assert.match(out, /Est\. net:\s+\+1,536/);
 });
 
+// ── Billed net: the rules are input, mostly served from cache ─────────────
+// The token net above adds output tokens saved to input tokens spent as if
+// they cost the same. They don't: input bills at 1/5 of output on every
+// priced model, and a cache read at ~0.1x of input. In a long agentic
+// session the rules ride the cached prefix on every turn, so the raw token
+// net goes negative while the bill says caveman saved money.
+
+function cachedTurn(output) {
+  return {
+    type: 'assistant',
+    message: {
+      model: 'claude-opus-5',
+      usage: {
+        output_tokens: output,
+        input_tokens: 2,
+        cache_read_input_tokens: 150000,
+        cache_creation_input_tokens: 2000,
+        cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 2000 },
+      },
+    },
+  };
+}
+
+test('cached agentic session: negative raw token net does not tell the user to turn caveman off', (tmp) => {
+  const sess = makeSession(tmp, Array.from({ length: 35 }, () => cachedTurn(388)));
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // 13,580 output / 0.35 = 38,800, saved 25,220; overhead 1,250 x 35 = 43,750.
+  assert.match(out, /Est\. net:\s+-18,530 \(raw token count/);
+  // Billed: saved 25,220 x $25/M = $0.6305. Rules: 43,750 tokens at this
+  // mix — (2 + 150,000 x 0.1 + 2,000 x 2) / 152,002 = 0.125x input — at
+  // $5/M input = $0.0273. Net +$0.603.
+  assert.match(out, /Est\. net \(USD\):\s+\+\$0\.603 \(rules priced at this session's input mix, ~0\.13× input rate\)/);
+  assert.doesNotMatch(out, /consider turning it off/);
+});
+
+test('uncached single turn (#145 regime) still reports a loss at billed rates', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { model: 'claude-opus-5', usage: { output_tokens: 100, input_tokens: 5000 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // Saved 186 x $25/M = $0.00465; rules 1,250 uncached x $5/M = $0.00625.
+  assert.match(out, /Est\. net:\s+-1,064 \(caveman cost more than it saved for this workload — consider turning it off\)/);
+  assert.match(out, /Est\. net \(USD\):\s+-\$0\.0016 \(caveman cost more than it saved at billed rates\)/);
+});
+
+test('no USD net when the model has no known price', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { model: 'some-other-model', usage: { output_tokens: 100, cache_read_input_tokens: 9000 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.match(out, /Est\. net:\s+-1,064 \(caveman cost more than it saved for this workload — consider turning it off\)/);
+  assert.doesNotMatch(out, /Est\. net \(USD\)/);
+});
+
+test('inputCostMultiplier prices each response at its own cache mix', () => {
+  const { inputCostMultiplier } = require(STATS);
+  assert.strictEqual(inputCostMultiplier({ input_tokens: 1000 }), 1);
+  assert.strictEqual(inputCostMultiplier({ cache_read_input_tokens: 1000 }), 0.1);
+  assert.strictEqual(inputCostMultiplier({
+    cache_creation_input_tokens: 1000,
+    cache_creation: { ephemeral_5m_input_tokens: 1000, ephemeral_1h_input_tokens: 0 },
+  }), 1.25);
+  // TTL split missing: priced at the 1-hour rate, the higher of the two.
+  assert.strictEqual(inputCostMultiplier({ cache_creation_input_tokens: 1000 }), 2);
+  // Nothing logged on the input side: assume every token uncached.
+  assert.strictEqual(inputCostMultiplier({ output_tokens: 10 }), 1);
+  assert.strictEqual(inputCostMultiplier(undefined), 1);
+});
+
+test('history rows log the billed rule overhead so the lifetime view can net it', (tmp) => {
+  const sess = makeSession(tmp, Array.from({ length: 35 }, () => cachedTurn(388)));
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  const row = JSON.parse(fs.readFileSync(path.join(claudeDir, '.caveman-history.jsonl'), 'utf8').trim());
+  assert.ok(Math.abs(row.est_rule_overhead_usd - 0.02734) < 0.00001, `got ${row.est_rule_overhead_usd}`);
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.match(out, /Est\. net:\s+-18,530 \(raw token count/);
+  assert.match(out, /Est\. net \(USD\):\s+\+\$0\.603 \(rules priced at each session's input mix\)/);
+  assert.doesNotMatch(out, /consider turning it off/);
+});
+
+test('lifetime view omits the USD net when any netted row predates the billed field', (tmp) => {
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-history.jsonl'), [
+    { ts: 1000, session_id: 'old', mode: 'full', output_tokens: 100, est_saved_tokens: 186, est_saved_usd: 0.00465, turns: 1 },
+    { ts: 2000, session_id: 'new', mode: 'full', output_tokens: 13580, est_saved_tokens: 25220, est_saved_usd: 0.6305, turns: 35, est_rule_overhead_usd: 0.02734 },
+  ].map(o => JSON.stringify(o)).join('\n') + '\n');
+  const out = execFileSync(process.execPath, [STATS, '--all'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // Half the netted turns carry no billed overhead — a USD net over the rest
+  // would compare different session sets. Keep the pre-existing token verdict.
+  assert.doesNotMatch(out, /Est\. net \(USD\)/);
+  assert.match(out, /Est\. net:\s+-19,594 \(caveman cost more than it saved for this workload — consider turning it off\)/);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
