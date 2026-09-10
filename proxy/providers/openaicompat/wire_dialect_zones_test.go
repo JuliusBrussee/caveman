@@ -138,3 +138,36 @@ func TestNamedMountWithoutDialectKeepsOpenAIZonesOnMessagesPath(t *testing.T) {
 		}
 	}
 }
+
+// TestAnthropicWireZonesAgreesWithHeaderPathRule pins the two path questions to
+// one rule. SanitizeAndMapHeaders asks anthropicMessagesPath whether a request
+// is Anthropic-protocol (x-api-key + anthropic-version rather than Bearer); the
+// zone selector asks the same question to pick the grammar. They must never
+// disagree: a mount that sends Anthropic auth headers while compressing with
+// the OpenAI grammar rewrites blocks the provider cached under the other
+// protocol's rules. This fails if a future edit gives either side its own copy
+// of the path set.
+func TestAnthropicWireZonesAgreesWithHeaderPathRule(t *testing.T) {
+	built, err := NewNamedWithWireDialect("zai", "https://api.example.test", "anthropic")
+	if err != nil {
+		t.Fatalf("NewNamedWithWireDialect: %v", err)
+	}
+	adapter, ok := built.(namedAdapter)
+	if !ok {
+		t.Fatalf("named mount is %T, want namedAdapter", built)
+	}
+	paths := []string{
+		"/compat/zai/v1/messages",
+		"/compat/zai/v1/messages/count_tokens",
+		"/compat/zai/v1/messages/",
+		"/compat/zai/v1/chat/completions",
+		"/compat/zai/v1/responses",
+		"/compat/zai/v1/messagesx",
+		"/compat/zai/v1/embeddings",
+	}
+	for _, path := range paths {
+		if got, want := adapter.anthropicWireZones(path), adapter.anthropicMessagesPath(path); got != want {
+			t.Errorf("%s: zone grammar says anthropic=%v, header mapping says anthropic=%v", path, got, want)
+		}
+	}
+}

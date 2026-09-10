@@ -128,6 +128,13 @@ the key in `Authorization: Bearer`. A real inbound Bearer token keeps its header
 on every path. OpenCode Go rejects a Bearer header on its Anthropic path, so
 this rule is necessary for the `anthropic-messages` models.
 
+The header is the only thing the path decides on its own. If the upstream
+answers the Anthropic Messages protocol, also declare `wire_dialect: anthropic`
+on the mount, or its usage blocks are parsed with OpenAI cache semantics and
+every cache-warm response is recorded as malformed usage — which drops the
+request from token accounting and from compression eligibility. See
+[Configuration](configuration.md).
+
 ## Modes
 
 | Mode | Request behavior |

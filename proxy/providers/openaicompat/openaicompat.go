@@ -184,6 +184,12 @@ type namedAdapter struct {
 // On an Anthropic-protocol body that misjudgment leaves the uncached
 // post-breakpoint tail frozen, or rewrites a block the provider already
 // cached, busting the prefix on the next turn.
+//
+// The path test is anthropicMessagesPath itself, not a second copy of its
+// rule: that is the same question SanitizeAndMapHeaders already answers to
+// decide x-api-key over Bearer, and two matchers for "is this mount's request
+// Anthropic-protocol" would let header mapping and zone selection disagree the
+// first time the Messages path set grows.
 func (a namedAdapter) anthropicWireZones(endpoint string) bool {
 	if a.wireDialect != "anthropic" {
 		return false
@@ -192,8 +198,7 @@ func (a namedAdapter) anthropicWireZones(endpoint string) bool {
 	if trimmed == "" {
 		return true
 	}
-	rest := strings.TrimPrefix(trimmed, a.prefix)
-	return rest == "/v1/messages" || strings.HasPrefix(rest, "/v1/messages/")
+	return a.anthropicMessagesPath(trimmed)
 }
 
 func (a namedAdapter) MatchRoute(method, path string) bool {
