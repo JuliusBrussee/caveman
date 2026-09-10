@@ -4719,6 +4719,52 @@ function releaseLedgerHolds(reservations: readonly SpendReservation[]): void {
   }
 }
 
+/**
+ * Lifecycle events of one sandboxed tool child process.
+ *
+ * `stderr` gives the parent a live channel. A test fixture can write a
+ * readiness marker on it. `signal` reports each signal that the runtime sends.
+ * `close` reports the child close event before the tool result settles.
+ */
+export type SandboxLifecycleEvent =
+  | { kind: "stderr"; chunk: Buffer }
+  | { kind: "signal"; signal: "SIGTERM" | "SIGKILL" }
+  | { kind: "close"; code: number | null; signal: NodeJS.Signals | null };
+
+export type SandboxLifecycleObserver = (event: SandboxLifecycleEvent) => void;
+
+let sandboxLifecycleObserver: SandboxLifecycleObserver | undefined;
+
+/**
+ * Install one observer of sandbox child lifecycle events, or clear it with
+ * `undefined`.
+ *
+ * This seam is package-internal and made for tests. `src/index.ts` does not
+ * re-export it, so it is not part of the public API. The setter is the only
+ * gate: with no observer installed, the runtime does no extra work.
+ */
+export function setSandboxLifecycleObserver(
+  observer: SandboxLifecycleObserver | undefined,
+): void {
+  sandboxLifecycleObserver = observer;
+}
+
+/**
+ * Send one lifecycle event to the observer.
+ *
+ * An observer error must not change the outcome of a tool. Thus this function
+ * discards every exception that the observer throws.
+ */
+function notifySandboxLifecycle(event: SandboxLifecycleEvent): void {
+  const observer = sandboxLifecycleObserver;
+  if (observer === undefined) return;
+  try {
+    observer(event);
+  } catch {
+    // Observation is diagnostic only. Never fail a tool because of it.
+  }
+}
+
 async function executeSandboxedTool(
   entryPath: string,
   sourceFiles: readonly string[],
@@ -4790,10 +4836,13 @@ async function executeSandboxedTool(
       let killTimer: NodeJS.Timeout | undefined;
       const terminate = (error: Error, immediate = false) => {
         terminalError ??= error;
-        killSandboxProcess(child, immediate ? "SIGKILL" : "SIGTERM");
+        const first = immediate ? "SIGKILL" : "SIGTERM";
+        killSandboxProcess(child, first);
+        notifySandboxLifecycle({ kind: "signal", signal: first });
         if (!immediate && killTimer === undefined) {
           killTimer = setTimeout(() => {
             killSandboxProcess(child, "SIGKILL");
+            notifySandboxLifecycle({ kind: "signal", signal: "SIGKILL" });
           }, 250);
           killTimer.unref();
         }
@@ -4816,6 +4865,7 @@ async function executeSandboxedTool(
       child.stderr.on("data", (chunk: Buffer) => {
         stderrBytes += chunk.byteLength;
         if (stderrBytes <= 1_048_576) stderr.push(chunk);
+        notifySandboxLifecycle({ kind: "stderr", chunk });
       });
       const resultStream = child.stdio[3] as NodeJS.ReadableStream | null | undefined;
       resultStream?.on("data", (chunk: Buffer) => {
@@ -4830,7 +4880,10 @@ async function executeSandboxedTool(
       child.once("error", (error) => {
         terminalError ??= error;
       });
-      child.once("close", (code) => {
+      child.once("close", (code, closeSignal: NodeJS.Signals | null) => {
+        // Report close BEFORE accept or reject. A test can then prove that the
+        // result settles only after the child closes.
+        notifySandboxLifecycle({ kind: "close", code, signal: closeSignal });
         liveSandboxChildren.delete(child);
         combined.removeEventListener("abort", onAbort);
         if (killTimer !== undefined) clearTimeout(killTimer);
