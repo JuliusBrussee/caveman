@@ -10,13 +10,17 @@ import type { RecoveryClient } from "./recovery.ts";
 // Partial-patch result shape for tool_result handlers (ToolResultEventResult is
 // not re-exported from the package root; omitted fields keep current values).
 type ToolResultPatch = { content: ToolResultEvent["content"] };
+export type ToolOutputEvent = Pick<ToolResultEvent, "toolName" | "input" | "content" | "isError">;
 
 export async function shrinkToolResult(
   bridge: HookBridge,
   sessionId: string,
-  event: ToolResultEvent,
+  event: ToolOutputEvent,
   recovery: Pick<RecoveryClient, "verify">,
 ): Promise<ToolResultPatch | undefined> {
+  // Positive eligibility also excludes recovery, mutations, and custom/meta
+  // tools. Failed reads/commands must retain their exact error diagnostics.
+  if (event.isError || (event.toolName !== "read" && event.toolName !== "bash")) return undefined;
   const text = event.content
     .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
     .join("");
