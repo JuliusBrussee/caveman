@@ -107,6 +107,7 @@ const flagPath = path.join(claudeDir, '.caveman-active');
 // Remembers the prose mode active before a one-shot independent mode
 // (/caveman-commit etc.) so the next ordinary prompt can restore it (#599).
 const prevPath = path.join(claudeDir, '.caveman-active.prev');
+const settingsPath = path.join(claudeDir, 'settings.json');
 
 const REINFORCEMENT_RULES = {
   lite: 'No filler, hedging, or pleasantries. Keep articles and full sentences OK, but stay tight.',
@@ -122,6 +123,37 @@ function reinforcementForMode(mode) {
   const rules = REINFORCEMENT_RULES[canonical] || REINFORCEMENT_RULES.full;
   return 'CAVEMAN MODE ACTIVE (' + mode + '). Enforce this reply: ' + rules +
     ' Technical terms, code, commands, paths, and errors stay exact.';
+}
+
+// Other installed token-compression plugins (#574) inject their own
+// contradictory per-turn additionalContext. Detected so the reminder below
+// can back off instead of out-competing them for the model's attention.
+const COMPRESSION_PLUGIN_IDS = ['ponytail', 'grill-me', 'grilling'];
+
+function hasCompetingCompressionPlugin() {
+  try {
+    if (!fs.existsSync(settingsPath)) return false;
+    const raw = fs.readFileSync(settingsPath, 'utf8');
+    let settings;
+    try {
+      settings = JSON.parse(raw);
+    } catch (e) {
+      // JSONC is legal here and this hook has no JSONC parser (mirrors
+      // caveman-activate.js's own settings.json fallback for the same reason).
+      return COMPRESSION_PLUGIN_IDS.some((id) => raw.toLowerCase().includes(id));
+    }
+    // permissions is keyed allow/deny/ask, each a list of rule strings
+    // (e.g. "Bash(ponytail:*)"), never a plugin name as a top-level key.
+    const permissionRules = ['allow', 'deny', 'ask']
+      .flatMap((k) => settings.permissions?.[k] || []);
+    const haystack = Object.keys(settings.installed_plugins || {})
+      .concat(permissionRules)
+      .join(' ')
+      .toLowerCase();
+    return COMPRESSION_PLUGIN_IDS.some((id) => haystack.includes(id));
+  } catch (e) {
+    return false;
+  }
 }
 
 function removeFlag(path) {
@@ -352,7 +384,10 @@ function handle(raw) {
     // reinforcement output below — it never deletes or writes the flag file.
     const reinforce = activeMode && !INDEPENDENT_MODES.has(activeMode)
       && getDefaultMode(data.cwd) !== 'off'
-      ? reinforcementForMode(activeMode)
+      ? (hasCompetingCompressionPlugin()
+          ? 'CAVEMAN MODE ACTIVE (' + activeMode + '): reduced injection, another compression ' +
+            'plugin is also active. Caveman rules still apply per SessionStart injection.'
+          : reinforcementForMode(activeMode))
       : null;
 
     // A level switch has to carry the new level's RULES, not just relabel the
