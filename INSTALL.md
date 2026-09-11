@@ -189,6 +189,33 @@ across the automatic context compaction that happens in long sessions.
 
 Statusline should show `[CAVEMAN]` (orange) at the bottom of Claude Code. After your first `/caveman-stats` run it appends a savings counter like `[CAVEMAN] ⛏ 12.4k`.
 
+## Update
+
+**Claude Code.** The plugin is `caveman@caveman` — plugin name, then the
+marketplace it came from. Both are called `caveman`, so the short name looks
+right and fails: `claude plugin update caveman` answers *Failed to update
+plugin "caveman": Plugin "caveman" not found*. Use the full name:
+
+```bash
+claude plugin update caveman@caveman
+```
+
+`claude plugin list` shows what you have now. Restart Claude Code after an
+update — hooks are read once at session start.
+
+**Everything else:**
+
+| Agent | Update command |
+|---|---|
+| **Gemini CLI** | The Gemini CLI owns its extensions — see `gemini extensions --help` for its update subcommand |
+| **Installed via `npx skills add`** | Re-run the same `npx skills add` command — it overwrites in place |
+| **Hooks / opencode / OpenClaw / rule files** | Re-run the installer; it is idempotent for everything it owns |
+
+```bash
+# Re-run the installer (safe to repeat — overwrites only installer-owned files)
+npx -y github:JuliusBrussee/caveman
+```
+
 ## Uninstall
 
 ```bash
