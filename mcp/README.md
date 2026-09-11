@@ -46,3 +46,15 @@ with `ratio:0` — never an error.
 Repeated recovery calls remain available after host compaction. An empty query
 returns the exact stored original on every call; a nonempty query keeps the same
 record-narrowing behavior regardless of how many earlier calls were made.
+
+Hosts that publish compressed output can first call `caveman_retrieve` with
+`{"recovery_handle":"ccr://ccr_…","verify_only":true}`. Check for the
+`recovery_verification` capability in `caveman-mcp version --json` before using
+this optional mode: older servers may ignore unknown arguments.
+
+Verification returns a JSON text block containing the normalized bare
+`recovery_handle`, UTF-8 `byte_length`, and lowercase hexadecimal `sha256` of
+the complete stored original. It ignores `query`, errors on unknown handles,
+and does not count as a delivery. Compare all three fields with the proposed handle and original bytes;
+retain the original output when verification fails. This checks availability
+at publication time, not indefinite retention or immunity to later deletion.
