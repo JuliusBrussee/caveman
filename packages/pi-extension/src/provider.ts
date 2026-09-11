@@ -3,13 +3,27 @@
 // models.json is never replaced — Pi keeps owning auth, pricing, reasoning
 // flags, context sizes, and model names.
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+// Both hosts supply their own model objects; routing only inspects these fields.
+export type RoutingModel = { provider: string; id: string; api: string; baseUrl: string };
+export type RoutingHost<M extends RoutingModel> = {
+  registerProvider(name: string, config: { baseUrl: string }): void;
+  unregisterProvider(name: string): void;
+  setModel(model: M): Promise<boolean>;
+};
+export type RoutingContext<M extends RoutingModel> = {
+  model?: M;
+  modelRegistry: {
+    getAll(): M[];
+    find(provider: string, id: string): M | undefined;
+    isUsingOAuth(model: M): boolean;
+  };
+};
 import { MAX_MESSAGE_BYTES, boundedString, compatUpstreamFor, hostOf, isLoopbackUrl, routeForApi, upstreamHostFor } from "./protocol.ts";
 
 type Notify = (message: string, kind: "warning" | "info") => void;
 
-export class ProviderRouter {
-  private pi: ExtensionAPI;
+export class ProviderRouter<M extends RoutingModel> {
+  private pi: RoutingHost<M>;
   private notify: Notify;
   private gateway: string | undefined;
   private gateOpen = false;
@@ -26,16 +40,18 @@ export class ProviderRouter {
   // Named compat mounts the running proxy published in its run-state file.
   private compatUpstreams: Readonly<Record<string, string>> | undefined;
   private applying = false;
+  private generation = 0;
+  private pendingModel: Promise<boolean> | undefined;
   private warnedModels = new Set<string>();
 
-  constructor(pi: ExtensionAPI, notify: Notify) {
+  constructor(pi: RoutingHost<M>, notify: Notify) {
     this.pi = pi;
     this.notify = notify;
   }
 
   // openGate is called once per session after the recovery gate held. Refuses
   // non-loopback gateways: managed routing needs auth proof v1 does not carry.
-  async openGate(gateway: string, ctx: ExtensionContext, compatUpstreams?: Readonly<Record<string, string>>): Promise<void> {
+  async openGate(gateway: string, ctx: RoutingContext<M>, compatUpstreams?: Readonly<Record<string, string>>): Promise<void> {
     if (!isLoopbackUrl(gateway)) {
       this.notify("Caveman: direct mode, no compression this session (gateway is not loopback)", "warning");
       return;
@@ -46,9 +62,21 @@ export class ProviderRouter {
     await this.apply(ctx.model, ctx);
   }
 
-  closeGate(): void {
+  async closeGate(ctx: RoutingContext<M>): Promise<void> {
+    this.generation++;
     this.gateOpen = false;
+    const hadOverrides = this.overridden.size > 0;
     this.clearOverrides();
+    this.gateway = undefined;
+    this.compatUpstreams = undefined;
+    this.warnedModels.clear();
+    // Let an already-issued setModel finish before restoring the selected
+    // model. Otherwise its gateway URL can outlive the removed registry override.
+    try { await this.pendingModel; } catch { /* apply reports the failure */ }
+    if (hadOverrides && ctx.model) {
+      const direct = ctx.modelRegistry.find(ctx.model.provider, ctx.model.id);
+      if (direct) await this.pi.setModel(direct);
+    }
   }
 
   routing(): boolean {
@@ -58,7 +86,7 @@ export class ProviderRouter {
   // apply routes one model's provider, or restores direct mode when the model
   // has no verified route. Called from the gate and from model_select; the
   // applying flag swallows the model_select echo of our own setModel call.
-  async apply(model: ExtensionContext["model"], ctx: ExtensionContext): Promise<void> {
+  async apply(model: M | undefined, ctx: RoutingContext<M>): Promise<void> {
     if (!this.gateOpen || this.applying || !this.gateway) return;
     if (!model) return;
     const key = `${model.provider}/${model.id}`;
@@ -93,6 +121,7 @@ export class ProviderRouter {
       return;
     }
     this.applying = true;
+    const generation = this.generation;
     try {
       for (const provider of this.overridden) {
         if (provider !== model.provider) {
@@ -107,22 +136,27 @@ export class ProviderRouter {
       // model that cannot be re-resolved or applied would keep sending direct
       // while the registry claims routing — restore direct honestly instead.
       const refreshed = ctx.modelRegistry.find(model.provider, model.id);
-      if (!refreshed || !(await this.pi.setModel(refreshed))) {
+      this.pendingModel = refreshed ? this.pi.setModel(refreshed) : undefined;
+      const applied = await this.pendingModel;
+      if (generation !== this.generation) return;
+      if (!applied) {
         this.clearOverrides();
         this.notify("Caveman: direct mode, no compression this session (model re-resolution failed)", "warning");
         return;
       }
     } catch {
+      if (generation !== this.generation) return;
       this.clearOverrides();
       this.notify("Caveman: direct mode, no compression this session (provider override failed)", "warning");
     } finally {
       this.applying = false;
+      this.pendingModel = undefined;
     }
   }
 
   // snapshot records the real base URL of every model of this provider, so a
   // later selection inside the same provider is gated against its OWN endpoint.
-  private snapshot(model: NonNullable<ExtensionContext["model"]>, ctx: ExtensionContext): void {
+  private snapshot(model: M, ctx: RoutingContext<M>): void {
     try {
       for (const candidate of ctx.modelRegistry.getAll()) {
         if (candidate.provider === model.provider && typeof candidate.baseUrl === "string") {
