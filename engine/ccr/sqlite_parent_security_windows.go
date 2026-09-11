@@ -80,3 +80,29 @@ func windowsACLGrantsBroadWrite(dacl *windows.ACL) (bool, error) {
 	}
 	return false, nil
 }
+
+func createSQLiteFile(path string) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	return file.Close()
+}
+
+func chmodSQLiteFile(path string, info os.FileInfo) error {
+	// Windows locks are handle-based, so closing this separate descriptor does
+	// not release the locks held by SQLite.
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(info, opened) {
+		return fmt.Errorf("file changed while opening")
+	}
+	return file.Chmod(0o600)
+}
