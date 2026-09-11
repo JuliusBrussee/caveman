@@ -431,19 +431,25 @@ func (b Base) ResolveUpstreamURL(ctx context.Context, req *http.Request, route R
 }
 
 func (b Base) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, credential Credential, _ *url.URL) (http.Header, error) {
-	out := http.Header{}
-	copyIfPresent(out, req.Header, "content-type")
-	copyIfPresent(out, req.Header, "accept")
-	copyIfPresent(out, req.Header, "accept-encoding")
-	copyIfPresent(out, req.Header, "idempotency-key")
-	copyIfPresent(out, req.Header, "openai-organization")
-	copyIfPresent(out, req.Header, "openai-project")
-	copyIfPresent(out, req.Header, "anthropic-version")
-	copyIfPresent(out, req.Header, "anthropic-beta")
-	copyIfPresent(out, req.Header, "api-version")
-	if env.Bool("CAVE_PROPAGATE_TRACE_HEADERS_UPSTREAM", false) {
-		copyIfPresent(out, req.Header, "traceparent")
-		copyIfPresent(out, req.Header, "tracestate")
+	out := req.Header.Clone()
+	for _, name := range []string{
+		"authorization", "proxy-authorization", "proxy-authenticate",
+		"connection", "proxy-connection", "keep-alive", "te", "trailer",
+		"transfer-encoding", "upgrade",
+	} {
+		out.Del(name)
+	}
+	for _, name := range strings.Split(req.Header.Get("connection"), ",") {
+		out.Del(strings.TrimSpace(name))
+	}
+	for name := range out {
+		if strings.HasPrefix(strings.ToLower(name), "x-cave-") {
+			out.Del(name)
+		}
+	}
+	if !env.Bool("CAVE_PROPAGATE_TRACE_HEADERS_UPSTREAM", false) {
+		out.Del("traceparent")
+		out.Del("tracestate")
 	}
 	out.Set("user-agent", appendUserAgent(req.UserAgent()))
 	switch b.Provider {
@@ -482,6 +488,7 @@ func (b Base) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, cred
 				out.Set("authorization", "Bearer "+credential.Key)
 				out.Set("x-goog-user-project", quotaProject)
 			} else {
+				out.Del("x-goog-user-project")
 				out.Set("x-goog-api-key", credential.Key)
 			}
 		}
