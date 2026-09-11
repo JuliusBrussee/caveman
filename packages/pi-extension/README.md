@@ -15,8 +15,11 @@ One extension, four jobs:
   must match. A provider that points at any other endpoint stays direct, with
   one notice saying why.
 - **Exact recovery** — registers a single model-visible tool, `caveman_retrieve`,
-  backed by the local `caveman-mcp` binary and the shared CCR store. Compressed
-  bytes are always recoverable, byte-exact.
+  backed by the local `caveman-mcp` binary and the shared CCR store. Before
+  shortening a tool result, the extension checks that its advertised handle
+  resolves to the original bytes without consuming the model's later recovery.
+  Missing, mismatched, or unverifiable handles leave the original output intact.
+  Older companions without verification support keep tool results unchanged.
 - **Native lifecycle** — bridges Pi session/turn/tool events into the Caveman
   native runtime (Core injection, per-turn context, tool-output shrinking).
 - **Honest fallback** — routing activates only after the recovery gate holds

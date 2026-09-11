@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"testing"
 )
 
@@ -27,8 +28,10 @@ func TestVersionJSON(t *testing.T) {
 	if got.Schema != "caveman.mcp.version.v1" {
 		t.Fatalf("schema=%q", got.Schema)
 	}
-	if len(got.Capabilities) != 2 || got.Capabilities[0] != "mcp_recovery" {
-		t.Fatalf("capabilities=%v", got.Capabilities)
+	for _, capability := range []string{"mcp_recovery", "build_stamped_version", "recovery_verification"} {
+		if !slices.Contains(got.Capabilities, capability) {
+			t.Fatalf("missing %q: capabilities=%v", capability, got.Capabilities)
+		}
 	}
 }
 

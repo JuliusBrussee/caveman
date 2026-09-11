@@ -249,9 +249,9 @@ func secureSQLiteFiles(path string) error {
 func secureSQLiteFile(path string, create bool) error {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) && create {
-		file, createErr := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		createErr := createSQLiteFile(path)
 		if createErr == nil {
-			return file.Close()
+			return nil
 		}
 		if !errors.Is(createErr, os.ErrExist) {
 			return createErr
@@ -267,24 +267,26 @@ func secureSQLiteFile(path string, create bool) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return fmt.Errorf("refusing non-regular file")
 	}
-	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	err = chmodSQLiteFile(path, info)
 	if errors.Is(err, os.ErrNotExist) && !create {
-		// The sidecar vanished between Lstat and open — a concurrent process
+		// The sidecar vanished while securing it — a concurrent process
 		// checkpointed the WAL and removed it. Nothing left to secure.
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	opened, err := file.Stat()
+	secured, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) && !create {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if !os.SameFile(info, opened) {
-		return fmt.Errorf("file changed while opening")
+	if !os.SameFile(info, secured) {
+		return fmt.Errorf("file changed while securing")
 	}
-	return file.Chmod(0o600)
+	return nil
 }
 
 func configureStorageBudget(db *sql.DB, maxBytes int64) error {
