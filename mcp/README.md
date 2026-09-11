@@ -42,3 +42,16 @@ in `BINARY_LICENSE.md`.
 Compression is lossy (S4) but **reversible**: every drop is recoverable via
 `caveman_retrieve`. Incompressible or malformed input passes through unchanged
 with `ratio:0` — never an error.
+
+Hosts that publish compressed output can first call `caveman_retrieve` with
+`{"recovery_handle":"ccr://ccr_…","verify_only":true}`. Check for the
+`recovery_verification` capability in `caveman-mcp version --json` before using
+this optional mode: older servers may ignore unknown arguments.
+
+Verification returns a JSON text block containing the normalized bare
+`recovery_handle`, UTF-8 `byte_length`, and lowercase hexadecimal `sha256` of
+the complete stored original. It ignores `query`, errors on unknown handles,
+and does not count as a delivery or alter the session's repeated-retrieval
+ledger. Compare all three fields with the proposed handle and original bytes;
+retain the original output when verification fails. This checks availability
+at publication time, not indefinite retention or immunity to later deletion.

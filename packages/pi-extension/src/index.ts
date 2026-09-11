@@ -269,7 +269,7 @@ export default function (pi: ExtensionAPI) {
   // instead of terminating — and registering this tool disabled the proxy's
   // server-side retrieve loop, so nothing else would strip it.
   pi.on("tool_result", GUARD_tool_result((event: Parameters<typeof shrinkToolResult>[2]) =>
-    event.toolName === RECOVERY_TOOL ? undefined : shrinkToolResult(bridge, sessionId, event)));
+    event.toolName === RECOVERY_TOOL ? undefined : shrinkToolResult(bridge, sessionId, event, recovery)));
 
   pi.on("session_before_compact", GUARD_session_before_compact(() => { void bridge.call("PreCompact", { session_id: sessionId }); }));
 

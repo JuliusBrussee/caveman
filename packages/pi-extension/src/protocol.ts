@@ -76,6 +76,17 @@ export function outputReplacementOf(response: HookResponse | undefined): string 
   return replacement ? replacement : undefined;
 }
 
+// Match mcp.normalizeRecoveryHandle's historical wrappers, then require one
+// complete CCR id. Never salvage a valid prefix from a malformed reference.
+export function normalizeRecoveryHandle(value: unknown): string | undefined {
+  if (!fits(value, MAX_RECOVERY_REF_BYTES)) return undefined;
+  let handle = value.trim();
+  if (handle.startsWith("<<") && handle.endsWith(">>")) handle = handle.slice(2, -2).trim();
+  if (handle.startsWith("ccr://")) handle = handle.slice(6).trim().replace(/^\/+|\/+$/g, "");
+  else if (handle.startsWith("ccr:")) handle = handle.slice(4).trim();
+  return /^ccr_[A-Za-z0-9_-]+$/.test(handle) ? handle : undefined;
+}
+
 // This route table maps each Pi model API to a path under the local gateway.
 // An API that is not in this table is unsupported, for example azure, bedrock,
 // vertex, mistral, and codex-responses. The extension never routes such an API,

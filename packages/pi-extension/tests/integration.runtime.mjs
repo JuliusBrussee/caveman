@@ -141,40 +141,54 @@ function runPi(env, args) {
 // ~448 bytes, so the recovered original came back to the model as a fresh ccr://
 // mask and recovery looped instead of terminating — and registering the tool
 // disables the proxy's server-side retrieve loop, so nothing else strips it.
-test("caveman_retrieve output is never shrunk; other tools still are", async () => {
-  const root = mkdtempSync(join(tmpdir(), "cave-pi-shrink-"));
-  const hookLog = join(root, "hooks.log");
-  const hook = join(root, "hook.mjs");
+test("fresh tool-output handles recover exactly; caveman_retrieve output is never shrunk", async () => {
+  const fx = fixture(0, { runState: false });
+  const hook = join(fx.root, "publish.mjs");
+  const store = join(fx.root, "originals.json");
+  const original = "exact original bytes\r\nline two éø bytes\0\n";
   writeFileSync(hook, `
-import { appendFileSync } from "node:fs";
-const event = process.argv[process.argv.length - 1];
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
-  let toolName = "";
-  try { toolName = JSON.parse(input).tool_name ?? ""; } catch { /* logged as empty */ }
-  appendFileSync(${JSON.stringify(hookLog)}, event + " " + toolName + "\\n");
-  process.stdout.write('{"output_replacement":"SHRUNK <<ccr:handle>>"}');
+  const text = JSON.parse(input).tool_output;
+  if (typeof text !== "string") { process.stdout.write("{}"); return; }
+  const handle = "ccr_obj_" + createHash("sha256").update(text).digest("hex").slice(0, 32);
+  writeFileSync(${JSON.stringify(store)}, JSON.stringify({ [handle]: text }));
+  const recovery_ref = "ccr://" + handle;
+  process.stdout.write(JSON.stringify({ recovery_ref, output_replacement: "SHRUNK full: " + recovery_ref }));
 });
 `);
-  const prior = process.env.CAVEMAN_PI_HOOK_CMD;
-  process.env.CAVEMAN_PI_HOOK_CMD = JSON.stringify([process.execPath, hook, "placeholder"]);
+  const vars = {
+    CAVEMAN_PI_HOOK_CMD: JSON.stringify([process.execPath, hook, "placeholder"]),
+    CAVEMAN_MCP_BIN: fx.env.CAVEMAN_MCP_BIN,
+    STUB_MCP_STORE: store,
+  };
+  const prior = Object.fromEntries(Object.keys(vars).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, vars);
+  const handlers = new Map();
+  let retrieveTool;
   try {
     const { default: factory } = await import(pathToFileURL(extension).href);
-    const handlers = new Map();
-    factory({ registerTool: () => {}, on: (name, fn) => handlers.set(name, fn) });
-    const result = (toolName) => handlers.get("tool_result")({ toolName, input: {}, isError: false, content: [{ type: "text", text: "exact original bytes" }] });
+    factory({ registerTool: (tool) => { retrieveTool = tool; }, on: (name, fn) => handlers.set(name, fn) });
+    const image = { type: "image", data: "cGl4ZWxz", mimeType: "image/png" };
+    const content = [{ type: "text", text: original.slice(0, 8) }, image, { type: "text", text: original.slice(8) }];
+    const shrunk = await handlers.get("tool_result")({ toolName: "read_file", input: {}, isError: false, content });
+    const handle = Object.keys(JSON.parse(readFileSync(store, "utf8")))[0];
+    assert.deepEqual(shrunk?.content, [{ type: "text", text: `SHRUNK full: ccr://${handle}` }, image]);
+    assert.equal(shrunk.content[1], image, "nontext content must survive unchanged");
 
-    const shrunk = await result("read_file");
-    assert.equal(shrunk?.content?.[0]?.text, "SHRUNK <<ccr:handle>>", "ordinary tool output must still shrink");
-    assert.equal(await result("caveman_retrieve"), undefined, "recovered originals must reach the model unmasked");
-    // Not merely unchanged output: the runtime is never even asked, so no
-    // handle can be minted for bytes that were already recovered.
-    assert.deepEqual(readFileSync(hookLog, "utf8").trim().split("\n"), ["PostToolUse read_file"]);
+    const recovered = await retrieveTool.execute("recover", { recovery_handle: `ccr://${handle}` }, undefined);
+    assert.deepEqual(recovered.content, [{ type: "text", text: original }], "verification must not consume model recovery");
+    assert.equal(await handlers.get("tool_result")({ toolName: "caveman_retrieve", input: {}, isError: false, content: recovered.content }), undefined);
   } finally {
-    if (prior === undefined) delete process.env.CAVEMAN_PI_HOOK_CMD; else process.env.CAVEMAN_PI_HOOK_CMD = prior;
-    rmSync(root, { recursive: true, force: true });
+    await handlers.get("session_shutdown")?.();
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    fx.cleanup();
   }
 });
 
