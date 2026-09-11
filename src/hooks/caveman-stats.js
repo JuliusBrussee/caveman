@@ -131,6 +131,61 @@ function priceForModel(model) {
   return null;
 }
 
+// Every model in MODEL_OUTPUT_PRICE_PER_M bills input at one fifth of its
+// output rate, so the input price is derived here rather than tabled twice.
+const INPUT_TO_OUTPUT_PRICE_RATIO = 0.2;
+
+// Input-side prices relative to the base input rate (prompt caching): a cache
+// read bills 0.1x, a cache write 1.25x (5-minute TTL) or 2x (1-hour TTL).
+// Claude Fable 5.1 reads at 0.025x — using 0.1x everywhere overstates the
+// rules' cost there, never understates it. A write with no TTL split logged is
+// priced at the 1-hour rate, the higher of the two, for the same reason.
+const CACHE_READ_MULTIPLIER = 0.1;
+const CACHE_WRITE_5M_MULTIPLIER = 1.25;
+const CACHE_WRITE_1H_MULTIPLIER = 2;
+
+// Blended price of one input token of an API response, as a multiple of the
+// base input rate: that response's own mix of uncached input, cache writes and
+// cache reads. The rules sit near the front of the prompt — the part most
+// likely to be served from cache — so pricing them at the request's average
+// token errs toward overstating their cost. Returns 1 (every token uncached)
+// when the response logged no input breakdown.
+function inputCostMultiplier(usage) {
+  const u = usage || {};
+  const uncached = u.input_tokens || 0;
+  const read = u.cache_read_input_tokens || 0;
+  const split = u.cache_creation || {};
+  const write5m = split.ephemeral_5m_input_tokens || 0;
+  const write1h = split.ephemeral_1h_input_tokens || 0;
+  const written = Math.max(u.cache_creation_input_tokens || 0, write5m + write1h);
+  const writeUnknown = written - write5m - write1h;
+  const total = uncached + read + written;
+  if (total <= 0) return 1;
+  return (uncached +
+    read * CACHE_READ_MULTIPLIER +
+    write5m * CACHE_WRITE_5M_MULTIPLIER +
+    (write1h + writeUnknown) * CACHE_WRITE_1H_MULTIPLIER) / total;
+}
+
+// USD the rules cost across `turns`: every turn re-sends them as input, billed
+// at that turn's own cache mix. Turns with no logged response (synthetic
+// callers) are priced as uncached input. Null when the model has no known
+// price — no number beats a guessed one.
+function ruleOverheadUsd({ messages, turns, model }) {
+  const price = priceForModel(model);
+  if (price === null || !(turns > 0)) return null;
+  let weightedTurns = 0;
+  let counted = 0;
+  for (const m of messages || []) {
+    if (counted >= turns) break;
+    weightedTurns += Number.isFinite(m.inputCostMultiplier) ? m.inputCostMultiplier : 1;
+    counted++;
+  }
+  weightedTurns += turns - counted;
+  const usd = (ruleOverheadPerTurn() * weightedTurns / 1_000_000) * price * INPUT_TO_OUTPUT_PRICE_RATIO;
+  return { usd, avgMultiplier: weightedTurns / turns };
+}
+
 function formatUsd(amount) {
   if (amount >= 1) return `$${amount.toFixed(2)}`;
   if (amount >= 0.01) return `$${amount.toFixed(3)}`;
@@ -198,6 +253,7 @@ function parseSession(filePath) {
     messages.push({
       ts: Number.isFinite(ts) ? ts : null,
       outputTokens: usage.output_tokens || 0,
+      inputCostMultiplier: inputCostMultiplier(usage),
     });
   }
   return { outputTokens, cacheReadTokens, turns, model, messages };
@@ -375,15 +431,34 @@ function deriveNet({ estSavedTokens, turns }) {
 // tool's English output.
 const fmt = (n) => n.toLocaleString('en-US');
 
-function netLines({ estSavedTokens, turns }) {
+// `billed` ({ savedUsd, overheadUsd, avgMultiplier? }, or null when the model
+// has no known price) adds a USD net. The token net sums output tokens saved
+// with input tokens spent as if they cost the same; on a cached session the
+// rules bill at a small fraction of output, so the token net alone can read
+// as a loss while the bill shows a saving. The turn-it-off advice follows the
+// USD net when there is one.
+function netLines({ estSavedTokens, turns, billed }) {
   const perTurn = ruleOverheadPerTurn();
   const { overheadTokens, netTokens } = deriveNet({ estSavedTokens, turns });
   const overhead = `Est. rule overhead:    ${fmt(overheadTokens)} ` +
     `(input, ~${fmt(perTurn)}/turn over ${turns} turn${turns === 1 ? '' : 's'})`;
-  const net = netTokens >= 0
-    ? `Est. net:              +${fmt(netTokens)} (net saving after rule overhead)`
-    : `Est. net:              ${fmt(netTokens)} (caveman cost more than it saved for this workload — consider turning it off)`;
-  return `${overhead}\n${net}`;
+  const netUsd = billed ? billed.savedUsd - billed.overheadUsd : null;
+  let net;
+  if (netTokens >= 0) {
+    net = `Est. net:              +${fmt(netTokens)} (net saving after rule overhead)`;
+  } else if (netUsd !== null && netUsd >= 0) {
+    net = `Est. net:              ${fmt(netTokens)} (raw token count — the rules are mostly cached input, billed far below output; see USD net)`;
+  } else {
+    net = `Est. net:              ${fmt(netTokens)} (caveman cost more than it saved for this workload — consider turning it off)`;
+  }
+  if (netUsd === null) return `${overhead}\n${net}`;
+  const mix = billed.avgMultiplier != null
+    ? `this session's input mix, ~${billed.avgMultiplier.toFixed(2)}× input rate`
+    : `each session's input mix`;
+  const usdLine = netUsd >= 0
+    ? `Est. net (USD):        +${formatUsd(netUsd)} (rules priced at ${mix})`
+    : `Est. net (USD):        -${formatUsd(-netUsd)} (caveman cost more than it saved at billed rates)`;
+  return `${overhead}\n${net}\n${usdLine}`;
 }
 
 // Parse "7d", "12h" etc. to milliseconds. Returns null on invalid input.
@@ -417,6 +492,11 @@ function aggregateHistory(historyPath, sinceMs) {
   // over- or under-state the overhead, so they're excluded from net entirely
   // (they still count toward the plain gross totals above, unchanged).
   let netSavedTokens = 0, netTurns = 0;
+  // USD net only when EVERY netted row logged its billed rule overhead: rows
+  // from before that field would otherwise drop out of the USD side while
+  // still counting on the token side, and the two nets would describe
+  // different sessions.
+  let netSavedUsd = 0, netOverheadUsd = 0, allNetRowsBilled = true;
   for (const e of latestPerSession.values()) {
     outputTokens   += e.output_tokens     || 0;
     estSavedTokens += e.est_saved_tokens  || 0;
@@ -424,9 +504,18 @@ function aggregateHistory(historyPath, sinceMs) {
     if (e.turns != null) {
       netSavedTokens += e.est_saved_tokens || 0;
       netTurns       += e.turns            || 0;
+      if (Number.isFinite(e.est_rule_overhead_usd)) {
+        netSavedUsd    += e.est_saved_usd || 0;
+        netOverheadUsd += e.est_rule_overhead_usd;
+      } else {
+        allNetRowsBilled = false;
+      }
     }
   }
-  return { sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd, netSavedTokens, netTurns };
+  const netBilled = netTurns > 0 && allNetRowsBilled
+    ? { savedUsd: netSavedUsd, overheadUsd: netOverheadUsd }
+    : null;
+  return { sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd, netSavedTokens, netTurns, netBilled };
 }
 
 // Output-reduction share: saved / (saved + used) = the fraction of the
@@ -452,7 +541,7 @@ function humanizeTokens(n) {
   return String(Math.round(n));
 }
 
-function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, netSavedTokens, netTurns, since }) {
+function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, netSavedTokens, netTurns, netBilled, since }) {
   const sep = '──────────────────────────────────';
   const window = since ? ` (last ${since})` : '';
   if (sessions === 0) {
@@ -465,7 +554,9 @@ function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, ne
     : '';
   // Only sessions that logged a turn count feed the net figure (older rows
   // predate #145) — omit rather than understate the overhead.
-  const netBlock = netTurns > 0 ? netLines({ estSavedTokens: netSavedTokens, turns: netTurns }) + '\n' : '';
+  const netBlock = netTurns > 0
+    ? netLines({ estSavedTokens: netSavedTokens, turns: netTurns, billed: netBilled || null }) + '\n'
+    : '';
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
     `Sessions:   ${fmt(sessions)}\n${sep}\n` +
     `Output tokens:         ${fmt(outputTokens)}\n` +
@@ -493,7 +584,7 @@ function formatShare({ outputTokens, turns, mode, model, attribution }) {
 // Pure formatter — separated from main() so tests can pass synthetic inputs.
 // `attribution` (from attributeByMode, #601) splits output tokens per mode;
 // when omitted, the current mode is assumed for the whole session.
-function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessionPath, compressed, attribution }) {
+function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessionPath, compressed, attribution, messages }) {
   const sep = '──────────────────────────────────';
   const shortPath = sessionPath && sessionPath.length > 45
     ? '...' + sessionPath.slice(-45)
@@ -564,6 +655,10 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
     // docs/HONEST-NUMBERS.md.
     footer += ' Reduction is of output tokens only; input/cache usage is unchanged.';
     footer += ` Net subtracts the rules' est. input cost (~${fmt(ruleOverheadPerTurn())}/turn — docs/HONEST-NUMBERS.md).`;
+    const overheadBilled = ruleOverheadUsd({ messages, turns, model });
+    if (overheadBilled) {
+      footer += ' USD net prices that input at each turn\'s logged cache mix (read 0.1×, write 1.25×/2× the input rate; input = 1/5 of output).';
+    }
     savings = (`Est. without caveman:  ${fmt(estNormal)}\n` +
               `Est. tokens saved:     ${fmt(estSaved)} (~${Math.round(ratio * 100)}% of output)\n` +
               usdLine).replace(/\n$/, '');
@@ -571,7 +666,12 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
     // single benchmarked mode ran the whole span (uniform) with a known turn
     // count. Mixed-mode or partially-unattributed spans (the !uniform branch
     // above) intentionally get no net line rather than a guessed one.
-    if (turns > 0) savings += '\n' + netLines({ estSavedTokens: estSaved, turns });
+    if (turns > 0) {
+      const billed = overheadBilled
+        ? { savedUsd: (estSaved / 1_000_000) * price, overheadUsd: overheadBilled.usd, avgMultiplier: overheadBilled.avgMultiplier }
+        : null;
+      savings += '\n' + netLines({ estSavedTokens: estSaved, turns, billed });
+    }
   } else if (mode && mode !== 'off') {
     savings = `No savings estimate for '${mode}' mode — only 'full' has benchmark data.`;
   } else {
@@ -666,6 +766,7 @@ function main() {
   // session_id; aggregateHistory keeps only the latest per session_id.
   if (parsed.turns > 0) {
     const { estSavedTokens, estSavedUsd } = deriveSavings({ byMode: attribution.byMode, model: parsed.model });
+    const overheadBilled = ruleOverheadUsd({ messages: parsed.messages, turns: parsed.turns, model: parsed.model });
     appendFlag(historyPath, JSON.stringify({
       ts: Date.now(),
       session_id: sessionId || path.basename(sessionFile, '.jsonl'),
@@ -675,6 +776,9 @@ function main() {
       turns: parsed.turns,
       est_saved_tokens: estSavedTokens,
       est_saved_usd: estSavedUsd,
+      // Omitted (not null) when the model has no known price, so the
+      // lifetime view can tell "not priced" from "priced at zero".
+      ...(overheadBilled ? { est_rule_overhead_usd: overheadBilled.usd } : {}),
     }));
 
     // Statusline suffix: tiny pre-rendered string the shell statusline can
@@ -701,5 +805,5 @@ module.exports = {
   formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
   deriveNet, ruleOverheadPerTurn, parseSession, priceForModel, formatUsd, COMPRESSION,
   MODEL_OUTPUT_PRICE_PER_M, findCompressedPairs, summarizeCompressed, humanizeTokens,
-  outputReductionPct, readModeLog, attributeByMode,
+  outputReductionPct, readModeLog, attributeByMode, inputCostMultiplier, ruleOverheadUsd,
 };
