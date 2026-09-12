@@ -197,7 +197,10 @@ function handle(raw) {
     // as additionalContext (#618), instructing the model to relay it
     // verbatim. The script reads the active session log, so we pass
     // transcript_path through when Claude Code provides it.
-    const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
+    // The space-arg form (/caveman stats) is accepted too: it used to fall
+    // through to parseModeChange, where "stats" is not a VALID_MODE, so the
+    // flag was left untouched and the prompt ran with no stats at all.
+    const statsMatch = /^\/caveman(?::caveman)?(?:-stats|\s+stats)(?:\s+(.*))?$/.exec(prompt);
     if (statsMatch) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
       let block;

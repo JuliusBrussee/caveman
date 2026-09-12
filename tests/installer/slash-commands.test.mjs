@@ -33,7 +33,7 @@ const STATS_TOML = path.join(COMMANDS_DIR, 'caveman-stats.toml');
 // Mirrors the live regex in src/hooks/caveman-mode-tracker.js (the
 // `statsMatch` line). Anything that fails this here would also fail in
 // production, so the test stays representative if the hook regex shifts.
-const HOOK_STATS_REGEX = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/m;
+const HOOK_STATS_REGEX = /^\/caveman(?::caveman)?(?:-stats|\s+stats)(?:\s+(.*))?$/m;
 
 test('#470 commands/caveman-stats.toml exists so Claude Code registers /caveman-stats', () => {
   assert.ok(

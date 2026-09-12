@@ -182,6 +182,38 @@ class ModeTrackerTests(unittest.TestCase):
         self.send("/caveman off")
         self.assertIsNone(self.flag_value())
 
+    # ── stats: space-arg form ───────────────────────────────────────────
+
+    # The stats branch always emits this preamble, whether the script produced
+    # real numbers or the could-not-run fallback. An isolated CLAUDE_CONFIG_DIR
+    # has no session log, so routing is what these tests can observe — the
+    # numbers themselves are covered by tests/test_caveman_stats.js.
+    STATS_MARKER = "Print this stats block verbatim"
+
+    def test_slash_caveman_stats_space_arg_is_routed_to_stats(self):
+        """/caveman stats is the form users reach for, and it used to fall
+        through to the mode parser, where "stats" is not a VALID_MODE — the
+        flag was left untouched and the turn produced no stats at all."""
+        self.flag.write_text("full", encoding="utf-8")
+        for prompt in ("/caveman stats", "/caveman:caveman stats",
+                       "/caveman stats --share"):
+            with self.subTest(prompt=prompt):
+                r = self.send(prompt)
+                self.assertIn(self.STATS_MARKER, r.stdout)
+                self.assertEqual(
+                    self.flag_value(), "full",
+                    "a stats request must not disturb the active level",
+                )
+
+    def test_hyphen_stats_form_still_routed(self):
+        for prompt in ("/caveman-stats", "/caveman:caveman-stats"):
+            with self.subTest(prompt=prompt):
+                self.assertIn(self.STATS_MARKER, self.send(prompt).stdout)
+
+    def test_stats_arg_does_not_shadow_a_real_level(self):
+        self.send("/caveman ultra")
+        self.assertEqual(self.flag_value(), "ultra")
+
     # ── #599: one-shot independent modes ────────────────────────────────
 
     def test_commit_restores_prior_level_on_next_prompt(self):
