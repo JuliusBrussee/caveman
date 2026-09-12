@@ -11,6 +11,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// fchmodatEmptyPath tightens the inode behind an O_PATH descriptor via
+// fchmodat2(2). It is a variable so a test can force the EOPNOTSUPP a
+// pre-6.6 kernel returns: every CI runner has fchmodat2, so without a seam the
+// procfs fallback below is never executed here and ships untested to the
+// distributions that actually take it (RHEL 9, Debian 12, Amazon Linux 2023).
+var fchmodatEmptyPath = func(fd int) error {
+	return unix.Fchmodat(fd, "", 0o600, unix.AT_EMPTY_PATH)
+}
+
 func chmodSQLiteFile(path string, info os.FileInfo) error {
 	// Closing an ordinary descriptor for the database or -shm drops ALL POSIX
 	// locks held by SQLite in this process. O_PATH pins the inode without opening
@@ -28,7 +37,7 @@ func chmodSQLiteFile(path string, info os.FileInfo) error {
 	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		return fmt.Errorf("file changed while opening")
 	}
-	if err := unix.Fchmodat(fd, "", 0o600, unix.AT_EMPTY_PATH); !errors.Is(err, unix.EOPNOTSUPP) && !errors.Is(err, unix.EINVAL) {
+	if err := fchmodatEmptyPath(fd); !errors.Is(err, unix.EOPNOTSUPP) && !errors.Is(err, unix.EINVAL) {
 		return err
 	}
 	// Kernels before fchmodat2/AT_EMPTY_PATH require procfs. This is the pinned
