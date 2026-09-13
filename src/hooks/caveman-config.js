@@ -190,12 +190,18 @@ function safeWriteFlag(flagPath, content) {
             return;
           }
         } else {
-          const home = os.homedir();
-          const normalizedReal = path.resolve(realFlagDir);
-          const normalizedHome = path.resolve(home);
-          if (!normalizedReal.toLowerCase().startsWith(normalizedHome.toLowerCase() + path.sep) &&
-              normalizedReal.toLowerCase() !== normalizedHome.toLowerCase()) {
-            if (debug) process.stderr.write(`[caveman] safeWriteFlag: symlink target ${normalizedReal} is outside home directory ${normalizedHome}\n`);
+          // The home-prefix check used to live here, comparing the resolved
+          // symlink target against os.homedir(). That is the wrong proxy on
+          // win32: a directory junction (e.g. ~/.claude junctioned to another
+          // drive, the same "legitimate symlinked config dir" case this branch
+          // exists to allow) resolves to a realpath that does not start with
+          // the home directory, so the write was refused through the very
+          // junction this code's own comments say it should tolerate. Test
+          // what actually matters instead: can the current user write there.
+          try {
+            fs.accessSync(realFlagDir, fs.constants.W_OK);
+          } catch (e) {
+            if (debug) process.stderr.write(`[caveman] safeWriteFlag: symlink target ${realFlagDir} is not writable by current user\n`);
             return;
           }
         }
