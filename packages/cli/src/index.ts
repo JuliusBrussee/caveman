@@ -13186,15 +13186,18 @@ async function shrinkHook() {
   const isGemini = tool === "run_shell_command"; // Gemini CLI's shell tool
   const isBash = tool === "Bash";                // Claude Code + the opencode plugin
   const isCodex = tool === "shell" || tool === "shell_command" || tool === "exec_command";
-  if (!isGemini && !isBash && !isCodex) process.exit(0);
+  // Codex's saved prefix_rule rules match on exact command text; rewriting it here
+  // breaks that match for an already-approved command (#1037), and nothing confirms
+  // permissionDecision:"allow" makes Codex skip re-checking it. Pass through as-is.
+  if (isCodex) process.exit(0);
+  if (!isGemini && !isBash) process.exit(0);
   const command = evt.tool_input?.command;
   if (typeof command !== "string" || !shouldShrink(command)) process.exit(0);
   // updatedInput.command executes in host shell (Git Bash on Claude Windows),
   // not hook's explicit PowerShell shell. Never leak PowerShell `&` into it.
   const rewritten = `${cavemanBinForHook(false)} shrink -- ${command.trim()}`;
-  // Each harness has a different (silent-on-mismatch) override contract: Gemini merges
-  // hookSpecificOutput.tool_input (snake_case, no event discriminator); Claude replaces
-  // via hookSpecificOutput.updatedInput (camelCase + hookEventName). Emit the right one.
+  // Gemini merges hookSpecificOutput.tool_input (snake_case, no event discriminator);
+  // Claude replaces via hookSpecificOutput.updatedInput (camelCase + hookEventName).
   const out = isGemini
     ? { hookSpecificOutput: { tool_input: { command: rewritten } } }
     : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: { command: rewritten } } };

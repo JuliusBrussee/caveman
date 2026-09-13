@@ -85,13 +85,16 @@ test("shrink-hook rewrites cargo test", async () => {
   assert.match(o.hookSpecificOutput.updatedInput.command, /shrink -- cargo test --all$/);
 });
 
-test("shrink-hook emits Codex allow + updatedInput for exec_command", async () => {
-  const out = await runHook({ tool_name: "exec_command", tool_input: { command: "git status" } });
-  assert.equal(out.code, 0, out.stderr);
-  const parsed = JSON.parse(out.stdout);
-  assert.equal(parsed.hookSpecificOutput.permissionDecision, "allow");
-  assert.match(parsed.hookSpecificOutput.updatedInput.command, /shrink -- git status$/);
-});
+// Codex's saved prefix_rule approval rules match on exact command text, so
+// rewriting the command here breaks an already-approved rule (#1037). Pass every
+// Codex tool-name alias through unrewritten until that's confirmed safe.
+for (const tool_name of ["exec_command", "shell", "shell_command"]) {
+  test(`shrink-hook does not rewrite Codex commands (${tool_name})`, async () => {
+    const out = await runHook({ tool_name, tool_input: { command: "git status" } });
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(out.stdout, "", "must not rewrite a Codex tool event");
+  });
+}
 
 test("native-hook injects stable Core, stores bounded metadata, and emits no marker when proxy is off", async () => {
   const caveHome = mkdtempSync(join(tmpdir(), "cave-native-"));
