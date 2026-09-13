@@ -207,7 +207,10 @@ func TestLoad_ParsesCompatUpstreams(t *testing.T) {
 		"    api_key_env: OPENROUTER_API_KEY\n" +
 		"  ollama:\n" +
 		"    base_url: http://localhost:11434\n" +
-		"    api_key_env: \"\"\n"
+		"    api_key_env: \"\"\n" +
+		"  zai:\n" +
+		"    base_url: https://api.z.ai/api/anthropic\n" +
+		"    wire_dialect: anthropic\n"
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -224,6 +227,12 @@ func TestLoad_ParsesCompatUpstreams(t *testing.T) {
 	if got := cfg.Compat["ollama"].APIKeyEnv; got != "" {
 		t.Errorf("ollama api_key_env = %q, want empty", got)
 	}
+	if got := cfg.Compat["zai"].WireDialect; got != "anthropic" {
+		t.Errorf("zai wire_dialect = %q, want anthropic", got)
+	}
+	if got := cfg.Compat["openrouter"].WireDialect; got != "" {
+		t.Errorf("openrouter wire_dialect = %q, want empty default", got)
+	}
 }
 
 func TestLoad_CompatMalformedErrors(t *testing.T) {
@@ -233,6 +242,7 @@ func TestLoad_CompatMalformedErrors(t *testing.T) {
 		"missing url":  "compat:\n  groq:\n    api_key_env: GROQ_API_KEY\n",
 		"bad url":      "compat:\n  groq:\n    base_url: ://bad\n",
 		"bad shape":    "compat:\n  groq: []\n",
+		"bad dialect":  "compat:\n  zai:\n    base_url: https://api.example.test\n    wire_dialect: openai-ish\n",
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

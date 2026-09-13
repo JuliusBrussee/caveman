@@ -173,6 +173,22 @@ test("wrap codex API-key auth uses an ephemeral native home and leaves real ~/.c
   assert.deepEqual(snapshotTree(fx.codexDir), before);
 });
 
+// The README has said all along that "Codex skips the shrink hook because its
+// runtime rejects the rewrite" (openai/codex#18491), but no door implemented it —
+// wrap registered the hook whenever compression was on. Since #1037 shrinkHook
+// declines every Codex tool event, so the entry only bought a node spawn per tool
+// call. shrink:false already omits it (asserted above); the DEFAULT must too.
+test("wrap codex omits the shrink hook even with compression left on", async () => {
+  const fx = fixture({ agents: undefined, skills: false });
+  writeWrapConfig(fx.home, { proxy: false, mcp: false, browse: false });
+
+  const out = await runCli(fx, ["wrap", "codex"], GW);
+  assert.equal(out.code, 0, out.stderr);
+  const dump = readDump(fx);
+  assert.match(dump.hooks, /native-hook codex/, "the lifecycle hook must still be registered");
+  assert.doesNotMatch(dump.hooks, /shrink-hook/, "Codex rewrites nothing — do not register a dead hook");
+});
+
 test("wrap codex with missing auth.json still uses ephemeral native home", async () => {
   const fx = fixture({ agents: undefined, skills: false });
   writeWrapConfig(fx.home, { proxy: false, shrink: false, mcp: false, browse: false });

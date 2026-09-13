@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
+	"github.com/JuliusBrussee/caveman/proxy/providers/anthropic"
 	"github.com/JuliusBrussee/caveman/proxy/providers/openai"
 )
 
@@ -145,17 +146,59 @@ func (a Adapter) ExtractStabilizable(body []byte, meta providers.RequestMetadata
 	return openai.ExtractStabilizable(body, meta)
 }
 
+// anthropicZoneGrammar carries the shared Anthropic Messages zone extractors a
+// wire-dialect mount delegates to. The extractors are pure over (body, meta), so
+// the zero adapter is the whole grammar.
+var anthropicZoneGrammar = anthropic.Adapter{}
+
 func (a namedAdapter) ExtractCompressible(body []byte, meta providers.RequestMetadata) ([][]byte, func([][]byte) ([]byte, error), bool) {
+	if a.anthropicWireZones(meta.Endpoint) {
+		return anthropicZoneGrammar.ExtractCompressible(body, meta)
+	}
 	return openai.ExtractCompressible(body, meta)
 }
 
 func (a namedAdapter) ExtractStabilizable(body []byte, meta providers.RequestMetadata) ([]providers.RewritableBlock, func([][]byte) ([]byte, error), bool) {
+	if a.anthropicWireZones(meta.Endpoint) {
+		return anthropicZoneGrammar.ExtractStabilizable(body, meta)
+	}
 	return openai.ExtractStabilizable(body, meta)
 }
 
 type namedAdapter struct {
 	providers.Base
 	prefix string
+	// wireDialect is the configured wire grammar of the mount's upstream
+	// ("" = OpenAI shape, the default). It selects the usage parser via
+	// Base.UsageProvider and the compression-zone grammar per request path.
+	wireDialect string
+}
+
+// anthropicWireZones reports whether this request's compression zones follow
+// the Anthropic Messages grammar: the mount must declare the anthropic wire
+// dialect, and the request must be a Messages-path request (an empty endpoint
+// means a direct caller handed only a body, and a declared-dialect mount is
+// anthropic by construction). The Anthropic grammar is required there, not a
+// nicety: it keys the live/frozen boundary on the request's own cache_control
+// breakpoints, while the OpenAI grammar marks only the latest messages live.
+// On an Anthropic-protocol body that misjudgment leaves the uncached
+// post-breakpoint tail frozen, or rewrites a block the provider already
+// cached, busting the prefix on the next turn.
+//
+// The path test is anthropicMessagesPath itself, not a second copy of its
+// rule: that is the same question SanitizeAndMapHeaders already answers to
+// decide x-api-key over Bearer, and two matchers for "is this mount's request
+// Anthropic-protocol" would let header mapping and zone selection disagree the
+// first time the Messages path set grows.
+func (a namedAdapter) anthropicWireZones(endpoint string) bool {
+	if a.wireDialect != "anthropic" {
+		return false
+	}
+	trimmed := strings.TrimSpace(endpoint)
+	if trimmed == "" {
+		return true
+	}
+	return a.anthropicMessagesPath(trimmed)
 }
 
 func (a namedAdapter) MatchRoute(method, path string) bool {
@@ -261,8 +304,49 @@ func inspectOpenAICompatible(ctx context.Context, base providers.Base, body prov
 // /compat/<name>/. The provider enum intentionally stays openai_compatible so
 // usage/cost telemetry keeps using the shared OpenAI-shape parser.
 func NewNamed(name, baseURL string) (providers.Adapter, error) {
+	return NewNamedWithWireDialect(name, baseURL, "")
+}
+
+// wireDialectUsageProvider maps a configured wire dialect to the provider whose
+// usage parser implements it. "" is the default OpenAI-shape parser.
+var wireDialectUsageProvider = map[string]string{
+	"":          "",
+	"anthropic": "anthropic",
+}
+
+// ValidateWireDialect rejects dialect values no named mount can honor. It is
+// exported so the config loader fails at startup rather than silently parsing
+// an Anthropic-dialect upstream with the OpenAI-shape rules — the exact
+// misclassification issue #1026 reports.
+func ValidateWireDialect(dialect string) error {
+	if _, ok := wireDialectUsageProvider[dialect]; !ok {
+		return fmt.Errorf("wire dialect %q must be \"anthropic\" or empty", dialect)
+	}
+	return nil
+}
+
+// NewNamedWithWireDialect builds a named mount whose upstream speaks a
+// different wire grammar than the mount's OpenAI-compatible identity.
+// "anthropic" is for an upstream that answers the Anthropic Messages protocol
+// on the mount. It changes two things and nothing else:
+//
+//   - USAGE ACCOUNTING parses with the Anthropic dialect (Base.UsageProvider):
+//     the usage block reports input_tokens EXCLUSIVE of cache reads/writes, so
+//     the OpenAI-shape contradiction check reads a warm cache as malformed and
+//     drops every such row from token accounting (issue #1026).
+//   - COMPRESSION ZONES follow the Anthropic Messages grammar on Messages-path
+//     requests and keep the OpenAI grammar on every other path (see
+//     anthropicWireZones): the Anthropic extractor keys the live/frozen
+//     boundary on the request's own cache_control breakpoints.
+//
+// Routing, header mapping, telemetry provider, and pricing keep the mount's
+// openai_compatible identity in every dialect.
+func NewNamedWithWireDialect(name, baseURL, wireDialect string) (providers.Adapter, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, err
+	}
+	if err := ValidateWireDialect(wireDialect); err != nil {
+		return nil, fmt.Errorf("compat upstream %q: %w", name, err)
 	}
 	baseURL = strings.TrimSpace(baseURL)
 	if err := ValidateBaseURL(baseURL); err != nil {
@@ -271,11 +355,13 @@ func NewNamed(name, baseURL string) (providers.Adapter, error) {
 	prefix := "/compat/" + name
 	return namedAdapter{
 		Base: providers.Base{
-			Provider: "openai_compatible",
-			BaseURL:  baseURL,
-			Routes:   []string{prefix + "/"},
+			Provider:      "openai_compatible",
+			BaseURL:       baseURL,
+			Routes:        []string{prefix + "/"},
+			UsageProvider: wireDialectUsageProvider[wireDialect],
 		},
-		prefix: prefix,
+		prefix:      prefix,
+		wireDialect: wireDialect,
 	}, nil
 }
 
