@@ -1359,6 +1359,14 @@ function uninstall(ctx) {
 
   if (opts.dryRun) note('  (dry run — nothing will be removed)');
 
+  // Native integrations (`caveman enable <agent>`) journal their prior state
+  // at ~/.caveman/integrations/<agent>.json; restore it through the CLI's own
+  // `disable --all` rather than re-deriving that logic here.
+  if (hasCmd('caveman')) {
+    const r = runSpawn('caveman', ['disable', '--all'], null, opts.dryRun);
+    if (spawnOk(r)) ok('  disabled native agent integrations');
+  }
+
   // Hooks: remove from settings.json + delete hook files.
   const hooksDir = path.join(configDir, 'hooks');
   const settingsPath = path.join(configDir, 'settings.json');
