@@ -85,16 +85,29 @@ test("shrink-hook rewrites cargo test", async () => {
   assert.match(o.hookSpecificOutput.updatedInput.command, /shrink -- cargo test --all$/);
 });
 
-// Codex's saved prefix_rule approval rules match on exact command text, so
-// rewriting the command here breaks an already-approved rule (#1037). Pass every
-// Codex tool-name alias through unrewritten until that's confirmed safe.
+// Codex matches a saved approval against the command text itself
+// (`prefix_rule(pattern=["git", "add"], decision="allow")`), so rewriting the
+// command is what makes an already-approved one look new and get re-prompted
+// (#1037). The rewrite cannot be made rule-compatible either: it leads with the
+// resolved caveman/node path, which differs per machine and per install. Codex
+// shell tools therefore pass through untouched under every name they use.
 for (const tool_name of ["exec_command", "shell", "shell_command"]) {
-  test(`shrink-hook does not rewrite Codex commands (${tool_name})`, async () => {
+  test(`shrink-hook leaves a Codex command unrewritten (${tool_name})`, async () => {
+    // `git status` is on the shrink allowlist: a Bash event with it IS rewritten
+    // (asserted above), so this can only pass by the Codex branch declining.
     const out = await runHook({ tool_name, tool_input: { command: "git status" } });
     assert.equal(out.code, 0, out.stderr);
-    assert.equal(out.stdout, "", "must not rewrite a Codex tool event");
+    assert.equal(out.stdout, "", "a Codex tool event must reach the host byte-identical");
   });
 }
+
+// Emitting permissionDecision:"allow" toward a host whose contract we have not
+// verified is the other half of #1037: if Codex ever honors it, caveman would be
+// auto-approving a shell command the user's `approval_policy` meant to gate.
+test("shrink-hook never emits an approval decision for a Codex tool event", async () => {
+  const out = await runHook({ tool_name: "exec_command", tool_input: { command: "git add -A" } });
+  assert.doesNotMatch(out.stdout, /permissionDecision/, "must not answer Codex's approval question");
+});
 
 test("native-hook injects stable Core, stores bounded metadata, and emits no marker when proxy is off", async () => {
   const caveHome = mkdtempSync(join(tmpdir(), "cave-native-"));
@@ -732,49 +745,55 @@ writeFileSync(process.env.CAVE_WRAP_DUMP, JSON.stringify({ args, dir, hooks: dir
   assert.doesNotMatch(second.hooks, /shrink-hook/);
 });
 
-// ── Codex: current native PreToolUse hard tier ───────────────────────────────
-test("hooks install codex adds one native PreToolUse rewrite and preserves user hooks", async () => {
+// ── Codex: rewrite retired, entry still cleaned up ───────────────────────────
+// shrinkHook declines every Codex tool event since #1037, so installing the hook
+// would register a callback with no behavior and report a rewrite that never
+// happens. `hooks install codex` now installs nothing and says why.
+test("hooks install codex installs no rewrite and touches no user file", async () => {
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
   const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
   const env = { ...process.env, NO_COLOR: "1", HOME: home, CAVEMAN_HOME: caveDir };
   mkdirSync(join(home, ".codex"), { recursive: true });
-  writeFileSync(join(home, ".codex", "hooks.json"), JSON.stringify({ hooks: { PreToolUse: [
+  const before = JSON.stringify({ hooks: { PreToolUse: [
     { hooks: [{ type: "command", command: "my-hook" }] },
-  ] } }, null, 2));
+  ] } }, null, 2);
+  writeFileSync(join(home, ".codex", "hooks.json"), before);
 
-  await runCli(["hooks", "install", "codex"], env);
-  await runCli(["hooks", "install", "codex"], env);
+  const out = await runCli(["hooks", "install", "codex"], env);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stderr, /#1037/, "must say why there is no rewrite");
+  assert.match(out.stderr, /caveman shrink -- <cmd>/, "must point at the manual path");
 
-  const hooks = JSON.parse(readFileSync(join(home, ".codex", "hooks.json"), "utf8")).hooks.PreToolUse;
-  assert.equal(hooks.filter((entry) => JSON.stringify(entry).includes("shrink-hook")).length, 1);
-  assert.ok(hooks.some((entry) => JSON.stringify(entry).includes("my-hook")));
-  assert.ok(existsSync(join(caveDir, "hooks", "codex.json")), "a marker must be written");
+  assert.equal(readFileSync(join(home, ".codex", "hooks.json"), "utf8"), before, "user's hooks.json must be byte-identical");
+  assert.ok(!existsSync(join(caveDir, "hooks", "codex.json")), "no marker for a hook that was not installed");
 });
 
-test("hooks install codex creates hooks.json when absent", async () => {
+test("hooks install codex does not create hooks.json when absent", async () => {
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
   const env = { ...process.env, NO_COLOR: "1", HOME: home, CAVEMAN_HOME: mkdtempSync(join(tmpdir(), "cave-dot-")) };
   const out = await runCli(["hooks", "install", "codex"], env);
   assert.equal(out.code, 0, out.stderr);
-  assert.ok(existsSync(join(home, ".codex", "hooks.json")));
+  assert.ok(!existsSync(join(home, ".codex", "hooks.json")), "must not create a config file to hold a dead hook");
 });
 
-test("hooks uninstall codex removes only Caveman hook", async () => {
+// Migration: an older caveman DID install this entry, so uninstall has to keep
+// removing it. Seeded directly rather than via `hooks install`, which no longer
+// writes it — otherwise this test would silently stop covering the upgrade path.
+test("hooks uninstall codex still removes a legacy shrink-hook entry", async () => {
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
   const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
   const env = { ...process.env, NO_COLOR: "1", HOME: home, CAVEMAN_HOME: caveDir };
   mkdirSync(join(home, ".codex"), { recursive: true });
   writeFileSync(join(home, ".codex", "hooks.json"), JSON.stringify({ hooks: { PreToolUse: [
     { hooks: [{ type: "command", command: "keep-me" }] },
+    { hooks: [{ type: "command", command: "/usr/local/bin/caveman shrink-hook" }] },
   ] } }, null, 2));
 
-  await runCli(["hooks", "install", "codex"], env);
   await runCli(["hooks", "uninstall", "codex"], env);
 
   const hooks = JSON.parse(readFileSync(join(home, ".codex", "hooks.json"), "utf8")).hooks.PreToolUse;
   assert.ok(hooks.some((entry) => JSON.stringify(entry).includes("keep-me")));
-  assert.ok(!hooks.some((entry) => JSON.stringify(entry).includes("shrink-hook")));
-  assert.ok(!existsSync(join(caveDir, "hooks", "codex.json")), "the marker must be removed");
+  assert.ok(!hooks.some((entry) => JSON.stringify(entry).includes("shrink-hook")), "the legacy entry must be cleaned up");
 });
 
 // ── opencode: plugin (hard tier, real RTK parity) ────────────────────────────
@@ -1069,7 +1088,7 @@ test("wrap gemini is zero-commit until a temp native extension exists", async ()
   assert.ok(!existsSync(join(home2, ".gemini", "settings.json")), "shrink:false must not install the hook");
 });
 
-test("hooks install labels Claude and current Codex as hard rewrites", async () => {
+test("hooks install labels Claude a hard rewrite and claims none for Codex", async () => {
   const mk = () => ({ ...process.env, NO_COLOR: "1", HOME: mkdtempSync(join(tmpdir(), "cave-home-")), CAVEMAN_HOME: mkdtempSync(join(tmpdir(), "cave-dot-")) });
 
   const hard = await runCli(["hooks", "install", "claude"], mk());
@@ -1077,9 +1096,13 @@ test("hooks install labels Claude and current Codex as hard rewrites", async () 
   assert.doesNotMatch(hard.stderr, /model nudge/, "a hard install must not be called a nudge");
   assert.match(hard.stderr, /auto-shrunk/, "hard footer claims auto-shrink");
 
+  // Codex rewrites nothing since #1037, so neither the per-agent line nor the
+  // footer may promise one — the footer is what a codex-only run actually reads.
   const codex = await runCli(["hooks", "install", "codex"], mk());
-  assert.match(codex.stderr, /rewrite hook installed/);
-  assert.match(codex.stderr, /auto-shrunk/);
+  assert.doesNotMatch(codex.stderr, /rewrite hook installed/);
+  assert.doesNotMatch(codex.stderr, /auto-shrunk/);
+  assert.doesNotMatch(codex.stderr, /model nudge/, "nothing was installed, so nothing nudges either");
+  assert.match(codex.stderr, /no command-output rewrite/);
 });
 
 // ── hooks install with no agent: fan out to every hookable agent on PATH ───────
@@ -1095,9 +1118,13 @@ test("hooks install (no agent) installs for every hookable agent detected on PAT
   const out = await runCli(["hooks", "install"], env);
   assert.equal(out.code, 0, out.stderr);
   assert.ok(existsSync(join(home, ".claude", "settings.json")), "claude (hard) hook installed");
-  assert.ok(existsSync(join(home, ".codex", "hooks.json")), "codex native hook installed");
   assert.ok(existsSync(join(home, ".config", "opencode", "plugins", "caveman-shrink.js")), "opencode (hard) plugin installed");
-  for (const id of ["claude", "codex", "opencode"]) assert.ok(existsSync(join(caveDir, "hooks", `${id}.json`)), `${id} marker written`);
+  for (const id of ["claude", "opencode"]) assert.ok(existsSync(join(caveDir, "hooks", `${id}.json`)), `${id} marker written`);
+  // Codex is detected and reported, but its rewrite is retired (#1037): a fan-out
+  // must not quietly write a dead hook into a host it just told the user it skipped.
+  assert.match(out.stderr, /no command-output rewrite/, "codex is reported, not silently skipped");
+  assert.ok(!existsSync(join(home, ".codex", "hooks.json")), "no dead codex hook from a fan-out");
+  assert.ok(!existsSync(join(caveDir, "hooks", "codex.json")), "codex marker not written");
   assert.ok(!existsSync(join(caveDir, "hooks", "aider.json")), "aider (no surface) is skipped — no marker");
 });
 
@@ -1136,8 +1163,12 @@ test("hooks directive coexists with native Codex hook and removes only its own b
   const env = { ...process.env, NO_COLOR: "1", HOME: home, CAVEMAN_HOME: caveDir };
   mkdirSync(join(home, ".codex"), { recursive: true });
   writeFileSync(join(home, ".codex", "AGENTS.md"), "# My rules\n");
+  // A legacy shrink-hook entry, as an older caveman installed it (#1037 retired the
+  // install, not the file): directives must leave it exactly where it is.
+  writeFileSync(join(home, ".codex", "hooks.json"), JSON.stringify({ hooks: { PreToolUse: [
+    { hooks: [{ type: "command", command: "/usr/local/bin/caveman shrink-hook" }] },
+  ] } }, null, 2));
 
-  await runCli(["hooks", "install", "codex"], env);
   const out = await runCli(["hooks", "install", "--directive", "exploration-offload-directive", "codex"], env);
   assert.equal(out.code, 0, out.stderr);
   assert.match(out.stderr, /directive 'exploration-offload-directive' added/, "install must announce itself");

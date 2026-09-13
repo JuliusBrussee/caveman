@@ -336,6 +336,23 @@ test("disable refuses a removed pre-existing file and keeps journal", async () =
   assert.ok(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")));
 });
 
+// `caveman enable codex` still writes a shrink-hook entry into ~/.codex/hooks.json,
+// but since #1037 that hook declines every Codex tool event. Reporting the component
+// off a substring of the hooks file therefore claimed a rewrite that no longer
+// happens. Codex is an installed, healthy integration WITHOUT command-output rewrite.
+test("doctor does not claim a Codex tool rewrite that shrink-hook declines", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  writeFileSync(join(fx.home, ".codex", "config.toml"), 'approval_policy = "never"\n');
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const out = await run(["doctor", "codex"], fx.env);
+  const result = JSON.parse(out.stdout);
+  assert.equal(result.components.tool_rewrite, false, "Codex commands are no longer rewritten");
+  // The rest of the integration is untouched: this is a claim fix, not a downgrade.
+  assert.equal(result.components.lifecycle_hooks, true);
+  assert.equal(result.components.routing, true);
+});
+
 test("doctor reports Codex routing degraded when auth lane changes", async () => {
   const fx = fixture();
   mkdirSync(join(fx.home, ".codex"), { recursive: true });
