@@ -75,11 +75,17 @@ function fakeCavemanDir(root, record) {
   const dir = path.join(root, 'fake-caveman-bin');
   fs.mkdirSync(dir, { recursive: true });
   if (process.platform === 'win32') {
+    // install.js's own portableInvocation() refuses to launch a `.cmd` shim
+    // via cmd.exe unless it recognizes it as an npm/pnpm-style Node shim
+    // (a line calling node on a sibling .js/.cjs/.mjs file); it launches that
+    // script directly with the running node binary instead. Match the same
+    // shape the gemini fixture in gemini-install.test.mjs already uses.
+    fs.writeFileSync(path.join(dir, 'caveman.js'),
+      "const fs = require('node:fs');\n"
+      + `fs.appendFileSync(${JSON.stringify(record)}, process.argv.slice(2).join('\\n') + '\\n\\n');\n`);
     fs.writeFileSync(path.join(dir, 'caveman.cmd'),
       '@echo off\r\n'
-      + `(for %%a in (%*) do echo %%a)>>"${record}"\r\n`
-      + `echo.>>"${record}"\r\n`
-      + 'exit /b 0\r\n');
+      + '"%~dp0\\node.exe" "%~dp0\\caveman.js" %*\r\n');
   } else {
     const file = path.join(dir, 'caveman');
     fs.writeFileSync(file,
