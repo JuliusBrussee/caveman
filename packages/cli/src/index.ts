@@ -5455,7 +5455,13 @@ async function spawnWrapped(
   // Direct mode: inherit the shell env with NO profile injection, stripping only
   // our own routing if it leaked in — so the agent talks straight to the provider
   // with its own key. Any unrelated base URL the user set themselves stays put.
-  const includeShrink = !opts.noShrink && wrapCompressEnabled(opts);
+  // Codex is excluded by design, and the README has said so all along: its runtime
+  // rejects the rewrite (openai/codex#18491). No door actually implemented that, and
+  // since #1037 shrinkHook declines every Codex tool event — so registering it here
+  // bought nothing but a node spawn per tool call. The persistent `caveman enable
+  // codex` door still writes the entry; removing it there needs a migration, since
+  // nativeHookEntriesHealthy would read every existing install as degraded.
+  const includeShrink = !opts.noShrink && wrapCompressEnabled(opts) && agent?.id !== "codex";
   let childArgs = cmdArgs;
   let env: NodeJS.ProcessEnv;
   try {
