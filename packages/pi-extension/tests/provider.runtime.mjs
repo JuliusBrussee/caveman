@@ -43,7 +43,7 @@ function harness(models) {
     },
   };
   const router = new ProviderRouter(pi, (message) => notices.push(message));
-  return { router, ctx, calls, notices, overrides, model: (id) => live().find((m) => m.id === id) };
+  return { router, pi, ctx, calls, notices, overrides, model: (id) => live().find((m) => m.id === id) };
 }
 
 test("a same-provider model with its own endpoint stays direct; the default keeps routing", async () => {
@@ -75,4 +75,26 @@ test("a provider with no published mount gets an actionable pass-through notice"
   await h.router.openGate(GATEWAY, h.ctx, {});
   assert.equal(h.router.routing(), false);
   assert.match(h.notices.at(-1), /no compat mount named "unlisted-relay" in the local proxy; add compat\.unlisted-relay\.base_url to caveman\.yaml to route it/);
+});
+
+test("closing a gate during setModel restores the direct selected model", async () => {
+  const h = harness([{ provider: "openai", id: "m", api: "openai-completions", baseUrl: "https://api.openai.com/v1" }]);
+  h.ctx.model = h.model("m");
+  let release;
+  let first = true;
+  h.pi.setModel = async (model) => {
+    if (first) {
+      first = false;
+      await new Promise((resolve) => { release = resolve; });
+    }
+    h.ctx.model = model;
+    return true;
+  };
+  const opening = h.router.openGate(GATEWAY, h.ctx);
+  const closing = h.router.closeGate(h.ctx);
+  assert.equal(h.overrides.size, 0, "close removes provider overrides before any await");
+  release();
+  await Promise.all([opening, closing]);
+  assert.equal(h.router.routing(), false);
+  assert.equal(h.ctx.model.baseUrl, "https://api.openai.com/v1", "late setModel must not leave the active model routed");
 });

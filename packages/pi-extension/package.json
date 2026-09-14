@@ -1,7 +1,7 @@
 {
   "name": "@caveman-ai/pi",
   "version": "0.1.0",
-  "description": "Native Caveman extension for the Pi coding agent \u2014 proxy routing, exact-recovery caveman_retrieve tool, native lifecycle events, Core injection, and tool-output shrinking.",
+  "description": "Native Caveman extension for Pi and Oh My Pi — proxy routing, exact recovery, session lifecycle, Core injection, and tool-output shrinking.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -19,28 +19,45 @@
       "./dist/index.mjs"
     ]
   },
+  "omp": {
+    "extensions": [
+      "./dist/omp.mjs"
+    ]
+  },
   "engines": {
     "node": ">=22.13"
   },
   "files": [
-    "dist",
+    "dist/index.mjs",
+    "dist/omp.mjs",
+    "LICENSE",
     "README.md"
   ],
   "scripts": {
     "build": "tsc --noEmit && node scripts/bundle.mjs",
     "lint": "tsc --noEmit",
     "prepack": "npm run build",
-    "test": "npm run build && node --test --test-force-exit tests/protocol.runtime.mjs tests/provider.runtime.mjs tests/recovery.runtime.mjs tests/portable-command.runtime.mjs tests/integration.runtime.mjs"
+    "test": "npm run build && node --test --test-force-exit tests/protocol.runtime.mjs tests/provider.runtime.mjs tests/recovery.runtime.mjs tests/portable-command.runtime.mjs tests/runtime.runtime.mjs tests/integration.runtime.mjs",
+    "test:omp": "npm run build && bun test tests/omp.runtime.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
+    "@oh-my-pi/pi-coding-agent": "*",
     "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": { "optional": true },
+    "@earendil-works/pi-coding-agent": { "optional": true },
+    "@oh-my-pi/pi-coding-agent": { "optional": true },
+    "typebox": { "optional": true }
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.84.2",
+    "@oh-my-pi/pi-coding-agent": "^18.1.17",
     "@types/node": "24.10.1",
     "esbuild": "0.28.1",
+    "typebox": "1.3.7",
     "typescript": "5.9.3"
   }
 }
