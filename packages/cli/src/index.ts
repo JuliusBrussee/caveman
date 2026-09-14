@@ -5668,7 +5668,13 @@ function applyHermesAuthEnv(env: NodeJS.ProcessEnv, gw: string, modeGw = gw) {
   if (key && name) env[name] = key;
 }
 
-async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon: boolean, pixelModels: string | undefined, pixelDensity: string | undefined, gw = gatewayURL(), purpose: "standard" | "codex-subscription" = "standard", observeEstimate = false): Promise<boolean> {
+// spawnLocalProxyProcess resolves the proxy binary, builds its env, and spawns
+// it detached + unref'd — the part every caller needs identically. Split out
+// of startWrapProxy so a caller that only wants to kick the proxy off (never
+// waiting to confirm it came up) doesn't have to either duplicate this env
+// assembly or pay for the readiness-poll loop below, which holds this
+// process's event loop open via a non-unref'd sleep() timer.
+function spawnLocalProxyProcess(mode: WrapRuntimeMode, mcpRecovery: boolean, toon: boolean, pixelModels: string | undefined, pixelDensity: string | undefined, gw: string, purpose: "standard" | "codex-subscription", observeEstimate: boolean): { host: string; port: number } | null {
   const bin = cavemanBin("caveman-proxy", "CAVEMAN_PROXY_BIN");
   const resolved = which(bin);
   if (!resolved) {
@@ -5677,7 +5683,7 @@ async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon:
     } else {
       process.stderr.write(`${mark("warn")} ${bin} not found; wrap will still launch, but no local compression/metering will run — run ${cyan("caveman setup")} to see what's missing\n`);
     }
-    return false;
+    return null;
   }
   const { host, port } = gatewayHostPort(gw);
   const env: NodeJS.ProcessEnv = {
@@ -5725,14 +5731,21 @@ async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon:
     process.stderr.write(`${mark("warn")} could not start ${bin}: ${(error as Error).message}\n`);
   });
   child.unref();
+  return { host, port };
+}
+
+async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon: boolean, pixelModels: string | undefined, pixelDensity: string | undefined, gw = gatewayURL(), purpose: "standard" | "codex-subscription" = "standard", observeEstimate = false): Promise<boolean> {
+  const spawned = spawnLocalProxyProcess(mode, mcpRecovery, toon, pixelModels, pixelDensity, gw, purpose, observeEstimate);
+  if (!spawned) return false;
+  const { host, port } = spawned;
   for (let i = 0; i < 20; i++) {
     await sleep(100);
     if (await portListening(host, port)) {
-      process.stderr.write(dim(`→ started Caveman proxy on ${host}:${port} (${env.CAVEMAN_MODE})\n`));
+      process.stderr.write(dim(`→ started Caveman proxy on ${host}:${port} (${mode})\n`));
       return true;
     }
   }
-  process.stderr.write(`${mark("warn")} started ${bin}, but proxy did not become ready on ${host}:${port}\n`);
+  process.stderr.write(`${mark("warn")} started ${cavemanBin("caveman-proxy", "CAVEMAN_PROXY_BIN")}, but proxy did not become ready on ${host}:${port}\n`);
   return false;
 }
 
@@ -7977,28 +7990,37 @@ function enableNative(argv: string[]) {
       // leaves that window open indefinitely: config.toml/settings now route
       // every request through a proxy nothing has confirmed is listening,
       // which is exactly what turns a fresh Codex session into a mid-stream
-      // disconnect instead of a connection error. Best-effort, synchronous,
-      // fire-and-forget spawn — same fail-open contract as the hook. No
-      // readiness wait here, unlike startWrapProxy: that wait loop's sleep()
-      // uses a non-unref'd timer, so awaiting it would hold this command's
-      // own process open for up to two seconds on every enable where nothing
-      // is listening yet — the common case this exists to cover.
+      // disconnect instead of a connection error. Best-effort, synchronous
+      // spawn via the same spawnLocalProxyProcess() startWrapProxy uses, with
+      // the exact same purpose/mode/recovery derivation agentShortcut already
+      // applies right after this same enableNative() call — including the
+      // codex-subscription case, where purpose is deliberately NOT "standard"
+      // (a subscription proxy is CAVEMAN_PROXY_OWNER=start, not wrap; see
+      // spawnLocalProxyProcess). Same explicit CAVEMAN_RECOVERY stamping too
+      // (never inherited from process.env — see the comment in
+      // spawnLocalProxyProcess). No readiness wait here, unlike
+      // startWrapProxy: that wait loop's sleep() uses a non-unref'd timer, so
+      // awaiting it would hold this command's own process open for up to two
+      // seconds on every enable where nothing is listening yet — the common
+      // case this exists to cover. A prior enable, or any other caveman door,
+      // commonly already has a proxy up on this port, so probe for that first
+      // (a single fast TCP connect, not the retry loop) — the redundant
+      // second process that skipping this would spawn is harmless (it just
+      // fails to bind and exits, since run state is only written after the
+      // listener binds), but free is better than harmless. Fire-and-forget:
+      // this async IIFE's own await never blocks enableNative's return.
       if (agent !== "aider" && wrapMode(gw) === "local") {
-        try {
-          const proxyBin = cavemanBin("caveman-proxy", "CAVEMAN_PROXY_BIN");
-          const resolved = which(proxyBin);
-          if (resolved) {
+        void (async () => {
+          try {
             const { host, port } = gatewayHostPort(gw);
-            const child = spawn(resolved, [], {
-              stdio: "ignore",
-              env: { ...process.env, CAVEMAN_PROXY_OWNER: "enable", CAVEMAN_MODE: defaultWrapOptions().mode, CAVEMAN_LISTEN: `${host}:${port}` },
-              detached: true,
-              windowsHide: true,
-            });
-            child.on("error", () => { /* fail-open, same as the SessionStart hook */ });
-            child.unref();
-          }
-        } catch { /* fail-open, same as the SessionStart hook and the shortcut door */ }
+            if (await portListening(host, port)) return;
+            const subscription = agent === "codex" && detectCodexWrapAuthMode() === "subscription";
+            const opts = defaultWrapOptions();
+            const mode = subscription && opts.mode === "pixel" ? "record" : opts.mode;
+            const recovery = Boolean(probeMcpBinary()?.probe.current);
+            spawnLocalProxyProcess(mode, recovery, subscription ? false : opts.toon, opts.pixelModels, opts.pixelDensity, gw, subscription ? "codex-subscription" : "standard", false);
+          } catch { /* fail-open, same as the SessionStart hook and the shortcut door */ }
+        })();
       }
       return "enabled" as const;
     });
