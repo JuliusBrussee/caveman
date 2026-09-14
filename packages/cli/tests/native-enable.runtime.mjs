@@ -22,9 +22,14 @@ if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
 fi
 `, { mode: 0o755 });
   const proxy = join(bin, "caveman-proxy");
+  // The bare-spawn branch (no "version --json" args — how enable/wrap actually
+  // launch the proxy) only records anything when CAVEMAN_PROXY_SPAWN_LOG is
+  // set, so it stays silent for the other tests in this file that never opt in.
   writeFileSync(proxy, `#!/bin/sh
 if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
   printf '%s\n' '{"version":"1.0.0","capabilities":["run_state","native_runtime_v1","native_hook_bridge_v1","typed_ccr"]}'
+elif [ -n "$CAVEMAN_PROXY_SPAWN_LOG" ]; then
+  printf 'listen=%s recovery=%s owner=%s\n' "$CAVEMAN_LISTEN" "$CAVEMAN_RECOVERY" "$CAVEMAN_PROXY_OWNER" >> "$CAVEMAN_PROXY_SPAWN_LOG"
 fi
 `, { mode: 0o755 });
   writeFileSync(join(bin, "caveman"), `#!/usr/bin/env node
@@ -274,6 +279,40 @@ test("enable codex after a binary path change keeps one caveman hook per event",
     assert.equal(native.length, 1, `${event} has ${native.length} caveman native hooks`);
     assert.match(JSON.stringify(native[0]), /moved-caveman-proxy/, `${event} must point at the current binary`);
   }
+});
+
+// enable writes config.toml to route every Codex request through the local
+// proxy but, until this test, nothing asserted the proxy is actually spawned
+// — config.toml pointed at a proxy that might never be running (#1051). Also
+// guards the two follow-up review findings on that fix: CAVEMAN_RECOVERY must
+// be recomputed, never let a stray inherited value survive into the spawned
+// proxy's env, and CAVEMAN_PROXY_OWNER must be "wrap" (the hook-revived
+// proxy's 30-minute-idle-exit lifecycle), not the immortal one "start" gets.
+test("enable codex spawns the local proxy with explicit recovery/owner, not inherited env", async () => {
+  const fx = fixture();
+  const spawnLog = join(fx.home, "proxy-spawn.log");
+  // A stray CAVEMAN_RECOVERY in the parent env (left over from an earlier
+  // wrap/start in the same shell) must not leak into the proxy this spawns —
+  // the fixture's caveman-mcp stub reports mcp_recovery, so the correctly
+  // recomputed value is "mcp"; this planted value is neither that nor empty,
+  // so it only proves anything if it does NOT show up in the log.
+  const env = { ...fx.env, CAVEMAN_PROXY_SPAWN_LOG: spawnLog, CAVEMAN_RECOVERY: "stale-leaked-value" };
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+
+  const out = await run(["enable", "codex"], env);
+  assert.equal(out.code, 0, out.stderr);
+
+  // The spawn is fire-and-forget from enable's own perspective; give the
+  // detached stub a moment to write its log line.
+  for (let i = 0; i < 20 && !existsSync(spawnLog); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(existsSync(spawnLog), "enable never spawned the local proxy");
+  const logged = readFileSync(spawnLog, "utf8").trim();
+  assert.match(logged, /listen=127\.0\.0\.1:8787\b/, "spawned proxy must listen where config.toml just routed Codex to");
+  assert.match(logged, /recovery=mcp\b/, "CAVEMAN_RECOVERY must be recomputed from the current MCP install, not inherited");
+  assert.doesNotMatch(logged, /stale-leaked-value/, "a stray parent-env CAVEMAN_RECOVERY must never survive into the spawn");
+  assert.match(logged, /owner=wrap\b/, "enable's proxy must share the hook-revived (wrap) lifecycle, not the immortal one \"start\" gets");
 });
 
 test("enable fails before host writes when current MCP binary is missing", async () => {
