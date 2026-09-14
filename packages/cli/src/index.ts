@@ -13861,11 +13861,14 @@ async function nativeHook(argv: string[]) {
   // the time, which flips it without touching config.toml. That leaves the
   // route stale until someone remembers to run `caveman doctor codex --fix`
   // by hand. Just do what that command would do, right here at session
-  // start, so a stale route heals itself instead of surfacing as an
-  // opaque 401 from OpenAI three requests into someone's session.
+  // start — but only for that specific drift. `degraded` also covers pack
+  // version bumps, missing hooks, MCP recovery being down, etc., and none
+  // of those should get a silent config rewrite just because Codex started;
+  // those still surface through `caveman doctor codex` like normal.
   if (normalizedEvent === "SessionStart" && agent === "codex") {
     try {
-      if (nativeIntegrationStatus("codex").state === "degraded") repairNativeAgent("codex");
+      const status = nativeIntegrationStatus("codex");
+      if (status.state === "degraded" && !status.components.routing) repairNativeAgent("codex");
     } catch {
       // Best-effort; a real problem still shows up in `caveman doctor codex`.
     }
