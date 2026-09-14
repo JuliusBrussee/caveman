@@ -7970,6 +7970,29 @@ function enableNative(argv: string[]) {
           ? `  lifecycle/Core/tool rewrite: bundled Pi extension -> ${nativeHookCommand(agent)}\n`
           : `  lifecycle/Core/tool rewrite: ${nativeHookCommand(agent)}${agent === "hermes" ? " via native plugin" : ` + ${cavemanBinForHook()} shrink-hook`}\n`);
       applyNativeMutations(agent, profile, mutations);
+      // The native SessionStart hook autostarts the proxy, but only after the
+      // host approves the installed hooks (Codex gates this behind /hooks) —
+      // and `enable` run on its own, outside the `caveman <agent>` shortcut
+      // (which has this same best-effort start at its own call site), leaves
+      // that window open indefinitely: config.toml/settings now route every
+      // request through a proxy nothing has confirmed is listening, which is
+      // exactly what breaks a fresh Codex session with a mid-stream disconnect
+      // instead of a connection error. Fire-and-forget so this command's own
+      // success path never blocks on it. Same fail-open contract as the hook.
+      if (agent !== "aider") {
+        void (async () => {
+          try {
+            const { host, port } = gatewayHostPort(gw);
+            if (wrapMode(gw) === "local" && !(await portListening(host, port))) {
+              const subscription = agent === "codex" && detectCodexWrapAuthMode() === "subscription";
+              const opts = defaultWrapOptions();
+              const mode = subscription && opts.mode === "pixel" ? "record" : opts.mode;
+              const recovery = Boolean(probeMcpBinary()?.probe.current);
+              await startWrapProxy(mode, recovery, subscription ? false : opts.toon, opts.pixelModels, opts.pixelDensity, gw, subscription ? "codex-subscription" : "standard", false);
+            }
+          } catch { /* fail-open, same as the SessionStart hook and the shortcut door */ }
+        })();
+      }
       return "enabled" as const;
     });
     if (outcome === "already") {
