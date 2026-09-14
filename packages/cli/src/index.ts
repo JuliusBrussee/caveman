@@ -7973,25 +7973,32 @@ function enableNative(argv: string[]) {
       // The native SessionStart hook autostarts the proxy, but only after the
       // host approves the installed hooks (Codex gates this behind /hooks) —
       // and `enable` run on its own, outside the `caveman <agent>` shortcut
-      // (which has this same best-effort start at its own call site), leaves
-      // that window open indefinitely: config.toml/settings now route every
-      // request through a proxy nothing has confirmed is listening, which is
-      // exactly what breaks a fresh Codex session with a mid-stream disconnect
-      // instead of a connection error. Fire-and-forget so this command's own
-      // success path never blocks on it. Same fail-open contract as the hook.
-      if (agent !== "aider") {
-        void (async () => {
-          try {
+      // (which has its own blocking pre-start at its call site), otherwise
+      // leaves that window open indefinitely: config.toml/settings now route
+      // every request through a proxy nothing has confirmed is listening,
+      // which is exactly what turns a fresh Codex session into a mid-stream
+      // disconnect instead of a connection error. Best-effort, synchronous,
+      // fire-and-forget spawn — same fail-open contract as the hook. No
+      // readiness wait here, unlike startWrapProxy: that wait loop's sleep()
+      // uses a non-unref'd timer, so awaiting it would hold this command's
+      // own process open for up to two seconds on every enable where nothing
+      // is listening yet — the common case this exists to cover.
+      if (agent !== "aider" && wrapMode(gw) === "local") {
+        try {
+          const proxyBin = cavemanBin("caveman-proxy", "CAVEMAN_PROXY_BIN");
+          const resolved = which(proxyBin);
+          if (resolved) {
             const { host, port } = gatewayHostPort(gw);
-            if (wrapMode(gw) === "local" && !(await portListening(host, port))) {
-              const subscription = agent === "codex" && detectCodexWrapAuthMode() === "subscription";
-              const opts = defaultWrapOptions();
-              const mode = subscription && opts.mode === "pixel" ? "record" : opts.mode;
-              const recovery = Boolean(probeMcpBinary()?.probe.current);
-              await startWrapProxy(mode, recovery, subscription ? false : opts.toon, opts.pixelModels, opts.pixelDensity, gw, subscription ? "codex-subscription" : "standard", false);
-            }
-          } catch { /* fail-open, same as the SessionStart hook and the shortcut door */ }
-        })();
+            const child = spawn(resolved, [], {
+              stdio: "ignore",
+              env: { ...process.env, CAVEMAN_PROXY_OWNER: "enable", CAVEMAN_MODE: defaultWrapOptions().mode, CAVEMAN_LISTEN: `${host}:${port}` },
+              detached: true,
+              windowsHide: true,
+            });
+            child.on("error", () => { /* fail-open, same as the SessionStart hook */ });
+            child.unref();
+          }
+        } catch { /* fail-open, same as the SessionStart hook and the shortcut door */ }
       }
       return "enabled" as const;
     });
