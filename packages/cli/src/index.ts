@@ -6218,7 +6218,11 @@ function codexCavemanProviderToml(gw: string, subscription = true): string {
     `model_provider = "caveman"`,
     `[model_providers.caveman]`,
     `name = "Caveman"`,
-    `base_url = ${JSON.stringify(subscription ? appendUrlPath(gw, "/chatgpt") : appendUrlPath(gw, "/w/codex"))}`,
+    // codex's OpenAI-Responses client appends "/responses" straight onto base_url
+    // itself (same as it does for the real api.openai.com), so unlike the other
+    // agents we route by slug alone, this one needs the "/v1" baked in here or
+    // the proxy 404s with cave_route_not_found before it ever reaches OpenAI.
+    `base_url = ${JSON.stringify(subscription ? appendUrlPath(gw, "/chatgpt") : appendUrlPath(gw, "/w/codex/v1"))}`,
     `wire_api = "responses"`,
     `requires_openai_auth = true`,
   ].join("\n");
@@ -7393,7 +7397,7 @@ function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const configBefore = fileBytes(configPath);
   const subscription = detectCodexWrapAuthMode() === "subscription";
   const native = codexNativeConfig(configBefore?.toString("utf8") ?? "", gw, subscription, mcpBinary);
-  const route = appendUrlPath(gw, subscription ? "/chatgpt" : "/w/codex");
+  const route = appendUrlPath(gw, subscription ? "/chatgpt" : "/w/codex/v1");
   return [
     { file: hooksPath, before: hooksBefore, after: Buffer.from(JSON.stringify(hooks, null, 2) + "\n"), kind: "codex-hooks" },
     {
@@ -8410,7 +8414,7 @@ function nativeIntegrationStatus(agent: NativeAgent) {
   const coreResolution = runtimeConfig.resolution.values["think.core"];
   const coreConfigured = coreResolution.value === true;
   const mcp = probeMcpBinary();
-  const expectedRoute = appendUrlPath(gatewayURL(), agent === "claude" ? "/w/claude" : agent === "hermes" ? "/w/hermes" : agent === "gemini" ? "/w/gemini" : agent === "opencode" ? "/w/opencode" : agent === "pi" ? "/w/pi" : agent === "aider" ? "/w/aider/openai/v1" : detectCodexWrapAuthMode() === "subscription" ? "/chatgpt" : "/w/codex");
+  const expectedRoute = appendUrlPath(gatewayURL(), agent === "claude" ? "/w/claude" : agent === "hermes" ? "/w/hermes" : agent === "gemini" ? "/w/gemini" : agent === "opencode" ? "/w/opencode" : agent === "pi" ? "/w/pi" : agent === "aider" ? "/w/aider/openai/v1" : detectCodexWrapAuthMode() === "subscription" ? "/chatgpt" : "/w/codex/v1");
   const routeKind: NativeMutation["kind"] = agent === "claude" ? "claude-settings" : agent === "codex" ? "codex-config" : agent === "hermes" ? "hermes-config" : agent === "gemini" ? "gemini-env" : agent === "opencode" ? "opencode-config" : agent === "pi" ? "pi-extension" : "aider-config";
   const routeOperation = journal?.operations.find((operation) => operation.kind === routeKind);
   // Pi's artifact encodes no route: the extension resolves the gateway at
@@ -13849,6 +13853,21 @@ async function nativeHook(argv: string[]) {
       }
     } catch {
       // Runtime startup is fail-open; host session and Core still proceed.
+    }
+  }
+
+  // Codex's native config.toml bakes in the auth mode (subscription vs
+  // api-key) at install time, but people run `codex login` afterwards all
+  // the time, which flips it without touching config.toml. That leaves the
+  // route stale until someone remembers to run `caveman doctor codex --fix`
+  // by hand. Just do what that command would do, right here at session
+  // start, so a stale route heals itself instead of surfacing as an
+  // opaque 401 from OpenAI three requests into someone's session.
+  if (normalizedEvent === "SessionStart" && agent === "codex") {
+    try {
+      if (nativeIntegrationStatus("codex").state === "degraded") repairNativeAgent("codex");
+    } catch {
+      // Best-effort; a real problem still shows up in `caveman doctor codex`.
     }
   }
 

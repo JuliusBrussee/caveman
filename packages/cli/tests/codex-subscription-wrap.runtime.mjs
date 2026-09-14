@@ -18,7 +18,7 @@ function sha256(bytes) {
 }
 
 function attributed(gw) {
-  return `${gw.replace(/\/+$/, "")}/w/codex`;
+  return `${gw.replace(/\/+$/, "")}/w/codex/v1`;
 }
 
 function snapshotTree(root) {
