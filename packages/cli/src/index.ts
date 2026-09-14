@@ -13187,6 +13187,9 @@ async function shrinkHook() {
   const isBash = tool === "Bash";                // Claude Code + the opencode plugin
   const isCodex = tool === "shell" || tool === "shell_command" || tool === "exec_command";
   if (!isGemini && !isBash && !isCodex) process.exit(0);
+  // Windows hosts may label PowerShell commands as "Bash" without identifying
+  // the execution shell. Preserve commands until a shell-specific contract exists.
+  if (process.platform === "win32") process.exit(0);
   const command = evt.tool_input?.command;
   if (typeof command !== "string" || !shouldShrink(command)) process.exit(0);
   // updatedInput.command executes in host shell (Git Bash on Claude Windows),

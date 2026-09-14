@@ -71,7 +71,7 @@ function writeWrapConfig(home, wrap) {
 
 // A noisy, finite, non-interactive command is rewritten to run through
 // `caveman shrink` — the RTK-style command-output compression, recoverable.
-test("shrink-hook rewrites a noisy command through caveman shrink", async () => {
+test("shrink-hook rewrites a noisy command through caveman shrink", { skip: process.platform === "win32" }, async () => {
   const out = await runHook({ tool_name: "Bash", tool_input: { command: "git status" } });
   assert.equal(out.code, 0, out.stderr);
   const o = JSON.parse(out.stdout);
@@ -79,19 +79,45 @@ test("shrink-hook rewrites a noisy command through caveman shrink", async () => 
   assert.match(o.hookSpecificOutput.updatedInput.command, /shrink -- git status$/);
 });
 
-test("shrink-hook rewrites cargo test", async () => {
+test("shrink-hook rewrites cargo test", { skip: process.platform === "win32" }, async () => {
   const out = await runHook({ tool_name: "Bash", tool_input: { command: "cargo test --all" } });
   const o = JSON.parse(out.stdout);
   assert.match(o.hookSpecificOutput.updatedInput.command, /shrink -- cargo test --all$/);
 });
 
-test("shrink-hook emits Codex allow + updatedInput for exec_command", async () => {
+test("shrink-hook emits Codex allow + updatedInput for exec_command", { skip: process.platform === "win32" }, async () => {
   const out = await runHook({ tool_name: "exec_command", tool_input: { command: "git status" } });
   assert.equal(out.code, 0, out.stderr);
   const parsed = JSON.parse(out.stdout);
   assert.equal(parsed.hookSpecificOutput.permissionDecision, "allow");
   assert.match(parsed.hookSpecificOutput.updatedInput.command, /shrink -- git status$/);
 });
+
+for (const tool of ["Bash", "shell", "shell_command", "exec_command", "run_shell_command"]) {
+  test(`shrink-hook preserves Windows Codex ${tool} commands executable by PowerShell`, { skip: process.platform !== "win32" }, async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "caveman-powershell-"));
+    const init = spawnSync("git.exe", ["init", "--quiet", cwd], { encoding: "utf8" });
+    assert.equal(init.status, 0, init.stderr);
+    writeFileSync(join(cwd, "file with spaces.txt"), "first\n");
+    assert.equal(spawnSync("git.exe", ["add", "file with spaces.txt"], { cwd }).status, 0);
+    writeFileSync(join(cwd, "file with spaces.txt"), "changed\n");
+    const env = { ...process.env, CAVEMAN_NATIVE_PROFILE: "full-safe", CAVEMAN_NATIVE_MODE: "safe" };
+    for (const command of ["git diff -- 'file with spaces.txt'", "git rev-parse --verify missing-test-ref"]) {
+      const out = await runHook({ tool_name: tool, tool_input: { command } }, env);
+      assert.equal(out.code, 0, out.stderr);
+      assert.equal(out.stdout, "", "unknown Windows shell must not be rewritten");
+      const args = ["-NoProfile", "-NonInteractive", "-Command", command + "; exit $LASTEXITCODE"];
+      const before = spawnSync("powershell.exe", args, { cwd, encoding: "utf8" });
+      const rewritten = out.stdout ? JSON.parse(out.stdout).hookSpecificOutput.updatedInput.command : command;
+      const after = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", rewritten + "; exit $LASTEXITCODE"], { cwd, encoding: "utf8" });
+      assert.equal(after.status, before.status);
+      assert.equal(after.stdout, before.stdout);
+      assert.equal(after.stderr, before.stderr);
+      assert.doesNotMatch(after.stderr, /ParserError|Unexpected token/);
+      assert.equal(after.status === 0, command.startsWith("git diff"));
+    }
+  });
+}
 
 test("native-hook injects stable Core, stores bounded metadata, and emits no marker when proxy is off", async () => {
   const caveHome = mkdtempSync(join(tmpdir(), "cave-native-"));
@@ -984,7 +1010,7 @@ test("the generated opencode plugin rewrites a noisy bash command and is byte-sa
 // ── Gemini: shrink-hook emits Gemini's override shape (not Claude's) ──────────
 // Gemini's run_shell_command uses hookSpecificOutput.tool_input (snake_case, merge),
 // NOT Claude's updatedInput/hookEventName — emitting the wrong shape is a silent no-op.
-test("shrink-hook emits Gemini's tool_input override for run_shell_command", async () => {
+test("shrink-hook emits Gemini's tool_input override for run_shell_command", { skip: process.platform === "win32" }, async () => {
   const out = await runHook({ tool_name: "run_shell_command", tool_input: { command: "git status" } });
   assert.equal(out.code, 0, out.stderr);
   const o = JSON.parse(out.stdout);
