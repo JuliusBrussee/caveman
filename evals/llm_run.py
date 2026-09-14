@@ -73,6 +73,11 @@ SNAPSHOT = EVALS / "snapshots" / (
     "results.json" if LANG == "en" else f"results.{LANG}.json"
 )
 
+if LANG not in TERSE_PREFIXES:
+    raise SystemExit(
+        f"CAVEMAN_EVAL_LANG={LANG}: no terse control in TERSE_PREFIXES; "
+        f"add one next to prompts/{LANG}.txt"
+    )
 TERSE_PREFIX = TERSE_PREFIXES[LANG]
 
 # Isolate the call from the local machine: no settings/hooks, no CLAUDE.md
