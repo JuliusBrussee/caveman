@@ -346,7 +346,7 @@ func TestNewNamed_ForwardsOpenCodeSessionHeaders(t *testing.T) {
 		t.Errorf("anthropic-version = %q, want %q", got, "2023-06-01")
 	}
 
-	// Another named mount gets none of the headers.
+	// Another named mount preserves provider-defined end-to-end headers too.
 	other := mustNamed(t, "other", "https://api.example.test")
 	otherReq := httptest.NewRequest(http.MethodPost, "/compat/other/v1/chat/completions", nil)
 	for name, value := range inbound {
@@ -357,8 +357,8 @@ func TestNewNamed_ForwardsOpenCodeSessionHeaders(t *testing.T) {
 		t.Fatalf("SanitizeAndMapHeaders on the other mount: %v", err)
 	}
 	for name := range inbound {
-		if got := otherOut.Get(name); got != "" {
-			t.Errorf("other mount %s = %q, want no header", name, got)
+		if got := otherOut.Get(name); got != inbound[name] {
+			t.Errorf("other mount %s = %q, want %q", name, got, inbound[name])
 		}
 	}
 }

@@ -147,12 +147,15 @@ func TestSanitizeAndMapHeaders_NoKeyLeakAndCorrectMapping(t *testing.T) {
 		t.Run(c.provider, func(t *testing.T) {
 			b := Base{Provider: c.provider}
 			req, _ := http.NewRequest(http.MethodPost, "/x", nil)
-			// Inbound client headers that MUST NOT leak upstream:
+			// Inbound proxy credentials and hop-by-hop headers must not leak upstream.
 			req.Header.Set("authorization", "Bearer CLIENT-CAVE-KEY")
 			req.Header.Set("x-cave-api-key", "cave_live_clientclient_secret")
 			req.Header.Set("x-cave-upstream-key", "should-not-be-copied-verbatim")
 			req.Header.Set("content-type", "application/json")
-			req.Header.Set("x-internal-secret", "nope")
+			req.Header.Set("x-opencode-session", "session-123")
+			req.Header.Set("x-provider-feature", "enabled")
+			req.Header.Set("connection", "x-hop-private")
+			req.Header.Set("x-hop-private", "nope")
 
 			out, err := b.SanitizeAndMapHeaders(req.Context(), req, Credential{Key: "UPSTREAM-PROVIDER-KEY"}, nil)
 			if err != nil {
@@ -180,19 +183,22 @@ func TestSanitizeAndMapHeaders_NoKeyLeakAndCorrectMapping(t *testing.T) {
 					}
 				}
 			}
-			// x-cave-* and arbitrary inbound secrets are not forwarded.
+			// Caveman-private and hop-by-hop headers are not forwarded.
 			if out.Get("x-cave-api-key") != "" {
 				t.Error("x-cave-api-key forwarded upstream")
 			}
 			if out.Get("x-cave-upstream-key") != "" {
 				t.Error("x-cave-upstream-key forwarded upstream")
 			}
-			if out.Get("x-internal-secret") != "" {
-				t.Error("non-allowlisted x-internal-secret forwarded upstream")
+			if out.Get("connection") != "" || out.Get("x-hop-private") != "" {
+				t.Error("hop-by-hop header forwarded upstream")
 			}
-			// Allowlisted passthrough still works.
+			// Provider-defined end-to-end headers pass through without an allowlist.
 			if out.Get("content-type") != "application/json" {
 				t.Error("content-type should pass through")
+			}
+			if out.Get("x-opencode-session") != "session-123" || out.Get("x-provider-feature") != "enabled" {
+				t.Error("provider-defined header was dropped")
 			}
 		})
 	}
