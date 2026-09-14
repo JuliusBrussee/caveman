@@ -190,12 +190,18 @@ function safeWriteFlag(flagPath, content) {
             return;
           }
         } else {
-          const home = os.homedir();
-          const normalizedReal = path.resolve(realFlagDir);
-          const normalizedHome = path.resolve(home);
-          if (!normalizedReal.toLowerCase().startsWith(normalizedHome.toLowerCase() + path.sep) &&
-              normalizedReal.toLowerCase() !== normalizedHome.toLowerCase()) {
-            if (debug) process.stderr.write(`[caveman] safeWriteFlag: symlink target ${normalizedReal} is outside home directory ${normalizedHome}\n`);
+          // The home-prefix check used to live here, comparing the resolved
+          // symlink target against os.homedir(). That is the wrong proxy on
+          // win32: a directory junction (e.g. ~/.claude junctioned to another
+          // drive, the same "legitimate symlinked config dir" case this branch
+          // exists to allow) resolves to a realpath that does not start with
+          // the home directory, so the write was refused through the very
+          // junction this code's own comments say it should tolerate. Test
+          // what actually matters instead: can the current user write there.
+          try {
+            fs.accessSync(realFlagDir, fs.constants.W_OK);
+          } catch (e) {
+            if (debug) process.stderr.write(`[caveman] safeWriteFlag: symlink target ${realFlagDir} is not writable by current user\n`);
             return;
           }
         }
@@ -268,6 +274,64 @@ function safeWriteFlag(flagPath, content) {
         }
       }
     }
+  } catch (e) {
+    // Silent fail — flag is best-effort
+  }
+}
+
+// Symlink-safe flag file delete. Symmetric with safeWriteFlag: resolves
+// through a symlinked/junctioned parent the same way (ownership check on
+// Unix, writable-parent check on win32) and refuses to touch a target that
+// is itself a symlink, before unlinking. Without this, any caller that wants
+// to clear the flag could delete straight through a junction that
+// safeWriteFlag would refuse to write through in the first place — a
+// write/delete asymmetry that lets the flag be destroyed but never
+// recreated on that machine.
+//
+// Silent-fails on any filesystem error — the flag is best-effort.
+function safeDeleteFlag(flagPath) {
+  const debug = process.env.CAVEMAN_DEBUG === '1';
+  try {
+    const flagDir = path.dirname(flagPath);
+
+    let realFlagDir;
+    try {
+      const lstat = fs.lstatSync(flagDir);
+      if (lstat.isSymbolicLink()) {
+        realFlagDir = fs.realpathSync(flagDir);
+        const realStat = fs.statSync(realFlagDir);
+        if (!realStat.isDirectory()) {
+          if (debug) process.stderr.write(`[caveman] safeDeleteFlag: symlink target ${realFlagDir} is not a directory\n`);
+          return;
+        }
+        if (typeof process.getuid === 'function') {
+          if (realStat.uid !== process.getuid()) {
+            if (debug) process.stderr.write(`[caveman] safeDeleteFlag: symlink target ${realFlagDir} owned by uid ${realStat.uid}, not current user ${process.getuid()}\n`);
+            return;
+          }
+        } else {
+          try {
+            fs.accessSync(realFlagDir, fs.constants.W_OK);
+          } catch (e) {
+            if (debug) process.stderr.write(`[caveman] safeDeleteFlag: symlink target ${realFlagDir} is not writable by current user\n`);
+            return;
+          }
+        }
+      } else {
+        realFlagDir = flagDir;
+      }
+    } catch (e) {
+      return;
+    }
+
+    const realFlagPath = path.join(realFlagDir, path.basename(flagPath));
+    try {
+      if (fs.lstatSync(realFlagPath).isSymbolicLink()) return;
+    } catch (e) {
+      return;
+    }
+
+    fs.unlinkSync(realFlagPath);
   } catch (e) {
     // Silent fail — flag is best-effort
   }
@@ -493,7 +557,7 @@ function writeSessionMode(claudeDir, sessionId, modeOrNull) {
 
   const legacy = legacyFlagPath(claudeDir);
   if (canonical === 'off') {
-    try { fs.unlinkSync(legacy); } catch (e) { /* already absent */ }
+    safeDeleteFlag(legacy);
   } else {
     safeWriteFlag(legacy, canonical);
   }
@@ -726,7 +790,7 @@ function rulesetBanner(mode) {
 
 module.exports = {
   getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES,
-  safeWriteFlag, readFlag, appendFlag, readHistory,
+  safeWriteFlag, safeDeleteFlag, readFlag, appendFlag, readHistory,
   recordModeChange, MODE_LOG_BASENAME,
   // Per-session state
   SESSIONS_DIRNAME, FLAG_BASENAME, PREV_BASENAME,
