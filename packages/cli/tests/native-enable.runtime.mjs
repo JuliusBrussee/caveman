@@ -370,6 +370,59 @@ test("doctor reports a present but unlaunchable host as unavailable", async () =
   assert.equal(result.version_probe_error, "version_probe_exit_127");
 });
 
+test("a native install honors think.shrink=false, and a repair keeps the entry out", async () => {
+  const fx = fixture();
+
+  // Accept control first: with the rewrite ON the entry is written, so the
+  // assertions below separate "off is honored" from "nothing was written".
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  assert.match(readFileSync(settingsPath, "utf8"), /shrink-hook/);
+
+  const configDir = join(fx.home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { shrink: false } }, null, 2));
+
+  // Turning the switch off makes the existing install genuinely out of sync,
+  // and doctor says so instead of calling an unwanted entry healthy.
+  const degraded = await run(["doctor", "claude"], fx.env);
+  assert.notEqual(degraded.code, 0);
+  assert.equal(JSON.parse(degraded.stdout).state, "degraded");
+
+  // ...and the repair the CLI itself recommends now HONORS the choice. Before
+  // #1049 this is where the manual removal was undone: --fix rewrote the entry
+  // back in, every time, and `caveman disable` was the only way out.
+  const repaired = await run(["doctor", "claude", "--fix"], fx.env);
+  assert.equal(repaired.code, 0, repaired.stderr);
+  const afterFix = readFileSync(settingsPath, "utf8");
+  assert.doesNotMatch(afterFix, /shrink-hook/, "doctor --fix must honor think.shrink=false");
+  // ...and takes nothing else with it.
+  assert.match(afterFix, /native-hook claude/);
+  assert.equal(JSON.parse(afterFix).env.ANTHROPIC_BASE_URL, "http://127.0.0.1:8787/w/claude");
+
+  // The install is healthy again, so nothing keeps nagging the user to --fix.
+  const healthy = await run(["doctor", "claude"], fx.env);
+  assert.equal(JSON.parse(healthy.stdout).state, "installed");
+
+  // A second repair is a no-op rather than a reinstatement.
+  assert.equal((await run(["doctor", "claude", "--fix"], fx.env)).code, 0);
+  assert.doesNotMatch(readFileSync(settingsPath, "utf8"), /shrink-hook/);
+
+  // And turning it back on is still a one-command round trip.
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { shrink: true } }, null, 2));
+  assert.equal((await run(["doctor", "claude", "--fix"], fx.env)).code, 0);
+  assert.match(readFileSync(settingsPath, "utf8"), /shrink-hook/);
+});
+
+test("the env switch honors think.shrink=false the same way", async () => {
+  const fx = fixture();
+  const off = { ...fx.env, CAVEMAN_SHRINK: "0" };
+  assert.equal((await run(["enable", "claude"], off)).code, 0);
+  const settings = readFileSync(join(fx.home, ".claude", "settings.json"), "utf8");
+  assert.doesNotMatch(settings, /shrink-hook/);
+  assert.match(settings, /native-hook claude/);
+});
+
 test("doctor surfaces independently disabled Core without degrading native integration", async () => {
   const fx = fixture();
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);

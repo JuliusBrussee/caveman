@@ -6431,6 +6431,17 @@ function canonicalManagedHookEntry(entry: Record<string, unknown>): string | und
   return JSON.stringify(clone);
 }
 
+// Why: `think.shrink` (and its `CAVEMAN_SHRINK` env form) is the persisted
+// switch for the command-output rewrite, but only the ephemeral launcher ever
+// read it — every native writer passed a literal `true`, so `caveman enable` /
+// `doctor --fix` / `repairNativeAgent` reinstated `shrink-hook` no matter what
+// the config said and there was no persistent way to run the native
+// integration without it (#1049). Read in ONE place so the writers and the
+// health check that judges them cannot disagree about what is expected.
+function nativeShrinkEnabled(): boolean {
+  return resolveCapabilities().values["think.shrink"].value as boolean;
+}
+
 function nativeHooksDocument(agentId: "claude" | "codex" | "gemini", includeShrink: boolean, base: Record<string, unknown> = {}, includeRecall = false): Record<string, unknown> {
   const root = JSON.parse(JSON.stringify(base)) as Record<string, unknown>;
   const hooks = root.hooks && typeof root.hooks === "object" && !Array.isArray(root.hooks)
@@ -6490,6 +6501,8 @@ function assertNativeHooksShape(path: string, root: Record<string, unknown>, age
   }
   const hooks = root.hooks as Record<string, unknown> | undefined;
   if (!hooks) return;
+  // `true` on purpose, unlike the writers: this only reads the event NAMES to
+  // refuse a non-array, so the superset is the safer set to check.
   const expected = nativeHooksDocument(agentId, true).hooks as Record<string, unknown>;
   for (const event of Object.keys(expected)) {
     if (hooks[event] !== undefined && !Array.isArray(hooks[event])) {
@@ -6503,7 +6516,7 @@ function nativeHookEntriesHealthy(root: Record<string, unknown>, agentId: "claud
     ? root.hooks as Record<string, unknown>
     : undefined;
   if (!hooks) return false;
-  const expected = nativeHooksDocument(agentId, true).hooks as Record<string, unknown>;
+  const expected = nativeHooksDocument(agentId, nativeShrinkEnabled()).hooks as Record<string, unknown>;
   const required = Object.entries(expected).every(([event, expectedRaw]) => {
     const actual = Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [];
     const actualEntries = new Set(actual.map(canonicalManagedHookEntry).filter(Boolean));
@@ -6929,7 +6942,7 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   // Claude Code names for the override. Never clobber an explicit user value.
   if (env.ENABLE_TOOL_SEARCH === undefined) env.ENABLE_TOOL_SEARCH = TOOL_SEARCH_DEFAULT;
   settings.env = env;
-  const withHooks = nativeHooksDocument("claude", true, settings);
+  const withHooks = nativeHooksDocument("claude", nativeShrinkEnabled(), settings);
 
   const mcpPath = join(homedir(), ".claude.json");
   const mcpBefore = fileBytes(mcpPath);
@@ -6999,7 +7012,7 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const installedMcp = { command: mcpBinary, args: [] };
   servers.caveman = installedMcp;
   settings.mcpServers = servers;
-  const withHooks = nativeHooksDocument("gemini", true, settings);
+  const withHooks = nativeHooksDocument("gemini", nativeShrinkEnabled(), settings);
 
   const envPath = join(homedir(), ".gemini", ".env");
   const envBefore = fileBytes(envPath);
@@ -7388,7 +7401,7 @@ function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const hooksBefore = fileBytes(hooksPath);
   const hooksRoot = parseJsonFileObject(hooksPath, hooksBefore);
   assertNativeHooksShape(hooksPath, hooksRoot, "codex");
-  const hooks = nativeHooksDocument("codex", true, hooksRoot);
+  const hooks = nativeHooksDocument("codex", nativeShrinkEnabled(), hooksRoot);
   const configPath = join(codexHomeDir(), "config.toml");
   const configBefore = fileBytes(configPath);
   const subscription = detectCodexWrapAuthMode() === "subscription";
@@ -8001,6 +8014,8 @@ function removeNativeHookEntries(root: Record<string, unknown>, agent: "claude" 
     ? root.hooks as Record<string, unknown>
     : undefined;
   if (!hooks) return root;
+  // `true` on purpose, unlike the writers: disable must withdraw a shrink entry
+  // an earlier install wrote, whatever the config says now.
   const expected = nativeHooksDocument(agent, true).hooks as Record<string, unknown>;
   const allowedManaged = new Set(
     Object.values(expected)
