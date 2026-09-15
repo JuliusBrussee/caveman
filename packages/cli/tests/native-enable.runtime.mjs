@@ -315,6 +315,50 @@ test("enable codex spawns the local proxy with explicit recovery/owner, not inhe
   assert.match(logged, /owner=wrap\b/, "enable's proxy must share the hook-revived (wrap) lifecycle, not the immortal one \"start\" gets");
 });
 
+// Re-running `enable` is exactly what someone does when the route is dead, so
+// the installed-state branch has to reach the proxy startup too. It returns
+// "already" before the mutation work, so gating startup on a fresh install made
+// it an accidental side effect of the first install rather than something the
+// command does.
+test("a second enable still starts the proxy when nothing is listening", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+
+  const first = await run(["enable", "codex"], fx.env);
+  assert.equal(first.code, 0, first.stderr);
+
+  // Only now start recording, so the log can only contain the second run's spawn.
+  const spawnLog = join(fx.home, "proxy-spawn-second.log");
+  const second = await run(["enable", "codex"], { ...fx.env, CAVEMAN_PROXY_SPAWN_LOG: spawnLog });
+  assert.equal(second.code, 0, second.stderr);
+  assert.match(second.stderr, /already enabled/, "precondition: the second run must take the installed-state branch");
+
+  for (let i = 0; i < 20 && !existsSync(spawnLog); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(existsSync(spawnLog), "a repeated enable must still revive a dead proxy");
+  assert.match(readFileSync(spawnLog, "utf8").trim(), /listen=127\.0\.0\.1:8787\b/);
+});
+
+// Every other spawn site (agentShortcut, the native hook) gates on !opts.noProxy.
+test("enable does not start the proxy when the user's config disables it", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  mkdirSync(join(fx.home, ".caveman-cloud"), { recursive: true });
+  writeFileSync(
+    join(fx.home, ".caveman-cloud", "config.json"),
+    JSON.stringify({ wrap: { proxy: false } }, null, 2),
+  );
+
+  const spawnLog = join(fx.home, "proxy-spawn-disabled.log");
+  const out = await run(["enable", "codex"], { ...fx.env, CAVEMAN_PROXY_SPAWN_LOG: spawnLog });
+  assert.equal(out.code, 0, out.stderr);
+
+  // Give a spawn that should never happen the same grace the positive test gives one.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(existsSync(spawnLog), false, "enable must not start a proxy the config switched off");
+});
+
 test("enable fails before host writes when current MCP binary is missing", async () => {
   const fx = fixture();
   const env = { ...fx.env, CAVEMAN_MCP_BIN: join(fx.home, "missing-mcp"), PATH: "/usr/bin:/bin" };
