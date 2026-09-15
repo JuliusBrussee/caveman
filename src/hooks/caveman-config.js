@@ -407,10 +407,17 @@ function appendFlag(filePath, line) {
             return;
           }
         } else {
-          const home = os.homedir();
-          const normalized = path.resolve(realDir).toLowerCase();
-          const normalizedHome = path.resolve(home).toLowerCase();
-          if (!normalized.startsWith(normalizedHome + path.sep) && normalized !== normalizedHome) return;
+          // Same reasoning as safeWriteFlag's win32 branch: a directory
+          // junction resolves to a realpath with no home-directory prefix, so
+          // the old check refused the legitimate junctioned config dir it was
+          // meant to allow — and silently stopped the lifetime stats log from
+          // recording anything. Test what the guard actually cares about.
+          try {
+            fs.accessSync(realDir, fs.constants.W_OK);
+          } catch (e) {
+            if (debug) process.stderr.write(`[caveman] appendFlag: symlink target ${realDir} is not writable by current user\n`);
+            return;
+          }
         }
       } else {
         realDir = dir;

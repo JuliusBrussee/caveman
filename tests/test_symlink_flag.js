@@ -10,7 +10,7 @@ const path = require('path');
 const os = require('os');
 const assert = require('assert');
 
-const { safeWriteFlag, readFlag, VALID_MODES, writeSessionMode } = require('../src/hooks/caveman-config');
+const { safeWriteFlag, readFlag, VALID_MODES, writeSessionMode, appendFlag } = require('../src/hooks/caveman-config');
 
 let passed = 0;
 let failed = 0;
@@ -318,6 +318,33 @@ test('write succeeds through a symlinked config dir pointing outside home (win32
   assert.strictEqual(fs.existsSync(flagPath), true,
     'flag must be written through a junction to a writable dir outside home');
   assert.strictEqual(readFlag(flagPath), 'full');
+});
+
+test('append succeeds through a symlinked config dir pointing outside home (win32 branch)', (tmp) => {
+  // appendFlag carries a byte-identical copy of the home-prefix guard that
+  // safeWriteFlag used to have, so the junction fix has to land in both or
+  // the lifetime stats log ($CLAUDE_CONFIG_DIR/.caveman-history.jsonl) still
+  // silently records nothing on a junctioned config dir.
+  const target = path.join(tmp, 'other-drive');
+  fs.mkdirSync(target, { recursive: true });
+  if (path.resolve(target).toLowerCase().startsWith(path.resolve(os.homedir()).toLowerCase() + path.sep)) {
+    skip('temp dir lives under $HOME, so the out-of-home case cannot be staged');
+  }
+  const dir = path.join(tmp, 'claude-config');
+  fs.symlinkSync(target, dir);
+  const logPath = path.join(dir, '.caveman-history.jsonl');
+
+  const realGetuid = process.getuid;
+  try {
+    delete process.getuid;
+    appendFlag(logPath, JSON.stringify({ mode: 'full' }));
+  } finally {
+    process.getuid = realGetuid;
+  }
+
+  assert.strictEqual(fs.existsSync(logPath), true,
+    'append must work through a junction to a writable dir outside home');
+  assert.match(fs.readFileSync(logPath, 'utf8'), /"mode":"full"/);
 });
 
 test('delete is refused through a symlinked parent owned by another user', (tmp) => {
