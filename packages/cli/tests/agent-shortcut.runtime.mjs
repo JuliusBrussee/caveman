@@ -31,6 +31,13 @@ function runShortcut(agentId, cliArgs) {
     CAVEMAN_PROXY_BIN: join(binDir, "missing-caveman-proxy"),
   };
   delete env.CAVE_GATEWAY_URL;
+  // The stub above echoes $ANTHROPIC_BASE_URL so a test can assert what the
+  // CLI injected. Whoever runs this suite may have one exported already —
+  // routine for anyone pointing Claude at a gateway, caveman's own users
+  // included — and the stub cannot tell an inherited value from an injected
+  // one, so "must not inject" assertions fail on their machine and nowhere
+  // else. Strip it so the stub only ever reports what the CLI set.
+  delete env.ANTHROPIC_BASE_URL;
   return new Promise((resolve, reject) => {
     const child = spawn("node", [cli, ...cliArgs], { env });
     let stdout = "";
@@ -78,6 +85,10 @@ function runLockedClaude(routes, { harness = "pi", mutateDuringCheck = false } =
     PATH: `${binDir}:${process.env.PATH}`,
   };
   delete env.CAVE_TRANSFORM_IDS;
+  // Same reason as runShortcut: this stub echoes $ANTHROPIC_CUSTOM_HEADERS and
+  // $CAVE_AGENT_BUILD_STATE, so an inherited value would read as an injected one.
+  delete env.ANTHROPIC_CUSTOM_HEADERS;
+  delete env.CAVE_AGENT_BUILD_STATE;
   return new Promise((resolve, reject) => {
     const child = spawn("node", [cli, "claude"], { cwd: project, env });
     let stdout = "";
@@ -188,6 +199,8 @@ function nativeShortcutEnv() {
   };
   delete env.CAVE_GATEWAY_URL;
   delete env.CLAUDE_CONFIG_DIR;
+  // Same reason as runShortcut — the native stub echoes $ANTHROPIC_BASE_URL.
+  delete env.ANTHROPIC_BASE_URL;
   return { env, home };
 }
 
