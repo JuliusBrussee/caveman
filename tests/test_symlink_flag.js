@@ -10,10 +10,18 @@ const path = require('path');
 const os = require('os');
 const assert = require('assert');
 
-const { safeWriteFlag, readFlag, VALID_MODES } = require('../src/hooks/caveman-config');
+const { safeWriteFlag, readFlag, VALID_MODES, writeSessionMode } = require('../src/hooks/caveman-config');
 
 let passed = 0;
 let failed = 0;
+let skipped = 0;
+
+// Thrown by a test whose precondition this machine can't provide (e.g. an
+// unprivileged runner that cannot chown a directory to another user). Skipping
+// is only ever acceptable where a source-level guard covers the same invariant
+// on every runner — see the "Source code audit" section.
+class Skip extends Error {}
+function skip(why) { throw new Skip(why); }
 
 function test(name, fn) {
   const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-symlink-test-'));
@@ -22,9 +30,14 @@ function test(name, fn) {
     passed++;
     console.log(`  ✓ ${name}`);
   } catch (e) {
-    failed++;
-    console.error(`  ✗ ${name}`);
-    console.error(`    ${e.message}`);
+    if (e instanceof Skip) {
+      skipped++;
+      console.log(`  ~ ${name} (skipped: ${e.message})`);
+    } else {
+      failed++;
+      console.error(`  ✗ ${name}`);
+      console.error(`    ${e.message}`);
+    }
   } finally {
     fs.rmSync(tmpBase, { recursive: true, force: true });
   }
@@ -273,7 +286,92 @@ test('a non-transient rename error also leaves no orphaned temp file', (tmp) => 
   assert.strictEqual(fs.existsSync(flagPath), false, 'flag was never created');
 });
 
+// ---------- win32 junction handling (#1041) ----------
+
+test('write succeeds through a symlinked config dir pointing outside home (win32 branch)', (tmp) => {
+  // On win32 there is no uid to compare, so safeWriteFlag takes its second
+  // branch. That branch used to require the resolved target to sit under
+  // os.homedir() — which a directory junction to another drive never does, so
+  // the write was refused through exactly the "legitimate symlinked config
+  // dir" case the code says it means to allow. Anyone keeping ~/.claude
+  // junctioned off a small system drive silently lost per-turn reinforcement.
+  //
+  // Node reports a win32 junction as isSymbolicLink(), so dropping
+  // process.getuid is a faithful stand-in for that branch on a POSIX runner.
+  const target = path.join(tmp, 'other-drive');
+  fs.mkdirSync(target, { recursive: true });
+  if (path.resolve(target).toLowerCase().startsWith(path.resolve(os.homedir()).toLowerCase() + path.sep)) {
+    skip('temp dir lives under $HOME, so the out-of-home case cannot be staged');
+  }
+  const flagDir = path.join(tmp, 'claude-config');
+  fs.symlinkSync(target, flagDir);
+  const flagPath = path.join(flagDir, '.caveman-active');
+
+  const realGetuid = process.getuid;
+  try {
+    delete process.getuid;
+    safeWriteFlag(flagPath, 'full');
+  } finally {
+    process.getuid = realGetuid;
+  }
+
+  assert.strictEqual(fs.existsSync(flagPath), true,
+    'flag must be written through a junction to a writable dir outside home');
+  assert.strictEqual(readFlag(flagPath), 'full');
+});
+
+test('delete is refused through a symlinked parent owned by another user', (tmp) => {
+  // safeWriteFlag refuses to write through a parent symlink owned by someone
+  // else. writeSessionMode's legacy-mirror cleanup used a bare fs.unlinkSync,
+  // which follows that same symlink happily — so caveman could delete a file
+  // it was (correctly) forbidden from creating. Asymmetric guards like this
+  // are how a flag ends up destroyed and then impossible to recreate.
+  const foreign = path.join(tmp, 'foreign-home');
+  fs.mkdirSync(foreign, { recursive: true });
+  try {
+    fs.chownSync(foreign, 65534, 65534); // nobody
+  } catch (e) {
+    skip('needs privileges to stage a directory owned by another user');
+  }
+  if (typeof process.getuid !== 'function' || fs.statSync(foreign).uid === process.getuid()) {
+    skip('could not stage a foreign-owned directory');
+  }
+
+  const claudeDir = path.join(tmp, 'claude-config');
+  fs.symlinkSync(foreign, claudeDir);
+  const legacy = path.join(claudeDir, '.caveman-active');
+
+  // Precondition: the write path already refuses this parent.
+  safeWriteFlag(legacy, 'full');
+  assert.strictEqual(fs.existsSync(legacy), false,
+    'precondition: safeWriteFlag must refuse a foreign-owned symlinked parent');
+
+  // Plant a victim file as that other user, then ask for a durable "off",
+  // which is what clears the legacy mirror.
+  fs.writeFileSync(legacy, 'victim');
+  fs.chownSync(legacy, 65534, 65534);
+  writeSessionMode(claudeDir, 'abc123def', 'off');
+
+  assert.strictEqual(fs.existsSync(legacy), true,
+    'delete must not follow a symlinked parent the write path refuses');
+});
+
 // ---------- Source code audit ----------
+
+test('legacy flag delete goes through a guarded helper, not a bare unlinkSync', () => {
+  // The behavioral test above needs privileges to stage a foreign-owned dir,
+  // so it skips on an ordinary runner. This one holds everywhere: the legacy
+  // mirror must never be removed with an unguarded unlinkSync.
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'hooks', 'caveman-config.js'), 'utf8'
+  );
+  assert.ok(/function safeDeleteFlag\s*\(/.test(source),
+    'caveman-config.js should define safeDeleteFlag');
+  assert.doesNotMatch(source, /fs\.unlinkSync\(legacy\)/,
+    'writeSessionMode must not delete the legacy mirror with a bare unlinkSync');
+  assert.match(source, /safeDeleteFlag\(legacy\)/,
+    'writeSessionMode should clear the legacy mirror via safeDeleteFlag');
+});
 
 test('safeWriteFlag no longer has blanket symlink parent refusal', (tmp) => {
   // Verify the old pattern "if (fs.lstatSync(flagDir).isSymbolicLink()) return;"
@@ -302,5 +400,5 @@ test('safeWriteFlag no longer has blanket symlink parent refusal', (tmp) => {
 
 // ---------- Summary ----------
 
-console.log(`\n${passed} passed, ${failed} failed`);
+console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped`);
 if (failed > 0) process.exit(1);
