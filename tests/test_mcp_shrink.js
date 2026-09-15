@@ -100,6 +100,44 @@ test('compresses a pleasantry/filler sitting inside an English parenthetical (#9
   assert.match(compressed, /compress\(text, opts\)/);
 });
 
+test('never eats a hyphen-joined component of a compound word', () => {
+  // `\b` treats "-" as a word boundary, so a filler/hedge/pleasantry spelled as
+  // part of a hyphenated compound used to match and get stripped, leaving a
+  // dangling "-suffix": "just-in-time" → "-in-time". These are ordinary
+  // technical terms and appear verbatim in MCP tool descriptions, which the
+  // proxy rewrites in place via compressDescriptionsInPlace — so the corruption
+  // ships straight into the model's tool list.
+  const cases = [
+    'Enable just-in-time compilation for the runtime',
+    'Set the maybe-null flag on the field',
+    'Use the sure-fire approach',
+    'Returns a very-long-string value',
+    'The actually-used config wins',
+    'Pass the thanks-giving header',
+    'A might-fail retry policy',
+  ];
+  for (const input of cases) {
+    const compound = input.match(/[a-z]+(?:-[a-z]+)+/i)[0];
+    const { compressed } = compress(input);
+    // Case-insensitive: dropping a leading article can promote the compound to
+    // sentence-initial, where the capitalization pass legitimately upcases it.
+    assert.ok(
+      compressed.toLowerCase().includes(compound.toLowerCase()),
+      `compound "${compound}" was mangled: "${input}" → "${compressed}"`
+    );
+    assert.doesNotMatch(
+      compressed,
+      /(^|\s)-/,
+      `left a dangling hyphen: "${input}" → "${compressed}"`
+    );
+  }
+  // The same words standing alone are still dropped — the fix must not turn
+  // the compressor off, only stop it from reaching inside a compound.
+  const { compressed } = compress('This is just a maybe wrong value');
+  assert.doesNotMatch(compressed, /\bjust\b/i);
+  assert.doesNotMatch(compressed, /\bmaybe\b/i);
+});
+
 test('compresses real MCP-style description', () => {
   const input = 'Get the current weather for a given location. ' +
     'Returns the temperature in Fahrenheit. ' +
