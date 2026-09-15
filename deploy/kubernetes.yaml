@@ -1,0 +1,109 @@
+# Apply into whatever namespace you like: kubectl apply -n caveman -f kubernetes.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: caveman-proxy
+type: Opaque
+stringData:
+  ANTHROPIC_API_KEY: REPLACE_WITH_YOUR_PROVIDER_KEY
+# CAVEMAN_AUTH_TOKEN is deliberately absent. It is REQUIRED for the container's
+# default 0.0.0.0 listen — the proxy has no other inbound authentication, and
+# clients send it as x-cave-api-key or Bearer — but any placeholder written here
+# passes validation and ships as a real, guessable token. Generate one and put it
+# in this same Secret BEFORE applying this file:
+#   kubectl create secret generic caveman-proxy \
+#     --from-literal=CAVEMAN_AUTH_TOKEN="$(openssl rand -hex 32)"
+# A later `kubectl apply -f kubernetes.yaml` adds the provider key beside it and
+# leaves the token untouched. Without the token the pod exits at startup.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: caveman-proxy-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: caveman-proxy
+spec:
+  # One replica, deliberately. State is SQLite on the PVC below, so this does
+  # not scale horizontally behind a single volume. Need more? Run one
+  # deployment per team, each with its own PVC.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: caveman-proxy
+  template:
+    metadata:
+      labels:
+        app: caveman-proxy
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        # Makes the mounted PVC writable by uid 65532.
+        fsGroup: 65532
+      containers:
+        - name: caveman-proxy
+          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v1.1.7
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8787
+          envFrom:
+            - secretRef:
+                name: caveman-proxy
+          env:
+            # Bedrock users: set the region and give the pod's ServiceAccount
+            # an IRSA role with bedrock:InvokeModel*.
+            # - name: AWS_REGION
+            #   value: us-east-1
+            - name: CAVEMAN_MODE
+              value: record
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8787
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8787
+            initialDelaySeconds: 10
+          securityContext:
+            # The binary writes only under CAVEMAN_HOME=/data, which is the PVC.
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: caveman-proxy-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: caveman-proxy
+spec:
+  type: ClusterIP
+  selector:
+    app: caveman-proxy
+  ports:
+    - port: 8787
+      targetPort: 8787

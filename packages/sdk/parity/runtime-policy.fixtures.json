@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "description": "Cross-language fixtures for the SDK runtime-policy client (spec docs/self_learning_implementation_spec.md §21.2, issue #88). BOTH SDKs (@caveman-ai/sdk and caveman_cloud) load this file and run EVERY section: the fetch operation (wire assertion), the signature cases, the assignment vectors (pinning each port of shared/platform/sampling.Fraction bit-for-bit against the Go implementation), and the decision cases. A case passing in one SDK and failing (or missing) in the other is a release-gate failure. Assignment fractions were generated FROM the real Go sampling.Fraction — never recompute or 'fix' them by hand; if they disagree with an SDK port, the port is wrong.",
+  "fetch": {
+    "wire": {
+      "method": "GET",
+      "path": "/sdk/v1/runtime-policy",
+      "headers": "std_headers (from fixtures.json, minus content-type)",
+      "body": null
+    },
+    "response": {
+      "bundle": "{\"schema_version\":\"caveman.runtime-policy.v1\",\"project_id\":\"proj_parity\",\"policy_version\":7,\"sequence\":42,\"issued_at\":\"2026-08-08T12:00:00Z\",\"refresh_seconds\":60,\"kill\":false,\"runtime_policies\":[{\"id\":\"targeted_test_repair_v3\",\"task_family\":\"fix_failing_test_with_stacktrace\",\"disabled\":false,\"applies_when\":[{\"field\":\"stack_trace_location_confidence\",\"op\":\"gte\",\"value\":0.9},{\"field\":\"language\",\"op\":\"in\",\"value\":[\"typescript\",\"python\"]}],\"execute\":{\"workflow\":\"targeted_repair_v3\"},\"fallback\":{\"workflow\":\"baseline_repair_v11\"},\"verify\":[\"targeted_test_passes\",\"full_suite_passes\"],\"budget\":{\"max_cost_usd\":1.2,\"max_duration_seconds\":180},\"escalation\":[{\"on\":\"ambiguous_symbol\",\"action\":\"baseline\"}],\"experiment\":{\"id\":\"exp-1\",\"holdout_frac\":0.1,\"arms\":[{\"name\":\"candidate\",\"fraction\":1}]}}],\"experiments\":[]}",
+      "signature": {
+        "alg": "Ed25519",
+        "key_id": "parity-policy-key-1",
+        "sig": "f3qADbQilhudBoe2NGPFY/SiwKzEjOsNWnJtjCw9gyEXFRQUnmCB/yW+zM8ND8SnIOYCBQbu41jVLuTPiqX7AQ=="
+      },
+      "public_key": {
+        "key_id": "parity-policy-key-1",
+        "alg": "Ed25519",
+        "key": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+      }
+    },
+    "expect_state": {
+      "signed": true,
+      "policy_version": 7,
+      "sequence": 42,
+      "kill": false,
+      "policy_count": 1
+    }
+  },
+  "signing_test_seed_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+  "signature_cases": [
+    {
+      "name": "pinned_key_verifies",
+      "pinned_public_key": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+      "use": "fetch.response",
+      "expect": "accepted, signed=true"
+    },
+    {
+      "name": "tampered_bundle_rejected",
+      "pinned_public_key": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+      "use": "fetch.response with one byte of bundle changed (policy_version 7 -> 9)",
+      "expect": "rejected; client keeps last-known-good; with no prior bundle decide() reasons policy_unavailable"
+    },
+    {
+      "name": "unsigned_refused_when_key_pinned",
+      "pinned_public_key": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+      "use": "kill_bundle (no signature)",
+      "expect": "rejected"
+    },
+    {
+      "name": "unsigned_accepted_when_nothing_pinned",
+      "pinned_public_key": null,
+      "use": "kill_bundle (no signature)",
+      "expect": "accepted, signed=false"
+    }
+  ],
+  "kill_bundle": "{\"schema_version\":\"caveman.runtime-policy.v1\",\"project_id\":\"proj_parity\",\"policy_version\":8,\"sequence\":43,\"issued_at\":\"2026-08-08T13:00:00Z\",\"refresh_seconds\":60,\"kill\":true,\"runtime_policies\":[],\"experiments\":[]}",
+  "assignment_vectors_note": "fraction = big-endian uint64 of the first 8 bytes of SHA-256 over length-prefixed keys (8-byte big-endian byte-length prefix per key), >>11, / 2^53. Values below came from the Go implementation (public/shared/platform/sampling). Assert EXACT float equality. The empty-unit-key vector pins the hash only — decide() must refuse an empty unit key before ever assigning. Propensity is computed as (1 - holdout_frac) * (fraction / total) IN EXACTLY THAT ASSOCIATION — ((1-h)*w)/t is a DIFFERENT float expression that diverges in the last ULP on ~25% of realistic inputs; the exp-w vectors below (expected_propensity 0.32000000000000006) exist to catch the wrong association.",
+  "assignment_vectors": [
+    { "keys": ["proj-a", "exp-1", "task-1"], "fraction": 0.05190238685080939, "holdout_frac": 0.1, "arms": [{ "name": "candidate", "fraction": 1 }], "expected_arm": "holdout", "expected_propensity": 0.1 },
+    { "keys": ["proj-a", "exp-1", "task-2"], "fraction": 0.11311675780131503, "holdout_frac": 0.1, "arms": [{ "name": "candidate", "fraction": 1 }], "expected_arm": "candidate", "expected_propensity": 0.9 },
+    { "keys": ["proj-a", "exp-1", "task-3"], "fraction": 0.9517742255887784, "holdout_frac": 0.1, "arms": [{ "name": "candidate", "fraction": 1 }], "expected_arm": "candidate", "expected_propensity": 0.9 },
+    { "keys": ["proj-b", "exp-1", "task-1"], "fraction": 0.4010878358345116, "holdout_frac": 0.1, "arms": [{ "name": "candidate", "fraction": 1 }], "expected_arm": "candidate", "expected_propensity": 0.9 },
+    { "keys": ["proj-a", "exp-2", "task-1"], "fraction": 0.7948721449457975, "holdout_frac": 0.5, "arms": [{ "name": "candidate", "fraction": 3 }, { "name": "alt", "fraction": 1 }], "expected_arm": "candidate", "expected_propensity": 0.375 },
+    { "keys": ["proj-a", "exp-2", "task-42"], "fraction": 0.4484400873741511, "holdout_frac": 0.5, "arms": [{ "name": "candidate", "fraction": 3 }, { "name": "alt", "fraction": 1 }], "expected_arm": "holdout", "expected_propensity": 0.5 },
+    { "keys": ["proj-a", "exp-2", ""], "fraction": 0.43062198340003566, "holdout_frac": 0.25, "arms": [{ "name": "candidate", "fraction": 3 }, { "name": "alt", "fraction": 1 }], "expected_arm": "candidate", "expected_propensity": 0.5625 },
+    { "keys": ["proj-a", "exp-2", "тask-θ"], "fraction": 0.2265057358878254, "holdout_frac": 0.25, "arms": [{ "name": "candidate", "fraction": 3 }, { "name": "alt", "fraction": 1 }], "expected_arm": "holdout", "expected_propensity": 0.25 },
+    { "keys": ["018f6f0a-1111-7000-8000-000000000001", "exp-replay-9", "workflow:refund/case-0007"], "fraction": 0.028202912997154495, "holdout_frac": 0.02, "arms": [{ "name": "candidate", "fraction": 3 }, { "name": "alt", "fraction": 1 }], "expected_arm": "candidate", "expected_propensity": 0.735 },
+    { "keys": ["proj_parity", "exp-w", "task-a"], "fraction": 0.25449890043482704, "holdout_frac": 0.2, "arms": [{ "name": "tight", "fraction": 1.5 }, { "name": "loose", "fraction": 1.0 }], "expected_arm": "tight", "expected_propensity": 0.48 },
+    { "keys": ["proj_parity", "exp-w", "task-b"], "fraction": 0.7017923450148856, "holdout_frac": 0.2, "arms": [{ "name": "tight", "fraction": 1.5 }, { "name": "loose", "fraction": 1.0 }], "expected_arm": "loose", "expected_propensity": 0.32000000000000006 },
+    { "keys": ["proj_parity", "exp-w", "task-3"], "fraction": 0.02966399031625988, "holdout_frac": 0.2, "arms": [{ "name": "tight", "fraction": 1.5 }, { "name": "loose", "fraction": 1.0 }], "expected_arm": "holdout", "expected_propensity": 0.2 }
+  ],
+  "guard_cases_note": "Both SDKs iterate EVERY case below through their guard evaluator. Semantics: a condition is TRUE only when the context value and the guard value are the same scalar kind AND the comparison holds. Scalar kinds: string, boolean, number (int and float are ONE kind; a boolean is NEVER a number — Python must exclude bool explicitly). Lists, objects, and null are not scalars and never compare equal to anything, under any op. 'in' requires the guard value to be a list and the context value to be a scalar; membership uses the same same-kind scalar equality. Unknown op, missing field, or any type mismatch => FALSE — a guard failure must NEVER fail open, in either direction of any operator (ne included: 'ne' on a type mismatch is FALSE, not true).",
+  "guard_cases": [
+    { "name": "eq_string_match", "guard": { "field": "x", "op": "eq", "value": "go" }, "context": { "x": "go" }, "expect": true },
+    { "name": "eq_string_mismatch", "guard": { "field": "x", "op": "eq", "value": "go" }, "context": { "x": "rust" }, "expect": false },
+    { "name": "eq_int_float_same_kind", "guard": { "field": "x", "op": "eq", "value": 1 }, "context": { "x": 1.0 }, "expect": true },
+    { "name": "eq_number_vs_string", "guard": { "field": "x", "op": "eq", "value": 1 }, "context": { "x": "1" }, "expect": false },
+    { "name": "eq_bool_match", "guard": { "field": "x", "op": "eq", "value": true }, "context": { "x": true }, "expect": true },
+    { "name": "eq_bool_vs_number", "guard": { "field": "x", "op": "eq", "value": 1 }, "context": { "x": true }, "expect": false },
+    { "name": "eq_null_never_scalar", "guard": { "field": "x", "op": "eq", "value": null }, "context": { "x": null }, "expect": false },
+    { "name": "eq_list_never_scalar", "guard": { "field": "x", "op": "eq", "value": [1, 2] }, "context": { "x": [1, 2] }, "expect": false },
+    { "name": "eq_missing_field", "guard": { "field": "absent", "op": "eq", "value": "go" }, "context": { "x": "go" }, "expect": false },
+    { "name": "ne_same_kind_differing", "guard": { "field": "x", "op": "ne", "value": "go" }, "context": { "x": "rust" }, "expect": true },
+    { "name": "ne_same_kind_equal", "guard": { "field": "x", "op": "ne", "value": "go" }, "context": { "x": "go" }, "expect": false },
+    { "name": "ne_type_mismatch_fails_closed", "guard": { "field": "x", "op": "ne", "value": "go" }, "context": { "x": 5 }, "expect": false },
+    { "name": "ne_bool_vs_number_fails_closed", "guard": { "field": "x", "op": "ne", "value": 1 }, "context": { "x": true }, "expect": false },
+    { "name": "ne_missing_field_fails_closed", "guard": { "field": "absent", "op": "ne", "value": "go" }, "context": {}, "expect": false },
+    { "name": "ne_null_fails_closed", "guard": { "field": "x", "op": "ne", "value": "go" }, "context": { "x": null }, "expect": false },
+    { "name": "gt_true", "guard": { "field": "x", "op": "gt", "value": 1 }, "context": { "x": 2 }, "expect": true },
+    { "name": "gt_equal_false", "guard": { "field": "x", "op": "gt", "value": 2 }, "context": { "x": 2 }, "expect": false },
+    { "name": "gte_boundary_true", "guard": { "field": "x", "op": "gte", "value": 0.9 }, "context": { "x": 0.9 }, "expect": true },
+    { "name": "gte_below_false", "guard": { "field": "x", "op": "gte", "value": 0.9 }, "context": { "x": 0.5 }, "expect": false },
+    { "name": "lt_true", "guard": { "field": "x", "op": "lt", "value": 3 }, "context": { "x": 2.5 }, "expect": true },
+    { "name": "lte_boundary_true", "guard": { "field": "x", "op": "lte", "value": 3 }, "context": { "x": 3 }, "expect": true },
+    { "name": "lt_string_operand_false", "guard": { "field": "x", "op": "lt", "value": "3" }, "context": { "x": 2 }, "expect": false },
+    { "name": "gt_bool_context_false", "guard": { "field": "x", "op": "gt", "value": 0 }, "context": { "x": true }, "expect": false },
+    { "name": "in_member", "guard": { "field": "x", "op": "in", "value": ["typescript", "python"] }, "context": { "x": "python" }, "expect": true },
+    { "name": "in_nonmember", "guard": { "field": "x", "op": "in", "value": ["typescript", "python"] }, "context": { "x": "go" }, "expect": false },
+    { "name": "in_bool_member_same_kind", "guard": { "field": "x", "op": "in", "value": [true] }, "context": { "x": true }, "expect": true },
+    { "name": "in_bool_vs_number_member", "guard": { "field": "x", "op": "in", "value": [1] }, "context": { "x": true }, "expect": false },
+    { "name": "in_int_float_member", "guard": { "field": "x", "op": "in", "value": [1] }, "context": { "x": 1.0 }, "expect": true },
+    { "name": "in_value_not_list", "guard": { "field": "x", "op": "in", "value": "typescript" }, "context": { "x": "typescript" }, "expect": false },
+    { "name": "in_context_list_not_scalar", "guard": { "field": "x", "op": "in", "value": [["a"]] }, "context": { "x": ["a"] }, "expect": false },
+    { "name": "in_missing_field", "guard": { "field": "absent", "op": "in", "value": ["a"] }, "context": {}, "expect": false },
+    { "name": "unknown_op_fails_closed", "guard": { "field": "x", "op": "matches", "value": "g.*" }, "context": { "x": "go" }, "expect": false }
+  ],
+  "decision_cases_note": "All cases run against the fetched fetch.response bundle (project_id proj_parity). decide() is synchronous and performs no network I/O. 'baseline' means the customer's own path with workflow null; 'fallback' means the policy's declared fallback workflow. Assignment keys are (bundle.project_id, experiment.id, unit_key).",
+  "decision_cases": [
+    {
+      "name": "applies_candidate_arm",
+      "task_family": "fix_failing_test_with_stacktrace",
+      "unit_key": "task-a",
+      "context": { "stack_trace_location_confidence": 0.95, "language": "typescript" },
+      "expect": { "decision": "execute", "workflow": "targeted_repair_v3", "reason": "applied", "policy_id": "targeted_test_repair_v3", "experiment_id": "exp-1", "arm": "candidate", "propensity": 0.9 }
+    },
+    {
+      "name": "holdout_forces_fallback",
+      "task_family": "fix_failing_test_with_stacktrace",
+      "unit_key": "task-3",
+      "context": { "stack_trace_location_confidence": 0.95, "language": "python" },
+      "expect": { "decision": "fallback", "workflow": "baseline_repair_v11", "reason": "holdout", "policy_id": "targeted_test_repair_v3", "experiment_id": "exp-1", "arm": "holdout", "propensity": 0.1 }
+    },
+    {
+      "name": "guard_boundary_gte_passes",
+      "task_family": "fix_failing_test_with_stacktrace",
+      "unit_key": "task-a",
+      "context": { "stack_trace_location_confidence": 0.9, "language": "typescript" },
+      "expect": { "decision": "execute", "workflow": "targeted_repair_v3", "reason": "applied", "arm": "candidate" }
+    },
+    {
+      "name": "guard_below_threshold_fails",
+      "task_family": "fix_failing_test_with_stacktrace",
+      "unit_key": "task-a",
+      "context": { "stack_trace_location_confidence": 0.5, "language": "typescript" },
+      "expect": { "decision": "fallback", "workflow": "baseline_repair_v11", "reason": "guards_failed", "policy_id": "targeted_test_repair_v3" }
+    },
+    {
+      "name": "guard_in_miss_fails",
+      "task_family": "fix_failing_test_with_stacktrace",
+      "unit_key": "task-a",
+      "context": { "stack_trace_location_confidence": 0.95, "language": "go" },
+      "expect": { "decision": "fallback", "workflow": "baseline_repair_v11", "reason": "guards_failed" }
+    },
+    {
+      "name": "missing_context_field_fails_closed",
+      "task_family": "fix_failing_test_with_stacktrace",
+      "unit_key": "task-a",
+      "context": { "language": "typescript" },
+      "expect": { "decision": "fallback", "workflow": "baseline_repair_v11", "reason": "guards_failed" }
+    },
+    {
+      "name": "unknown_task_family_is_baseline",
+      "task_family": "summarize_ticket",
+      "unit_key": "task-a",
+      "context": {},
+      "expect": { "decision": "baseline", "workflow": null, "reason": "no_policy" }
+    },
+    {
+      "name": "missing_unit_key_never_guesses_an_arm",
+      "task_family": "fix_failing_test_with_stacktrace",
+      "unit_key": null,
+      "context": { "stack_trace_location_confidence": 0.95, "language": "typescript" },
+      "expect": { "decision": "fallback", "workflow": "baseline_repair_v11", "reason": "no_unit_key" }
+    },
+    {
+      "name": "kill_bundle_forces_baseline",
+      "bundle": "kill_bundle",
+      "task_family": "fix_failing_test_with_stacktrace",
+      "unit_key": "task-a",
+      "context": { "stack_trace_location_confidence": 0.95, "language": "typescript" },
+      "expect": { "decision": "baseline", "workflow": null, "reason": "kill" }
+    },
+    {
+      "name": "no_bundle_is_policy_unavailable",
+      "bundle": null,
+      "task_family": "fix_failing_test_with_stacktrace",
+      "unit_key": "task-a",
+      "context": {},
+      "expect": { "decision": "baseline", "workflow": null, "reason": "policy_unavailable" }
+    }
+  ]
+}

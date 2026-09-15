@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lean Build"
+  short_description: "Build smallest coherent feature slice"
+  default_prompt: "Use $lean-build to implement this feature without speculative scope."

@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "id": "vercel-ai-sdk",
+  "display_name": "Vercel AI SDK",
+  "lang": "ts",
+  "wire_protocol": "multi",
+  "note": "Use @ai-sdk/openai-compatible for OpenAI-protocol models; the Anthropic provider takes a baseURL too.",
+  "code": "import { createOpenAICompatible } from \"@ai-sdk/openai-compatible\";\nimport { generateText } from \"ai\";\n\nconst caveman = createOpenAICompatible({\n  name: \"caveman\",\n  baseURL: \"{{baseURL}}/w/{{app}}/openai/v1\",\n  apiKey: process.env.OPENAI_API_KEY,\n});\n\nconst { text } = await generateText({\n  model: caveman(\"gpt-5.5\"),\n  prompt: \"Why is the sky blue?\",\n});\n\n// Anthropic models keep their native protocol (no translation):\n//   import { createAnthropic } from \"@ai-sdk/anthropic\";\n//   const anthropic = createAnthropic({ baseURL: \"{{baseURL}}/w/{{app}}/v1\" });",
+  "models": ["gpt-5.5"]
+}

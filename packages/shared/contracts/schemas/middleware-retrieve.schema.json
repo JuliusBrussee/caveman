@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/middleware-retrieve.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope",
+    "handle",
+    "offset",
+    "limit",
+    "query"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "scope": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/scope"
+    },
+    "handle": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 262144
+    },
+    "query": {
+      "type": "string",
+      "maxLength": 1024
+    }
+  }
+}

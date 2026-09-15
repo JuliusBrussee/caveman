@@ -1,0 +1,721 @@
+{
+  "schema_version": "1",
+  "agents": [
+    {
+      "schema_version": "1",
+      "id": "aider",
+      "display_name": "Aider",
+      "vendor": "OpenAI / Anthropic",
+      "homepage": "https://aider.chat/docs/llms/openai-compat.html",
+      "binary_names": [
+        "aider"
+      ],
+      "args": [],
+      "install": "python -m pip install aider-chat",
+      "wire_protocol": "openai-chat",
+      "injection": {
+        "method": "env",
+        "env": {
+          "OPENAI_API_BASE": "{{cave_base_url}}/openai/v1"
+        }
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "0.86.2",
+      "injection_completeness": "declarative",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "claude",
+      "display_name": "Claude Code",
+      "vendor": "Anthropic",
+      "homepage": "https://code.claude.com/docs",
+      "binary_names": [
+        "claude"
+      ],
+      "args": [],
+      "install": "npm i -g @anthropic-ai/claude-code",
+      "wire_protocol": "anthropic-messages",
+      "injection": {
+        "method": "env",
+        "env": {
+          "ANTHROPIC_BASE_URL": "{{cave_base_url}}",
+          "ANTHROPIC_AUTH_TOKEN": "{{cave_api_key}}"
+        }
+      },
+      "skills": {
+        "format": "skill-md",
+        "user_dirs": [
+          "~/.claude/skills"
+        ],
+        "project_dirs": [
+          ".claude/skills"
+        ]
+      },
+      "command_hook": {
+        "method": "claude-pretooluse"
+      },
+      "memory_hook": {
+        "method": "claude-userpromptsubmit"
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "2.1.259",
+      "injection_completeness": "builder-assisted",
+      "last_verified_at": "2026-09-03",
+      "verified_by": "local pinned-binary probe (claude 2.1.259, agents/probe-installed.mjs)",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "codex",
+      "display_name": "OpenAI Codex CLI",
+      "vendor": "OpenAI",
+      "homepage": "https://developers.openai.com/codex",
+      "binary_names": [
+        "codex"
+      ],
+      "args": [],
+      "install": "npm i -g @openai/codex",
+      "wire_protocol": "openai-responses",
+      "injection": {
+        "method": "env",
+        "env": {}
+      },
+      "skills": {
+        "format": "skill-md",
+        "user_dirs": [
+          "~/.codex/skills"
+        ],
+        "project_dirs": []
+      },
+      "command_hook": {
+        "method": "codex-pretooluse",
+        "file": "~/.codex/AGENTS.md"
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "0.153.0",
+      "injection_completeness": "code-only",
+      "last_verified_at": "2026-09-03",
+      "verified_by": "local pinned-binary probe (codex 0.153.0, agents/probe-installed.mjs)",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "gemini",
+      "display_name": "Gemini CLI",
+      "vendor": "Google",
+      "homepage": "https://github.com/google-gemini/gemini-cli",
+      "binary_names": [
+        "gemini"
+      ],
+      "args": [],
+      "install": "npm i -g @google/gemini-cli",
+      "wire_protocol": "gemini-generatecontent",
+      "injection": {
+        "method": "env",
+        "env": {
+          "GOOGLE_GEMINI_BASE_URL": "{{cave_base_url}}",
+          "GOOGLE_VERTEX_BASE_URL": "{{cave_base_url}}/vertex"
+        }
+      },
+      "command_hook": {
+        "method": "gemini-beforetool"
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "0.58.0",
+      "injection_completeness": "declarative",
+      "last_verified_at": "2026-09-03",
+      "verified_by": "local pinned-binary probe (gemini 0.58.0, agents/probe-installed.mjs)",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "hermes",
+      "display_name": "Hermes Agent",
+      "vendor": "Nous Research",
+      "homepage": "https://hermes-agent.nousresearch.com/docs/",
+      "binary_names": [
+        "hermes"
+      ],
+      "args": [
+        "--provider",
+        "custom"
+      ],
+      "install": "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+      "wire_protocol": "openai-chat",
+      "injection": {
+        "method": "env",
+        "env": {
+          "CUSTOM_BASE_URL": "{{cave_base_url}}/v1",
+          "CUSTOM_API_KEY": "{{cave_api_key}}"
+        }
+      },
+      "command_hook": {
+        "method": "hermes-plugin"
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "0.19.1",
+      "injection_completeness": "builder-assisted",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "kilo",
+      "display_name": "Kilo Code",
+      "vendor": "Kilo Code",
+      "homepage": "https://kilo.ai/docs/code-with-ai/platforms/cli",
+      "binary_names": [
+        "kilo",
+        "kilocode"
+      ],
+      "args": [],
+      "install": "npm install -g @kilocode/cli@7.5.9",
+      "wire_protocol": "openai-chat",
+      "injection": {
+        "method": "config-env-content",
+        "env_var": "KILO_CONFIG_CONTENT",
+        "config_content": {
+          "local": {
+            "provider": {
+              "caveman": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Caveman Local Proxy",
+                "options": {
+                  "baseURL": "{{cave_base_url}}/v1",
+                  "apiKey": "{env:OPENAI_API_KEY}",
+                  "headers": {
+                    "X-Cave-Agent": "kilo"
+                  }
+                },
+                "models": {
+                  "gpt-5.5": {
+                    "name": "GPT-5.5 (via Caveman)",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 1050000,
+                      "output": 32768
+                    }
+                  },
+                  "gpt-5.4-mini": {
+                    "name": "GPT-5.4 mini (via Caveman)",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 400000,
+                      "output": 16384
+                    }
+                  }
+                }
+              }
+            },
+            "model": "caveman/gpt-5.5",
+            "enabled_providers": [
+              "caveman"
+            ]
+          },
+          "managed": {
+            "provider": {
+              "caveman": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Caveman Gateway",
+                "options": {
+                  "baseURL": "{{cave_base_url}}/v1",
+                  "apiKey": "{env:CAVE_API_KEY}",
+                  "headers": {
+                    "x-cave-upstream-key": "{{cave_optional_openai_key_env}}",
+                    "X-Cave-Agent": "kilo"
+                  }
+                },
+                "models": {
+                  "gpt-5.5": {
+                    "name": "GPT-5.5 (via Caveman)",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 1050000,
+                      "output": 32768
+                    }
+                  },
+                  "gpt-5.4-mini": {
+                    "name": "GPT-5.4 mini (via Caveman)",
+                    "tool_call": true,
+                    "limit": {
+                      "context": 400000,
+                      "output": 16384
+                    }
+                  }
+                }
+              }
+            },
+            "model": "caveman/gpt-5.5",
+            "enabled_providers": [
+              "caveman"
+            ]
+          }
+        }
+      },
+      "attribution": {
+        "header": "X-Cave-Agent"
+      },
+      "tested_agent_version": "7.5.9",
+      "injection_completeness": "declarative",
+      "last_verified_at": "2026-09-03",
+      "verified_by": "local pinned-binary probe (kilo 7.5.9, agents/probe-installed.mjs)",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "openclaw",
+      "display_name": "OpenClaw",
+      "vendor": "OpenClaw",
+      "homepage": "https://github.com/openclaw/openclaw#readme",
+      "binary_names": [
+        "openclaw"
+      ],
+      "args": [
+        "chat"
+      ],
+      "install": "npm i -g openclaw",
+      "wire_protocol": "openai-chat",
+      "injection": {
+        "method": "config-file",
+        "env_var": "OPENCLAW_CONFIG_PATH",
+        "base_config": {
+          "path": "~/.openclaw/openclaw.json",
+          "env_var": "OPENCLAW_CONFIG_PATH",
+          "state_dir": {
+            "env_var": "OPENCLAW_STATE_DIR",
+            "filename": "openclaw.json"
+          }
+        },
+        "config_overlay": {
+          "local": {
+            "mcp": {
+              "servers": {
+                "caveman": {
+                  "command": "caveman-mcp",
+                  "args": []
+                }
+              }
+            }
+          },
+          "managed": {
+            "mcp": {
+              "servers": {
+                "caveman": {
+                  "command": "caveman-mcp",
+                  "args": []
+                }
+              }
+            }
+          }
+        }
+      },
+      "command_hook": {
+        "method": "openclaw-plugin"
+      },
+      "attribution": {
+        "header": "x-cave-agent"
+      },
+      "tested_agent_version": "2026.8.2",
+      "injection_completeness": "builder-assisted",
+      "last_verified_at": "2026-09-03",
+      "verified_by": "local pinned-binary probe (openclaw 2026.8.2, agents/probe-installed.mjs)",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "opencode",
+      "display_name": "opencode",
+      "vendor": "sst",
+      "homepage": "https://opencode.ai/docs/config",
+      "binary_names": [
+        "opencode"
+      ],
+      "args": [],
+      "install": "npm i -g opencode-ai",
+      "wire_protocol": "openai-chat",
+      "injection": {
+        "method": "config-env-content",
+        "env_var": "OPENCODE_CONFIG_CONTENT",
+        "config_content": {
+          "local": {
+            "$schema": "https://opencode.ai/config.json",
+            "provider": {
+              "openai": {
+                "options": {
+                  "baseURL": "{{cave_base_url}}/v1",
+                  "headers": {
+                    "X-Cave-Agent": "opencode"
+                  }
+                }
+              },
+              "anthropic": {
+                "options": {
+                  "baseURL": "{{cave_base_url}}/v1",
+                  "headers": {
+                    "X-Cave-Agent": "opencode"
+                  }
+                }
+              }
+            }
+          },
+          "managed": {
+            "$schema": "https://opencode.ai/config.json",
+            "provider": {
+              "caveman": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Caveman Gateway",
+                "options": {
+                  "baseURL": "{{cave_base_url}}/v1",
+                  "apiKey": "{env:CAVE_API_KEY}",
+                  "headers": {
+                    "x-cave-upstream-key": "{env:OPENAI_API_KEY}",
+                    "X-Cave-Agent": "opencode"
+                  }
+                },
+                "models": {
+                  "gpt-5.5": {
+                    "name": "GPT-5.5 (via Caveman)",
+                    "limit": {
+                      "context": 1050000,
+                      "output": 32768
+                    }
+                  },
+                  "gpt-5.4-mini": {
+                    "name": "GPT-5.4 mini (via Caveman)",
+                    "limit": {
+                      "context": 400000,
+                      "output": 16384
+                    }
+                  }
+                }
+              }
+            },
+            "model": "caveman/gpt-5.5"
+          }
+        }
+      },
+      "command_hook": {
+        "method": "opencode-plugin"
+      },
+      "attribution": {
+        "header": "X-Cave-Agent"
+      },
+      "tested_agent_version": "1.18.27",
+      "injection_completeness": "declarative",
+      "last_verified_at": "2026-09-03",
+      "verified_by": "local pinned-binary probe (opencode 1.18.27, agents/probe-installed.mjs)",
+      "fallback": "generic-env",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "pi",
+      "display_name": "Pi",
+      "vendor": "pi.dev",
+      "homepage": "https://pi.dev/",
+      "binary_names": [
+        "pi"
+      ],
+      "args": [],
+      "install": "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
+      "wire_protocol": "openai-chat",
+      "injection": {
+        "method": "native-extension",
+        "host": "pi",
+        "asset": "caveman-pi-extension",
+        "loader_flag": "--extension"
+      },
+      "command_hook": {
+        "method": "pi-extension"
+      },
+      "tested_agent_version": "0.84.4",
+      "injection_completeness": "builder-assisted",
+      "last_verified_at": "2026-09-03",
+      "verified_by": "local pinned-binary probe (pi 0.84.4, agents/probe-installed.mjs)",
+      "fallback": "none",
+      "maintainer": null
+    },
+    {
+      "schema_version": "1",
+      "id": "qwen",
+      "display_name": "Qwen Code",
+      "vendor": "QwenLM",
+      "homepage": "https://github.com/QwenLM/qwen-code",
+      "binary_names": [
+        "qwen"
+      ],
+      "args": [
+        "--extensions=none"
+      ],
+      "install": "npm i -g @qwen-code/qwen-code@0.22.3",
+      "wire_protocol": "openai-chat",
+      "injection": {
+        "method": "config-file",
+        "env_var": "QWEN_CODE_SYSTEM_SETTINGS_PATH",
+        "base_config": {
+          "path": "~/.qwen/system-settings.json",
+          "env_var": "QWEN_CODE_SYSTEM_SETTINGS_PATH",
+          "platform_default": "qwen-system-settings"
+        },
+        "config_overlay": {
+          "local": {
+            "providerProtocol": {},
+            "modelProviders": {
+              "openai": [
+                {
+                  "id": "gpt-5.5",
+                  "name": "GPT-5.5 (via Caveman)",
+                  "envKey": "OPENAI_API_KEY",
+                  "baseUrl": "{{cave_base_url}}/v1",
+                  "generationConfig": {
+                    "customHeaders": {
+                      "X-Cave-Agent": "qwen"
+                    }
+                  }
+                },
+                {
+                  "id": "gpt-5.4-mini",
+                  "name": "GPT-5.4 mini (via Caveman)",
+                  "envKey": "OPENAI_API_KEY",
+                  "baseUrl": "{{cave_base_url}}/v1",
+                  "generationConfig": {
+                    "customHeaders": {
+                      "X-Cave-Agent": "qwen"
+                    }
+                  }
+                }
+              ]
+            },
+            "security": {
+              "auth": {
+                "selectedType": "openai",
+                "enforcedType": "openai"
+              }
+            },
+            "model": {
+              "name": "gpt-5.5",
+              "baseUrl": "{{cave_base_url}}/v1"
+            },
+            "modelFallbacks": "",
+            "fastModel": "",
+            "advisorModel": "",
+            "visionModel": "",
+            "compactionModel": "",
+            "imageModel": "",
+            "voiceModel": "",
+            "disableAllHooks": true,
+            "tools": {
+              "webSearch": {
+                "enabled": false,
+                "model": ""
+              },
+              "workflowsEnabled": false,
+              "disabled": [
+                "agent",
+                "skill",
+                "web_search",
+                "create_sub_session",
+                "workflow"
+              ]
+            },
+            "agents": {
+              "builtin": {
+                "exploreModel": "inherit"
+              },
+              "allowedGrades": []
+            },
+            "permissions": {
+              "deny": [
+                "Agent",
+                "Skill",
+                "WebSearch",
+                "CreateSubSession",
+                "Workflow"
+              ]
+            },
+            "skills": {
+              "disabledLevels": [
+                "project",
+                "user",
+                "extension",
+                "bundled"
+              ]
+            },
+            "experimental": {
+              "liveVoice": {
+                "enabled": false,
+                "apiKey": "",
+                "model": ""
+              }
+            },
+            "slashCommands": {
+              "disabled": [
+                "auth",
+                "connect",
+                "login",
+                "model",
+                "arena",
+                "agents",
+                "workflows",
+                "settings",
+                "config",
+                "permissions",
+                "skills",
+                "voice",
+                "extensions",
+                "reload-plugins",
+                "hooks",
+                "mcp",
+                "resume",
+                "continue",
+                "import-config"
+              ]
+            }
+          },
+          "managed": {
+            "providerProtocol": {},
+            "modelProviders": {
+              "openai": [
+                {
+                  "id": "gpt-5.5",
+                  "name": "GPT-5.5 (via Caveman)",
+                  "envKey": "CAVE_API_KEY",
+                  "baseUrl": "{{cave_base_url}}/v1",
+                  "generationConfig": {
+                    "customHeaders": {
+                      "x-cave-upstream-key": "{{cave_optional_openai_key_env}}",
+                      "X-Cave-Agent": "qwen"
+                    }
+                  }
+                },
+                {
+                  "id": "gpt-5.4-mini",
+                  "name": "GPT-5.4 mini (via Caveman)",
+                  "envKey": "CAVE_API_KEY",
+                  "baseUrl": "{{cave_base_url}}/v1",
+                  "generationConfig": {
+                    "customHeaders": {
+                      "x-cave-upstream-key": "{{cave_optional_openai_key_env}}",
+                      "X-Cave-Agent": "qwen"
+                    }
+                  }
+                }
+              ]
+            },
+            "security": {
+              "auth": {
+                "selectedType": "openai",
+                "enforcedType": "openai"
+              }
+            },
+            "model": {
+              "name": "gpt-5.5",
+              "baseUrl": "{{cave_base_url}}/v1"
+            },
+            "modelFallbacks": "",
+            "fastModel": "",
+            "advisorModel": "",
+            "visionModel": "",
+            "compactionModel": "",
+            "imageModel": "",
+            "voiceModel": "",
+            "disableAllHooks": true,
+            "tools": {
+              "webSearch": {
+                "enabled": false,
+                "model": ""
+              },
+              "workflowsEnabled": false,
+              "disabled": [
+                "agent",
+                "skill",
+                "web_search",
+                "create_sub_session",
+                "workflow"
+              ]
+            },
+            "agents": {
+              "builtin": {
+                "exploreModel": "inherit"
+              },
+              "allowedGrades": []
+            },
+            "permissions": {
+              "deny": [
+                "Agent",
+                "Skill",
+                "WebSearch",
+                "CreateSubSession",
+                "Workflow"
+              ]
+            },
+            "skills": {
+              "disabledLevels": [
+                "project",
+                "user",
+                "extension",
+                "bundled"
+              ]
+            },
+            "experimental": {
+              "liveVoice": {
+                "enabled": false,
+                "apiKey": "",
+                "model": ""
+              }
+            },
+            "slashCommands": {
+              "disabled": [
+                "auth",
+                "connect",
+                "login",
+                "model",
+                "arena",
+                "agents",
+                "workflows",
+                "settings",
+                "config",
+                "permissions",
+                "skills",
+                "voice",
+                "extensions",
+                "reload-plugins",
+                "hooks",
+                "mcp",
+                "resume",
+                "continue",
+                "import-config"
+              ]
+            }
+          }
+        }
+      },
+      "attribution": {
+        "header": "X-Cave-Agent"
+      },
+      "tested_agent_version": "0.22.3",
+      "injection_completeness": "declarative",
+      "last_verified_at": "2026-08-30",
+      "verified_by": "local pinned-binary route probe (@qwen-code/qwen-code 0.22.3)",
+      "fallback": "generic-env",
+      "maintainer": null
+    }
+  ]
+}

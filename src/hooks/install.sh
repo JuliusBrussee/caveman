@@ -35,15 +35,44 @@ fi
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
-REPO_URL="https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks"
+REPO_URL="https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks"
 
-HOOK_FILES=("package.json" "caveman-config.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh" "cavecrew-model-overrides.js")
+HOOK_FILES=("package.json" "caveman-config.js" "caveman-parse.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh" "cavecrew-model-overrides.js")
 
 # Resolve source — works from repo clone or curl pipe
 SCRIPT_DIR=""
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 fi
+
+# Clone installs share the unified installer's JSONC parser. A standalone copy
+# without that helper refuses unsupported settings before changing any files.
+SETTINGS_HELPER=""
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../../bin/lib/settings.js" ]; then
+  SETTINGS_HELPER="$SCRIPT_DIR/../../bin/lib/settings.js"
+fi
+CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" CAVEMAN_SETTINGS_HELPER="$SETTINGS_HELPER" node --input-type=commonjs <<'NODE'
+const fs = require('fs');
+try {
+  const manifest = process.env.CAVEMAN_HOOKS_DIR + '/package.json';
+  if (fs.existsSync(manifest)) {
+    const value = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value) || (value.type !== undefined && value.type !== 'commonjs')) {
+      throw new Error('existing hooks/package.json is incompatible with CommonJS hooks');
+    }
+  }
+  const file = process.env.CAVEMAN_SETTINGS;
+  if (fs.existsSync(file)) {
+    const helper = process.env.CAVEMAN_SETTINGS_HELPER;
+    const value = helper ? require(helper).readSettings(file) : JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('settings.json must be a readable object');
+  }
+} catch (error) {
+  console.error('Cannot install standalone hooks: ' + error.message);
+  console.error('Nothing was changed. For JSONC settings, use bin/install.js from a clone.');
+  process.exit(1);
+}
+NODE
 
 # Check if already installed (unless --force). Older installs only had two hook
 # files, so require the full current set plus the hook registrations before we
@@ -64,14 +93,18 @@ if [ "$FORCE" -eq 0 ]; then
     if CAVEMAN_SETTINGS="$SETTINGS" node -e "
       const fs = require('fs');
       const settings = JSON.parse(fs.readFileSync(process.env.CAVEMAN_SETTINGS, 'utf8'));
-      const hasCavemanHook = (event) =>
+      // Probe for the exact script we wire for this event, not a bare
+      // 'caveman' substring — that also matches user hooks merely mentioning
+      // the word in a path (#593), which made us skip wiring and silently
+      // leave caveman inactive.
+      const hasCavemanHook = (event, script) =>
         Array.isArray(settings.hooks?.[event]) &&
         settings.hooks[event].some(e =>
-          e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+          e.hooks && e.hooks.some(h => h.command && h.command.includes(script))
         );
       process.exit(
-        hasCavemanHook('SessionStart') &&
-        hasCavemanHook('UserPromptSubmit') &&
+        hasCavemanHook('SessionStart', 'caveman-activate.js') &&
+        hasCavemanHook('UserPromptSubmit', 'caveman-mode-tracker.js') &&
         !!settings.statusLine
           ? 0
           : 1
@@ -106,6 +139,10 @@ mkdir -p "$HOOKS_DIR"
 
 # 2. Copy or download hook files
 for hook in "${HOOK_FILES[@]}"; do
+  if [ "$hook" = "package.json" ] && [ -e "$HOOKS_DIR/$hook" ]; then
+    echo "  Preserved existing: $HOOKS_DIR/$hook"
+    continue
+  fi
   if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$hook" ]; then
     cp "$SCRIPT_DIR/$hook" "$HOOKS_DIR/$hook"
   else
@@ -122,29 +159,39 @@ if [ ! -f "$SETTINGS" ]; then
   echo '{}' > "$SETTINGS"
 fi
 
-# Back up existing settings.json before touching it
-cp "$SETTINGS" "$SETTINGS.bak"
+# Back up existing settings.json before touching it. Back up ONCE: without the
+# guard a --force reinstall overwrites the only pre-caveman copy with the
+# already-merged file, destroying the user's recovery path. Same guard as
+# bin/install.js.
+if [ ! -f "$SETTINGS.bak" ]; then
+  cp "$SETTINGS" "$SETTINGS.bak"
+fi
 
 # Pass paths via env vars — avoids shell injection if $HOME contains single quotes
-CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
+CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" CAVEMAN_SETTINGS_HELPER="$SETTINGS_HELPER" node -e "
   const fs = require('fs');
   const settingsPath = process.env.CAVEMAN_SETTINGS;
   const hooksDir = process.env.CAVEMAN_HOOKS_DIR;
   const managedStatusLinePath = hooksDir + '/caveman-statusline.sh';
-  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  const shared = process.env.CAVEMAN_SETTINGS_HELPER ? require(process.env.CAVEMAN_SETTINGS_HELPER) : null;
+  const meta = {};
+  const settings = shared ? shared.readSettings(settingsPath, meta) : JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('settings.json must be a readable object');
+  if (meta.jsonc) console.log('  Comments are preserved in ' + settingsPath + '.bak; updated settings use JSON.');
   if (!settings.hooks) settings.hooks = {};
 
   // SessionStart — auto-load caveman rules
   if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
+  // Match the exact script, not a bare 'caveman' substring (#593).
   const hasStart = settings.hooks.SessionStart.some(e =>
-    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-activate.js'))
   );
   if (!hasStart) {
     settings.hooks.SessionStart.push({
       hooks: [{
         type: 'command',
         command: 'node \"' + hooksDir + '/caveman-activate.js\"',
-        timeout: 5,
+        timeout: 30,
         statusMessage: 'Loading caveman mode...'
       }]
     });
@@ -153,14 +200,14 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
   // UserPromptSubmit — track mode changes when user types /caveman commands
   if (!settings.hooks.UserPromptSubmit) settings.hooks.UserPromptSubmit = [];
   const hasPrompt = settings.hooks.UserPromptSubmit.some(e =>
-    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-mode-tracker.js'))
   );
   if (!hasPrompt) {
     settings.hooks.UserPromptSubmit.push({
       hooks: [{
         type: 'command',
         command: 'node \"' + hooksDir + '/caveman-mode-tracker.js\"',
-        timeout: 5,
+        timeout: 30,
         statusMessage: 'Tracking caveman mode...'
       }]
     });
@@ -185,7 +232,8 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
     }
   }
 
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  if (shared) shared.writeSettings(settingsPath, settings);
+  else fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   console.log('  Hooks wired in settings.json');
 "
 

@@ -1,0 +1,70 @@
+{
+  "tools": [
+    {
+      "name": "write_file",
+      "description": "Write bytes to a file on disk. This trailing sentence is pure filler that carries no rule and should be dropped once the description grows past the small budget. The path must be an absolute path. Provide exactly one of body or body_b64.",
+      "inputSchema": {
+        "type": "object",
+        "title": "WriteFileArgs",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Target path, e.g. /srv/data/out.txt. It must be absolute, not relative.",
+            "examples": ["/srv/x"]
+          },
+          "body": {
+            "type": "string",
+            "description": "UTF-8 text contents. Exactly one of body or body_b64 is required."
+          },
+          "body_b64": {
+            "type": "string",
+            "description": "Base64-encoded contents. Rejected if body is also set."
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["overwrite", "append"],
+            "default": "overwrite",
+            "description": "How to write the file."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Sets the limit. Anything over 100 errors."
+          },
+          "count": {
+            "type": "integer",
+            "description": "The number of items to return in a single page of results, which the server paginates for you automatically without any further round trips or extra bookkeeping on your side. Values above 100 are not allowed and negative numbers are invalid."
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "schedule_event",
+      "description": "Create a calendar event.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string",
+            "description": "Event start time. The format must be RFC3339, e.g. 2026-08-08T14:00:00Z. Values without a timezone are rejected."
+          },
+          "duration": {
+            "$ref": "#/$defs/ISO8601Duration"
+          }
+        },
+        "required": ["start"],
+        "$defs": {
+          "ISO8601Duration": {
+            "type": "string",
+            "description": "An ISO 8601 duration. Must match the P#DT#H#M#S grammar."
+          },
+          "default": {
+            "type": "string",
+            "description": "A definition whose name collides with a metadata key. It must not be dropped."
+          }
+        }
+      }
+    }
+  ]
+}

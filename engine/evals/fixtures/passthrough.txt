@@ -1,0 +1,4 @@
+This is an ordinary paragraph of prose. It carries no repetitive structure,
+no JSON, no log levels, and no source code. The engine should detect it as
+plain text and pass it through byte-for-byte unchanged, claiming no savings.
+Honesty means the engine never pretends to compress what it cannot.

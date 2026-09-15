@@ -1,0 +1,1784 @@
+package standalone
+
+import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/JuliusBrussee/caveman/engine"
+	"github.com/JuliusBrussee/caveman/engine/ccr"
+	"github.com/JuliusBrussee/caveman/proxy/internal/config"
+	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
+	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
+	"github.com/JuliusBrussee/caveman/proxy/internal/store"
+	"github.com/JuliusBrussee/caveman/proxy/providers"
+)
+
+type captureUpstreamTransport struct {
+	body     []byte
+	headers  http.Header
+	url      string
+	status   int
+	response string
+}
+
+func (t *captureUpstreamTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	body, _ := io.ReadAll(r.Body)
+	t.body = append([]byte(nil), body...)
+	t.headers = r.Header.Clone()
+	t.url = r.URL.String()
+	status := t.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Header:     http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"u1"}},
+		Body:       io.NopCloser(strings.NewReader(t.response)),
+		Request:    r,
+	}, nil
+}
+
+// TestStandaloneBoot_ZeroCloudDeps_InferredRows boots the full standalone server
+// — config + BYOK + SQLite — with no Valkey/Postgres/ClickHouse anywhere, proxies
+// one request to a loopback upstream, and asserts the persisted spend row is
+// labeled `inferred` with a positive cost.
+// TestMain isolates the suite from the host's corporate-network variables,
+// which config.Load now reads (#1001).
+func TestMain(m *testing.M) {
+	for _, name := range []string{"CAVE_UPSTREAM_PROXY", "CAVE_CA_BUNDLE", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+		"AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN"} {
+		os.Unsetenv(name)
+	}
+	// The Bedrock resolver now ends in the AWS default chain. A runner that is
+	// itself an EC2/ECS host would hand every "no credentials" test a real role,
+	// and any other host would spend the IMDS dial timeout per case instead.
+	os.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	os.Exit(m.Run())
+}
+
+func TestStandaloneBoot_ZeroCloudDeps_InferredRows(t *testing.T) {
+	const respBody = `{"id":"resp_stub","model":"gpt-5.5","output":[{"type":"message","content":[{"type":"output_text","text":"hi"}]}],"usage":{"input_tokens":1000,"output_tokens":120,"input_tokens_details":{"cached_tokens":0}}}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Header().Set("x-request-id", "u1")
+		_, _ = io.WriteString(w, respBody)
+	}))
+	defer upstream.Close()
+
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer spend.Close()
+
+	cfg := config.Config{
+		Mode:      "record",
+		Providers: map[string]config.ProviderConfig{"openai": {BaseURL: upstream.URL}},
+	}
+	// Plain client: the upstream stub is on loopback; the SSRF-guarded default
+	// (exercised in the SSRF test) would block it.
+	srv := New(cfg, spend, Options{HTTPClient: &http.Client{}})
+
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"hi"}`))
+	req.Header.Set("authorization", "Bearer sk-openai-test")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	stats, err := spend.Summary()
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if stats.Requests != 1 {
+		t.Errorf("requests = %d, want 1 row persisted", stats.Requests)
+	}
+	if stats.TotalCost <= 0 {
+		t.Errorf("total cost = %v, want > 0", stats.TotalCost)
+	}
+	if stats.Basis != "inferred" {
+		t.Errorf("basis = %q, want inferred (standalone never claims verified)", stats.Basis)
+	}
+}
+
+func TestStandaloneActiveModeAutoCachesAcrossProvidersAndModelSwitches(t *testing.T) {
+	t.Setenv("CAVEMAN_MODE", "active")
+	t.Setenv("CAVEMAN_BREAKPOINT_PLAN", "")
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatalf("load defaults: %v", err)
+	}
+	upstream := &captureUpstreamTransport{response: `{}`}
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spend.Close()
+	srv := New(cfg, spend, Options{HTTPClient: &http.Client{Transport: upstream}})
+
+	send := func(path, body string) []byte {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("x-api-key", "provider-test-key")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+		return bytes.Clone(upstream.body)
+	}
+
+	anthropicBody := send("/anthropic/v1/messages", `{"model":"claude-sonnet-4-6","max_tokens":64,"tools":[{"name":"workspace","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"inspect"}]}`)
+	if !bytes.Contains(anthropicBody, []byte(`"cache_control"`)) {
+		t.Fatalf("Anthropic default missed cache breakpoint: %s", anthropicBody)
+	}
+	bedrockBody := send("/bedrock/model/global.anthropic.claude-sonnet-4-6/converse", `{"system":[{"text":"stable policy"}],"messages":[{"role":"user","content":[{"text":"inspect"}]}]}`)
+	if !bytes.Contains(bedrockBody, []byte(`"cachePoint"`)) {
+		t.Fatalf("Bedrock default missed cache point: %s", bedrockBody)
+	}
+
+	openAIKey := func(model string) string {
+		t.Helper()
+		body := send("/openai/v1/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"system","content":"stable policy"},{"role":"user","content":"inspect"}]}`, model))
+		var root map[string]any
+		if err := json.Unmarshal(body, &root); err != nil {
+			t.Fatalf("decode OpenAI body: %v", err)
+		}
+		key, _ := root["prompt_cache_key"].(string)
+		if key == "" {
+			t.Fatalf("OpenAI default missed prompt_cache_key: %s", body)
+		}
+		return key
+	}
+	first := openAIKey("gpt-5.6")
+	switched := openAIKey("gpt-5.6-sol")
+	back := openAIKey("gpt-5.6")
+	if first == switched || first != back {
+		t.Fatalf("model cache lanes not isolated/stable: first=%q switched=%q back=%q", first, switched, back)
+	}
+}
+
+func TestStandaloneStripsSignedNativeSessionMarkerBeforeProviderAndCorrelatesRow(t *testing.T) {
+	const response = `{"id":"resp","model":"gpt-5.5","output":[],"usage":{"input_tokens":10,"output_tokens":1}}`
+	upstream := &captureUpstreamTransport{response: response}
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spend.Close()
+	sink := &recordingSink{inner: spend}
+	key := bytes.Repeat([]byte{4}, 32)
+	marker, err := nativeruntime.SessionMarker(key, "claude:host-77")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Mode: "record"}
+	srv := New(cfg, sink, Options{
+		HTTPClient:       &http.Client{Transport: upstream},
+		SessionMarkerKey: key,
+	})
+	original := `{"model":"gpt-5.5","input":"Core\n` + marker + `\nkeep exact"}`
+	want := `{"model":"gpt-5.5","input":"Core\nkeep exact"}`
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(original))
+	req.Header.Set("authorization", "Bearer sk-openai-test")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if string(upstream.body) != want {
+		t.Fatalf("provider bytes changed beyond marker removal:\ngot  %s\nwant %s", upstream.body, want)
+	}
+	if strings.Contains(string(upstream.body), "caveman-session-v1") {
+		t.Fatal("session marker reached provider")
+	}
+	if sink.last.SessionID != "claude:host-77" {
+		t.Fatalf("telemetry session id = %q, want signed marker identity", sink.last.SessionID)
+	}
+	if sink.last.SessionCorrelationBasis != "signed_marker" {
+		t.Fatalf("correlation basis = %q, want signed_marker", sink.last.SessionCorrelationBasis)
+	}
+}
+
+func TestStandaloneUsesOnlyExplicitApproximateSessionFallback(t *testing.T) {
+	const response = `{"id":"resp","model":"gpt-5.5","output":[],"usage":{"input_tokens":10,"output_tokens":1}}`
+	upstream := &captureUpstreamTransport{response: response}
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spend.Close()
+	sink := &recordingSink{inner: spend}
+	srv := New(config.Config{Mode: "record"}, sink, Options{
+		HTTPClient: &http.Client{Transport: upstream},
+		SessionFallback: func(time.Time, string, string) (string, string) {
+			return "claude:recent", "unique_recent_time_model"
+		},
+	})
+	original := `{"model":"gpt-5.5","input":"markerless exact bytes"}`
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(original))
+	req.Header.Set("authorization", "Bearer sk-openai-test")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if string(upstream.body) != original {
+		t.Fatalf("fallback changed provider bytes: got %s want %s", upstream.body, original)
+	}
+	if sink.last.SessionID != "claude:recent" || sink.last.SessionCorrelationBasis != "unique_recent_time_model" {
+		t.Fatalf("fallback correlation not labeled approximate: %+v", sink.last)
+	}
+}
+
+func TestStandaloneLeavesAmbiguousFallbackUncorrelated(t *testing.T) {
+	upstream := &captureUpstreamTransport{response: `{"id":"resp","model":"gpt-5.5","output":[]}`}
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spend.Close()
+	sink := &recordingSink{inner: spend}
+	srv := New(config.Config{Mode: "record"}, sink, Options{
+		HTTPClient: &http.Client{Transport: upstream},
+		SessionFallback: func(time.Time, string, string) (string, string) {
+			return "", ""
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"ambiguous"}`))
+	req.Header.Set("authorization", "Bearer sk-openai-test")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if sink.last.SessionID != "" || sink.last.SessionCorrelationBasis != "" {
+		t.Fatalf("ambiguous fallback must remain uncorrelated: %+v", sink.last)
+	}
+}
+
+// TestStandaloneSSRF_BlocksPrivateUpstream proves the SSRF dial guard is always
+// on in standalone (not gated on CAVE_ENV=prod): a request whose upstream is a
+// private RFC1918 address is blocked at dial time, surfacing as a 502 rather than
+// letting the local proxy reach an internal host.
+func TestStandaloneSSRF_BlocksPrivateUpstream(t *testing.T) {
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer spend.Close()
+
+	cfg := config.Config{
+		Mode:      "record",
+		Providers: map[string]config.ProviderConfig{"openai": {BaseURL: "https://10.0.0.1:443"}},
+	}
+	// Options{} → the default SSRF-guarded standalone client (no plain-client override).
+	srv := New(cfg, spend, Options{})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.5","input":"hi"}`))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 — a private-IP upstream must be blocked by the SSRF guard", rec.Code)
+	}
+}
+
+func TestStandaloneProductionTransportPreservesEncodedResponseWireBytes(t *testing.T) {
+	payload := []byte(`{"id":"resp_gzip","model":"gpt-5.5","usage":{"input_tokens":3,"output_tokens":2}}`)
+	var encoded bytes.Buffer
+	zw := gzip.NewWriter(&encoded)
+	if _, err := zw.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wireBody := append([]byte(nil), encoded.Bytes()...)
+	acceptEncodings := make(chan string, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		acceptEncodings <- r.Header.Get("Accept-Encoding")
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("X-Request-Id", "gzip-wire")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(wireBody)
+	}))
+	defer upstream.Close()
+
+	t.Setenv("CAVE_SSRF_ALLOWLIST", "127.0.0.1")
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spend.Close()
+	srv := New(config.Config{
+		Mode:      "record",
+		Providers: map[string]config.ProviderConfig{"openai": {BaseURL: upstream.URL}},
+	}, spend, Options{HTTPClient: StandaloneHTTPClient(config.Config{}, time.Minute)})
+
+	for _, tc := range []struct {
+		name           string
+		acceptEncoding string
+	}{
+		{name: "absent"},
+		{name: "explicit", acceptEncoding: "gzip"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"wire"}`))
+			req.Header.Set("authorization", "Bearer sk-openai-test")
+			if tc.acceptEncoding != "" {
+				req.Header.Set("Accept-Encoding", tc.acceptEncoding)
+			}
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%q", rec.Code, rec.Body.Bytes())
+			}
+			if got := <-acceptEncodings; got != tc.acceptEncoding {
+				t.Fatalf("upstream Accept-Encoding=%q, want %q", got, tc.acceptEncoding)
+			}
+			if got := rec.Header().Get("Content-Encoding"); got != "gzip" {
+				t.Fatalf("Content-Encoding=%q, want gzip", got)
+			}
+			if !bytes.Equal(rec.Body.Bytes(), wireBody) {
+				t.Fatalf("encoded provider bytes changed: got=%x want=%x", rec.Body.Bytes(), wireBody)
+			}
+		})
+	}
+}
+
+// TestEngineCompressor_StoreOriginalRoundTrip proves the recovery contract that
+// compress mode relies on: the handle StoreOriginal returns resolves, through a
+// plain engine over the same CCR store, back to the exact original bytes.
+func TestEngineCompressor_StoreOriginalRoundTrip(t *testing.T) {
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatalf("open ccr: %v", err)
+	}
+	defer store.Close()
+
+	comp := NewEngineCompressor(store)
+	original := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"recover me exactly"}]}`)
+	handle, err := comp.StoreOriginal(original)
+	if err != nil {
+		t.Fatalf("store original: %v", err)
+	}
+	if handle == "" {
+		t.Fatal("StoreOriginal returned an empty handle")
+	}
+
+	got, err := engine.New(store, nil).Retrieve(handle)
+	if err != nil {
+		t.Fatalf("retrieve: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Errorf("retrieved bytes != original:\n got %s\nwant %s", got, original)
+	}
+}
+
+// TestEngineCompressor_QueryTargetedRetrieve proves the query-targeted recovery
+// path copied from Headroom's store.search: with no query the full original content
+// block comes back byte-exact; with a query only BM25-relevant sections return, so
+// a model needing one detail does not re-ingest the whole block. StoreOriginal is
+// called per provider content block, not with an enclosing wire request.
+func TestEngineCompressor_QueryTargetedRetrieve(t *testing.T) {
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatalf("open ccr: %v", err)
+	}
+	defer store.Close()
+
+	comp := &engineCompressor{eng: engine.New(store, nil), store: store}
+	original := []byte("Section about kubernetes pod scheduling and node affinity rules.\n\n" +
+		"Section about postgres vacuum tuning and autovacuum thresholds.\n\n" +
+		"Section about redis eviction policies and maxmemory settings.")
+	handle, err := comp.StoreOriginal(original)
+	if err != nil {
+		t.Fatalf("store original: %v", err)
+	}
+
+	full, err := comp.RetrieveOriginal(handle, "")
+	if err != nil {
+		t.Fatalf("full retrieve: %v", err)
+	}
+	if !bytes.Equal(full, original) {
+		t.Errorf("empty query must return the byte-exact original:\n got %s", full)
+	}
+
+	narrowed, err := comp.RetrieveOriginal(handle, "postgres autovacuum tuning")
+	if err != nil {
+		t.Fatalf("query retrieve: %v", err)
+	}
+	if !strings.Contains(string(narrowed), "vacuum") {
+		t.Errorf("query-targeted retrieve must include the relevant section, got: %s", narrowed)
+	}
+	if strings.Contains(string(narrowed), "kubernetes") || strings.Contains(string(narrowed), "redis eviction") {
+		t.Errorf("query-targeted retrieve must drop irrelevant sections, got: %s", narrowed)
+	}
+	if len(narrowed) >= len(full) {
+		t.Errorf("query-targeted retrieve (%d bytes) must be smaller than full recovery (%d bytes)", len(narrowed), len(full))
+	}
+}
+
+// TestStandaloneCompressMode_RealEngine_Recoverable boots standalone in compress
+// mode with the real engine, sends a request whose message content is a
+// compressible JSON payload, and proves the disclosed CCR handle recovers the exact
+// original live-zone block through the engine.
+func TestStandaloneCompressMode_RealEngine_Recoverable(t *testing.T) {
+	t.Setenv("CAVE_ENGINE_TOON", "")
+	const respBody = `{"id":"c","object":"chat.completion","model":"gpt-5.5","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1000,"completion_tokens":10}}`
+	upstream := &captureUpstreamTransport{response: respBody}
+
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer spend.Close()
+
+	recovery, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatalf("open ccr: %v", err)
+	}
+	defer recovery.Close()
+
+	cfg := config.Config{
+		Mode:      "compress",
+		Providers: map[string]config.ProviderConfig{"openai": {BaseURL: "https://upstream.test"}},
+	}
+	srv := New(cfg, spend, Options{HTTPClient: &http.Client{Transport: upstream}, Compressor: NewEngineCompressor(recovery)})
+
+	// Message content is a JSON document with a long array — the engine's JSON
+	// compressor collapses arrays longer than 8, guaranteeing a real reduction.
+	items := make([]map[string]any, 80)
+	for i := range items {
+		items[i] = map[string]any{"id": i + 1, "name": "very repetitive fixture row", "city": "boulder"}
+	}
+	inner, _ := json.Marshal(map[string]any{"items": items})
+	if len(inner) < 512 {
+		t.Fatalf("test fixture is %d bytes, want live-zone eligible", len(inner))
+	}
+	reqMap := map[string]any{"model": "gpt-5.5", "messages": []any{map[string]any{"role": "user", "content": string(inner)}}}
+	reqBytes, _ := json.Marshal(reqMap)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(reqBytes))
+	req.Header.Set("authorization", "Bearer sk-openai-test")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	handle := rec.Header().Get("x-caveman-recovery-handle")
+	if handle == "" {
+		t.Fatal("compress mode produced no recovery handle for a compressible JSON payload")
+	}
+	if string(upstream.body) == string(reqBytes) {
+		t.Error("upstream received the original body; compress mode should have shrunk it")
+	}
+
+	got, err := engine.New(recovery, nil).Retrieve(handle)
+	if err != nil {
+		t.Fatalf("retrieve original block: %v", err)
+	}
+	if !bytes.Equal(got, inner) {
+		t.Errorf("recovered block != original:\n got %s\nwant %s", got, inner)
+	}
+	stats, err := recovery.Summary()
+	if err != nil {
+		t.Fatalf("recovery stats: %v", err)
+	}
+	if stats.Totals.TokensBefore <= 0 || stats.Totals.TokensAfter <= 0 || stats.Totals.TokensAfter >= stats.Totals.TokensBefore {
+		t.Fatalf("standalone compression erased engine CCR accounting: %+v", stats.Totals)
+	}
+}
+
+// TestStandaloneCompressMode_RealEngine_QueryAware proves query relevance reaches
+// the real JSON compressor through the full proxy path. The planted middle row is
+// neither positional, anomalous, nor error-like; only latest-user query relevance
+// requires it to survive compression.
+func TestStandaloneCompressMode_RealEngine_QueryAware(t *testing.T) {
+	t.Setenv("CAVE_ENGINE_TOON", "")
+	const respBody = `{"id":"c","object":"chat.completion","model":"gpt-5.5","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1000,"completion_tokens":10}}`
+	upstream := &captureUpstreamTransport{response: respBody}
+
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer spend.Close()
+	recovery, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatalf("open ccr: %v", err)
+	}
+	defer recovery.Close()
+
+	items := make([]map[string]any, 80)
+	for i := range items {
+		status := "host-0000-alpha"
+		if i == 25 {
+			status = "host-0025-omega"
+		}
+		items[i] = map[string]any{"id": i, "status": status}
+	}
+	toolOutput, _ := json.Marshal(map[string]any{"items": items})
+	reqBytes, _ := json.Marshal(map[string]any{
+		"model": "gpt-5.5",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "find host-0025-omega"},
+			map[string]any{"role": "assistant", "content": "", "tool_calls": []any{
+				map[string]any{"id": "c1", "type": "function", "function": map[string]any{"name": "inventory", "arguments": "{}"}},
+			}},
+			map[string]any{"role": "tool", "tool_call_id": "c1", "content": string(toolOutput)},
+		},
+	})
+	srv := New(config.Config{
+		Mode:      "compress",
+		Providers: map[string]config.ProviderConfig{"openai": {BaseURL: "https://upstream.test"}},
+	}, spend, Options{
+		HTTPClient:     &http.Client{Transport: upstream},
+		Compressor:     NewEngineCompressor(recovery),
+		RecoveryViaMCP: true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(reqBytes))
+	req.Header.Set("authorization", "Bearer sk-openai-test")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(upstream.body, []byte("host-0025-omega")) {
+		t.Fatalf("query-relevant middle row was dropped by full proxy path: %s", upstream.body)
+	}
+	if !bytes.Contains(upstream.body, []byte(`__caveman_elided__`)) {
+		t.Fatalf("query-aware request did not still compress irrelevant rows: %s", upstream.body)
+	}
+	if bytes.Equal(upstream.body, reqBytes) {
+		t.Fatal("query-aware request passed through unchanged")
+	}
+
+	handle := rec.Header().Get("x-caveman-recovery-handle")
+	recovered, err := engine.New(recovery, nil).Retrieve(handle)
+	if err != nil {
+		t.Fatalf("recover query-aware block: %v", err)
+	}
+	if !bytes.Equal(recovered, toolOutput) {
+		t.Fatalf("CCR did not preserve exact original tool output:\n got %s\nwant %s", recovered, toolOutput)
+	}
+}
+
+// TestStandaloneSubscriptionCompress_NoAccountRequired proves the invariant end to end
+// with the real engine: a subscription-authenticated coding-agent request takes
+// live-zone compression with NO account signal in the environment at all, while
+// `record` mode stays byte-identical pass-through. The persisted row is
+// tokens-only — inferred, no dollars.
+func TestStandaloneSubscriptionCompress_NoAccountRequired(t *testing.T) {
+	t.Setenv("CAVE_ENGINE_TOON", "")
+	const respBody = `{"id":"msg","type":"message","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1000,"output_tokens":10}}`
+
+	items := make([]map[string]any, 80)
+	for i := range items {
+		items[i] = map[string]any{"id": i + 1, "name": "very repetitive fixture row", "city": "boulder"}
+	}
+	inner, _ := json.Marshal(map[string]any{"items": items})
+	reqBytes, _ := json.Marshal(map[string]any{
+		"model":      "claude-sonnet-4-6",
+		"max_tokens": 1024,
+		"messages":   []any{map[string]any{"role": "user", "content": string(inner)}},
+	})
+
+	run := func(t *testing.T, mode string) ([]byte, gateway.RequestRecord) {
+		t.Helper()
+		// Deliberately no account signal of any kind in the environment.
+		upstream := &captureUpstreamTransport{response: respBody}
+		spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+		defer spend.Close()
+		recovery, err := ccr.OpenMemory()
+		if err != nil {
+			t.Fatalf("open ccr: %v", err)
+		}
+		defer recovery.Close()
+
+		cfg, err := config.Load(filepath.Join(t.TempDir(), "absent.yaml"))
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		cfg.Mode = mode
+		cfg.Providers = map[string]config.ProviderConfig{"anthropic": {BaseURL: "https://upstream.test"}}
+		sink := &recordingSink{inner: spend}
+		// The binary wires exactly these three for compress mode: the engine
+		// compressor, the spend store as the durable prefix-replacement cache, and MCP
+		// recovery (which `caveman wrap` installs for the agent).
+		srv := New(cfg, sink, Options{
+			HTTPClient:     &http.Client{Transport: upstream},
+			Compressor:     NewEngineCompressor(recovery),
+			PrefixCache:    spend,
+			RecoveryViaMCP: true,
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(reqBytes))
+		req.Header.Set("user-agent", "claude-cli/1.0.0")
+		req.Header.Set("authorization", "Bearer sk-ant-oat-test")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		return upstream.body, sink.last
+	}
+
+	t.Run("record mode stays byte-identical pass-through", func(t *testing.T) {
+		got, row := run(t, "record")
+		if !bytes.Equal(got, reqBytes) {
+			t.Fatalf("record mode must be byte-identical passthrough:\n got %s\nwant %s", got, reqBytes)
+		}
+		if row.CompressionTokensBefore != 0 {
+			t.Fatalf("record row must claim no compression: %+v", row)
+		}
+	})
+
+	t.Run("no account still compresses the live zone, tokens only", func(t *testing.T) {
+		got, row := run(t, "compress")
+		if bytes.Equal(got, reqBytes) {
+			t.Fatal("an account-less subscription request should have been compressed")
+		}
+		if !bytes.Contains(got, []byte("<<ccr:")) {
+			t.Fatalf("compressed subscription request must disclose a CCR marker: %s", got)
+		}
+		if row.CompressionTokensBefore <= row.CompressionTokensAfter {
+			t.Fatalf("row must record a token reduction: %+v", row)
+		}
+		if row.CompressionTokenCountBasis != "estimated_engine_o200k" {
+			t.Fatalf("compression_token_count_basis = %q, want estimated_engine_o200k", row.CompressionTokenCountBasis)
+		}
+		if row.Basis != "inferred" {
+			t.Fatalf("basis = %q, want inferred", row.Basis)
+		}
+		if row.TotalCostUSD != 0 || row.SavingsUSD != 0 || row.WouldSaveUSD != nil {
+			t.Fatalf("subscription row must carry no dollars: %+v", row)
+		}
+	})
+}
+
+// recordingSink tees the lifecycle row so a test can assert on it while the real
+// SQLite store still applies its own persistence-boundary re-zeroing.
+type recordingSink struct {
+	inner gateway.TelemetrySink
+	last  gateway.RequestRecord
+}
+
+func (s *recordingSink) Record(rec gateway.RequestRecord) {
+	s.last = rec
+	s.inner.Record(rec)
+}
+
+// TestCreds_PassthroughThenBYOK proves the credential resolver preserves a real
+// inbound provider credential and falls back to the operator BYOK env key only
+// when the request carries no credential.
+func TestCreds_PassthroughThenBYOK(t *testing.T) {
+	c := Creds{cfg: config.Config{}}
+
+	rRaw := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	rRaw.Header.Set("x-api-key", "sk-from-agent")
+	if got := c.Resolve("anthropic", rRaw).Key; got != "sk-from-agent" {
+		t.Errorf("passthrough key = %q, want sk-from-agent", got)
+	}
+
+	// OpenAI-style Bearer passthrough.
+	rBearer := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	rBearer.Header.Set("authorization", "Bearer sk-openai-agent")
+	if got := c.Resolve("openai", rBearer).Key; got != "sk-openai-agent" {
+		t.Errorf("bearer passthrough key = %q, want sk-openai-agent", got)
+	}
+
+	t.Setenv("ANTHROPIC_API_KEY", "sk-byok-env")
+	if got := c.Resolve("anthropic", rRaw).Key; got != "sk-from-agent" {
+		t.Errorf("credential with env present = %q, want inbound sk-from-agent", got)
+	}
+	rNoAuth := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	if got := c.Resolve("anthropic", rNoAuth).Key; got != "sk-byok-env" {
+		t.Errorf("BYOK fallback key = %q, want sk-byok-env", got)
+	}
+}
+
+func TestBuildAdapters_RegistersNamedCompatBeforeLegacy(t *testing.T) {
+	cfg := config.Config{
+		Compat: map[string]config.CompatConfig{
+			"openrouter": {BaseURL: "https://openrouter.ai/api"},
+			"groq":       {BaseURL: "https://api.groq.com/openai"},
+		},
+		Providers: map[string]config.ProviderConfig{
+			"openai_compatible": {BaseURL: "https://legacy.example.test"},
+		},
+	}
+	adapters := buildAdapters(cfg)
+
+	req := httptest.NewRequest(http.MethodPost, "/compat/openrouter/v1/chat/completions", nil)
+	matched := false
+	for _, adapter := range adapters {
+		if !adapter.MatchRoute(req.Method, req.URL.Path) {
+			continue
+		}
+		matched = true
+		upstream, err := adapter.ResolveUpstreamURL(req.Context(), req, providers.RouteContext{})
+		if err != nil {
+			t.Fatalf("resolve named compat: %v", err)
+		}
+		want := "https://openrouter.ai/api/v1/chat/completions"
+		if got := upstream.String(); got != want {
+			t.Fatalf("first matching adapter resolved %q, want named upstream %q", got, want)
+		}
+		break
+	}
+	if !matched {
+		t.Fatal("no adapter matched named compat route")
+	}
+
+	legacyReq := httptest.NewRequest(http.MethodPost, "/compat/openai-compatible/v1/chat/completions", nil)
+	matched = false
+	for _, adapter := range adapters {
+		if !adapter.MatchRoute(legacyReq.Method, legacyReq.URL.Path) {
+			continue
+		}
+		matched = true
+		upstream, err := adapter.ResolveUpstreamURL(legacyReq.Context(), legacyReq, providers.RouteContext{})
+		if err != nil {
+			t.Fatalf("resolve legacy compat: %v", err)
+		}
+		want := "https://legacy.example.test/v1/chat/completions"
+		if got := upstream.String(); got != want {
+			t.Fatalf("legacy adapter resolved %q, want %q", got, want)
+		}
+		break
+	}
+	if !matched {
+		t.Fatal("no adapter matched legacy compat route")
+	}
+}
+
+// TestBuildAdapters_PassesCompatWireDialect verifies the mount's configured
+// usage dialect reaches the adapter's usage scanner (issue #1026): an
+// anthropic-dialect mount must account a cache-warm Anthropic-shape stream —
+// input_tokens excluding the cache read — as provider-complete, while the same
+// body on a dialect-less mount keeps the legacy malformed verdict.
+func TestBuildAdapters_PassesCompatWireDialect(t *testing.T) {
+	const warmStream = "event: message_start\n" +
+		`data: {"type": "message_start", "message": {"id": "msg_warm", "usage": {"input_tokens": 0, "output_tokens": 0}}}` + "\n" +
+		"event: message_delta\n" +
+		`data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"input_tokens": 36, "output_tokens": 4, "cache_read_input_tokens": 1280, "server_tool_use": {"web_search_requests": 0}, "service_tier": "standard"}}` + "\n" +
+		"event: message_stop\n" +
+		`data: {"type": "message_stop"}` + "\n"
+	cfg := config.Config{
+		Compat: map[string]config.CompatConfig{
+			"zai":     {BaseURL: "https://api.z.ai/api/anthropic", WireDialect: "anthropic"},
+			"plainai": {BaseURL: "https://api.example.test"},
+		},
+	}
+	scan := func(t *testing.T, path string) providers.UsageObservation {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		for _, adapter := range buildAdapters(cfg) {
+			if !adapter.MatchRoute(req.Method, req.URL.Path) {
+				continue
+			}
+			scanner := adapter.NewUsageScanner(http.Header{})
+			if _, err := scanner.Write([]byte(warmStream)); err != nil {
+				t.Fatalf("scanner write: %v", err)
+			}
+			return scanner.Usage()
+		}
+		t.Fatalf("no adapter matched %s", path)
+		return providers.UsageObservation{}
+	}
+	dialect := scan(t, "/compat/zai/v1/messages")
+	if dialect.Malformed || !dialect.Complete() || dialect.InputTokens != 1316 || dialect.CacheStatus != "hit" {
+		t.Errorf("anthropic-dialect usage = %+v, want complete input 1316 hit", dialect)
+	}
+	plain := scan(t, "/compat/plainai/v1/messages")
+	if !plain.Malformed {
+		t.Errorf("dialect-less usage = %+v, want legacy malformed verdict preserved", plain)
+	}
+}
+
+// resolveCompatRoute resolves path through the one named compat adapter that
+// matches it. It fails the test if zero or more than one adapter matches.
+func resolveCompatRoute(t *testing.T, cfg config.Config, path string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	var resolved []string
+	for _, adapter := range buildAdapters(cfg) {
+		if adapter.Name() != "openai_compatible" || !adapter.MatchRoute(req.Method, req.URL.Path) {
+			continue
+		}
+		upstream, err := adapter.ResolveUpstreamURL(req.Context(), req, providers.RouteContext{})
+		if err != nil {
+			t.Fatalf("resolve %s: %v", path, err)
+		}
+		resolved = append(resolved, upstream.String())
+	}
+	if len(resolved) != 1 {
+		t.Fatalf("%s matched %d compat adapters, want exactly one: %v", path, len(resolved), resolved)
+	}
+	return resolved[0]
+}
+
+func TestBuildAdapters_OpenCodeGoRouteUsesOpenCodeUpstream(t *testing.T) {
+	cases := map[string]string{
+		"/compat/opencode-go/v1/responses":        "https://opencode.ai/zen/go/v1/responses",
+		"/compat/opencode-go/v1/chat/completions": "https://opencode.ai/zen/go/v1/chat/completions",
+		"/compat/opencode-go/v1/messages":         "https://opencode.ai/zen/go/v1/messages",
+	}
+	for path, want := range cases {
+		if got := resolveCompatRoute(t, config.Config{}, path); got != want {
+			t.Errorf("OpenCode Go upstream for %s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// TestBuildAdapters_OpenCodeGoUserEntryReplacesBuiltin shows that a user
+// `compat.opencode-go` entry replaces the built-in upstream on the adapter path.
+// This entry is the escape hatch if OpenCode moves the endpoint.
+func TestBuildAdapters_OpenCodeGoUserEntryReplacesBuiltin(t *testing.T) {
+	cfg := config.Config{Compat: map[string]config.CompatConfig{
+		"opencode-go": {BaseURL: "https://opencode.example.test/zen", APIKeyEnv: "OPENCODE_ZEN_API_KEY"},
+	}}
+	cases := map[string]string{
+		"/compat/opencode-go/v1/responses": "https://opencode.example.test/zen/v1/responses",
+		"/compat/opencode-go/v1/messages":  "https://opencode.example.test/zen/v1/messages",
+	}
+	for path, want := range cases {
+		if got := resolveCompatRoute(t, cfg, path); got != want {
+			t.Errorf("user OpenCode Go upstream for %s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// TestCreds_OpenCodeGoBuiltinCompatCredential proves that the built-in OpenCode
+// Go mount has its own BYOK policy. The proxy adds this mount only if the user
+// config has no opencode-go entry. Thus a keyless request must not use the wrong
+// OPENAI_COMPAT_API_KEY secret. A user entry must still win.
+func TestCreds_OpenCodeGoBuiltinCompatCredential(t *testing.T) {
+	t.Setenv("OPENCODE_API_KEY", "sk-opencode")
+	t.Setenv("OPENAI_COMPAT_API_KEY", "sk-legacy")
+
+	builtin := Creds{cfg: config.Config{}}
+	req := httptest.NewRequest(http.MethodPost, "/compat/opencode-go/v1/responses", nil)
+	if got := builtin.Resolve("openai_compatible", req); got.Key != "sk-opencode" || got.AuthFallbackEnv != "OPENCODE_API_KEY" {
+		t.Errorf("built-in OpenCode Go credential = %+v, want OPENCODE_API_KEY key and fallback policy", got)
+	}
+
+	t.Setenv("OPENCODE_ZEN_API_KEY", "sk-user")
+	configured := Creds{cfg: config.Config{Compat: map[string]config.CompatConfig{
+		"opencode-go": {BaseURL: "https://opencode.example.test", APIKeyEnv: "OPENCODE_ZEN_API_KEY"},
+	}}}
+	if got := configured.Resolve("openai_compatible", req); got.Key != "sk-user" || got.AuthFallbackEnv != "OPENCODE_ZEN_API_KEY" {
+		t.Errorf("configured OpenCode Go credential = %+v, want the user api_key_env to win", got)
+	}
+}
+
+func TestBuildAdapters_DefaultCompatBareRoutePreservesConfiguredBase(t *testing.T) {
+	cfg := config.Config{Providers: map[string]config.ProviderConfig{
+		"openai_compatible": {BaseURL: "http://127.0.0.1:11434/v1?tenant=local"},
+	}}
+	adapters := buildAdapters(cfg)
+	req := httptest.NewRequest(http.MethodPost, "/compat/v1/chat/completions?stream=true", nil)
+	for _, adapter := range adapters {
+		if adapter.Name() != "openai_compatible" || !adapter.MatchRoute(req.Method, req.URL.Path) {
+			continue
+		}
+		upstream, err := adapter.ResolveUpstreamURL(req.Context(), req, providers.RouteContext{})
+		if err != nil {
+			t.Fatalf("resolve default compat: %v", err)
+		}
+		want := "http://127.0.0.1:11434/v1/chat/completions?tenant=local&stream=true"
+		if got := upstream.String(); got != want {
+			t.Fatalf("default compat upstream = %q, want %q", got, want)
+		}
+		return
+	}
+	t.Fatal("default compat adapter was not registered for configured base URL")
+}
+
+func TestBuildAdapters_RegistersBedrockFromResolvedRegion(t *testing.T) {
+	t.Setenv("CAVE_BEDROCK_REGION", "")
+	t.Setenv("AWS_REGION", "eu-west-1")
+	t.Setenv("AWS_DEFAULT_REGION", "us-east-2")
+	adapters := buildAdapters(config.Config{})
+
+	req := httptest.NewRequest(http.MethodPost, "/bedrock/model/anthropic.claude-3-5-sonnet-20241022-v2:0/converse", nil)
+	for _, adapter := range adapters {
+		if adapter.Name() != "bedrock" {
+			continue
+		}
+		if !adapter.MatchRoute(req.Method, req.URL.Path) {
+			t.Fatal("Bedrock adapter registered but did not match its native route")
+		}
+		upstream, err := adapter.ResolveUpstreamURL(req.Context(), req, providers.RouteContext{})
+		if err != nil {
+			t.Fatalf("resolve Bedrock route: %v", err)
+		}
+		want := "https://bedrock-runtime.eu-west-1.amazonaws.com/model/anthropic.claude-3-5-sonnet-20241022-v2:0/converse"
+		if got := upstream.String(); got != want {
+			t.Fatalf("Bedrock upstream = %q, want %q", got, want)
+		}
+		return
+	}
+	t.Fatal("Bedrock adapter was not registered without a raw base URL")
+}
+
+func TestCreds_NamedCompatEnvResolution(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-openrouter")
+	t.Setenv("OPENAI_COMPAT_API_KEY", "sk-legacy")
+	t.Setenv("OPENAI_API_KEY", "sk-global")
+	c := Creds{cfg: config.Config{Compat: map[string]config.CompatConfig{
+		"openrouter": {BaseURL: "https://openrouter.ai/api", APIKeyEnv: "OPENROUTER_API_KEY"},
+		"ollama":     {BaseURL: "http://localhost:11434", APIKeyEnv: ""},
+	}}}
+
+	openrouterReq := httptest.NewRequest(http.MethodPost, "/compat/openrouter/v1/chat/completions", nil)
+	if got := c.Resolve("openai_compatible", openrouterReq); got.Key != "sk-openrouter" || got.AuthFallbackEnv != "OPENROUTER_API_KEY" {
+		t.Errorf("openrouter credential = %+v, want per-name env key and fallback policy", got)
+	}
+
+	ollamaReq := httptest.NewRequest(http.MethodPost, "/compat/ollama/v1/chat/completions", nil)
+	if got := c.Resolve("openai_compatible", ollamaReq); got.Key != "" || got.AuthFallbackEnv != "" {
+		t.Errorf("ollama credential = %+v, want no auth and no fallback for empty api_key_env", got)
+	}
+
+	unknownReq := httptest.NewRequest(http.MethodPost, "/compat/unknown/v1/chat/completions", nil)
+	if got := c.Resolve("openai_compatible", unknownReq); got.Key != "sk-legacy" || got.AuthFallbackEnv != "OPENAI_COMPAT_API_KEY" {
+		t.Errorf("unknown compat credential = %+v, want legacy OPENAI_COMPAT_API_KEY", got)
+	}
+
+	openrouterReq.Header.Set("x-api-key", "sk-inbound")
+	if got := c.Resolve("openai_compatible", openrouterReq); got.Key != "sk-inbound" || got.AuthFallbackEnv != "OPENROUTER_API_KEY" {
+		t.Errorf("inbound credential = %+v, want passthrough key with named fallback policy", got)
+	}
+}
+
+// TestStandaloneGeminiGoogleEnvFallbackEndToEnd proves the resolver keeps the
+// Gemini fallback policy even when GEMINI_API_KEY is empty, so the gateway can
+// use the documented GOOGLE_API_KEY alias without borrowing a cross-provider
+// secret. The assertion observes the exact outbound header through the
+// listener-free transport seam.
+func TestStandaloneGeminiGoogleEnvFallbackEndToEnd(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "google-only-key")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	upstream := &captureUpstreamTransport{
+		response: `{"candidates":[],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1}}`,
+	}
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer spend.Close()
+
+	srv := New(config.Config{
+		Mode:      "record",
+		Providers: map[string]config.ProviderConfig{"gemini": {BaseURL: "https://upstream.test"}},
+	}, spend, Options{HTTPClient: &http.Client{Transport: upstream}})
+
+	req := httptest.NewRequest(http.MethodPost, "/gemini/v1beta/models/gemini-pro:generateContent", strings.NewReader(`{"model":"gemini-pro","contents":[]}`))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := upstream.headers.Get("x-goog-api-key"); got != "google-only-key" {
+		t.Fatalf("upstream x-goog-api-key = %q, want GOOGLE_API_KEY value", got)
+	}
+	if got := upstream.headers.Get("authorization"); got != "" {
+		t.Fatalf("upstream authorization = %q, want empty for Gemini API-key mode", got)
+	}
+}
+
+// Native SDK API-key headers must retain the caller's principal, including when
+// the persistent proxy has an unrelated provider key configured in its process.
+func TestStandaloneNativeProviderHeadersEndToEnd(t *testing.T) {
+	for _, provider := range []struct{ name, path, header, env string }{
+		{"gemini", "/gemini/v1beta/models/gemini-2.5-flash:generateContent", "x-goog-api-key", "GEMINI_API_KEY"},
+		{"azure_openai", "/azure/openai/v1/chat/completions", "api-key", "AZURE_OPENAI_API_KEY"},
+	} {
+		t.Run(provider.name, func(t *testing.T) {
+			for _, scenario := range []struct {
+				name, envKey string
+				otherAuth    bool
+			}{
+				{name: "SDK key only"},
+				{name: "SDK key overrides configured account", envKey: "different-account-key"},
+				{name: "native header takes API-key precedence", envKey: "different-account-key", otherAuth: true},
+			} {
+				t.Run(scenario.name, func(t *testing.T) {
+					t.Setenv(provider.env, scenario.envKey)
+					t.Setenv("GOOGLE_API_KEY", "")
+					upstream := &captureUpstreamTransport{response: `{}`}
+					spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer spend.Close()
+					srv := New(config.Config{
+						Mode: "record",
+						Providers: map[string]config.ProviderConfig{
+							provider.name: {BaseURL: "https://upstream.test"},
+						},
+					}, spend, Options{HTTPClient: &http.Client{Transport: upstream}})
+					const body = `{"model":"model","messages":[],"contents":[]}`
+					req := httptest.NewRequest(http.MethodPost, provider.path, strings.NewReader(body))
+					req.Header.Set(provider.header, "inbound-caller-key")
+					if scenario.otherAuth {
+						req.Header.Set("x-api-key", "legacy-alias-key")
+						req.Header.Set("Authorization", "Bearer another-key")
+					}
+					rec := httptest.NewRecorder()
+					srv.Handler().ServeHTTP(rec, req)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+					}
+					if got := upstream.headers.Get(provider.header); got != "inbound-caller-key" {
+						t.Errorf("upstream %s = %q, want inbound-caller-key", provider.header, got)
+					}
+					if got := upstream.headers.Get("Authorization"); got != "" {
+						t.Errorf("upstream Authorization = %q, want no competing credential", got)
+					}
+					if string(upstream.body) != body {
+						t.Errorf("record-mode body changed: %s", upstream.body)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestCredsNativeProviderHeadersStayProviderScoped(t *testing.T) {
+	for _, tc := range []struct{ provider, env string }{
+		{"gemini", "GEMINI_API_KEY"},
+		{"azure_openai", "AZURE_OPENAI_API_KEY"},
+		{"anthropic", "ANTHROPIC_API_KEY"},
+		{"openai", "OPENAI_API_KEY"},
+		{"openai_compatible", "OPENAI_COMPAT_API_KEY"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			t.Setenv(tc.env, "selected-provider-key")
+			req := httptest.NewRequest(http.MethodPost, "/unused", nil)
+			if tc.provider != "gemini" {
+				req.Header.Set("x-goog-api-key", "other-google-key")
+			}
+			if tc.provider != "azure_openai" {
+				req.Header.Set("api-key", "other-azure-key")
+			}
+			creds := Creds{cfg: config.Config{}}
+			if got := creds.Resolve(tc.provider, req); got.Key != "selected-provider-key" || got.AuthFallbackEnv != tc.env {
+				t.Errorf("foreign native header displaced selected provider: %+v", got)
+			}
+			req.Header.Set("Authorization", "Bearer inbound-bearer")
+			if got := creds.Resolve(tc.provider, req); got.Key != "inbound-bearer" || got.Scheme != "bearer" {
+				t.Errorf("foreign native header displaced caller bearer: %+v", got)
+			}
+		})
+	}
+}
+
+// TestStandaloneAzureAuthBoundariesEndToEnd keeps the synthetic placeholder
+// path distinct from real Entra bearer credentials: the exact sentinel may be
+// replaced by AZURE_OPENAI_API_KEY in api-key, while a real bearer keeps its
+// scheme and principal, including when another account's env key is configured.
+func TestStandaloneAzureAuthBoundariesEndToEnd(t *testing.T) {
+	const azurePath = "/azure/openai/deployments/gpt-prod/chat/completions?api-version=2024-10-21"
+	const response = `{"id":"azure","model":"gpt-5.5","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+	cases := []struct {
+		name       string
+		path       string
+		inbound    string
+		azureKey   string
+		openaiKey  string
+		wantStatus int
+		wantAPIKey string
+		wantAuth   string
+	}{
+		{
+			name:       "placeholder bearer becomes Azure api-key",
+			inbound:    "Bearer no-key-required",
+			azureKey:   "azure-key",
+			openaiKey:  "openai-unrelated",
+			wantStatus: http.StatusOK,
+			wantAPIKey: "azure-key",
+		},
+		{
+			name:       "real bearer preserves its scheme and account",
+			inbound:    "Bearer entra-access-token",
+			azureKey:   "azure-key",
+			openaiKey:  "openai-unrelated",
+			wantStatus: http.StatusOK,
+			wantAuth:   "Bearer entra-access-token",
+		},
+		{
+			name:       "OpenAI v1 SDK Bearer API key",
+			path:       "/azure/openai/v1/chat/completions",
+			inbound:    "Bearer provider-api-key",
+			azureKey:   "azure-other-account",
+			openaiKey:  "openai-unrelated",
+			wantStatus: http.StatusOK,
+			wantAuth:   "Bearer provider-api-key",
+		},
+		{
+			name:       "JWT-shaped env API key remains opaque",
+			azureKey:   "eyJopaque-api-key",
+			openaiKey:  "openai-unrelated",
+			wantStatus: http.StatusOK,
+			wantAPIKey: "eyJopaque-api-key",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AZURE_OPENAI_API_KEY", tc.azureKey)
+			t.Setenv("OPENAI_API_KEY", tc.openaiKey)
+			upstream := &captureUpstreamTransport{response: response}
+			spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer spend.Close()
+
+			srv := New(config.Config{
+				Mode:      "record",
+				Providers: map[string]config.ProviderConfig{"azure_openai": {BaseURL: "https://upstream.test"}},
+			}, spend, Options{HTTPClient: &http.Client{Transport: upstream}})
+			path := tc.path
+			if path == "" {
+				path = azurePath
+			}
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"gpt-5.5","messages":[]}`))
+			if tc.inbound != "" {
+				req.Header.Set("authorization", tc.inbound)
+			}
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantStatus == http.StatusOK {
+				if got := upstream.headers.Get("api-key"); got != tc.wantAPIKey {
+					t.Fatalf("upstream api-key = %q, want %q", got, tc.wantAPIKey)
+				}
+				if got := upstream.headers.Get("authorization"); got != tc.wantAuth {
+					t.Fatalf("upstream authorization = %q, want %q", got, tc.wantAuth)
+				}
+				if got := upstream.headers.Get("api-key"); got == tc.openaiKey {
+					t.Fatal("upstream api-key used unrelated OPENAI_API_KEY")
+				}
+			} else if upstream.headers != nil {
+				t.Fatalf("upstream was called for rejected Azure bearer: %#v", upstream.headers)
+			}
+		})
+	}
+}
+
+func TestStandaloneBedrockResignsSDKRequests(t *testing.T) {
+	const requestPath = "/bedrock/model/global.anthropic.claude-sonnet-4-6/converse"
+	const input = `{"system":[{"text":"stable policy"}],"messages":[{"role":"user","content":[{"text":"hello"}]}]}`
+	const secret = "configured-signing-secret"
+	for _, tc := range []struct {
+		name, accessKey, session string
+	}{
+		{"IAM takes precedence over configured bearer", "AKIAEXAMPLE", ""},
+		{"temporary IAM retains session token", "ASIAEXAMPLE", "temporary-session-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AWS_ACCESS_KEY_ID", tc.accessKey)
+			t.Setenv("AWS_SECRET_ACCESS_KEY", secret)
+			t.Setenv("AWS_SESSION_TOKEN", tc.session)
+			t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "another-account-bearer")
+			upstream := &captureUpstreamTransport{response: `{}`}
+			spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer spend.Close()
+			srv := New(config.Config{
+				Mode:       "active",
+				Optimizers: map[string]bool{"bedrock-cache-points": true},
+				Providers:  map[string]config.ProviderConfig{"bedrock": {BaseURL: "https://bedrock-runtime.us-east-1.amazonaws.com"}},
+			}, spend, Options{HTTPClient: &http.Client{Transport: upstream}})
+			req := httptest.NewRequest(http.MethodPost, requestPath, strings.NewReader(input))
+			inboundAuth := "AWS4-HMAC-SHA256 Credential=" + tc.accessKey + "/20260907/us-east-1/bedrock/aws4_request, SignedHeaders=host;x-amz-date, Signature=" + strings.Repeat("0", 64)
+			req.Header.Set("Authorization", inboundAuth)
+			req.Header.Set("X-Amz-Date", "20260907T000000Z")
+			if tc.session != "" {
+				req.Header.Set("X-Amz-Security-Token", tc.session)
+			}
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			outboundAuth := upstream.headers.Get("Authorization")
+			if !strings.HasPrefix(outboundAuth, "AWS4-HMAC-SHA256 Credential="+tc.accessKey+"/") ||
+				!strings.Contains(outboundAuth, "/us-east-1/bedrock/aws4_request") || outboundAuth == inboundAuth {
+				t.Fatalf("request was not re-signed with caller's principal: %q", outboundAuth)
+			}
+			if !bytes.Contains(upstream.body, []byte(`"cachePoint"`)) {
+				t.Fatalf("test did not exercise a changed upstream body: %s", upstream.body)
+			}
+			if got := upstream.headers.Get("X-Amz-Content-Sha256"); got != fmt.Sprintf("%x", sha256.Sum256(upstream.body)) {
+				t.Errorf("payload hash = %q; want hash of actual transformed bytes", got)
+			}
+			if got := upstream.headers.Get("X-Amz-Security-Token"); got != tc.session {
+				t.Errorf("session token = %q, want caller's selected session", got)
+			}
+			for name, values := range upstream.headers {
+				for _, value := range values {
+					if strings.Contains(value, secret) || strings.Contains(value, "another-account-bearer") {
+						t.Errorf("unrelated credential or signing secret leaked in %s", name)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestStandaloneBedrockRejectsUnresolvableSignedRequests(t *testing.T) {
+	const requestPath = "/bedrock/model/anthropic.claude-sonnet-4-6/converse"
+	const inboundAuth = "AWS4-HMAC-SHA256 Credential=ASIAEXAMPLE/20260907/us-east-1/bedrock/aws4_request, SignedHeaders=host;x-amz-date;x-amz-security-token, Signature=0000000000000000000000000000000000000000000000000000000000000000"
+	for _, tc := range []struct {
+		name, accessKey, secret, session, auth string
+	}{
+		{name: "missing IAM credentials"},
+		{name: "partial IAM pair", accessKey: "ASIAEXAMPLE"},
+		{name: "different configured principal", accessKey: "ASIAOTHER", secret: "test-secret", session: "caller-session"},
+		{name: "different configured session", accessKey: "ASIAEXAMPLE", secret: "test-secret", session: "another-session"},
+		{name: "missing temporary session", accessKey: "ASIAEXAMPLE", secret: "test-secret"},
+		{name: "different region", accessKey: "ASIAEXAMPLE", secret: "test-secret", session: "caller-session", auth: strings.Replace(inboundAuth, "/us-east-1/", "/us-west-2/", 1)},
+		{name: "malformed SigV4 scope", accessKey: "ASIAEXAMPLE", secret: "test-secret", session: "caller-session", auth: "AWS4-HMAC-SHA256 Credential=ASIAEXAMPLE"},
+		{name: "unsupported auth scheme", accessKey: "ASIAEXAMPLE", secret: "test-secret", session: "caller-session", auth: "Basic invalid-credential"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AWS_ACCESS_KEY_ID", tc.accessKey)
+			t.Setenv("AWS_SECRET_ACCESS_KEY", tc.secret)
+			t.Setenv("AWS_SESSION_TOKEN", tc.session)
+			t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "must-not-replace-IAM")
+			upstream := &captureUpstreamTransport{response: `{}`}
+			spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer spend.Close()
+			srv := New(config.Config{Mode: "record", Providers: map[string]config.ProviderConfig{
+				"bedrock": {BaseURL: "https://bedrock-runtime.us-east-1.amazonaws.com"},
+			}}, spend, Options{HTTPClient: &http.Client{Transport: upstream}})
+			req := httptest.NewRequest(http.MethodPost, requestPath, strings.NewReader(`{"messages":[]}`))
+			auth := tc.auth
+			if auth == "" {
+				auth = inboundAuth
+			}
+			req.Header.Set("Authorization", auth)
+			req.Header.Set("X-Amz-Security-Token", "caller-session")
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "cave_bedrock_sigv4_configuration") ||
+				!strings.Contains(rec.Body.String(), "AWS_ACCESS_KEY_ID") {
+				t.Fatalf("want actionable SigV4 error, got status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if upstream.headers != nil {
+				t.Fatal("unresolved signing identity reached upstream")
+			}
+			for _, value := range []string{"caller-session", "another-session", "test-secret", "must-not-replace-IAM", "ASIAEXAMPLE"} {
+				if strings.Contains(rec.Body.String(), value) {
+					t.Fatalf("response leaked credential material %q", value)
+				}
+			}
+		})
+	}
+}
+
+func TestStandaloneBedrockPreservesEncodedRequestOnWire(t *testing.T) {
+	const body = `{"messages":[{"role":"user","content":[{"text":"hello"}]}]}`
+	var encoded bytes.Buffer
+	zipper := gzip.NewWriter(&encoded)
+	if _, err := io.WriteString(zipper, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := zipper.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, auth := range []string{"bearer", "sigv4"} {
+		t.Run(auth, func(t *testing.T) {
+			t.Setenv("CAVE_BEDROCK_REGION", "us-east-1")
+			t.Setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+			t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+			t.Setenv("AWS_SESSION_TOKEN", "")
+			seen := make(chan struct{}, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer func() { seen <- struct{}{} }()
+				wire, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+				}
+				if r.Header.Get("Content-Encoding") != "gzip" || r.Header.Get("Accept-Encoding") != "identity" {
+					t.Errorf("encoding headers changed: content=%q accept=%q", r.Header.Get("Content-Encoding"), r.Header.Get("Accept-Encoding"))
+				}
+				if !bytes.Equal(wire, encoded.Bytes()) {
+					t.Error("encoded request bytes changed")
+				}
+				if auth == "sigv4" && r.Header.Get("X-Amz-Content-Sha256") != fmt.Sprintf("%x", sha256.Sum256(wire)) {
+					t.Error("SigV4 payload hash does not cover compressed wire bytes")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{}`)
+			}))
+			defer upstream.Close()
+			spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer spend.Close()
+			srv := New(config.Config{Mode: "active", Optimizers: map[string]bool{"bedrock-cache-points": true}, Providers: map[string]config.ProviderConfig{
+				"bedrock": {BaseURL: upstream.URL},
+			}}, spend, Options{HTTPClient: &http.Client{}})
+			req := httptest.NewRequest(http.MethodPost, "/bedrock/model/global.anthropic.claude-sonnet-4-6/converse", bytes.NewReader(encoded.Bytes()))
+			req.Header.Set("Content-Encoding", "gzip")
+			req.Header.Set("Accept-Encoding", "identity")
+			if auth == "sigv4" {
+				req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/20260907/us-east-1/bedrock/aws4_request, SignedHeaders=host;x-amz-date, Signature="+strings.Repeat("0", 64))
+			} else {
+				req.Header.Set("Authorization", "Bearer bedrock-test-key")
+			}
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			select {
+			case <-seen:
+			default:
+				t.Fatal("request did not reach HTTP upstream")
+			}
+		})
+	}
+}
+
+// TestCreds_BearerSchemeRecorded proves the resolver records the bearer scheme
+// only when the key came from an inbound Authorization header, so the Anthropic
+// adapter can preserve OAuth tokens as Bearer instead of remapping to x-api-key.
+func TestCreds_BearerSchemeRecorded(t *testing.T) {
+	c := Creds{cfg: config.Config{}}
+
+	rBearer := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	rBearer.Header.Set("authorization", "Bearer oauth-subscription-token")
+	cred := c.Resolve("anthropic", rBearer)
+	if cred.Key != "oauth-subscription-token" || cred.Scheme != "bearer" {
+		t.Errorf("bearer credential = %+v, want Key=oauth-subscription-token Scheme=bearer", cred)
+	}
+
+	// Inbound x-api-key wins over Authorization and carries no bearer scheme.
+	rBoth := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	rBoth.Header.Set("x-api-key", "sk-from-agent")
+	rBoth.Header.Set("authorization", "Bearer something-else")
+	cred = c.Resolve("anthropic", rBoth)
+	if cred.Key != "sk-from-agent" || cred.Scheme != "" {
+		t.Errorf("x-api-key credential = %+v, want Key=sk-from-agent Scheme=\"\"", cred)
+	}
+
+	// BYOK env key is an API key only when no inbound credential is present.
+	t.Setenv("ANTHROPIC_API_KEY", "sk-byok-env")
+	cred = c.Resolve("anthropic", rBearer)
+	if cred.Key != "oauth-subscription-token" || cred.Scheme != "bearer" {
+		t.Errorf("bearer credential with env present = %+v, want inbound bearer credential", cred)
+	}
+	rNoAuth := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	cred = c.Resolve("anthropic", rNoAuth)
+	if cred.Key != "sk-byok-env" || cred.Scheme != "" {
+		t.Errorf("BYOK fallback credential = %+v, want Key=sk-byok-env Scheme=\"\"", cred)
+	}
+}
+
+func TestCreds_BedrockInboundThenEnvironment(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-env-token")
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIAENV")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "env-secret")
+	c := Creds{cfg: config.Config{}}
+
+	inboundAPIKey := httptest.NewRequest(http.MethodPost, "/bedrock/model/anthropic.claude/converse", nil)
+	inboundAPIKey.Header.Set("x-api-key", "bedrock-request-api-key")
+	inboundAPIKey.Header.Set("user-agent", "claude-code/2.1.218")
+	got := c.Resolve("bedrock", inboundAPIKey)
+	if got.Key != "bedrock-request-api-key" || got.Scheme != "" || got.AuthKind != "bedrock_api_key" {
+		t.Fatalf("inbound Bedrock x-api-key credential = %+v, want provider-aware API key", got)
+	}
+	if mode := gateway.ClassifyResolvedAuthMode(inboundAPIKey.Header, got); mode != gateway.AuthModePAYG {
+		t.Fatalf("inbound Bedrock x-api-key auth mode = %s, want PAYG before Claude user-agent classification", mode)
+	}
+
+	inbound := httptest.NewRequest(http.MethodPost, "/bedrock/model/anthropic.claude/converse", nil)
+	inbound.Header.Set("authorization", "Bearer bedrock-request-token")
+	got = c.Resolve("bedrock", inbound)
+	if got.Key != "bedrock-request-token" || got.Scheme != "bearer" || got.AuthKind != "bedrock_api_key" {
+		t.Fatalf("inbound Bedrock credential = %+v, want provider-aware bearer", got)
+	}
+
+	noAuth := httptest.NewRequest(http.MethodPost, "/bedrock/model/anthropic.claude/converse", nil)
+	got = c.Resolve("bedrock", noAuth)
+	if got.Key != "bedrock-env-token" || got.Scheme != "bearer" || got.AuthKind != "bedrock_api_key" {
+		t.Fatalf("environment Bedrock credential = %+v, want bearer before IAM", got)
+	}
+
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("AWS_SESSION_TOKEN", "session-token")
+	got = c.Resolve("bedrock", noAuth)
+	if got.Key != "AKIAENV:env-secret:session-token" || got.AuthKind != "aws_access_keys" {
+		t.Fatalf("IAM Bedrock credential = %+v, want complete access-key tuple", got)
+	}
+
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	got = c.Resolve("bedrock", noAuth)
+	if got.Key != "" || got.AuthKind != "" {
+		t.Fatalf("partial IAM credential = %+v, want fail-closed empty credential", got)
+	}
+}
+
+// TestStandaloneOpenCodeGoAuthEndToEnd drives the Pi wire shapes through the
+// full standalone handler: the /w/pi agent prefix, the built-in opencode-go
+// mount, and the header mapping. The Anthropic client in Pi sends x-api-key to
+// /v1/messages, and OpenCode Go rejects a Bearer header there. The OpenAI client
+// in Pi sends a Bearer token to /v1/chat/completions. A real inbound Bearer token
+// keeps its scheme on every path. The legacy compat secret must never reach this
+// mount.
+func TestStandaloneOpenCodeGoAuthEndToEnd(t *testing.T) {
+	const anthropicBody = `{"model":"minimax-m3","max_tokens":8,"messages":[{"role":"user","content":"Reply with OK"}]}`
+	const anthropicResponse = `{"id":"msg","type":"message","role":"assistant","model":"minimax-m3","content":[{"type":"text","text":"OK"}],"usage":{"input_tokens":1,"output_tokens":1}}`
+	const openAIBody = `{"model":"glm-5.2","messages":[{"role":"user","content":"Reply with OK"}]}`
+	const openAIResponse = `{"id":"chat","model":"glm-5.2","choices":[{"message":{"role":"assistant","content":"OK"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+	const responsesBody = `{"model":"glm-5.2","input":"Reply with OK"}`
+	const responsesResponse = `{"id":"resp","model":"glm-5.2","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`
+
+	cases := []struct {
+		name        string
+		path        string
+		body        string
+		response    string
+		inbound     map[string]string
+		wantURL     string
+		wantAPIKey  string
+		wantAuth    string
+		wantHeaders map[string]string
+	}{
+		{
+			name:       "messages with inbound x-api-key",
+			path:       "/w/pi/compat/opencode-go/v1/messages",
+			body:       anthropicBody,
+			response:   anthropicResponse,
+			inbound:    map[string]string{"x-api-key": "sk-inbound", "anthropic-version": "2023-06-01"},
+			wantURL:    "https://opencode.ai/zen/go/v1/messages",
+			wantAPIKey: "sk-inbound",
+		},
+		{
+			name:       "messages without inbound key uses OPENCODE_API_KEY",
+			path:       "/w/pi/compat/opencode-go/v1/messages",
+			body:       anthropicBody,
+			response:   anthropicResponse,
+			wantURL:    "https://opencode.ai/zen/go/v1/messages",
+			wantAPIKey: "sk-env-opencode",
+		},
+		{
+			name:     "messages with inbound bearer keeps bearer",
+			path:     "/w/pi/compat/opencode-go/v1/messages",
+			body:     anthropicBody,
+			response: anthropicResponse,
+			inbound:  map[string]string{"authorization": "Bearer sk-inbound"},
+			wantURL:  "https://opencode.ai/zen/go/v1/messages",
+			wantAuth: "Bearer sk-inbound",
+		},
+		{
+			name:     "chat completions with inbound bearer",
+			path:     "/w/pi/compat/opencode-go/v1/chat/completions",
+			body:     openAIBody,
+			response: openAIResponse,
+			inbound:  map[string]string{"authorization": "Bearer sk-inbound"},
+			wantURL:  "https://opencode.ai/zen/go/v1/chat/completions",
+			wantAuth: "Bearer sk-inbound",
+		},
+		{
+			name:     "messages forwards the OpenCode session headers",
+			path:     "/w/pi/compat/opencode-go/v1/messages",
+			body:     anthropicBody,
+			response: anthropicResponse,
+			inbound: map[string]string{
+				"x-api-key":          "sk-inbound",
+				"x-opencode-session": "ses_messages",
+				"x-opencode-client":  "pi",
+			},
+			wantURL:    "https://opencode.ai/zen/go/v1/messages",
+			wantAPIKey: "sk-inbound",
+			wantHeaders: map[string]string{
+				"x-opencode-session": "ses_messages",
+				"x-opencode-client":  "pi",
+			},
+		},
+		{
+			name:     "chat completions forwards the OpenCode session headers",
+			path:     "/w/pi/compat/opencode-go/v1/chat/completions",
+			body:     openAIBody,
+			response: openAIResponse,
+			inbound: map[string]string{
+				"authorization":      "Bearer sk-inbound",
+				"x-opencode-session": "ses_chat",
+				"x-opencode-client":  "pi",
+			},
+			wantURL:  "https://opencode.ai/zen/go/v1/chat/completions",
+			wantAuth: "Bearer sk-inbound",
+			wantHeaders: map[string]string{
+				"x-opencode-session": "ses_chat",
+				"x-opencode-client":  "pi",
+			},
+		},
+		{
+			name:     "responses forwards the OpenCode session headers",
+			path:     "/w/pi/compat/opencode-go/v1/responses",
+			body:     responsesBody,
+			response: responsesResponse,
+			inbound: map[string]string{
+				"authorization":      "Bearer sk-inbound",
+				"x-opencode-session": "ses_responses",
+				"x-opencode-client":  "pi",
+			},
+			wantURL:  "https://opencode.ai/zen/go/v1/responses",
+			wantAuth: "Bearer sk-inbound",
+			wantHeaders: map[string]string{
+				"x-opencode-session": "ses_responses",
+				"x-opencode-client":  "pi",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("OPENCODE_API_KEY", "sk-env-opencode")
+			t.Setenv("OPENAI_COMPAT_API_KEY", "sk-legacy")
+			upstream := &captureUpstreamTransport{response: tc.response}
+			spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer spend.Close()
+			srv := New(config.Config{Mode: "record"}, spend, Options{HTTPClient: &http.Client{Transport: upstream}})
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set("content-type", "application/json")
+			for name, value := range tc.inbound {
+				req.Header.Set(name, value)
+			}
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			if upstream.url != tc.wantURL {
+				t.Errorf("upstream url = %q, want %q", upstream.url, tc.wantURL)
+			}
+			if got := upstream.headers.Get("x-api-key"); got != tc.wantAPIKey {
+				t.Errorf("upstream x-api-key = %q, want %q", got, tc.wantAPIKey)
+			}
+			if got := upstream.headers.Get("authorization"); got != tc.wantAuth {
+				t.Errorf("upstream authorization = %q, want %q", got, tc.wantAuth)
+			}
+			if strings.Contains(upstream.headers.Get("authorization")+upstream.headers.Get("x-api-key"), "sk-legacy") {
+				t.Fatal("OPENAI_COMPAT_API_KEY reached the opencode-go mount")
+			}
+			for name, want := range tc.wantHeaders {
+				if got := upstream.headers.Get(name); got != want {
+					t.Errorf("upstream %s = %q, want %q", name, got, want)
+				}
+			}
+			// A case that sends no OpenCode header must not gain one.
+			if tc.wantHeaders["x-opencode-session"] == "" && upstream.headers.Get("x-opencode-session") != "" {
+				t.Errorf("upstream x-opencode-session = %q, want no header", upstream.headers.Get("x-opencode-session"))
+			}
+			if !bytes.Equal(upstream.body, []byte(tc.body)) {
+				t.Fatalf("record mode changed the body:\n got %s\nwant %s", upstream.body, tc.body)
+			}
+		})
+	}
+}
+
+// The production SSRF-guarded client must permit a response to remain open
+// beyond the old request cap. Explicit operator deadlines remain supported.
+func TestStandaloneClientLifetimeAndCancellation(t *testing.T) {
+	t.Setenv("CAVE_SSRF_ALLOWLIST", "localhost")
+	client := StandaloneHTTPClient(config.Config{}, 0)
+	defer client.CloseIdleConnections()
+	if client.Timeout != 0 {
+		t.Fatalf("total timeout = %v", client.Timeout)
+	}
+	// No total deadline means the header deadline is the only bound left on an
+	// upstream that connects and then never answers. It must be set, and it must
+	// be a header deadline only — the long stream below still has to complete.
+	transport := client.Transport.(*http.Transport)
+	if transport.ResponseHeaderTimeout != 15*time.Minute || transport.IdleConnTimeout == 0 || !transport.DisableCompression {
+		t.Fatalf("unbounded streaming transport: header timeout=%v idle=%v compression=%v", transport.ResponseHeaderTimeout, transport.IdleConnTimeout, transport.DisableCompression)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: first\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-time.After(75 * time.Millisecond):
+			_, _ = io.WriteString(w, "data: last\n\n")
+		case <-r.Context().Done():
+		}
+	}))
+	defer upstream.Close()
+	resp, err := client.Get(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil || string(data) != "data: first\n\ndata: last\n\n" {
+		t.Fatalf("long stream cut: body=%q error=%v", data, err)
+	}
+	bounded := StandaloneHTTPClient(config.Config{}, 25*time.Millisecond)
+	defer bounded.CloseIdleConnections()
+	resp, err = bounded.Get(upstream.URL)
+	if err == nil {
+		_, err = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("explicit operator deadline was ignored")
+	}
+}
+
+func TestLongSessionUsesFreshInboundOAuthAndPreservesProviderErrors(t *testing.T) {
+	for _, path := range []string{"/v1/messages", "/v1/responses", "/chatgpt/responses", "/v1beta/models/gemini-2.5-flash:generateContent", "/compat/opencode-go/v1/messages"} {
+		t.Run(path, func(t *testing.T) {
+			transport := &captureUpstreamTransport{}
+			s := New(config.Config{Mode: "record"}, nil, Options{HTTPClient: &http.Client{Transport: transport}})
+			for i, token := range []string{"old-token", "refreshed-token"} {
+				transport.status = []int{http.StatusUnauthorized, http.StatusOK}[i]
+				transport.response = []string{`{"error":{"type":"authentication_error","message":"expired"}}`, `{"ok":true}`}[i]
+				r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"test","messages":[]}`))
+				r.Header.Set("Authorization", "Bearer "+token)
+				r.Header.Set("ChatGPT-Account-ID", "account-test")
+				r.Header.Set("x-goog-user-project", "project-test")
+				w := httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, r)
+				if transport.headers.Get("Authorization") != "Bearer "+token || transport.headers.Get("x-api-key") != "" {
+					t.Fatalf("fresh inbound bearer not preserved: %v", transport.headers)
+				}
+				if w.Code != transport.status || w.Body.String() != transport.response {
+					t.Fatalf("provider auth response changed: status=%d body=%s", w.Code, w.Body.String())
+				}
+				if path == "/chatgpt/responses" && transport.headers.Get("ChatGPT-Account-ID") != "account-test" {
+					t.Fatal("subscription account identity lost")
+				}
+			}
+		})
+	}
+}
+
+// TestStandaloneUpstreamProxy_RoutesProviderTrafficThroughProxy is the #1001
+// path end to end: caveman.yaml upstream_proxy sends provider traffic to a
+// corporate-style forward proxy that the client could not reach directly (it is
+// on loopback and NOT allowlisted), and the provider hostname is left for the
+// proxy to resolve.
+func TestStandaloneUpstreamProxy_RoutesProviderTrafficThroughProxy(t *testing.T) {
+	hosts := make(chan string, 1)
+	forward := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hosts <- r.Host
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_proxied","model":"gpt-5.5","usage":{"input_tokens":3,"output_tokens":2}}`))
+	}))
+	defer forward.Close()
+
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spend.Close()
+	srv := New(config.Config{
+		Mode:          "record",
+		UpstreamProxy: forward.URL,
+		Providers:     map[string]config.ProviderConfig{"openai": {BaseURL: "http://api.openai.invalid"}},
+	}, spend, Options{})
+
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"via proxy"}`))
+	req.Header.Set("authorization", "Bearer sk-openai-test")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.Bytes())
+	}
+	if got := <-hosts; got != "api.openai.invalid" {
+		t.Fatalf("forward proxy saw Host %q, want api.openai.invalid", got)
+	}
+}
+
+// TestStandaloneCABundle_TrustsPrivateRootForProviderTLS is the corporate TLS
+// inspection shape: the provider presents a certificate from a root that only
+// the operator's bundle knows. With ca_bundle the request succeeds; without it
+// the same upstream is rejected, proving the bundle is what made the difference.
+func TestStandaloneCABundle_TrustsPrivateRootForProviderTLS(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_tls","model":"gpt-5.5","usage":{"input_tokens":3,"output_tokens":2}}`))
+	}))
+	defer upstream.Close()
+	bundle := filepath.Join(t.TempDir(), "corp-root.pem")
+	if err := os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CAVE_SSRF_ALLOWLIST", "127.0.0.1")
+	t.Setenv("CAVE_UPSTREAM_PROXY", "off")
+
+	for _, tc := range []struct {
+		name   string
+		bundle string
+		want   int
+	}{
+		{name: "without bundle", want: http.StatusBadGateway},
+		{name: "with ca_bundle", bundle: bundle, want: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CAVE_CA_BUNDLE", tc.bundle)
+			cfg, err := config.Load(filepath.Join(t.TempDir(), "absent.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Providers = map[string]config.ProviderConfig{"openai": {BaseURL: upstream.URL}}
+			spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer spend.Close()
+			srv := New(cfg, spend, Options{})
+
+			req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"tls"}`))
+			req.Header.Set("authorization", "Bearer sk-openai-test")
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status=%d want %d body=%q", rec.Code, tc.want, rec.Body.Bytes())
+			}
+		})
+	}
+}

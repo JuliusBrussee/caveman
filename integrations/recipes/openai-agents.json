@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "id": "openai-agents",
+  "display_name": "OpenAI Agents SDK",
+  "lang": "python",
+  "wire_protocol": "openai-responses",
+  "note": "The Agents SDK honors OPENAI_BASE_URL — zero code — or a custom client for finer control.",
+  "code": "# Zero-code path: the Agents SDK reads OPENAI_BASE_URL.\n#   export OPENAI_BASE_URL=\"{{baseURL}}/w/{{app}}/openai/v1\"\n\n# Or set a custom client explicitly:\nimport os\nfrom openai import AsyncOpenAI\nfrom agents import Agent, Runner, set_default_openai_client\n\nset_default_openai_client(\n    AsyncOpenAI(\n        base_url=\"{{baseURL}}/w/{{app}}/openai/v1\",\n        api_key=os.environ[\"OPENAI_API_KEY\"],\n    ),\n    use_for_tracing=False,\n)\n\nagent = Agent(name=\"assistant\", instructions=\"Be concise.\")\nresult = Runner.run_sync(agent, \"Why is the sky blue?\")",
+  "models": []
+}

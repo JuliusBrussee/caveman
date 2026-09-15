@@ -1,4 +1,4 @@
-// caveman — JSONC-tolerant settings.json read/write + defensive hook validation.
+// caveman — JSONC-tolerant settings.json read/write + scoped hook maintenance.
 //
 // Lifted in spirit from gsd-build/get-shit-done's stripJsonComments + readSettings.
 // Reused by bin/install.js and (optionally) by hooks/caveman-activate.js so a
@@ -8,7 +8,7 @@
 //   readSettings(path)             → object, {}, or null on hard parse failure
 //   writeSettings(path, obj)       → atomic write with newline
 //   stripJsonComments(src)         → string with // and /* */ stripped (string-aware)
-//   validateHookFields(settings)   → mutates: drops malformed hook entries
+//   validateHookFields(settings)   → validates only Caveman-managed handlers
 //   hasCavemanHook(settings, ev)   → idempotency probe
 //   addCommandHook(settings, ev, opts) → no-op if substring marker already present
 //   removeCavemanHooks(settings)   → uninstall helper
@@ -21,6 +21,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { hookCommand } = require('./platform-paths');
 
 // ── stripJsonComments ──────────────────────────────────────────────────────
 // Hand-rolled state machine. Tracks string state + backslash escape so a
@@ -95,7 +96,11 @@ function stripTrailingCommas(src) {
 // Try strict JSON first (fast path). On failure, strip comments and retry.
 // On total failure return `null` and warn — never silently overwrite a
 // malformed-but-recoverable file with `{}`.
-function readSettings(p) {
+// `meta` is an optional out-param. When the file only parsed after comment
+// stripping, meta.jsonc is set true — writeSettings re-serializes plain JSON,
+// so those comments do not survive the round trip. Callers that mutate a file
+// the user authored should warn and point at their backup.
+function readSettings(p, meta) {
   if (!fs.existsSync(p)) return {};
   let raw;
   try { raw = fs.readFileSync(p, 'utf8'); }
@@ -105,7 +110,11 @@ function readSettings(p) {
   }
   if (!raw.trim()) return {};
   try { return JSON.parse(raw); } catch (_) { /* fall through to JSONC */ }
-  try { return JSON.parse(stripJsonComments(raw)); }
+  try {
+    const parsed = JSON.parse(stripJsonComments(raw));
+    if (meta) meta.jsonc = true;
+    return parsed;
+  }
   catch (e) {
     process.stderr.write(`caveman: warning — ${p} is not valid JSON or JSONC: ${e.message}\n`);
     return null;
@@ -118,37 +127,34 @@ function writeSettings(p, obj) {
   const dir = path.dirname(p);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.${path.basename(p)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
-  fs.renameSync(tmp, p);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
+    fs.renameSync(tmp, p);
+  } catch (error) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw error;
+  }
 }
 
 // ── validateHookFields ────────────────────────────────────────────────────
-// Claude Code uses strict Zod on settings.json — a single malformed hook
-// silently discards the entire file. Mutate-to-valid before write.
-//
-// Required shape (per Claude Code docs):
-//   settings.hooks[event] = [{ hooks: [{ type:'command', command:'…', timeout?:n }, ...] }, ...]
-//   settings.hooks[event] = [{ matcher?:'…', hooks: [...] }, ...]   // also valid
+// Installer owns only handlers targeting one of its exact script basenames.
+// Preserve every foreign/unknown shape: Claude adds hook kinds over time, and
+// deleting a hook we do not understand can remove user security controls.
 function validateHookFields(settings) {
   if (!settings || typeof settings !== 'object') return settings;
   if (!settings.hooks || typeof settings.hooks !== 'object') return settings;
   for (const ev of Object.keys(settings.hooks)) {
     const arr = settings.hooks[ev];
-    if (!Array.isArray(arr)) { delete settings.hooks[ev]; continue; }
-    settings.hooks[ev] = arr.filter(entry => {
-      if (!entry || typeof entry !== 'object') return false;
-      if (!Array.isArray(entry.hooks)) return false;
+    if (!Array.isArray(arr)) continue;
+    for (const entry of arr) {
+      if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) continue;
       entry.hooks = entry.hooks.filter(h => {
-        if (!h || typeof h !== 'object') return false;
-        if (h.type === 'command') return typeof h.command === 'string' && h.command.length > 0;
-        if (h.type === 'agent')   return typeof h.prompt === 'string' && h.prompt.length > 0;
-        return false;
+        if (!h || typeof h !== 'object' || typeof h.command !== 'string') return true;
+        if (!referencesManagedScript(h.command)) return true;
+        return h.type === 'command' && h.command.length > 0;
       });
-      return entry.hooks.length > 0;
-    });
-    if (settings.hooks[ev].length === 0) delete settings.hooks[ev];
+    }
   }
-  if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
   return settings;
 }
 
@@ -168,7 +174,10 @@ function hasCavemanHook(settings, event, marker = 'caveman') {
 // might rotate across reinstalls.
 function addCommandHook(settings, event, opts) {
   if (!settings.hooks) settings.hooks = {};
-  if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
+  if (settings.hooks[event] !== undefined && !Array.isArray(settings.hooks[event])) {
+    throw new TypeError(`caveman: unsupported hook event shape for ${event}; refusing to overwrite it`);
+  }
+  if (settings.hooks[event] === undefined) settings.hooks[event] = [];
   const marker = opts.marker || opts.command;
   if (hasCavemanHook(settings, event, marker)) return false;
   const hook = { type: 'command', command: opts.command };
@@ -218,25 +227,29 @@ function referencesManagedScript(command) {
 }
 
 // ── removeCavemanHooks ────────────────────────────────────────────────────
-// Strip every entry whose any hook command targets one of our managed hook
-// scripts (exact basename match, see above). Empties events. Tolerates
-// malformed pre-existing settings (non-array hook lists, foreign shapes) —
-// those get dropped by validateHookFields first so we never call .length /
-// .filter on a non-array.
+// Strip only handlers whose command targets one of our managed hook scripts
+// (exact basename match, see above). Mixed matcher groups retain every foreign
+// handler. Unknown shapes survive byte-semantically.
 function removeCavemanHooks(settings) {
   if (!settings || !settings.hooks) return 0;
   validateHookFields(settings);
-  if (!settings.hooks) return 0; // validate may have deleted the whole tree
+  if (!settings.hooks) return 0;
   let removed = 0;
   for (const ev of Object.keys(settings.hooks)) {
-    if (!Array.isArray(settings.hooks[ev])) { delete settings.hooks[ev]; continue; }
-    const before = settings.hooks[ev].length;
+    if (!Array.isArray(settings.hooks[ev])) continue;
+    let removedFromEvent = 0;
     settings.hooks[ev] = settings.hooks[ev].filter(entry => {
       if (!entry || !Array.isArray(entry.hooks)) return true;
-      return !entry.hooks.some(h => h && typeof h.command === 'string' && referencesManagedScript(h.command));
+      const before = entry.hooks.length;
+      entry.hooks = entry.hooks.filter(h =>
+        !(h && typeof h.command === 'string' && referencesManagedScript(h.command))
+      );
+      const count = before - entry.hooks.length;
+      removedFromEvent += count;
+      return count === 0 || entry.hooks.length > 0;
     });
-    removed += before - settings.hooks[ev].length;
-    if (settings.hooks[ev].length === 0) delete settings.hooks[ev];
+    removed += removedFromEvent;
+    if (removedFromEvent > 0 && settings.hooks[ev].length === 0) delete settings.hooks[ev];
   }
   if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
   return removed;
@@ -248,11 +261,12 @@ function removeCavemanHooks(settings) {
 // `absoluteNode` so GUI launchers with minimal PATH still find Node. Only
 // touches commands matching the exact bare-node shape — won't false-positive
 // on user-authored hooks that just happen to mention "caveman".
-function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
+function rewriteLegacyManagedHookCommands(settings, absoluteNode, platform = process.platform) {
   if (!settings || !settings.hooks || !absoluteNode) return 0;
   let rewritten = 0;
   const reBare = /^node\s+("([^"]+)"|'([^']+)'|(\S+))\s*$/;
   for (const ev of Object.keys(settings.hooks)) {
+    if (!Array.isArray(settings.hooks[ev])) continue;
     for (const entry of settings.hooks[ev]) {
       if (!entry || !Array.isArray(entry.hooks)) continue;
       for (const h of entry.hooks) {
@@ -262,7 +276,10 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
         const scriptPath = m[2] || m[3] || m[4];
         const basename = path.basename(scriptPath);
         if (!MANAGED_HOOK_BASENAMES.has(basename)) continue;
-        h.command = `"${absoluteNode}" "${scriptPath}"`;
+        // One shape, one place. This used to emit PowerShell call-operator
+        // syntax on win32, which Git Bash — Claude Code's default hook shell
+        // on Windows — rejects as a syntax error (#835).
+        h.command = hookCommand(absoluteNode, [scriptPath], platform);
         rewritten++;
       }
     }
@@ -287,9 +304,10 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode) {
 // and drop the hook only when its target is genuinely absent. A managed hook
 // whose script still exists is left untouched, so this is safe to run on
 // every install.
-function pruneOrphanedManagedHooks(settings, configDir) {
+function pruneOrphanedManagedHooks(settings, configDir, platform = process.platform) {
   if (!settings || typeof settings !== 'object') return 0;
   const baseDir = configDir || claudeConfigDir();
+  const host = platform === 'win32' ? path.win32 : path.posix;
   let removed = 0;
 
   // A command is a missing managed target iff some token's BASENAME exactly
@@ -301,29 +319,44 @@ function pruneOrphanedManagedHooks(settings, configDir) {
     try {
       for (const tok of tokenizeCommand(command)) {
         if (!tok || typeof tok !== 'string') continue;
-        if (!MANAGED_HOOK_BASENAMES.has(path.basename(tok))) continue;
-        const scriptPath = path.isAbsolute(tok) ? tok : path.join(baseDir, tok);
+        // win32.basename splits on both / and \, matching
+        // referencesManagedScript(). Plain basename() misses a Windows-written
+        // command when a roaming $CLAUDE_CONFIG_DIR is processed on POSIX.
+        if (!MANAGED_HOOK_BASENAMES.has(path.win32.basename(tok))) continue;
+        // A path absolute on the OTHER platform (`C:\...` seen from POSIX) is
+        // not ours to judge: posix isAbsolute() says false, we would join it
+        // under baseDir, find nothing, and prune a hook that is live on the
+        // machine that wrote it. Existence is only knowable for our own paths.
+        // The check is one-directional by construction: win32's absolute set is
+        // a superset of posix's, so from Windows `/home/me/x.js` is
+        // indistinguishable from a drive-relative rooted path and gets judged
+        // natively. Flavour comes from `platform`, not the host, so the POSIX
+        // side of that asymmetry stays reachable from a Windows test runner.
+        if (host.isAbsolute(tok) !== path.win32.isAbsolute(tok)) return false;
+        const scriptPath = host.isAbsolute(tok) ? tok : host.join(baseDir, tok);
         return !fs.existsSync(scriptPath);
       }
     } catch (_) { /* silent-fail: never block install on a parse/fs hiccup */ }
     return false;
   };
 
-  if (settings.hooks && typeof settings.hooks === 'object') {
-    // Normalize malformed shapes first so the filter below only sees valid
-    // entries (and a poisoned settings.json can't survive the rewrite).
-    validateHookFields(settings);
-  }
+  if (settings.hooks && typeof settings.hooks === 'object') validateHookFields(settings);
   if (settings.hooks && typeof settings.hooks === 'object') {
     for (const ev of Object.keys(settings.hooks)) {
-      if (!Array.isArray(settings.hooks[ev])) { delete settings.hooks[ev]; continue; }
-      const before = settings.hooks[ev].length;
+      if (!Array.isArray(settings.hooks[ev])) continue;
+      let removedFromEvent = 0;
       settings.hooks[ev] = settings.hooks[ev].filter(entry => {
         if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return true;
-        return !entry.hooks.some(h => h && typeof h.command === 'string' && targetMissing(h.command));
+        const before = entry.hooks.length;
+        entry.hooks = entry.hooks.filter(h =>
+          !(h && typeof h.command === 'string' && targetMissing(h.command))
+        );
+        const count = before - entry.hooks.length;
+        removedFromEvent += count;
+        return count === 0 || entry.hooks.length > 0;
       });
-      removed += before - settings.hooks[ev].length;
-      if (settings.hooks[ev].length === 0) delete settings.hooks[ev];
+      removed += removedFromEvent;
+      if (removedFromEvent > 0 && settings.hooks[ev].length === 0) delete settings.hooks[ev];
     }
     if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
   }

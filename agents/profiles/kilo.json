@@ -1,0 +1,81 @@
+{
+  "schema_version": "1",
+  "id": "kilo",
+  "display_name": "Kilo Code",
+  "vendor": "Kilo Code",
+  "homepage": "https://kilo.ai/docs/code-with-ai/platforms/cli",
+  "binary_names": ["kilo", "kilocode"],
+  "args": [],
+  "install": "npm install -g @kilocode/cli@7.5.9",
+  "wire_protocol": "openai-chat",
+  "injection": {
+    "method": "config-env-content",
+    "env_var": "KILO_CONFIG_CONTENT",
+    "config_content": {
+      "local": {
+        "provider": {
+          "caveman": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "Caveman Local Proxy",
+            "options": {
+              "baseURL": "{{cave_base_url}}/v1",
+              "apiKey": "{env:OPENAI_API_KEY}",
+              "headers": { "X-Cave-Agent": "kilo" }
+            },
+            "models": {
+              "gpt-5.5": {
+                "name": "GPT-5.5 (via Caveman)",
+                "tool_call": true,
+                "limit": { "context": 1050000, "output": 32768 }
+              },
+              "gpt-5.4-mini": {
+                "name": "GPT-5.4 mini (via Caveman)",
+                "tool_call": true,
+                "limit": { "context": 400000, "output": 16384 }
+              }
+            }
+          }
+        },
+        "model": "caveman/gpt-5.5",
+        "enabled_providers": ["caveman"]
+      },
+      "managed": {
+        "provider": {
+          "caveman": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "Caveman Gateway",
+            "options": {
+              "baseURL": "{{cave_base_url}}/v1",
+              "apiKey": "{env:CAVE_API_KEY}",
+              "headers": {
+                "x-cave-upstream-key": "{{cave_optional_openai_key_env}}",
+                "X-Cave-Agent": "kilo"
+              }
+            },
+            "models": {
+              "gpt-5.5": {
+                "name": "GPT-5.5 (via Caveman)",
+                "tool_call": true,
+                "limit": { "context": 1050000, "output": 32768 }
+              },
+              "gpt-5.4-mini": {
+                "name": "GPT-5.4 mini (via Caveman)",
+                "tool_call": true,
+                "limit": { "context": 400000, "output": 16384 }
+              }
+            }
+          }
+        },
+        "model": "caveman/gpt-5.5",
+        "enabled_providers": ["caveman"]
+      }
+    }
+  },
+  "attribution": { "header": "X-Cave-Agent" },
+  "tested_agent_version": "7.5.9",
+  "injection_completeness": "declarative",
+  "last_verified_at": "2026-09-03",
+  "verified_by": "local pinned-binary probe (kilo 7.5.9, agents/probe-installed.mjs)",
+  "fallback": "generic-env",
+  "maintainer": null
+}

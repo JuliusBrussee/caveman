@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "id": "langchain",
+  "display_name": "LangChain / LangGraph",
+  "lang": "python",
+  "wire_protocol": "multi",
+  "note": "Every LangChain chat model takes a base_url; LangGraph inherits whatever model you pass it.",
+  "code": "import os\nfrom langchain_openai import ChatOpenAI\n\nllm = ChatOpenAI(\n    model=\"gpt-5.5\",\n    base_url=\"{{baseURL}}/w/{{app}}/openai/v1\",\n    api_key=os.environ[\"OPENAI_API_KEY\"],\n)\n\nllm.invoke(\"Why is the sky blue?\")\n\n# Anthropic models keep their native protocol (no translation):\n#   from langchain_anthropic import ChatAnthropic\n#   llm = ChatAnthropic(model=\"claude-sonnet-4-5\", base_url=\"{{baseURL}}/w/{{app}}\")",
+  "models": ["gpt-5.5", "claude-sonnet-4-5"]
+}

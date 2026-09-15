@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "id": "litellm",
+  "display_name": "LiteLLM",
+  "lang": "python",
+  "wire_protocol": "multi",
+  "note": "Works per-call via api_base, or fleet-wide via the LiteLLM proxy config.yaml.",
+  "code": "import os\nimport litellm\n\nres = litellm.completion(\n    model=\"openai/gpt-5.5\",\n    api_base=\"{{baseURL}}/w/{{app}}/openai/v1\",\n    api_key=os.environ[\"OPENAI_API_KEY\"],\n    messages=[{\"role\": \"user\", \"content\": \"Why is the sky blue?\"}],\n)\n\n# LiteLLM proxy? Point the model at the gateway in config.yaml instead:\n#   model_list:\n#     - model_name: gpt-5.5\n#       litellm_params:\n#         model: openai/gpt-5.5\n#         api_base: {{baseURL}}/w/{{app}}/openai/v1\n#         api_key: os.environ/OPENAI_API_KEY",
+  "models": ["gpt-5.5"]
+}

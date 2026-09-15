@@ -1,0 +1,591 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/continuous-improvement-report.schema.json",
+  "title": "Caveman Continuous Improvement Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "organization_id", "project_id", "generated_at", "readiness",
+    "analysis_units", "digests", "signals", "themes", "relationships", "task_families",
+    "workflow_variants", "motifs", "opportunities", "cases", "report_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "caveman.continuous-improvement.v1" },
+    "organization_id": { "type": "string", "minLength": 1 },
+    "project_id": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "minLength": 1 },
+    "readiness": { "$ref": "#/$defs/readiness" },
+    "analysis_units": { "type": "array", "items": { "$ref": "#/$defs/typedArtifact" } },
+    "digests": { "type": "array", "items": { "$ref": "#/$defs/digest" } },
+    "signals": { "type": "array", "items": { "$ref": "#/$defs/signal" } },
+    "themes": { "type": "array", "items": { "$ref": "#/$defs/theme" } },
+    "relationships": { "type": "array", "maxItems": 4000, "items": { "$ref": "#/$defs/themeRelationship" } },
+    "task_families": { "type": "array", "items": { "$ref": "#/$defs/typedArtifact" } },
+    "workflow_variants": { "type": "array", "items": { "$ref": "#/$defs/workflowVariant" } },
+    "motifs": { "type": "array", "maxItems": 4000, "items": { "$ref": "#/$defs/workflowMotif" } },
+    "opportunities": { "type": "array", "items": { "$ref": "#/$defs/opportunity" } },
+    "cases": { "type": "array", "items": { "$ref": "#/$defs/optimizationCase" } },
+    "report_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "$defs": {
+    "typedArtifact": {
+      "type": "object",
+      "required": ["id"],
+      "properties": { "id": { "type": "string", "minLength": 1 } },
+      "additionalProperties": true
+    },
+    "stringArray": { "type": "array", "items": { "type": "string" } },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace_integrity", "task_boundary_coverage", "external_outcome_coverage", "version_coverage", "tool_argument_coverage", "artifact_provenance_coverage", "replayability", "available", "not_yet_available"],
+      "properties": {
+        "trace_integrity": { "$ref": "#/$defs/ratio" },
+        "task_boundary_coverage": { "$ref": "#/$defs/ratio" },
+        "external_outcome_coverage": { "$ref": "#/$defs/ratio" },
+        "version_coverage": { "$ref": "#/$defs/ratio" },
+        "tool_argument_coverage": { "$ref": "#/$defs/ratio" },
+        "artifact_provenance_coverage": { "$ref": "#/$defs/ratio" },
+        "replayability": { "$ref": "#/$defs/ratio" },
+        "available": { "$ref": "#/$defs/stringArray" },
+        "not_yet_available": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+    "digest": {
+      "type": "object",
+      "required": ["schema_version", "analysis_unit_id", "trace_id", "operations", "outcome", "metrics", "evidence_refs", "sha256"],
+      "properties": {
+        "schema_version": { "const": "caveman.trace-digest.v1" },
+        "analysis_unit_id": { "type": "string", "minLength": 1 },
+        "trace_id": { "type": "string", "minLength": 1 },
+        "operations": { "type": "array" },
+        "outcome": { "type": "object" },
+        "metrics": { "type": "object" },
+        "evidence_refs": { "$ref": "#/$defs/stringArray" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      },
+      "additionalProperties": true
+    },
+    "signal": {
+      "type": "object",
+      "required": ["id", "analysis_unit_id", "extractor_version", "facet", "summary", "evidence_refs", "counter_evidence_refs", "confidence", "status"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "analysis_unit_id": { "type": "string", "minLength": 1 },
+        "extractor_version": { "type": "string", "minLength": 1 },
+        "facet": { "enum": ["goal", "outcome", "behavior", "friction", "reaction"] },
+        "summary": { "type": "string", "minLength": 1 },
+        "evidence_refs": { "$ref": "#/$defs/stringArray" },
+        "counter_evidence_refs": { "$ref": "#/$defs/stringArray" },
+        "confidence": { "$ref": "#/$defs/ratio" },
+        "status": { "enum": ["accepted", "uncertain", "abstained"] }
+      },
+      "additionalProperties": true
+    },
+    "theme": {
+      "type": "object",
+      "required": ["id", "registry_id", "facet", "label", "status", "membership_count", "batch_count", "evidence_level", "signal_ids", "analysis_unit_ids", "lineage"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "registry_id": { "type": "string" },
+        "facet": { "enum": ["goal", "outcome", "behavior", "friction", "reaction"] },
+        "label": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["candidate", "stable", "drifting", "split", "merged", "dormant", "retired"] },
+        "membership_count": { "type": "integer", "minimum": 0 },
+        "batch_count": { "type": "integer", "minimum": 0 },
+        "evidence_level": { "enum": ["E0", "E1"] },
+        "signal_ids": { "$ref": "#/$defs/stringArray" },
+        "analysis_unit_ids": { "$ref": "#/$defs/stringArray" },
+        "lineage": { "$ref": "#/$defs/themeLineage" }
+      },
+      "additionalProperties": true
+    },
+    "themeLineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predecessor_ids", "transition"],
+      "properties": {
+        "predecessor_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "transition": { "enum": ["new", "persisted", "renamed", "split", "merged", "returned"] }
+      }
+    },
+    "themeRelationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "class_kind", "theme_a_id", "theme_b_id", "shared_unit_count",
+        "theme_a_unit_count", "theme_b_unit_count", "probability_b_given_a",
+        "probability_a_given_b", "shared_unit_ids", "evidence_level"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "class_kind": { "enum": ["co_occurrence"] },
+        "theme_a_id": { "type": "string", "minLength": 1 },
+        "theme_b_id": { "type": "string", "minLength": 1 },
+        "shared_unit_count": { "type": "integer", "minimum": 10 },
+        "theme_a_unit_count": { "type": "integer", "minimum": 10 },
+        "theme_b_unit_count": { "type": "integer", "minimum": 10 },
+        "probability_b_given_a": { "$ref": "#/$defs/ratio" },
+        "probability_a_given_b": { "$ref": "#/$defs/ratio" },
+        "shared_unit_ids": { "type": "array", "maxItems": 50, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "evidence_level": { "const": "E1" }
+      }
+    },
+    "workflowVariant": {
+      "type": "object",
+      "required": ["id", "task_family_id", "signature", "nodes", "edges", "eligible_runs", "success_rate", "mean_cost_usd", "mean_latency_ms", "p95_latency_ms"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "task_family_id": { "type": "string", "minLength": 1 },
+        "signature": { "$ref": "#/$defs/stringArray" },
+        "nodes": { "type": "array" },
+        "edges": { "type": "array" },
+        "eligible_runs": { "type": "integer", "minimum": 0 },
+        "success_rate": { "$ref": "#/$defs/ratio" },
+        "mean_cost_usd": { "type": "number", "minimum": 0 },
+        "mean_latency_ms": { "type": "integer", "minimum": 0 },
+        "p95_latency_ms": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "workflowMotif": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "task_family_id", "workload", "operations", "variant_ids",
+        "support_variant_count", "support_run_count", "structural_cost_share",
+        "evidence_refs", "evidence_level"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "task_family_id": { "type": "string", "minLength": 1 },
+        "workload": { "type": "string" },
+        "operations": { "type": "array", "minItems": 2, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
+        "variant_ids": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "support_variant_count": { "type": "integer", "minimum": 2 },
+        "support_run_count": { "type": "integer", "minimum": 0 },
+        "structural_cost_share": { "$ref": "#/$defs/ratio" },
+        "evidence_refs": { "type": "array", "maxItems": 50, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "evidence_level": { "const": "E1" }
+      }
+    },
+    "cohort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_family_id", "workload", "goal_action", "goal_target", "environment_version",
+        "difficulty", "cohort_versions", "inclusion_rule", "matched_exactly_on",
+        "family_unit_count", "arms", "excluded_units", "balance"
+      ],
+      "properties": {
+        "task_family_id": { "type": "string", "minLength": 1 },
+        "workload": { "type": "string" },
+        "goal_action": { "type": "string" },
+        "goal_target": { "type": "string" },
+        "environment_version": { "type": "string" },
+        "difficulty": { "type": "string" },
+        "cohort_versions": { "$ref": "#/$defs/versions" },
+        "inclusion_rule": { "type": "string", "minLength": 1 },
+        "matched_exactly_on": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "family_unit_count": { "type": "integer", "minimum": 0 },
+        "arms": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "$ref": "#/$defs/cohortArm" } },
+        "excluded_units": { "type": "array", "items": { "$ref": "#/$defs/cohortExclusion" } },
+        "balance": { "type": "array", "items": { "$ref": "#/$defs/cohortBalanceCheck" } }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "application": { "type": "string" },
+        "agent": { "type": "string" },
+        "harness": { "type": "string" },
+        "prompt_set": { "type": "string" },
+        "workflow": { "type": "string" },
+        "tool_set": { "type": "string" },
+        "model_policy": { "type": "string" }
+      }
+    },
+    "cohortArm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "variant_id", "signature", "unit_count", "eligible_runs", "median_cost_usd"],
+      "properties": {
+        "role": { "enum": ["baseline", "alternative"] },
+        "variant_id": { "type": "string", "minLength": 1 },
+        "signature": { "$ref": "#/$defs/stringArray" },
+        "unit_count": { "type": "integer", "minimum": 0 },
+        "eligible_runs": { "type": "integer", "minimum": 0 },
+        "median_cost_usd": { "type": "number", "minimum": 0 }
+      }
+    },
+    "cohortExclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "unit_count"],
+      "properties": {
+        "reason": { "enum": ["assigned_to_another_workflow_variant", "unit_not_analyzable", "no_workflow_variant_signature"] },
+        "unit_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "cohortBalanceCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["covariate", "maximum_share_difference", "balanced"],
+      "properties": {
+        "covariate": { "enum": ["environment_version", "difficulty", "application_version", "agent_version", "tool_set_version", "model_policy_version"] },
+        "maximum_share_difference": { "$ref": "#/$defs/ratio" },
+        "balanced": { "type": "boolean" }
+      }
+    },
+    "representativeTrace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["arm", "variant_id", "analysis_unit_id", "cost_usd", "cost_distance_usd", "selection_rule"],
+      "properties": {
+        "arm": { "enum": ["baseline", "alternative"] },
+        "variant_id": { "type": "string", "minLength": 1 },
+        "analysis_unit_id": { "type": "string", "minLength": 1 },
+        "cost_usd": { "type": "number", "minimum": 0 },
+        "cost_distance_usd": { "type": "number", "minimum": 0 },
+        "selection_rule": { "const": "median_cost_proximity.v1" }
+      }
+    },
+    "causalSlice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variant_id", "manifestation_node_id", "traversal_rule", "node_chain", "hard_edges", "unproven_adjacencies"],
+      "properties": {
+        "variant_id": { "type": "string", "minLength": 1 },
+        "manifestation_node_id": { "type": "string" },
+        "traversal_rule": { "const": "hard_dependency_backward_slice.v1" },
+        "node_chain": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "hard_edges": { "type": "array", "items": { "$ref": "#/$defs/causalSliceHardEdge" } },
+        "unproven_adjacencies": { "type": "array", "items": { "$ref": "#/$defs/causalSliceSoftEdge" } }
+      }
+    },
+    "causalSliceHardEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "type", "strength", "confidence", "evidence_refs"],
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["data", "control"] },
+        "strength": { "const": "hard" },
+        "confidence": { "$ref": "#/$defs/ratio" },
+        "evidence_refs": { "type": "array", "minItems": 1, "maxItems": 50, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "causalSliceSoftEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "type", "strength", "confidence", "evidence_refs"],
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 },
+        "type": { "type": "string" },
+        "strength": { "type": "string" },
+        "confidence": { "$ref": "#/$defs/ratio" },
+        "evidence_refs": { "type": "array", "maxItems": 50, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "opportunity": {
+      "type": "object",
+      "required": ["id", "type", "detector_id", "signal_family", "observation", "evidence_level", "metrics_basis", "expected_value_basis", "method", "current_metrics", "alternative_metrics", "alternative_explanations", "recommended_next_step", "evidence_refs"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["efficiency", "reliability", "capability", "user_experience", "safety", "instrumentation"] },
+        "detector_id": { "type": "string", "minLength": 1 },
+        "signal_family": { "enum": ["exact", "semantic"] },
+        "current_variant_id": { "type": "string" },
+        "alternative_variant_id": { "type": "string" },
+        "observation": { "type": "string", "minLength": 1 },
+        "evidence_level": { "enum": ["E0", "E1", "E2", "E3"] },
+        "metrics_basis": { "const": "observed" },
+        "expected_value_basis": { "const": "inferred" },
+        "method": { "type": "string", "minLength": 1 },
+        "current_metrics": { "type": "object" },
+        "alternative_metrics": { "type": "object" },
+        "alternative_explanations": { "$ref": "#/$defs/stringArray" },
+        "recommended_next_step": { "enum": ["collect_more_data", "fix_instrumentation", "create_dataset", "matched_comparison", "causal_investigation", "replay_experiment"] },
+        "evidence_refs": { "$ref": "#/$defs/stringArray" }
+      },
+      "additionalProperties": true
+    },
+    "replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "evidence_level", "basis", "method", "baseline", "candidate", "cost_delta_usd", "latency_delta_ms", "outcome_delta", "evidence_refs", "trial_proofs", "thresholds"],
+      "properties": {
+        "status": { "enum": ["not_run", "passed", "failed"] },
+        "reason": { "type": "string" },
+        "evidence_level": { "enum": ["E3", "E4"] },
+        "basis": { "const": "inferred" },
+        "method": { "const": "replayed_counterfactual" },
+        "baseline": { "$ref": "#/$defs/replayMetrics" },
+        "candidate": { "$ref": "#/$defs/replayMetrics" },
+        "cost_delta_usd": { "type": "number" },
+        "latency_delta_ms": { "type": "integer" },
+        "outcome_delta": { "type": "number" },
+        "evidence_refs": { "$ref": "#/$defs/stringArray" },
+        "trial_proofs": { "type": "array", "maxItems": 120, "items": { "$ref": "#/$defs/replayTrialProof" } },
+        "thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cost_reduction_minimum", "non_inferiority_margin", "fallback_rate_maximum"],
+          "properties": {
+            "cost_reduction_minimum": { "$ref": "#/$defs/ratio" },
+            "non_inferiority_margin": { "$ref": "#/$defs/ratio" },
+            "fallback_rate_maximum": { "$ref": "#/$defs/ratio" }
+          }
+        }
+      }
+    },
+    "replayMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cases", "pass_rate", "cost_usd", "latency_ms", "tool_calls", "model_calls", "fallback_rate"],
+      "properties": {
+        "cases": { "type": "integer", "minimum": 0 },
+        "pass_rate": { "$ref": "#/$defs/ratio" },
+        "cost_usd": { "type": "number", "minimum": 0 },
+        "latency_ms": { "type": "integer", "minimum": 0 },
+        "tool_calls": { "type": "integer", "minimum": 0 },
+        "model_calls": { "type": "integer", "minimum": 0 },
+        "fallback_rate": { "$ref": "#/$defs/ratio" }
+      }
+    },
+    "replayTrialProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "dataset_case_id", "repetition", "input_hash", "starting_state_hash", "change_set_sha256", "eval_pack_sha256", "tool_set_version", "model_policy_version", "agent_version", "application_version", "environment_version", "difficulty", "baseline", "candidate"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "dataset_case_id": { "type": "string", "minLength": 1 },
+        "repetition": { "type": "integer", "minimum": 1 },
+        "input_hash": { "$ref": "#/$defs/sha256" },
+        "starting_state_hash": { "$ref": "#/$defs/sha256" },
+        "change_set_sha256": { "$ref": "#/$defs/sha256" },
+        "eval_pack_sha256": { "$ref": "#/$defs/sha256" },
+        "tool_set_version": { "type": "string", "minLength": 1 },
+        "model_policy_version": { "type": "string", "minLength": 1 },
+        "agent_version": { "type": "string", "minLength": 1 },
+        "application_version": { "type": "string", "minLength": 1 },
+        "environment_version": { "type": "string", "minLength": 1 },
+        "difficulty": { "type": "string", "minLength": 1 },
+        "baseline": { "$ref": "#/$defs/replayObservation" },
+        "candidate": { "$ref": "#/$defs/replayObservation" }
+      }
+    },
+    "replayObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome_verified", "outcome_source", "outcome_evidence_refs", "grader_results", "guardrails_passed", "cost_usd", "latency_ms", "tool_calls", "model_calls", "fallback", "execution"],
+      "properties": {
+        "outcome_verified": { "type": "boolean" },
+        "outcome_source": { "const": "replay_execution" },
+        "outcome_evidence_refs": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "grader_results": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/replayGraderResult" } },
+        "guardrails_passed": { "type": "boolean" },
+        "cost_usd": { "type": "number", "minimum": 0 },
+        "latency_ms": { "type": "integer", "minimum": 0 },
+        "tool_calls": { "type": "integer", "minimum": 0 },
+        "model_calls": { "type": "integer", "minimum": 0 },
+        "fallback": { "type": "boolean" },
+        "execution": { "$ref": "#/$defs/replayExecutionProof" }
+      }
+    },
+    "replayGraderResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grader", "passed", "evidence_ref"],
+      "properties": {
+        "grader": { "type": "string", "minLength": 1 },
+        "passed": { "type": "boolean" },
+        "evidence_ref": { "type": "string", "minLength": 1 }
+      }
+    },
+    "replayExecutionProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_sha256", "eval_pack_sha256", "constraints_sha256", "application_version", "agent_version", "harness_version", "workflow_version", "tool_set_version", "model_policy_version", "environment_version", "execution_evidence_refs"],
+      "properties": {
+        "artifact_sha256": { "$ref": "#/$defs/sha256" },
+        "applied_change_set_sha256": { "$ref": "#/$defs/sha256" },
+        "eval_pack_sha256": { "$ref": "#/$defs/sha256" },
+        "constraints_sha256": { "$ref": "#/$defs/sha256" },
+        "application_version": { "type": "string", "minLength": 1 },
+        "agent_version": { "type": "string", "minLength": 1 },
+        "harness_version": { "type": "string", "minLength": 1 },
+        "workflow_version": { "type": "string", "minLength": 1 },
+        "prompt_set_version": { "type": "string" },
+        "tool_set_version": { "type": "string", "minLength": 1 },
+        "model_policy_version": { "type": "string", "minLength": 1 },
+        "environment_version": { "type": "string", "minLength": 1 },
+        "execution_evidence_refs": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "changeSet": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "case_id", "operator", "operator_id", "operator_kind", "target", "mechanism", "applicability", "intervention", "fallback", "falsification", "sha256"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "case_id": { "type": "string", "minLength": 1 },
+        "operator": { "type": "string", "minLength": 1 },
+        "operator_id": { "type": "string", "minLength": 1 },
+        "operator_kind": { "enum": ["prompt_edit", "tool_description_edit", "workflow_reorder", "verification_relocation", "guard_addition", "model_policy_edit"] },
+        "target": {
+          "type": "object",
+          "required": ["workflow", "version"],
+          "properties": { "workflow": { "type": "string", "minLength": 1 }, "version": { "type": "string", "minLength": 1 } }
+        },
+        "mechanism": {
+          "type": "object",
+          "required": ["observation", "hypothesis"],
+          "properties": { "observation": { "type": "string", "minLength": 1 }, "hypothesis": { "type": "string", "minLength": 1 } }
+        },
+        "applicability": {
+          "type": "object",
+          "required": ["all"],
+          "properties": { "all": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } } }
+        },
+        "intervention": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["insert", "before"],
+          "properties": {
+            "insert": { "$ref": "#/$defs/stringArray" },
+            "before": { "$ref": "#/$defs/stringArray" },
+            "guard": { "$ref": "#/$defs/stringArray" },
+            "skip": { "$ref": "#/$defs/stringArray" }
+          }
+        },
+        "fallback": {
+          "type": "object",
+          "required": ["on", "use"],
+          "properties": {
+            "on": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+            "use": { "type": "string", "minLength": 1 }
+          }
+        },
+        "falsification": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "evalPack": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "case_id", "categories", "dataset", "graders", "repetitions_per_case", "non_inferiority_margin", "execution_constraints_sha256", "sha256"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "case_id": { "type": "string", "minLength": 1 },
+        "categories": {
+          "type": "object",
+          "required": ["deterministic", "semantic", "trajectory", "adversarial", "regression", "economic"],
+          "properties": {
+            "deterministic": { "$ref": "#/$defs/stringArray" },
+            "semantic": { "$ref": "#/$defs/stringArray" },
+            "trajectory": { "$ref": "#/$defs/stringArray" },
+            "adversarial": { "$ref": "#/$defs/stringArray" },
+            "regression": { "$ref": "#/$defs/stringArray" },
+            "economic": { "$ref": "#/$defs/stringArray" }
+          }
+        },
+        "dataset": { "$ref": "#/$defs/evalDataset" },
+        "graders": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "repetitions_per_case": { "type": "integer", "minimum": 1 },
+        "non_inferiority_margin": { "$ref": "#/$defs/ratio" },
+        "execution_constraints_sha256": { "$ref": "#/$defs/sha256" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "evalDataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_failure_cases", "prior_success_cases", "boundary_cases", "generated_cases", "cases", "replay_case_ids"],
+      "properties": {
+        "target_failure_cases": { "$ref": "#/$defs/stringArray" },
+        "prior_success_cases": { "$ref": "#/$defs/stringArray" },
+        "boundary_cases": { "type": "array", "maxItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "generated_cases": { "type": "array", "maxItems": 2, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "cases": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evalDatasetCase" } },
+        "replay_case_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "evalDatasetCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "generator", "source_unit_id", "perturbation"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["target_failure", "prior_success", "boundary", "adversarial"] },
+        "generator": { "enum": ["recorded_case.v1", "boundary_guard_threshold.v1", "adversarial_misleading_tool_output.v1", "adversarial_stale_input.v1"] },
+        "source_unit_id": { "type": "string", "minLength": 1 },
+        "perturbation": { "enum": ["none", "guard_threshold_boundary", "misleading_tool_output", "stale_input"] }
+      }
+    },
+    "diagnosisOnlyChangeSet": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["operator_id", "sha256"],
+      "properties": { "operator_id": { "const": "" }, "operator_kind": { "const": "" }, "sha256": { "const": "" } }
+    },
+    "diagnosisOnlyEvalPack": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "sha256"],
+      "properties": { "id": { "const": "" }, "sha256": { "const": "" } }
+    },
+    "optimizationCase": {
+      "type": "object",
+      "required": ["id", "opportunity_id", "workload", "status", "cohort", "representative_traces", "causal_slice", "diagnosis", "change_set", "eval_pack", "replay", "result"],
+      "allOf": [
+        {
+          "if": { "required": ["status"], "properties": { "status": { "const": "diagnosis_only" } } },
+          "then": {
+            "properties": {
+              "change_set": { "$ref": "#/$defs/diagnosisOnlyChangeSet" },
+              "eval_pack": { "$ref": "#/$defs/diagnosisOnlyEvalPack" },
+              "replay": { "type": "object", "properties": { "status": { "const": "not_run" } } }
+            }
+          },
+          "else": {
+            "properties": {
+              "change_set": { "$ref": "#/$defs/changeSet" },
+              "eval_pack": { "$ref": "#/$defs/evalPack" }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "opportunity_id": { "type": "string", "minLength": 1 },
+        "workload": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["diagnosis_only", "replay_pending", "replay_passed", "replay_failed"] },
+        "cohort": { "$ref": "#/$defs/cohort" },
+        "representative_traces": { "type": "array", "maxItems": 6, "items": { "$ref": "#/$defs/representativeTrace" } },
+        "causal_slice": { "$ref": "#/$defs/causalSlice" },
+        "diagnosis": { "type": "object" },
+        "change_set": { "type": "object" },
+        "eval_pack": { "type": "object" },
+        "replay": { "$ref": "#/$defs/replay" },
+        "result": {
+          "type": "object",
+          "required": ["vocabulary", "money_basis", "summary", "outcome_proof"],
+          "properties": {
+            "vocabulary": { "enum": ["mechanism hypothesis", "replay-estimated improvement", "replay-supported safety change"] },
+            "money_basis": { "const": "inferred" },
+            "summary": { "type": "string", "minLength": 1 },
+            "outcome_proof": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

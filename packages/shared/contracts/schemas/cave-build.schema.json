@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/cave-build.schema.json",
+  "title": "Immutable Caveman Agent Build",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "agent_id",
+    "build_sha256",
+    "plan_sha256",
+    "source_sha256",
+    "agent_definition_sha256",
+    "context_ir_sha256",
+    "eval_suite_sha256",
+    "context_ir_schema",
+    "harness",
+    "runtime",
+    "catalog_sha256",
+    "baseline_plan_id",
+    "selected_plan_id",
+    "selected_plan",
+    "evidence"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "build_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "plan_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "source_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "agent_definition_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "context_ir_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "eval_suite_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "context_ir_schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "adapter_version", "upstream_version"],
+      "properties": {
+        "id": {
+          "enum": ["pi", "claude", "vercel-ai-sdk", "eve", "mastra"]
+        },
+        "adapter_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "upstream_version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caveman_version",
+        "transform_registry_sha256",
+        "external_provenance_sha256"
+      ],
+      "properties": {
+        "caveman_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transform_registry_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "external_provenance_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "const": ""
+            }
+          ]
+        }
+      }
+    },
+    "catalog_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "baseline_plan_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selected_plan_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selected_plan": {
+      "$ref": "https://caveman.so/schemas/cave-plan.schema.json"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "basis",
+        "quality_retention_lcb95",
+        "error_rate",
+        "p95_latency_ms",
+        "catalog_cost_usd_per_task",
+        "completed_runs"
+      ],
+      "properties": {
+        "status": {
+          "const": "locked"
+        },
+        "basis": {
+          "const": "inferred"
+        },
+        "quality_retention_lcb95": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "error_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "p95_latency_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "catalog_cost_usd_per_task": {
+          "type": "number",
+          "minimum": 0
+        },
+        "completed_runs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

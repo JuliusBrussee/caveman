@@ -1,0 +1,13 @@
+{
+  "provider": "azure_openai",
+  "verified_at": "2026-06-02T00:00:00Z",
+  "models": {
+    "gpt-5.4": {
+      "prompt_cache_retention": ["in_memory", "24h"]
+    },
+    "newer_than_gpt-5.4": {
+      "prompt_cache_retention": ["24h"]
+    }
+  },
+  "cached_tokens_field": "usage.prompt_tokens_details.cached_tokens"
+}

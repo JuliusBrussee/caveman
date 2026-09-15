@@ -1,0 +1,41 @@
+{
+  "entries": [
+    {
+      "id": "chat",
+      "shape": "chat",
+      "inputFile": "chat-input.json",
+      "outputFile": "chat-output.json",
+      "options": {
+        "charsPerToken": 1,
+        "minCompressChars": 1,
+        "collapseHistory": false
+      },
+      "imageCount": 1,
+      "images": [
+        {
+          "file": "chat-00.png"
+        }
+      ]
+    },
+    {
+      "id": "responses",
+      "shape": "responses",
+      "inputFile": "responses-input.json",
+      "outputFile": "responses-output.json",
+      "options": {
+        "charsPerToken": 1,
+        "minCompressChars": 1,
+        "collapseHistory": false
+      },
+      "imageCount": 2,
+      "images": [
+        {
+          "file": "responses-00.png"
+        },
+        {
+          "file": "responses-01.png"
+        }
+      ]
+    }
+  ]
+}

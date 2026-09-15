@@ -19,7 +19,27 @@ README = product front door. Non-technical people read it to decide if caveman w
 
 ## Project overview
 
-Caveman makes AI coding agents respond in compressed caveman-style prose — cuts 65% output tokens (measured), full technical accuracy. Ships as Claude Code plugin, Codex plugin, Gemini CLI extension, agent rule files for Cursor, Windsurf, Cline, Copilot, 40+ others via `npx skills`.
+Caveman makes AI coding agents respond in compressed caveman-style prose while preserving technical substance, code, commands, and exact errors. Publish no reduction or quality-equivalence percentage without a committed reviewed benchmark. Ships as Claude Code plugin, Codex plugin, Gemini CLI extension, and agent rule files for Cursor, Windsurf, Cline, Copilot, and other profiles via `npx skills`.
+
+## Repository routing
+
+This repo is source of truth for Caveman skills, Engine, and MV3 directive
+extension. Agent SDK + initializer work belongs in
+`/Users/julb/Desktop/GitHub/caveman-agent-sdk`
+(`JuliusBrussee/agent-sdk`). Proprietary Pebble runtime, policy, sessions, TUI,
+distribution, and conformance work belongs in
+`/Users/julb/Desktop/GitHub/caveman-coding-agent`
+(intended `JuliusBrussee/caveman-coding-agent`). Browse driver/MCP/benchmark/plugin work
+belongs in `/Users/julb/Desktop/GitHub/caveman-browse`
+(`JuliusBrussee/caveman-browse`). Matching `packages/agent/`,
+`packages/create-caveman-agent/`, and `browse/` directories here are
+historical/consumer copies; edit only for pinned integration, migration/removal,
+or an explicitly requested cross-repo sync.
+
+Visibility is separate from ownership: this repo and `caveman-browse` are
+public now; `caveman-agent-sdk` is private during development and planned for
+public release after its release gates; `caveman-coding-agent` and
+Caveman-Cloud remain private commercial source.
 
 ---
 
@@ -51,6 +71,7 @@ caveman/
 │   └── cavecrew/{SKILL.md, README.md}
 │
 ├── agents/                      # cavecrew subagents (single source — kept at root for plugin auto-discovery)
+│   └── docs/                    # profile-registry docs — NOT agents (see note below)
 ├── commands/                    # Codex/Gemini TOML command stubs (root for plugin auto-discovery)
 │
 ├── src/                         # Internal source — not auto-discovered by plugin
@@ -58,6 +79,21 @@ caveman/
 │   ├── rules/                   # Auto-activation rule body (single source)
 │   ├── tools/                   # caveman-init.js (per-repo rule writer)
 │   └── mcp-servers/             # caveman-shrink npm-published MCP middleware
+│
+├── packages/                    # Current public packages
+│   ├── agent/                   # historical copy; source = caveman-agent-sdk
+│   ├── create-caveman-agent/    # historical copy; source = caveman-agent-sdk
+│   ├── cli/                     # @caveman-ai/cli
+│   ├── pi-extension/            # @caveman-ai/pi — native Pi extension (bundled into the CLI, published on `pi-v*` tags)
+│   ├── sdk/                     # TypeScript + Python gateway clients
+│   ├── subagent-tax/            # Local harness-prefix benchmark
+│   └── shared/                  # Contracts + binary installer
+├── engine/ · proxy/             # BSL local compression runtime + provider proxy
+├── rewriter/                    # Prompt rewriter
+├── mcp/ · mem/ · shrink/        # Recovery tools, memory, output compression
+├── browse/                      # consumer copy; source = caveman-browse
+├── extension/                   # MV3 extension source
+├── shared/                       # Provider catalog + BSL platform libraries
 │
 ├── .claude-plugin/              # Claude Code plugin manifest (REQUIRED at root)
 ├── plugins/caveman/             # Claude Code plugin distribution (CI-mirrored)
@@ -91,11 +127,53 @@ caveman/
 | `skills/caveman-help/SKILL.md` | Quick-reference card. One-shot display, not a persistent mode. |
 | `skills/caveman-compress/SKILL.md` | Compress sub-skill behavior. |
 | `skills/cavecrew/SKILL.md` | Cavecrew decision guide — when to delegate to caveman subagents vs vanilla. Edit only here. |
+| `skills/{caveman-setup,caveman-discover,caveman-learn,caveman-manage,caveman-optimize,caveman-explore,caveman-evidence-review}/SKILL.md` | Engine/proxy driver skills. Ship with the plugin (see the auto-discovery note below). |
+| `skills/{investigate-first,lean-build,surgical-patch,safe-refactor,migration,verify-and-stop}/SKILL.md` | Token-discipline work patterns — same goal as caveman prose (fewer output tokens) applied to code volume rather than wording. Deliberately un-branded so they read as generic patterns to the model. Ship with the plugin. |
 | `agents/cavecrew-investigator.md` | Read-only locator subagent (haiku). Output contract: `path:line — symbol — note`. |
 | `agents/cavecrew-builder.md` | Surgical 1-2 file editor subagent. Refuses 3+ file scope. |
 | `agents/cavecrew-reviewer.md` | Diff/file reviewer subagent (haiku). One-line findings with severity emoji. |
 | `src/plugins/opencode/plugin.js` | opencode native plugin. ESM Bun module — `session.created` writes flag, `tui.prompt.append` parses slash/natural-language activation and appends per-prompt reinforcement. Reuses `caveman-config.js` via `createRequire`. |
 | `src/plugins/opencode/commands/*.md` | Six opencode slash-command prompt templates (`/caveman`, `/caveman-{commit,review,compress,stats,help}`). |
+
+### `skills/` is auto-discovered wholesale — every subdirectory ships
+
+`.claude-plugin/marketplace.json` sets `"source": "./"`, so the plugin root IS
+the repo root, and Claude Code auto-discovers **every** `skills/*/SKILL.md`
+with no `skills` key in `plugin.json` to gate it. Adding a directory under
+`skills/` therefore installs it into every plugin user's agent, where its
+`description` competes for activation on ordinary work.
+
+There is no allowlist. Before adding a directory here, decide whether it
+should reach end users; if not, it belongs under `packages/` or another root.
+Keep the two tables above and the README "What you get" table in sync with the
+actual directory listing — `ls skills/` is the source of truth.
+
+### `agents/*.md` is auto-discovered too — and `plugin.json` must NOT list them
+
+Same mechanism, sharper edge. `plugin.json` used to carry an explicit
+`"agents": ["./agents/cavecrew-*.md"]` array. On Claude Code 2.1.235 that array
+loads **zero** agents — `claude plugin details caveman` reports `Agents (0)`
+with it and `Agents (3)` without it, so the three cavecrew subagents the
+`cavecrew` skill delegates to did not exist for any plugin user. The docs say
+`string | string[]` is valid and a directory string is rejected outright
+(`agents: Invalid input`), so the default `agents/` scan is the only path that
+works. Do not re-add the key.
+
+Consequence: **every `.md` anywhere in `agents/` becomes a subagent**, named
+from its frontmatter or filename. Maintainer documentation belongs outside that
+tree; profile-registry orientation lives in
+`docs/technical/agent-profile-registry.md`. `tests/verify_repo.py` fails build
+if any markdown beyond three intended cavecrew agents appears under `agents/`.
+
+### `commands/*.md` shadows same-named skills — keep the `.md` stubs unique
+
+Claude Code loads `commands/*.md` as flat skills alongside `skills/*/SKILL.md`,
+so a stub sharing a skill's name registers that name twice. `caveman.md`,
+`caveman-commit.md`, `caveman-review.md` and `caveman-stats.md` each duplicated
+a real skill — a 3-line stub competing with the full ruleset for the same slash
+command — and were removed. The `.toml` stubs are Codex/Gemini-only and are not
+scanned, so `commands/` keeps one `.md`: `caveman-init.md`, which has no skill
+twin. Guarded by `tests/verify_repo.py`.
 
 ### Auto-generated / auto-synced — do not edit directly
 
@@ -136,16 +214,29 @@ The old steps that mirrored SKILL.md and rules into root dotdirs (`.cursor/`, `.
 
 ## Hook system (Claude Code)
 
-Three hooks in `src/hooks/` plus a `caveman-config.js` shared module and a `package.json` CommonJS marker. Communicate via flag file at `$CLAUDE_CONFIG_DIR/.caveman-active` (falls back to `~/.claude/.caveman-active`).
+Three hooks in `src/hooks/` plus a `caveman-config.js` shared module, a `caveman-parse.js` shared mode-change parser and a `package.json` CommonJS marker.
+
+**Mode state is per session.** Each session's mode lives in `$CLAUDE_CONFIG_DIR/.caveman-sessions/<session_id>.mode`, keyed by the `session_id` Claude Code puts in every hook payload *and* in the statusline's stdin JSON. `$CLAUDE_CONFIG_DIR/.caveman-active` survives as a last-write-wins compat mirror (falls back to `~/.claude/`).
 
 ```
-SessionStart hook ──writes "full"──▶ $CLAUDE_CONFIG_DIR/.caveman-active ◀──writes mode── UserPromptSubmit hook
-                                                       │
-                                                    reads
-                                                       ▼
-                                              caveman-statusline.sh
-                                            [CAVEMAN] / [CAVEMAN:ULTRA] / ...
+SessionStart hook ──┐                                        ┌── UserPromptSubmit hook
+  (session_id,      │                                        │     (session_id, prompt)
+   source)          ▼                                        ▼
+        $CLAUDE_CONFIG_DIR/.caveman-sessions/<session_id>.mode
+                             │             │
+                          mirrors       reads
+                             ▼             ▼
+              .caveman-active      caveman-statusline.sh ◀── session JSON on stdin
+           (last-write-wins,        [CAVEMAN] / [CAVEMAN:ULTRA] / ...
+            compat only)
 ```
+
+Two invariants that are load-bearing, not stylistic:
+
+- **The legacy mirror never holds the literal `off`.** Deactivation deletes it. `off` is in `VALID_MODES`, so an older `caveman-mode-tracker.js` reading `off` from that path would pass its `!INDEPENDENT_MODES.has(...)` check and inject "CAVEMAN MODE ACTIVE (off)", and an older `caveman-statusline.sh` would render `[CAVEMAN:OFF]`. Mixed-version installs are real: plugin hooks and standalone hooks can both be registered at once, and `statusLine` holds an absolute path baked in at install time.
+- **`recordModeChange` compares against the session's own state, never the mirror.** That's why `readSessionModeRaw` exists alongside `resolveActiveMode` — diffing against the mirror would compare one session's transition to whatever another session wrote last and spam the log with phantom entries.
+
+Both spellings of off are READ everywhere: a missing file (old semantics) and a literal `off` (new, durable).
 
 `src/hooks/package.json` pins the directory to `{"type": "commonjs"}` so the `.js` hooks resolve as CJS even when an ancestor `package.json` (e.g. `~/.claude/package.json` from another plugin) declares `"type": "module"`. Without this, `require()` blows up with `ReferenceError: require is not defined in ES module scope`.
 
@@ -157,21 +248,35 @@ Exports:
 - `getDefaultMode()` — resolves default mode in order: `CAVEMAN_DEFAULT_MODE` env var → repo-local config (`<cwd>/.caveman/config.json` or `<cwd>/.caveman.json`, walking up to the filesystem root) → user config (`$XDG_CONFIG_HOME/caveman/config.json` / `~/.config/caveman/config.json` / `%APPDATA%\caveman\config.json`) → `'full'`. The env var short-circuits before any cwd walk. Repo-local config lets a team check in a per-project default without polluting every contributor's env or user config.
 - `findRepoConfigPath(start)` — walks up from `start` (default `process.cwd()`) looking for the first `.caveman/config.json` or `.caveman.json`. Bounded to 64 ancestors. Refuses symlinked files (symmetric with `safeWriteFlag` / `readFlag`).
 - `safeWriteFlag(flagPath, content)` — symlink-safe flag write. Refuses if flag target or its immediate parent is a symlink. Opens with `O_NOFOLLOW` where supported. Atomic temp + rename. Creates with `0600`. Protects against local attackers replacing the predictable flag path with a symlink to clobber files writable by the user. Used by both write hooks. Silent-fails on all filesystem errors.
+- `validateSessionId(id)` — returns the id or `null`. Whitelist `^[A-Za-z0-9_-]{1,128}$`. **A session id becomes part of a filesystem path, so nothing may interpolate one without passing it through here first.** The symlink hardening in `safeWriteFlag` does not cover traversal.
+- `resolveActiveMode(claudeDir, sessionId)` — what mode is in effect: session file → legacy mirror, with both a missing file and a literal `off` collapsing to `null`. The reader every hook should use.
+- `readSessionModeRaw(claudeDir, sessionId)` — literal stored value for **this** session, no legacy fallback. Two callers only: `recordModeChange` (see the invariant above) and the SessionStart continuation branch, which has to tell a stored `off` apart from "nothing stored yet".
+- `writeSessionMode(claudeDir, sessionId, modeOrNull)` — the single writer. Writes `off` literally to the session file, unlinks the legacy mirror. Rejects anything outside `VALID_MODES`.
+- `writeSessionPrev` / `readSessionPrev` / `clearSessionPrev` — the displaced-prose-mode memory for one-shot skills (#599), scoped per session so two windows running `/caveman-commit` don't overwrite each other's return target.
+- `gcSessionStore(claudeDir, opts)` — mtime sweep of `.caveman-sessions/`, 14-day TTL (`CAVEMAN_SESSION_TTL_MS` overrides for tests), `maxDeletes` cap, refuses symlinks. Called from SessionStart on new sessions only — never on `compact`, which is frequent and shares the 5s hook budget.
+- `recordModeChange(claudeDir, newMode, sessionId)` — third arg tags the log entry; omitted (not null) when unknown, so pre-existing readers see the old shape.
+
+**Every function above accepts a `sessionId` that may be `null` or malformed and degrades to the legacy machine-wide behavior.** That is the entire backward-compatibility story: the old code path *is* the fallback branch, which is why the existing tests — none of which send a `session_id` — pass unchanged. The three hook entrypoints resolve these helpers individually (`cfg.writeSessionMode || <legacy stub>`) rather than adding them to their `requireSibling` shape checks: a `caveman-config.js` from before per-session state satisfies those checks, and hard-failing over the newer exports would trade "machine-wide mode, as it always worked" for "no state at all" on exactly the plugin-cache-drift scenario #848 is about.
 
 ### `src/hooks/caveman-activate.js` — SessionStart hook
 
-Runs once per Claude Code session start. Three things:
-1. Writes the active mode to `$CLAUDE_CONFIG_DIR/.caveman-active` via `safeWriteFlag` (creates if missing)
-2. Emits caveman ruleset as hidden stdout — Claude Code injects SessionStart hook stdout as system context, invisible to user
-3. Checks `settings.json` for statusline config; if missing, appends nudge to offer setup on first interaction
+Runs on every SessionStart — `source` is `startup`, `resume`, `clear`, `compact` or `fork`. Four things:
+1. Reads the hook payload from stdin for `session_id`, `source` and `cwd`
+2. Resolves this session's mode and persists it via `writeSessionMode`
+3. Emits caveman ruleset as hidden stdout — Claude Code injects SessionStart hook stdout as system context, invisible to user
+4. Checks `settings.json` for statusline config; if missing, appends nudge to offer setup on first interaction (one-shot, gated by `.caveman-nudge-shown`)
+
+**`source` branching.** `RESET_SOURCES` is `{startup, clear}` — only those re-derive `getDefaultMode()`. Everything else (`compact`/`resume`/`fork`, an unrecognized source, and the watchdog's `unknown`) READS the stored mode via `readSessionModeRaw`, falling back to the legacy mirror for a session that predates the store, and only then to the default. Reading the LITERAL value is the point: #691 already branched on `source`, but it read the legacy flag where off is spelled "no file", so a deactivated session found nothing and re-derived the default anyway — "stop caveman" was still undone by the next auto-compaction. A stored `off` now short-circuits to `OK` with no ruleset. It still re-emits when a mode IS active: compaction is what prunes the rules out of context, which is the whole reason this hook runs on every source. `clear` counts as a fresh start (explicit user reset — nothing else in the conversation survives it, so neither should a "stop caveman" from before it); this deliberately differs from #691's comment, which grouped `clear` with the continuations.
+
+**The stdin contour is load-bearing.** Activation runs on the first COMPLETE JSON object, not at EOF, with a 2000ms `PAYLOAD_WATCHDOG_MS` backstop and `process.stdin.unref()` in `finish()`. `pause()` alone is not enough — it stops reading but leaves the pipe handle referenced, so a host that holds the write end open (Windows pipe close lags arbitrarily, #729/#833) burns the whole 5s budget. The watchdog must NOT assume `startup`: it reports `unknown`, which preserves the session's stored mode rather than resetting it. Several suites also invoke this hook via `subprocess.run()` with no `input=`, inheriting a stdin that never reaches EOF — `tests/test_hooks.py::test_hook_never_blocks_on_stdin_that_never_closes` guards that path.
 
 Silent-fails on all filesystem errors — never blocks session start.
 
 ### `src/hooks/caveman-mode-tracker.js` — UserPromptSubmit hook
 
-Reads JSON from stdin. Three responsibilities:
+Reads JSON from stdin — `session_id` scopes every read and write. Three responsibilities:
 
-**1. Slash-command activation.** If prompt starts with `/caveman`, writes mode to flag file via `safeWriteFlag`:
+**1. Slash-command activation.** If prompt starts with `/caveman`, writes the session's mode via `writeSessionMode`:
 - `/caveman` → configured default (see `caveman-config.js`, defaults to `full`)
 - `/caveman lite` → `lite`
 - `/caveman ultra` → `ultra`
@@ -182,19 +287,22 @@ Reads JSON from stdin. Three responsibilities:
 - `/caveman-review` → `review`
 - `/caveman-compress` → `compress`
 
-**2. Natural-language activation/deactivation.** Matches phrases like "activate caveman", "turn on caveman mode", "talk like caveman" and writes the configured default mode. Matches "stop caveman", "disable caveman", "normal mode", "deactivate caveman" etc. and deletes the flag file. README promises these triggers, the hook enforces them.
+**2. Natural-language activation/deactivation.** Matches phrases like "activate caveman", "turn on caveman mode", "talk like caveman" and writes the configured default mode. Matches "stop caveman", "disable caveman", "normal mode", "deactivate caveman" etc. and stores a durable `off` for the session. README promises these triggers, the hook enforces them.
 
-**3. Per-turn reinforcement.** When flag is set to a non-independent mode (i.e. not `commit`/`review`/`compress`), emits a small `hookSpecificOutput` JSON reminder so the model keeps caveman style after other plugins inject competing instructions mid-conversation. The full ruleset still comes from SessionStart — this is just an attention anchor.
+**3. Per-turn reinforcement.** When the session's mode is a non-independent one (i.e. not `commit`/`review`/`compress`), emits a small `hookSpecificOutput` JSON reminder so the model keeps caveman style after other plugins inject competing instructions mid-conversation. The full ruleset still comes from SessionStart — this is just an attention anchor.
 
 ### `src/hooks/caveman-statusline.sh` — Statusline badge
 
-Reads flag file at `$CLAUDE_CONFIG_DIR/.caveman-active`. Outputs colored badge string for Claude Code statusline:
+Reads the session JSON Claude Code pipes to it on stdin, extracts `session_id` (pure bash — no `jq` dependency), and reads `.caveman-sessions/<id>.mode`; falls back to `$CLAUDE_CONFIG_DIR/.caveman-active` when there is no usable id. Outputs colored badge string for Claude Code statusline:
 - `full` or empty → `[CAVEMAN]` (orange)
+- `off` → nothing at all. Never `[CAVEMAN:OFF]` — that reads as a mode rather than the absence of one
 - anything else → `[CAVEMAN:<MODE_UPPERCASED>]` (orange)
 
-Then appends the lifetime-savings suffix (`⛏ 12.4k`) read from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` — written by `caveman-stats.js` on every `/caveman-stats` run. **Default on**; users opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`. The suffix file is absent until `/caveman-stats` runs at least once, so fresh installs render no fake number.
+Stdin is bounded the same way as the SessionStart hook: `[ ! -t 0 ]` skips an interactive terminal, and `read -r -d '' -t 1` caps the wait. The timeout is an **integer on purpose** — macOS ships bash 3.2, which rejects `-t 0.3` with `invalid timeout specification`.
 
-Configured in `settings.json` under `statusLine.command`. PowerShell counterpart at `src/hooks/caveman-statusline.ps1` for Windows. Both scripts symlink-refuse and whitelist-validate the flag/suffix file contents — never echo arbitrary bytes.
+The statusline reports mode only. Old `.caveman-statusline-suffix` values are ignored; fixed-ratio savings estimates were removed because no measured baseline supported them. `/caveman-stats` records actual Claude output/cache-read counts and mode attribution with savings unknown. Gemini uses native `/stats model` and `/stats session`; never read Claude transcripts as another host's usage.
+
+Configured in `settings.json` under `statusLine.command`. PowerShell counterpart at `src/hooks/caveman-statusline.ps1` for Windows. Both scripts symlink-refuse and whitelist-validate mode flag contents — never echo arbitrary bytes.
 
 ### Hook installation
 
@@ -204,7 +312,7 @@ Configured in `settings.json` under `statusLine.command`. PowerShell counterpart
 
 The `install.sh` / `install.ps1` shims at the repo root delegate to `bin/install.js` via `node` (local clone) or `npx -y github:JuliusBrussee/caveman` (curl|bash). No legacy fallback path remains — earlier `install.sh.legacy` / `install.ps1.legacy` files were removed.
 
-**Uninstall** — `npx -y github:JuliusBrussee/caveman -- --uninstall` (or `node bin/install.js --uninstall` from a clone). Strips caveman hook entries from `settings.json` via substring marker `caveman`, deletes hook files, and removes the Claude plugin / Gemini extension. Skill installs done via `npx skills add` must be removed via the IDE's skill manager (we don't track them).
+**Uninstall** — `npx -y github:JuliusBrussee/caveman -- --uninstall` (or `node bin/install.js --uninstall` from a clone). Strips caveman hook entries from `settings.json` via substring marker `caveman`, deletes hook files, and removes the Claude plugin / Gemini extension. Native skill copies use `bin/lib/provider-skills.js` and ownership journals; uninstall removes unchanged owned files while preserving foreign or edited content. Use the same vendor home overrides for install and uninstall. Delegated `npx skills add` installs remain managed by the host/upstream skill manager.
 
 ---
 
@@ -249,7 +357,8 @@ How caveman reaches each agent type:
 | Windsurf | `npx skills add ... -a windsurf` (default via `--only windsurf`); per-repo `.windsurf/rules/caveman.md` via `--with-init` | Yes — always-on rule |
 | Cline | `npx skills add ... -a cline` (default via `--only cline`); per-repo `.clinerules/caveman.md` via `--with-init` | Yes — Cline auto-discovers `.clinerules/` |
 | Copilot | `npx skills add ... -a github-copilot` (soft probe — pass `--only copilot`); per-repo `.github/copilot-instructions.md` + `AGENTS.md` via `--with-init` | Yes — repo-wide instructions |
-| Others (Junie, Trae, Warp, Tabnine, Mistral, Qwen, Devin, Droid, ForgeCode, Bob, Crush, iFlow, OpenHands, Qoder, Rovo Dev, Replit, Antigravity, …) | `npx skills add JuliusBrussee/caveman -a <profile>` | No — user must say `/caveman` each session |
+| Continue, AiderDesk, Antigravity IDE/2.0 | Owned physical copies into each vendor's supported directory, honoring configured homes; separate explicit targets for the two Antigravity products | Host skill invocation; feature settings may be required |
+| Others (Junie, Trae, Warp, Tabnine, Mistral, Qwen, Devin, Droid, ForgeCode, Bob, Crush, iFlow, OpenHands, Qoder, Rovo Dev, Replit, …) | Delegated `npx skills` personal installs; Replit uses project scope. Configured iFlow/Crush roots use owned copies | Host skill invocation; `/caveman` where supported |
 
 opencode reaches Tier 1 minus the statusline (opencode's TUI has no plugin-writable badge). Mode flag lives at `~/.config/opencode/.caveman-active` for any external tooling that wants to surface it.
 
@@ -301,6 +410,11 @@ To reproduce: `uv run python benchmarks/run.py` (needs `ANTHROPIC_API_KEY` in `.
 - CI workflow commits back to main after merge. Account for when checking branch state.
 - Hook files must silent-fail on all filesystem errors. Never let hook crash block session start.
 - Any new flag file write must go through `safeWriteFlag()` in `caveman-config.js`. Direct `fs.writeFileSync` on predictable user-owned paths reopens the symlink-clobber attack surface.
+- Mode state reads/writes go through the `caveman-config.js` session helpers (`resolveActiveMode` / `writeSessionMode` / …), never by joining a path by hand. Any `session_id` that reaches a path must pass `validateSessionId()` first.
+- **Keep mode-state logic in `caveman-config.js`.** `src/plugins/opencode/plugin.js` cannot `require()` from disk (compiled Bun binary) — it reads that file and evaluates it through `new Function(...)` with a `createRequire` that resolves only node built-ins. Parsing already lives in `caveman-parse.js` (#602) and loads the same way, so a second parser copy is no longer the risk; a THIRD home for the state primitives would be, because opencode would keep its own drifting version of them.
+- The two statusline scripts have no shared runtime with the JS, so they re-implement path resolution by hand. `tests/verify_repo.py::verify_powershell_static` greps both against the `SESSIONS_DIRNAME` and `SESSION_ID_RE` constants to catch drift — there is no behavioral `.ps1` test on the POSIX runners, so that grep is the only guard on the Windows badge.
+- Editing anything in `src/hooks/` means regenerating `src/hooks/checksums.sha256` (same file set, recomputed digests) — `tests/verify_repo.py` fails the build otherwise, and `bin/install.js` verifies remote hook downloads against the manifest for the pinned ref.
 - Hooks must respect `CLAUDE_CONFIG_DIR` env var, not hardcode `~/.claude`. Same for `bin/install.js` / statusline scripts.
+- **Any entrypoint that reads a host hook payload from stdin returns on the first complete JSON object, never at EOF.** Under the Windows pipe implementation the host's close lags arbitrarily (#729/#833, #949), so a reader that waits for EOF burns the host's whole budget with its work done. The readers that follow this rule: `caveman-activate.js` and `caveman-mode-tracker.js` (per-chunk parse), `packages/cli/src/native-hook-fast.ts` (`stdin()`), `readHookStdin()` in `packages/cli/src/index.ts` (shrink-hook, memory recall, native-hook), and `readNativeHookPayload` in `proxy/cmd/caveman-proxy/main.go`. A new hook callback uses one of those, not `readStdin()` or `io.ReadAll`. Each has a keep-the-writer-open regression test; add one for any new reader.
 - `bin/install.js` is the only installer source. `install.sh` / `install.ps1` at repo root are 30-line shims that delegate to it. Never re-add per-OS install logic to the shims — that's how we got the Windows quoting bug (#249).
 - Any settings.json read in installer or hooks must go through `bin/lib/settings.js` `readSettings()` so JSONC comments don't crash the merge. Any settings.json write must run through `validateHookFields()` first.

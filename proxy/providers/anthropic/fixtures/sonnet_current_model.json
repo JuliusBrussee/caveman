@@ -1,0 +1,13 @@
+{
+  "provider": "anthropic",
+  "spec_example_model": "claude-sonnet-4-5",
+  "current_catalog_model": "claude-sonnet-4-6",
+  "verified_at": "2026-06-02T00:00:00Z",
+  "capabilities": {
+    "messages_api": true,
+    "count_tokens": true,
+    "prompt_cache": true,
+    "message_batches": true,
+    "context_editing": true
+  }
+}

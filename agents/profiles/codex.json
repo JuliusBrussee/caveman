@@ -1,0 +1,28 @@
+{
+  "schema_version": "1",
+  "id": "codex",
+  "display_name": "OpenAI Codex CLI",
+  "vendor": "OpenAI",
+  "homepage": "https://developers.openai.com/codex",
+  "binary_names": ["codex"],
+  "args": [],
+  "install": "npm i -g @openai/codex",
+  "wire_protocol": "openai-responses",
+  "injection": {
+    "method": "env",
+    "env": {}
+  },
+  "skills": {
+    "format": "skill-md",
+    "user_dirs": ["~/.codex/skills"],
+    "project_dirs": []
+  },
+  "command_hook": { "method": "codex-pretooluse", "file": "~/.codex/AGENTS.md" },
+  "attribution": { "header": "x-cave-agent" },
+  "tested_agent_version": "0.153.0",
+  "injection_completeness": "code-only",
+  "last_verified_at": "2026-09-03",
+  "verified_by": "local pinned-binary probe (codex 0.153.0, agents/probe-installed.mjs)",
+  "fallback": "generic-env",
+  "maintainer": null
+}

@@ -1,0 +1,264 @@
+{
+  "query": "list all items in region eu-west-1 with pagination",
+  "count": 18,
+  "page": 1,
+  "results": [
+    {
+      "id": 0,
+      "name": "item-0",
+      "status": "stale",
+      "score": 0.5,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 0
+      }
+    },
+    {
+      "id": 1,
+      "name": "item-1",
+      "status": "ok",
+      "score": 0.51,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 1
+      }
+    },
+    {
+      "id": 2,
+      "name": "item-2",
+      "status": "ok",
+      "score": 0.52,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 2
+      }
+    },
+    {
+      "id": 3,
+      "name": "item-3",
+      "status": "ok",
+      "score": 0.53,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 0
+      }
+    },
+    {
+      "id": 4,
+      "name": "item-4",
+      "status": "ok",
+      "score": 0.54,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 1
+      }
+    },
+    {
+      "id": 5,
+      "name": "item-5",
+      "status": "ok",
+      "score": 0.55,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 2
+      }
+    },
+    {
+      "id": 6,
+      "name": "item-6",
+      "status": "ok",
+      "score": 0.56,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 0
+      }
+    },
+    {
+      "id": 7,
+      "name": "item-7",
+      "status": "stale",
+      "score": 0.57,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 1
+      }
+    },
+    {
+      "id": 8,
+      "name": "item-8",
+      "status": "ok",
+      "score": 0.58,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 2
+      }
+    },
+    {
+      "id": 9,
+      "name": "item-9",
+      "status": "ok",
+      "score": 0.59,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 0
+      }
+    },
+    {
+      "id": 10,
+      "name": "item-10",
+      "status": "ok",
+      "score": 0.6,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 1
+      }
+    },
+    {
+      "id": 11,
+      "name": "item-11",
+      "status": "ok",
+      "score": 0.61,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 2
+      }
+    },
+    {
+      "id": 12,
+      "name": "item-12",
+      "status": "ok",
+      "score": 0.62,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 0
+      }
+    },
+    {
+      "id": 13,
+      "name": "item-13",
+      "status": "ok",
+      "score": 0.63,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 1
+      }
+    },
+    {
+      "id": 14,
+      "name": "item-14",
+      "status": "stale",
+      "score": 0.64,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 2
+      }
+    },
+    {
+      "id": 15,
+      "name": "item-15",
+      "status": "ok",
+      "score": 0.65,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 0
+      }
+    },
+    {
+      "id": 16,
+      "name": "item-16",
+      "status": "ok",
+      "score": 0.66,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 1
+      }
+    },
+    {
+      "id": 17,
+      "name": "item-17",
+      "status": "ok",
+      "score": 0.67,
+      "tags": [
+        "alpha",
+        "beta"
+      ],
+      "owner": {
+        "team": "platform",
+        "shift": 2
+      }
+    }
+  ],
+  "warnings": [
+    "rate limit at 80%",
+    "2 items stale"
+  ],
+  "error": null
+}

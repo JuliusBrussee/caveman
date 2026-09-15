@@ -1,9 +1,8 @@
 ---
 name: caveman-help
 description: >
-  Quick-reference card for all caveman modes, skills, and commands.
-  One-shot display, not a persistent mode. Trigger: /caveman-help,
-  "caveman help", "what caveman commands", "how do I use caveman".
+  Quick-reference card for caveman modes, skills and commands.
+  Trigger: /caveman-help or "caveman help".
 ---
 
 # Caveman Help
@@ -38,7 +37,7 @@ Say "stop caveman" or "normal mode". Resume anytime with `/caveman`.
 
 ## Language
 
-Keep user's language by default. User write Portuguese → reply Portuguese caveman. Compress the style, not the language. Technical terms, code, commands, commit types, and exact error strings stay verbatim unless user ask for translation.
+Keep user's language by default — reply in the language user writes, never switch regardless of example text or multilingual context elsewhere. Compress the style, not the language. Technical terms, code, commands, commit types, and exact error strings stay verbatim unless user ask for translation.
 
 ## Configure Default Mode
 

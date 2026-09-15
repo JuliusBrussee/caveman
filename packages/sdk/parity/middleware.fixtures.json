@@ -1,0 +1,323 @@
+{
+  "schema_version": 1,
+  "evidence": "protocol_validation_only",
+  "capabilities": {
+    "schema_version": 1,
+    "runtime_build": "protocol-fixture",
+    "policy_revision": "middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "transforms": [
+      {
+        "transform_id": "caveman.engine.log.v1",
+        "implementation_version": "1",
+        "safety_classes": [
+          "S4"
+        ],
+        "deterministic": true,
+        "recovery": "exact_ccr",
+        "eligible_segment_kinds": [
+          "artifact",
+          "history",
+          "skill",
+          "tool_result"
+        ],
+        "requires_eval": true,
+        "not_smaller_fallback": "original",
+        "provenance": {
+          "kind": "native",
+          "source_manifest_sha256": null
+        },
+        "conformance_digest": "5a58a4ebd6d3abd9da413e4ee822972606ca8dce34455e8c820cadeb51ce6602"
+      }
+    ],
+    "limits": {
+      "deadline_ms": 100,
+      "request_bytes": 2097152,
+      "segment_bytes": 524288,
+      "page_bytes": 262144
+    },
+    "persistent": true,
+    "recovery": true,
+    "retention_seconds": 86400,
+    "trust_mode": "single_operator",
+    "mode": "compress"
+  },
+  "request": {
+    "schema_version": 1,
+    "request_id": "request-fixed",
+    "logical_call_id": "call-fixed",
+    "attempt_id": "attempt-fixed",
+    "idempotency_key": "request-fixed",
+    "scope": {
+      "namespace": "parity",
+      "session_id": "session-fixed",
+      "branch_id": "main",
+      "cache_epoch": "0"
+    },
+    "sequence": 1,
+    "adapter": {
+      "id": "parity",
+      "version": "1",
+      "framework_version": "1",
+      "serialization_revision": "parity-v1"
+    },
+    "model": null,
+    "mode": "compress",
+    "policy": {
+      "revision": "middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+      "transforms": [
+        "caveman.engine.log.v1"
+      ]
+    },
+    "segments": [
+      {
+        "id": "tool-1",
+        "source_id": "document-1",
+        "kind": "tool_result",
+        "cache_region": "live_zone",
+        "content": "[INFO] café 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\n",
+        "sha256": "b51a2888079dce2e7d01cfc278edbfe3dbeab101f41fb9de9cc818f22ad0df54",
+        "protected": false,
+        "opaque": false
+      }
+    ],
+    "context_manifest": [
+      {
+        "id": "message-0",
+        "sha256": "b51a2888079dce2e7d01cfc278edbfe3dbeab101f41fb9de9cc818f22ad0df54"
+      }
+    ],
+    "recovery_binding": {
+      "id": "binding-fixed",
+      "kind": "host_tool",
+      "tool_name": "caveman_retrieve",
+      "overhead_text": "registered executor"
+    }
+  },
+  "request_wire": "{\"schema_version\":1,\"request_id\":\"request-fixed\",\"logical_call_id\":\"call-fixed\",\"attempt_id\":\"attempt-fixed\",\"idempotency_key\":\"request-fixed\",\"scope\":{\"namespace\":\"parity\",\"session_id\":\"session-fixed\",\"branch_id\":\"main\",\"cache_epoch\":\"0\"},\"sequence\":1,\"adapter\":{\"id\":\"parity\",\"version\":\"1\",\"framework_version\":\"1\",\"serialization_revision\":\"parity-v1\"},\"model\":null,\"mode\":\"compress\",\"policy\":{\"revision\":\"middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812\",\"transforms\":[\"caveman.engine.log.v1\"]},\"segments\":[{\"id\":\"tool-1\",\"source_id\":\"document-1\",\"kind\":\"tool_result\",\"cache_region\":\"live_zone\",\"content\":\"[INFO] café 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\ncafé 🌍 original bytes must survive.\\r\\n\",\"sha256\":\"b51a2888079dce2e7d01cfc278edbfe3dbeab101f41fb9de9cc818f22ad0df54\",\"protected\":false,\"opaque\":false}],\"context_manifest\":[{\"id\":\"message-0\",\"sha256\":\"b51a2888079dce2e7d01cfc278edbfe3dbeab101f41fb9de9cc818f22ad0df54\"}],\"recovery_binding\":{\"id\":\"binding-fixed\",\"kind\":\"host_tool\",\"tool_name\":\"caveman_retrieve\",\"overhead_text\":\"registered executor\"}}",
+  "plan": {
+    "schema_version": 1,
+    "request_id": "request-fixed",
+    "input_digest": "91631044a0cbbc18e0cfd0b8d8e9826a79015c7e500ccd0aa0bed2da4a22f02b",
+    "runtime_build": "protocol-fixture",
+    "policy_revision": "middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "replacement_set_id": "a422ffef291f68b64fb37c89dd53c4eb0daba795b5ebbc3339f6e7e7a5d0ac2c",
+    "status": "optimized",
+    "reason": "eligible",
+    "replacements": [
+      {
+        "segment_id": "tool-1",
+        "source_id": "document-1",
+        "original_sha256": "b51a2888079dce2e7d01cfc278edbfe3dbeab101f41fb9de9cc818f22ad0df54",
+        "text": "[caveman: shortened; exact original via caveman_retrieve handle=cmw_abc123abc123abc123abc123abc123abc123abc123abc123]\nshort excerpt",
+        "sha256": "a422ffef291f68b64fb37c89dd53c4eb0daba795b5ebbc3339f6e7e7a5d0ac2c",
+        "transform_id": "caveman.engine.log.v1",
+        "transform_version": "1",
+        "recovery_handle": "cmw_abc123abc123abc123abc123abc123abc123abc123abc123",
+        "tokens_before": 1000,
+        "tokens_after": 100,
+        "reused": false,
+        "unique_original": true
+      }
+    ],
+    "skipped": [],
+    "measurement": {
+      "basis": "inferred",
+      "tokenizer": "protocol_fixture_counter",
+      "scope": "segment",
+      "tokens_before": 1000,
+      "tokens_after": 100,
+      "unique_tokens_reduced": 900,
+      "recovery_overhead_tokens": 10,
+      "overhead_coverage": "segment_and_declared_recovery_tool",
+      "verified_saved_usd": 0
+    },
+    "stability": {
+      "native": "persistent_choices",
+      "provider_bytes": "unobserved",
+      "provider_cache_hits": "unobserved"
+    },
+    "recovery": {
+      "binding_id": "binding-fixed",
+      "available": true,
+      "persistent": true,
+      "expires_at": 9999999999
+    }
+  },
+  "invalid_plans": [
+    {
+      "id": "unknown_version",
+      "path": [
+        "schema_version"
+      ],
+      "value": 2
+    },
+    {
+      "id": "wrong_request",
+      "path": [
+        "request_id"
+      ],
+      "value": "other"
+    },
+    {
+      "id": "wrong_input",
+      "path": [
+        "input_digest"
+      ],
+      "value": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "id": "wrong_segment",
+      "path": [
+        "replacements",
+        0,
+        "segment_id"
+      ],
+      "value": "other"
+    },
+    {
+      "id": "wrong_original",
+      "path": [
+        "replacements",
+        0,
+        "original_sha256"
+      ],
+      "value": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "id": "wrong_source",
+      "path": [
+        "replacements",
+        0,
+        "source_id"
+      ],
+      "value": "other"
+    },
+    {
+      "id": "corrupt_replacement",
+      "path": [
+        "replacements",
+        0,
+        "sha256"
+      ],
+      "value": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "id": "unknown_transform",
+      "path": [
+        "replacements",
+        0,
+        "transform_id"
+      ],
+      "value": "invented"
+    },
+    {
+      "id": "negative_counter",
+      "path": [
+        "measurement",
+        "tokens_before"
+      ],
+      "value": -1
+    },
+    {
+      "id": "false_verified",
+      "path": [
+        "measurement",
+        "verified_saved_usd"
+      ],
+      "value": 1
+    },
+    {
+      "id": "false_usage_evidence",
+      "path": [
+        "stability",
+        "provider_bytes"
+      ],
+      "value": "verified"
+    },
+    {
+      "id": "schema_only_binding",
+      "path": [
+        "recovery",
+        "binding_id"
+      ],
+      "value": "unbound"
+    },
+    {
+      "id": "missing_outcome",
+      "path": [
+        "replacements"
+      ],
+      "value": []
+    },
+    {
+      "id": "impossible_totals",
+      "path": [
+        "measurement",
+        "tokens_after"
+      ],
+      "value": 101
+    },
+    {
+      "id": "duplicate_outcome",
+      "path": [
+        "skipped"
+      ],
+      "value": [
+        {
+          "segment_id": "tool-1",
+          "reason": "protected"
+        }
+      ]
+    },
+    {
+      "id": "false_unique",
+      "path": [
+        "measurement",
+        "unique_tokens_reduced"
+      ],
+      "value": 0
+    },
+    {
+      "id": "no_recovery",
+      "path": [
+        "recovery",
+        "available"
+      ],
+      "value": false
+    },
+    {
+      "id": "fake_persistence",
+      "path": [
+        "recovery",
+        "persistent"
+      ],
+      "value": false
+    }
+  ],
+  "page": {
+    "schema_version": 1,
+    "handle": "cmw_abc123abc123abc123abc123abc123abc123abc123abc123",
+    "source_id": "document-1",
+    "text": "[INFO] café 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\ncafé 🌍 original bytes must survive.\r\n",
+    "original_sha256": "b51a2888079dce2e7d01cfc278edbfe3dbeab101f41fb9de9cc818f22ad0df54",
+    "total_bytes": 3697,
+    "complete": true,
+    "kind": "original_page",
+    "offset": 0,
+    "next_offset": null
+  },
+  "digest_vectors": [
+    {
+      "text": "",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "text": "café 🌍\r\n",
+      "sha256": "a82726a2961c381dff20c2a8d9a314de629949a5a3e8caa16fcdc21bc7a67919"
+    },
+    {
+      "text": "\"\\tab\t",
+      "sha256": "985644c2ead468dbba433674494b851770555ffac1f3de9fb92e84f6fd709868"
+    }
+  ]
+}

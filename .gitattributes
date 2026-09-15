@@ -1,2 +1,7 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Text files check out with LF everywhere. Byte-compared fixtures (golden
+# files), hook checksums, and generated-output tests break on CRLF checkouts
+# otherwise. PowerShell 5.1+ parses LF scripts fine, so .ps1 stays LF too.
+* text=auto eol=lf
+
+# Byte-exact fixture committed with CRLF on purpose — never convert.
+engine/evals/fixtures/terminal_session.txt -text

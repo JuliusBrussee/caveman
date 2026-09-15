@@ -1,5 +1,5 @@
 # caveman — uninstaller for the SessionStart + UserPromptSubmit hooks (Windows PowerShell)
-# Removes: hook files in ~/.claude/hooks, settings.json entries, and the flag file
+# Removes: hook files in ~/.claude/hooks, settings.json entries, and the mode state
 # Usage: powershell -ExecutionPolicy Bypass -File src\hooks\uninstall.ps1
 #   or:  irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks/uninstall.ps1 | iex
 param()
@@ -9,9 +9,14 @@ $ErrorActionPreference = "Stop"
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
 $HooksDir = Join-Path $ClaudeDir "hooks"
 $Settings = Join-Path $ClaudeDir "settings.json"
-$FlagFile = Join-Path $ClaudeDir ".caveman-active"
+$SettingsHelper = ""
+if ($PSScriptRoot) {
+    $candidate = Join-Path $PSScriptRoot "../../bin/lib/settings.js"
+    if (Test-Path -LiteralPath $candidate) { $SettingsHelper = $candidate }
+}
+$env:CAVEMAN_SETTINGS_HELPER = $SettingsHelper
 
-$HookFiles = @("package.json", "caveman-config.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js")
+$HookFiles = @("package.json", "caveman-config.js", "caveman-parse.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js")
 
 # Detect if caveman is installed as a plugin
 $PluginInstalled = $false
@@ -35,11 +40,173 @@ if ($PluginInstalled) {
 
 Write-Host "Uninstalling caveman hooks..."
 
-# 1. Remove hook files
+# 1. Remove caveman entries from settings.json (idempotent)
+#
+# This runs BEFORE the hook files are deleted, on purpose. If the settings edit
+# cannot complete, the install is still intact and the user can re-run or edit
+# by hand. The other order left Claude Code pointing at deleted scripts, which
+# is `Cannot find module ...caveman-activate.js` on every session start (#471).
+if (Test-Path $Settings) {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        # Abort - do NOT fall through to deleting the hook files. settings.json
+        # still points at them, and removing them is exactly #471 on every
+        # session start. Same reason the node exit code below aborts.
+        Write-Host "ERROR: 'node' not found - cannot safely edit settings.json." -ForegroundColor Yellow
+        Write-Host "       Nothing was removed. Install node and re-run, or remove the"
+        Write-Host "       caveman SessionStart, UserPromptSubmit and statusLine entries"
+        Write-Host "       from $Settings by hand first."
+        exit 1
+    } else {
+        # Back up before editing, same policy as install.ps1: never overwrite an
+        # existing .bak, which is the only pre-caveman copy the user has.
+        if (-not (Test-Path "$Settings.bak")) {
+            Copy-Item $Settings "$Settings.bak"
+        }
+
+        # Pass path via env var — avoids injection if username contains a single quote.
+        # Use a single-quote here-string so PowerShell does NOT expand $variables inside.
+        $env:CAVEMAN_SETTINGS = $Settings -replace '\\', '/'
+
+        $nodeScript = @'
+const fs = require('fs');
+const path = require('path');
+const settingsPath = process.env.CAVEMAN_SETTINGS;
+// A settings.json with // comments is valid for Claude Code but not for
+// JSON.parse. Bail out before touching anything rather than half-uninstalling:
+// bin/install.js --uninstall handles JSONC properly.
+let settings;
+const shared = process.env.CAVEMAN_SETTINGS_HELPER ? require(process.env.CAVEMAN_SETTINGS_HELPER) : null;
+try {
+  settings = shared ? shared.readSettings(settingsPath) : JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('settings.json must be a readable object');
+} catch (e) {
+  console.error('  Cannot parse ' + settingsPath + ': ' + e.message);
+  console.error('  Nothing was changed. If the file has // comments, run:');
+  console.error('    npx -y github:JuliusBrussee/caveman -- --uninstall');
+  process.exit(3);
+}
+
+// Own ONLY handlers whose command targets one of our exact script basenames.
+// A bare 'caveman' substring also matches user-authored hooks that merely
+// mention the word in a path (#593). Mirrors referencesManagedScript() in
+// bin/lib/settings.js — keep the two in sync.
+const MANAGED = new Set([
+  'caveman-activate.js', 'caveman-mode-tracker.js', 'caveman-stats.js',
+  'caveman-statusline.sh', 'caveman-statusline.ps1',
+]);
+const tokenize = (command) => {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(command)) !== null) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+};
+// win32.basename splits on both / and \ so either slash form matches.
+const isManaged = (command) => {
+  if (typeof command !== 'string') return false;
+  try {
+    return tokenize(command).some(t => MANAGED.has(path.win32.basename(t)));
+  } catch (e) { return false; }
+};
+
+let removed = 0;
+if (settings.hooks) {
+  for (const event of Object.keys(settings.hooks)) {
+    if (!Array.isArray(settings.hooks[event])) continue;
+    let removedHere = 0;
+    // Filter the inner handler list, not the entry: a matcher group holding
+    // one of ours AND a foreign hook must keep the foreign one.
+    settings.hooks[event] = settings.hooks[event].filter(entry => {
+      if (!entry || !Array.isArray(entry.hooks)) return true;
+      const before = entry.hooks.length;
+      entry.hooks = entry.hooks.filter(h => !(h && isManaged(h.command)));
+      const n = before - entry.hooks.length;
+      removedHere += n;
+      return n === 0 || entry.hooks.length > 0;
+    });
+    removed += removedHere;
+    if (removedHere > 0 && settings.hooks[event].length === 0) {
+      delete settings.hooks[event];
+    }
+  }
+  if (Object.keys(settings.hooks).length === 0) {
+    delete settings.hooks;
+  }
+}
+
+// Remove statusLine only when it points at our managed script. Matching by
+// basename also survives the slash-form mismatch between a Windows-written
+// settings.json and the forward-slashed env var.
+if (settings.statusLine) {
+  const cmd = typeof settings.statusLine === 'string'
+    ? settings.statusLine
+    : (settings.statusLine.command || '');
+  if (isManaged(cmd)) {
+    delete settings.statusLine;
+    console.log('  Removed caveman statusLine from settings.json');
+  }
+}
+
+if (shared) shared.writeSettings(settingsPath, settings);
+else fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+console.log('  Removed ' + removed + ' caveman hook entries from settings.json');
+'@
+
+        # Write the script to a temp file rather than passing it to `node -e`.
+        # PowerShell's native-argument quoting mangles embedded double quotes,
+        # so `node -e "<script>"` truncated at the first one under cmd quoting
+        # (#249); install.ps1 was fixed to this shape in #250 and the
+        # uninstaller must not drift back.
+        $tmpScript = Join-Path $env:TEMP "caveman-uninstall-$([System.Diagnostics.Process]::GetCurrentProcess().Id).js"
+        try {
+            [System.IO.File]::WriteAllText($tmpScript, $nodeScript, [System.Text.Encoding]::UTF8)
+            node $tmpScript
+        } finally {
+            if (Test-Path $tmpScript) { Remove-Item $tmpScript -Force }
+        }
+
+        # $ErrorActionPreference does not trip on a native exit code, so check
+        # it by hand: without this, a failed edit still fell through and deleted
+        # the user's only pre-caveman backup.
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Aborting: settings.json was not modified and nothing was removed." -ForegroundColor Yellow
+            exit 1
+        }
+
+        # Clean up backup file left by installer
+        if (Test-Path "$Settings.bak") {
+            Remove-Item "$Settings.bak" -Force
+            Write-Host "  Removed: $Settings.bak"
+        }
+    }
+}
+
+# 2. Remove hook files (only now that settings.json no longer points at them)
 $RemovedFiles = 0
 foreach ($hook in $HookFiles) {
     $path = Join-Path $HooksDir $hook
     if (Test-Path $path) {
+        if ($hook -eq "package.json") {
+            $OwnedManifest = $false
+            # ConvertFrom-Json unwraps one-element arrays and accepts comments
+            # on newer PowerShell. Use the same strict ownership check as Node.
+            if (Get-Command node -ErrorAction SilentlyContinue) {
+                $env:CAVEMAN_MANIFEST_PATH = $path
+                try {
+                    @'
+try {
+  const value = JSON.parse(require('fs').readFileSync(process.env.CAVEMAN_MANIFEST_PATH, 'utf8'));
+  process.exit(value && value.type === 'commonjs' && Object.keys(value).length === 1 ? 0 : 1);
+} catch (_) { process.exit(1); }
+'@ | node --input-type=commonjs
+                    $OwnedManifest = $LASTEXITCODE -eq 0
+                } catch {}
+            }
+            if (-not $OwnedManifest) {
+                Write-Host "  Preserved foreign manifest: $path"
+                continue
+            }
+        }
         Remove-Item $path -Force
         Write-Host "  Removed: $path"
         $RemovedFiles++
@@ -50,78 +217,24 @@ if ($RemovedFiles -eq 0) {
     Write-Host "  No hook files found in $HooksDir"
 }
 
-# 2. Remove caveman entries from settings.json (idempotent)
-if (Test-Path $Settings) {
-    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-        Write-Host "WARNING: 'node' not found - cannot safely edit settings.json." -ForegroundColor Yellow
-        Write-Host "         Remove the caveman SessionStart and UserPromptSubmit"
-        Write-Host "         entries from $Settings manually."
-    } else {
-        # Back up before editing
-        Copy-Item $Settings "$Settings.bak" -Force
-
-        # Pass path via env var — avoids injection if username contains a single quote.
-        # Use a single-quote here-string so PowerShell does NOT expand $variables inside.
-        $env:CAVEMAN_SETTINGS = $Settings -replace '\\', '/'
-        $env:CAVEMAN_HOOKS_DIR = $HooksDir -replace '\\', '/'
-
-        $nodeScript = @'
-const fs = require('fs');
-const settingsPath = process.env.CAVEMAN_SETTINGS;
-const hooksDir = process.env.CAVEMAN_HOOKS_DIR;
-const managedStatusLinePath = hooksDir + '/caveman-statusline.ps1';
-const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-
-const isCavemanEntry = (entry) =>
-  entry && entry.hooks && entry.hooks.some(h =>
-    h.command && h.command.includes('caveman')
-  );
-
-let removed = 0;
-if (settings.hooks) {
-  for (const event of ['SessionStart', 'UserPromptSubmit']) {
-    if (Array.isArray(settings.hooks[event])) {
-      const before = settings.hooks[event].length;
-      settings.hooks[event] = settings.hooks[event].filter(e => !isCavemanEntry(e));
-      removed += before - settings.hooks[event].length;
-      if (settings.hooks[event].length === 0) {
-        delete settings.hooks[event];
-      }
-    }
-  }
-  if (Object.keys(settings.hooks).length === 0) {
-    delete settings.hooks;
-  }
-}
-
-if (settings.statusLine) {
-  const cmd = typeof settings.statusLine === 'string'
-    ? settings.statusLine
-    : (settings.statusLine.command || '');
-  if (cmd.includes(managedStatusLinePath)) {
-    delete settings.statusLine;
-    console.log('  Removed caveman statusLine from settings.json');
-  }
-}
-
-fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-console.log('  Removed ' + removed + ' caveman hook entries from settings.json');
-'@
-
-        node -e $nodeScript
-
-        # Clean up backup file left by installer
-        if (Test-Path "$Settings.bak") {
-            Remove-Item "$Settings.bak" -Force
-            Write-Host "  Removed: $Settings.bak"
-        }
+# 3. Remove mode state
+#
+# .caveman-history.jsonl is deliberately NOT removed: it is the user's
+# accumulated lifetime savings record, not caveman plumbing. Keep this list in
+# sync with the uninstall block in bin/install.js.
+foreach ($state in @(".caveman-active", ".caveman-active.prev", ".caveman-mode-log.jsonl", ".caveman-statusline-suffix", ".caveman-nudge-shown")) {
+    $StatePath = Join-Path $ClaudeDir $state
+    if (Test-Path $StatePath) {
+        Remove-Item $StatePath -Force
+        Write-Host "  Removed: $StatePath"
     }
 }
 
-# 3. Remove flag file
-if (Test-Path $FlagFile) {
-    Remove-Item $FlagFile -Force
-    Write-Host "  Removed: $FlagFile"
+# Per-session mode files (one <session_id>.mode / .prev per window)
+$SessionsDir = Join-Path $ClaudeDir ".caveman-sessions"
+if (Test-Path $SessionsDir) {
+    Remove-Item $SessionsDir -Recurse -Force
+    Write-Host "  Removed: $SessionsDir"
 }
 
 Write-Host ""

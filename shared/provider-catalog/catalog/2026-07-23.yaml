@@ -1,0 +1,932 @@
+- provider: openai
+  model: gpt-5.5
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 5.00
+    output_per_million: 30.00
+    cache_read_input_per_million: 0.50
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+    long_context_threshold_tokens: 272000
+    long_context_input_multiplier: 2.0
+    long_context_output_multiplier: 1.5
+  capabilities:
+    responses_api: true
+    chat_completions: true
+    prompt_cache_key: true
+    prompt_cache_retention: true
+    streaming: true
+    batch: true
+    flex: true
+    regional_processing_multiplier: 1.10
+    long_context_threshold_tokens: 272000
+    context_window_tokens: 1050000
+  sources:
+    - https://openai.com/api/pricing/
+    - https://developers.openai.com/api/docs/guides/prompt-caching
+  verified_at: 2026-07-10T00:00:00Z
+- provider: openai
+  model: gpt-5.4-mini
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 0.75
+    output_per_million: 4.50
+    cache_read_input_per_million: 0.075
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    responses_api: true
+    chat_completions: true
+    prompt_cache_key: true
+    streaming: true
+    batch: true
+    regional_processing_multiplier: 1.10
+    context_window_tokens: 400000
+  sources:
+    - https://developers.openai.com/api/docs/models/gpt-5.4-mini
+  verified_at: 2026-07-10T00:00:00Z
+- provider: openai
+  model: gpt-5.4-nano
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 0.20
+    output_per_million: 1.25
+    cache_read_input_per_million: 0.02
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    responses_api: true
+    chat_completions: true
+    streaming: true
+    batch: true
+    regional_processing_multiplier: 1.10
+    context_window_tokens: 400000
+  sources:
+    - https://developers.openai.com/api/docs/models/gpt-5.4-nano
+  verified_at: 2026-07-10T00:00:00Z
+- provider: openai
+  model: text-embedding-3-large
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 0.13
+    output_per_million: 0.00
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    embeddings: true
+  sources:
+    - https://openai.com/api/pricing/
+  verified_at: 2026-07-10T00:00:00Z
+- provider: openai
+  model: text-embedding-3-small
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 0.02
+    output_per_million: 0.00
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    embeddings: true
+  sources:
+    - https://openai.com/api/pricing/
+  verified_at: 2026-07-10T00:00:00Z
+- provider: anthropic
+  model: claude-sonnet-4-6
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 3.00
+    output_per_million: 15.00
+    cache_read_input_per_million: 0.30
+    cache_write_input_per_million: 3.75
+    cache_write_1h_input_per_million: 6.00
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    messages_api: true
+    count_tokens: true
+    prompt_cache: true
+    streaming: true
+    message_batches: true
+    context_editing: true
+    inference_geo_us_multiplier: 1.10
+  sources:
+    - https://platform.claude.com/docs/en/about-claude/pricing
+  verified_at: 2026-07-10T00:00:00Z
+- provider: anthropic
+  model: claude-sonnet-4-5
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 3.00
+    output_per_million: 15.00
+    cache_read_input_per_million: 0.30
+    cache_write_input_per_million: 3.75
+    cache_write_1h_input_per_million: 6.00
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+    long_context_threshold_tokens: 200000
+    long_context_input_multiplier: 2.0
+    long_context_output_multiplier: 1.5
+  capabilities:
+    messages_api: true
+    count_tokens: true
+    prompt_cache: true
+    streaming: true
+    message_batches: true
+  sources:
+    - https://platform.claude.com/docs/en/about-claude/pricing
+  verified_at: 2026-07-10T00:00:00Z
+- provider: anthropic
+  model: claude-opus-4-1
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 15.00
+    output_per_million: 75.00
+    cache_read_input_per_million: 1.50
+    cache_write_input_per_million: 18.75
+    cache_write_1h_input_per_million: 30.00
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    messages_api: true
+    prompt_cache: true
+    streaming: true
+    message_batches: true
+  sources:
+    - https://platform.claude.com/docs/en/about-claude/pricing
+  verified_at: 2026-07-10T00:00:00Z
+- provider: anthropic
+  model: claude-haiku-4-5
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 1.00
+    output_per_million: 5.00
+    cache_read_input_per_million: 0.10
+    cache_write_input_per_million: 1.25
+    cache_write_1h_input_per_million: 2.00
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    messages_api: true
+    prompt_cache: true
+    streaming: true
+    message_batches: true
+  sources:
+    - https://platform.claude.com/docs/en/about-claude/pricing
+  verified_at: 2026-07-10T00:00:00Z
+- provider: gemini
+  model: gemini-2.5-pro
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 1.25
+    output_per_million: 10.00
+    cache_read_input_per_million: 0.125
+    cache_write_input_per_million: null
+    reasoning_output_per_million: 10.00
+    batch_discount_fraction: 0.50
+    cache_storage_per_million_tokens_hour: 4.50
+    long_context_threshold_tokens: 200000
+    long_context_input_multiplier: 2.0
+    long_context_output_multiplier: 1.5
+  capabilities:
+    generate_content: true
+    stream_generate_content: true
+    explicit_cache: true
+    streaming: true
+    batch: true
+  sources:
+    - https://ai.google.dev/gemini-api/docs/pricing
+  verified_at: 2026-07-10T00:00:00Z
+- provider: gemini
+  model: gemini-2.5-flash
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 0.30
+    output_per_million: 2.50
+    cache_read_input_per_million: 0.03
+    cache_write_input_per_million: null
+    reasoning_output_per_million: 2.50
+    batch_discount_fraction: 0.50
+    cache_storage_per_million_tokens_hour: 1.00
+  capabilities:
+    generate_content: true
+    stream_generate_content: true
+    explicit_cache: true
+    streaming: true
+    batch: true
+  sources:
+    - https://ai.google.dev/gemini-api/docs/pricing
+  verified_at: 2026-07-10T00:00:00Z
+- provider: bedrock
+  model: anthropic.claude-3-5-sonnet-20241022-v2:0
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 6.00
+    output_per_million: 30.00
+    cache_read_input_per_million: 0.60
+    cache_write_input_per_million: 7.50
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    prompt_cache: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+  verified_at: 2026-07-10T00:00:00Z
+- provider: bedrock
+  model: anthropic.claude-3-5-haiku-20241022-v1:0
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 0.80
+    output_per_million: 4.00
+    cache_read_input_per_million: 0.08
+    cache_write_input_per_million: 1.00
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    prompt_cache: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+  verified_at: 2026-06-14T00:00:00Z
+# Bedrock prices are keyed by the exact invocation model/profile ID and source
+# Region. Global and geographic inference profiles are not regionless: AWS
+# charges according to the source Region, so no other Region may borrow these
+# us-east-1 rows.
+- provider: bedrock
+  model: global.anthropic.claude-opus-4-8
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 5.00
+    output_per_million: 25.00
+    cache_read_input_per_million: 0.50
+    cache_write_input_per_million: 6.25
+    cache_write_1h_input_per_million: 10.00
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    prompt_cache: true
+    streaming: true
+    global_inference_profile: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: global.anthropic.claude-sonnet-4-6
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 3.00
+    output_per_million: 15.00
+    cache_read_input_per_million: 0.30
+    cache_write_input_per_million: 3.75
+    cache_write_1h_input_per_million: 6.00
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    prompt_cache: true
+    streaming: true
+    global_inference_profile: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-6.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: global.anthropic.claude-haiku-4-5-20251001-v1:0
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 1.00
+    output_per_million: 5.00
+    cache_read_input_per_million: 0.10
+    cache_write_input_per_million: 1.25
+    cache_write_1h_input_per_million: 2.00
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    prompt_cache: true
+    streaming: true
+    global_inference_profile: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: anthropic.claude-sonnet-4-6-v1
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 3.30
+    output_per_million: 16.50
+    cache_read_input_per_million: 0.33
+    cache_write_input_per_million: 4.125
+    cache_write_1h_input_per_million: 6.60
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    messages_api: true
+    bedrock_mantle: true
+    prompt_cache: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: global.amazon.nova-2-lite-v1:0
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 0.30
+    output_per_million: 2.50
+    cache_read_input_per_million: 0.075
+    cache_write_input_per_million: 0.00
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    prompt_cache: true
+    streaming: true
+    global_inference_profile: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-lite.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: us.meta.llama4-maverick-17b-instruct-v1:0
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 0.24
+    output_per_million: 0.97
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    streaming: true
+    geo_inference_profile: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-4-maverick-17b-instruct.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: us.meta.llama4-scout-17b-instruct-v1:0
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 0.17
+    output_per_million: 0.66
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    streaming: true
+    geo_inference_profile: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-4-scout-17b-instruct.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.mistral-large-3-675b-instruct
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 0.50
+    output_per_million: 1.50
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.mistral-large-3-675b-instruct
+  region: us-east-2
+  currency: USD
+  pricing:
+    input_per_million: 0.50
+    output_per_million: 1.50
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.mistral-large-3-675b-instruct
+  region: us-west-2
+  currency: USD
+  pricing:
+    input_per_million: 0.50
+    output_per_million: 1.50
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.mistral-large-3-675b-instruct
+  region: ap-south-1
+  currency: USD
+  pricing:
+    input_per_million: 0.59
+    output_per_million: 1.76
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.mistral-large-3-675b-instruct
+  region: ap-northeast-1
+  currency: USD
+  pricing:
+    input_per_million: 0.61
+    output_per_million: 1.82
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.mistral-large-3-675b-instruct
+  region: sa-east-1
+  currency: USD
+  pricing:
+    input_per_million: 0.61
+    output_per_million: 1.82
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.mistral-large-3-675b-instruct
+  region: ap-southeast-2
+  currency: USD
+  pricing:
+    input_per_million: 0.515
+    output_per_million: 1.545
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.ministral-3-8b-instruct
+  region: us-east-1
+  currency: USD
+  pricing:
+    input_per_million: 0.15
+    output_per_million: 0.15
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    responses_api: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.ministral-3-8b-instruct
+  region: us-east-2
+  currency: USD
+  pricing:
+    input_per_million: 0.15
+    output_per_million: 0.15
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    responses_api: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.ministral-3-8b-instruct
+  region: us-west-2
+  currency: USD
+  pricing:
+    input_per_million: 0.15
+    output_per_million: 0.15
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    responses_api: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.ministral-3-8b-instruct
+  region: ap-south-1
+  currency: USD
+  pricing:
+    input_per_million: 0.18
+    output_per_million: 0.18
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    responses_api: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.ministral-3-8b-instruct
+  region: ap-northeast-1
+  currency: USD
+  pricing:
+    input_per_million: 0.18
+    output_per_million: 0.18
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    responses_api: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.ministral-3-8b-instruct
+  region: sa-east-1
+  currency: USD
+  pricing:
+    input_per_million: 0.18
+    output_per_million: 0.18
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    responses_api: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.ministral-3-8b-instruct
+  region: eu-west-1
+  currency: USD
+  pricing:
+    input_per_million: 0.18
+    output_per_million: 0.18
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    responses_api: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.ministral-3-8b-instruct
+  region: eu-south-1
+  currency: USD
+  pricing:
+    input_per_million: 0.18
+    output_per_million: 0.18
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    responses_api: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.ministral-3-8b-instruct
+  region: eu-west-2
+  currency: USD
+  pricing:
+    input_per_million: 0.23
+    output_per_million: 0.23
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    responses_api: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
+  verified_at: 2026-07-23T00:00:00Z
+- provider: bedrock
+  model: mistral.ministral-3-8b-instruct
+  region: ap-southeast-2
+  currency: USD
+  pricing:
+    input_per_million: 0.1545
+    output_per_million: 0.1545
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+  capabilities:
+    invoke_model: true
+    converse: true
+    converse_stream: true
+    responses_api: true
+    chat_completions: true
+    bedrock_mantle: true
+    streaming: true
+  sources:
+    - https://aws.amazon.com/bedrock/pricing/
+    - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
+  verified_at: 2026-07-23T00:00:00Z
+# Vertex AI: Google Gemini (publishers/google) + Anthropic Claude
+# (publishers/anthropic) through one aiplatform endpoint. Prices are the
+# global-endpoint list rates; regional/multi-region newer Claude models carry a
+# +10% premium not modeled here. The model id is exactly what the gateway
+# resolves from the request path (.../models/{model}:{method}).
+- provider: vertex
+  model: gemini-2.5-pro
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 1.25
+    output_per_million: 10.00
+    cache_read_input_per_million: 0.125
+    cache_write_input_per_million: null
+    reasoning_output_per_million: 10.00
+    batch_discount_fraction: 0.50
+    cache_storage_per_million_tokens_hour: 4.50
+    long_context_threshold_tokens: 200000
+    long_context_input_multiplier: 2.0
+    long_context_output_multiplier: 1.5
+  capabilities:
+    generate_content: true
+    stream_generate_content: true
+    explicit_cache: true
+    streaming: true
+    batch: true
+    region_agnostic_pricing: true
+  sources:
+    - https://cloud.google.com/vertex-ai/generative-ai/pricing
+  verified_at: 2026-07-10T00:00:00Z
+- provider: vertex
+  model: gemini-2.5-flash
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 0.30
+    output_per_million: 2.50
+    cache_read_input_per_million: 0.03
+    cache_write_input_per_million: null
+    reasoning_output_per_million: 2.50
+    batch_discount_fraction: 0.50
+    cache_storage_per_million_tokens_hour: 1.00
+  capabilities:
+    generate_content: true
+    stream_generate_content: true
+    explicit_cache: true
+    streaming: true
+    batch: true
+    region_agnostic_pricing: true
+  sources:
+    - https://cloud.google.com/vertex-ai/generative-ai/pricing
+  verified_at: 2026-07-10T00:00:00Z
+- provider: vertex
+  model: claude-sonnet-4-6
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 3.00
+    output_per_million: 15.00
+    cache_read_input_per_million: 0.30
+    cache_write_input_per_million: 3.75
+    cache_write_1h_input_per_million: 6.00
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    messages_api: true
+    raw_predict: true
+    prompt_cache: true
+    streaming: true
+  sources:
+    - https://cloud.google.com/vertex-ai/generative-ai/pricing
+    - https://platform.claude.com/docs/en/about-claude/pricing
+  verified_at: 2026-07-10T00:00:00Z
+- provider: vertex
+  model: claude-haiku-4-5@20251001
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 1.00
+    output_per_million: 5.00
+    cache_read_input_per_million: 0.10
+    cache_write_input_per_million: 1.25
+    cache_write_1h_input_per_million: 2.00
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.50
+  capabilities:
+    messages_api: true
+    raw_predict: true
+    prompt_cache: true
+    streaming: true
+  sources:
+    - https://cloud.google.com/vertex-ai/generative-ai/pricing
+    - https://platform.claude.com/docs/en/about-claude/pricing
+  verified_at: 2026-07-10T00:00:00Z

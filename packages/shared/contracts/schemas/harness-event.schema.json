@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/harness-event.schema.json",
+  "title": "Normalized Caveman Harness Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "run_id",
+    "sequence",
+    "type",
+    "harness",
+    "plan_sha256",
+    "build_sha256",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "type": {
+      "enum": [
+        "run_start",
+        "context_ready",
+        "provider_request",
+        "provider_usage",
+        "tool_start",
+        "tool_end",
+        "compaction",
+        "run_end",
+        "run_error"
+      ]
+    },
+    "harness": {
+      "enum": ["pi", "claude", "vercel-ai-sdk", "eve", "mastra"]
+    },
+    "plan_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "build_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Content-blind event metadata only; bodies and free text are forbidden.",
+      "propertyNames": {
+        "not": {
+          "enum": [
+            "prompt",
+            "completion",
+            "body",
+            "tool_arguments",
+            "tool_result",
+            "path",
+            "url",
+            "query",
+            "free_text",
+            "secret"
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

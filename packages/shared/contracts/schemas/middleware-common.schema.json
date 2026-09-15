@@ -1,0 +1,331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/middleware-common.schema.json",
+  "$defs": {
+    "token": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9._:/-]{1,256}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace",
+        "session_id",
+        "branch_id",
+        "cache_epoch"
+      ],
+      "properties": {
+        "namespace": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "session_id": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "branch_id": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "cache_epoch": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        }
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "framework_version",
+        "serialization_revision"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "version": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "framework_version": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "serialization_revision": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "id",
+        "protocol"
+      ],
+      "properties": {
+        "provider": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "id": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "protocol": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "transforms"
+      ],
+      "properties": {
+        "revision": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "transforms": {
+          "type": "array",
+          "items": {
+            "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          },
+          "maxItems": 128,
+          "uniqueItems": true
+        }
+      }
+    },
+    "manifest_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sha256"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "sha256": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "tool_name",
+        "overhead_text"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "kind": {
+          "enum": [
+            "host_tool",
+            "source_reader"
+          ]
+        },
+        "tool_name": {
+          "const": "caveman_retrieve"
+        },
+        "overhead_text": {
+          "type": "string",
+          "maxLength": 32768
+        }
+      }
+    },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "cache_region",
+        "content",
+        "sha256",
+        "source_id",
+        "protected",
+        "opaque"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "kind": {
+          "$ref": "https://caveman.so/schemas/context-ir.schema.json#/$defs/segment/properties/kind"
+        },
+        "cache_region": {
+          "$ref": "https://caveman.so/schemas/context-ir.schema.json#/$defs/segment/properties/cache_region"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 2097152
+        },
+        "sha256": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+        },
+        "source_id": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "protected": {
+          "type": "boolean"
+        },
+        "opaque": {
+          "type": "boolean"
+        }
+      }
+    },
+    "replacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "segment_id",
+        "source_id",
+        "original_sha256",
+        "text",
+        "sha256",
+        "transform_id",
+        "transform_version",
+        "recovery_handle",
+        "tokens_before",
+        "tokens_after",
+        "reused",
+        "unique_original"
+      ],
+      "properties": {
+        "segment_id": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "source_id": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "original_sha256": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 524288
+        },
+        "sha256": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+        },
+        "transform_id": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "transform_version": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "recovery_handle": {
+          "type": "string",
+          "pattern": "^cmw_[a-f0-9]{48}$"
+        },
+        "tokens_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tokens_after": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reused": {
+          "type": "boolean"
+        },
+        "unique_original": {
+          "type": "boolean"
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provenance",
+        "complete",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens"
+      ],
+      "properties": {
+        "provenance": {
+          "const": "client_observed_sdk"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "input_tokens": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_tokens": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cache_read_tokens": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cache_write_tokens": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoning_tokens": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

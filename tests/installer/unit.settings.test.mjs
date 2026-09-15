@@ -91,31 +91,40 @@ test('writeSettings round-trips with newline', () => {
   assert.deepEqual(JSON.parse(raw), { a: 1 });
 });
 
-test('validateHookFields drops malformed command hook (missing command)', () => {
-  const s = {
-    hooks: {
-      SessionStart: [{ hooks: [{ type: 'command' }, { type: 'command', command: 'good' }] }],
-    },
-  };
-  SETTINGS.validateHookFields(s);
-  assert.equal(s.hooks.SessionStart[0].hooks.length, 1);
-  assert.equal(s.hooks.SessionStart[0].hooks[0].command, 'good');
+test('writeSettings removes its temporary file when rename fails', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-settings-fail-'));
+  const target = path.join(dir, 'settings.json');
+  fs.mkdirSync(target);
+  assert.throws(() => SETTINGS.writeSettings(target, { token: 'secret' }));
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((name) => name.startsWith('.settings.json.') && name.endsWith('.tmp')),
+    [],
+  );
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('validateHookFields drops malformed agent hook (missing prompt)', () => {
+test('validateHookFields preserves foreign and unknown hook shapes', () => {
   const s = {
     hooks: {
-      SessionStart: [{ hooks: [{ type: 'agent' }] }],
+      SessionStart: [{ hooks: [
+        { type: 'command' },
+        { type: 'prompt', prompt: 'check policy' },
+        { type: 'http', url: 'https://audit.example/hook' },
+        { type: 'mcp_tool', tool: 'guard' },
+        { type: 'future-hook', opaque: { keep: true } },
+      ] }],
+      FutureEvent: { opaque: true },
     },
   };
+  const expected = structuredClone(s);
   SETTINGS.validateHookFields(s);
-  assert.equal(s.hooks, undefined);
+  assert.deepEqual(s, expected);
 });
 
-test('validateHookFields drops empty events and empty hooks parent', () => {
+test('validateHookFields preserves empty foreign containers it does not own', () => {
   const s = { hooks: { SessionStart: [], UserPromptSubmit: [{ hooks: [] }] } };
   SETTINGS.validateHookFields(s);
-  assert.equal(s.hooks, undefined);
+  assert.deepEqual(s, { hooks: { SessionStart: [], UserPromptSubmit: [{ hooks: [] }] } });
 });
 
 test('addCommandHook is idempotent on substring marker', () => {
@@ -142,7 +151,22 @@ test('removeCavemanHooks tolerates malformed hook event values without throwing'
   let removed;
   assert.doesNotThrow(() => { removed = SETTINGS.removeCavemanHooks(s); });
   assert.equal(removed, 0);
-  assert.equal(s.hooks, undefined);
+  assert.deepEqual(s.hooks, { SessionStart: "oops", UserPromptSubmit: { not: 'an array either' } });
+});
+
+test('removeCavemanHooks preserves foreign handlers in a mixed matcher group', () => {
+  const foreign = [
+    { type: 'command', command: 'run-user-audit' },
+    { type: 'prompt', prompt: 'check policy' },
+    { type: 'http', url: 'https://audit.example/hook' },
+    { type: 'mcp_tool', tool: 'guard' },
+  ];
+  const s = { hooks: { PreToolUse: [{ matcher: '*', hooks: [
+    { type: 'command', command: 'node /x/hooks/caveman-activate.js' },
+    ...structuredClone(foreign),
+  ] }] } };
+  assert.equal(SETTINGS.removeCavemanHooks(s), 1);
+  assert.deepEqual(s.hooks.PreToolUse[0].hooks, foreign);
 });
 
 test('removeCavemanHooks strips managed scripts and cleans empties', () => {
@@ -201,10 +225,31 @@ test('rewriteLegacyManagedHookCommands rewrites bare-node managed scripts', () =
       ] }],
     },
   };
-  const n = SETTINGS.rewriteLegacyManagedHookCommands(s, '/usr/local/bin/node');
+  // Pin the platform: this asserts the POSIX quoting shape, which the host
+  // default would silently swap for PowerShell on a Windows CI box (the
+  // Windows shape has its own test below).
+  const n = SETTINGS.rewriteLegacyManagedHookCommands(s, '/usr/local/bin/node', 'linux');
   assert.equal(n, 1);
   assert.match(s.hooks.SessionStart[0].hooks[0].command, /"\/usr\/local\/bin\/node" "\/abs\/hooks\/caveman-activate\.js"/);
   assert.equal(s.hooks.SessionStart[0].hooks[1].command, 'node /abs/hooks/some-user-hook.js');
+});
+
+// #835: Git Bash is Claude Code's default hook shell on Windows, so the
+// rewrite must emit a bash-parseable command. The old PowerShell
+// call-operator shape (`& 'x' 'y'`) was a bash syntax error, meaning the
+// "migration" rewrote a working bare-node hook into a broken one.
+test('rewriteLegacyManagedHookCommands emits a bash-safe command on Windows', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: 'command', command: "node \"C:/Users/O'Brien/.claude/hooks/caveman-activate.js\"" }] }],
+    },
+  };
+  const n = SETTINGS.rewriteLegacyManagedHookCommands(s, "C:/Program Files/nodejs/node.exe", 'win32');
+  assert.equal(n, 1);
+  assert.equal(
+    s.hooks.SessionStart[0].hooks[0].command,
+    '"C:/Program Files/nodejs/node.exe" "C:/Users/O\'Brien/.claude/hooks/caveman-activate.js"',
+  );
 });
 
 test('rewriteLegacyManagedHookCommands ignores already-absolute node commands', () => {
@@ -219,6 +264,18 @@ test('rewriteLegacyManagedHookCommands ignores already-absolute node commands', 
   assert.equal(n, 0);
 });
 
+test('future non-array event shapes survive rewrite and cannot be overwritten', () => {
+  const future = { schema: 2, handlers: [{ type: 'future' }] };
+  const settings = { hooks: { SessionStart: future, Stop: [] } };
+  assert.equal(SETTINGS.rewriteLegacyManagedHookCommands(settings, '/usr/local/bin/node'), 0);
+  assert.deepEqual(settings.hooks.SessionStart, future);
+  assert.throws(
+    () => SETTINGS.addCommandHook(settings, 'SessionStart', { command: 'node /hooks/caveman-activate.js' }),
+    /unsupported hook event shape/,
+  );
+  assert.deepEqual(settings.hooks.SessionStart, future);
+});
+
 test('pruneOrphanedManagedHooks removes managed hook whose target is missing (absolute-node)', () => {
   const s = {
     hooks: {
@@ -228,6 +285,41 @@ test('pruneOrphanedManagedHooks removes managed hook whose target is missing (ab
     },
   };
   const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
+  assert.equal(removed, 1);
+  assert.equal(s.hooks, undefined);
+});
+
+test('pruneOrphanedManagedHooks keeps a foreign-platform absolute path it cannot judge', () => {
+  // A roaming settings.json written on Windows, processed on POSIX: posix
+  // .isAbsolute() says false for `C:\...`, so the old code joined it under
+  // baseDir, found nothing, and pruned a hook that is live on the machine that
+  // wrote it. Existence is only knowable for paths of our own platform.
+  // Platform is passed explicitly because a Windows runner resolves `C:\...`
+  // natively and would prune it — the scenario only exists POSIX-side.
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\.claude\\hooks\\caveman-activate.js"' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing', 'linux');
+  assert.equal(removed, 0, 'must not prune a hook whose path belongs to another platform');
+  assert.equal(s.hooks.SessionStart[0].hooks.length, 1);
+});
+
+test('pruneOrphanedManagedHooks judges a Windows path natively when platform is win32', () => {
+  // Same settings as above, own-platform side: `C:\...` is absolute for a
+  // Windows host, so the foreign-path guard must not fire and the missing
+  // target is a real orphan.
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: '"C:\\Program Files\\nodejs\\node.exe" "C:\\no\\such\\dir\\caveman-activate.js"' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing', 'win32');
   assert.equal(removed, 1);
   assert.equal(s.hooks, undefined);
 });
@@ -273,6 +365,19 @@ test('pruneOrphanedManagedHooks leaves non-managed hooks alone even if missing',
   const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing');
   assert.equal(removed, 0);
   assert.equal(s.hooks.SessionStart[0].hooks.length, 2);
+});
+
+test('pruneOrphanedManagedHooks preserves foreign handlers in a mixed matcher group', () => {
+  const foreign = [
+    { type: 'command', command: 'node /missing/user-audit.js' },
+    { type: 'http', url: 'https://audit.example/hook' },
+  ];
+  const s = { hooks: { SessionStart: [{ hooks: [
+    { type: 'command', command: 'node /missing/caveman-activate.js' },
+    ...structuredClone(foreign),
+  ] }] } };
+  assert.equal(SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing'), 1);
+  assert.deepEqual(s.hooks.SessionStart[0].hooks, foreign);
 });
 
 test('pruneOrphanedManagedHooks resolves relative target against configDir', () => {

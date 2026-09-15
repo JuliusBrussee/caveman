@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "id": "openai-ts",
+  "display_name": "OpenAI SDK (TypeScript)",
+  "lang": "ts",
+  "wire_protocol": "openai-responses",
+  "note": "One constructor argument. /w/{{app}} in the base URL attributes this app's spend — no custom headers.",
+  "code": "import OpenAI from \"openai\";\n\nconst client = new OpenAI({\n  baseURL: \"{{baseURL}}/w/{{app}}/openai/v1\",\n  apiKey: process.env.OPENAI_API_KEY,\n});\n\n// Chat Completions and the Responses API both route through the gateway.\nconst res = await client.responses.create({\n  model: \"gpt-5.5\",\n  input: \"Why is the sky blue?\",\n});\n\n// Connected to Caveman Cloud? Add gateway auth + BYOK headers:\n//   defaultHeaders: { \"x-cave-api-key\": CAVE_API_KEY, \"x-cave-upstream-key\": OPENAI_API_KEY }",
+  "models": ["gpt-5.5"]
+}

@@ -1,0 +1,100 @@
+{
+  "name": "@caveman-ai/middleware",
+  "version": "0.1.0-alpha.2",
+  "description": "Native framework middleware over the Caveman compression runtime.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JuliusBrussee/caveman.git",
+    "directory": "packages/middleware/typescript"
+  },
+  "homepage": "https://caveman.so/docs/sdk/typescript",
+  "bugs": {
+    "url": "https://github.com/JuliusBrussee/caveman/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./ai-sdk": {
+      "types": "./dist/ai-sdk.d.ts",
+      "import": "./dist/ai-sdk.js"
+    },
+    "./openai": {
+      "types": "./dist/openai.d.ts",
+      "import": "./dist/openai.js"
+    },
+    "./anthropic": {
+      "types": "./dist/anthropic.d.ts",
+      "import": "./dist/anthropic.js"
+    },
+    "./google": {
+      "types": "./dist/google.d.ts",
+      "import": "./dist/google.js"
+    },
+    "./langchain": {
+      "types": "./dist/langchain.d.ts",
+      "import": "./dist/langchain.js"
+    },
+    "./strands": {
+      "types": "./dist/strands.d.ts",
+      "import": "./dist/strands.js"
+    },
+    "./mastra": {
+      "types": "./dist/mastra.d.ts",
+      "import": "./dist/mastra.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@caveman-ai/sdk": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "22.13.10",
+    "ai": "7.0.94",
+    "@ai-sdk/provider": "4.0.11",
+    "openai": "7.12.1",
+    "@anthropic-ai/sdk": "0.124.0",
+    "langchain": "1.5.10",
+    "@langchain/core": "1.2.9",
+    "@langchain/langgraph": "1.4.14",
+    "@strands-agents/sdk": "1.17.0",
+    "@google/genai": "2.21.0",
+    "@mastra/core": "1.65.0",
+    "@modelcontextprotocol/sdk": "1.30.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "testedFrameworkVersions": {
+    "ai": ">=7.0.94 <8",
+    "@ai-sdk/provider": ">=4.0.11 <5",
+    "openai": ">=7.12 <8",
+    "@anthropic-ai/sdk": ">=0.124 <1",
+    "@google/genai": ">=2.21 <3",
+    "langchain": ">=1.5 <2",
+    "@langchain/core": ">=1.2 <2",
+    "@langchain/langgraph": ">=1.4 <2",
+    "@strands-agents/sdk": ">=1.17 <2",
+    "@mastra/core": ">=1.65 <2",
+    "@modelcontextprotocol/sdk": ">=1.30 <2"
+  }
+}

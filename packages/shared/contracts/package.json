@@ -1,0 +1,14 @@
+{
+  "name": "@caveman/contracts",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/validate-schemas.mjs",
+    "lint": "node scripts/validate-schemas.mjs",
+    "test": "node scripts/validate-schemas.mjs"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0"
+  }
+}

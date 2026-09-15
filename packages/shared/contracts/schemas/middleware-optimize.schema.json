@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/middleware-optimize.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "logical_call_id",
+    "attempt_id",
+    "idempotency_key",
+    "scope",
+    "sequence",
+    "adapter",
+    "model",
+    "mode",
+    "policy",
+    "segments",
+    "context_manifest",
+    "recovery_binding"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "request_id": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "logical_call_id": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "attempt_id": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "idempotency_key": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "scope": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/scope"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "adapter": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/adapter"
+    },
+    "model": {
+      "oneOf": [
+        {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/model"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "mode": {
+      "enum": [
+        "record",
+        "compress"
+      ]
+    },
+    "policy": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/policy"
+    },
+    "segments": {
+      "type": "array",
+      "items": {
+        "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/segment"
+      },
+      "maxItems": 256
+    },
+    "context_manifest": {
+      "type": "array",
+      "items": {
+        "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/manifest_item"
+      },
+      "maxItems": 4096
+    },
+    "recovery_binding": {
+      "oneOf": [
+        {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/binding"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

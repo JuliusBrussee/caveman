@@ -1,0 +1,4 @@
+interface:
+  display_name: "Surgical Patch"
+  short_description: "Fix narrow responsible layer with proof"
+  default_prompt: "Use $surgical-patch to fix this bug with a narrow verified change."

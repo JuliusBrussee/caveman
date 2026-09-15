@@ -1,0 +1,26 @@
+{
+  "name": "caveman-browse",
+  "version": "1.0.0",
+  "description": "Caveman browser driver — compressed accessibility snapshots, uid actions, CCR recovery. Local-only, inferred-only.",
+  "license": "BSL-1.1",
+  "type": "module",
+  "bin": {
+    "caveman-browse": "bin/caveman-browse.mjs"
+  },
+  "files": [
+    "bin/caveman-browse.mjs",
+    "bin/binary-installer.generated.mjs",
+    "bin/release.generated.mjs",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "pretest": "node ../packages/cli/scripts/gen-wedge-installer.mjs && node scripts/copy-binary-installer.mjs",
+    "prepack": "node ../packages/cli/scripts/gen-wedge-installer.mjs && node scripts/copy-binary-installer.mjs",
+    "test": "node --test --test-force-exit bin/*.test.mjs tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

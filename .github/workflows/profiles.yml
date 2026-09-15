@@ -1,0 +1,40 @@
+name: profile-contract
+
+on:
+  pull_request:
+    paths:
+      - "agents/profiles/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profile-contract-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  profiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.16.0"
+      - name: Enforce atomic profile-data commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node agents/check-profile-scope.mjs "$BASE_SHA" "$HEAD_SHA"
+      - name: Validate profile registry
+        run: node agents/compile.mjs
+      - name: Require generated artifacts in pull request
+        run: git diff --exit-code -- agents/agents.json packages/cli/src/agents.generated.ts packages/cli/src/reserved-verbs.generated.ts
+      - name: Install CLI build dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund --no-package-lock --prefix packages/cli
+      - name: Build CLI
+        run: npm --prefix packages/cli run build
+      - name: Run fake-harness matrix and help fixture
+        run: node --test --test-force-exit packages/cli/tests/agent-registry.runtime.mjs packages/cli/tests/agent-shortcut.runtime.mjs packages/cli/tests/kilo-wrap.runtime.mjs packages/cli/tests/qwen-wrap.runtime.mjs packages/cli/tests/porcelain.runtime.mjs

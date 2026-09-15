@@ -1,4 +1,3 @@
-benchmarks/results/*.json
 __pycache__/
 *.pyc
 .venv/
@@ -7,8 +6,39 @@ __pycache__/
 .claude/worktrees/
 evals/snapshots/*.html
 evals/snapshots/*.png
-context/refs/research-brief-caveman-code-efficiency.md
+# Agent scratch: specs and implementation notes are not shipped artifacts.
+/context/
 
 # Build artifacts
 dist/*
 !dist/caveman.skill
+
+# Local star-history chart scratch (not part of the product)
+tmp-starcharts/
+
+# Engine stack build artifacts
+node_modules/
+bin/caveman-engine
+bin/caveman-proxy
+bin/caveman-wasm
+*/dist/
+packages/*/dist/
+packages/sdk/typescript/dist/
+packages/middleware/typescript/dist/
+packages/shared/*/dist/
+skills/*/dist/
+*.egg-info/
+extension/engine.wasm
+*.tsbuildinfo
+bin/cave
+.claude/skills/crossplatform-audit/SKILL.md
+.claude/skills/preflight/SKILL.md
+docs/GITHUB_OPEN_TRIAGE_2026-08-19.md
+docs/plans/
+# examples/ is scratch; the shipped adapter tests live in the packages.
+/examples/*
+.artifacts/
+*.samples.jsonl
+# Python build output — never a source of truth.
+packages/sdk/python/build/
+packages/middleware/python/build/

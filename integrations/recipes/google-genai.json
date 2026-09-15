@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "id": "google-genai",
+  "display_name": "Google Gen AI SDK",
+  "lang": "python",
+  "wire_protocol": "gemini-generatecontent",
+  "note": "The SDK appends /v1beta/... itself, so the base URL is just the gateway + /w/{{app}}.",
+  "code": "import os\nfrom google import genai\nfrom google.genai import types\n\nclient = genai.Client(\n    api_key=os.environ[\"GEMINI_API_KEY\"],\n    http_options=types.HttpOptions(base_url=\"{{baseURL}}/w/{{app}}\"),\n)\n\nres = client.models.generate_content(\n    model=\"gemini-2.5-flash\",\n    contents=\"Why is the sky blue?\",\n)",
+  "models": ["gemini-2.5-flash"]
+}

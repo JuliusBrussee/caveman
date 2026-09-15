@@ -20,9 +20,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
+          persist-credentials: false
 
       - name: Pull latest before making changes
         run: |
@@ -52,9 +53,15 @@ jobs:
           cp agents/cavecrew-reviewer.md plugins/caveman/agents/cavecrew-reviewer.md
 
       - name: Rebuild caveman.skill ZIP
-        run: mkdir -p dist && cd skills && zip -r ../dist/caveman.skill caveman/
+        # `zip -r` ADDS to an existing archive, and dist/caveman.skill is tracked
+        # (.gitignore keeps it with `!dist/caveman.skill`), so a file deleted from
+        # skills/caveman/ never left the shipped ZIP — it just stopped being
+        # updated. Delete first so the archive is genuinely rebuilt.
+        run: mkdir -p dist && rm -f dist/caveman.skill && cd skills && zip -r ../dist/caveman.skill caveman/
 
       - name: Commit and push if changed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           git add \
             skills/caveman-compress/ \
@@ -67,4 +74,6 @@ jobs:
             dist/caveman.skill
           git diff --staged --quiet && exit 0
           git commit -m "chore: sync SKILL.md copies [skip ci]"
-          git push
+          git config --local credential.helper '!f() { echo "username=x-access-token"; echo "password=$GITHUB_TOKEN"; }; f'
+          git push "https://github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+          git config --local --unset credential.helper

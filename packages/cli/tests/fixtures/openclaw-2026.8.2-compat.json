@@ -1,0 +1,392 @@
+{
+  "schema": 1,
+  "upstream": {
+    "version": "2026.8.2",
+    "commit": "0965053fe6b9341776df147a6934b7485c60b5ca",
+    "sources": [
+      {
+        "url": "https://github.com/openclaw/openclaw/blob/0965053fe6b9341776df147a6934b7485c60b5ca/packages/ai/src/providers/anthropic.ts",
+        "sha256": "b392910da4a4b779a7bb73ed01564b80882df0eb53f528b3ba34bcf1b72c16e6",
+        "functions": [
+          "getAnthropicCompat"
+        ]
+      },
+      {
+        "url": "https://github.com/openclaw/openclaw/blob/0965053fe6b9341776df147a6934b7485c60b5ca/packages/ai/src/transports/openai-responses-payload-policy.ts",
+        "sha256": "0eae9b7ef5127beb6e2743b9cc3583c80d0307ec794a8b312fc3daa86bd89602",
+        "functions": [
+          "resolveOpenAIResponsesPayloadCapabilities",
+          "resolveOpenAIResponsesCompactEndpointPlan"
+        ]
+      }
+    ],
+    "method": "Actual pinned TypeScript function declarations extracted by TypeScript AST and transpiled; imports replaced only with string normalizers and literal constant sets from source. No network requests or provider SDK calls."
+  },
+  "cases": [
+    {
+      "model": {
+        "provider": "relay",
+        "id": "model",
+        "api": "anthropic-messages",
+        "baseUrl": "https://relay.example/anthropic"
+      },
+      "resolved": {
+        "supportsEagerToolInputStreaming": true,
+        "supportsLongCacheRetention": true,
+        "sendSessionAffinityHeaders": false,
+        "supportsCacheControlOnTools": true,
+        "allowEmptySignature": false
+      },
+      "routedWithoutCompat": {
+        "supportsEagerToolInputStreaming": true,
+        "supportsLongCacheRetention": true,
+        "sendSessionAffinityHeaders": false,
+        "supportsCacheControlOnTools": true,
+        "allowEmptySignature": false
+      }
+    },
+    {
+      "model": {
+        "provider": "fireworks",
+        "id": "model",
+        "api": "anthropic-messages",
+        "baseUrl": "https://api.fireworks.ai/inference"
+      },
+      "resolved": {
+        "supportsEagerToolInputStreaming": false,
+        "supportsLongCacheRetention": false,
+        "sendSessionAffinityHeaders": true,
+        "supportsCacheControlOnTools": false,
+        "allowEmptySignature": false
+      },
+      "routedWithoutCompat": {
+        "supportsEagerToolInputStreaming": false,
+        "supportsLongCacheRetention": false,
+        "sendSessionAffinityHeaders": true,
+        "supportsCacheControlOnTools": false,
+        "allowEmptySignature": false
+      }
+    },
+    {
+      "model": {
+        "provider": "cloudflare-ai-gateway",
+        "id": "model",
+        "api": "anthropic-messages",
+        "baseUrl": "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic"
+      },
+      "resolved": {
+        "supportsEagerToolInputStreaming": true,
+        "supportsLongCacheRetention": true,
+        "sendSessionAffinityHeaders": true,
+        "supportsCacheControlOnTools": true,
+        "allowEmptySignature": false
+      },
+      "routedWithoutCompat": {
+        "supportsEagerToolInputStreaming": true,
+        "supportsLongCacheRetention": true,
+        "sendSessionAffinityHeaders": false,
+        "supportsCacheControlOnTools": true,
+        "allowEmptySignature": false
+      }
+    },
+    {
+      "model": {
+        "provider": "cloudflare-ai-gateway",
+        "id": "model",
+        "api": "anthropic-messages",
+        "baseUrl": "https://gateway.ai.cloudflare.com/v1/account/gateway/custom"
+      },
+      "resolved": {
+        "supportsEagerToolInputStreaming": true,
+        "supportsLongCacheRetention": true,
+        "sendSessionAffinityHeaders": false,
+        "supportsCacheControlOnTools": true,
+        "allowEmptySignature": false
+      },
+      "routedWithoutCompat": {
+        "supportsEagerToolInputStreaming": true,
+        "supportsLongCacheRetention": true,
+        "sendSessionAffinityHeaders": false,
+        "supportsCacheControlOnTools": true,
+        "allowEmptySignature": false
+      }
+    },
+    {
+      "model": {
+        "provider": "cloudflare-ai-gateway",
+        "id": "model",
+        "api": "anthropic-messages",
+        "baseUrl": "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic",
+        "compat": {
+          "supportsEagerToolInputStreaming": false,
+          "supportsLongCacheRetention": false,
+          "sendSessionAffinityHeaders": false
+        }
+      },
+      "resolved": {
+        "supportsEagerToolInputStreaming": false,
+        "supportsLongCacheRetention": false,
+        "sendSessionAffinityHeaders": false,
+        "supportsCacheControlOnTools": true,
+        "allowEmptySignature": false
+      },
+      "routedWithoutCompat": {
+        "supportsEagerToolInputStreaming": false,
+        "supportsLongCacheRetention": false,
+        "sendSessionAffinityHeaders": false,
+        "supportsCacheControlOnTools": true,
+        "allowEmptySignature": false
+      }
+    },
+    {
+      "model": {
+        "provider": "relay",
+        "id": "model",
+        "api": "openai-responses",
+        "baseUrl": "https://relay.example/v1"
+      },
+      "resolved": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": false
+      },
+      "routedWithoutCompat": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": false
+      },
+      "compactEndpoint": {
+        "enabled": false
+      },
+      "routedCompactEndpoint": {
+        "enabled": false
+      }
+    },
+    {
+      "model": {
+        "provider": "relay",
+        "id": "model",
+        "api": "openai-responses",
+        "baseUrl": "https://relay.example/v1",
+        "compat": {
+          "supportsStore": false,
+          "supportsPromptCacheKey": true,
+          "supportsInstructions": true
+        }
+      },
+      "resolved": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": false,
+        "supportsResponsesStoreField": false,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": false
+      },
+      "routedWithoutCompat": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": false,
+        "supportsResponsesStoreField": false,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": false
+      },
+      "compactEndpoint": {
+        "enabled": false
+      },
+      "routedCompactEndpoint": {
+        "enabled": false
+      }
+    },
+    {
+      "model": {
+        "provider": "relay",
+        "id": "model",
+        "api": "openai-responses",
+        "baseUrl": "https://api.x.ai/v1"
+      },
+      "resolved": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": true
+      },
+      "routedWithoutCompat": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": false
+      },
+      "compactEndpoint": {
+        "enabled": false
+      },
+      "routedCompactEndpoint": {
+        "enabled": false
+      }
+    },
+    {
+      "model": {
+        "provider": "relay",
+        "id": "model",
+        "api": "openai-responses",
+        "baseUrl": "https://api.x.ai/v1",
+        "compat": {
+          "supportsStore": false,
+          "supportsPromptCacheKey": false,
+          "supportsInstructions": false
+        }
+      },
+      "resolved": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": false,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": true
+      },
+      "routedWithoutCompat": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": false,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": false
+      },
+      "compactEndpoint": {
+        "enabled": false
+      },
+      "routedCompactEndpoint": {
+        "enabled": false
+      }
+    },
+    {
+      "model": {
+        "provider": "x-ai",
+        "id": "model",
+        "api": "openai-responses",
+        "baseUrl": "https://api.x.ai/v1"
+      },
+      "resolved": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": true
+      },
+      "routedWithoutCompat": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": false
+      },
+      "compactEndpoint": {
+        "enabled": true
+      },
+      "routedCompactEndpoint": {
+        "enabled": false
+      }
+    },
+    {
+      "model": {
+        "provider": "XAI",
+        "id": "model",
+        "api": "openai-responses",
+        "baseUrl": "https://api.x.ai/v1"
+      },
+      "resolved": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": true
+      },
+      "routedWithoutCompat": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": false
+      },
+      "compactEndpoint": {
+        "enabled": true
+      },
+      "routedCompactEndpoint": {
+        "enabled": false
+      }
+    },
+    {
+      "model": {
+        "provider": "openai",
+        "id": "gpt-5.5",
+        "api": "openai-responses",
+        "baseUrl": "https://api.openai.com/v1"
+      },
+      "resolved": {
+        "allowsOpenAIServiceTier": true,
+        "allowsResponsesStore": true,
+        "shouldStripResponsesPromptCache": false,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": true,
+        "usesVerifiedInstructionsEndpoint": true
+      },
+      "routedWithoutCompat": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": false
+      },
+      "compactEndpoint": {
+        "enabled": false
+      },
+      "routedCompactEndpoint": {
+        "enabled": false
+      }
+    },
+    {
+      "model": {
+        "provider": "relay",
+        "id": "gpt-5.5",
+        "api": "openai-responses",
+        "baseUrl": "https://example.openai.azure.com/openai/v1"
+      },
+      "resolved": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": false,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": true,
+        "usesVerifiedInstructionsEndpoint": false
+      },
+      "routedWithoutCompat": {
+        "allowsOpenAIServiceTier": false,
+        "allowsResponsesStore": false,
+        "shouldStripResponsesPromptCache": true,
+        "supportsResponsesStoreField": true,
+        "usesKnownNativeOpenAIRoute": false,
+        "usesVerifiedInstructionsEndpoint": false
+      },
+      "compactEndpoint": {
+        "enabled": false
+      },
+      "routedCompactEndpoint": {
+        "enabled": false
+      }
+    }
+  ]
+}

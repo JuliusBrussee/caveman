@@ -1,0 +1,197 @@
+name: agent-conformance
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-engine-contract:
+    name: all profiles / real compression engine
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.16.0"
+      - name: Validate registry, profile pins, and generated artifacts
+        run: |
+          node agents/compile.mjs
+          git diff --exit-code -- agents/agents.json packages/cli/src/agents.generated.ts packages/cli/src/reserved-verbs.generated.ts
+      - name: Require one pinned probe for every shipped profile
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const registry = JSON.parse(readFileSync("agents/agents.json", "utf8"));
+          const workflow = readFileSync(".github/workflows/agent-conformance.yml", "utf8");
+          const pinned = [...workflow.matchAll(/- id:\s*(\S+)\s*\r?\n\s*install:\s*([^\r\n]+)/g)].map((match) => match[1]);
+          const shipped = registry.agents.map((profile) => profile.id).sort();
+          const duplicates = pinned.filter((id, index) => pinned.indexOf(id) !== index);
+          const missing = shipped.filter((id) => !pinned.includes(id));
+          const unknown = pinned.filter((id) => !shipped.includes(id));
+          if (duplicates.length || missing.length || unknown.length) {
+            throw new Error(`pinned probe coverage mismatch: missing=${missing} unknown=${unknown} duplicates=${duplicates}`);
+          }
+          console.log(`pinned probe coverage: ${shipped.join(", ")}`);
+          NODE
+      - name: Install CLI build dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund --no-package-lock --prefix packages/cli
+      - name: Build CLI
+        run: npm --prefix packages/cli run build
+      - name: Build real proxy and compression engine
+        run: go build -o "$RUNNER_TEMP/caveman-proxy" ./proxy/cmd/caveman-proxy
+      - name: Run every profile through real compression
+        env:
+          CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}/caveman-proxy
+        run: node --test --test-force-exit packages/cli/tests/agent-compression-conformance.runtime.mjs
+
+  pinned-upstream-binary:
+    name: pinned binary / ${{ matrix.id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: aider
+            install: python -m pip install aider-chat==0.86.2
+          - id: claude
+            install: npm install -g @anthropic-ai/claude-code@2.1.259
+          - id: codex
+            install: npm install -g @openai/codex@0.153.0
+          - id: gemini
+            install: npm install -g @google/gemini-cli@0.58.0
+          - id: hermes
+            install: python -m pip install --src "$RUNNER_TEMP/hermes-source" --editable "git+https://github.com/NousResearch/hermes-agent.git@1f8acb340f9c72aec1426248cca54139816a77f5#egg=hermes-agent" && python -c "import sys; from importlib.metadata import version; name, expected = 'hermes-agent==0.19.1'.split('=='); observed = version(name); print(observed); sys.exit(0 if observed == expected else 'Hermes package version mismatch')"
+          - id: kilo
+            install: npm install -g @kilocode/cli@7.5.9
+          - id: openclaw
+            install: npm install -g openclaw@2026.8.2
+          - id: opencode
+            install: npm install -g opencode-ai@1.18.27
+          - id: pi
+            install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          - id: qwen
+            install: npm install -g @qwen-code/qwen-code@0.22.3
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.16.0"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned upstream binary
+        run: ${{ matrix.install }}
+      - name: Probe isolated version and help surfaces
+        run: node agents/probe-installed.mjs --require "${{ matrix.id }}"
+
+  latest-drift-probe:
+    name: latest drift / ${{ matrix.id }}
+    if: github.event_name == 'schedule'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: aider
+            install_latest: python -m pip install --upgrade aider-chat
+          - id: claude
+            install_latest: npm install -g @anthropic-ai/claude-code@latest
+          - id: codex
+            install_latest: npm install -g @openai/codex@latest
+          - id: gemini
+            install_latest: npm install -g @google/gemini-cli@latest
+          - id: hermes
+            install_latest: python -m pip install --src "$RUNNER_TEMP/hermes-source" --editable "git+https://github.com/NousResearch/hermes-agent.git@main#egg=hermes-agent"
+          - id: kilo
+            install_latest: npm install -g @kilocode/cli@latest
+          - id: openclaw
+            install_latest: npm install -g openclaw@latest
+          - id: opencode
+            install_latest: npm install -g opencode-ai@latest
+          - id: pi
+            install_latest: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest
+          - id: qwen
+            install_latest: npm install -g @qwen-code/qwen-code@latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.16.0"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - id: install
+        name: Install current upstream binary
+        run: ${{ matrix.install_latest }}
+      - id: probe
+        name: Probe latest binary without blocking pinned conformance
+        if: ${{ always() && steps.install.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          mkdir -p agent-probes
+          node agents/probe-installed.mjs --require "${{ matrix.id }}" --allow-newer --json > "agent-probes/${{ matrix.id }}.json"
+      - name: Upload untrusted probe result
+        if: ${{ always() && steps.install.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-probe-${{ matrix.id }}
+          path: agent-probes/${{ matrix.id }}.json
+          if-no-files-found: error
+          retention-days: 1
+
+  latest-drift-report:
+    name: latest drift report
+    if: ${{ always() && github.event_name == 'schedule' }}
+    needs: latest-drift-probe
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # Fresh runner: upstream @latest lifecycle code never receives issue-write
+      # credentials and cannot rewrite the trusted reporter used here.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Download probe results
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: agent-probe-*
+          path: ${{ runner.temp }}/agent-probes
+          merge-multiple: true
+      - name: Open or update drift issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          probes=("$RUNNER_TEMP"/agent-probes/*.json)
+          if (( ${#probes[@]} == 0 )); then
+            echo "no latest-agent probe results were produced"
+            exit 0
+          fi
+          for probe in "${probes[@]}"; do
+            expected_id="$(basename "$probe" .json)"
+            if ! node agents/drift-report.mjs --input "$probe" --expected-id "$expected_id"; then
+              echo "::warning file=$probe::invalid agent drift probe"
+            fi
+          done

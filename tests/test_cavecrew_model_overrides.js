@@ -9,7 +9,7 @@ const path = require('path');
 const os   = require('os');
 const assert = require('assert');
 
-const { patchFrontmatterModel, resolvePluginRoot, applyOverrides, AGENT_ENV_MAP } =
+const { patchFrontmatterModel, resolvePluginRoot, applyOverrides, insideGitWorkTree, AGENT_ENV_MAP } =
   require('../src/hooks/cavecrew-model-overrides');
 
 let passed = 0;
@@ -281,6 +281,52 @@ test('body content preserved after model patch', () => {
 });
 
 // ── Summary ────────────────────────────────────────────────────────────────
+
+
+// ── source checkout guard ──────────────────────────────────────────────────
+// resolvePluginRoot returns the REPO ROOT when this hook runs from a clone, so
+// every SessionStart used to rewrite tracked agents/*.md and dirty the working
+// tree just from opening the repo.
+console.log('\nsource checkout guard');
+
+test('a plugin root inside a git work tree is left untouched', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cavecrew-git-'));
+  fs.mkdirSync(path.join(root, '.git'));
+  fs.mkdirSync(path.join(root, 'agents'));
+  const file = AGENT_ENV_MAP[0].file;
+  const target = path.join(root, file);
+  const before = '---\nname: x\nmodel: haiku\n---\nbody\n';
+  fs.writeFileSync(target, before);
+
+  applyOverrides(root, { [AGENT_ENV_MAP[0].envVar]: 'opus' });
+
+  assert.strictEqual(fs.readFileSync(target, 'utf8'), before,
+    'overrides rewrote tracked source in a git checkout');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('a plugin root with no git above it still gets overrides', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cavecrew-nogit-'));
+  fs.mkdirSync(path.join(root, 'agents'));
+  const file = AGENT_ENV_MAP[0].file;
+  const target = path.join(root, file);
+  fs.writeFileSync(target, '---\nname: x\nmodel: haiku\n---\nbody\n');
+
+  applyOverrides(root, { [AGENT_ENV_MAP[0].envVar]: 'opus' });
+
+  assert.ok(/^model: opus$/m.test(fs.readFileSync(target, 'utf8')),
+    'override did not apply outside a git work tree');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('insideGitWorkTree walks up to an ancestor .git', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cavecrew-ancestor-'));
+  fs.mkdirSync(path.join(root, '.git'));
+  const nested = path.join(root, 'a', 'b', 'c');
+  fs.mkdirSync(nested, { recursive: true });
+  assert.strictEqual(insideGitWorkTree(nested), true);
+  fs.rmSync(root, { recursive: true, force: true });
+});
 
 console.log('');
 if (failed === 0) {

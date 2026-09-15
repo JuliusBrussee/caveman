@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/adapter-conformance.schema.json",
+  "title": "Caveman Adapter Conformance Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence",
+    "harness",
+    "adapter_version",
+    "upstream_version",
+    "normalized_context_digest",
+    "plan_sha256",
+    "build_sha256",
+    "ordered_transform_ids",
+    "provider_visible_digest",
+    "recovery_handles",
+    "accounting_method",
+    "failure_fallback"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "evidence": {
+      "const": "static_contract_only",
+      "description": "Shape agreement only. This record is not executable runtime-parity evidence."
+    },
+    "harness": {
+      "enum": ["pi", "claude", "vercel-ai-sdk", "eve", "mastra"]
+    },
+    "adapter_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "upstream_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "normalized_context_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "plan_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "build_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "ordered_transform_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    "provider_visible_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "recovery_handles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      }
+    },
+    "accounting_method": {
+      "const": "provider_reported_public_catalog"
+    },
+    "failure_fallback": {
+      "const": "original"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

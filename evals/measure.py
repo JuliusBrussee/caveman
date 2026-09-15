@@ -18,9 +18,21 @@ from __future__ import annotations
 
 import json
 import statistics
+import sys
 from pathlib import Path
 
 import tiktoken
+
+# Windows consoles and piped stdout default to the ANSI code page (cp1252),
+# which cannot encode the arrows, em-dashes and minus signs printed below —
+# a diagnostic that crashes instead of printing is worse than useless
+# (#203/#459). Replace unencodable characters rather than raising.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 
 ENCODING = tiktoken.get_encoding("o200k_base")
 SNAPSHOT = Path(__file__).parent / "snapshots" / "results.json"
@@ -50,7 +62,7 @@ def main() -> None:
         print(f"No snapshot at {SNAPSHOT}. Run `python evals/llm_run.py` first.")
         return
 
-    data = json.loads(SNAPSHOT.read_text())
+    data = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     arms = data["arms"]
     meta = data.get("metadata", {})
 

@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/agent-run-receipt.schema.json",
+  "title": "Caveman Agent Run Receipt v1",
+  "description": "Content-blind SDK economic receipt. Money is an estimated public-catalog list-price subtotal, never an invoice or verified-savings claim.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "runId", "agentId", "basis", "claimBasis", "stopReason",
+    "denomination", "capBreached", "overspent", "totalEstimatedUsd",
+    "totalTokens", "unpriced", "calls", "tools", "subagents", "tranches",
+    "breakers", "compactions"
+  ],
+  "properties": {
+    "schema": { "const": "caveman.agent.run-receipt.v1" },
+    "runId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "agentId": { "type": "string", "minLength": 1 },
+    "basis": { "const": "estimated_list_price_subtotal" },
+    "claimBasis": { "const": "inferred" },
+    "stopReason": {
+      "enum": [
+        "complete", "budget_exhausted", "deadline", "loop_detected",
+        "no_progress", "wallet_revoked", "call_budget_exhausted"
+      ]
+    },
+    "denomination": { "enum": ["usd", "tokens", "none"] },
+    "max": { "type": "number", "minimum": 0 },
+    "released": { "type": "number", "minimum": 0 },
+    "spent": { "type": "number", "minimum": 0 },
+    "capBreached": { "type": "boolean" },
+    "overspent": { "type": "number", "minimum": 0 },
+    "totalEstimatedUsd": { "type": "number", "minimum": 0 },
+    "totalTokens": { "type": "integer", "minimum": 0 },
+    "unpriced": { "type": "boolean" },
+    "calls": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/call" }
+    },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tool" }
+    },
+    "subagents": {
+      "type": "array",
+      "items": { "$ref": "#" }
+    },
+    "tranches": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tranche" }
+    },
+    "breakers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/breaker" }
+    },
+    "compactions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/compaction" }
+    }
+  },
+  "$defs": {
+    "nonNegativeInteger": { "type": "integer", "minimum": 0 },
+    "call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider", "model", "inputTokens", "outputTokens", "cacheReadTokens",
+        "cacheWriteTokens", "reasoningTokens", "estimatedUsd", "unpriced",
+        "usageBasis"
+      ],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "inputTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "outputTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "cacheReadTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "cacheWriteTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "reasoningTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "estimatedUsd": { "type": "number", "minimum": 0 },
+        "unpriced": { "type": "boolean" },
+        "usageBasis": { "enum": ["provider_reported", "unavailable"] },
+        "clampedOutputTokens": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "calls", "errors"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "calls": { "$ref": "#/$defs/nonNegativeInteger" },
+        "errors": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    },
+    "tranche": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "reason", "atCall"],
+      "properties": {
+        "amount": { "type": "number", "exclusiveMinimum": 0 },
+        "reason": { "type": "string", "minLength": 1 },
+        "atCall": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    },
+    "breaker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "count"],
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "retry_attempted" } } },
+          "then": {
+            "required": ["reservedSpend", "measuredSpend", "spendBasis"],
+            "properties": {
+              "reservedSpend": { "type": "number", "minimum": 0 },
+              "measuredSpend": { "type": "number", "minimum": 0 },
+              "spendBasis": {
+                "enum": [
+                  "pre_stream_no_usage", "provider_reported", "unavailable_worst_case"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "loop_detected", "no_progress", "fan_out_blocked",
+            "retry_attempted", "retry_exhausted"
+          ]
+        },
+        "tool": { "type": "string", "minLength": 1 },
+        "count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "signature": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "reservedSpend": { "type": "number", "minimum": 0 },
+        "measuredSpend": { "type": "number", "minimum": 0 },
+        "spendBasis": {
+          "enum": [
+            "pre_stream_no_usage", "provider_reported", "unavailable_worst_case"
+          ]
+        }
+      }
+    },
+    "compaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index", "tier", "preTokens", "postTokens", "pinnedSegmentIds",
+        "elidedSegmentDigests", "cacheState", "meteredCost", "meteredBasis",
+        "modeledNetTokens", "modeledBasis", "workingCallsAfter"
+      ],
+      "properties": {
+        "index": { "$ref": "#/$defs/nonNegativeInteger" },
+        "tier": { "enum": ["evicted", "summarized"] },
+        "preTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "postTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "pinnedSegmentIds": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "elidedSegmentDigests": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        },
+        "summarySchemaVersion": { "type": "integer", "minimum": 1 },
+        "cacheState": { "enum": ["warm", "cold", "unknown"] },
+        "meteredCost": { "type": "number", "minimum": 0 },
+        "meteredBasis": { "const": "measured" },
+        "modeledNetTokens": { "type": "number" },
+        "modeledBasis": { "const": "modeled" },
+        "workingCallsAfter": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    }
+  }
+}

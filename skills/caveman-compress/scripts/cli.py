@@ -6,6 +6,7 @@ Usage:
     caveman <filepath>
 """
 
+import argparse
 import sys
 
 # Force UTF-8 on stdout/stderr before any code can print. Windows consoles
@@ -21,20 +22,20 @@ for _stream in (sys.stdout, sys.stderr):
 
 from pathlib import Path
 
+# Direct script execution has no package context. Resolve imports relative to
+# this installed skill, independent of the caller's working directory.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    __package__ = "scripts"
+
 from .compress import backup_dir_for, compress_file
 from .detect import detect_file_type, should_compress
 
 
-def print_usage():
-    print("Usage: caveman <filepath>")
-
-
 def main():
-    if len(sys.argv) != 2:
-        print_usage()
-        sys.exit(1)
-
-    filepath = Path(sys.argv[1])
+    parser = argparse.ArgumentParser(description="Compress a natural-language file with validation and an original backup.")
+    parser.add_argument("filepath", type=Path, help="path to the file to compress")
+    filepath = parser.parse_args().filepath
 
     # Check file exists
     if not filepath.exists():

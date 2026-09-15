@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/middleware-receipt.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope",
+    "logical_call_id",
+    "attempt_id",
+    "event_kind",
+    "plan_id",
+    "usage",
+    "provider_request_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "scope": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/scope"
+    },
+    "logical_call_id": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "attempt_id": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "event_kind": {
+      "enum": [
+        "dispatch_intent",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "plan_id": {
+      "oneOf": [
+        { "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256" },
+        { "type": "null" }
+      ]
+    },
+    "usage": {
+      "oneOf": [
+        {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/usage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "provider_request_sha256": {
+      "oneOf": [
+        {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

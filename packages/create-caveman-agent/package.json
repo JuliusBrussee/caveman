@@ -1,0 +1,47 @@
+{
+  "name": "@caveman-ai/create-agent",
+  "version": "0.1.0",
+  "description": "Create an efficiency-native TypeScript agent powered by @caveman-ai/agent.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JuliusBrussee/caveman.git",
+    "directory": "packages/create-caveman-agent"
+  },
+  "homepage": "https://caveman.so/products/caveman-agent",
+  "bugs": {
+    "url": "https://github.com/JuliusBrussee/caveman/issues"
+  },
+  "type": "module",
+  "keywords": [
+    "agents",
+    "ai",
+    "create",
+    "scaffold",
+    "typescript"
+  ],
+  "bin": {
+    "create-caveman-agent": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
+    "lint": "tsc --noEmit",
+    "test": "tsc && node --test --test-force-exit tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

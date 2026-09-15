@@ -1,0 +1,77 @@
+$ pytest -q
+collecting... 0%collecting... 45%collecting... 100% (320 items)
+[32m.[0m tests/test_auth.py::test_case_01 PASSED
+[32m.[0m tests/test_auth.py::test_case_02 PASSED
+[32m.[0m tests/test_auth.py::test_case_03 PASSED
+[32m.[0m tests/test_auth.py::test_case_04 PASSED
+[32m.[0m tests/test_auth.py::test_case_05 PASSED
+[32m.[0m tests/test_auth.py::test_case_06 PASSED
+[32m.[0m tests/test_auth.py::test_case_07 PASSED
+[32m.[0m tests/test_auth.py::test_case_08 PASSED
+[32m.[0m tests/test_auth.py::test_case_09 PASSED
+[32m.[0m tests/test_auth.py::test_case_10 PASSED
+[32m.[0m tests/test_auth.py::test_case_11 PASSED
+[32m.[0m tests/test_auth.py::test_case_12 PASSED
+[32m.[0m tests/test_auth.py::test_case_13 PASSED
+[32m.[0m tests/test_auth.py::test_case_14 PASSED
+[32m.[0m tests/test_auth.py::test_case_15 PASSED
+[32m.[0m tests/test_auth.py::test_case_16 PASSED
+[32m.[0m tests/test_auth.py::test_case_17 PASSED
+[32m.[0m tests/test_auth.py::test_case_18 PASSED
+[32m.[0m tests/test_auth.py::test_case_19 PASSED
+[32m.[0m tests/test_auth.py::test_case_20 PASSED
+[32m.[0m tests/test_auth.py::test_case_21 PASSED
+[32m.[0m tests/test_auth.py::test_case_22 PASSED
+[32m.[0m tests/test_auth.py::test_case_23 PASSED
+[32m.[0m tests/test_auth.py::test_case_24 PASSED
+[32m.[0m tests/test_auth.py::test_case_25 PASSED
+[32m.[0m tests/test_auth.py::test_case_26 PASSED
+[32m.[0m tests/test_auth.py::test_case_27 PASSED
+[32m.[0m tests/test_auth.py::test_case_28 PASSED
+[32m.[0m tests/test_auth.py::test_case_29 PASSED
+[32m.[0m tests/test_auth.py::test_case_30 PASSED
+[32m.[0m tests/test_auth.py::test_case_31 PASSED
+[32m.[0m tests/test_auth.py::test_case_32 PASSED
+[32m.[0m tests/test_auth.py::test_case_33 PASSED
+[32m.[0m tests/test_auth.py::test_case_34 PASSED
+[32m.[0m tests/test_auth.py::test_case_35 PASSED
+[32m.[0m tests/test_auth.py::test_case_36 PASSED
+[32m.[0m tests/test_auth.py::test_case_37 PASSED
+[32m.[0m tests/test_auth.py::test_case_38 PASSED
+[32m.[0m tests/test_auth.py::test_case_39 PASSED
+[32m.[0m tests/test_auth.py::test_case_40 PASSED
+[31mE   AssertionError: token expiry uses < not <=[0m
+tests/test_auth.py:42: AssertionError
+  File "auth/token.py", line 88, in is_expired
+    return now < self.exp
+[32m.[0m tests/test_auth.py::test_case_41 PASSED
+[32m.[0m tests/test_auth.py::test_case_42 PASSED
+[32m.[0m tests/test_auth.py::test_case_43 PASSED
+[32m.[0m tests/test_auth.py::test_case_44 PASSED
+[32m.[0m tests/test_auth.py::test_case_45 PASSED
+[32m.[0m tests/test_auth.py::test_case_46 PASSED
+[32m.[0m tests/test_auth.py::test_case_47 PASSED
+[32m.[0m tests/test_auth.py::test_case_48 PASSED
+[32m.[0m tests/test_auth.py::test_case_49 PASSED
+[32m.[0m tests/test_auth.py::test_case_50 PASSED
+[32m.[0m tests/test_auth.py::test_case_51 PASSED
+[32m.[0m tests/test_auth.py::test_case_52 PASSED
+[32m.[0m tests/test_auth.py::test_case_53 PASSED
+[32m.[0m tests/test_auth.py::test_case_54 PASSED
+[32m.[0m tests/test_auth.py::test_case_55 PASSED
+[32m.[0m tests/test_auth.py::test_case_56 PASSED
+[32m.[0m tests/test_auth.py::test_case_57 PASSED
+[32m.[0m tests/test_auth.py::test_case_58 PASSED
+[32m.[0m tests/test_auth.py::test_case_59 PASSED
+[32m.[0m tests/test_auth.py::test_case_60 PASSED
+[32m.[0m tests/test_auth.py::test_case_61 PASSED
+[32m.[0m tests/test_auth.py::test_case_62 PASSED
+[32m.[0m tests/test_auth.py::test_case_63 PASSED
+[32m.[0m tests/test_auth.py::test_case_64 PASSED
+[32m.[0m tests/test_auth.py::test_case_65 PASSED
+[32m.[0m tests/test_auth.py::test_case_66 PASSED
+[32m.[0m tests/test_auth.py::test_case_67 PASSED
+[32m.[0m tests/test_auth.py::test_case_68 PASSED
+[32m.[0m tests/test_auth.py::test_case_69 PASSED
+[32m.[0m tests/test_auth.py::test_case_70 PASSED
+[31m1 failed[0m, [32m70 passed[0m in 3.14s

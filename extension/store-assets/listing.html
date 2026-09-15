@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      @font-face { font-family: "Geist"; src: url("../fonts/geist-sans.woff2") format("woff2"); font-weight: 100 900; }
+      @font-face { font-family: "Geist Mono"; src: url("../fonts/geist-mono.woff2") format("woff2"); font-weight: 100 900; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        width: 1280px; height: 800px; overflow: hidden;
+        background:
+          radial-gradient(hsl(0 0% 100% / 0.05) 1px, transparent 1px) 0 0 / 22px 22px,
+          #0a0a0a;
+        color: #f2ece3; font-family: "Geist", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .hairline { position: absolute; inset-inline: 0; top: 0; height: 1px;
+        background: linear-gradient(90deg, transparent, hsl(0 0% 100% / 0.3), transparent); }
+      .glow { position: absolute; width: 900px; height: 900px; right: -260px; top: -340px;
+        background: radial-gradient(circle, hsl(22 90% 52% / 0.10), transparent 60%); filter: blur(20px); }
+      .wrap { position: relative; display: grid; grid-template-columns: 1fr 480px;
+        height: 100%; align-items: center; padding: 0 96px; gap: 40px; }
+      .eyebrow { display: inline-flex; align-items: center; gap: 12px;
+        font-family: "Geist Mono"; font-size: 14px; font-weight: 500;
+        letter-spacing: 0.34em; text-transform: uppercase; }
+      .eyebrow .sub { color: hsl(0 0% 100% / 0.45); }
+      h1 { font-family: "Geist", sans-serif; font-weight: 500;
+        font-size: 84px; line-height: 0.95; letter-spacing: -0.03em; margin-top: 30px; }
+      h1 .dim { color: hsl(0 0% 100% / 0.5); }
+      .sub { margin-top: 26px; max-width: 460px; font-size: 21px; line-height: 1.5;
+        color: hsl(0 0% 100% / 0.62); }
+      .meta { margin-top: 34px; display: flex; gap: 10px; flex-wrap: wrap; }
+      .chip { font-family: "Geist Mono"; font-size: 12px; letter-spacing: 0.12em;
+        text-transform: uppercase; color: hsl(0 0% 100% / 0.55);
+        border: 1px solid hsl(0 0% 100% / 0.14); border-radius: 999px; padding: 7px 13px; }
+
+      .stage { position: relative; height: 600px; }
+      .card { position: absolute; top: 96px; right: 8px; width: 296px; height: 372px;
+        border-radius: 18px; overflow: hidden; border: 1px solid hsl(0 0% 100% / 0.12);
+        box-shadow: 0 40px 90px -30px rgba(0,0,0,0.85), 0 0 0 1px hsl(0 0% 100% / 0.04); }
+      .card iframe { width: 296px; height: 372px; border: 0; display: block; }
+      .card-cap { position: absolute; top: 70px; right: 12px; font-family: "Geist Mono";
+        font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: hsl(0 0% 100% / 0.4); }
+
+      .pill { position: absolute; left: 0; bottom: 86px; display: inline-flex; align-items: center;
+        gap: 9px; padding: 9px 16px 9px 12px; font-family: "Geist Mono"; font-size: 13px;
+        font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #f2ece3;
+        background: rgba(10,10,10,0.72); border: 1px solid hsl(0 0% 100% / 0.15); border-radius: 999px;
+        box-shadow: inset 0 1px 0 0 hsl(0 0% 100% / 0.18), 0 16px 40px -16px rgba(0,0,0,0.7); }
+      .pill .lvl { color: hsl(0 0% 100% / 0.5); }
+      .pill-cap { position: absolute; left: 4px; bottom: 56px; font-family: "Geist Mono";
+        font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: hsl(0 0% 100% / 0.38); }
+    </style>
+  </head>
+  <body>
+    <div class="hairline"></div>
+    <div class="glow"></div>
+    <div class="wrap">
+      <div class="copy">
+        <span class="eyebrow"><span id="eflame"></span>Caveman<span class="sub">&nbsp;/ mode</span></span>
+        <h1>Less filler.<br /><span class="dim">Technical details stay.</span></h1>
+        <p class="sub">Compact replies on ChatGPT, Claude &amp; Gemini. Designed to preserve code, commands, and errors. One toggle.</p>
+        <div class="meta">
+          <span class="chip">lite · full · ultra</span>
+          <span class="chip">no account</span>
+          <span class="chip">nothing leaves your device</span>
+        </div>
+      </div>
+
+      <div class="stage">
+        <span class="card-cap">the toggle ↘</span>
+        <div class="card"><iframe src="../popup.html" scrolling="no"></iframe></div>
+        <span class="pill-cap">lives on the page ↙</span>
+        <div class="pill"><span id="pflame"></span><span>Caveman</span><span class="lvl">· full</span></div>
+      </div>
+    </div>
+
+    <script src="flame.js"></script>
+    <script>
+      buildFlame(document.getElementById("eflame"), 3, 1);
+      buildFlame(document.getElementById("pflame"), 3, 1);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/cache-guard.schema.json",
+  "title": "Caveman CacheGuard Inspection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "cache_epoch_id",
+    "provider",
+    "endpoint",
+    "frozen_spans",
+    "live_spans",
+    "caller_markers",
+    "prefix_sha256",
+    "warnings",
+    "decision"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "cache_epoch_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "endpoint": {
+      "type": "string",
+      "minLength": 1
+    },
+    "frozen_spans": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/span"
+      }
+    },
+    "live_spans": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/span"
+      }
+    },
+    "caller_markers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "prefix_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "unknown_provider",
+          "unknown_endpoint",
+          "missing_boundary",
+          "prefix_drift",
+          "volatile_stable_slot",
+          "adapter_ambiguity",
+          "store_failure",
+          "cache_rebuild"
+        ]
+      }
+    },
+    "decision": {
+      "enum": ["transform_live_only", "replay_frozen", "pass_through", "new_epoch"]
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

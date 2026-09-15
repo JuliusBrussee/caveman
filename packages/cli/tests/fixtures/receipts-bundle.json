@@ -1,0 +1,109 @@
+{
+  "schema": "caveman.receipt-bundle.v1",
+  "public_key": {
+    "key_id": "cli-fixture-key",
+    "alg": "Ed25519",
+    "key": "ER2X/vqCk7dQkN5CtQFEcbvyB9tcjdMSwO3J+ATWJYs="
+  },
+  "receipts": [
+    {
+      "schema": "caveman.receipt.v1",
+      "scope": {
+        "org_hash": "sha256:d28b49d3521737b4dbab75a6677eee01fb5ceccc1e342b1d9fe4532424161e97",
+        "project_hash": "sha256:8a854d499bf32b3d3ce4771d3e15a788bf67d0247800c8f1b7f74eaa99225461"
+      },
+      "day": "2026-06-13",
+      "seq": 1,
+      "prev_receipt_hash": "",
+      "verified_savings_usd": 100.1,
+      "tokens_before": 2000,
+      "tokens_after": 1100,
+      "total_cost_usd": 30,
+      "requests_optimized": 400,
+      "optimizers": [
+        {
+          "optimizer_id_hash": "sha256:67d4bbca711af5ffb40ebe77c372ba7b06b14e5e14cca8b3d9d58cda512d76aa",
+          "requests_optimized": 400
+        }
+      ],
+      "eval_gate": {
+        "passed": 400,
+        "failed": 0
+      },
+      "formula_version": "verified-savings-ledger.v1",
+      "catalog_version": "2026-06-02",
+      "receipt_hash": "sha256:951f9d23ab47f0ac13bdadeeaf5081bc2caa35a4f9f0ff0043f876a4fa428c01",
+      "signature": {
+        "alg": "Ed25519",
+        "key_id": "cli-fixture-key",
+        "sig": "fzWF5pxSu30po4q7wya6LuUjXW9GwKkuvdAfsUCiBpqxX7b1vpTdj4iAiAeP39zQehnNxAxaOqYGtx0nlOypBQ=="
+      }
+    },
+    {
+      "schema": "caveman.receipt.v1",
+      "scope": {
+        "org_hash": "sha256:d28b49d3521737b4dbab75a6677eee01fb5ceccc1e342b1d9fe4532424161e97",
+        "project_hash": "sha256:8a854d499bf32b3d3ce4771d3e15a788bf67d0247800c8f1b7f74eaa99225461"
+      },
+      "day": "2026-06-14",
+      "seq": 2,
+      "prev_receipt_hash": "sha256:951f9d23ab47f0ac13bdadeeaf5081bc2caa35a4f9f0ff0043f876a4fa428c01",
+      "verified_savings_usd": 211.42,
+      "tokens_before": 4000,
+      "tokens_after": 2300,
+      "total_cost_usd": 61.07,
+      "requests_optimized": 880,
+      "optimizers": [
+        {
+          "optimizer_id_hash": "sha256:67d4bbca711af5ffb40ebe77c372ba7b06b14e5e14cca8b3d9d58cda512d76aa",
+          "requests_optimized": 880
+        }
+      ],
+      "eval_gate": {
+        "passed": 880,
+        "failed": 0
+      },
+      "formula_version": "verified-savings-ledger.v1",
+      "catalog_version": "2026-06-02",
+      "receipt_hash": "sha256:6fabcb75d217f9d102c10c6893656460468dd9e66bbab74592120ff1869f3121",
+      "signature": {
+        "alg": "Ed25519",
+        "key_id": "cli-fixture-key",
+        "sig": "YOf8+ZUr3JWoTyATVvm/qJP1HXWPGZuwPMF3RTSqZafB6e7emM95tNpng7+s7Es/AZ2bjTM7OGjjROm0URudAQ=="
+      }
+    },
+    {
+      "schema": "caveman.receipt.v1",
+      "scope": {
+        "org_hash": "sha256:d28b49d3521737b4dbab75a6677eee01fb5ceccc1e342b1d9fe4532424161e97",
+        "project_hash": "sha256:8a854d499bf32b3d3ce4771d3e15a788bf67d0247800c8f1b7f74eaa99225461"
+      },
+      "day": "2026-06-15",
+      "seq": 3,
+      "prev_receipt_hash": "sha256:6fabcb75d217f9d102c10c6893656460468dd9e66bbab74592120ff1869f3121",
+      "verified_savings_usd": 318.44,
+      "tokens_before": 6000,
+      "tokens_after": 3300,
+      "total_cost_usd": 90.55,
+      "requests_optimized": 1200,
+      "optimizers": [
+        {
+          "optimizer_id_hash": "sha256:67d4bbca711af5ffb40ebe77c372ba7b06b14e5e14cca8b3d9d58cda512d76aa",
+          "requests_optimized": 1200
+        }
+      ],
+      "eval_gate": {
+        "passed": 1200,
+        "failed": 0
+      },
+      "formula_version": "verified-savings-ledger.v1",
+      "catalog_version": "2026-06-02",
+      "receipt_hash": "sha256:7adb878183d8d8ca150688242213426a61829cf19915e920172721f7dfb6006f",
+      "signature": {
+        "alg": "Ed25519",
+        "key_id": "cli-fixture-key",
+        "sig": "yp91O2/1L6MqI8fCuyfaLOsbySTfOt2CWMQQhNr35zrG+hsCEWd9tjZmdMUOvpWzF4OVUdv8/hKRNNWrs3+PCQ=="
+      }
+    }
+  ]
+}
