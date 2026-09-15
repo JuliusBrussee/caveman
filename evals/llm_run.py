@@ -60,13 +60,29 @@ def claude_bin() -> str:
     return shutil.which("claude") or "claude"
 
 
-def run_claude(prompt: str, system: str | None = None) -> str:
-    cmd = [claude_bin(), "-p"]
+def build_claude_command(
+    prompt: str, system: str | None = None, model: str | None = None
+) -> list[str]:
+    """Build an isolated Claude command without changing prompt content."""
+    cmd = [
+        claude_bin(),
+        "-p",
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+    ]
     if system:
         cmd += ["--system-prompt", system]
-    if model := os.environ.get("CAVEMAN_EVAL_MODEL"):
+    if model:
         cmd += ["--model", model]
     cmd.append(prompt)
+    return cmd
+
+
+def run_claude(prompt: str, system: str | None = None) -> str:
+    cmd = build_claude_command(
+        prompt, system=system, model=os.environ.get("CAVEMAN_EVAL_MODEL")
+    )
     out = subprocess.run(
         cmd, capture_output=True, text=True, check=True,
         encoding="utf-8", errors="replace",
