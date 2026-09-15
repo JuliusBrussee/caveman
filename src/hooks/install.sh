@@ -45,6 +45,35 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 fi
 
+# Clone installs share the unified installer's JSONC parser. A standalone copy
+# without that helper refuses unsupported settings before changing any files.
+SETTINGS_HELPER=""
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../../bin/lib/settings.js" ]; then
+  SETTINGS_HELPER="$SCRIPT_DIR/../../bin/lib/settings.js"
+fi
+CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" CAVEMAN_SETTINGS_HELPER="$SETTINGS_HELPER" node --input-type=commonjs <<'NODE'
+const fs = require('fs');
+try {
+  const manifest = process.env.CAVEMAN_HOOKS_DIR + '/package.json';
+  if (fs.existsSync(manifest)) {
+    const value = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value) || (value.type !== undefined && value.type !== 'commonjs')) {
+      throw new Error('existing hooks/package.json is incompatible with CommonJS hooks');
+    }
+  }
+  const file = process.env.CAVEMAN_SETTINGS;
+  if (fs.existsSync(file)) {
+    const helper = process.env.CAVEMAN_SETTINGS_HELPER;
+    const value = helper ? require(helper).readSettings(file) : JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('settings.json must be a readable object');
+  }
+} catch (error) {
+  console.error('Cannot install standalone hooks: ' + error.message);
+  console.error('Nothing was changed. For JSONC settings, use bin/install.js from a clone.');
+  process.exit(1);
+}
+NODE
+
 # Check if already installed (unless --force). Older installs only had two hook
 # files, so require the full current set plus the hook registrations before we
 # short-circuit.
@@ -110,6 +139,10 @@ mkdir -p "$HOOKS_DIR"
 
 # 2. Copy or download hook files
 for hook in "${HOOK_FILES[@]}"; do
+  if [ "$hook" = "package.json" ] && [ -e "$HOOKS_DIR/$hook" ]; then
+    echo "  Preserved existing: $HOOKS_DIR/$hook"
+    continue
+  fi
   if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$hook" ]; then
     cp "$SCRIPT_DIR/$hook" "$HOOKS_DIR/$hook"
   else
@@ -135,12 +168,16 @@ if [ ! -f "$SETTINGS.bak" ]; then
 fi
 
 # Pass paths via env vars — avoids shell injection if $HOME contains single quotes
-CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
+CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" CAVEMAN_SETTINGS_HELPER="$SETTINGS_HELPER" node -e "
   const fs = require('fs');
   const settingsPath = process.env.CAVEMAN_SETTINGS;
   const hooksDir = process.env.CAVEMAN_HOOKS_DIR;
   const managedStatusLinePath = hooksDir + '/caveman-statusline.sh';
-  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  const shared = process.env.CAVEMAN_SETTINGS_HELPER ? require(process.env.CAVEMAN_SETTINGS_HELPER) : null;
+  const meta = {};
+  const settings = shared ? shared.readSettings(settingsPath, meta) : JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('settings.json must be a readable object');
+  if (meta.jsonc) console.log('  Comments are preserved in ' + settingsPath + '.bak; updated settings use JSON.');
   if (!settings.hooks) settings.hooks = {};
 
   // SessionStart — auto-load caveman rules
@@ -195,7 +232,8 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" node -e "
     }
   }
 
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  if (shared) shared.writeSettings(settingsPath, settings);
+  else fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   console.log('  Hooks wired in settings.json');
 "
 

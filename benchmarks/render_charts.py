@@ -11,7 +11,7 @@ Writes: docs/assets/chart-skill-output{,-dark}.svg
         docs/assets/chart-wrap-input{,-dark}.svg
 """
 
-import re
+from html import escape
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,15 +43,32 @@ WRAP_CASES = [
 ]
 
 
-def read_skill_rows():
-    md = (ROOT / "README.md").read_text(encoding="utf-8")
+def read_skill_rows(md=None):
+    if md is None:
+        md = (ROOT / "README.md").read_text(encoding="utf-8")
     block = md.split("<!-- BENCHMARK-TABLE-START -->")[1].split("<!-- BENCHMARK-TABLE-END -->")[0]
     rows, avg = [], None
+    columns = None
     for line in block.splitlines():
-        m = re.match(r"\|\s*(\*\*)?(.+?)(\*\*)?\s*\|\s*(\*\*)?(\d+)(\*\*)?\s*\|\s*(\*\*)?(\d+)(\*\*)?\s*\|\s*(\*\*)?(\d+)%(\*\*)?\s*\|", line)
-        if not m or m.group(2).strip() in ("Task", "------"):
+        if not line.startswith("|"):
             continue
-        row = (m.group(2).strip(), int(m.group(5)), int(m.group(8)), f"-{m.group(11)}%")
+        cells = [cell.strip().replace("**", "") for cell in line.strip("|").split("|")]
+        if cells[0] == "Task":
+            # The current harness has three arms. Plot the skill's contribution
+            # against its terse control; do not relabel baseline as that control.
+            columns = {cell: index for index, cell in enumerate(cells)}
+            continue
+        if columns is None or not {"Terse (tokens)", "Caveman (tokens)"} <= columns.keys():
+            continue
+        try:
+            terse = int(cells[columns["Terse (tokens)"]])
+            cave = int(cells[columns["Caveman (tokens)"]])
+        except (IndexError, ValueError):
+            continue
+        if terse < 0 or cave < 0:
+            continue
+        delta = f"{(cave / terse - 1) * 100:+.0f}%" if terse else "n/a"
+        row = (cells[0], terse, cave, delta)
         if row[0] == "Average":
             avg = row
         else:
@@ -62,6 +79,8 @@ def read_skill_rows():
 
 def bar(x, y, w, h, fill, r=4):
     """Bar anchored square at the baseline, rounded at the data end."""
+    if w <= 0:
+        return ""
     w = max(w, r)
     return (f'<path d="M{x},{y} h{w - r:.1f} a{r},{r} 0 0 1 {r},{r} '
             f'v{h - 2 * r} a{r},{r} 0 0 1 -{r},{r} h-{w - r:.1f} z" fill="{fill}"/>')
@@ -78,18 +97,24 @@ def legend(c, x, y, labels):
 
 def chart_skill(c):
     rows, avg = read_skill_rows()
+    if not rows or avg is None:
+        return (f'<svg xmlns="http://www.w3.org/2000/svg" width="880" height="92" viewBox="0 0 880 92" '
+                f'font-family="{FONT}" role="img" aria-label="No reviewed API output benchmark result published">'
+                f'<text x="0" y="24" font-size="15" fill="{c["text"]}">Output reduction: no reviewed API benchmark result published.</text>'
+                f'<text x="0" y="53" font-size="13" fill="{c["sub"]}">Current-session savings are unknown without a measured comparison.</text>'
+                '</svg>')
     groups = rows + [avg]
     W, LEFT, PLOT = 880, 248, 430
     stride, bh, gap = 40, 10, 2
     top = 56
     H = top + stride * len(groups) + 46
-    xmax = max(r[1] for r in groups)
+    xmax = max(1, *(max(r[1], r[2]) for r in groups))
     sc = PLOT / xmax
     p = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
-         f'font-family="{FONT}" role="img" aria-label="Output tokens per task, normal agent versus caveman">']
+         f'font-family="{FONT}" role="img" aria-label="Output tokens per task, terse control versus caveman">']
     p.append(f'<text x="0" y="16" font-size="13" font-weight="600" fill="{c["text"]}">'
              'Output tokens per task — same prompt, same model, real API runs</text>')
-    p.append(legend(c, 0, 38, [(c["normal"], "Normal agent"), (c["caveman"], "Caveman")]))
+    p.append(legend(c, 0, 38, [(c["normal"], "Terse control"), (c["caveman"], "Caveman")]))
     y = top
     for i, (task, normal, cave, saved) in enumerate(groups):
         last = i == len(groups) - 1
@@ -97,7 +122,7 @@ def chart_skill(c):
             p.append(f'<line x1="0" y1="{y - 7}" x2="{W}" y2="{y - 7}" stroke="{c["axis"]}" stroke-width="1"/>')
         weight = ' font-weight="700"' if last else ""
         p.append(f'<text x="{LEFT - 12}" y="{y + bh + gap / 2 + 4}" font-size="12" text-anchor="end" '
-                 f'fill="{c["text"]}"{weight}>{task}</text>')
+                 f'fill="{c["text"]}"{weight}>{escape(task)}</text>')
         p.append(bar(LEFT, y, normal * sc, bh, c["normal"]))
         p.append(f'<text x="{LEFT + normal * sc + 6}" y="{y + bh - 1}" font-size="11" fill="{c["sub"]}">{normal:,}</text>')
         y2 = y + bh + gap

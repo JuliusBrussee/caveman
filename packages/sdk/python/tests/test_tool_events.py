@@ -66,7 +66,7 @@ def _assert_event(request: dict[str, Any], *, name: str, outcome: str, sequence:
 def test_success_returns_original_value_and_emits_joined_ok_event() -> None:
     captured, fake_urlopen = _capture()
     original = {"exact": "result"}
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         with _cave().trace(workflow="event-workflow", tags={"env": "test"}, trace_id=TRACE_ID, span_id=SPAN_ID) as trace:
             result = trace.tool("lookup", {"read_only": True}, lambda: original)
     assert result is original
@@ -81,7 +81,7 @@ def test_synchronous_and_asynchronous_failures_emit_error_without_exception_leak
     def sync_failure() -> Any:
         raise sync_error
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         with _cave().trace(trace_id=TRACE_ID, span_id=SPAN_ID) as trace:
             with pytest.raises(RuntimeError) as raised:
                 trace.tool("sync-danger", {}, sync_failure)
@@ -96,7 +96,7 @@ def test_synchronous_and_asynchronous_failures_emit_error_without_exception_leak
         raise async_error
 
     async def run_async_failure() -> None:
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
             with _cave().trace(trace_id=TRACE_ID, span_id=SPAN_ID) as trace:
                 await trace.tool("async-danger", {}, async_failure)
 
@@ -116,7 +116,7 @@ def test_cancellation_is_error_and_original_cancellation_propagates() -> None:
         raise asyncio.CancelledError("private-cancel-message")
 
     async def run_cancelled() -> None:
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
             with _cave().trace(trace_id=TRACE_ID, span_id=SPAN_ID) as trace:
                 await trace.tool("cancelled", {}, cancelled)
 
@@ -129,7 +129,7 @@ def test_cancellation_is_error_and_original_cancellation_propagates() -> None:
 def test_telemetry_failure_never_changes_successful_return_or_original_throw() -> None:
     captured, fake_urlopen = _capture(fail=True)
     value = {"preserved": True}
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         with _cave().trace(trace_id=TRACE_ID, span_id=SPAN_ID) as trace:
             assert trace.tool("ok", {}, lambda: value) is value
     _assert_event(captured[0], name="ok", outcome="ok", sequence=1)
@@ -140,7 +140,7 @@ def test_telemetry_failure_never_changes_successful_return_or_original_throw() -
     def fail() -> Any:
         raise original
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         with _cave().trace(trace_id=TRACE_ID, span_id=SPAN_ID) as trace:
             with pytest.raises(RuntimeError) as raised:
                 trace.tool("bad", {}, fail)
@@ -162,7 +162,7 @@ def test_sequence_follows_start_order_when_async_completions_reverse() -> None:
         async def second() -> str:
             return "second-result"
 
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
             with _cave().trace(trace_id=TRACE_ID, span_id=SPAN_ID) as trace:
                 first_call = trace.tool("first", {}, first)
                 second_call = trace.tool("second", {}, second)
@@ -179,7 +179,7 @@ def test_sequence_follows_start_order_when_async_completions_reverse() -> None:
 def test_each_trace_owns_independent_sequence() -> None:
     captured, fake_urlopen = _capture()
     cave = _cave()
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         with cave.trace(trace_id=TRACE_ID, span_id=SPAN_ID) as first:
             first.tool("one", {}, lambda: 1)
         with cave.trace(trace_id=TRACE_ID, span_id=SPAN_ID) as second:
@@ -189,7 +189,7 @@ def test_each_trace_owns_independent_sequence() -> None:
 
 def test_sequence_increment_is_thread_safe() -> None:
     captured, fake_urlopen = _capture()
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         with _cave().trace(trace_id=TRACE_ID, span_id=SPAN_ID) as trace:
             with ThreadPoolExecutor(max_workers=8) as executor:
                 results = list(executor.map(lambda index: trace.tool(f"tool-{index}", {}, lambda: index), range(64)))

@@ -1,3 +1,4 @@
+import { verifiedProviderRoute } from "../../cli/src/provider-routing.ts";
 // Bounded shared types for the Pi ⇄ Caveman native-runtime bridge. Mirrors the
 // caps enforced by the CLI (validNativeRuntimeResponse) and the Go runtime so an
 // oversized field degrades to "absent" instead of crossing the boundary.
@@ -148,31 +149,16 @@ const COMPAT_SUFFIX_BY_API: Readonly<Record<string, string>> = {
   "openai-responses": "/v1",
 };
 
-// routeForApi gives the gateway route for one model, or undefined for a model
-// that must stay direct. With a provider, the provider must be in
-// UPSTREAM_HOSTS_BY_PROVIDER. With an original base URL, the host of that URL
-// must be the upstream host of the provider. Without a provider, the function
-// keeps the API-only behavior for existing callers. With compatUpstreams, a
-// provider named by a mount the proxy published routes through that mount when
-// the original base URL points at the mount's own upstream host.
-export function routeForApi(gateway: string, api: string | undefined, provider?: string, originalBaseUrl?: string, compatUpstreams?: Readonly<Record<string, string>>): string | undefined {
-  if (provider) {
-    // A mount published by the running proxy wins over the static table, so a
-    // caveman.yaml entry that repoints a built-in name (opencode-go) is gated
-    // against the endpoint the proxy actually forwards to.
-    const mount = compatUpstreamFor(provider, compatUpstreams);
-    if (mount !== undefined) {
-      const host = hostOf(mount);
-      if (!host) return undefined;
-      if (hostOf(originalBaseUrl) !== host) return undefined;
-      const suffix = api ? COMPAT_SUFFIX_BY_API[api] : undefined;
-      return suffix === undefined ? undefined : joinUrl(gateway, `/w/pi/compat/${provider}${suffix}`);
-    }
-    const expected = UPSTREAM_HOSTS_BY_PROVIDER[provider];
-    if (!expected) return undefined;
-    if (originalBaseUrl !== undefined && hostOf(originalBaseUrl) !== expected) return undefined;
+// Production callers supply the selected model URL and the running listener's
+// upstream maps. Missing proof stays direct, including older proxy state files.
+export function routeForApi(gateway: string, api: string | undefined, provider?: string, originalBaseUrl?: string, compatUpstreams?: Readonly<Record<string, string>>, providerUpstreams?: Readonly<Record<string, string>>): string | undefined {
+  if (originalBaseUrl !== undefined) {
+    return verifiedProviderRoute(joinUrl(gateway, "/w/pi"), api, provider ?? "", originalBaseUrl,
+      { compat_upstreams: compatUpstreams, provider_upstreams: providerUpstreams });
   }
+  // API-only lookup describes routes; it never authorizes a selected model.
   const table = (provider ? ROUTES_BY_PROVIDER_API[provider] : undefined) ?? ROUTES_BY_API;
+  if (provider && !UPSTREAM_HOSTS_BY_PROVIDER[provider]) return undefined;
   const path = api ? table[api] : undefined;
   return path ? joinUrl(gateway, path) : undefined;
 }

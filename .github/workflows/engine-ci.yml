@@ -55,6 +55,17 @@ jobs:
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: packages/sdk/python
+            extras: ""
+          # Framework extras that resolve together. strands/crewai pin mcp<2.2
+          # and agno/crewai disagree over litellm, so those adapters skip here
+          # and are covered by the entry-point smoke test instead.
+          - package: packages/middleware/python
+            extras: "[langchain,openai,anthropic,google,asgi,mcp]"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -63,8 +74,13 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m pip install pytest
+      # caveman-middleware depends on caveman-sdk, which is not published from
+      # this commit; install the in-tree SDK so the adapters can import it.
+      - run: python -m pip install --no-deps -e packages/sdk/python
+      - run: python -m pip install "./${{ matrix.package }}${{ matrix.extras }}"
+        if: matrix.extras != ''
       - run: python -m pytest -q
-        working-directory: packages/sdk/python
+        working-directory: ${{ matrix.package }}
 
   root-surfaces:
     runs-on: ubuntu-latest

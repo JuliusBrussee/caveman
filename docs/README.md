@@ -26,6 +26,8 @@ this repository. Hosted-service implementation details are outside its scope.
   retrieval, and retention limits
 - [Local proxy and providers](./technical/proxy-and-providers.md): routes,
   credentials, usage parsing, and network boundaries
+- [Deploy the proxy for a team](./technical/deploy.md): shared VPC and cloud
+  deployment, inbound token, containers, and manifests
 - [TOON and Pixel](./technical/toon-and-pixel.md): structured-data and image
   transforms
 - [Cache planner and rewriter](./technical/cache-and-rewriter.md): provider

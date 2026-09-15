@@ -48,7 +48,7 @@ func (a Adapter) ApplyProviderNativeTransforms(ctx context.Context, body provide
 	// Record mode is an unconditional wire-preservation boundary. The gateway
 	// normally skips this adapter in record mode, but keep the adapter safe when
 	// called directly (or by a future caller) as well.
-	if policy.RuntimeMode == "record" {
+	if policy.RuntimeMode == "record" || isInputTokenCountEndpoint(meta.Endpoint) {
 		return passthrough, nil
 	}
 

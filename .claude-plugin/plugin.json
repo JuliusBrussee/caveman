@@ -1,6 +1,7 @@
 {
   "name": "caveman",
-  "description": "Ultra-compressed communication mode. Cuts 65% of output tokens against an unprompted baseline (measured) while keeping full technical accuracy by speaking like a caveman.",
+  "version": "2.7.0",
+  "description": "Ultra-compressed communication mode. Shortens prose while preserving technical terms, code, commands, and exact errors.",
   "author": {
     "name": "Julius Brussee",
     "url": "https://github.com/JuliusBrussee"

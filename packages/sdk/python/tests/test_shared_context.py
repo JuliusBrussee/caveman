@@ -24,7 +24,7 @@ def test_shared_context_put_posts_session_key_and_content() -> None:
         captured.append((req.full_url, req.get_method(), json.loads(req.data)))
         return _fake_response({"session_key": "h1", "bytes": 5, "stored": True})
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave = Cave(api_key="cave_live_test_key", base_url="http://localhost:8787", agent="a")
         out = cave.shared_context.put("h1", "hello")
 
@@ -41,7 +41,7 @@ def test_shared_context_get_recovers_content() -> None:
         captured.append((req.full_url, req.get_method()))
         return _fake_response({"session_key": "h1", "content": "héllo 🦴"})
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave = Cave(api_key="cave_live_test_key", base_url="http://localhost:8787", agent="a")
         out = cave.shared_context.get("h1")
 

@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cmpVersion } from "./version.mjs";
+import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const { portableInvocation, resolveWindowsCommand } = require("../bin/lib/portable-process.js");
 const registry = JSON.parse(readFileSync(join(here, "agents.json"), "utf8"));
 const args = process.argv.slice(2);
 const required = new Set();
@@ -22,32 +26,22 @@ for (let i = 0; i < args.length; i++) {
   }
 }
 
-// cmpSemver: -1/0/1 by dotted numeric-then-lexical segments. Not full SemVer prerelease
-// ordering, but enough to tell "a working newer binary" apart from an older/unknown one.
-function cmpSemver(a, b) {
-  const norm = (v) => String(v).split(/[.+-]/).map((x) => (/^\d+$/.test(x) ? Number(x) : x));
-  const A = norm(a);
-  const B = norm(b);
-  for (let i = 0; i < Math.max(A.length, B.length); i++) {
-    const x = A[i];
-    const y = B[i];
-    if (x === undefined) return -1;
-    if (y === undefined) return 1;
-    if (typeof x === "number" && typeof y === "number") {
-      if (x !== y) return x < y ? -1 : 1;
-    } else if (String(x) !== String(y)) {
-      return String(x) < String(y) ? -1 : 1;
-    }
-  }
-  return 0;
-}
 
 function which(names, pathValue) {
   for (const name of names) {
-    if (name.includes("/") && existsSync(name)) return name;
+    if (process.platform === "win32") {
+      const found = resolveWindowsCommand(name, { PATH: pathValue, PATHEXT: process.env.PATHEXT });
+      if (found) return found;
+      continue;
+    }
+    const executable = (candidate) => {
+      try { accessSync(candidate, constants.X_OK); return statSync(candidate).isFile(); }
+      catch { return false; }
+    };
+    if (name.includes("/") && executable(name)) return name;
     for (const dir of String(pathValue || "").split(delimiter)) {
       const candidate = join(dir, name);
-      if (existsSync(candidate)) return candidate;
+      if (executable(candidate)) return candidate;
     }
   }
   return undefined;
@@ -58,7 +52,10 @@ function firstVersion(text) {
 }
 
 function run(binary, argv, env) {
-  const result = spawnSync(binary, argv, { env, encoding: "utf8", timeout: 15_000 });
+  let invocation;
+  try { invocation = portableInvocation(binary, argv, { env }); }
+  catch (error) { return { ok: false, status: null, error: error.message, output: "" }; }
+  const result = spawnSync(invocation.command, invocation.args, { env, encoding: "utf8", timeout: 15_000 });
   const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
   return {
     ok: result.status === 0 && !result.error,
@@ -73,15 +70,26 @@ function probeEnvironment(home) {
   const env = {
     PATH: process.env.PATH || "",
     HOME: home,
+    USERPROFILE: home,
+    APPDATA: join(home, "AppData", "Roaming"),
+    LOCALAPPDATA: join(home, "AppData", "Local"),
+    XDG_CONFIG_HOME: join(home, ".config"),
+    XDG_DATA_HOME: join(home, ".local", "share"),
+    XDG_CACHE_HOME: join(home, ".cache"),
     CODEX_HOME: join(home, ".codex"),
     OPENCLAW_STATE_DIR: join(home, ".openclaw"),
     NO_COLOR: "1",
   };
   for (const key of [
-    "ComSpec", "PATHEXT", "SystemRoot", "TEMP", "TMP", "TMPDIR", "USERPROFILE",
+    "ComSpec", "PATHEXT", "SystemRoot", "TEMP", "TMP", "TMPDIR",
     "LANG", "LC_ALL", "LC_CTYPE", "SHELL", "TERM", "TZ", "CI",
   ]) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  // Codex validates an explicit CODEX_HOME before loading commands. Materialize
+  // the isolated home rather than pointing its help/version probe at a missing dir.
+  for (const key of ["CODEX_HOME", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"]) {
+    mkdirSync(env[key], { recursive: true });
   }
   return env;
 }
@@ -113,7 +121,7 @@ for (const profile of registry.agents) {
     const launchable = versionProbe.ok && helpProbe.ok;
     // With --allow-newer a launchable binary that is strictly newer than the pin is
     // `drift` (report it, do not fail); an older/unknown one is still `broken`.
-    const isNewer = allowNewer && !versionMatches && observed && profile.tested_agent_version !== "x" && cmpSemver(observed, profile.tested_agent_version) > 0;
+    const isNewer = allowNewer && !versionMatches && observed && profile.tested_agent_version !== "x" && cmpVersion(observed, profile.tested_agent_version) > 0;
     let status;
     if (!launchable) status = "broken";
     else if (versionMatches) status = "ok";

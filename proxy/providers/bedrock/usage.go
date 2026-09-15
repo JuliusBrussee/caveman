@@ -76,7 +76,8 @@ func newUsage(h http.Header) providers.UsageObservation {
 // real ConverseStream/InvokeModelWithResponseStream APIs. Counters are merged
 // with a max rule so cumulative stream totals resolve correctly.
 func parseBedrockUsage(data []byte, usage *providers.UsageObservation) {
-	if payloads, ok := bedrockEventPayloads(data); ok {
+	if payloads, providerError, ok := bedrockEventPayloads(data); ok {
+		usage.ProviderError = usage.ProviderError || providerError
 		streamed, terminalUsage := false, false
 		for _, payload := range payloads {
 			parseBedrockPayload(payload, usage)
@@ -109,6 +110,10 @@ func bedrockPayloadCompletion(payload []byte) (streamed, terminalUsage bool) {
 	if decodeBedrockObject(payload, &obj) != nil {
 		return false, false
 	}
+	return bedrockObjectCompletion(obj)
+}
+
+func bedrockObjectCompletion(obj map[string]any) (streamed, terminalUsage bool) {
 	if encoded, ok := obj["bytes"].(string); ok {
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
@@ -157,9 +162,21 @@ func parseBedrockText(data []byte, usage *providers.UsageObservation) {
 		maxLine = 64 * 1024
 	}
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLine)
+	eventType := ""
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "event:") || strings.HasPrefix(line, ":") {
+		if line == "" {
+			eventType = ""
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			if eventType == "error" {
+				usage.ProviderError = true
+			}
+			continue
+		}
+		if line == "" || strings.HasPrefix(line, ":") {
 			continue
 		}
 		line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
@@ -168,8 +185,11 @@ func parseBedrockText(data []byte, usage *providers.UsageObservation) {
 		}
 		var obj map[string]any
 		if decodeBedrockObject([]byte(line), &obj) == nil {
+			if _, hasType := obj["type"]; !hasType && eventType != "" {
+				obj["type"] = eventType
+			}
 			mergeBedrockUsage(obj, usage)
-			isStream, isTerminal := bedrockPayloadCompletion([]byte(line))
+			isStream, isTerminal := bedrockObjectCompletion(obj)
 			streamed = streamed || isStream
 			terminalUsage = terminalUsage || isTerminal
 		}
@@ -207,37 +227,76 @@ func parseBedrockPayload(payload []byte, usage *providers.UsageObservation) {
 // bedrockEventPayloads decodes AWS event-stream frames and validates both CRCs.
 // Invalid/truncated frames return ok=false so no partial binary payload can be
 // mistaken for provider usage and priced.
-func bedrockEventPayloads(data []byte) (payloads [][]byte, ok bool) {
+func bedrockEventPayloads(data []byte) (payloads [][]byte, providerError, ok bool) {
 	if len(data) < 16 {
-		return nil, false
+		return nil, false, false
 	}
 	remaining := data
 	for len(remaining) > 0 {
 		if len(remaining) < 16 {
-			return nil, false
+			return nil, false, false
 		}
 		total := int(binary.BigEndian.Uint32(remaining[0:4]))
 		headers := int(binary.BigEndian.Uint32(remaining[4:8]))
-		if total < 16 || total > len(remaining) || headers < 0 || 12+headers > total-4 {
-			return nil, false
+		if total < 16 || total > len(remaining) || headers < 0 || headers > total-16 {
+			return nil, false, false
 		}
 		if got, want := crc32.ChecksumIEEE(remaining[:8]), binary.BigEndian.Uint32(remaining[8:12]); got != want {
-			return nil, false
+			return nil, false, false
 		}
 		frame := remaining[:total]
 		if got, want := crc32.ChecksumIEEE(frame[:total-4]), binary.BigEndian.Uint32(frame[total-4:]); got != want {
-			return nil, false
+			return nil, false, false
 		}
+		frameError, valid := eventStreamErrorHeader(frame[12 : 12+headers])
+		if !valid {
+			return nil, false, false
+		}
+		providerError = providerError || frameError
 		payloads = append(payloads, append([]byte(nil), frame[12+headers:total-4]...))
 		remaining = remaining[total:]
 	}
-	return payloads, len(payloads) > 0
+	return payloads, providerError, len(payloads) > 0
+}
+
+// EventStream errors live in :message-type, outside the JSON payload. Skip all
+// Smithy header types with bounded lengths, retaining only the error signal.
+func eventStreamErrorHeader(data []byte) (providerError, valid bool) {
+	for len(data) > 0 {
+		nameLen := int(data[0])
+		if len(data) < 1+nameLen+1 {
+			return false, false
+		}
+		name, kind := string(data[1:1+nameLen]), data[1+nameLen]
+		data = data[1+nameLen+1:]
+		if kind > 9 {
+			return false, false
+		}
+		size := [...]int{0, 0, 1, 2, 4, 8, -1, -1, 8, 16}[kind]
+		if size == -1 {
+			if len(data) < 2 {
+				return false, false
+			}
+			size = int(binary.BigEndian.Uint16(data[:2]))
+			data = data[2:]
+		}
+		if size > len(data) {
+			return false, false
+		}
+		if name == ":message-type" && kind == 7 {
+			value := string(data[:size])
+			providerError = providerError || value == "error" || value == "exception"
+		}
+		data = data[size:]
+	}
+	return providerError, true
 }
 
 // mergeBedrockUsage reads usage from the Bedrock shapes (camelCase converse,
 // snake_case anthropic-invoke, nested metadata/message.usage) and merges the
 // maximum value seen for each field.
 func mergeBedrockUsage(obj map[string]any, usage *providers.UsageObservation) {
+	usage.ProviderError = usage.ProviderError || providers.ProviderErrorReported(obj)
 	mergeBedrockServiceTier(obj, usage)
 	for _, u := range bedrockUsageObjects(obj) {
 		validateBedrockRawTotal(u, usage)

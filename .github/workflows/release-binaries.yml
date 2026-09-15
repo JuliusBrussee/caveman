@@ -19,6 +19,7 @@ jobs:
     environment: binary-release
     permissions:
       contents: write
+      packages: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -65,6 +66,28 @@ jobs:
           dist/binaries/checksums.txt
           dist/binaries/checksums.txt.keysig
           packages/cli/BINARY_SIGNING_PUBKEY.pub
+      # Before the release is published, so a broken image blocks the release
+      # instead of shipping a tag whose container never built. Plain docker
+      # commands only: every action here is SHA-pinned and no new SHA can be
+      # verified from a release branch.
+      - name: Publish caveman-proxy container image to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # GHCR rejects any uppercase in a namespace; repository owners may have it.
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          # No QEMU setup: the Dockerfile's build stage runs on $BUILDPLATFORM and
+          # cross-compiles with the Go toolchain, and the final stage has no RUN.
+          docker buildx create --use
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=true --sbom=true \
+            --build-arg VERSION="$GITHUB_REF_NAME" \
+            -t "ghcr.io/$owner/caveman-proxy:$GITHUB_REF_NAME" \
+            -t "ghcr.io/$owner/caveman-proxy:latest" \
+            --push .
       - name: Publish binary-only release
         env:
           GH_TOKEN: ${{ github.token }}

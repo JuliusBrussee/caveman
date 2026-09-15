@@ -310,7 +310,7 @@ func TestCompressModeShrinksRecordsAndDiscloses(t *testing.T) {
 	comp := &stubCompressor{out: []byte("X"), before: 100, after: 40, handle: "ccr_test123"}
 	rt := &captureTransport{responses: []string{chatRespBody}}
 	srv := New(Config{
-		Adapters:   []providers.Adapter{openai.New("https://upstream.test")},
+		Adapters:   []providers.Adapter{openai.New("https://api.openai.com")},
 		Auth:       stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "compress"}},
 		Creds:      stubCreds{key: "sk-byok"},
 		Sink:       sink,

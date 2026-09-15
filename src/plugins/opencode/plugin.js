@@ -76,6 +76,16 @@ const config = loadConfig();
 
 const { getDefaultMode, safeWriteFlag, readFlag } = config;
 
+// Resolved defensively, NOT destructured with the three above. loadConfig()
+// reads whatever caveman-config.cjs sits in the installed plugin directory,
+// which can predate this file (#848). recordModeChange is the newest of these
+// exports, and handleSessionCreated() runs at factory time below, outside any
+// try — so destructuring an absent one would throw during plugin construction
+// and take caveman on opencode from "mode works, history missing" to "plugin
+// does not load at all". The history log is best-effort by design (its own
+// body silent-fails), so the no-op stub is the honest fallback.
+const recordModeChange = config.recordModeChange || function () {};
+
 // Load the shared mode-change parser (#602) the same way loadConfig() loads
 // caveman-config.js — see the doc comment above loadConfig() for why this
 // can't go through require()/import() in a compiled Bun binary.
@@ -103,7 +113,8 @@ function opencodeConfigDir() {
   return path.join(os.homedir(), '.config', 'opencode');
 }
 
-const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
+const opencodeDir = opencodeConfigDir();
+const flagPath = path.join(opencodeDir, '.caveman-active');
 
 function removeFlag() {
   try {
@@ -170,10 +181,12 @@ function reinforcementLine(mode) {
 function applyModeChange(change) {
   if (!change) return;
   if (change.action === 'clear') {
+    recordModeChange(opencodeDir, null);
     removeFlag();
     return;
   }
   if (change.action === 'set' && change.mode) {
+    recordModeChange(opencodeDir, change.mode);
     safeWriteFlag(flagPath, change.mode);
   }
 }
@@ -184,9 +197,11 @@ function applyModeChange(change) {
 function handleSessionCreated() {
   const mode = getDefaultMode();
   if (mode === 'off') {
+    recordModeChange(opencodeDir, null);
     removeFlag();
     return;
   }
+  recordModeChange(opencodeDir, mode);
   safeWriteFlag(flagPath, mode);
 }
 

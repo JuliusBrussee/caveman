@@ -5,6 +5,8 @@ on:
     tags:
       - "sdk-ts-v*"
       - "sdk-python-v*"
+      - "middleware-ts-v*"
+      - "middleware-python-v*"
       - "agent-v*"
       - "create-agent-v*"
       - "pi-v*"
@@ -22,6 +24,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       ecosystem: ${{ steps.package.outputs.ecosystem }}
+      packager: ${{ steps.package.outputs.packager }}
       package: ${{ steps.package.outputs.package }}
       version: ${{ steps.package.outputs.version }}
     steps:
@@ -52,7 +55,23 @@ jobs:
         id: package
         run: |
           set -euo pipefail
+          # @caveman-ai/middleware depends on the workspace SDK, so its tarball is
+          # built with pnpm, which rewrites `workspace:^` to a concrete range.
+          packager="npm"
           case "$GITHUB_REF_NAME" in
+            middleware-ts-v*)
+              package="packages/middleware/typescript"
+              ecosystem="npm"
+              packager="pnpm"
+              version="${GITHUB_REF_NAME#middleware-ts-v}"
+              actual="$(node -p "require('./$package/package.json').version")"
+              ;;
+            middleware-python-v*)
+              package="packages/middleware/python"
+              ecosystem="pypi"
+              version="${GITHUB_REF_NAME#middleware-python-v}"
+              actual="$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("packages/middleware/python/pyproject.toml").read_text())["project"]["version"])')"
+              ;;
             sdk-ts-v*)
               package="packages/sdk/typescript"
               ecosystem="npm"
@@ -88,7 +107,7 @@ jobs:
               exit 2
               ;;
           esac
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+|[+-][0-9A-Za-z.-]+)?$ ]] || {
             echo "release version is not semver: $version" >&2
             exit 1
           }
@@ -98,9 +117,35 @@ jobs:
           }
           echo "package=$package" >> "$GITHUB_OUTPUT"
           echo "ecosystem=$ecosystem" >> "$GITHUB_OUTPUT"
+          echo "packager=$packager" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        if: steps.package.outputs.packager == 'pnpm'
+      - name: Build and test pnpm workspace package
+        if: steps.package.outputs.packager == 'pnpm'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/package-dist"
+          pnpm install --frozen-lockfile
+          # Build the workspace dependencies first: the adapters import the SDK's
+          # built `./middleware` types, which do not exist until the SDK is built.
+          pnpm --filter @caveman-ai/sdk run build
+          pnpm --filter ./${{ steps.package.outputs.package }} test
+          pnpm --filter ./${{ steps.package.outputs.package }} pack --pack-destination "$RUNNER_TEMP/package-dist"
+          mapfile -t tarballs < <(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name '*.tgz' -print)
+          [[ "${#tarballs[@]}" == 1 ]] || { echo "expected exactly one npm tarball" >&2; exit 1; }
+          smoke="$RUNNER_TEMP/npm-artifact-smoke"
+          mkdir -p "$smoke"
+          (cd "$smoke" && npm init --yes >/dev/null)
+          # The ai-sdk adapter imports `ai` at runtime, so the smoke installs the
+          # framework it exercises; every other adapter stays uninstalled.
+          (cd "$smoke" && npm install --ignore-scripts --no-audit --no-fund "${tarballs[0]}" "ai@^7.0.94" "@ai-sdk/provider@^4.0.11")
+          # The workspace protocol must not survive into the published manifest.
+          node -e 'const p=require(process.argv[1]); if(String(p.dependencies?.["@caveman-ai/sdk"]).startsWith("workspace:")) { console.error("workspace protocol leaked into the tarball"); process.exit(1) }' \
+            "$smoke/node_modules/@caveman-ai/middleware/package.json"
+          (cd "$smoke" && node --input-type=module -e 'const m=await import("@caveman-ai/middleware/ai-sdk"); if(typeof m.withCaveman!=="function") process.exit(1)')
       - name: Build and test npm package
-        if: steps.package.outputs.ecosystem == 'npm'
+        if: steps.package.outputs.ecosystem == 'npm' && steps.package.outputs.packager == 'npm'
         working-directory: ${{ steps.package.outputs.package }}
         run: |
           set -euo pipefail
@@ -154,11 +199,21 @@ jobs:
           [[ "${#wheels[@]}" == 1 && "${#sdists[@]}" == 1 ]] || { echo "expected exactly one wheel and one sdist" >&2; exit 1; }
           python -m venv "$RUNNER_TEMP/wheel-smoke"
           "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install --disable-pip-version-check --no-deps "${wheels[0]}"
-          "$RUNNER_TEMP/wheel-smoke/bin/python" -c 'import caveman_cloud,importlib.metadata; assert importlib.metadata.version("caveman-sdk") == "${{ steps.package.outputs.version }}"'
           python -m venv "$RUNNER_TEMP/sdist-smoke"
           "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install --disable-pip-version-check setuptools==80.9.0
           "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install --disable-pip-version-check --no-deps --no-build-isolation "${sdists[0]}"
-          "$RUNNER_TEMP/sdist-smoke/bin/python" -c 'import caveman_cloud,importlib.metadata; assert importlib.metadata.version("caveman-sdk") == "${{ steps.package.outputs.version }}"'
+          case "${{ steps.package.outputs.package }}" in
+            packages/sdk/python)
+              import='import caveman_cloud,importlib.metadata; assert importlib.metadata.version("caveman-sdk") == "${{ steps.package.outputs.version }}"'
+              ;;
+            packages/middleware/python)
+              # No framework is installed here, so only the version gates and the
+              # package metadata can be imported without an optional extra.
+              import='import caveman_middleware,caveman_middleware._versions,importlib.metadata; assert importlib.metadata.version("caveman-middleware") == "${{ steps.package.outputs.version }}"'
+              ;;
+          esac
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -c "$import"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -c "$import"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: package-dist
@@ -173,7 +228,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: npm
-      url: https://www.npmjs.com/package/${{ needs.build.outputs.package == 'packages/agent' && '@caveman-ai/agent' || needs.build.outputs.package == 'packages/create-caveman-agent' && '@caveman-ai/create-agent' || needs.build.outputs.package == 'packages/pi-extension' && '@caveman-ai/pi' || '@caveman-ai/sdk' }}
+      url: https://www.npmjs.com/package/${{ needs.build.outputs.package == 'packages/agent' && '@caveman-ai/agent' || needs.build.outputs.package == 'packages/create-caveman-agent' && '@caveman-ai/create-agent' || needs.build.outputs.package == 'packages/pi-extension' && '@caveman-ai/pi' || needs.build.outputs.package == 'packages/middleware/typescript' && '@caveman-ai/middleware' || '@caveman-ai/sdk' }}
     permissions:
       contents: read
       id-token: write
@@ -190,7 +245,14 @@ jobs:
         run: |
           set -euo pipefail
           npm install --global npm@11.5.1
-          npm publish ./dist/*.tgz --access public
+          # A prerelease must not displace a stable `latest`. While the package has
+          # no stable release yet, the newest prerelease IS `latest`: leaving the
+          # tag on an older (possibly deprecated) prerelease serves a worse build.
+          name="$(node -p "require('./dist/package.json').name" 2>/dev/null || tar -xOf ./dist/*.tgz package/package.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).name")"
+          current="$(npm view "$name" dist-tags.latest 2>/dev/null || true)"
+          tag=latest
+          if [[ "${{ needs.build.outputs.version }}" == *-* && -n "$current" && "$current" != *-* ]]; then tag=alpha; fi
+          npm publish ./dist/*.tgz --access public --tag "$tag"
 
   publish-pypi:
     if: needs.build.outputs.ecosystem == 'pypi'
@@ -199,7 +261,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: pypi
-      url: https://pypi.org/p/caveman-sdk
+      url: https://pypi.org/p/${{ needs.build.outputs.package == 'packages/middleware/python' && 'caveman-middleware' || 'caveman-sdk' }}
     permissions:
       contents: read
       id-token: write

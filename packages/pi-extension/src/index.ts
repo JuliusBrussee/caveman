@@ -1,3 +1,4 @@
+import { publishedForwardHeadersOf, publishedUpstreamsOf } from "../../cli/src/provider-routing.ts";
 // Caveman native extension for Pi. One model-visible tool (caveman_retrieve),
 // lifecycle bridged into the Caveman native runtime, gated provider routing to
 // the local proxy, byte-stable Core injection, and post-tool output shrinking.
@@ -12,7 +13,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { HookBridge, promptDigest, taskContinuation, taskTerms, taskType } from "./lifecycle.ts";
-import { COMPAT_NAME_RE, MAX_CONTEXT_BYTES, additionalContextOf } from "./protocol.ts";
+import { MAX_CONTEXT_BYTES, additionalContextOf, isLoopbackUrl } from "./protocol.ts";
 import { ProviderRouter } from "./provider.ts";
 import { RecoveryClient } from "./recovery.ts";
 import { shrinkToolResult } from "./tool-output.ts";
@@ -34,26 +35,7 @@ function gatewayUrl(): string {
   return "http://127.0.0.1:8787";
 }
 
-type RunState = { recoveryViaMcp: boolean; compatUpstreams: Record<string, string> };
-
-// compatUpstreamsOf keeps only entries that could name a real mount: a
-// proxy-shaped name and an http(s) URL. A null-prototype object so a name like
-// "constructor" can never resolve to something inherited.
-function compatUpstreamsOf(raw: unknown): Record<string, string> {
-  const out: Record<string, string> = Object.create(null);
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
-  for (const [name, url] of Object.entries(raw as Record<string, unknown>)) {
-    if (!COMPAT_NAME_RE.test(name) || typeof url !== "string") continue;
-    try {
-      const protocol = new URL(url).protocol;
-      if (protocol !== "http:" && protocol !== "https:") continue;
-    } catch {
-      continue;
-    }
-    out[name] = url;
-  }
-  return out;
-}
+type RunState = { instanceToken: string; recoveryViaMcp: boolean; compatUpstreams: Record<string, string>; providerUpstreams: Record<string, string>; compatForwardHeaders: Record<string, string[]> };
 
 // readRunState returns the gate inputs the running proxy published, or undefined
 // when no valid run-state file for this gateway exists.
@@ -61,6 +43,7 @@ function readRunState(gateway: string): RunState | undefined {
   let port: string;
   try {
     const url = new URL(gateway);
+    if (!isLoopbackUrl(gateway) || url.pathname !== "/" || url.search || url.hash || url.username || url.password) return undefined;
     port = url.port || (url.protocol === "https:" ? "443" : "80");
   } catch {
     return undefined;
@@ -71,7 +54,8 @@ function readRunState(gateway: string): RunState | undefined {
     // CLI's field validation and require the recorded pid to still be alive so
     // a stale file (or a stranger on the port) can never open the gate.
     if (state?.schema !== "caveman.proxy.run.v1") return undefined;
-    if (typeof state.pid !== "number" || typeof state.instance_token !== "string") return undefined;
+    if (!Number.isSafeInteger(state.pid) || state.pid < 1 || state.port !== Number(port)
+      || typeof state.instance_token !== "string" || !state.instance_token) return undefined;
     if (state.owner !== "wrap" && state.owner !== "start") return undefined;
     try {
       process.kill(state.pid, 0);
@@ -79,19 +63,19 @@ function readRunState(gateway: string): RunState | undefined {
       return undefined;
     }
     // compat_upstreams is absent in files written by an older proxy.
-    return { recoveryViaMcp: Boolean(state.recovery_via_mcp), compatUpstreams: compatUpstreamsOf(state.compat_upstreams) };
+    return { instanceToken: state.instance_token, recoveryViaMcp: state.recovery_via_mcp === true, compatUpstreams: publishedUpstreamsOf(state.compat_upstreams), providerUpstreams: publishedUpstreamsOf(state.provider_upstreams), compatForwardHeaders: publishedForwardHeadersOf(state.compat_forward_headers) };
   } catch {
     return undefined;
   }
 }
 
-async function proxyAliveOnce(gateway: string): Promise<boolean> {
+async function proxyAliveOnce(gateway: string, instanceToken: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
   try {
-    const response = await fetch(`${gateway.replace(/\/+$/, "")}/health/live`, { signal: controller.signal });
+    const response = await fetch(`${gateway.replace(/\/+$/, "")}/health/live`, { signal: controller.signal, redirect: "error" });
     await response.body?.cancel();
-    return response.ok;
+    return response.ok && response.headers.get("x-caveman-instance") === instanceToken;
   } catch {
     return false;
   } finally {
@@ -101,12 +85,13 @@ async function proxyAliveOnce(gateway: string): Promise<boolean> {
 
 // A proxy the SessionStart hook just autostarted may be a few hundred ms behind
 // the first probe; retry briefly before declaring the session direct.
-async function proxyAlive(gateway: string): Promise<boolean> {
+async function readLiveRunState(gateway: string): Promise<RunState | undefined> {
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (await proxyAliveOnce(gateway)) return true;
+    const state = readRunState(gateway);
+    if (state && await proxyAliveOnce(gateway, state.instanceToken)) return state;
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
-  return false;
+  return undefined;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -178,6 +163,11 @@ export default function (pi: ExtensionAPI) {
     coreContext = undefined;
     pendingContext = [];
     pendingBytes = 0;
+    // A failed gate in a replacement session must not retain the old route.
+    if (!(await router.closeGate(ctx))) {
+      gateDone = true;
+      return;
+    }
     try {
       sessionId = ctx.sessionManager.getSessionId() || "default";
     } catch {
@@ -199,11 +189,10 @@ export default function (pi: ExtensionAPI) {
     // disables the proxy's server-side retrieve fallback, so a "both false"
     // session could never compress anything and must stay direct instead.
     const gateway = gatewayUrl();
-    const alive = await proxyAlive(gateway);
-    const published = readRunState(gateway);
-    const recoveryReady = alive ? await recovery.ensure() : false;
+    const published = await readLiveRunState(gateway);
+    const recoveryReady = published ? await recovery.ensure() : false;
     gateDone = true;
-    if (!alive || !published) {
+    if (!published) {
       notify(ctx, "Caveman: direct mode, no compression this session (local proxy not running)", "warning");
       return;
     }
@@ -211,7 +200,7 @@ export default function (pi: ExtensionAPI) {
       notify(ctx, "Caveman: direct mode, no compression this session (recovery not available — run `caveman doctor pi`)", "warning");
       return;
     }
-    await router.openGate(gateway, ctx, published.compatUpstreams);
+    await router.openGate(gateway, ctx, published.compatUpstreams, published.providerUpstreams, published.compatForwardHeaders);
   }));
 
   pi.on("model_select", GUARD_model_select(async (event: { model: ExtensionContext["model"] }, ctx: ExtensionContext) => {
@@ -221,6 +210,9 @@ export default function (pi: ExtensionAPI) {
   }));
 
   pi.on("before_agent_start", GUARD_before_agent_start(async (event: { prompt: string; systemPrompt: string }, ctx: ExtensionContext) => {
+    // Provider registration changes can refresh Pi's active model without a
+    // model_select event. Recheck that current object before every new turn.
+    if (gateDone) await router?.apply(ctx.model, ctx);
     const response = await bridge.call("UserPromptSubmit", {
       session_id: sessionId,
       model: ctx.model?.id,
@@ -279,9 +271,9 @@ export default function (pi: ExtensionAPI) {
     if (context) coreContext = context;
   }));
 
-  pi.on("session_shutdown", GUARD_session_shutdown(async () => {
+  pi.on("session_shutdown", GUARD_session_shutdown(async (_event: unknown, ctx: ExtensionContext) => {
     await bridge.call("SessionEnd", { session_id: sessionId });
-    router?.closeGate();
+    await router?.closeGate(ctx);
     recovery.dispose();
   }));
 }

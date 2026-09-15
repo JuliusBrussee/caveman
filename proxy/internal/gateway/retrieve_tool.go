@@ -613,6 +613,7 @@ func addUsage(a, b providers.UsageObservation) providers.UsageObservation {
 		a.Malformed = true
 	}
 	a.Malformed = a.Malformed || b.Malformed
+	a.ProviderError = a.ProviderError || b.ProviderError
 	a.CacheObserved = a.CacheObserved || b.CacheObserved
 	a.CacheStatus = aggregateCacheStatus(a)
 	if a.PricingUnsupportedReason == "" {

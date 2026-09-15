@@ -57,6 +57,7 @@ function runReporter(t, artifact, { expectedId = profile.id, inputBasename = `${
     const agentsDir = join(dir, "agents");
     mkdirSync(agentsDir);
     writeFileSync(join(agentsDir, "drift-report.mjs"), readFileSync(reporter));
+    writeFileSync(join(agentsDir, "version.mjs"), readFileSync(join(root, "agents", "version.mjs")));
     writeFileSync(join(agentsDir, "agents.json"), JSON.stringify(registryOverride));
     reporterPath = join(agentsDir, "drift-report.mjs");
   }

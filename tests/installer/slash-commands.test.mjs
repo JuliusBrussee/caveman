@@ -35,10 +35,10 @@ const STATS_TOML = path.join(COMMANDS_DIR, 'caveman-stats.toml');
 // production, so the test stays representative if the hook regex shifts.
 const HOOK_STATS_REGEX = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/m;
 
-test('#470 commands/caveman-stats.toml exists so Claude Code registers /caveman-stats', () => {
+test('#470 commands/caveman-stats.toml registers the Gemini extension command', () => {
   assert.ok(
     fs.existsSync(STATS_TOML),
-    `Missing ${path.relative(REPO_ROOT, STATS_TOML)} — Claude Code rejects /caveman-stats as "Unknown command" before the UserPromptSubmit hook can intercept (issue #470).`,
+    `Missing ${path.relative(REPO_ROOT, STATS_TOML)} — Gemini CLI cannot discover this extension command (issue #470).`,
   );
 });
 
@@ -49,16 +49,17 @@ test('#470 caveman-stats.toml declares a non-empty description for the slash-com
   assert.ok(descMatch[1].trim().length > 0, 'description must not be empty');
 });
 
-test('#470 caveman-stats.toml prompt is intercepted by the mode-tracker regex', () => {
+test('#403 Gemini stats command uses native host statistics without entering the Claude hook path', () => {
   const body = fs.readFileSync(STATS_TOML, 'utf8');
   const promptMatch = body.match(/^\s*prompt\s*=\s*"([^"\n]+)"/m);
   assert.ok(promptMatch, 'caveman-stats.toml must declare a prompt = "..." line');
   const prompt = promptMatch[1].replace(/\{\{args\}\}/g, '').trim();
-  assert.match(
-    prompt,
-    HOOK_STATS_REGEX,
-    `Resolved prompt ${JSON.stringify(prompt)} must match the UserPromptSubmit handler regex in src/hooks/caveman-mode-tracker.js; otherwise the stats output is never injected.`,
-  );
+  assert.match(prompt, /\/stats model/);
+  assert.match(prompt, /\/stats session/);
+  assert.match(prompt, /cannot invoke a built-in slash command or access the host's live metrics/);
+  assert.match(prompt, /Do not run the Claude Code caveman-stats reader/);
+  assert.match(prompt, /savings are unknown/);
+  assert.doesNotMatch(prompt, HOOK_STATS_REGEX);
 });
 
 // ── #571: Claude Code only discovers commands/*.md ─────────────────────────

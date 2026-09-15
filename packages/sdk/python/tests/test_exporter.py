@@ -154,7 +154,7 @@ def test_export_posts_otlp_payload_with_headers_and_attrs() -> None:
         captured.append((req.full_url, dict(req.headers), json.loads(req.data)))
         return _fake_urlopen({"ok": True, "spans_accepted": 2, "spans_total": 2, "otel_schema_version": "genai-2026-06"})
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         result = exp.export()
 
     assert len(captured) == 1
@@ -223,7 +223,7 @@ def test_export_empty_is_noop_no_network() -> None:
     def boom(req, timeout):  # type: ignore[no-untyped-def]
         raise AssertionError("export() must not hit the network when empty")
 
-    with patch("urllib.request.urlopen", side_effect=boom):
+    with patch("caveman_cloud.core._urlopen", side_effect=boom):
         result = exp.export()
     assert result == {"ok": True, "spans_accepted": 0, "spans_total": 0}
 
@@ -252,7 +252,7 @@ def test_overlapping_exports_serialize_without_duplicate_or_dropped_spans() -> N
         except BaseException as exc:
             errors.append(exc)
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         first = threading.Thread(target=run_export)
         first.start()
         assert first_started.wait(timeout=2)

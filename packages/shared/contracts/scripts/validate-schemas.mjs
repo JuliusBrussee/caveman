@@ -82,6 +82,12 @@ if (claude.failure_fallback !== "original") {
   throw new Error("unknown adapter failure must preserve original bytes");
 }
 
+const middleware = JSON.parse(await readFile(path.join(packageRoot, "..", "..", "sdk", "parity", "middleware.fixtures.json"), "utf8"));
+for (const [field, schemaName] of Object.entries({ capabilities: "capabilities", request: "optimize", plan: "plan", page: "page" })) {
+  const validate = ajv.getSchema(`https://caveman.so/schemas/middleware-${schemaName}.schema.json`);
+  if (!validate?.(middleware[field])) throw new Error(`middleware ${field}: ${ajv.errorsText(validate?.errors)}`);
+}
+
 console.log(
   `validated ${files.length} JSON schemas and ${fixtureFiles.length} static agent contract fixtures (not executable parity)`,
 );

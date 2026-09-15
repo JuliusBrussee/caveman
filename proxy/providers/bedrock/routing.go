@@ -199,7 +199,7 @@ func (a Adapter) ResolveUpstreamURL(ctx context.Context, req *http.Request, rout
 	base.RawQuery = req.URL.RawQuery
 
 	if env.IsProduction() {
-		if err := ssrf.ValidateURL(ctx, base.String(), ssrf.ManagedConfig()); err != nil {
+		if err := providers.ValidateUpstreamEndpoint(ctx, base, ssrf.ManagedConfig()); err != nil {
 			return nil, err
 		}
 		hostKind, _, ok := bedrockHostKind(base.Hostname())
@@ -256,7 +256,7 @@ func MantleBaseURL(region string) string {
 
 func actionAllowed(action string) bool {
 	switch action {
-	case "invoke", "invoke-with-response-stream", "converse", "converse-stream":
+	case "invoke", "invoke-with-response-stream", "converse", "converse-stream", "count-tokens":
 		return true
 	default:
 		return false
@@ -301,7 +301,7 @@ func (a Adapter) InspectRequest(ctx context.Context, body providers.BodyReader, 
 	} else if region := regionFromHost(headers.Get("x-cave-bedrock-host")); region != "" {
 		meta.Region = region
 	} else {
-		meta.Region = env.String("CAVE_BEDROCK_REGION", "us-east-1")
+		meta.Region = environmentRegion()
 	}
 	if headers.Get("x-amzn-bedrock-guardrail-identifier") != "" || headers.Get("x-amzn-bedrock-guardrail-version") != "" {
 		// Guardrails are billed in text/image units outside model token rates.
@@ -356,7 +356,21 @@ func resolveRegion(req *http.Request, base *url.URL) (string, error) {
 	if r := regionFromHost(req.Header.Get("x-cave-bedrock-host")); r != "" {
 		return r, nil
 	}
-	return env.String("CAVE_BEDROCK_REGION", "us-east-1"), nil
+	return environmentRegion(), nil
+}
+
+// environmentRegion mirrors the precedence the proxy's own config uses
+// (CAVE_BEDROCK_REGION, then the standard AWS variables) so a request whose
+// upstream host does not name a region — a VPC endpoint, a PrivateLink host —
+// is signed for the region the operator actually configured instead of
+// silently falling back to us-east-1 and failing the signature.
+func environmentRegion() string {
+	for _, key := range []string{"CAVE_BEDROCK_REGION", "AWS_REGION", "AWS_DEFAULT_REGION"} {
+		if region := strings.TrimSpace(env.String(key, "")); region != "" {
+			return region
+		}
+	}
+	return "us-east-1"
 }
 
 // signingRegion picks the AWS region the SigV4 scope is built for. The resolved
@@ -371,7 +385,7 @@ func signingRegion(req *http.Request, upstream *url.URL) string {
 	if r := strings.TrimSpace(req.Header.Get("x-cave-aws-region")); r != "" {
 		return r
 	}
-	return env.String("CAVE_BEDROCK_REGION", "us-east-1")
+	return environmentRegion()
 }
 
 func regionFromHost(host string) string {

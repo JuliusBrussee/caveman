@@ -54,7 +54,7 @@ def test_two_traces_get_distinct_ids() -> None:
 
 def test_provider_calls_inside_a_trace_carry_continuity_headers() -> None:
     captured, fake_urlopen = _capture({"id": "resp_1"})
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         with _cave().trace() as t:
             t.model["openai"].responses.create({"model": "gpt-4o", "input": "hi"})
             t.model["openai"].chat["completions"].create({"model": "gpt-4o", "messages": []})
@@ -68,7 +68,7 @@ def test_provider_calls_inside_a_trace_carry_continuity_headers() -> None:
 
 def test_injected_ids_are_used_verbatim() -> None:
     captured, fake_urlopen = _capture({"id": "resp_1"})
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         with _cave().trace(trace_id="0123456789abcdef0123456789abcdef", span_id="fedcba9876543210") as t:
             assert t.trace_id == "0123456789abcdef0123456789abcdef"
             assert t.span_id == "fedcba9876543210"
@@ -81,7 +81,7 @@ def test_injected_ids_are_used_verbatim() -> None:
 def test_injected_ids_are_canonicalized_or_replaced() -> None:
     captured, fake_urlopen = _capture({"id": "resp_1"})
     cave = _cave()
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         with cave.trace(trace_id="0123456789ABCDEF0123456789ABCDEF", span_id="FEDCBA9876543210") as t:
             assert t.trace_id == "0123456789abcdef0123456789abcdef"
             assert t.span_id == "fedcba9876543210"
@@ -103,7 +103,7 @@ def test_injected_ids_are_canonicalized_or_replaced() -> None:
 
 def test_trace_scoped_sdk_calls_carry_continuity_headers() -> None:
     captured, fake_urlopen = _capture({"ok": True, "artifact_id": "art_1", "stored": True})
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         with _cave().trace() as t:
             t.tool("do_thing", {"read_only": True}, lambda: "ok")
             t.artifacts.page({"big": "payload"}, {"source": "tool:fetch", "strategy": "json-index"})
@@ -119,7 +119,7 @@ def test_trace_scoped_sdk_calls_carry_continuity_headers() -> None:
 
 def test_provider_clients_off_the_cave_carry_no_continuity_headers() -> None:
     captured, fake_urlopen = _capture({"id": "resp_1"})
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         _cave().openai().responses.create({"model": "gpt-4o", "input": "hi"})
 
     assert "x-cave-trace-id" not in captured[0]["headers"]
@@ -133,7 +133,7 @@ def test_trace_bound_exporter_reuses_the_trace_id() -> None:
         payloads.append(json.loads(req.data))
         return _fake_response({"ok": True, "spans_accepted": 1, "spans_total": 1})
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         with _cave().trace() as t:
             exporter = t.exporter()
             assert t.exporter() is exporter

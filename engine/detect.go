@@ -94,13 +94,15 @@ func looksLikeTerminal(input []byte) bool {
 }
 
 func looksLikeDiff(input []byte) bool {
-	matches := len(diffLineRe.FindAll(input, -1))
-	if matches < 4 {
-		return false
-	}
-	return bytes.Contains(input, []byte("\n@@ ")) ||
+	// The structural marker is necessary regardless of the line count. Check
+	// its literal bytes before scanning a large non-diff payload with a regexp.
+	marked := bytes.Contains(input, []byte("\n@@ ")) ||
 		bytes.Contains(input, []byte("diff --git ")) ||
 		(bytes.Contains(input, []byte("\n--- ")) && bytes.Contains(input, []byte("\n+++ ")))
+	if !marked {
+		return false
+	}
+	return len(diffLineRe.FindAll(input, 4)) >= 4
 }
 
 func looksLikeCode(input []byte) bool {

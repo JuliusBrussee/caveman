@@ -39,6 +39,25 @@ class BenchmarkContractTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
         self.assertNotIn("65% average output", readme)
         self.assertNotIn("technical accuracy    ", readme)
+        if not list((ROOT / "benchmarks" / "results").glob("*.json")):
+            self.assertNotIn("**1214**", readme)
+            for name in ("plugin.json", "marketplace.json"):
+                manifest = (ROOT / ".claude-plugin" / name).read_text(encoding="utf-8")
+                self.assertNotIn("65%", manifest)
+
+    def test_chart_reads_terse_control_from_current_harness_table(self):
+        spec = importlib.util.spec_from_file_location("benchmark_charts", ROOT / "benchmarks" / "render_charts.py")
+        charts = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(charts)
+        data = f"{BENCHMARK.BENCHMARK_START}\n" + (
+            "| Task | Baseline (tokens) | Terse (tokens) | Caveman (tokens) | vs terse | vs baseline |\n"
+            "| Fixture | 1000 | 100 | 75 | 25% | 92% |\n"
+            "| **Average** | **1000** | **100** | **75** | **25%** | **92%** |\n"
+        ) + BENCHMARK.BENCHMARK_END
+        rows, average = charts.read_skill_rows(data)
+        self.assertEqual(rows, [("Fixture", 100, 75, "-25%")])
+        self.assertEqual(average, ("Average", 100, 75, "-25%"))
+        self.assertEqual(charts.read_skill_rows(f"{BENCHMARK.BENCHMARK_START}\nNo result\n{BENCHMARK.BENCHMARK_END}"), ([], None))
 
     def test_update_readme_replaces_only_marker_body(self):
         with tempfile.TemporaryDirectory() as directory:

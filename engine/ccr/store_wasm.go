@@ -45,6 +45,9 @@ func OpenMemory() (*Store, error) {
 // Close is a no-op.
 func (s *Store) Close() error { return nil }
 
+// Persistent is false for the browser's in-memory store.
+func (s *Store) Persistent() bool { return false }
+
 // Put stores a recovery and returns its content-addressed handle (idempotent).
 func (s *Store) Put(rec Recovery) (string, error) {
 	handle := Handle(rec.Original)

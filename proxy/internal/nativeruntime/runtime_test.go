@@ -1117,7 +1117,7 @@ func TestRuntimeFailsClosedOnUnknownProtocolOrEvent(t *testing.T) {
 	}
 }
 
-func TestRuntimeIdleLifecycleTracksSessionsAndRecoversFromMissingEnd(t *testing.T) {
+func TestRuntimeTracksSessionsUntilSessionEnd(t *testing.T) {
 	store, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -1132,16 +1132,6 @@ func TestRuntimeIdleLifecycleTracksSessionsAndRecoversFromMissingEnd(t *testing.
 	}
 	if active, _ := runtime.IdleSnapshot(); active != 1 {
 		t.Fatalf("active sessions = %d, want 1", active)
-	}
-	started := time.Now()
-	if !runtime.WaitForIdle(context.Background(), 30*time.Millisecond) {
-		t.Fatal("crashed session without SessionEnd must eventually idle")
-	}
-	if elapsed := time.Since(started); elapsed < 25*time.Millisecond {
-		t.Fatalf("idle returned too early: %v", elapsed)
-	}
-	if active, _ := runtime.IdleSnapshot(); active != 0 {
-		t.Fatalf("expired sessions = %d, want 0", active)
 	}
 
 	if _, err := runtime.Handle(context.Background(), Request{
@@ -1159,45 +1149,25 @@ func TestRuntimeIdleLifecycleTracksSessionsAndRecoversFromMissingEnd(t *testing.
 	}
 }
 
-// A wrap heartbeat must hold off idle exit even with zero session activity: an
-// open-but-quiet agent still points its ANTHROPIC_BASE_URL at this proxy (#860).
-func TestKeepaliveHoldsOffIdleExit(t *testing.T) {
+// Keepalive is the CLI's heartbeat for older proxies that still idle-exit. It
+// must move lastActivity without touching session accounting: a beat is activity
+// only, and counting it as a session would keep a dead wrap's proxy alive.
+func TestKeepaliveMarksActivityWithoutOpeningASession(t *testing.T) {
 	store, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	runtime := New(store)
-	stop := make(chan struct{})
-	// Heartbeat interval must sit far below the idle threshold, not merely
-	// under it. Windows' default timer granularity is ~15.6ms, so a 10ms ticker
-	// really fires every ~16ms and a loaded CI runner stretches that further; a
-	// 30ms threshold left barely a 2x margin and the idle timer won this race
-	// intermittently on windows-latest. 5ms against 250ms is ~50x, which
-	// survives a scheduling stall an order of magnitude worse than anything
-	// observed.
-	const heartbeat = 5 * time.Millisecond
-	const idleAfter = 250 * time.Millisecond
-	go func() {
-		ticker := time.NewTicker(heartbeat)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				runtime.Keepalive()
-			}
-		}
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
-	defer cancel()
-	if runtime.WaitForIdle(ctx, idleAfter) {
-		t.Fatal("idle exit fired while keepalive heartbeats were arriving")
+	_, before := runtime.IdleSnapshot()
+	time.Sleep(2 * time.Millisecond)
+	runtime.Keepalive()
+	active, after := runtime.IdleSnapshot()
+	if active != 0 {
+		t.Fatalf("Keepalive opened %d sessions", active)
 	}
-	close(stop)
-	if !runtime.WaitForIdle(context.Background(), idleAfter) {
-		t.Fatal("idle exit must fire once heartbeats stop")
+	if !after.After(before) {
+		t.Fatalf("Keepalive did not advance last activity: %v then %v", before, after)
 	}
 }
 
@@ -1476,5 +1446,29 @@ func TestStoredEvidenceBundleCarriesOnlyDirectItems(t *testing.T) {
 		if !item.Direct {
 			t.Fatalf("metadata-only item stored behind the ccr:// handle: %+v", item)
 		}
+	}
+}
+
+func TestPersistentRuntimePrunesAbandonedCorrelationEntries(t *testing.T) {
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	r := New(store)
+	r.activeSessions["abandoned"] = sessionActivity{At: time.Now().Add(-time.Hour)}
+	r.activeSessions["recent"] = sessionActivity{At: time.Now()}
+	_, err = r.Handle(context.Background(), Request{
+		ProtocolVersion: 1, Agent: Agent{ID: "claude", Surface: "cli"},
+		Session: Session{ID: "new"}, Event: Event{Type: "prompt.submit"}, PolicyMode: "record",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.activeSessions["abandoned"]; ok {
+		t.Fatal("abandoned session retained forever")
+	}
+	if active, _ := r.IdleSnapshot(); active != 2 {
+		t.Fatalf("active correlation entries = %d, want recent and new", active)
 	}
 }

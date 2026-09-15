@@ -205,7 +205,7 @@ export const PROFILES: AgentProfile[] = [
     "injection": {
       "method": "env",
       "env": {
-        "CUSTOM_BASE_URL": "{{cave_base_url}}",
+        "CUSTOM_BASE_URL": "{{cave_base_url}}/v1",
         "CUSTOM_API_KEY": "{{cave_api_key}}"
       }
     },

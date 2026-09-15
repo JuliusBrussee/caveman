@@ -450,8 +450,8 @@ async function main(): Promise<void> {
   if (!response) {
     // A dead loopback gateway PORT at prompt time is the SessionStart revive
     // signal arriving mid-session: native routing still points this session's
-    // next request at the local proxy, but a wrap-owned proxy idle-exits after
-    // its wrap dies and a plain session has no other way to restart it — the
+    // next request at the local proxy. Crashes or older proxies that idle-exit
+    // can leave a plain session without a way to restart it — the
     // turn hard-fails with ConnectionRefused. Delegate this one event to the
     // full CLI, which revives the proxy exactly like SessionStart (and records
     // the event itself). The port probe — not the dead runtime socket — is the

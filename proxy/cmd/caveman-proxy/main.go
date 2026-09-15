@@ -66,7 +66,10 @@ func main() {
 	case "learn":
 		runLearn(logger, os.Args[2:])
 	case "status":
-		runStatus(logger, os.Args[2:])
+		// status prints one JSON document on stdout, which the CLI parses whole.
+		// Its diagnostics go to stderr so a config error cannot interleave a
+		// second JSON object into that document.
+		runStatus(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: redact.SlogReplaceAttr})), os.Args[2:])
 	case "version":
 		runVersion(os.Args[2:])
 	case "native-why":
@@ -193,6 +196,9 @@ func runServe(logger *slog.Logger) {
 		logger.Error("cannot load caveman.yaml", "error", err)
 		os.Exit(1)
 	}
+	for _, skipped := range cfg.SkippedCABundles {
+		logger.Warn("CA bundle env var names an unusable file; skipped", "env", skipped.Env, "error", skipped.Error)
+	}
 	spend, err := store.Open(dbPath(home), logger)
 	if err != nil {
 		logger.Error("cannot open local spend store", "error", err)
@@ -208,6 +214,11 @@ func runServe(logger *slog.Logger) {
 	// objects. Record mode still never writes recovery originals: it only permits
 	// metadata-safe native runtime state when an installed host pack sends events.
 	opts := standalone.Options{SessionMarkerKey: sessionMarkerKey, Logger: logger}
+	if runtime, err := standalone.NewMiddleware(cfg, spend, recovery, version); err != nil {
+		logger.Warn("framework middleware unavailable", "code", "runtime_initialization")
+	} else {
+		opts.Middleware = runtime
+	}
 	switch {
 	case (cfg.Mode == "compress" || cfg.Mode == "pixel") && recovery != nil:
 		opts.Compressor = standalone.NewEngineCompressor(recovery)
@@ -237,41 +248,15 @@ func runServe(logger *slog.Logger) {
 			}
 		}()
 	}
-	if env.String("CAVEMAN_PROXY_OWNER", "start") == "wrap" {
-		idleTimeout := 30 * time.Minute
-		if raw := env.String("CAVEMAN_NATIVE_IDLE_TIMEOUT", ""); raw != "" {
-			parsed, parseErr := time.ParseDuration(raw)
-			if parseErr != nil || parsed <= 0 {
-				logger.Warn("invalid native idle timeout; using default", "value", raw, "default", idleTimeout)
-			} else {
-				idleTimeout = parsed
-			}
-		}
-		if nativeRuntime != nil {
-			go func() {
-				if nativeRuntime.WaitForIdle(ctx, idleTimeout) {
-					logger.Info("caveman proxy idle; shutting down", "idle_timeout", idleTimeout)
-					cancel()
-				}
-			}()
-		}
-	}
+	// A base URL can outlive the wrapper or any observed hook session. Never
+	// retire its listener on an idle clock, even when an old install exports
+	// CAVEMAN_NATIVE_IDLE_TIMEOUT. Only an explicit stop or process failure ends it.
 
 	handler := server.Handler()
 	if nativeRuntime != nil {
-		// Loopback liveness beacon for the wrap CLI: while a wrapped agent
-		// process is alive its wrap heartbeats here, which holds off the
-		// wrap-owned idle exit above (issue #860). It only refreshes the idle
-		// clock — no session state, no metering, nothing recorded.
-		proxied := handler
-		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/caveman/keepalive" && r.Method == http.MethodPost {
-				nativeRuntime.Keepalive()
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-			proxied.ServeHTTP(w, r)
-		})
+		// Keep accepting heartbeats from older CLIs. Listener lifetime no longer
+		// depends on these beacons or on native session tracking.
+		handler = withKeepalive(handler, nativeRuntime.Keepalive)
 	}
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -296,13 +281,31 @@ func runServe(logger *slog.Logger) {
 	// its requested recovery contract before making a compression claim.
 	state.RecoveryViaMCP = env.String("CAVEMAN_RECOVERY", "") == "mcp"
 	state.CompatUpstreams = compatUpstreams(cfg)
+	state.ProviderUpstreams = standalone.ProviderUpstreams(cfg)
+	state.CompatForwardHeaders = make(map[string][]string)
+	for name, mount := range cfg.CompatUpstreams() {
+		state.CompatForwardHeaders[name] = append([]string(nil), mount.ForwardHeaders...)
+	}
+	srv.Handler = withInstanceIdentity(handler, state.InstanceToken, loopbackListen(cfg.Listen))
 	if err := runstate.Write(home, state); err != nil {
 		_ = listener.Close()
 		logger.Error("cannot write proxy run state", "error", err)
 		os.Exit(1)
 	}
+	// Whether inbound requests are gated is the difference between a loopback
+	// dev proxy and one reachable from a VPC. Log the fact, never the token.
+	inboundAuth := "none"
+	if cfg.AuthToken != "" {
+		inboundAuth = "token"
+		// A token on a loopback listener still gates every request, but the
+		// local `caveman wrap` path sends none — /health/live stays green while
+		// each inference 401s. Say so once here, where it is readable.
+		if loopbackListen(cfg.Listen) {
+			logger.Warn("CAVEMAN_AUTH_TOKEN is set on a loopback listener; local clients must present the token in x-cave-api-key or Authorization: Bearer", "addr", cfg.Listen)
+		}
+	}
 	go func() {
-		logger.Info("caveman proxy listening", "addr", cfg.Listen, "mode", cfg.Mode, "basis", "inferred")
+		logger.Info("caveman proxy listening", "addr", cfg.Listen, "mode", cfg.Mode, "basis", "inferred", "inbound_auth", inboundAuth)
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			logger.Error("proxy stopped", "error", err)
 			cancel()
@@ -315,6 +318,53 @@ func runServe(logger *slog.Logger) {
 	if err := runstate.RemoveMatching(home, state.Port, state.InstanceToken); err != nil {
 		logger.Warn("cannot remove proxy run state", "error", err)
 	}
+}
+
+// withKeepalive answers the no-op beacon older CLIs still send. It sits OUTSIDE
+// the gateway's inbound token gate on purpose: the beacon carries no credential,
+// reads nothing and changes nothing, and a 401 here would make an old CLI log a
+// failure for a call whose only effect is a timestamp.
+func withKeepalive(next http.Handler, beacon func()) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/caveman/keepalive" && r.Method == http.MethodPost {
+			beacon()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// loopbackListen reports whether addr binds only the local machine. It is the
+// one test behind two decisions: whether a token on this listener deserves the
+// startup warning, and whether the instance identity header may be published.
+func loopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// withInstanceIdentity proves that the health listener is the generation named
+// by its run-state file. The token is never attached to inference traffic.
+//
+// loopback gates the whole header: the only consumer is the local CLI matching
+// a run-state file it can already read, so on a shared listener the header
+// hands every unauthenticated /health/live caller a value that correlates
+// restarts and distinguishes instances behind a load balancer, for nothing.
+func withInstanceIdentity(next http.Handler, token string, loopback bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if loopback && r.Method == http.MethodGet && r.URL.Path == "/health/live" {
+			w.Header().Set(runstate.InstanceHeader, token)
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // compatUpstreams flattens the named OpenAI-compatible mounts to name → base URL
@@ -363,16 +413,23 @@ func runStatus(logger *slog.Logger, args []string) {
 		}
 		port = parsed
 	} else {
+		// Status reads the port from the same config the proxy serves on. A config
+		// that does not load says nothing about the listener: report Unknown with
+		// the reason on stderr rather than probing DefaultListen, which would
+		// report some other port's state as if it were this config's.
 		cfg, err := config.Load(env.String("CAVEMAN_CONFIG", filepath.Join(home, "caveman.yaml")))
 		if err != nil {
+			logger.Error("cannot load caveman.yaml; status is unknown", "error", err)
 			printJSON(runstate.Unknown())
 			return
 		}
-		port, err = runstate.PortFromListen(cfg.Listen)
+		parsed, err := runstate.PortFromListen(cfg.Listen)
 		if err != nil {
+			logger.Error("caveman.yaml listen is not a usable address", "listen", cfg.Listen, "error", err)
 			printJSON(runstate.Unknown())
 			return
 		}
+		port = parsed
 	}
 	printJSON(runstate.ReadValidated(home, port))
 }
@@ -400,6 +457,10 @@ func runVersion(args []string) {
 // runStats prints the local spend summary as JSON for `caveman stats`. The
 // summary's basis is always "inferred"; the figures are never re-projected.
 func runStats(logger *slog.Logger, args []string) {
+	if hasArg(args, "--report") {
+		runStatsReport(logger, args)
+		return
+	}
 	home := mustHome(logger)
 	spend, err := store.Open(dbPath(home), logger)
 	if err != nil {

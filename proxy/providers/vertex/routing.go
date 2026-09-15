@@ -28,8 +28,11 @@ var defaultModelPrefixes = []string{"gemini-", "claude-"}
 // endpoint, and resolves the upstream URL. The /vertex prefix is stripped so the
 // upstream path is the native aiplatform path
 // (/v1/projects/{p}/locations/{l}/publishers/{pub}/models/{model}:{method}). The
-// query string (e.g. ?alt=sse) is preserved unchanged — byte-safe passthrough.
+// non-authentication query bytes (e.g. ?alt=sse) are preserved unchanged.
 func (a Adapter) ResolveUpstreamURL(ctx context.Context, req *http.Request, route providers.RouteContext) (*url.URL, error) {
+	if _, err := providers.GoogleRequestAPIKey(req); err != nil {
+		return nil, err
+	}
 	publisher, model, method := parsePredictPath(req.URL.Path)
 	if publisher == "" || model == "" || method == "" {
 		return nil, fmt.Errorf("vertex request path %q does not name a publisher, model, and method", req.URL.Path)
@@ -40,7 +43,7 @@ func (a Adapter) ResolveUpstreamURL(ctx context.Context, req *http.Request, rout
 	if !publisherAllowed(publisher) {
 		return nil, fmt.Errorf("vertex publisher %q is not on the allowlist", publisher)
 	}
-	if !modelAllowed(model) {
+	if !modelAllowed(model) && !anthropicCountTokensPath(publisher, model, method) {
 		return nil, fmt.Errorf("vertex model %q is not on the allowlist", model)
 	}
 
@@ -53,13 +56,13 @@ func (a Adapter) ResolveUpstreamURL(ctx context.Context, req *http.Request, rout
 		return nil, fmt.Errorf("vertex base url invalid: %w", err)
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + strings.TrimPrefix(req.URL.Path, "/vertex")
-	base.RawQuery = req.URL.RawQuery
+	base.RawQuery = providers.WithoutGoogleAPIKeyQuery(req.URL.RawQuery)
 
 	// SSRF/host validation on the resolved endpoint. Active in managed (prod)
 	// mode; local/self-hosted (stub) endpoints are permitted so the dry-run and
 	// examples can target the provider-stub.
 	if env.IsProduction() {
-		if err := ssrf.ValidateURL(ctx, base.String(), ssrf.ManagedConfig()); err != nil {
+		if err := providers.ValidateUpstreamEndpoint(ctx, base, ssrf.ManagedConfig()); err != nil {
 			return nil, err
 		}
 		if host := base.Hostname(); !isVertexHost(host) {
@@ -70,6 +73,11 @@ func (a Adapter) ResolveUpstreamURL(ctx context.Context, req *http.Request, rout
 }
 
 func methodAllowed(publisher, method string) bool {
+	// countTokens is publisher-agnostic on aiplatform: the discovery document
+	// defines projects.locations.publishers.models.countTokens for any publisher.
+	if method == "countTokens" {
+		return publisher == "google" || publisher == "anthropic"
+	}
 	switch publisher {
 	case "google":
 		return method == "generateContent" || method == "streamGenerateContent"
@@ -154,6 +162,15 @@ func locationFromPredictPath(path string) string {
 
 func publisherAllowed(publisher string) bool {
 	return onAllowlist(publisher, allowlist("CAVE_VERTEX_PUBLISHER_ALLOWLIST", defaultPublishers), false)
+}
+
+// anthropicCountTokensPath recognizes the accounting route the Anthropic SDK
+// builds on Vertex, whose model segment is a fixed literal rather than a model
+// id: POST .../publishers/anthropic/models/count-tokens:rawPredict
+// (anthropic-sdk-python, lib/vertex/_client.py). Rejecting it as an unknown
+// model made every count_tokens call from a Vertex-routed Claude client fail.
+func anthropicCountTokensPath(publisher, model, method string) bool {
+	return publisher == "anthropic" && model == "count-tokens" && method == "rawPredict"
 }
 
 func modelAllowed(model string) bool {

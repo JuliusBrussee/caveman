@@ -64,6 +64,11 @@ var countPattern = regexp.MustCompile(`(?i)(?:^|[^\w:.])(\d+[ \t]+(?:failed|fail
 // (go build, tsc, gcc, rustc, eslint) emit the location on its own line with no
 // signal word on it, so failure-line scoping left them unprotected.
 var sourceLocationPatterns = []*regexp.Regexp{
+	// Windows drive/UNC paths may contain spaces. Capture their entire prefix:
+	// matching only "\\repo\\file.go:42" would allow a rewrite to move a frame
+	// from C: to D: (or to a different share) while passing the fidelity gate.
+	regexp.MustCompile(`(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/\x00-\x20"<>|?*:]+[\\/])[^\x00-\x1f"<>|?*:]+:\d+(?::\d+)?`),
+	regexp.MustCompile(`(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/\x00-\x20"<>|?*:]+[\\/])[^\x00-\x1f"<>|?*:]+\(\d+(?:,\d+)?\)`),
 	// path.ext:line[:col]. The :line suffix is mandatory here; a bare path with
 	// no location stays failure-line-scoped, or every mentioned filename would
 	// be frozen into the block.
@@ -139,8 +144,12 @@ func accept(original, rewritten []byte, theta int) string {
 
 	// Locations are the coordinates the agent needs to act on a failure, so they
 	// survive byte-for-byte or not at all — paraphrase does not count.
+	rewrittenLocations := map[string]bool{}
+	for _, loc := range sourceLocations(rew) {
+		rewrittenLocations[loc] = true
+	}
 	for _, loc := range sourceLocations(orig) {
-		if !strings.Contains(rew, loc) {
+		if !rewrittenLocations[loc] {
 			return reasonReference
 		}
 	}

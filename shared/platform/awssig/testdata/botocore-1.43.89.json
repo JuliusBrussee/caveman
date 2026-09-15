@@ -1,0 +1,87 @@
+{
+  "oracle": {
+    "package": "botocore",
+    "version": "1.43.89",
+    "source": "https://github.com/boto/botocore/blob/1.43.89/botocore/auth.py",
+    "methods": [
+      "SigV4Auth.canonical_request",
+      "SigV4Auth.string_to_sign",
+      "SigV4Auth.signature",
+      "S3SigV4Auth._normalize_url_path"
+    ]
+  },
+  "request": {
+    "method": "POST",
+    "region": "us-east-1",
+    "timestamp": "20260907T120000Z",
+    "accessKeyID": "AKIDEXAMPLE",
+    "secretAccessKey": "test-secret",
+    "body": "{\"messages\":[]}",
+    "signedHeaders": "host;x-amz-content-sha256;x-amz-date"
+  },
+  "cases": [
+    {
+      "name": "bedrock plain model",
+      "service": "bedrock",
+      "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude/invoke",
+      "canonicalPath": "/model/anthropic.claude/invoke",
+      "signature": "a8098cf6a2602287e44624380dc3d6511712bf5255aeed8d0384ee5dc2890c82"
+    },
+    {
+      "name": "bedrock versioned model",
+      "service": "bedrock",
+      "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-haiku-20240307-v1:0/invoke",
+      "canonicalPath": "/model/anthropic.claude-3-haiku-20240307-v1%3A0/invoke",
+      "signature": "7efe983710175791cbf2d2d9ce5898bfe2fdac837a34e058d4d159302b41b747"
+    },
+    {
+      "name": "bedrock escaped versioned model",
+      "service": "bedrock",
+      "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-haiku-20240307-v1%3A0/invoke",
+      "canonicalPath": "/model/anthropic.claude-3-haiku-20240307-v1%253A0/invoke",
+      "signature": "ac1ad590245b298bb1ee2a23aa763d8b3521253679e008d7aaa4a90484e1328b"
+    },
+    {
+      "name": "bedrock ARN",
+      "service": "bedrock",
+      "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-haiku-20240307-v1:0/invoke",
+      "canonicalPath": "/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Ainference-profile/us.anthropic.claude-3-haiku-20240307-v1%3A0/invoke",
+      "signature": "d2ccc118f3457b8caffdacd95d123fec510e733a3ec5197408042d6b562993f6"
+    },
+    {
+      "name": "bedrock escaped ARN",
+      "service": "bedrock",
+      "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Ainference-profile%2Fus.anthropic.claude-3-haiku-20240307-v1%3A0/invoke",
+      "canonicalPath": "/model/arn%253Aaws%253Abedrock%253Aus-east-1%253A123456789012%253Ainference-profile%252Fus.anthropic.claude-3-haiku-20240307-v1%253A0/invoke",
+      "signature": "ff48dde91c19994c08fb3d13d5445ae44f368ae8ae1ee52832cb51b1f49cd905"
+    },
+    {
+      "name": "bedrock normalizes slashes and dot segments",
+      "service": "bedrock",
+      "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model//unused/../anthropic.claude/./invoke/",
+      "canonicalPath": "/model/anthropic.claude/invoke/",
+      "signature": "bf9bfdd5c61aae208e4c1b0ea2c4d7fd642cdb2a1877d6575271171781b71bfd"
+    },
+    {
+      "name": "bedrock Mantle",
+      "service": "bedrock-mantle",
+      "url": "https://bedrock-mantle.us-east-1.amazonaws.com/anthropic/v1/messages",
+      "canonicalPath": "/anthropic/v1/messages",
+      "signature": "c8f107153e6d977401cfcd8771ca6d02e5a5d20bcb4e45f0ebe3128c76957f6f"
+    },
+    {
+      "name": "S3 preserves escaped path and dot segments",
+      "service": "s3",
+      "url": "https://s3.us-east-1.amazonaws.com/bucket/folder//../object%3Aname%2Fpart/",
+      "canonicalPath": "/bucket/folder//../object%3Aname%2Fpart/",
+      "signature": "d69be527ead3a20f412eb13f0fb0f56c48776561aaddb3214f0f0254b7c78f5a"
+    },
+    {
+      "name": "S3 preserves unescaped colon",
+      "service": "s3",
+      "url": "https://s3.us-east-1.amazonaws.com/bucket/object:name",
+      "canonicalPath": "/bucket/object:name",
+      "signature": "30c6a850681c022867df2e2bd43b219d96c871a8f29a92b4b797abd61576e8c3"
+    }
+  ]
+}

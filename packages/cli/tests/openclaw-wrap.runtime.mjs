@@ -2,10 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { nativeStub, nodeStub, stubEnv } from "./harness/stub-bin.mjs";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
@@ -14,10 +16,8 @@ function sha256(path) {
 }
 
 function writeOpenClawStub(binDir, body = "") {
-  const stub = join(binDir, "openclaw");
-  writeFileSync(stub, `#!/usr/bin/env node
-${body || `import { existsSync, readFileSync, writeFileSync } from "node:fs";
-const args = process.argv.slice(2);
+  return nodeStub(binDir, "openclaw", body || `import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const args = ARGV;
 const configPath = process.env.OPENCLAW_CONFIG_PATH || "";
 if (args[0] === "mcp") {
   if (configPath) writeFileSync(configPath, (existsSync(configPath) ? readFileSync(configPath, "utf8") : "") + "\\nMUTATED_BY_MCP\\n");
@@ -30,59 +30,93 @@ process.stdout.write(JSON.stringify({
   args,
   config,
   configExistedDuringChild: configPath ? existsSync(configPath) : false,
-}));`}
-`, { mode: 0o755 });
-  return stub;
+}));`);
 }
 
 function runCli(argv, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn("node", [cli, ...argv], { env });
+    const child = spawn(process.execPath, [cli, ...argv], { env, cwd: env.HOME, timeout: 15_000 });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
-    child.on("exit", (code) => resolve({ code, stdout, stderr }));
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
     child.on("error", reject);
   });
 }
 
 function writeWrapConfig(home, wrap) {
   mkdirSync(join(home, ".caveman-cloud"), { recursive: true });
-  // Seed a valid wrap entitlement so the account gate keeps local
-  // compression on — these tests verify the compress-mode overlay + MCP recovery.
-  const wrapEntitlement = {
-    entitled: true, plan: "free", telemetry_level: "metadata",
-    seats_used: 1, seats_limit: 1, devices_used: 1, devices_limit: 3,
-    evicted_device_hash: null, expires_at: new Date(Date.now() + 72 * 3600 * 1000).toISOString(),
-  };
   writeFileSync(
     join(home, ".caveman-cloud", "config.json"),
-    JSON.stringify({ wrap, wrapEntitlement, wrapEntitlementFetchedAt: new Date().toISOString() }, null, 2),
+    JSON.stringify({ wrap }, null, 2),
   );
 }
 
-function fixtureEnv(baseConfigPath, extra = {}) {
-  const home = mkdtempSync(join(tmpdir(), "cave-openclaw-home-"));
-  const caveHome = mkdtempSync(join(tmpdir(), "cave-openclaw-dot-"));
-  const binDir = mkdtempSync(join(tmpdir(), "cave-openclaw-bin-"));
+function temporary(t, prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  return dir;
+}
+
+function fixtureEnv(t, baseConfigPath, extra = {}) {
+  const root = temporary(t, "cave-openclaw fixture ");
+  const home = join(root, "home");
+  const caveHome = join(home, ".caveman");
+  const binDir = join(root, "bin with spaces");
   writeOpenClawStub(binDir);
-  writeWrapConfig(home, { browse: false });
-  const env = {
+  writeWrapConfig(home, { proxy: false, browse: false });
+  const mcpBin = nativeStub(binDir, "caveman-mcp", `
+if (ARGV[0] === "version") process.stdout.write(JSON.stringify({ version: "test", capabilities: ["mcp_recovery"] }));
+`);
+  const env = stubEnv({
     ...process.env,
     NO_COLOR: "1",
+    CI: "1",
+    CAVE_NO_KEYCHAIN: "1",
+    CAVEMAN_TELEMETRY: "0",
     HOME: home,
+    USERPROFILE: home,
     CAVEMAN_HOME: caveHome,
-    PATH: `${binDir}:${process.env.PATH}`,
-  };
+    CAVEMAN_CONFIG: join(caveHome, "caveman.yaml"),
+    CAVEMAN_MCP_BIN: mcpBin,
+    CAVEMAN_PROXY_BIN: join(root, "missing-caveman-proxy"),
+  }, binDir);
   if (baseConfigPath) env.OPENCLAW_CONFIG_PATH = baseConfigPath;
   else delete env.OPENCLAW_CONFIG_PATH;
   delete env.CAVE_GATEWAY_URL;
+  delete env.OPENCLAW_STATE_DIR;
   for (const key of ["OPENAI_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "CAVE_API_KEY", "MYPROV_API_KEY"]) {
     delete env[key];
   }
   Object.assign(env, extra);
   return { env, home, caveHome, binDir };
+}
+
+async function listeningProxy(t, binDir) {
+  const server = createServer((socket) => socket.end());
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const port = server.address().port;
+  const calls = join(binDir, "proxy-calls.jsonl");
+  const binary = nativeStub(binDir, "caveman-proxy", `
+const { appendFileSync } = require("node:fs");
+appendFileSync(${JSON.stringify(calls)}, JSON.stringify(ARGV) + "\\n");
+if (ARGV[0] === "version") process.stdout.write(JSON.stringify({ version: "test", capabilities: ["run_state"] }));
+else if (ARGV[0] === "status") process.stdout.write(JSON.stringify({
+  owner: "start", mode: "compress", recovery_via_mcp: true,
+  pid: ${process.pid}, port: ${port}, instance_token: "fixture-listener",
+  provider_upstreams: { openai: "https://api.openai.com" },
+  compat_upstreams: { myprov: "https://provider.example/v1" },
+  compat_forward_headers: { myprov: ["x-provider-option"] },
+}));
+else if (ARGV[0] === "stats") process.stdout.write("{}");
+else process.exit(1);
+`);
+  return { binary, calls, gateway: `http://127.0.0.1:${port}` };
 }
 
 function apiKeyConfig() {
@@ -98,7 +132,8 @@ function apiKeyConfig() {
         myprov: {
           baseUrl: "https://provider.example/v1",
           apiKey: "${MYPROV_API_KEY}",
-          api: "openai-completions",
+          api: "openai-responses",
+          headers: { "x-provider-option": "preserved" },
           models: [{
             id: "gpt-test",
             name: "GPT Test",
@@ -107,41 +142,34 @@ function apiKeyConfig() {
             cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
             contextWindow: 123456,
             maxTokens: 4096,
-          }],
+            compat: { supportsStore: false, supportsPromptCacheKey: true, supportsInstructions: true },
+          }, { id: "other-model", name: "Other Model", contextWindow: 32768,
+            compat: { supportsStore: true, supportsPromptCacheKey: false, supportsInstructions: false } }],
         },
       },
     },
   }, null, 2);
 }
 
-test("wrap openclaw writes a temp overlay config, preserves user config, and reroutes API-key primary", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cave-openclaw-config-"));
+test("wrap openclaw uses a verified compat mount and preserves provider identity, auth, and catalog", async (t) => {
+  const dir = temporary(t, "cave-openclaw-config-");
   const base = join(dir, "openclaw.json");
   writeFileSync(base, apiKeyConfig());
   const before = sha256(base);
-  const proxyEnv = join(dir, "proxy-env.json");
-  const proxyBin = join(dir, "proxy.mjs");
-  writeFileSync(proxyBin, `#!/usr/bin/env node
-import { writeFileSync } from "node:fs";
-if (process.argv[2] === "stats") { process.stdout.write("{}"); process.exit(0); }
-writeFileSync(${JSON.stringify(proxyEnv)}, JSON.stringify({ recovery: process.env.CAVEMAN_RECOVERY || "" }));
-`, { mode: 0o755 });
-  const { env, caveHome, binDir } = fixtureEnv(base, {
-    CAVE_GATEWAY_URL: "http://127.0.0.1:18809",
-    CAVEMAN_PROXY_BIN: proxyBin,
+  const { env, home, caveHome, binDir } = fixtureEnv(t, base, {
     MYPROV_API_KEY: "sk-myprov-local",
   });
-  writeFileSync(join(binDir, "caveman-mcp"), `#!/usr/bin/env sh
-if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
-  printf '%s\\n' '{"version":"test","capabilities":["mcp_recovery"]}'
-fi
-exit 0
-`, { mode: 0o755 });
+  writeWrapConfig(home, { proxy: true, browse: false });
+  const proxy = await listeningProxy(t, binDir);
+  env.CAVE_GATEWAY_URL = proxy.gateway;
+  env.CAVEMAN_PROXY_BIN = proxy.binary;
 
   const out = await runCli(["wrap", "openclaw"], env);
   assert.equal(out.code, 0, out.stderr);
   assert.equal(sha256(base), before, "wrap must not mutate the user-owned OpenClaw config");
-  assert.equal(JSON.parse(readFileSync(proxyEnv, "utf8")).recovery, "mcp", "overlay MCP must make proxy recovery eligible without persistent install");
+  const calls = readFileSync(proxy.calls, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.ok(calls.some((args) => args[0] === "status"), "routing needs the running proxy's endpoint map");
+  assert.ok(calls.every((args) => ["version", "status", "stats"].includes(args[0])), "wrap must reuse the verified listener without restarting it");
 
   const child = JSON.parse(out.stdout);
   assert.deepEqual(child.args, ["chat"], "profile args must launch openclaw chat");
@@ -152,15 +180,14 @@ exit 0
   assert.equal(existsSync(dirname(child.configPath)), false, "temp overlay directory must be cleaned after child exits");
 
   const cfg = JSON.parse(child.config);
-  assert.equal(cfg.models.providers.caveman.baseUrl, "http://127.0.0.1:18809/w/openclaw/v1");
-  assert.equal(cfg.models.providers.caveman.api, "openai-completions");
-  assert.equal(cfg.models.providers.caveman.apiKey, "sk-myprov-local");
-  assert.equal(cfg.models.providers.caveman.headers["x-cave-agent"], "openclaw");
-  assert.equal(cfg.models.providers.caveman.models[0].id, "gpt-test");
-  assert.equal(cfg.models.providers.caveman.models[0].contextWindow, 123456);
-  assert.equal(cfg.models.providers.caveman.models[0].maxTokens, 4096);
-  assert.equal(cfg.agents.defaults.model.primary, "caveman/gpt-test");
-  assert.deepEqual(cfg.agents.defaults.models["caveman/gpt-test"], { params: { fastMode: true } });
+  const original = JSON.parse(apiKeyConfig());
+  assert.equal(cfg.models.providers.caveman, undefined);
+  assert.equal(cfg.models.providers.myprov.baseUrl, `${proxy.gateway}/w/openclaw/compat/myprov/v1`);
+  assert.equal(cfg.models.providers.myprov.api, "openai-responses");
+  assert.equal(cfg.models.providers.myprov.apiKey, "${MYPROV_API_KEY}");
+  assert.deepEqual(cfg.models.providers.myprov.headers, { "x-provider-option": "preserved", "x-cave-agent": "openclaw" });
+  assert.deepEqual(cfg.models.providers.myprov.models, original.models.providers.myprov.models);
+  assert.deepEqual(cfg.agents, original.agents);
   assert.equal(cfg.mcp.servers.caveman.command, "caveman-mcp");
   assert.deepEqual(cfg.mcp.servers.caveman.args, []);
   assert.equal(cfg.plugins.entries["caveman-shrink"].enabled, true);
@@ -168,14 +195,14 @@ exit 0
   assert.ok(cfg.plugins.load.paths.some((p) => p.startsWith(join(caveHome, "openclaw", "plugins"))));
 });
 
-test("wrap openclaw leaves OAuth primary unchanged and still injects MCP/plugin", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cave-openclaw-oauth-"));
+test("wrap openclaw leaves OAuth primary unchanged and still injects MCP/plugin", async (t) => {
+  const dir = temporary(t, "cave-openclaw-oauth-");
   const base = join(dir, "openclaw.json");
   writeFileSync(base, JSON.stringify({
     agents: { defaults: { model: { primary: "openai-codex/gpt-5" } } },
     models: { providers: { "openai-codex": { auth: "oauth", api: "openai-chatgpt-responses", models: [{ id: "gpt-5", name: "GPT-5" }] } } },
   }));
-  const { env, home } = fixtureEnv(base);
+  const { env, home } = fixtureEnv(t, base);
   writeWrapConfig(home, { proxy: false, browse: false });
 
   const out = await runCli(["wrap", "openclaw"], env);
@@ -189,13 +216,13 @@ test("wrap openclaw leaves OAuth primary unchanged and still injects MCP/plugin"
   assert.equal(cfg.plugins.entries["caveman-shrink"].enabled, true);
 });
 
-test("wrap openclaw treats bare well-known openai primary without env key as OAuth default", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cave-openclaw-openai-oauth-"));
+test("wrap openclaw treats bare well-known openai primary without env key as OAuth default", async (t) => {
+  const dir = temporary(t, "cave-openclaw-openai-oauth-");
   const base = join(dir, "openclaw.json");
   writeFileSync(base, JSON.stringify({
     agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
   }));
-  const { env, home } = fixtureEnv(base);
+  const { env, home } = fixtureEnv(t, base);
   writeWrapConfig(home, { proxy: false, browse: false });
 
   const out = await runCli(["wrap", "openclaw"], env);
@@ -208,46 +235,47 @@ test("wrap openclaw treats bare well-known openai primary without env key as OAu
   assert.equal(cfg.mcp.servers.caveman.command, "caveman-mcp");
 });
 
-test("wrap openclaw reroutes bare well-known openai primary when OPENAI_API_KEY is set", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cave-openclaw-openai-key-"));
+test("wrap openclaw preserves an API-key OpenAI primary without verified proxy routing", async (t) => {
+  const dir = temporary(t, "cave-openclaw-openai-key-");
   const base = join(dir, "openclaw.json");
   writeFileSync(base, JSON.stringify({
     agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
   }));
-  const { env, home } = fixtureEnv(base, { OPENAI_API_KEY: "sk-openai-real" });
+  const { env, home } = fixtureEnv(t, base, { OPENAI_API_KEY: "sk-openai-real" });
   writeWrapConfig(home, { proxy: false, browse: false });
 
   const out = await runCli(["wrap", "openclaw"], env);
   assert.equal(out.code, 0, out.stderr);
   const child = JSON.parse(out.stdout);
   const cfg = JSON.parse(child.config);
-  assert.equal(cfg.agents.defaults.model.primary, "caveman/gpt-5.5");
-  assert.equal(cfg.models.providers.caveman.api, "openai-responses");
-  assert.equal(cfg.models.providers.caveman.apiKey, "sk-openai-real");
-  assert.equal(cfg.models.providers.caveman.baseUrl, "http://127.0.0.1:8787/w/openclaw/v1");
+  assert.equal(cfg.agents.defaults.model.primary, "openai/gpt-5.5");
+  assert.equal(cfg.models?.providers?.caveman, undefined);
+  assert.match(out.stderr, /endpoint is not verified by the running proxy/);
+  assert.equal(cfg.mcp.servers.caveman.command, "caveman-mcp");
 });
 
-test("wrap openclaw managed mode uses Caveman key auth and preserves upstream key header", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cave-openclaw-managed-"));
+test("wrap openclaw managed mode preserves an existing provider without endpoint proof", async (t) => {
+  const dir = temporary(t, "cave-openclaw-managed-");
   const base = join(dir, "openclaw.json");
   writeFileSync(base, apiKeyConfig());
-  const { env, home } = fixtureEnv(base, { CAVE_GATEWAY_URL: "https://gw.example.com", CAVE_API_KEY: "cave-managed-key", MYPROV_API_KEY: "sk-myprov-managed" });
+  const { env, home } = fixtureEnv(t, base, { CAVE_GATEWAY_URL: "https://gw.example.com", CAVE_API_KEY: "cave-managed-key", MYPROV_API_KEY: "sk-myprov-managed" });
   writeWrapConfig(home, { proxy: false, browse: false });
 
   const out = await runCli(["wrap", "openclaw"], env);
   assert.equal(out.code, 0, out.stderr);
   const child = JSON.parse(out.stdout);
   const cfg = JSON.parse(child.config);
-  assert.equal(cfg.models.providers.caveman.baseUrl, "https://gw.example.com/w/openclaw/v1");
-  assert.equal(cfg.models.providers.caveman.apiKey, "cave-managed-key");
-  assert.equal(cfg.models.providers.caveman.headers["x-cave-upstream-key"], "sk-myprov-managed");
-  assert.equal(cfg.models.providers.caveman.headers["x-cave-agent"], "openclaw");
+  assert.deepEqual(cfg.models, JSON.parse(apiKeyConfig()).models);
+  assert.deepEqual(cfg.agents, JSON.parse(apiKeyConfig()).agents);
+  assert.equal(cfg.mcp.servers.caveman.command, "caveman-mcp");
+  assert.equal(cfg.plugins.entries["caveman-shrink"].enabled, true);
+  assert.equal(readFileSync(base, "utf8"), apiKeyConfig());
 });
 
-test("wrap openclaw honors OPENCLAW_STATE_DIR when OPENCLAW_CONFIG_PATH is unset", async () => {
-  const stateDir = mkdtempSync(join(tmpdir(), "cave-openclaw-state-dir-"));
+test("wrap openclaw honors OPENCLAW_STATE_DIR when OPENCLAW_CONFIG_PATH is unset", async (t) => {
+  const stateDir = temporary(t, "cave-openclaw-state-dir-");
   writeFileSync(join(stateDir, "openclaw.json"), apiKeyConfig());
-  const { env, home } = fixtureEnv(undefined, { OPENCLAW_STATE_DIR: stateDir, MYPROV_API_KEY: "sk-state-dir" });
+  const { env, home } = fixtureEnv(t, undefined, { OPENCLAW_STATE_DIR: stateDir, MYPROV_API_KEY: "sk-state-dir" });
   writeWrapConfig(home, { proxy: false, browse: false });
   delete env.OPENCLAW_CONFIG_PATH;
 
@@ -255,12 +283,13 @@ test("wrap openclaw honors OPENCLAW_STATE_DIR when OPENCLAW_CONFIG_PATH is unset
   assert.equal(out.code, 0, out.stderr);
   const child = JSON.parse(out.stdout);
   const cfg = JSON.parse(child.config);
-  assert.equal(cfg.agents.defaults.model.primary, "caveman/gpt-test");
-  assert.equal(cfg.models.providers.caveman.apiKey, "sk-state-dir");
+  assert.equal(cfg.agents.defaults.model.primary, "myprov/gpt-test");
+  assert.deepEqual(cfg.models, JSON.parse(apiKeyConfig()).models);
+  assert.equal(readFileSync(join(stateDir, "openclaw.json"), "utf8"), apiKeyConfig());
 });
 
-test("wrap openclaw parses JSON5 base config with comments and trailing commas", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cave-openclaw-json5-"));
+test("wrap openclaw parses JSON5 base config with comments and trailing commas", async (t) => {
+  const dir = temporary(t, "cave-openclaw-json5-");
   const base = join(dir, "openclaw.json");
   writeFileSync(base, `{
     // OpenClaw supports JSON5-style config files.
@@ -275,42 +304,41 @@ test("wrap openclaw parses JSON5 base config with comments and trailing commas",
       },
     },
   }`);
-  const { env, home } = fixtureEnv(base, { MYPROV_API_KEY: "sk-json5" });
+  const { env, home } = fixtureEnv(t, base, { MYPROV_API_KEY: "sk-json5" });
   writeWrapConfig(home, { proxy: false, browse: false });
 
   const out = await runCli(["wrap", "openclaw"], env);
   assert.equal(out.code, 0, out.stderr);
   const child = JSON.parse(out.stdout);
   const cfg = JSON.parse(child.config);
-  assert.equal(cfg.agents.defaults.model.primary, "caveman/gpt-json5");
-  assert.equal(cfg.models.providers.caveman.models[0].name, "JSON5 Model");
-  assert.equal(cfg.models.providers.caveman.apiKey, "sk-json5");
+  assert.equal(cfg.agents.defaults.model.primary, "myprov/gpt-json5");
+  assert.equal(cfg.models.providers.myprov.models[0].name, "JSON5 Model");
+  assert.equal(cfg.models.providers.myprov.apiKey, "${MYPROV_API_KEY}");
+  assert.equal(cfg.models.providers.caveman, undefined);
 });
 
-test("wrap openclaw with missing base config synthesizes a routed provider when OpenAI auth exists", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cave-openclaw-missing-"));
+test("wrap openclaw fresh local config keeps MCP/plugin without inventing an unverified route", async (t) => {
+  const dir = temporary(t, "cave-openclaw-missing-");
   const missing = join(dir, "does-not-exist.json");
-  const { env, home } = fixtureEnv(missing, { OPENAI_API_KEY: "sk-fresh-openai" });
+  const { env, home } = fixtureEnv(t, missing, { OPENAI_API_KEY: "sk-fresh-openai" });
   writeWrapConfig(home, { proxy: false, browse: false });
 
   const out = await runCli(["wrap", "openclaw"], env);
   assert.equal(out.code, 0, out.stderr);
-  assert.match(out.stderr, /primary model not found; routing fresh config through caveman\/gpt-5\.5/);
+  assert.match(out.stderr, /endpoint is not verified by the running proxy/);
   const child = JSON.parse(out.stdout);
   const cfg = JSON.parse(child.config);
   assert.equal(cfg.mcp.servers.caveman.command, "caveman-mcp");
   assert.equal(cfg.plugins.entries["caveman-shrink"].enabled, true);
-  assert.equal(cfg.agents.defaults.model.primary, "caveman/gpt-5.5");
-  assert.equal(cfg.models.providers.caveman.api, "openai-responses");
-  assert.equal(cfg.models.providers.caveman.apiKey, "sk-fresh-openai");
-  assert.equal(cfg.models.providers.caveman.baseUrl, "http://127.0.0.1:8787/w/openclaw/v1");
-  assert.equal(cfg.models.providers.caveman.models[0].id, "gpt-5.5");
+  assert.equal(cfg.agents?.defaults?.model?.primary, undefined);
+  assert.equal(cfg.models?.providers?.caveman, undefined);
+  assert.equal(existsSync(missing), false);
 });
 
-test("wrap openclaw with missing base config fails closed to direct launch without usable auth", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cave-openclaw-unroutable-"));
+test("wrap openclaw with missing base config fails closed to direct launch without usable auth", async (t) => {
+  const dir = temporary(t, "cave-openclaw-unroutable-");
   const missing = join(dir, "does-not-exist.json");
-  const { env, home } = fixtureEnv(missing);
+  const { env, home } = fixtureEnv(t, missing);
   writeWrapConfig(home, { proxy: false, browse: false });
 
   const out = await runCli(["wrap", "openclaw"], env);
@@ -323,10 +351,10 @@ test("wrap openclaw with missing base config fails closed to direct launch witho
   assert.equal(child.config, "");
 });
 
-test("wrap openclaw managed fresh config uses gateway auth without requiring a BYOK key", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cave-openclaw-managed-fresh-"));
+test("wrap openclaw managed fresh config uses gateway auth without requiring a BYOK key", async (t) => {
+  const dir = temporary(t, "cave-openclaw-managed-fresh-");
   const missing = join(dir, "does-not-exist.json");
-  const { env, home } = fixtureEnv(missing, {
+  const { env, home } = fixtureEnv(t, missing, {
     CAVE_GATEWAY_URL: "https://gw.example.com",
     CAVE_API_KEY: "cave-managed-key",
   });
@@ -342,12 +370,12 @@ test("wrap openclaw managed fresh config uses gateway auth without requiring a B
   assert.equal(cfg.models.providers.caveman.headers["x-cave-upstream-key"], undefined);
 });
 
-test("bare caveman openclaw hoists --pixel to wrap and does not pass it to OpenClaw", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cave-openclaw-pixel-"));
+test("bare caveman openclaw hoists --pixel to wrap and does not pass it to OpenClaw", async (t) => {
+  const dir = temporary(t, "cave-openclaw-pixel-");
   const base = join(dir, "openclaw.json");
   writeFileSync(base, apiKeyConfig());
-  const { env, binDir } = fixtureEnv(base);
-  writeOpenClawStub(binDir, "process.stdout.write(process.argv.slice(2).join('|'));");
+  const { env, binDir } = fixtureEnv(t, base);
+  writeOpenClawStub(binDir, "process.stdout.write(ARGV.join('|'));");
 
   const out = await runCli(["openclaw", "--pixel"], env);
   assert.equal(out.code, 0, out.stderr);

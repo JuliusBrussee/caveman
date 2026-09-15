@@ -10,10 +10,12 @@
  * Firefox or web-ext: those runs print a SKIP line and exit 0.
  *
  * Run: npm run test:firefox            (or: node scripts/firefox-e2e.mjs)
- * Env: FIREFOX_BIN overrides the Firefox executable probe.
+ * Env: FIREFOX_BIN overrides the Firefox executable probe; WEB_EXT_BIN selects
+ * an already-installed web-ext JavaScript CLI. This script never installs tools.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, cpSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,21 +64,32 @@ function findFirefox() {
   return hit ? { path: hit } : { missing: "no Firefox executable found (install Firefox or set FIREFOX_BIN)" };
 }
 
-function hasWebExt() {
-  // --no-install first (fast when cached); fall back to a plain npx (registry is
-  // reachable even where the playwright CDN is not). Any failure → SKIP.
-  for (const cmd of [
-    "npx --no-install web-ext --version",
-    "npx web-ext --version",
-  ]) {
+function findWebExt() {
+  if (process.env.WEB_EXT_BIN) return existsSync(process.env.WEB_EXT_BIN) ? resolve(process.env.WEB_EXT_BIN) : null;
+  const require = createRequire(import.meta.url);
+  for (const base of [EXT_ROOT, dirname(process.execPath), resolve(dirname(process.execPath), "../lib")]) {
     try {
-      const r = spawnSync(cmd, { cwd: EXT_ROOT, shell: true, encoding: "utf8", timeout: 90000 });
-      if (r.status === 0 && /^\d+\.\d+/.test(String(r.stdout || "").trim())) return true;
+      // web-ext exports its root entry but not package.json.
+      const manifest = join(dirname(require.resolve("web-ext", { paths: [base] })), "package.json");
+      const pkg = JSON.parse(readFileSync(manifest, "utf8"));
+      const bin = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.["web-ext"];
+      if (bin) return resolve(dirname(manifest), bin);
     } catch {
-      /* try next */
+      /* try the next installed package location */
     }
   }
-  return false;
+  return null;
+}
+
+// Run JavaScript through Node with an argv array on every OS. In particular,
+// Windows .cmd quoting and spaces/metacharacters in TEMP never reach a shell.
+export function webExtInvocation(cli, sourceDir, firefox, bidiPort) {
+  return {
+    command: process.execPath,
+    args: [cli, "run", "--source-dir", sourceDir, "--firefox", firefox, "--start-url", "about:blank",
+      "--no-reload", "--verbose", `--args=--remote-debugging-port=${bidiPort}`],
+    options: { cwd: EXT_ROOT, shell: false, stdio: ["ignore", "pipe", "pipe"] },
+  };
 }
 
 // ── results ────────────────────────────────────────────────────────────────
@@ -88,7 +101,7 @@ function record(name, ok, detail) {
 
 const ffVersion = (binary) => {
   try {
-    const r = spawnSync(`"${binary}" --version`, { shell: true, encoding: "utf8", timeout: 15000 });
+    const r = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 15000 });
     return String(r.stdout || r.stderr || "").trim().split("\n")[0] || "unknown";
   } catch {
     return "unknown";
@@ -100,12 +113,12 @@ async function main() {
   const found = findFirefox();
   if (found.missing) skip(found.missing);
   const ff = found.path;
-  if (!hasWebExt()) skip("web-ext unavailable (npx web-ext --version failed)");
+  const webExt = findWebExt();
+  if (!webExt) skip("web-ext unavailable (install web-ext or set WEB_EXT_BIN to its JavaScript CLI)");
 
   log(`firefox-e2e: ${ff} — ${ffVersion(ff)}`);
   const bidiPort = await freePort();
-  const work = join(tmpdir(), `caveman-firefox-e2e-${process.pid}`);
-  rmSync(work, { recursive: true, force: true });
+  const work = mkdtempSync(join(tmpdir(), "caveman-firefox-e2e-"));
   mkdirSync(work + "/scratch", { recursive: true });
 
   let wex = null;
@@ -113,7 +126,7 @@ async function main() {
   let server = null;
   try {
     // 1. build the Firefox stage (single source of packaging truth), copy to scratch
-    const b = spawnSync("node", ["scripts/build-extension-zip.mjs", "firefox"], { cwd: EXT_ROOT, encoding: "utf8", timeout: 60000 });
+    const b = spawnSync(process.execPath, ["scripts/build-extension-zip.mjs", "firefox"], { cwd: EXT_ROOT, encoding: "utf8", timeout: 60000 });
     if (b.status !== 0) throw new Error("firefox stage build failed: " + String(b.stderr || b.stdout).slice(-300));
     cpSync(join(EXT_ROOT, "dist/stage"), work + "/scratch", { recursive: true });
     // 2. patch the THROWAWAY copy only: localhost match (NO port — Firefox match
@@ -133,7 +146,7 @@ async function main() {
     const harnessPort = await freePort();
     const HARNESS_HTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>FF harness</title>
 <style>body{font:14px system-ui;max-width:640px;margin:40px auto}#transcript div{padding:6px 10px;margin:4px 0;background:#f0f0f0;white-space:pre-wrap}#prompt-textarea{border:1px solid #ccc;border-radius:8px;padding:10px;min-height:44px}button{margin-top:8px;padding:8px 14px}</style></head>
-<body><h3>Mock chat (Firefox e2e)</h3><div id="transcript"></div><div id="prompt-textarea" class="ProseMirror" contenteditable="true" role="textbox"></div><button data-testid="send-button">Send</button>
+<body><h3>Mock chat (Firefox e2e)</h3><div id="transcript"></div><section><div id="prompt-textarea" class="ProseMirror" contenteditable="true" role="textbox"></div><button data-testid="send-button">Send</button></section>
 <script>
 const ed=document.getElementById("prompt-textarea"), sb=document.querySelector('button[data-testid="send-button"]'), tr=document.getElementById("transcript");
 function appSend(){const t=(ed.innerText||"").replace(/\\u00a0/g," ").trim(); if(!t) return; const m=document.createElement("div"); m.setAttribute("data-message-author-role","user"); m.textContent=t; tr.appendChild(m); ed.innerHTML="";}
@@ -148,15 +161,21 @@ window.cavemanTest={transcript(){return[...tr.querySelectorAll("div")].map(d=>d.
     await new Promise((r) => server.listen(harnessPort, "127.0.0.1", r));
 
     // 4. web-ext run: installs the add-on, and --args opens the BiDi agent on the same instance
-    wex = spawn(
-      `npx web-ext run --source-dir ${work}/scratch --firefox "${ff}" --start-url about:blank --no-reload --verbose --args=--remote-debugging-port=${bidiPort}`,
-      { cwd: EXT_ROOT, shell: true, stdio: ["ignore", "pipe", "pipe"] },
-    );
-    let _installed = null;
-    const installed = new Promise((r) => { _installed = r; });
-    wex.stdout.on("data", (d) => { if (String(d).includes("temporary add-on")) _installed && _installed(); });
-    wex.stderr.on("data", () => {});
-    await Promise.race([installed, sleep(90000).then(() => { throw new Error("web-ext did not install the add-on within 90s"); })]);
+    const invocation = webExtInvocation(webExt, join(work, "scratch"), ff, bidiPort);
+    wex = spawn(invocation.command, invocation.args, invocation.options);
+    await new Promise((accept, reject) => {
+      const timer = setTimeout(() => reject(new Error("web-ext did not install the add-on within 90s")), 90000);
+      let output = "";
+      const finish = (error) => { clearTimeout(timer); error ? reject(error) : accept(); };
+      const read = (data) => {
+        output = (output + String(data)).slice(-4000);
+        if (output.includes("temporary add-on")) finish();
+      };
+      wex.stdout.on("data", read);
+      wex.stderr.on("data", read);
+      wex.once("error", finish);
+      wex.once("exit", (code, signal) => finish(new Error(`web-ext exited before installation (${code ?? signal}): ${output.slice(-300)}`)));
+    });
 
     let agentUp = false;
     for (let i = 0; i < 40; i++) {
@@ -225,10 +244,12 @@ window.cavemanTest={transcript(){return[...tr.querySelectorAll("div")].map(d=>d.
     record("zero extension-sourced console errors", extErrors.length === 0, extErrors.slice(0, 4).join(" | "));
   } finally {
     try { ws?.close(); } catch { /* ignore */ }
-    try { wex?.kill(); } catch { /* ignore */ }
     if (wex?.pid && process.platform === "win32") {
+      // Kill the tree while its root still exists; killing Node first can leave
+      // Firefox orphaned because taskkill can no longer resolve the parent PID.
       try { spawnSync("taskkill", ["/PID", String(wex.pid), "/T", "/F"], { timeout: 10000 }); } catch { /* ignore */ }
     }
+    try { wex?.kill(); } catch { /* ignore */ }
     await sleep(800);
     try { server?.close(); } catch { /* ignore */ }
     rmSync(work, { recursive: true, force: true });
@@ -240,7 +261,7 @@ window.cavemanTest={transcript(){return[...tr.querySelectorAll("div")].map(d=>d.
 }
 
 // Top-level only: every exit happens here, after main()'s finally has run.
-main()
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()
   .then((code) => process.exit(code))
   .catch((e) => {
     if (e instanceof SkipError) {

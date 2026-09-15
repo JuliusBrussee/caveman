@@ -8,6 +8,7 @@ packages:
   - "packages/device-auth"
   - "packages/pi-extension"
   - "packages/sdk/typescript"
+  - "packages/middleware/typescript"
   - "packages/shared/contracts"
   - "shared/provider-catalog"
   - "packages/subagent-tax"

@@ -1,6 +1,6 @@
 {
   "name": "@caveman-ai/sdk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Zero-dependency TypeScript client for Caveman gateway tracing, tool deferral, checkpoints, and recoverable compression.",
   "license": "MIT",
   "type": "module",
@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./middleware": {
+      "types": "./dist/middleware/index.d.ts",
+      "import": "./dist/middleware/index.js"
     }
   },
   "files": [

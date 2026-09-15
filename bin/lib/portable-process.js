@@ -9,9 +9,7 @@ function envValue(env, name) {
 }
 
 function resolveWindowsCommand(command, env = process.env) {
-  if (path.isAbsolute(command) || /[\\/]/.test(command)) {
-    return fs.existsSync(command) ? command : null;
-  }
+  const hasPath = path.isAbsolute(command) || /[\\/]/.test(command);
   const pathExt = envValue(env, 'PATHEXT') || '.COM;.EXE;.BAT;.CMD';
   // Extensionless commands resolve only through PATHEXT, matching Windows
   // semantics. npm/pnpm .bin dirs place a non-executable Unix shim under the
@@ -21,11 +19,14 @@ function resolveWindowsCommand(command, env = process.env) {
     ? [command]
     : pathExt.split(';').map(extension =>
       `${command}${extension.startsWith('.') ? extension : `.${extension}`}`);
-  for (const directory of (envValue(env, 'PATH') || '').split(';')) {
+  // Absolute and relative paths follow the same PATHEXT rule as bare names.
+  // An extensionless npm shim is still a POSIX script when supplied by path.
+  const directories = hasPath ? ['.'] : (envValue(env, 'PATH') || '').split(';');
+  for (const directory of directories) {
     if (!directory) continue;
     for (const name of names) {
-      const candidate = path.join(directory, name);
-      if (fs.existsSync(candidate)) return candidate;
+      const candidate = hasPath ? name : path.join(directory.replace(/^"(.*)"$/, '$1'), name);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch (_) {}
     }
   }
   return null;

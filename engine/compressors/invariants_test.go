@@ -867,6 +867,18 @@ func TestTinyLogClassesAreNotElided(t *testing.T) {
 // TestNDJSONLinesSummarizeAsEvents: a line that is a whole JSON object is read as
 // one, not run through the logfmt matcher that cannot see `"k":"v"`. Without this
 // the entire NDJSON event-stream class summarized to a bare count.
+func TestMalformedNDJSONSuffixDoesNotProduceJSONInvariants(t *testing.T) {
+	const event = `{"id":"event-123","state":"delivered"}`
+	if fields := lineFields([]byte(event)); len(fields) == 0 {
+		t.Fatal("valid fixture must expose JSON event fields")
+	}
+	for _, suffix := range []string{"}", " }", "]}", " {}"} {
+		if fields := lineFields([]byte(event + suffix)); len(fields) != 0 {
+			t.Fatalf("malformed suffix=%q produced JSON event facts: %+v", suffix, fields)
+		}
+	}
+}
+
 func TestNDJSONLinesSummarizeAsEvents(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 60; i++ {

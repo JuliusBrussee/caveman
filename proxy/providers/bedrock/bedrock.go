@@ -22,6 +22,7 @@ type Adapter struct {
 //	POST /bedrock/model/{modelId}/invoke-with-response-stream
 //	POST /bedrock/model/{modelId}/converse
 //	POST /bedrock/model/{modelId}/converse-stream
+//	POST /bedrock/model/{modelId}/count-tokens
 //	POST /bedrock/anthropic/v1/messages
 //	POST /bedrock/anthropic/v1/messages/count_tokens
 var Routes = []string{"/bedrock/model/", "/bedrock/anthropic/"}

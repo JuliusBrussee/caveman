@@ -17,9 +17,21 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+// The `/v1` is not decoration. Codex's OpenAI-Responses client appends
+// "/responses" onto base_url itself, exactly as it does against the real
+// api.openai.com, so the route the proxy actually receives is
+// `base_url + "/responses"`. The proxy's allowlist is closed and exact
+// (proxy/providers/openai/openai.go Routes), and it holds "/v1/responses",
+// never "/responses" — so a base_url without the "/v1" 404s with
+// cave_route_not_found before a single request reaches OpenAI (#1045).
+// Same convention aider already uses (`/w/aider/openai/v1`).
 function attributed(gw) {
-  return `${gw.replace(/\/+$/, "")}/w/codex`;
+  return `${gw.replace(/\/+$/, "")}/w/codex/v1`;
 }
+
+// What Codex builds from it, and what the proxy sees after it strips `/w/codex`.
+const CODEX_CLIENT_SUFFIX = "/responses";
+const PROXY_OPENAI_ROUTE = "/v1/responses";
 
 function snapshotTree(root) {
   if (!existsSync(root)) return [];
@@ -168,9 +180,31 @@ test("wrap codex API-key auth uses an ephemeral native home and leaves real ~/.c
   assert.equal(existsSync(dump.env.CODEX_HOME), false, "ephemeral home must be cleaned");
   assert.equal(dump.env.OPENAI_BASE_URL, null);
   assert.match(dump.config, new RegExp(`base_url = "${attributed(GW).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
+  // Pin the whole contract, not just the string: what Codex concatenates has to
+  // land on a route the proxy's closed allowlist actually holds.
+  assert.equal(
+    `${attributed(GW)}${CODEX_CLIENT_SUFFIX}`.slice(`${GW}/w/codex`.length),
+    PROXY_OPENAI_ROUTE,
+  );
   assert.match(dump.hooks, /native-hook codex/);
   assert.doesNotMatch(dump.hooks, /shrink-hook/, "shrink:false must omit command rewrite");
   assert.deepEqual(snapshotTree(fx.codexDir), before);
+});
+
+// The README has said all along that "Codex skips the shrink hook because its
+// runtime rejects the rewrite" (openai/codex#18491), but no door implemented it —
+// wrap registered the hook whenever compression was on. Since #1037 shrinkHook
+// declines every Codex tool event, so the entry only bought a node spawn per tool
+// call. shrink:false already omits it (asserted above); the DEFAULT must too.
+test("wrap codex omits the shrink hook even with compression left on", async () => {
+  const fx = fixture({ agents: undefined, skills: false });
+  writeWrapConfig(fx.home, { proxy: false, mcp: false, browse: false });
+
+  const out = await runCli(fx, ["wrap", "codex"], GW);
+  assert.equal(out.code, 0, out.stderr);
+  const dump = readDump(fx);
+  assert.match(dump.hooks, /native-hook codex/, "the lifecycle hook must still be registered");
+  assert.doesNotMatch(dump.hooks, /shrink-hook/, "Codex rewrites nothing — do not register a dead hook");
 });
 
 test("wrap codex with missing auth.json still uses ephemeral native home", async () => {

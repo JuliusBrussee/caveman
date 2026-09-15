@@ -300,9 +300,9 @@ Reads the session JSON Claude Code pipes to it on stdin, extracts `session_id` (
 
 Stdin is bounded the same way as the SessionStart hook: `[ ! -t 0 ]` skips an interactive terminal, and `read -r -d '' -t 1` caps the wait. The timeout is an **integer on purpose** — macOS ships bash 3.2, which rejects `-t 0.3` with `invalid timeout specification`.
 
-Then appends the lifetime-savings suffix (`⛏ 12.4k`) read from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` — written by `caveman-stats.js` on every `/caveman-stats` run. **Default on**; users opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`. The suffix file is absent until `/caveman-stats` runs at least once, so fresh installs render no fake number.
+The statusline reports mode only. Old `.caveman-statusline-suffix` values are ignored; fixed-ratio savings estimates were removed because no measured baseline supported them. `/caveman-stats` records actual Claude output/cache-read counts and mode attribution with savings unknown. Gemini uses native `/stats model` and `/stats session`; never read Claude transcripts as another host's usage.
 
-Configured in `settings.json` under `statusLine.command`. PowerShell counterpart at `src/hooks/caveman-statusline.ps1` for Windows. Both scripts symlink-refuse and whitelist-validate the flag/suffix file contents — never echo arbitrary bytes.
+Configured in `settings.json` under `statusLine.command`. PowerShell counterpart at `src/hooks/caveman-statusline.ps1` for Windows. Both scripts symlink-refuse and whitelist-validate mode flag contents — never echo arbitrary bytes.
 
 ### Hook installation
 
@@ -312,7 +312,7 @@ Configured in `settings.json` under `statusLine.command`. PowerShell counterpart
 
 The `install.sh` / `install.ps1` shims at the repo root delegate to `bin/install.js` via `node` (local clone) or `npx -y github:JuliusBrussee/caveman` (curl|bash). No legacy fallback path remains — earlier `install.sh.legacy` / `install.ps1.legacy` files were removed.
 
-**Uninstall** — `npx -y github:JuliusBrussee/caveman -- --uninstall` (or `node bin/install.js --uninstall` from a clone). Strips caveman hook entries from `settings.json` via substring marker `caveman`, deletes hook files, and removes the Claude plugin / Gemini extension. Skill installs done via `npx skills add` must be removed via the IDE's skill manager (we don't track them).
+**Uninstall** — `npx -y github:JuliusBrussee/caveman -- --uninstall` (or `node bin/install.js --uninstall` from a clone). Strips caveman hook entries from `settings.json` via substring marker `caveman`, deletes hook files, and removes the Claude plugin / Gemini extension. Native skill copies use `bin/lib/provider-skills.js` and ownership journals; uninstall removes unchanged owned files while preserving foreign or edited content. Use the same vendor home overrides for install and uninstall. Delegated `npx skills add` installs remain managed by the host/upstream skill manager.
 
 ---
 
@@ -357,7 +357,8 @@ How caveman reaches each agent type:
 | Windsurf | `npx skills add ... -a windsurf` (default via `--only windsurf`); per-repo `.windsurf/rules/caveman.md` via `--with-init` | Yes — always-on rule |
 | Cline | `npx skills add ... -a cline` (default via `--only cline`); per-repo `.clinerules/caveman.md` via `--with-init` | Yes — Cline auto-discovers `.clinerules/` |
 | Copilot | `npx skills add ... -a github-copilot` (soft probe — pass `--only copilot`); per-repo `.github/copilot-instructions.md` + `AGENTS.md` via `--with-init` | Yes — repo-wide instructions |
-| Others (Junie, Trae, Warp, Tabnine, Mistral, Qwen, Devin, Droid, ForgeCode, Bob, Crush, iFlow, OpenHands, Qoder, Rovo Dev, Replit, Antigravity, …) | `npx skills add JuliusBrussee/caveman -a <profile>` | No — user must say `/caveman` each session |
+| Continue, AiderDesk, Antigravity IDE/2.0 | Owned physical copies into each vendor's supported directory, honoring configured homes; separate explicit targets for the two Antigravity products | Host skill invocation; feature settings may be required |
+| Others (Junie, Trae, Warp, Tabnine, Mistral, Qwen, Devin, Droid, ForgeCode, Bob, Crush, iFlow, OpenHands, Qoder, Rovo Dev, Replit, …) | Delegated `npx skills` personal installs; Replit uses project scope. Configured iFlow/Crush roots use owned copies | Host skill invocation; `/caveman` where supported |
 
 opencode reaches Tier 1 minus the statusline (opencode's TUI has no plugin-writable badge). Mode flag lives at `~/.config/opencode/.caveman-active` for any external tooling that wants to surface it.
 

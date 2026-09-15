@@ -13,6 +13,7 @@
   <body>
     <h3>Mock chat (ChatGPT-shaped DOM)</h3>
     <div id="transcript"></div>
+    <section>
     <div
       id="prompt-textarea"
       class="ProseMirror"
@@ -20,6 +21,7 @@
       role="textbox"
     ></div>
     <button data-testid="send-button">Send</button>
+    </section>
 
     <script>
       // --- stub chrome.storage so the real content script runs unmodified ---

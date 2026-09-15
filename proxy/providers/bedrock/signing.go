@@ -2,6 +2,7 @@ package bedrock
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,11 @@ import (
 	"github.com/JuliusBrussee/caveman/shared/platform/awssig"
 )
 
+// ErrSigV4Configuration is safe to show to the caller: it contains no credential
+// material. An inbound signature is not a reusable credential after the proxy
+// changes the request authority/path or body.
+var ErrSigV4Configuration = errors.New("AWS SigV4 requests require matching AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN (when used), and region in the proxy process; configure them or use a Bedrock bearer API key")
+
 // SanitizeAndMapHeaders builds the upstream header set for Bedrock Runtime or
 // Mantle. Bedrock API keys use a bearer on Runtime and x-api-key on Mantle. IAM
 // access keys are SigV4-signed with the endpoint's distinct service name.
@@ -23,7 +29,9 @@ import (
 func (a Adapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, credential providers.Credential, upstream *url.URL) (http.Header, error) {
 	out := http.Header{}
 	copyIfPresent(out, req.Header, "content-type")
+	copyIfPresent(out, req.Header, "content-encoding")
 	copyIfPresent(out, req.Header, "accept")
+	copyIfPresent(out, req.Header, "accept-encoding")
 	mantle := endpointKindForPath(req.URL.Path) == endpointMantle
 	if mantle {
 		copyIfPresent(out, req.Header, "anthropic-version")
@@ -37,6 +45,10 @@ func (a Adapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, c
 		copyIfPresent(out, req.Header, "x-amzn-bedrock-service-tier")
 		copyIfPresent(out, req.Header, "x-amzn-bedrock-trace")
 	}
+	// Before the signature below covers these headers: a caller must not be able
+	// to nominate a signed header (x-amz-date, x-amz-security-token) — or the
+	// Authorization header itself — for removal after this hop builds it.
+	providers.RemoveConnectionHeaders(out, req.Header)
 	if out.Get("content-type") == "" {
 		out.Set("content-type", "application/json")
 	}
@@ -44,6 +56,9 @@ func (a Adapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, c
 	authKind, err := credentialAuthKind(credential)
 	if err != nil {
 		return nil, err
+	}
+	if credential.Scheme == "sigv4" && authKind != "aws_access_keys" {
+		return nil, ErrSigV4Configuration
 	}
 	if authKind == "bedrock_api_key" {
 		key := strings.TrimSpace(credential.Key)
@@ -60,6 +75,9 @@ func (a Adapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, c
 
 	creds, err := parseAWSCredentials(credential.Key)
 	if err != nil {
+		if credential.Scheme == "sigv4" {
+			return nil, ErrSigV4Configuration
+		}
 		return nil, err
 	}
 
@@ -74,6 +92,9 @@ func (a Adapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, c
 		if err != nil {
 			return nil, err
 		}
+	}
+	if credential.Scheme == "sigv4" && !matchesInboundSigningIdentity(req, upstream, creds) {
+		return nil, ErrSigV4Configuration
 	}
 
 	// Build a synthetic request carrying the upstream host/path/query and the
@@ -107,6 +128,41 @@ func (a Adapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, c
 		}
 	}
 	return out, nil
+}
+
+// matchesInboundSigningIdentity prevents a configured key or region from
+// silently replacing the principal/region selected by the SDK. This checks the
+// caller's scope claim, not the validity of its old signature: the standalone
+// loopback proxy is not an IAM authenticator. The signer below creates a new
+// signature covering the actual upstream authority, headers, and body.
+func matchesInboundSigningIdentity(req *http.Request, upstream *url.URL, creds awssig.Credentials) bool {
+	if len(req.Header.Values("Authorization")) != 1 {
+		return false
+	}
+	scheme, fields, ok := strings.Cut(strings.TrimSpace(req.Header.Get("Authorization")), " ")
+	if !ok || !strings.EqualFold(scheme, "AWS4-HMAC-SHA256") {
+		return false
+	}
+	values := make(map[string]string, 3)
+	for _, field := range strings.Split(fields, ",") {
+		name, value, ok := strings.Cut(strings.TrimSpace(field), "=")
+		if !ok || value == "" || values[name] != "" {
+			return false
+		}
+		values[name] = value
+	}
+	if len(values) != 3 || values["SignedHeaders"] == "" || values["Signature"] == "" {
+		return false
+	}
+	scope := strings.Split(values["Credential"], "/")
+	service := runtimeService
+	if endpointKindForPath(req.URL.Path) == endpointMantle {
+		service = mantleService
+	}
+	return len(scope) == 5 && scope[0] == creds.AccessKeyID && len(scope[1]) == 8 &&
+		scope[2] == signingRegion(req, upstream) && scope[3] == service && scope[4] == "aws4_request" &&
+		req.Header.Get("X-Amz-Security-Token") == creds.SessionToken &&
+		(!strings.HasPrefix(creds.AccessKeyID, "ASIA") || creds.SessionToken != "")
 }
 
 // requestPayloadHash returns the hash of the exact post-transform wire body.

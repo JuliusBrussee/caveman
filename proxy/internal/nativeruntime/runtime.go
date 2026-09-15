@@ -232,6 +232,14 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 	request.Profile = profile
 	r.mu.Lock()
 	r.lastActivity = time.Now()
+	// Listener lifetime is independent of session bookkeeping. Prune abandoned
+	// correlation entries lazily so a persistent proxy does not retain them
+	// forever when a host disappears without session.end.
+	for sessionID, activity := range r.activeSessions {
+		if r.lastActivity.Sub(activity.At) >= 30*time.Minute {
+			delete(r.activeSessions, sessionID)
+		}
+	}
 	if request.Event.Type == "session.end" {
 		delete(r.activeSessions, request.Session.ID)
 	} else {
@@ -511,42 +519,6 @@ func (r *Runtime) Keepalive() {
 	r.mu.Lock()
 	r.lastActivity = time.Now()
 	r.mu.Unlock()
-}
-
-// WaitForIdle returns true only after every observed session ended and timeout
-// elapsed. Explicit long-running gateway owners do not call it.
-func (r *Runtime) WaitForIdle(ctx context.Context, idleTimeout time.Duration) bool {
-	if idleTimeout <= 0 {
-		return false
-	}
-	poll := idleTimeout / 4
-	if poll < 10*time.Millisecond {
-		poll = 10 * time.Millisecond
-	}
-	if poll > time.Second {
-		poll = time.Second
-	}
-	ticker := time.NewTicker(poll)
-	defer ticker.Stop()
-	for {
-		now := time.Now()
-		r.mu.Lock()
-		for sessionID, activity := range r.activeSessions {
-			if now.Sub(activity.At) >= idleTimeout {
-				delete(r.activeSessions, sessionID)
-			}
-		}
-		active, last := len(r.activeSessions), r.lastActivity
-		r.mu.Unlock()
-		if active == 0 && time.Since(last) >= idleTimeout {
-			return true
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-ticker.C:
-		}
-	}
 }
 
 // startRepositoryEvidence warms deterministic repository metadata outside hook

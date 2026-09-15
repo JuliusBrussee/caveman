@@ -7,10 +7,14 @@ package standalone
 
 import (
 	"context"
+	"crypto/subtle"
+	"crypto/tls"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/engine"
@@ -26,17 +30,64 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/providers/openai"
 	"github.com/JuliusBrussee/caveman/proxy/providers/openaicompat"
 	"github.com/JuliusBrussee/caveman/proxy/providers/vertex"
+	"github.com/JuliusBrussee/caveman/shared/platform/awscreds"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
 	"github.com/JuliusBrussee/caveman/shared/platform/ssrf"
 )
 
-// Auth is the single-operator authenticator: it accepts every request and
-// returns a static context built from caveman.yaml. There is no multi-tenant key
-// to validate — the proxy listens on loopback for one operator.
-type Auth struct{ rc gateway.RequestContext }
+// Auth is the single-operator authenticator: it returns a static context built
+// from caveman.yaml. There is still no multi-tenant key to validate — token is
+// one shared secret (CAVEMAN_AUTH_TOKEN), and it exists only so an operator can
+// bind past loopback (config.validateListen refuses that bind without it).
+type Auth struct {
+	rc    gateway.RequestContext
+	token string
+}
+
+// errInboundTokenRejected is deliberately uniform: the gateway maps any non-nil
+// error to 401 cave_unauthorized, and an error that told a missing token apart
+// from a wrong one would be an oracle for the caller probing the port. The
+// operator still sees that the gate fired — gateway.Server.rejectUnauthorized
+// logs the path and remote host and counts cave_proxy_unauthorized_total — so
+// the silence here costs no observability.
+var errInboundTokenRejected = errors.New("inbound token rejected")
 
 func (a Auth) Authenticate(ctx context.Context, r *http.Request) (gateway.RequestContext, error) {
-	return a.rc, nil
+	if a.token == "" {
+		// Loopback single-operator mode, unchanged: accept everything.
+		return a.rc, nil
+	}
+	// The token is OURS, not the provider's, so it must not leave this hop — and
+	// it must not still be in the header set when Creds.Resolve and
+	// ClassifyResolvedAuthMode read the request, or the operator's shared secret
+	// gets classified (and forwarded) as a provider credential. x-cave-api-key is
+	// a caveman header, so it always goes. Authorization goes ONLY when it
+	// carried the token: a real provider bearer (Claude Pro/Max OAuth, the
+	// /chatgpt/ ChatGPT login) arrives in that same header and the request dies
+	// without it.
+	accepted := false
+	if presented := strings.TrimSpace(r.Header.Get("x-cave-api-key")); presented != "" {
+		r.Header.Del("x-cave-api-key")
+		accepted = tokenEqual(presented, a.token)
+	}
+	// Checked even when x-cave-api-key already matched: a client that hedges and
+	// sends the token in both headers would otherwise leave it in Authorization,
+	// which every adapter forwards.
+	if scheme, value, ok := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " "); ok &&
+		strings.EqualFold(scheme, "Bearer") && tokenEqual(strings.TrimSpace(value), a.token) {
+		r.Header.Del("Authorization")
+		accepted = true
+	}
+	if accepted {
+		return a.rc, nil
+	}
+	return gateway.RequestContext{}, errInboundTokenRejected
+}
+
+// tokenEqual compares a presented secret in constant time so the port cannot be
+// used to recover the token one byte at a time.
+func tokenEqual(presented, token string) bool {
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(token)) == 1
 }
 
 // Creds preserves a real inbound provider credential first; otherwise it falls
@@ -45,18 +96,88 @@ func (a Auth) Authenticate(ctx context.Context, r *http.Request) (gateway.Reques
 // work as a Bearer, never as x-api-key). Placeholder bearer tokens are preserved
 // here so the gateway's upstream-header fallback can replace only that narrow
 // case and log it.
-type Creds struct{ cfg config.Config }
+type Creds struct {
+	cfg config.Config
+	// bedrock is the AWS default credential chain (task role, pod identity,
+	// IRSA, instance profile) consulted only after the env pair says nothing.
+	// Nil (hand-built Creds in tests) means env-only, exactly as before.
+	bedrock *awscreds.Provider
+	// logger and sourceLogged disclose, once, which chain entry the proxy signs
+	// as: "which AWS identity am I billed as" must be observable.
+	logger       *slog.Logger
+	sourceLogged *sync.Once
+}
 
 func (c Creds) Resolve(provider string, r *http.Request) providers.Credential {
 	fallbackEnv := c.authFallbackEnv(provider, r)
-	if k := strings.TrimSpace(r.Header.Get("x-api-key")); k != "" {
+	// SDKs use provider-specific API-key headers. Resolve the selected provider's
+	// native header before the legacy x-api-key alias or any configured fallback,
+	// otherwise a shared listener can replace the caller's principal with its own.
+	// Never consult another provider's native header on this route.
+	key := ""
+	switch provider {
+	case "gemini":
+		var err error
+		key, err = gemini.RequestAPIKey(r)
+		if err != nil {
+			return providers.Credential{Mode: "ephemeral_header"}
+		}
+		if key == "" {
+			// x-api-key is not a Google header. It stays supported as the alias
+			// this proxy has always accepted, but only where Google's own
+			// spellings said nothing — never as a competing account.
+			key = strings.TrimSpace(r.Header.Get("x-api-key"))
+		}
+		// Keep an explicit OAuth credential unless the caller also sent Google's
+		// native key header. A key that arrived only in the URL (or through the
+		// alias) does not displace the principal the caller named in Authorization;
+		// the adapter retains the caller-supplied URL key in its native header.
+		if auth := strings.TrimSpace(r.Header.Get("Authorization")); auth != "" &&
+			!strings.EqualFold(auth, "Bearer no-key-required") &&
+			strings.TrimSpace(r.Header.Get("x-goog-api-key")) == "" {
+			key = ""
+		}
+	case "azure_openai":
+		key = strings.TrimSpace(r.Header.Get("api-key"))
+	case "vertex":
+		var err error
+		key, err = providers.GoogleRequestAPIKey(r)
+		if err != nil {
+			return providers.Credential{Mode: "ephemeral_header"}
+		}
+		if key != "" {
+			// Vertex's default credential is OAuth. Mark an explicitly selected
+			// Express API key so it keeps Google's native header instead.
+			return providers.Credential{Mode: "ephemeral_header", Key: key, Scheme: "api_key"}
+		}
+	}
+	if key == "" && provider != "gemini" {
+		key = strings.TrimSpace(r.Header.Get("x-api-key"))
+	}
+	if key == "" && (provider == "gemini" || provider == "vertex") && providers.GoogleRequestCarriesQueryCredential(r) {
+		// The caller authenticated in the URL with a token this proxy does not
+		// resolve. Forward it as sent; adding the operator's key beside it would
+		// bill this request to a principal the caller never chose.
+		return providers.Credential{Mode: "ephemeral_header"}
+	}
+	if k := key; k != "" {
 		credential := providers.Credential{Mode: "ephemeral_header", Key: k, AuthFallbackEnv: fallbackEnv}
 		if provider == "bedrock" {
 			credential.AuthKind = "bedrock_api_key"
 		}
 		return credential
 	}
-	if a := r.Header.Get("authorization"); a != "" {
+	if a := strings.TrimSpace(r.Header.Get("authorization")); a != "" {
+		if provider == "bedrock" && !strings.EqualFold(strings.Fields(a)[0], "Bearer") {
+			// SDK SigV4 signatures cover the original authority/path/body and
+			// cannot survive a base-URL swap. Resolve IAM separately from bearer
+			// fallback; the Bedrock adapter checks the caller's requested principal
+			// and signs the actual upstream bytes, or rejects the request.
+			credential := c.bedrockSigningCredential(r.Context())
+			credential.Scheme = "sigv4"
+			credential.AuthKind = "aws_access_keys"
+			return credential
+		}
 		credential := providers.Credential{Mode: "ephemeral_header", Key: bearerKey(a), Scheme: "bearer", AuthFallbackEnv: fallbackEnv}
 		if provider == "bedrock" {
 			credential.AuthKind = "bedrock_api_key"
@@ -72,6 +193,12 @@ func (c Creds) Resolve(provider string, r *http.Request) providers.Credential {
 	}
 	if credential := c.cfg.Credential(provider); credential.Key != "" || credential.AuthFallbackEnv != "" {
 		return credential
+	}
+	if provider == "bedrock" {
+		// No bearer key and no env pair: a proxy running inside AWS still has a
+		// role. Config.Credential cannot ask for it (it is a pure env read), so
+		// the chain lives here, after every explicit source has declined.
+		return c.bedrockSigningCredential(r.Context())
 	}
 	return providers.Credential{Mode: "ephemeral_header"}
 }
@@ -120,6 +247,7 @@ func bearerKey(raw string) string {
 // the binary wires the engine-backed one when mode is compress or pixel.
 type Options struct {
 	HTTPClient *http.Client
+	Middleware http.Handler
 	// Logger receives gateway warnings (upstream failures, copy errors). Nil
 	// silences them, which is how the serve path ran until #897.
 	Logger     *slog.Logger
@@ -150,12 +278,13 @@ type Options struct {
 func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.Server {
 	client := opts.HTTPClient
 	if client == nil {
-		client = StandaloneHTTPClient(time.Duration(env.Int("CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS", 900000)) * time.Millisecond)
+		client = StandaloneHTTPClient(cfg, time.Duration(env.Int("CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS", 0))*time.Millisecond)
 	}
 	return gateway.New(gateway.Config{
+		Middleware:           opts.Middleware,
 		Adapters:             buildAdapters(cfg),
-		Auth:                 Auth{rc: gateway.RequestContext{Label: cfg.Label, RuntimeMode: cfg.Mode, Optimizers: cfg.Optimizers, ProviderBillingTiers: cfg.BillingTiers()}},
-		Creds:                Creds{cfg: cfg},
+		Auth:                 Auth{rc: gateway.RequestContext{Label: cfg.Label, RuntimeMode: cfg.Mode, Optimizers: cfg.Optimizers, ProviderBillingTiers: cfg.BillingTiers()}, token: cfg.AuthToken},
+		Creds:                Creds{cfg: cfg, bedrock: awscreds.New(awscreds.Options{Region: cfg.BedrockRegion()}), logger: opts.Logger, sourceLogged: new(sync.Once)},
 		Sink:                 sink,
 		Compressor:           opts.Compressor,
 		PrefixCache:          opts.PrefixCache,
@@ -274,11 +403,23 @@ func (c *engineCompressor) RetrieveOriginal(handle, query string) ([]byte, error
 // OpenAI-compatible adapter stay opt-in because they have no universal endpoint.
 // The named compat mounts come from Config.CompatUpstreams, which includes the
 // built-in OpenCode Go mount.
+// ProviderUpstreams publishes the same native base URLs that buildAdapters uses.
+// Wrappers must match a selected host's endpoint against the running proxy, not
+// a configuration file that may have changed after this listener started.
+func ProviderUpstreams(cfg config.Config) map[string]string {
+	return map[string]string{
+		"anthropic": cfg.BaseURL("anthropic", "https://api.anthropic.com"),
+		"openai":    cfg.BaseURL("openai", "https://api.openai.com"),
+		"gemini":    cfg.BaseURL("gemini", "https://generativelanguage.googleapis.com"),
+	}
+}
+
 func buildAdapters(cfg config.Config) []providers.Adapter {
+	upstreams := ProviderUpstreams(cfg)
 	adapters := []providers.Adapter{
-		anthropic.New(cfg.BaseURL("anthropic", "https://api.anthropic.com")),
-		openai.New(cfg.BaseURL("openai", "https://api.openai.com")),
-		gemini.New(cfg.BaseURL("gemini", "https://generativelanguage.googleapis.com")),
+		anthropic.New(upstreams["anthropic"]),
+		openai.New(upstreams["openai"]),
+		gemini.New(upstreams["gemini"]),
 		bedrock.New(cfg.BedrockBaseURL()),
 	}
 	if u := cfg.BaseURL("azure_openai", ""); u != "" {
@@ -294,12 +435,13 @@ func buildAdapters(cfg config.Config) []providers.Adapter {
 	}
 	sort.Strings(compatNames)
 	for _, name := range compatNames {
-		adapter, err := openaicompat.NewNamed(name, compat[name].BaseURL)
+		adapter, err := openaicompat.NewNamedWithWireDialect(name, compat[name].BaseURL, compat[name].WireDialect, compat[name].ForwardHeaders...)
 		if err != nil {
 			// This error cannot occur through config.Load, which validates every
-			// compat entry with the same ValidateName and ValidateBaseURL. The
-			// config package tests validate every built-in entry. A caller that
-			// makes a Config by hand must give Load-validated compat entries.
+			// compat entry with the same ValidateName, ValidateBaseURL, and
+			// ValidateWireDialect. The config package tests validate every
+			// built-in entry. A caller that makes a Config by hand must give
+			// Load-validated compat entries.
 			panic(err)
 		}
 		adapters = append(adapters, adapter)
@@ -319,17 +461,24 @@ func buildAdapters(cfg config.Config) []providers.Adapter {
 // which requires self-hosted mode: managed mode ignores the allowlist by
 // contract, so building on ManagedConfig here would make the documented escape
 // hatch a silent no-op (loopback/private stay blocked unless allowlisted).
-func StandaloneHTTPClient(timeout time.Duration) *http.Client {
-	cfg := ssrf.SelfHostedConfig()
+// The upstream proxy selector and the extra TLS roots come from cfg (a Config
+// that never went through config.Load is direct, on Go's default verification).
+func StandaloneHTTPClient(cfg config.Config, timeout time.Duration) *http.Client {
+	guard := ssrf.SelfHostedConfig()
+	guard.Proxy = cfg.UpstreamProxyFunc()
 	if raw := env.String("CAVE_SSRF_ALLOWLIST", ""); raw != "" {
-		cfg.AllowList = strings.Split(raw, ",")
+		guard.AllowList = strings.Split(raw, ",")
 	}
-	client := ssrf.NewHTTPClient(cfg)
+	client := ssrf.NewHTTPClient(guard)
 	// Go otherwise injects Accept-Encoding: gzip when callers omit it and then
 	// transparently decodes the provider response. Standalone record mode promises
 	// exact response wire bytes, so transport compression must stay disabled.
 	if transport, ok := client.Transport.(*http.Transport); ok {
 		transport.DisableCompression = true
+		gateway.BoundUpstreamTransport(transport)
+		if rootCAs := cfg.RootCAs(); rootCAs != nil {
+			transport.TLSClientConfig = &tls.Config{RootCAs: rootCAs, MinVersion: tls.VersionTLS12}
+		}
 	}
 	client.Timeout = timeout
 	return client

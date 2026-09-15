@@ -34,11 +34,15 @@ in `BINARY_LICENSE.md`.
 | Tool | Input | Returns |
 |---|---|---|
 | `caveman_compress` | `input` (string) | compressed text, inferred `ratio`, `recovery_handle` (null on pass-through) |
-| `caveman_retrieve` | `recovery_handle` (string) | the byte-exact original; error on unknown handle |
-| `caveman_stats` | — | session totals: tokens before/after, `ratio`, `basis:"inferred"`, `scope:"session"` |
+| `caveman_retrieve` | `recovery_handle` (string), optional `query` | byte-exact original without a query; ranked complete records with a query; error on unknown handle |
+| `caveman_stats` | — | this MCP process's compression-call totals, including repeated inputs and pass-throughs: tokens before/after, `requests`, `ratio`, `basis:"inferred"`, `scope:"session"` |
 | `caveman_toon_encode` | `input` (JSON string) | explicit JSON→TOON result with sizes; pass-through plus note when not encodable |
 | `caveman_toon_decode` | `input` (TOON string) | decoded JSON; error on invalid TOON |
 
 Compression is lossy (S4) but **reversible**: every drop is recoverable via
 `caveman_retrieve`. Incompressible or malformed input passes through unchanged
 with `ratio:0` — never an error.
+
+Repeated recovery calls remain available after host compaction. An empty query
+returns the exact stored original on every call; a nonempty query keeps the same
+record-narrowing behavior regardless of how many earlier calls were made.

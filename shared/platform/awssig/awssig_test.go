@@ -1,13 +1,82 @@
 package awssig_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/shared/platform/awssig"
 )
+
+// These fixtures were produced offline with the actual botocore==1.43.89
+// SigV4Auth (S3SigV4Auth for S3), not another copy of this signer's algorithm.
+// Source, timestamp, body, fake credentials, canonical paths and signatures are
+// frozen in the fixture; running Go tests needs no Python or provider access.
+// In particular a Bedrock version suffix :0 must be escaped in its canonical
+// URI, and an already escaped SDK path must be escaped again. S3 does neither.
+func TestSign_MatchesBotocorePathSignatures(t *testing.T) {
+	var fixture struct {
+		Oracle struct {
+			Package string `json:"package"`
+			Version string `json:"version"`
+		} `json:"oracle"`
+		Request struct {
+			Method          string `json:"method"`
+			Region          string `json:"region"`
+			Timestamp       string `json:"timestamp"`
+			AccessKeyID     string `json:"accessKeyID"`
+			SecretAccessKey string `json:"secretAccessKey"`
+			Body            string `json:"body"`
+			SignedHeaders   string `json:"signedHeaders"`
+		} `json:"request"`
+		Cases []struct {
+			Name          string `json:"name"`
+			Service       string `json:"service"`
+			URL           string `json:"url"`
+			CanonicalPath string `json:"canonicalPath"`
+			Signature     string `json:"signature"`
+		} `json:"cases"`
+	}
+	raw, err := os.ReadFile("testdata/botocore-1.43.89.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.Oracle.Package != "botocore" || fixture.Oracle.Version != "1.43.89" || len(fixture.Cases) != 9 {
+		t.Fatal("unexpected signing oracle fixture")
+	}
+	at, err := time.Parse("20060102T150405Z", fixture.Request.Timestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds := awssig.Credentials{AccessKeyID: fixture.Request.AccessKeyID, SecretAccessKey: fixture.Request.SecretAccessKey}
+	for _, tc := range fixture.Cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			req, err := http.NewRequest(fixture.Request.Method, tc.URL, strings.NewReader(fixture.Request.Body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			signer := awssig.Signer{Region: fixture.Request.Region, Service: tc.Service}
+			if err := signer.Sign(req, creds, awssig.HashPayload([]byte(fixture.Request.Body)), at); err != nil {
+				t.Fatal(err)
+			}
+			want := fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s/%s/%s/aws4_request, SignedHeaders=%s, Signature=%s",
+				creds.AccessKeyID, at.Format("20060102"), signer.Region, signer.Service, fixture.Request.SignedHeaders, tc.Signature)
+			if got := req.Header.Get("Authorization"); got != want {
+				t.Errorf("signature differs from Botocore canonical path %q:\n got %s\nwant %s", tc.CanonicalPath, got, want)
+			}
+			if req.URL.String() != tc.URL {
+				t.Errorf("signing changed wire URL: got %s, want %s", req.URL, tc.URL)
+			}
+		})
+	}
+}
 
 // This uses the AWS documentation example credentials, time and request URL
 // (https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html),

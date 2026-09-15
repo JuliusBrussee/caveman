@@ -3,6 +3,7 @@
 Firefox port of the existing Chrome MV3 extension. It runs the **same** runtime files
 (`../src/directive.js`, `../src/caveman.js`, `../src/indicator.css`, `../popup.html`) so
 behaviour is identical to Chrome; only the manifest is Firefox-tuned.
+The popup hides the review link until a verified Firefox Add-ons listing URL is available.
 
 Differences from the Chrome manifest:
 
@@ -54,6 +55,11 @@ root-relative manifest (`manifest_version:3` + `browser_specific_settings.gecko`
 shared version, and verifies the stage against the package allowlist (including the
 `background.scripts` reference), so it uploads as `manifest_version:3` to addons.mozilla.org. No
 store-asset or popup changes are the responsibility of this target.
+
+The optional `npm run test:firefox` check needs Firefox and an already-installed
+`web-ext` package. Set `FIREFOX_BIN` to the browser executable and `WEB_EXT_BIN` to
+the package's JavaScript CLI when automatic discovery cannot find them. Paths may
+contain spaces; the runner invokes Node directly without a shell. It never installs tools.
 
 ## Why this exists
 

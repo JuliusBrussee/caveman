@@ -2,8 +2,10 @@
 
 Local proxy presents provider-compatible HTTP routes on loopback, applies
 configured local transforms, forwards requests to provider endpoints, and
-records local usage. It is a single-operator developer tool, not a multi-user
-network gateway.
+records local usage. By default it is a single-operator developer tool with no
+inbound authentication. Setting `CAVEMAN_AUTH_TOKEN` turns it into a shared,
+token-gated service that may bind beyond loopback — see
+[Deploy the proxy for a team](deploy.md).
 
 Start it with:
 
@@ -32,6 +34,24 @@ sequenceDiagram
 Provider credentials are preserved from inbound requests. Supported environment
 fallbacks apply only when an integration does not send a credential.
 
+Native SSE, Gemini streamed JSON arrays, and AWS EventStream responses are
+forwarded as they arrive. HTTP error status, response headers, and body bytes
+are preserved. Provider error events inside an HTTP 200 stream remain HTTP 200
+on the wire, as required after the headers have been sent; the local request
+record carries `provider_stream_error`. Error detection stores only that code,
+not the provider's error message. Complete billed usage remains distinct from
+successful generation, and an error-bearing call claims no savings.
+
+The protocol regression uses local HTTP servers and the wire envelopes accepted
+by the [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/_streaming.py),
+[OpenAI SDK](https://github.com/openai/openai-python/blob/main/src/openai/_streaming.py),
+[Google SDK](https://github.com/googleapis/python-genai/blob/main/google/genai/_api_client.py),
+and [Botocore EventStream parser](https://github.com/boto/botocore/blob/develop/botocore/eventstream.py).
+It checks first-event delivery before upstream completion, exact bytes, final
+usage, HTTP errors, and stream errors. AWS Converse frame shapes were also
+checked with Botocore 1.43.89. This is local protocol evidence; it does not
+certify every provider endpoint, model, entitlement, or live account.
+
 ## Routes
 
 ### Anthropic
@@ -47,9 +67,11 @@ fallbacks apply only when an integration does not send a credential.
 ```text
 /openai/v1/chat/completions
 /openai/v1/responses
+/openai/v1/responses/input_tokens
 /openai/v1/embeddings
 /v1/chat/completions
 /v1/responses
+/v1/responses/input_tokens
 /v1/embeddings
 ```
 
@@ -61,8 +83,9 @@ fallbacks apply only when an integration does not send a credential.
 /gemini/v1beta/models/{model}:countTokens
 ```
 
-Equivalent bare Gemini paths are also accepted where profile configuration uses
-them.
+Both `v1beta` and stable `v1` are accepted for these three methods. Equivalent
+bare Gemini paths are also accepted where profile configuration uses them.
+See [Google's API versions](https://ai.google.dev/gemini-api/docs/api-versions).
 
 ### Amazon Bedrock
 
@@ -71,6 +94,7 @@ them.
 /bedrock/model/{model}/invoke-with-response-stream
 /bedrock/model/{model}/converse
 /bedrock/model/{model}/converse-stream
+/bedrock/model/{model}/count-tokens
 ```
 
 Optional Mantle compatibility route:
@@ -79,12 +103,34 @@ Optional Mantle compatibility route:
 /bedrock/anthropic/v1/messages
 ```
 
+Bedrock's OpenAI-compatible Chat Completions and Responses APIs on Runtime and
+Mantle are separate protocols and are not implemented by this Bedrock mount.
+Paths under `/bedrock/openai/v1/...` or `/bedrock/v1/...` return 404 before
+forwarding. Enabling the Anthropic Mantle route does not enable them. AWS and
+the OpenAI SDK distinguish their endpoint roots and IAM signing services; see
+the [AWS endpoint comparison](https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html)
+and [OpenAI Bedrock provider](https://github.com/openai/openai-python/blob/main/bedrock.md).
+
 ### Azure OpenAI and Vertex AI
 
 Azure mounts under `/azure/...` after its base URL is configured. Vertex mounts
 under `/vertex/v1/projects/...` and supports public Google and Anthropic
 publisher route forms implemented by adapter. Both are opt-in because endpoint
 and identity configuration are installation-specific.
+
+Vertex Express also accepts Google's projectless
+`/vertex/v1/publishers/google/models/{model}:generateContent` route and the
+corresponding `:streamGenerateContent` and `:countTokens` methods. Caller API
+keys use Google's native header; query keys normalize to that header. See
+[provider authentication](provider-authentication.md) for credential conflicts
+and the existing OAuth path.
+
+Vertex's Google publisher routes also accept `:countTokens`. Token-count
+requests retain their request and response bytes in every proxy mode; counts
+are not recorded as generated model usage or spend. These routes follow the
+[OpenAI SDK](https://github.com/openai/openai-python/blob/main/src/openai/resources/responses/input_tokens.py),
+[AWS Runtime reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html),
+and [Vertex REST reference](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/projects.locations.publishers.models/countTokens).
 
 ### OpenAI-compatible providers
 
@@ -103,16 +149,37 @@ upstream `https://opencode.ai/zen/go` and the credential variable
 `OPENCODE_API_KEY`. A `compat` entry with the name `opencode-go` in
 `caveman.yaml` replaces the built-in mount and can set another endpoint.
 
-The Pi extension routes a provider through `/compat/<name>/` only when the
-running proxy publishes a compat mount whose name is exactly the provider name
-and whose `base_url` host and port match the provider's base URL. The proxy
-publishes its mounts in the run-state file it writes on start, so the extension
-can verify a mount instead of guessing one; a provider with no matching mount
-stays direct with a notice. The mount's `base_url` path is what the proxy
-forwards to: a provider on the same host but a different path is sent to the
-mount's path, not its own. A mount pointing at a loopback relay (litellm,
-ollama, llama.cpp) also needs a `CAVE_SSRF_ALLOWLIST` entry; see
-[Security and privacy](security-and-privacy.md).
+Pi and local OpenClaw wrappers compare the full request URL their host SDK
+would send with the URL the running proxy would forward. Scheme, host, port,
+tenant path, and API version must match. Named mounts use the host's original
+provider name; native routes use the listener's published native endpoint.
+Unknown or credential-bearing base URLs remain direct with a notice. A
+same-host path mismatch is not a verified route.
+
+The proxy publishes credential-free endpoint identities in its run-state file
+and returns its instance identity on the local health route. Wrappers require
+that live identity before trusting the file, so a stale process record plus an
+unrelated listener cannot open the routing gate. Older proxies without endpoint
+or identity proof leave these host configurations direct. Existing OpenClaw
+provider identities, model catalogs, fallback settings, and auth profiles remain
+owned by OpenClaw. Existing managed OpenClaw configurations stay direct until
+the gateway can establish the same endpoint proof; fresh managed setup still
+uses its configured Caveman gateway.
+
+Endpoint equality is necessary but does not cover host-derived payload policy.
+Pi preserves supported public compatibility defaults; native OpenAI Chat cache
+policy and unresolved endpoint-specific attribution can still require direct
+transport. OpenClaw 2026.8.2 keeps OpenAI Chat, native Responses and native
+Anthropic routes direct because its public config overlay cannot preserve all
+private cache, replay, attribution and stream-validation decisions. Supported
+custom routes also require compatible transport settings and headers. The
+wrapper reports when proxy compression is off; keeping a host operational on
+direct transport is not a claim that its traffic was compressed. See the
+[compatibility audit](provider-compatibility-audit.md) and
+[Pi extension contract](../../packages/pi-extension/README.md).
+
+A mount pointing at a loopback relay (litellm, ollama, llama.cpp) also needs a
+`CAVE_SSRF_ALLOWLIST` entry; see [Security and privacy](security-and-privacy.md).
 
 ```yaml
 compat:
@@ -127,6 +194,13 @@ header follows the request path. A request to `/compat/{name}/v1/messages`
 the key in `Authorization: Bearer`. A real inbound Bearer token keeps its header
 on every path. OpenCode Go rejects a Bearer header on its Anthropic path, so
 this rule is necessary for the `anthropic-messages` models.
+
+The header is the only thing the path decides on its own. If the upstream
+answers the Anthropic Messages protocol, also declare `wire_dialect: anthropic`
+on the mount, or its usage blocks are parsed with OpenAI cache semantics and
+every cache-warm response is recorded as malformed usage — which drops the
+request from token accounting and from compression eligibility. See
+[Configuration](configuration.md).
 
 ## Modes
 
@@ -158,10 +232,14 @@ metadata, not raw secrets.
 
 ## Endpoint security
 
-Proxy rejects non-loopback listen addresses. Outbound Server-Side Request
-Forgery protection checks configured endpoints and redirects. Private,
-link-local, and loopback upstreams are blocked unless explicitly included in
-`CAVE_SSRF_ALLOWLIST` for a self-hosted setup.
+Proxy rejects a non-loopback listen address unless `CAVEMAN_AUTH_TOKEN` is set.
+With that token every request must present it in `x-cave-api-key` or
+`Authorization: Bearer`; the proxy consumes the header before resolving a
+provider credential, so it never reaches a provider. Health and metrics
+endpoints stay unauthenticated. Outbound Server-Side Request Forgery protection
+checks configured endpoints and redirects. Private, link-local, and loopback
+upstreams are blocked unless explicitly included in `CAVE_SSRF_ALLOWLIST` for a
+self-hosted setup; link-local and metadata addresses have no allowlist escape.
 
 See [Security and privacy](security-and-privacy.md) before allowing a local
 model endpoint.

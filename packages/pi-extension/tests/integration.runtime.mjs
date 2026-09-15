@@ -20,7 +20,7 @@ const mcpStub = join(here, "fixtures", "stub-caveman-mcp.mjs");
 const stubProviderExtension = join(here, "fixtures", "stub-provider-extension.mjs");
 const havePi = existsSync(piCli);
 
-function startStub() {
+function startStub({ instanceToken = "test-token", healthRedirect } = {}) {
   const requests = [];
   const server = createServer((req, res) => {
     let body = "";
@@ -28,7 +28,8 @@ function startStub() {
     req.on("end", () => {
       requests.push({ method: req.method, path: req.url, body });
       if (req.method === "GET" && req.url === "/health/live") {
-        res.writeHead(200, { "content-type": "application/json" });
+        if (healthRedirect) { res.writeHead(302, { location: healthRedirect }); res.end(); return; }
+        res.writeHead(200, { "content-type": "application/json", ...(instanceToken ? { "x-caveman-instance": instanceToken } : {}) });
         res.end("{}");
         return;
       }
@@ -99,12 +100,14 @@ process.stdin.unref();
       started_at: new Date().toISOString(),
       version: "test",
       recovery_via_mcp: recoveryViaMcp,
-      compat_upstreams: { "stub-relay": "http://127.0.0.1:1" },
+      provider_upstreams: { openai: "http://127.0.0.1:1/native-openai" },
+      compat_upstreams: { "stub-relay": "http://127.0.0.1:1", "opencode-go": "http://127.0.0.1:1/tenant-go" },
     }));
   }
   const env = {
     ...process.env,
     HOME: home,
+    USERPROFILE: home,
     CAVEMAN_HOME: cavemanHome,
     CAVE_GATEWAY_URL: `http://127.0.0.1:${port}`,
     CAVEMAN_PI_HOOK_CMD: JSON.stringify([process.execPath, hook, "placeholder"]),
@@ -335,3 +338,19 @@ test("open gate: a custom provider with no compat mount stays direct and says wh
     server.close();
   }
 });
+
+for (const instanceToken of [undefined, 'another-listener-token']) {
+  test(`stale run state cannot route credentials to listener with ${instanceToken ? 'wrong' : 'missing'} identity`, { skip: !havePi && 'pi devDependency missing' }, async () => {
+    const { server, requests, port } = await startStub({ instanceToken: instanceToken ?? '' });
+    const fx = fixture(port);
+    try {
+      const out = await runPi(fx.env, [
+        '--extension', stubProviderExtension, '--extension', extension,
+        '--no-session', '--no-skills', '--no-context-files', '--no-prompt-templates', '--no-themes', '--no-extensions',
+        '--provider', 'openai', '--model', 'stub-model', '-p', 'say hi',
+      ]);
+      assert.equal(requests.filter(r => r.method === 'POST').length, 0);
+      assert.match(out.stderr + out.stdout, /local proxy not running/);
+    } finally { fx.cleanup(); server.close(); }
+  });
+}

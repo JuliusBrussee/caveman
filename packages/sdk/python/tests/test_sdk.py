@@ -73,7 +73,7 @@ def test_tool_search_posts_correct_body_and_returns_result() -> None:
         captured_requests.append((req.full_url, dict(req.headers), body))
         return _fake_urlopen(mock_response)
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave = Cave(api_key="cave_live_test_key", base_url="http://localhost:8787", agent="test-agent")
         catalog = [
             CaveTool(
@@ -157,7 +157,7 @@ def test_tool_search_malformed_counters_fail_closed() -> None:
         "token_basis": "estimated_bytes_div_4",
     }
 
-    with patch("urllib.request.urlopen", return_value=_fake_urlopen(mock_response)):
+    with patch("caveman_cloud.core._urlopen", return_value=_fake_urlopen(mock_response)):
         cave = Cave(api_key="k", base_url="http://localhost:8787", agent="a")
         result = cave.tool_search([], query="anything")
 
@@ -179,7 +179,7 @@ def test_tool_search_minimal_args() -> None:
         captured_bodies.append(json.loads(req.data))
         return _fake_urlopen(mock_response)
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave = Cave(api_key="cave_live_test_key", base_url="http://localhost:8787", agent="test-agent")
         result = cave.tool_search([], query="anything")
 
@@ -199,7 +199,7 @@ def test_tools_handle_applies_default_cap_and_allows_override() -> None:
         return _fake_urlopen(mock_response)
 
     tool = CaveTool(name="safe", description="safe", input_schema={}, read_only=True, idempotent=True)
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave = Cave(api_key="k", base_url="http://localhost:8787", agent="a")
         handle = cave.tools([tool], strategy="deferred", max_loaded_tools=2)
         handle.search("first")
@@ -240,7 +240,7 @@ def test_tool_search_uses_custom_workflow_header() -> None:
         captured_headers.append(dict(req.headers))
         return _fake_urlopen(mock_response)
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave = Cave(api_key="k", base_url="http://localhost:8787", agent="a", default_workflow="my-workflow")
         cave.tool_search([], query="test", workflow="custom-workflow")
 
@@ -254,7 +254,7 @@ def test_provider_request_can_send_tool_session_header() -> None:
         captured_headers.append(dict(req.headers))
         return _fake_urlopen({"ok": True})
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave = Cave(api_key="k", base_url="http://localhost:8787", agent="a")
         cave.openai().chat["completions"].create({"model": "gpt-5.5", "messages": []}, tool_session_id="tool-session-1")
 
@@ -273,7 +273,7 @@ def test_service_urls_normalize_trailing_slashes_and_reject_query_or_fragment() 
             "tokens_after": 1,
         })
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave = Cave(
             api_key="k",
             base_url="https://gateway.example///",
@@ -342,7 +342,7 @@ def test_cave_plan_gets_plan_with_key_header() -> None:
         captured.append({"url": req.full_url, "method": req.get_method(), "headers": dict(req.headers), "body": req.data})
         return _fake_urlopen(_PLAN)
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave = Cave(api_key="cave_live_plan_key", base_url="http://localhost:8787", agent="test-agent")
         plan = cave.cave_plan()
 
@@ -372,7 +372,7 @@ def test_cave_plan_stays_on_gateway_when_control_url_is_set() -> None:
         captured.append(req.full_url)
         return _fake_urlopen(_PLAN)
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave = Cave(api_key="k", base_url="http://gateway.test", agent="a", control_url="http://control.test")
         cave.cave_plan()
 
@@ -385,7 +385,7 @@ def test_cave_plan_propagates_non_200() -> None:
     def fake_urlopen(req, timeout):  # type: ignore[no-untyped-def]
         raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, None)  # type: ignore[arg-type]
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave = Cave(api_key="k", base_url="http://localhost:8787", agent="a")
         with pytest.raises(urllib.error.HTTPError):
             cave.cave_plan()

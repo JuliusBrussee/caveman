@@ -1,16 +1,31 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { nativeStub, nodeStub, stubEnv } from "./harness/stub-bin.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const cli = join(here, "..", "dist", "index.js");
+const temporaryDirs = [];
+function temporary(prefix) {
+  const directory = mkdtempSync(join(tmpdir(), prefix));
+  temporaryDirs.push(directory);
+  return directory;
+}
+after(() => temporaryDirs.forEach(directory => rmSync(directory, { recursive: true, force: true })));
 
 function runAdd(project, args, extraEnv = {}) {
-  const env = { ...process.env, NO_COLOR: "1", ...extraEnv };
+  let env = { ...process.env, NO_COLOR: "1", ...extraEnv };
+  // Do not let the runner's account/profile decide where global test skills go.
+  for (const key of ["CODEX_HOME", "CLAUDE_CONFIG_DIR"]) if (!(key in extraEnv)) delete env[key];
+  if (extraEnv.HOME) env.USERPROFILE = extraEnv.HOME;
+  if (extraEnv.PATH !== undefined) {
+    for (const key of Object.keys(env)) if (key !== "PATH" && key.toLowerCase() === "path") delete env[key];
+  }
+  if (env.CAVEMAN_ENGINE_BIN && existsSync(env.CAVEMAN_ENGINE_BIN)) env = stubEnv(env, dirname(env.CAVEMAN_ENGINE_BIN));
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cli, "skills", "add", ...args], { cwd: project, env });
     let stdout = "";
@@ -24,9 +39,8 @@ function runAdd(project, args, extraEnv = {}) {
 }
 
 function writeFakeNpx() {
-  const dir = mkdtempSync(join(tmpdir(), "cave-skills-npx-"));
-  const bin = join(dir, "npx");
-  writeFileSync(bin, `#!/usr/bin/env node
+  const dir = temporary("cave-skills-npx-");
+  const bin = nodeStub(dir, "npx", `
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -52,22 +66,20 @@ description: Test-drive code changes.
 
 \${"Write one failing test, then make it pass.\\n".repeat(500)}\`);
 writeFileSync(join(skill, "references", "notes.md"), "resource stays plain and untouched\\n");
-`, { mode: 0o755 });
+`);
   return { dir, bin };
 }
 
 function writeEngineStub() {
-  const dir = mkdtempSync(join(tmpdir(), "cave-skills-add-engine-"));
-  const bin = join(dir, "caveman-engine");
-  writeFileSync(bin, `#!/usr/bin/env node
-import { writeFileSync } from "node:fs";
-const file = process.argv[5];
-if (process.argv[2] !== "pixel" || process.argv[3] !== "render" || process.argv[4] !== "--dense" || !file) process.exit(2);
+  const dir = temporary("cave-skills-add-engine-");
+  return nativeStub(dir, "caveman-engine", `
+const { writeFileSync } = require("node:fs");
+const file = ARGV[3];
+if (ARGV[0] !== "pixel" || ARGV[1] !== "render" || ARGV[2] !== "--dense" || !file) process.exit(2);
 writeFileSync(file + ".px1.png", Buffer.from("png"));
 console.log(JSON.stringify({ width: 10, height: 10, charsRendered: 10, droppedChars: 0, estTokens: 400 }));
 console.log(JSON.stringify({ summary: true, pages: 1, textEstTokens: 5000, imageEstTokens: 400 }));
-`, { mode: 0o755 });
-  return bin;
+`);
 }
 
 function fakePath(fakeNpxDir) {
@@ -75,7 +87,7 @@ function fakePath(fakeNpxDir) {
 }
 
 test("skills add forwards Skills CLI source/options and pixelizes only installed skill", async () => {
-  const project = mkdtempSync(join(tmpdir(), "cave-skills-add-project-"));
+  const project = temporary("cave-skills-add-project-");
   const existing = join(project, ".agents", "skills", "existing");
   mkdirSync(existing, { recursive: true });
   const existingBody = `---\nname: existing\ndescription: Leave this skill alone.\n---\n\nExisting body.\n`;
@@ -111,7 +123,7 @@ test("skills add forwards Skills CLI source/options and pixelizes only installed
 });
 
 test("skills add preserves upstream exit code and does not claim installation", async () => {
-  const project = mkdtempSync(join(tmpdir(), "cave-skills-add-fail-"));
+  const project = temporary("cave-skills-add-fail-");
   const fake = writeFakeNpx();
   const out = await runAdd(project, ["mattpocock/skills", "-y"], {
     PATH: fakePath(fake.dir),
@@ -124,7 +136,7 @@ test("skills add preserves upstream exit code and does not claim installation", 
 });
 
 test("skills add --no-pixel installs plain text and does not leak Caveman flags upstream", async () => {
-  const project = mkdtempSync(join(tmpdir(), "cave-skills-add-plain-"));
+  const project = temporary("cave-skills-add-plain-");
   const fake = writeFakeNpx();
   const argsFile = join(project, "npx-args.json");
   const out = await runAdd(project, ["mattpocock/skills", "--skill", "tdd", "--agent", "codex", "-y", "--no-pixel"], {
@@ -143,7 +155,7 @@ test("skills add --no-pixel installs plain text and does not leak Caveman flags 
 });
 
 test("skills add --list stays an upstream read-only listing", async () => {
-  const project = mkdtempSync(join(tmpdir(), "cave-skills-add-list-"));
+  const project = temporary("cave-skills-add-list-");
   const fake = writeFakeNpx();
   const argsFile = join(project, "npx-args.json");
   const out = await runAdd(project, ["mattpocock/skills", "--list"], {
@@ -157,9 +169,21 @@ test("skills add --list stays an upstream read-only listing", async () => {
   assert.ok(!existsSync(join(project, ".agents", "skills", "tdd")));
 });
 
+for (const options of [["--list"], ["--no-pixel", "--agent", "claude-code"]]) {
+  test(`global skills add ${options[0]} does not resolve unrelated Codex home`, async () => {
+    const project = temporary("cave-skills-add-unrelated-home-");
+    const home = temporary("cave-skills-add-isolated-home-");
+    const fake = writeFakeNpx();
+    const out = await runAdd(project, ["mattpocock/skills", "--global", ...options], {
+      PATH: fakePath(fake.dir), HOME: home, CODEX_HOME: join(project, "absent-codex-profile"),
+    });
+    assert.equal(out.code, 0, out.output);
+  });
+}
+
 test("skills add supports upstream URL, Claude Code, and global scope", async () => {
-  const project = mkdtempSync(join(tmpdir(), "cave-skills-add-global-project-"));
-  const isolatedHome = mkdtempSync(join(tmpdir(), "cave-skills-add-home-"));
+  const project = temporary("cave-skills-add-global-project-");
+  const isolatedHome = temporary("cave-skills-add-home-");
   const fake = writeFakeNpx();
   const out = await runAdd(
     project,
@@ -175,8 +199,8 @@ test("skills add supports upstream URL, Claude Code, and global scope", async ()
 });
 
 test("skills add scans current upstream global Codex path", async () => {
-  const project = mkdtempSync(join(tmpdir(), "cave-skills-add-global-codex-project-"));
-  const isolatedHome = mkdtempSync(join(tmpdir(), "cave-skills-add-global-codex-home-"));
+  const project = temporary("cave-skills-add-global-codex-project-");
+  const isolatedHome = temporary("cave-skills-add-global-codex-home-");
   const fake = writeFakeNpx();
   const out = await runAdd(project, ["mattpocock/skills", "--skill", "tdd", "--agent", "codex", "--global", "-y"], {
     PATH: fakePath(fake.dir),
@@ -191,7 +215,7 @@ test("skills add scans current upstream global Codex path", async () => {
 });
 
 test("skills add keeps successful upstream install as text when engine is missing", async () => {
-  const project = mkdtempSync(join(tmpdir(), "cave-skills-add-no-engine-"));
+  const project = temporary("cave-skills-add-no-engine-");
   const fake = writeFakeNpx();
   const out = await runAdd(project, ["mattpocock/skills", "--skill", "tdd", "--agent", "codex", "-y"], {
     PATH: fakePath(fake.dir),
@@ -205,7 +229,7 @@ test("skills add keeps successful upstream install as text when engine is missin
 });
 
 test("skills add fails loudly before writes when npx is missing", async () => {
-  const project = mkdtempSync(join(tmpdir(), "cave-skills-add-no-npx-"));
+  const project = temporary("cave-skills-add-no-npx-");
   const out = await runAdd(project, ["mattpocock/skills", "--skill", "tdd", "--agent", "codex", "-y"], {
     PATH: "",
     CAVEMAN_ENGINE_BIN: writeEngineStub(),

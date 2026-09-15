@@ -25,9 +25,11 @@ const crypto = require('crypto');
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
 const OWNED = require('./lib/owned-install');
+const PROVIDER_SKILLS = require('./lib/provider-skills');
 const { transformOpencodeAgentFrontmatter } = require('./lib/opencode-agent');
 const PORTABLE = require('./lib/portable-process');
 const PLATFORM_PATHS = require('./lib/platform-paths');
+const { parseCommandArgs } = require('./lib/command-args');
 
 const REPO = 'JuliusBrussee/caveman';
 // Mirrors the `engines.node` floor in package.json. Hardcoded rather than read
@@ -41,7 +43,7 @@ const MIN_NODE_MAJOR = 18;
 // the new tag on every release (CI release step) AFTER regenerating
 // src/hooks/checksums.sha256 so the integrity manifest matches the ref.
 // Overridable via CAVEMAN_REF for testing against a branch.
-const PINNED_REF = process.env.CAVEMAN_REF || 'v2.6.0';
+const PINNED_REF = process.env.CAVEMAN_REF || 'v2.7.0';
 const OPENCLAW_SKILL_VERSION = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(PINNED_REF)
   ? PINNED_REF.replace(/^v/, '')
   : undefined;
@@ -84,7 +86,7 @@ function hooksManifestIsOurs(p) {
 // ── Argv ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const opts = {
-    dryRun: false, force: false, skipSkills: false,
+    dryRun: false, force: false,
     withHooks: 'auto', withInit: false, withMcpShrink: false,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
@@ -98,18 +100,14 @@ function parseArgs(argv) {
     // and a stub registration just lands the user in a broken-MCP loop (#474).
     if (a.startsWith('--with-mcp-shrink=')) {
       const raw = a.slice('--with-mcp-shrink='.length);
-      const tokens = raw.trim().split(/\s+/).filter(Boolean);
-      if (tokens.length === 0) {
-        die('error: --with-mcp-shrink requires an upstream command\n' +
-            '  example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /path"');
-      }
-      opts.withMcpShrink = tokens;
+      opts.withMcpShrink = upstreamArgs(raw);
       continue;
     }
     switch (a) {
       case '--dry-run': opts.dryRun = true; break;
       case '--force': opts.force = true; break;
-      case '--skip-skills': opts.skipSkills = true; break;
+      // Legacy flag: there is no longer an all-agent fallback to suppress.
+      case '--skip-skills': break;
       case '--with-hooks': opts.withHooks = true; break;
       case '--no-hooks': opts.withHooks = false; break;
       case '--with-init': opts.withInit = true; break;
@@ -117,12 +115,7 @@ function parseArgs(argv) {
         const v = argv[i + 1];
         if (v && !v.startsWith('--')) {
           i++;
-          const tokens = v.trim().split(/\s+/).filter(Boolean);
-          if (tokens.length === 0) {
-            die('error: --with-mcp-shrink requires an upstream command\n' +
-                '  example: --with-mcp-shrink "npx @modelcontextprotocol/server-filesystem /path"');
-          }
-          opts.withMcpShrink = tokens;
+          opts.withMcpShrink = upstreamArgs(v);
         } else {
           die('error: --with-mcp-shrink requires an upstream command — caveman-shrink\n' +
               '  is a proxy and exits immediately without one. Pass the upstream:\n' +
@@ -183,6 +176,13 @@ function parseArgs(argv) {
 
 function die(msg) { process.stderr.write(msg + '\n'); process.exit(2); }
 
+function upstreamArgs(value) {
+  try { return parseCommandArgs(value); }
+  catch (error) {
+    die(`error: --with-mcp-shrink requires an upstream command: ${error.message}`);
+  }
+}
+
 // ── Color helpers ──────────────────────────────────────────────────────────
 function makeChalk(noColor) {
   const useColor = !noColor && process.stdout.isTTY && !process.env.NO_COLOR;
@@ -242,10 +242,10 @@ const PROVIDERS = [
   // IDE / VS Code-family — extension probes are precise. Cursor/Windsurf also
   // ship CLI binaries; we drop the dir fallback because the dir lingers after
   // uninstall and false-positives heavily.
-  { id: 'cursor',     label: 'Cursor',              mech: 'npx skills add (cursor)',       detect: 'command:cursor||macapp:Cursor', profile: 'cursor', globalSkillsDir: ['.cursor', 'skills'] },
+  { id: 'cursor',     label: 'Cursor',              mech: 'npx skills add (cursor)',       detect: 'command:cursor||macapp:Cursor', profile: 'cursor' },
   { id: 'windsurf',   label: 'Windsurf',            mech: 'npx skills add (windsurf)',     detect: 'command:windsurf||macapp:Windsurf', profile: 'windsurf' },
   { id: 'cline',      label: 'Cline',               mech: 'npx skills add (cline)',        detect: 'vscode-ext:cline',        profile: 'cline' },
-  { id: 'continue',   label: 'Continue',            mech: 'npx skills add (continue)',     detect: 'vscode-ext:continue.continue||vscode-ext:continue', profile: 'continue' },
+  { id: 'continue',   label: 'Continue',            mech: 'native skills copy',     detect: 'vscode-ext:continue.continue||vscode-ext:continue', profile: 'continue' },
   { id: 'kilo',       label: 'Kilo Code',           mech: 'npx skills add (kilo)',         detect: 'vscode-ext:kilocode', profile: 'kilo' },
   { id: 'roo',        label: 'Roo Code',            mech: 'npx skills add (roo)',          detect: 'vscode-ext:roo||vscode-ext:rooveterinaryinc.roo-cline||cursor-ext:roo', profile: 'roo' },
   { id: 'augment',    label: 'Augment Code',        mech: 'npx skills add (augment)',      detect: 'vscode-ext:augment||jetbrains-plugin:augment', profile: 'augment' },
@@ -259,7 +259,7 @@ const PROVIDERS = [
   // main source of false positives (warp, kiro, junie etc. leave config dirs
   // behind on uninstall).
   { id: 'hermes',     label: 'Hermes Agent',        mech: 'native hermes skills copy',     detect: 'command:hermes' },
-  { id: 'aider-desk', label: 'Aider Desk',          mech: 'npx skills add (aider-desk)',   detect: 'command:aider', profile: 'aider-desk' },
+  { id: 'aider-desk', label: 'Aider Desk',          mech: 'native skills copy',   detect: 'command:aider-desk||macapp:aider-desk', profile: 'aider-desk' },
   { id: 'amp',        label: 'Sourcegraph Amp',     mech: 'npx skills add (amp)',          detect: 'command:amp',             profile: 'amp' },
   { id: 'bob',        label: 'IBM Bob',             mech: 'npx skills add (bob)',          detect: 'command:bob', profile: 'bob' },
   { id: 'crush',      label: 'Crush',               mech: 'npx skills add (crush)',        detect: 'command:crush', profile: 'crush' },
@@ -268,15 +268,15 @@ const PROVIDERS = [
   { id: 'forgecode',  label: 'ForgeCode',           mech: 'npx skills add (forgecode)',    detect: 'command:forge', profile: 'forgecode' },
   { id: 'goose',      label: 'Block Goose',         mech: 'npx skills add (goose)',        detect: 'command:goose', profile: 'goose' },
   { id: 'iflow',      label: 'iFlow CLI',           mech: 'npx skills add (iflow-cli)',    detect: 'command:iflow', profile: 'iflow-cli' },
-  { id: 'kiro',       label: 'Kiro CLI',            mech: 'npx skills add (kiro-cli)',     detect: 'command:kiro', profile: 'kiro-cli' },
-  { id: 'mistral',    label: 'Mistral Vibe',        mech: 'npx skills add (mistral-vibe)', detect: 'command:mistral', profile: 'mistral-vibe' },
+  { id: 'kiro',       label: 'Kiro CLI',            mech: 'npx skills add (kiro-cli)',     detect: 'command:kiro-cli||command:kiro', profile: 'kiro-cli' },
+  { id: 'mistral',    label: 'Mistral Vibe',        mech: 'npx skills add (mistral-vibe)', detect: 'command:vibe||command:mistral', profile: 'mistral-vibe' },
   { id: 'openhands',  label: 'OpenHands',           mech: 'npx skills add (openhands)',    detect: 'command:openhands', profile: 'openhands' },
   { id: 'qwen',       label: 'Qwen Code',           mech: 'npx skills add (qwen-code)',    detect: 'command:qwen', profile: 'qwen-code' },
   { id: 'rovodev',    label: 'Atlassian Rovo Dev',  mech: 'npx skills add (rovodev)',      detect: 'command:rovodev', profile: 'rovodev' },
   { id: 'tabnine',    label: 'Tabnine CLI',         mech: 'npx skills add (tabnine-cli)',  detect: 'command:tabnine', profile: 'tabnine-cli' },
   { id: 'trae',       label: 'Trae',                mech: 'npx skills add (trae)',         detect: 'command:trae', profile: 'trae' },
   { id: 'warp',       label: 'Warp',                mech: 'npx skills add (warp)',         detect: 'command:warp', profile: 'warp' },
-  { id: 'replit',     label: 'Replit Agent',        mech: 'npx skills add (replit)',       detect: 'command:replit', profile: 'replit' },
+  { id: 'replit',     label: 'Replit Agent',        mech: 'npx skills add (replit, project)', detect: 'command:replit', profile: 'replit', skillsScope: 'project' },
 
   // Soft (opt-in via --only) — no reliable always-on probe.
   // junie: ships only as a JetBrains plugin; jetbrains-plugin probe walks
@@ -286,7 +286,9 @@ const PROVIDERS = [
   //   gemini CLI on first use — not a reliable signal of antigravity itself.
   { id: 'junie',      label: 'JetBrains Junie',     mech: 'npx skills add (junie)',        detect: 'jetbrains-plugin:junie', profile: 'junie', soft: true },
   { id: 'qoder',      label: 'Qoder',               mech: 'npx skills add (qoder)',        detect: 'dir:$HOME/.qoder', profile: 'qoder', soft: true },
-  { id: 'antigravity',label: 'Google Antigravity',  mech: 'npx skills add (antigravity)',  detect: 'dir:$HOME/.gemini/antigravity', profile: 'antigravity', soft: true },
+  { id: 'antigravity',label: 'Antigravity IDE',     mech: 'native skills copy',  detect: 'dir:$HOME/.gemini/antigravity', profile: 'antigravity', soft: true },
+  // Antigravity 2.0 has a distinct global skills root; require explicit selection.
+  { id: 'antigravity-2', label: 'Antigravity 2.0',   mech: 'native skills copy',             detect: '', soft: true },
 ];
 
 // ── Detection ─────────────────────────────────────────────────────────────
@@ -686,9 +688,29 @@ function installGemini(ctx) {
 }
 
 function installViaSkills(ctx, prov) {
-  const { say, note, warn, opts, results } = ctx;
+  const { say, note, opts, results } = ctx;
   results.detected++;
-  say(`→ ${prov.label} detected`);
+  say(`→ ${prov.label} ${prov.soft ? 'selected' : 'detected'}`);
+  if (PROVIDER_SKILLS.usesNativeSkills(prov.id)) {
+    try {
+      const installed = PROVIDER_SKILLS.install({
+        provider: prov.id,
+        repoRoot: ctx.repoRoot,
+        force: opts.force,
+        dryRun: opts.dryRun,
+        note,
+        run: (command, args, options) => runSpawn(command, args, options, false),
+      });
+      if (!opts.dryRun) note(`  copied ${installed.count} skills into ${installed.root}`);
+      if (prov.id === 'aider-desk') note('  Enable Skills Tools for the AiderDesk agent profile to use these skills.');
+      results.installed.push(prov.id);
+    } catch (error) {
+      ctx.warn(`  ${prov.label} skill installation failed: ${error.message}`);
+      results.failed.push([prov.id, error.message]);
+    }
+    process.stdout.write('\n');
+    return;
+  }
   // --skill '*' --yes: skip the upstream skill-selection TUI and confirmation
   // prompts. Without --skill, `curl|bash` (no TTY on stdin) renders an empty
   // checkbox list the user can't interact with, then exits 0 with zero skills
@@ -699,29 +721,12 @@ function installViaSkills(ctx, prov) {
   // ignores the `-a prov.profile` selection and writes every skill through
   // every agent adapter (see issue #389). `--skill '*' -a <agent>` is the
   // documented form for "install every skill into a specific agent".
+  // Use the vendor's supported scope. Replit reads project-local skills; its
+  // workspace-wide library is managed in the UI, not a home-directory scan.
+  // Other adapters resolve their user directories and supported home overrides.
   const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
-  // Without -g the upstream CLI writes to a PROJECT-local ./.agents/skills
-  // under whatever directory the installer happened to run from. For an agent
-  // whose skills UI reads a fixed home directory, that means the install
-  // reports success and the skills never appear (#836) — a `curl | bash` run
-  // from ~/.local/bin put them in ~/.local/bin/.agents/skills. Set
-  // globalSkillsDir on a provider whose skills live at a known home path.
-  if (prov.globalSkillsDir) {
-    const globalSkillsDir = path.join(os.homedir(), ...prov.globalSkillsDir);
-    if (opts.dryRun) {
-      note(`  would mkdir -p ${globalSkillsDir}`);
-    } else {
-      // Belt and braces: -g should create the target itself. A failure here is
-      // not fatal — let the CLI run and report the real error rather than
-      // aborting on a directory we may not have needed.
-      try {
-        fs.mkdirSync(globalSkillsDir, { recursive: true });
-      } catch (error) {
-        warn(`  could not pre-create ${globalSkillsDir}: ${error.message}`);
-      }
-    }
-    args.push('-g');
-  }
+  if (prov.skillsScope === 'project') note(`  Installing into this project: ${process.cwd()}`);
+  else args.push('-g');
   const r = runSpawn('npx', args, null, opts.dryRun);
   if (spawnOk(r)) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
@@ -1352,12 +1357,52 @@ async function loadRemoteHookChecksums() {
 }
 
 // ── Uninstall ─────────────────────────────────────────────────────────────
+
+// Agents whose `caveman enable` journal is still on disk. `CAVEMAN_HOME` is the
+// same override the CLI itself honors, so a non-default home is not read as a
+// clean machine. Read-only and silent-failing: a machine that never had the CLI
+// has no such directory, and an unreadable one must not fail an uninstall.
+function remainingNativeIntegrations() {
+  const dir = path.join(process.env.CAVEMAN_HOME || path.join(os.homedir(), '.caveman'), 'integrations');
+  try {
+    return fs.readdirSync(dir)
+      // `.pending-<agent>.json` is an interrupted transaction, not an install.
+      .filter((name) => name.endsWith('.json') && !name.startsWith('.'))
+      .map((name) => name.slice(0, -'.json'.length))
+      .sort();
+  } catch (_) {
+    return [];
+  }
+}
+
 function uninstall(ctx) {
   const { say, note, warn, ok, opts, configDir } = ctx;
   let cleanupFailed = false;
   say('🪨 caveman uninstall');
 
   if (opts.dryRun) note('  (dry run — nothing will be removed)');
+
+  // Native integrations (`caveman enable <agent>`) journal their prior state
+  // at ~/.caveman/integrations/<agent>.json; restore it through the CLI's own
+  // `disable --all` rather than re-deriving that logic here.
+  if (hasCmd('caveman')) {
+    const r = runSpawn('caveman', ['disable', '--all'], null, opts.dryRun);
+    if (spawnOk(r)) ok('  disabled native agent integrations');
+  }
+
+  // ...and say so when one survived. `disable` removes the journal it restored
+  // from, so a journal still sitting here after the call above is exact evidence
+  // that a caveman route (ANTHROPIC_BASE_URL + _CLAUDE_CODE_ASSUME_FIRST_PARTY_
+  // BASE_URL for Claude) is still in the host's settings — the CLI was already
+  // npm-uninstalled, or `disable --all` failed. Silence there leaves the user
+  // with a dead route and the Remote Control breakage of #947, with nothing in
+  // the uninstall output pointing at the cause (#1040). Reading the journal
+  // directory is not re-deriving the restore logic: it never writes.
+  if (!opts.dryRun) {
+    const stranded = remainingNativeIntegrations();
+    for (const agent of stranded) warn(`  ${agent}: native Caveman routing is still installed and was not removed here.`);
+    if (stranded.length > 0) warn('  Run `caveman disable --all` (reinstall @caveman-ai/cli first if needed) to restore the host settings.');
+  }
 
   // Hooks: remove from settings.json + delete hook files.
   const hooksDir = path.join(configDir, 'hooks');
@@ -1546,6 +1591,17 @@ function uninstall(ctx) {
     warn(`  Hermes ownership journal invalid; left integration untouched: ${error.message}`);
   }
 
+  for (const prov of PROVIDERS.filter(prov => PROVIDER_SKILLS.usesNativeSkills(prov.id))) {
+    try {
+      const removed = PROVIDER_SKILLS.uninstall({ provider: prov.id, dryRun: opts.dryRun, note, warn });
+      if (removed.hadJournal && removed.changed.length === 0) ok(`  pruned owned caveman skills from ${prov.label}`);
+      if (removed.changed.length) cleanupFailed = true;
+    } catch (error) {
+      cleanupFailed = true;
+      warn(`  ${prov.label} ownership cleanup failed; left integration untouched: ${error.message}`);
+    }
+  }
+
   // Per-session state. Keep lifetime savings history unless user removes it.
   const stateFiles = [
     '.caveman-active',
@@ -1653,7 +1709,6 @@ FLAGS
   --force               Re-run even if a target reports already installed.
   --only <agent>        Install only for the named agent. Repeatable.
                         See --list for valid ids.
-  --skip-skills         Don't run the npx-skills auto-detect fallback.
   --all                 Turn on hooks + init. (mcp-shrink needs an upstream;
                         pass --with-mcp-shrink="<cmd>" to add it.)
   --minimal             Just the plugin/extension install.
@@ -1665,7 +1720,8 @@ FLAGS
                         Claude Code (and opencode): register caveman-shrink MCP
                         proxy wrapping the given upstream. Default OFF.
                         caveman-shrink crashes without an upstream, so a value
-                        is required. The value is whitespace-tokenized.
+                        is required. Quotes group paths containing spaces;
+                        backslashes stay literal. A JSON argv array also works.
                         Example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"
   --no-mcp-shrink       Skip MCP shrink. (Default.)
   --uninstall, -u       Remove caveman from this machine.
@@ -1748,19 +1804,13 @@ async function main() {
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
     if (prov.id === 'openclaw') { installOpenclaw(ctx); continue; }
     if (prov.id === 'hermes')   { installHermes(ctx); continue; }
-    if (prov.profile)           { installViaSkills(ctx, prov); continue; }
+    if (prov.profile || PROVIDER_SKILLS.usesNativeSkills(prov.id)) { installViaSkills(ctx, prov); continue; }
   }
 
-  // Auto-detect fallback if nothing matched
-  if (!opts.skipSkills && opts.only.length === 0 && ctx.results.detected === 0) {
-    ctx.say('→ no known agents detected — running npx-skills auto-detect fallback');
-    // --yes --all for the same reason as installViaSkills above (issue #370):
-    // skip the interactive skill picker so curl|bash actually installs.
-    const r = runSpawn('npx', ['-y', 'skills', 'add', REPO, '--yes', '--all'], null, opts.dryRun);
-    if (spawnOk(r)) ctx.results.installed.push('skills-auto');
-    else ctx.results.failed.push(['skills-auto', 'npx skills add (auto) failed']);
-    process.stdout.write('\n');
-  }
+  // No detected target means no skill installation. Upstream --all (and --yes
+  // with no detected agents) installs into every profile, contradicting our
+  // promise to skip agents the user does not have. --only remains the explicit
+  // way to select an agent that cannot be detected.
 
   // Per-repo init
   if (opts.withInit) {

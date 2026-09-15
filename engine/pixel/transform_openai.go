@@ -67,7 +67,7 @@ func transformOpenAIChat(body []byte, root map[string]json.RawMessage, opts Tran
 		return body, info, nil
 	}
 	var messages []any
-	if err := json.Unmarshal(root["messages"], &messages); err != nil {
+	if err := decodeRequestJSON(root["messages"], &messages); err != nil {
 		info.Reason = "parse_error: messages must be an array"
 		return nil, info, err
 	}
@@ -81,7 +81,7 @@ func transformOpenAIChat(body []byte, root map[string]json.RawMessage, opts Tran
 	var haveTools bool
 	if raw, ok := root["tools"]; ok {
 		haveTools = true
-		if err := json.Unmarshal(raw, &tools); err != nil {
+		if err := decodeRequestJSON(raw, &tools); err != nil {
 			info.Reason = "parse_error: tools must be an array"
 			return nil, info, err
 		}
@@ -229,7 +229,7 @@ func transformOpenAIResponses(body []byte, root map[string]json.RawMessage, opts
 		inputWasString = true
 		originalInput = inputString
 		inputItems = []any{}
-	} else if err := json.Unmarshal(root["input"], &inputItems); err != nil {
+	} else if err := decodeRequestJSON(root["input"], &inputItems); err != nil {
 		info.Reason = "parse_error: input must be a string or array"
 		return nil, info, err
 	}
@@ -246,7 +246,7 @@ func transformOpenAIResponses(body []byte, root map[string]json.RawMessage, opts
 	var haveTools bool
 	if raw, ok := root["tools"]; ok {
 		haveTools = true
-		if err := json.Unmarshal(raw, &tools); err != nil {
+		if err := decodeRequestJSON(raw, &tools); err != nil {
 			info.Reason = "parse_error: tools must be an array"
 			return nil, info, err
 		}

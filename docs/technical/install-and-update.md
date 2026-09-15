@@ -158,17 +158,26 @@ GitHub installer is idempotent for installer-owned files.
 
 ## Uninstall
 
-Remove installer-managed skill integrations:
+Remove installer-managed skill integrations **and** native agent routing. Order
+matters: this step shells out to `caveman disable --all`, so it needs the CLI
+still installed.
 
 ```bash
 npx -y github:JuliusBrussee/caveman -- --uninstall
 ```
 
-Remove global CLI through npm:
+Then remove global CLI through npm:
 
 ```bash
 npm uninstall -g @caveman-ai/cli
 ```
+
+Reversed, the native route survives — for Claude Code that leaves
+`ANTHROPIC_BASE_URL` and `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL` in
+`~/.claude/settings.json` and Remote Control unavailable (see
+[agent wrapping](agent-wrapping.md)). The installer names any agent still routed
+when it finds one; recover with `caveman disable --all` after reinstalling the
+CLI, or delete those two keys by hand.
 
 These commands do not delete local usage, CCR, or account state. Review
 [`SECURITY.md`](../../SECURITY.md#local-storage) before deleting

@@ -5,15 +5,26 @@ Native [Caveman](https://getcaveman.dev) extension for the [Pi coding agent](htt
 One extension, four jobs:
 
 - **Proxy routing** — points the selected model's provider at your local Caveman
-  proxy (`/w/pi/...`) with a baseUrl-only override. Pi keeps owning auth, model
-  names, pricing, and `models.json`; nothing is copied or rewritten. The
-  extension routes a provider only when its base URL points at the upstream
-  host of the proxy route (`api.anthropic.com`, `api.openai.com`,
-  `generativelanguage.googleapis.com`, or `opencode.ai`), or at a named
-  OpenAI-compatible mount the running proxy published under exactly that
-  provider name (`compat.<provider>.base_url` in `caveman.yaml`). Host and port
-  must match. A provider that points at any other endpoint stays direct, with
-  one notice saying why.
+  proxy (`/w/pi/...`) by updating that model's endpoint and preserving the SDK's
+  original URL-dependent compatibility settings. Pi keeps owning auth, model
+  names, pricing, and `models.json`; the provider registry is unchanged. The
+  extension routes only when the running proxy identifies the same destination:
+  scheme, host, port, path, and API version must match. Custom providers need a
+  published `compat.<provider>.base_url` mount. The proxy's live identity must
+  also match its run-state file. Unknown endpoints and older proxies without
+  this proof stay direct with a notice. Pi keeps its own provider identity,
+  model catalog, auth registration, and custom stream handlers.
+  OpenAI Chat Completions endpoints containing `api.openai.com` stay direct:
+  Pi derives their prompt cache key from the URL and exposes no reliable
+  override for routed requests. OpenAI Responses routing remains supported.
+  Pi also derives attribution/session headers from some URLs. OpenRouter,
+  NVIDIA, Cloudflare, and OpenCode aliases stay direct when their original
+  headers cannot be preserved; canonical provider IDs remain routable. An alias
+  can route when explicit headers make the result identical, or when
+  `PI_TELEMETRY=0` disables the affected attribution (OpenCode session headers
+  still require preservation). The extension does not reload or guess Pi's
+  private active telemetry preference.
+
 - **Exact recovery** — registers a single model-visible tool, `caveman_retrieve`,
   backed by the local `caveman-mcp` binary and the shared CCR store. Compressed
   bytes are always recoverable, byte-exact.

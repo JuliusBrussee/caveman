@@ -81,7 +81,7 @@ test("wrap hermes local injects CUSTOM_BASE_URL, never appends --api-key, and wa
   const out = await runCli(["wrap", "hermes", "-z", "hi", "-m", "gpt-5.6"], env);
   assert.equal(out.code, 0, out.stderr);
   const seen = JSON.parse(out.stdout);
-  assert.equal(seen.customBaseUrl, "http://127.0.0.1:18801/w/hermes");
+  assert.equal(seen.customBaseUrl, "http://127.0.0.1:18801/w/hermes/v1");
   assert.equal(seen.hasCustomApiKey, false, "empty cave_api_key render must omit CUSTOM_API_KEY");
   assert.deepEqual(seen.argv.slice(0, 2), ["--provider", "custom"], "profile provider args must precede user args");
   assert.deepEqual(seen.argv.slice(2), ["-z", "hi", "-m", "gpt-5.6"], "user args must remain after profile args");
@@ -110,7 +110,7 @@ test("wrap hermes managed injects host-derived API key env and never appends --a
   const out = await runCli(["wrap", "hermes"], env);
   assert.equal(out.code, 0, out.stderr);
   const seen = JSON.parse(out.stdout);
-  assert.equal(seen.customBaseUrl, "https://gateway.example-cave.com/w/hermes");
+  assert.equal(seen.customBaseUrl, "https://gateway.example-cave.com/w/hermes/v1");
   assert.equal(seen.hasCustomApiKey, false, "Hermes request auth must use host-derived env, not CUSTOM_API_KEY");
   assert.equal(seen.apiKeyVars.EXAMPLE_CAVE_API_KEY, "cave_test_key");
   assert.deepEqual(seen.argv, ["--provider", "custom"]);
@@ -130,7 +130,7 @@ test("wrap hermes loopback gateway does not derive an API key env and does not c
   const out = await runCli(["wrap", "hermes"], env);
   assert.equal(out.code, 0, out.stderr);
   const seen = JSON.parse(out.stdout);
-  assert.equal(seen.customBaseUrl, "http://127.0.0.1:18804/w/hermes");
+  assert.equal(seen.customBaseUrl, "http://127.0.0.1:18804/w/hermes/v1");
   assert.equal(seen.hasCustomApiKey, false, "loopback Hermes auth stays on the local proxy side");
   assert.equal(seen.apiKeyVars.EXAMPLE_CAVE_API_KEY, undefined);
   assert.equal(seen.apiKeyVars.LOCALHOST_API_KEY, undefined);

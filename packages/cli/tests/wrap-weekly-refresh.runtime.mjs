@@ -25,15 +25,6 @@ async function listen(server) {
   return server.address().port;
 }
 
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function entitlement() {
   return {
     entitled: true,
@@ -48,7 +39,7 @@ function entitlement() {
   };
 }
 
-async function fixture({ responseDelayMs = 0 } = {}) {
+async function fixture({ holdResponse = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "cave-weekly-refresh-"));
   const userHome = join(dir, "user");
   const caveHome = join(userHome, ".caveman");
@@ -62,7 +53,7 @@ async function fixture({ responseDelayMs = 0 } = {}) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-    if (responseDelayMs) await new Promise((resolve) => setTimeout(resolve, responseDelayMs));
+    if (holdResponse) return;
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(entitlement()));
   });
@@ -122,6 +113,7 @@ process.exit(0);
   };
   cleanups.push(async () => {
     if (proxyOwner.exitCode === null && proxyOwner.signalCode === null) proxyOwner.kill("SIGTERM");
+    control.closeAllConnections();
     await new Promise((resolve) => control.close(resolve));
     await new Promise((resolve) => gateway.close(resolve));
     rmSync(dir, { recursive: true, force: true });
@@ -168,10 +160,13 @@ test("connected run refreshes at most once per ISO week and skips wall/denied st
 });
 
 test("weekly refresh never blocks run start when entitlement service stalls", async () => {
-  const f = await fixture({ responseDelayMs: 5000 });
-  const started = Date.now();
-  const out = await runCli(cli, ["wrap", "agent"], { env: f.env, cwd: f.dir, timeoutMs: 3500 });
+  const f = await fixture({ holdResponse: true });
+  const out = await runCli(cli, ["wrap", "agent"], { env: f.env, cwd: f.dir, timeoutMs: 10_000 });
   assert.equal(out.code, 0, out.stderr);
-  assert.ok(Date.now() - started < 3000, "agent completion must not wait for entitlement response");
-  assert.equal(alive(process.pid), true);
+  assert.equal(f.requests.length, 1, "the stalled refresh must actually start");
+  // Neither a response nor the refresh's own timeout may finish before the
+  // agent exits. This checks the dependency directly, without a three-second
+  // wall-clock budget that includes unrelated child startup and proxy probes.
+  const config = JSON.parse(readFileSync(f.configPath, "utf8"));
+  assert.equal(config.wrapEntitlementRefresh, undefined, "agent completion must precede refresh completion or timeout");
 });

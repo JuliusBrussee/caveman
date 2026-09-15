@@ -46,18 +46,21 @@ test("route table maps supported APIs and refuses everything else", () => {
   assert.equal(Object.keys(ROUTES_BY_API).length, 4);
 });
 
-test("route gate compares the original provider host with the proxy upstream host", () => {
+const NATIVE = { openai: "https://api.openai.com", anthropic: "https://api.anthropic.com", gemini: "https://generativelanguage.googleapis.com" };
+const BUILTIN_COMPAT = { "opencode-go": "https://opencode.ai/zen/go" };
+
+test("route gate compares the original provider endpoint with the running proxy", () => {
   const gw = "http://127.0.0.1:8787";
-  assert.equal(routeForApi(gw, "openai-completions", "openai", "https://api.openai.com/v1"), `${gw}/w/pi/openai/v1`);
-  assert.equal(routeForApi(gw, "openai-completions", "openai", "http://127.0.0.1:4000/v1"), undefined, "a local relay named openai must stay direct");
-  assert.equal(routeForApi(gw, "openai-completions", "openai", "https://my-resource.openai.azure.com/openai"), undefined, "Azure named openai must stay direct");
-  assert.equal(routeForApi(gw, "anthropic-messages", "anthropic", "https://api.anthropic.com"), `${gw}/w/pi`);
-  assert.equal(routeForApi(gw, "anthropic-messages", "anthropic", "http://127.0.0.1:1"), undefined);
-  assert.equal(routeForApi(gw, "google-generative-ai", "google", "https://generativelanguage.googleapis.com"), `${gw}/w/pi/v1beta`);
-  assert.equal(routeForApi(gw, "anthropic-messages", "opencode-go", "https://opencode.ai/zen/go"), `${gw}/w/pi/compat/opencode-go`);
-  assert.equal(routeForApi(gw, "openai-completions", "opencode-go", "https://opencode.ai/zen/go/v1"), `${gw}/w/pi/compat/opencode-go/v1`);
-  assert.equal(routeForApi(gw, "openai-completions", "opencode-go", "https://other.example/v1"), undefined, "a moved opencode-go endpoint must stay direct");
-  assert.equal(routeForApi(gw, "openai-completions", "openai", "not a url"), undefined, "an unreadable base URL must stay direct");
+  assert.equal(routeForApi(gw, "openai-completions", "openai", "https://api.openai.com/v1", BUILTIN_COMPAT, NATIVE), `${gw}/w/pi/openai/v1`);
+  assert.equal(routeForApi(gw, "openai-completions", "openai", "http://127.0.0.1:4000/v1", BUILTIN_COMPAT, NATIVE), undefined, "a local relay named openai must stay direct");
+  assert.equal(routeForApi(gw, "openai-completions", "openai", "https://my-resource.openai.azure.com/openai", BUILTIN_COMPAT, NATIVE), undefined, "Azure named openai must stay direct");
+  assert.equal(routeForApi(gw, "anthropic-messages", "anthropic", "https://api.anthropic.com", BUILTIN_COMPAT, NATIVE), `${gw}/w/pi/anthropic`);
+  assert.equal(routeForApi(gw, "anthropic-messages", "anthropic", "http://127.0.0.1:1", BUILTIN_COMPAT, NATIVE), undefined);
+  assert.equal(routeForApi(gw, "google-generative-ai", "google", "https://generativelanguage.googleapis.com/v1beta", BUILTIN_COMPAT, NATIVE), `${gw}/w/pi/gemini/v1beta`);
+  assert.equal(routeForApi(gw, "anthropic-messages", "opencode-go", "https://opencode.ai/zen/go", BUILTIN_COMPAT, NATIVE), `${gw}/w/pi/compat/opencode-go`);
+  assert.equal(routeForApi(gw, "openai-completions", "opencode-go", "https://opencode.ai/zen/go/v1", BUILTIN_COMPAT, NATIVE), `${gw}/w/pi/compat/opencode-go/v1`);
+  assert.equal(routeForApi(gw, "openai-completions", "opencode-go", "https://other.example/v1", BUILTIN_COMPAT, NATIVE), undefined, "a moved opencode-go endpoint must stay direct");
+  assert.equal(routeForApi(gw, "openai-completions", "openai", "not a url", BUILTIN_COMPAT, NATIVE), undefined, "an unreadable base URL must stay direct");
   assert.equal(upstreamHostFor("openai"), "api.openai.com");
   assert.equal(upstreamHostFor("openrouter"), undefined);
   assert.equal(hostOf("https://API.OpenAI.com/v1"), "api.openai.com");
@@ -78,12 +81,18 @@ test("a published compat mount routes a custom provider and gates it on the moun
   assert.equal(routeForApi(gw, "openai-completions", "opencode-go", "http://127.0.0.1:9000/zen/v1", mounts), `${gw}/w/pi/compat/opencode-go/v1`);
   assert.equal(routeForApi(gw, "openai-completions", "opencode-go", "https://opencode.ai/zen/go/v1", mounts), undefined, "the static host no longer applies once the mount moved");
   // A name that could not be a mount, or a non-string value, falls back to the static table.
-  assert.equal(routeForApi(gw, "openai-completions", "openai", "https://api.openai.com/v1", { "": "http://x", "UPPER": "http://x" }), `${gw}/w/pi/openai/v1`);
+  assert.equal(routeForApi(gw, "openai-completions", "openai", "https://api.openai.com/v1", { "": "http://x", "UPPER": "http://x" }, NATIVE), `${gw}/w/pi/openai/v1`);
   assert.equal(routeForApi(gw, "openai-completions", "constructor", "http://127.0.0.1:4000/v1", {}), undefined, "inherited properties are not mounts");
   assert.equal(compatUpstreamFor("my-relay", mounts), "http://127.0.0.1:4000");
   assert.equal(compatUpstreamFor("My-Relay", mounts), undefined);
   assert.equal(compatUpstreamFor("my-relay", undefined), undefined);
   assert.equal(hostOf("http://127.0.0.1:4000/v1"), "127.0.0.1:4000");
+});
+
+test("compat routes preserve tenant path and scheme as well as host", () => {
+  const mounts = { relay: "https://relay.example/tenant-b" };
+  assert.equal(routeForApi("http://127.0.0.1:8787", "openai-completions", "relay", "https://relay.example/tenant-a/v1", mounts), undefined);
+  assert.equal(routeForApi("http://127.0.0.1:8787", "openai-completions", "relay", "http://relay.example/tenant-b/v1", mounts), undefined);
 });
 
 test("loopback detection", () => {
@@ -155,4 +164,11 @@ test("hook invocation resolution honors CAVEMAN_PI_HOOK_CMD with fallback", () =
   const fallback = resolveHookInvocations({ CAVEMAN_PI_HOOK_CMD: "not json", CAVEMAN_HOME: "/x/.caveman" });
   assert.deepEqual(fallback.map((i) => i.command), ["caveman", "cave", localBin]);
   assert.deepEqual(resolveHookInvocations({ CAVEMAN_HOME: "/x/.caveman" }).map((i) => i.command), ["caveman", "cave", localBin]);
+});
+
+test("native endpoint routing requires the running listener's proof", () => {
+  const gw = "http://127.0.0.1:8787";
+  assert.equal(routeForApi(gw, "openai-responses", "openai", "https://api.openai.com/v1"), undefined);
+  assert.equal(routeForApi(gw, "openai-responses", "openai", "https://api.openai.com/v1", {}, { openai: "https://relay.example" }), undefined);
+  assert.equal(routeForApi(gw, "openai-responses", "openai", "https://relay.example/tenant/v1", {}, { openai: "https://relay.example/tenant" }), `${gw}/w/pi/openai/v1`);
 });

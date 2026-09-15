@@ -188,6 +188,23 @@ func TestToolSchemaByteSafeOnMalformed(t *testing.T) {
 	}
 }
 
+func TestToolSchemaRejectsEveryTrailingNonWhitespaceToken(t *testing.T) {
+	for _, suffix := range []string{"}", "]", " }", "\n]", " {}", " null", " true", " 17", " trailing", " /* comment */"} {
+		t.Run(strconv.Quote(suffix), func(t *testing.T) {
+			input := []byte(sampleCatalog + suffix)
+			if json.Valid(input) {
+				t.Fatal("fixture should be malformed JSON")
+			}
+			if out, ok := NewToolSchema().Compress(input); ok || out != nil {
+				t.Fatalf("malformed suffix was silently discarded: ok=%v output=%s", ok, out)
+			}
+		})
+	}
+	if _, ok := NewToolSchema().Compress([]byte(sampleCatalog + " \t\r\n")); !ok {
+		t.Fatal("valid trailing whitespace must remain accepted")
+	}
+}
+
 func TestToolSchemaIdempotent(t *testing.T) {
 	c := NewToolSchema()
 	once, ok := c.Compress([]byte(sampleCatalog))

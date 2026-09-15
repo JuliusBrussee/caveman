@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -8,6 +8,24 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const portable = require(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "lib", "portable-process.js"));
+
+test("absolute Windows commands use PATHEXT and skip Unix shims and directories", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "caveman explicit win "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const command = join(root, "npx");
+  writeFileSync(command, "#!/bin/sh\n");
+  mkdirSync(`${command}.EXE`);
+  writeFileSync(`${command}.CMD`, 'node "%~dp0\\cli.js" %*\r\n');
+  const script = join(root, "cli.js");
+  writeFileSync(script, "");
+  const env = { PATHEXT: ".EXE;.CMD" };
+  assert.equal(portable.resolveWindowsCommand(command, env), `${command}.CMD`);
+  assert.deepEqual(portable.portableInvocation(command, ["C:\\path with spaces\\", "%PATH%"], {
+    platform: "win32", env, execPath: "node.exe",
+  }), { command: "node.exe", args: [script, "C:\\path with spaces\\", "%PATH%"] });
+  assert.equal(portable.resolveWindowsCommand("npx", { ...env, Path: `"${root}"` }), `${command}.CMD`);
+  assert.equal(portable.resolveWindowsCommand(join(root, "missing"), env), null);
+});
 
 test("root installer unwraps Windows Node shims without a shell", () => {
   const root = mkdtempSync(join(tmpdir(), "caveman-installer-win-"));

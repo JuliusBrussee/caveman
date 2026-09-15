@@ -1,15 +1,6 @@
-// Registers four test providers.
-//
-// The gated arms ("openai" and "opencode-go") declare the real upstream hosts,
-// because the extension routes a provider only when its base URL points at the
-// host that the proxy sends to. With an open gate, the extension re-points them
-// at the stub gateway, so a passing run never leaves the machine. If routing
-// regresses, the dummy key reaches the real host and the request fails with a
-// 401 error or a DNS error.
-//
-// The loopback arm ("anthropic") points at a dead local port. The closed-gate
-// tests use it, so direct traffic fast-fails locally. The open-gate test for a
-// custom endpoint uses it too: the extension must keep it direct.
+// All endpoints stay on loopback even if routing fails. Native/custom identities
+// match the listener maps in integration.runtime.mjs; no fixture needs a public
+// API request, key, or model response.
 export default function (pi) {
   const model = (id, name) => ({
     id,
@@ -22,14 +13,14 @@ export default function (pi) {
   });
   pi.registerProvider("openai", {
     name: "Stub OpenAI",
-    baseUrl: "https://api.openai.com/v1",
+    baseUrl: "http://127.0.0.1:1/native-openai/v1",
     apiKey: "dummy-key-for-stub",
     api: "openai-completions",
     models: [model("stub-model", "Stub Model")],
   });
   pi.registerProvider("opencode-go", {
     name: "Stub OpenCode Go",
-    baseUrl: "https://opencode.ai/zen/go/v1",
+    baseUrl: "http://127.0.0.1:1/tenant-go/v1",
     apiKey: "dummy-key-for-stub",
     api: "openai-completions",
     models: [model("stub-go-model", "Stub Go Model")],

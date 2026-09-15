@@ -109,7 +109,7 @@ test("stats delegates to the proxy binary and prints its summary", async () => {
   assert.match(out.stdout, /"requests":\s*3/);
 });
 
-test("stats forwards --json and rejects unknown public flags", async () => {
+test("stats requests the detailed JSON report and rejects unknown public flags", async () => {
   const stubDir = mkdtempSync(join(tmpdir(), "cave-proxy-json-"));
   const stub = join(stubDir, "caveman-proxy");
   const argvLog = join(stubDir, "argv.txt");
@@ -125,7 +125,7 @@ test("stats forwards --json and rejects unknown public flags", async () => {
 
   const json = await run(["--json"]);
   assert.equal(json.code, 0, json.stderr);
-  assert.equal(readFileSync(argvLog, "utf8"), "stats --json");
+  assert.equal(readFileSync(argvLog, "utf8"), "stats --report");
   const unknown = await run(["--recent", "5"]);
   assert.equal(unknown.code, 2);
   assert.match(unknown.stderr, /stats \[--json\]/);

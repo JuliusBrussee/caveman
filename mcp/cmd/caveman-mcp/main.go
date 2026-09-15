@@ -12,6 +12,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -80,6 +81,9 @@ func openRecoveryStore() (*ccr.Store, error) {
 				return ccr.OpenMemory()
 			}
 			home = filepath.Join(h, ".caveman")
+		}
+		if err := os.MkdirAll(home, 0o700); err != nil {
+			return nil, fmt.Errorf("create recovery directory %q: %w", home, err)
 		}
 		path = filepath.Join(home, "ccr.db")
 	}

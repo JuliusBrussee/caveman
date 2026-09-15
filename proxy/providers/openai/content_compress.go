@@ -125,6 +125,11 @@ func ExtractStabilizable(body []byte, meta providers.RequestMetadata) ([]provide
 // (per-message parse problems are skipped, not failed), which is what makes the
 // skip safe.
 func rewritableZones(body []byte, meta providers.RequestMetadata, liveOnly bool) ([]zoneCandidate, bool) {
+	// Counting must measure the caller's exact prompt. Neither live compression
+	// nor reuse of a previously compressed prefix may alter an accounting call.
+	if isInputTokenCountEndpoint(meta.Endpoint) {
+		return nil, false
+	}
 	root, ok := rootObjectSpan(body)
 	if !ok {
 		return nil, false

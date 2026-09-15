@@ -8,12 +8,16 @@ const packageJSON = JSON.parse(
 
 test("package publishes only built runtime, types, license, and README", () => {
   assert.equal(packageJSON.name, "@caveman-ai/sdk");
-  assert.equal(packageJSON.version, "1.0.0");
+  assert.equal(packageJSON.version, "1.1.0");
   assert.deepEqual(packageJSON.files, ["dist", "README.md", "LICENSE"]);
   assert.deepEqual(packageJSON.exports, {
     ".": {
       types: "./dist/index.d.ts",
       import: "./dist/index.js",
+    },
+    "./middleware": {
+      types: "./dist/middleware/index.d.ts",
+      import: "./dist/middleware/index.js",
     },
   });
   assert.equal(packageJSON.sideEffects, false);

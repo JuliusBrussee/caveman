@@ -340,8 +340,9 @@ test("openclaw config-file injection keeps attribution header and uses path-attr
     models: {
       providers: {
         myprov: {
+          baseUrl: "https://relay.example/tenant/v1",
           apiKey: "${MYPROV_API_KEY}",
-          api: "openai-completions",
+          api: "openai-responses",
           models: [{ id: "gpt-test", name: "GPT Test" }],
         },
       },
@@ -355,7 +356,7 @@ test("openclaw config-file injection keeps attribution header and uses path-attr
     MYPROV_API_KEY: "sk-openclaw",
   }, () => {
     const agent = profile("openclaw");
-    const env = buildWrapEnv(agent, "http://127.0.0.1:19006");
+    const env = buildWrapEnv(agent, "http://127.0.0.1:19006", "auto", [], { compat_upstreams: { myprov: "https://relay.example/tenant" } });
     const expectedGateway = attributed("http://127.0.0.1:19006", "openclaw");
     assert.equal(env.OPENAI_BASE_URL, expectedGateway);
     assert.equal(env.OPENAI_API_BASE, expectedGateway);
@@ -363,8 +364,8 @@ test("openclaw config-file injection keeps attribution header and uses path-attr
     assert.equal(env.GOOGLE_GEMINI_BASE_URL, expectedGateway);
 
     const cfg = JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
-    assert.equal(cfg.models.providers.caveman.baseUrl, `${expectedGateway}/v1`);
-    assert.equal(cfg.models.providers.caveman.headers["x-cave-agent"], "openclaw");
-    assert.equal(cfg.models.providers.caveman.apiKey, "sk-openclaw");
+    assert.equal(cfg.models.providers.myprov.baseUrl, `${expectedGateway}/compat/myprov/v1`);
+    assert.equal(cfg.models.providers.myprov.headers["x-cave-agent"], "openclaw");
+    assert.equal(cfg.models.providers.myprov.apiKey, "${MYPROV_API_KEY}");
   });
 });

@@ -29,8 +29,10 @@ const storeTSLayout = "2006-01-02 15:04:05.000"
 
 // Store is a SQLite-backed TelemetrySink.
 type Store struct {
-	db     *sql.DB
-	logger *slog.Logger
+	db               *sql.DB
+	logger           *slog.Logger
+	persistent       bool
+	middlewareWriter chan struct{}
 }
 
 const schema = `
@@ -89,7 +91,24 @@ CREATE TABLE IF NOT EXISTS requests (
   compression_token_count_basis TEXT,
   recovery_handle TEXT,
   would_save_tokens INTEGER,
-  would_save_usd REAL
+  would_save_usd REAL,
+  cache_creation_1h_tokens INTEGER,
+  request_tokens_before INTEGER,
+  request_tokens_after INTEGER,
+  request_token_basis TEXT,
+  request_measurement_status TEXT,
+  request_estimated_input_delta_usd REAL,
+  request_savings_basis TEXT,
+  pricing_known INTEGER,
+  pricing_provider TEXT,
+  pricing_model TEXT,
+  pricing_catalog_version TEXT,
+  price_input_per_million REAL,
+  price_output_per_million REAL,
+  price_cache_read_per_million REAL,
+  price_cache_write_per_million REAL,
+  price_cache_write_1h_per_million REAL,
+  price_reasoning_per_million REAL
 );
 
 CREATE TABLE IF NOT EXISTS usage_events (
@@ -274,6 +293,23 @@ var migrations = []string{
 	`ALTER TABLE requests ADD COLUMN compression_token_count_basis TEXT`,
 	`ALTER TABLE requests ADD COLUMN would_save_tokens INTEGER`,
 	`ALTER TABLE requests ADD COLUMN would_save_usd REAL`,
+	`ALTER TABLE requests ADD COLUMN cache_creation_1h_tokens INTEGER`,
+	`ALTER TABLE requests ADD COLUMN request_tokens_before INTEGER`,
+	`ALTER TABLE requests ADD COLUMN request_tokens_after INTEGER`,
+	`ALTER TABLE requests ADD COLUMN request_token_basis TEXT`,
+	`ALTER TABLE requests ADD COLUMN request_measurement_status TEXT`,
+	`ALTER TABLE requests ADD COLUMN request_estimated_input_delta_usd REAL`,
+	`ALTER TABLE requests ADD COLUMN request_savings_basis TEXT`,
+	`ALTER TABLE requests ADD COLUMN pricing_known INTEGER`,
+	`ALTER TABLE requests ADD COLUMN pricing_provider TEXT`,
+	`ALTER TABLE requests ADD COLUMN pricing_model TEXT`,
+	`ALTER TABLE requests ADD COLUMN pricing_catalog_version TEXT`,
+	`ALTER TABLE requests ADD COLUMN price_input_per_million REAL`,
+	`ALTER TABLE requests ADD COLUMN price_output_per_million REAL`,
+	`ALTER TABLE requests ADD COLUMN price_cache_read_per_million REAL`,
+	`ALTER TABLE requests ADD COLUMN price_cache_write_per_million REAL`,
+	`ALTER TABLE requests ADD COLUMN price_cache_write_1h_per_million REAL`,
+	`ALTER TABLE requests ADD COLUMN price_reasoning_per_million REAL`,
 	`ALTER TABLE requests ADD COLUMN session_id TEXT`,
 	`ALTER TABLE requests ADD COLUMN session_correlation_basis TEXT NOT NULL DEFAULT 'uncorrelated'`,
 	`ALTER TABLE requests ADD COLUMN agent_build_sha256 TEXT`,
@@ -333,8 +369,11 @@ func Open(path string, logger *slog.Logger) (*Store, error) {
 			return nil, fmt.Errorf("migrate sqlite %q: %w", path, err)
 		}
 	}
-	return &Store{db: db, logger: logger}, nil
+	return &Store{db: db, logger: logger, persistent: path != ":memory:", middlewareWriter: make(chan struct{}, 1)}, nil
 }
+
+// Persistent reports whether this store retains middleware choices on restart.
+func (s *Store) Persistent() bool { return s != nil && s.persistent }
 
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
@@ -389,7 +428,7 @@ func (s *Store) Record(rec gateway.RequestRecord) {
 		rec.CacheBoundaryKnown = false
 	}
 	invalidTokens := rec.InputTokens < 0 || rec.OutputTokens < 0 || rec.CachedInputTokens < 0 ||
-		rec.CacheCreationInputTokens < 0 || rec.ReasoningTokens < 0 ||
+		rec.CacheCreationInputTokens < 0 || rec.CacheCreation1hTokens < 0 || rec.CacheCreation1hTokens > rec.CacheCreationInputTokens || rec.ReasoningTokens < 0 ||
 		rec.CachedInputTokens > rec.InputTokens ||
 		rec.CacheCreationInputTokens > rec.InputTokens-rec.CachedInputTokens ||
 		rec.ReasoningTokens > rec.OutputTokens
@@ -406,7 +445,7 @@ func (s *Store) Record(rec gateway.RequestRecord) {
 	if invalidTokens {
 		rec.TokenUsageBasis = "provider_malformed"
 		rec.InputTokens, rec.OutputTokens = 0, 0
-		rec.CachedInputTokens, rec.CacheCreationInputTokens, rec.ReasoningTokens = 0, 0, 0
+		rec.CachedInputTokens, rec.CacheCreationInputTokens, rec.CacheCreation1hTokens, rec.ReasoningTokens = 0, 0, 0, 0
 		rec.TotalCostUSD, rec.SavingsUSD = 0, 0
 	}
 	if !providers.ListPriceEligible(rec.Provider, rec.AuthMode) || rec.TokenUsageBasis != "provider_complete" {
@@ -465,6 +504,7 @@ func (s *Store) Record(rec gateway.RequestRecord) {
 		rec.RawRequestSHA256 = ""
 		rec.TransformedRequestSHA256 = ""
 	}
+	sanitizeStatsMeasurement(&rec)
 	_, err := s.db.Exec(
 		`INSERT INTO requests (
 		    ts, request_id, trace_id, label, session_id, session_correlation_basis, agent_build_sha256, efficiency_plan_sha256,
@@ -476,8 +516,13 @@ func (s *Store) Record(rec gateway.RequestRecord) {
 		    reasoning_tokens, total_cost_usd, savings_usd, basis, token_usage_basis, auth_mode, runtime_mode,
             optimization_ids, cache_status, raw_request_sha256, transformed_request_sha256, request_hash_complete,
 		    compression_ratio, compression_tokens_before, compression_tokens_after, compression_token_count_basis, recovery_handle,
-		    would_save_tokens, would_save_usd
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		    would_save_tokens, would_save_usd,
+            cache_creation_1h_tokens, request_tokens_before, request_tokens_after,
+            request_token_basis, request_measurement_status, request_estimated_input_delta_usd, request_savings_basis,
+            pricing_known, pricing_provider, pricing_model, pricing_catalog_version,
+            price_input_per_million, price_output_per_million, price_cache_read_per_million,
+            price_cache_write_per_million, price_cache_write_1h_per_million, price_reasoning_per_million
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		rec.Timestamp, rec.RequestID, rec.TraceID, rec.Label, rec.SessionID, rec.SessionCorrelationBasis, rec.AgentBuildSHA256, rec.EfficiencyPlanSHA256,
 		rec.ContextBill, rec.TransformTrace, rec.TransformLocation, rec.CacheEpoch, rec.CachePrefixSHA256,
 		rec.ProviderCachePrefixSHA256, rec.ProviderCacheComponentSHA256, rec.CacheBoundaryKnown, rec.CacheBust, rec.CompressionEligible,
@@ -488,6 +533,11 @@ func (s *Store) Record(rec gateway.RequestRecord) {
 		strings.Join(rec.OptimizationIDs, ","), rec.CacheStatus, rec.RawRequestSHA256, rec.TransformedRequestSHA256, rec.RequestHashComplete,
 		rec.CompressionRatio, rec.CompressionTokensBefore, rec.CompressionTokensAfter, rec.CompressionTokenCountBasis, rec.RecoveryHandle,
 		rec.WouldSaveTokens, rec.WouldSaveUSD,
+		rec.CacheCreation1hTokens, rec.RequestTokensBefore, rec.RequestTokensAfter,
+		rec.RequestTokenBasis, rec.RequestMeasurementStatus, rec.RequestEstimatedInputDeltaUSD, rec.RequestSavingsBasis,
+		rec.PricingKnown, rec.PricingProvider, rec.PricingModel, rec.PricingCatalogVersion,
+		rec.PriceInputPerMillion, rec.PriceOutputPerMillion, rec.PriceCacheReadPerMillion,
+		rec.PriceCacheWritePerMillion, rec.PriceCacheWrite1hPerMillion, rec.PriceReasoningPerMillion,
 	)
 	if err != nil && s.logger != nil {
 		s.logger.Warn("local spend store insert failed", "error", err, "request_id", rec.RequestID)

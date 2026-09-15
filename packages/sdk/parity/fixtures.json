@@ -1,5 +1,11 @@
 {
   "version": 1,
+  "transport": {
+    "redirect_statuses": [301, 302, 303, 307, 308],
+    "redirect_origins": ["same", "cross"],
+    "provider_body": {"model": "fixture", "input": "keep  spaces\nand café"},
+    "provider_response": {"id": "fixture-response"}
+  },
   "description": "Cross-language SDK parity fixtures. The TypeScript (@caveman-ai/sdk) and Python (caveman_cloud) SDKs each run EVERY operation below against a mocked transport and assert the same wire request (method, path, header set, body) and the same derived result. A field present in one SDK and absent in the other makes one side's assertion fail — so this file is a release gate: change one SDK without the other and CI goes red. Both SDKs MUST implement a handler for every operation; a missing handler is a failure, never a skip.",
   "config": {
     "api_key": "cave_live_parity_key",

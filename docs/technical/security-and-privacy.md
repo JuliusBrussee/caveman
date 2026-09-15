@@ -6,12 +6,25 @@ local proxy.
 
 ## Trust model
 
-Local proxy is designed for one trusted operating-system user. It binds to
-loopback and has no multi-user authentication layer. Do not expose it on a LAN,
-container bridge, public interface, or shared host.
+By default the proxy is a single-operator tool: it binds to loopback and accepts
+every request on it without authentication. In that configuration do not expose
+it on a LAN, container bridge, public interface, or shared host — a non-loopback
+listen address is refused at startup.
+
+A shared deployment is a separate, explicit configuration. It requires
+`CAVEMAN_AUTH_TOKEN`, and then every request must present that token in
+`x-cave-api-key` or `Authorization: Bearer`. The proxy consumes the header before
+resolving a provider credential, so the shared token is never forwarded upstream
+and is never mistaken for a provider key. Provider credentials live on the
+server, in its environment or in an AWS role, not on the clients. The token is a
+single shared secret with no per-user identity: rotate it when someone leaves.
+Keep the listener inside a private network and terminate TLS in front of it —
+the proxy speaks plain HTTP. Health and metrics endpoints stay unauthenticated
+for load balancers, so do not expose them publicly. See
+[Deploy the proxy for a team](deploy.md).
 
 Connected Caveman Cloud commands have separate account and organization
-controls. Those controls do not turn local loopback proxy into a shared service.
+controls. Those controls are not what gates a self-hosted shared proxy.
 
 ## Data flow
 
@@ -47,6 +60,18 @@ self-hosted provider needs explicit `CAVE_SSRF_ALLOWLIST` configuration.
 
 Allow only exact hosts needed. Broad private-network ranges can let prompt-driven
 requests reach unrelated local services.
+
+When an outbound proxy is in use (`upstream_proxy`, which by default honours
+`HTTPS_PROXY`), that proxy connects to providers on Caveman's behalf, so the
+boundary moves to it. Caveman still applies the range checks to IP-literal
+destinations and rejects `localhost` before selecting it, but hostnames are
+resolved by the proxy, so hostname-level policy is the proxy's own access
+control. The same applies to the Bedrock and Vertex endpoint pre-flight: for a
+proxied destination it checks host syntax, `localhost`, and IP-literal ranges
+without resolving. The proxy
+address is operator configuration and is dialed without an allowlist entry.
+Destinations that `NO_PROXY` sends direct keep the full guard and still need a
+`CAVE_SSRF_ALLOWLIST` entry when they are private or loopback.
 
 ## Lossy transforms
 
@@ -99,11 +124,14 @@ suggested mitigation without real credentials or customer data.
 
 ## Deployment checklist
 
-1. Confirm proxy listens on `127.0.0.1`.
-2. Keep secrets out of configuration files.
-3. Review enabled transforms and model allowlists.
-4. Set precise SSRF allowlist only when required.
-5. Restrict local database and hook-state permissions.
-6. Test recovery before a long lossy session.
-7. Run record mode for byte-sensitive workflows.
-8. Review agent, browser, hook, and plugin permissions separately.
+1. Confirm the proxy listens on `127.0.0.1`, or that a non-loopback listener is
+   deliberate, private, and behind TLS.
+2. Set `CAVEMAN_AUTH_TOKEN` from a secret store for any shared listener, and
+   rotate it on team changes.
+3. Keep secrets out of configuration files.
+4. Review enabled transforms and model allowlists.
+5. Set precise SSRF allowlist only when required.
+6. Restrict local database and hook-state permissions.
+7. Test recovery before a long lossy session.
+8. Run record mode for byte-sensitive workflows.
+9. Review agent, browser, hook, and plugin permissions separately.

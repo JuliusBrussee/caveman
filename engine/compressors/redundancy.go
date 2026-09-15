@@ -3,6 +3,7 @@ package compressors
 import (
 	"bytes"
 	"unicode"
+	"unicode/utf8"
 )
 
 // keepNonRedundant guarantees that every distinct kind of content in a payload
@@ -185,13 +186,17 @@ func unitVocabulary(unit []byte) profile {
 func tokenize(unit []byte, maskDigits bool) (map[string]struct{}, int) {
 	vocab := make(map[string]struct{})
 	words := 0
-	var token []rune
+	// Store token bytes directly. Converting a []rune for both map lookup and
+	// insertion repeatedly re-encodes every word in long log/document streams.
+	var scratch [128]byte
+	token := scratch[:0]
 	hasLetter := false
 	inDigits := false
 	flush := func() {
 		if len(token) > 0 {
-			if _, seen := vocab[string(token)]; !seen {
-				vocab[string(token)] = struct{}{}
+			key := string(token)
+			if _, seen := vocab[key]; !seen {
+				vocab[key] = struct{}{}
 				if hasLetter {
 					words++
 				}
@@ -210,10 +215,10 @@ func tokenize(unit []byte, maskDigits bool) (map[string]struct{}, int) {
 					inDigits = true
 				}
 			} else {
-				token = append(token, r)
+				token = utf8.AppendRune(token, r)
 			}
 		case unicode.IsLetter(r) || r == '_':
-			token = append(token, r)
+			token = utf8.AppendRune(token, r)
 			hasLetter = true
 			inDigits = false
 		default:

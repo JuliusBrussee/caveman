@@ -5,14 +5,19 @@
 package config
 
 import (
+	"crypto/x509"
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/openaicompat"
+	"github.com/JuliusBrussee/caveman/shared/platform/cabundle"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
+	"golang.org/x/net/http/httpproxy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -34,6 +39,20 @@ type Config struct {
 	Mode string `yaml:"mode"`
 	// Listen is the host:port standalone mode binds to.
 	Listen string `yaml:"listen"`
+	// AuthToken is the optional INBOUND shared secret. It is read only from
+	// CAVEMAN_AUTH_TOKEN, never from caveman.yaml — secrets never live in that
+	// file (see the package doc) and an inbound credential is no exception.
+	// Empty keeps the historical behavior: standalone.Auth accepts every request,
+	// which is only safe on loopback. A non-empty token is what makes a
+	// non-loopback listen legal (see validateListen), because it is the sole
+	// thing standing between a VPC/container bind and every configured provider
+	// credential.
+	AuthToken string `yaml:"-" json:"-"`
+	// AuthTokenYAML exists only to CATCH `auth_token:` in caveman.yaml. The field
+	// above is yaml:"-", so before this probe such a key was silently dropped and
+	// the operator got a proxy they believed was gated and was not. Load refuses
+	// to start on a non-empty value; nothing ever reads it.
+	AuthTokenYAML string `yaml:"auth_token" json:"-"`
 	// Optimizers gates provider-native optimizers by id.
 	Optimizers map[string]bool `yaml:"optimizers"`
 	// SubscriptionCompress is the operator off-switch for subscription-auth
@@ -65,6 +84,40 @@ type Config struct {
 	Providers map[string]ProviderConfig `yaml:"providers"`
 	// Compat carries named OpenAI-compatible upstreams mounted at /compat/<name>/.
 	Compat map[string]CompatConfig `yaml:"compat"`
+	// UpstreamProxy routes provider traffic through an HTTP proxy. Empty and
+	// "env" (the default) honour HTTPS_PROXY/HTTP_PROXY/NO_PROXY like curl and
+	// every other tool on the host; "off" dials providers directly regardless;
+	// a URL (http://, https://, socks5://, optional user:pass@) pins one proxy
+	// for provider traffic only, without exporting process-wide proxy variables
+	// that the wrapped agent's tool executions would inherit. Also set via
+	// CAVE_UPSTREAM_PROXY. See ssrf.Config.Proxy for the guard contract.
+	UpstreamProxy string `yaml:"upstream_proxy"`
+	// CABundle is a PEM file of extra roots to trust for provider TLS, on top of
+	// the system store — what corporate TLS inspection (Zscaler, Netskope, …)
+	// needs. Also set via CAVE_CA_BUNDLE. Independently of this key, bundles
+	// named by SSL_CERT_FILE, REQUESTS_CA_BUNDLE and NODE_EXTRA_CA_CERTS are
+	// appended too, so an environment already set up for curl, Python or Claude
+	// Code works unchanged. All bundles are additive; a corrupt one fails Load.
+	CABundle string `yaml:"ca_bundle"`
+	// SkippedCABundles lists inherited CA env vars (never ca_bundle itself)
+	// whose file was missing or unusable. Load skips them rather than refusing
+	// to start — Go's own loader and Node both tolerate a bad inherited bundle,
+	// and the SSL_CERT_FILE-points-at-a-directory mixup is common — and the
+	// binary logs them at startup. An unusable bundle contributes nothing, never
+	// a partial set of roots.
+	SkippedCABundles []SkippedCABundle `yaml:"-"`
+
+	rootCAs             *x509.CertPool
+	upstreamProxy       func(*http.Request) (*url.URL, error)
+	upstreamProxyParsed bool
+}
+
+// SkippedCABundle names one inherited CA env var that Load could not use, with
+// the reason. It stays structured so the startup log records the variable and
+// the failure as separate fields instead of one opaque string.
+type SkippedCABundle struct {
+	Env   string
+	Error string
 }
 
 // ProviderConfig is the per-provider configuration in caveman.yaml.
@@ -76,8 +129,17 @@ type ProviderConfig struct {
 
 // CompatConfig is one named OpenAI-compatible upstream in caveman.yaml.
 type CompatConfig struct {
-	BaseURL   string `yaml:"base_url"`
-	APIKeyEnv string `yaml:"api_key_env"`
+	BaseURL        string   `yaml:"base_url"`
+	APIKeyEnv      string   `yaml:"api_key_env"`
+	ForwardHeaders []string `yaml:"forward_headers"`
+	// WireDialect selects which provider's usage-accounting dialect the mount
+	// parses responses with. Empty keeps the shared OpenAI-shape parser.
+	// "anthropic" is for a mount whose upstream answers the Anthropic Messages
+	// wire shape: its usage block reports input_tokens exclusive of cache
+	// reads/writes, which the OpenAI-shape contradiction check misreads as
+	// malformed on every cache-warm row (issue #1026). Applies to the whole
+	// mount, not per path. Unknown values fail config load.
+	WireDialect string `yaml:"wire_dialect"`
 }
 
 // knownModes is the set of accepted runtime modes; anything else fails closed to
@@ -105,20 +167,151 @@ func Load(path string) (Config, error) {
 			return cfg, err
 		}
 	}
+	if strings.TrimSpace(cfg.AuthTokenYAML) != "" {
+		// Never echo the value: it reached a file on disk, but this error reaches
+		// the proxy log.
+		return Config{}, fmt.Errorf("auth_token: in %s is ignored — the inbound token is read only from the CAVEMAN_AUTH_TOKEN environment variable; remove the key", path)
+	}
 	cfg = cfg.withDefaults()
-	if err := validateListen(cfg.Listen); err != nil {
+	if err := validateAuthToken(cfg.AuthToken); err != nil {
+		return Config{}, err
+	}
+	if err := validateListen(cfg.Listen, cfg.AuthToken != ""); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.validateCompat(); err != nil {
 		return Config{}, err
 	}
+	proxyFunc, err := parseUpstreamProxy(cfg.UpstreamProxy)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.upstreamProxy, cfg.upstreamProxyParsed = proxyFunc, true
+	if err := cfg.loadRootCAs(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
-// validateListen keeps standalone's unauthenticated BYOK proxy local to one
-// operator. Binding an empty, wildcard, or non-loopback host would expose every
-// configured provider credential to the network with no inbound authentication.
-func validateListen(listen string) error {
+// inheritedCABundleEnv names the CA bundle variables other toolchains already
+// read: Go/OpenSSL, Python requests, and Node (which Claude Code runs on).
+var inheritedCABundleEnv = []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"}
+
+// loadRootCAs builds the provider trust store. It stays nil — Go's default
+// verification — when no bundle is configured, so the common case keeps the
+// platform verifier untouched.
+func (c *Config) loadRootCAs() error {
+	var certs []*x509.Certificate
+	if c.CABundle = strings.TrimSpace(c.CABundle); c.CABundle != "" {
+		loaded, err := cabundle.Certificates(c.CABundle)
+		if err != nil {
+			return fmt.Errorf("ca_bundle: %w", err)
+		}
+		certs = append(certs, loaded...)
+	}
+	for _, name := range inheritedCABundleEnv {
+		path := strings.TrimSpace(env.String(name, ""))
+		if path == "" {
+			continue
+		}
+		loaded, err := cabundle.Certificates(path)
+		if err != nil {
+			c.SkippedCABundles = append(c.SkippedCABundles, SkippedCABundle{Env: name, Error: err.Error()})
+			continue
+		}
+		certs = append(certs, loaded...)
+	}
+	if len(certs) == 0 {
+		return nil
+	}
+	pool, err := cabundle.PoolOf(certs)
+	if err != nil {
+		return fmt.Errorf("ca bundle: %w", err)
+	}
+	c.rootCAs = pool
+	return nil
+}
+
+// RootCAs returns the provider TLS trust store, or nil for Go's default.
+func (c Config) RootCAs() *x509.CertPool { return c.rootCAs }
+
+// UpstreamProxyFunc returns the Transport.Proxy selector for UpstreamProxy, or
+// nil for a direct client. Load parses UpstreamProxy once and rejects bad values
+// there, so for a loaded Config this is a cached-field accessor like RootCAs.
+// A Config built by hand (tests) never went through that gate, so it parses
+// here. An unparseable value dials direct rather than taking a request path
+// down with a panic: falling back to the environment default would both hide
+// the bad value and quietly move the SSRF boundary to a proxy the caller never
+// named.
+func (c Config) UpstreamProxyFunc() func(*http.Request) (*url.URL, error) {
+	if c.upstreamProxyParsed {
+		return c.upstreamProxy
+	}
+	fn, err := parseUpstreamProxy(c.UpstreamProxy)
+	if err != nil {
+		return nil
+	}
+	return fn
+}
+
+func parseUpstreamProxy(raw string) (func(*http.Request) (*url.URL, error), error) {
+	raw = strings.TrimSpace(raw)
+	switch strings.ToLower(raw) {
+	case "", "env":
+		// ProxyFromEnvironment snapshots the proxy variables once per process
+		// (sync.Once), so a test that t.Setenv's HTTPS_PROXY must build its own
+		// httpproxy.Config selector instead — see ssrf_test.go.
+		return http.ProxyFromEnvironment, nil
+	case "off":
+		return nil, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("upstream_proxy %q must be \"env\", \"off\" or a proxy URL", raw)
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return nil, fmt.Errorf("upstream_proxy %q: unsupported scheme %q", raw, u.Scheme)
+	}
+	// Same selector semantics as env mode: localhost/loopback destinations (an
+	// allowlisted Ollama) and NO_PROXY matches are dialed direct rather than
+	// handed to a corporate proxy that cannot reach them.
+	selector := (&httpproxy.Config{HTTPProxy: raw, HTTPSProxy: raw, NoProxy: env.String("NO_PROXY", env.String("no_proxy", ""))}).ProxyFunc()
+	return func(req *http.Request) (*url.URL, error) { return selector(req.URL) }, nil
+}
+
+// minAuthTokenBytes is the floor for the inbound shared secret. The token is the
+// only gate in front of every configured provider credential once the proxy is
+// reachable off-host, so a short one is not a weaker deployment, it is an open one.
+const minAuthTokenBytes = 16
+
+// validateAuthToken refuses a token that cannot survive one HTTP header value:
+// control bytes terminate the field, and a space would split scheme from value in
+// `Authorization: Bearer <token>`. The error never echoes the value — it is a
+// secret and this message reaches the proxy log.
+func validateAuthToken(token string) error {
+	if token == "" {
+		return nil
+	}
+	if len(token) < minAuthTokenBytes {
+		return fmt.Errorf("CAVEMAN_AUTH_TOKEN must be at least %d bytes", minAuthTokenBytes)
+	}
+	for _, r := range token {
+		if r == ' ' || r < 0x20 || r == 0x7f {
+			return fmt.Errorf("CAVEMAN_AUTH_TOKEN must contain no spaces or control characters")
+		}
+	}
+	return nil
+}
+
+// validateListen keeps standalone's BYOK proxy local to one operator unless an
+// inbound credential gates it. Binding an empty, wildcard, or non-loopback host
+// would expose every configured provider credential to the network with no
+// inbound authentication; authenticated says CAVEMAN_AUTH_TOKEN is set, so
+// standalone.Auth rejects every request that does not present it and the wider
+// bind becomes a deliberate operator choice instead of an accident.
+func validateListen(listen string, authenticated bool) error {
 	host, port, err := net.SplitHostPort(strings.TrimSpace(listen))
 	if err != nil || port == "" {
 		return fmt.Errorf("listen address %q must be loopback host:port", listen)
@@ -128,7 +321,10 @@ func validateListen(listen string) error {
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("listen address %q is not loopback; standalone proxy has no inbound authentication", listen)
+		if authenticated {
+			return nil
+		}
+		return fmt.Errorf("listen address %q is not loopback; standalone proxy has no inbound authentication; set CAVEMAN_AUTH_TOKEN to expose the proxy beyond loopback", listen)
 	}
 	return nil
 }
@@ -146,6 +342,9 @@ func (c Config) withDefaults() Config {
 	if listen := env.String("CAVEMAN_LISTEN", ""); listen != "" {
 		c.Listen = listen
 	}
+	// Assigned unconditionally: the environment is the ONLY source for this
+	// secret, so nothing a config file (or a caller) put in the field may survive.
+	c.AuthToken = strings.TrimSpace(env.String("CAVEMAN_AUTH_TOKEN", ""))
 	if sub := env.String("CAVEMAN_SUBSCRIPTION_COMPRESS", ""); sub != "" {
 		c.SubscriptionCompress = sub
 	}
@@ -157,6 +356,12 @@ func (c Config) withDefaults() Config {
 	}
 	if env.Bool("CAVEMAN_OBSERVE_ESTIMATE", false) {
 		c.ObserveEstimate = true
+	}
+	if proxy := env.String("CAVE_UPSTREAM_PROXY", ""); proxy != "" {
+		c.UpstreamProxy = proxy
+	}
+	if bundle := env.String("CAVE_CA_BUNDLE", ""); bundle != "" {
+		c.CABundle = bundle
 	}
 	if c.Listen == "" {
 		c.Listen = DefaultListen
@@ -255,6 +460,12 @@ func (c Config) validateCompat() error {
 		if err := openaicompat.ValidateBaseURL(upstream.BaseURL); err != nil {
 			return fmt.Errorf("compat upstream %q: base_url: %w", name, err)
 		}
+		if err := openaicompat.ValidateForwardHeaders(upstream.ForwardHeaders); err != nil {
+			return fmt.Errorf("compat upstream %q: forward_headers: %w", name, err)
+		}
+		if err := openaicompat.ValidateWireDialect(upstream.WireDialect); err != nil {
+			return fmt.Errorf("compat upstream %q: %w", name, err)
+		}
 	}
 	return nil
 }
@@ -283,23 +494,7 @@ func (c Config) Credential(provider string) providers.Credential {
 				Scheme:   "bearer",
 			}
 		}
-		accessKey := strings.TrimSpace(env.String("AWS_ACCESS_KEY_ID", ""))
-		secretKey := strings.TrimSpace(env.String("AWS_SECRET_ACCESS_KEY", ""))
-		// A partial IAM pair is never useful and must not fall through as an
-		// apparently valid credential. Return empty so Bedrock fails closed before
-		// any unsigned upstream request can be sent.
-		if accessKey == "" || secretKey == "" {
-			return providers.Credential{Mode: "ephemeral_header"}
-		}
-		key := accessKey + ":" + secretKey
-		if sessionToken := strings.TrimSpace(env.String("AWS_SESSION_TOKEN", "")); sessionToken != "" {
-			key += ":" + sessionToken
-		}
-		return providers.Credential{
-			Mode:     "ephemeral_header",
-			Key:      key,
-			AuthKind: "aws_access_keys",
-		}
+		return c.BedrockSigningCredential()
 	}
 	if key, ok := providerEnvKey[provider]; ok {
 		return providers.Credential{
@@ -309,6 +504,26 @@ func (c Config) Credential(provider string) providers.Credential {
 		}
 	}
 	return providers.Credential{Mode: "ephemeral_header"}
+}
+
+// BedrockSigningCredential resolves only the configured IAM signing principal.
+// An incoming SigV4 request has already selected IAM; a Bedrock bearer key in
+// the same process must not replace that selection when the proxy re-signs it.
+func (c Config) BedrockSigningCredential() providers.Credential {
+	accessKey := strings.TrimSpace(env.String("AWS_ACCESS_KEY_ID", ""))
+	secretKey := strings.TrimSpace(env.String("AWS_SECRET_ACCESS_KEY", ""))
+	credential := providers.Credential{Mode: "ephemeral_header"}
+	// A partial pair cannot sign a request. The adapter produces an actionable,
+	// secret-free error when the request came from an AWS SigV4 client.
+	if accessKey == "" || secretKey == "" {
+		return credential
+	}
+	credential.Key = accessKey + ":" + secretKey
+	credential.AuthKind = "aws_access_keys"
+	if sessionToken := strings.TrimSpace(env.String("AWS_SESSION_TOKEN", "")); sessionToken != "" {
+		credential.Key += ":" + sessionToken
+	}
+	return credential
 }
 
 // builtinCompat holds the named OpenAI-compatible upstreams that work with no

@@ -3,6 +3,7 @@ package compressors
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"regexp"
 	"strings"
 	"unicode"
@@ -94,8 +95,8 @@ func (c *toolSchemaCompressor) Compress(input []byte) ([]byte, bool) {
 	if err := dec.Decode(&v); err != nil {
 		return nil, false // malformed JSON → pass-through
 	}
-	if dec.More() {
-		return nil, false // more than one value → not a single catalog payload
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, false // extra value or malformed suffix → not a single catalog payload
 	}
 	out, err := json.Marshal(c.compressDocument(v))
 	if err != nil {

@@ -78,11 +78,20 @@ Three honest tiers — never claim a rewrite an agent can't do:
   (opencode/hermes/openclaw) deterministically reroutes the command before it runs.
   Claude + Gemini share one `installSettingsHook` (same settings.json shape, different
   event/matcher); every hard-rewrite method routes the command through `caveman shrink-hook`.
+  **`codex-pretooluse` is declared but inert** (#1037): Codex matches a saved approval
+  against the command text, so rewriting it re-prompts the user for a command they had
+  already allowed, and the rewritten command leads with the resolved caveman/node path
+  that no `prefix_rule` can cover. `shrinkHook` therefore declines every Codex tool
+  event and `hooks install codex` installs nothing. Retiring the method outright is
+  still open: the same `command_hook` entry carries codex's directives
+  instructions-file, and `nativeHooksDocument` would need to migrate the entry
+  `caveman enable codex` already wrote into existing installs.
 - `instruction-note` (+ `file`) — **soft model-nudge**: append a delimited "prefer
   `caveman shrink`" note to a file the agent auto-reads. Best-effort, idempotent,
   install→uninstall is a byte-exact round-trip. Retained only for hosts without a
-  current hard hook surface. Codex now uses its native `PreToolUse` hook in
-  `~/.codex/hooks.json` and supports `updatedInput` when allowing the tool.
+  current hard hook surface. (Codex was moved off this tier to its native
+  `PreToolUse` hook; see the `codex-pretooluse` note above for why that hook no
+  longer rewrites anything.)
 - **absent** — **manual-only**: no installable surface (e.g. Aider); `hooks` just prints
   the `caveman shrink -- <cmd>` guidance.
 

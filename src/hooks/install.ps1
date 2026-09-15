@@ -29,6 +29,40 @@ $HookFiles = @("package.json", "caveman-config.js", "caveman-parse.js", "caveman
 # Resolve source — works from repo clone or remote
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
 
+# Use the unified JSONC parser when running from a clone. Standalone copies
+# refuse unreadable settings before copying hooks or replacing existing files.
+$SettingsHelper = ""
+if ($ScriptDir) {
+    $candidate = Join-Path $ScriptDir "../../bin/lib/settings.js"
+    if (Test-Path -LiteralPath $candidate) { $SettingsHelper = $candidate }
+}
+$env:CAVEMAN_SETTINGS = $Settings
+$env:CAVEMAN_HOOKS_DIR = $HooksDir
+$env:CAVEMAN_SETTINGS_HELPER = $SettingsHelper
+@'
+const fs = require('fs');
+try {
+  const manifest = process.env.CAVEMAN_HOOKS_DIR + '/package.json';
+  if (fs.existsSync(manifest)) {
+    const value = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value) || (value.type !== undefined && value.type !== 'commonjs')) {
+      throw new Error('existing hooks/package.json is incompatible with CommonJS hooks');
+    }
+  }
+  const file = process.env.CAVEMAN_SETTINGS;
+  if (fs.existsSync(file)) {
+    const helper = process.env.CAVEMAN_SETTINGS_HELPER;
+    const value = helper ? require(helper).readSettings(file) : JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('settings.json must be a readable object');
+  }
+} catch (error) {
+  console.error('Cannot install standalone hooks: ' + error.message);
+  console.error('Nothing was changed. For JSONC settings, use bin/install.js from a clone.');
+  process.exit(1);
+}
+'@ | node --input-type=commonjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 # Check if already installed (unless -Force). Older installs only had two hook
 # files, so require the full current set plus the hook registrations before we
 # short-circuit.
@@ -98,6 +132,10 @@ if (-not (Test-Path $HooksDir)) {
 # 2. Copy or download hook files
 foreach ($hook in $HookFiles) {
     $dest = Join-Path $HooksDir $hook
+    if ($hook -eq "package.json" -and (Test-Path -LiteralPath $dest)) {
+        Write-Host "  Preserved existing: $dest"
+        continue
+    }
     $localSource = if ($ScriptDir) { Join-Path $ScriptDir $hook } else { $null }
 
     if ($localSource -and (Test-Path $localSource)) {
@@ -132,7 +170,11 @@ const fs = require('fs');
 const settingsPath = process.env.CAVEMAN_SETTINGS;
 const hooksDir = process.env.CAVEMAN_HOOKS_DIR;
 const managedStatusLinePath = hooksDir + '/caveman-statusline.ps1';
-const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+const shared = process.env.CAVEMAN_SETTINGS_HELPER ? require(process.env.CAVEMAN_SETTINGS_HELPER) : null;
+const meta = {};
+const settings = shared ? shared.readSettings(settingsPath, meta) : JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('settings.json must be a readable object');
+if (meta.jsonc) console.log('  Comments are preserved in ' + settingsPath + '.bak; updated settings use JSON.');
 if (!settings.hooks) settings.hooks = {};
 
 // SessionStart
@@ -189,7 +231,8 @@ if (!settings.statusLine) {
   }
 }
 
-fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+if (shared) shared.writeSettings(settingsPath, settings);
+else fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
 console.log('  Hooks wired in settings.json');
 '@
 
@@ -197,8 +240,13 @@ $tmpScript = Join-Path $env:TEMP "caveman-install-$([System.Diagnostics.Process]
 try {
     [System.IO.File]::WriteAllText($tmpScript, $nodeScript, [System.Text.Encoding]::UTF8)
     node $tmpScript
+    $MergeExitCode = $LASTEXITCODE
 } finally {
     if (Test-Path $tmpScript) { Remove-Item $tmpScript -Force }
+}
+if ($MergeExitCode -ne 0) {
+    Write-Host "Hook settings could not be updated; installation did not complete." -ForegroundColor Red
+    exit $MergeExitCode
 }
 
 Write-Host ""

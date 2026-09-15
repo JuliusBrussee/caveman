@@ -9,6 +9,12 @@ $ErrorActionPreference = "Stop"
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
 $HooksDir = Join-Path $ClaudeDir "hooks"
 $Settings = Join-Path $ClaudeDir "settings.json"
+$SettingsHelper = ""
+if ($PSScriptRoot) {
+    $candidate = Join-Path $PSScriptRoot "../../bin/lib/settings.js"
+    if (Test-Path -LiteralPath $candidate) { $SettingsHelper = $candidate }
+}
+$env:CAVEMAN_SETTINGS_HELPER = $SettingsHelper
 
 $HookFiles = @("package.json", "caveman-config.js", "caveman-parse.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js")
 
@@ -69,8 +75,10 @@ const settingsPath = process.env.CAVEMAN_SETTINGS;
 // JSON.parse. Bail out before touching anything rather than half-uninstalling:
 // bin/install.js --uninstall handles JSONC properly.
 let settings;
+const shared = process.env.CAVEMAN_SETTINGS_HELPER ? require(process.env.CAVEMAN_SETTINGS_HELPER) : null;
 try {
-  settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  settings = shared ? shared.readSettings(settingsPath) : JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('settings.json must be a readable object');
 } catch (e) {
   console.error('  Cannot parse ' + settingsPath + ': ' + e.message);
   console.error('  Nothing was changed. If the file has // comments, run:');
@@ -139,7 +147,8 @@ if (settings.statusLine) {
   }
 }
 
-fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+if (shared) shared.writeSettings(settingsPath, settings);
+else fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
 console.log('  Removed ' + removed + ' caveman hook entries from settings.json');
 '@
 
@@ -177,6 +186,27 @@ $RemovedFiles = 0
 foreach ($hook in $HookFiles) {
     $path = Join-Path $HooksDir $hook
     if (Test-Path $path) {
+        if ($hook -eq "package.json") {
+            $OwnedManifest = $false
+            # ConvertFrom-Json unwraps one-element arrays and accepts comments
+            # on newer PowerShell. Use the same strict ownership check as Node.
+            if (Get-Command node -ErrorAction SilentlyContinue) {
+                $env:CAVEMAN_MANIFEST_PATH = $path
+                try {
+                    @'
+try {
+  const value = JSON.parse(require('fs').readFileSync(process.env.CAVEMAN_MANIFEST_PATH, 'utf8'));
+  process.exit(value && value.type === 'commonjs' && Object.keys(value).length === 1 ? 0 : 1);
+} catch (_) { process.exit(1); }
+'@ | node --input-type=commonjs
+                    $OwnedManifest = $LASTEXITCODE -eq 0
+                } catch {}
+            }
+            if (-not $OwnedManifest) {
+                Write-Host "  Preserved foreign manifest: $path"
+                continue
+            }
+        }
         Remove-Item $path -Force
         Write-Host "  Removed: $path"
         $RemovedFiles++

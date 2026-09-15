@@ -173,3 +173,61 @@ jobs:
       # platform this job exists to cover.
       - name: Go test suite
         run: go test ./engine/... ./proxy/... ./shared/...
+
+  # The Dockerfile is a deploy artifact like the installer is: nothing else in
+  # CI builds it, so a broken COPY or a moved package path would only surface at
+  # release time. Cheap check — one native-arch build, no registry, no push.
+  container-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build the proxy image
+        run: docker build --build-arg VERSION=ci -t caveman-proxy:ci .
+      # Proves the binary runs in the distroless image AND that the ldflags
+      # version stamp actually reached `var version` in main.go.
+      - name: Image runs and reports the stamped version
+        run: |
+          set -euo pipefail
+          got="$(docker run --rm caveman-proxy:ci version)"
+          [[ "$got" == "ci" ]] || { echo "expected version 'ci', got '$got'" >&2; exit 1; }
+      # The image listens on 0.0.0.0 by default, so booting without an inbound
+      # token would put every configured provider credential on the network with
+      # no authentication. That refusal is the one container behaviour worth
+      # proving on every push. Output is combined: the proxy's structured log
+      # goes to stdout.
+      - name: Image refuses to serve with no CAVEMAN_AUTH_TOKEN
+        run: |
+          set -euo pipefail
+          if out="$(docker run --rm caveman-proxy:ci serve 2>&1)"; then
+            echo "serve started on 0.0.0.0 with no inbound token: $out" >&2
+            exit 1
+          fi
+          grep -q CAVEMAN_AUTH_TOKEN <<<"$out" || {
+            echo "refusal did not name CAVEMAN_AUTH_TOKEN: $out" >&2
+            exit 1
+          }
+      # ...and with a token it serves: readiness answers unauthenticated for the
+      # load balancer, inference does not answer at all without the token.
+      - name: Image serves readiness open and inference gated
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f caveman-proxy-ci >/dev/null 2>&1 || true; docker volume rm -f caveman-ci-data >/dev/null 2>&1 || true' EXIT
+          docker volume create caveman-ci-data >/dev/null
+          docker run -d --name caveman-proxy-ci \
+            --read-only -v caveman-ci-data:/data \
+            -e CAVEMAN_AUTH_TOKEN="$(openssl rand -hex 32)" \
+            -p 127.0.0.1:18787:8787 caveman-proxy:ci >/dev/null
+          for _ in $(seq 1 30); do
+            [[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18787/health/ready || true)" == "200" ]] && break
+            sleep 1
+          done
+          ready="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18787/health/ready)"
+          [[ "$ready" == "200" ]] || {
+            echo "readiness = $ready, want 200"; docker logs caveman-proxy-ci; exit 1
+          }
+          gated="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18787/v1/messages \
+            -H 'content-type: application/json' -d '{"model":"claude-sonnet-4-5","max_tokens":1,"messages":[]}')"
+          [[ "$gated" == "401" ]] || {
+            echo "unauthenticated inference = $gated, want 401"; docker logs caveman-proxy-ci; exit 1
+          }
