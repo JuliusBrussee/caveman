@@ -1,0 +1,2046 @@
+{
+  "endpoint": "GET /api/v1/orders?limit=40",
+  "count": 40,
+  "orders": [
+    {
+      "order_id": "ORD-2026-1000",
+      "created_at": "2026-06-01T09:00:00Z",
+      "updated_at": "2026-06-01T14:00:00Z",
+      "status": "shipped",
+      "customer": {
+        "id": "CUST-500",
+        "name": "Customer Number 0",
+        "email": "customer0@example-shop.com",
+        "phone": "+31 6 1234 1000",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "1 Marktstraat",
+        "line2": "",
+        "city": "Amsterdam",
+        "postal_code": "1000 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-0",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-0",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-0",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 59.97,
+        "tax": 12.59,
+        "shipping": 4.95,
+        "grand_total": 77.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1001",
+      "created_at": "2026-06-02T09:01:00Z",
+      "updated_at": "2026-06-02T14:01:00Z",
+      "status": "processing",
+      "customer": {
+        "id": "CUST-501",
+        "name": "Customer Number 1",
+        "email": "customer1@example-shop.com",
+        "phone": "+31 6 1234 1001",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "2 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Rotterdam",
+        "postal_code": "1001 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-1",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-1",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-1",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 60.97,
+        "tax": 13.59,
+        "shipping": 4.95,
+        "grand_total": 78.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1002",
+      "created_at": "2026-06-03T09:02:00Z",
+      "updated_at": "2026-06-03T14:02:00Z",
+      "status": "delivered",
+      "customer": {
+        "id": "CUST-502",
+        "name": "Customer Number 2",
+        "email": "customer2@example-shop.com",
+        "phone": "+31 6 1234 1002",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "3 Marktstraat",
+        "line2": "",
+        "city": "Utrecht",
+        "postal_code": "1002 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-2",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-2",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-2",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 61.97,
+        "tax": 14.59,
+        "shipping": 4.95,
+        "grand_total": 79.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1003",
+      "created_at": "2026-06-04T09:03:00Z",
+      "updated_at": "2026-06-04T14:03:00Z",
+      "status": "refunded",
+      "customer": {
+        "id": "CUST-503",
+        "name": "Customer Number 3",
+        "email": "customer3@example-shop.com",
+        "phone": "+31 6 1234 1003",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "4 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Den Haag",
+        "postal_code": "1003 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-3",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-3",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-3",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 62.97,
+        "tax": 15.59,
+        "shipping": 4.95,
+        "grand_total": 80.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1004",
+      "created_at": "2026-06-05T09:04:00Z",
+      "updated_at": "2026-06-05T14:04:00Z",
+      "status": "cancelled",
+      "customer": {
+        "id": "CUST-504",
+        "name": "Customer Number 4",
+        "email": "customer4@example-shop.com",
+        "phone": "+31 6 1234 1004",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "5 Marktstraat",
+        "line2": "",
+        "city": "Eindhoven",
+        "postal_code": "1004 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-4",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-4",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-4",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 63.97,
+        "tax": 16.59,
+        "shipping": 4.95,
+        "grand_total": 81.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1005",
+      "created_at": "2026-06-06T09:05:00Z",
+      "updated_at": "2026-06-06T14:05:00Z",
+      "status": "shipped",
+      "customer": {
+        "id": "CUST-505",
+        "name": "Customer Number 5",
+        "email": "customer5@example-shop.com",
+        "phone": "+31 6 1234 1005",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "6 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Amsterdam",
+        "postal_code": "1005 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-5",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-5",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-5",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 64.97,
+        "tax": 17.59,
+        "shipping": 4.95,
+        "grand_total": 82.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1006",
+      "created_at": "2026-06-07T09:06:00Z",
+      "updated_at": "2026-06-07T14:06:00Z",
+      "status": "processing",
+      "customer": {
+        "id": "CUST-506",
+        "name": "Customer Number 6",
+        "email": "customer6@example-shop.com",
+        "phone": "+31 6 1234 1006",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "7 Marktstraat",
+        "line2": "",
+        "city": "Rotterdam",
+        "postal_code": "1006 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-6",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-6",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-6",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 65.97,
+        "tax": 18.59,
+        "shipping": 4.95,
+        "grand_total": 83.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1007",
+      "created_at": "2026-06-08T09:07:00Z",
+      "updated_at": "2026-06-08T14:07:00Z",
+      "status": "delivered",
+      "customer": {
+        "id": "CUST-507",
+        "name": "Customer Number 7",
+        "email": "customer7@example-shop.com",
+        "phone": "+31 6 1234 1007",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "8 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Utrecht",
+        "postal_code": "1007 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-7",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-7",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-7",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 66.97,
+        "tax": 19.59,
+        "shipping": 4.95,
+        "grand_total": 84.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1008",
+      "created_at": "2026-06-09T09:08:00Z",
+      "updated_at": "2026-06-09T14:08:00Z",
+      "status": "refunded",
+      "customer": {
+        "id": "CUST-508",
+        "name": "Customer Number 8",
+        "email": "customer8@example-shop.com",
+        "phone": "+31 6 1234 1008",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "9 Marktstraat",
+        "line2": "",
+        "city": "Den Haag",
+        "postal_code": "1008 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-8",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-8",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-8",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 67.97,
+        "tax": 20.59,
+        "shipping": 4.95,
+        "grand_total": 85.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1009",
+      "created_at": "2026-06-10T09:09:00Z",
+      "updated_at": "2026-06-10T14:09:00Z",
+      "status": "cancelled",
+      "customer": {
+        "id": "CUST-509",
+        "name": "Customer Number 9",
+        "email": "customer9@example-shop.com",
+        "phone": "+31 6 1234 1009",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "10 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Eindhoven",
+        "postal_code": "1009 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-9",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-9",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-9",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 68.97,
+        "tax": 21.59,
+        "shipping": 4.95,
+        "grand_total": 86.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1010",
+      "created_at": "2026-06-11T09:10:00Z",
+      "updated_at": "2026-06-11T14:10:00Z",
+      "status": "shipped",
+      "customer": {
+        "id": "CUST-510",
+        "name": "Customer Number 10",
+        "email": "customer10@example-shop.com",
+        "phone": "+31 6 1234 1010",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "11 Marktstraat",
+        "line2": "",
+        "city": "Amsterdam",
+        "postal_code": "1010 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-10",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-10",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-10",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 69.97,
+        "tax": 22.59,
+        "shipping": 4.95,
+        "grand_total": 87.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1011",
+      "created_at": "2026-06-12T09:11:00Z",
+      "updated_at": "2026-06-12T14:11:00Z",
+      "status": "processing",
+      "customer": {
+        "id": "CUST-511",
+        "name": "Customer Number 11",
+        "email": "customer11@example-shop.com",
+        "phone": "+31 6 1234 1011",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "12 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Rotterdam",
+        "postal_code": "1011 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-11",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-11",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-11",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 70.97,
+        "tax": 23.59,
+        "shipping": 4.95,
+        "grand_total": 88.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1012",
+      "created_at": "2026-06-13T09:12:00Z",
+      "updated_at": "2026-06-13T14:12:00Z",
+      "status": "delivered",
+      "customer": {
+        "id": "CUST-512",
+        "name": "Customer Number 12",
+        "email": "customer12@example-shop.com",
+        "phone": "+31 6 1234 1012",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "13 Marktstraat",
+        "line2": "",
+        "city": "Utrecht",
+        "postal_code": "1012 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-12",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-12",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-12",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 71.97,
+        "tax": 24.59,
+        "shipping": 4.95,
+        "grand_total": 89.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1013",
+      "created_at": "2026-06-14T09:13:00Z",
+      "updated_at": "2026-06-14T14:13:00Z",
+      "status": "refunded",
+      "customer": {
+        "id": "CUST-513",
+        "name": "Customer Number 13",
+        "email": "customer13@example-shop.com",
+        "phone": "+31 6 1234 1013",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "14 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Den Haag",
+        "postal_code": "1013 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-13",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-13",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-13",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 72.97,
+        "tax": 25.59,
+        "shipping": 4.95,
+        "grand_total": 90.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1014",
+      "created_at": "2026-06-15T09:14:00Z",
+      "updated_at": "2026-06-15T14:14:00Z",
+      "status": "cancelled",
+      "customer": {
+        "id": "CUST-514",
+        "name": "Customer Number 14",
+        "email": "customer14@example-shop.com",
+        "phone": "+31 6 1234 1014",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "15 Marktstraat",
+        "line2": "",
+        "city": "Eindhoven",
+        "postal_code": "1014 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-14",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-14",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-14",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 73.97,
+        "tax": 26.59,
+        "shipping": 4.95,
+        "grand_total": 91.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1015",
+      "created_at": "2026-06-16T09:15:00Z",
+      "updated_at": "2026-06-16T14:15:00Z",
+      "status": "shipped",
+      "customer": {
+        "id": "CUST-515",
+        "name": "Customer Number 15",
+        "email": "customer15@example-shop.com",
+        "phone": "+31 6 1234 1015",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "16 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Amsterdam",
+        "postal_code": "1015 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-15",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-15",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-15",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 74.97,
+        "tax": 27.59,
+        "shipping": 4.95,
+        "grand_total": 92.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1016",
+      "created_at": "2026-06-17T09:16:00Z",
+      "updated_at": "2026-06-17T14:16:00Z",
+      "status": "processing",
+      "customer": {
+        "id": "CUST-516",
+        "name": "Customer Number 16",
+        "email": "customer16@example-shop.com",
+        "phone": "+31 6 1234 1016",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "17 Marktstraat",
+        "line2": "",
+        "city": "Rotterdam",
+        "postal_code": "1016 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-16",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-16",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-16",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 75.97,
+        "tax": 28.59,
+        "shipping": 4.95,
+        "grand_total": 93.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1017",
+      "created_at": "2026-06-18T09:17:00Z",
+      "updated_at": "2026-06-18T14:17:00Z",
+      "status": "delivered",
+      "customer": {
+        "id": "CUST-517",
+        "name": "Customer Number 17",
+        "email": "customer17@example-shop.com",
+        "phone": "+31 6 1234 1017",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "18 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Utrecht",
+        "postal_code": "1017 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-17",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-17",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-17",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 76.97,
+        "tax": 29.59,
+        "shipping": 4.95,
+        "grand_total": 94.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1018",
+      "created_at": "2026-06-19T09:18:00Z",
+      "updated_at": "2026-06-19T14:18:00Z",
+      "status": "refunded",
+      "customer": {
+        "id": "CUST-518",
+        "name": "Customer Number 18",
+        "email": "customer18@example-shop.com",
+        "phone": "+31 6 1234 1018",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "19 Marktstraat",
+        "line2": "",
+        "city": "Den Haag",
+        "postal_code": "1018 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-18",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-18",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-18",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 77.97,
+        "tax": 30.59,
+        "shipping": 4.95,
+        "grand_total": 95.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1019",
+      "created_at": "2026-06-20T09:19:00Z",
+      "updated_at": "2026-06-20T14:19:00Z",
+      "status": "cancelled",
+      "customer": {
+        "id": "CUST-519",
+        "name": "Customer Number 19",
+        "email": "customer19@example-shop.com",
+        "phone": "+31 6 1234 1019",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "20 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Eindhoven",
+        "postal_code": "1019 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-19",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-19",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-19",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 78.97,
+        "tax": 31.59,
+        "shipping": 4.95,
+        "grand_total": 96.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1020",
+      "created_at": "2026-06-21T09:20:00Z",
+      "updated_at": "2026-06-21T14:20:00Z",
+      "status": "shipped",
+      "customer": {
+        "id": "CUST-520",
+        "name": "Customer Number 20",
+        "email": "customer20@example-shop.com",
+        "phone": "+31 6 1234 1020",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "21 Marktstraat",
+        "line2": "",
+        "city": "Amsterdam",
+        "postal_code": "1020 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-20",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-20",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-20",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 79.97,
+        "tax": 32.59,
+        "shipping": 4.95,
+        "grand_total": 97.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1021",
+      "created_at": "2026-06-22T09:21:00Z",
+      "updated_at": "2026-06-22T14:21:00Z",
+      "status": "processing",
+      "customer": {
+        "id": "CUST-521",
+        "name": "Customer Number 21",
+        "email": "customer21@example-shop.com",
+        "phone": "+31 6 1234 1021",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "22 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Rotterdam",
+        "postal_code": "1021 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-21",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-21",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-21",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 80.97,
+        "tax": 33.59,
+        "shipping": 4.95,
+        "grand_total": 98.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1022",
+      "created_at": "2026-06-23T09:22:00Z",
+      "updated_at": "2026-06-23T14:22:00Z",
+      "status": "delivered",
+      "customer": {
+        "id": "CUST-522",
+        "name": "Customer Number 22",
+        "email": "customer22@example-shop.com",
+        "phone": "+31 6 1234 1022",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "23 Marktstraat",
+        "line2": "",
+        "city": "Utrecht",
+        "postal_code": "1022 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-22",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-22",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-22",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 81.97,
+        "tax": 34.59,
+        "shipping": 4.95,
+        "grand_total": 99.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1023",
+      "created_at": "2026-06-24T09:23:00Z",
+      "updated_at": "2026-06-24T14:23:00Z",
+      "status": "refunded",
+      "customer": {
+        "id": "CUST-523",
+        "name": "Customer Number 23",
+        "email": "customer23@example-shop.com",
+        "phone": "+31 6 1234 1023",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "24 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Den Haag",
+        "postal_code": "1023 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-23",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-23",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-23",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 82.97,
+        "tax": 35.59,
+        "shipping": 4.95,
+        "grand_total": 100.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1024",
+      "created_at": "2026-06-25T09:24:00Z",
+      "updated_at": "2026-06-25T14:24:00Z",
+      "status": "cancelled",
+      "customer": {
+        "id": "CUST-524",
+        "name": "Customer Number 24",
+        "email": "customer24@example-shop.com",
+        "phone": "+31 6 1234 1024",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "25 Marktstraat",
+        "line2": "",
+        "city": "Eindhoven",
+        "postal_code": "1024 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-24",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-24",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-24",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 83.97,
+        "tax": 36.59,
+        "shipping": 4.95,
+        "grand_total": 101.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1025",
+      "created_at": "2026-06-26T09:25:00Z",
+      "updated_at": "2026-06-26T14:25:00Z",
+      "status": "shipped",
+      "customer": {
+        "id": "CUST-525",
+        "name": "Customer Number 25",
+        "email": "customer25@example-shop.com",
+        "phone": "+31 6 1234 1025",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "26 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Amsterdam",
+        "postal_code": "1025 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-25",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-25",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-25",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 84.97,
+        "tax": 37.59,
+        "shipping": 4.95,
+        "grand_total": 102.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1026",
+      "created_at": "2026-06-27T09:26:00Z",
+      "updated_at": "2026-06-27T14:26:00Z",
+      "status": "processing",
+      "customer": {
+        "id": "CUST-526",
+        "name": "Customer Number 26",
+        "email": "customer26@example-shop.com",
+        "phone": "+31 6 1234 1026",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "27 Marktstraat",
+        "line2": "",
+        "city": "Rotterdam",
+        "postal_code": "1026 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-26",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-26",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-26",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 85.97,
+        "tax": 38.59,
+        "shipping": 4.95,
+        "grand_total": 103.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1027",
+      "created_at": "2026-06-28T09:27:00Z",
+      "updated_at": "2026-06-28T14:27:00Z",
+      "status": "delivered",
+      "customer": {
+        "id": "CUST-527",
+        "name": "Customer Number 27",
+        "email": "customer27@example-shop.com",
+        "phone": "+31 6 1234 1027",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "28 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Utrecht",
+        "postal_code": "1027 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-27",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-27",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-27",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 86.97,
+        "tax": 39.59,
+        "shipping": 4.95,
+        "grand_total": 104.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1028",
+      "created_at": "2026-06-01T09:28:00Z",
+      "updated_at": "2026-06-01T14:28:00Z",
+      "status": "refunded",
+      "customer": {
+        "id": "CUST-528",
+        "name": "Customer Number 28",
+        "email": "customer28@example-shop.com",
+        "phone": "+31 6 1234 1028",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "29 Marktstraat",
+        "line2": "",
+        "city": "Den Haag",
+        "postal_code": "1028 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-28",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-28",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-28",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 87.97,
+        "tax": 40.59,
+        "shipping": 4.95,
+        "grand_total": 105.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1029",
+      "created_at": "2026-06-02T09:29:00Z",
+      "updated_at": "2026-06-02T14:29:00Z",
+      "status": "cancelled",
+      "customer": {
+        "id": "CUST-529",
+        "name": "Customer Number 29",
+        "email": "customer29@example-shop.com",
+        "phone": "+31 6 1234 1029",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "30 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Eindhoven",
+        "postal_code": "1029 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-29",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-29",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-29",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 88.97,
+        "tax": 41.59,
+        "shipping": 4.95,
+        "grand_total": 106.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1030",
+      "created_at": "2026-06-03T09:30:00Z",
+      "updated_at": "2026-06-03T14:30:00Z",
+      "status": "shipped",
+      "customer": {
+        "id": "CUST-530",
+        "name": "Customer Number 30",
+        "email": "customer30@example-shop.com",
+        "phone": "+31 6 1234 1030",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "31 Marktstraat",
+        "line2": "",
+        "city": "Amsterdam",
+        "postal_code": "1030 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-30",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-30",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-30",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 89.97,
+        "tax": 42.59,
+        "shipping": 4.95,
+        "grand_total": 107.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1031",
+      "created_at": "2026-06-04T09:31:00Z",
+      "updated_at": "2026-06-04T14:31:00Z",
+      "status": "processing",
+      "customer": {
+        "id": "CUST-531",
+        "name": "Customer Number 31",
+        "email": "customer31@example-shop.com",
+        "phone": "+31 6 1234 1031",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "32 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Rotterdam",
+        "postal_code": "1031 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-31",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-31",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-31",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 90.97,
+        "tax": 43.59,
+        "shipping": 4.95,
+        "grand_total": 108.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1032",
+      "created_at": "2026-06-05T09:32:00Z",
+      "updated_at": "2026-06-05T14:32:00Z",
+      "status": "delivered",
+      "customer": {
+        "id": "CUST-532",
+        "name": "Customer Number 32",
+        "email": "customer32@example-shop.com",
+        "phone": "+31 6 1234 1032",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "33 Marktstraat",
+        "line2": "",
+        "city": "Utrecht",
+        "postal_code": "1032 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-32",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-32",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-32",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 91.97,
+        "tax": 44.59,
+        "shipping": 4.95,
+        "grand_total": 109.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1033",
+      "created_at": "2026-06-06T09:33:00Z",
+      "updated_at": "2026-06-06T14:33:00Z",
+      "status": "refunded",
+      "customer": {
+        "id": "CUST-533",
+        "name": "Customer Number 33",
+        "email": "customer33@example-shop.com",
+        "phone": "+31 6 1234 1033",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "34 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Den Haag",
+        "postal_code": "1033 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-33",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-33",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-33",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 92.97,
+        "tax": 45.59,
+        "shipping": 4.95,
+        "grand_total": 110.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1034",
+      "created_at": "2026-06-07T09:34:00Z",
+      "updated_at": "2026-06-07T14:34:00Z",
+      "status": "cancelled",
+      "customer": {
+        "id": "CUST-534",
+        "name": "Customer Number 34",
+        "email": "customer34@example-shop.com",
+        "phone": "+31 6 1234 1034",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "35 Marktstraat",
+        "line2": "",
+        "city": "Eindhoven",
+        "postal_code": "1034 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-34",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-34",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-34",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 93.97,
+        "tax": 46.59,
+        "shipping": 4.95,
+        "grand_total": 111.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1035",
+      "created_at": "2026-06-08T09:35:00Z",
+      "updated_at": "2026-06-08T14:35:00Z",
+      "status": "shipped",
+      "customer": {
+        "id": "CUST-535",
+        "name": "Customer Number 35",
+        "email": "customer35@example-shop.com",
+        "phone": "+31 6 1234 1035",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "36 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Amsterdam",
+        "postal_code": "1035 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-35",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-35",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-35",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 94.97,
+        "tax": 47.59,
+        "shipping": 4.95,
+        "grand_total": 112.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1036",
+      "created_at": "2026-06-09T09:36:00Z",
+      "updated_at": "2026-06-09T14:36:00Z",
+      "status": "processing",
+      "customer": {
+        "id": "CUST-536",
+        "name": "Customer Number 36",
+        "email": "customer36@example-shop.com",
+        "phone": "+31 6 1234 1036",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "37 Marktstraat",
+        "line2": "",
+        "city": "Rotterdam",
+        "postal_code": "1036 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-36",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-36",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-36",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 95.97,
+        "tax": 48.59,
+        "shipping": 4.95,
+        "grand_total": 113.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1037",
+      "created_at": "2026-06-10T09:37:00Z",
+      "updated_at": "2026-06-10T14:37:00Z",
+      "status": "delivered",
+      "customer": {
+        "id": "CUST-537",
+        "name": "Customer Number 37",
+        "email": "customer37@example-shop.com",
+        "phone": "+31 6 1234 1037",
+        "loyalty_tier": "silver"
+      },
+      "shipping_address": {
+        "line1": "38 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Utrecht",
+        "postal_code": "1037 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-37",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-37",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-37",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 96.97,
+        "tax": 49.59,
+        "shipping": 4.95,
+        "grand_total": 114.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1038",
+      "created_at": "2026-06-11T09:38:00Z",
+      "updated_at": "2026-06-11T14:38:00Z",
+      "status": "refunded",
+      "customer": {
+        "id": "CUST-538",
+        "name": "Customer Number 38",
+        "email": "customer38@example-shop.com",
+        "phone": "+31 6 1234 1038",
+        "loyalty_tier": "gold"
+      },
+      "shipping_address": {
+        "line1": "39 Marktstraat",
+        "line2": "",
+        "city": "Den Haag",
+        "postal_code": "1038 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-38",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-38",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-38",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 97.97,
+        "tax": 50.59,
+        "shipping": 4.95,
+        "grand_total": 115.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    },
+    {
+      "order_id": "ORD-2026-1039",
+      "created_at": "2026-06-12T09:39:00Z",
+      "updated_at": "2026-06-12T14:39:00Z",
+      "status": "cancelled",
+      "customer": {
+        "id": "CUST-539",
+        "name": "Customer Number 39",
+        "email": "customer39@example-shop.com",
+        "phone": "+31 6 1234 1039",
+        "loyalty_tier": "bronze"
+      },
+      "shipping_address": {
+        "line1": "40 Marktstraat",
+        "line2": "Apartment 4B",
+        "city": "Eindhoven",
+        "postal_code": "1039 AB",
+        "country": "Netherlands"
+      },
+      "items": [
+        {
+          "sku": "SKU-0-39",
+          "name": "Product 0",
+          "qty": 1,
+          "unit_price": 19.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-1-39",
+          "name": "Product 1",
+          "qty": 2,
+          "unit_price": 20.99,
+          "currency": "EUR"
+        },
+        {
+          "sku": "SKU-2-39",
+          "name": "Product 2",
+          "qty": 3,
+          "unit_price": 21.99,
+          "currency": "EUR"
+        }
+      ],
+      "totals": {
+        "subtotal": 98.97,
+        "tax": 51.59,
+        "shipping": 4.95,
+        "grand_total": 116.51,
+        "currency": "EUR"
+      },
+      "notes": "Standard delivery. Customer requested no plastic packaging where possible."
+    }
+  ]
+}

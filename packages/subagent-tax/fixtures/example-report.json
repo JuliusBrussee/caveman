@@ -1,0 +1,348 @@
+{
+  "tool": "subagent-tax",
+  "tool_version": "0.1.0",
+  "date": "2026-08-07T18:38:24.439Z",
+  "basis": "inferred",
+  "platform": {
+    "os": "darwin",
+    "arch": "arm64",
+    "node": "v22.22.2"
+  },
+  "prompt": "Reply with exactly: DONE",
+  "calibration": {
+    "chars_per_token": 6.4,
+    "note": "chars/token calibrated 5.9\u20136.9 against provider-exact Claude Code prefixes (2026-08-07, one machine); 6.4 = midpoint"
+  },
+  "repeat": 2,
+  "honesty": [
+    "Basis: inferred. These are locally captured request-prefix sizes \u2014 not provider-billed usage, not spend, not savings.",
+    "Prefix per call \u2260 bill delta: with a warm provider cache this prefix re-reads at a discount (Anthropic ~0.1x; OpenAI/Gemini higher, ~0.25\u20130.5x); the full size only bills cold or where caching is broken.",
+    "Token counts marked 'est' are chars-per-token estimates rounded to 2 significant figures (\u00b18% calibration band, Anthropic-tokenizer-derived \u2014 see report.json); rows marked 'exact' used Anthropic's count_tokens endpoint.",
+    "These numbers are this machine's installed configuration (plugins and MCP servers included) on the run date \u2014 they will differ on yours. That is the point: run it yourself.",
+    "The variant column says what each row measures: a harness's floor (isolated config) and a harness's real installed tax are different constructs \u2014 do not compare them as if they were the same measurement.",
+    "The mcp column shows '-' where a harness's MCP tool-naming convention has not been confirmed; only Claude Code's is. '-' means unknown, not zero.",
+    "spread = observed min\u2013max across repeat runs on this machine, not a confidence interval; the row is the median trial."
+  ],
+  "rows": [
+    {
+      "harness": "claude",
+      "variant": "real config",
+      "version": "2.1.224 (Claude Code)",
+      "status": "ok",
+      "trial": 1,
+      "seconds_to_first_capture": 3.011,
+      "captures_total": 1,
+      "pick_rule": "most-tools",
+      "harness_said": null,
+      "primary": {
+        "kind": "anthropic-messages",
+        "seq": 1,
+        "model": "claude-fable-5",
+        "body_bytes": 273958,
+        "total_chars": 273058,
+        "system_chars": 43038,
+        "messages_chars": 4963,
+        "tools_count": 91,
+        "tools_chars": 224655,
+        "mcp_tools_count": 63,
+        "mcp_tools_chars": 155480
+      },
+      "all_captures": [
+        {
+          "kind": "anthropic-messages",
+          "seq": 1,
+          "model": "claude-fable-5",
+          "body_bytes": 273958,
+          "total_chars": 273058,
+          "system_chars": 43038,
+          "messages_chars": 4963,
+          "tools_count": 91,
+          "tools_chars": 224655,
+          "mcp_tools_count": 63,
+          "mcp_tools_chars": 155480
+        }
+      ],
+      "skipped_captures": [],
+      "tokens": {
+        "tokens": 42665,
+        "basis": "est",
+        "ratio": 6.4
+      },
+      "recipe_confirmed": true,
+      "mcp_pattern_validated": true,
+      "touches_real_config": true,
+      "notes": "Default captures the user's REAL installed tax \u2014 their plugins and MCP servers are the point. Allow/disallow-tools flags would not strip schemas anyway (checked 2026-08-07). --isolate switches to an empty CLAUDE_CONFIG_DIR for the harness floor.",
+      "trials": 2,
+      "trials_ok": 2,
+      "spread": {
+        "min_chars": 273058,
+        "max_chars": 273058,
+        "median_chars": 273058,
+        "all_chars": [
+          273058,
+          273058
+        ]
+      }
+    },
+    {
+      "harness": "codex",
+      "variant": "minimal home (floor)",
+      "version": "codex-cli 0.145.0",
+      "status": "ok",
+      "trial": 1,
+      "seconds_to_first_capture": 0.417,
+      "captures_total": 1,
+      "pick_rule": "most-tools",
+      "harness_said": null,
+      "primary": {
+        "kind": "openai-responses",
+        "seq": 1,
+        "model": "gpt-5.5",
+        "body_bytes": 53318,
+        "total_chars": 53203,
+        "system_chars": 41148,
+        "messages_chars": 746,
+        "tools_count": 11,
+        "tools_chars": 10298,
+        "mcp_tools_count": null,
+        "mcp_tools_chars": null
+      },
+      "all_captures": [
+        {
+          "kind": "openai-responses",
+          "seq": 1,
+          "model": "gpt-5.5",
+          "body_bytes": 53318,
+          "total_chars": 53203,
+          "system_chars": 41148,
+          "messages_chars": 746,
+          "tools_count": 11,
+          "tools_chars": 10298,
+          "mcp_tools_count": null,
+          "mcp_tools_chars": null
+        }
+      ],
+      "skipped_captures": [],
+      "tokens": {
+        "tokens": 8313,
+        "basis": "est",
+        "ratio": 6.4
+      },
+      "recipe_confirmed": true,
+      "mcp_pattern_validated": false,
+      "touches_real_config": false,
+      "notes": "Ephemeral CODEX_HOME with a minimal config \u2014 the harness floor, not the user's real tax. Copying the real config works but fires background memory-agent calls and real side-effect network I/O (plugin git clones, MCP OAuth), which a zero-touch public tool must not trigger by default.",
+      "trials": 2,
+      "trials_ok": 2,
+      "spread": {
+        "min_chars": 53203,
+        "max_chars": 53203,
+        "median_chars": 53203,
+        "all_chars": [
+          53203,
+          53203
+        ]
+      }
+    },
+    {
+      "harness": "gemini",
+      "variant": "isolated home (api-key mode)",
+      "version": "0.53.1",
+      "status": "ok",
+      "trial": 1,
+      "seconds_to_first_capture": 0.761,
+      "captures_total": 1,
+      "pick_rule": "most-tools",
+      "harness_said": null,
+      "primary": {
+        "kind": "gemini-generatecontent",
+        "seq": 1,
+        "model": "gemini-3.5-flash",
+        "body_bytes": 40168,
+        "total_chars": 40150,
+        "system_chars": 30634,
+        "messages_chars": 796,
+        "tools_count": 8,
+        "tools_chars": 8517,
+        "mcp_tools_count": null,
+        "mcp_tools_chars": null
+      },
+      "all_captures": [
+        {
+          "kind": "gemini-generatecontent",
+          "seq": 1,
+          "model": "gemini-3.5-flash",
+          "body_bytes": 40168,
+          "total_chars": 40150,
+          "system_chars": 30634,
+          "messages_chars": 796,
+          "tools_count": 8,
+          "tools_chars": 8517,
+          "mcp_tools_count": null,
+          "mcp_tools_chars": null
+        }
+      ],
+      "skipped_captures": [],
+      "tokens": {
+        "tokens": 6273,
+        "basis": "est",
+        "ratio": 6.4
+      },
+      "recipe_confirmed": true,
+      "mcp_pattern_validated": false,
+      "touches_real_config": false,
+      "notes": "Isolated HOME so the user's real ~/.gemini OAuth login is never consulted. The -m pin matters: gemini-3* default models fire a strict-JSON preflight classifier that retry-loops against a plain-text sink reply and never reaches the agent turn.",
+      "trials": 2,
+      "trials_ok": 2,
+      "spread": {
+        "min_chars": 40150,
+        "max_chars": 40174,
+        "median_chars": 40150,
+        "all_chars": [
+          40150,
+          40174
+        ]
+      }
+    },
+    {
+      "harness": "opencode",
+      "variant": "isolated config",
+      "version": "1.17.11",
+      "status": "ok",
+      "trial": 1,
+      "seconds_to_first_capture": 1.179,
+      "captures_total": 2,
+      "pick_rule": "most-tools",
+      "harness_said": null,
+      "primary": {
+        "kind": "openai-responses",
+        "seq": 2,
+        "model": "gpt-4o",
+        "body_bytes": 89858,
+        "total_chars": 89501,
+        "system_chars": 69297,
+        "messages_chars": 89,
+        "tools_count": 10,
+        "tools_chars": 19970,
+        "mcp_tools_count": null,
+        "mcp_tools_chars": null
+      },
+      "all_captures": [
+        {
+          "kind": "openai-responses",
+          "seq": 1,
+          "model": "gpt-5-nano",
+          "body_bytes": 2579,
+          "total_chars": 2555,
+          "system_chars": 2215,
+          "messages_chars": 190,
+          "tools_count": 0,
+          "tools_chars": 0,
+          "mcp_tools_count": null,
+          "mcp_tools_chars": null
+        },
+        {
+          "kind": "openai-responses",
+          "seq": 2,
+          "model": "gpt-4o",
+          "body_bytes": 89858,
+          "total_chars": 89501,
+          "system_chars": 69297,
+          "messages_chars": 89,
+          "tools_count": 10,
+          "tools_chars": 19970,
+          "mcp_tools_count": null,
+          "mcp_tools_chars": null
+        }
+      ],
+      "skipped_captures": [],
+      "tokens": {
+        "tokens": 13985,
+        "basis": "est",
+        "ratio": 6.4
+      },
+      "recipe_confirmed": true,
+      "mcp_pattern_validated": false,
+      "touches_real_config": false,
+      "notes": "OPENCODE_CONFIG_CONTENT sets the sink provider; XDG isolation keeps the user's real opencode config out (their config can narrow the model catalog and break the run \u2014 observed) and keeps their auth.json unconsulted. Despite the provider id, opencode speaks the OpenAI Responses API here. It sends a small title-generation call first; the most-tools primary pick skips it.",
+      "trials": 2,
+      "trials_ok": 2,
+      "spread": {
+        "min_chars": 89501,
+        "max_chars": 89617,
+        "median_chars": 89501,
+        "all_chars": [
+          89501,
+          89617
+        ]
+      }
+    },
+    {
+      "harness": "cursor-agent",
+      "version": "2025.09.12-4852336",
+      "status": "unmeasurable",
+      "reason": "thin client to Cursor's backend: the agent loop runs server-side and the wire schema (agent.v1.AgentRunRequest) has no system-prompt or builtin-tool-schema field, so no prefix crosses the wire to measure",
+      "primary": null
+    },
+    {
+      "harness": "pi",
+      "variant": "isolated home (4 default tools)",
+      "version": "0.80.3",
+      "status": "ok",
+      "trial": 1,
+      "seconds_to_first_capture": 0.464,
+      "captures_total": 1,
+      "pick_rule": "most-tools",
+      "harness_said": null,
+      "primary": {
+        "kind": "anthropic-messages",
+        "seq": 1,
+        "model": "sink-model",
+        "body_bytes": 26556,
+        "total_chars": 26524,
+        "system_chars": 23416,
+        "messages_chars": 116,
+        "tools_count": 4,
+        "tools_chars": 2901,
+        "mcp_tools_count": null,
+        "mcp_tools_chars": null
+      },
+      "all_captures": [
+        {
+          "kind": "anthropic-messages",
+          "seq": 1,
+          "model": "sink-model",
+          "body_bytes": 26556,
+          "total_chars": 26524,
+          "system_chars": 23416,
+          "messages_chars": 116,
+          "tools_count": 4,
+          "tools_chars": 2901,
+          "mcp_tools_count": null,
+          "mcp_tools_chars": null
+        }
+      ],
+      "skipped_captures": [],
+      "tokens": {
+        "tokens": 4144,
+        "basis": "est",
+        "ratio": 6.4
+      },
+      "recipe_confirmed": true,
+      "mcp_pattern_validated": false,
+      "touches_real_config": false,
+      "notes": "Minimal models.json is sufficient (id-only model entry). Without the env isolation pi fails closed with 'Unknown provider' \u2014 it never falls back to a real provider.",
+      "trials": 2,
+      "trials_ok": 2,
+      "spread": {
+        "min_chars": 26524,
+        "max_chars": 26524,
+        "median_chars": 26524,
+        "all_chars": [
+          26524,
+          26524
+        ]
+      }
+    }
+  ]
+}

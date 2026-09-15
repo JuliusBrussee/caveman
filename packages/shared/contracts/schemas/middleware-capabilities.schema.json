@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/middleware-capabilities.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "runtime_build",
+    "policy_revision",
+    "transforms",
+    "limits",
+    "persistent",
+    "recovery",
+    "retention_seconds",
+    "trust_mode",
+    "mode"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "runtime_build": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "policy_revision": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "transforms": {
+      "type": "array",
+      "items": {
+        "$ref": "https://caveman.so/schemas/transform-capability.schema.json#/$defs/capability"
+      },
+      "maxItems": 128
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deadline_ms",
+        "request_bytes",
+        "segment_bytes",
+        "page_bytes"
+      ],
+      "properties": {
+        "deadline_ms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "segment_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "page_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "persistent": {
+      "type": "boolean"
+    },
+    "recovery": {
+      "type": "boolean"
+    },
+    "retention_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "trust_mode": {
+      "enum": [
+        "single_operator",
+        "resolver"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "record",
+        "compress"
+      ]
+    }
+  }
+}

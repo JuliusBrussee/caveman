@@ -1,0 +1,4 @@
+interface:
+  display_name: "Investigate First"
+  short_description: "Find credible cause before editing code"
+  default_prompt: "Use $investigate-first to diagnose this failure before proposing edits."

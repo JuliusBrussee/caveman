@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/middleware-plan.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "input_digest",
+    "runtime_build",
+    "policy_revision",
+    "replacement_set_id",
+    "status",
+    "reason",
+    "replacements",
+    "skipped",
+    "measurement",
+    "stability",
+    "recovery"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "request_id": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "input_digest": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+    },
+    "runtime_build": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "policy_revision": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "replacement_set_id": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+    },
+    "status": {
+      "enum": [
+        "optimized",
+        "bypassed",
+        "record"
+      ]
+    },
+    "reason": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "replacements": {
+      "type": "array",
+      "items": {
+        "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/replacement"
+      },
+      "maxItems": 256
+    },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "segment_id",
+          "reason"
+        ],
+        "properties": {
+          "segment_id": {
+            "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          },
+          "reason": {
+            "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          }
+        }
+      },
+      "maxItems": 256
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "basis",
+        "tokenizer",
+        "scope",
+        "tokens_before",
+        "tokens_after",
+        "unique_tokens_reduced",
+        "recovery_overhead_tokens",
+        "overhead_coverage",
+        "verified_saved_usd"
+      ],
+      "properties": {
+        "basis": {
+          "const": "inferred"
+        },
+        "tokenizer": {
+          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        "scope": {
+          "const": "segment"
+        },
+        "tokens_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tokens_after": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unique_tokens_reduced": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "recovery_overhead_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "overhead_coverage": {
+          "const": "segment_and_declared_recovery_tool"
+        },
+        "verified_saved_usd": {
+          "const": 0
+        }
+      }
+    },
+    "stability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "native",
+        "provider_bytes",
+        "provider_cache_hits"
+      ],
+      "properties": {
+        "native": {
+          "enum": ["persistent_choices", "unavailable"]
+        },
+        "provider_bytes": {
+          "const": "unobserved"
+        },
+        "provider_cache_hits": {
+          "const": "unobserved"
+        }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_id",
+        "available",
+        "persistent",
+        "expires_at"
+      ],
+      "properties": {
+        "binding_id": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "persistent": {
+          "type": "boolean"
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    }
+  }
+}

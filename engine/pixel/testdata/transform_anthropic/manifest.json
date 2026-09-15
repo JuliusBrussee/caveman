@@ -1,0 +1,40 @@
+{
+  "cases": [
+    {
+      "name": "slab_tool_result",
+      "input": "slab_tool_result.input.json",
+      "expected": "slab_tool_result.expected.json",
+      "info": {
+        "compressed": true,
+        "imageCount": 8,
+        "collapsedTurns": 0,
+        "collapsedImages": 0,
+        "historyReason": "no_closed_prefix"
+      }
+    },
+    {
+      "name": "history_relocation",
+      "input": "history_relocation.input.json",
+      "expected": "history_relocation.expected.json",
+      "info": {
+        "compressed": true,
+        "imageCount": 14,
+        "collapsedTurns": 49,
+        "collapsedImages": 10,
+        "historyReason": "collapsed"
+      }
+    },
+    {
+      "name": "early_history_only",
+      "input": "early_history_only.input.json",
+      "expected": "early_history_only.expected.json",
+      "info": {
+        "compressed": true,
+        "imageCount": 2,
+        "collapsedTurns": 10,
+        "collapsedImages": 2,
+        "historyReason": "collapsed"
+      }
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify and Stop"
+  short_description: "Run relevant proof then stop cleanly"
+  default_prompt: "Use $verify-and-stop to prove acceptance criteria without adding scope."

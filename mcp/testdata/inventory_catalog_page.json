@@ -1,0 +1,261 @@
+{
+  "items": [
+    {
+      "sku": "SKU-60000",
+      "title": "Part SKU-60000 rev 0",
+      "active": false,
+      "status_reason": "supplier_contract_ended"
+    },
+    {
+      "sku": "SKU-60001",
+      "title": "Part SKU-60001 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60002",
+      "title": "Part SKU-60002 rev 2",
+      "active": true
+    },
+    {
+      "sku": "SKU-60003",
+      "title": "Part SKU-60003 rev 3",
+      "active": true
+    },
+    {
+      "sku": "SKU-60004",
+      "title": "Part SKU-60004 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60005",
+      "title": "Part SKU-60005 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60006",
+      "title": "Part SKU-60006 rev 2",
+      "active": true
+    },
+    {
+      "sku": "SKU-60007",
+      "title": "Part SKU-60007 rev 3",
+      "active": true
+    },
+    {
+      "sku": "SKU-60008",
+      "title": "Part SKU-60008 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60009",
+      "title": "Part SKU-60009 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60010",
+      "title": "Part SKU-60010 rev 2",
+      "active": true
+    },
+    {
+      "sku": "SKU-60011",
+      "title": "Part SKU-60011 rev 3",
+      "active": true
+    },
+    {
+      "sku": "SKU-60012",
+      "title": "Part SKU-60012 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60013",
+      "title": "Part SKU-60013 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60014",
+      "title": "Part SKU-60014 rev 2",
+      "active": true
+    },
+    {
+      "sku": "SKU-60015",
+      "title": "Part SKU-60015 rev 3",
+      "active": true
+    },
+    {
+      "sku": "SKU-60016",
+      "title": "Part SKU-60016 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60017",
+      "title": "Part SKU-60017 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60018",
+      "title": "Part SKU-60018 rev 2",
+      "active": true
+    },
+    {
+      "sku": "SKU-60019",
+      "title": "Part SKU-60019 rev 3",
+      "active": true
+    },
+    {
+      "sku": "SKU-60020",
+      "title": "Part SKU-60020 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60021",
+      "title": "Part SKU-60021 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60022",
+      "title": "Part SKU-60022 rev 2",
+      "active": true
+    },
+    {
+      "sku": "SKU-60023",
+      "title": "Part SKU-60023 rev 3",
+      "active": false,
+      "status_reason": "pending_quality_review"
+    },
+    {
+      "sku": "SKU-60024",
+      "title": "Part SKU-60024 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60025",
+      "title": "Part SKU-60025 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60026",
+      "title": "Part SKU-60026 rev 2",
+      "active": true
+    },
+    {
+      "sku": "SKU-60027",
+      "title": "Part SKU-60027 rev 3",
+      "active": true
+    },
+    {
+      "sku": "SKU-60028",
+      "title": "Part SKU-60028 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60029",
+      "title": "Part SKU-60029 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60030",
+      "title": "Part SKU-60030 rev 2",
+      "active": true
+    },
+    {
+      "sku": "SKU-60031",
+      "title": "Part SKU-60031 rev 3",
+      "active": true
+    },
+    {
+      "sku": "SKU-60032",
+      "title": "Part SKU-60032 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60033",
+      "title": "Part SKU-60033 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60034",
+      "title": "Part SKU-60034 rev 2",
+      "active": true
+    },
+    {
+      "sku": "SKU-60035",
+      "title": "Part SKU-60035 rev 3",
+      "active": true
+    },
+    {
+      "sku": "SKU-60036",
+      "title": "Part SKU-60036 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60037",
+      "title": "Part SKU-60037 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60038",
+      "title": "Part SKU-60038 rev 2",
+      "active": true
+    },
+    {
+      "sku": "SKU-60039",
+      "title": "Part SKU-60039 rev 3",
+      "active": true
+    },
+    {
+      "sku": "SKU-60040",
+      "title": "Part SKU-60040 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60041",
+      "title": "Part SKU-60041 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60042",
+      "title": "Part SKU-60042 rev 2",
+      "active": true
+    },
+    {
+      "sku": "SKU-60043",
+      "title": "Part SKU-60043 rev 3",
+      "active": true
+    },
+    {
+      "sku": "SKU-60044",
+      "title": "Part SKU-60044 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60045",
+      "title": "Part SKU-60045 rev 1",
+      "active": true
+    },
+    {
+      "sku": "SKU-60046",
+      "title": "Part SKU-60046 rev 2",
+      "active": false,
+      "status_reason": "seasonal_line_retired"
+    },
+    {
+      "sku": "SKU-60047",
+      "title": "Part SKU-60047 rev 3",
+      "active": true
+    },
+    {
+      "sku": "SKU-60048",
+      "title": "Part SKU-60048 rev 0",
+      "active": true
+    },
+    {
+      "sku": "SKU-60049",
+      "title": "Part SKU-60049 rev 1",
+      "active": true
+    }
+  ],
+  "next_page": 2,
+  "page": 1,
+  "page_count": 20,
+  "source": "catalog"
+}

@@ -6,11 +6,101 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
-const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange, VALID_MODES } = require('./caveman-config');
+// caveman-config.js and caveman-parse.js are mandatory siblings, but an
+// incomplete install leaves one absent. A bare top-level require turns that
+// into an uncaught MODULE_NOT_FOUND on EVERY prompt, which the harness
+// surfaces only as an opaque loader stack trace (#848). Resolve defensively.
+//
+// Deliberately inlined rather than extracted into a shared helper: a shared
+// loader would itself be one more sibling that can go missing, which is the
+// exact failure this guards against.
+function requireSibling(name, isUsable) {
+  let mod;
+  try {
+    mod = require('./' + name);
+  } catch (primary) {
+    // The opencode install layout renames siblings to `.cjs` (its plugin dir
+    // is "type": "module"), same fallback caveman-parse.js already does. Gate
+    // the retry on the error naming THIS module: a MODULE_NOT_FOUND thrown by
+    // a require *inside* a sibling that loaded fine must not be re-reported as
+    // "./<name>.cjs is missing", blaming a file never meant to exist.
+    const message = String((primary && primary.message) || primary);
+    if (primary && primary.code === 'MODULE_NOT_FOUND' && message.includes("'./" + name + "'")) {
+      try { return require('./' + name + '.cjs'); } catch (e) { /* report primary */ }
+    }
+    const absent = !fs.existsSync(path.join(__dirname, name + '.js'))
+                && !fs.existsSync(path.join(__dirname, name + '.cjs'));
+    // Distinguish "the sibling is absent" from "the sibling loaded but its own
+    // require failed" — naming the wrong cause is worse than no message. Only
+    // the first line of error.message: Node appends a multi-line "Require
+    // stack:" block, the very noise this guard exists to remove.
+    process.stderr.write('caveman: ' + (absent
+      ? name + '.js is missing from ' + __dirname + ' — the install is incomplete.'
+      : name + ' could not load — ' + message.split('\n')[0]) + '\n'
+      + 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks. '
+      + 'Continuing with reduced functionality.\n');
+    return null;
+  }
+  // A module that LOADS but exports the wrong shape is the plugin-cache-drift
+  // case #848 describes. Without this check the first use dereferences
+  // undefined — the raw stack trace this guard exists to remove.
+  if (!isUsable(mod)) {
+    process.stderr.write('caveman: ' + name + ' loaded but is missing expected exports — the install is inconsistent.\n'
+      + 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks. '
+      + 'Continuing with reduced functionality.\n');
+    return null;
+  }
+  return mod;
+}
 
-// Modes handled by their own slash commands (/caveman-commit, etc.) — not
-// selectable via /caveman <arg>.
-const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
+// Degraded stubs make this hook a clean no-op when a sibling is unusable: no
+// mode change is parsed, readFlag reports nothing active, so nothing is emitted
+// and the process still exits 0 with stdin drained (never a broken pipe, #397).
+// getDefaultMode's stub value is never consulted in that state — the only call
+// site is gated behind an activeMode that readFlag can no longer produce.
+const cavemanConfig = requireSibling('caveman-config', (m) =>
+  m && typeof m.getDefaultMode === 'function' && typeof m.safeWriteFlag === 'function'
+    && typeof m.readFlag === 'function' && typeof m.recordModeChange === 'function'
+    && Array.isArray(m.VALID_MODES));
+const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange, VALID_MODES } = cavemanConfig || {
+  getDefaultMode: () => 'full',
+  safeWriteFlag: () => {},
+  readFlag: () => null,
+  recordModeChange: () => {},
+  VALID_MODES: [],
+};
+
+// Per-session helpers, resolved individually rather than folded into the shape
+// check above: a caveman-config.js from before per-session state satisfies that
+// check, and failing the whole module over the newer exports would turn "mode
+// still tracked, machine-wide" into "hook is a no-op". Each stub reproduces the
+// pre-per-session behavior against the legacy flag instead.
+const cfg = cavemanConfig || {};
+const validateSessionId = cfg.validateSessionId || (() => null);
+const resolveActiveMode = cfg.resolveActiveMode || (() => {
+  const m = readFlag(flagPath);
+  return (!m || m === 'off') ? null : m;
+});
+const writeSessionMode = cfg.writeSessionMode || ((dir, sid, modeOrNull) => {
+  if (!modeOrNull || modeOrNull === 'off') removeFlag(flagPath);
+  else safeWriteFlag(flagPath, modeOrNull);
+});
+const writeSessionPrev = cfg.writeSessionPrev || ((dir, sid, mode) => safeWriteFlag(prevPath, mode));
+const readSessionPrev = cfg.readSessionPrev || (() => readFlag(prevPath));
+const clearSessionPrev = cfg.clearSessionPrev || (() => removeFlag(prevPath));
+// Ruleset injection helpers, shared with caveman-activate.js so a mid-session
+// switch delivers the SAME ruleset SessionStart does (#975). Resolved
+// individually like the per-session helpers above: a caveman-config.js
+// predating them passes the shape check, and the stand-ins below degrade this
+// hook to exactly its pre-#975 behavior — the one-line reminder, nothing more.
+const canonicalModeLabel = cfg.canonicalModeLabel || ((m) => (m === 'wenyan' ? 'wenyan-full' : m));
+const rulesetBanner = cfg.rulesetBanner || ((m) => 'CAVEMAN MODE ACTIVE — level: ' + canonicalModeLabel(m));
+const loadFilteredRuleset = cfg.loadFilteredRuleset || (() => null);
+const { parseModeChange, INDEPENDENT_MODES } = requireSibling('caveman-parse', (m) =>
+  m && typeof m.parseModeChange === 'function' && m.INDEPENDENT_MODES instanceof Set) || {
+  parseModeChange: () => null,
+  INDEPENDENT_MODES: new Set(['commit', 'review', 'compress']),
+};
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -18,189 +108,325 @@ const flagPath = path.join(claudeDir, '.caveman-active');
 // (/caveman-commit etc.) so the next ordinary prompt can restore it (#599).
 const prevPath = path.join(claudeDir, '.caveman-active.prev');
 
-let input = '';
-process.stdin.on('data', chunk => { input += chunk; });
-// Abnormal stdin close (broken pipe, parent crash) emits 'error'; without a
-// listener Node throws it as an uncaught exception and the hook exits
-// non-zero — a spurious hook failure (#538). Hooks must always exit 0.
-process.stdin.on('error', () => process.exit(0));
-process.stdin.on('end', () => {
+const REINFORCEMENT_RULES = {
+  lite: 'No filler, hedging, or pleasantries. Keep articles and full sentences OK, but stay tight.',
+  full: 'Drop articles (a/an/the), filler, pleasantries, and hedging. Prefer fragments over full natural-prose sentences. No preamble or recap.',
+  ultra: 'Drop articles, filler, pleasantries, hedging, and excess conjunctions. Prefer fragments over full natural-prose sentences. State each fact once. No preamble or recap.',
+  'wenyan-lite': 'Use wenyan-lite: semi-classical terse register. Drop filler and hedging. Keep meaning exact.',
+  'wenyan-full': 'Use wenyan-full: maximum classical terseness. Drop filler and hedging. Keep meaning exact.',
+  'wenyan-ultra': 'Use wenyan-ultra: extreme classical terseness. Drop filler and hedging. Keep meaning exact.',
+};
+
+function reinforcementForMode(mode) {
+  const canonical = mode === 'wenyan' ? 'wenyan-full' : mode;
+  const rules = REINFORCEMENT_RULES[canonical] || REINFORCEMENT_RULES.full;
+  return 'CAVEMAN MODE ACTIVE (' + mode + '). Enforce this reply: ' + rules +
+    ' Technical terms, code, commands, paths, and errors stay exact.';
+}
+
+function removeFlag(path) {
   try {
-    const data = JSON.parse(input);
+    fs.unlinkSync(path);
+  } catch (error) {
+    if (process.env.CAVEMAN_DEBUG === '1' && error.code !== 'ENOENT') {
+      console.error(`caveman: failed to remove flag ${path}: ${error.message}`);
+    }
+  }
+}
+
+let input = '';
+let handled = false;
+
+// Act on the first COMPLETE JSON payload rather than waiting for EOF. The host
+// writes one object and closes, but under the Windows pipe implementation that
+// close can lag arbitrarily (#729/#833) — and this hook is registered with a 5s
+// budget, so a lagging EOF spends the whole budget and the host kills us before
+// the flag is ever written. Parsing per chunk costs one JSON.parse of a payload
+// we are about to parse anyway.
+function handle(raw) {
+  if (handled) return;
+  handled = true;
+  try {
+    const data = JSON.parse(raw);
+
+    // Scopes every read and write below to this session. null when absent or
+    // malformed, in which case the helpers above fall back to the legacy
+    // machine-wide flag — i.e. exactly the pre-per-session behavior.
+    const sessionId = validateSessionId(data.session_id);
+
     // Collapse whitespace so phrase triggers still match multiline prompts —
     // every regex below sees a single-line prompt (#598).
-    const prompt = (data.prompt || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    let prompt = (data.prompt || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
-    // Deactivation intent — computed FIRST so "turn caveman mode off" never
-    // falls through to the activation patterns (#598: the old contiguous
-    // "turn off" phrasing missed the "turn X off" word order entirely, and
-    // the activation regex then re-armed caveman at the default level).
-    const wantsOff =
-      /\b(stop|disable|deactivate|quit|exit|kill)\s+(the\s+)?caveman\b/.test(prompt) ||
-      /\bcaveman(\s+mode)?\s+(off|stop|disabled?)\b/.test(prompt) ||
-      /\bturn\s+off\s+(the\s+)?caveman\b/.test(prompt) ||
-      // "normal mode" only as a command (prompt-initial, optionally led by a
-      // switch-back verb) or with caveman context — never mid-sentence for
-      // e.g. vim's normal mode ("how do I exit vim normal mode").
-      /^(please\s+)?(go\s+|back\s+to\s+|switch\s+(back\s+)?to\s+|return\s+to\s+)?normal\s+mode\b/.test(prompt) ||
-      (/\bnormal\s+mode\b/.test(prompt) && /\bcaveman\b/.test(prompt));
+    // Unattended scheduled-task runs must never receive caveman styling —
+    // the per-turn reinforcement would hijack the task prompt, and a
+    // lightweight scheduled task would answer with a caveman greeting
+    // instead of doing its job. Claude Code wraps these in a
+    // <scheduled-task ...> marker; bail out completely when present: no flag
+    // mutation, no reinforcement, no stats. Interactive sessions are
+    // unaffected.
+    if (/<scheduled-task\b/.test(prompt)) return;
 
-    // Questions about caveman are not activation commands
-    // ("what is caveman mode?", "does caveman lite drop articles?").
-    const isQuestion =
-      /^(what|whats|what's|how|why|when|where|who|does|do|did|is|are|can|could|would|should|tell me|explain)\b/.test(prompt);
-
-    // Natural language activation (e.g. "activate caveman", "turn on caveman
-    // mode", "talk like caveman"). README tells users they can say these.
-    // Also brevity requests ("less tokens", "be brief/terse", "fewer tokens",
-    // "shorter answers") — but not when scoped to a single section
-    // ("be brief in the summary"), which is a one-off instruction, not a
-    // session-wide mode switch.
-    if (!wantsOff && !isQuestion) {
-      if (/\b(activate|enable|start|turn on|use|switch to|want|give me)\b[^.]{0,40}\bcaveman\b/.test(prompt) ||
-          /\btalk like\b[^.]{0,40}\bcaveman\b/.test(prompt) ||
-          /\bcaveman\s+mode\s+(on|please|now)\b/.test(prompt) ||
-          /^caveman(\s+mode)?\s*[.!]*$/.test(prompt) ||
-          /\b(less tokens|fewer tokens|be brief|be terse|shorter answers)\b(?!\s+(in|for|on|about|when|during|with)\b)/.test(prompt)) {
-        const mode = getDefaultMode();
-        if (mode !== 'off') {
-          recordModeChange(claudeDir, mode); // #601: timestamped transition log
-          safeWriteFlag(flagPath, mode);
-        }
+    // Claude Code delivers slash commands to this hook as an envelope, not
+    // the literal command (#537):
+    //   <command-message>caveman</command-message>
+    //   <command-name>/caveman</command-name>
+    //   <command-args>ultra</command-args>
+    // (one-line or newline-separated — the collapse above normalizes both
+    // into single spaces; <command-args> may be empty or absent). Every
+    // switch below matches against the literal command string, so this
+    // envelope was a silent no-op for every slash command, including
+    // '/caveman off'. Reconstruct '<name> <args>' for /caveman* envelopes so
+    // the rest of this hook sees exactly what the user selected. A foreign
+    // command's envelope is left untouched, and natural-language detection
+    // is skipped for it so another command's own args can't misfire our
+    // activation/deactivation triggers.
+    let skipNaturalLanguage = false;
+    const envName = /<command-name>\s*([^<\s]+)\s*<\/command-name>/.exec(prompt);
+    if (envName) {
+      if (envName[1].startsWith('/caveman')) {
+        const envArgs = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(prompt);
+        const args = envArgs ? envArgs[1].trim() : '';
+        prompt = args ? envName[1] + ' ' + args : envName[1];
+      } else {
+        skipNaturalLanguage = true;
       }
     }
 
-    // /caveman-stats [--share] — block the prompt and inject stats output as
-    // the hook's reason. The script reads the active session log, so we pass
+    // /caveman-stats [--share] — run the stats script and inject its output
+    // as additionalContext (#618), instructing the model to relay it
+    // verbatim. The script reads the active session log, so we pass
     // transcript_path through when Claude Code provides it.
     const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
     if (statsMatch) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
+      // Resolved once, outside the try, because the failure message needs it
+      // too. A hardcoded `hooks/caveman-stats.js` is only real for a standalone
+      // install rooted at $CLAUDE_CONFIG_DIR — a plugin user has no such
+      // directory to run it from (#789).
+      const statsPath = path.join(__dirname, 'caveman-stats.js');
+      let block;
       try {
-        const statsPath = path.join(__dirname, 'caveman-stats.js');
         const argv = [statsPath];
+        argv.push('--host', 'claude');
         if (data.transcript_path) argv.push('--session-file', data.transcript_path);
+        // Lets stats drop mode-log rows belonging to other windows instead of
+        // joining them onto this session's timeline.
+        if (sessionId) argv.push('--session-id', sessionId);
         if (tailArgs.includes('--share')) argv.push('--share');
         if (tailArgs.includes('--all')) argv.push('--all');
         const sinceIdx = tailArgs.indexOf('--since');
         if (sinceIdx !== -1 && tailArgs[sinceIdx + 1]) {
           argv.push('--since', tailArgs[sinceIdx + 1]);
         }
-        const out = execFileSync(process.execPath, argv, { encoding: 'utf8', timeout: 5000 });
-        process.stdout.write(JSON.stringify({ decision: 'block', reason: out.trim() }));
+        // 2.5s. Hook registration allows 30s for slow Windows process startup,
+        // while this child watchdog still bounds optional context loading.
+        // already spent its own Node startup; giving the child the host's
+        // entire budget means the host kills the hook before the child's own
+        // timeout can fire and produce the fallback message. Windows process
+        // spawn is ~10x macOS before antivirus (#819), so the margin is real.
+        block = execFileSync(process.execPath, argv, { encoding: 'utf8', timeout: 2500 }).trim();
       } catch (e) {
-        process.stdout.write(JSON.stringify({
-          decision: 'block',
-          reason: 'caveman-stats: could not run stats script.\nTry manually: node hooks/caveman-stats.js'
-        }));
+        block = 'caveman-stats: could not run stats script.\nTry manually: node ' + statsPath;
       }
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: 'Print this stats block verbatim inside a fenced code block. Say nothing else.\n\n' + block
+        }
+      }));
       return;
     }
 
-    // Match /caveman commands. Independent one-shot modes remember the prose
-    // mode active before them so the next ordinary prompt restores it (#599)
-    // — SKILL.md promises "Level persist until changed or session end", and a
-    // one-shot skill invocation should not count as "changed" forever.
+    // Shared mode-change parser (#602) — single source of truth with the
+    // opencode plugin for slash commands, namespaced /caveman:caveman-*,
+    // natural-language activation/deactivation, and brevity triggers.
+    const change = parseModeChange(prompt, { getDefaultMode, skipNaturalLanguage });
+
+    // A /caveman argument that resolves to no mode used to leave the level
+    // untouched and say nothing, so a typo or punctuation glued to the level
+    // ("/caveman ultra;") looked like it worked. Build a notice instead — but
+    // do NOT return here: an early exit would skip the #599 one-shot restore
+    // below, stranding the user in /caveman-commit for an extra turn because
+    // they made a typo, and would also drop that turn's reinforcement.
+    let notice = null;
+    if (change && change.action === 'unresolved') {
+      if (change.independentMode) {
+        // A real mode, just not reachable via /caveman <arg>. Denying it exists
+        // would contradict the docs.
+        notice = 'Tell the user ' + change.independentMode + ' mode is set with its own command, '
+          + '/caveman-' + change.independentMode + ', not /caveman ' + change.independentMode
+          + '. The level is unchanged.';
+      } else {
+        // Levels are derived from VALID_MODES so they cannot drift from the
+        // parser, minus 'off', the independent modes, and 'wenyan' — that is
+        // the storage alias for wenyan-full, and listing both would advertise
+        // seven levels for a product documented as having six. The rejected
+        // argument is never echoed: it is untrusted input headed for model
+        // context.
+        const levels = VALID_MODES.filter(m => m !== 'off' && m !== 'wenyan' && !INDEPENDENT_MODES.has(m));
+        notice = 'Tell the user their /caveman level was not recognized and the level is '
+          + 'unchanged. Valid levels: ' + levels.join(', ') + '. Use /caveman off to deactivate.';
+      }
+    }
+
+    // The level the model is actually holding rules for, read BEFORE any write:
+    // a switch can only be detected against this, never against the value we
+    // are about to store. Read only on a `set`, so an ordinary turn — every
+    // turn, on the hot path — still makes the single state read it always did.
+    const modeBeforeChange = change && change.action === 'set'
+      ? resolveActiveMode(claudeDir, sessionId)
+      : null;
+
+    // Independent one-shot modes remember the prose mode active before them
+    // so the next ordinary prompt restores it (#599) — SKILL.md promises
+    // "Level persist until changed or session end", and a one-shot skill
+    // invocation should not count as "changed" forever.
     let setIndependentThisTurn = false;
-    if (prompt.startsWith('/caveman')) {
-      const parts = prompt.split(/\s+/);
-      const cmd = parts[0]; // /caveman, /caveman-commit, /caveman-review, etc.
-      const arg = parts[1] || '';
-
-      let mode = null;
-
-      // Marketplace plugin installs surface commands namespaced as
-      // /caveman:caveman-<name> — accept both forms for every skill (#599:
-      // only compress and stats had the namespaced variant).
-      if (cmd === '/caveman-commit' || cmd === '/caveman:caveman-commit') {
-        mode = 'commit';
-      } else if (cmd === '/caveman-review' || cmd === '/caveman:caveman-review') {
-        mode = 'review';
-      } else if (cmd === '/caveman-compress' || cmd === '/caveman:caveman-compress') {
-        mode = 'compress';
-      } else if (cmd === '/caveman' || cmd === '/caveman:caveman') {
-        // Bare /caveman → activate at configured default
-        if (!arg) {
-          mode = getDefaultMode();
-        } else if (arg === 'off' || arg === 'stop' || arg === 'disable') {
-          mode = 'off';
-        } else if (arg === 'wenyan-full') {
-          // Canonical alias — config stores as 'wenyan'
-          mode = 'wenyan';
-        } else if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) {
-          mode = arg;
+    // Set to the new level only when this prompt genuinely CHANGES it, so the
+    // ruleset re-injection below is paid for by an actual switch and nothing
+    // else (#975). Compared through canonicalModeLabel because the two
+    // spellings of wenyan-full both reach storage — parseModeChange writes the
+    // 'wenyan' alias while getDefaultMode accepts either — and a raw compare
+    // would read that no-op as a switch. A null previous mode (caveman was
+    // off) counts as a change: the model holds no ruleset at all in that case,
+    // which is the strongest reason to send one.
+    let switchedToLevel = null;
+    if (change && change.action === 'set') {
+      const mode = change.mode;
+      if (INDEPENDENT_MODES.has(mode)) {
+        // Save the prose mode being displaced — but never overwrite an
+        // already-saved one with another independent mode (/caveman-commit
+        // followed by /caveman-review must still restore the original).
+        if (modeBeforeChange && !INDEPENDENT_MODES.has(modeBeforeChange)) {
+          writeSessionPrev(claudeDir, sessionId, modeBeforeChange);
         }
-        // Unknown arg → mode stays null, flag untouched (no silent overwrite)
+        setIndependentThisTurn = true;
+      } else if (canonicalModeLabel(mode) !== canonicalModeLabel(modeBeforeChange)) {
+        switchedToLevel = mode;
       }
-
-      if (mode && mode !== 'off') {
-        if (INDEPENDENT_MODES.has(mode)) {
-          // Save the prose mode being displaced — but never overwrite an
-          // already-saved one with another independent mode (/caveman-commit
-          // followed by /caveman-review must still restore the original).
-          const current = readFlag(flagPath);
-          if (current && !INDEPENDENT_MODES.has(current)) {
-            safeWriteFlag(prevPath, current);
-          }
-          setIndependentThisTurn = true;
-        }
-        recordModeChange(claudeDir, mode); // #601
-        safeWriteFlag(flagPath, mode);
-      } else if (mode === 'off') {
-        recordModeChange(claudeDir, null); // #601
-        try { fs.unlinkSync(flagPath); } catch (e) {}
-        try { fs.unlinkSync(prevPath); } catch (e) {}
-      }
+      recordModeChange(claudeDir, mode, sessionId); // #601: timestamped transition log
+      writeSessionMode(claudeDir, sessionId, mode);
+    } else if (change && change.action === 'clear') {
+      // Durable off: writeSessionMode stores the literal 'off' for this session
+      // (and unlinks the legacy mirror), so the next SessionStart cannot mistake
+      // deactivation for "never set" and re-arm caveman on the next compaction.
+      recordModeChange(claudeDir, null, sessionId); // #601
+      writeSessionMode(claudeDir, sessionId, null);
+      clearSessionPrev(claudeDir, sessionId);
     }
 
-    // Apply deactivation detected above
-    if (wantsOff) {
-      recordModeChange(claudeDir, null); // #601
-      try { fs.unlinkSync(flagPath); } catch (e) {}
-      try { fs.unlinkSync(prevPath); } catch (e) {}
-    }
-
-    // Per-turn reinforcement: emit a structured reminder when caveman is active.
+    // Per-turn reinforcement: emit a short reminder when caveman is active.
     // The SessionStart hook injects the full ruleset once, but models lose it
     // when other plugins inject competing style instructions every turn.
     // This keeps caveman visible in the model's attention on every user message.
     //
     // Skip independent modes (commit, review, compress) — they have their own
     // skill behavior and the base caveman rules would conflict.
-    // readFlag enforces symlink-safe read + size cap + VALID_MODES whitelist.
-    // If the flag is missing, corrupted, oversized, or a symlink pointing at
-    // something like ~/.ssh/id_rsa, readFlag returns null and we emit nothing
-    // — never inject untrusted bytes into model context.
-    let activeMode = readFlag(flagPath);
+    // resolveActiveMode enforces symlink-safe read + size cap + VALID_MODES
+    // whitelist, and treats both a missing file and a durable 'off' as "no
+    // mode". If the state is missing, corrupted, oversized, or a symlink
+    // pointing at something like ~/.ssh/id_rsa, it returns null and we emit
+    // nothing — never inject untrusted bytes into model context.
+    let activeMode = resolveActiveMode(claudeDir, sessionId);
 
     // One-shot restore (#599): an independent mode set on a PREVIOUS prompt
     // has served its turn — bring back the prose mode that was active before
     // it, or deactivate if caveman wasn't active then.
     if (activeMode && INDEPENDENT_MODES.has(activeMode) && !setIndependentThisTurn) {
-      const prev = readFlag(prevPath);
-      try { fs.unlinkSync(prevPath); } catch (e) {}
-      if (prev && !INDEPENDENT_MODES.has(prev)) {
-        recordModeChange(claudeDir, prev); // #601
-        safeWriteFlag(flagPath, prev);
+      const prev = readSessionPrev(claudeDir, sessionId);
+      clearSessionPrev(claudeDir, sessionId);
+      // `prev !== 'off'` is not redundant: prev is stored literally, and
+      // restoring a stored 'off' as a mode would inject "CAVEMAN MODE ACTIVE
+      // (off)" for a session that had deliberately turned caveman off.
+      if (prev && !INDEPENDENT_MODES.has(prev) && prev !== 'off') {
+        recordModeChange(claudeDir, prev, sessionId); // #601
+        writeSessionMode(claudeDir, sessionId, prev);
         activeMode = prev;
       } else {
-        recordModeChange(claudeDir, null); // #601
-        try { fs.unlinkSync(flagPath); } catch (e) {}
+        recordModeChange(claudeDir, null, sessionId); // #601
+        writeSessionMode(claudeDir, sessionId, null);
         activeMode = null;
       }
     }
 
-    if (activeMode && !INDEPENDENT_MODES.has(activeMode)) {
+    // #634: a repo-local .caveman.json / .caveman/config.json can set
+    // defaultMode "off" to opt a project out of caveman entirely. Thread the
+    // hook stdin's cwd through so that check resolves for the session's
+    // directory, not this hook process's own cwd. This gates ONLY the
+    // reinforcement output below — it never deletes or writes the flag file.
+    const reinforce = activeMode && !INDEPENDENT_MODES.has(activeMode)
+      && getDefaultMode(data.cwd) !== 'off'
+      ? reinforcementForMode(activeMode)
+      : null;
+
+    // A level switch has to carry the new level's RULES, not just relabel the
+    // banner (#975). SessionStart injected exactly one level's ruleset and it
+    // is still the previous level's in the model's context — its intensity row
+    // and its "Default: **full**" line included — so a reminder that merely
+    // names the new level leaves the model working from the old one's rules,
+    // silently and self-confirmingly: the banner agrees with the user while
+    // the output does not.
+    //
+    // `reinforce` is the gate as well as the reminder: it already encodes both
+    // "caveman is active and not an independent mode" and the #634 repo
+    // opt-out, so a project with defaultMode "off" gets neither line.
+    // A SKILL.md that cannot be read degrades to the reminder alone — the
+    // standalone hook install with no skills dir, the case activate.js covers
+    // with its hardcoded fallback.
+    let ruleset = null;
+    if (switchedToLevel && reinforce) {
+      const body = loadFilteredRuleset(switchedToLevel, __dirname);
+      if (body) ruleset = rulesetBanner(switchedToLevel) + '\n\n' + body;
+    }
+
+    // One write, so an unresolved-level notice, a switch's ruleset and the
+    // per-turn reinforcement can all land on the same turn. Only one
+    // hookSpecificOutput per hook run is read, so emitting them separately
+    // would drop whichever came second. The reminder goes last: it is the
+    // directive for THIS reply, and recency is the point of it.
+    const context = [notice, ruleset, reinforce].filter(Boolean).join('\n\n');
+    if (context) {
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "UserPromptSubmit",
-          additionalContext: "CAVEMAN MODE ACTIVE (" + activeMode + "). " +
-            "Drop articles/filler/pleasantries/hedging. Fragments OK. " +
-            "Code/commits/security: write normal."
+          additionalContext: context
         }
       }));
     }
   } catch (e) {
     // Silent fail
   }
+}
+
+// StringDecoder semantics: a multi-byte character split across two chunks is
+// held until it is complete, instead of each half being coerced to a lone
+// replacement char by `'' + buffer`. Matters more now that the payload is
+// parsed per chunk rather than once at EOF.
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => {
+  input += chunk;
+  // A partial payload throws here and we simply wait for more bytes.
+  try { JSON.parse(input); } catch (e) { return; }
+  handle(input);
+  // pause() stops the flow but the 'data' listener has REFERENCED the stdin
+  // handle, so the event loop stays alive until the host closes the write end.
+  // On Windows that close lags arbitrarily (#729/#833), so the hook sat idle
+  // with its work already done until the 5s budget expired and the host killed
+  // it — the shape of #819 (timeouts on turns that measure ~56ms of real work).
+  // unref() drops the handle from the loop without closing the fd, so we exit
+  // as soon as stdout has flushed.
+  process.stdin.pause();
+  try { process.stdin.unref(); } catch (e) {}
 });
+// Abnormal stdin close (broken pipe, parent crash) emits 'error'; without a
+// listener Node throws it as an uncaught exception and the hook exits
+// non-zero — a spurious hook failure (#538). Hooks must always exit 0.
+process.stdin.on('error', () => process.exit(0));
+// Same failure, output side (#397): the harness can close its end of our
+// stdout/stderr after this hook has already written a payload, and an
+// unlistened 'error' there throws just as loudly.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', () => process.exit(0));
+}
+process.stdin.on('end', () => handle(input));

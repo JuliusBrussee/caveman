@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/canonical-span.schema.json",
+  "title": "Caveman Canonical Span v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "organization_id", "project_id", "trace_id", "span_id",
+    "linked_span_ids", "agent_id", "kind", "operation", "started_at", "ended_at",
+    "status", "input_refs", "output_refs", "artifact_refs", "side_effect", "versions", "attributes"
+  ],
+  "properties": {
+    "schema_version": { "const": "caveman.span.v1" },
+    "organization_id": { "type": "string", "minLength": 1 },
+    "project_id": { "type": "string", "minLength": 1 },
+    "trace_id": { "type": "string", "minLength": 1 },
+    "span_id": { "type": "string", "minLength": 1 },
+    "parent_span_id": { "type": "string" },
+    "linked_span_ids": { "$ref": "#/$defs/stringArray" },
+    "agent_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "case_id": { "type": "string" },
+    "kind": {
+      "enum": ["agent", "workflow", "model", "tool", "retrieval", "transform", "decision", "plan", "verifier", "human", "state_change", "unknown"]
+    },
+    "operation": { "type": "string", "minLength": 1 },
+    "started_at": { "type": "string", "minLength": 1 },
+    "ended_at": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["success", "error", "cancelled", "unknown"] },
+    "error_type": { "type": "string" },
+    "input_refs": { "$ref": "#/$defs/stringArray" },
+    "output_refs": { "$ref": "#/$defs/stringArray" },
+    "artifact_refs": { "$ref": "#/$defs/stringArray" },
+    "side_effect": { "enum": ["none", "idempotent", "reversible", "irreversible", "unknown"] },
+    "state_before_hash": { "type": "string" },
+    "state_after_hash": { "type": "string" },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "application": { "type": "string" },
+        "agent": { "type": "string" },
+        "harness": { "type": "string" },
+        "prompt_set": { "type": "string" },
+        "workflow": { "type": "string" },
+        "tool_set": { "type": "string" },
+        "model_policy": { "type": "string" }
+      }
+    },
+    "attributes": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    }
+  }
+}

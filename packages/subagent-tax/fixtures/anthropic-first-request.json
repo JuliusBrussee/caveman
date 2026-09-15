@@ -1,0 +1,61 @@
+{
+  "model": "claude-opus-5",
+  "max_tokens": 8192,
+  "stream": true,
+  "system": [
+    {
+      "type": "text",
+      "text": "You are a coding agent. This synthetic system prompt stands in for a real harness prefix in tests: identity, tone rules, environment description, and a long tail of instructions that in real captures runs to tens of kilobytes."
+    }
+  ],
+  "tools": [
+    {
+      "name": "Bash",
+      "description": "Executes a bash command and returns its output.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string", "description": "The command to execute" },
+          "timeout": { "type": "number" }
+        },
+        "required": ["command"]
+      }
+    },
+    {
+      "name": "Read",
+      "description": "Reads a file from the local filesystem.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_path": { "type": "string" },
+          "offset": { "type": "number" },
+          "limit": { "type": "number" }
+        },
+        "required": ["file_path"]
+      }
+    },
+    {
+      "name": "mcp__example__do_thing",
+      "description": "An MCP-provided tool with a deliberately verbose schema so the plugin split has weight to measure in tests.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": { "type": "string", "description": "What to operate on, described at length so this schema is the largest of the three tools in the fixture by a comfortable margin." },
+          "mode": { "type": "string", "enum": ["fast", "slow", "careful", "reckless"] },
+          "options": {
+            "type": "object",
+            "properties": {
+              "retries": { "type": "number" },
+              "verbose": { "type": "boolean" },
+              "labels": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "required": ["target"]
+      }
+    }
+  ],
+  "messages": [
+    { "role": "user", "content": [{ "type": "text", "text": "Reply with exactly: DONE" }] }
+  ]
+}

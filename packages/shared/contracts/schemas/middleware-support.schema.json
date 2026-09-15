@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/middleware-support.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "family",
+    "language",
+    "framework",
+    "version",
+    "method",
+    "runtime_protocol",
+    "state",
+    "evidence",
+    "limitations",
+    "adapter_package",
+    "adapter_version",
+    "provider",
+    "protocol",
+    "provider_sdk_versions",
+    "execution",
+    "streaming",
+    "structured_output",
+    "recovery",
+    "persistence",
+    "serialization_visibility",
+    "tests"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "family": {
+      "type": "string",
+      "pattern": "^F(0[1-9]|1[0-6])$"
+    },
+    "language": {
+      "enum": [
+        "python",
+        "typescript"
+      ]
+    },
+    "framework": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?:@[a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+$"
+    },
+    "version": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "method": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "runtime_protocol": {
+      "const": 1
+    },
+    "state": {
+      "enum": [
+        "missing",
+        "implemented",
+        "conformant",
+        "provider_tested",
+        "not_applicable"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "artifact",
+          "sha256"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "source_probe",
+              "native_fixture",
+              "packaged_consumer",
+              "provider_live",
+              "upstream_source",
+              "runtime_contract",
+              "local_performance"
+            ]
+          },
+          "artifact": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "sha256": {
+            "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+          }
+        }
+      },
+      "maxItems": 128
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 2048
+      },
+      "maxItems": 64
+    },
+    "adapter_package": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "adapter_version": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "provider": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "protocol": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "provider_sdk_versions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "maxProperties": 32
+    },
+    "execution": {
+      "enum": [
+        "sync",
+        "async",
+        "batch",
+        "transport"
+      ]
+    },
+    "streaming": {
+      "type": "boolean"
+    },
+    "structured_output": {
+      "type": "boolean"
+    },
+    "recovery": {
+      "enum": [
+        "native_executor",
+        "model_only",
+        "operator_bound",
+        "not_applicable"
+      ]
+    },
+    "persistence": {
+      "enum": [
+        "scoped_durable",
+        "not_applicable"
+      ]
+    },
+    "serialization_visibility": {
+      "enum": [
+        "provider_http",
+        "native_model",
+        "host_result",
+        "opaque"
+      ]
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 2048
+      },
+      "maxItems": 128
+    }
+  }
+}

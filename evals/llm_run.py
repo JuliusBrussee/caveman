@@ -29,8 +29,21 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+# Windows consoles and piped stdout default to the ANSI code page (cp1252),
+# which cannot encode the arrows, em-dashes and minus signs printed below —
+# a diagnostic that crashes instead of printing is worse than useless
+# (#203/#459). Replace unencodable characters rather than raising.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 
 EVALS = Path(__file__).parent
 SKILLS = EVALS.parent / "skills"
@@ -40,21 +53,32 @@ SNAPSHOT = EVALS / "snapshots" / "results.json"
 TERSE_PREFIX = "Answer concisely."
 
 
+def claude_bin() -> str:
+    """Resolve the CLI through PATHEXT. npm installs it as claude.CMD on
+    Windows and CreateProcess does not apply PATHEXT, so a bare "claude"
+    raises FileNotFoundError there."""
+    return shutil.which("claude") or "claude"
+
+
 def run_claude(prompt: str, system: str | None = None) -> str:
-    cmd = ["claude", "-p"]
+    cmd = [claude_bin(), "-p"]
     if system:
         cmd += ["--system-prompt", system]
     if model := os.environ.get("CAVEMAN_EVAL_MODEL"):
         cmd += ["--model", model]
     cmd.append(prompt)
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    out = subprocess.run(
+        cmd, capture_output=True, text=True, check=True,
+        encoding="utf-8", errors="replace",
+    )
     return out.stdout.strip()
 
 
 def claude_version() -> str:
     try:
         out = subprocess.run(
-            ["claude", "--version"], capture_output=True, text=True, check=True
+            [claude_bin(), "--version"], capture_output=True, text=True,
+            check=True, encoding="utf-8", errors="replace",
         )
         return out.stdout.strip()
     except Exception:
@@ -62,7 +86,7 @@ def claude_version() -> str:
 
 
 def main() -> None:
-    prompts = [p.strip() for p in PROMPTS.read_text().splitlines() if p.strip()]
+    prompts = [p.strip() for p in PROMPTS.read_text(encoding="utf-8").splitlines() if p.strip()]
     skills = sorted(p.name for p in SKILLS.iterdir() if (p / "SKILL.md").exists())
 
     print(
@@ -91,13 +115,13 @@ def main() -> None:
     ]
 
     for skill in skills:
-        skill_md = (SKILLS / skill / "SKILL.md").read_text()
+        skill_md = (SKILLS / skill / "SKILL.md").read_text(encoding="utf-8")
         system = f"{TERSE_PREFIX}\n\n{skill_md}"
         print(f"  {skill}", flush=True)
         snapshot["arms"][skill] = [run_claude(p, system=system) for p in prompts]
 
     SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
-    SNAPSHOT.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2))
+    SNAPSHOT.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\nWrote {SNAPSHOT}")
 
 

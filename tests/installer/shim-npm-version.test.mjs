@@ -14,7 +14,7 @@ function writeExecutable(file, body) {
   fs.writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 }
 
-function runShim(npxVersion) {
+function runShim(npxVersion, ref = 'v9.8.7') {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-shim-test-'));
   const argsFile = path.join(temp, 'npx-args');
 
@@ -36,6 +36,7 @@ printf '%s\\n' "$@" > "$NPX_ARGS_FILE"
         ...process.env,
         PATH: `${temp}${path.delimiter}${process.env.PATH || ''}`,
         NPX_ARGS_FILE: argsFile,
+        CAVEMAN_REF: ref,
       },
     });
 
@@ -52,7 +53,7 @@ test('shell shim opts into root git fetching on npm 12+', {
   assert.deepEqual(runShim('12.0.1'), [
     '--allow-git=root',
     '-y',
-    'github:JuliusBrussee/caveman',
+    'github:JuliusBrussee/caveman#v9.8.7',
     '--only',
     'claude',
   ]);
@@ -63,7 +64,7 @@ test('shell shim keeps legacy invocation before npm 12', {
 }, () => {
   assert.deepEqual(runShim('11.15.0'), [
     '-y',
-    'github:JuliusBrussee/caveman',
+    'github:JuliusBrussee/caveman#v9.8.7',
     '--only',
     'claude',
   ]);

@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "id": "anthropic-py",
+  "display_name": "Anthropic SDK (Python)",
+  "lang": "python",
+  "wire_protocol": "anthropic-messages",
+  "note": "The SDK appends /v1/messages itself, so the base URL is just the gateway + /w/{{app}}.",
+  "code": "import os\nimport anthropic\n\nclient = anthropic.Anthropic(\n    base_url=\"{{baseURL}}/w/{{app}}\",\n    api_key=os.environ[\"ANTHROPIC_API_KEY\"],\n)\n\nmsg = client.messages.create(\n    model=\"claude-sonnet-4-5\",\n    max_tokens=1024,\n    messages=[{\"role\": \"user\", \"content\": \"Why is the sky blue?\"}],\n)\n\n# Connected to Caveman Cloud? Add gateway auth + BYOK headers:\n#   default_headers={\"x-cave-api-key\": CAVE_API_KEY, \"x-cave-upstream-key\": ANTHROPIC_API_KEY}",
+  "models": ["claude-sonnet-4-5"]
+}

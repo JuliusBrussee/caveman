@@ -1,0 +1,11 @@
+{
+  "name": "@caveman/provider-catalog",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "go test ../platform/catalog -run TestCurrentCatalogRowsAreFreshAndStructurallyValid -count=1",
+    "lint": "go test ../platform/catalog -run 'TestCurrentCatalogRowsAreFreshAndStructurallyValid|TestDecodeAndValidateRejectsUnsafeCatalogs' -count=1",
+    "test": "go test . ../platform/catalog -count=1"
+  }
+}

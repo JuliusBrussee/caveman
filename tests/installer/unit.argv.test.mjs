@@ -12,9 +12,16 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const INSTALLER = path.resolve(HERE, '..', '..', 'bin', 'install.js');
+const CLEAN_ENV = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PATH'),
+);
+CLEAN_ENV.PATH = path.join(HERE, '__no_commands__');
 
 function run(...args) {
-  return spawnSync('node', [INSTALLER, ...args], { encoding: 'utf8' });
+  return spawnSync(process.execPath, [INSTALLER, ...args], {
+    encoding: 'utf8',
+    env: CLEAN_ENV,
+  });
 }
 
 test('--help prints usage and exits 0', () => {
@@ -99,7 +106,7 @@ test('--config-dir expands ~ to home directory', async () => {
   // positive assertion when claude isn't on PATH on the runner.
   if (/Claude Code detected/.test(r.stdout)) {
     const { homedir } = await import('node:os');
-    assert.match(r.stdout, new RegExp(homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/' + suffix));
+    assert.match(r.stdout, new RegExp(homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\\\/]' + suffix));
   }
 });
 

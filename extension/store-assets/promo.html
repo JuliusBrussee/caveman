@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      @font-face { font-family: "Geist"; src: url("../fonts/geist-sans.woff2") format("woff2"); font-weight: 100 900; }
+      @font-face { font-family: "Geist Mono"; src: url("../fonts/geist-mono.woff2") format("woff2"); font-weight: 100 900; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { width: 440px; height: 280px; overflow: hidden;
+        background: radial-gradient(hsl(0 0% 100% / 0.05) 1px, transparent 1px) 0 0 / 16px 16px, #0a0a0a;
+        color: #f2ece3; font-family: "Geist", sans-serif; -webkit-font-smoothing: antialiased;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+      .hairline { position: absolute; inset-inline: 0; top: 0; height: 1px;
+        background: linear-gradient(90deg, transparent, hsl(0 0% 100% / 0.3), transparent); }
+      .glow { position: absolute; width: 440px; height: 280px;
+        background: radial-gradient(circle at 50% 38%, hsl(22 90% 52% / 0.14), transparent 58%); }
+      .word { position: relative; font-family: "Geist Mono"; font-size: 22px; font-weight: 500;
+        letter-spacing: 0.3em; text-transform: uppercase; }
+      .sub { position: relative; font-family: "Geist Mono"; font-size: 12px; letter-spacing: 0.18em;
+        text-transform: uppercase; color: hsl(0 0% 100% / 0.45); }
+    </style>
+  </head>
+  <body>
+    <div class="hairline"></div>
+    <div class="glow"></div>
+    <span id="flame" style="position: relative"></span>
+    <div class="word">Caveman Mode</div>
+    <div class="sub">aims for substance · less filler</div>
+    <script src="flame.js"></script>
+    <script>buildFlame(document.getElementById("flame"), 7, 2);</script>
+  </body>
+</html>

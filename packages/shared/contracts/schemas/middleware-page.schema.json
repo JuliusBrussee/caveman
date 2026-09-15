@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/middleware-page.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "handle",
+    "source_id",
+    "text",
+    "original_sha256",
+    "total_bytes",
+    "complete",
+    "kind",
+    "offset",
+    "next_offset"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "handle": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "source_id": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 262144
+    },
+    "original_sha256": {
+      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+    },
+    "total_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "kind": {
+      "enum": [
+        "original_page",
+        "excerpt"
+      ]
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "next_offset": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

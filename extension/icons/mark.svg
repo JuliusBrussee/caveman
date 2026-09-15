@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45" width="45" height="45" role="img" aria-label="Caveman">
+<rect width="45" height="45" rx="9.4" fill="#0a0a0a"/>
+<g fill="#ffffff" transform="translate(7.00 7.00)">
+<rect x="12" y="0" width="3" height="3" rx="0.5"/>
+<rect x="16" y="0" width="3" height="3" rx="0.5"/>
+<rect x="8" y="4" width="3" height="3" rx="0.5"/>
+<rect x="12" y="4" width="3" height="3" rx="0.5"/>
+<rect x="16" y="4" width="3" height="3" rx="0.5"/>
+<rect x="20" y="4" width="3" height="3" rx="0.5"/>
+<rect x="8" y="8" width="3" height="3" rx="0.5"/>
+<rect x="12" y="8" width="3" height="3" rx="0.5"/>
+<rect x="16" y="8" width="3" height="3" rx="0.5"/>
+<rect x="20" y="8" width="3" height="3" rx="0.5"/>
+<rect x="4" y="12" width="3" height="3" rx="0.5"/>
+<rect x="8" y="12" width="3" height="3" rx="0.5"/>
+<rect x="20" y="12" width="3" height="3" rx="0.5"/>
+<rect x="24" y="12" width="3" height="3" rx="0.5"/>
+<rect x="4" y="16" width="3" height="3" rx="0.5"/>
+<rect x="8" y="16" width="3" height="3" rx="0.5"/>
+<rect x="20" y="16" width="3" height="3" rx="0.5"/>
+<rect x="24" y="16" width="3" height="3" rx="0.5"/>
+<rect x="0" y="20" width="3" height="3" rx="0.5"/>
+<rect x="4" y="20" width="3" height="3" rx="0.5"/>
+<rect x="24" y="20" width="3" height="3" rx="0.5"/>
+<rect x="28" y="20" width="3" height="3" rx="0.5"/>
+<rect x="4" y="24" width="3" height="3" rx="0.5"/>
+<rect x="8" y="24" width="3" height="3" rx="0.5"/>
+<rect x="20" y="24" width="3" height="3" rx="0.5"/>
+<rect x="24" y="24" width="3" height="3" rx="0.5"/>
+<rect x="8" y="28" width="3" height="3" rx="0.5"/>
+<rect x="12" y="28" width="3" height="3" rx="0.5"/>
+<rect x="16" y="28" width="3" height="3" rx="0.5"/>
+<rect x="20" y="28" width="3" height="3" rx="0.5"/>
+</g>
+</svg>

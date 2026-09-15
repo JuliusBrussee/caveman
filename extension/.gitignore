@@ -1,0 +1,5 @@
+# supersampled master (regenerate with icons/generate-icons.js); ship sizes are committed
+icons/icon-master.png
+dist/
+playwright-report/
+test-results/

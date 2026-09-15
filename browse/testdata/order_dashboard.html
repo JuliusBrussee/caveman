@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Order operations</title>
+  </head>
+  <body>
+    <main>
+      <h1>Order operations</h1>
+      <table>
+        <caption>Orders awaiting review</caption>
+        <thead>
+          <tr><th>Order</th><th>Customer</th><th>Status</th><th>Amount</th><th>Action</th></tr>
+        </thead>
+        <tbody id="orders"></tbody>
+      </table>
+    </main>
+    <script>
+      const rows = [];
+      for (let index = 0; index < 200; index += 1) {
+        const id = `ORD-${String(index).padStart(4, "0")}`;
+        const status = index % 17 === 0 ? "manual review" : "ready";
+        rows.push(`<tr><td>${id}</td><td>Customer ${index}</td><td>${status}</td><td>EUR ${index + 20}.00</td><td><button aria-label="Review ${id}">Review</button></td></tr>`);
+      }
+      document.getElementById("orders").innerHTML = rows.join("");
+    </script>
+  </body>
+</html>

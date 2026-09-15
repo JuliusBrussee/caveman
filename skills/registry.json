@@ -1,0 +1,175 @@
+{
+  "schema_version": "2",
+  "native_pack": {
+    "id": "caveman-local",
+    "version": "2.2.0",
+    "protocol": 1,
+    "core_source": "native-core.md",
+    "core_prompt_token_budget": 560,
+    "targets": ["claude", "codex", "hermes", "gemini", "opencode", "aider"]
+  },
+  "preserved_skill_ids": [
+    "cavecrew",
+    "caveman-commit",
+    "caveman-compress",
+    "caveman-help",
+    "caveman-review",
+    "caveman-stats"
+  ],
+  "skills": [
+    {
+      "id": "caveman",
+      "summary": "Compress agent output style without changing technical literals.",
+      "delivery": ["cli"],
+      "suites": ["output"]
+    },
+    {
+      "id": "caveman-discover",
+      "summary": "Find and label every LLM workflow in a repository.",
+      "delivery": ["cli", "web"],
+      "suites": ["agent-native"]
+    },
+    {
+      "id": "caveman-explore",
+      "summary": "Explore repositories read-only with compact file citations.",
+      "delivery": ["cli"],
+      "suites": ["local"]
+    },
+    {
+      "id": "caveman-learn",
+      "summary": "Apply consent-gated fixes from a local Caveman learn report.",
+      "delivery": ["cli"],
+      "suites": ["local"]
+    },
+    {
+      "id": "caveman-manage",
+      "summary": "Review eval-gated experiments and block unsafe lifecycle actions.",
+      "delivery": ["cli"],
+      "suites": ["agent-native"]
+    },
+    {
+      "id": "caveman-optimize",
+      "summary": "Evaluate an operator-chosen report-only observation with paired evidence.",
+      "delivery": ["cli", "web"],
+      "suites": ["agent-native"]
+    },
+    {
+      "id": "caveman-evidence-review",
+      "summary": "Review costs, quality, workflows, traces, and savings evidence.",
+      "delivery": ["cli"],
+      "suites": ["agent-native"]
+    },
+    {
+      "id": "caveman-setup",
+      "summary": "Wire a repository through Caveman in record mode and verify it.",
+      "delivery": ["cli", "web"],
+      "suites": ["agent-native"]
+    },
+    {
+      "id": "investigate-first",
+      "summary": "Gather evidence and establish a credible mechanism before editing.",
+      "delivery": ["native"],
+      "suites": [],
+      "activation": "classified",
+      "task_types": ["investigation"],
+      "evidence_status": "structural-test-only",
+      "prompt_byte_budget": 900,
+      "conflicts": [],
+      "precedence": 100,
+      "guardrails": ["no_edit_before_credible_hypothesis", "diagnosis_does_not_authorize_fix"],
+      "entry_condition": "cause is ambiguous",
+      "stop_condition": "cause or exact blocker is evidence-backed"
+    },
+    {
+      "id": "lean-build",
+      "summary": "Deliver narrow complete feature outcomes with architectural fit on top of mandatory simplicity Core.",
+      "delivery": ["native"],
+      "suites": [],
+      "activation": "classified",
+      "task_types": ["feature"],
+      "evidence_status": "structural-test-only",
+      "prompt_byte_budget": 900,
+      "conflicts": [],
+      "precedence": 100,
+      "guardrails": ["core_architecture_first_simplicity", "preserve_correctness_controls", "justify_material_tradeoffs"],
+      "entry_condition": "task adds product behavior",
+      "stop_condition": "focused acceptance proof passes"
+    },
+    {
+      "id": "migration",
+      "summary": "Execute a reversible compatibility-safe transition without hidden destruction.",
+      "delivery": ["native"],
+      "suites": [],
+      "activation": "classified",
+      "task_types": ["migration"],
+      "evidence_status": "structural-test-only",
+      "prompt_byte_budget": 950,
+      "conflicts": [],
+      "precedence": 100,
+      "guardrails": ["preserve_rollback", "preserve_data", "verify_compatibility"],
+      "entry_condition": "task changes persisted or public shape",
+      "stop_condition": "requested migration stage passes without implicit contraction"
+    },
+    {
+      "id": "safe-refactor",
+      "summary": "Restructure code while preserving observable behavior.",
+      "delivery": ["native"],
+      "suites": [],
+      "activation": "classified",
+      "task_types": ["refactor"],
+      "evidence_status": "structural-test-only",
+      "prompt_byte_budget": 900,
+      "conflicts": [],
+      "precedence": 100,
+      "guardrails": ["preserve_behavior", "keep_intermediate_states_testable"],
+      "entry_condition": "task requests structural change without behavior change",
+      "stop_condition": "before-and-after proof matches"
+    },
+    {
+      "id": "surgical-patch",
+      "summary": "Fix the narrowest responsible layer with regression proof.",
+      "delivery": ["native"],
+      "suites": [],
+      "activation": "classified",
+      "task_types": ["bugfix"],
+      "evidence_status": "structural-test-only",
+      "prompt_byte_budget": 850,
+      "conflicts": [],
+      "precedence": 100,
+      "guardrails": ["avoid_unrelated_cleanup", "preserve_surrounding_behavior"],
+      "entry_condition": "task fixes incorrect behavior",
+      "stop_condition": "failure is fixed and regression proof passes"
+    },
+    {
+      "id": "verify-and-stop",
+      "summary": "Run the smallest sufficient proof set and stop without scope growth.",
+      "delivery": ["native"],
+      "suites": [],
+      "activation": "classified",
+      "task_types": ["verification"],
+      "evidence_status": "structural-test-only",
+      "prompt_byte_budget": 850,
+      "conflicts": [],
+      "precedence": 100,
+      "guardrails": ["no_unrequested_product_edit", "report_unavailable_proof_exactly"],
+      "entry_condition": "task asks for proof or completion validation",
+      "stop_condition": "acceptance proof is complete"
+    }
+  ],
+  "suites": {
+    "agent-native": [
+      "caveman-setup",
+      "caveman-discover",
+      "caveman-evidence-review",
+      "caveman-optimize",
+      "caveman-manage"
+    ],
+    "local": [
+      "caveman-explore",
+      "caveman-learn"
+    ],
+    "output": [
+      "caveman"
+    ]
+  }
+}

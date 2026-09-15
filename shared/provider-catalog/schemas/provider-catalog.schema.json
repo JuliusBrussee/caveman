@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["provider", "model", "region", "currency", "pricing", "capabilities", "sources", "verified_at"],
+    "properties": {
+      "provider": { "type": "string" },
+      "model": { "type": "string" },
+      "region": { "type": "string" },
+      "currency": { "type": "string" },
+      "pricing": {
+        "type": "object",
+        "required": ["input_per_million", "output_per_million"],
+        "properties": {
+          "input_per_million": { "type": "number" },
+          "output_per_million": { "type": "number" },
+          "cache_read_input_per_million": { "type": ["number", "null"] },
+          "cache_write_input_per_million": { "type": ["number", "null"] },
+          "cache_write_1h_input_per_million": { "type": ["number", "null"] },
+          "reasoning_output_per_million": { "type": ["number", "null"] },
+          "batch_discount_fraction": { "type": ["number", "null"] },
+          "cache_storage_per_million_tokens_hour": { "type": ["number", "null"] },
+          "long_context_threshold_tokens": { "type": ["integer", "null"] },
+          "long_context_threshold_inclusive": { "type": ["boolean", "null"] },
+          "long_context_input_multiplier": { "type": ["number", "null"] },
+          "long_context_output_multiplier": { "type": ["number", "null"] }
+        }
+      },
+      "capabilities": {
+        "type": "object",
+        "description": "Free-form capability keys. The three routing booleans below are explicitly nullable: null means the vendor's own model docs do not state the answer and nobody verified it. The router treats null exactly like absent (fail-closed), so an honest unknown costs a routing candidate, while a guessed true would route traffic to a model that may not support the feature. Never write a guess here; write null. regional_processing_multiplier, inference_geo_us_multiplier and region_agnostic_pricing are NOT capability data — they decide what a request costs (the first two multiply this row's rates, the third decides whether this global row's price answers a regional lookup), so the immutable dated snapshot pins them alongside `pricing` and editing one is a price edit. NOTE: nothing in this repository validates catalog YAML against this schema; validate_catalog.py and the Go catalog tests are the enforced gates, and this file is the contract the published OSS mirror and community price PRs read. Keep all three in sync.",
+        "properties": {
+          "tools": { "type": ["boolean", "null"] },
+          "vision": { "type": ["boolean", "null"] },
+          "json_mode": { "type": ["boolean", "null"] },
+          "context_window_tokens": { "type": "integer", "exclusiveMinimum": 0 },
+          "regional_processing_multiplier": { "type": "number", "exclusiveMinimum": 0 },
+          "inference_geo_us_multiplier": { "type": "number", "exclusiveMinimum": 0 },
+          "region_agnostic_pricing": { "type": "boolean" }
+        }
+      },
+      "sources": { "type": "array", "items": { "type": "string" } },
+      "verified_at": { "type": "string", "format": "date-time" },
+      "capabilities_verified_at": { "type": "string", "format": "date-time" }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "id": "crewai",
+  "display_name": "CrewAI",
+  "lang": "python",
+  "wire_protocol": "openai-chat",
+  "note": "CrewAI's LLM class is LiteLLM-backed; base_url routes every crew call through the gateway.",
+  "code": "import os\nfrom crewai import LLM\n\nllm = LLM(\n    model=\"openai/gpt-5.5\",\n    base_url=\"{{baseURL}}/w/{{app}}/openai/v1\",\n    api_key=os.environ[\"OPENAI_API_KEY\"],\n)\n\n# Pass llm to your Agents/Crew as usual.",
+  "models": ["gpt-5.5"]
+}

@@ -1,0 +1,29 @@
+{
+  "model": "claude-sonnet-4-6",
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Count this prompt."
+    }
+  ],
+  "system": "Be concise.",
+  "tools": [
+    {
+      "name": "lookup",
+      "description": "Look up a value",
+      "input_schema": {
+        "type": "object"
+      }
+    }
+  ],
+  "tool_choice": {
+    "type": "auto"
+  },
+  "thinking": {
+    "type": "enabled",
+    "budget_tokens": 256
+  },
+  "temperature": 0.2,
+  "stream": true
+}

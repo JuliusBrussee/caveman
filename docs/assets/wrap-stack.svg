@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 360" width="860" height="360" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" role="img" aria-label="caveman wrap architecture: coding agent to a local caveman proxy to the provider on the main line with auth passed through byte-exact, a CCR store below the proxy holding original bytes with a recovery handle back to the agent, and an MCP toolkit side-channel exposing retrieve, toon encode/decode, and browse">
+  <style>
+    .ln  { stroke: #8b949e; fill: none; stroke-width: 1.4; }
+    .thin{ stroke: #8b949e; fill: none; stroke-width: 1; opacity: .7; }
+    .box { stroke: #8b949e; fill: none; stroke-width: 1.4; }
+    .tx  { fill: #57606a; }
+    .dim { fill: #8b949e; }
+    .dash{ stroke: #8b949e; fill: none; stroke-width: 1.2; stroke-dasharray: 4 3; }
+    @media (prefers-color-scheme: dark) {
+      .ln, .box { stroke: #7d8590; }
+      .thin, .dash { stroke: #768390; }
+      .tx  { fill: #adbac7; }
+      .dim { fill: #768390; }
+    }
+  </style>
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8" class="ln"/>
+    </marker>
+  </defs>
+
+  <!-- agent -->
+  <rect class="box" x="24" y="36" width="150" height="60" rx="6"/>
+  <text class="tx"  x="99" y="62" text-anchor="middle" font-size="13">coding agent</text>
+  <text class="dim" x="99" y="80" text-anchor="middle" font-size="9">claude · hermes · codex …</text>
+
+  <!-- agent -> proxy -->
+  <text class="dim" x="256" y="58" text-anchor="middle" font-size="10">request</text>
+  <line class="ln" x1="174" y1="66" x2="338" y2="66" marker-end="url(#ah)"/>
+
+  <!-- proxy -->
+  <rect class="box" x="340" y="26" width="200" height="80" rx="6"/>
+  <text class="tx"  x="440" y="58" text-anchor="middle" font-size="13">local caveman proxy</text>
+  <text class="dim" x="440" y="78" text-anchor="middle" font-size="9">S4 compress · TOON best-of · on your machine</text>
+
+  <!-- proxy -> provider -->
+  <text class="dim" x="622" y="58" text-anchor="middle" font-size="10">upstream</text>
+  <line class="ln" x1="540" y1="66" x2="704" y2="66" marker-end="url(#ah)"/>
+  <text class="dim" x="622" y="126" text-anchor="middle" font-size="9">auth untouched — API key or OAuth</text>
+  <text class="dim" x="622" y="138" text-anchor="middle" font-size="9">Bearer pass through byte-exact</text>
+
+  <!-- provider -->
+  <rect class="box" x="706" y="36" width="130" height="60" rx="6"/>
+  <text class="tx"  x="771" y="62" text-anchor="middle" font-size="13">provider</text>
+  <text class="dim" x="771" y="80" text-anchor="middle" font-size="9">anthropic · openai · gemini</text>
+
+  <!-- proxy -> CCR -->
+  <line class="ln" x1="440" y1="106" x2="440" y2="150" marker-end="url(#ah)"/>
+  <text class="dim" x="450" y="132" font-size="9">store original first</text>
+
+  <!-- CCR store -->
+  <rect class="box" x="326" y="150" width="228" height="56" rx="6"/>
+  <text class="tx"  x="440" y="174" text-anchor="middle" font-size="12">CCR store</text>
+  <text class="dim" x="440" y="192" text-anchor="middle" font-size="9">original bytes · byte-exact · on your disk</text>
+
+  <!-- recovery handle back to agent -->
+  <path class="dash" d="M326,183 C 210,183 110,150 110,98" marker-end="url(#ah)"/>
+  <text class="dim" x="155" y="128" text-anchor="middle" font-size="9">X-Caveman-Recovery-Handle</text>
+  <text class="dim" x="155" y="141" text-anchor="middle" font-size="9">→ caveman_retrieve (MCP)</text>
+
+  <!-- MCP side-channel: agent -> toolkit -->
+  <path class="ln" d="M50,96 L50,283 L278,283" marker-end="url(#ah)"/>
+  <text class="dim" x="58" y="196" font-size="9">MCP side-channel</text>
+
+  <!-- MCP toolkit -->
+  <rect class="box" x="280" y="252" width="460" height="64" rx="6"/>
+  <text class="tx"  x="510" y="278" text-anchor="middle" font-size="12">MCP toolkit</text>
+  <text class="dim" x="510" y="298" text-anchor="middle" font-size="9">caveman_retrieve · toon encode/decode · browse (compressed a11y tree)</text>
+</svg>

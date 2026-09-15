@@ -1,0 +1,2 @@
+$ echo hi
+hi

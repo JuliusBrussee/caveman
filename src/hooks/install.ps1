@@ -22,12 +22,46 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 $ClaudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
 $HooksDir = Join-Path $ClaudeDir "hooks"
 $Settings = Join-Path $ClaudeDir "settings.json"
-$RepoUrl = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks"
+$RepoUrl = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks"
 
-$HookFiles = @("package.json", "caveman-config.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js")
+$HookFiles = @("package.json", "caveman-config.js", "caveman-parse.js", "caveman-activate.js", "caveman-mode-tracker.js", "caveman-stats.js", "caveman-statusline.sh", "caveman-statusline.ps1", "cavecrew-model-overrides.js")
 
 # Resolve source — works from repo clone or remote
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
+
+# Use the unified JSONC parser when running from a clone. Standalone copies
+# refuse unreadable settings before copying hooks or replacing existing files.
+$SettingsHelper = ""
+if ($ScriptDir) {
+    $candidate = Join-Path $ScriptDir "../../bin/lib/settings.js"
+    if (Test-Path -LiteralPath $candidate) { $SettingsHelper = $candidate }
+}
+$env:CAVEMAN_SETTINGS = $Settings
+$env:CAVEMAN_HOOKS_DIR = $HooksDir
+$env:CAVEMAN_SETTINGS_HELPER = $SettingsHelper
+@'
+const fs = require('fs');
+try {
+  const manifest = process.env.CAVEMAN_HOOKS_DIR + '/package.json';
+  if (fs.existsSync(manifest)) {
+    const value = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value) || (value.type !== undefined && value.type !== 'commonjs')) {
+      throw new Error('existing hooks/package.json is incompatible with CommonJS hooks');
+    }
+  }
+  const file = process.env.CAVEMAN_SETTINGS;
+  if (fs.existsSync(file)) {
+    const helper = process.env.CAVEMAN_SETTINGS_HELPER;
+    const value = helper ? require(helper).readSettings(file) : JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('settings.json must be a readable object');
+  }
+} catch (error) {
+  console.error('Cannot install standalone hooks: ' + error.message);
+  console.error('Nothing was changed. For JSONC settings, use bin/install.js from a clone.');
+  process.exit(1);
+}
+'@ | node --input-type=commonjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Check if already installed (unless -Force). Older installs only had two hook
 # files, so require the full current set plus the hook registrations before we
@@ -46,15 +80,19 @@ if (-not $Force) {
     if ($AllFilesPresent -and (Test-Path $Settings)) {
         try {
             $settingsObj = Get-Content $Settings -Raw | ConvertFrom-Json
+            # Probe for the exact script we wire for this event, not a bare
+            # 'caveman' substring — that also matches user hooks merely
+            # mentioning the word in a path (#593), which made us skip wiring
+            # and silently leave caveman inactive. Mirrors install.sh.
             $hasCavemanHook = {
-                param([string]$eventName)
+                param([string]$eventName, [string]$script)
                 if (-not $settingsObj.hooks) { return $false }
                 $entries = $settingsObj.hooks.$eventName
                 if (-not $entries) { return $false }
                 foreach ($entry in $entries) {
                     if ($entry.hooks) {
                         foreach ($hookDef in $entry.hooks) {
-                            if ($hookDef.command -and $hookDef.command.Contains("caveman")) {
+                            if ($hookDef.command -and $hookDef.command.Contains($script)) {
                                 return $true
                             }
                         }
@@ -62,7 +100,8 @@ if (-not $Force) {
                 }
                 return $false
             }
-            $HooksWired = (& $hasCavemanHook "SessionStart") -and (& $hasCavemanHook "UserPromptSubmit")
+            $HooksWired = (& $hasCavemanHook "SessionStart" "caveman-activate.js") `
+                -and (& $hasCavemanHook "UserPromptSubmit" "caveman-mode-tracker.js")
             $HasStatusLine = $null -ne $settingsObj.statusLine
         } catch {
             $HooksWired = $false
@@ -93,6 +132,10 @@ if (-not (Test-Path $HooksDir)) {
 # 2. Copy or download hook files
 foreach ($hook in $HookFiles) {
     $dest = Join-Path $HooksDir $hook
+    if ($hook -eq "package.json" -and (Test-Path -LiteralPath $dest)) {
+        Write-Host "  Preserved existing: $dest"
+        continue
+    }
     $localSource = if ($ScriptDir) { Join-Path $ScriptDir $hook } else { $null }
 
     if ($localSource -and (Test-Path $localSource)) {
@@ -108,8 +151,13 @@ if (-not (Test-Path $Settings)) {
     Set-Content -Path $Settings -Value "{}"
 }
 
-# Back up existing settings.json before touching it
-Copy-Item $Settings "$Settings.bak" -Force
+# Back up existing settings.json before touching it. Back up ONCE: without the
+# Test-Path guard a -Force reinstall overwrites the only pre-caveman copy with
+# the already-merged file, destroying the user's recovery path. Same guard as
+# bin/install.js.
+if (-not (Test-Path "$Settings.bak")) {
+    Copy-Item $Settings "$Settings.bak"
+}
 
 # Use node for safe JSON merging — pass paths via env vars to avoid injection
 # if the username contains a single quote (e.g., O'Brien).
@@ -122,20 +170,27 @@ const fs = require('fs');
 const settingsPath = process.env.CAVEMAN_SETTINGS;
 const hooksDir = process.env.CAVEMAN_HOOKS_DIR;
 const managedStatusLinePath = hooksDir + '/caveman-statusline.ps1';
-const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+const shared = process.env.CAVEMAN_SETTINGS_HELPER ? require(process.env.CAVEMAN_SETTINGS_HELPER) : null;
+const meta = {};
+const settings = shared ? shared.readSettings(settingsPath, meta) : JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('settings.json must be a readable object');
+if (meta.jsonc) console.log('  Comments are preserved in ' + settingsPath + '.bak; updated settings use JSON.');
 if (!settings.hooks) settings.hooks = {};
 
 // SessionStart
 if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
+// Match the exact script, not a bare 'caveman' substring — that also matches
+// user hooks merely mentioning the word in a path (#593), which made us skip
+// wiring and silently leave caveman inactive.
 const hasStart = settings.hooks.SessionStart.some(e =>
-  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-activate.js'))
 );
 if (!hasStart) {
   settings.hooks.SessionStart.push({
     hooks: [{
       type: 'command',
       command: 'node "' + hooksDir + '/caveman-activate.js"',
-      timeout: 5,
+      timeout: 30,
       statusMessage: 'Loading caveman mode...'
     }]
   });
@@ -144,14 +199,14 @@ if (!hasStart) {
 // UserPromptSubmit
 if (!settings.hooks.UserPromptSubmit) settings.hooks.UserPromptSubmit = [];
 const hasPrompt = settings.hooks.UserPromptSubmit.some(e =>
-  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman'))
+  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-mode-tracker.js'))
 );
 if (!hasPrompt) {
   settings.hooks.UserPromptSubmit.push({
     hooks: [{
       type: 'command',
       command: 'node "' + hooksDir + '/caveman-mode-tracker.js"',
-      timeout: 5,
+      timeout: 30,
       statusMessage: 'Tracking caveman mode...'
     }]
   });
@@ -176,7 +231,8 @@ if (!settings.statusLine) {
   }
 }
 
-fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+if (shared) shared.writeSettings(settingsPath, settings);
+else fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
 console.log('  Hooks wired in settings.json');
 '@
 
@@ -184,8 +240,13 @@ $tmpScript = Join-Path $env:TEMP "caveman-install-$([System.Diagnostics.Process]
 try {
     [System.IO.File]::WriteAllText($tmpScript, $nodeScript, [System.Text.Encoding]::UTF8)
     node $tmpScript
+    $MergeExitCode = $LASTEXITCODE
 } finally {
     if (Test-Path $tmpScript) { Remove-Item $tmpScript -Force }
+}
+if ($MergeExitCode -ne 0) {
+    Write-Host "Hook settings could not be updated; installation did not complete." -ForegroundColor Red
+    exit $MergeExitCode
 }
 
 Write-Host ""

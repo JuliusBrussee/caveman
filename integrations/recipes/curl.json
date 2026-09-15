@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "id": "curl",
+  "display_name": "curl / raw HTTP",
+  "lang": "bash",
+  "wire_protocol": "multi",
+  "note": "The gateway speaks each provider's native protocol on its native path — bare or /w/-prefixed.",
+  "code": "# OpenAI protocol (Chat Completions, Responses, embeddings):\ncurl {{baseURL}}/w/{{app}}/v1/chat/completions \\\n  -H \"authorization: Bearer $OPENAI_API_KEY\" \\\n  -H \"content-type: application/json\" \\\n  -d '{\"model\":\"gpt-5.5\",\"messages\":[{\"role\":\"user\",\"content\":\"Why is the sky blue?\"}]}'\n\n# Anthropic protocol:\ncurl {{baseURL}}/w/{{app}}/v1/messages \\\n  -H \"x-api-key: $ANTHROPIC_API_KEY\" \\\n  -H \"anthropic-version: 2023-06-01\" \\\n  -H \"content-type: application/json\" \\\n  -d '{\"model\":\"claude-sonnet-4-5\",\"max_tokens\":256,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}'",
+  "models": ["gpt-5.5", "claude-sonnet-4-5"]
+}

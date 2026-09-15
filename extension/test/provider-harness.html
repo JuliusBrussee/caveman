@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Provider composer fixture</title>
+<style>
+  body { font: 16px system-ui; }
+  [contenteditable], textarea { display: block; border: 1px solid; width: 500px; min-height: 80px; white-space: pre-wrap; }
+  button { padding: 10px; }
+</style>
+<button aria-label="Send feedback" id="feedback">Send feedback</button>
+<div id="transcript"></div>
+<form id="composer"></form>
+<script>
+  // Provider DOM contracts only. This is not a copy of the providers' editor
+  // frameworks: the mock app keeps its own draft model updated by input events.
+  const host = location.hostname;
+  const textarea = host === "chatgpt.com" && location.search.includes("textarea");
+  const form = document.getElementById("composer");
+  const editor = document.createElement(textarea ? "textarea" : "div");
+  editor.setAttribute("role", "textbox");
+  if (!textarea) editor.contentEditable = "true";
+  if (host === "claude.ai") {
+    editor.className = "tiptap ProseMirror";
+    editor.dataset.testid = "chat-input";
+  } else if (host === "gemini.google.com") {
+    editor.className = "ql-editor";
+  } else if (textarea) {
+    editor.id = "mobile-composer-prompt";
+    editor.dataset.mobileComposerPrompt = "";
+  } else {
+    editor.id = "prompt-textarea";
+    editor.className = "ProseMirror";
+  }
+  const send = document.createElement("button");
+  send.type = "button";
+  send.textContent = "Send";
+  send.setAttribute("aria-label", "Send message");
+  if (host === "claude.ai") send.dataset.testid = "chat-input-send";
+  else if (host === "chatgpt.com") {
+    if (textarea) send.dataset.composerSubmit = "";
+    else send.dataset.testid = "send-button";
+  }
+  form.append(editor, send);
+  const store = { enabled: true, level: "full", sites: {} };
+  const listeners = [];
+  window.chrome = {
+    runtime: { id: "fixture" },
+    storage: {
+      sync: {
+        get(defaults, callback) { queueMicrotask(() => callback({ ...defaults, ...store })); },
+        set(value, callback) {
+          Object.assign(store, value);
+          queueMicrotask(() => { listeners.forEach(fn => fn({}, "sync")); callback?.(); });
+        },
+      },
+      onChanged: { addListener(fn) { listeners.push(fn); } },
+    },
+  };
+  let draft = "";
+  const fixture = window.fixture = { sent: [], feedback: 0, hold: false, store, editor, send };
+  editor.addEventListener("input", () => {
+    draft = textarea ? editor.value : editor.innerText;
+    send.disabled = fixture.hold;
+  });
+  function appSend() {
+    if (!draft.trim() || send.disabled) return;
+    fixture.sent.push(draft);
+    const message = document.createElement(host === "gemini.google.com" ? "user-query" : "div");
+    message.dataset.messageAuthorRole = "user";
+    if (host === "claude.ai") message.dataset.testid = "user-message";
+    message.textContent = draft;
+    document.getElementById("transcript").append(message);
+    draft = "";
+    if (textarea) editor.value = "";
+    else editor.replaceChildren();
+  }
+  send.addEventListener("click", appSend);
+  editor.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && e.keyCode !== 229) {
+      e.preventDefault(); appSend();
+    }
+  });
+  form.addEventListener("submit", e => e.preventDefault());
+  document.getElementById("feedback").addEventListener("click", () => ++fixture.feedback);
+  fixture.pressEnter = (overrides = {}) => editor.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Enter", bubbles: true, cancelable: true, ...overrides,
+  }));
+</script>
+<script src="/src/directive.js"></script>
+<script src="/src/caveman.js"></script>
+</html>

@@ -1,0 +1,1 @@
+{"hikes":[{"id":1,"name":"Blue Lake","distanceKm":7.5,"sunny":true},{"id":2,"name":"Ridge","distanceKm":9.2,"sunny":false},{"id":3,"name":"Wildflower Loop","distanceKm":5.1,"sunny":true},{"id":4,"name":"Canyon","distanceKm":11.4,"sunny":true}],"friends":["ana","luis","sam"],"meta":{"season":"spring_2025"}}

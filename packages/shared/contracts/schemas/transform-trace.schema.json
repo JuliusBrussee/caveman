@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.so/schemas/transform-trace.schema.json",
+  "title": "Content-Blind Caveman Transform Trace",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "agent_id",
+    "build_sha256",
+    "run_id",
+    "segment_kind",
+    "stability",
+    "cache_region",
+    "transform_id",
+    "transform_version",
+    "safety_class",
+    "before_tokens",
+    "after_tokens",
+    "recovery_kind",
+    "recovery_used",
+    "latency_ms",
+    "outcome"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "build_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "segment_kind": {
+      "enum": [
+        "instruction",
+        "user_intent",
+        "tool_schema",
+        "skill",
+        "memory",
+        "history",
+        "tool_result",
+        "artifact",
+        "error",
+        "output_contract"
+      ]
+    },
+    "stability": {
+      "enum": ["build", "session", "turn"]
+    },
+    "cache_region": {
+      "enum": ["frozen_prefix", "live_zone", "uncached"]
+    },
+    "transform_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "transform_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "safety_class": {
+      "enum": ["S0", "S1", "S2", "S3", "S4"]
+    },
+    "before_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "after_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "recovery_kind": {
+      "enum": ["none", "exact_ccr", "source_ref", "recompute"]
+    },
+    "recovery_used": {
+      "type": "boolean"
+    },
+    "latency_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "outcome": {
+      "enum": [
+        "applied",
+        "not_smaller",
+        "bypassed",
+        "failed_open",
+        "failed_closed"
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

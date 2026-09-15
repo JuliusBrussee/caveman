@@ -64,10 +64,38 @@ function pathWithout(binNames) {
 }
 
 function runInstaller(args, configDir, extraEnv = {}) {
-  return spawnSync('node', [INSTALLER, ...args, '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink'], {
+  return spawnSync(process.execPath, [INSTALLER, ...args, '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink'], {
     env: { ...process.env, CLAUDE_CONFIG_DIR: configDir, NO_COLOR: '1', ...extraEnv },
     encoding: 'utf8',
   });
+}
+
+function fakeClaudeDir(root) {
+  const dir = path.join(root, 'fake-bin');
+  fs.mkdirSync(dir);
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(dir, 'claude.cmd'), '@echo off\r\nexit /b 0\r\n');
+  } else {
+    const file = path.join(dir, 'claude');
+    fs.writeFileSync(file, '#!/bin/sh\nexit 0\n');
+    fs.chmodSync(file, 0o755);
+  }
+  return dir;
+}
+
+function isolatedInstallEnv(root) {
+  const home = path.join(root, 'home');
+  const fakeBin = fakeClaudeDir(root);
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const cleanPath = pathWithout(['claude', 'gemini']);
+  return {
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: path.join(home, '.config'),
+    HERMES_HOME: path.join(home, '.hermes'),
+    OPENCLAW_WORKSPACE: path.join(home, '.openclaw', 'workspace'),
+    PATH: `${fakeBin}${sep}${cleanPath}`,
+  };
 }
 
 function hasClaudeCli() {
@@ -82,6 +110,143 @@ function hasClaudeCli() {
 const STATUSLINE_FILE = process.platform === 'win32'
   ? 'caveman-statusline.ps1'
   : 'caveman-statusline.sh';
+
+test('isolated Claude install and uninstall complete without network or real user config', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const env = isolatedInstallEnv(dir);
+  try {
+    const installed = runInstaller(['--only', 'claude', '--with-hooks'], configDir, env);
+    assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+
+    const hooks = path.join(configDir, 'hooks');
+    for (const file of ['caveman-config.js', 'caveman-parse.js', 'caveman-activate.js',
+      'caveman-mode-tracker.js', 'caveman-stats.js', STATUSLINE_FILE, 'cavecrew-model-overrides.js']) {
+      assert.ok(fs.existsSync(path.join(hooks, file)), `${file} missing after install`);
+    }
+    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    assert.ok(SETTINGS.hasCavemanHook(settings, 'SessionStart', 'caveman-activate'));
+    assert.ok(SETTINGS.hasCavemanHook(settings, 'UserPromptSubmit', 'caveman-mode-tracker'));
+    assert.match(getStatuslineCommand(settings), /caveman-statusline/);
+
+    const removed = runInstaller(['--uninstall'], configDir, env);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    for (const file of ['caveman-config.js', 'caveman-parse.js', 'caveman-activate.js',
+      'caveman-mode-tracker.js', 'caveman-stats.js', STATUSLINE_FILE, 'cavecrew-model-overrides.js']) {
+      assert.equal(fs.existsSync(path.join(hooks, file)), false, `${file} survived uninstall`);
+    }
+    const clean = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    assert.equal(SETTINGS.hasCavemanHook(clean, 'SessionStart', 'caveman-activate'), false);
+    assert.equal(SETTINGS.hasCavemanHook(clean, 'UserPromptSubmit', 'caveman-mode-tracker'), false);
+    assert.doesNotMatch(getStatuslineCommand(clean), /caveman-statusline/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('uninstall removes session state but keeps lifetime history', () => {
+  const dir = freshTmpDir();
+  const env = isolatedInstallEnv(dir);
+  try {
+    const stateFiles = [
+      '.caveman-active',
+      '.caveman-active.prev',
+      '.caveman-mode-log.jsonl',
+      '.caveman-statusline-suffix',
+      '.caveman-nudge-shown',
+    ];
+    for (const file of stateFiles) fs.writeFileSync(path.join(dir, file), 'x');
+    const history = path.join(dir, '.caveman-history.jsonl');
+    fs.writeFileSync(history, '{"ts":1}\n');
+
+    const removed = runInstaller(['--uninstall'], dir, env);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    for (const file of stateFiles) {
+      assert.equal(fs.existsSync(path.join(dir, file)), false, `${file} survived uninstall`);
+    }
+    assert.ok(fs.existsSync(history), 'lifetime history must survive uninstall');
+    assert.match(removed.stdout, /kept .*caveman-history\.jsonl.*lifetime history/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('uninstall unlinks a replaced session directory without touching its target', {
+  skip: process.platform === 'win32' ? 'symlink setup requires Windows developer mode' : false,
+}, () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const outside = path.join(dir, 'outside');
+  const sentinel = path.join(outside, 'keep.txt');
+  const env = isolatedInstallEnv(dir);
+  try {
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.mkdirSync(outside);
+    fs.writeFileSync(sentinel, 'keep');
+    fs.symlinkSync(outside, path.join(configDir, '.caveman-sessions'));
+
+    const removed = runInstaller(['--uninstall'], configDir, env);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    assert.equal(fs.existsSync(path.join(configDir, '.caveman-sessions')), false);
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), 'keep');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('uninstall dry-run reports planned removals and deletes nothing', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const hooksDir = path.join(configDir, 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const env = isolatedInstallEnv(dir);
+  try {
+    const paths = [
+      path.join(configDir, '.caveman-active'),
+      path.join(configDir, '.caveman-mode-log.jsonl'),
+      path.join(hooksDir, 'caveman-activate.js'),
+    ];
+    for (const file of paths) fs.writeFileSync(file, 'x');
+
+    const result = runInstaller(['--uninstall', '--dry-run'], configDir, env);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    for (const file of paths) assert.ok(fs.existsSync(file), `${file} deleted during dry-run`);
+    const lines = result.stdout.split('\n').filter(line => /caveman-active|caveman-mode-log|caveman-activate/.test(line));
+    assert.ok(lines.length >= paths.length, 'missing dry-run removal output');
+    for (const line of lines) assert.match(line, /would remove/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('uninstall continues after OpenClaw cleanup failure and exits non-zero', {
+  skip: process.platform === 'win32' ? 'symlink setup requires Windows developer mode' : false,
+}, () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const env = isolatedInstallEnv(dir);
+  const workspace = env.OPENCLAW_WORKSPACE;
+  try {
+    const skillsDir = path.join(workspace, 'skills');
+    const target = path.join(dir, 'foreign-caveman-skill');
+    fs.mkdirSync(skillsDir, { recursive: true });
+    fs.mkdirSync(target);
+    fs.symlinkSync(target, path.join(skillsDir, 'caveman'), 'dir');
+    fs.mkdirSync(configDir, { recursive: true });
+    const state = path.join(configDir, '.caveman-active');
+    fs.writeFileSync(state, 'full');
+
+    const removed = runInstaller(['--uninstall'], configDir, env);
+    assert.equal(removed.status, 1, removed.stderr || removed.stdout);
+    assert.match(removed.stderr, /OpenClaw cleanup failed; continuing other cleanup/);
+    assert.match(removed.stderr, /uninstall incomplete/);
+    assert.equal(fs.existsSync(state), false, 'later session-state cleanup did not run');
+    assert.ok(fs.lstatSync(path.join(skillsDir, 'caveman')).isSymbolicLink(),
+      'foreign OpenClaw symlink should stay untouched');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 function getStatuslineCommand(settings) {
   if (!settings.statusLine) return '';
@@ -109,6 +274,7 @@ test('fresh install populates hooks dir and settings.json (skipped without `clau
     assert.ok(fs.existsSync(path.join(hooks, 'caveman-activate.js')),     'caveman-activate.js missing');
     assert.ok(fs.existsSync(path.join(hooks, 'caveman-mode-tracker.js')), 'caveman-mode-tracker.js missing');
     assert.ok(fs.existsSync(path.join(hooks, 'caveman-config.js')),       'caveman-config.js missing');
+    assert.ok(fs.existsSync(path.join(hooks, 'caveman-parse.js')),        'caveman-parse.js missing');
     assert.ok(fs.existsSync(path.join(hooks, 'package.json')),            'hooks/package.json (CJS marker) missing');
     assert.ok(fs.existsSync(path.join(hooks, STATUSLINE_FILE)),           `${STATUSLINE_FILE} missing`);
 
@@ -124,6 +290,150 @@ test('fresh install populates hooks dir and settings.json (skipped without `clau
     assert.ok(settings.statusLine, 'statusLine not set');
     assert.match(getStatuslineCommand(settings), /caveman-statusline/,
       'statusLine command does not reference caveman');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standalone hooks keep a stable PATH node symlink', { skip: process.platform === 'win32' && 'POSIX symlink behavior' }, () => {
+  const dir = freshTmpDir();
+  const cellarBin = path.join(dir, 'Cellar', 'node', '26.5.0', 'bin');
+  const upgradedCellarBin = path.join(dir, 'Cellar', 'node', '26.8.1', 'bin');
+  const stableBin = path.join(dir, 'bin');
+  const configDir = path.join(dir, 'claude-config');
+  fs.mkdirSync(cellarBin, { recursive: true });
+  fs.mkdirSync(upgradedCellarBin, { recursive: true });
+  fs.mkdirSync(stableBin, { recursive: true });
+  const cellarNode = path.join(cellarBin, 'node');
+  const upgradedCellarNode = path.join(upgradedCellarBin, 'node');
+  const stableNode = path.join(stableBin, 'node');
+
+  try {
+    fs.linkSync(process.execPath, cellarNode);
+    fs.symlinkSync(cellarNode, stableNode);
+    const r = spawnSync(stableNode, [
+      INSTALLER, '--only', 'claude', '--with-hooks', '--skip-skills',
+      '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink',
+    ], {
+      env: { ...process.env, PATH: stableBin, CLAUDE_CONFIG_DIR: configDir, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+
+    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    const command = cavemanHookCommands(settings, 'SessionStart', 'caveman-activate')[0]?.command || '';
+    assert.match(command, new RegExp(stableNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      'hook command should preserve the stable node path found on PATH');
+    assert.doesNotMatch(command, new RegExp(cellarNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      'hook command must not persist the versioned node target');
+
+    fs.linkSync(process.execPath, upgradedCellarNode);
+    fs.unlinkSync(stableNode);
+    fs.symlinkSync(upgradedCellarNode, stableNode);
+    fs.rmSync(path.join(dir, 'Cellar', 'node', '26.5.0'), { recursive: true });
+
+    const storedNode = command.match(/^"([^"]+)"/)?.[1];
+    assert.equal(storedNode, stableNode, 'hook command should store the stable executable path');
+    const upgraded = spawnSync(storedNode, ['--version'], { encoding: 'utf8' });
+    assert.equal(upgraded.status, 0,
+      `stored hook executable should survive a Node upgrade: ${upgraded.error?.message || upgraded.stderr}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Preferring the PATH node over process.execPath is only an improvement while
+// that node RUNS. `command -v node` names stale version-manager shims and
+// dangling symlinks just as readily as real binaries, and baking one of those
+// into settings.json breaks every session — a worse failure than the #805
+// upgrade drift it is meant to fix, because process.execPath was by
+// construction a working node. So a candidate that cannot report a version
+// must lose to process.execPath.
+test('a PATH node that does not run loses to the running node (#805)', { skip: process.platform === 'win32' && 'POSIX shim behavior' }, () => {
+  const dir = freshTmpDir();
+  const brokenBin = path.join(dir, 'broken-bin');
+  const configDir = path.join(dir, 'claude-config');
+  fs.mkdirSync(brokenBin, { recursive: true });
+  // A shim that exists and is executable but always fails — the shape a stale
+  // nvm/asdf shim takes once its target version is uninstalled.
+  const brokenNode = path.join(brokenBin, 'node');
+  fs.writeFileSync(brokenNode, '#!/bin/sh\necho "node: version not installed" 1>&2\nexit 1\n');
+  fs.chmodSync(brokenNode, 0o755);
+
+  try {
+    const r = spawnSync(process.execPath, [
+      INSTALLER, '--only', 'claude', '--with-hooks', '--skip-skills',
+      '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink',
+    ], {
+      env: { ...process.env, PATH: `${brokenBin}:${process.env.PATH || ''}`, CLAUDE_CONFIG_DIR: configDir, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+
+    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    const command = cavemanHookCommands(settings, 'SessionStart', 'caveman-activate')[0]?.command || '';
+    const storedNode = command.match(/^"([^"]+)"/)?.[1];
+    assert.ok(storedNode, `no node path in hook command: ${command}`);
+    assert.notEqual(storedNode, brokenNode, 'installer baked a node that cannot run');
+
+    const probe = spawnSync(storedNode, ['--version'], { encoding: 'utf8' });
+    assert.equal(probe.status, 0,
+      `stored hook executable must run: ${probe.error?.message || probe.stderr}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// absoluteNodePath() answers "which node do we WRITE INTO settings.json", where
+// the stable PATH symlink is what survives a `brew upgrade node` (#805). The
+// two runInit() spawns are a different question — they execute caveman-init
+// right now, in this process's lifetime — and there the answer is
+// process.execPath: the interpreter already known to work, the one running the
+// installer. Routing those through absoluteNodePath() broadened the persisted-
+// hook fix into same-process execution and broke launching the installer with
+// an explicit good Node while PATH resolves to a different or stale one.
+//
+// The fake node reports a CURRENT version for `--version` on purpose, so it
+// passes the MIN_NODE_MAJOR probe and absoluteNodePath() genuinely SELECTS it.
+// A fixture that fails outright also catches the regression, but only because
+// the version probe invokes it on the way to rejecting it — the marker records
+// the probe rather than caveman-init actually running on the wrong Node. This
+// shape exercises the real failure, so it keeps its meaning if the probe ever
+// changes. The marker is written only when the fake is handed a script, which
+// is what running caveman-init looks like.
+test('caveman-init runs on the installer\'s own Node, not the PATH one (#805)', { skip: process.platform === 'win32' && 'POSIX executable fixture' }, () => {
+  const dir = freshTmpDir();
+  const fakeBin = path.join(dir, 'fake-bin');
+  const fakeNodeCalled = path.join(dir, 'fake-node-called');
+  fs.mkdirSync(fakeBin);
+  const major = Number(process.versions.node.split('.')[0]);
+  fs.writeFileSync(path.join(fakeBin, 'node'),
+    '#!/bin/sh\n'
+    + `if [ "$1" = --version ]; then echo "v${major}.0.0"; exit 0; fi\n`
+    + `: > "${fakeNodeCalled}"\n`
+    + 'exit 1\n');
+  fs.chmodSync(path.join(fakeBin, 'node'), 0o755);
+
+  try {
+    const r = spawnSync(process.execPath, [
+      INSTALLER, '--with-init', '--skip-skills', '--non-interactive',
+      '--no-mcp-shrink', '--config-dir', path.join(dir, 'claude-config'),
+    ], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        HOME: path.join(dir, 'home'),
+        PATH: fakeBin,
+        NO_COLOR: '1',
+      },
+      encoding: 'utf8',
+    });
+
+    assert.equal(r.status, 0, r.stderr || r.stdout);
+    assert.equal(fs.existsSync(fakeNodeCalled), false,
+      'caveman-init must not use a different Node executable found on PATH');
+    assert.ok(fs.existsSync(path.join(dir, '.cursor', 'rules', 'caveman.mdc')),
+      'caveman-init did not write the per-repo rule files');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -154,11 +464,19 @@ test('idempotent install does not duplicate hook entries (skipped without `claud
 test('uninstall strips caveman hooks but preserves user-authored ones (skipped without `claude` CLI)', { skip: !hasClaudeCli() && 'claude CLI not on PATH; uninstall test depends on a prior real install' }, () => {
   const dir = freshTmpDir();
   try {
-    // Seed user's existing settings so we can verify they survive.
+    // Seed current and future foreign hook kinds so install/uninstall cannot
+    // silently remove security controls the installer does not own.
+    const foreignHooks = [
+      { type: 'command', command: 'echo user-owned-hook' },
+      { type: 'prompt', prompt: 'check policy' },
+      { type: 'http', url: 'https://audit.example/hook' },
+      { type: 'mcp_tool', tool: 'guard' },
+      { type: 'future-hook', opaque: { keep: true } },
+    ];
     fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({
       model: 'opus',
       hooks: {
-        SessionStart: [{ hooks: [{ type: 'command', command: 'echo user-owned-hook' }] }],
+        SessionStart: [{ matcher: '*', hooks: foreignHooks }],
       },
     }, null, 2));
 
@@ -174,7 +492,7 @@ test('uninstall strips caveman hooks but preserves user-authored ones (skipped w
     // Hook scripts deleted.
     const hooks = path.join(dir, 'hooks');
     if (fs.existsSync(hooks)) {
-      for (const f of ['caveman-activate.js', 'caveman-mode-tracker.js', 'caveman-config.js', STATUSLINE_FILE]) {
+      for (const f of ['caveman-activate.js', 'caveman-mode-tracker.js', 'caveman-config.js', 'caveman-parse.js', STATUSLINE_FILE]) {
         assert.equal(fs.existsSync(path.join(hooks, f)), false, `${f} should be removed`);
       }
     }
@@ -190,9 +508,8 @@ test('uninstall strips caveman hooks but preserves user-authored ones (skipped w
         }
       }
     }
-    // User's pre-existing hook preserved.
-    const preservedUser = cavemanHookCommands(settings, 'SessionStart', 'user-owned-hook').length > 0;
-    assert.ok(preservedUser, 'user-authored SessionStart hook was wiped during uninstall');
+    assert.deepEqual(settings.hooks.SessionStart[0].hooks, foreignHooks,
+      'foreign hook kinds changed during install/uninstall');
 
     // Statusline pointing at caveman should be removed.
     assert.doesNotMatch(getStatuslineCommand(settings), /caveman-statusline/,
@@ -248,8 +565,10 @@ test('openclaw install writes skill folder + SOUL.md bootstrap', () => {
   const ws = path.join(dir, 'ws');
   fs.mkdirSync(ws);
   try {
-    const r = spawnSync('node', [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
-      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' },
+    // Pin the ref explicitly so the assertion tests the derivation, not
+    // whatever release the repo happens to be on (see the branch-ref test).
+    const r = spawnSync(process.execPath, [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
+      env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1', CAVEMAN_REF: 'v3.4.5' },
       encoding: 'utf8',
     });
     assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
@@ -259,7 +578,7 @@ test('openclaw install writes skill folder + SOUL.md bootstrap', () => {
     assert.ok(fs.existsSync(skillFile), 'skill SKILL.md missing');
     const skillRaw = fs.readFileSync(skillFile, 'utf8');
     assert.match(skillRaw, /^---\n/, 'skill missing frontmatter');
-    assert.match(skillRaw, /\nversion:\s*\d+\.\d+\.\d+/, 'skill missing version frontmatter');
+    assert.match(skillRaw, /\nversion:\s*3\.4\.5/, 'skill version must match pinned installer ref');
     assert.match(skillRaw, /\nalways:\s*true/, 'skill missing always: true frontmatter');
 
     // Body after the merged frontmatter must match the source body.
@@ -281,6 +600,27 @@ test('openclaw install writes skill folder + SOUL.md bootstrap', () => {
   }
 });
 
+test('openclaw branch ref keeps valid fallback skill version', () => {
+  const dir = freshTmpDir();
+  const env = isolatedInstallEnv(dir);
+  try {
+    fs.mkdirSync(env.OPENCLAW_WORKSPACE, { recursive: true });
+    const installed = runInstaller(['--only', 'openclaw'], path.join(dir, 'claude'), {
+      ...env,
+      CAVEMAN_REF: 'main',
+    });
+    assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+    const skillRaw = fs.readFileSync(
+      path.join(env.OPENCLAW_WORKSPACE, 'skills', 'caveman', 'SKILL.md'),
+      'utf8',
+    );
+    assert.match(skillRaw, /\nversion:\s*1\.0\.0\n/);
+    assert.doesNotMatch(skillRaw, /\nversion:\s*main\n/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('openclaw install is idempotent: skill frontmatter not double-prepended, SOUL.md has one marker block', () => {
   const dir = freshTmpDir();
   const ws = path.join(dir, 'ws');
@@ -288,8 +628,8 @@ test('openclaw install is idempotent: skill frontmatter not double-prepended, SO
   try {
     const env = { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' };
     const args = ['--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir];
-    spawnSync('node', [INSTALLER, ...args], { env, encoding: 'utf8' });
-    spawnSync('node', [INSTALLER, ...args], { env, encoding: 'utf8' });
+    spawnSync(process.execPath, [INSTALLER, ...args], { env, encoding: 'utf8' });
+    spawnSync(process.execPath, [INSTALLER, ...args], { env, encoding: 'utf8' });
 
     const skillRaw = fs.readFileSync(path.join(ws, 'skills', 'caveman', 'SKILL.md'), 'utf8');
     // version key should appear exactly once (idempotent merge).
@@ -313,7 +653,7 @@ test('openclaw install preserves user content in SOUL.md (append, not overwrite)
   const userContent = '# my workspace\n\nfoo bar baz\n';
   fs.writeFileSync(path.join(ws, 'SOUL.md'), userContent);
   try {
-    spawnSync('node', [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
+    spawnSync(process.execPath, [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
       env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' },
       encoding: 'utf8',
     });
@@ -326,6 +666,101 @@ test('openclaw install preserves user content in SOUL.md (append, not overwrite)
   }
 });
 
+test('openclaw install rejects SOUL.md symlinks and rolls back its skill', () => {
+  if (process.platform === 'win32') return;
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  const target = path.join(dir, 'user-target.md');
+  fs.writeFileSync(target, 'USER SECRET\n');
+  fs.symlinkSync(target, path.join(ws, 'SOUL.md'));
+  try {
+    assert.throws(() => helper.installOpenclaw({ workspace: ws, repoRoot: REPO_ROOT }), /refusing non-regular/);
+    assert.equal(fs.readFileSync(target, 'utf8'), 'USER SECRET\n');
+    assert.equal(fs.existsSync(path.join(ws, 'skills', 'caveman', 'SKILL.md')), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw install rejects a symlinked skill directory', () => {
+  if (process.platform === 'win32') return;
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  const redirected = path.join(dir, 'redirected');
+  fs.mkdirSync(path.join(ws, 'skills'), { recursive: true });
+  fs.mkdirSync(redirected);
+  fs.symlinkSync(redirected, path.join(ws, 'skills', 'caveman'));
+  try {
+    assert.throws(() => helper.installOpenclaw({ workspace: ws, repoRoot: REPO_ROOT }), /symlink/);
+    assert.deepEqual(fs.readdirSync(redirected), []);
+    assert.equal(fs.existsSync(path.join(ws, 'SOUL.md')), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw atomic SOUL failure preserves user bytes and rolls back partial install', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  const soul = path.join(ws, 'SOUL.md');
+  const original = '# user soul\n\nkeep exactly\n';
+  fs.writeFileSync(soul, original);
+  const rename = fs.renameSync;
+  fs.renameSync = (from, to) => {
+    if (to === soul) throw Object.assign(new Error('injected rename failure'), { code: 'EIO' });
+    return rename(from, to);
+  };
+  try {
+    assert.throws(() => helper.installOpenclaw({ workspace: ws, repoRoot: REPO_ROOT }), /injected rename failure/);
+    assert.equal(fs.readFileSync(soul, 'utf8'), original);
+    assert.equal(fs.existsSync(path.join(ws, 'skills', 'caveman', 'SKILL.md')), false);
+    assert.deepEqual(fs.readdirSync(ws).filter(name => name.startsWith('.SOUL.md.') && name.endsWith('.tmp')), []);
+  } finally {
+    fs.renameSync = rename;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('openclaw install refuses a concurrent same-inode SOUL edit', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'workspace');
+  fs.mkdirSync(ws, { recursive: true });
+  const soul = path.join(ws, 'SOUL.md');
+  fs.writeFileSync(soul, 'original user bytes\n');
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const open = fs.openSync;
+  const writeFile = fs.writeFileSync;
+  let soulTempFD;
+  let injected = false;
+  fs.openSync = (target, ...args) => {
+    const fd = open(target, ...args);
+    if (typeof target === 'string' && path.basename(target).startsWith('.SOUL.md.') && target.endsWith('.tmp')) soulTempFD = fd;
+    return fd;
+  };
+  fs.writeFileSync = (target, ...args) => {
+    const result = writeFile(target, ...args);
+    if (!injected && target === soulTempFD) {
+      injected = true;
+      writeFile(soul, 'concurrent user edit\n');
+    }
+    return result;
+  };
+  try {
+    assert.throws(() => helper.installOpenclaw({ workspace: ws, repoRoot: REPO_ROOT }), /changed before atomic replace/);
+    assert.equal(fs.readFileSync(soul, 'utf8'), 'concurrent user edit\n');
+    assert.equal(fs.existsSync(path.join(ws, 'skills', 'caveman', 'SKILL.md')), false);
+  } finally {
+    fs.openSync = open;
+    fs.writeFileSync = writeFile;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('openclaw uninstall removes skill folder + strips SOUL.md block, preserving user content', () => {
   const dir = freshTmpDir();
   const ws = path.join(dir, 'ws');
@@ -334,11 +769,11 @@ test('openclaw uninstall removes skill folder + strips SOUL.md block, preserving
   fs.writeFileSync(path.join(ws, 'SOUL.md'), userContent);
   try {
     const env = { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' };
-    spawnSync('node', [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], { env, encoding: 'utf8' });
+    spawnSync(process.execPath, [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], { env, encoding: 'utf8' });
 
     // Strip claude/gemini from PATH so uninstall doesn't touch real plugins.
     const cleanPath = pathWithout(['claude', 'gemini']);
-    const r = spawnSync('node', [INSTALLER, '--uninstall', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
+    const r = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], {
       env: { ...env, PATH: cleanPath },
       encoding: 'utf8',
     });
@@ -355,13 +790,36 @@ test('openclaw uninstall removes skill folder + strips SOUL.md block, preserving
   }
 });
 
+test('openclaw uninstall propagates skill deletion failure and restores SOUL + skill', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  helper.installOpenclaw({ workspace: ws, repoRoot: REPO_ROOT });
+  const soul = path.join(ws, 'SOUL.md');
+  const before = fs.readFileSync(soul, 'utf8');
+  const remove = fs.rmSync;
+  fs.rmSync = (target, options) => {
+    if (String(target).includes('.caveman.remove.')) throw Object.assign(new Error('injected remove failure'), { code: 'EACCES' });
+    return remove(target, options);
+  };
+  try {
+    assert.throws(() => helper.uninstallOpenclaw({ workspace: ws }), /injected remove failure/);
+    assert.equal(fs.readFileSync(soul, 'utf8'), before);
+    assert.ok(fs.existsSync(path.join(ws, 'skills', 'caveman', 'SKILL.md')));
+  } finally {
+    fs.rmSync = remove;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('caveman-init.js --only openclaw routes through the same helper', () => {
   const dir = freshTmpDir();
   const ws = path.join(dir, 'ws');
   fs.mkdirSync(ws);
   try {
     const initScript = path.join(REPO_ROOT, 'src', 'tools', 'caveman-init.js');
-    const r = spawnSync('node', [initScript, dir, '--only', 'openclaw'], {
+    const r = spawnSync(process.execPath, [initScript, dir, '--only', 'openclaw'], {
       env: { ...process.env, OPENCLAW_WORKSPACE: ws, NO_COLOR: '1' },
       encoding: 'utf8',
     });
@@ -416,7 +874,7 @@ test('opencode: --force on legacy AGENTS.md preserves user content and takes a b
   const userRules = '# My precious user rules\n\nAlways use tabs.\n';
   fs.writeFileSync(agentsMd, userRules + '\n' + legacyBody);
   try {
-    const r = spawnSync('node', [INSTALLER, '--only', 'opencode', '--force', '--non-interactive', '--no-mcp-shrink', '--config-dir', path.join(dir, 'claude')], {
+    const r = spawnSync(process.execPath, [INSTALLER, '--only', 'opencode', '--force', '--non-interactive', '--no-mcp-shrink', '--config-dir', path.join(dir, 'claude')], {
       env: { ...process.env, XDG_CONFIG_HOME: xdg, NO_COLOR: '1' },
       encoding: 'utf8',
     });

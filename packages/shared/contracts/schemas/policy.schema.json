@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.cloud/schemas/policy.schema.json",
+  "type": "object",
+  "required": ["version", "runtime_mode", "fail_policy", "providers", "limits", "retention", "optimizers", "sdk", "telemetry"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "runtime_mode": { "enum": ["record", "recommend", "shadow", "canary", "active", "compress"] },
+    "capabilities": {
+      "type": "object",
+      "description": "Capability grants. additionalProperties is true on purpose: this is a forward-compatible grant set, and the control plane and the gateway deploy independently. With additionalProperties:false, a control plane that starts issuing a new capability makes every policy it publishes invalid against a gateway still on the previous schema — the compat window closes on the first added key instead of degrading to 'an older reader ignores what it does not grant'. Readers grant only what they recognize, so an unknown key can never widen anything. NOTE: no runtime in this repository validates a policy against this schema — Go structs decode it and ignore unknown fields already; scripts/validate-schemas.mjs only checks that the schema itself is a valid JSON Schema. This field is the published contract, so the change is about what integrators are told they may send, not about a check that was loosened.",
+      "properties": {
+        "compress": { "type": "boolean" },
+        "cache_hints": { "type": "boolean" },
+        "routing": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "pass_through": { "type": "boolean" },
+    "fail_policy": { "enum": ["fail_open", "fail_closed"] },
+    "providers": {
+      "type": "object",
+      "required": ["allowed", "allowed_models", "allowed_regions"],
+      "properties": {
+        "allowed": { "type": "array", "items": { "enum": ["openai", "anthropic", "gemini", "azure_openai", "openai_compatible"] } },
+        "allowed_models": { "type": "array", "items": { "type": "string" } },
+        "allowed_regions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": ["max_request_bytes", "max_artifact_bytes", "requests_per_minute", "concurrent_requests", "monthly_usd"],
+      "properties": {
+        "max_request_bytes": { "type": "integer", "minimum": 1 },
+        "max_artifact_bytes": { "type": "integer", "minimum": 1 },
+        "requests_per_minute": { "type": "integer", "minimum": 1 },
+        "concurrent_requests": { "type": "integer", "minimum": 1 },
+        "monthly_usd": {
+          "type": "object",
+          "required": ["soft", "hard"],
+          "properties": {
+            "soft": { "type": "number", "minimum": 0 },
+            "hard": { "type": "number", "minimum": 0 }
+          }
+        },
+        "spend_rate_usd": {
+          "type": "object",
+          "description": "Advisory catalog-list-price rate quota. Counters are post-response rolling lower bounds, fail open on Valkey errors, and soft_block is not an atomic provider-bill cap.",
+          "required": ["window_seconds", "per_key_usd", "per_workflow_usd", "soft_block"],
+          "properties": {
+            "window_seconds": { "type": "integer", "minimum": 0, "maximum": 86400 },
+            "per_key_usd": { "type": "number", "minimum": 0 },
+            "per_workflow_usd": { "type": "number", "minimum": 0 },
+            "soft_block": { "type": "boolean" }
+          },
+          "allOf": [{
+            "if": { "anyOf": [
+              { "properties": { "per_key_usd": { "type": "number", "exclusiveMinimum": 0 } }, "required": ["per_key_usd"] },
+              { "properties": { "per_workflow_usd": { "type": "number", "exclusiveMinimum": 0 } }, "required": ["per_workflow_usd"] }
+            ] },
+            "then": { "properties": { "window_seconds": { "type": "integer", "minimum": 60 } } },
+            "else": { "properties": { "window_seconds": { "const": 0 }, "soft_block": { "const": false } } }
+          }],
+          "additionalProperties": false
+        }
+      }
+    },
+    "retention": { "type": "object", "required": ["policy_id"], "properties": { "policy_id": { "type": "string" } } },
+    "optimizers": { "type": "object" },
+    "compress": {
+      "type": "object",
+      "properties": {
+        "method": { "enum": ["auto", "elision", "toon"] },
+        "pixel_density": { "enum": ["conservative", "balanced", "max"] }
+      },
+      "additionalProperties": true
+    },
+    "task_profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "quality_floor": { "type": "number", "minimum": 0, "maximum": 1 },
+          "alpha": { "type": "number", "minimum": 0, "maximum": 10 },
+          "candidate_allowlist": { "type": "array", "items": { "type": "string" } },
+          "candidate_denylist": { "type": "array", "items": { "type": "string" } },
+          "max_p95_latency_delta_ms": { "type": "integer", "minimum": 0 },
+          "max_error_delta": { "type": "number", "minimum": 0 },
+          "max_cost_ratio": { "type": "number", "minimum": 0 },
+          "cascade_enabled": { "type": "boolean" },
+          "cascade_tau": { "type": "number", "minimum": 0, "maximum": 1 },
+          "max_escalation_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+          "stickiness": { "enum": ["conversation", "none", "key"] },
+          "cross_provider": { "type": "boolean" },
+          "data_residency": { "type": "array", "items": { "type": "string" } },
+          "trusted_route_hints": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "runtime_policies": {
+      "type": "array",
+      "description": "Optional, additive: the runtime policies delivered to SDK callers through the published-policy overlay (spec §21.2). They select an execution path for a task family; they never measure, claim, or imply a saving. A structurally invalid entry is DROPPED at render time rather than guessed at, and a policy whose guard set or experiment is invalid is dropped whole — dropping only the broken part would widen who the policy applies to.",
+      "items": {
+        "type": "object",
+        "required": ["id", "task_family", "execute"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "task_family": { "type": "string", "minLength": 1 },
+          "disabled": { "type": "boolean" },
+          "applies_when": {
+            "type": "array",
+            "description": "AND-ed guards. An unknown op, a missing context field, or a type mismatch makes the condition FALSE at the client — never true.",
+            "items": {
+              "type": "object",
+              "required": ["field", "op", "value"],
+              "properties": {
+                "field": { "type": "string", "minLength": 1 },
+                "op": { "enum": ["eq", "ne", "gt", "gte", "lt", "lte", "in"] },
+                "value": true
+              },
+              "additionalProperties": false
+            }
+          },
+          "execute": {
+            "type": "object",
+            "required": ["workflow"],
+            "properties": { "workflow": { "type": "string", "minLength": 1 } },
+            "additionalProperties": false
+          },
+          "fallback": {
+            "type": "object",
+            "description": "The path taken when guards fail, the unit key is missing, or the caller lands in the holdout. A null workflow means the customer's own baseline.",
+            "properties": { "workflow": { "type": ["string", "null"] } },
+            "additionalProperties": false
+          },
+          "verify": { "type": "array", "items": { "type": "string" } },
+          "budget": {
+            "type": "object",
+            "description": "Advisory caps handed to the caller. Not a spend guarantee and not a savings figure — the caller enforces them.",
+            "properties": {
+              "max_cost_usd": { "type": "number", "minimum": 0 },
+              "max_duration_seconds": { "type": "number", "minimum": 0 }
+            },
+            "additionalProperties": false
+          },
+          "escalation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": { "on": { "type": "string" }, "action": { "type": "string" } },
+              "additionalProperties": false
+            }
+          },
+          "experiment": {
+            "type": "object",
+            "description": "Absent means the policy applies to 100% of guard-passing traffic. The holdout slice is carved FIRST and forced onto the fallback path.",
+            "required": ["id", "arms"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "holdout_frac": { "type": "number", "minimum": 0, "exclusiveMaximum": 1 },
+              "arms": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["name", "fraction"],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "\"holdout\" is the reserved name of the suppressed slice, so an arm may never claim it — an arm by that name would be assigned traffic the holdout exists to withhold. The renderer drops the whole policy when it sees one.",
+                      "not": { "const": "holdout" }
+                    },
+                    "fraction": { "type": "number", "exclusiveMinimum": 0 }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "sdk": { "type": "object" },
+    "telemetry": {
+      "type": "object",
+      "required": ["metadata_enabled", "raw_payloads_enabled", "sample_rate"],
+      "properties": {
+        "metadata_enabled": { "type": "boolean" },
+        "raw_payloads_enabled": { "type": "boolean" },
+        "sample_rate": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  },
+  "additionalProperties": true
+}

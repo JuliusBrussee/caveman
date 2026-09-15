@@ -1,0 +1,4 @@
+interface:
+  display_name: "Migration"
+  short_description: "Plan reversible data-safe transitions"
+  default_prompt: "Use $migration to implement this transition with compatibility and rollback proof."

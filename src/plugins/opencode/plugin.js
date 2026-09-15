@@ -7,13 +7,15 @@
 //
 // Bun ESM module; loads the existing security-hardened helpers from
 // caveman-config.js via createRequire so the symlink-safe flag-write code
-// lives in one place.
+// lives in one place. Same trick loads caveman-parse.js (#602) so the mode-
+// change parsing is a single shared source with caveman-mode-tracker.js.
 //
 // Layout once installed:
 //   ~/.config/opencode/plugins/caveman/
 //   ├── package.json
 //   ├── plugin.js              ← this file
-//   └── caveman-config.cjs     ← copied sibling of src/hooks/caveman-config.js
+//   ├── caveman-config.cjs     ← copied sibling of src/hooks/caveman-config.js
+//   └── caveman-parse.cjs      ← copied sibling of src/hooks/caveman-parse.js
 //
 // The always-on caveman ruleset is provided separately via
 // ~/.config/opencode/AGENTS.md (Tier-3 base). This plugin handles dynamic
@@ -34,7 +36,7 @@
 // https://github.com/JuliusBrussee/caveman/issues/421
 
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync, unlinkSync, readFileSync } from 'node:fs';
 import os from 'node:os';
@@ -62,17 +64,43 @@ function loadConfig() {
   const target = existsSync(installed) ? installed : dev;
   const code = readFileSync(target, 'utf8').replace(/^#![^\n]*\n/, '');
   const mod = { exports: {} };
+  // Base require on the loaded file, not plugin.js — caveman-parse.js does a
+  // relative require('./caveman-config') that must resolve against src/hooks/
+  // in the dev layout and against pluginDir when installed.
   new Function('module', 'exports', 'require', '__dirname', '__filename', code)(
-    mod, mod.exports, createRequire(import.meta.url), dirname(target), target
+    mod, mod.exports, createRequire(pathToFileURL(target).href), dirname(target), target
   );
   return mod.exports;
 }
 const config = loadConfig();
 
-const { getDefaultMode, safeWriteFlag, readFlag, VALID_MODES } = config;
+const { getDefaultMode, safeWriteFlag, readFlag } = config;
 
-// Modes handled by independent skills — not selectable via /caveman <arg>.
-const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
+// Resolved defensively, NOT destructured with the three above. loadConfig()
+// reads whatever caveman-config.cjs sits in the installed plugin directory,
+// which can predate this file (#848). recordModeChange is the newest of these
+// exports, and handleSessionCreated() runs at factory time below, outside any
+// try — so destructuring an absent one would throw during plugin construction
+// and take caveman on opencode from "mode works, history missing" to "plugin
+// does not load at all". The history log is best-effort by design (its own
+// body silent-fails), so the no-op stub is the honest fallback.
+const recordModeChange = config.recordModeChange || function () {};
+
+// Load the shared mode-change parser (#602) the same way loadConfig() loads
+// caveman-config.js — see the doc comment above loadConfig() for why this
+// can't go through require()/import() in a compiled Bun binary.
+function loadParse() {
+  const installed = join(here, 'caveman-parse.cjs');
+  const dev = join(here, '..', '..', 'hooks', 'caveman-parse.js');
+  const target = existsSync(installed) ? installed : dev;
+  const code = readFileSync(target, 'utf8').replace(/^#![^\n]*\n/, '');
+  const mod = { exports: {} };
+  new Function('module', 'exports', 'require', '__dirname', '__filename', code)(
+    mod, mod.exports, createRequire(pathToFileURL(target).href), dirname(target), target
+  );
+  return mod.exports;
+}
+const { parseModeChange, INDEPENDENT_MODES } = loadParse();
 
 // opencode resolves its config dir from $XDG_CONFIG_HOME, else ~/.config/opencode
 // on every platform — including Windows, where it uses %USERPROFILE%\.config\opencode
@@ -85,88 +113,82 @@ function opencodeConfigDir() {
   return path.join(os.homedir(), '.config', 'opencode');
 }
 
-const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
+const opencodeDir = opencodeConfigDir();
+const flagPath = path.join(opencodeDir, '.caveman-active');
 
-function reinforcementLine(mode) {
-  return 'CAVEMAN MODE ACTIVE (' + mode + '). ' +
-    'Drop articles/filler/pleasantries/hedging. Fragments OK. ' +
-    'Code/commits/security: write normal.';
-}
-
-// Parse a prompt for slash-command activation or natural-language toggles.
-// Returns the new mode to write, the literal string 'off' to deactivate, or
-// null when the prompt doesn't change state. Mirrors caveman-mode-tracker.js.
-function parseModeChange(promptRaw) {
-  let prompt = (promptRaw || '').trim();
-  // opencode's non-interactive `run` path delivers the message wrapped in
-  // literal quote characters ("/caveman ultra"\n) — unwrap symmetric quotes
-  // so the slash-command branch still matches.
-  const wrapped = /^(["'`])([\s\S]*)\1$/.exec(prompt);
-  if (wrapped) prompt = wrapped[2].trim();
-  prompt = prompt.toLowerCase();
-  if (!prompt) return null;
-
-  // Natural-language deactivation — checked before activation so "stop talking
-  // like caveman" doesn't trip the activation regex.
-  if (/\b(stop|disable|deactivate|turn off)\b.*\bcaveman\b/i.test(prompt) ||
-      /\bcaveman\b.*\b(stop|disable|deactivate|turn off)\b/i.test(prompt) ||
-      /\bnormal mode\b/i.test(prompt)) {
-    return 'off';
-  }
-
-  // Expanded /caveman command template. opencode replaces a typed
-  // "/caveman <level>" with the command file's body ("Activate caveman
-  // mode: $ARGUMENTS ...") before chat.message fires, so the literal
-  // slash-command branch below never sees it — recover the level argument
-  // from the template's first line instead. Must run before the generic
-  // NL-activation match, which would swallow it and drop the level.
-  const tpl = /^activate caveman mode:[ \t]*(\S*)/.exec(prompt);
-  if (tpl) {
-    const arg = tpl[1] || '';
-    if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
-    if (arg === 'wenyan-full') return 'wenyan';
-    if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return arg;
-    return getDefaultMode();
-  }
-
-  // Natural-language activation
-  if (/\b(activate|enable|turn on|start|talk like)\b.*\bcaveman\b/i.test(prompt) ||
-      /\bcaveman\b.*\b(mode|activate|enable|turn on|start)\b/i.test(prompt)) {
-    const mode = getDefaultMode();
-    return mode === 'off' ? null : mode;
-  }
-
-  // Slash-command parsing — opencode also expands command files, but if the
-  // user types the literal slash command we still want to flip the flag.
-  if (prompt.startsWith('/caveman')) {
-    const parts = prompt.split(/\s+/);
-    const cmd = parts[0];
-    const arg = parts[1] || '';
-
-    if (cmd === '/caveman-commit')   return 'commit';
-    if (cmd === '/caveman-review')   return 'review';
-    if (cmd === '/caveman-compress') return 'compress';
-
-    if (cmd === '/caveman') {
-      if (!arg)                                     return getDefaultMode();
-      if (arg === 'off' || arg === 'stop' || arg === 'disable') return 'off';
-      if (arg === 'wenyan-full')                    return 'wenyan';
-      if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return arg;
-      // Unknown arg — leave flag alone. No silent overwrite.
-      return null;
+function removeFlag() {
+  try {
+    unlinkSync(flagPath);
+  } catch (error) {
+    if (process.env.CAVEMAN_DEBUG === '1' && error.code !== 'ENOENT') {
+      console.error(`caveman: failed to remove flag ${flagPath}: ${error.message}`);
     }
   }
+}
 
+function reinforcementBanner(mode) {
+  return 'CAVEMAN MODE ACTIVE (' + mode + ') — session ruleset applies.';
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Derived from reinforcementBanner() itself (split on a sentinel) rather than
+// re-spelling the banner text as a second regex literal: one source of truth,
+// and it stays in sync if the wording above ever changes.
+const [bannerPrefix, bannerSuffix] = reinforcementBanner('\0').split('\0');
+const staleBlock = new RegExp(
+  escapeRegExp(bannerPrefix) + '[a-z-]+' + escapeRegExp(bannerSuffix) + '[\\s\\S]*$'
+);
+
+// SKILL.md is the single source of truth for caveman behavior, filtered to the
+// active level the same way caveman-activate.js and caveman-mode-tracker.js do.
+// The filter itself is NOT re-implemented here: it lives in caveman-config.js,
+// which loadConfig() already evaluates, so all three loaders share one copy of
+// the intensity-table parsing. A local copy here is the exact drift risk
+// CLAUDE.md's "keep it in caveman-config.js" rule exists to prevent — SKILL.md's
+// table format would then have two parsers to keep in step.
+//
+// Resolved off `config` rather than destructured at module scope because the
+// installed caveman-config.cjs is a COPY: a user whose opencode plugin dir
+// still holds a pre-#975 copy gets a config without these exports, and the
+// stand-ins below degrade to the banner alone rather than throwing inside a
+// system-prompt hook.
+function loadFilteredRuleset(mode) {
+  if (typeof config.loadFilteredRuleset !== 'function') return null;
+  // The shared loader probes <base>/../../skills and <base>/../skills. opencode
+  // has no CLAUDE_PLUGIN_ROOT equivalent and two layouts to cover, so it is
+  // called once per base — `here` resolves the installed tree
+  // (~/.config/opencode/plugins/caveman → ~/.config/opencode/skills) and the
+  // parent resolves the dev tree (src/plugins/opencode → repo-root skills).
+  for (const base of [here, join(here, '..')]) {
+    const ruleset = config.loadFilteredRuleset(mode, base);
+    if (ruleset) return ruleset;
+  }
   return null;
 }
 
-function applyModeChange(mode) {
-  if (!mode) return;
-  if (mode === 'off') {
-    try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
+function reinforcementLine(mode) {
+  const banner = reinforcementBanner(mode);
+  const ruleset = loadFilteredRuleset(mode);
+  // No SKILL.md reachable (a standalone hook install without the skills
+  // dir): fall back to the banner alone, the same degrade caveman-activate.js
+  // uses for the same case.
+  return ruleset ? banner + '\n\n' + ruleset : banner;
+}
+
+function applyModeChange(change) {
+  if (!change) return;
+  if (change.action === 'clear') {
+    recordModeChange(opencodeDir, null);
+    removeFlag();
     return;
   }
-  safeWriteFlag(flagPath, mode);
+  if (change.action === 'set' && change.mode) {
+    recordModeChange(opencodeDir, change.mode);
+    safeWriteFlag(flagPath, change.mode);
+  }
 }
 
 // Session-start logic — extracted so the `event` dispatcher (opencode >= 1.15)
@@ -175,9 +197,11 @@ function applyModeChange(mode) {
 function handleSessionCreated() {
   const mode = getDefaultMode();
   if (mode === 'off') {
-    try { if (existsSync(flagPath)) unlinkSync(flagPath); } catch (e) {}
+    recordModeChange(opencodeDir, null);
+    removeFlag();
     return;
   }
+  recordModeChange(opencodeDir, mode);
   safeWriteFlag(flagPath, mode);
 }
 
@@ -203,11 +227,14 @@ export const CavemanPlugin = async (_ctx) => {
   // mode toggles. opencode fires chat.message with (input, output) where
   // output.parts is the array of message parts; text parts carry .text.
   // Return value is ignored — state changes happen via the flag file.
+  // expandedTpl: opencode replaces a typed slash command with its command
+  // file's prose before this hook sees it. unwrapQuotes: the non-interactive
+  // `run` path delivers the message wrapped in literal quote characters.
   'chat.message': async (_input, output) => {
     if (!output || !output.parts) return;
     for (const part of output.parts) {
       if (part && part.type === 'text' && part.text) {
-        const change = parseModeChange(part.text);
+        const change = parseModeChange(part.text, { getDefaultMode, expandedTpl: true, unwrapQuotes: true });
         if (change) applyModeChange(change);
       }
     }
@@ -220,7 +247,28 @@ export const CavemanPlugin = async (_ctx) => {
     if (!output || !Array.isArray(output.system)) return;
     const active = readFlag(flagPath);
     if (active && !INDEPENDENT_MODES.has(active)) {
-      output.system.push(reinforcementLine(active));
+      const line = reinforcementLine(active);
+      // Idempotent: opencode is expected to rebuild `output.system` per
+      // request, but if it ever reuses the array across turns an unguarded
+      // append grows the system prompt without bound — silently eating the
+      // context window. Rewrite any line we already left instead of stacking
+      // another, so a mode switch updates in place rather than accumulating.
+      // staleBlock matches to end of string: `line` now carries the ruleset
+      // appended after the banner, and that content is always the last thing
+      // this hook writes into an entry, so replacing from the banner on is safe.
+      let found = false;
+      for (let i = 0; i < output.system.length; i++) {
+        if (typeof output.system[i] === 'string' && staleBlock.test(output.system[i])) {
+          output.system[i] = output.system[i].replace(staleBlock, line);
+          found = true;
+        }
+      }
+      if (found) return;
+      if (output.system.length > 0) {
+        output.system[output.system.length - 1] += '\n\n' + line;
+      } else {
+        output.system.push(line);
+      }
     }
   },
   };

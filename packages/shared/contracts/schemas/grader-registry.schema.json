@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caveman.cloud/schemas/grader-registry.schema.json",
+  "title": "Caveman eval grader registry",
+  "description": "Machine-readable description of every grader type the eval taxonomy accepts. Drives the dashboard grader editor; the two parity tests (public/evals/tests/grader-registry.parity.runtime.mjs and cloud/optimizer/tests/test_grader_registry_parity.py) hold it to the implementations.",
+  "type": "object",
+  "required": ["version", "graders"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Registry schema version; bump when an entry field is added, removed or changes meaning."
+    },
+    "graders": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "category",
+          "description",
+          "scored",
+          "deterministic",
+          "judge_calls",
+          "options"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Wire name sent as the grader type; must be a member of the Python GRADER_TYPES set."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short human name for a list or a form heading."
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "match",
+              "structure",
+              "tools",
+              "thresholds",
+              "similarity",
+              "retrieval",
+              "safety",
+              "judge",
+              "external"
+            ],
+            "description": "Grouping for the editor; unknown values are rejected rather than defaulted."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "One sentence in plain operator voice saying what passes and what fails."
+          },
+          "scored": {
+            "type": "boolean",
+            "description": "True when the Python service reports a graded score; false when the score is only 1.0 on pass and 0.0 on fail."
+          },
+          "deterministic": {
+            "type": "boolean",
+            "description": "True when the same input always yields the same verdict; false for the judge family and for custom_webhook, whose verdict comes from an outside system."
+          },
+          "judge_calls": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "Judge-model calls one grade costs: 0 for every non-judge type, 1 for the judge family, 2 for llm_pairwise, which asks both orderings."
+          },
+          "legacy": {
+            "type": "boolean",
+            "description": "True for a grader kept for existing suites and not offered for new ones."
+          },
+          "python_only": {
+            "type": "boolean",
+            "description": "True when only the Python grade service implements the type; the TypeScript package fails it closed as an unknown grader."
+          },
+          "prompt_template": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Judge family only: the pinned prompt both implementations send, byte for byte, with {name} markers for the interpolated values. A byte contract, not documentation."
+          },
+          "options": {
+            "type": "object",
+            "required": ["type", "properties"],
+            "properties": {
+              "type": { "const": "object" },
+              "required": { "type": "array", "items": { "type": "string" } },
+              "properties": { "type": "object" },
+              "additionalProperties": { "type": "boolean" }
+            },
+            "description": "JSON Schema for that type's option bag, ground-truthed from the two implementations."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
