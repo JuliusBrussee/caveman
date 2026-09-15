@@ -30,6 +30,11 @@ this harness did and is why its numbers were inflated.
 ## Files
 
 - `prompts/en.txt` — fixed list of dev questions, one per line.
+- `semantic_taxonomy.json` — stable eval-only contract IDs and readable keys.
+- `prompts/semantic_cases.json` — semantic prompts labeled with readable taxonomy
+  keys, without runtime-facing IDs.
+- `annotate_taxonomy.py` — resolves those keys to stable IDs when preparing an
+  evaluation run or report.
 - `llm_run.py` — runs `claude -p --system-prompt …` per (prompt, arm),
   captures real LLM output, writes `snapshots/results.json` along with
   metadata (model, CLI version, generation timestamp).
@@ -38,6 +43,20 @@ this harness did and is why its numbers were inflated.
   stdev across prompts.
 - `snapshots/results.json` — committed source of truth, regenerated only
   when SKILL.md files or prompts change.
+
+## Semantic taxonomy
+
+Stable IDs are useful for comparing failures across skill revisions, but they
+do not belong in the runtime prompt. Cases therefore use readable keys such as
+`exact-preservation`; annotation adds the corresponding `CAV-SEM-*` IDs only in
+evaluation output:
+
+```bash
+python evals/annotate_taxonomy.py > /tmp/caveman-semantic-cases.json
+```
+
+The command fails on duplicate IDs, unknown keys, duplicate case IDs, or cases
+that embed contract IDs directly. It never rewrites the prompt text.
 
 ## Refresh the snapshot (requires `claude` CLI logged in)
 
