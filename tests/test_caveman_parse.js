@@ -233,6 +233,22 @@ test('natural-language deactivation', () => {
   assert.deepStrictEqual(parseModeChange('normal mode', defaultFull), { action: 'clear' });
 });
 
+// "go back to normal mode" and "go to normal mode" are ordinary switch-back
+// phrasings, but the verb alternation listed "go" and "back to" as separate,
+// mutually exclusive prefixes, so "go back to" matched nothing and "go to" had
+// no alternative at all. Both deactivations were silently dropped, leaving the
+// user in the mode with no feedback.
+test('"go back to normal mode" / "go to normal mode" deactivate like the other switch-back phrasings', () => {
+  for (const prompt of [
+    'go back to normal mode',
+    'go to normal mode',
+    'please go back to normal mode',
+    'go back to normal mode and summarize the diff',
+  ]) {
+    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'clear' }, prompt);
+  }
+});
+
 test('vim "normal mode" (no caveman context) does not deactivate', () => {
   assert.strictEqual(parseModeChange('how do I exit vim normal mode', defaultFull), null);
 });

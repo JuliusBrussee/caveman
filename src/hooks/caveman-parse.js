@@ -233,7 +233,7 @@ function parseModeChange(promptRaw, options) {
     // "normal mode" only as a command (prompt-initial, optionally led by a
     // switch-back verb) or with caveman context — never mid-sentence for
     // e.g. vim's normal mode ("how do I exit vim normal mode").
-    /^(please\s+)?(go\s+|back\s+to\s+|switch\s+(back\s+)?to\s+|return\s+to\s+)?normal\s+mode\b/.test(nlPrompt) ||
+    /^(please\s+)?(go\s+(back\s+)?(to\s+)?|back\s+to\s+|switch\s+(back\s+)?to\s+|return\s+to\s+)?normal\s+mode\b/.test(nlPrompt) ||
     (/\bnormal\s+mode\b/.test(nlPrompt) && /\bcaveman\b/.test(nlPrompt))
   );
   if (wantsOff) return { action: 'clear' };
