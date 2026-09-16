@@ -83,7 +83,7 @@ func (s claudeSessionSource) scanSession(ref sessionRef, since time.Time, emit f
 			InputFreshTokens:  fresh, OutputTokens: out, BillingUsagePresent: hasBilling,
 			UsageMessageID: claudeUsageMessageID(obj), Model: claudeModel(obj), ProviderKey: "anthropic",
 			ToolCalls: claudeTurnToolCalls(obj, pendingTools), TextPayloads: claudeTextPayloads(obj),
-			TaskSpawns: strings.Count(lower, `"name":"task"`), SkillUses: claudeStructuredSkillReferences(obj),
+			TaskSpawns: claudeTaskSpawns(lower), SkillUses: claudeStructuredSkillReferences(obj),
 			Compaction: claudeCompactionMarker(obj),
 			JSONLLine:  lineNo, RelPath: ref.relPath, Repo: repo, Side: obj["isSidechain"] == true,
 		})
@@ -144,6 +144,13 @@ func claudeCacheUsage(obj map[string]any) (read, creation int, present bool) {
 // Both are recognized; readActivityTracker coalesces adjacent marker records.
 func claudeCompactionMarker(obj map[string]any) bool {
 	return firstString(obj["subtype"]) == "compact_boundary" || obj["isCompactSummary"] == true
+}
+
+// The subagent-spawn tool_use block is named "Agent" in current transcripts
+// (verified against real sessions on this machine); "task" is kept for
+// older sessions that still carry it.
+func claudeTaskSpawns(lower string) int {
+	return strings.Count(lower, `"name":"task"`) + strings.Count(lower, `"name":"agent"`)
 }
 
 func claudeRepoFromRelPath(relPath string) string {

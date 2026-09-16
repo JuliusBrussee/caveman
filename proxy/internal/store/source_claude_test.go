@@ -46,3 +46,37 @@ func TestClaudeSessionSourceUsesTranscriptCWDForHyphenatedRepo(t *testing.T) {
 		t.Fatalf("hyphenated --repo filter = sessions %d metrics %+v", filtered.SessionsScanned, filtered.SessionMetrics)
 	}
 }
+
+func TestClaudeSessionSourceExcludesStaleSessionOnlyFromSessionsScanned(t *testing.T) {
+	root := t.TempDir()
+	writeClaudeProject(t, root, "repo", "stale.jsonl", []string{
+		`{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"model":"claude-sonnet-5","usage":{"input_tokens":100,"output_tokens":10}}}`,
+	})
+	writeClaudeProject(t, root, "repo", "fresh.jsonl", []string{
+		`{"type":"assistant","timestamp":"2026-09-16T00:00:00Z","message":{"model":"claude-sonnet-5","usage":{"input_tokens":100,"output_tokens":10}}}`,
+	})
+
+	beh := behaviorScan{SkillUse: map[string]int{}, SessionsBySource: map[string]int{}}
+	since := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	if truncated := scanSessionSourceUntil(claudeSessionSource{root: root}, since, nil, &beh, newRecurringMiner(), nil); truncated {
+		t.Fatal("fixture scan truncated")
+	}
+	if beh.SessionsScanned != 1 {
+		t.Fatalf("SessionsScanned = %d, want 1 (the all-stale session must not count)", beh.SessionsScanned)
+	}
+}
+
+func TestClaudeTaskSpawnsCountsAgentToolName(t *testing.T) {
+	root := t.TempDir()
+	writeClaudeProject(t, root, "repo", "s.jsonl", []string{
+		`{"type":"assistant","timestamp":"2026-09-16T00:00:00Z","message":{"model":"claude-sonnet-5","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{}}],"usage":{"input_tokens":100,"output_tokens":10}}}`,
+	})
+
+	beh := behaviorScan{SkillUse: map[string]int{}, SessionsBySource: map[string]int{}}
+	if truncated := scanSessionSourceUntil(claudeSessionSource{root: root}, time.Time{}, nil, &beh, newRecurringMiner(), nil); truncated {
+		t.Fatal("fixture scan truncated")
+	}
+	if beh.TaskSpawns != 1 {
+		t.Fatalf("TaskSpawns = %d, want 1 for an Agent-named tool_use block", beh.TaskSpawns)
+	}
+}
