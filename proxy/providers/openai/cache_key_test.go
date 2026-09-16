@@ -159,3 +159,95 @@ func assertOnlyKeyAdded(t *testing.T, original string, result map[string]any) {
 		t.Errorf("transform changed model-visible content.\n original: %v\n result-minus-key: %v", orig, stripped)
 	}
 }
+
+// TestTransformPreservesLargeIntegersOnRemarshalFallback pins the sibling of
+// the Bedrock cache-points defect (#1057). spliceTopLevelFields cannot express
+// a NESTED mutation, so stream_options.include_usage and Responses-endpoint
+// reasoning.effort both fall through to json.Marshal(root). Go decodes untyped
+// JSON numbers into float64, which represents integers exactly only up to 2^53,
+// so every other integer literal in the body is silently rounded on the way out.
+func TestTransformPreservesLargeIntegersOnRemarshalFallback(t *testing.T) {
+	const largeInt = "9007199254740993" // 2^53 + 1, not representable as float64
+
+	streamUsageNested := providers.TransformPolicy{
+		RuntimeMode: "active",
+		Optimizers:  map[string]bool{StreamUsageOptimizerID: true},
+		EvalGates:   map[string]bool{StreamUsageOptimizerID: true},
+	}
+	reasoningResponses := providers.TransformPolicy{
+		RuntimeMode: "active",
+		Optimizers:  map[string]bool{ReasoningEffortOptimizerID: true},
+		EvalGates:   map[string]bool{ReasoningEffortOptimizerID: true},
+	}
+
+	tests := []struct {
+		name     string
+		body     string
+		endpoint string
+		policy   providers.TransformPolicy
+		wantID   string
+	}{
+		{
+			name:     "stream-options-nested-merge",
+			body:     `{"model":"gpt-5.5","stream":true,"stream_options":{"some_other_field":true},"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"amount_cents":` + largeInt + `}`,
+			endpoint: "",
+			policy:   streamUsageNested,
+			wantID:   StreamUsageOptimizerID,
+		},
+		{
+			name:     "responses-nested-reasoning-effort",
+			body:     `{"model":"gpt-5.5","instructions":"stable","input":"hi","reasoning":{"summary":"auto"},"amount_cents":` + largeInt + `}`,
+			endpoint: "/v1/responses",
+			policy:   reasoningResponses,
+			wantID:   ReasoningEffortOptimizerID,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			res := applyAtEndpoint(t, test.body, test.endpoint, test.policy)
+			if len(res.OptimizerIDs) != 1 || res.OptimizerIDs[0] != test.wantID {
+				t.Fatalf("optimizer did not fire: ids=%v, want [%s]", res.OptimizerIDs, test.wantID)
+			}
+			if !strings.Contains(string(res.Body), largeInt) {
+				t.Fatalf("large integer literal %s was silently rounded: %s", largeInt, res.Body)
+			}
+		})
+	}
+}
+
+// Decoding with a json.Decoder instead of json.Unmarshal must not widen what
+// this adapter accepts. json.Unmarshal rejects trailing bytes after the
+// top-level value; a Decoder stops at the end of the first value. A body that
+// used to be "malformed, pass through byte-identically" must not become
+// "transform it, and drop whatever followed".
+func TestTransformRejectsTrailingBytesAfterTheTopLevelValue(t *testing.T) {
+	const suffix = "TRAILING"
+	tests := []struct {
+		name string
+		body string
+		want bool // true = must pass through byte-identically
+	}{
+		{"trailing garbage", `{"model":"gpt-5.5","tools":[{"type":"function"}],"messages":[]}` + suffix, true},
+		{"second json value", `{"model":"gpt-5.5","tools":[{"type":"function"}],"messages":[]} {"b":2}`, true},
+		// A closing delimiter is the case decoder.More() gets wrong: it answers
+		// "another element in the current array or object", and a stray `]` or
+		// `}` is not one, so More() reports false and the byte is dropped.
+		{"trailing close bracket", `{"model":"gpt-5.5","tools":[{"type":"function"}],"messages":[]}]`, true},
+		{"trailing close brace", `{"model":"gpt-5.5","tools":[{"type":"function"}],"messages":[]}}`, true},
+		{"trailing comma", `{"model":"gpt-5.5","tools":[{"type":"function"}],"messages":[]},`, true},
+		{"trailing whitespace is fine", `{"model":"gpt-5.5","tools":[{"type":"function"}],"messages":[]}   `, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			res := apply(t, test.body, enabled())
+			passedThrough := len(res.OptimizerIDs) == 0 && string(res.Body) == test.body
+			if passedThrough != test.want {
+				t.Fatalf("passthrough=%v want %v; ids=%v body=%s", passedThrough, test.want, res.OptimizerIDs, res.Body)
+			}
+			if !test.want && strings.Contains(string(res.Body), suffix) {
+				t.Fatalf("unexpected trailing bytes survived: %s", res.Body)
+			}
+		})
+	}
+}

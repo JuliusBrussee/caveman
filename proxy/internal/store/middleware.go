@@ -219,10 +219,11 @@ func (t *MiddlewareTx) Renew(authority string, now, expires int64) error {
 	return err
 }
 
-func (t *MiddlewareTx) Delete(authority string) error {
+func (t *MiddlewareTx) Delete(authority string, now int64) error {
 	// Retain bounded metadata tombstones, not replacement text. Old markers
 	// still return a typed revoked result; no epoch silently resumes old grants.
-	if _, err := t.tx.ExecContext(t.ctx, `UPDATE middleware_scopes SET expires_at=0 WHERE authority=?`, authority); err != nil {
+	// expires_at<=0 records when, so Expire can eventually reclaim it (below).
+	if _, err := t.tx.ExecContext(t.ctx, `UPDATE middleware_scopes SET expires_at=? WHERE authority=?`, -now, authority); err != nil {
 		return err
 	}
 	return t.purge(`SELECT id FROM middleware_scopes WHERE authority=?`, authority)
@@ -234,15 +235,30 @@ func (t *MiddlewareTx) Delete(authority string) error {
 // typed "expired" answer instead of a silent new scope over unrecoverable text.
 const MiddlewareGraceSeconds int64 = 7 * 24 * 60 * 60
 
-// Revocation tombstones (expires_at=0) are excluded on purpose. They are bounded
-// by explicit sessions/delete calls and must keep answering "deleted" for as long
-// as any marker issued before the revocation can still be replayed.
+// Revocation tombstones (expires_at<=0) keep answering "deleted" for one grace
+// period, measured from Delete's revocation time rather than a future deadline,
+// then reclaim on the same schedule as an elapsed scope (dead, below) instead of never.
+//
+// An elapsed scope and a revoked one reach `dead` on DIFFERENT clocks, and that
+// asymmetry is the point. An elapsed scope still holds replacement text, so its
+// payload-bearing rows are collectable the moment it lapses and only the
+// metadata tombstone waits out the grace period. A revoked scope's payloads are
+// already gone — Delete called purge synchronously — so there is nothing to
+// collect early, and its rows ARE the tombstone: recovery.retrieve reads the
+// typed "deleted" answer off the choice row via Grant, exactly as previousPlan
+// reads it off the scope row. Selecting a revoked scope into `dead` as soon as
+// it is revoked would delete that choice row on the next Expire pass — which
+// runs in front of every optimize request — and a Grant that finds no row is
+// reported as "not_found", a marker the caller never had, rather than
+// "deleted", the marker they had and lost. So revoked rows wait out the same
+// grace period here that they wait out in the scope delete below.
 //
 // Every statement is keyed on an indexed column so an idle store pays index
 // seeks, not table scans: this runs in front of every optimize request. SQLite is
 // not built with UPDATE/DELETE LIMIT here, so batching goes through rowid.
 var middlewareExpire = func() []string {
-	const dead = `SELECT id FROM middleware_scopes WHERE expires_at>0 AND expires_at<=?1 LIMIT 128`
+	dead := fmt.Sprintf(`SELECT id FROM middleware_scopes
+ WHERE (expires_at>0 AND expires_at<=?1) OR (expires_at<=0 AND -expires_at<=?1-%d) LIMIT 128`, MiddlewareGraceSeconds)
 	return []string{
 		// Originals are credited per authority, and one authority can hold several
 		// scopes (adapter, policy or transform revisions). Drop a credit only once
@@ -254,7 +270,7 @@ var middlewareExpire = func() []string {
 		`DELETE FROM middleware_plans WHERE scope IN (` + dead + `)`,
 		`DELETE FROM middleware_choices WHERE scope IN (` + dead + `)`,
 		fmt.Sprintf(`DELETE FROM middleware_scopes WHERE rowid IN (SELECT rowid FROM middleware_scopes
- WHERE expires_at>0 AND expires_at<=?1-%d LIMIT 128)`, MiddlewareGraceSeconds),
+ WHERE (expires_at>0 AND expires_at<=?1-%[1]d) OR (expires_at<=0 AND -expires_at<=?1-%[1]d) LIMIT 128)`, MiddlewareGraceSeconds),
 	}
 }()
 

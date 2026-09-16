@@ -248,7 +248,7 @@ func previousPlan(tx *store.MiddlewareTx, scopeID string, req OptimizeRequest, i
 	if err != nil {
 		return nil, err
 	}
-	if previous.ExpiresAt == 0 {
+	if previous.ExpiresAt <= 0 {
 		return nil, Failure{"deleted"}
 	}
 	if previous.ExpiresAt <= now {

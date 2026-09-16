@@ -392,6 +392,76 @@ test('close reports the upstream exit code, or 128+signal when it was killed', (
   assert.equal(mk({ spawnFailed: () => true }).onClose(0, null), 1, 'spawn failure must not report success');
 });
 
+// The EOF half of the same sequence. A host shuts an MCP stdio server down by
+// closing its stdin first; these cover what happens when the upstream does and
+// does not act on that.
+test('passes client EOF on to the upstream', () => {
+  const child = fakeChild();
+  let ended = 0;
+  const shutdown = createShutdown({ child, timers: fakeTimers(), endUpstreamInput: () => { ended++; } });
+  shutdown.closeInput();
+  assert.equal(ended, 1);
+  assert.deepEqual(child.signals, [], 'EOF must not signal the upstream on its own');
+});
+
+test('does not signal an upstream that exits on EOF', () => {
+  // The normal path: a well-behaved server sees EOF and leaves. Nothing may be
+  // signalled, or every clean shutdown would look like a kill.
+  const child = fakeChild();
+  const timers = fakeTimers();
+  const shutdown = createShutdown({ child, timers });
+  shutdown.closeInput();
+  child.exitCode = 0;
+  timers.fire();
+  assert.deepEqual(child.signals, []);
+});
+
+test('escalates EOF through SIGTERM to SIGKILL when the upstream ignores both', () => {
+  // Without this the wrapper waits on an upstream that is never going to
+  // leave, and the host waits on the wrapper.
+  const child = fakeChild();
+  const timers = fakeTimers();
+  const shutdown = createShutdown({ child, timers });
+  shutdown.closeInput();
+  assert.equal(shutdown.pendingEscalation, true, 'EOF armed no wait');
+  timers.fire();
+  assert.deepEqual(child.signals, ['SIGTERM'], 'EOF grace expiring did not send SIGTERM');
+  timers.fire();
+  assert.deepEqual(child.signals, ['SIGTERM', 'SIGKILL']);
+});
+
+test('EOF on an already-exited upstream arms nothing', () => {
+  const child = fakeChild({ exitCode: 0 });
+  const timers = fakeTimers();
+  let ended = 0;
+  const shutdown = createShutdown({ child, timers, endUpstreamInput: () => { ended++; } });
+  shutdown.closeInput();
+  assert.equal(ended, 1, 'the upstream stdin still gets closed');
+  assert.equal(timers.armed, 0, 'armed a wait for a child that is already gone');
+});
+
+test('a repeated EOF does not arm a second wait', () => {
+  const child = fakeChild();
+  const timers = fakeTimers();
+  const shutdown = createShutdown({ child, timers });
+  shutdown.closeInput();
+  shutdown.closeInput();
+  assert.equal(timers.armed, 1);
+});
+
+test('close clears a pending EOF wait', () => {
+  // Same stale-timer hazard as the signal path: the upstream is gone, so the
+  // wait must not come back and signal whatever holds that pid next.
+  const child = fakeChild();
+  const timers = fakeTimers();
+  const shutdown = createShutdown({ child, timers });
+  shutdown.closeInput();
+  shutdown.onClose(0, null);
+  assert.equal(shutdown.pendingEscalation, false);
+  timers.fire();
+  assert.deepEqual(child.signals, [], 'stale EOF wait fired after close');
+});
+
 test('the default grace period is a real duration', () => {
   // Guards against a refactor that drops the default to 0 and turns every
   // teardown into an immediate SIGKILL.

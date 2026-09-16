@@ -108,7 +108,8 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 				err = Failure{"invalid_request"}
 				break
 			}
-			err = r.cfg.Store.WithMiddleware(ctx, func(tx *store.MiddlewareTx) error { return tx.Delete(authority(principal, req.Scope)) })
+			now := r.cfg.Now().Unix()
+			err = r.cfg.Store.WithMiddleware(ctx, func(tx *store.MiddlewareTx) error { return tx.Delete(authority(principal, req.Scope), now) })
 			out = map[string]any{"schema_version": 1, "status": "revoked", "originals_deleted": false}
 		}
 	default:
