@@ -488,3 +488,18 @@ func TestGitListingLeavesBudgetForTheWalkFallback(t *testing.T) {
 		t.Fatalf("a generous budget should still cap at %v, got %v", gitListTimeout, got)
 	}
 }
+
+// Top-level declarations are siblings in file.Decls, not nested; the cap must
+// hold across all of them, not just within the one being visited.
+func TestScanSymbolsCapsAtFiveHundredAcrossSiblingDeclarations(t *testing.T) {
+	var src strings.Builder
+	src.WriteString("package gen\n\n")
+	const total = 600
+	for i := 0; i < total; i++ {
+		fmt.Fprintf(&src, "func Fn%d() {}\n", i)
+	}
+	out := scanSymbols(context.Background(), "gen.go", "go", []byte(src.String()))
+	if len(out) > 500 {
+		t.Fatalf("scanSymbols(%s) returned %d symbols for %d top-level decls, want <= 500", symbolParserBasis(), len(out), total)
+	}
+}

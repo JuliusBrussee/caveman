@@ -122,6 +122,57 @@ func TestCachePointsAnthropicInvokeAddsCacheControl(t *testing.T) {
 	}
 }
 
+func TestCachePointsAnthropicInvokeFallsBackToSystemWithoutTools(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "string-system",
+			body: `{"anthropic_version":"bedrock-2023-05-31","system":"stable system","messages":[{"role":"user","content":"hello"}],"max_tokens":64}`,
+		},
+		{
+			name: "array-system",
+			body: `{"anthropic_version":"bedrock-2023-05-31","system":[{"type":"text","text":"stable system"}],"messages":[{"role":"user","content":"hello"}],"max_tokens":64}`,
+		},
+		{
+			name: "empty-tools-array",
+			body: `{"anthropic_version":"bedrock-2023-05-31","tools":[],"system":"stable system","messages":[{"role":"user","content":"hello"}],"max_tokens":64}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := applyCachePoints(t, test.body, providers.RequestMetadata{
+				Provider: "bedrock",
+				Model:    claudeModel,
+				Endpoint: "invoke",
+			}, cachePointsEnabled())
+			if len(result.OptimizerIDs) != 1 || result.OptimizerIDs[0] != CachePointsOptimizerID {
+				t.Fatalf("optimizer ids=%v, want [%s]", result.OptimizerIDs, CachePointsOptimizerID)
+			}
+			root := decodeCachePointBody(t, result.Body)
+			system := root["system"].([]any)
+			last := system[len(system)-1].(map[string]any)
+			control := last["cache_control"].(map[string]any)
+			if control["type"] != "ephemeral" {
+				t.Fatalf("cache_control=%v, want ephemeral", control)
+			}
+		})
+	}
+}
+
+func TestCachePointsAnthropicInvokeEmptySystemStringPassesThrough(t *testing.T) {
+	body := `{"anthropic_version":"bedrock-2023-05-31","system":"","messages":[{"role":"user","content":"hello"}],"max_tokens":64}`
+	result := applyCachePoints(t, body, providers.RequestMetadata{
+		Provider: "bedrock",
+		Model:    claudeModel,
+		Endpoint: "invoke",
+	}, cachePointsEnabled())
+	if len(result.OptimizerIDs) != 0 || string(result.Body) != body {
+		t.Fatalf("empty system string changed: ids=%v body=%s", result.OptimizerIDs, result.Body)
+	}
+}
+
 func TestCachePointsUnsupportedVendorAndSurfaceAreByteIdentical(t *testing.T) {
 	tests := []struct {
 		name string
@@ -228,6 +279,28 @@ func TestCachePointsDisabledNonPAYGAndMalformedPassThrough(t *testing.T) {
 	}
 }
 
+func TestCachePointsConverseUninjectableShapesPassThrough(t *testing.T) {
+	meta := providers.RequestMetadata{Provider: "bedrock", Model: claudeModel, Endpoint: "converse"}
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"toolConfig not an object", `{"toolConfig":"oops","system":[{"text":"stable"}],"messages":[]}`},
+		{"toolConfig without tools key", `{"toolConfig":{},"system":[{"text":"stable"}],"messages":[]}`},
+		{"neither toolConfig nor system", `{"messages":[]}`},
+		{"empty system array", `{"system":[],"messages":[]}`},
+		{"system array with a non-object element", `{"system":["stable"],"messages":[]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := applyCachePoints(t, test.body, meta, cachePointsEnabled())
+			if len(result.OptimizerIDs) != 0 || string(result.Body) != test.body {
+				t.Fatalf("uninjectable shape changed: ids=%v body=%s", result.OptimizerIDs, result.Body)
+			}
+		})
+	}
+}
+
 func TestCachePointsSigV4HashesExactTransformedWireBody(t *testing.T) {
 	body := `{"system":[{"text":"stable system"}],"messages":[]}`
 	meta := providers.RequestMetadata{Provider: "bedrock", Model: claudeModel, Endpoint: "converse"}
@@ -283,6 +356,45 @@ func TestCachePointEligibilityCoversInferenceProfiles(t *testing.T) {
 		if got := CachePointEligibleModel(model); got != want {
 			t.Errorf("CachePointEligibleModel(%q) = %v, want %v", model, got, want)
 		}
+	}
+}
+
+// TestCachePointsPreservesLargeIntegersElsewhereInBody pins the fix: a
+// decode-then-remarshal through map[string]any rounds any integer above 2^53
+// to the nearest float64, silently, anywhere else in the body.
+func TestCachePointsPreservesLargeIntegersElsewhereInBody(t *testing.T) {
+	const largeInt = "9007199254740993" // 2^53 + 1, not exactly representable as float64
+	tests := []struct {
+		name string
+		body string
+		meta providers.RequestMetadata
+	}{
+		{
+			name: "converse-tool-result",
+			body: `{"system":[{"text":"stable system"}],"messages":[{"role":"user","content":[{"toolResult":{"content":[{"json":{"amount_cents":` + largeInt + `}}]}}]}]}`,
+			meta: providers.RequestMetadata{Provider: "bedrock", Model: claudeModel, Endpoint: "converse"},
+		},
+		{
+			name: "converse-toolconfig-tool-result",
+			body: `{"toolConfig":{"tools":[{"toolSpec":{"name":"lookup","inputSchema":{"json":{"type":"object"}}}}]},"messages":[{"role":"user","content":[{"toolResult":{"content":[{"json":{"amount_cents":` + largeInt + `}}]}}]}]}`,
+			meta: providers.RequestMetadata{Provider: "bedrock", Model: claudeModel, Endpoint: "converse"},
+		},
+		{
+			name: "invoke-tool-result",
+			body: `{"anthropic_version":"bedrock-2023-05-31","system":"stable system","tools":[{"name":"lookup","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":[{"type":"tool_result","content":[{"type":"json","json":{"amount_cents":` + largeInt + `}}]}]}],"max_tokens":64}`,
+			meta: providers.RequestMetadata{Provider: "bedrock", Model: claudeModel, Endpoint: "invoke"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := applyCachePoints(t, test.body, test.meta, cachePointsEnabled())
+			if len(result.OptimizerIDs) != 1 {
+				t.Fatalf("optimizer did not fire: ids=%v", result.OptimizerIDs)
+			}
+			if !bytes.Contains(result.Body, []byte(largeInt)) {
+				t.Fatalf("large integer literal %s was not preserved byte-for-byte: %s", largeInt, result.Body)
+			}
+		})
 	}
 }
 

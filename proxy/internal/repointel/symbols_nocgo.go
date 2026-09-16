@@ -22,6 +22,9 @@ func scanSymbols(_ context.Context, path, language string, raw []byte) []Symbol 
 		}
 		var out []Symbol
 		ast.Inspect(file, func(node ast.Node) bool {
+			if len(out) >= 500 {
+				return false
+			}
 			var name, kind string
 			switch value := node.(type) {
 			case *ast.FuncDecl:
@@ -39,7 +42,7 @@ func scanSymbols(_ context.Context, path, language string, raw []byte) []Symbol 
 					LineEnd:   fset.Position(node.End()).Line,
 				})
 			}
-			return len(out) < 500
+			return true
 		})
 		return out
 	}

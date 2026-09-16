@@ -32,7 +32,7 @@ func (r *Runtime) retrieve(ctx context.Context, principal string, req RetrieveRe
 		if err != nil {
 			return Failure{"not_found"}
 		}
-		if expires == 0 {
+		if expires <= 0 {
 			return Failure{"deleted"}
 		}
 		if expires <= r.cfg.Now().Unix() {

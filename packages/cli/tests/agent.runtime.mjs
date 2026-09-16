@@ -82,3 +82,45 @@ test("cave agent run surfaces the server's honest 501 (never a synthesized resul
   // The CLI surfaces the server's real error rather than fabricating success.
   assert.match(out.stdout + out.stderr, /cave_not_implemented|not yet implemented/);
 });
+
+test("factory reads use the connected project and preserve server responses", async (t) => {
+  const requests = [];
+  const server = createServer((req, res) => {
+    requests.push({ method: req.method, url: req.url, auth: req.headers.authorization });
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ id: "agent-7", name: "Support agent", status: "active" }));
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  t.after(() => server.close());
+  const port = server.address().port;
+  const home = withConfig();
+  for (const [args, path] of [
+    [["list"], "/api/v1/projects/proj-123/agents"],
+    [["show", "agent-7"], "/api/v1/projects/proj-123/agents/agent-7"],
+  ]) {
+    const result = await runCli(home, port, ["cloud", "agent", "factory", ...args]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { id: "agent-7", name: "Support agent", status: "active" });
+    assert.deepEqual(requests.at(-1), { method: "GET", url: path, auth: "Bearer test-token" });
+  }
+  const count = requests.length;
+  for (const args of [["show"], ["show", "../keys"], ["show", "agent-7", "extra"], ["list", "extra"], ["run", "agent-7"], ["policy", "agent-7"], ["cases", "agent-7"]]) {
+    const result = await runCli(home, port, ["cloud", "agent", "factory", ...args]);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /agent factory list\|show <id>/);
+  }
+  assert.equal(requests.length, count, "invalid reads and unsupported mutations must not send requests");
+});
+
+test("factory reads surface server denial without fabricated agent data", async (t) => {
+  const server = createServer((_req, res) => {
+    res.writeHead(403, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { code: "cave_forbidden", message: "Project access denied." } }));
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  t.after(() => server.close());
+  const result = await runCli(withConfig(), server.address().port, ["cloud", "agent", "factory", "show", "agent-7"]);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /cave_forbidden|Project access denied/);
+});

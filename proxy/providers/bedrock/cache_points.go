@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
+	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
 	"github.com/JuliusBrussee/caveman/shared/platform/catalog"
 )
 
@@ -58,22 +59,24 @@ func (a Adapter) ApplyProviderNativeTransforms(
 		return passthrough, nil
 	}
 
+	// root above is decoded for decisions only; the marker is spliced into data.
+	rootSpan, ok := jsonsplice.Root(data)
+	if !ok {
+		return passthrough, nil
+	}
+
+	var out []byte
 	var injected bool
 	switch cachePointEndpoint(meta.Endpoint) {
 	case "converse", "converse-stream":
-		injected = injectConverseCachePoint(root)
+		out, injected = injectConverseCachePointRaw(data, rootSpan)
 	case "invoke", "invoke-with-response-stream":
-		injected = injectAnthropicCacheControl(root)
+		out, injected = injectAnthropicCacheControlRaw(data, rootSpan)
 	default:
 		// Mantle stays out until C4. Unknown/new Bedrock grammars fail closed.
 		return passthrough, nil
 	}
-	if !injected {
-		return passthrough, nil
-	}
-
-	out, err := json.Marshal(root)
-	if err != nil {
+	if !injected || !json.Valid(out) {
 		return passthrough, nil
 	}
 	return providers.TransformResult{Body: out, OptimizerIDs: []string{CachePointsOptimizerID}}, nil
@@ -158,82 +161,104 @@ func containsCacheMarker(value any) bool {
 	return false
 }
 
-func injectConverseCachePoint(root map[string]any) bool {
-	if rawToolConfig, exists := root["toolConfig"]; exists {
-		toolConfig, ok := rawToolConfig.(map[string]any)
-		if !ok {
-			return false
+// injectConverseCachePointRaw appends one cachePoint marker to the end of the
+// Converse tools array (if toolConfig is present) or the system array,
+// splicing it into the original byte slice so every other byte is untouched.
+func injectConverseCachePointRaw(data []byte, root jsonsplice.Span) ([]byte, bool) {
+	cachePoint := []byte(`{"cachePoint":{"type":"default"}}`)
+
+	if toolConfig, exists := jsonsplice.Field(data, root, "toolConfig"); exists {
+		if !isJSONObject(data, toolConfig) {
+			return nil, false
 		}
-		rawTools, exists := toolConfig["tools"]
+		tools, exists := jsonsplice.Field(data, toolConfig, "tools")
 		if !exists {
-			return false
+			return nil, false
 		}
-		tools, ok := rawTools.([]any)
-		if !ok || len(tools) == 0 {
-			return false
+		elements, valid := jsonsplice.Elements(data, tools)
+		if !valid || len(elements) == 0 {
+			return nil, false
 		}
-		for _, tool := range tools {
-			if _, ok := tool.(map[string]any); !ok {
-				return false
+		for _, element := range elements {
+			if !isJSONObject(data, element) {
+				return nil, false
 			}
 		}
-		toolConfig["tools"] = append(tools, defaultCachePoint())
-		return true
+		out, err := jsonsplice.AppendArrayElements(data, tools, cachePoint)
+		return out, err == nil
 	}
 
-	rawSystem, exists := root["system"]
+	system, exists := jsonsplice.Field(data, root, "system")
 	if !exists {
-		return false
+		return nil, false
 	}
-	system, ok := rawSystem.([]any)
-	if !ok || len(system) == 0 {
-		return false
+	elements, valid := jsonsplice.Elements(data, system)
+	if !valid || len(elements) == 0 {
+		return nil, false
 	}
-	for _, block := range system {
-		if _, ok := block.(map[string]any); !ok {
-			return false
+	for _, element := range elements {
+		if !isJSONObject(data, element) {
+			return nil, false
 		}
 	}
-	root["system"] = append(system, defaultCachePoint())
-	return true
+	out, err := jsonsplice.AppendArrayElements(data, system, cachePoint)
+	return out, err == nil
 }
 
-func injectAnthropicCacheControl(root map[string]any) bool {
-	if tools, ok := root["tools"].([]any); ok && len(tools) > 0 {
-		for index := len(tools) - 1; index >= 0; index-- {
-			if tool, ok := tools[index].(map[string]any); ok {
-				tool["cache_control"] = ephemeralCacheControl()
-				return true
+// injectAnthropicCacheControlRaw places one ephemeral cache_control marker on
+// the last object-shaped tool, or system block, or wraps a bare string system
+// prompt into the block form the marker needs. Mirrors cache_breakpoints.go.
+func injectAnthropicCacheControlRaw(data []byte, root jsonsplice.Span) ([]byte, bool) {
+	cacheControl := []byte(`{"type":"ephemeral"}`)
+
+	if tools, found := jsonsplice.Field(data, root, "tools"); found {
+		if elements, valid := jsonsplice.Elements(data, tools); valid {
+			for i := len(elements) - 1; i >= 0; i-- {
+				element := elements[i]
+				if isJSONObject(data, element) {
+					out, err := jsonsplice.AppendObjectFields(data, element,
+						jsonsplice.FieldInsertion{Name: "cache_control", Value: cacheControl},
+					)
+					return out, err == nil
+				}
 			}
 		}
 	}
 
-	switch system := root["system"].(type) {
-	case string:
-		if system == "" {
-			return false
+	system, found := jsonsplice.Field(data, root, "system")
+	if !found || system.Start >= system.End {
+		return nil, false
+	}
+	switch data[system.Start] {
+	case '"':
+		text, ok := jsonsplice.String(data, system)
+		if !ok || text == "" {
+			return nil, false
 		}
-		root["system"] = []any{map[string]any{
-			"type":          "text",
-			"text":          system,
-			"cache_control": ephemeralCacheControl(),
-		}}
-		return true
-	case []any:
-		for index := len(system) - 1; index >= 0; index-- {
-			if block, ok := system[index].(map[string]any); ok {
-				block["cache_control"] = ephemeralCacheControl()
-				return true
+		replacement := make([]byte, 0, system.End-system.Start+72)
+		replacement = append(replacement, []byte(`[{"type":"text","text":`)...)
+		replacement = append(replacement, data[system.Start:system.End]...)
+		replacement = append(replacement, []byte(`,"cache_control":{"type":"ephemeral"}}]`)...)
+		out, err := jsonsplice.ReplaceRaw(data, system, replacement)
+		return out, err == nil
+	case '[':
+		elements, valid := jsonsplice.Elements(data, system)
+		if !valid {
+			return nil, false
+		}
+		for i := len(elements) - 1; i >= 0; i-- {
+			element := elements[i]
+			if isJSONObject(data, element) {
+				out, err := jsonsplice.AppendObjectFields(data, element,
+					jsonsplice.FieldInsertion{Name: "cache_control", Value: cacheControl},
+				)
+				return out, err == nil
 			}
 		}
 	}
-	return false
+	return nil, false
 }
 
-func defaultCachePoint() map[string]any {
-	return map[string]any{"cachePoint": map[string]any{"type": "default"}}
-}
-
-func ephemeralCacheControl() map[string]any {
-	return map[string]any{"type": "ephemeral"}
+func isJSONObject(data []byte, span jsonsplice.Span) bool {
+	return span.Start < span.End && data[span.Start] == '{'
 }

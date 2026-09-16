@@ -191,3 +191,97 @@ func TestRetrieveToolSchemaValid(t *testing.T) {
 		t.Fatalf("description must direct model to in-block markers: %q", retrieveToolDescription)
 	}
 }
+
+// TestRetrieveRewritesPreserveLargeIntegerLiterals pins the gateway siblings of
+// the Bedrock cache-points defect (#1057). Both rewrites in the recovery loop
+// decode into map[string]any and re-marshal the whole document, so every
+// integer literal above 2^53 anywhere else in the body is silently rounded to
+// the nearest float64 on the way out.
+//
+// The two paths have different blast radii and both matter:
+//   - stripRetrieveCall rewrites the RESPONSE handed back to the agent, so a
+//     rounded id lands in a sibling tool_use's arguments that the agent then
+//     executes.
+//   - appendRetrieveResult rewrites the REQUEST re-sent upstream, so the whole
+//     conversation history is rewritten on every recovery round trip.
+func TestRetrieveRewritesPreserveLargeIntegerLiterals(t *testing.T) {
+	const largeInt = "9007199254740993" // 2^53 + 1, not representable as float64
+
+	t.Run("stripRetrieveCall/anthropic", func(t *testing.T) {
+		respBody := []byte(`{"id":"msg_1","type":"message","role":"assistant","stop_reason":"tool_use","content":[` +
+			`{"type":"tool_use","id":"tu_1","name":"charge_account","input":{"amount_cents":` + largeInt + `}},` +
+			`{"type":"tool_use","id":"tu_2","name":"caveman_retrieve","input":{"handle":"ccr_1","query":"schema"}}` +
+			`]}`)
+		cleaned, ok := stripRetrieveCall("anthropic", "/v1/messages", respBody)
+		if !ok {
+			t.Fatal("stripRetrieveCall did not strip the retrieve call")
+		}
+		if strings.Contains(string(cleaned), retrieveToolName) {
+			t.Fatalf("retrieve tool survived: %s", cleaned)
+		}
+		if !bytes.Contains(cleaned, []byte(largeInt)) {
+			t.Fatalf("sibling tool_use argument %s was silently rounded: %s", largeInt, cleaned)
+		}
+	})
+
+	t.Run("stripRetrieveCall/openai", func(t *testing.T) {
+		respBody := []byte(`{"id":"cc_1","choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[` +
+			`{"id":"c1","type":"function","function":{"name":"charge_account","arguments":"{}"}},` +
+			`{"id":"c2","type":"function","function":{"name":"caveman_retrieve","arguments":"{}"}}` +
+			`]}}],"usage":{"prompt_tokens":10,"request_id_numeric":` + largeInt + `}}`)
+		cleaned, ok := stripRetrieveCall("openai", "/v1/chat/completions", respBody)
+		if !ok {
+			t.Fatal("stripRetrieveCall did not strip the retrieve call")
+		}
+		if !bytes.Contains(cleaned, []byte(largeInt)) {
+			t.Fatalf("response integer %s was silently rounded: %s", largeInt, cleaned)
+		}
+	})
+
+	t.Run("appendRetrieveResult/anthropic", func(t *testing.T) {
+		reqBody := []byte(`{"model":"claude-fable-5","max_tokens":64,"messages":[` +
+			`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_0","content":"{\"ledger_id\":1}"},` +
+			`{"type":"text","text":"go on"}]}],"metadata":{"upstream_event_id":` + largeInt + `}}`)
+		respBody := []byte(`{"id":"msg_1","type":"message","role":"assistant","stop_reason":"tool_use","content":[` +
+			`{"type":"tool_use","id":"tu_1","name":"caveman_retrieve","input":{"handle":"ccr_1","query":"schema"}}]}`)
+		callID, _, _, ok := parseRetrieveCall("anthropic", "/v1/messages", respBody)
+		if !ok {
+			t.Fatal("parseRetrieveCall ok=false")
+		}
+		continued, ok := appendRetrieveResult("anthropic", "/v1/messages", reqBody, respBody, callID, "original bytes")
+		if !ok {
+			t.Fatal("appendRetrieveResult ok=false")
+		}
+		if !bytes.Contains(continued, []byte(largeInt)) {
+			t.Fatalf("request history integer %s was silently rounded: %s", largeInt, continued)
+		}
+	})
+}
+
+// Same guard on the gateway side: switching from json.Unmarshal to a Decoder
+// must not start accepting a document with trailing bytes and silently drop
+// them on the re-marshal. Both rewrites hand the body back untouched instead.
+func TestRetrieveRewritesRejectTrailingBytes(t *testing.T) {
+	base := `{"id":"msg_1","type":"message","role":"assistant","stop_reason":"tool_use","content":[` +
+		`{"type":"tool_use","id":"tu_1","name":"caveman_retrieve","input":{"handle":"ccr_1","query":"schema"}}` +
+		`]}`
+	// The closing-delimiter rows are the ones decoder.More() gets wrong: it
+	// answers "another element in the current array or object", and a stray `]`
+	// or `}` is not one, so More() reports false and the byte is silently lost.
+	for _, suffix := range []string{"TRAILING", " {\"second\":1}", "]", "}", ","} {
+		t.Run("suffix="+suffix, func(t *testing.T) {
+			respBody := []byte(base + suffix)
+			cleaned, ok := stripRetrieveCall("anthropic", "/v1/messages", respBody)
+			if ok || !bytes.Equal(cleaned, respBody) {
+				t.Fatalf("trailing bytes were accepted and rewritten: ok=%v body=%s", ok, cleaned)
+			}
+		})
+	}
+
+	reqBody := []byte(`{"model":"claude-fable-5","max_tokens":64,"messages":[]} {"second":"value"}`)
+	valid := []byte(`{"id":"msg_1","type":"message","role":"assistant","stop_reason":"tool_use","content":[` +
+		`{"type":"tool_use","id":"tu_1","name":"caveman_retrieve","input":{"handle":"ccr_1","query":"schema"}}]}`)
+	if _, ok := appendRetrieveResult("anthropic", "/v1/messages", reqBody, valid, "tu_1", "original bytes"); ok {
+		t.Fatal("a request body with a second top-level value was accepted for rewrite")
+	}
+}

@@ -68,8 +68,8 @@ func (a Adapter) ApplyProviderNativeTransforms(ctx context.Context, body provide
 		return passthrough, nil
 	}
 
-	var root map[string]any
-	if json.Unmarshal(data, &root) != nil {
+	root, ok := decodeRequestBody(data)
+	if !ok {
 		return passthrough, nil
 	}
 
@@ -104,6 +104,50 @@ func (a Adapter) ApplyProviderNativeTransforms(ctx context.Context, body provide
 		return passthrough, nil
 	}
 	return providers.TransformResult{Body: out, OptimizerIDs: ids}, nil
+}
+
+// decodeRequestBody decodes a request body for decision-making AND for the
+// re-marshal fallback below, so it must not lose information the caller sent.
+//
+// UseNumber is load-bearing, not a style choice. encoding/json decodes an
+// untyped JSON number into float64, which represents integers exactly only up
+// to 2^53. Re-marshalling such a document rounds every larger integer literal
+// in it — a snowflake id, a timestamp in nanoseconds, an amount in cents
+// sitting in some tool_result that has nothing to do with the field we are
+// injecting — silently, with no error and no signal. json.Number keeps the
+// original literal and marshals it back verbatim, so the fallback path can
+// only ever add the field it meant to add. Same defect as #1057 on the Bedrock
+// adapter, which reaches the same outcome by splicing instead.
+//
+// Nothing in this package asserts a decoded number's Go type, so carrying
+// json.Number through costs the decision helpers nothing.
+//
+// The trailing-input check is not optional. json.Unmarshal rejects a document
+// with trailing bytes after the top-level value; a Decoder stops at the end of
+// the first value and does not care what follows. Without the check,
+// `{...}garbage` would change from "malformed, pass through byte-identically"
+// to "transform, and drop the trailing bytes on the way out" — silently
+// widening what this adapter accepts and losing caller bytes, which is the
+// opposite of the fix.
+//
+// It has to be a second Decode returning io.EOF, not decoder.More(). More()
+// answers "is there another element in the current array or object", which is
+// not the same question: it returns FALSE for a trailing closing delimiter, so
+// `{...}]` and `{...}}` would still be accepted and silently lose that byte.
+// Requiring io.EOF matches json.Unmarshal's acceptance set exactly — trailing
+// whitespace passes, any trailing byte at all does not.
+func decodeRequestBody(data []byte) (map[string]any, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var root map[string]any
+	if decoder.Decode(&root) != nil {
+		return nil, false
+	}
+	var trailing json.RawMessage
+	if decoder.Decode(&trailing) != io.EOF {
+		return nil, false
+	}
+	return root, true
 }
 
 // spliceTopLevelFields appends the fields named by ids to data, preserving every

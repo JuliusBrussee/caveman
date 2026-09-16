@@ -158,6 +158,26 @@ Contributors may still build from source with
 Connected verbs (`login`, `plan`, `score`, `costs`, …) talk to Caveman Cloud
 over HTTP and need no binaries.
 
+For a customer-owned installation, connect to its API origin:
+
+```sh
+caveman login --instance https://caveman.example.com
+```
+
+Approve the displayed code in your instance's browser, choose a project and
+grant its access scopes. This connection creates no inference key and does not
+sync local request history. The CLI's anonymous usage setting remains in effect;
+`caveman telemetry off` disables it. Credentials use the existing secure store;
+`caveman logout` revokes the session. HTTPS is required except for HTTP loopback development.
+Hosted login remains unavailable during beta.
+
+Read agents in the connected project with `caveman cloud agent factory list`
+and `caveman cloud agent factory show <id>`. These commands need
+`trace:read_metadata` access. Factory cases, execution approvals and policy
+remain in the dashboard; the CLI connection cannot grant that authority.
+The existing `cloud agent list|show|run` commands still address optimization
+proposals.
+
 Connected telemetry imports stay under existing `cloud audit` governance verb:
 
 ```sh

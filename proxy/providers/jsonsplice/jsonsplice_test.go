@@ -216,6 +216,74 @@ func TestAppendObjectFieldsValidatesInputsAndNoOpPreservesBody(t *testing.T) {
 	}
 }
 
+func TestAppendArrayElementsPreservesOriginalBytes(t *testing.T) {
+	body := []byte(`{"amount_cents":9007199254740993,"system":[  {"text":"stable"}  ]}`)
+	root, ok := jsonsplice.Root(body)
+	if !ok {
+		t.Fatal("root not found")
+	}
+	system, ok := jsonsplice.Field(body, root, "system")
+	if !ok {
+		t.Fatal("system not found")
+	}
+	got, err := jsonsplice.AppendArrayElements(body, system, []byte(`{"cachePoint":{"type":"default"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"amount_cents":9007199254740993,"system":[  {"text":"stable"},{"cachePoint":{"type":"default"}}  ]}`
+	if string(got) != want {
+		t.Fatalf("raw insertion changed original bytes:\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestAppendArrayElementsHandlesEmptyArray(t *testing.T) {
+	body := []byte(`{"system":[  ]}`)
+	root, ok := jsonsplice.Root(body)
+	if !ok {
+		t.Fatal("root not found")
+	}
+	system, ok := jsonsplice.Field(body, root, "system")
+	if !ok {
+		t.Fatal("system not found")
+	}
+	got, err := jsonsplice.AppendArrayElements(body, system, []byte(`{"cachePoint":{"type":"default"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"system":[{"cachePoint":{"type":"default"}}  ]}` {
+		t.Fatalf("unexpected insertion: %s", got)
+	}
+}
+
+func TestAppendArrayElementsValidatesInputsAndNoOpPreservesBody(t *testing.T) {
+	body := []byte(`{"system":[1]}`)
+	root, _ := jsonsplice.Root(body)
+	system, _ := jsonsplice.Field(body, root, "system")
+	got, err := jsonsplice.AppendArrayElements(body, system)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) > 0 && &got[0] != &body[0] {
+		t.Fatal("empty insertion allocated or rewrote body")
+	}
+
+	tests := []struct {
+		name     string
+		span     jsonsplice.Span
+		elements [][]byte
+	}{
+		{"invalid array range", jsonsplice.Span{Start: 1, End: len(body)}, [][]byte{[]byte("2")}},
+		{"invalid JSON element", system, [][]byte{[]byte(`{`)}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := jsonsplice.AppendArrayElements(body, tc.span, tc.elements...); err == nil {
+				t.Fatal("invalid insertion accepted")
+			}
+		})
+	}
+}
+
 func TestReplaceRawPreservesOutsideSpan(t *testing.T) {
 	body := []byte(`{"system":"You \u003c exact","messages":[]}`)
 	root, ok := jsonsplice.Root(body)

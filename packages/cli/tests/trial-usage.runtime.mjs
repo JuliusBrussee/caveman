@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isolatedCliEnv, runCli } from "./_cli.mjs";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
@@ -260,4 +262,116 @@ test("learn report --json passes through to the proxy", async () => {
   const out = await run(["learn", "report", "--json"], env);
   assert.equal(out.code, 0, `learn report should succeed; stderr=${out.stderr}`);
   assert.match(out.stdout, /"basis":\s*"inferred"/);
+});
+
+// #1068: a trial points the child at its own labelled proxy through the
+// environment, but native routing pins the base URL in the agent's OWN config
+// file, and an agent prefers its config to its environment. The child then
+// talks to the persistent listener, which carries no trial label; RecordPayload
+// only stores payloads under a `trial:` label, so nothing is captured and every
+// number in the report renders 0 while the trial still exits 0. Refusing up
+// front is the difference between "we could not measure this" and a report that
+// states a measurement of zero.
+test("trial refuses to run against an agent whose native routing pins its base URL", async () => {
+  const isolated = isolatedCliEnv();
+  try {
+    const bin = join(isolated.home, "bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(claude, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const logFile = join(isolated.home, "proxy.log");
+    const proxy = stubProxy(isolated.home);
+    Object.assign(isolated.env, {
+      PATH: `${bin}:${isolated.env.PATH}`,
+      CAVEMAN_PROXY_BIN: proxy,
+      STUB_PROXY_LOG: logFile,
+    });
+
+    const settings = join(isolated.home, ".claude", "settings.json");
+    const journal = join(isolated.home, "integrations", "claude.json");
+    mkdirSync(join(isolated.home, "integrations"), { recursive: true });
+    writeFileSync(journal, JSON.stringify({
+      schema_version: 1,
+      agent: "claude",
+      pack_version: "test",
+      installed_at: new Date().toISOString(),
+      detected_agent_version: null,
+      operations: [{
+        file: settings,
+        kind: "claude-settings",
+        backup: `${settings}.bak`,
+        before_exists: false,
+        before_sha256: null,
+        after_sha256: "x",
+        owned: { route: "http://127.0.0.1:8787/w/claude" },
+      }],
+    }));
+
+    const refused = await runCli(["trial", "--trial-id", "trial_native", "--", "claude"], { env: isolated.env });
+    assert.equal(refused.code, 2, `expected refusal, got code=${refused.code} stderr=${refused.stderr}`);
+    assert.match(refused.stderr, /native routing/i);
+    assert.match(refused.stderr, /127\.0\.0\.1:8787/);
+    assert.match(refused.stderr, /settings\.json/);
+    // The refusal must land before `trial start`, or it leaves an open trial row
+    // that nothing will ever finish.
+    const logs = existsSync(logFile)
+      ? readFileSync(logFile, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      : [];
+    assert.ok(!logs.some((l) => l.argv[0] === "trial" && l.argv[1] === "start"), "refusal opened a trial row anyway");
+    assert.ok(!logs.some((l) => l.argv[0] === "serve"), "refusal still started a trial proxy");
+
+    // An interrupted install is the same hazard reached by a crash rather than
+    // by a successful enable: installNativeAgent writes the pending journal
+    // first, then the host files, and publishes the committed journal LAST, so
+    // dying in between leaves a fully applied pinned route with only the
+    // pending journal on disk.
+    rmSync(journal);
+    const settingsBody = Buffer.from(JSON.stringify({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8787/w/claude" } }, null, 2) + "\n");
+    mkdirSync(join(isolated.home, ".claude"), { recursive: true });
+    writeFileSync(settings, settingsBody);
+    const pendingJournal = (afterSha) => JSON.stringify({
+      schema_version: 1,
+      agent: "claude",
+      pack_version: "test",
+      installed_at: new Date().toISOString(),
+      detected_agent_version: null,
+      operations: [{
+        file: settings,
+        kind: "claude-settings",
+        backup: `${settings}.bak`,
+        before_exists: false,
+        before_sha256: null,
+        after_sha256: afterSha,
+        owned: { route: "http://127.0.0.1:8787/w/claude" },
+      }],
+    });
+    // Must match bytesHash()'s spelling, which is prefixed.
+    const appliedSha = `sha256:${createHash("sha256").update(settingsBody).digest("hex")}`;
+    writeFileSync(join(isolated.home, "integrations", ".pending-claude.json"), pendingJournal(appliedSha));
+
+    const refusedPending = await runCli(["trial", "--trial-id", "trial_pending", "--", "claude"], { env: isolated.env });
+    assert.equal(refusedPending.code, 2, `interrupted install bypassed the guard: ${refusedPending.stderr}`);
+    assert.match(refusedPending.stderr, /interrupted native install/i);
+    assert.match(refusedPending.stderr, /127\.0\.0\.1:8787/);
+
+    // A pending journal whose write never landed is NOT a pin, and must not
+    // refuse a legitimate trial: same journal, a hash that does not match what
+    // is on disk.
+    writeFileSync(join(isolated.home, "integrations", ".pending-claude.json"), pendingJournal("0".repeat(64)));
+    const allowedUnapplied = await runCli(["trial", "--trial-id", "trial_unapplied", "--", "claude"], { env: isolated.env });
+    assert.notEqual(allowedUnapplied.code, 2, `unapplied pending journal refused a trial: ${allowedUnapplied.stderr}`);
+    rmSync(join(isolated.home, "integrations", ".pending-claude.json"));
+    rmSync(settings);
+
+    // Control: the journal is the only thing standing in the way. With native
+    // routing absent the same invocation runs, which is what proves the guard
+    // fired on the pin rather than on the stub agent.
+    const allowed = await runCli(["trial", "--trial-id", "trial_native_off", "--", "claude"], { env: isolated.env });
+    assert.notEqual(allowed.code, 2, `guard still refused without a pin: ${allowed.stderr}`);
+    assert.doesNotMatch(allowed.stderr, /native routing/i);
+    const after = readFileSync(logFile, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    assert.ok(after.some((l) => l.argv[0] === "trial" && l.argv[1] === "start"), "control run never started a trial");
+  } finally {
+    isolated.cleanup();
+  }
 });

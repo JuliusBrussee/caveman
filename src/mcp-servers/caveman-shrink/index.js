@@ -62,10 +62,11 @@ upstream.on('error', err => {
 const shutdown = createShutdown({
   child: upstream,
   spawnFailed: () => spawnFailed,
+  endUpstreamInput: endInput,
   detachInput: () => {
     process.stdin.pause();
     process.stdin.removeListener('data', forwardInput);
-    process.stdin.removeListener('end', endInput);
+    process.stdin.removeListener('end', handleClientEof);
   },
 });
 
@@ -109,7 +110,8 @@ upstream.on('close', (code, signal) => {
 // on that path the upstream is orphaned by the OS with nothing this process can
 // do about it. Windows has no real signals — process.kill() there terminates
 // the target without running handlers — so teardown on that platform goes
-// through the stdin EOF the `close` handler above already forwards.
+// through the stdin EOF handled at the bottom of this file, which runs the same
+// escalation from its first step rather than relying on a signal arriving.
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   process.on(signal, () => shutdown.forward(signal));
 }
@@ -222,5 +224,11 @@ upstream.stdin.on('error', err => {
     process.exitCode = 1;
   }
 });
+// Our client closing our stdin is how a host initiates shutdown over the MCP
+// stdio transport, so hand that EOF on to the upstream and let `shutdown` see
+// the teardown through if the upstream declines to act on it.
+function handleClientEof() {
+  shutdown.closeInput();
+}
 process.stdin.on('data', forwardInput);
-process.stdin.on('end', endInput);
+process.stdin.on('end', handleClientEof);
