@@ -599,10 +599,10 @@ function readSessionPrev(claudeDir, sessionId) {
 function clearSessionPrev(claudeDir, sessionId) {
   const p = sessionPrevPath(claudeDir, sessionId);
   if (p) {
-    try { fs.unlinkSync(p); } catch (e) {}
+    safeDeleteFlag(p);
     return;
   }
-  try { fs.unlinkSync(path.join(claudeDir, PREV_BASENAME)); } catch (e) {}
+  safeDeleteFlag(path.join(claudeDir, PREV_BASENAME));
 }
 
 // Sweep stale per-session files. Called from SessionStart on a genuinely new

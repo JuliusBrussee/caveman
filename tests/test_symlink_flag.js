@@ -10,7 +10,7 @@ const path = require('path');
 const os = require('os');
 const assert = require('assert');
 
-const { safeWriteFlag, readFlag, VALID_MODES, writeSessionMode, appendFlag } = require('../src/hooks/caveman-config');
+const { safeWriteFlag, readFlag, VALID_MODES, writeSessionMode, appendFlag, clearSessionPrev } = require('../src/hooks/caveman-config');
 
 let passed = 0;
 let failed = 0;
@@ -383,6 +383,34 @@ test('delete is refused through a symlinked parent owned by another user', (tmp)
     'delete must not follow a symlinked parent the write path refuses');
 });
 
+test('session prev delete is refused through a symlinked sessions dir owned by another user', (tmp) => {
+  // Same asymmetry as the legacy-mirror case above, one level down: the
+  // per-session prev file lives under claudeDir/sessions/, and
+  // clearSessionPrev used a bare fs.unlinkSync there too.
+  const foreign = path.join(tmp, 'foreign-sessions');
+  fs.mkdirSync(foreign, { recursive: true });
+  try {
+    fs.chownSync(foreign, 65534, 65534); // nobody
+  } catch (e) {
+    skip('needs privileges to stage a directory owned by another user');
+  }
+  if (typeof process.getuid !== 'function' || fs.statSync(foreign).uid === process.getuid()) {
+    skip('could not stage a foreign-owned directory');
+  }
+
+  const claudeDir = path.join(tmp, 'claude-config');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.symlinkSync(foreign, path.join(claudeDir, '.caveman-sessions'));
+  const prevPath = path.join(foreign, 'abc123def.prev');
+
+  fs.writeFileSync(prevPath, 'victim');
+  fs.chownSync(prevPath, 65534, 65534);
+  clearSessionPrev(claudeDir, 'abc123def');
+
+  assert.strictEqual(fs.existsSync(prevPath), true,
+    'session prev delete must not follow a symlinked sessions dir the write path refuses');
+});
+
 // ---------- Source code audit ----------
 
 test('legacy flag delete goes through a guarded helper, not a bare unlinkSync', () => {
@@ -398,6 +426,23 @@ test('legacy flag delete goes through a guarded helper, not a bare unlinkSync', 
     'writeSessionMode must not delete the legacy mirror with a bare unlinkSync');
   assert.match(source, /safeDeleteFlag\(legacy\)/,
     'writeSessionMode should clear the legacy mirror via safeDeleteFlag');
+});
+
+test('clearSessionPrev goes through a guarded helper, not a bare unlinkSync', () => {
+  // Holds on every runner regardless of chown privileges, same reasoning as
+  // the legacy-mirror audit above.
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'hooks', 'caveman-config.js'), 'utf8'
+  );
+  const fnMatch = source.match(/function clearSessionPrev\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(fnMatch, 'clearSessionPrev should be defined');
+  const body = fnMatch[0];
+  assert.doesNotMatch(body, /fs\.unlinkSync/,
+    'clearSessionPrev must not delete either prev file with a bare unlinkSync');
+  assert.match(body, /safeDeleteFlag\(/g,
+    'clearSessionPrev should clear both prev locations via safeDeleteFlag');
+  assert.strictEqual((body.match(/safeDeleteFlag\(/g) || []).length, 2,
+    'clearSessionPrev has two delete sites (session-scoped and legacy); both must use safeDeleteFlag');
 });
 
 test('safeWriteFlag no longer has blanket symlink parent refusal', (tmp) => {
