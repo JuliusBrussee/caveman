@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/browse"
@@ -52,9 +54,26 @@ func main() {
 	defer session.Close()
 
 	srv := mcp.NewServer("caveman-browse", browse.BrowserTools(session), logger)
-	if err := srv.Serve(os.Stdin, os.Stdout); err != nil {
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer cancel()
+	if err := runUntilSignal(ctx, srv, os.Stdin, os.Stdout); err != nil {
 		logger.Error("serve", "err", err)
 		os.Exit(1)
+	}
+}
+
+// runUntilSignal returns as soon as srv.Serve finishes or ctx is done, instead of
+// blocking on it directly: an unwrapped call cannot be interrupted by a signal, so
+// main's deferred Close calls never run and the browser is orphaned.
+func runUntilSignal(ctx context.Context, srv *mcp.Server, in io.Reader, out io.Writer) error {
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(in, out) }()
+	select {
+	case err := <-serveErr:
+		return err
+	case <-ctx.Done():
+		return nil
 	}
 }
 

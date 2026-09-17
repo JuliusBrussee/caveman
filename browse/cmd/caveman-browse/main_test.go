@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -9,8 +10,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JuliusBrussee/caveman/browse"
+	"github.com/JuliusBrussee/caveman/mcp"
 )
 
 func TestOpenRecoveryStoreCreatesFreshCavemanHome(t *testing.T) {
@@ -101,6 +104,56 @@ func TestDefaultChromeCandidatesPreserveMacPaths(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("candidate[%d]=%q want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// TestRunUntilSignalReturnsOnContextDoneWithoutWaitingForServe pins issue #1016:
+// srv.Serve(in, out) blocks reading in until EOF, so a bare call cannot be
+// interrupted by ctx being done, and main would never reach its deferred Close
+// calls on a terminating signal. in is an unclosed io.Pipe reader, so it blocks
+// forever exactly like stdin blocks on an MCP host that has not sent EOF; the
+// only way out is the ctx.Done() branch.
+func TestRunUntilSignalReturnsOnContextDoneWithoutWaitingForServe(t *testing.T) {
+	srv := mcp.NewServer("test", nil, nil)
+	in, _ := io.Pipe() // never written to, never closed
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // simulates a signal having already arrived
+
+	done := make(chan error, 1)
+	go func() { done <- runUntilSignal(ctx, srv, in, io.Discard) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runUntilSignal returned an error on ctx.Done(): %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runUntilSignal did not return after ctx was done; it is still blocked on Serve reading a stalled input, so a terminating signal would never let main's deferred Close calls run")
+	}
+}
+
+// TestRunUntilSignalReturnsServeError confirms the ordinary EOF path is
+// unchanged: when in reaches EOF before ctx is done, runUntilSignal reports
+// Serve's own result rather than a signal-shaped nil.
+func TestRunUntilSignalReturnsServeError(t *testing.T) {
+	srv := mcp.NewServer("test", nil, nil)
+	in, w := io.Pipe()
+	_ = w.Close() // immediate EOF
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- runUntilSignal(ctx, srv, in, io.Discard) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runUntilSignal returned an unexpected error on EOF: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runUntilSignal did not return on Serve's own EOF completion")
 	}
 }
 
