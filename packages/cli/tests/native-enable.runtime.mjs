@@ -47,23 +47,27 @@ if (process.argv[2] === "shrink-hook") {
   process.stdout.write(JSON.stringify({ output_replacement: "[CommandResult] full: ccr://fixture" }));
 }
 `, { mode: 0o755 });
-  return {
-    home,
-    env: {
-      ...process.env,
-      HOME: home,
-      CAVEMAN_HOME: join(home, ".caveman"),
-      CAVEMAN_MCP_BIN: mcp,
-      CAVEMAN_PROXY_BIN: proxy,
-      // Full CLI suite runs several process-heavy files concurrently. Keep this
-      // fixture's valid shell probes distinct from dedicated 2s hung-probe tests.
-      CAVE_BINARY_PROBE_TIMEOUT_MS: "10000",
-      CAVEMAN_TELEMETRY: "0",
-      CAVE_NATIVE_CAPTURE: join(home, "native-capture.jsonl"),
-      NO_COLOR: "1",
-      PATH: `${bin}:${process.env.PATH}`,
-    },
+  const env = {
+    ...process.env,
+    HOME: home,
+    CAVEMAN_HOME: join(home, ".caveman"),
+    CAVEMAN_MCP_BIN: mcp,
+    CAVEMAN_PROXY_BIN: proxy,
+    // Full CLI suite runs several process-heavy files concurrently. Keep this
+    // fixture's valid shell probes distinct from dedicated 2s hung-probe tests.
+    CAVE_BINARY_PROBE_TIMEOUT_MS: "10000",
+    CAVEMAN_TELEMETRY: "0",
+    CAVE_NATIVE_CAPTURE: join(home, "native-capture.jsonl"),
+    NO_COLOR: "1",
+    PATH: `${bin}:${process.env.PATH}`,
   };
+  // Whoever runs this suite may well have a real OPENAI_API_KEY exported in
+  // their own shell (that's normal, not a fixture bug) — but detectCodexWrapAuthMode
+  // reads it as a fallback, so an inherited one silently forces every codex
+  // fixture below into api-key mode regardless of what auth.json under `home`
+  // says. Strip it so auth-mode detection only ever sees the fixture's auth.json.
+  delete env.OPENAI_API_KEY;
+  return { home, env };
 }
 
 function run(argv, env, input = undefined) {
@@ -486,6 +490,64 @@ test("doctor reports Codex routing degraded when auth lane changes", async () =>
   assert.equal(result.capabilities.provider_proxy.active, false);
   assert.equal(result.capabilities.post_tool_rewrite.supported, false);
   assert.equal(result.repair, "caveman doctor codex --fix");
+});
+
+test("codex SessionStart hook self-heals a stale route after api-key to subscription auth switch", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const authPath = join(fx.home, ".codex", "auth.json");
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(authPath, JSON.stringify({ OPENAI_API_KEY: "sk-local" }));
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  assert.match(readFileSync(configPath, "utf8"), /base_url = "http:\/\/127\.0\.0\.1:8787\/w\/codex\/v1"/);
+  writeFileSync(authPath, JSON.stringify({ tokens: { account_id: "acct_1" } }));
+  const hookOut = await run(["native-hook", "codex"], fx.env, JSON.stringify({ hook_event_name: "SessionStart", session_id: "s1" }));
+  assert.equal(hookOut.code, 0, hookOut.stderr);
+  assert.match(readFileSync(configPath, "utf8"), /base_url = "http:\/\/127\.0\.0\.1:8787\/chatgpt"/);
+  const after = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
+  assert.equal(after.state, "installed");
+  assert.equal(after.components.routing, true);
+});
+
+test("codex SessionStart hook self-heals a stale route after subscription to api-key auth switch", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const authPath = join(fx.home, ".codex", "auth.json");
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(authPath, JSON.stringify({ tokens: { account_id: "acct_1" } }));
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  assert.match(readFileSync(configPath, "utf8"), /base_url = "http:\/\/127\.0\.0\.1:8787\/chatgpt"/);
+  writeFileSync(authPath, JSON.stringify({ OPENAI_API_KEY: "sk-local" }));
+  const hookOut = await run(["native-hook", "codex"], fx.env, JSON.stringify({ hook_event_name: "SessionStart", session_id: "s1" }));
+  assert.equal(hookOut.code, 0, hookOut.stderr);
+  assert.match(readFileSync(configPath, "utf8"), /base_url = "http:\/\/127\.0\.0\.1:8787\/w\/codex\/v1"/);
+  const after = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
+  assert.equal(after.state, "installed");
+  assert.equal(after.components.routing, true);
+});
+
+test("codex SessionStart hook leaves config alone when degraded for an unrelated reason", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const authPath = join(fx.home, ".codex", "auth.json");
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(authPath, JSON.stringify({ OPENAI_API_KEY: "sk-local" }));
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const configBefore = readFileSync(configPath, "utf8");
+  // Force a degraded state that has nothing to do with routing: mark the
+  // installed pack as older than what this build ships, same as an in-place
+  // CLI upgrade would leave behind. Routing itself is untouched and still
+  // matches the current auth mode.
+  const journalPath = join(fx.home, ".caveman", "integrations", "codex.json");
+  const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+  journal.pack_version = "0.0.1";
+  writeFileSync(journalPath, JSON.stringify(journal, null, 2));
+  const before = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
+  assert.equal(before.state, "degraded");
+  assert.equal(before.components.routing, true, "routing itself must still be healthy in this fixture");
+  const hookOut = await run(["native-hook", "codex"], fx.env, JSON.stringify({ hook_event_name: "SessionStart", session_id: "s1" }));
+  assert.equal(hookOut.code, 0, hookOut.stderr);
+  assert.equal(readFileSync(configPath, "utf8"), configBefore, "config.toml must not be rewritten for non-routing drift");
 });
 
 test("doctor reports a present but unlaunchable host as unavailable", async () => {
