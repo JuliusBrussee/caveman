@@ -5,6 +5,7 @@ package compressors
 import (
 	"bytes"
 	"context"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/rust"
+	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 
 	"github.com/JuliusBrussee/caveman/engine/safety"
@@ -58,14 +60,17 @@ func (c *codeCompressor) Compress(input []byte) ([]byte, bool) {
 	if l == nil {
 		return nil, false // unsupported language → pass-through
 	}
-	root, tree, ok := parse(l, input)
+	root, tree, missing, ok := parseAccepted(l, input)
+	if !ok && l.name == "ts" {
+		// JSX is not TypeScript: a React component fails the TypeScript grammar
+		// at its first `<div>`. The TSX grammar is a superset, so retry with it.
+		l = &lang{name: "tsx", language: tsx.GetLanguage(), braceBody: true}
+		root, tree, missing, ok = parseAccepted(l, input)
+	}
 	if !ok {
 		return nil, false
 	}
 	defer tree.Close()
-	if root.HasError() {
-		return nil, false // never edit code we cannot cleanly parse
-	}
 
 	var repls []replacement
 	elision := pyElision
@@ -81,16 +86,69 @@ func (c *codeCompressor) Compress(input []byte) ([]byte, bool) {
 	}
 	out := applyReplacements(input, repls)
 
-	// Byte-safe guarantee: the result must re-parse without error.
-	vroot, vtree, ok := parse(l, out)
+	// Byte-safe guarantee: the result must re-parse at least as cleanly.
+	_, vtree, vmissing, ok := parseAccepted(l, out)
 	if !ok {
 		return nil, false
 	}
-	defer vtree.Close()
-	if vroot.HasError() {
+	vtree.Close()
+	if vmissing > missing {
 		return nil, false
 	}
 	return out, true
+}
+
+// parseAccepted parses src with l and reports whether the tree may be edited:
+// no ERROR node anywhere, and every MISSING node a token the parser could
+// safely invent, a `;` or a name. Real-world C++ leans on macros that end a
+// class-body line without a semicolon (Godot's GDCLASS) and on typed anonymous
+// enums the grammar wants named; tree-sitter recovers from both by inserting
+// exactly such a token, and the block structure the elision relies on was still
+// parsed from real tokens. A MISSING brace or parenthesis is not accepted,
+// because then the recovery decided where a block ends. The MISSING count is
+// returned so a re-parse can be held to at most as many. On rejection the tree
+// is closed.
+func parseAccepted(l *lang, src []byte) (*sitter.Node, *sitter.Tree, int, bool) {
+	root, tree, ok := parse(l, src)
+	if !ok {
+		return nil, nil, 0, false
+	}
+	if !root.HasError() {
+		return root, tree, 0, true
+	}
+	missing, tolerable := recoveredTokens(root)
+	if !tolerable {
+		tree.Close()
+		return nil, nil, 0, false
+	}
+	return root, tree, missing, true
+}
+
+// recoveredTokens walks a tree that has errors and reports how many MISSING
+// nodes it holds and whether every error in it is such a node of a tolerable
+// kind. Subtrees without errors are not entered.
+func recoveredTokens(n *sitter.Node) (missing int, tolerable bool) {
+	if n.IsError() {
+		return 0, false
+	}
+	if n.IsMissing() {
+		t := n.Type()
+		if t == ";" || strings.HasSuffix(t, "identifier") {
+			return 1, true
+		}
+		return 0, false
+	}
+	if !n.HasError() {
+		return 0, true
+	}
+	for i := 0; i < int(n.ChildCount()); i++ {
+		m, ok := recoveredTokens(n.Child(i))
+		if !ok {
+			return 0, false
+		}
+		missing += m
+	}
+	return missing, true
 }
 
 func parse(l *lang, src []byte) (*sitter.Node, *sitter.Tree, bool) {
@@ -256,6 +314,11 @@ func applyReplacements(src []byte, repls []replacement) []byte {
 	return buf.Bytes()
 }
 
+// pyDefRe is the Python signal: a `def name(` that starts a line. A bare
+// "def " substring also matches `#ifdef`, `#ifndef` and `typedef`, which sent
+// guarded C and C++ files to the Python grammar.
+var pyDefRe = regexp.MustCompile(`(?m)^[ \t]*(?:async[ \t]+)?def[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\(`)
+
 // sniffLanguage picks a tree-sitter grammar from cheap byte signals. Order
 // matters: the broad TypeScript arm (class/const/function) is last so it cannot
 // swallow Java/C/C++/Rust. A mis-sniff is self-correcting — the wrong grammar
@@ -265,7 +328,7 @@ func sniffLanguage(input []byte) *lang {
 	switch {
 	case has("package ") && has("func "):
 		return &lang{name: "go", language: golang.GetLanguage(), braceBody: true}
-	case has("def ") && has(":"):
+	case pyDefRe.Match(input) && has(":"):
 		return &lang{name: "python", language: python.GetLanguage(), braceBody: false}
 	case has("fn ") && (has("->") || has("impl ") || has("pub ") || has("let mut ")):
 		return &lang{name: "rust", language: rust.GetLanguage(), braceBody: true}
