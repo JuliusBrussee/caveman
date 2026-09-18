@@ -22,18 +22,22 @@
 // state only: flag writes, slash-command parsing, natural-language
 // activation, and per-turn reinforcement.
 //
-// Hook mapping (opencode >= 1.15.x):
-//   - event (event.type === 'session.created'): session-init flag write,
-//     re-fires per session rather than once per plugin-process load
-//   - chat.message: intercept user prompts for mode changes
-//   - experimental.chat.system.transform: inject reinforcement per-turn
+// Hook mapping — V2 primary (opencode >= 2), V1 kept via server():
+//   - setup(): session-init flag write at load (covers one-shot `run`),
+//     ctx.event.subscribe re-fires it on every 'session.created';
+//     the prompt hook parses mode changes; the context hook injects
+//     reinforcement as structured text parts.
+//   - server(): the opencode 1.x hook map (needs >= 1.18.29 for object
+//     entrypoints): `event` dispatcher, 'chat.message',
+//     'experimental.chat.system.transform'.
 //
 // Note: opencode does NOT support 'session.created' or 'tui.prompt.append'
 // as named plugin-hook keys. 'session.created' is an event *type* dispatched
-// through the single `event` handler; the old direct-key handlers were
-// silently ignored. See:
+// through the single `event` handler (V1) or the event subscription (V2);
+// the old direct-key handlers were silently ignored. See:
 // https://github.com/JuliusBrussee/caveman/issues/418
 // https://github.com/JuliusBrussee/caveman/issues/421
+// V2 port: https://github.com/JuliusBrussee/caveman/issues/1083
 
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -205,7 +209,12 @@ function handleSessionCreated() {
   safeWriteFlag(flagPath, mode);
 }
 
-export const CavemanPlugin = async (_ctx) => {
+// V1 hook map (opencode 1.x >= 1.18.29 calls server()). Behavior unchanged:
+// session-init flag write at construction (covers one-shot `opencode run`,
+// whose first session.created publishes before event dispatch is wired),
+// mode parsing on chat.message, string-array reinforcement on
+// experimental.chat.system.transform.
+async function server() {
   // Assert the flag at plugin load as well: in one-shot `opencode run` the
   // first session.created publishes before plugin event dispatch is wired,
   // so the event handler alone misses it. The factory-time write covers that
@@ -272,6 +281,72 @@ export const CavemanPlugin = async (_ctx) => {
     }
   },
   };
-};
+}
 
-export default CavemanPlugin;
+// Parts-aware twin of the V1 system.transform body above: V2 hands the
+// context hook structured text parts ({ type: 'text', text }) instead of
+// strings, so the banner scan, in-place rewrite, and last-entry fold all run
+// against part.text. Same idempotency contract: repeated calls never stack.
+function injectReinforcement(system, line) {
+  if (!Array.isArray(system)) return;
+  let found = false;
+  for (const part of system) {
+    if (part && typeof part.text === 'string' && staleBlock.test(part.text)) {
+      part.text = part.text.replace(staleBlock, line);
+      found = true;
+    }
+  }
+  if (found) return;
+  for (let i = system.length - 1; i >= 0; i--) {
+    const part = system[i];
+    if (part && typeof part.text === 'string') {
+      part.text += '\n\n' + line;
+      return;
+    }
+  }
+  system.push({ type: 'text', text: line });
+}
+
+// V2 wiring (opencode >= 2 calls setup()): same behaviors as server()
+// through domain hooks — prompt admission parses mode changes, the context
+// hook injects reinforcement, and the event subscription re-asserts the
+// flag on every session.created.
+async function setup(ctx) {
+  handleSessionCreated();
+
+  const controller = new AbortController();
+  const events = (async () => {
+    for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+      if (event && event.type === 'session.created') handleSessionCreated();
+    }
+  })().catch(() => {
+    if (!controller.signal.aborted) console.warn('[caveman] opencode event subscription failed');
+  });
+
+  await ctx.session.hook('prompt', (event) => {
+    const text = event && event.prompt && typeof event.prompt.text === 'string' ? event.prompt.text : '';
+    if (!text) return;
+    const change = parseModeChange(text, { getDefaultMode, expandedTpl: true, unwrapQuotes: true });
+    if (change) applyModeChange(change);
+  });
+
+  await ctx.session.hook('context', (event) => {
+    if (!event || !Array.isArray(event.system)) return;
+    const active = readFlag(flagPath);
+    if (active && !INDEPENDENT_MODES.has(active)) {
+      injectReinforcement(event.system, reinforcementLine(active));
+    }
+  });
+
+  return () => controller.abort();
+}
+
+// Dual entrypoint (https://opencode.ai/v2/docs/build/plugins/migrate-v1):
+// V2 calls setup(), V1 (>= 1.18.29) calls server(). Older V1 releases only
+// accept a factory function as the default export and cannot load this file;
+// they predate object entrypoints, so no single file serves all three.
+export default {
+  id: 'caveman',
+  setup,
+  server,
+};
