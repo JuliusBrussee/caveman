@@ -856,7 +856,7 @@ function installOpencode(ctx) {
 
   if (opts.dryRun) {
     note(`  would mkdir ${pluginDir}/, ${commandsDir}/, ${agentsDir}/, ${skillsDir}/`);
-    note(`  would copy plugin.js + package.json + caveman-config.cjs + caveman-parse.cjs into ${pluginDir}/`);
+    note(`  would copy plugin.js + index.js (same bytes; V2 dir entrypoint) + package.json + caveman-config.cjs + caveman-parse.cjs into ${pluginDir}/`);
     note(`  would copy ${OPENCODE_COMMAND_FILES.length} command files into ${commandsDir}/`);
     note(`  would copy ${OPENCODE_AGENT_FILES.length} cavecrew agents into ${agentsDir}/`);
     note(`  would copy ${OPENCODE_SKILL_DIRS.length} skill dirs into ${skillsDir}/`);
@@ -877,6 +877,12 @@ function installOpencode(ctx) {
       write: (stage) => {
         fs.mkdirSync(stage, { recursive: true });
         fs.copyFileSync(path.join(pluginSrc, 'plugin.js'), path.join(stage, 'plugin.js'));
+        // OpenCode 2 auto-discovers plugin package directories by their
+        // index.js entrypoint and ignores package.json "main", while 1.x
+        // loads the explicit `plugin` config entry pointing at plugin.js —
+        // ship the same bytes under both names so one layout serves both
+        // hosts with no version detection (#1083).
+        fs.copyFileSync(path.join(pluginSrc, 'plugin.js'), path.join(stage, 'index.js'));
         fs.copyFileSync(path.join(pluginSrc, 'package.json'), path.join(stage, 'package.json'));
         // Plugin dir is ESM; the CommonJS config bridge needs .cjs.
         fs.copyFileSync(path.join(repoRoot, 'src', 'hooks', 'caveman-config.js'), path.join(stage, 'caveman-config.cjs'));
