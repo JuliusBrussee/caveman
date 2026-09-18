@@ -1215,6 +1215,41 @@ test("enable opencode with an unreadable version keeps the V1 plugin", async () 
   assert.doesNotMatch(plugin, /async setup\(ctx\)/);
 });
 
+test("doctor reports opencode degraded after the host upgrades past the installed plugin API", async () => {
+  // The plugin API is chosen while building native mutations, so a V1 install
+  // stays on disk after the host becomes V2 — and `caveman opencode` skips
+  // enableNative whenever a journal exists, by design (status probes spawn
+  // subprocesses). That makes doctor the repair door for this drift, exactly
+  // as the comment on that skip says. Before this check, doctor compared
+  // journaled bytes and pack version only, never the installed plugin API
+  // against the current host major, so it called a plugin OpenCode 2 refuses
+  // to load "installed".
+  const fx = fixture({ opencodeVersion: "opencode 1.18.31" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  assert.equal((await run(["enable", "opencode"], fx.env)).code, 0);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  assert.match(readFileSync(pluginPath, "utf8"), /export const CavemanNative/, "V1 host gets the V1 plugin");
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
+
+  // The user upgrades OpenCode. Nothing else changes: same journal, same bytes.
+  writeFileSync(join(fx.home, "bin", "opencode"),
+    `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'opencode 2.0.7'; fi\n`, { mode: 0o755 });
+
+  const doctor = await run(["doctor", "opencode"], fx.env);
+  assert.notEqual(doctor.code, 0, "a plugin the host cannot load must not report healthy");
+  const result = JSON.parse(doctor.stdout);
+  assert.equal(result.state, "degraded");
+  assert.equal(result.components.lifecycle_hooks, false);
+  assert.equal(result.repair, "caveman doctor opencode --fix");
+
+  assert.equal((await run(["doctor", "opencode", "--fix"], fx.env)).code, 0);
+  assert.match(readFileSync(pluginPath, "utf8"), /async setup\(ctx\)/, "--fix regenerates against the new host major");
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
+});
+
 test("enable/disable aider stays shallow, preserves native repo map, and restores config", async () => {
   const fx = fixture();
   const configPath = join(fx.home, ".aider.conf.yml");

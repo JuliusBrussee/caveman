@@ -8868,13 +8868,35 @@ function nativeIntegrationStatus(agent: NativeAgent) {
       return false;
     }
   })();
+  // Same class as piBundleCurrent above, one step removed: opencode's plugin API
+  // is chosen when the mutations are built, so an install made against OpenCode
+  // 1.x keeps its V1 hook map after the host upgrades to 2.x — which that host
+  // refuses to load (#1083). Nothing else drifts on that upgrade: same journal,
+  // same bytes, so packCurrent and ownedHealthy both still pass and doctor called
+  // an unloadable plugin "installed". `caveman opencode` deliberately skips
+  // enableNative whenever a journal exists (status probes spawn subprocesses),
+  // which is exactly why that skip's own comment names doctor as the repair door
+  // for drifted installs — so the drift has to be visible here to be repairable.
+  // An unreadable version yields no judgement, matching opencodeNativePluginSource:
+  // "unknown" is not evidence of a new host, so it must not degrade a good install.
+  const opencodePluginApiCurrent = agent !== "opencode" || (() => {
+    const operation = journal?.operations.find((item) => item.kind === "opencode-plugin");
+    const current = operation ? fileBytes(operation.file)?.toString("utf8") : null;
+    if (!current) return true;
+    const installedV2 = current.includes("async setup(ctx)");
+    const installedV1 = current.includes("export const CavemanNative");
+    if (installedV1 === installedV2) return true;
+    const semver = parsedSemver(host.version);
+    if (!semver) return true;
+    return (semver[0]! >= 2) === installedV2;
+  })();
   const routeHealthy = ownedHealthy && (agent === "opencode"
     ? (routeOperation?.owned?.routes as Record<string, unknown> | undefined)?.openai === appendUrlPath(expectedRoute, "/openai/v1")
       && (routeOperation?.owned?.routes as Record<string, unknown> | undefined)?.anthropic === appendUrlPath(expectedRoute, "/anthropic/v1")
     : agent === "pi" ? piBundleCurrent : routeOperation?.owned?.route === expectedRoute);
   const proxyHealthy = wrapMode(gatewayURL()) === "managed" || Boolean(probeProxyVersion()?.capabilities.includes("native_runtime_v1"));
   const recoveryHealthy = agent === "aider" || Boolean(mcp?.probe.current);
-  const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy ? "degraded" : "installed";
+  const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy || !opencodePluginApiCurrent ? "degraded" : "installed";
 	const coreSupported = agent === "aider" ? ownedHealthy : ownedHealthy && Boolean(NATIVE_PACK.core);
 	const coreActive = agent === "aider"
 	  ? ownedHealthy
@@ -8882,7 +8904,8 @@ function nativeIntegrationStatus(agent: NativeAgent) {
   const fileText = checks.map((check) => fileBytes(check.file)?.toString("utf8") ?? "").join("\n");
   const components: NativeComponents = {
     routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? fileText.includes(HERMES_NATIVE_ROUTE_BEGIN) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
-    lifecycle_hooks: agent !== "aider" && ownedHealthy,
+    // A plugin the host cannot load runs no hooks, whatever its bytes hash to.
+    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent,
     core: coreActive,
     mcp_recovery: agent !== "aider" && ownedHealthy && Boolean(mcp?.probe.current),
     // Codex is false for the same reason hermes is: no command rewrite happens. The
