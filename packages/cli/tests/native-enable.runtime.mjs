@@ -1194,6 +1194,27 @@ test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip
   }
 });
 
+test("enable opencode with an unreadable version keeps the V1 plugin", async () => {
+  // nativeHostProbe reports version: null whenever `opencode --version` yields
+  // nothing, exits non-zero, or cannot be spawned ("version_probe_failed").
+  // #1081 records that state on a live OpenCode 1.18.31 host, so "unknown" is
+  // not a proxy for "new": defaulting it to V2 would hand a 1.x user whose
+  // probe merely flaked a plugin their host cannot load, breaking an install
+  // that works today. Unknown therefore keeps the status quo (V1); only a
+  // version that positively reads as major >= 2 opts into the V2 API.
+  const fx = fixture({ opencodeVersion: "" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const plugin = readFileSync(join(configDir, "plugins", "caveman-native.js"), "utf8");
+  assert.match(plugin, /export const CavemanNative/,
+    "an unreadable version must not silently upgrade a V1 host to the V2 API (#1083, #1081)");
+  assert.doesNotMatch(plugin, /async setup\(ctx\)/);
+});
+
 test("enable/disable aider stays shallow, preserves native repo map, and restores config", async () => {
   const fx = fixture();
   const configPath = join(fx.home, ".aider.conf.yml");

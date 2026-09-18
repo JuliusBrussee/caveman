@@ -7156,10 +7156,18 @@ function opencodePluginMajor(): number | null {
 function opencodeNativePluginSource(): string {
   // OpenCode 2 replaced the plugin API: a V1 hook map no longer loads
   // (PluginModule.LoadError, missing "default"). Emit the implementation
-  // matching the detected host major; an unreadable version gets the current
-  // API rather than a plugin that cannot load. See #1083.
+  // matching the detected host major. See #1083.
+  //
+  // An unreadable version keeps V1, the status quo. nativeHostProbe returns
+  // version: null for an empty/non-zero/unspawnable `opencode --version`
+  // ("version_probe_failed"), and #1081 records exactly that state on a live
+  // OpenCode 1.18.31 host — so "unknown" is not evidence of "new". Defaulting
+  // it to V2 would break a 1.x user whose probe merely flaked, turning a
+  // working install into one whose plugin the host refuses to load; a 2.x user
+  // in the same state is no worse off than before this gate existed. Only a
+  // version that positively reads as major >= 2 opts into the V2 API.
   const major = opencodePluginMajor();
-  if (major !== null && major < 2) return opencodeNativePluginSourceV1();
+  if (major === null || major < 2) return opencodeNativePluginSourceV1();
   return opencodeNativePluginSourceV2();
 }
 
