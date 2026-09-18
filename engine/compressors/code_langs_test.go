@@ -199,3 +199,46 @@ func TestCodePythonDocstringOnlyModulePreserved(t *testing.T) {
 		t.Error("a sole-docstring module must not have its docstring removed")
 	}
 }
+
+// A React component is TSX, not TypeScript: the TypeScript grammar stops at the
+// first JSX element and the file used to pass through untouched.
+func TestCodeTSXReactComponent(t *testing.T) {
+	out := elides(t, `import { useState, useEffect } from "react";
+import type { Item } from "./types";
+
+interface WidgetProps {
+  items: Item[];
+  onSelect: (id: string) => void;
+}
+
+export function Widget({ items, onSelect }: WidgetProps) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (items.length === 0) {
+      setOpen(false);
+    }
+  }, [items]);
+  const handleClick = (id: string) => {
+    setOpen(!open);
+    onSelect(id);
+  };
+  return (
+    <div className="widget">
+      {items.map((it) => (
+        <button key={it.id} onClick={() => handleClick(it.id)}>
+          {it.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export default Widget;
+`, "export function Widget({ items, onSelect }: WidgetProps)")
+	if bytes.Contains(out, []byte("className")) {
+		t.Errorf("the JSX body must be elided, got:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("interface WidgetProps {")) {
+		t.Errorf("the interface must survive, got:\n%s", out)
+	}
+}
