@@ -800,12 +800,17 @@ func TestNewHTTPClient_ProxyConnectTunnelsHTTPSWithoutResolvingTarget(t *testing
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		client, _, err := http.NewResponseController(w).Hijack()
+		// Hijack writes the 200 before it cancels the server's pending background
+		// read, so the first byte of the client's TLS ClientHello can already sit
+		// in the reader Hijack returns. Copy from that reader, not from the bare
+		// conn, or the origin sees a record that "does not look like a TLS
+		// handshake" and this test fails at random.
+		client, buffered, err := http.NewResponseController(w).Hijack()
 		if err != nil {
 			t.Error(err)
 			return
 		}
-		go func() { _, _ = io.Copy(upstream, client); _ = upstream.Close() }()
+		go func() { _, _ = io.Copy(upstream, buffered); _ = upstream.Close() }()
 		_, _ = io.Copy(client, upstream)
 		_ = client.Close()
 	}))
