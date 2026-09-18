@@ -10,6 +10,7 @@ const REPO = 'JuliusBrussee/caveman';
 function usesNativeSkills(provider, env = process.env) {
   return provider === 'continue' || provider === 'aider-desk' ||
     provider === 'antigravity' || provider === 'antigravity-2' ||
+    provider === 'grok' ||
     (provider === 'iflow' && Boolean(env.IFLOW_HOME)) ||
     (provider === 'crush' && Boolean(env.CRUSH_SKILLS_DIR));
 }
@@ -26,6 +27,12 @@ function skillsRoot(provider, {
     configDir = env.CONTINUE_GLOBAL_DIR || paths.join(home, '.continue');
   } else if (provider === 'aider-desk') {
     configDir = env.AIDER_DESK_HOME_DIR || paths.join(home, env.AIDER_DESK_DIR || '.aider-desk');
+  } else if (provider === 'grok') {
+    // Grok Build (xAI `grok` CLI) config home is ~/.grok with a GROK_HOME
+    // override per third-party setup docs; no live binary was available to
+    // verify it, so the override follows the CONTINUE_GLOBAL_DIR convention
+    // (truthy, cwd-relative when relative).
+    configDir = env.GROK_HOME || paths.join(home, '.grok');
   } else if (provider === 'antigravity' || provider === 'antigravity-2') {
     // Official docs distinguish IDE and 2.0 global discovery. Neither page
     // documents a home override: /docs/ide/skills/ and /docs/skills/ at
