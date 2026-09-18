@@ -22,7 +22,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
 
-const SKILLS = ['caveman', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
+// Derived, not pinned, so this suite tracks the real skills/ set (as
+// provider-skills-integration.test.mjs does) instead of drifting stale
+// whenever a skill is added or removed.
+const SKILLS = fs.readdirSync(path.join(REPO_ROOT, 'skills'))
+  .filter((name) => fs.existsSync(path.join(REPO_ROOT, 'skills', name, 'SKILL.md')))
+  .sort();
 
 function freshHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-grok-'));
@@ -40,8 +45,8 @@ function skillsDir(grokHome) {
   return path.join(grokHome, 'skills');
 }
 
-// ── 1. Fresh install drops all 7 skills with SKILL.md directly under skills/ ──
-test('grok fresh install lands 7 skill dirs with SKILL.md under skills/', () => {
+// ── 1. Fresh install drops every owned skill with SKILL.md directly under skills/ ──
+test('grok fresh install lands every skill dir with SKILL.md under skills/', () => {
   const home = freshHome();
   try {
     const r = runInstaller(['--only', 'grok'], home);
