@@ -32,7 +32,9 @@ this harness did and is why its numbers were inflated.
 - `prompts/en.txt` — fixed list of dev questions, one per line.
 - `llm_run.py` — runs `claude -p --system-prompt …` per (prompt, arm),
   captures real LLM output, writes `snapshots/results.json` along with
-  metadata (model, CLI version, generation timestamp).
+  metadata (model, CLI version, generation timestamp). It passes
+  `--setting-sources "" --strict-mcp-config` so user or project settings and
+  inherited MCP configuration cannot alter the generation arms.
 - `measure.py` — reads the snapshot, counts tokens with tiktoken
   `o200k_base`, prints a markdown table with median / mean / min / max /
   stdev across prompts.
