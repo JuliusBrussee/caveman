@@ -54,6 +54,9 @@ func (c *codeCompressor) ContentType() string       { return "code" }
 func (c *codeCompressor) SafetyClass() safety.Class { return safety.S4 }
 
 func (c *codeCompressor) Compress(input []byte) ([]byte, bool) {
+	if isGDScript(input) {
+		return compressGDScript(input) // no grammar for it; see code_gdscript.go
+	}
 	l := sniffLanguage(input)
 	if l == nil {
 		return nil, false // unsupported language → pass-through

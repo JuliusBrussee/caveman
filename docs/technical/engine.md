@@ -87,6 +87,13 @@ Default registry contains 15 compressors:
 14. repetition
 15. terminal output
 
+The code compressor keeps imports, signatures, and type declarations and elides
+function bodies. A cgo build parses Go, Python, TypeScript, JavaScript, Rust,
+Java, C, and C++ with tree-sitter; the pure-Go build, which is how the release
+binaries are compiled, parses Go with the standard library. GDScript is elided
+by a line scanner in both builds: the language is indentation-scoped and has no
+grammar in either.
+
 Each compressor declares a safety class and implements its own parse and output
 rules. Current compressors belong to lossy class S4, even when a particular
 input can round-trip structurally. Callers must not infer byte safety from a
