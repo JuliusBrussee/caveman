@@ -154,6 +154,49 @@ def verify_shipped_skills_are_documented() -> None:
     print(f"All {len(shipped)} shipped skills are documented")
 
 
+def verify_skills_root_holds_only_skills() -> None:
+    """`skills/` is scanned wholesale, so only skill directories belong in it.
+
+    pi loads a package's `skills/` directory as a skill root — "Packages:
+    `skills/` directories or `pi.skills` entries in `package.json`" (pi docs,
+    Skills > Locations) — which is a separate install path from
+    `native_pack.targets` and applies even though pi is wrapped by an
+    extension rather than the native pack. Its discovery rules read every
+    direct `.md` child of that root as a skill candidate: one carrying
+    frontmatter registers under the *parent directory* name, so a loose file
+    here would ship as a skill literally called `skills`, and one without is
+    opened and discarded at every launch (pi <= 0.84.2 also warned
+    "description is required" for it, until earendil-works/pi#8012).
+    Subdirectories are recursed for `SKILL.md` only, so build sources kept one
+    level down are invisible to both rules.
+
+    Same family as the `agents/**/*.md` and `commands/*.md` guards below: a
+    directory that some host scans wholesale may not hold markdown that is not
+    what the scan is looking for.
+    """
+    section("Skills Root Holds Only Skills")
+
+    loose = sorted(path.name for path in (ROOT / "skills").glob("*.md"))
+    ensure(
+        not loose,
+        "skills/*.md is read as a skill candidate by pi's package scan; "
+        f"these are not skills: {', '.join(loose)}. Move them into a "
+        "subdirectory (scanned for SKILL.md only) or out of skills/.",
+    )
+
+    core_source = json.loads(
+        (ROOT / "skills/registry.json").read_text(encoding="utf-8")
+    )["native_pack"]["core_source"]
+    ensure(
+        "/" in core_source and not core_source.endswith("/SKILL.md"),
+        f"native_pack.core_source is {core_source!r}: the native pack's build "
+        "source must live in a skills/ subdirectory and must not be named "
+        "SKILL.md, or pi's scan picks it up as a skill.",
+    )
+
+    print(f"skills/ holds only skill directories; core source is {core_source}")
+
+
 def verify_skill_frontmatter_upload_compatibility() -> None:
     section("Skill Frontmatter Upload Compatibility")
 
@@ -786,6 +829,7 @@ def main() -> int:
         verify_license_boundaries,
         verify_untrusted_git_invocations,
         verify_shipped_skills_are_documented,
+        verify_skills_root_holds_only_skills,
         verify_skill_frontmatter_upload_compatibility,
         verify_synced_files,
         verify_manifests_and_syntax,
