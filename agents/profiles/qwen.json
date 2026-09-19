@@ -6,7 +6,7 @@
   "homepage": "https://github.com/QwenLM/qwen-code",
   "binary_names": ["qwen"],
   "args": ["--extensions=none"],
-  "install": "npm i -g @qwen-code/qwen-code@0.22.3",
+  "install": "npm i -g @qwen-code/qwen-code@0.24.0",
   "wire_protocol": "openai-chat",
   "injection": {
     "method": "config-file",
@@ -128,10 +128,10 @@
     }
   },
   "attribution": { "header": "X-Cave-Agent" },
-  "tested_agent_version": "0.22.3",
+  "tested_agent_version": "0.24.0",
   "injection_completeness": "declarative",
-  "last_verified_at": "2026-08-30",
-  "verified_by": "local pinned-binary route probe (@qwen-code/qwen-code 0.22.3)",
+  "last_verified_at": "2026-09-18",
+  "verified_by": "local pinned-binary route probe (@qwen-code/qwen-code 0.24.0)",
   "fallback": "generic-env",
   "maintainer": null
 }

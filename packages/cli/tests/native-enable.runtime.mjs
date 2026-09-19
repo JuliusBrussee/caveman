@@ -8,13 +8,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
-function fixture() {
+function fixture({ opencodeVersion = "opencode 1.0.0" } = {}) {
   const home = mkdtempSync(join(tmpdir(), "cave-native-enable-"));
   const bin = join(home, "bin");
   mkdirSync(bin, { recursive: true });
-  for (const agent of ["claude", "codex", "hermes", "gemini", "opencode", "aider"]) {
+  for (const agent of ["claude", "codex", "hermes", "gemini", "aider"]) {
     writeFileSync(join(bin, agent), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${agent} 1.0.0'; fi\n`, { mode: 0o755 });
   }
+  writeFileSync(join(bin, "opencode"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${opencodeVersion}'; fi\n`, { mode: 0o755 });
   const mcp = join(bin, "caveman-mcp");
   writeFileSync(mcp, `#!/bin/sh
 if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
@@ -41,6 +42,8 @@ if (process.argv[2] === "shrink-hook") {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { updatedInput: { command: "caveman shrink -- git status" } } }));
 } else if (event === "SessionStart" || event === "PostCompact") {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { additionalContext: "Caveman Core fixture" } }));
+} else if (event === "UserPromptSubmit") {
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { additionalContext: "prompt hint fixture" } }));
 } else if (event === "PreToolUse") {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { additionalContext: "current observation fixture" } }));
 } else if (event === "PostToolUse") {
@@ -1026,6 +1029,7 @@ test("enable/disable opencode installs one native plugin, routed providers and r
     assert.match(plugin, new RegExp(surface.replaceAll(".", "\\.")));
   }
   assert.match(plugin, /native-hook", "opencode/);
+  assert.match(plugin, /export const CavemanNative/, "an OpenCode 1.x host keeps the V1 hook map (#1083)");
   const syntax = spawnSync(process.execPath, ["--check", pluginPath], { encoding: "utf8" });
   assert.equal(syntax.status, 0, syntax.stderr);
   const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
@@ -1078,6 +1082,172 @@ test("enable/disable opencode installs one native plugin, routed providers and r
   assert.equal(restored.mcp.caveman, undefined);
   assert.equal(existsSync(pluginPath), false);
   assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "opencode.json")), false);
+});
+
+test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {
+  const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  const plugin = readFileSync(pluginPath, "utf8");
+  assert.match(plugin, /caveman:native-opencode/);
+  assert.match(plugin, /id: "caveman-native"/, "the V2 plugin must carry a stable id (#1083)");
+  assert.match(plugin, /async setup\(ctx\)/);
+  assert.doesNotMatch(plugin, /export const CavemanNative/, "no V1 hook map on an OpenCode 2 host");
+  const syntax = spawnSync(process.execPath, ["--check", pluginPath], { encoding: "utf8" });
+  assert.equal(syntax.status, 0, syntax.stderr);
+
+  const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+  assert.equal(pluginModule.default.id, "caveman-native");
+  assert.equal(typeof pluginModule.default.setup, "function");
+
+  const sessionHooks = new Map();
+  const toolHooks = new Map();
+  const scripted = [
+    { type: "session.created", location: { directory: fx.home }, data: { sessionID: "oc2-1" } },
+    { type: "session.created", location: { directory: "/elsewhere" }, data: { sessionID: "oc2-x" } },
+    { type: "session.idle", location: { directory: fx.home }, data: { sessionID: "oc2-1" } },
+    { type: "session.compaction.ended", location: { directory: fx.home }, data: { sessionID: "oc2-1" } },
+    { type: "session.deleted", location: { directory: fx.home }, data: { sessionID: "oc2-1" } },
+  ];
+  const fakeCtx = {
+    location: { directory: fx.home, workspaceID: undefined },
+    event: { async *subscribe() { for (const event of scripted) yield event; } },
+    session: { hook: async (name, cb) => { sessionHooks.set(name, cb); return { dispose: async () => {} }; } },
+    tool: { hook: async (name, cb) => { toolHooks.set(name, cb); return { dispose: async () => {} }; } },
+  };
+  const readCapture = () => readFileSync(fx.env.CAVE_NATIVE_CAPTURE, "utf8").trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+  const flush = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r)); };
+  const previousCapture = process.env.CAVE_NATIVE_CAPTURE;
+  process.env.CAVE_NATIVE_CAPTURE = fx.env.CAVE_NATIVE_CAPTURE;
+  writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+  try {
+    const cleanup = await pluginModule.default.setup(fakeCtx);
+    assert.deepEqual([...sessionHooks.keys()].sort(), ["compaction", "context", "prompt"]);
+    assert.deepEqual([...toolHooks.keys()].sort(), ["execute.after", "execute.before"]);
+    await flush();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
+      ["SessionStart", "oc2-1"],
+      ["Stop", "oc2-1"],
+      ["PostCompact", "oc2-1"],
+      ["SessionEnd", "oc2-1"],
+    ]);
+
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    await sessionHooks.get("prompt")({ sessionID: "oc2-2", prompt: { text: "Yes, add billing support" } });
+    await sessionHooks.get("prompt")({ sessionID: "oc2-2", prompt: { text: "fix that" } });
+    const profiles = readCapture();
+    assert.equal(profiles.length, 2, JSON.stringify(profiles));
+    assert.equal(profiles[0].task_continuation, false);
+    assert.equal(profiles[1].task_continuation, true);
+
+    const system = { sessionID: "oc2-2", system: [] };
+    await sessionHooks.get("context")(system);
+    assert.deepEqual(system.system, [
+      { type: "text", text: "Caveman Core fixture" },
+      { type: "text", text: "prompt hint fixture" },
+    ]);
+    const once = { sessionID: "oc2-2", system: [] };
+    await sessionHooks.get("context")(once);
+    assert.deepEqual(once.system, [{ type: "text", text: "Caveman Core fixture" }]);
+
+    const shrinkable = { tool: "shell", sessionID: "oc2-2", input: { command: "git status" } };
+    await toolHooks.get("execute.before")(shrinkable);
+    assert.equal(shrinkable.input.command, "caveman shrink -- git status");
+    const legacy = { tool: "bash", sessionID: "oc2-2", input: { command: "git status" } };
+    await toolHooks.get("execute.before")(legacy);
+    assert.equal(legacy.input.command, "caveman shrink -- git status");
+    const other = { tool: "read", sessionID: "oc2-2", input: { filePath: "x" } };
+    await toolHooks.get("execute.before")(other);
+    assert.deepEqual(other.input, { filePath: "x" });
+
+    const replaced = { status: "completed", tool: "shell", sessionID: "oc2-2", input: {}, result: { content: "large exact output" } };
+    await toolHooks.get("execute.after")(replaced);
+    assert.equal(replaced.result.content, "[CommandResult] full: ccr://fixture");
+    const failed = { status: "error", tool: "shell", sessionID: "oc2-2", error: { message: "x" } };
+    await toolHooks.get("execute.after")(failed);
+    assert.equal(failed.result, undefined);
+
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    const compacting = { sessionID: "oc2-3", system: [] };
+    await sessionHooks.get("compaction")(compacting);
+    assert.deepEqual(compacting.system, [{ type: "text", text: "Caveman Core fixture" }]);
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
+      ["PreCompact", "oc2-3"],
+      ["SessionStart", "oc2-3"],
+    ]);
+
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    await cleanup();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]).sort(), [
+      ["SessionEnd", "oc2-2"],
+      ["SessionEnd", "oc2-3"],
+    ]);
+  } finally {
+    if (previousCapture === undefined) delete process.env.CAVE_NATIVE_CAPTURE;
+    else process.env.CAVE_NATIVE_CAPTURE = previousCapture;
+  }
+});
+
+test("enable opencode with an unreadable version keeps the V1 plugin", async () => {
+  // nativeHostProbe reports version: null whenever `opencode --version` yields
+  // nothing, exits non-zero, or cannot be spawned ("version_probe_failed").
+  // #1081 records that state on a live OpenCode 1.18.31 host, so "unknown" is
+  // not a proxy for "new": defaulting it to V2 would hand a 1.x user whose
+  // probe merely flaked a plugin their host cannot load, breaking an install
+  // that works today. Unknown therefore keeps the status quo (V1); only a
+  // version that positively reads as major >= 2 opts into the V2 API.
+  const fx = fixture({ opencodeVersion: "" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const plugin = readFileSync(join(configDir, "plugins", "caveman-native.js"), "utf8");
+  assert.match(plugin, /export const CavemanNative/,
+    "an unreadable version must not silently upgrade a V1 host to the V2 API (#1083, #1081)");
+  assert.doesNotMatch(plugin, /async setup\(ctx\)/);
+});
+
+test("doctor reports opencode degraded after the host upgrades past the installed plugin API", async () => {
+  // The plugin API is chosen while building native mutations, so a V1 install
+  // stays on disk after the host becomes V2 — and `caveman opencode` skips
+  // enableNative whenever a journal exists, by design (status probes spawn
+  // subprocesses). That makes doctor the repair door for this drift, exactly
+  // as the comment on that skip says. Before this check, doctor compared
+  // journaled bytes and pack version only, never the installed plugin API
+  // against the current host major, so it called a plugin OpenCode 2 refuses
+  // to load "installed".
+  const fx = fixture({ opencodeVersion: "opencode 1.18.31" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  assert.equal((await run(["enable", "opencode"], fx.env)).code, 0);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  assert.match(readFileSync(pluginPath, "utf8"), /export const CavemanNative/, "V1 host gets the V1 plugin");
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
+
+  // The user upgrades OpenCode. Nothing else changes: same journal, same bytes.
+  writeFileSync(join(fx.home, "bin", "opencode"),
+    `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'opencode 2.0.7'; fi\n`, { mode: 0o755 });
+
+  const doctor = await run(["doctor", "opencode"], fx.env);
+  assert.notEqual(doctor.code, 0, "a plugin the host cannot load must not report healthy");
+  const result = JSON.parse(doctor.stdout);
+  assert.equal(result.state, "degraded");
+  assert.equal(result.components.lifecycle_hooks, false);
+  assert.equal(result.repair, "caveman doctor opencode --fix");
+
+  assert.equal((await run(["doctor", "opencode", "--fix"], fx.env)).code, 0);
+  assert.match(readFileSync(pluginPath, "utf8"), /async setup\(ctx\)/, "--fix regenerates against the new host major");
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
 });
 
 test("enable/disable aider stays shallow, preserves native repo map, and restores config", async () => {

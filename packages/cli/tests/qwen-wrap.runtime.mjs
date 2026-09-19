@@ -264,8 +264,8 @@ function writePendingMcpUninstall(agent, markerPath, configPath, configBefore, c
 test("Qwen profile uses high-precedence system settings with a bounded extension guard", () => {
   assert.deepEqual(qwen.binary_names, ["qwen"]);
   assert.deepEqual(qwen.args, ["--extensions=none"]);
-  assert.equal(qwen.tested_agent_version, "0.22.3");
-  assert.equal(qwen.install, "npm i -g @qwen-code/qwen-code@0.22.3");
+  assert.equal(qwen.tested_agent_version, "0.24.0");
+  assert.equal(qwen.install, "npm i -g @qwen-code/qwen-code@0.24.0");
   assert.equal(qwen.injection.method, "config-file");
   assert.equal(qwen.injection.env_var, "QWEN_CODE_SYSTEM_SETTINGS_PATH");
   assert.equal(qwen.injection.base_config.platform_default, "qwen-system-settings");

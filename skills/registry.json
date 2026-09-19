@@ -4,7 +4,7 @@
     "id": "caveman-local",
     "version": "2.2.0",
     "protocol": 1,
-    "core_source": "native-core.md",
+    "core_source": "native/native-core.md",
     "core_prompt_token_budget": 560,
     "targets": ["claude", "codex", "hermes", "gemini", "opencode", "aider"]
   },

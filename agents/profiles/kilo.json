@@ -6,7 +6,7 @@
   "homepage": "https://kilo.ai/docs/code-with-ai/platforms/cli",
   "binary_names": ["kilo", "kilocode"],
   "args": [],
-  "install": "npm install -g @kilocode/cli@7.5.9",
+  "install": "npm install -g @kilocode/cli@7.7.3",
   "wire_protocol": "openai-chat",
   "injection": {
     "method": "config-env-content",
@@ -72,10 +72,10 @@
     }
   },
   "attribution": { "header": "X-Cave-Agent" },
-  "tested_agent_version": "7.5.9",
+  "tested_agent_version": "7.7.3",
   "injection_completeness": "declarative",
-  "last_verified_at": "2026-09-03",
-  "verified_by": "local pinned-binary probe (kilo 7.5.9, agents/probe-installed.mjs)",
+  "last_verified_at": "2026-09-18",
+  "verified_by": "local pinned-binary probe (kilo 7.7.3, agents/probe-installed.mjs)",
   "fallback": "generic-env",
   "maintainer": null
 }
