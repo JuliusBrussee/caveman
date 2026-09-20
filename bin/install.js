@@ -838,28 +838,9 @@ function ompExtensionEntryPresent(pkgDir) {
     && extensions.every((entry) => typeof entry === 'string' && fs.existsSync(path.join(pkgDir, entry)));
 }
 
-// bin/install.js and packages/pi-extension release on separate schedules, so
-// `omp plugin install @caveman-ai/pi` can succeed against an npm version that
-// predates this repo's OMP support. Verify the registry-installed package
-// actually declares a loadable extension before reporting success — an
-// install that silently leaves OMP with nothing to load is worse than a
-// clear, actionable failure.
-function ompRegistryExtensionInstalled(pluginName) {
-  const doctor = captureSpawn('omp', ['plugin', 'doctor', '--json']);
-  if (!spawnOk(doctor)) return false;
-  let checks;
-  try { checks = JSON.parse(doctor.stdout); } catch (_) { return false; }
-  const directory = Array.isArray(checks) && checks.find((check) => check.name === 'plugins_directory');
-  if (directory?.status !== 'ok' || typeof directory.message !== 'string' || !directory.message.startsWith('Found at ')) return false;
-  const root = directory.message.slice('Found at '.length);
-  if (!path.isAbsolute(root)) return false;
-  return ompExtensionEntryPresent(path.join(root, 'node_modules', ...pluginName.split('/')));
-}
-
-// True when @caveman-ai/pi is currently registered with OMP (installed via
-// either the registry or a local-path link) — used before uninstall so an
-// OMP with caveman never installed exits cleanly instead of erroring on
-// "not installed".
+// True when @caveman-ai/pi is currently registered with OMP — used before
+// uninstall so an OMP with caveman never installed exits cleanly instead of
+// erroring on "not installed".
 function ompPackageRegistered(pluginName) {
   const list = captureSpawn('omp', ['plugin', 'list', '--json']);
   if (!spawnOk(list)) return true; // unknown state: let the real uninstall call surface the actual error
@@ -906,24 +887,27 @@ function installOmp(ctx) {
   results.detected++;
   say('→ Oh My Pi (OMP) detected');
 
-  const localPkgDir = repoRoot ? path.join(repoRoot, 'packages', 'pi-extension') : null;
+  if (!repoRoot) {
+    warn('  OMP native install requires a local clone of the caveman repo.');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node bin/install.js --only omp');
+    results.failed.push(['omp', 'native install requires local repo clone']);
+    process.stdout.write('\n');
+    return;
+  }
+
+  const localPkgDir = path.join(repoRoot, 'packages', 'pi-extension');
 
   if (opts.dryRun) {
-    note(localPkgDir
-      ? `  would build packages/pi-extension and run: omp plugin install ${localPkgDir}`
-      : `  would run: omp plugin install ${OMP_PACKAGE_NAME}`);
+    note(`  would build packages/pi-extension and run: omp plugin install ${localPkgDir}`);
     results.installed.push('omp');
     process.stdout.write('\n');
     return;
   }
 
   try {
-    const target = localPkgDir ? buildLocalOmpExtension(repoRoot) : OMP_PACKAGE_NAME;
+    const target = buildLocalOmpExtension(repoRoot);
     const result = runSpawn('omp', ['plugin', 'install', target], null, false);
     if (!spawnOk(result)) throw new Error('omp plugin install failed');
-    if (!localPkgDir && !ompRegistryExtensionInstalled(OMP_PACKAGE_NAME)) {
-      throw new Error('installed package predates OMP support; try again after the next @caveman-ai/pi release');
-    }
     results.installed.push('omp');
   } catch (e) {
     warn('  OMP install failed: ' + (e && e.message || e));
