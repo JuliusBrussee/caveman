@@ -873,14 +873,31 @@ function ompPackageRegistered(pluginName) {
 // once (skipped once dist/ already carries a loadable entry) and hand OMP a
 // direct path — `omp plugin install <path>` symlinks it in, so the checkout
 // stays the source of truth on every subsequent session.
+//
+// npm's Windows launch mirrors packages/create-caveman-agent/src/index.ts's
+// dependencyInstall: cmd.exe /d /s /c, not portableInvocation's .cmd-shim
+// parser built for third-party CLIs (claude/omp/gemini) with unpredictable
+// shim formats — npm is a well-known tool, and this is the pattern already
+// established and tested elsewhere in this repo for launching it portably.
+function runNpm(args, cwd) {
+  const npmExecPath = process.env.npm_execpath;
+  const windowsShell = !npmExecPath && process.platform === 'win32';
+  const command = npmExecPath ? process.execPath : windowsShell ? (process.env.ComSpec ?? 'cmd.exe') : 'npm';
+  const spawnArgs = npmExecPath
+    ? [npmExecPath, ...args]
+    : windowsShell
+      ? ['/d', '/s', '/c', `npm ${args.join(' ')}`]
+      : args;
+  process.stdout.write(`  $ npm ${args.join(' ')}\n`);
+  return spawnOk(child_process.spawnSync(command, spawnArgs, { cwd, stdio: 'inherit' }));
+}
+
 function buildLocalOmpExtension(repoRoot) {
   const pkgDir = path.join(repoRoot, 'packages', 'pi-extension');
   if (ompExtensionEntryPresent(pkgDir)) return pkgDir;
   const buildFailure = 'build it manually: cd packages/pi-extension && npm install && npm run build';
-  const install = runSpawn('npm', ['install', '--no-audit', '--no-fund'], { cwd: pkgDir }, false);
-  if (!spawnOk(install)) throw new Error(`npm install failed for packages/pi-extension; ${buildFailure}`);
-  const build = runSpawn('npm', ['run', 'build'], { cwd: pkgDir }, false);
-  if (!spawnOk(build) || !ompExtensionEntryPresent(pkgDir)) throw new Error(`npm run build failed for packages/pi-extension; ${buildFailure}`);
+  if (!runNpm(['install', '--no-audit', '--no-fund'], pkgDir)) throw new Error(`npm install failed for packages/pi-extension; ${buildFailure}`);
+  if (!runNpm(['run', 'build'], pkgDir) || !ompExtensionEntryPresent(pkgDir)) throw new Error(`npm run build failed for packages/pi-extension; ${buildFailure}`);
   return pkgDir;
 }
 
