@@ -120,11 +120,11 @@ function installerWithoutRepoRoot() {
   return path.join(binDir, 'install.js');
 }
 
-// packages/pi-extension is already built for the real test suite; running the
-// real installer from this checkout exercises buildLocalOmpExtension's fast
-// (already-built) path deterministically, with no network or build step.
+// Exercises the real buildLocalOmpExtension path against this checkout: if
+// packages/pi-extension is not already built (a fresh clone/CI checkout),
+// this triggers a real `npm install && npm run build` there — the same thing
+// a real user's first `caveman install --only omp` from a clone would do.
 test('omp fresh install from a local checkout builds/links the real package.json, not @caveman-ai/pi from npm', () => {
-  assert.ok(fs.existsSync(path.join(LOCAL_PKG_DIR, 'dist', 'omp.mjs')), 'precondition: packages/pi-extension must already be built');
   const home = freshHome();
   try {
     const r = runInstaller(INSTALLER, ['--only', 'omp'], home);
