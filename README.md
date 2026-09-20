@@ -324,7 +324,7 @@ Fair headline. We link it anyway. See [The Numbers](#-the-numbers).
 
 ## 💬 The skill, unpacked
 
-One rule file, one talking style, plus a small toolbox. `/caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra` sets intensity. `/caveman off` or `normal mode` turns it off.
+One rule file, one talking style, plus a small toolbox. `/caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra` sets intensity. `/caveman status` reports current mode. `/caveman off` or `normal mode` turns it off. Want opt-in startup? Claude Code supports [`defaultMode: "manual"`](skills/caveman/README.md#how-to-invoke).
 
 | Level | Same question: "Why does my React component re-render?" |
 |---|---|

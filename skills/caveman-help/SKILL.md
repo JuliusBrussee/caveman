@@ -21,6 +21,7 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget. |
 
 Mode stick until changed or session end.
+`/caveman status` reports current mode without changing it. Claude Code and the standalone OpenCode plugin read stored state; other hosts use conversation context and report `unknown` if no mode is known.
 
 ## Skills
 
@@ -53,9 +54,11 @@ export CAVEMAN_DEFAULT_MODE=ultra
 { "defaultMode": "lite" }
 ```
 
-Set `"off"` to disable auto-activation on session start. User can still activate manually with `/caveman`.
+For opt-in activation in Claude Code, set `defaultMode` to `manual`. Sessions start off; `/caveman` or `talk like caveman` activates full. `off` also disables bare-command activation. `manual` is a startup policy, not an intensity level. OpenCode still starts in full mode because its installer also supplies static activation rules.
 
-Resolution: env var > config file > `full`.
+Set `"off"` to suppress automatic and bare-command activation. Use `"manual"` when bare `/caveman` should activate.
+
+Resolution: env var > repo config > user config > `full`.
 
 ## More
 

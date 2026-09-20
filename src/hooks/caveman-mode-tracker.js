@@ -241,7 +241,24 @@ function handle(raw) {
     // Shared mode-change parser (#602) — single source of truth with the
     // opencode plugin for slash commands, namespaced /caveman:caveman-*,
     // natural-language activation/deactivation, and brevity triggers.
-    const change = parseModeChange(prompt, { getDefaultMode, skipNaturalLanguage });
+    const change = parseModeChange(prompt, {
+      getDefaultMode: () => getDefaultMode(data.cwd), skipNaturalLanguage,
+    });
+
+    // Status is observational: do not consume a one-shot mode's pending
+    // restore, refresh flag mtimes, or log a transition. The parser is shared
+    // with OpenCode, including its expanded command templates.
+    if (change && change.action === 'status') {
+      const activeMode = resolveActiveMode(claudeDir, sessionId);
+      const modeLabel = activeMode === 'wenyan' ? 'wenyan-full' : (activeMode || 'off');
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'UserPromptSubmit',
+          additionalContext: 'Report this status verbatim without changing mode: Caveman mode: ' + modeLabel
+        }
+      }));
+      return;
+    }
 
     // A /caveman argument that resolves to no mode used to leave the level
     // untouched and say nothing, so a typo or punctuation glued to the level
@@ -300,6 +317,11 @@ function handle(raw) {
         // followed by /caveman-review must still restore the original).
         if (modeBeforeChange && !INDEPENDENT_MODES.has(modeBeforeChange)) {
           writeSessionPrev(claudeDir, sessionId, modeBeforeChange);
+        } else if (!modeBeforeChange) {
+          // An explicit reset can leave a previous one-shot's return target
+          // behind. A new one-shot from off must restore off, never that stale
+          // level. Store the displaced off state through the shared writer.
+          writeSessionPrev(claudeDir, sessionId, 'off');
         }
         setIndependentThisTurn = true;
       } else if (canonicalModeLabel(mode) !== canonicalModeLabel(modeBeforeChange)) {

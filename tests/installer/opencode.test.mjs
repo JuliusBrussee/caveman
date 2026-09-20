@@ -385,6 +385,18 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     const activationRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(activationRows.at(-1).mode, 'ultra');
 
+    // Status must replace the activation template and report the actual flag,
+    // without touching mode history or refreshing its mtime.
+    const beforeStatus = [fs.readFileSync(modeLogPath, 'utf8'), fs.statSync(flagPath).mtimeMs];
+    for (const text of ['/caveman status', '/caveman:caveman status',
+      'Activate caveman mode: status\n\nIf no level given, use full.']) {
+      const output = { parts: [{ type: 'text', text }] };
+      await handlers['chat.message']({}, output);
+      assert.equal(output.parts[0].text, 'Report this status verbatim without changing mode: Caveman mode: ultra');
+      assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultra');
+      assert.deepEqual([fs.readFileSync(modeLogPath, 'utf8'), fs.statSync(flagPath).mtimeMs], beforeStatus);
+    }
+
     // opencode expands "/caveman <level>" into the command template before
     // chat.message fires — the level must be recovered from the expanded text.
     await handlers['chat.message']({}, { parts: [{ type: 'text', text:
@@ -437,6 +449,20 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     assert.equal(fs.existsSync(flagPath), false, 'flag should be deleted after deactivation');
     const deactivationRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(deactivationRows.at(-1).mode, null);
+
+    const offStatus = { parts: [{ type: 'text', text: '/caveman status' }] };
+    await handlers['chat.message']({}, offStatus);
+    assert.equal(offStatus.parts[0].text, 'Report this status verbatim without changing mode: Caveman mode: off');
+    assert.equal(fs.existsSync(flagPath), false, 'status must not activate the default');
+
+    process.env.CAVEMAN_DEFAULT_MODE = 'manual';
+    await handlers.event({ event: { type: 'session.created' } });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full', 'Claude-only manual policy must not pretend OpenCode static rules are disabled');
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full', 'manual policy permits explicit activation');
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: 'stop caveman' }] });
+    assert.equal(fs.existsSync(flagPath), false);
+    process.env.CAVEMAN_DEFAULT_MODE = 'full';
 
     // No reinforcement injected when inactive.
     const sys2 = { system: [] };

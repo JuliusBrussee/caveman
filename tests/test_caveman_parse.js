@@ -37,6 +37,26 @@ console.log('caveman-parse (shared mode-change parser) tests\n');
 const defaultFull = { getDefaultMode: () => 'full' };
 const defaultOff = { getDefaultMode: () => 'off' };
 
+test('status uses one read-only verdict for literal and expanded commands', () => {
+  const options = { getDefaultMode: () => { throw new Error('status must not resolve a default'); } };
+  for (const prompt of ['/caveman status', '/caveman:caveman status', '/caveman status.']) {
+    assert.deepStrictEqual(parseModeChange(prompt, options), { action: 'status' });
+  }
+  assert.deepStrictEqual(parseModeChange('Activate caveman mode: status\n\nIf no level given, use full.', {
+    ...options, expandedTpl: true,
+  }), { action: 'status' });
+  assert.strictEqual(parseModeChange('What does `/caveman status` do?', options), null);
+});
+
+test('manual startup policy permits explicit activation but is not a level', () => {
+  const options = { getDefaultMode: () => 'manual', expandedTpl: true };
+  for (const prompt of ['/caveman', 'talk like caveman', 'Activate caveman mode: \n\nIf no level given, use full.']) {
+    assert.deepStrictEqual(parseModeChange(prompt, options), { action: 'set', mode: 'full' });
+  }
+  assert.deepStrictEqual(parseModeChange('/caveman manual', options), { action: 'unresolved' });
+  assert.strictEqual(parseModeChange('ordinary request', options), null);
+});
+
 // ---------- basic unit coverage ----------
 
 test('empty/whitespace prompt is a no-op', () => {

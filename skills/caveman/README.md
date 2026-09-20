@@ -27,11 +27,16 @@ Auto-clarity rule: caveman drops to normal prose for security warnings, irrevers
 
 ```
 /caveman              # full mode (default)
+/caveman status       # show current mode without changing it
 /caveman lite         # lighter compression
 /caveman ultra        # extreme compression
 /caveman wenyan       # classical Chinese
 stop caveman          # back to normal prose
 ```
+
+Claude Code and the standalone OpenCode plugin read stored mode state. Other hosts report the mode known in the conversation, or `unknown` if none is known.
+
+Want Claude Code sessions to start with normal prose? Set `{"defaultMode":"manual"}` in `.caveman.json` for one project or `~/.config/caveman/config.json` for your user. You can also set `CAVEMAN_DEFAULT_MODE=manual`. Then `/caveman` activates full mode; `/caveman lite` selects lite. Stop persists across compaction and resume; a fresh session starts off again. This startup policy is Claude Code-only: OpenCode keeps its full-mode default because the installer also supplies static activation rules.
 
 ## Example output
 

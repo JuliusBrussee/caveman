@@ -11,6 +11,7 @@
 // parseModeChange(prompt, { getDefaultMode, skipNaturalLanguage, expandedTpl, unwrapQuotes })
 //   → { action: 'set', mode }  — caller should activate `mode`
 //   → { action: 'clear' }      — caller should deactivate (delete the flag)
+//   → { action: 'status' }     — report the current mode without changing state
 //   → null                     — prompt does not change state
 //
 // Options:
@@ -174,10 +175,12 @@ function resolveModeArg(rawArg, getDefaultMode) {
     // like `/caveman ?` — plausibly someone asking for help, who should not be
     // switched into the mode by it.
     if (rawArg) return { action: 'unresolved' };
-    const mode = getDefaultMode();
+    const configured = getDefaultMode();
+    const mode = configured === 'manual' ? 'full' : configured;
     return mode === 'off' ? { action: 'clear' } : { action: 'set', mode };
   }
   if (arg === 'off' || arg === 'stop' || arg === 'disable') return { action: 'clear' };
+  if (arg === 'status') return { action: 'status' };
   // canonical alias — config stores wenyan-full as 'wenyan'
   if (arg === 'wenyan-full') return { action: 'set', mode: 'wenyan' };
   if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return { action: 'set', mode: arg };
@@ -273,7 +276,8 @@ function parseModeChange(promptRaw, options) {
     // one-off instruction, not a session-wide mode switch.
     if (!isQuestion) {
       if (wantsActivation(nlPrompt)) {
-        const mode = getDefaultMode();
+        const configured = getDefaultMode();
+        const mode = configured === 'manual' ? 'full' : configured;
         // Mirrors the tracker exactly: a configured-off default makes this a
         // no-op (leave whatever flag state already exists), NOT a clear —
         // that's only what an explicit "/caveman" bare command does.

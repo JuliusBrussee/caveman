@@ -326,6 +326,8 @@ Each skill has a human-facing `README.md` alongside the LLM-facing `SKILL.md`. T
 
 Defined in `skills/caveman/SKILL.md`. Six levels: `lite`, `full` (default), `ultra`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`. Persists until changed or session ends.
 
+`defaultMode: "manual"` is a Claude Code startup policy, not a seventh intensity level. It starts inactive, stores only `off`, and explicit bare-command or natural-language activation resolves to `full`. Keep it out of `VALID_MODES`; only configuration accepts it. OpenCode maps this policy to its existing full-mode default because its installer also supplies static AGENTS.md activation. `/caveman status` is read-only and must return before one-shot restoration or any mode-state mutation.
+
 ### Auto-clarity rule
 
 Caveman drops to normal prose for: security warnings, irreversible action confirmations, multi-step sequences where fragment ambiguity risks misread, user confused or repeating question. Resumes after. Defined in skill — preserve in any SKILL.md edit.

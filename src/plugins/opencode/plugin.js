@@ -195,7 +195,11 @@ function applyModeChange(change) {
 // drives one shared implementation. Re-fires on every `session.created` event,
 // so a new session in a long-lived plugin process re-asserts the flag.
 function handleSessionCreated() {
-  const mode = getDefaultMode();
+  // Manual startup is currently a Claude Code policy. OpenCode's installer
+  // also ships static AGENTS.md activation, so a cleared flag alone cannot
+  // promise normal prose here. Preserve its existing full-mode default.
+  const configured = getDefaultMode();
+  const mode = configured === 'manual' ? 'full' : configured;
   if (mode === 'off') {
     recordModeChange(opencodeDir, null);
     removeFlag();
@@ -235,6 +239,14 @@ export const CavemanPlugin = async (_ctx) => {
     for (const part of output.parts) {
       if (part && part.type === 'text' && part.text) {
         const change = parseModeChange(part.text, { getDefaultMode, expandedTpl: true, unwrapQuotes: true });
+        if (change && change.action === 'status') {
+          const active = readFlag(flagPath);
+          const label = active === 'wenyan' ? 'wenyan-full' : (active || 'off');
+          // Replace the expanded activation template for this message only.
+          // No shared pending response: concurrent sessions cannot steal it.
+          part.text = 'Report this status verbatim without changing mode: Caveman mode: ' + label;
+          continue;
+        }
         if (change) applyModeChange(change);
       }
     }

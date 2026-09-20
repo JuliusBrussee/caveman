@@ -35,6 +35,10 @@ const VALID_MODES = [
   'commit', 'review', 'compress'
 ];
 
+// Startup policy only: manual starts inactive, but explicit activation uses
+// full. Keep it out of flag validation and the selectable intensity levels.
+const VALID_DEFAULT_MODES = [...VALID_MODES, 'manual'];
+
 // Legacy machine-wide flag. Kept as a last-write-wins MIRROR of whichever
 // session wrote most recently, because INSTALL.md tells users to `cat` it and
 // src/hooks/README.md ships a third-party statusline snippet that reads it.
@@ -100,7 +104,7 @@ function readModeFromConfigFile(configPath) {
     const raw = fs.readFileSync(configPath, 'utf8');
     const config = JSON.parse(raw);
     if (config && config.defaultMode &&
-        VALID_MODES.includes(String(config.defaultMode).toLowerCase())) {
+        VALID_DEFAULT_MODES.includes(String(config.defaultMode).toLowerCase())) {
       return String(config.defaultMode).toLowerCase();
     }
   } catch (e) {
@@ -118,7 +122,7 @@ function readModeFromConfigFile(configPath) {
 function getDefaultMode(startDir) {
   // 1. Environment variable (highest priority)
   const envMode = process.env.CAVEMAN_DEFAULT_MODE;
-  if (envMode && VALID_MODES.includes(envMode.toLowerCase())) {
+  if (envMode && VALID_DEFAULT_MODES.includes(envMode.toLowerCase())) {
     return envMode.toLowerCase();
   }
 

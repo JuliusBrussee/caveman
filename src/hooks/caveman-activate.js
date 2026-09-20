@@ -73,6 +73,7 @@ const FALLBACK_VALID_MODES = [
   'wenyan-lite', 'wenyan', 'wenyan-full', 'wenyan-ultra',
   'commit', 'review', 'compress'
 ];
+const FALLBACK_DEFAULT_MODES = [...FALLBACK_VALID_MODES, 'manual'];
 
 // Minimal stand-in for caveman-config.getDefaultMode. It must mirror the real
 // resolution order rather than read only the env var: a degrade that ignores a
@@ -84,7 +85,7 @@ function fallbackReadMode(file) {
   try {
     if (!fs.lstatSync(file).isFile()) return null;
     const mode = JSON.parse(fs.readFileSync(file, 'utf8')).defaultMode;
-    if (typeof mode === 'string' && FALLBACK_VALID_MODES.includes(mode.toLowerCase())) {
+    if (typeof mode === 'string' && FALLBACK_DEFAULT_MODES.includes(mode.toLowerCase())) {
       return mode.toLowerCase();
     }
   } catch (e) { /* absent, unreadable, or malformed → next source */ }
@@ -104,7 +105,7 @@ function fallbackGetDefaultMode(startDir) {
   //    a degraded path that accepts " ultra" where the intact one rejects it is
   //    drift in a whitelist.
   const envMode = process.env.CAVEMAN_DEFAULT_MODE;
-  if (envMode && FALLBACK_VALID_MODES.includes(envMode.toLowerCase())) return envMode.toLowerCase();
+  if (envMode && FALLBACK_DEFAULT_MODES.includes(envMode.toLowerCase())) return envMode.toLowerCase();
   // 2. Repo-local config, walking up. Bounded at 64 like findRepoConfigPath.
   try {
     let dir = path.resolve(startDir || process.cwd());
@@ -311,7 +312,7 @@ if (RESET_SOURCES.has(source)) {
 // written so the choice survives this session's later compactions: that write
 // is what closes the "stop caveman → /compact re-arms caveman" hole, because
 // the next SessionStart finds a durable 'off' instead of an absent file.
-if (mode === 'off') {
+if (mode === 'off' || mode === 'manual') {
   recordModeChange(claudeDir, null, sessionId); // #601: timestamped transition log
   writeSessionMode(claudeDir, sessionId, null);
   process.stdout.write('OK');
