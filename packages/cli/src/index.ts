@@ -5036,6 +5036,23 @@ async function agentShortcut(rest: string[]) {
     process.exitCode = result.status ?? 1;
     return;
   }
+  // Some host surfaces cannot run routed at all — Claude Code Remote Control
+  // refuses any non-first-party ANTHROPIC_BASE_URL and its escape hatch does not
+  // cover the check (#947, #1101). The native door would install machine-wide
+  // routing and then launch the host straight into that refusal, leaving the
+  // user both unrouted and unable to start the surface they asked for. Resolve
+  // the override before any persistent write and hand these to wrap, whose
+  // route-override path launches the host directly and writes nothing.
+  const shortcutRouteOverride = agentRouteOverride(agent, rest.slice(1));
+  if (shortcutRouteOverride) {
+    // A native install already owns the host's base URL from its own config
+    // file, which launching directly cannot undo — say so rather than let the
+    // surface fail with the host's own opaque refusal.
+    if (readNativeJournal(native)) {
+      process.stderr.write(`${mark("warn")} ${routeOverrideLabel(agent)} ${shortcutRouteOverride.surface} ${shortcutRouteOverride.reason}, and the native integration still routes ${binOf(agent)} from its own config — run \`caveman disable ${native}\` first, then \`caveman enable ${native}\` afterwards\n`);
+    }
+    return wrap(rest);
+  }
   // A Cave Build lock is enforced at the wrap door (claudeCaveBuildEnv); the
   // native door applies none of its transforms, so a locked project must keep
   // routing through wrap or the lock would be silently unenforced.
