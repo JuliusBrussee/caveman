@@ -4,3 +4,5 @@ export * from "./protocol.ts";
 export { HookBridge, promptDigest, resolveHookInvocations, taskContinuation, taskTerms, taskType } from "./lifecycle.ts";
 export { RecoveryClient, resolveMcpBinary } from "./recovery.ts";
 export { ProviderRouter } from "./provider.ts";
+export { createCavemanRuntime } from "./runtime.ts";
+export { shrinkToolResult } from "./tool-output.ts";
