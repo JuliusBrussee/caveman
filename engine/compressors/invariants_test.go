@@ -969,3 +969,95 @@ func TestTrimmedSummaryDeclaresWhatItShed(t *testing.T) {
 		}
 	}
 }
+
+// A non-finite value parses cleanly through strconv.ParseFloat and then
+// compares false against every bound, so it used to sit on the numeric track
+// without ever joining the range it was being described by. The marker then
+// stated `name=min..max` over a run holding a unit that satisfies no bound at
+// all. Such a field must leave the numeric track instead and be reported by a
+// form that counts every unit.
+func TestNonFiniteValuesLeaveTheNumericTrack(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		values   []string
+		wantSeen string
+	}{
+		{"NaN mid-run", []string{"100", "250", "NaN", "400"}, "NaN"},
+		{"NaN last", []string{"100", "250", "400", "nan"}, "nan"},
+		{"infinity mid-run", []string{"100", "250", "Infinity", "400"}, "Infinity"},
+		{"negative inf", []string{"100", "-Inf", "400"}, "-Inf"},
+		{"NaN in an enumerable run", []string{"100", "100", "250", "NaN"}, "NaN×1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			units := make([][]field, len(tc.values))
+			for i, v := range tc.values {
+				units[i] = fields("state", "ok", "amount", v)
+			}
+			got := summarizeElided(units, 1<<20)
+			if strings.Contains(got, "range amount=") {
+				t.Fatalf("a run holding %q was described by a numeric range: %q", tc.values, got)
+			}
+			// Whatever form it falls back to, the non-finite unit must be
+			// visible in it rather than absorbed into a bound it never met.
+			if !strings.Contains(got, tc.wantSeen) {
+				t.Fatalf("summary %q hides the non-finite unit %q", got, tc.wantSeen)
+			}
+		})
+	}
+
+	// A run whose values are ALL non-finite is still genuinely constant, and
+	// that fact is verified — it must still be stated.
+	allNaN := [][]field{fields("amount", "NaN"), fields("amount", "NaN"), fields("amount", "NaN")}
+	if got := summarizeElided(allNaN, 1<<20); got != "all amount=NaN" {
+		t.Fatalf("a constant NaN run should still be reported as constant, got %q", got)
+	}
+
+	// Finite numbers are untouched: the range is still the whole point.
+	finite := [][]field{fields("amount", "100"), fields("amount", "250"), fields("amount", "400")}
+	if got := summarizeElided(finite, 1<<20); got != "range amount=100..400" {
+		t.Fatalf("finite numbers must still render a range, got %q", got)
+	}
+}
+
+// keepNumericExtrema latches minIndex/maxIndex on the first numeric cell it
+// sees and then only displaces them on a strict comparison. A NaN compares
+// false against everything, so the first one seen pinned both ends and the
+// column's real extrema stopped being kept — the exact rows this function
+// exists to hold back from elision.
+func TestKeepNumericExtremaIgnoresNonFinite(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values []string
+	}{
+		{"NaN first", []string{"NaN", "10", "70", "30"}},
+		{"inf first", []string{"Inf", "10", "70", "30"}},
+		{"NaN mid", []string{"50", "NaN", "70", "10"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := [][]string{{"amount"}}
+			for _, v := range tc.values {
+				rows = append(rows, []string{v})
+			}
+			keep := make([]bool, len(rows))
+			keepNumericExtrema(rows, 1, keep)
+
+			var kept []string
+			for i := 1; i < len(rows); i++ {
+				if keep[i] {
+					kept = append(kept, rows[i][0])
+				}
+			}
+			for _, want := range []string{"10", "70"} {
+				found := false
+				for _, k := range kept {
+					if k == want {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("real extremum %q was not kept from %v, kept %v", want, tc.values, kept)
+				}
+			}
+		})
+	}
+}
