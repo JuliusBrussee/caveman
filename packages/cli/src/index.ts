@@ -12728,10 +12728,28 @@ function agentRouteOverride(agent: AgentProfile, args: string[]): AgentRouteOver
   if (agent.id === "qwen") return qwenRouteOverride(agent, args);
   // Claude Code 2.1.196+ refuses Remote Control unless ANTHROPIC_BASE_URL is
   // api.anthropic.com, and the first-party escape hatch does not apply (#947).
-  if (agent.id === "claude" && args.includes("remote-control")) {
+  if (agent.id === "claude" && claudeStartsRemoteControl(args)) {
     return { surface: "remote-control", reason: "only runs against api.anthropic.com, so it cannot route through the proxy" };
   }
   return null;
+}
+
+// Claude Code spells Remote Control `--remote-control [name]`; the bare
+// `remote-control` word is the legacy subcommand. #947 matched only the latter,
+// so every user who followed the documented flag kept routing through the proxy
+// and kept being refused by the host (#1101).
+//
+// `--remote-control-session-name-prefix` only names auto-generated sessions and
+// does NOT start Remote Control, so it must not match — bypassing on it would
+// silently drop compression for a session that never needed the bypass. Scanning
+// stops at `--`, after which argv belongs to the agent's own payload.
+function claudeStartsRemoteControl(args: string[]): boolean {
+  for (const arg of args) {
+    if (arg === "--") return false;
+    if (arg === "remote-control" || arg === "--remote-control") return true;
+    if (arg.startsWith("--remote-control=")) return true;
+  }
+  return false;
 }
 
 function routeOverrideLabel(agent: AgentProfile): string {

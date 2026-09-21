@@ -216,9 +216,13 @@ smaller safe output, Caveman sends original input.
 Claude Code 2.1.196 and later only allows Remote Control when
 `ANTHROPIC_BASE_URL` points at `api.anthropic.com`; its first-party escape
 hatch does not cover this check. A proxied session therefore cannot start
-Remote Control. `caveman claude remote-control` and
-`caveman wrap claude remote-control` detect the subcommand and launch Claude
-Code directly, uncompressed. If `caveman enable claude` has written the route
-into `settings.json`, run `caveman disable claude` before starting a Remote
-Control session from a plain `claude` command, then `caveman enable claude`
-again afterwards.
+Remote Control. `caveman claude --remote-control` and
+`caveman wrap claude --remote-control` detect the flag — including
+`--remote-control <name>` and `--remote-control=<name>`, and the legacy bare
+`remote-control` subcommand — and launch Claude Code directly, uncompressed.
+`--remote-control-session-name-prefix` only names auto-generated sessions and
+does not start Remote Control, so it keeps routing through the proxy.
+
+If `caveman enable claude` has written the route into `settings.json`, run
+`caveman disable claude` before starting a Remote Control session from a plain
+`claude` command, then `caveman enable claude` again afterwards.

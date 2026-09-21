@@ -914,6 +914,37 @@ test("Claude remote-control launches direct because Claude Code refuses a proxie
   assert.equal(env.ANTHROPIC_BASE_URL, "http://127.0.0.1:8787/w/claude");
 });
 
+test("Claude remote-control is a flag, not only a subcommand (#1101)", async () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const { buildWrapEnv } = await import(`${pathToFileURL(join(here, "..", "dist", "index.js")).href}?claude-remote-control-flag`);
+  const claude = PROFILES.find((profile) => profile.id === "claude");
+  // Claude Code spells Remote Control `--remote-control [name]`; the bare
+  // `remote-control` word the original guard matched is the legacy subcommand.
+  // Both must bypass the proxy, or the host refuses the session outright.
+  for (const argv of [
+    ["--remote-control"],
+    ["--remote-control", "mybox"],
+    ["--remote-control=mybox"],
+    ["--dangerously-skip-permissions", "--remote-control"],
+  ]) {
+    assert.throws(
+      () => buildWrapEnv(claude, "http://127.0.0.1:8787", "auto", argv),
+      /Claude Code remote-control only runs against api.anthropic.com/,
+      `expected ${argv.join(" ")} to launch direct`,
+    );
+  }
+  // Naming the prefix does not turn Remote Control on, so it must keep routing
+  // through the proxy — bypassing here would silently drop compression.
+  for (const argv of [
+    ["--remote-control-session-name-prefix", "laptop", "-p", "hi"],
+    ["--remote-control-session-name-prefix=laptop", "-p", "hi"],
+    ["-p", "write a --remote-control guide"],
+  ]) {
+    const routed = buildWrapEnv(claude, "http://127.0.0.1:8787", "auto", argv);
+    assert.equal(routed.ANTHROPIC_BASE_URL, "http://127.0.0.1:8787/w/claude", `expected ${argv.join(" ")} to stay routed`);
+  }
+});
+
 test("a corporate HTTPS_PROXY does not swallow the agent's loopback hop (#1001)", async () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const { buildWrapEnv } = await import(`${pathToFileURL(join(here, "..", "dist", "index.js")).href}?gateway-no-proxy`);
