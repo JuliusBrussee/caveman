@@ -11,14 +11,20 @@ import { MAX_TOOL_OUTPUT_BYTES, outputReplacementOf } from "./protocol.ts";
 type ToolResultPatch = { content: ToolResultEvent["content"] };
 export type ToolOutputEvent = Pick<ToolResultEvent, "toolName" | "input" | "content" | "isError">;
 
+// caveman_retrieve's own output is the recovered ORIGINAL. Shrinking it hands
+// the model a fresh ccr:// mask, so recovery loops instead of terminating —
+// and registering that tool disables the native runtime's server-side
+// retrieve fallback, so nothing else would strip it. Every other tool's
+// eligibility is the native runtime's own PostToolUse/PostToolUseFailure
+// decision (classifyTool), not a second policy duplicated here.
+const RECOVERY_TOOL = "caveman_retrieve";
+
 export async function shrinkToolResult(
   bridge: HookBridge,
   sessionId: string,
   event: ToolOutputEvent,
 ): Promise<ToolResultPatch | undefined> {
-  // Positive eligibility also excludes recovery, mutations, and custom/meta
-  // tools. Failed reads/commands must retain their exact error diagnostics.
-  if (event.isError || (event.toolName !== "read" && event.toolName !== "bash")) return undefined;
+  if (event.toolName === RECOVERY_TOOL) return undefined;
   const text = event.content
     .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
     .join("");
@@ -26,7 +32,7 @@ export async function shrinkToolResult(
   // Over-cap output is skipped, not truncated: a partial payload could produce
   // a replacement whose recovery handle does not cover the elided bytes.
   if (Buffer.byteLength(text, "utf8") > MAX_TOOL_OUTPUT_BYTES) return undefined;
-  const response = await bridge.call("PostToolUse", {
+  const response = await bridge.call(event.isError ? "PostToolUseFailure" : "PostToolUse", {
     session_id: sessionId,
     tool_name: event.toolName,
     tool_input: event.input,

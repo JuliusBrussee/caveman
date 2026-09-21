@@ -14,18 +14,26 @@ export default function (omp: ExtensionAPI) {
     }),
     execute: runtime.retrieve,
   });
+  // OMP's real BeforeAgentStartEvent/SessionEvent shapes (verified against
+  // @oh-my-pi/pi-coding-agent 18.2.6's shipped .d.ts): session_start fires
+  // only on initial load; session_switch/session_tree/session_branch are
+  // separate, non-overlapping events for resume/fork, tree navigation, and
+  // branch — none of them re-fires session_start. All four need their own
+  // binding here.
   omp.on("session_start", (_event, ctx) => runtime.start(ctx));
   omp.on("session_switch", (_event, ctx) => runtime.start(ctx));
   omp.on("session_tree", (_event, ctx) => runtime.start(ctx));
   omp.on("session_branch", (_event, ctx) => runtime.start(ctx));
   omp.on("session_shutdown", () => runtime.shutdown());
   omp.on("before_agent_start", async (event, ctx) => {
-    // OMP exposes no extension model_select event. Recheck the selected model
-    // at the native user-run boundary, never by replaying startup per request.
-    await runtime.modelSelect(ctx.model, ctx);
     const context = await runtime.beforeAgentStart(event.prompt, ctx);
+    if (!context) return;
     // Preserve existing prompt blocks byte-for-byte for OMP's prefix cache.
-    if (context) return { systemPrompt: [...event.systemPrompt, ...context] };
+    // systemPrompt is typed as string[] (verified in the shipped types), but
+    // the devDependency range spans builds this wasn't confirmed against —
+    // never spread an unexpected shape into the model's prompt.
+    const existing = Array.isArray(event.systemPrompt) ? event.systemPrompt : [event.systemPrompt].filter(Boolean);
+    return { systemPrompt: [...existing, ...context] };
   });
   omp.on("turn_start", () => runtime.turnStart());
   omp.on("turn_end", () => runtime.turnEnd());

@@ -236,7 +236,7 @@ const PROVIDERS = [
   { id: 'claude',     label: 'Claude Code',         mech: 'claude plugin install',         detect: 'command:claude' },
   { id: 'gemini',     label: 'Gemini CLI',          mech: 'gemini extensions install',     detect: 'command:gemini' },
   { id: 'opencode',   label: 'opencode',            mech: 'native opencode plugin',        detect: 'command:opencode' },
-  { id: 'omp',        label: 'Oh My Pi (OMP)',      mech: 'omp plugin install',             detect: 'command:omp' },
+  { id: 'omp',        label: 'Oh My Pi (OMP)',      mech: 'omp plugin install',            detect: 'command:omp' },
   { id: 'openclaw',   label: 'OpenClaw',            mech: 'workspace skill + SOUL.md',     detect: 'command:openclaw||dir:$HOME/.openclaw/workspace' },
   { id: 'codex',      label: 'Codex CLI',           mech: 'npx skills add (codex)',        detect: 'command:codex',           profile: 'codex' },
 
@@ -824,6 +824,12 @@ function countOccurrences(haystack, needle) {
 // @caveman-ai/pi (packages/pi-extension) is a real npm package with an OMP
 // entry (omp.extensions) shipping the actual compression/recovery runtime:
 // proxy routing, caveman_retrieve, Core injection, tool-output shrinking.
+//
+// An earlier revision generated a hand-rolled stub OMP plugin (`caveman` at
+// ~/.omp/caveman-plugin, tracked in a local ownership journal) with none of
+// that functionality. No tagged release ever shipped that revision, so there
+// is no installed base to migrate off of — this file has no cleanup code for
+// it. If that ever changes, add one here rather than silently ignoring it.
 const OMP_PACKAGE_NAME = '@caveman-ai/pi';
 
 // True when pkgDir/package.json declares at least one omp.extensions entry
@@ -846,7 +852,8 @@ function ompPackageRegistered(pluginName) {
   if (!spawnOk(list)) return true; // unknown state: let the real uninstall call surface the actual error
   let parsed;
   try { parsed = JSON.parse(list.stdout); } catch (_) { return true; }
-  return Array.isArray(parsed?.npm) && parsed.npm.some((entry) => entry?.name === pluginName);
+  if (!Array.isArray(parsed?.npm)) return true; // unrecognized shape: let uninstall surface the real error
+  return parsed.npm.some((entry) => entry?.name === pluginName);
 }
 
 // Running from a local checkout must install exactly what is in that
@@ -873,13 +880,41 @@ function runNpm(args, cwd) {
   return spawnOk(child_process.spawnSync(command, spawnArgs, { cwd, stdio: 'inherit' }));
 }
 
-function buildLocalOmpExtension(repoRoot) {
+function buildLocalOmpExtension(repoRoot, force) {
   const pkgDir = path.join(repoRoot, 'packages', 'pi-extension');
-  if (ompExtensionEntryPresent(pkgDir)) return pkgDir;
+  if (!force && ompExtensionEntryPresent(pkgDir)) return pkgDir;
   const buildFailure = 'build it manually: cd packages/pi-extension && npm install && npm run build';
-  if (!runNpm(['install', '--no-audit', '--no-fund'], pkgDir)) throw new Error(`npm install failed for packages/pi-extension; ${buildFailure}`);
+  // `npm ci` when a lockfile pins exact versions — deterministic, and it
+  // never rewrites the checkout's lockfile the way `npm install` can.
+  const installVerb = fs.existsSync(path.join(pkgDir, 'package-lock.json')) ? 'ci' : 'install';
+  if (!runNpm([installVerb, '--no-audit', '--no-fund'], pkgDir)) throw new Error(`npm ${installVerb} failed for packages/pi-extension; ${buildFailure}`);
   if (!runNpm(['run', 'build'], pkgDir) || !ompExtensionEntryPresent(pkgDir)) throw new Error(`npm run build failed for packages/pi-extension; ${buildFailure}`);
   return pkgDir;
+}
+
+// True when repoRoot is a real git working tree (`git clone`, or a worktree
+// created from one) rather than a one-shot extraction. `npx -y github:...`
+// (the documented curl|bash install path) unpacks the repo into npm's `_npx`
+// cache with no `.git` — a real directory today, but one npm can prune or
+// reuse for a different ref on a later run. Symlinking `omp plugin install`
+// at that path would eventually dangle silently; installing the published
+// package by name instead keeps it durable.
+function isDurableRepoClone(repoRoot) {
+  return fs.existsSync(path.join(repoRoot, '.git'));
+}
+
+// Resolves the on-disk path OMP installed `pluginName` at, so its manifest
+// can be checked directly — `omp plugin install <name>` exits 0 even for a
+// published version with no `omp.extensions` entry (it happens to share a
+// `pi.extensions` entrypoint OMP also picks up), so a clean exit code alone
+// does not prove a real OMP extension was installed.
+function installedOmpPackagePath(pluginName) {
+  const list = captureSpawn('omp', ['plugin', 'list', '--json']);
+  if (!spawnOk(list)) return null;
+  let parsed;
+  try { parsed = JSON.parse(list.stdout); } catch (_) { return null; }
+  const entry = Array.isArray(parsed?.npm) ? parsed.npm.find((e) => e?.name === pluginName) : null;
+  return entry?.path || null;
 }
 
 function installOmp(ctx) {
@@ -895,19 +930,33 @@ function installOmp(ctx) {
     return;
   }
 
+  const fromClone = isDurableRepoClone(repoRoot);
   const localPkgDir = path.join(repoRoot, 'packages', 'pi-extension');
 
   if (opts.dryRun) {
-    note(`  would build packages/pi-extension and run: omp plugin install ${localPkgDir}`);
+    note(fromClone
+      ? `  would build packages/pi-extension and run: omp plugin install ${localPkgDir}`
+      : `  would run: omp plugin install ${OMP_PACKAGE_NAME}`);
     results.installed.push('omp');
     process.stdout.write('\n');
     return;
   }
 
   try {
-    const target = buildLocalOmpExtension(repoRoot);
-    const result = runSpawn('omp', ['plugin', 'install', target], null, false);
-    if (!spawnOk(result)) throw new Error('omp plugin install failed');
+    if (fromClone) {
+      const target = buildLocalOmpExtension(repoRoot, opts.force);
+      const result = runSpawn('omp', ['plugin', 'install', target], null, false);
+      if (!spawnOk(result)) throw new Error('omp plugin install failed');
+    } else {
+      // Not a durable checkout — install the published extension by name
+      // instead of symlinking a path npm's npx cache may later reclaim.
+      const result = runSpawn('omp', ['plugin', 'install', OMP_PACKAGE_NAME], null, false);
+      if (!spawnOk(result)) throw new Error('omp plugin install failed');
+      const installedPath = installedOmpPackagePath(OMP_PACKAGE_NAME);
+      if (!installedPath || !ompExtensionEntryPresent(installedPath)) {
+        throw new Error(`published ${OMP_PACKAGE_NAME} does not declare a loadable OMP extension yet; install from a local clone instead`);
+      }
+    }
     results.installed.push('omp');
   } catch (e) {
     warn('  OMP install failed: ' + (e && e.message || e));
