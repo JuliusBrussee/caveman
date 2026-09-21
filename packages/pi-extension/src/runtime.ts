@@ -127,6 +127,13 @@ export function createCavemanRuntime<M extends RoutingModel>(host: RoutingHost<M
   // Invalidate synchronously, even while SessionStart/health/MCP awaits. Stop
   // provider overrides and recovery immediately, then serialize native hooks so
   // an old SessionEnd cannot end the newly navigated session.
+  //
+  // closeGate(previous.ctx) reads previous.ctx.model at shutdown/switch time,
+  // not at the ctx object's construction time — this is only correct because
+  // ctx.model is a live getter over current selection state in both hosts.
+  // Verified for OMP: @oh-my-pi/pi-coding-agent's real session-context
+  // objects define `get model()` reading live agent state, never a captured
+  // snapshot; Pi's createContext() does the same.
   const navigate = (ctx?: CavemanContext<M>) => {
     const next = ++generation;
     const previous = current;
@@ -199,6 +206,10 @@ export function createCavemanRuntime<M extends RoutingModel>(host: RoutingHost<M
       if (requested !== generation) return undefined;
       const state = current;
       if (!state) return undefined;
+      // Provider registration changes (OMP has no model_select event at all;
+      // Pi can refresh its active model without firing one) can leave the
+      // route stale. Recheck before every turn, not just on model_select.
+      if (state.gateDone) await state.router.apply(ctx.model, ctx);
       const response = await state.bridge.call("UserPromptSubmit", {
         session_id: state.id, model: ctx.model?.id, provider: ctx.model?.provider,
         prompt: promptDigest(prompt), task_type: taskType(prompt),

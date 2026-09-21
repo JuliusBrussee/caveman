@@ -6,8 +6,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
-// Run with Bun and a native OMP installation. The manifest entry is the built,
-// published artifact, not a Pi shim or a test-only copy of its source.
+// Run with Bun, loading the real built dist/omp.mjs artifact through a
+// minimal three-method fake host (on/registerTool/setModel) — proves the
+// compiled bundle loads and its exported hooks behave correctly against a
+// controlled host, not that a real OMP AgentSession drives them identically.
 test("published OMP entry preserves prompt blocks and renews recovery across navigation", async () => {
   const root = mkdtempSync(join(tmpdir(), "caveman-omp-"));
   const server = createServer((_req, res) => { res.writeHead(200, { "x-caveman-instance": "test" }); res.end("{}"); });
@@ -119,3 +121,16 @@ process.stdin.on("end", () => {
     rmSync(root, { recursive: true, force: true });
   }
 }, 30_000);
+
+// scripts/bundle.mjs marks @earendil-works/*, @oh-my-pi/*, and typebox
+// external for BOTH bundles. A shared module (runtime.ts, lifecycle.ts, ...)
+// that gains a runtime (non-type-only) import from the wrong host's package
+// would compile silently — esbuild leaves an external bare specifier as-is —
+// and only fail at load time on a real install missing that optional peer.
+test("built bundles never carry a bare specifier for the other host's package", () => {
+  const ompBundle = readFileSync(new URL("../dist/omp.mjs", import.meta.url), "utf8");
+  const piBundle = readFileSync(new URL("../dist/index.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(ompBundle, /from *["']@earendil-works\//, "dist/omp.mjs must not import Pi's package at runtime");
+  assert.doesNotMatch(ompBundle, /from *["']typebox["']/, "dist/omp.mjs must not import typebox at runtime (OMP tools use zod)");
+  assert.doesNotMatch(piBundle, /from *["']@oh-my-pi\//, "dist/index.mjs must not import OMP's package at runtime");
+});
