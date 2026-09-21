@@ -263,7 +263,11 @@ def extract_inline_codes(text):
         "" if FENCE_MARKER_LINE_REGEX.match(line) else line
         for line in text_without_fences.split("\n")
     )
-    return re.findall(r"`([^`]+)`", text_without_fences)
+    # Run-aware pairing (CommonMark): a span opens with a backtick run and
+    # closes with an equal-length run. A mid-line ``` in prose ("inside a
+    # ```diff fence") has no equal closer, so it matches nothing — instead of
+    # its trailing backtick shifting the pairing of every following span.
+    return [m.group(2) for m in re.finditer(r"(?<!`)(`+)([^`]+)\1(?!`)", text_without_fences)]
 
 
 # ---------- Validators ----------
