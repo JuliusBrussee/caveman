@@ -22,7 +22,7 @@ class LockPathTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
                 target_dir = Path(tmp) / "sub"
                 target_dir.mkdir()
-                (target_dir / "task.md").write_text("x")
+                (target_dir / "task.md").write_text("x", encoding="utf-8")
                 resolved = (target_dir / "task.md").resolve()
                 relative_cwd = os.getcwd()
                 try:
@@ -135,13 +135,13 @@ class FileLockTests(unittest.TestCase):
                 lock_path = compress_mod.lock_path_for(target)
                 lock_path.parent.mkdir(parents=True, exist_ok=True)
                 decoy = Path(tmp) / "decoy"
-                decoy.write_text("do not touch")
+                decoy.write_text("do not touch", encoding="utf-8")
                 lock_path.symlink_to(decoy)
 
                 with self.assertRaises(OSError):
                     with compress_mod.file_lock(target):
                         pass  # pragma: no cover - must never be reached
-                self.assertEqual(decoy.read_text(), "do not touch")
+                self.assertEqual(decoy.read_text(encoding="utf-8"), "do not touch")
 
     @unittest.skipIf(compress_mod._IS_WINDOWS, "creating dir symlinks needs elevated privilege on Windows")
     def test_refuses_when_lock_dir_itself_is_a_symlink(self):
@@ -284,7 +284,7 @@ class CompressFileLockIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as data_home:
             with mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
                 sensitive = Path(tmp) / "id_rsa"
-                sensitive.write_text("fake key material")
+                sensitive.write_text("fake key material", encoding="utf-8")
                 with self.assertRaises(ValueError):
                     compress_mod.compress_file(sensitive)
                 self.assertFalse(compress_mod._state_base_dir("locks").exists())
