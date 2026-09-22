@@ -218,3 +218,27 @@ class TestAsyncMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertIn("deadline", [out.reason for out in outcomes])
         self.assertEqual(paths, ["capabilities"] * 4, "expired queued calls never start optimization I/O")
         await runtime.aclose()
+
+    async def test_observe_burst_does_not_starve_concurrent_optimize(self):
+        runtime = AsyncMiddlewareRuntime(deadline_ms=20)
+        release = threading.Event()
+        entered = []
+        def blocked_http(path, *_):
+            if path == "receipts":
+                entered.append(1)
+                release.wait(2)
+                return {}
+            return copy.deepcopy(FIXTURE["capabilities"])
+        runtime._runtime._http = blocked_http
+        receipts = [asyncio.create_task(runtime.observe({"n": i})) for i in range(4)]
+        while len(entered) < 4:
+            await asyncio.sleep(0.001)
+        task = asyncio.create_task(runtime.optimize(**inputs()))
+        # Give the deadline time to expire while optimize would still be
+        # queued behind the receipt burst on a shared, unisolated executor.
+        await asyncio.sleep(0.06)
+        release.set()
+        result = await task
+        await asyncio.gather(*receipts)
+        self.assertNotEqual(result.reason, "deadline", "a receipt burst must not starve an unrelated optimize() call")
+        await runtime.aclose()

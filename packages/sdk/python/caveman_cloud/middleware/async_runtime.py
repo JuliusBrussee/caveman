@@ -90,10 +90,8 @@ class AsyncMiddlewareRuntime:
         return await self._submit(self._runtime.retrieve, scope, **args)
 
     async def observe(self, receipt):
-        try:
-            await self._submit(self._runtime.observe, receipt)
-        except MiddlewareError:
-            pass
+        # Dedicated pool, not the shared executor: mirrors observe_background().
+        self._runtime.observe_background(receipt)
 
     def observe_background(self, receipt):
         return self._runtime.observe_background(receipt)
