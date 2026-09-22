@@ -12,11 +12,16 @@ comparing skills against each other, but the absolute numbers should be
 read as "approximate output-length reduction", not "exact Claude tokens".
 
 Run: uv run --with tiktoken python evals/measure.py
+
+Environment:
+  CAVEMAN_EVAL_LANG  read snapshots/results.<lang>.json instead of the
+                     English results.json (default: en)
 """
 
 from __future__ import annotations
 
 import json
+import os
 import statistics
 import sys
 from pathlib import Path
@@ -35,7 +40,10 @@ for _stream in (sys.stdout, sys.stderr):
 
 
 ENCODING = tiktoken.get_encoding("o200k_base")
-SNAPSHOT = Path(__file__).parent / "snapshots" / "results.json"
+LANG = os.environ.get("CAVEMAN_EVAL_LANG", "en")
+SNAPSHOT = Path(__file__).parent / "snapshots" / (
+    "results.json" if LANG == "en" else f"results.{LANG}.json"
+)
 
 
 def count(text: str) -> int:
@@ -74,6 +82,7 @@ def main() -> None:
         f"_Model: {meta.get('model', '?')} · CLI: {meta.get('claude_cli_version', '?')}_"
     )
     print(f"_Tokenizer: tiktoken o200k_base (approximation of Claude's BPE)_")
+    print(f"_Language: {meta.get('lang', 'en')} · terse control: `{meta.get('terse_prefix', '?')}`_")
     print(
         f"_n = {meta.get('n_prompts', len(baseline_tokens))} prompts, single run per arm_"
     )
@@ -81,7 +90,7 @@ def main() -> None:
     print(f"**Reference arms (no skill):**")
     print(f"- baseline (no system prompt): {sum(baseline_tokens)} tokens total")
     print(
-        f"- terse control (`Answer concisely.`): {sum(terse_tokens)} tokens total "
+        f"- terse control (`{meta.get('terse_prefix', 'Answer concisely.')}`): {sum(terse_tokens)} tokens total "
         f"({fmt_pct(1 - sum(terse_tokens) / sum(baseline_tokens))} vs baseline)"
     )
     print()

@@ -1,0 +1,10 @@
+por que meu componente React renderiza de novo toda vez que o pai atualiza?
+explica connection pooling de banco
+qual a diferença entre TCP e UDP?
+como acho vazamento de memória num processo Node que roda dias?
+o que o EXPLAIN do SQL me diz?
+como hash table trata colisão?
+tô tomando erro de CORS no console, por quê?
+pra que serve debounce num campo de busca?
+git rebase x git merge, qual a diferença?
+quando uso fila e quando uso tópico em mensageria?
