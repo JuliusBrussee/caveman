@@ -73,15 +73,15 @@ jobs:
           - id: hermes
             install: python -m pip install --src "$RUNNER_TEMP/hermes-source" --editable "git+https://github.com/NousResearch/hermes-agent.git@1f8acb340f9c72aec1426248cca54139816a77f5#egg=hermes-agent" && python -c "import sys; from importlib.metadata import version; name, expected = 'hermes-agent==0.19.1'.split('=='); observed = version(name); print(observed); sys.exit(0 if observed == expected else 'Hermes package version mismatch')"
           - id: kilo
-            install: npm install -g @kilocode/cli@7.7.5
+            install: npm install -g @kilocode/cli@7.7.7
           - id: openclaw
             install: npm install -g openclaw@2026.9.5
           - id: opencode
-            install: npm install -g opencode-ai@1.18.31
+            install: npm install -g opencode-ai@1.18.32
           - id: pi
-            install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.86.1
+            install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.0
           - id: qwen
-            install: npm install -g @qwen-code/qwen-code@0.24.2
+            install: npm install -g @qwen-code/qwen-code@0.24.3
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
