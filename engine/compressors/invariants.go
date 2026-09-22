@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -174,6 +175,31 @@ type entry struct {
 // pasted far more freely than the body it replaced.
 var invariantSecretFieldRe = regexp.MustCompile(`(?i)(secret|passw|token|api[_-]?key|authoriz|credential|cookie|session)`)
 
+// invariantNumber parses a field value as a FINITE number, and is the only
+// place in this package that decides whether a value counts as numeric.
+//
+// strconv.ParseFloat is not that test on its own: it also accepts "NaN",
+// "Inf", "-Infinity" and friends, which is exactly how a CSV or logfmt export
+// spells a missing or undefined measurement (pandas, Postgres `numeric` NaN, R).
+// Such a value then parses without error, so the field stays on the numeric
+// track — and every comparison against NaN is false, so it neither widens the
+// range nor removes the field from it. The unit lands inside a run the marker
+// goes on to describe as `name=min..max`, stating a bound that unit does not
+// satisfy, with nothing in the compressed view left to say otherwise.
+//
+// That is the one claim this file may never make. A non-finite value is
+// therefore not a number here: the field leaves the numeric track and falls
+// through to enumeration or coverage, which state only exact, counted facts
+// ("amount: 500x26 NaN x1"). A run whose values are ALL "NaN" is still
+// constant and still reported as such, because that IS verified.
+func invariantNumber(value string) (float64, bool) {
+	n, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+		return 0, false
+	}
+	return n, true
+}
+
 // summarizeElided renders the facts that hold across every unit of one elided
 // run, or "" when there are none, extraction found no structure, or the summary
 // would not fit its budget. elidedBytes is the size of the content the marker
@@ -222,10 +248,10 @@ func summarizeElided(units [][]field, elidedBytes int) string {
 				if len(order) >= invariantMaxTrackedFields {
 					continue
 				}
-				value, err := strconv.ParseFloat(f.value, 64)
+				value, isNumber := invariantNumber(f.value)
 				a = &agg{
 					constant:  true,
-					numeric:   err == nil,
+					numeric:   isNumber,
 					first:     f.value,
 					minStr:    f.value,
 					maxStr:    f.value,
@@ -243,9 +269,9 @@ func summarizeElided(units [][]field, elidedBytes int) string {
 				a.constant = false
 			}
 			if a.numeric {
-				value, err := strconv.ParseFloat(f.value, 64)
+				value, isNumber := invariantNumber(f.value)
 				switch {
-				case err != nil:
+				case !isNumber:
 					a.numeric = false
 				default:
 					if value < a.minVal {
