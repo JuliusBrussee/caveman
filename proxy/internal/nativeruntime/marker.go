@@ -16,7 +16,13 @@ import (
 
 const sessionKeyBytes = 32
 
-var markerPattern = regexp.MustCompile(`\[\[caveman-session-v1 sid="([A-Za-z0-9_-]{1,384})" sig="([0-9a-f]{64})"\]\]`)
+// The marker is injected into a user-message string that later travels inside
+// a JSON request body, where every quote is escaped as \". Both the raw form
+// (sid="...") and the JSON-escaped form (sid=\"...\") must match. RE2 (Go's
+// regexp) has no backreferences, so the two forms are two full alternatives
+// rather than one pattern with an optional backslash — that would also let
+// sid and sig disagree on form, leaving a stray backslash in the output.
+var markerPattern = regexp.MustCompile(`\[\[caveman-session-v1 sid="([A-Za-z0-9_-]{1,384})" sig="([0-9a-f]{64})"\]\]|\[\[caveman-session-v1 sid=\\"([A-Za-z0-9_-]{1,384})\\" sig=\\"([0-9a-f]{64})\\"\]\]`)
 
 // LoadOrCreateSessionKey returns one user-only HMAC key shared by CLI adapters
 // and local proxy. O_EXCL makes concurrent first startup converge on one key.
@@ -92,8 +98,12 @@ func StripSessionMarkers(body, key []byte) (stripped []byte, sessionID string, c
 	last := 0
 	conflict := false
 	for _, match := range matches {
-		encoded := string(body[match[2]:match[3]])
-		signature := string(body[match[4]:match[5]])
+		sidStart, sidEnd, sigStart, sigEnd := match[2], match[3], match[4], match[5]
+		if sidStart == -1 {
+			sidStart, sidEnd, sigStart, sigEnd = match[6], match[7], match[8], match[9]
+		}
+		encoded := string(body[sidStart:sidEnd])
+		signature := string(body[sigStart:sigEnd])
 		expected, decodeErr := hex.DecodeString(markerMAC(key, encoded))
 		actual, signatureErr := hex.DecodeString(signature)
 		decoded, sidErr := base64.RawURLEncoding.DecodeString(encoded)
