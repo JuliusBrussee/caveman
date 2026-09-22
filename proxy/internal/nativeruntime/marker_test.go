@@ -2,6 +2,7 @@ package nativeruntime
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -36,6 +37,54 @@ func TestSessionMarkerIgnoresInvalidSignatureAndConflictingIDsFailCorrelation(t 
 	got, sessionID, changed = StripSessionMarkers(body, key)
 	if !changed || sessionID != "" || bytes.Contains(got, []byte("caveman-session")) {
 		t.Fatalf("conflicting valid markers must strip but not correlate: changed=%v session=%q body=%s", changed, sessionID, got)
+	}
+}
+
+// TestSessionMarkerMatchesJSONEscapedMarkerInRealRequestBody exercises the
+// shape a real HTTP body actually has: the marker sits inside a JSON string,
+// so encoding/json escapes every quote as \". The regex previously only
+// matched the literal, unescaped form, so this never matched in production.
+func TestSessionMarkerMatchesJSONEscapedMarkerInRealRequestBody(t *testing.T) {
+	key := bytes.Repeat([]byte{3}, sessionKeyBytes)
+	marker, err := SessionMarker(key, "claude:host-99")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type block struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	type message struct {
+		Role    string  `json:"role"`
+		Content []block `json:"content"`
+	}
+	type request struct {
+		Messages []message `json:"messages"`
+	}
+	body, err := json.Marshal(request{Messages: []message{{
+		Role:    "user",
+		Content: []block{{Type: "text", Text: "Do the task.\n" + marker}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte(`sid=\"`)) {
+		t.Fatalf("test body does not actually contain an escaped marker: %s", body)
+	}
+
+	stripped, sessionID, changed := StripSessionMarkers(body, key)
+	if !changed || sessionID != "claude:host-99" {
+		t.Fatalf("escaped marker not stripped: changed=%v session=%q body=%s", changed, sessionID, stripped)
+	}
+	if bytes.Contains(stripped, []byte("caveman-session-v1")) {
+		t.Fatalf("marker survived stripping: %s", stripped)
+	}
+	var decoded request
+	if err := json.Unmarshal(stripped, &decoded); err != nil {
+		t.Fatalf("stripped body is no longer valid JSON: %v\nbody: %s", err, stripped)
+	}
+	if decoded.Messages[0].Content[0].Text != "Do the task." {
+		t.Fatalf("stripped text wrong: %q", decoded.Messages[0].Content[0].Text)
 	}
 }
 
