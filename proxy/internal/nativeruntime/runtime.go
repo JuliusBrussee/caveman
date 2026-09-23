@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/engine"
@@ -108,7 +109,7 @@ type Runtime struct {
 	repositoryMaps        map[string]*repositoryMapEntry
 	repositorySessionRefs map[string]string
 	repositoryWarming     map[string]bool
-	repositoryEnded       map[string]bool
+	repositoryEnded       map[string]time.Time
 	activeSessions        map[string]sessionActivity
 	lastActivity          time.Time
 	// detect classifies a tool output so afterTool can tell what the elision
@@ -128,12 +129,17 @@ type repositoryMapEntry struct {
 	done    chan struct{}
 	repoMap repointel.Map
 	err     error
+	// lastAccess is unix nanoseconds of the last time a session created or
+	// read this entry. pruneRepositoryState reclaims entries idle past
+	// repositoryPruneWindow. Atomic because repositoryEvidenceContext and
+	// captureTestImpact only hold repositoryMu.RLock when they touch it.
+	lastAccess atomic.Int64
 }
 
 func newRuntime(store *ccr.Store) *Runtime {
 	return &Runtime{
 		store: store, repositoryMaps: map[string]*repositoryMapEntry{},
-		repositorySessionRefs: map[string]string{}, repositoryWarming: map[string]bool{}, repositoryEnded: map[string]bool{},
+		repositorySessionRefs: map[string]string{}, repositoryWarming: map[string]bool{}, repositoryEnded: map[string]time.Time{},
 		activeSessions: map[string]sessionActivity{}, lastActivity: time.Now(),
 		// A store-less engine: Detect reads only the bytes handed to it.
 		detect: engine.New(nil, nil).Detect,
@@ -259,6 +265,7 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 		r.activeSessions[request.Session.ID] = activity
 	}
 	r.mu.Unlock()
+	r.pruneRepositoryState()
 	response := Response{
 		ProtocolVersion: ProtocolVersion,
 		PolicyMode:      policyMode,
@@ -543,6 +550,7 @@ func (r *Runtime) startRepositoryEvidence(request Request) {
 		entry = &repositoryMapEntry{done: make(chan struct{})}
 		r.repositoryMaps[key] = entry
 	}
+	entry.lastAccess.Store(time.Now().UnixNano())
 	r.repositoryWarming[request.Session.ID] = true
 	r.repositoryMu.Unlock()
 
@@ -574,7 +582,7 @@ func (r *Runtime) startRepositoryEvidence(request Request) {
 		if err == nil {
 			var id string
 			r.repositoryMu.Lock()
-			if r.repositoryEnded[request.Session.ID] {
+			if !r.repositoryEnded[request.Session.ID].IsZero() {
 				delete(r.repositoryWarming, request.Session.ID)
 				r.repositoryMu.Unlock()
 				return
@@ -597,9 +605,35 @@ func (r *Runtime) startRepositoryEvidence(request Request) {
 
 func (r *Runtime) markRepositorySessionEnded(sessionID string) {
 	r.repositoryMu.Lock()
-	r.repositoryEnded[sessionID] = true
+	r.repositoryEnded[sessionID] = time.Now()
 	delete(r.repositoryWarming, sessionID)
 	r.repositoryMu.Unlock()
+}
+
+// repositoryPruneWindow mirrors the activeSessions lazy-prune window in
+// Handle: repository-evidence bookkeeping for a session or a (CWD,
+// RepositoryState) key untouched this long belongs to nothing still running.
+const repositoryPruneWindow = 30 * time.Minute
+
+// pruneRepositoryState reclaims repositoryEnded, repositorySessionRefs and
+// repositoryMaps entries idle past repositoryPruneWindow. There is no
+// background ticker for this state, same as activeSessions: it only shrinks
+// when the next request drives it.
+func (r *Runtime) pruneRepositoryState() {
+	now := time.Now()
+	r.repositoryMu.Lock()
+	defer r.repositoryMu.Unlock()
+	for sessionID, endedAt := range r.repositoryEnded {
+		if now.Sub(endedAt) >= repositoryPruneWindow {
+			delete(r.repositoryEnded, sessionID)
+			delete(r.repositorySessionRefs, sessionID)
+		}
+	}
+	for key, entry := range r.repositoryMaps {
+		if now.Sub(time.Unix(0, entry.lastAccess.Load())) >= repositoryPruneWindow {
+			delete(r.repositoryMaps, key)
+		}
+	}
 }
 
 func (r *Runtime) transitionAfterCompaction(sessionID string) error {
@@ -652,6 +686,7 @@ func (r *Runtime) repositoryEvidenceContext(request Request) (string, string, er
 	if entry == nil {
 		return "Caveman repository evidence: unavailable; no path claims injected.", "", nil
 	}
+	entry.lastAccess.Store(time.Now().UnixNano())
 	select {
 	case <-entry.done:
 		r.repositoryMu.RLock()
@@ -1202,6 +1237,7 @@ func (r *Runtime) captureTestImpact(request Request, changedPath string) {
 	if entry == nil {
 		return
 	}
+	entry.lastAccess.Store(time.Now().UnixNano())
 	select {
 	case <-entry.done:
 		r.repositoryMu.RLock()
