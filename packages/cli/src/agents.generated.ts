@@ -111,10 +111,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "2.1.278",
+    "tested_agent_version": "2.1.280",
     "injection_completeness": "builder-assisted",
-    "last_verified_at": "2026-09-21",
-    "verified_by": "local pinned-binary probe (claude 2.1.278, agents/probe-installed.mjs)",
+    "last_verified_at": "2026-09-23",
+    "verified_by": "local pinned-binary probe (claude 2.1.280, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -148,10 +148,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "0.155.1",
+    "tested_agent_version": "0.156.1",
     "injection_completeness": "code-only",
-    "last_verified_at": "2026-09-21",
-    "verified_by": "local pinned-binary probe (codex 0.155.1, agents/probe-installed.mjs)",
+    "last_verified_at": "2026-09-23",
+    "verified_by": "local pinned-binary probe (codex 0.156.1, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -492,10 +492,10 @@ export const PROFILES: AgentProfile[] = [
     "command_hook": {
       "method": "pi-extension"
     },
-    "tested_agent_version": "0.87.0",
+    "tested_agent_version": "0.87.1",
     "injection_completeness": "builder-assisted",
-    "last_verified_at": "2026-09-21",
-    "verified_by": "local pinned-binary probe (pi 0.87.0, agents/probe-installed.mjs)",
+    "last_verified_at": "2026-09-23",
+    "verified_by": "local pinned-binary probe (pi 0.87.1, agents/probe-installed.mjs)",
     "fallback": "none",
     "maintainer": null
   },
@@ -511,7 +511,7 @@ export const PROFILES: AgentProfile[] = [
     "args": [
       "--extensions=none"
     ],
-    "install": "npm i -g @qwen-code/qwen-code@0.24.3",
+    "install": "npm i -g @qwen-code/qwen-code@0.24.4",
     "wire_protocol": "openai-chat",
     "injection": {
       "method": "config-file",
@@ -757,10 +757,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "X-Cave-Agent"
     },
-    "tested_agent_version": "0.24.3",
+    "tested_agent_version": "0.24.4",
     "injection_completeness": "declarative",
-    "last_verified_at": "2026-09-21",
-    "verified_by": "local pinned-binary route probe (@qwen-code/qwen-code 0.24.3)",
+    "last_verified_at": "2026-09-23",
+    "verified_by": "local pinned-binary route probe (@qwen-code/qwen-code 0.24.4)",
     "fallback": "generic-env",
     "maintainer": null
   }
