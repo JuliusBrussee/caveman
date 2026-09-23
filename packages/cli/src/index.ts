@@ -896,6 +896,45 @@ function telemetryTokenWatermarkFromDisk(): TelemetryTokenWatermark | null {
   }
 }
 
+// telemetryClaimLockPath is the sidecar used to serialize the read-compare-write
+// below across OS processes; it sits beside config.json so its permission and
+// cross-filesystem behavior always matches the file it protects.
+function telemetryClaimLockPath(): string {
+  return `${configPath()}.telemetry.lock`;
+}
+
+// A lock older than this is presumed abandoned by a crashed holder; kept far
+// above a real claim's own write time and above any waiter's acquire budget,
+// so a slow but live holder is never mistaken for a dead one.
+const TELEMETRY_CLAIM_LOCK_STALE_MS = 5000;
+
+// acquireTelemetryClaimLock spins on an atomic O_CREAT|O_EXCL create until it
+// wins the lock or the budget runs out; a lock older than
+// TELEMETRY_CLAIM_LOCK_STALE_MS is treated as abandoned and reclaimed.
+function acquireTelemetryClaimLock(lockPath: string, budgetMs: number): boolean {
+  try {
+    mkdirSync(dirname(lockPath), { recursive: true });
+  } catch {
+    return false;
+  }
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    try {
+      closeSync(openSync(lockPath, "wx"));
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return false;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > TELEMETRY_CLAIM_LOCK_STALE_MS) unlinkSync(lockPath);
+      } catch {
+        /* raced the holder releasing it; loop back to the create attempt */
+      }
+      if (Date.now() >= deadline) return false;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+}
+
 // telemetryTokenDelta returns what to report for THIS event and advances the
 // watermark to the totals it read. The send is fire-and-forget, so a dropped POST
 // loses that delta rather than replaying it — undercounting beats double-counting
@@ -916,11 +955,13 @@ function telemetryTokenDelta(): { processed: number; saved: number; basis: strin
   const saved = prior && !rewound ? Math.max(0, totals.tokensSaved - prior.tokensSaved) : 0;
   const rebaselining = prior === null || rewound;
   if (processed === 0 && saved === 0 && !rebaselining) return null;
-  // Claim the delta optimistically: two CLI processes exiting together would
-  // otherwise read the same watermark and both report the same tokens, inflating
-  // a savings figure. Whoever writes second sees the watermark already moved and
-  // reports nothing.
+  // Claim the delta under a lock, not a bare compare: two processes exiting
+  // together can both read the pre-write watermark before either commits (see
+  // the regression test below).
+  const lockPath = telemetryClaimLockPath();
+  if (!acquireTelemetryClaimLock(lockPath, 500)) return null;
   let claimed = true;
+  let readOnly = false;
   try {
     mutateRawConfig((out) => {
       const current = parseTelemetryTokenWatermark(out.telemetryTokens);
@@ -935,10 +976,11 @@ function telemetryTokenDelta(): { processed: number; saved: number; basis: strin
       } satisfies TelemetryTokenWatermark;
     });
   } catch {
-    // Read-only home: report nothing rather than resend the same delta forever.
-    return null;
+    readOnly = true; // Read-only home: report nothing rather than resend the same delta forever.
+  } finally {
+    try { unlinkSync(lockPath); } catch { /* already gone */ }
   }
-  if (!claimed) return null;
+  if (readOnly || !claimed) return null;
   if (processed === 0 && saved === 0) return null;
   return { processed, saved, basis: totals.basis };
 }

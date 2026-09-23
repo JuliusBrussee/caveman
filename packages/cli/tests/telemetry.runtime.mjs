@@ -423,6 +423,72 @@ test("command_run carries the proxy token delta, then stops repeating it", async
   stub.close();
 });
 
+// delayConfigWrite wires a --require preload that stalls fs.writeFileSync for
+// delayMs when the target path is this run's config.json, widening the gap
+// between reading and committing the watermark the way process jitter can.
+function delayConfigWrite(env, home, delayMs) {
+  const dir = mkdtempSync(join(tmpdir(), "cave-delay-"));
+  const preload = join(dir, "delay-write.cjs");
+  writeFileSync(preload, [
+    'const fs = require("node:fs");',
+    "const target = process.env.CAVEMAN_TEST_DELAY_CONFIG_PATH;",
+    "const ms = Number(process.env.CAVEMAN_TEST_DELAY_WRITE_MS || 0);",
+    "const original = fs.writeFileSync;",
+    "fs.writeFileSync = function (path, ...rest) {",
+    "  if (ms > 0 && target && String(path) === target) {",
+    "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);",
+    "  }",
+    "  return original.call(fs, path, ...rest);",
+    "};",
+  ].join("\n"));
+  return {
+    ...env,
+    NODE_OPTIONS: `${env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ` : ""}--require ${preload}`,
+    CAVEMAN_TEST_DELAY_CONFIG_PATH: join(home, ".caveman-cloud", "config.json"),
+    CAVEMAN_TEST_DELAY_WRITE_MS: String(delayMs),
+  };
+}
+
+// Two `caveman` invocations exiting close together both read the config
+// before either writes back (the timing telemetryTokenDelta's own comment
+// used to claim could not happen); only one may end up claiming the delta.
+test("two CLI processes racing the same watermark do not both claim the delta", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("the --require preload path quoting here is POSIX-only");
+    return;
+  }
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const iso = isolatedEnv({
+    CAVEMAN_TELEMETRY: "1",
+    CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
+  });
+  const configDir = join(iso.home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+    telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-08-01T00:00:00.000Z", promptVersion: 4 },
+    telemetryTokens: { tokensIn: 500, tokensSaved: 100, at: "2026-08-01T00:00:00.000Z" },
+  }));
+  const baseEnv = stubProxyStats(iso, { tokensIn: 1500, tokensSaved: 300 });
+  const racingEnv = delayConfigWrite(baseEnv, iso.home, 1200);
+
+  const [a, b] = await Promise.all([runCli(["version"], racingEnv), runCli(["version"], racingEnv)]);
+  assert.equal(a.code, 0, a.stderr);
+  assert.equal(b.code, 0, b.stderr);
+
+  const events = stub.posts.flatMap((p) => JSON.parse(p.body));
+  const withTokens = events.filter((e) => "tokens_processed" in e);
+  assert.equal(withTokens.length, 1, "exactly one of the two racing processes may claim the delta");
+  assert.equal(withTokens[0].tokens_processed, 1000);
+  assert.equal(withTokens[0].tokens_saved, 200);
+
+  const watermark = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).telemetryTokens;
+  assert.equal(watermark.tokensIn, 1500, "the watermark still advances to the real total");
+
+  stub.close();
+});
+
 // The seeding rule has to survive the off/on boundary: tokens processed while
 // telemetry was off belong to the opt-out window and are never reported later.
 test("telemetry off drops the token watermark so re-enabling re-seeds", async (t) => {
