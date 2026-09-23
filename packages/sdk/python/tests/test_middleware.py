@@ -218,3 +218,56 @@ class TestAsyncMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertIn("deadline", [out.reason for out in outcomes])
         self.assertEqual(paths, ["capabilities"] * 4, "expired queued calls never start optimization I/O")
         await runtime.aclose()
+
+    async def test_shutdown_from_another_thread_never_leaks_a_bare_runtimeerror(self):
+        # guarded_submit blocks the event loop thread, so the trigger below
+        # must run on a plain OS thread, not an awaited coroutine.
+        runtime = AsyncMiddlewareRuntime()
+        entered_submit, release_submit = threading.Event(), threading.Event()
+        real_submit = runtime._executor.submit
+
+        def guarded_submit(*args, **kwargs):
+            entered_submit.set()
+            release_submit.wait(2)
+            return real_submit(*args, **kwargs)
+
+        runtime._executor.submit = guarded_submit
+
+        def trigger_shutdown_mid_submit():
+            entered_submit.wait(2)
+            shutdown_thread = threading.Thread(target=runtime._shutdown_now)
+            shutdown_thread.start()
+            # Do not wait for shutdown_thread here: the fix makes it block on
+            # the lock _submit holds until release_submit fires below.
+            time.sleep(0.05)
+            release_submit.set()
+            shutdown_thread.join(2)
+
+        watcher = threading.Thread(target=trigger_shutdown_mid_submit)
+        watcher.start()
+        try:
+            result = await runtime._submit(lambda: "ok")
+        except MiddlewareError as error:
+            self.assertEqual(error.code, "closed")
+        else:
+            self.assertEqual(result, "ok")
+        watcher.join(2)
+
+    async def test_shutdown_completing_between_the_two_checks_still_raises_closed_and_frees_the_slot(self):
+        # Forces _shutdown_now to complete strictly between _submit's two
+        # checks, deterministically, by closing from inside the slot acquire.
+        runtime = AsyncMiddlewareRuntime()
+        real_acquire = runtime._slots.acquire
+
+        def acquire_then_close_first(*args, **kwargs):
+            runtime._shutdown_now()
+            return real_acquire(*args, **kwargs)
+
+        runtime._slots.acquire = acquire_then_close_first
+        with self.assertRaisesRegex(MiddlewareError, "closed"):
+            await runtime._submit(lambda: "ok")
+        # The failed submit must not have leaked the slot it acquired.
+        reacquired = [runtime._slots.acquire(blocking=False) for _ in range(16)]
+        self.assertTrue(all(reacquired))
+        for _ in range(16):
+            runtime._slots.release()

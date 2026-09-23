@@ -20,6 +20,8 @@ class AsyncMiddlewareRuntime:
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="caveman-middleware")
         self._slots = threading.BoundedSemaphore(16)
         self._closed = False
+        # Serializes _closed with _shutdown_now, which can run on another thread.
+        self._lifecycle_lock = threading.Lock()
 
     @classmethod
     def from_sync(cls, runtime: MiddlewareRuntime):
@@ -34,8 +36,9 @@ class AsyncMiddlewareRuntime:
         return instance
 
     def _shutdown_now(self):
-        self._closed = True
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        with self._lifecycle_lock:
+            self._closed = True
+            self._executor.shutdown(wait=False, cancel_futures=True)
 
     @property
     def mode(self):
@@ -102,7 +105,7 @@ class AsyncMiddlewareRuntime:
         return await self._submit(self._runtime.delete_session, scope)
 
     async def aclose(self):
-        self._closed = True
+        self._shutdown_now()
         if self._owns_runtime:
             self._runtime.close()
         await asyncio.to_thread(self._executor.shutdown, wait=True, cancel_futures=True)
@@ -120,7 +123,12 @@ class AsyncMiddlewareRuntime:
             raise MiddlewareError("capacity")
         context = contextvars.copy_context()
         try:
-            future = self._executor.submit(context.run, functools.partial(function, *args, **kwargs))
+            # Re-checked under the lock: the fast check above cannot rule out
+            # a shutdown landing between it and the submit call below.
+            with self._lifecycle_lock:
+                if self._closed:
+                    raise MiddlewareError("closed")
+                future = self._executor.submit(context.run, functools.partial(function, *args, **kwargs))
         except BaseException:
             self._slots.release()
             raise
