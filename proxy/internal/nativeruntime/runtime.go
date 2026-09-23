@@ -107,7 +107,7 @@ type Runtime struct {
 	sessionLocks          [64]sync.Mutex
 	repositoryMu          sync.RWMutex
 	repositoryMaps        map[string]*repositoryMapEntry
-	repositorySessionRefs map[string]string
+	repositorySessionRefs map[string]repositorySessionRef
 	repositoryWarming     map[string]bool
 	repositoryEnded       map[string]time.Time
 	activeSessions        map[string]sessionActivity
@@ -125,6 +125,15 @@ type sessionActivity struct {
 	Model    string
 }
 
+// repositorySessionRef is the stored repository-map object for one session,
+// with the last time that session created or read it. The timestamp is what
+// lets pruneRepositoryState reclaim a session whose host disappeared without
+// ever sending session.end, which repositoryEnded alone cannot see.
+type repositorySessionRef struct {
+	id string
+	at time.Time
+}
+
 type repositoryMapEntry struct {
 	done    chan struct{}
 	repoMap repointel.Map
@@ -139,7 +148,7 @@ type repositoryMapEntry struct {
 func newRuntime(store *ccr.Store) *Runtime {
 	return &Runtime{
 		store: store, repositoryMaps: map[string]*repositoryMapEntry{},
-		repositorySessionRefs: map[string]string{}, repositoryWarming: map[string]bool{}, repositoryEnded: map[string]time.Time{},
+		repositorySessionRefs: map[string]repositorySessionRef{}, repositoryWarming: map[string]bool{}, repositoryEnded: map[string]time.Time{},
 		activeSessions: map[string]sessionActivity{}, lastActivity: time.Now(),
 		// A store-less engine: Detect reads only the bytes handed to it.
 		detect: engine.New(nil, nil).Detect,
@@ -541,7 +550,7 @@ func (r *Runtime) startRepositoryEvidence(request Request) {
 	// was never closed (the warming goroutine below only starts when !exists), so
 	// the next request for that key blocked its waiter forever and
 	// repositoryWarming stayed true for the rest of the session.
-	if r.repositorySessionRefs[request.Session.ID] != "" || r.repositoryWarming[request.Session.ID] {
+	if r.repositorySessionRefs[request.Session.ID].id != "" || r.repositoryWarming[request.Session.ID] {
 		r.repositoryMu.Unlock()
 		return
 	}
@@ -593,7 +602,7 @@ func (r *Runtime) startRepositoryEvidence(request Request) {
 				Currentness: ccr.Current, Lifecycle: ccr.Warm, Data: data,
 			})
 			if err == nil {
-				r.repositorySessionRefs[request.Session.ID] = id
+				r.repositorySessionRefs[request.Session.ID] = repositorySessionRef{id: id, at: time.Now()}
 			}
 			r.repositoryMu.Unlock()
 		}
@@ -627,6 +636,16 @@ func (r *Runtime) pruneRepositoryState() {
 		if now.Sub(endedAt) >= repositoryPruneWindow {
 			delete(r.repositoryEnded, sessionID)
 			delete(r.repositorySessionRefs, sessionID)
+		}
+	}
+	// repositoryEnded is only ever written by session.end, so keying the ref
+	// prune off it alone retains a ref forever for any host that disappeared
+	// without sending one. Prune by idleness too, exactly as the activeSessions
+	// sweep in Handle already does for the same reason.
+	for sessionID, ref := range r.repositorySessionRefs {
+		if now.Sub(ref.at) >= repositoryPruneWindow {
+			delete(r.repositorySessionRefs, sessionID)
+			delete(r.repositoryEnded, sessionID)
 		}
 	}
 	for key, entry := range r.repositoryMaps {
@@ -679,10 +698,17 @@ func (r *Runtime) repositoryEvidenceContext(request Request) (string, string, er
 	}
 	r.startRepositoryEvidence(request)
 	key := repositoryKey(request.Session)
-	r.repositoryMu.RLock()
+	r.repositoryMu.Lock()
 	entry := r.repositoryMaps[key]
-	mapRef := r.repositorySessionRefs[request.Session.ID]
-	r.repositoryMu.RUnlock()
+	ref := r.repositorySessionRefs[request.Session.ID]
+	mapRef := ref.id
+	// Touch on read as well as on write: a live session that keeps asking for
+	// evidence must never have its own ref pruned out from under it.
+	if mapRef != "" {
+		ref.at = time.Now()
+		r.repositorySessionRefs[request.Session.ID] = ref
+	}
+	r.repositoryMu.Unlock()
 	if entry == nil {
 		return "Caveman repository evidence: unavailable; no path claims injected.", "", nil
 	}

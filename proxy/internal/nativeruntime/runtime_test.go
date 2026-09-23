@@ -1547,3 +1547,64 @@ func TestRepositoryStatePrunedAfterIdleWindow(t *testing.T) {
 			recentEndedThere, recentRefThere, recentMapThere)
 	}
 }
+
+// A host can disappear without ever sending session.end. repositoryEnded is
+// only written by session.end, so a ref prune keyed off it alone keeps one
+// entry per abandoned session forever — the same failure mode the activeSessions
+// sweep in Handle already guards against.
+func TestAbandonedSessionRepositoryRefsPrunedAfterIdleWindow(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "handler.go"), []byte("package main\n\nfunc Serve() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	r := New(store)
+
+	start := func(sessionID, repoState string) {
+		session := Session{ID: sessionID, CWD: root, RepositoryState: repoState}
+		if _, err := r.Handle(context.Background(), Request{
+			ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "claude"},
+			Session: session, Event: Event{Type: "session.start"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		waitForRepositoryMap(t, store, sessionID)
+		// Deliberately no session.end.
+	}
+	start("abandoned-session", "git:abandoned")
+	start("live-session", "git:live")
+
+	// Age only the abandoned session's ref. The live session is the positive
+	// control: a ref must never be pruned out from under a session still asking.
+	r.repositoryMu.Lock()
+	ref, ok := r.repositorySessionRefs["abandoned-session"]
+	if !ok {
+		r.repositoryMu.Unlock()
+		t.Fatal("abandoned session has no repositorySessionRefs entry to age")
+	}
+	ref.at = time.Now().Add(-2 * repositoryPruneWindow)
+	r.repositorySessionRefs["abandoned-session"] = ref
+	r.repositoryMu.Unlock()
+
+	if _, err := r.Handle(context.Background(), Request{
+		ProtocolVersion: 1, Agent: Agent{ID: "claude", Surface: "cli"},
+		Session: Session{ID: "unrelated-poke"}, Event: Event{Type: "prompt.submit"}, PolicyMode: "record",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r.repositoryMu.RLock()
+	_, abandonedThere := r.repositorySessionRefs["abandoned-session"]
+	_, liveThere := r.repositorySessionRefs["live-session"]
+	r.repositoryMu.RUnlock()
+	if abandonedThere {
+		t.Fatal("repositorySessionRefs retained for a session that never sent session.end")
+	}
+	if !liveThere {
+		t.Fatal("repositorySessionRefs pruned for a session still inside the idle window")
+	}
+}
