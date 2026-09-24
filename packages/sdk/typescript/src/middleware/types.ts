@@ -232,7 +232,7 @@ export type ReasonCode =
   | 'unsupported_shape' | 'redirect_refused' | 'unauthorized' | 'forbidden_origin' | 'forbidden_namespace' | 'invalid_request'
   | 'payload_limit' | 'not_found' | 'deleted' | 'expired' | 'epoch_changed' | 'identity_conflict' | 'quota_exceeded'
   | 'not_smaller' | 'cache_state_unavailable' | 'recovery_unavailable' | 'protected' | 'record' | 'eligible' | 'disabled'
-  | 'invalid_endpoint' | 'remote_content_not_enabled' | 'insecure_transport_not_enabled';
+  | 'invalid_endpoint' | 'remote_content_not_enabled' | 'insecure_transport_not_enabled' | 'invalid_configuration';
 export interface ReasonPolicy { readonly breaker: boolean; readonly warn_once: boolean; readonly strict: 'raise' | 'ready' | 'none' }
 export const REASON_CATALOG: Readonly<Record<ReasonCode, ReasonPolicy>> = Object.freeze({
   adapter_error: { breaker: false, warn_once: true, strict: 'raise' },
@@ -250,6 +250,7 @@ export const REASON_CATALOG: Readonly<Record<ReasonCode, ReasonPolicy>> = Object
   forbidden_origin: { breaker: false, warn_once: true, strict: 'raise' },
   identity_conflict: { breaker: false, warn_once: true, strict: 'none' },
   insecure_transport_not_enabled: { breaker: false, warn_once: true, strict: 'ready' },
+  invalid_configuration: { breaker: false, warn_once: true, strict: 'ready' },
   invalid_endpoint: { breaker: false, warn_once: true, strict: 'ready' },
   invalid_plan: { breaker: true, warn_once: true, strict: 'raise' },
   invalid_request: { breaker: false, warn_once: true, strict: 'raise' },

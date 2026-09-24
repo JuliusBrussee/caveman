@@ -153,6 +153,11 @@
       "warn_once": true,
       "strict": "ready"
     },
+    "invalid_configuration": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "ready"
+    },
     "invalid_endpoint": {
       "breaker": false,
       "warn_once": true,

@@ -155,6 +155,7 @@ REASON_CATALOG: Final[Mapping[str, ReasonPolicy]] = MappingProxyType({
     "forbidden_origin": ReasonPolicy(False, True, "raise"),
     "identity_conflict": ReasonPolicy(False, True, "none"),
     "insecure_transport_not_enabled": ReasonPolicy(False, True, "ready"),
+    "invalid_configuration": ReasonPolicy(False, True, "ready"),
     "invalid_endpoint": ReasonPolicy(False, True, "ready"),
     "invalid_plan": ReasonPolicy(True, True, "raise"),
     "invalid_request": ReasonPolicy(False, True, "raise"),

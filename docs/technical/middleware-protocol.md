@@ -308,7 +308,7 @@ strict mode:
   `preflight()`, which reports unavailable. The request path passes through.
 - `none`: never an error.
 
-Nothing raises at wrap or construction time.
+Nothing raises at wrap time, and configuration errors never raise at construction.
 
 | Code | Meaning | Breaker | Warn | Strict |
 |---|---|---|---|---|
@@ -333,6 +333,7 @@ Nothing raises at wrap or construction time.
 | `unsupported_shape` | Candidate id invalid/duplicate or content ill-formed Unicode (per candidate) | no | yes | raise |
 | `redirect_refused` | Runtime answered 3xx | yes | yes | raise |
 | `invalid_endpoint`, `remote_content_not_enabled`, `insecure_transport_not_enabled` | Endpoint refused by §15; every call bypasses, no I/O | no | yes | ready |
+| `invalid_configuration` | Invalid option value (`mode`, deadlines, `max_concurrency` outside 1–1024); warns once, every call passes through with no I/O (an invalid `mode` reads as `off`) | no | yes | ready |
 | `unauthorized`, `forbidden_origin`, `forbidden_namespace`, `invalid_request`, `payload_limit`, `not_found`, `deleted`, `quota_exceeded`, `recovery_unavailable` | Server code passed through | no | yes | raise |
 | `epoch_changed`, `identity_conflict`, `cache_state_unavailable` | Server code passed through | no | yes | none |
 | `expired`, `not_smaller` | Server code passed through (natural lifecycle / result) | no | no | none |

@@ -56,9 +56,10 @@ PREFLIGHT_ACTIONS = {
     "redirect_refused": "Configure the runtime origin directly without an HTTP redirect.",
     "invalid_plan": "Check that the endpoint serves the Caveman middleware protocol.",
     "payload_limit": "Check runtime compatibility; the capability response exceeded the SDK limit.",
-    "invalid_endpoint": "Use an http(s) endpoint with an optional path prefix and no credentials, query or fragment.",
-    "remote_content_not_enabled": "Set allow_remote_content=True to send tool results to a non-loopback runtime.",
-    "insecure_transport_not_enabled": "Use https, or set allow_insecure_transport=True for a trusted private network.",
+    "invalid_endpoint": "Set the endpoint to an http(s) URL without credentials, query or fragment.",
+    "remote_content_not_enabled": "Set allow_remote_content to send content to a non-loopback runtime.",
+    "insecure_transport_not_enabled": "Use https, or set allow_insecure_transport for plain HTTP inside a trusted network.",
+    "invalid_configuration": "Check mode, deadline_ms, retrieve_deadline_ms and max_concurrency.",
 }
 _ZERO = DecisionCounts(0, 0, 0, 0, 0, 0, 0, 0, 0)
 _DEADLINE = FailureOutcome("deadline", True, False, None)
@@ -149,8 +150,9 @@ if hasattr(os, "register_at_fork"):
 class MiddlewareRuntime:
     """Synchronous middleware client (experimental API).
 
-    Nothing raises at construction for an endpoint problem: it warns once, every call bypasses with the
-    refusal code, and ready()/preflight() report it. Invalid option types still raise ``invalid_configuration``.
+    Never raises at construction (spec §8): a refused endpoint or an invalid option value warns once, every call
+    passes through with no I/O, and ready() raises / preflight() reports the reason. An invalid ``mode`` reads as
+    ``off``; invalid deadlines or ``max_concurrency`` fall back to their defaults.
     ``transport`` is ``transport(method, url, headers, body, timeout) -> (status, headers, body)``; see
     :mod:`caveman_cloud.middleware.transport`. ``tracer``/``meter`` are optional OpenTelemetry objects.
     """
@@ -161,21 +163,25 @@ class MiddlewareRuntime:
                  strict: bool = False, on_diagnostic: Callable[[dict], None] | None = None,
                  on_report: Callable[[CallReport], None] | None = None, on_decision: Callable[[DecisionEvent], None] | None = None,
                  ssl_context: Any = None, transport: Callable[..., Any] | None = None, tracer: Any = None, meter: Any = None):
-        def positive(value, top=2**53 - 1):
-            return type(value) is int and 0 < value <= top
+        def valid(value, top=2**53 - 1):
+            return value is None or (type(value) is int and 0 < value <= top)
 
-        if (mode not in ("off", "record", "compress") or not positive(max_concurrency, 1024)
-                or any(v is not None and not positive(v) for v in (deadline_ms, retrieve_deadline_ms))):
-            raise MiddlewareError("invalid_configuration")
+        self.mode = mode if mode in ("off", "record", "compress") else "off"
+        self.strict = strict
+        self.max_concurrency = max_concurrency if valid(max_concurrency, 1024) and max_concurrency else MIDDLEWARE_DEFAULTS["max_concurrency"]
         # deadline_ms / retrieve_deadline_ms are overrides; None follows capabilities limits (§10).
-        self.mode, self.strict, self.max_concurrency = mode, strict, max_concurrency
-        self.deadline_ms, self.retrieve_deadline_ms = deadline_ms, retrieve_deadline_ms
+        self.deadline_ms = deadline_ms if valid(deadline_ms) else None
+        self.retrieve_deadline_ms = retrieve_deadline_ms if valid(retrieve_deadline_ms) else None
         self._config_error: str | None = None
         try:
             base = resolve_endpoint(endpoint, allow_remote_content, allow_insecure_transport)
         except MiddlewareError as error:
             base, self._config_error = "", error.code
-            warn_once(None, error.code)
+        if not self._config_error and (self.mode != mode or not valid(max_concurrency, 1024)
+                                       or not valid(deadline_ms) or not valid(retrieve_deadline_ms)):
+            self._config_error = "invalid_configuration"
+        if self._config_error:
+            warn_once(None, self._config_error)
         self.endpoint = base[:-1] if base else endpoint
         self._routes = base + PREFIX[1:]
         url = urlsplit(base)
@@ -251,13 +257,15 @@ class MiddlewareRuntime:
         return self._store(parse_capabilities(self._http("capabilities", None, self._deadlines()[0] / 1000)))
 
     def ready(self) -> dict:
+        if self._config_error:
+            raise MiddlewareError(self._config_error)
         if self.mode == "off":
             raise MiddlewareError("off")
         return copy.deepcopy(self._discover().capabilities)
 
     def preflight(self) -> PreflightReport:
         """Nonthrowing discovery, even in strict mode; sends no candidate content."""
-        if self.mode == "off":
+        if self.mode == "off" and not self._config_error:
             return _preflight_report(self.mode, "disabled")
         try:
             view = self._discover()
@@ -671,7 +679,7 @@ class MiddlewareRuntime:
                 return False
         except (TypeError, ValueError, RecursionError, UnicodeError):
             return False
-        if self.mode == "off" or not self._receipt_slots.acquire(blocking=False):
+        if self.mode == "off" or self._config_error or not self._receipt_slots.acquire(blocking=False):
             return False
         with self._lock:
             slots = self._receipt_slots

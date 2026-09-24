@@ -224,6 +224,11 @@ class TestParityVectors(unittest.TestCase):
             with self.subTest(vector["id"]):
                 self.assertEqual(resolve_proxy(vector["input"]["url"], vector["input"]["env"]), vector["expect"])
 
+    def test_max_retention_seconds_must_be_positive(self):
+        for value, expected in ((0, None), (1, 1), (604800, 604800), (True, None)):
+            with self.subTest(value):
+                self.assertEqual(parse_capabilities({**BASE["capabilities"], "max_retention_seconds": value}).max_retention_seconds, expected)
+
     def test_decision_event_shape(self):
         for example in V11["examples"]["decision_events"]:
             counts = mw_types.DecisionCounts(**example["counts"])
@@ -456,9 +461,26 @@ class TestRuntimeProtocol(unittest.TestCase):
                                  transport=Peer())
         self.addCleanup(mesh.close)
         self.assertEqual((mesh.preflight().reason, mesh.endpoint), ("ready", "http://mesh.svc:8787/rt"))
-        for bad in ({"max_concurrency": 0}, {"max_concurrency": 1025}, {"mode": "compres"}, {"deadline_ms": 0}):
-            with self.subTest(bad), self.assertRaisesRegex(MiddlewareError, "invalid_configuration"):
-                MiddlewareRuntime(**bad)
+        # Invalid option values never raise either: warn once, pass every call through with no I/O, surface from
+        # ready()/preflight(). A bad mode reads as off; bad numbers fall back to defaults (matches the TS SDK).
+        for bad, status in (({"max_concurrency": 0}, "bypassed"), ({"max_concurrency": 1025}, "bypassed"),
+                            ({"mode": "compres"}, "off"), ({"deadline_ms": 0}, "bypassed"), ({"retrieve_deadline_ms": "5"}, "bypassed")):
+            with self.subTest(bad):
+                protocol._warned.clear()
+                with self.assertLogs("caveman.middleware", logging.WARNING) as logs:
+                    runtime = MiddlewareRuntime(strict=True, transport=lambda *_: self.fail("invalid configuration sent a request"), **bad)
+                self.addCleanup(runtime.close)
+                self.assertIn("reason=invalid_configuration", logs.output[0])
+                result = call(runtime, runtime.recovery(SCOPE))
+                self.assertEqual((result.status, result.reason), (status, "invalid_configuration" if status == "bypassed" else "off"))
+                self.assertEqual((runtime.max_concurrency, runtime._deadlines()), (16, (500, 5000)))
+                report = runtime.preflight()
+                self.assertEqual((report.status, report.reason), ("unavailable", "invalid_configuration"))
+                with self.assertRaisesRegex(MiddlewareError, "invalid_configuration"):
+                    runtime.ready()
+                self.assertFalse(runtime.observe_background({"schema_version": 1}))
+        self.assertEqual(MiddlewareRuntime(mode="off", endpoint="ftp://x").preflight().reason, "invalid_endpoint",
+                         "an endpoint refusal takes precedence and still surfaces while off")
 
     def test_scope_normalization_and_recovery_without_raising(self):
         peer = Peer()

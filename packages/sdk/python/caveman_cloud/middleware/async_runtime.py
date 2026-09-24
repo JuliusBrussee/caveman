@@ -89,7 +89,7 @@ class AsyncMiddlewareRuntime:
 
     async def preflight(self):
         """Nonthrowing discovery; caller cancellation still propagates."""
-        if self.mode == "off":
+        if self.mode == "off" and not self._runtime._config_error:
             return _preflight_report(self.mode, "disabled")
         try:
             return await self._submit(self._optimize_s(), False, self._runtime.preflight)

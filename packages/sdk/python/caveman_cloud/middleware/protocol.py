@@ -108,7 +108,7 @@ def parse_capabilities(value: Any) -> CapabilitiesView:
                                 limit("queue_depth", None), limit("retrieve_queue_depth", None), limit("quota_requests_per_minute", None))
     retention = value.get("max_retention_seconds")
     return CapabilitiesView(value, legacy, known, tuple(usable), value["mode"] if value.get("mode") in ("record", "compress") else "record",
-                            effective, retention if _safe(retention) else None)
+                            effective, retention if _positive(retention) else None)
 
 
 def code_outcome(code: str, status: int = 0, retry_after_ms: int | None = None) -> FailureOutcome:
