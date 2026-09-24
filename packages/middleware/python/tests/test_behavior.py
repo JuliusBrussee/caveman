@@ -11,10 +11,21 @@ The five contracts:
 - an invalid scope is recovery-free (``invalid_scope``), never an error;
 - a framework version outside the tested range warns once and skips,
   unless ``accept_framework_version=True``.
+
+Stage 4 adds, for every family: a blackholed runtime (accepts, never answers),
+shutdown before and during a call, and a forked child. For the certified
+families (langchain, openai, anthropic) it adds an image plus a long history,
+and an async caller cancellation while the runtime is slow.
 """
 import asyncio
 import copy
 import json
+import os
+import signal
+import socket
+import threading
+import time
+import warnings
 
 import pytest
 
@@ -586,3 +597,343 @@ def test_out_of_range_version_warns_once_and_skips(family, lenient_runtime, monk
     assert "unsupported_version" in _reasons(lenient_runtime)
     assert "reason=unsupported_version" in caplog.text
     assert _drive(family, lenient_runtime, Scope("tests", "old"), accept_framework_version=True).startswith(MARKER)
+
+
+# ---------------------------------------------------------------- Stage 4 matrix
+
+
+@pytest.fixture
+def blackhole():
+    """A runtime endpoint that accepts connections and never answers: up, but wedged."""
+    server, held = socket.socket(), []
+    server.bind(("127.0.0.1", 0))
+    server.listen(64)
+
+    def accept():
+        while True:
+            try:
+                held.append(server.accept()[0])
+            except OSError:
+                return
+
+    threading.Thread(target=accept, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.getsockname()[1]}"
+    finally:
+        server.close()
+        for connection in held:
+            connection.close()
+
+
+def _runtime(endpoint, deadline_ms):
+    from caveman_cloud.middleware import MiddlewareRuntime
+    reports = []
+    runtime = MiddlewareRuntime(endpoint=endpoint, deadline_ms=deadline_ms, on_report=reports.append)
+    runtime.reports = reports
+    return runtime
+
+
+@pytest.mark.parametrize("family", sorted(DRIVERS))
+def test_blackholed_runtime_passes_the_original_through_at_the_deadline(family, blackhole):
+    from caveman_cloud.middleware import Scope
+    runtime = _runtime(blackhole, 150)
+    try:
+        started = time.monotonic()
+        assert _drive(family, runtime, Scope("tests", "blackholed")) == ORIGINAL
+        assert time.monotonic() - started < 10, "the call waited far past its 150 ms deadline"
+        assert "deadline" in _reasons(runtime)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("family", sorted(DRIVERS))
+def test_closed_runtime_passes_the_original_through(family, lenient_runtime):
+    from caveman_cloud.middleware import Scope
+    require_adapter(family)
+    lenient_runtime.close()
+    assert _drive(family, lenient_runtime, Scope("tests", "closed")) == ORIGINAL
+    assert lenient_runtime.requests == []
+
+
+@pytest.mark.parametrize("family", sorted(DRIVERS))
+def test_close_during_an_in_flight_call_passes_the_original_through_promptly(family, blackhole):
+    from caveman_cloud.middleware import Scope
+    require_adapter(family)
+    runtime = _runtime(blackhole, 20000)
+    threading.Timer(0.2, runtime.close).start()
+    started = time.monotonic()
+    assert _drive(family, runtime, Scope("tests", "shutdown")) == ORIGINAL
+    assert time.monotonic() - started < 10, "close() did not release the in-flight call"
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+@pytest.mark.parametrize("family", sorted(DRIVERS))
+@pytest.mark.parametrize("view", ["sync", "async"])
+def test_forked_child_drives_the_adapter_without_hanging(family, view, lenient_runtime, monkeypatch):
+    """D3: the parent's pools, threads and loops exist before the fork; the child must still finish, and compress."""
+    from caveman_cloud.middleware import Scope
+    require_adapter(family)
+    # macOS only: with no proxy variable set, urllib asks SystemConfiguration, which segfaults in a forked child
+    # (litellm's httpx client does this). Any *_proxy variable skips that lookup; loopback is never proxied anyway.
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    runtime = lenient_runtime if view == "sync" else lenient_runtime.as_async()
+    assert _drive(family, runtime, Scope("tests", "parent")).startswith(MARKER)
+    read, write = os.pipe()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)  # "multi-threaded, use of fork() may lead to deadlocks": the point
+        pid = os.fork()
+    if pid == 0:
+        outcome = b"error"
+        try:
+            text = _drive(family, runtime, Scope("tests", "child"))
+            outcome = b"compressed" if text.startswith(MARKER) else b"original" if text == ORIGINAL else b"other"
+        finally:
+            os.write(write, outcome)
+            os._exit(0)
+    os.close(write)
+    deadline = time.monotonic() + 30
+    while not (waited := os.waitpid(pid, os.WNOHANG))[0]:
+        if time.monotonic() > deadline:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pytest.fail(f"{family} ({view}) hung in a forked child")
+        time.sleep(0.05)
+    outcome = os.read(read, 64)
+    os.close(read)
+    assert outcome == b"compressed", f"child {outcome!r}, exit {os.waitstatus_to_exitcode(waited[1])}"
+
+
+# Certified families with a caller-built history. Each takes (runtime, scope, first_user_content, earlier_turns) and
+# returns (text the provider received for the newest tool result, the provider's first user turn, history intact).
+PNG = "iVBORw0KGgoAAAANSUhEUg=="
+
+
+def earlier(i):
+    """An earlier tool result. Longer than a replacement marker: the test peer replaces every segment it is sent."""
+    return f"earlier result {i} " + "." * 200
+
+
+def _history_openai(runtime, scope, first, turns):
+    from openai import OpenAI
+    from caveman_middleware.openai import with_caveman_openai_tools
+
+    http, received = _openai_http(), []
+
+    def provider(request):
+        received.append(json.loads(request.content))
+        return http.Response(200, json={"id": "c", "object": "chat.completion", "created": 0, "model": "m", "choices": [
+            {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}]})
+
+    def turn(call, content):
+        return [{"role": "assistant", "tool_calls": [{"type": "function", "id": call, "function": {"name": "read_log", "arguments": "{}"}}]},
+                {"role": "tool", "tool_call_id": call, "content": content}]
+
+    messages = [{"role": "user", "content": first("openai")}] + [m for i in range(turns) for m in turn(f"old-{i}", earlier(i))] + turn("call-1", ORIGINAL)
+    same = untouched(messages)
+    tools = [{"type": "function", "function": {"name": "read_log", "description": "Read", "parameters": {"type": "object", "properties": {}}}}]
+    with OpenAI(api_key="test", http_client=http.Client(transport=http.MockTransport(provider))) as client:
+        loop = with_caveman_openai_tools(client, runtime=runtime, scope=scope, protocol="openai-chat", tools=tools, functions={"read_log": lambda _: ORIGINAL})
+        loop.client.chat.completions.create(model="m", tools=loop.tools, messages=messages)
+    return received[0]["messages"][-1]["content"], received[0]["messages"][0], same()
+
+
+def _history_anthropic(runtime, scope, first, turns):
+    import importlib
+    from anthropic import Anthropic, DefaultHttpxClient
+    from anthropic.lib.tools import beta_tool
+    from caveman_middleware._httpx2 import sdk_flavour
+    from caveman_middleware.anthropic import with_caveman_anthropic
+
+    http, received = importlib.import_module(sdk_flavour(DefaultHttpxClient)), []
+
+    def provider(request):
+        received.append(json.loads(request.content))
+        return http.Response(200, json={"id": "msg", "type": "message", "role": "assistant", "model": "m", "stop_reason": "end_turn",
+                                        "stop_sequence": None, "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": 1, "output_tokens": 1}})
+
+    @beta_tool
+    def read_log() -> str:
+        """Read the log."""
+        return ORIGINAL
+
+    def turn(call, content):
+        return [{"role": "assistant", "content": [{"type": "tool_use", "id": call, "name": "read_log", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": call, "content": content}]}]
+
+    messages = [{"role": "user", "content": first("anthropic")}] + [m for i in range(turns) for m in turn(f"toolu_old{i}", earlier(i))] + turn("toolu_1", ORIGINAL)
+    same = untouched(messages)
+    with Anthropic(api_key="test", http_client=http.Client(transport=http.MockTransport(provider))) as client:
+        with_caveman_anthropic(client, runtime=runtime, scope=scope).beta.messages.tool_runner(
+            model="m", max_tokens=16, messages=messages, tools=[read_log]).until_done()
+    return received[0]["messages"][-1]["content"][0]["content"], received[0]["messages"][0], same()
+
+
+def _history_langchain(runtime, scope, first, turns):
+    from langchain.agents.middleware.types import ModelRequest, ModelResponse
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    from caveman_middleware.langchain import with_caveman_agent
+
+    def turn(call, content):
+        return [AIMessage("", tool_calls=[{"id": call, "name": "read_log", "args": {}}]), ToolMessage(content, tool_call_id=call, name="read_log")]
+
+    history = [HumanMessage(content=first("langchain"))] + [m for i in range(turns) for m in turn(f"old-{i}", earlier(i))] + turn("call-1", ORIGINAL)
+    same = untouched(history)
+    agent = with_caveman_agent({"tools": []}, runtime=runtime, scope=scope)
+    request = ModelRequest(model=FakeListChatModel(responses=["unused"]), messages=history, tools=agent["tools"])
+    seen = []
+    agent["middleware"][0].wrap_model_call(request, lambda projected: seen.append(projected.messages) or ModelResponse(result=[AIMessage("done")]))
+    return seen[0][-1].content, seen[0][0].content, same()
+
+
+HISTORIES = {"openai": _history_openai, "anthropic": _history_anthropic, "langchain": _history_langchain}
+IMAGE = {"openai": {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{PNG}"}},
+         "anthropic": {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG}},
+         "langchain": {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{PNG}"}}}
+
+
+@pytest.mark.parametrize("family", sorted(HISTORIES))
+def test_image_and_long_history_still_compress_the_newest_result(family, protocol_runtime):
+    """C5/D6: 2100 earlier tool turns (over 256 candidates and 4096 manifest items) and an image never skip the call."""
+    from caveman_cloud.middleware import Scope
+    require_adapter(family)
+    first = lambda name: [{"type": "text", "text": "summarize"}, IMAGE[name]]  # noqa: E731
+    received, first_turn, intact = HISTORIES[family](protocol_runtime, Scope("tests", "long"), first, 2100)
+    assert received.startswith(MARKER), "the newest tool result was not compressed"
+    assert PNG in json.dumps(first_turn, default=str), "the image did not reach the provider"
+    assert intact, "the caller's history changed"
+    assert len(protocol_runtime.requests) == 1
+    request = protocol_runtime.requests[0]
+    assert any(segment["content"] == ORIGINAL for segment in request["segments"]), "the newest result was not sent"
+    assert len(request["segments"]) <= 256 and len(request["context_manifest"]) <= 4096
+
+
+@pytest.mark.parametrize("family", ["langchain", "openai", "anthropic"])
+def test_async_cancellation_while_the_runtime_is_slow_propagates_promptly(family, blackhole):
+    """An async caller cancelled while optimize waits on a wedged runtime gets CancelledError at once, not at the deadline."""
+    from caveman_cloud.middleware import Scope
+    require_adapter(family)
+    runtime = _runtime(blackhole, 20000)
+
+    async def cancel_after_start():
+        task = asyncio.ensure_future(_async_drive(family, runtime.as_async(), Scope("tests", "cancel")))
+        await asyncio.sleep(0.2)
+        task.cancel()
+        started = time.monotonic()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return time.monotonic() - started
+
+    try:
+        assert asyncio.run(cancel_after_start()) < 5, "cancellation waited for the runtime deadline"
+    finally:
+        runtime.close()
+
+
+async def _async_drive(family, runtime, scope):
+    """One async native call per certified family; the provider must never be reached."""
+    if family == "openai":
+        from openai import AsyncOpenAI
+        http = _openai_http()
+
+        def provider(request):
+            raise AssertionError("a cancelled call reached the provider")
+
+        async with AsyncOpenAI(api_key="test", http_client=http.AsyncClient(transport=http.MockTransport(provider))) as client:
+            wrapped = _openai_tool_loop(client, runtime, scope)
+            return await wrapped.client.chat.completions.create(model="m", tools=wrapped.tools, messages=_chat_history())
+    if family == "anthropic":
+        import importlib
+        from anthropic import AsyncAnthropic, DefaultHttpxClient
+        from anthropic.lib.tools import beta_async_tool
+        from caveman_middleware._httpx2 import sdk_flavour
+        from caveman_middleware.anthropic import with_caveman_anthropic
+        http = importlib.import_module(sdk_flavour(DefaultHttpxClient))
+
+        def provider(request):
+            raise AssertionError("a cancelled call reached the provider")
+
+        @beta_async_tool
+        async def read_log() -> str:
+            """Read the log."""
+            return ORIGINAL
+
+        messages = [{"role": "user", "content": "summarize"},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "read_log", "input": {}}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": ORIGINAL}]}]
+        async with AsyncAnthropic(api_key="test", http_client=http.AsyncClient(transport=http.MockTransport(provider))) as client:
+            runner = with_caveman_anthropic(client, runtime=runtime, scope=scope).beta.messages.tool_runner(
+                model="m", max_tokens=16, messages=messages, tools=[read_log])
+            return await runner.until_done()
+    from langchain.agents.middleware.types import ModelRequest
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    from caveman_middleware.langchain import with_caveman_agent
+    history = [HumanMessage("summarize"), AIMessage("", tool_calls=[{"id": "call-1", "name": "read_log", "args": {}}]),
+               ToolMessage(ORIGINAL, tool_call_id="call-1", name="read_log")]
+    agent = with_caveman_agent({"tools": []}, runtime=runtime, scope=scope)
+    request = ModelRequest(model=FakeListChatModel(responses=["unused"]), messages=history, tools=agent["tools"])
+
+    async def handler(projected):
+        raise AssertionError("a cancelled call reached the model")
+
+    return await agent["middleware"][0].awrap_model_call(request, handler)
+
+
+def _chat_history():
+    return [{"role": "user", "content": "summarize"},
+            {"role": "assistant", "tool_calls": [{"type": "function", "id": "call-1", "function": {"name": "read_log", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call-1", "content": ORIGINAL}]
+
+
+def _openai_tool_loop(client, runtime, scope):
+    from caveman_middleware.openai import with_caveman_openai_tools
+    tools = [{"type": "function", "function": {"name": "read_log", "description": "Read", "parameters": {"type": "object", "properties": {}}}}]
+
+    async def read_log(_):
+        return ORIGINAL
+
+    return with_caveman_openai_tools(client, runtime=runtime, scope=scope, protocol="openai-chat", tools=tools, functions={"read_log": read_log})
+
+
+def test_anthropic_tool_runner_executes_recovery_and_the_model_receives_the_exact_original(protocol_runtime):
+    """openai and langchain recovery run in their native suites; this is the anthropic tool_runner's."""
+    import importlib
+    import re
+    from anthropic import Anthropic, DefaultHttpxClient
+    from anthropic.lib.tools import beta_tool
+    from caveman_cloud.middleware import Scope
+    from caveman_middleware._httpx2 import sdk_flavour
+    from caveman_middleware.anthropic import with_caveman_anthropic
+    require_adapter("anthropic")
+    http, received = importlib.import_module(sdk_flavour(DefaultHttpxClient)), []
+
+    def provider(request):
+        body = json.loads(request.content)
+        received.append(body)
+        if len(received) == 1:
+            handle = re.search(r"handle=(cmw_[a-f0-9]{48})\]", body["messages"][-1]["content"][0]["content"]).group(1)
+            content, stop = [{"type": "tool_use", "id": "toolu_r", "name": "caveman_retrieve", "input": {"handle": handle}}], "tool_use"
+        else:
+            content, stop = [{"type": "text", "text": "done"}], "end_turn"
+        return http.Response(200, json={"id": "msg", "type": "message", "role": "assistant", "model": "m", "stop_reason": stop,
+                                        "stop_sequence": None, "content": content, "usage": {"input_tokens": 1, "output_tokens": 1}})
+
+    @beta_tool
+    def read_log() -> str:
+        """Read the log."""
+        return ORIGINAL
+
+    messages = [{"role": "user", "content": "summarize"},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "read_log", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": ORIGINAL}]}]
+    same = untouched(messages)
+    with Anthropic(api_key="test", http_client=http.Client(transport=http.MockTransport(provider))) as client:
+        with_caveman_anthropic(client, runtime=protocol_runtime, scope=Scope("tests", "recover")).beta.messages.tool_runner(
+            model="m", max_tokens=16, messages=messages, tools=[read_log]).until_done()
+    assert same()
+    assert received[0]["messages"][-1]["content"][0]["content"].startswith(MARKER)
+    result = next(block for block in received[1]["messages"][-1]["content"] if block.get("tool_use_id") == "toolu_r")
+    text = result["content"] if isinstance(result["content"], str) else "".join(block["text"] for block in result["content"])
+    assert ORIGINAL in text or json.loads(text)["text"] == ORIGINAL, "the model did not receive the exact original"
+    assert len(protocol_runtime.retrievals) == 1
