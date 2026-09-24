@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://caveman.so/schemas/middleware-optimize.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-optimize.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -24,19 +24,19 @@
       "const": 1
     },
     "request_id": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
     },
     "logical_call_id": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
     },
     "attempt_id": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
     },
     "idempotency_key": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
     },
     "scope": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/scope"
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/scope"
     },
     "sequence": {
       "type": "integer",
@@ -44,12 +44,12 @@
       "maximum": 9007199254740991
     },
     "adapter": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/adapter"
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/adapter"
     },
     "model": {
       "oneOf": [
         {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/model"
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/model"
         },
         {
           "type": "null"
@@ -63,26 +63,26 @@
       ]
     },
     "policy": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/policy"
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/policy"
     },
     "segments": {
       "type": "array",
       "items": {
-        "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/segment"
+        "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/segment"
       },
       "maxItems": 256
     },
     "context_manifest": {
       "type": "array",
       "items": {
-        "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/manifest_item"
+        "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/manifest_item"
       },
       "maxItems": 4096
     },
     "recovery_binding": {
       "oneOf": [
         {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/binding"
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/binding"
         },
         {
           "type": "null"

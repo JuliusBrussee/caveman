@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-session-delete-response.schema.json",
+  "title": "Caveman middleware sessions/delete response",
+  "description": "Protocol 1.1 runtimes always send originals_deleted true and deleted counts; protocol 1.0 runtimes sent originals_deleted false and no counts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "originals_deleted"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "status": {
+      "const": "revoked"
+    },
+    "originals_deleted": {
+      "type": "boolean"
+    },
+    "deleted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopes",
+        "choices",
+        "grants",
+        "originals"
+      ],
+      "properties": {
+        "scopes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "choices": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "grants": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "originals": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    }
+  }
+}

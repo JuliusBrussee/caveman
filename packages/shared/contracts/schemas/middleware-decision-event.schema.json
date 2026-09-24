@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-decision-event.schema.json",
+  "title": "Caveman middleware decision event",
+  "description": "Client-side, content-free record of one native call decision. Emitted once per report(); never sent to the runtime.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "reason",
+    "adapter",
+    "logical_call_id",
+    "attempt_id",
+    "transform_ids",
+    "latency_ms",
+    "counts",
+    "runtime_build",
+    "cache_continuity"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "status": {
+      "enum": [
+        "applied",
+        "reused",
+        "skipped",
+        "recorded",
+        "disabled"
+      ]
+    },
+    "reason": {
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/reason"
+    },
+    "adapter": {
+      "oneOf": [
+        {
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "logical_call_id": {
+      "oneOf": [
+        {
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "attempt_id": {
+      "oneOf": [
+        {
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "transform_ids": {
+      "type": "array",
+      "items": {
+        "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+      },
+      "maxItems": 128,
+      "uniqueItems": true
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidates",
+        "sent",
+        "protected",
+        "opaque",
+        "unsupported",
+        "budget_skipped",
+        "skipped",
+        "replaced",
+        "reused"
+      ],
+      "properties": {
+        "candidates": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "protected": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "opaque": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unsupported": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "budget_skipped": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "replaced": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reused": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "runtime_build": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cache_continuity": {
+      "enum": [
+        "persistent_choices",
+        "unavailable",
+        "off"
+      ]
+    }
+  }
+}

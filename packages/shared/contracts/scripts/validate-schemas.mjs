@@ -45,7 +45,7 @@ const fixtures = await Promise.all(
   fixtureFiles.map(async (file) => JSON.parse(await readFile(path.join(agentFixtureRoot, file), "utf8"))),
 );
 const validateAdapterConformance = ajv.getSchema(
-  "https://caveman.so/schemas/adapter-conformance.schema.json",
+  "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/adapter-conformance.schema.json",
 );
 if (!validateAdapterConformance) {
   throw new Error("adapter conformance schema failed to compile");
@@ -82,12 +82,57 @@ if (claude.failure_fallback !== "original") {
   throw new Error("unknown adapter failure must preserve original bytes");
 }
 
-const middleware = JSON.parse(await readFile(path.join(packageRoot, "..", "..", "sdk", "parity", "middleware.fixtures.json"), "utf8"));
-for (const [field, schemaName] of Object.entries({ capabilities: "capabilities", request: "optimize", plan: "plan", page: "page" })) {
-  const validate = ajv.getSchema(`https://caveman.so/schemas/middleware-${schemaName}.schema.json`);
-  if (!validate?.(middleware[field])) throw new Error(`middleware ${field}: ${ajv.errorsText(validate?.errors)}`);
+const SCHEMA_BASE = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/";
+for (const [file, schema] of files.map((file, i) => [file, schemas[i]])) {
+  if (schema.$id !== SCHEMA_BASE + file) throw new Error(`${file}: $id must be ${SCHEMA_BASE + file}`);
+}
+function check(schemaName, value, label) {
+  const validate = ajv.getSchema(`${SCHEMA_BASE}middleware-${schemaName}.schema.json`);
+  if (!validate?.(value)) throw new Error(`middleware ${label}: ${ajv.errorsText(validate?.errors)}`);
 }
 
+const parity = path.join(packageRoot, "..", "..", "sdk", "parity");
+const middleware = JSON.parse(await readFile(path.join(parity, "middleware.fixtures.json"), "utf8"));
+for (const [field, schemaName] of Object.entries({ capabilities: "capabilities", request: "optimize", plan: "plan", page: "page" })) {
+  check(schemaName, middleware[field], field);
+}
+
+// Protocol 1.1 examples. Every error code in the catalog must produce a valid envelope.
+const v11 = JSON.parse(await readFile(path.join(parity, "middleware-v1_1.fixtures.json"), "utf8"));
+const examples = v11.examples;
+check("capabilities", examples.capabilities_v1_1, "capabilities_v1_1");
+for (const envelope of examples.error_envelopes) check("error", envelope, `error ${envelope.error.code}`);
+if (examples.error_envelopes.length !== v11.server_error_codes.length) throw new Error("error envelope examples must cover server_error_codes");
+check("session-delete", examples.session_delete_request, "session_delete_request");
+for (const response of examples.session_delete_responses) check("session-delete-response", response, "session_delete_response");
+check("receipt-response", examples.receipt_response, "receipt_response");
+for (const event of examples.decision_events) check("decision-event", event, `decision_event ${event.reason}`);
+for (const [reason] of Object.entries(v11.reason_catalog)) {
+  if (!/^[a-z][a-z0-9_]{0,63}$/.test(reason)) throw new Error(`reason_catalog: ${reason} violates the reason grammar`);
+}
+
+// OpenAPI: every relative $ref must land on a schema file (and JSON pointer) in this package.
+const openapiPath = path.join(packageRoot, "openapi", "middleware.openapi.json");
+const openapi = JSON.parse(await readFile(openapiPath, "utf8"));
+if (openapi.openapi !== "3.1.0") throw new Error("openapi: must be 3.1.0");
+for (const route of ["capabilities", "optimize", "retrieve", "receipts", "sessions/delete"]) {
+  if (!openapi.paths[`/caveman/v1/middleware/${route}`]) throw new Error(`openapi: missing route ${route}`);
+}
+const pointer = (doc, fragment) => fragment.split("/").slice(1)
+  .reduce((node, key) => node?.[key.replaceAll("~1", "/").replaceAll("~0", "~")], doc);
+let refs = 0;
+(function walk(node) {
+  if (!node || typeof node !== "object") return;
+  if (typeof node.$ref === "string") {
+    refs++;
+    const [target, fragment = ""] = node.$ref.split("#");
+    const doc = target === "" ? openapi : schemas[files.indexOf(path.basename(target))];
+    if (target !== "" && (!target.startsWith("../schemas/") || !doc)) throw new Error(`openapi: unresolved $ref ${node.$ref}`);
+    if (fragment && pointer(doc, fragment) === undefined) throw new Error(`openapi: unresolved pointer ${node.$ref}`);
+  }
+  for (const value of Object.values(node)) walk(value);
+})(openapi);
+
 console.log(
-  `validated ${files.length} JSON schemas and ${fixtureFiles.length} static agent contract fixtures (not executable parity)`,
+  `validated ${files.length} JSON schemas, ${refs} OpenAPI refs, and ${fixtureFiles.length} static agent contract fixtures (not executable parity)`,
 );

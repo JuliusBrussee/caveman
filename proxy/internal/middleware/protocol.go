@@ -13,6 +13,106 @@ const (
 	DefaultPageBytes    = 256 << 10
 )
 
+// Protocol 1.1 negotiation and defaults. docs/technical/middleware-protocol.md
+// is normative; packages/sdk/parity/middleware-v1_1.fixtures.json pins values.
+const (
+	ProtocolMin = 1
+	ProtocolMax = 1
+
+	// HeaderFeatures carries the client's comma-separated features. A request
+	// without it is a protocol 1.0 client and gets 1.0 behavior.
+	HeaderFeatures   = "Caveman-Middleware-Features"
+	HeaderClient     = "Caveman-Middleware-Client"
+	HeaderRetryAfter = "Retry-After"
+
+	FeatureTolerantReader     = "tolerant_reader"     // server ignores unknown request fields
+	FeatureRevisionTolerant   = "revision_tolerant"   // accept any revision whose transforms are all supported
+	FeatureHTTPStatusV2       = "http_status_v2"      // decisions are 200; 408/429/503+Retry-After mapping
+	FeatureOriginalsLifecycle = "originals_lifecycle" // delete/retention cover originals; max_retention_seconds
+
+	DefaultDeadlineMS         = 500
+	DefaultRetrieveDeadlineMS = 5000
+	DefaultQueueDepth         = 16
+	DefaultRetrieveQueueDepth = 16
+	DefaultMaxSegments        = 256
+	DefaultMaxManifestItems   = 4096
+	DefaultReceiptBytes       = 16 << 10
+)
+
+// Error codes (error.code). Status, 1.0 status, retryable and Retry-After per
+// code: server_error_codes in the parity fixture; per-condition 1.0 mappings
+// (slow body, queue wait, bypass decisions, ...): legacy_conditions.
+const (
+	CodeInvalidRequest      = "invalid_request"
+	CodeUnsupportedVersion  = "unsupported_version"
+	CodeUnknownCapability   = "unknown_capability"
+	CodeInvalidRange        = "invalid_range"
+	CodeUnauthorized        = "unauthorized"
+	CodeForbiddenOrigin     = "forbidden_origin"
+	CodeForbiddenNamespace  = "forbidden_namespace"
+	CodeNotFound            = "not_found"
+	CodeRequestTimeout      = "request_timeout"
+	CodeEpochChanged        = "epoch_changed"
+	CodeIdentityConflict    = "identity_conflict"
+	CodeDeleted             = "deleted"
+	CodeExpired             = "expired"
+	CodePayloadLimit        = "payload_limit"
+	CodeCapacity            = "capacity"
+	CodeQuotaExceeded       = "quota_exceeded"
+	CodeRuntimeUnavailable  = "runtime_unavailable"
+	CodeRecoveryUnavailable = "recovery_unavailable"
+	CodeDeadline            = "deadline"
+)
+
+// Plan reasons (plan.reason, skipped[].reason). Under http_status_v2 the
+// not_smaller, cache_state_unavailable, recovery_unavailable and capacity
+// outcomes of optimize are 200 bypass plans instead of 503 errors.
+const (
+	ReasonEligible              = "eligible"
+	ReasonRecord                = "record"
+	ReasonNoCandidate           = "no_candidate"
+	ReasonProtected             = "protected"
+	ReasonUnsupportedShape      = "unsupported_shape"
+	ReasonNotSmaller            = "not_smaller"
+	ReasonCacheStateUnavailable = "cache_state_unavailable"
+)
+
+type ProtocolRange struct {
+	Min int `json:"min"`
+	Max int `json:"max"`
+}
+
+type ErrorEnvelope struct {
+	SchemaVersion int     `json:"schema_version"`
+	Error         Failure `json:"error"`
+}
+
+type SessionDeleteRequest struct {
+	SchemaVersion int   `json:"schema_version"`
+	Scope         Scope `json:"scope"`
+}
+
+type DeleteCounts struct {
+	Scopes    int64 `json:"scopes"`
+	Choices   int64 `json:"choices"`
+	Grants    int64 `json:"grants"`
+	Originals int64 `json:"originals"`
+}
+
+type SessionDeleteResponse struct {
+	SchemaVersion    int           `json:"schema_version"`
+	Status           string        `json:"status"` // "revoked"
+	OriginalsDeleted bool          `json:"originals_deleted"`
+	Deleted          *DeleteCounts `json:"deleted,omitempty"`
+}
+
+type ReceiptResponse struct {
+	SchemaVersion    int    `json:"schema_version"`
+	Status           string `json:"status"` // "recorded"
+	Basis            string `json:"basis"`  // "client_observed"
+	VerifiedSavedUSD int    `json:"verified_saved_usd"`
+}
+
 type Scope struct {
 	Namespace  string `json:"namespace"`
 	SessionID  string `json:"session_id"`
@@ -138,23 +238,35 @@ type OptimizeResponse struct {
 	Recovery         RecoveryState `json:"recovery"`
 }
 
+// Limits values are positive safe integers or omitted: SDK 1.1.0 rejects the
+// whole capabilities document if any limits value is anything else.
 type Limits struct {
-	DeadlineMS   int64 `json:"deadline_ms"`
-	RequestBytes int   `json:"request_bytes"`
-	SegmentBytes int   `json:"segment_bytes"`
-	PageBytes    int   `json:"page_bytes"`
+	DeadlineMS             int64 `json:"deadline_ms"`
+	RequestBytes           int   `json:"request_bytes"`
+	SegmentBytes           int   `json:"segment_bytes"`
+	PageBytes              int   `json:"page_bytes"`
+	RetrieveDeadlineMS     int64 `json:"retrieve_deadline_ms,omitempty"`
+	QueueDepth             int   `json:"queue_depth,omitempty"`
+	RetrieveQueueDepth     int   `json:"retrieve_queue_depth,omitempty"`
+	MaxSegments            int   `json:"max_segments,omitempty"`
+	MaxManifestItems       int   `json:"max_manifest_items,omitempty"`
+	ReceiptBytes           int   `json:"receipt_bytes,omitempty"`
+	QuotaRequestsPerMinute int   `json:"quota_requests_per_minute,omitempty"` // omitted = unlimited
 }
 type Capabilities struct {
-	SchemaVersion    int                      `json:"schema_version"`
-	RuntimeBuild     string                   `json:"runtime_build"`
-	PolicyRevision   string                   `json:"policy_revision"`
-	Transforms       []compressors.Capability `json:"transforms"`
-	Limits           Limits                   `json:"limits"`
-	Persistent       bool                     `json:"persistent"`
-	Recovery         bool                     `json:"recovery"`
-	RetentionSeconds int64                    `json:"retention_seconds"`
-	TrustMode        string                   `json:"trust_mode"`
-	Mode             string                   `json:"mode"`
+	SchemaVersion       int                      `json:"schema_version"`
+	RuntimeBuild        string                   `json:"runtime_build"`
+	PolicyRevision      string                   `json:"policy_revision"`
+	Transforms          []compressors.Capability `json:"transforms"`
+	Limits              Limits                   `json:"limits"`
+	Persistent          bool                     `json:"persistent"`
+	Recovery            bool                     `json:"recovery"`
+	RetentionSeconds    int64                    `json:"retention_seconds"`
+	TrustMode           string                   `json:"trust_mode"`
+	Mode                string                   `json:"mode"`
+	Protocol            *ProtocolRange           `json:"protocol,omitempty"`
+	Features            []string                 `json:"features,omitempty"`
+	MaxRetentionSeconds int64                    `json:"max_retention_seconds,omitempty"`
 }
 
 type RetrieveRequest struct {

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://caveman.cloud/schemas/grader-registry.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/grader-registry.schema.json",
   "title": "Caveman eval grader registry",
   "description": "Machine-readable description of every grader type the eval taxonomy accepts. Drives the dashboard grader editor; the two parity tests (public/evals/tests/grader-registry.parity.runtime.mjs and cloud/optimizer/tests/test_grader_registry_parity.py) hold it to the implementations.",
   "type": "object",

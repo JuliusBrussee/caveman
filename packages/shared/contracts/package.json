@@ -1,12 +1,28 @@
 {
-  "name": "@caveman/contracts",
-  "version": "1.0.0",
+  "name": "@caveman-ai/contracts",
+  "version": "2.0.0",
+  "description": "JSON Schema and OpenAPI wire contracts for Caveman, including the framework middleware protocol.",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JuliusBrussee/caveman.git",
+    "directory": "packages/shared/contracts"
+  },
+  "files": [
+    "schemas",
+    "openapi",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./schemas/*": "./schemas/*",
+    "./openapi/*": "./openapi/*"
+  },
   "scripts": {
-    "build": "node scripts/validate-schemas.mjs",
-    "lint": "node scripts/validate-schemas.mjs",
-    "test": "node scripts/validate-schemas.mjs"
+    "build": "node scripts/validate-schemas.mjs && node scripts/validate.mjs",
+    "lint": "node scripts/validate-schemas.mjs && node scripts/validate.mjs",
+    "test": "node scripts/validate-schemas.mjs && node scripts/validate.mjs"
   },
   "devDependencies": {
     "ajv": "8.20.0"

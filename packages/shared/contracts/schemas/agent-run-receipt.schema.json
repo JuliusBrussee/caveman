@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://caveman.so/schemas/agent-run-receipt.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/agent-run-receipt.schema.json",
   "title": "Caveman Agent Run Receipt v1",
   "description": "Content-blind SDK economic receipt. Money is an estimated public-catalog list-price subtotal, never an invoice or verified-savings claim.",
   "type": "object",

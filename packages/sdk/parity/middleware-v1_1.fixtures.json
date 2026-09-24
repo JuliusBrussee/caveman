@@ -1,0 +1,4154 @@
+{
+  "schema_version": 1,
+  "protocol": "1.1",
+  "evidence": "protocol_validation_only",
+  "spec": "docs/technical/middleware-protocol.md",
+  "base": "middleware.fixtures.json",
+  "notes": {
+    "helpers": "Section -> SDK helper mapping: docs/technical/middleware-protocol.md, Appendix.",
+    "patch_ops": "Each patch is {op: set|delete|append, path, value?} applied in order to a deep copy of the named document. Plan-constraint paths start with the document name (capabilities, request or plan) from `base`; validate with base.plan.input_digest.",
+    "scope_tokens": "input_repeat {text,count} means text repeated count times; output null = not normalizable.",
+    "capabilities_parsing": "Compare legacy, features, transform ids (in order), mode, limits and max_retention_seconds of the parsed view; ok:false means parsing fails with reason.",
+    "plan_constraints": "valid:false cases must fail with invalid_plan. refresh_capabilities:true is asserted at runtime level: the next optimize after this plan triggers exactly one capabilities GET.",
+    "failure_classification": "input.body is raw response text; retry_after is the raw header value.",
+    "breaker_sequences": "Fresh breaker per sequence. success/failure: call allow(at_ms); if it returns true, record(result, at_ms). local: do not touch the breaker. expect.sent is allow()'s result, expect.state is the state after the step.",
+    "budgets": "replaced lists item keys; admitted/skipped are ids in input order; bypass payload_budget when items exist and none is admitted.",
+    "endpoints": "expect.capabilities_url is the resolved base plus caveman/v1/middleware/capabilities, or expect.error is the refusal code."
+  },
+  "constants": {
+    "protocol": {
+      "min": 1,
+      "max": 1
+    },
+    "features": {
+      "known": [
+        "http_status_v2",
+        "originals_lifecycle",
+        "revision_tolerant",
+        "tolerant_reader"
+      ],
+      "client": [
+        "http_status_v2",
+        "revision_tolerant"
+      ]
+    },
+    "headers": {
+      "features": "Caveman-Middleware-Features",
+      "client": "Caveman-Middleware-Client",
+      "retry_after": "Retry-After",
+      "traceparent": "traceparent",
+      "tracestate": "tracestate"
+    },
+    "client_features_header_value": "http_status_v2, revision_tolerant",
+    "client_header_products": {
+      "typescript": "caveman-sdk-typescript",
+      "python": "caveman-sdk-python"
+    },
+    "client_recovery_allowlist": [
+      "exact_ccr"
+    ],
+    "marker_prefix": "[caveman: shortened; exact original via caveman_retrieve handle=",
+    "handle_pattern": "^cmw_[a-f0-9]{48}$",
+    "reason_pattern": "^[a-z][a-z0-9_]{0,63}$",
+    "feature_pattern": "^[a-z][a-z0-9_]{0,63}$",
+    "scope": {
+      "token_pattern": "^[A-Za-z0-9._:/-]{1,256}$",
+      "hash_prefix": "h-",
+      "hash_hex_chars": 32,
+      "default_branch_id": "main",
+      "default_cache_epoch": "0"
+    },
+    "breaker": {
+      "consecutive_failures": 5,
+      "window_size": 20,
+      "window_failures": 10,
+      "open_ms": 30000
+    },
+    "defaults": {
+      "bootstrap_deadline_ms": 500,
+      "retrieve_deadline_ms": 5000,
+      "max_concurrency": 16,
+      "max_segments": 256,
+      "max_manifest_items": 4096,
+      "manifest_bytes": 2097152,
+      "receipt_bytes": 16384,
+      "replaced_memory_entries": 4096,
+      "retry_after_cap_ms": 30000,
+      "warn_once_entries": 1024
+    }
+  },
+  "reason_catalog": {
+    "adapter_error": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "cache_state_unavailable": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "none"
+    },
+    "capacity": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "circuit_open": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "closed": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "none"
+    },
+    "deadline": {
+      "breaker": true,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "deleted": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "disabled": {
+      "breaker": false,
+      "warn_once": false,
+      "strict": "none"
+    },
+    "eligible": {
+      "breaker": false,
+      "warn_once": false,
+      "strict": "none"
+    },
+    "epoch_changed": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "none"
+    },
+    "expired": {
+      "breaker": false,
+      "warn_once": false,
+      "strict": "none"
+    },
+    "forbidden_namespace": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "forbidden_origin": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "identity_conflict": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "none"
+    },
+    "insecure_transport_not_enabled": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "ready"
+    },
+    "invalid_endpoint": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "ready"
+    },
+    "invalid_plan": {
+      "breaker": true,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "invalid_request": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "invalid_scope": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "no_candidate": {
+      "breaker": false,
+      "warn_once": false,
+      "strict": "none"
+    },
+    "not_found": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "not_smaller": {
+      "breaker": false,
+      "warn_once": false,
+      "strict": "none"
+    },
+    "opaque_part": {
+      "breaker": false,
+      "warn_once": false,
+      "strict": "none"
+    },
+    "payload_budget": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "none"
+    },
+    "payload_limit": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "protected": {
+      "breaker": false,
+      "warn_once": false,
+      "strict": "none"
+    },
+    "provider_state_retained": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "none"
+    },
+    "quota_exceeded": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "record": {
+      "breaker": false,
+      "warn_once": false,
+      "strict": "none"
+    },
+    "recovery_name_conflict": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "recovery_unavailable": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "recovery_unbound": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "none"
+    },
+    "redirect_refused": {
+      "breaker": true,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "remote_content_not_enabled": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "ready"
+    },
+    "runtime_unavailable": {
+      "breaker": true,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "unauthorized": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "unknown_capability": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "unsupported_shape": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "raise"
+    },
+    "unsupported_version": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "ready"
+    },
+    "version_unavailable": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "ready"
+    },
+    "version_unverified": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "none"
+    }
+  },
+  "server_error_codes": [
+    {
+      "code": "capacity",
+      "status": 429,
+      "legacy_status": 503,
+      "retryable": true,
+      "retry_after": true
+    },
+    {
+      "code": "deadline",
+      "status": 504,
+      "legacy_status": 504,
+      "retryable": true,
+      "retry_after": false
+    },
+    {
+      "code": "deleted",
+      "status": 410,
+      "legacy_status": 410,
+      "retryable": false,
+      "retry_after": false
+    },
+    {
+      "code": "epoch_changed",
+      "status": 409,
+      "legacy_status": 409,
+      "retryable": false,
+      "retry_after": false
+    },
+    {
+      "code": "expired",
+      "status": 410,
+      "legacy_status": 410,
+      "retryable": false,
+      "retry_after": false
+    },
+    {
+      "code": "forbidden_namespace",
+      "status": 403,
+      "legacy_status": null,
+      "retryable": false,
+      "retry_after": false
+    },
+    {
+      "code": "forbidden_origin",
+      "status": 403,
+      "legacy_status": 403,
+      "retryable": false,
+      "retry_after": false
+    },
+    {
+      "code": "identity_conflict",
+      "status": 409,
+      "legacy_status": 409,
+      "retryable": true,
+      "retry_after": false
+    },
+    {
+      "code": "invalid_range",
+      "status": 400,
+      "legacy_status": 400,
+      "retryable": false,
+      "retry_after": false
+    },
+    {
+      "code": "invalid_request",
+      "status": 400,
+      "legacy_status": 400,
+      "retryable": false,
+      "retry_after": false
+    },
+    {
+      "code": "not_found",
+      "status": 404,
+      "legacy_status": 404,
+      "retryable": false,
+      "retry_after": false
+    },
+    {
+      "code": "payload_limit",
+      "status": 413,
+      "legacy_status": 413,
+      "retryable": false,
+      "retry_after": false
+    },
+    {
+      "code": "quota_exceeded",
+      "status": 429,
+      "legacy_status": null,
+      "retryable": true,
+      "retry_after": true
+    },
+    {
+      "code": "recovery_unavailable",
+      "status": 503,
+      "legacy_status": 503,
+      "retryable": true,
+      "retry_after": true
+    },
+    {
+      "code": "request_timeout",
+      "status": 408,
+      "legacy_status": null,
+      "retryable": true,
+      "retry_after": false
+    },
+    {
+      "code": "runtime_unavailable",
+      "status": 503,
+      "legacy_status": 503,
+      "retryable": true,
+      "retry_after": true
+    },
+    {
+      "code": "unauthorized",
+      "status": 401,
+      "legacy_status": 401,
+      "retryable": false,
+      "retry_after": false
+    },
+    {
+      "code": "unknown_capability",
+      "status": 400,
+      "legacy_status": 400,
+      "retryable": false,
+      "retry_after": false
+    },
+    {
+      "code": "unsupported_version",
+      "status": 400,
+      "legacy_status": 400,
+      "retryable": false,
+      "retry_after": false
+    }
+  ],
+  "legacy_conditions": [
+    {
+      "condition": "slow_request_body",
+      "status": 408,
+      "code": "request_timeout",
+      "legacy_status": 413,
+      "legacy_code": "payload_limit"
+    },
+    {
+      "condition": "retrieve_limit_out_of_range",
+      "status": 400,
+      "code": "invalid_range",
+      "legacy_status": 413,
+      "legacy_code": "payload_limit"
+    },
+    {
+      "condition": "queue_wait_exceeded",
+      "status": 429,
+      "code": "capacity",
+      "legacy_status": 504,
+      "legacy_code": "deadline"
+    },
+    {
+      "condition": "malformed_recovery_binding",
+      "status": 400,
+      "code": "invalid_request",
+      "legacy_status": 503,
+      "legacy_code": "recovery_unavailable"
+    },
+    {
+      "condition": "optimize_not_smaller",
+      "status": 200,
+      "code": "not_smaller",
+      "legacy_status": 503,
+      "legacy_code": "not_smaller",
+      "note": "200 = bypassed plan with reason = code"
+    },
+    {
+      "condition": "optimize_cache_state_unavailable",
+      "status": 200,
+      "code": "cache_state_unavailable",
+      "legacy_status": 503,
+      "legacy_code": "cache_state_unavailable",
+      "note": "200 = bypassed plan"
+    },
+    {
+      "condition": "optimize_recovery_unavailable",
+      "status": 200,
+      "code": "recovery_unavailable",
+      "legacy_status": 503,
+      "legacy_code": "recovery_unavailable",
+      "note": "200 = bypassed plan; retrieve keeps 503"
+    },
+    {
+      "condition": "optimize_store_capacity",
+      "status": 200,
+      "code": "capacity",
+      "legacy_status": 503,
+      "legacy_code": "capacity",
+      "note": "200 = bypassed plan"
+    },
+    {
+      "condition": "storage_error",
+      "status": 503,
+      "code": "runtime_unavailable",
+      "legacy_status": 503,
+      "legacy_code": "runtime_unavailable",
+      "note": "bug fix for all clients: 1.0 retrieve answered 404 not_found"
+    }
+  ],
+  "scope_tokens": [
+    {
+      "id": "already_valid",
+      "input": "tenant-a",
+      "output": "tenant-a"
+    },
+    {
+      "id": "valid_all_punctuation",
+      "input": "org.acme:team/app_1-2",
+      "output": "org.acme:team/app_1-2"
+    },
+    {
+      "id": "valid_mixed_case",
+      "input": "Tenant_A",
+      "output": "Tenant_A"
+    },
+    {
+      "id": "valid_hash_shaped",
+      "input": "h-0123456789abcdef0123456789abcdef",
+      "output": "h-0123456789abcdef0123456789abcdef"
+    },
+    {
+      "id": "valid_exactly_256",
+      "input_repeat": {
+        "text": "a",
+        "count": 256
+      },
+      "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "email",
+      "input": "alice@example.com",
+      "output": "h-ff8d9819fc0e12bf0d24892e45987e24"
+    },
+    {
+      "id": "spaces",
+      "input": "my session 42",
+      "output": "h-108421c4cf0fa5f539f57ade98c6f12c"
+    },
+    {
+      "id": "unicode",
+      "input": "caf\u00e9-\ud83c\udf0d",
+      "output": "h-9aed795cf796d89a382c0037d1796fe3"
+    },
+    {
+      "id": "too_long_257",
+      "input_repeat": {
+        "text": "a",
+        "count": 257
+      },
+      "output": "h-e8d95cc2b4bc198c54b40bd214df958a"
+    },
+    {
+      "id": "long_unicode",
+      "input_repeat": {
+        "text": "\u00e9",
+        "count": 300
+      },
+      "output": "h-7250b66610f8b7dbd6f5e5426d2143bc"
+    },
+    {
+      "id": "trailing_newline",
+      "input": "abc\n",
+      "output": "h-edeaaff3f1774ad2888673770c6d6409"
+    },
+    {
+      "id": "embedded_nul",
+      "input": "a\u0000b",
+      "output": "h-59b271ae1bbcb1d31d41929817f4b16f"
+    },
+    {
+      "id": "percent_encoded",
+      "input": "a%20b",
+      "output": "h-719b5ec792eb69fe3dfe29c75ce06b0a"
+    },
+    {
+      "id": "empty",
+      "input": "",
+      "output": null
+    },
+    {
+      "id": "lone_high_surrogate",
+      "input": "\ud800abc",
+      "output": null
+    },
+    {
+      "id": "lone_low_surrogate",
+      "input": "abc\udc00",
+      "output": null
+    },
+    {
+      "id": "number",
+      "input": 42,
+      "output": null
+    },
+    {
+      "id": "null",
+      "input": null,
+      "output": null
+    },
+    {
+      "id": "boolean",
+      "input": true,
+      "output": null
+    }
+  ],
+  "scopes": [
+    {
+      "id": "all_valid",
+      "input": {
+        "namespace": "acme",
+        "session_id": "s-1",
+        "branch_id": "main",
+        "cache_epoch": "0"
+      },
+      "output": {
+        "namespace": "acme",
+        "session_id": "s-1",
+        "branch_id": "main",
+        "cache_epoch": "0"
+      }
+    },
+    {
+      "id": "email_namespace_defaults",
+      "input": {
+        "namespace": "alice@example.com",
+        "session_id": "thread 7"
+      },
+      "output": {
+        "namespace": "h-ff8d9819fc0e12bf0d24892e45987e24",
+        "session_id": "h-510ec429f0e52ffa218b7e6a679718a3",
+        "branch_id": "main",
+        "cache_epoch": "0"
+      }
+    },
+    {
+      "id": "explicit_null_optional",
+      "input": {
+        "namespace": "acme",
+        "session_id": "s-1",
+        "branch_id": null,
+        "cache_epoch": null
+      },
+      "output": {
+        "namespace": "acme",
+        "session_id": "s-1",
+        "branch_id": "main",
+        "cache_epoch": "0"
+      }
+    },
+    {
+      "id": "missing_session",
+      "input": {
+        "namespace": "acme"
+      },
+      "output": null
+    },
+    {
+      "id": "null_namespace",
+      "input": {
+        "namespace": null,
+        "session_id": "s-1"
+      },
+      "output": null
+    },
+    {
+      "id": "empty_branch",
+      "input": {
+        "namespace": "acme",
+        "session_id": "s-1",
+        "branch_id": ""
+      },
+      "output": null
+    },
+    {
+      "id": "numeric_epoch",
+      "input": {
+        "namespace": "acme",
+        "session_id": "s-1",
+        "cache_epoch": 3
+      },
+      "output": null
+    },
+    {
+      "id": "unicode_session",
+      "input": {
+        "namespace": "acme",
+        "session_id": "\u4f1a\u8bdd-1",
+        "branch_id": "feature/x",
+        "cache_epoch": "2026-09-23T00:00:00Z"
+      },
+      "output": {
+        "namespace": "acme",
+        "session_id": "h-611a498b849c24419ba931a77442e24f",
+        "branch_id": "feature/x",
+        "cache_epoch": "2026-09-23T00:00:00Z"
+      }
+    }
+  ],
+  "capabilities_parsing": [
+    {
+      "id": "legacy_without_features",
+      "patches": [],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "v1_1_full",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "protocol"
+          ],
+          "value": {
+            "min": 1,
+            "max": 1
+          }
+        },
+        {
+          "op": "set",
+          "path": [
+            "features"
+          ],
+          "value": [
+            "http_status_v2",
+            "originals_lifecycle",
+            "revision_tolerant",
+            "tolerant_reader"
+          ]
+        },
+        {
+          "op": "set",
+          "path": [
+            "max_retention_seconds"
+          ],
+          "value": 604800
+        },
+        {
+          "op": "set",
+          "path": [
+            "limits",
+            "retrieve_deadline_ms"
+          ],
+          "value": 7000
+        },
+        {
+          "op": "set",
+          "path": [
+            "limits",
+            "queue_depth"
+          ],
+          "value": 16
+        },
+        {
+          "op": "set",
+          "path": [
+            "limits",
+            "retrieve_queue_depth"
+          ],
+          "value": 16
+        },
+        {
+          "op": "set",
+          "path": [
+            "limits",
+            "max_segments"
+          ],
+          "value": 256
+        },
+        {
+          "op": "set",
+          "path": [
+            "limits",
+            "max_manifest_items"
+          ],
+          "value": 4096
+        },
+        {
+          "op": "set",
+          "path": [
+            "limits",
+            "receipt_bytes"
+          ],
+          "value": 16384
+        },
+        {
+          "op": "set",
+          "path": [
+            "limits",
+            "quota_requests_per_minute"
+          ],
+          "value": 600
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": false,
+        "features": [
+          "http_status_v2",
+          "originals_lifecycle",
+          "revision_tolerant",
+          "tolerant_reader"
+        ],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 7000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": 16,
+          "retrieve_queue_depth": 16,
+          "quota_requests_per_minute": 600
+        },
+        "max_retention_seconds": 604800
+      }
+    },
+    {
+      "id": "features_not_array_is_legacy",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "features"
+          ],
+          "value": "http_status_v2"
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "unknown_feature_ignored",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "features"
+          ],
+          "value": [
+            "future_feature",
+            "http_status_v2",
+            "Not-A-Token"
+          ]
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": false,
+        "features": [
+          "http_status_v2"
+        ],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "empty_features_is_not_legacy",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "features"
+          ],
+          "value": []
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": false,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "unknown_transform_recovery_ignored",
+      "patches": [
+        {
+          "op": "append",
+          "path": [
+            "transforms"
+          ],
+          "value": {
+            "transform_id": "caveman.engine.json.v2",
+            "implementation_version": "1",
+            "safety_classes": [
+              "S4"
+            ],
+            "deterministic": true,
+            "recovery": "source_ref",
+            "eligible_segment_kinds": [
+              "artifact",
+              "history",
+              "skill",
+              "tool_result"
+            ],
+            "requires_eval": true,
+            "not_smaller_fallback": "original",
+            "provenance": {
+              "kind": "native",
+              "source_manifest_sha256": null
+            },
+            "conformance_digest": "5a58a4ebd6d3abd9da413e4ee822972606ca8dce34455e8c820cadeb51ce6602"
+          }
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "recovery_none_transform_ignored",
+      "patches": [
+        {
+          "op": "append",
+          "path": [
+            "transforms"
+          ],
+          "value": {
+            "transform_id": "caveman.engine.lossy.v1",
+            "implementation_version": "1",
+            "safety_classes": [
+              "S4"
+            ],
+            "deterministic": true,
+            "recovery": "none",
+            "eligible_segment_kinds": [
+              "artifact",
+              "history",
+              "skill",
+              "tool_result"
+            ],
+            "requires_eval": true,
+            "not_smaller_fallback": "original",
+            "provenance": {
+              "kind": "native",
+              "source_manifest_sha256": null
+            },
+            "conformance_digest": "5a58a4ebd6d3abd9da413e4ee822972606ca8dce34455e8c820cadeb51ce6602"
+          }
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "nondeterministic_transform_ignored",
+      "patches": [
+        {
+          "op": "append",
+          "path": [
+            "transforms"
+          ],
+          "value": {
+            "transform_id": "caveman.engine.sampled.v1",
+            "implementation_version": "1",
+            "safety_classes": [
+              "S4"
+            ],
+            "deterministic": false,
+            "recovery": "exact_ccr",
+            "eligible_segment_kinds": [
+              "artifact",
+              "history",
+              "skill",
+              "tool_result"
+            ],
+            "requires_eval": true,
+            "not_smaller_fallback": "original",
+            "provenance": {
+              "kind": "native",
+              "source_manifest_sha256": null
+            },
+            "conformance_digest": "5a58a4ebd6d3abd9da413e4ee822972606ca8dce34455e8c820cadeb51ce6602"
+          }
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "malformed_transform_entry_ignored",
+      "patches": [
+        {
+          "op": "append",
+          "path": [
+            "transforms"
+          ],
+          "value": {
+            "transform_id": 5
+          }
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "duplicate_transform_first_wins",
+      "patches": [
+        {
+          "op": "append",
+          "path": [
+            "transforms"
+          ],
+          "value": {
+            "transform_id": "caveman.engine.log.v1",
+            "implementation_version": "9",
+            "safety_classes": [
+              "S4"
+            ],
+            "deterministic": true,
+            "recovery": "exact_ccr",
+            "eligible_segment_kinds": [
+              "artifact",
+              "history",
+              "skill",
+              "tool_result"
+            ],
+            "requires_eval": true,
+            "not_smaller_fallback": "original",
+            "provenance": {
+              "kind": "native",
+              "source_manifest_sha256": null
+            },
+            "conformance_digest": "5a58a4ebd6d3abd9da413e4ee822972606ca8dce34455e8c820cadeb51ce6602"
+          }
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "unknown_transform_fields_ignored",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "transforms",
+            0,
+            "future_field"
+          ],
+          "value": {
+            "x": 1
+          }
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "no_usable_transform",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "transforms",
+            0,
+            "recovery"
+          ],
+          "value": "recompute"
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "unknown_limits_key_ignored",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "limits",
+            "future_budget"
+          ],
+          "value": 7
+        },
+        {
+          "op": "set",
+          "path": [
+            "limits",
+            "future_label"
+          ],
+          "value": "x"
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "invalid_known_new_limit_defaults",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "limits",
+            "retrieve_deadline_ms"
+          ],
+          "value": 0
+        },
+        {
+          "op": "set",
+          "path": [
+            "limits",
+            "max_segments"
+          ],
+          "value": "256"
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "unknown_top_level_field_ignored",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "future_section"
+          ],
+          "value": {
+            "a": [
+              1,
+              2
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "unknown_mode_is_record",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "mode"
+          ],
+          "value": "shadow"
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "record",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "malformed_protocol_ignored",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "protocol"
+          ],
+          "value": "1"
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "invalid_max_retention_ignored",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "max_retention_seconds"
+          ],
+          "value": -1
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "legacy": true,
+        "features": [],
+        "transforms": [
+          "caveman.engine.log.v1"
+        ],
+        "mode": "compress",
+        "limits": {
+          "deadline_ms": 100,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 5000,
+          "max_segments": 256,
+          "max_manifest_items": 4096,
+          "receipt_bytes": 16384,
+          "queue_depth": null,
+          "retrieve_queue_depth": null,
+          "quota_requests_per_minute": null
+        },
+        "max_retention_seconds": null
+      }
+    },
+    {
+      "id": "protocol_range_excludes_client",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "protocol"
+          ],
+          "value": {
+            "min": 2,
+            "max": 3
+          }
+        }
+      ],
+      "expect": {
+        "ok": false,
+        "reason": "unsupported_version"
+      }
+    },
+    {
+      "id": "schema_version_2",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "schema_version"
+          ],
+          "value": 2
+        }
+      ],
+      "expect": {
+        "ok": false,
+        "reason": "unsupported_version"
+      }
+    },
+    {
+      "id": "missing_legacy_limit",
+      "patches": [
+        {
+          "op": "delete",
+          "path": [
+            "limits",
+            "page_bytes"
+          ]
+        }
+      ],
+      "expect": {
+        "ok": false,
+        "reason": "unsupported_version"
+      }
+    },
+    {
+      "id": "missing_policy_revision",
+      "patches": [
+        {
+          "op": "delete",
+          "path": [
+            "policy_revision"
+          ]
+        }
+      ],
+      "expect": {
+        "ok": false,
+        "reason": "unsupported_version"
+      }
+    },
+    {
+      "id": "transforms_not_array",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "transforms"
+          ],
+          "value": {}
+        }
+      ],
+      "expect": {
+        "ok": false,
+        "reason": "unsupported_version"
+      }
+    }
+  ],
+  "plan_constraints": [
+    {
+      "id": "baseline_valid",
+      "patches": [],
+      "expect": {
+        "valid": true,
+        "refresh_capabilities": false
+      }
+    },
+    {
+      "id": "transform_not_requested",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "transform_id"
+          ],
+          "value": "caveman.engine.unknown.v1"
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
+    },
+    {
+      "id": "recovery_none_not_allowlisted",
+      "patches": [
+        {
+          "op": "append",
+          "path": [
+            "capabilities",
+            "transforms"
+          ],
+          "value": {
+            "transform_id": "caveman.engine.lossy.v1",
+            "implementation_version": "1",
+            "safety_classes": [
+              "S4"
+            ],
+            "deterministic": true,
+            "recovery": "none",
+            "eligible_segment_kinds": [
+              "artifact",
+              "history",
+              "skill",
+              "tool_result"
+            ],
+            "requires_eval": true,
+            "not_smaller_fallback": "original",
+            "provenance": {
+              "kind": "native",
+              "source_manifest_sha256": null
+            },
+            "conformance_digest": "5a58a4ebd6d3abd9da413e4ee822972606ca8dce34455e8c820cadeb51ce6602"
+          }
+        },
+        {
+          "op": "append",
+          "path": [
+            "request",
+            "policy",
+            "transforms"
+          ],
+          "value": "caveman.engine.lossy.v1"
+        },
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "transform_id"
+          ],
+          "value": "caveman.engine.lossy.v1"
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
+    },
+    {
+      "id": "missing_marker",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "text"
+          ],
+          "value": "short excerpt"
+        },
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "sha256"
+          ],
+          "value": "c9ecd4b50e3499f5ee1a784b824af1fc39eedeb3057324d1f262766cb03e1439"
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
+    },
+    {
+      "id": "marker_handle_mismatch",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "text"
+          ],
+          "value": "[caveman: shortened; exact original via caveman_retrieve handle=cmw_dddddddddddddddddddddddddddddddddddddddddddddddd]\nshort excerpt"
+        },
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "sha256"
+          ],
+          "value": "9ce01e54c30913dc14e8880c806813a17fb1ddeb28ee9b647d60539a9469d7b5"
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
+    },
+    {
+      "id": "handle_pattern_invalid",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "recovery_handle"
+          ],
+          "value": "cmw_xyz"
+        },
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "text"
+          ],
+          "value": "[caveman: shortened; exact original via caveman_retrieve handle=cmw_xyz]\nshort excerpt"
+        },
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "sha256"
+          ],
+          "value": "c8b94d552fc2458ac935ed285f794382c981da9db2232f3aacdd8b339e346001"
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
+    },
+    {
+      "id": "not_shorter_equal_bytes",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "text"
+          ],
+          "value": "[caveman: shortened; exact original via caveman_retrieve handle=cmw_abc123abc123abc123abc123abc123abc123abc123abc123]\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "sha256"
+          ],
+          "value": "b9bed9c8ff33d37dd484734cf763a6e7a0a359693f58f2bc48efc461cadf20b4"
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
+    },
+    {
+      "id": "not_shorter_utf8_bytes",
+      "note": "fewer UTF-16 code units than the original but more UTF-8 bytes",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "text"
+          ],
+          "value": "[caveman: shortened; exact original via caveman_retrieve handle=cmw_abc123abc123abc123abc123abc123abc123abc123abc123]\n\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+        },
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "sha256"
+          ],
+          "value": "09fbac3b130a5f7491d242b11226a46148c901864c4deafa168817702396d95a"
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
+    },
+    {
+      "id": "replacement_sha_mismatch",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "sha256"
+          ],
+          "value": "9d6f965ac832e40a5df6c06afe983e3b449c07b843ff51ce76204de05c690d11"
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
+    },
+    {
+      "id": "original_sha_mismatch",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "original_sha256"
+          ],
+          "value": "9d6f965ac832e40a5df6c06afe983e3b449c07b843ff51ce76204de05c690d11"
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
+    },
+    {
+      "id": "revision_differs_accepted",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "policy_revision"
+          ],
+          "value": "middleware-v1:c60e86ae5dcbf2cf9c4760599e45e66df8a10a901ad4bc619217ef8cdf0ffe28"
+        }
+      ],
+      "expect": {
+        "valid": true,
+        "refresh_capabilities": true
+      }
+    },
+    {
+      "id": "transform_version_differs_accepted",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "transform_version"
+          ],
+          "value": "2"
+        }
+      ],
+      "expect": {
+        "valid": true,
+        "refresh_capabilities": false
+      }
+    }
+  ],
+  "failure_classification": [
+    {
+      "id": "transport_error",
+      "input": {
+        "transport": "error"
+      },
+      "expect": {
+        "reason": "runtime_unavailable",
+        "breaker": true,
+        "clear_capabilities": true,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "client_deadline",
+      "input": {
+        "transport": "timeout"
+      },
+      "expect": {
+        "reason": "deadline",
+        "breaker": true,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "redirect",
+      "input": {
+        "transport": "redirect",
+        "status": 307
+      },
+      "expect": {
+        "reason": "redirect_refused",
+        "breaker": true,
+        "clear_capabilities": true,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "invalid_request_400",
+      "input": {
+        "transport": "response",
+        "status": 400,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"invalid_request\"}}"
+      },
+      "expect": {
+        "reason": "invalid_request",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "unknown_capability_400",
+      "input": {
+        "transport": "response",
+        "status": 400,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"unknown_capability\"}}"
+      },
+      "expect": {
+        "reason": "unknown_capability",
+        "breaker": false,
+        "clear_capabilities": true,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "unsupported_version_400",
+      "input": {
+        "transport": "response",
+        "status": 400,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"unsupported_version\"}}"
+      },
+      "expect": {
+        "reason": "unsupported_version",
+        "breaker": false,
+        "clear_capabilities": true,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "unauthorized_401",
+      "input": {
+        "transport": "response",
+        "status": 401,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"unauthorized\"}}"
+      },
+      "expect": {
+        "reason": "unauthorized",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "forbidden_origin_403",
+      "input": {
+        "transport": "response",
+        "status": 403,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"forbidden_origin\"}}"
+      },
+      "expect": {
+        "reason": "forbidden_origin",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "forbidden_namespace_403",
+      "input": {
+        "transport": "response",
+        "status": 403,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"forbidden_namespace\"}}"
+      },
+      "expect": {
+        "reason": "forbidden_namespace",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "not_found_404",
+      "input": {
+        "transport": "response",
+        "status": 404,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"not_found\"}}"
+      },
+      "expect": {
+        "reason": "not_found",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "request_timeout_408",
+      "input": {
+        "transport": "response",
+        "status": 408,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"request_timeout\"}}"
+      },
+      "expect": {
+        "reason": "deadline",
+        "breaker": true,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "epoch_changed_409",
+      "input": {
+        "transport": "response",
+        "status": 409,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"epoch_changed\"}}"
+      },
+      "expect": {
+        "reason": "epoch_changed",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "identity_conflict_409",
+      "input": {
+        "transport": "response",
+        "status": 409,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"identity_conflict\"}}"
+      },
+      "expect": {
+        "reason": "identity_conflict",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "deleted_410",
+      "input": {
+        "transport": "response",
+        "status": 410,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"deleted\"}}"
+      },
+      "expect": {
+        "reason": "deleted",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "expired_410",
+      "input": {
+        "transport": "response",
+        "status": 410,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"expired\"}}"
+      },
+      "expect": {
+        "reason": "expired",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "payload_limit_413",
+      "input": {
+        "transport": "response",
+        "status": 413,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"payload_limit\"}}"
+      },
+      "expect": {
+        "reason": "payload_limit",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "capacity_429_retry_after",
+      "input": {
+        "transport": "response",
+        "status": 429,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"capacity\"}}",
+        "retry_after": "2"
+      },
+      "expect": {
+        "reason": "capacity",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": 2000
+      }
+    },
+    {
+      "id": "quota_429_retry_after_capped",
+      "input": {
+        "transport": "response",
+        "status": 429,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"quota_exceeded\"}}",
+        "retry_after": "120"
+      },
+      "expect": {
+        "reason": "quota_exceeded",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": 30000
+      }
+    },
+    {
+      "id": "runtime_unavailable_503_retry_after",
+      "input": {
+        "transport": "response",
+        "status": 503,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"runtime_unavailable\"}}",
+        "retry_after": "5"
+      },
+      "expect": {
+        "reason": "runtime_unavailable",
+        "breaker": true,
+        "clear_capabilities": true,
+        "retry_after_ms": 5000
+      }
+    },
+    {
+      "id": "retry_after_http_date_ignored",
+      "input": {
+        "transport": "response",
+        "status": 503,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"runtime_unavailable\"}}",
+        "retry_after": "Wed, 23 Sep 2026 07:28:00 GMT"
+      },
+      "expect": {
+        "reason": "runtime_unavailable",
+        "breaker": true,
+        "clear_capabilities": true,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "retry_after_zero",
+      "input": {
+        "transport": "response",
+        "status": 429,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"capacity\"}}",
+        "retry_after": "0"
+      },
+      "expect": {
+        "reason": "capacity",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": 0
+      }
+    },
+    {
+      "id": "retry_after_ignored_outside_429_503",
+      "input": {
+        "transport": "response",
+        "status": 410,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"deleted\"}}",
+        "retry_after": "5"
+      },
+      "expect": {
+        "reason": "deleted",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "deadline_504",
+      "input": {
+        "transport": "response",
+        "status": 504,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"deadline\"}}"
+      },
+      "expect": {
+        "reason": "deadline",
+        "breaker": true,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "legacy_capacity_503",
+      "input": {
+        "transport": "response",
+        "status": 503,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"capacity\"}}"
+      },
+      "expect": {
+        "reason": "capacity",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "legacy_not_smaller_503",
+      "input": {
+        "transport": "response",
+        "status": 503,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"not_smaller\"}}"
+      },
+      "expect": {
+        "reason": "not_smaller",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "legacy_cache_state_503",
+      "input": {
+        "transport": "response",
+        "status": 503,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"cache_state_unavailable\"}}"
+      },
+      "expect": {
+        "reason": "cache_state_unavailable",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "legacy_recovery_unavailable_503",
+      "input": {
+        "transport": "response",
+        "status": 503,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"recovery_unavailable\"}}"
+      },
+      "expect": {
+        "reason": "recovery_unavailable",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "legacy_slow_body_413",
+      "input": {
+        "transport": "response",
+        "status": 413,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"payload_limit\"}}"
+      },
+      "expect": {
+        "reason": "payload_limit",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "unknown_code_4xx",
+      "input": {
+        "transport": "response",
+        "status": 418,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"teapot_mode\"}}"
+      },
+      "expect": {
+        "reason": "teapot_mode",
+        "breaker": false,
+        "clear_capabilities": false,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "unknown_code_5xx",
+      "input": {
+        "transport": "response",
+        "status": 500,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"maintenance\"}}"
+      },
+      "expect": {
+        "reason": "maintenance",
+        "breaker": true,
+        "clear_capabilities": true,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "non_json_body",
+      "input": {
+        "transport": "response",
+        "status": 502,
+        "body": "<html>Bad Gateway</html>"
+      },
+      "expect": {
+        "reason": "runtime_unavailable",
+        "breaker": true,
+        "clear_capabilities": true,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "envelope_without_code",
+      "input": {
+        "transport": "response",
+        "status": 404,
+        "body": "{\"message\":\"no route\"}"
+      },
+      "expect": {
+        "reason": "runtime_unavailable",
+        "breaker": true,
+        "clear_capabilities": true,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "code_not_reason_grammar",
+      "input": {
+        "transport": "response",
+        "status": 400,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"Invalid-Request\"}}"
+      },
+      "expect": {
+        "reason": "runtime_unavailable",
+        "breaker": true,
+        "clear_capabilities": true,
+        "retry_after_ms": null
+      }
+    }
+  ],
+  "breaker_sequences": [
+    {
+      "id": "consecutive_failures_open",
+      "steps": [
+        {
+          "at_ms": 0,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 1,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 2,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 3,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 4,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "open"
+          }
+        },
+        {
+          "at_ms": 5,
+          "result": "failure",
+          "expect": {
+            "sent": false,
+            "state": "open"
+          }
+        },
+        {
+          "at_ms": 30003,
+          "result": "success",
+          "expect": {
+            "sent": false,
+            "state": "open"
+          }
+        },
+        {
+          "at_ms": 30004,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 30005,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        }
+      ]
+    },
+    {
+      "id": "probe_failure_reopens",
+      "steps": [
+        {
+          "at_ms": 0,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 1,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 2,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 3,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 4,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "open"
+          }
+        },
+        {
+          "at_ms": 30004,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "open"
+          }
+        },
+        {
+          "at_ms": 30005,
+          "result": "failure",
+          "expect": {
+            "sent": false,
+            "state": "open"
+          }
+        },
+        {
+          "at_ms": 60003,
+          "result": "success",
+          "expect": {
+            "sent": false,
+            "state": "open"
+          }
+        },
+        {
+          "at_ms": 60004,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        }
+      ]
+    },
+    {
+      "id": "success_resets_consecutive",
+      "steps": [
+        {
+          "at_ms": 0,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 1,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 2,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 3,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 4,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 5,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 6,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 7,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 8,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        }
+      ]
+    },
+    {
+      "id": "failure_ratio_window",
+      "steps": [
+        {
+          "at_ms": 0,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 1,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 2,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 3,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 4,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 5,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 6,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 7,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 8,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 9,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 10,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 11,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 12,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 13,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 14,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 15,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 16,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 17,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 18,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 19,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "open"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ratio_needs_full_window",
+      "steps": [
+        {
+          "at_ms": 0,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 1,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 2,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 3,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 4,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 5,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 6,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 7,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 8,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 9,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 10,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 11,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 12,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 13,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 14,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 15,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 16,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 17,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 18,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        }
+      ]
+    },
+    {
+      "id": "local_bypass_records_nothing",
+      "steps": [
+        {
+          "at_ms": 0,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 1,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 2,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 3,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 4,
+          "result": "local",
+          "expect": {
+            "sent": false,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 5,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "open"
+          }
+        }
+      ]
+    },
+    {
+      "id": "open_then_local_then_probe",
+      "steps": [
+        {
+          "at_ms": 0,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 1,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 2,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 3,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        },
+        {
+          "at_ms": 4,
+          "result": "failure",
+          "expect": {
+            "sent": true,
+            "state": "open"
+          }
+        },
+        {
+          "at_ms": 10,
+          "result": "local",
+          "expect": {
+            "sent": false,
+            "state": "open"
+          }
+        },
+        {
+          "at_ms": 30004,
+          "result": "success",
+          "expect": {
+            "sent": true,
+            "state": "closed"
+          }
+        }
+      ]
+    }
+  ],
+  "deadlines": [
+    {
+      "id": "bootstrap_without_capabilities",
+      "input": {
+        "deadline_ms": null,
+        "retrieve_deadline_ms": null,
+        "limits": null
+      },
+      "expect": {
+        "optimize_ms": 500,
+        "retrieve_ms": 5000
+      }
+    },
+    {
+      "id": "legacy_capabilities",
+      "input": {
+        "deadline_ms": null,
+        "retrieve_deadline_ms": null,
+        "limits": {
+          "deadline_ms": 500,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144
+        }
+      },
+      "expect": {
+        "optimize_ms": 500,
+        "retrieve_ms": 5000
+      }
+    },
+    {
+      "id": "from_capabilities",
+      "input": {
+        "deadline_ms": null,
+        "retrieve_deadline_ms": null,
+        "limits": {
+          "deadline_ms": 800,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 7000
+        }
+      },
+      "expect": {
+        "optimize_ms": 800,
+        "retrieve_ms": 7000
+      }
+    },
+    {
+      "id": "override_wins",
+      "input": {
+        "deadline_ms": 150,
+        "retrieve_deadline_ms": 2000,
+        "limits": {
+          "deadline_ms": 800,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 7000
+        }
+      },
+      "expect": {
+        "optimize_ms": 150,
+        "retrieve_ms": 2000
+      }
+    },
+    {
+      "id": "override_before_capabilities",
+      "input": {
+        "deadline_ms": 250,
+        "retrieve_deadline_ms": null,
+        "limits": null
+      },
+      "expect": {
+        "optimize_ms": 250,
+        "retrieve_ms": 5000
+      }
+    },
+    {
+      "id": "invalid_retrieve_limit_defaults",
+      "input": {
+        "deadline_ms": null,
+        "retrieve_deadline_ms": null,
+        "limits": {
+          "deadline_ms": 500,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 0
+        }
+      },
+      "expect": {
+        "optimize_ms": 500,
+        "retrieve_ms": 5000
+      }
+    }
+  ],
+  "budgets": [
+    {
+      "id": "all_fit",
+      "input": {
+        "items": [
+          {
+            "id": "a",
+            "key": "82a4fe1935fe2da20f83d86c3898590ab668992adcb042786cb8240165638401:a",
+            "bytes": 100
+          },
+          {
+            "id": "b",
+            "key": "7b3a8ef44ebe2313ec8891d2a0cebaed1c00c0794177d73b3113c35a4a00e3ea:b",
+            "bytes": 100
+          },
+          {
+            "id": "c",
+            "key": "2789ed8049e5db5f02a41f21f11712a4d6955cf373275e58c0cfd9b1f32040d6:c",
+            "bytes": 100
+          }
+        ],
+        "max_segments": 256,
+        "max_bytes": 1000,
+        "replaced": []
+      },
+      "expect": {
+        "admitted": [
+          "a",
+          "b",
+          "c"
+        ],
+        "skipped": [],
+        "bypass": null
+      }
+    },
+    {
+      "id": "newest_first_over_bytes",
+      "input": {
+        "items": [
+          {
+            "id": "a",
+            "key": "82a4fe1935fe2da20f83d86c3898590ab668992adcb042786cb8240165638401:a",
+            "bytes": 400
+          },
+          {
+            "id": "b",
+            "key": "7b3a8ef44ebe2313ec8891d2a0cebaed1c00c0794177d73b3113c35a4a00e3ea:b",
+            "bytes": 400
+          },
+          {
+            "id": "c",
+            "key": "2789ed8049e5db5f02a41f21f11712a4d6955cf373275e58c0cfd9b1f32040d6:c",
+            "bytes": 400
+          }
+        ],
+        "max_segments": 256,
+        "max_bytes": 900,
+        "replaced": []
+      },
+      "expect": {
+        "admitted": [
+          "b",
+          "c"
+        ],
+        "skipped": [
+          "a"
+        ],
+        "bypass": null
+      }
+    },
+    {
+      "id": "replaced_prioritized",
+      "input": {
+        "items": [
+          {
+            "id": "a",
+            "key": "82a4fe1935fe2da20f83d86c3898590ab668992adcb042786cb8240165638401:a",
+            "bytes": 400
+          },
+          {
+            "id": "b",
+            "key": "7b3a8ef44ebe2313ec8891d2a0cebaed1c00c0794177d73b3113c35a4a00e3ea:b",
+            "bytes": 400
+          },
+          {
+            "id": "c",
+            "key": "2789ed8049e5db5f02a41f21f11712a4d6955cf373275e58c0cfd9b1f32040d6:c",
+            "bytes": 400
+          }
+        ],
+        "max_segments": 256,
+        "max_bytes": 900,
+        "replaced": [
+          "82a4fe1935fe2da20f83d86c3898590ab668992adcb042786cb8240165638401:a"
+        ]
+      },
+      "expect": {
+        "admitted": [
+          "a",
+          "c"
+        ],
+        "skipped": [
+          "b"
+        ],
+        "bypass": null
+      }
+    },
+    {
+      "id": "first_fit_continues_past_large",
+      "input": {
+        "items": [
+          {
+            "id": "a",
+            "key": "82a4fe1935fe2da20f83d86c3898590ab668992adcb042786cb8240165638401:a",
+            "bytes": 100
+          },
+          {
+            "id": "b",
+            "key": "7b3a8ef44ebe2313ec8891d2a0cebaed1c00c0794177d73b3113c35a4a00e3ea:b",
+            "bytes": 800
+          },
+          {
+            "id": "c",
+            "key": "2789ed8049e5db5f02a41f21f11712a4d6955cf373275e58c0cfd9b1f32040d6:c",
+            "bytes": 100
+          }
+        ],
+        "max_segments": 256,
+        "max_bytes": 300,
+        "replaced": []
+      },
+      "expect": {
+        "admitted": [
+          "a",
+          "c"
+        ],
+        "skipped": [
+          "b"
+        ],
+        "bypass": null
+      }
+    },
+    {
+      "id": "max_segments",
+      "input": {
+        "items": [
+          {
+            "id": "a",
+            "key": "82a4fe1935fe2da20f83d86c3898590ab668992adcb042786cb8240165638401:a",
+            "bytes": 10
+          },
+          {
+            "id": "b",
+            "key": "7b3a8ef44ebe2313ec8891d2a0cebaed1c00c0794177d73b3113c35a4a00e3ea:b",
+            "bytes": 10
+          },
+          {
+            "id": "c",
+            "key": "2789ed8049e5db5f02a41f21f11712a4d6955cf373275e58c0cfd9b1f32040d6:c",
+            "bytes": 10
+          },
+          {
+            "id": "d",
+            "key": "e343b4479de507c714402f25a629032606d60277894b0741040b02113cf372c0:d",
+            "bytes": 10
+          }
+        ],
+        "max_segments": 2,
+        "max_bytes": 1000,
+        "replaced": []
+      },
+      "expect": {
+        "admitted": [
+          "c",
+          "d"
+        ],
+        "skipped": [
+          "a",
+          "b"
+        ],
+        "bypass": null
+      }
+    },
+    {
+      "id": "replaced_over_budget_still_skipped",
+      "input": {
+        "items": [
+          {
+            "id": "a",
+            "key": "82a4fe1935fe2da20f83d86c3898590ab668992adcb042786cb8240165638401:a",
+            "bytes": 1000
+          },
+          {
+            "id": "b",
+            "key": "7b3a8ef44ebe2313ec8891d2a0cebaed1c00c0794177d73b3113c35a4a00e3ea:b",
+            "bytes": 100
+          }
+        ],
+        "max_segments": 256,
+        "max_bytes": 500,
+        "replaced": [
+          "82a4fe1935fe2da20f83d86c3898590ab668992adcb042786cb8240165638401:a"
+        ]
+      },
+      "expect": {
+        "admitted": [
+          "b"
+        ],
+        "skipped": [
+          "a"
+        ],
+        "bypass": null
+      }
+    },
+    {
+      "id": "multiple_replaced_keep_input_order",
+      "input": {
+        "items": [
+          {
+            "id": "a",
+            "key": "82a4fe1935fe2da20f83d86c3898590ab668992adcb042786cb8240165638401:a",
+            "bytes": 300
+          },
+          {
+            "id": "b",
+            "key": "7b3a8ef44ebe2313ec8891d2a0cebaed1c00c0794177d73b3113c35a4a00e3ea:b",
+            "bytes": 300
+          },
+          {
+            "id": "c",
+            "key": "2789ed8049e5db5f02a41f21f11712a4d6955cf373275e58c0cfd9b1f32040d6:c",
+            "bytes": 300
+          },
+          {
+            "id": "d",
+            "key": "e343b4479de507c714402f25a629032606d60277894b0741040b02113cf372c0:d",
+            "bytes": 300
+          }
+        ],
+        "max_segments": 256,
+        "max_bytes": 700,
+        "replaced": [
+          "82a4fe1935fe2da20f83d86c3898590ab668992adcb042786cb8240165638401:a",
+          "2789ed8049e5db5f02a41f21f11712a4d6955cf373275e58c0cfd9b1f32040d6:c"
+        ]
+      },
+      "expect": {
+        "admitted": [
+          "a",
+          "c"
+        ],
+        "skipped": [
+          "b",
+          "d"
+        ],
+        "bypass": null
+      }
+    },
+    {
+      "id": "none_fit",
+      "input": {
+        "items": [
+          {
+            "id": "a",
+            "key": "82a4fe1935fe2da20f83d86c3898590ab668992adcb042786cb8240165638401:a",
+            "bytes": 500
+          }
+        ],
+        "max_segments": 256,
+        "max_bytes": 100,
+        "replaced": []
+      },
+      "expect": {
+        "admitted": [],
+        "skipped": [
+          "a"
+        ],
+        "bypass": "payload_budget"
+      }
+    },
+    {
+      "id": "empty",
+      "input": {
+        "items": [],
+        "max_segments": 256,
+        "max_bytes": 100,
+        "replaced": []
+      },
+      "expect": {
+        "admitted": [],
+        "skipped": [],
+        "bypass": null
+      }
+    }
+  ],
+  "manifest_windows": [
+    {
+      "id": "all_fit",
+      "input": {
+        "sizes": [
+          10,
+          10,
+          10
+        ],
+        "max_items": 4096,
+        "max_bytes": 2097152
+      },
+      "expect": 3
+    },
+    {
+      "id": "item_cap_head",
+      "input": {
+        "sizes": [
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "max_items": 3,
+        "max_bytes": 2097152
+      },
+      "expect": 3
+    },
+    {
+      "id": "byte_budget_inclusive",
+      "input": {
+        "sizes": [
+          100,
+          200,
+          300,
+          400
+        ],
+        "max_items": 10,
+        "max_bytes": 600
+      },
+      "expect": 3
+    },
+    {
+      "id": "stops_at_first_overflow",
+      "input": {
+        "sizes": [
+          700,
+          1,
+          1
+        ],
+        "max_items": 10,
+        "max_bytes": 600
+      },
+      "expect": 0
+    },
+    {
+      "id": "empty",
+      "input": {
+        "sizes": [],
+        "max_items": 10,
+        "max_bytes": 600
+      },
+      "expect": 0
+    }
+  ],
+  "opaque_manifest_values": [
+    {
+      "id": "bytes",
+      "input": {
+        "bytes_base64": "iVBORw0KGgoA/w=="
+      },
+      "expect": {
+        "caveman_opaque": "d44c4eee8f72efac76c1f294e7260408825c8dad42adaaf6e9bee7e7ef4c7de3"
+      }
+    },
+    {
+      "id": "empty_bytes",
+      "input": {
+        "bytes_base64": ""
+      },
+      "expect": {
+        "caveman_opaque": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "id": "string_payload",
+      "input": {
+        "string": "data:image/png;base64,iVBORw0KGgo="
+      },
+      "expect": {
+        "caveman_opaque": "e1e10747c2374f621aa59fefede6ef99dc6acdb41b267ab4af408d5529f89ea8"
+      }
+    },
+    {
+      "id": "ill_formed_string",
+      "input": {
+        "string": "\ud800"
+      },
+      "expect": {
+        "caveman_opaque": "unhashable"
+      }
+    },
+    {
+      "id": "other_object",
+      "input": {
+        "object": true
+      },
+      "expect": {
+        "caveman_opaque": "unhashable"
+      }
+    }
+  ],
+  "endpoints": [
+    {
+      "id": "loopback_default",
+      "input": {
+        "endpoint": "http://127.0.0.1:8787",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "capabilities_url": "http://127.0.0.1:8787/caveman/v1/middleware/capabilities"
+      }
+    },
+    {
+      "id": "localhost_trailing_slash",
+      "input": {
+        "endpoint": "http://localhost:8787/",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "capabilities_url": "http://localhost:8787/caveman/v1/middleware/capabilities"
+      }
+    },
+    {
+      "id": "ipv6_loopback",
+      "input": {
+        "endpoint": "http://[::1]:8787",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "capabilities_url": "http://[::1]:8787/caveman/v1/middleware/capabilities"
+      }
+    },
+    {
+      "id": "remote_https_path_prefix",
+      "input": {
+        "endpoint": "https://gw.example.com/caveman-rt",
+        "allow_remote_content": true,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "capabilities_url": "https://gw.example.com/caveman-rt/caveman/v1/middleware/capabilities"
+      }
+    },
+    {
+      "id": "remote_https_nested_prefix_slash",
+      "input": {
+        "endpoint": "https://gw.example.com/team/rt/",
+        "allow_remote_content": true,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "capabilities_url": "https://gw.example.com/team/rt/caveman/v1/middleware/capabilities"
+      }
+    },
+    {
+      "id": "remote_requires_opt_in",
+      "input": {
+        "endpoint": "https://gw.example.com",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "remote_content_not_enabled"
+      }
+    },
+    {
+      "id": "remote_plain_http_refused",
+      "input": {
+        "endpoint": "http://runtime.mesh.svc:8787",
+        "allow_remote_content": true,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "insecure_transport_not_enabled"
+      }
+    },
+    {
+      "id": "remote_plain_http_opt_in",
+      "input": {
+        "endpoint": "http://runtime.mesh.svc:8787",
+        "allow_remote_content": true,
+        "allow_insecure_transport": true
+      },
+      "expect": {
+        "capabilities_url": "http://runtime.mesh.svc:8787/caveman/v1/middleware/capabilities"
+      }
+    },
+    {
+      "id": "insecure_without_remote",
+      "input": {
+        "endpoint": "http://runtime.mesh.svc:8787",
+        "allow_remote_content": false,
+        "allow_insecure_transport": true
+      },
+      "expect": {
+        "error": "remote_content_not_enabled"
+      }
+    },
+    {
+      "id": "userinfo_rejected",
+      "input": {
+        "endpoint": "https://user:pw@gw.example.com",
+        "allow_remote_content": true,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "query_rejected",
+      "input": {
+        "endpoint": "https://gw.example.com/?a=1",
+        "allow_remote_content": true,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "fragment_rejected",
+      "input": {
+        "endpoint": "https://gw.example.com/#x",
+        "allow_remote_content": true,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "dot_segment_rejected",
+      "input": {
+        "endpoint": "https://gw.example.com/a/../b",
+        "allow_remote_content": true,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "empty_segment_rejected",
+      "input": {
+        "endpoint": "https://gw.example.com//rt",
+        "allow_remote_content": true,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "percent_encoding_rejected",
+      "input": {
+        "endpoint": "https://gw.example.com/a%2Fb",
+        "allow_remote_content": true,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "unsupported_scheme",
+      "input": {
+        "endpoint": "ftp://gw.example.com",
+        "allow_remote_content": true,
+        "allow_insecure_transport": true
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    }
+  ],
+  "proxies": [
+    {
+      "id": "https_proxy_upper",
+      "input": {
+        "url": "https://gw.example.com/",
+        "env": {
+          "HTTPS_PROXY": "http://proxy.corp:3128"
+        }
+      },
+      "expect": "http://proxy.corp:3128"
+    },
+    {
+      "id": "lowercase_wins",
+      "input": {
+        "url": "https://gw.example.com/",
+        "env": {
+          "HTTPS_PROXY": "http://upper:1",
+          "https_proxy": "http://lower:2"
+        }
+      },
+      "expect": "http://lower:2"
+    },
+    {
+      "id": "http_uses_http_proxy",
+      "input": {
+        "url": "http://runtime.mesh.svc:8787/",
+        "env": {
+          "HTTP_PROXY": "http://proxy.corp:3128",
+          "HTTPS_PROXY": "http://other:1"
+        }
+      },
+      "expect": "http://proxy.corp:3128"
+    },
+    {
+      "id": "no_env",
+      "input": {
+        "url": "https://gw.example.com/",
+        "env": {}
+      },
+      "expect": null
+    },
+    {
+      "id": "loopback_never_proxied",
+      "input": {
+        "url": "http://127.0.0.1:8787/",
+        "env": {
+          "HTTP_PROXY": "http://proxy.corp:3128"
+        }
+      },
+      "expect": null
+    },
+    {
+      "id": "no_proxy_exact",
+      "input": {
+        "url": "https://gw.example.com/",
+        "env": {
+          "HTTPS_PROXY": "http://p:1",
+          "NO_PROXY": "gw.example.com"
+        }
+      },
+      "expect": null
+    },
+    {
+      "id": "no_proxy_suffix_leading_dot",
+      "input": {
+        "url": "https://gw.example.com/",
+        "env": {
+          "HTTPS_PROXY": "http://p:1",
+          "NO_PROXY": ".example.com"
+        }
+      },
+      "expect": null
+    },
+    {
+      "id": "no_proxy_suffix_bare",
+      "input": {
+        "url": "https://gw.example.com/",
+        "env": {
+          "HTTPS_PROXY": "http://p:1",
+          "NO_PROXY": "example.com"
+        }
+      },
+      "expect": null
+    },
+    {
+      "id": "no_proxy_not_substring",
+      "input": {
+        "url": "https://gw.badexample.com/",
+        "env": {
+          "HTTPS_PROXY": "http://p:1",
+          "NO_PROXY": "example.com"
+        }
+      },
+      "expect": "http://p:1"
+    },
+    {
+      "id": "no_proxy_wildcard",
+      "input": {
+        "url": "https://gw.example.com/",
+        "env": {
+          "HTTPS_PROXY": "http://p:1",
+          "no_proxy": "*"
+        }
+      },
+      "expect": null
+    },
+    {
+      "id": "no_proxy_port_match",
+      "input": {
+        "url": "https://gw.example.com:8443/",
+        "env": {
+          "HTTPS_PROXY": "http://p:1",
+          "NO_PROXY": "gw.example.com:8443"
+        }
+      },
+      "expect": null
+    },
+    {
+      "id": "no_proxy_port_mismatch",
+      "input": {
+        "url": "https://gw.example.com/",
+        "env": {
+          "HTTPS_PROXY": "http://p:1",
+          "NO_PROXY": "gw.example.com:8443"
+        }
+      },
+      "expect": "http://p:1"
+    },
+    {
+      "id": "no_proxy_list_whitespace_case",
+      "input": {
+        "url": "https://GW.Example.com/",
+        "env": {
+          "HTTPS_PROXY": "http://p:1",
+          "NO_PROXY": " other.org , Example.COM "
+        }
+      },
+      "expect": null
+    },
+    {
+      "id": "no_proxy_lowercase_wins",
+      "input": {
+        "url": "https://gw.example.com/",
+        "env": {
+          "HTTPS_PROXY": "http://p:1",
+          "NO_PROXY": "gw.example.com",
+          "no_proxy": "other.org"
+        }
+      },
+      "expect": "http://p:1"
+    },
+    {
+      "id": "empty_proxy_value_ignored",
+      "input": {
+        "url": "https://gw.example.com/",
+        "env": {
+          "https_proxy": "",
+          "HTTPS_PROXY": "http://p:1"
+        }
+      },
+      "expect": "http://p:1"
+    }
+  ],
+  "examples": {
+    "capabilities_v1_1": {
+      "schema_version": 1,
+      "runtime_build": "protocol-fixture",
+      "policy_revision": "middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+      "transforms": [
+        {
+          "transform_id": "caveman.engine.log.v1",
+          "implementation_version": "1",
+          "safety_classes": [
+            "S4"
+          ],
+          "deterministic": true,
+          "recovery": "exact_ccr",
+          "eligible_segment_kinds": [
+            "artifact",
+            "history",
+            "skill",
+            "tool_result"
+          ],
+          "requires_eval": true,
+          "not_smaller_fallback": "original",
+          "provenance": {
+            "kind": "native",
+            "source_manifest_sha256": null
+          },
+          "conformance_digest": "5a58a4ebd6d3abd9da413e4ee822972606ca8dce34455e8c820cadeb51ce6602"
+        }
+      ],
+      "limits": {
+        "deadline_ms": 100,
+        "request_bytes": 2097152,
+        "segment_bytes": 524288,
+        "page_bytes": 262144,
+        "retrieve_deadline_ms": 7000,
+        "queue_depth": 16,
+        "retrieve_queue_depth": 16,
+        "max_segments": 256,
+        "max_manifest_items": 4096,
+        "receipt_bytes": 16384,
+        "quota_requests_per_minute": 600
+      },
+      "persistent": true,
+      "recovery": true,
+      "retention_seconds": 86400,
+      "trust_mode": "single_operator",
+      "mode": "compress",
+      "protocol": {
+        "min": 1,
+        "max": 1
+      },
+      "features": [
+        "http_status_v2",
+        "originals_lifecycle",
+        "revision_tolerant",
+        "tolerant_reader"
+      ],
+      "max_retention_seconds": 604800
+    },
+    "error_envelopes": [
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "capacity"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "deadline"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "deleted"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "epoch_changed"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "expired"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "forbidden_namespace"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "forbidden_origin"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "identity_conflict"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "invalid_range"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "invalid_request"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "not_found"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "payload_limit"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "quota_exceeded"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "recovery_unavailable"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "request_timeout"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "runtime_unavailable"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "unauthorized"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "unknown_capability"
+        }
+      },
+      {
+        "schema_version": 1,
+        "error": {
+          "code": "unsupported_version"
+        }
+      }
+    ],
+    "session_delete_request": {
+      "schema_version": 1,
+      "scope": {
+        "namespace": "parity",
+        "session_id": "session-fixed",
+        "branch_id": "main",
+        "cache_epoch": "0"
+      }
+    },
+    "session_delete_responses": [
+      {
+        "schema_version": 1,
+        "status": "revoked",
+        "originals_deleted": false
+      },
+      {
+        "schema_version": 1,
+        "status": "revoked",
+        "originals_deleted": true,
+        "deleted": {
+          "scopes": 1,
+          "choices": 3,
+          "grants": 3,
+          "originals": 2
+        }
+      }
+    ],
+    "receipt_response": {
+      "schema_version": 1,
+      "status": "recorded",
+      "basis": "client_observed",
+      "verified_saved_usd": 0
+    },
+    "decision_events": [
+      {
+        "schema_version": 1,
+        "status": "applied",
+        "reason": "eligible",
+        "adapter": "openai",
+        "logical_call_id": "call-fixed",
+        "attempt_id": "attempt-fixed",
+        "transform_ids": [
+          "caveman.engine.log.v1"
+        ],
+        "latency_ms": 12,
+        "runtime_build": "protocol-fixture",
+        "cache_continuity": "persistent_choices",
+        "counts": {
+          "candidates": 3,
+          "sent": 2,
+          "protected": 1,
+          "opaque": 0,
+          "unsupported": 0,
+          "budget_skipped": 0,
+          "skipped": 1,
+          "replaced": 1,
+          "reused": 0
+        }
+      },
+      {
+        "schema_version": 1,
+        "status": "skipped",
+        "reason": "no_candidate",
+        "adapter": "langchain",
+        "logical_call_id": null,
+        "attempt_id": null,
+        "transform_ids": [],
+        "latency_ms": 0,
+        "runtime_build": null,
+        "cache_continuity": "unavailable",
+        "counts": {
+          "candidates": 0,
+          "sent": 0,
+          "protected": 0,
+          "opaque": 0,
+          "unsupported": 0,
+          "budget_skipped": 0,
+          "skipped": 0,
+          "replaced": 0,
+          "reused": 0
+        }
+      }
+    ]
+  }
+}
