@@ -108,8 +108,8 @@ class AsyncMiddlewareRuntime:
     def owns_binding(self, binding, scope):
         return self._runtime.owns_binding(binding, scope)
 
-    def decline(self, reason):
-        return self._runtime.decline(reason)
+    def decline(self, reason, adapter=None):
+        return self._runtime.decline(reason, adapter)
 
     @property
     def last_report(self):

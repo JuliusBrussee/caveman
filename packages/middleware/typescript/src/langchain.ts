@@ -3,22 +3,15 @@ import { ToolMessage, isAIMessage } from '@langchain/core/messages';
 import { tool, type ClientTool, type ServerTool } from '@langchain/core/tools';
 import { ensureConfig, type RunnableConfig } from '@langchain/core/runnables';
 import type { JSONSchema } from '@langchain/core/utils/json_schema';
-import { BaseDocumentCompressor } from '@langchain/core/retrievers/document_compressors';
-import type { DocumentInterface } from '@langchain/core/documents';
-import { recoveryInputSchema, recoveryToolDescription, type RecoveryBinding, type RetrieveArgs, type Scope } from '@caveman-ai/sdk/middleware';
-import { bindRecovery, currentOwner, manifest, nameConflict, observe, withOwner } from './common.js';
+import { recoveryInputSchema, recoveryToolDescription, type RetrieveArgs, type Scope } from '@caveman-ai/sdk/middleware';
+import { bindRecovery, currentOwner, nameConflict, observe, withOwner } from './common.js';
 import { frameworkGate, type GateReason } from './compatibility.js';
-import { guard } from './guard.js';
-import { langChainAdapter, langChainUsage, prepareLangChain, resolveLangChainScope, type LangChainOptions } from './langchain-model.js';
+import { langChainUsage, prepareLangChain, resolveLangChainScope, type LangChainOptions } from './langchain-model.js';
 
 // The @langchain/core-only entries live in ./langchain-model.js (`@caveman-ai/middleware/langchain-model`), which
 // never loads `langchain`; this subpath adds the agent entries and still exports everything.
 export * from './langchain-model.js';
 
-export interface LangChainDocumentOptions extends LangChainOptions {
-  /** The runtime-owned reader already registered by the application for this scope. */
-  sourceExpansion?: RecoveryBinding;
-}
 /** C11: agent entries use `langchain` + `@langchain/core`; model and document entries use `@langchain/core` only. */
 export function langChainGate(options:LangChainOptions,entry:'langchain'|'langchain-core'):GateReason|null{
   return frameworkGate(entry,options,()=>typeof ToolMessage.isInstance==='function'&&(entry==='langchain-core'||typeof createMiddleware==='function'));
@@ -72,37 +65,3 @@ export function withCavemanAgent<T extends {tools?: (ClientTool|ServerTool)[];mi
   }
   return {...input,tools,middleware:[...(input.middleware??[]),middleware]};
 }
-
-/** RAG-only native compressor. Source expansion is required for lossy use. */
-export class CavemanDocumentCompressor extends BaseDocumentCompressor{
-  private readonly blocked:GateReason|null;
-  constructor(private readonly options:LangChainDocumentOptions){super();this.blocked=langChainGate(options,'langchain-core');}
-  async compressDocuments(documents:DocumentInterface[],_query:string):Promise<DocumentInterface[]>{
-    const report=(reason:string)=>this.options.runtime.report(null,{reason,adapter:'langchain-rag'});
-    if(this.options.runtime.mode==='off'){report('off');return documents;}
-    if(this.blocked){report(this.blocked);return documents;}
-    const scope=resolveLangChainScope(this.options.scope);
-    if(!scope){report('recovery_unbound');return documents;}
-    return guard(this.options.runtime,'langchain-rag',undefined,async()=>{
-      // C6: a structural check survives minification and another installed copy of @langchain/core.
-      if(documents.some(d=>!d||typeof d.pageContent!=='string'||!Object.keys(d).every(key=>['pageContent','metadata','id'].includes(key)))){report('unsupported_shape');return documents;}
-      const context=await manifest(documents.map(d=>({id:d.id,pageContent:d.pageContent,metadata:d.metadata})),this.options.manifestBytes);
-      const reader=this.options.sourceExpansion;
-      const binding=this.options.runtime.ownsBinding(reader,scope)&&typeof reader.execute==='function'?reader:null;
-      const result=await this.options.runtime.optimize({scope,adapter:{...langChainAdapter,id:'langchain-rag',serialization_revision:'langchain-document-v1'},...context,
-        candidates:documents.map((d,i)=>({id:`document-${i}`,sourceId:d.id??`document-${i}`,content:d.pageContent,kind:'artifact'})),binding});
-      const replacements=new Map(result.replacements.map(r=>[r.segment_id,r.text]));
-      const segments=new Set(documents.map((_document,index)=>`document-${index}`));
-      if(result.replacements.some(replacement=>!segments.has(replacement.segment_id))){report('invalid_replacement_plan');return documents;}
-      const projected=documents.map((d,i)=>{
-        if(!replacements.has(`document-${i}`))return d;
-        // Host applications can load another copy of @langchain/core; keep their native constructor.
-        const NativeDocument=Object.getPrototypeOf(d).constructor as new(fields:DocumentInterface)=>DocumentInterface;
-        return new NativeDocument({pageContent:replacements.get(`document-${i}`)!,metadata:d.metadata,...(d.id!==undefined?{id:d.id}:{})});
-      });
-      this.options.runtime.report(result,{adapter:'langchain-rag'});
-      return projected;
-    },()=>{report('adapter_error');return documents;});
-  }
-}
-

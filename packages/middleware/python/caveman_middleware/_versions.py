@@ -90,8 +90,7 @@ def gate(runtime, adapter, *pins, accept=False):
     if state == "unverified":
         warn_once(adapter, "version_unverified")
         return True
-    warn_once(adapter, "unsupported_version")
-    runtime.decline("unsupported_version")  # keeps the on_diagnostic signal for existing hosts
+    runtime.decline("unsupported_version", adapter)  # warns once and keeps the on_diagnostic signal for existing hosts
     return False
 
 

@@ -399,7 +399,7 @@ class TestRuntimeProtocol(unittest.TestCase):
         with self.assertLogs("caveman.middleware", logging.WARNING) as logs:
             for _ in range(3):
                 runtime.report(call(runtime, binding, candidates=[Candidate("p", "x", protected=True)]))
-                runtime.report(runtime.decline("unsupported_version"), adapter="openai")
+                runtime.report(runtime.decline("unsupported_version", "openai"), adapter="openai")
                 runtime.report(None, reason="capacity", adapter="openai")
         self.assertEqual(sorted(logs.output), sorted([
             "WARNING:caveman.middleware:Caveman middleware decision: adapter=openai reason=unsupported_version (logged once per adapter and reason)",
@@ -416,6 +416,22 @@ class TestRuntimeProtocol(unittest.TestCase):
         self.assertTrue(warn_once("fresh-adapter", "invalid_scope"))
         self.assertFalse(warn_once("fresh-adapter", "invalid_scope"))
         self.assertFalse(warn_once("fresh-adapter", "no_candidate"), "catalog warn_once=false never logs")
+
+    def test_decline_takes_any_catalog_reason_and_names_the_adapter(self):
+        # TS parity: even a `raise` reason returns at wrap time in strict mode, and the line names the adapter.
+        diagnostics = []
+        runtime = MiddlewareRuntime(strict=True, on_diagnostic=diagnostics.append, transport=lambda *_: self.fail("unexpected network"))
+        self.addCleanup(runtime.close)
+        with self.assertLogs("caveman.middleware", logging.WARNING) as logs:
+            self.assertEqual(runtime.decline("recovery_name_conflict", "decline-test").reason, "recovery_name_conflict")
+            self.assertEqual(runtime.as_async().decline("version_unverified", "decline-async").reason, "version_unverified")
+            runtime.decline("unsupported_version")
+        self.assertEqual(logs.output, [
+            f"WARNING:caveman.middleware:Caveman middleware decision: adapter={adapter} reason={reason} (logged once per adapter and reason)"
+            for adapter, reason in (("decline-test", "recovery_name_conflict"), ("decline-async", "version_unverified"), ("-", "unsupported_version"))])
+        self.assertEqual([d["code"] for d in diagnostics], ["recovery_name_conflict", "version_unverified", "unsupported_version"])
+        with self.assertRaises(ValueError):
+            runtime.decline("not_a_catalog_reason")
 
     def test_opentelemetry_is_opt_in_and_uses_spec_names(self):
         modules, tracer, spans, carrier_keys = otel_stub()

@@ -713,13 +713,18 @@ class MiddlewareRuntime:
     def __exit__(self, *_):
         self.close()
 
-    def decline(self, reason: str) -> Optimization:
-        """Report an untested native framework without sending content or I/O."""
-        if reason != "unsupported_version":
+    def decline(self, reason: str, adapter: str | None = None) -> Optimization:
+        """Pass through at wrap time (an untested framework version, a recovery tool name conflict) without content or I/O.
+
+        Takes any catalog reason (anything else is a ValueError); ``adapter`` names the adapter in the warn-once line.
+        A catalog reason never raises here, even in strict mode.
+        """
+        if reason not in REASON_CATALOG:
             raise ValueError("Unsupported adapter diagnostic")
         if self.mode == "off":
             return Optimization("off", "disabled", (), None, None, "off")
-        return self._bypass(reason)
+        warn_once(adapter, reason)
+        return self._bypass(reason, strict=False)
 
     def _bypass(self, code: str, *, adapter: str | None = None, diagnostic: bool = True, strict: bool | None = None,
                 counts: DecisionCounts | None = None, started: float | None = None, caps: CapabilitiesView | None = None) -> Optimization:

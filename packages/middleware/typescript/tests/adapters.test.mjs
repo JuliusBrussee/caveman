@@ -42,12 +42,15 @@ test('langchain-model loads and runs without langchain installed', async t => {
     import { register } from 'node:module';
     register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(hooks)}`)});
     await assert.rejects(import(${dist('langchain')}), { code: 'ERR_MODULE_NOT_FOUND' });
-    const { withCavemanModel, CavemanChatModel, scopeFromConfig } = await import(${dist('langchain-model')});
+    const { withCavemanModel, CavemanChatModel, CavemanDocumentCompressor, scopeFromConfig } = await import(${dist('langchain-model')});
     assert.equal(typeof CavemanChatModel, 'function'); assert.equal(typeof scopeFromConfig, 'function');
     const { createMiddlewareRuntime } = await import('@caveman-ai/sdk/middleware'), { FakeListChatModel } = await import('@langchain/core/utils/testing');
     const runtime = createMiddlewareRuntime({ mode: 'off' });
     const model = withCavemanModel(new FakeListChatModel({ responses: ['done'] }), { runtime, scope: { namespace: 'test', session_id: 'one' } });
-    assert.equal((await model.invoke('hello')).content, 'done'); runtime.close();
+    assert.equal((await model.invoke('hello')).content, 'done');
+    const { Document } = await import('@langchain/core/documents'), documents = [new Document({ pageContent: 'kept' })];
+    const compressor = new CavemanDocumentCompressor({ runtime, scope: { namespace: 'test', session_id: 'one' } });
+    assert.equal(await compressor.compressDocuments(documents, 'query'), documents); runtime.close();
   `;
   await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], { cwd: fileURLToPath(new URL('../', import.meta.url)) });
 });

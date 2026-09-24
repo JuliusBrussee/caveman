@@ -6,6 +6,8 @@ Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
 ## Unreleased
 
+- Version-gate warnings name the adapter through `decline()`, on both sync
+  and async runtimes.
 - Every adapter fails open: outside strict mode, an adapter or runtime error
   sends the original request and records a reason code (`adapter_error` for
   adapter bugs). Strict mode raises `MiddlewareError`. Every pass-through

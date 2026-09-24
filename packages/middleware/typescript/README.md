@@ -42,7 +42,7 @@ Compression needs a recovery tool the adapter registered itself, so the model ca
 | `mastra` | experimental | `withCavemanMastra` | `createCavemanMastraProcessor` |
 | `mcp` | experimental | `CavemanMCPHost` with `register()`ed tools | |
 
-Certified adapters are gated by the conformance suite. Experimental ones get the same fail-open guard, logging and tests, but may change in a minor release. `CavemanGoogleGenAI` hooks the Google SDK's internal `ApiClient`; if that moves, the client falls back to the native one (`adapter_error`). `CavemanDocumentCompressor` (LangChain RAG) compresses only with a `sourceExpansion` reader. `@caveman-ai/middleware/langchain` loads `langchain`; if you only wrap a chat model, import `withCavemanModel`, `CavemanChatModel` and `scopeFromConfig` from `@caveman-ai/middleware/langchain-model` instead, which needs only `@langchain/core`. Every compressing entry point disables recovery if your tools already include one named `caveman_retrieve`; calls then report `recovery_name_conflict`.
+Certified adapters are gated by the conformance suite. Experimental ones get the same fail-open guard, logging and tests, but may change in a minor release. `CavemanGoogleGenAI` hooks the Google SDK's internal `ApiClient`; if that moves, the client falls back to the native one (`adapter_error`). `CavemanDocumentCompressor` (LangChain RAG) compresses only with a `sourceExpansion` reader. `@caveman-ai/middleware/langchain` loads `langchain`; if you only wrap a chat model or compress documents, import `withCavemanModel`, `CavemanChatModel`, `CavemanDocumentCompressor` and `scopeFromConfig` from `@caveman-ai/middleware/langchain-model` instead, which needs only `@langchain/core`. Every compressing entry point disables recovery if your tools already include one named `caveman_retrieve`; calls then report `recovery_name_conflict`.
 
 ## Framework versions
 
@@ -72,7 +72,7 @@ Each pass-through reason logs once per process through `console.warn`, as `adapt
 
 ## Runtimes and module systems
 
-Node.js 22.12 or later, ESM `import` or CommonJS `require()`. TypeScript resolves the types with `moduleResolution` `bundler`, `nodenext`, `node16` or `node10`. A CommonJS project on `node16` also needs `skipLibCheck` (the `tsc --init` default). Edge runtimes (Cloudflare `workerd`, Vercel `edge-light`) are not supported: adapters rely on `node:async_hooks` call ownership, and importing one under those conditions throws an explanatory error. Run the adapter in a Node.js function instead.
+Node.js 22.12 or later, ESM `import` or CommonJS `require()`. TypeScript resolves the types with `moduleResolution` `bundler`, `nodenext`, `node16` or `node10`. Edge runtimes (Cloudflare `workerd`, Vercel `edge-light`) are not supported: adapters rely on `node:async_hooks` call ownership, and importing one under those conditions throws an explanatory error. Run the adapter in a Node.js function instead.
 
 ## Contracts to keep
 

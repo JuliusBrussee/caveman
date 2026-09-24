@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `decline()` accepts any catalog reason and an optional adapter id, which the
+  warn-once line names. It never raises in strict mode.
 - Python floor lowered from 3.13 to 3.11.
 - `caveman_cloud.middleware` implements middleware protocol 1.1 and is marked
   experimental. Requests carry `Caveman-Middleware-Features`,

@@ -47,6 +47,9 @@ never `latest`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-ver
 - New `@caveman-ai/middleware/langchain-model` subpath (`withCavemanModel`,
   `CavemanChatModel`, `scopeFromConfig`). It needs only `@langchain/core`;
   `/langchain` still exports everything.
+- `.d.cts` shims type-check under node16 CommonJS without `skipLibCheck`.
+- `CavemanDocumentCompressor` is also exported from `/langchain-model`, so it
+  needs only `@langchain/core`.
 
 ## 0.1.0-alpha.2 — 2026-09-15
 

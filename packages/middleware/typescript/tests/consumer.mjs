@@ -82,8 +82,7 @@ try {
     console.log((await model.invoke('hello')).content); runtime.close();
   `);
   assert.match(run(process.execPath, [model], consumer), /langchain-model-ok/);
-  // C9: TypeScript resolution modes. A CommonJS project on node16 reads the .d.cts shim; like any ESM-only type
-  // import it needs skipLibCheck (the tsc --init default) or module node20/nodenext.
+  // C9: TypeScript resolution modes. A CommonJS project on node16 reads the .d.cts shim.
   const check = `
     import { withCaveman } from '@caveman-ai/middleware/ai-sdk';
     import { inspectFrameworkCompatibility } from '@caveman-ai/middleware/compatibility';
@@ -95,9 +94,18 @@ try {
   `;
   // .cts is a CommonJS module whatever the package type: the TS1479 case.
   await writeFile(join(consumer, 'check.ts'), check); await writeFile(join(consumer, 'check.cts'), check);
+  // Framework declarations (ai, zod, @langchain/core) need skipLibCheck on their own; ours must not. compatibility
+  // depends only on the SDK, so this file checks the shims without it (an `export *` shim fails node16 with TS1479).
+  await writeFile(join(consumer, 'types.cts'), `
+    import { frameworkGate, inspectFrameworkCompatibility } from '@caveman-ai/middleware/compatibility';
+    import { createMiddlewareRuntime } from '@caveman-ai/sdk/middleware';
+    export const tier: 'certified' | 'experimental' = inspectFrameworkCompatibility('ai-sdk').tier;
+    export const gated = frameworkGate('ai-sdk', { runtime: createMiddlewareRuntime({ mode: 'off' }) });
+  `);
   const tsc = join(consumer, 'node_modules/typescript/bin/tsc');
   for (const [resolution, module, file] of [['node10', 'commonjs', 'check.cts'], ['node16', 'node16', 'check.cts'], ['nodenext', 'nodenext', 'check.cts'], ['bundler', 'esnext', 'check.ts']]) {
     run(process.execPath, [tsc, '--noEmit', '--strict', '--skipLibCheck', '--moduleResolution', resolution, '--module', module, join(consumer, file)], consumer);
+    if (file === 'check.cts') run(process.execPath, [tsc, '--noEmit', '--strict', '--target', 'es2022', '--moduleResolution', resolution, '--module', module, join(consumer, 'types.cts')], consumer);
   }
   // C9: edge runtimes are an explicit unsupported target, with a clear error at import.
   const edge = join(consumer, 'edge.mjs');
