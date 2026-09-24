@@ -65,15 +65,15 @@ jobs:
           - id: aider
             install: python -m pip install aider-chat==0.86.2
           - id: claude
-            install: npm install -g @anthropic-ai/claude-code@2.1.280
+            install: npm install -g @anthropic-ai/claude-code@2.1.281
           - id: codex
             install: npm install -g @openai/codex@0.156.1
           - id: gemini
-            install: npm install -g @google/gemini-cli@0.60.0
+            install: npm install -g @google/gemini-cli@0.61.0
           - id: hermes
             install: python -m pip install --src "$RUNNER_TEMP/hermes-source" --editable "git+https://github.com/NousResearch/hermes-agent.git@1f8acb340f9c72aec1426248cca54139816a77f5#egg=hermes-agent" && python -c "import sys; from importlib.metadata import version; name, expected = 'hermes-agent==0.19.1'.split('=='); observed = version(name); print(observed); sys.exit(0 if observed == expected else 'Hermes package version mismatch')"
           - id: kilo
-            install: npm install -g @kilocode/cli@7.7.7
+            install: npm install -g @kilocode/cli@7.7.9
           - id: openclaw
             install: npm install -g openclaw@2026.9.5
           - id: opencode
