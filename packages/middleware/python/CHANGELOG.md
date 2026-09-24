@@ -6,6 +6,8 @@ Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
 ## Unreleased
 
+- `recovery_name_conflict` now reaches `on_diagnostic`, and strict `ready()`
+  raises it.
 - Version-gate warnings name the adapter through `decline()`, on both sync
   and async runtimes.
 - Every adapter fails open: outside strict mode, an adapter or runtime error

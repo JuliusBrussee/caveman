@@ -219,7 +219,7 @@ def with_caveman_agent(options: dict, *, runtime, scope, accept_framework_versio
     tools = list(options.get("tools", []))
     if model.runtime.mode == "compress":
         if any(getattr(t, "tool_name", None) == "caveman_retrieve" for t in tools):
-            recovery_name_conflict(ADAPTER.id)
+            recovery_name_conflict(model.runtime, ADAPTER.id)
         else:
             tools.append(registration.recovery_tool)
     return {**options, "model": model, "tools": tools, "plugins": [*options.get("plugins", []), registration]}

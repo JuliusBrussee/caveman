@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The warn-once line now reads `Caveman middleware passed content through
+  unchanged: adapter=… reason=…`, the same as TypeScript. Log filters that
+  match the old `Caveman middleware decision:` prefix need updating.
+- Strict `ready()`/`preflight()` now report the first `decline()`.
 - `decline()` accepts any catalog reason and an optional adapter id, which the
   warn-once line names. It never raises in strict mode.
 - Python floor lowered from 3.13 to 3.11.

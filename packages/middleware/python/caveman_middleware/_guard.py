@@ -49,6 +49,10 @@ def recovery(runtime, scope):
         return None
 
 
-def recovery_name_conflict(adapter):
-    """A host tool already owns ``caveman_retrieve``: recovery stays off for this registration."""
+def recovery_name_conflict(runtime, adapter):
+    """A host tool already owns ``caveman_retrieve``: recovery stays off for this registration.
+
+    Reported through ``decline()`` so hosts get the ``on_diagnostic`` signal, and strict ``ready()`` raises it.
+    """
     warn_once(adapter, "recovery_name_conflict")
+    runtime.decline("recovery_name_conflict", adapter)

@@ -350,7 +350,7 @@ def with_caveman_agent(options, *, runtime, scope, accept_framework_version=Fals
                         and not any(params.get(key) for key in ("response_format", "output_config", "output_format")))
     conflict = any(sanitize_tool_name(tool.name) == "caveman_retrieve" for tool in tools)
     if recovery_allowed and conflict:
-        recovery_name_conflict(ADAPTER.id)
+        recovery_name_conflict(model.runtime, ADAPTER.id)
     if recovery_allowed and not conflict:
         tools.append(model.recovery_tool)
     return {**options, "llm": model, "tools": tools}

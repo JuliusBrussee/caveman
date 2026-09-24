@@ -154,7 +154,7 @@ class CavemanCapability(AbstractCapability[Any]):
         for toolset in getattr(getattr(ctx, "agent", None), "toolsets", None) or ():
             tools = getattr(toolset, "tools", None)
             if toolset is not self.toolset and isinstance(tools, dict) and "caveman_retrieve" in tools:
-                recovery_name_conflict(ADAPTER.id)
+                recovery_name_conflict(self.runtime, ADAPTER.id)
                 return None
         return tool_def
 

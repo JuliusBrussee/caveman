@@ -306,7 +306,7 @@ def warn_once(adapter: Any, reason: Any) -> bool:
         if key in _warned or len(_warned) >= MIDDLEWARE_DEFAULTS["warn_once_entries"]:
             return False
         _warned.add(key)
-    LOGGER.warning("Caveman middleware decision: adapter=%s reason=%s (logged once per adapter and reason)", *key)
+    LOGGER.warning("Caveman middleware passed content through unchanged: adapter=%s reason=%s", *key)
     return True
 
 

@@ -578,6 +578,10 @@ Events MUST NOT contain content, scope values, handles or credentials. A sink
 exception MUST NOT affect the call. `no_candidate` emits an event too.
 `CallReport` / `onReport` and `onDiagnostic` keep working unchanged.
 
+**Warn-once line** (§8). Both SDKs MUST log exactly
+`Caveman middleware passed content through unchanged: adapter=<id or -> reason=<code>`;
+any extra field follows as ` key=value`.
+
 **OpenTelemetry** is opt-in. The SDK never imports OTel unless the caller
 supplies a tracer and/or meter.
 

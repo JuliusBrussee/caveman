@@ -402,8 +402,8 @@ class TestRuntimeProtocol(unittest.TestCase):
                 runtime.report(runtime.decline("unsupported_version", "openai"), adapter="openai")
                 runtime.report(None, reason="capacity", adapter="openai")
         self.assertEqual(sorted(logs.output), sorted([
-            "WARNING:caveman.middleware:Caveman middleware decision: adapter=openai reason=unsupported_version (logged once per adapter and reason)",
-            "WARNING:caveman.middleware:Caveman middleware decision: adapter=openai reason=capacity (logged once per adapter and reason)"]))
+            "WARNING:caveman.middleware:Caveman middleware passed content through unchanged: adapter=openai reason=unsupported_version",
+            "WARNING:caveman.middleware:Caveman middleware passed content through unchanged: adapter=openai reason=capacity"]))
         self.assertTrue(all(isinstance(e, DecisionEvent) for e in events))
         self.assertEqual(events[0].reason, "no_candidate")
         self.assertEqual(dataclasses.asdict(events[0].counts)["protected"], 1)
@@ -427,11 +427,34 @@ class TestRuntimeProtocol(unittest.TestCase):
             self.assertEqual(runtime.as_async().decline("version_unverified", "decline-async").reason, "version_unverified")
             runtime.decline("unsupported_version")
         self.assertEqual(logs.output, [
-            f"WARNING:caveman.middleware:Caveman middleware decision: adapter={adapter} reason={reason} (logged once per adapter and reason)"
+            f"WARNING:caveman.middleware:Caveman middleware passed content through unchanged: adapter={adapter} reason={reason}"
             for adapter, reason in (("decline-test", "recovery_name_conflict"), ("decline-async", "version_unverified"), ("-", "unsupported_version"))])
         self.assertEqual([d["code"] for d in diagnostics], ["recovery_name_conflict", "version_unverified", "unsupported_version"])
         with self.assertRaises(ValueError):
             runtime.decline("not_a_catalog_reason")
+
+    def test_strict_ready_raises_the_first_decline(self):
+        # TS parity: strict ready()/preflight() surface the first wrap-time decline, with no I/O; lenient still discovers.
+        peer = Peer()
+        runtime = MiddlewareRuntime(strict=True, transport=peer)
+        self.addCleanup(runtime.close)
+        runtime.decline("unsupported_version", "openai")
+        runtime.decline("recovery_name_conflict", "openai")
+        with self.assertRaises(MiddlewareError) as raised:
+            runtime.ready()
+        self.assertEqual(raised.exception.code, "unsupported_version")
+        self.assertEqual((runtime.preflight().status, runtime.preflight().reason), ("unavailable", "unsupported_version"))
+        conflict = MiddlewareRuntime(strict=True, transport=peer)
+        self.addCleanup(conflict.close)
+        conflict.decline("recovery_name_conflict", "openai")
+        with self.assertRaises(MiddlewareError) as raised:
+            conflict.ready()
+        self.assertEqual(raised.exception.code, "recovery_name_conflict")
+        self.assertEqual(peer.paths(), [])
+        lenient = MiddlewareRuntime(transport=peer)
+        self.addCleanup(lenient.close)
+        lenient.decline("unsupported_version")
+        self.assertEqual(lenient.ready()["runtime_build"], "protocol-fixture")
 
     def test_opentelemetry_is_opt_in_and_uses_spec_names(self):
         modules, tracer, spans, carrier_keys = otel_stub()
@@ -547,6 +570,18 @@ class TestRuntimeProtocol(unittest.TestCase):
 
 
 class TestAsyncRuntime(unittest.IsolatedAsyncioTestCase):
+    async def test_strict_ready_raises_the_first_decline(self):
+        # TS parity: the async view surfaces a wrap-time decline from strict ready()/preflight() too.
+        peer = Peer()
+        runtime = AsyncMiddlewareRuntime(strict=True, transport=peer)
+        runtime.decline("recovery_name_conflict", "openai")
+        with self.assertRaises(MiddlewareError) as raised:
+            await runtime.ready()
+        self.assertEqual(raised.exception.code, "recovery_name_conflict")
+        self.assertEqual((await runtime.preflight()).status, "unavailable")
+        self.assertEqual(peer.paths(), [])
+        await runtime.aclose()
+
     async def test_slow_retrieves_do_not_delay_optimize(self):
         # B1(a): 4 slow retrieves in flight made a 100 ms optimize wait ~2 s in a shared 4-worker pool.
         peer = Peer()

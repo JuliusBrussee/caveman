@@ -94,7 +94,7 @@ def _register(config, runtime, scope, context, asynchronous):
         return config, context
     for tool in tools:
         if callable(tool) and getattr(tool, "__name__", None) == "caveman_retrieve":
-            recovery_name_conflict(ADAPTER_ID)
+            recovery_name_conflict(runtime, ADAPTER_ID)
             return config, context
         if not callable(tool) and _get(tool, "function_declarations"):
             # Preserve the SDK's mixed callable/declaration handling.

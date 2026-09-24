@@ -533,7 +533,7 @@ def with_caveman_agent(options: dict, *, runtime, scope, accept_framework_versio
         result = list(tools or [])
         if connection.sync.mode == "compress" and options.get("output_schema") is None and options.get("tool_choice") in (None, "auto"):
             if any(_has_recovery(tool) for tool in result):
-                recovery_name_conflict(ADAPTER.id)
+                recovery_name_conflict(connection.sync, ADAPTER.id)
             else:
                 result.append(connection.recovery_tool)
         return result

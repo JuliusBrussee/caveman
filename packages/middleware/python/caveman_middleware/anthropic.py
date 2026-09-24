@@ -173,7 +173,7 @@ def with_caveman_anthropic(client, *, runtime, scope, accept_framework_version=F
             return original_runner(**params)
         names = [(t.get("name") if plain(t) else getattr(t, "name", None)) for t in supplied]
         if "caveman_retrieve" in names:
-            recovery_name_conflict(ADAPTER_ID)
+            recovery_name_conflict(runtime, ADAPTER_ID)
         if any(type(name) is not str or not name for name in names) or len(set(names)) != len(names) or "caveman_retrieve" in names:
             return original_runner(**params)
         binding = runtime.recovery(scope)

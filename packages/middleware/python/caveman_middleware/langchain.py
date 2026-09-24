@@ -214,7 +214,7 @@ class CavemanMiddleware(AgentMiddleware):
             return None
         actual = [tool for tool in request.tools if getattr(tool, "name", None) == "caveman_retrieve" or (plain(tool) and tool.get("name") == "caveman_retrieve")]
         if any(tool is not self.recovery_tool for tool in actual):
-            recovery_name_conflict(ADAPTER.id)
+            recovery_name_conflict(runtime, ADAPTER.id)
         if len(actual) != 1 or actual[0] is not self.recovery_tool or not self._recovery_intact() or request.response_format is not None or request.tool_choice not in (None, "auto"):
             return None
         scope = _scope(runtime, self.connection.scope)
@@ -274,7 +274,7 @@ def with_caveman_agent(options: dict, *, runtime, scope, accept_framework_versio
     tools = list(options.get("tools", []))
     collision = any((tool.get("name") if plain(tool) else getattr(tool, "name", None)) == "caveman_retrieve" for tool in tools)
     if collision and middleware.recovery_tool is not None and middleware.connection.sync.mode == "compress":
-        recovery_name_conflict(ADAPTER.id)
+        recovery_name_conflict(middleware.connection.sync, ADAPTER.id)
     if not collision and middleware.connection.sync.mode == "compress" and middleware.recovery_tool is not None:
         tools.append(middleware.recovery_tool)
     return {**options, "tools": tools, "middleware": [*options.get("middleware", []), middleware]}

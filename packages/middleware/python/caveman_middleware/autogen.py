@@ -395,7 +395,7 @@ class CavemanWorkbench(StaticStreamWorkbench):
         tools = [tool for _, found in listing for tool in found]
         conflict = any(t.get("name") == "caveman_retrieve" for t in tools)
         if conflict and self.runtime.mode == "compress":
-            recovery_name_conflict(ADAPTER.id)
+            recovery_name_conflict(self.runtime, ADAPTER.id)
         self.recovery_enabled = (not self.stopped and self.version_supported and self.binding is not None
                                  and self.runtime.mode == "compress" and not conflict)
         # The first delegate that lists a name owns it; a collision always belongs to the original workbench.

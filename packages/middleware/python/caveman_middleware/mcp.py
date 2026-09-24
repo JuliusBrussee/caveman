@@ -72,7 +72,7 @@ class CavemanMCPHost:
         if not self._version_supported or self.runtime.mode != "compress" or self.recovery is None:
             return list(tools)
         if any(item.tool.name == self.recovery.tool.name for item in tools):
-            recovery_name_conflict(self.adapter.id)
+            recovery_name_conflict(self.runtime, self.adapter.id)
             return list(tools)
         return [*tools, self.recovery]
 

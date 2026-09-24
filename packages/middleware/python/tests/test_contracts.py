@@ -17,6 +17,21 @@ ROOT = Path(__file__).parents[1]
 # ---------------------------------------------------------------- no framework needed
 
 
+def test_recovery_name_conflict_is_reported_through_decline():
+    """TS parity: a name conflict reaches on_diagnostic and strict ready() raises it; nothing raises at wrap time."""
+    from caveman_cloud.middleware import MiddlewareError
+    from caveman_middleware._guard import recovery_name_conflict
+
+    diagnostics = []
+    runtime = peer_runtime(strict=True, on_diagnostic=diagnostics.append)
+    recovery_name_conflict(runtime.as_async(), "demo")
+    assert [d["code"] for d in diagnostics] == ["recovery_name_conflict"]
+    with pytest.raises(MiddlewareError) as raised:
+        runtime.ready()
+    assert raised.value.code == "recovery_name_conflict"
+    runtime.close()
+
+
 def test_httpx2_is_never_imported_eagerly():
     """D1: an openai 2.x stack has no httpx2; importing the shared transport module must not need it."""
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT.parents[1] / "sdk/python"), str(ROOT)])}
@@ -200,12 +215,14 @@ def test_openai_tool_name_conflict_disables_recovery_instead_of_raising(caplog):
     from caveman_cloud.middleware import Scope
     from caveman_middleware.openai import with_caveman_openai_tools
 
-    runtime = peer_runtime()
+    diagnostics = []
+    runtime = peer_runtime(on_diagnostic=diagnostics.append)
     own = [{"type": "function", "function": {"name": "caveman_retrieve", "parameters": {"type": "object"}}}]
     loop = with_caveman_openai_tools(OpenAI(api_key="test"), runtime=runtime, scope=Scope("tests", "conflict"), protocol="openai-chat",
                                      tools=own, functions={"caveman_retrieve": lambda _: "host tool"})
     assert loop.tools == own and loop.functions["caveman_retrieve"]({}) == "host tool"
     assert "adapter=openai-sdk reason=recovery_name_conflict" in caplog.text
+    assert [d["code"] for d in diagnostics] == ["recovery_name_conflict"], "the host got no signal"
     runtime.close()
 
 

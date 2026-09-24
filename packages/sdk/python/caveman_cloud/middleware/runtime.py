@@ -173,6 +173,7 @@ class MiddlewareRuntime:
         self.deadline_ms = deadline_ms if valid(deadline_ms) else None
         self.retrieve_deadline_ms = retrieve_deadline_ms if valid(retrieve_deadline_ms) else None
         self._config_error: str | None = None
+        self._declined: str | None = None  # first wrap-time decline; strict ready()/preflight() surface it
         try:
             base = resolve_endpoint(endpoint, allow_remote_content, allow_insecure_transport)
         except MiddlewareError as error:
@@ -254,6 +255,8 @@ class MiddlewareRuntime:
     def _discover(self) -> CapabilitiesView:
         if self._config_error:
             raise MiddlewareError(self._config_error)
+        if self.strict and self._declined:
+            raise MiddlewareError(self._declined)
         return self._store(parse_capabilities(self._http("capabilities", None, self._deadlines()[0] / 1000)))
 
     def ready(self) -> dict:
@@ -717,12 +720,13 @@ class MiddlewareRuntime:
         """Pass through at wrap time (an untested framework version, a recovery tool name conflict) without content or I/O.
 
         Takes any catalog reason (anything else is a ValueError); ``adapter`` names the adapter in the warn-once line.
-        A catalog reason never raises here, even in strict mode.
+        A catalog reason never raises here, even in strict mode; strict ``ready()``/``preflight()`` surface the first one.
         """
         if reason not in REASON_CATALOG:
             raise ValueError("Unsupported adapter diagnostic")
         if self.mode == "off":
             return Optimization("off", "disabled", (), None, None, "off")
+        self._declined = self._declined or reason
         warn_once(adapter, reason)
         return self._bypass(reason, strict=False)
 

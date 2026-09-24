@@ -100,7 +100,7 @@ def with_caveman_openai_tools(client, *, runtime, scope, protocol, tools, functi
                    accept=accept_framework_version, manifest_bytes=manifest_bytes)
     conflict = "caveman_retrieve" in names
     if conflict and runtime.mode == "compress":
-        recovery_name_conflict(ADAPTER_ID)
+        recovery_name_conflict(runtime, ADAPTER_ID)
     supported = accept_framework_version or framework_state(*COMPATIBILITY["openai"].pins) != "unsupported"
     binding = recovery(runtime, scope) if runtime.mode == "compress" and supported and not conflict else None
     if binding is None:  # off/record, untested version, name conflict, or an unusable scope: recovery-free

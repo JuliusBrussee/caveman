@@ -156,7 +156,7 @@ class _ApplicationTools:
         if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names):
             raise ValueError("Expected distinct named native tools")
         if enabled and "caveman_retrieve" in names:
-            recovery_name_conflict(ADAPTER.id)  # the host's tool keeps its name; recovery stays off
+            recovery_name_conflict(runtime, ADAPTER.id)  # the host's tool keeps its name; recovery stays off
             enabled = False
         self.binding = recovery(ensure_sync(runtime), scope) if enabled and scope is not None else None
         self.async_binding = recovery(_async_runtime(runtime), scope) if self.binding is not None else None
@@ -704,7 +704,7 @@ class CavemanFunctionAgent(FunctionAgent):
         selected = list(tools or [])
         names = [tool.metadata.name if hasattr(tool, "metadata") else getattr(tool, "__name__", None) for tool in selected]
         if "caveman_retrieve" in names:
-            recovery_name_conflict(ADAPTER.id)  # the host's tool keeps its name; ours is never offered
+            recovery_name_conflict(runtime, ADAPTER.id)  # the host's tool keeps its name; ours is never offered
         else:
             selected.append(registration.tool)
         super().__init__(llm=CavemanLLM(llm, registration=registration, **options),
