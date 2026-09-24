@@ -106,7 +106,10 @@ Servers split on `,`, trim optional whitespace, and ignore empty, malformed
 
 **Rule.** A server applies the 1.1 semantics of feature F to a request only
 when F is in both the request header and the server's own `features`.
-Otherwise it MUST behave exactly as protocol 1.0 for that aspect.
+Otherwise it MUST behave exactly as protocol 1.0 for that aspect. The two
+server-advertised features are the exception: a request that carries the
+header at all is a 1.1 client, so `tolerant_reader` and `originals_lifecycle`
+apply to it whenever the server advertises them.
 
 | Feature | Direction | Meaning when active |
 |---|---|---|
