@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- New read-only `MiddlewareRuntime.strict`.
+- `decline()` accepts any catalog `ReasonCode` and an optional adapter id,
+  which the warn-once log line then names.
+- `typesVersions` and `.d.cts` shims: TypeScript projects using node10 or
+  node16 CommonJS resolution can import both entry points without
+  `skipLibCheck`.
 - `@caveman-ai/sdk/middleware` implements middleware protocol 1.1 and is marked
   `@experimental`:
   - capabilities are parsed tolerantly, cached for 300 s and refreshed

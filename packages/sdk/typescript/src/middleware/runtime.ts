@@ -1,5 +1,5 @@
 import { CLIENT_FEATURES_HEADER_VALUE, MIDDLEWARE_CLIENT_HEADER, MIDDLEWARE_CLIENT_PRODUCT, MIDDLEWARE_DEFAULTS, MIDDLEWARE_FEATURES_HEADER, OTEL, SDK_VERSION } from './types.js';
-import type { Adapter, BindingWire, CallReport, Candidate, Capabilities, CapabilitiesView, DecisionCounts, DecisionEvent, FailureOutcome, ManifestItem, ModelIdentity, Optimization, OptimizeRequest, PreflightReport, Receipt, RecoveryBinding, RecoveryPage, RetrieveArgs, Scope, Segment, SessionDeleteResult } from './types.js';
+import type { Adapter, BindingWire, CallReport, Candidate, Capabilities, CapabilitiesView, DecisionCounts, DecisionEvent, FailureOutcome, ManifestItem, ModelIdentity, Optimization, OptimizeRequest, PreflightReport, ReasonCode, Receipt, RecoveryBinding, RecoveryPage, RetrieveArgs, Scope, Segment, SessionDeleteResult } from './types.js';
 import { byteLength, isToken, MiddlewareError, parseCapabilities, positive, scopeKey, sha256, validatePage, validatePlan } from './validate.js';
 import { CircuitBreaker, classifyFailure, codeOutcome, normalizeScope, planBudget, reasonPolicy, resolveDeadlines, resolveEndpoint, resolveProxy, warnOnce } from './protocol.js';
 
@@ -123,6 +123,8 @@ export class MiddlewareRuntime {
   /** Runtime origin (scheme://host:port), or '' when the endpoint was refused. */
   readonly endpoint: string;
   readonly mode: 'off' | 'record' | 'compress';
+  /** The `strict` option: adapters raise their own failures (`adapter_error`) instead of passing through. */
+  readonly strict: boolean;
   // ES private fields: the token and state never appear in JSON.stringify(runtime) or util.inspect(runtime) (B10).
   readonly #options: RuntimeOptions;
   readonly #base: string;
@@ -157,6 +159,7 @@ export class MiddlewareRuntime {
     this.#options = { ...options };
     const mode = options.mode ?? 'compress';
     this.mode = mode === 'off' || mode === 'record' || mode === 'compress' ? mode : 'off';
+    this.strict = !!options.strict;
     const valid = (value: unknown, max = Number.MAX_SAFE_INTEGER) => value === undefined || (positive(value) && value <= max);
     this.#maxConcurrency = valid(options.maxConcurrency, 1024) ? options.maxConcurrency ?? MIDDLEWARE_DEFAULTS.max_concurrency : MIDDLEWARE_DEFAULTS.max_concurrency;
     this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
@@ -466,12 +469,13 @@ export class MiddlewareRuntime {
     this.#caps = null;
   }
 
-  /** Native adapters use this when their installed framework is untested. No content or network request is sent, and
-   * nothing raises here (it runs at wrap time); strict mode surfaces the reason from ready()/preflight(). */
-  decline(reason: 'unsupported_version'): Optimization {
+  /** Native adapters use this when they pass through at wrap time (an untested framework version, a recovery tool name
+   * conflict); `adapter` names them in the warn-once line. No content or network request is sent, and nothing raises
+   * here; strict mode surfaces the reason from ready()/preflight(). */
+  decline(reason: ReasonCode, adapter?: string): Optimization {
     if (this.mode === 'off') return { status: 'off', reason: 'disabled', replacements: [], plan: null, request: null, cacheContinuity: 'off' };
     this.#declined ??= reason;
-    return this.#bypass(reason, undefined, {}, false);
+    return this.#bypass(reason, adapter, {}, false);
   }
 
   /** Header controls are restricted to an explicitly configured, discovered runtime origin. */

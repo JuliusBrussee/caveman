@@ -42,7 +42,7 @@ Compression needs a recovery tool the adapter registered itself, so the model ca
 | `mastra` | experimental | `withCavemanMastra` | `createCavemanMastraProcessor` |
 | `mcp` | experimental | `CavemanMCPHost` with `register()`ed tools | |
 
-Certified adapters are gated by the conformance suite. Experimental ones get the same fail-open guard, logging and tests, but may change in a minor release. `CavemanGoogleGenAI` hooks the Google SDK's internal `ApiClient`; if that moves, the client falls back to the native one (`adapter_error`). `CavemanDocumentCompressor` (LangChain RAG) compresses only with a `sourceExpansion` reader. Every compressing entry point disables recovery if your tools already include one named `caveman_retrieve`; calls then report `recovery_name_conflict`.
+Certified adapters are gated by the conformance suite. Experimental ones get the same fail-open guard, logging and tests, but may change in a minor release. `CavemanGoogleGenAI` hooks the Google SDK's internal `ApiClient`; if that moves, the client falls back to the native one (`adapter_error`). `CavemanDocumentCompressor` (LangChain RAG) compresses only with a `sourceExpansion` reader. `@caveman-ai/middleware/langchain` loads `langchain`; if you only wrap a chat model, import `withCavemanModel`, `CavemanChatModel` and `scopeFromConfig` from `@caveman-ai/middleware/langchain-model` instead, which needs only `@langchain/core`. Every compressing entry point disables recovery if your tools already include one named `caveman_retrieve`; calls then report `recovery_name_conflict`.
 
 ## Framework versions
 
@@ -68,7 +68,7 @@ LangChain passes the `RunnableConfig` (`config => scopeFromConfig(config, 'app')
 
 A large history never skips the whole call. Each tool result over the runtime's `segment_bytes` is skipped on its own (`payload_budget`), and images or bytes enter the context manifest as hashes. `manifestBytes` (default 2 MiB) bounds how much history is hashed, and `wireBytes` (default 16 MiB, OpenAI and Anthropic) bounds the request body the adapter parses. OpenAI Responses turns pass through with `provider_state_retained` unless `store: false`, because OpenAI would store the compressed turn; `allowStoredResponses: true` opts in.
 
-Each pass-through reason logs once per process through `console.warn`, as `adapter=<id> reason=<code>`, never content, scope values or credentials. Any exception inside adapter code becomes a pass-through with `adapter_error`.
+Each pass-through reason logs once per process through `console.warn`, as `adapter=<id> reason=<code>`, never content, scope values or credentials. Any exception inside adapter code becomes a pass-through with `adapter_error`; with `strict: true` the call raises `MiddlewareError('adapter_error')` instead.
 
 ## Runtimes and module systems
 

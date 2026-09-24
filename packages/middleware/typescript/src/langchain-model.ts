@@ -1,11 +1,99 @@
 import { BaseChatModel, type BaseChatModelCallOptions, type BindToolsInput } from '@langchain/core/language_models/chat_models';
 import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
-import { BaseMessage, AIMessageChunk, HumanMessage, coerceMessageLikeToMessage, isAIMessage, isAIMessageChunk } from '@langchain/core/messages';
-import { RunnableLambda, type RunnableConfig } from '@langchain/core/runnables';
+import { BaseMessage, AIMessageChunk, HumanMessage, ToolMessage, coerceMessageLikeToMessage, isAIMessage, isAIMessageChunk, type UsageMetadata } from '@langchain/core/messages';
+import { RunnableLambda, ensureConfig, type RunnableConfig } from '@langchain/core/runnables';
 import type { ChatGeneration, ChatResult } from '@langchain/core/outputs';
 import { IterableReadableStream } from '@langchain/core/utils/stream';
-import { prepareLangChain, langChainUsage, langChainGate, type LangChainOptions } from './langchain.js';
-import { hintRecovery, observe, withOwner } from './common.js';
+import type { Candidate, MiddlewareRuntime, RecoveryBinding, Scope, Usage } from '@caveman-ai/sdk/middleware';
+import { currentOwner, hintRecovery, manifest, observe, passiveAttempt, plain, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
+import { frameworkGate, frameworkVersion, type GateOptions } from './compatibility.js';
+import { guard } from './guard.js';
+
+// `@caveman-ai/middleware/langchain-model`: the entries that need only @langchain/core, so this module never loads
+// `langchain`. `@caveman-ai/middleware/langchain` re-exports all of it.
+
+/** A scope, or a function of the run's RunnableConfig (e.g. `config => scopeFromConfig(config, 'app')`). */
+export type LangChainScope = ScopeSource<RunnableConfig>;
+export interface LangChainOptions extends GateOptions, BudgetOptions { runtime: MiddlewareRuntime; scope: LangChainScope }
+export const langChainAdapter = { id:'langchain', version:'0.1.0', framework_version:frameworkVersion('langchain')??'unknown', serialization_revision:'langchain-message-v1' };
+
+/** LangGraph scope from `configurable.thread_id`. Throws without one; adapters catch that and run the call
+ * recovery-free (`recovery_unbound`). Any thread_id text works: it is normalized per spec §9. */
+export function scopeFromConfig(config:RunnableConfig, namespace:string):Scope{
+  const c=config.configurable??{};
+  if(typeof c.thread_id!=='string'||!c.thread_id)throw new Error('LangGraph middleware requires configurable.thread_id');
+  if(c.caveman_branch_id!==undefined&&typeof c.caveman_branch_id!=='string')throw new Error('Invalid caveman_branch_id');
+  if(c.caveman_cache_epoch!==undefined&&typeof c.caveman_cache_epoch!=='string')throw new Error('Invalid caveman_cache_epoch');
+  return {namespace,session_id:c.thread_id,branch_id:c.caveman_branch_id??'main',cache_epoch:c.caveman_cache_epoch??'0'};
+}
+/** Never throws: null when no scope could be resolved (see resolveScope). */
+export function resolveLangChainScope(source:LangChainScope,config?:RunnableConfig):Scope|null{
+  return resolveScope(source,ensureConfig(config));
+}
+const number=(value:unknown):number|null=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0?value:null;
+export function langChainUsage(value:UsageMetadata|undefined):Usage|null{
+  if(!value)return null;
+  const input=number(value.input_tokens),output=number(value.output_tokens);
+  return {provenance:'client_observed_sdk',complete:input!==null&&output!==null,input_tokens:input,output_tokens:output,
+    cache_read_tokens:number(value.input_token_details?.cache_read),cache_write_tokens:number(value.input_token_details?.cache_creation),reasoning_tokens:number(value.output_token_details?.reasoning)};
+}
+
+// C6: `lc_name` is a string the class defines itself, so it survives minification and excludes subclasses that would
+// lose their own fields when rebuilt. Another installed copy of @langchain/core still qualifies.
+const nativeToolMessage=(message:BaseMessage):message is ToolMessage=>{
+  const native=Object.getPrototypeOf(message)?.constructor;
+  return ToolMessage.isInstance(message)&&!!native&&Object.hasOwn(native,'lc_name')&&native.lc_name()==='ToolMessage';
+};
+/** C12: rebuild from explicit fields; spreading the instance would copy `lc_kwargs`, which still holds the original. */
+function projectedToolMessage(message:ToolMessage,content:ToolMessage['content']):ToolMessage{
+  const NativeToolMessage=Object.getPrototypeOf(message).constructor as typeof ToolMessage;
+  const fields={content,tool_call_id:message.tool_call_id,name:message.name,id:message.id,status:message.status,artifact:message.artifact,
+    metadata:message.metadata,additional_kwargs:message.additional_kwargs,response_metadata:message.response_metadata};
+  return new NativeToolMessage(Object.fromEntries(Object.entries(fields).filter(([,value])=>value!==undefined)) as ConstructorParameters<typeof ToolMessage>[0] & object);
+}
+
+/** Clone only native ToolMessage text. Other message classes stay identical. */
+export async function prepareLangChain(messages:BaseMessage[], options:LangChainOptions, config?:RunnableConfig, binding?:RecoveryBinding|null, prefix:BaseMessage[]=[], blocked:string|null=null):Promise<{messages:BaseMessage[];attempt:Attempt|null}>{
+  const signal=config?.signal;signal?.throwIfAborted();
+  if(currentOwner())return {messages,attempt:null};
+  const passive=(reason:string)=>({messages,attempt:passiveAttempt(options.runtime,'langchain',reason)});
+  if(options.runtime.mode==='off')return passive('off');
+  if(blocked)return passive(blocked);
+  const scope=resolveLangChainScope(options.scope,config);
+  if(!scope)return passive('recovery_unbound');
+  return guard(options.runtime,'langchain',signal,async()=>{
+    const context=await manifest([...prefix,...messages].map(m=>m.toDict()),options.manifestBytes);
+    const names=new Map<string,string>();
+    for(const message of messages)if(isAIMessage(message))for(const call of message.tool_calls??[])if(call.id)names.set(call.id,call.name);
+    const candidates:Candidate[]=[], setters=new Map<string,{mi:number;pi:number|null}>();
+    messages.forEach((message,mi)=>{
+      if(!nativeToolMessage(message)||message.name==='caveman_retrieve'||names.get(message.tool_call_id)==='caveman_retrieve'||message.status==='error')return;
+      if(!message.name&&!names.has(message.tool_call_id))return;
+      const add=(text:unknown,pi:number|null)=>{
+        if(typeof text!=='string')return;
+        const id=`message-${mi}.part-${pi??0}`;candidates.push({id,sourceId:id,content:text});setters.set(id,{mi,pi});
+      };
+      if(typeof message.content==='string')add(message.content,null);
+      else message.content.forEach((part,pi)=>{if(plain(part)&&part.type==='text'&&!('citations'in part))add(part.text,pi);});
+    });
+    const attempt:Attempt={runtime:options.runtime,scope,logicalCallId:crypto.randomUUID(),attemptId:crypto.randomUUID(),optimization:null,wireSHA256:null,adapter:'langchain'};
+    const optimization=await options.runtime.optimize({scope,adapter:langChainAdapter,...context,candidates,binding:binding??null,
+      ...(binding?{recoveryOverheadText:JSON.stringify({name:binding.name,description:binding.description,input_schema:binding.inputSchema})}:{}),
+      logicalCallId:attempt.logicalCallId,attemptId:attempt.attemptId,...(signal?{signal}:{}),});
+    if(!optimization.replacements.every(r=>setters.has(r.segment_id))){attempt.reason='invalid_replacement_plan';return {messages,attempt};}
+    const result=messages.slice();
+    for(const replacement of optimization.replacements){
+      const {mi,pi}=setters.get(replacement.segment_id)!,message=result[mi] as ToolMessage;
+      let content:ToolMessage['content']=replacement.text;
+      if(pi!==null&&Array.isArray(message.content)){
+        const parts=message.content.slice();parts[pi]={...parts[pi] as Record<string,unknown>,text:replacement.text} as typeof parts[number];content=parts;
+      }
+      result[mi]=projectedToolMessage(message,content);
+    }
+    attempt.optimization=optimization;
+    return {messages:optimization.replacements.length?result:messages,attempt};
+  },()=>passive('adapter_error'));
+}
 
 function messages(input:BaseLanguageModelInput):BaseMessage[]{
   if(typeof input==='string')return [new HumanMessage(input)];
@@ -20,7 +108,7 @@ export class CavemanChatModel<Options extends BaseChatModelCallOptions=BaseChatM
   private readonly blocked:string|null;
   constructor(readonly inner:BaseChatModel<Options>,readonly caveman:LangChainOptions){
     super({});
-    this.blocked=langChainGate(caveman,'langchain-core');
+    this.blocked=frameworkGate('langchain-core',caveman,()=>typeof ToolMessage.isInstance==='function');
     if(!this.blocked)hintRecovery(caveman.runtime,'langchain','withCavemanModel/CavemanChatModel','withCavemanAgent');
     this.withStructuredOutput=((...args:Parameters<BaseChatModel<Options>['withStructuredOutput']>)=>this.project().pipe(inner.withStructuredOutput(...args))) as BaseChatModel<Options>['withStructuredOutput'];
   }

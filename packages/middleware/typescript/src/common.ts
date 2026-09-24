@@ -109,7 +109,7 @@ export function passiveAttempt(runtime: MiddlewareRuntime, adapter: string, reas
  * reporting `recovery_name_conflict`, and strict mode raises it from ready(). */
 export function nameConflict(runtime: MiddlewareRuntime, adapter: string): 'recovery_name_conflict' {
   warnOnce(adapter, 'recovery_name_conflict');
-  (runtime.decline as (reason: string) => unknown)('recovery_name_conflict');
+  runtime.decline('recovery_name_conflict', adapter);
   return 'recovery_name_conflict';
 }
 

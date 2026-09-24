@@ -23,7 +23,8 @@ try {
   const consumer = join(directory, 'app'); await mkdir(consumer);
   await writeFile(join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module', packageManager, dependencies: {
     '@caveman-ai/sdk': `file:${sdk}`, '@caveman-ai/middleware': `file:${middleware}`, ai: '7.0.94', '@ai-sdk/provider': '4.0.11', zod: '4.4.3',
-    typescript: '5.9.3',
+    // @langchain/core without `langchain`: the model-only subpath must work alone.
+    '@langchain/core': '1.2.9', typescript: '5.9.3',
   // The middleware's own ^SDK range must resolve to this tarball too, not an older registry release.
   }, pnpm: { overrides: { '@caveman-ai/sdk': `file:${sdk}` } } }));
   // A clean registry install proves consumer resolution independently of the
@@ -69,13 +70,27 @@ try {
     console.log('require-ok');
   `);
   assert.match(run(process.execPath, [required], consumer), /require-ok/);
+  const model = join(consumer, 'langchain-model.mjs');
+  await writeFile(model, `
+    import assert from 'node:assert/strict';
+    import { withCavemanModel } from '@caveman-ai/middleware/langchain-model';
+    import { createMiddlewareRuntime } from '@caveman-ai/sdk/middleware';
+    import { FakeListChatModel } from '@langchain/core/utils/testing';
+    await assert.rejects(import('@caveman-ai/middleware/langchain'), { code: 'ERR_MODULE_NOT_FOUND' }, 'langchain is not installed');
+    const runtime = createMiddlewareRuntime({ mode: 'off' });
+    const model = withCavemanModel(new FakeListChatModel({ responses: ['langchain-model-ok'] }), { runtime, scope: { namespace: 'consumer', session_id: 'test' } });
+    console.log((await model.invoke('hello')).content); runtime.close();
+  `);
+  assert.match(run(process.execPath, [model], consumer), /langchain-model-ok/);
   // C9: TypeScript resolution modes. A CommonJS project on node16 reads the .d.cts shim; like any ESM-only type
   // import it needs skipLibCheck (the tsc --init default) or module node20/nodenext.
   const check = `
     import { withCaveman } from '@caveman-ai/middleware/ai-sdk';
     import { inspectFrameworkCompatibility } from '@caveman-ai/middleware/compatibility';
+    import { withCavemanModel } from '@caveman-ai/middleware/langchain-model';
     const tier: 'certified' | 'experimental' = inspectFrameworkCompatibility('ai-sdk').tier;
     export const wrap: typeof withCaveman = withCaveman;
+    export const wrapModel: typeof withCavemanModel = withCavemanModel;
     export { tier };
   `;
   // .cts is a CommonJS module whatever the package type: the TS1479 case.
@@ -90,5 +105,5 @@ try {
   for (const condition of ['workerd', 'edge-light']) {
     assert.match(run(process.execPath, ['--conditions', condition, edge], consumer), /edge runtimes \(workerd, edge-light\) are not supported/);
   }
-  console.log('Consumer tarball install, require(), TypeScript node10/node16/nodenext/bundler, edge refusal, and Node ESM bundle passed.');
+  console.log('Consumer tarball install, require(), langchain-model without langchain, TypeScript node10/node16/nodenext/bundler, edge refusal, and Node ESM bundle passed.');
 } finally { await rm(directory, { recursive: true, force: true }); }

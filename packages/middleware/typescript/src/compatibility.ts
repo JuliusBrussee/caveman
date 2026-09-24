@@ -86,8 +86,7 @@ export function frameworkGate(adapter: AdapterName, options: GateOptions, detect
   }
   if (reason) {
     warnOnce(id, reason);
-    // ponytail: decline() is typed for unsupported_version only; version_unavailable takes the same strict path.
-    (options.runtime.decline as (reason: GateReason) => unknown)(reason);
+    options.runtime.decline(reason, id);
   }
   return reason;
 }

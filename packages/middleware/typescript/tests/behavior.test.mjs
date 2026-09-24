@@ -42,6 +42,15 @@ for (const [name, driver] of Object.entries(drivers)) {
     assert.ok(f.reports.some(report => report.reason === 'adapter_error'), JSON.stringify(f.reports));
   });
 
+  test(`${name}: strict mode raises an exception in adapter code as adapter_error`, async t => {
+    if (!requirePeers(t, name)) return;
+    const f = runtimeFixture({ strict: true }); t.after(() => f.runtime.close());
+    f.runtime.optimize = async () => { throw new TypeError('adapter bug'); };
+    // Frameworks may wrap it (provider SDKs as a connection error); the code rides the cause chain.
+    const codes = error => error ? [error.code, ...codes(error.cause)] : [];
+    await assert.rejects(driver.run(f.runtime), error => codes(error).includes('adapter_error'));
+  });
+
   test(`${name}: scopes are normalized; an unusable or missing scope runs recovery-free without throwing`, async t => {
     if (!requirePeers(t, name)) return;
     const email = runtimeFixture(); t.after(() => email.runtime.close());

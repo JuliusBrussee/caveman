@@ -83,6 +83,18 @@
         "default": "./dist/langchain.js"
       }
     },
+    "./langchain-model": {
+      "workerd": "./dist/edge.js",
+      "edge-light": "./dist/edge.js",
+      "import": {
+        "types": "./dist/langchain-model.d.ts",
+        "default": "./dist/langchain-model.js"
+      },
+      "default": {
+        "types": "./dist/langchain-model.d.cts",
+        "default": "./dist/langchain-model.js"
+      }
+    },
     "./strands": {
       "workerd": "./dist/edge.js",
       "edge-light": "./dist/edge.js",

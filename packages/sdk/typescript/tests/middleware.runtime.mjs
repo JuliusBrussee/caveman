@@ -218,4 +218,11 @@ test('untested native versions decline without network traffic and strict mode s
   assert.equal((await strict.preflight()).reason, 'unsupported_version'); strict.close();
   const off = createMiddlewareRuntime({ mode: 'off', strict: true, onDiagnostic: () => { throw new Error('off diagnostic'); } });
   assert.equal(off.decline('unsupported_version').status, 'off'); off.close();
+  assert.deepEqual([strict.strict, off.strict, runtime.strict], [true, true, false], 'adapters read strict to raise adapter_error');
+  // Any catalog reason, and the warn-once line names the adapter instead of `adapter=-`.
+  const lines = [], warn = console.warn; console.warn = line => lines.push(line);
+  const named = createMiddlewareRuntime({ strict: true, fetch: async () => Response.json(fixture.capabilities) });
+  try { assert.equal(named.decline('recovery_name_conflict', 'decline-test').reason, 'recovery_name_conflict'); } finally { console.warn = warn; }
+  assert.deepEqual(lines, ['Caveman middleware passed content through unchanged: adapter=decline-test reason=recovery_name_conflict']);
+  await assert.rejects(named.ready(), { code: 'recovery_name_conflict' }); named.close();
 });

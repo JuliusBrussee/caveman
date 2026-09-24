@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { inRange, matchesFramework } from '../dist/versions.js';
 import { inspectFrameworkCompatibility, frameworkCompatible, frameworkGate } from '../dist/compatibility.js';
+import { nameConflict } from '../dist/common.js';
 import { createMiddlewareRuntime } from '@caveman-ai/sdk/middleware';
 import { runtimeFixture } from './runtime-fixture.mjs';
 import { readFile } from 'node:fs/promises';
@@ -71,7 +72,12 @@ test('the version gate never throws at wrap time: warn once, decline for strict 
     assert.equal(frameworkGate('mcp', { runtime }, () => false, { '@modelcontextprotocol/sdk': null }), 'version_unavailable');
     await assert.rejects(runtime.ready(), { code: 'version_unavailable' });
     assert.equal(frameworkGate('mcp', { runtime: createMiddlewareRuntime({ mode: 'off' }) }, () => false, { '@modelcontextprotocol/sdk': '9.0.0' }), null, 'off never gates');
-    strict.close(); runtime.close();
+    const conflict = createMiddlewareRuntime({ strict: true, fetch: async () => Response.json({}) });
+    assert.equal(nameConflict(conflict, 'mcp'), 'recovery_name_conflict');
+    await assert.rejects(conflict.ready(), { code: 'recovery_name_conflict' });
+    // Every decline names its adapter in the warn-once line.
+    assert.ok(!lines.some(line => line.includes('adapter=-')), lines.join('\n'));
+    strict.close(); runtime.close(); conflict.close();
   } finally { console.warn = warn; }
 });
 

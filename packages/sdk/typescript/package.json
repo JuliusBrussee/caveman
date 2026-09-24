@@ -8,14 +8,31 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "default": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.js"
+      }
     },
     "./middleware": {
-      "types": "./dist/middleware/index.d.ts",
-      "import": "./dist/middleware/index.js",
-      "default": "./dist/middleware/index.js"
+      "import": {
+        "types": "./dist/middleware/index.d.ts",
+        "default": "./dist/middleware/index.js"
+      },
+      "default": {
+        "types": "./dist/middleware/index.d.cts",
+        "default": "./dist/middleware/index.js"
+      }
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "middleware": [
+        "./dist/middleware/index.d.ts"
+      ]
     }
   },
   "files": [
@@ -48,7 +65,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/cjs-types.mjs",
     "prepack": "npm run build",
     "lint": "tsc --noEmit",
     "test": "npm run build && npm run test:types && npm run test:node",
