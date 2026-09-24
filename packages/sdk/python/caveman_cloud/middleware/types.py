@@ -49,6 +49,10 @@ class Optimization:
     plan: dict[str, Any] | None = None
     request: dict[str, Any] | None = None
     cache_continuity: str = "unavailable"
+    # Protocol 1.1 decision-event inputs (§14); None/0 when optimize() never reached them.
+    counts: "DecisionCounts | None" = None
+    latency_ms: int = 0
+    runtime_build: str | None = None
 
 
 @dataclass(frozen=True)
@@ -230,6 +234,13 @@ class BudgetItem:
     id: str
     key: str
     bytes: int
+
+
+@dataclass(frozen=True)
+class BudgetResult:
+    """K10 admission: ids in input order."""
+    admitted: tuple[str, ...]
+    skipped: tuple[str, ...]
 
 
 @dataclass(frozen=True)

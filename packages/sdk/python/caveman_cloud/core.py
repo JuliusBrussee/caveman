@@ -1675,6 +1675,7 @@ class OTelExporter:
         cached_tokens: int | None = None,
         cost_usd: float | None = None,
         workflow: str | None = None,
+        cache_creation_tokens: int | None = None,
         status: str = "ok",
         start_time_ns: int | None = None,
         end_time_ns: int | None = None,
@@ -1694,6 +1695,7 @@ class OTelExporter:
             "gen_ai.usage.output_tokens",
             "gen_ai.usage.cached_tokens",
             "gen_ai.usage.cache_read.input_tokens",
+            "gen_ai.usage.cache_creation.input_tokens",
             "gen_ai.usage.cost_usd",
             "cave.agent",
             "cave.workflow",
@@ -1717,6 +1719,11 @@ class OTelExporter:
             attrs["gen_ai.usage.output_tokens"] = valid_output
         if valid_cached is not None and (valid_input is None or valid_cached <= valid_input):
             attrs["gen_ai.usage.cache_read.input_tokens"] = valid_cached
+        valid_creation = _strict_non_negative_int(cache_creation_tokens)
+        if valid_creation is not None:
+            attrs["gen_ai.usage.cache_creation.input_tokens"] = valid_creation
+        # Deprecated: `gen_ai.usage.cost_usd` is not an OTel GenAI semconv name. It stays for 1.x because the
+        # gateway importer reads it; prefer the semconv token counts above.
         if isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool) and math.isfinite(float(cost_usd)) and cost_usd >= 0:
             attrs["gen_ai.usage.cost_usd"] = float(cost_usd)
         attrs["cave.agent"] = self.cave.agent

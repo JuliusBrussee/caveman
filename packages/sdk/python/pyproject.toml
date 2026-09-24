@@ -10,12 +10,14 @@ version = "1.1.0"
 description = "Stdlib-only Python client for Caveman gateway tracing, tool deferral, checkpoints, and recoverable compression."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = []
 authors = [{name = "Caveman"}]
 keywords = ["agents", "ai", "llm", "observability", "opentelemetry", "optimization"]
 classifiers = [
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Typing :: Typed",
 ]
