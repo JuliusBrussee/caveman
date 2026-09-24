@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -419,6 +419,108 @@ test("command_run carries the proxy token delta, then stops repeating it", async
   assert.equal(thirdEvent.tokens_processed, 15680);
   assert.equal(thirdEvent.tokens_saved, 3800);
   assert.equal(thirdEvent.tokens_basis, "inferred", "token volume must ship with its basis, never bare");
+
+  stub.close();
+});
+
+// delayConfigWrite wires a --require preload that stalls fs.writeFileSync for
+// delayMs when the target path is this run's config.json, widening the gap
+// between reading and committing the watermark the way process jitter can.
+function delayConfigWrite(env, home, delayMs) {
+  const dir = mkdtempSync(join(tmpdir(), "cave-delay-"));
+  const preload = join(dir, "delay-write.cjs");
+  writeFileSync(preload, [
+    'const fs = require("node:fs");',
+    "const target = process.env.CAVEMAN_TEST_DELAY_CONFIG_PATH;",
+    "const ms = Number(process.env.CAVEMAN_TEST_DELAY_WRITE_MS || 0);",
+    "const original = fs.writeFileSync;",
+    "fs.writeFileSync = function (path, ...rest) {",
+    "  if (ms > 0 && target && String(path) === target) {",
+    "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);",
+    "  }",
+    "  return original.call(fs, path, ...rest);",
+    "};",
+  ].join("\n"));
+  return {
+    ...env,
+    NODE_OPTIONS: `${env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ` : ""}--require ${preload}`,
+    CAVEMAN_TEST_DELAY_CONFIG_PATH: join(home, ".caveman-cloud", "config.json"),
+    CAVEMAN_TEST_DELAY_WRITE_MS: String(delayMs),
+  };
+}
+
+// Two `caveman` invocations exiting close together both read the config
+// before either writes back (the timing telemetryTokenDelta's own comment
+// used to claim could not happen); only one may end up claiming the delta.
+test("two CLI processes racing the same watermark do not both claim the delta", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("the --require preload path quoting here is POSIX-only");
+    return;
+  }
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const iso = isolatedEnv({
+    CAVEMAN_TELEMETRY: "1",
+    CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
+  });
+  const configDir = join(iso.home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+    telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-08-01T00:00:00.000Z", promptVersion: 4 },
+    telemetryTokens: { tokensIn: 500, tokensSaved: 100, at: "2026-08-01T00:00:00.000Z" },
+  }));
+  const baseEnv = stubProxyStats(iso, { tokensIn: 1500, tokensSaved: 300 });
+  const racingEnv = delayConfigWrite(baseEnv, iso.home, 1200);
+
+  const [a, b] = await Promise.all([runCli(["version"], racingEnv), runCli(["version"], racingEnv)]);
+  assert.equal(a.code, 0, a.stderr);
+  assert.equal(b.code, 0, b.stderr);
+
+  const events = stub.posts.flatMap((p) => JSON.parse(p.body));
+  const withTokens = events.filter((e) => "tokens_processed" in e);
+  assert.equal(withTokens.length, 1, "exactly one of the two racing processes may claim the delta");
+  assert.equal(withTokens[0].tokens_processed, 1000);
+  assert.equal(withTokens[0].tokens_saved, 200);
+
+  const watermark = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).telemetryTokens;
+  assert.equal(watermark.tokensIn, 1500, "the watermark still advances to the real total");
+
+  stub.close();
+});
+
+// A lock left behind by a crashed holder must not wedge telemetry off
+// forever: the next run reclaims it once it is past the stale window.
+test("a stale lock from a crashed holder does not wedge telemetry off", async (t) => {
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const iso = isolatedEnv({
+    CAVEMAN_TELEMETRY: "1",
+    CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
+  });
+  const configDir = join(iso.home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  const configFile = join(configDir, "config.json");
+  writeFileSync(configFile, JSON.stringify({
+    telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-08-01T00:00:00.000Z", promptVersion: 4 },
+    telemetryTokens: { tokensIn: 500, tokensSaved: 100, at: "2026-08-01T00:00:00.000Z" },
+  }));
+  // A holder that died without releasing, aged well past the stale window.
+  const lockFile = `${configFile}.telemetry.lock`;
+  writeFileSync(lockFile, "");
+  const longAgo = Math.floor(Date.now() / 1000) - 3600;
+  utimesSync(lockFile, longAgo, longAgo);
+
+  const run = await runCli(["version"], stubProxyStats(iso, { tokensIn: 1500, tokensSaved: 300 }));
+  assert.equal(run.code, 0, run.stderr);
+
+  const events = stub.posts.flatMap((p) => JSON.parse(p.body));
+  const withTokens = events.filter((e) => "tokens_processed" in e);
+  assert.equal(withTokens.length, 1, "an abandoned lock is reclaimed, not treated as held forever");
+  assert.equal(withTokens[0].tokens_processed, 1000);
+  assert.equal(withTokens[0].tokens_saved, 200);
+  assert.equal(existsSync(lockFile), false, "the reclaimed lock is released again on the way out");
 
   stub.close();
 });
