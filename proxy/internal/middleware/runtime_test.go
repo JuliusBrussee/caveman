@@ -18,6 +18,7 @@ import (
 
 	"github.com/JuliusBrussee/caveman/engine"
 	"github.com/JuliusBrussee/caveman/engine/ccr"
+	ident "github.com/JuliusBrussee/caveman/proxy/internal/identity"
 	"github.com/JuliusBrussee/caveman/proxy/internal/store"
 )
 
@@ -38,20 +39,29 @@ func openFixture(t *testing.T, dir, mode string) fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := New(Config{Store: s, Recovery: c, Mode: mode, Limits: Limits{DeadlineMS: 5000}, Principal: func(req *http.Request) (string, error) {
-		if req.Header.Get("Authorization") == "Bearer alice" {
-			return "alice", nil
-		}
-		if req.Header.Get("Authorization") == "Bearer bob" {
-			return "bob", nil
-		}
-		return "", fmt.Errorf("denied")
-	}})
+	r, err := New(Config{Store: s, Recovery: c, Mode: mode, Limits: Limits{DeadlineMS: 5000}, Identify: bearerIdentity})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return fixture{r, s, c, dir}
 }
+
+// bearerIdentity is the fixtures' identity: "Bearer alice" and "Bearer bob"
+// are principals allowed every namespace.
+func bearerIdentity(req *http.Request) (ident.Principal, error) {
+	switch req.Header.Get("Authorization") {
+	case "Bearer alice":
+		return everyNamespace("alice")
+	case "Bearer bob":
+		return everyNamespace("bob")
+	}
+	return ident.Principal{}, fmt.Errorf("denied")
+}
+
+func everyNamespace(name string) (ident.Principal, error) {
+	return ident.NewPrincipal(name, "test", []string{"*"}, ident.Quota{})
+}
+
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 	f := openFixture(t, t.TempDir(), "compress")
@@ -341,7 +351,8 @@ func TestConcurrentWritersChooseOneDurableReplacement(t *testing.T) {
 			req.RequestID = fmt.Sprintf("req-%d", i)
 			req.IdempotencyKey = req.RequestID
 			b, _ := json.Marshal(req)
-			out, err := r.optimize(context.Background(), "alice", req, digest(b), negotiated{})
+			alice, _ := everyNamespace("alice")
+			out, err := r.optimize(context.Background(), alice, req, digest(b), negotiated{})
 			if err != nil {
 				errors <- err
 				return

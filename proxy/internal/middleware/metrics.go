@@ -16,6 +16,7 @@ import (
 // truncated hashes.
 type outcome struct {
 	route, principal, scope, handle string
+	mechanism                       string // how principal authenticated
 	client                          string // Caveman-Middleware-Client, logged only (§14)
 	status                          int
 	code, planStatus, reason        string
@@ -80,7 +81,7 @@ func (r *Runtime) record(o *outcome, start time.Time) {
 	if r.cfg.Logger == nil {
 		return
 	}
-	attrs := []any{"route", route, "status", o.status, "code", code, "principal", o.principal, "scope", o.scope,
+	attrs := []any{"route", route, "status", o.status, "code", code, "principal", o.principal, "auth", o.mechanism, "scope", o.scope,
 		"request_bytes", o.requestBytes, "response_bytes", o.responseBytes, "latency_ms", elapsed.Milliseconds()}
 	if o.planStatus != "" {
 		attrs = append(attrs, "plan_status", o.planStatus, "reason", o.reason)
@@ -172,7 +173,8 @@ func sortedKeys[K comparable, V any](m map[K]V) []K {
 // Ready reports whether the middleware store accepts writes.
 func (r *Runtime) Ready(ctx context.Context) error { return r.cfg.Store.MiddlewareWritable(ctx) }
 
-// rateQuota enforces quota_requests_per_minute per principal.
+// rateQuota enforces quota_requests_per_minute per principal; a principal's
+// own requests_per_minute replaces the runtime-wide limit.
 // ponytail: fixed one-minute windows; a sliding window if boundary bursts matter.
 type rateQuota struct {
 	limit  int
@@ -183,8 +185,11 @@ type rateQuota struct {
 
 // allow reports whether principal may send another request now and, if not,
 // the whole seconds until its window resets.
-func (q *rateQuota) allow(principal string, now time.Time) (bool, int) {
-	if q.limit <= 0 {
+func (q *rateQuota) allow(principal string, limit int, now time.Time) (bool, int) {
+	if limit <= 0 {
+		limit = q.limit
+	}
+	if limit <= 0 {
 		return true, 0
 	}
 	q.mu.Lock()
@@ -192,7 +197,7 @@ func (q *rateQuota) allow(principal string, now time.Time) (bool, int) {
 	if minute := now.Unix() / 60; minute != q.window {
 		q.window, q.counts = minute, map[string]int{}
 	}
-	if q.counts[principal] >= q.limit {
+	if q.counts[principal] >= limit {
 		return false, int(60 - now.Unix()%60)
 	}
 	q.counts[principal]++

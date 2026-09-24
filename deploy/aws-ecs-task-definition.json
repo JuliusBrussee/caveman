@@ -8,22 +8,13 @@
   "taskRoleArn": "arn:aws:iam::REPLACE_ACCOUNT_ID:role/REPLACE_caveman_proxy_task_role_with_bedrock_InvokeModel",
   "volumes": [
     {
-      "name": "caveman-data",
-      "efsVolumeConfiguration": {
-        "fileSystemId": "fs-REPLACE_EFS_FILESYSTEM_ID",
-        "rootDirectory": "/",
-        "transitEncryption": "ENABLED",
-        "authorizationConfig": {
-          "accessPointId": "fsap-REPLACE_ACCESS_POINT_THAT_MAPS_POSIX_UID_65532",
-          "iam": "ENABLED"
-        }
-      }
+      "name": "caveman-data"
     }
   ],
   "containerDefinitions": [
     {
       "name": "caveman-proxy",
-      "image": "ghcr.io/juliusbrussee/caveman-proxy:bin-v1.1.7",
+      "image": "ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0",
       "essential": true,
       "portMappings": [
         {
@@ -39,12 +30,28 @@
         {
           "name": "CAVEMAN_MODE",
           "value": "record"
+        },
+        {
+          "name": "CAVEMAN_MIDDLEWARE_MODE",
+          "value": "compress"
         }
       ],
       "secrets": [
         {
           "name": "CAVEMAN_AUTH_TOKEN",
           "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:caveman-proxy/auth-token-REPLACE_SUFFIX"
+        },
+        {
+          "name": "CAVEMAN_MIDDLEWARE_DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:caveman-proxy/middleware-database-url-REPLACE_SUFFIX"
+        },
+        {
+          "name": "CAVEMAN_MIDDLEWARE_ENCRYPTION_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:caveman-proxy/middleware-encryption-key-REPLACE_SUFFIX"
+        },
+        {
+          "name": "CAVE_POSTGRES_CA_CERT",
+          "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:caveman-proxy/rds-ca-bundle-REPLACE_SUFFIX"
         }
       ],
       "mountPoints": [

@@ -1,0 +1,215 @@
+# Highly available caveman-proxy: two or more replicas, the framework middleware
+# store in Postgres, TLS on the listener, identity from a token map.
+#
+# Every replica serves every middleware session: handles, choices and originals
+# live in Postgres, so the Service needs no session affinity. The proxy's own
+# state (spend rows, its recovery store, proxy.log) stays per pod on an emptyDir;
+# the proxy routes run in record mode, which needs no durable recovery.
+#
+# Needs runtime bin-v2.0.0 or later. This file holds no secrets and no
+# placeholders: pods wait (CreateContainerConfigError) until these exist.
+#
+#   # Environment. CAVEMAN_AUTH_TOKEN is optional: without it the provider
+#   # routes refuse every request and the replicas serve the middleware only.
+#   kubectl create secret generic caveman-proxy-ha \
+#     --from-literal=CAVEMAN_MIDDLEWARE_DATABASE_URL='postgres://caveman:<password>@<host>:5432/caveman?sslmode=verify-full' \
+#     --from-literal=CAVEMAN_METRICS_TOKEN="$(openssl rand -hex 32)" \
+#     --from-literal=CAVEMAN_AUTH_TOKEN="$(openssl rand -hex 32)" \
+#     --from-literal=ANTHROPIC_API_KEY=<provider-key>
+#   # Files. The CA bundle signs your database's certificate; leave it empty
+#   # (--from-literal=postgres-ca.crt=) when the system roots already do.
+#   kubectl create secret generic caveman-proxy-files \
+#     --from-literal=middleware.key="$(openssl rand -base64 32)" \
+#     --from-file=postgres-ca.crt=<database-ca-bundle.pem>
+#   kubectl create secret tls caveman-proxy-tls --cert=tls.crt --key=tls.key
+#   kubectl create secret generic caveman-proxy-tokens --from-file=tokens.yaml
+#
+# tokens.yaml maps token hashes (never tokens) to principals. List two hashes
+# for a principal to rotate without an outage; edits apply within 10 s:
+#
+#   principals:
+#     - name: team-a
+#       namespaces: ["team-a/*"]
+#       token_sha256: [<printf %s "$TOKEN" | sha256sum>]
+#       quota: {rows: 200000, bytes: 134217728, requests_per_minute: 1200}
+#
+# Details: docs/technical/deploy.md#high-availability
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: caveman-proxy-ha
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: caveman-proxy-ha
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Keep full capacity during a rollout; new pods join once ready.
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: caveman-proxy-ha
+  template:
+    metadata:
+      labels:
+        app: caveman-proxy-ha
+    spec:
+      serviceAccountName: caveman-proxy-ha
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: caveman-proxy-ha
+      containers:
+        - name: caveman-proxy
+          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: https
+              containerPort: 8787
+          envFrom:
+            - secretRef:
+                name: caveman-proxy-ha
+          env:
+            - name: CAVEMAN_MODE
+              value: record
+            - name: CAVEMAN_MIDDLEWARE_MODE
+              value: compress
+            - name: CAVEMAN_MIDDLEWARE_TOKEN_MAP_FILE
+              value: /etc/caveman/identity/tokens.yaml
+            - name: CAVEMAN_MIDDLEWARE_ENCRYPTION_KEY_FILE
+              value: /etc/caveman/secrets/middleware.key
+            - name: CAVE_POSTGRES_CA_CERT_FILE
+              value: /etc/caveman/secrets/postgres-ca.crt
+            - name: CAVEMAN_TLS_CERT_FILE
+              value: /etc/caveman/tls/tls.crt
+            - name: CAVEMAN_TLS_KEY_FILE
+              value: /etc/caveman/tls/tls.key
+            # mTLS: verify client certificates against a CA and map their SAN
+            # (URI, then DNS) or CN to a principal in the token map.
+            # - name: CAVEMAN_TLS_CLIENT_CA_FILE
+            #   value: /etc/caveman/tls/ca.crt
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: identity
+              mountPath: /etc/caveman/identity
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/caveman/secrets
+              readOnly: true
+            - name: tls
+              mountPath: /etc/caveman/tls
+              readOnly: true
+          # Ready means Postgres just accepted a write; a replica that loses the
+          # database leaves the Service instead of answering 503s.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+      volumes:
+        # Per-pod proxy state only. Declaring the middleware store ephemeral is
+        # not needed here: it is Postgres, and reports persistent: true.
+        - name: data
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: identity
+          secret:
+            secretName: caveman-proxy-tokens
+        - name: secrets
+          secret:
+            secretName: caveman-proxy-files
+        - name: tls
+          secret:
+            secretName: caveman-proxy-tls
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: caveman-proxy-ha
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: caveman-proxy-ha
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: caveman-proxy-ha
+spec:
+  type: ClusterIP
+  selector:
+    app: caveman-proxy-ha
+  ports:
+    - name: https
+      port: 8787
+      targetPort: https
+---
+# Only labelled client pods reach the proxy; it reaches DNS, Postgres and
+# provider APIs over HTTPS. Narrow the egress blocks to your database and
+# provider address ranges where you can. Kubelet probes are not affected.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: caveman-proxy-ha
+spec:
+  podSelector:
+    matchLabels:
+      app: caveman-proxy-ha
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              caveman-client: "true"
+      ports:
+        - port: 8787
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 5432
+          protocol: TCP
+    - ports:
+        - port: 443
+          protocol: TCP

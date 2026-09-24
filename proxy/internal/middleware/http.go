@@ -58,12 +58,12 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		fail(Failure{CodeForbiddenOrigin})
 		return
 	}
-	principal, err := r.cfg.Principal(request)
-	if err != nil || principal == "" {
+	principal, err := r.cfg.Identify(request)
+	if err != nil || principal.Name == "" {
 		fail(Failure{CodeUnauthorized})
 		return
 	}
-	o.principal, o.client = principal, logSafe(request.Header.Get(HeaderClient))
+	o.principal, o.mechanism, o.client = principal.Name, principal.Mechanism, logSafe(request.Header.Get(HeaderClient))
 	if request.URL.Path == RoutePrefix+"capabilities" && request.Method == http.MethodGet {
 		caps, _ := r.view(n)
 		o.status, o.responseBytes = http.StatusOK, writeJSON(w, http.StatusOK, caps)
@@ -73,7 +73,7 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		fail(Failure{CodeNotFound})
 		return
 	}
-	if ok, wait := r.quota.allow(principal, r.cfg.Now()); !ok {
+	if ok, wait := r.quota.allow(principal.Name, principal.Quota.RequestsPerMinute, r.cfg.Now()); !ok {
 		fail(retryAfter{Failure{CodeQuotaExceeded}, wait})
 		return
 	}
@@ -124,7 +124,9 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		fail(err)
 		return
 	}
-	decode := func(target any) error {
+	// decode also authorizes: scope points into target, and its namespace must be
+	// one the principal may use, on every route (§2).
+	decode := func(target any, scope *Scope) error {
 		if err := requestPresence(body, request.URL.Path); err != nil {
 			return err
 		}
@@ -138,14 +140,17 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		if d.Decode(new(any)) != io.EOF {
 			return Failure{CodeInvalidRequest}
 		}
+		if !principal.Allows(scope.Namespace) {
+			return Failure{CodeForbiddenNamespace}
+		}
 		return nil
 	}
 	var out any
 	switch request.URL.Path {
 	case RoutePrefix + "optimize":
 		var req OptimizeRequest
-		if err = decode(&req); err == nil {
-			o.scope = short(authority(principal, req.Scope))
+		if err = decode(&req, &req.Scope); err == nil {
+			o.scope = short(authority(principal.Name, req.Scope))
 			var plan OptimizeResponse
 			if plan, err = r.optimize(ctx, principal, req, digest(body), n); err == nil {
 				o.planStatus, o.reason = plan.Status, plan.Reason
@@ -154,8 +159,8 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		}
 	case RoutePrefix + "retrieve":
 		var req RetrieveRequest
-		if err = decode(&req); err == nil {
-			o.scope, o.handle = short(authority(principal, req.Scope)), short(digest([]byte(req.Handle)))
+		if err = decode(&req, &req.Scope); err == nil {
+			o.scope, o.handle = short(authority(principal.Name, req.Scope)), short(digest([]byte(req.Handle)))
 			out, err = r.retrieve(ctx, principal, req, n)
 		}
 	case RoutePrefix + "receipts":
@@ -164,19 +169,19 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 			break
 		}
 		var req Receipt
-		if err = decode(&req); err == nil {
-			o.scope = short(authority(principal, req.Scope))
+		if err = decode(&req, &req.Scope); err == nil {
+			o.scope = short(authority(principal.Name, req.Scope))
 			err = r.receipt(ctx, principal, req)
 			out = ReceiptResponse{SchemaVersion: ProtocolVersion, Status: "recorded", Basis: "client_observed"}
 		}
 	case RoutePrefix + "sessions/delete":
 		var req SessionDeleteRequest
-		if err = decode(&req); err == nil {
+		if err = decode(&req, &req.Scope); err == nil {
 			if req.SchemaVersion != ProtocolVersion || !scopeValid(req.Scope) {
 				err = Failure{CodeInvalidRequest}
 				break
 			}
-			o.scope = short(authority(principal, req.Scope))
+			o.scope = short(authority(principal.Name, req.Scope))
 			var deleted SessionDeleteResponse
 			deleted, err = r.deleteSession(ctx, principal, req.Scope)
 			o.deleted, out = deleted.Deleted, deleted

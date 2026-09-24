@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"sync"
@@ -17,18 +18,27 @@ import (
 	"github.com/JuliusBrussee/caveman/engine/ccr"
 	"github.com/JuliusBrussee/caveman/engine/compressors"
 	"github.com/JuliusBrussee/caveman/engine/tokens"
+	ident "github.com/JuliusBrussee/caveman/proxy/internal/identity"
 	"github.com/JuliusBrussee/caveman/proxy/internal/store"
 )
 
 type Config struct {
-	Store *store.Store
+	// Store is SQLite (*store.Store) or Postgres (*store.PostgresMiddleware).
+	Store store.MiddlewareStore
 	// Recovery is the process-global CCR. Originals now live in Store, owned by
 	// their scope; CCR is only read, for grants an older runtime issued. May be nil.
 	Recovery *ccr.Store
-	// Principal must resolve authenticated server authority, never a client
-	// namespace, framework run ID, or a tenant field from request JSON.
-	Principal              func(*http.Request) (string, error)
+	// Identify resolves the caller from its credential only, never from a client
+	// namespace, framework run ID, or a tenant field in request JSON. Its
+	// Principal names who owns the data, which namespaces it may use (checked on
+	// every scoped route) and its quota overrides.
+	Identify               func(*http.Request) (ident.Principal, error)
 	Build, Mode, TrustMode string
+	// Ephemeral declares that the store does not survive a restart (an emptyDir,
+	// a container without a volume) whatever the backend says, so capabilities
+	// report persistent:false and nothing is compressed that could not be
+	// recovered after the restart.
+	Ephemeral bool
 	// Retention slides with use. MaxRetention caps the slide, counted from a
 	// scope's creation (§12); it is raised to Retention when smaller.
 	Retention, MaxRetention time.Duration
@@ -64,7 +74,7 @@ type Runtime struct {
 var serverFeatures = []string{FeatureHTTPStatusV2, FeatureOriginalsLifecycle, FeatureRevisionTolerant, FeatureTolerantReader}
 
 func New(cfg Config) (*Runtime, error) {
-	if cfg.Store == nil || cfg.Principal == nil {
+	if cfg.Store == nil || cfg.Identify == nil {
 		return nil, Failure{"configuration"}
 	}
 	if cfg.Mode != "compress" && cfg.Mode != "record" {
@@ -142,7 +152,7 @@ func New(cfg Config) (*Runtime, error) {
 		}
 	}
 	r.caps = Capabilities{SchemaVersion: ProtocolVersion, RuntimeBuild: cfg.Build, PolicyRevision: policyRevision(caps), Transforms: caps,
-		Limits: cfg.Limits, Persistent: cfg.Store.Persistent(), Recovery: true,
+		Limits: cfg.Limits, Persistent: cfg.Store.Persistent() && !cfg.Ephemeral, Recovery: true,
 		RetentionSeconds: int64(cfg.Retention.Seconds()), TrustMode: cfg.TrustMode, Mode: cfg.Mode,
 		Protocol: &ProtocolRange{ProtocolMin, ProtocolMax}, Features: serverFeatures, MaxRetentionSeconds: int64(cfg.MaxRetention.Seconds())}
 	r.legacyCaps = r.caps
@@ -180,20 +190,28 @@ func (r *Runtime) expiry(now, created int64) int64 {
 	return expires
 }
 
-// write runs fn in a write transaction that stamps and bounds rows by principal.
-func (r *Runtime) write(ctx context.Context, principal string, fn func(*store.MiddlewareTx) error) error {
+// write runs fn in a write transaction that stamps and bounds rows by
+// principal; the principal's own quota overrides the runtime-wide one.
+func (r *Runtime) write(ctx context.Context, principal ident.Principal, fn func(*store.MiddlewareTx) error) error {
+	limits := r.cfg.Capacity
+	if principal.Quota.Rows > 0 {
+		limits.PrincipalRows = principal.Quota.Rows
+	}
+	if principal.Quota.Bytes > 0 {
+		limits.PrincipalBytes = principal.Quota.Bytes
+	}
 	return r.cfg.Store.WithMiddleware(ctx, func(tx *store.MiddlewareTx) error {
-		tx.Principal, tx.Limits = principal, r.cfg.Capacity
+		tx.Principal, tx.Limits = principal.Name, limits
 		return fn(tx)
 	})
 }
 
-func (r *Runtime) optimize(ctx context.Context, principal string, req OptimizeRequest, inputDigest string, n negotiated) (OptimizeResponse, error) {
+func (r *Runtime) optimize(ctx context.Context, principal ident.Principal, req OptimizeRequest, inputDigest string, n negotiated) (OptimizeResponse, error) {
 	if err := r.validate(req, n); err != nil {
 		return OptimizeResponse{}, err
 	}
 	caps, _ := r.view(n)
-	auth := authority(principal, req.Scope)
+	auth := authority(principal.Name, req.Scope)
 	// Scope identity excludes the policy revision and transform list (§2), so
 	// persisted choices, and the provider-cached bytes they produced, survive a
 	// runtime upgrade. Reuse is gated per choice on policy.transforms instead.
@@ -447,8 +465,9 @@ func (r *Runtime) flushRenewals(ctx context.Context) error {
 		return nil
 	}
 	now := r.cfg.Now().Unix()
+	// Sorted, so replicas renewing overlapping authorities lock rows in one order.
 	err := r.cfg.Store.WithMiddleware(ctx, func(tx *store.MiddlewareTx) error {
-		for auth := range pending {
+		for _, auth := range slices.Sorted(maps.Keys(pending)) {
 			if err := tx.Renew(auth, now, int64(r.cfg.Retention.Seconds()), int64(r.cfg.MaxRetention.Seconds())); err != nil {
 				return err
 			}

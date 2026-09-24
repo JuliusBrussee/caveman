@@ -1,3 +1,5 @@
+# Single-replica shared proxy with its state (SQLite) on one volume.
+# For two or more replicas, use kubernetes-ha.yaml (middleware store in Postgres).
 # Apply into whatever namespace you like: kubectl apply -n caveman -f kubernetes.yaml
 apiVersion: v1
 kind: Secret
@@ -24,16 +26,23 @@ spec:
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      storage: 1Gi
+      # Two stores are capped: the middleware store (576 MiB by default,
+      # CAVEMAN_MIDDLEWARE_MAX_BYTES) and the proxy's recovery store (512 MiB,
+      # CAVEMAN_CCR_MAX_BYTES). On top come SQLite indexes, free pages and the
+      # WAL, the spend database (one metadata row per proxied request, never
+      # capped), and 32 MiB of rotated proxy.log. 5 Gi leaves room for all of
+      # it; raise it with the caps. docs/technical/deploy.md#sizing
+      storage: 5Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: caveman-proxy
 spec:
-  # One replica, deliberately. State is SQLite on the PVC below, so this does
-  # not scale horizontally behind a single volume. Need more? Run one
-  # deployment per team, each with its own PVC.
+  # One replica, deliberately, and Recreate: state is SQLite on a
+  # ReadWriteOnce volume, which takes exactly one writer. A RollingUpdate would
+  # start the new pod beside the old one on the same database. Need more
+  # replicas or zero-downtime rollouts? Use kubernetes-ha.yaml.
   replicas: 1
   strategy:
     type: Recreate
@@ -52,7 +61,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: caveman-proxy
-          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v1.1.7
+          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8787
@@ -64,15 +73,24 @@ spec:
             # an IRSA role with bedrock:InvokeModel*.
             # - name: AWS_REGION
             #   value: us-east-1
+            # The proxy routes record (byte-safe pass-through); the framework
+            # middleware compresses for clients that ask it to.
             - name: CAVEMAN_MODE
               value: record
+            - name: CAVEMAN_MIDDLEWARE_MODE
+              value: compress
           volumeMounts:
             - name: data
               mountPath: /data
+          # Ready means the middleware store just accepted a write (a full disk
+          # or a read-only volume fails it); the check itself allows 2 s.
           readinessProbe:
             httpGet:
               path: /health/ready
               port: 8787
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health/live

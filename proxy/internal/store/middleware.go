@@ -162,16 +162,65 @@ type MiddlewareScope struct {
 	Sequence, ExpiresAt, CreatedAt int64
 }
 
-// MiddlewareTx serializes decisions across processes, not just Go goroutines.
-// Its first statement takes SQLite's write lock before any decision is read.
+// MiddlewareStore is the middleware runtime's storage backend: the SQLite Store
+// (the default: one writer per file) or PostgresMiddleware (shared by every
+// replica). Both hand the runtime a *MiddlewareTx with the same semantics.
+type MiddlewareStore interface {
+	InitMiddleware(ctx context.Context) error
+	// ReadMiddleware runs fn on a consistent snapshot. Callers must recheck every
+	// decision under WithMiddleware before publishing it.
+	ReadMiddleware(ctx context.Context, fn func(*MiddlewareTx) error) error
+	// WithMiddleware runs fn in a write transaction whose reads see every write
+	// committed by a competing writer of the same data before fn's decisions.
+	WithMiddleware(ctx context.Context, fn func(*MiddlewareTx) error) error
+	MiddlewareWritable(ctx context.Context) error
+	MiddlewareUsage(ctx context.Context) (rows, bytes int64, err error)
+	// Persistent reports whether choices and originals survive a restart.
+	Persistent() bool
+}
+
+// middlewareTxOps is one backend's transaction: exactly the operations the
+// middleware runtime performs. Bodies arrive already sealed.
+type middlewareTxOps interface {
+	Scope(id string) (MiddlewareScope, error)
+	SaveScope(s MiddlewareScope) error
+	Plan(scope, id, digest string) ([]byte, error)
+	SavePlan(scope, id, digest string, body []byte, expires int64) error
+	Choice(scope, id string) ([]byte, string, error)
+	SaveChoice(scope, id, grant, handle string, body []byte) error
+	Grant(authority, grant string) ([]byte, string, int64, error)
+	Renew(authority string, now, retention, maxRetention int64) error
+	Delete(authority string, now int64) (MiddlewareDeleted, error)
+	Expire(now int64) (int64, error)
+	Receipt(authority, id, digest string, body []byte, expires int64) error
+	SaveOriginal(authority, digest string, body []byte, keyID string) (bool, error)
+	Original(authority, digest string) ([]byte, string, error)
+	HasOriginal(authority, digest string) (bool, error)
+}
+
+// MiddlewareTx is one middleware transaction on either backend.
 //
 // Principal is stamped on every row the transaction writes and Limits bound its
 // admissions; set both before the first write.
 type MiddlewareTx struct {
-	tx        *sql.Tx
-	ctx       context.Context
+	middlewareTxOps
 	Principal string
 	Limits    MiddlewareLimits
+}
+
+// sqliteMiddlewareTx serializes decisions across processes, not just Go
+// goroutines: WithMiddleware's first statement takes SQLite's write lock before
+// any decision is read. Its embedded *MiddlewareTx supplies Principal and Limits.
+type sqliteMiddlewareTx struct {
+	*MiddlewareTx
+	tx  *sql.Tx
+	ctx context.Context
+}
+
+func newSQLiteMiddlewareTx(ctx context.Context, tx *sql.Tx) *MiddlewareTx {
+	m := &MiddlewareTx{}
+	m.middlewareTxOps = &sqliteMiddlewareTx{MiddlewareTx: m, tx: tx, ctx: ctx}
+	return m
 }
 
 // ReadMiddleware takes a consistent snapshot without reserving SQLite's writer.
@@ -182,13 +231,17 @@ func (s *Store) ReadMiddleware(ctx context.Context, fn func(*MiddlewareTx) error
 		return err
 	}
 	defer tx.Rollback()
-	if err = fn(&MiddlewareTx{tx: tx, ctx: ctx}); err != nil {
+	if err = fn(newSQLiteMiddlewareTx(ctx, tx)); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) WithMiddleware(ctx context.Context, fn func(*MiddlewareTx) error) error {
+	return s.middlewareWrite(ctx, func(tx *sql.Tx) error { return fn(newSQLiteMiddlewareTx(ctx, tx)) })
+}
+
+func (s *Store) middlewareWrite(ctx context.Context, fn func(*sql.Tx) error) error {
 	// Avoid SQLite's busy-handler sleep/backoff between local requests. This
 	// queue is cancellable; SQLite still arbitrates against other processes.
 	select {
@@ -205,7 +258,7 @@ func (s *Store) WithMiddleware(ctx context.Context, fn func(*MiddlewareTx) error
 	if _, err = tx.ExecContext(ctx, `UPDATE middleware_scopes SET sequence=sequence WHERE id=''`); err != nil {
 		return err
 	}
-	if err = fn(&MiddlewareTx{tx: tx, ctx: ctx}); err != nil {
+	if err = fn(tx); err != nil {
 		return err
 	}
 	if err = ctx.Err(); err != nil {
@@ -218,8 +271,8 @@ func (s *Store) WithMiddleware(ctx context.Context, fn func(*MiddlewareTx) error
 // row in a transaction and commits, so a read-only file, a full disk or a held
 // lock fails readiness instead of the next optimize.
 func (s *Store) MiddlewareWritable(ctx context.Context) error {
-	return s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
-		_, err := tx.tx.ExecContext(ctx, `UPDATE middleware_usage SET rows=rows WHERE singleton=1`)
+	return s.middlewareWrite(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE middleware_usage SET rows=rows WHERE singleton=1`)
 		return err
 	})
 }
@@ -230,7 +283,7 @@ func (s *Store) MiddlewareUsage(ctx context.Context) (rows, bytes int64, err err
 	return rows, bytes, err
 }
 
-func (t *MiddlewareTx) Scope(id string) (MiddlewareScope, error) {
+func (t *sqliteMiddlewareTx) Scope(id string) (MiddlewareScope, error) {
 	s := MiddlewareScope{ID: id}
 	err := t.tx.QueryRowContext(t.ctx, `SELECT authority,manifest,sequence,expires_at,created_at FROM middleware_scopes WHERE id=?`, id).
 		Scan(&s.Authority, &s.Manifest, &s.Sequence, &s.ExpiresAt, &s.CreatedAt)
@@ -238,7 +291,7 @@ func (t *MiddlewareTx) Scope(id string) (MiddlewareScope, error) {
 }
 
 // SaveScope inserts or advances a scope. created_at is set once, at insert.
-func (t *MiddlewareTx) SaveScope(s MiddlewareScope) error {
+func (t *sqliteMiddlewareTx) SaveScope(s MiddlewareScope) error {
 	var old int
 	err := t.tx.QueryRowContext(t.ctx, `SELECT length(manifest) FROM middleware_scopes WHERE id=?`, s.ID).Scan(&old)
 	rows := 0
@@ -256,7 +309,7 @@ ON CONFLICT(id) DO UPDATE SET manifest=excluded.manifest,sequence=excluded.seque
 	return err
 }
 
-func (t *MiddlewareTx) Plan(scope, id, digest string) ([]byte, error) {
+func (t *sqliteMiddlewareTx) Plan(scope, id, digest string) ([]byte, error) {
 	var storedDigest string
 	var body []byte
 	err := t.tx.QueryRowContext(t.ctx, `SELECT digest,payload FROM middleware_plans WHERE scope=? AND id=?`, scope, id).Scan(&storedDigest, &body)
@@ -268,7 +321,7 @@ func (t *MiddlewareTx) Plan(scope, id, digest string) ([]byte, error) {
 
 // SavePlan records an idempotent replay. Plans carry their own expiry: a scope
 // renewed on every call would otherwise keep one row per call until it lapses.
-func (t *MiddlewareTx) SavePlan(scope, id, digest string, body []byte, expires int64) error {
+func (t *sqliteMiddlewareTx) SavePlan(scope, id, digest string, body []byte, expires int64) error {
 	if err := t.capacity(len(body), 1); err != nil {
 		return err
 	}
@@ -277,7 +330,7 @@ func (t *MiddlewareTx) SavePlan(scope, id, digest string, body []byte, expires i
 	return err
 }
 
-func (t *MiddlewareTx) Choice(scope, id string) ([]byte, string, error) {
+func (t *sqliteMiddlewareTx) Choice(scope, id string) ([]byte, string, error) {
 	var body []byte
 	var handle string
 	err := t.tx.QueryRowContext(t.ctx, `SELECT payload,ccr_handle FROM middleware_choices WHERE scope=? AND id=?`, scope, id).Scan(&body, &handle)
@@ -287,7 +340,7 @@ func (t *MiddlewareTx) Choice(scope, id string) ([]byte, string, error) {
 // SaveChoice publishes an immutable choice. handle is a CCR handle only for
 // choices an older runtime made; this runtime's choices store their original in
 // middleware_originals and pass "".
-func (t *MiddlewareTx) SaveChoice(scope, id, grant, handle string, body []byte) error {
+func (t *sqliteMiddlewareTx) SaveChoice(scope, id, grant, handle string, body []byte) error {
 	if err := t.capacity(len(body), 1); err != nil {
 		return err
 	}
@@ -298,7 +351,7 @@ func (t *MiddlewareTx) SaveChoice(scope, id, grant, handle string, body []byte) 
 
 // Grant never accepts a global CCR hash as authority. Even possession of the
 // random grant requires the authenticated principal and matching session scope.
-func (t *MiddlewareTx) Grant(authority, grant string) ([]byte, string, int64, error) {
+func (t *sqliteMiddlewareTx) Grant(authority, grant string) ([]byte, string, int64, error) {
 	var body []byte
 	var handle string
 	var expires int64
@@ -311,7 +364,7 @@ WHERE s.authority=? AND c.grant_id=?`, authority, grant).Scan(&body, &handle, &e
 // Renew slides every live scope of an authority to now+retention, never past
 // created_at+maxRetention. Scopes with no created_at (written by an older
 // runtime after migration) slide uncapped rather than expiring at once.
-func (t *MiddlewareTx) Renew(authority string, now, retention, maxRetention int64) error {
+func (t *sqliteMiddlewareTx) Renew(authority string, now, retention, maxRetention int64) error {
 	_, err := t.tx.ExecContext(t.ctx, `UPDATE middleware_scopes
 SET expires_at=CASE WHEN created_at>0 THEN min(?1+?2, created_at+?3) ELSE ?1+?2 END
 WHERE authority=?4 AND expires_at>?1`, now, retention, maxRetention, authority)
@@ -325,7 +378,7 @@ type MiddlewareDeleted struct {
 	Scopes, Choices, Originals, Legacy int64
 }
 
-func (t *MiddlewareTx) Delete(authority string, now int64) (MiddlewareDeleted, error) {
+func (t *sqliteMiddlewareTx) Delete(authority string, now int64) (MiddlewareDeleted, error) {
 	var out MiddlewareDeleted
 	const scopes = `SELECT id FROM middleware_scopes WHERE authority=?`
 	if err := t.tx.QueryRowContext(t.ctx, `SELECT count(*) FROM middleware_choices WHERE ccr_handle<>'' AND scope IN (`+scopes+`)`, authority).Scan(&out.Legacy); err != nil {
@@ -384,7 +437,7 @@ const MiddlewareGraceSeconds int64 = 7 * 24 * 60 * 60
 //
 // Every statement is keyed on an indexed column. SQLite is not built with
 // UPDATE/DELETE LIMIT here, so batches are selected first.
-func (t *MiddlewareTx) Expire(now int64) (int64, error) {
+func (t *sqliteMiddlewareTx) Expire(now int64) (int64, error) {
 	var total int64
 	exec := func(statement string, args ...any) error {
 		result, err := t.tx.ExecContext(t.ctx, statement, args...)
@@ -440,7 +493,7 @@ func (t *MiddlewareTx) Expire(now int64) (int64, error) {
 }
 
 // ids returns now followed by the selected scope ids, ready to bind as ?1..?n+1.
-func (t *MiddlewareTx) ids(query string, now int64) ([]any, error) {
+func (t *sqliteMiddlewareTx) ids(query string, now int64) ([]any, error) {
 	rows, err := t.tx.QueryContext(t.ctx, query, now)
 	if err != nil {
 		return nil, err
@@ -457,7 +510,7 @@ func (t *MiddlewareTx) ids(query string, now int64) ([]any, error) {
 	return args, rows.Err()
 }
 
-func (t *MiddlewareTx) Receipt(authority, id, digest string, body []byte, expires int64) error {
+func (t *sqliteMiddlewareTx) Receipt(authority, id, digest string, body []byte, expires int64) error {
 	var old string
 	err := t.tx.QueryRowContext(t.ctx, `SELECT digest FROM middleware_receipts WHERE authority=? AND id=?`, authority, id).Scan(&old)
 	if err == nil {
@@ -477,28 +530,39 @@ func (t *MiddlewareTx) Receipt(authority, id, digest string, body []byte, expire
 	return err
 }
 
-func (t *MiddlewareTx) capacity(extra, rows int) error {
-	limits := t.Limits
+func (t *sqliteMiddlewareTx) capacity(extra, rows int) error {
+	return admit(t.Limits, t.Principal, extra, rows, func() (count, size int64, err error) {
+		err = t.tx.QueryRowContext(t.ctx, `SELECT rows,bytes FROM middleware_usage WHERE singleton=1`).Scan(&count, &size)
+		return count, size, err
+	}, func() (count, size int64, err error) {
+		err = t.tx.QueryRowContext(t.ctx, `SELECT rows,bytes FROM middleware_principal_usage WHERE principal=?`, t.Principal).Scan(&count, &size)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		}
+		return count, size, err
+	})
+}
+
+// admit applies MiddlewareLimits to an admission of rows rows and extra bytes,
+// given the store's totals and, when a principal cap applies, the principal's.
+func admit(limits MiddlewareLimits, principal string, extra, rows int, total, own func() (int64, int64, error)) error {
 	if limits.Rows <= 0 {
 		limits.Rows = DefaultMiddlewareRows
 	}
 	if limits.Bytes <= 0 {
 		limits.Bytes = DefaultMiddlewareBytes
 	}
-	var count, size int64
-	err := t.tx.QueryRowContext(t.ctx, `SELECT rows,bytes FROM middleware_usage WHERE singleton=1`).Scan(&count, &size)
+	count, size, err := total()
 	if err != nil {
 		return err
 	}
 	if count+int64(rows) > limits.Rows || size+int64(extra) > limits.Bytes {
 		return ErrMiddlewareCapacity
 	}
-	if t.Principal == "" || (limits.PrincipalRows <= 0 && limits.PrincipalBytes <= 0) {
+	if principal == "" || (limits.PrincipalRows <= 0 && limits.PrincipalBytes <= 0) {
 		return nil
 	}
-	count, size = 0, 0
-	err = t.tx.QueryRowContext(t.ctx, `SELECT rows,bytes FROM middleware_principal_usage WHERE principal=?`, t.Principal).Scan(&count, &size)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if count, size, err = own(); err != nil {
 		return err
 	}
 	if (limits.PrincipalRows > 0 && count+int64(rows) > limits.PrincipalRows) || (limits.PrincipalBytes > 0 && size+int64(extra) > limits.PrincipalBytes) {

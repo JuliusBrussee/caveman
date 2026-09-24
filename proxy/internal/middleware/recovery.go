@@ -6,17 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/JuliusBrussee/caveman/engine"
-	"github.com/JuliusBrussee/caveman/engine/ccr"
+	ident "github.com/JuliusBrussee/caveman/proxy/internal/identity"
 	"github.com/JuliusBrussee/caveman/proxy/internal/store"
 )
 
 // retrieve never takes the metadata writer: the grant and its original come
 // from one read snapshot, decryption and paging run outside any transaction,
 // and the sliding renewal is batched (Run).
-func (r *Runtime) retrieve(ctx context.Context, principal string, req RetrieveRequest, n negotiated) (RetrieveResponse, error) {
+func (r *Runtime) retrieve(ctx context.Context, principal ident.Principal, req RetrieveRequest, n negotiated) (RetrieveResponse, error) {
 	response := RetrieveResponse{SchemaVersion: ProtocolVersion, Handle: req.Handle, Kind: "original_page"}
 	if req.SchemaVersion != ProtocolVersion {
 		return response, Failure{CodeUnsupportedVersion}
@@ -33,7 +34,7 @@ func (r *Runtime) retrieve(ctx context.Context, principal string, req RetrieveRe
 		}
 		return response, Failure{CodePayloadLimit}
 	}
-	auth := authority(principal, req.Scope)
+	auth := authority(principal.Name, req.Scope)
 	var choice Replacement
 	var handle, keyID string
 	var sealed []byte
@@ -112,40 +113,37 @@ func (r *Runtime) retrieve(ctx context.Context, principal string, req RetrieveRe
 	return response, nil
 }
 
-// narrow runs the Engine's query ranking. The Engine only ranks content behind
-// a CCR handle, so a middleware-owned original is ranked inside a throwaway
-// in-memory CCR that is closed before returning.
-// ponytail: one in-memory SQLite open per query; export engine's narrowToQuery to drop it.
+// narrow runs the Engine's query ranking: through CCR for a grant protocol 1.0
+// issued, directly on a middleware-owned original otherwise, with
+// RetrieveQuery's rule that only a strictly shorter view replaces the original.
 func (r *Runtime) narrow(handle string, original []byte, query string) ([]byte, error) {
 	if handle != "" {
 		return r.eng.RetrieveQuery(handle, query)
 	}
-	scratch, err := ccr.OpenMemory()
-	if err != nil {
-		return nil, err
+	if strings.TrimSpace(query) == "" {
+		return original, nil
 	}
-	defer scratch.Close()
-	if handle, err = scratch.Put(ccr.Recovery{Original: original}); err != nil {
-		return nil, err
+	if narrowed, ok := engine.NarrowToQuery(original, query); ok && len(narrowed) < len(original) {
+		return narrowed, nil
 	}
-	return engine.New(scratch, r.counter).RetrieveQuery(handle, query)
+	return original, nil
 }
 
 // deleteSession revokes the request's authority and deletes everything it owns
 // (§12). Grants protocol 1.0 issued keep their original in the shared CCR,
 // which this runtime cannot delete, so originals_deleted says so.
-func (r *Runtime) deleteSession(ctx context.Context, principal string, scope Scope) (SessionDeleteResponse, error) {
+func (r *Runtime) deleteSession(ctx context.Context, principal ident.Principal, scope Scope) (SessionDeleteResponse, error) {
 	var deleted store.MiddlewareDeleted
 	err := r.write(ctx, principal, func(tx *store.MiddlewareTx) error {
 		var err error
-		deleted, err = tx.Delete(authority(principal, scope), r.cfg.Now().Unix())
+		deleted, err = tx.Delete(authority(principal.Name, scope), r.cfg.Now().Unix())
 		return err
 	})
 	return SessionDeleteResponse{SchemaVersion: ProtocolVersion, Status: "revoked", OriginalsDeleted: deleted.Legacy == 0,
 		Deleted: &DeleteCounts{Scopes: deleted.Scopes, Choices: deleted.Choices, Grants: deleted.Choices, Originals: deleted.Originals}}, err
 }
 
-func (r *Runtime) receipt(ctx context.Context, principal string, req Receipt) error {
+func (r *Runtime) receipt(ctx context.Context, principal ident.Principal, req Receipt) error {
 	if req.SchemaVersion != ProtocolVersion {
 		return Failure{CodeUnsupportedVersion}
 	}
@@ -176,6 +174,6 @@ func (r *Runtime) receipt(ctx context.Context, principal string, req Receipt) er
 	// removes them with the rest of the authority.
 	expires := r.cfg.Now().Unix() + int64(r.cfg.Retention.Seconds())
 	return r.write(ctx, principal, func(tx *store.MiddlewareTx) error {
-		return tx.Receipt(authority(principal, req.Scope), identity(req.LogicalCallID, req.AttemptID, req.EventKind), digest(b), b, expires)
+		return tx.Receipt(authority(principal.Name, req.Scope), identity(req.LogicalCallID, req.AttemptID, req.EventKind), digest(b), b, expires)
 	})
 }

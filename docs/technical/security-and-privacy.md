@@ -13,19 +13,30 @@ it on a LAN, container bridge, public interface, or shared host — without
 container image listens on `0.0.0.0:8787`, so it will not start without the
 token.
 
-A shared deployment is a separate, explicit configuration. It requires
-`CAVEMAN_AUTH_TOKEN`, and then every request must present that token in
-`x-cave-api-key` or `Authorization: Bearer`. The proxy consumes the header before
-resolving a provider credential, so the shared token is never forwarded upstream
-and is never mistaken for a provider key. Provider credentials live on the
-server, in its environment or in an AWS role, not on the clients. The token is a
-single shared secret (at least 16 bytes) with no per-user identity, roles, or
-audit log: rotate it when someone leaves. The same token gates the framework
-middleware routes (`/caveman/v1/middleware/*`).
-Keep the listener inside a private network and terminate TLS in front of it —
-the proxy speaks plain HTTP. Health and metrics endpoints stay unauthenticated
-for load balancers, so do not expose them publicly. See
-[Deploy the proxy for a team](deploy.md).
+A shared deployment is a separate, explicit configuration. On the provider
+(inference) routes it requires `CAVEMAN_AUTH_TOKEN`, and every request must
+present that token in `x-cave-api-key` or `Authorization: Bearer`. The proxy
+consumes the header before resolving a provider credential, so the shared token
+is never forwarded upstream and is never mistaken for a provider key. Provider
+credentials live on the server, in its environment or in an AWS role, not on
+the clients. That token is a single shared secret (at least 16 bytes) with no
+per-user identity or roles: rotate it when someone leaves.
+
+The framework middleware routes (`/caveman/v1/middleware/*`) have their own
+identity, from runtime `bin-v2.0.0`: the shared token still means one
+`single_operator` principal, and a token map, an OIDC issuer or TLS client
+certificates add per-team principals. A principal reaches only its own
+sessions; its allowed namespaces are checked server-side on every route, and
+each request is written to an audit log line with the principal, never the
+content. Originals can be encrypted at rest, and several replicas can share one
+Postgres store.
+
+The proxy can serve TLS itself (`CAVEMAN_TLS_CERT_FILE`, `CAVEMAN_TLS_KEY_FILE`,
+optionally `CAVEMAN_TLS_CLIENT_CA_FILE` for mTLS); otherwise it speaks plain
+HTTP and TLS belongs in front of it. Keep the listener inside a private network
+either way. Health endpoints stay unauthenticated for load balancers, and
+`/metrics` does too unless `CAVEMAN_METRICS_TOKEN` is set, so do not expose them
+publicly. See [Deploy the proxy for a team](deploy.md#identity).
 
 Connected Caveman Cloud commands have separate account and organization
 controls. Those controls are not what gates a self-hosted shared proxy.
@@ -140,9 +151,10 @@ response targets are in [SECURITY.md](../../SECURITY.md#supported-versions).
 ## Deployment checklist
 
 1. Confirm the proxy listens on `127.0.0.1`, or that a non-loopback listener is
-   deliberate, private, and behind TLS.
+   deliberate, private, and served over TLS (its own listener or in front).
 2. Set `CAVEMAN_AUTH_TOKEN` from a secret store for any shared listener, and
-   rotate it on team changes.
+   rotate it on team changes. For framework middleware shared by several teams,
+   give each team a token-map principal with only its namespaces.
 3. Keep secrets out of configuration files.
 4. Review enabled transforms and model allowlists.
 5. Set precise SSRF allowlist only when required.

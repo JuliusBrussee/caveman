@@ -17,7 +17,9 @@
 package main
 
 import (
+	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +30,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +40,7 @@ import (
 	"github.com/JuliusBrussee/caveman/engine/ccr"
 	"github.com/JuliusBrussee/caveman/mem"
 	"github.com/JuliusBrussee/caveman/proxy/internal/config"
+	"github.com/JuliusBrussee/caveman/proxy/internal/identity"
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativehook"
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
 	"github.com/JuliusBrussee/caveman/proxy/internal/runstate"
@@ -215,11 +219,41 @@ func runServe(logger *slog.Logger) {
 	// objects. Record mode still never writes recovery originals: it only permits
 	// metadata-safe native runtime state when an installed host pack sends events.
 	opts := standalone.Options{SessionMarkerKey: sessionMarkerKey, Logger: logger}
-	framework, err := standalone.NewMiddleware(cfg, spend, recovery, version, logger)
+	// Identity and TLS the operator configured never degrade to something
+	// weaker: an unreadable token map, OIDC setting or certificate stops startup.
+	ids, err := standalone.NewIdentity(cfg, logger)
 	if err != nil {
+		logger.Error("cannot load middleware identity", "error", err)
+		os.Exit(1)
+	}
+	var serverTLS *identity.ServerTLS
+	if cfg.TLS.CertFile != "" {
+		if serverTLS, err = identity.NewServerTLS(cfg.TLS.CertFile, cfg.TLS.KeyFile, cfg.TLS.ClientCAFile); err != nil {
+			logger.Error("cannot load TLS listener configuration", "error", err)
+			os.Exit(1)
+		}
+	}
+	var middlewareStore store.MiddlewareStore = spend
+	if databaseURL := cfg.Middleware.DatabaseURL; databaseURL != "" {
+		shared, err := store.OpenPostgresMiddleware(context.Background(), databaseURL)
+		if err != nil {
+			logger.Error("cannot open the middleware Postgres store", "error", err)
+			os.Exit(1)
+		}
+		defer shared.Close()
+		middlewareStore = shared
+	}
+	framework, err := standalone.NewMiddleware(cfg, middlewareStore, recovery, version, logger, ids)
+	switch {
+	case err != nil && cfg.Middleware.DatabaseURL != "":
+		// A replica that cannot reach the shared store exits (and restarts)
+		// rather than serving 503s behind a ready probe.
+		logger.Error("framework middleware unavailable", "code", "runtime_initialization", "error", err)
+		os.Exit(1)
+	case err != nil:
 		// Store/config errors carry no secrets; key errors never echo the key.
 		logger.Warn("framework middleware unavailable", "code", "runtime_initialization", "error", err)
-	} else {
+	default:
 		opts.Middleware = framework
 	}
 	switch {
@@ -247,6 +281,18 @@ func runServe(logger *slog.Logger) {
 	if opts.Middleware != nil {
 		// Expiry sweeps and batched retrieve renewals, off the request path.
 		go framework.Run(ctx)
+	}
+	reloaders := map[string]identity.Reloader{}
+	if cfg.Middleware.TokenMapFile != "" {
+		reloaders["token_map"] = ids
+	}
+	if serverTLS != nil {
+		reloaders["tls"] = serverTLS
+	}
+	if len(reloaders) > 0 {
+		// Rotated tokens and renewed certificates apply without a restart: on
+		// file change (Kubernetes Secret updates included) or SIGHUP.
+		go identity.Watch(ctx, logger, 10*time.Second, reloaders)
 	}
 	if nativeRuntime != nil {
 		go func() {
@@ -278,6 +324,9 @@ func runServe(logger *slog.Logger) {
 		logger.Error("cannot bind proxy listener", "addr", cfg.Listen, "error", err)
 		os.Exit(1)
 	}
+	if serverTLS != nil {
+		listener = tls.NewListener(listener, serverTLS.Config())
+	}
 	state, err := runstate.New(cfg.Listen, cfg.Mode, env.String("CAVEMAN_PROXY_OWNER", "start"), version)
 	if err != nil {
 		_ = listener.Close()
@@ -301,9 +350,16 @@ func runServe(logger *slog.Logger) {
 	}
 	// Whether inbound requests are gated is the difference between a loopback
 	// dev proxy and one reachable from a VPC. Log the fact, never the token.
-	inboundAuth := "none"
+	var mechanisms []string
+	for mechanism, on := range map[string]bool{"token": cfg.AuthToken != "", "token_map": cfg.Middleware.TokenMapFile != "",
+		"oidc": cfg.Middleware.OIDC.Issuer != "", "mtls": cfg.TLS.ClientCAFile != ""} {
+		if on {
+			mechanisms = append(mechanisms, mechanism)
+		}
+	}
+	slices.Sort(mechanisms)
+	inboundAuth := cmp.Or(strings.Join(mechanisms, ","), "none")
 	if cfg.AuthToken != "" {
-		inboundAuth = "token"
 		// A token on a loopback listener still gates every request, but the
 		// local `caveman wrap` path sends none — /health/live stays green while
 		// each inference 401s. Say so once here, where it is readable.
@@ -312,7 +368,7 @@ func runServe(logger *slog.Logger) {
 		}
 	}
 	go func() {
-		logger.Info("caveman proxy listening", "addr", cfg.Listen, "mode", cfg.Mode, "basis", "inferred", "inbound_auth", inboundAuth)
+		logger.Info("caveman proxy listening", "addr", cfg.Listen, "mode", cfg.Mode, "basis", "inferred", "inbound_auth", inboundAuth, "tls", serverTLS != nil)
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			logger.Error("proxy stopped", "error", err)
 			cancel()

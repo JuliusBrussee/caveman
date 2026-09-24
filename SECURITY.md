@@ -65,7 +65,9 @@ never prompts or tool results. Turn it off with `caveman telemetry off` or
 `DO_NOT_TRACK=1`. Running the binary or container image directly
 (`caveman-proxy serve`) involves no CLI and no telemetry.
 
-What the runtime stores, on its own disk:
+What the runtime stores, on its own disk, or in the Postgres database you point
+it at with `CAVEMAN_MIDDLEWARE_DATABASE_URL` when several replicas share one
+store:
 
 - **Tool-result originals** (exact text), so the model can recover them. Treat
   them as sensitive as the tool output itself.
@@ -211,19 +213,35 @@ the proxy accepts every inbound request, because loopback single-operator
 isolation is the security boundary, and startup rejects a non-loopback `--host`
 or `CAVEMAN_LISTEN` value.
 
-Setting `CAVEMAN_AUTH_TOKEN` (at least 16 bytes, no spaces or control
-characters) is what permits a non-loopback listener. Every inference and
-middleware request must then present the token in `x-cave-api-key` or
-`Authorization: Bearer`; `/health/*` and `/metrics` stay unauthenticated for
-load balancers. The container image listens on `0.0.0.0:8787`, so it refuses to
-start without the token.
+A non-loopback listener needs an inbound credential: `CAVEMAN_AUTH_TOKEN` (at
+least 16 bytes, no spaces or control characters), or one of the middleware
+identity sources below. The container image listens on `0.0.0.0:8787`, so it
+refuses to start without one.
 
-What a token-gated listener does **not** give you today: the token is one
-shared secret with no per-user identity, roles, or audit log, and the proxy
-speaks plain HTTP. Keep it on a private network, terminate TLS in front of it,
-and rotate the token when someone leaves. A firewall alone does not make it an
-authenticated external gateway. See
-[`docs/technical/deploy.md`](./docs/technical/deploy.md).
+- **Provider routes** (inference) accept only `CAVEMAN_AUTH_TOKEN`, in
+  `x-cave-api-key` or `Authorization: Bearer`: one shared secret, the operator's
+  authority over the server's provider keys. Without it on a non-loopback
+  listener they refuse every request.
+- **Framework middleware routes** (from runtime `bin-v2.0.0`) resolve a
+  principal per caller: the shared token (`single_operator`, every namespace),
+  a token map of SHA-256 token hashes to principals with namespace globs and
+  quotas (several tokens per principal, so rotation needs no outage; reloaded on
+  change or `SIGHUP`), an OIDC/JWT bearer checked against the issuer's key set
+  (RS256/ES256 only), or a TLS client certificate. Each principal reaches only
+  its own sessions, and its allowed namespaces are enforced server-side on
+  every route (`403 forbidden_namespace`). Every middleware request writes one
+  audit line with the principal and how it authenticated, never content.
+- **TLS:** `CAVEMAN_TLS_CERT_FILE` / `CAVEMAN_TLS_KEY_FILE` serve TLS 1.2+
+  directly, reloaded on change; `CAVEMAN_TLS_CLIENT_CA_FILE` adds mTLS. Without
+  them the proxy speaks plain HTTP: terminate TLS in front of it.
+- `/health/*` stay unauthenticated for load balancers; `/metrics` does too
+  unless `CAVEMAN_METRICS_TOKEN` is set.
+
+Still not provided: per-user identity or roles on the provider routes, and an
+audit log for them beyond the counted and logged rejections. Keep any shared
+listener on a private network. A firewall alone does not make it an
+authenticated external gateway. Configuration and examples:
+[`docs/technical/deploy.md`](./docs/technical/deploy.md#identity).
 
 Proxy upstream clients apply SSRF controls. Compression is recovery-first:
 parse failure, unsafe transform, unavailable durable recovery, storage failure,

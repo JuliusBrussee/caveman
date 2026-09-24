@@ -15,7 +15,7 @@ import (
 // so an aborted or not_smaller plan leaves no original behind. It reports
 // whether the authority saw this digest for the first time (the credit). A
 // credit-only row gets its body filled in without a second credit.
-func (t *MiddlewareTx) SaveOriginal(authority, digest string, body []byte, keyID string) (bool, error) {
+func (t *sqliteMiddlewareTx) SaveOriginal(authority, digest string, body []byte, keyID string) (bool, error) {
 	var stored bool
 	err := t.tx.QueryRowContext(t.ctx, `SELECT body IS NOT NULL FROM middleware_originals WHERE authority=? AND digest=?`, authority, digest).Scan(&stored)
 	if err == nil {
@@ -47,7 +47,7 @@ func (t *MiddlewareTx) CreditOriginal(authority, digest string) (bool, error) {
 
 // Original returns a stored original and its key id; sql.ErrNoRows when the
 // authority holds no content for digest.
-func (t *MiddlewareTx) Original(authority, digest string) ([]byte, string, error) {
+func (t *sqliteMiddlewareTx) Original(authority, digest string) ([]byte, string, error) {
 	var body []byte
 	var keyID string
 	err := t.tx.QueryRowContext(t.ctx, `SELECT body,key_id FROM middleware_originals WHERE authority=? AND digest=? AND body IS NOT NULL`,
@@ -56,7 +56,7 @@ func (t *MiddlewareTx) Original(authority, digest string) ([]byte, string, error
 }
 
 // HasOriginal reports whether Original would find content, without reading it.
-func (t *MiddlewareTx) HasOriginal(authority, digest string) (bool, error) {
+func (t *sqliteMiddlewareTx) HasOriginal(authority, digest string) (bool, error) {
 	var found int
 	err := t.tx.QueryRowContext(t.ctx, `SELECT 1 FROM middleware_originals WHERE authority=? AND digest=? AND body IS NOT NULL`,
 		authority, digest).Scan(&found)
