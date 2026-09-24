@@ -130,6 +130,12 @@ export interface Optimization {
   plan: Plan | null;
   request: OptimizeRequest | null;
   cacheContinuity: 'persistent_choices' | 'unavailable' | 'off';
+  /** Local candidate accounting for the decision event (spec §14). Set by optimize(); absent on adapter-built values. */
+  counts?: Readonly<DecisionCounts>;
+  /** optimize() duration in whole milliseconds. */
+  latencyMs?: number;
+  /** Build of the runtime whose capabilities or plan produced this outcome. */
+  runtimeBuild?: string | null;
 }
 /** Final native-call decision. Contains no source text or provider credentials. */
 export interface CallReport {
@@ -190,6 +196,8 @@ export const PROTOCOL_RANGE = Object.freeze({ min: 1, max: 1 });
 export const MIDDLEWARE_FEATURES_HEADER = 'Caveman-Middleware-Features';
 export const MIDDLEWARE_CLIENT_HEADER = 'Caveman-Middleware-Client';
 export const MIDDLEWARE_CLIENT_PRODUCT = 'caveman-sdk-typescript';
+/** Package version sent in `Caveman-Middleware-Client`; a test pins it to package.json. */
+export const SDK_VERSION = '1.1.0';
 export type Feature = 'http_status_v2' | 'originals_lifecycle' | 'revision_tolerant' | 'tolerant_reader';
 /** Every feature this SDK understands, sorted. */
 export const KNOWN_FEATURES: readonly Feature[] = Object.freeze(['http_status_v2', 'originals_lifecycle', 'revision_tolerant', 'tolerant_reader']);

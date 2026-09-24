@@ -310,6 +310,8 @@ export type SpanOptions = {
   outputTokens?: number;
   /** Provider-reported cached-input subset; never added to inputTokens. */
   cachedTokens?: number;
+  /** Provider-reported cache-write input subset (`gen_ai.usage.cache_creation.input_tokens`). */
+  cacheCreationTokens?: number;
   /** Provider-reported/request-attributed cost in USD. */
   costUsd?: number;
   workflow?: string;
@@ -2227,6 +2229,7 @@ export class OTelExporter {
       "gen_ai.usage.output_tokens",
       "gen_ai.usage.cached_tokens",
       "gen_ai.usage.cache_read.input_tokens",
+      "gen_ai.usage.cache_creation.input_tokens",
       "gen_ai.usage.cost_usd",
       "cave.agent",
       "cave.workflow",
@@ -2241,9 +2244,11 @@ export class OTelExporter {
     const inputTokens = strictNonNegativeInt(options.inputTokens);
     const outputTokens = strictNonNegativeInt(options.outputTokens);
     const cachedTokens = strictNonNegativeInt(options.cachedTokens);
+    const cacheCreationTokens = strictNonNegativeInt(options.cacheCreationTokens);
     if (inputTokens !== null) attrs["gen_ai.usage.input_tokens"] = inputTokens;
     if (outputTokens !== null) attrs["gen_ai.usage.output_tokens"] = outputTokens;
     if (cachedTokens !== null && (inputTokens === null || cachedTokens <= inputTokens)) attrs["gen_ai.usage.cache_read.input_tokens"] = cachedTokens;
+    if (cacheCreationTokens !== null && (inputTokens === null || cacheCreationTokens <= inputTokens)) attrs["gen_ai.usage.cache_creation.input_tokens"] = cacheCreationTokens;
     if (typeof options.costUsd === "number" && Number.isFinite(options.costUsd) && options.costUsd >= 0) attrs["gen_ai.usage.cost_usd"] = options.costUsd;
     attrs["cave.agent"] = this.cave.options.agent;
     attrs["cave.workflow"] = options.workflow ?? this.cave.options.defaultWorkflow ?? "unlabeled-workflow";

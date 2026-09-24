@@ -109,7 +109,7 @@ The non-null assertions above are type annotations, not environment validation. 
 
 ## Next steps
 
-- [Configure credentials, labels, timeouts, and cancellation](https://docs.caveman.so/docs/sdk/configuration).
+- [Configure credentials, labels, timeouts, and cancellation](https://docs.caveman.so/docs/sdk/reference#constructor-options).
 - [Use Anthropic, Gemini, Vertex, raw responses, or streaming](https://docs.caveman.so/docs/sdk/providers).
 - [Select tools](https://docs.caveman.so/docs/sdk/tools), [manage context](https://docs.caveman.so/docs/sdk/context), or [trace a workflow](https://docs.caveman.so/docs/sdk/tracing).
 - [Add local framework middleware](https://docs.caveman.so/docs/sdk/middleware) when you want to keep an existing framework integration.
@@ -122,4 +122,6 @@ The SDK does not install the engine, run an agent loop, or guarantee that your c
 
 ## Native framework middleware
 
-For automatic projection of eligible tool results in an existing framework, use the separate [middleware package](https://docs.caveman.so/docs/sdk/middleware). Start with the complete [AI SDK quickstart](https://docs.caveman.so/docs/sdk/middleware/typescript). The local runtime is accountless; inference stays in your provider client. The thin connected APIs above remain explicit calls.
+For automatic projection of eligible tool results in an existing framework, use the separate [middleware package](https://docs.caveman.so/docs/sdk/middleware). Start with the complete [AI SDK quickstart](https://docs.caveman.so/docs/sdk/middleware/vercel-ai-sdk). The local runtime is accountless; inference stays in your provider client. The thin connected APIs above remain explicit calls.
+
+**Experimental.** The `@caveman-ai/sdk/middleware` subpath is the protocol client those adapters build on. Every export in it may change in any minor release while the middleware packages are 0.x. The root `@caveman-ai/sdk` entrypoint keeps its stable API.

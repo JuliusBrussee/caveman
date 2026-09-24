@@ -62,6 +62,7 @@ test("recordSpan() maps GenAI fields to gen_ai.* attributes and generates ids", 
     inputTokens: 1200,
     outputTokens: 350,
     cachedTokens: 800,
+    cacheCreationTokens: 150,
     costUsd: 0.0145,
     workflow: "invoice-flow"
   });
@@ -78,6 +79,8 @@ test("recordSpan() maps GenAI fields to gen_ai.* attributes and generates ids", 
   assert.equal(a["gen_ai.usage.input_tokens"], 1200);
   assert.equal(a["gen_ai.usage.output_tokens"], 350);
   assert.equal(a["gen_ai.usage.cache_read.input_tokens"], 800);
+  assert.equal(a["gen_ai.usage.cache_creation.input_tokens"], 150);
+  assert.ok(!("gen_ai.usage.cached_tokens" in a), "OTel GenAI semconv names only");
   assert.equal(a["gen_ai.usage.cost_usd"], 0.0145);
   assert.equal(a["cave.agent"], "billing-agent");
   assert.equal(a["cave.workflow"], "invoice-flow");
@@ -116,6 +119,7 @@ test("recordSpan() omits malformed counters and prevents reserved-attribute over
     attributes: {
       "gen_ai.usage.input_tokens": 999999,
       "gen_ai.usage.cost_usd": 999999,
+      "gen_ai.usage.cache_creation.input_tokens": 999999,
       "cave.agent": "spoofed-agent",
     },
   });
@@ -124,6 +128,7 @@ test("recordSpan() omits malformed counters and prevents reserved-attribute over
   assert.ok(!("gen_ai.usage.output_tokens" in span.attributes));
   assert.ok(!("gen_ai.usage.cache_read.input_tokens" in span.attributes));
   assert.ok(!("gen_ai.usage.cost_usd" in span.attributes));
+  assert.ok(!("gen_ai.usage.cache_creation.input_tokens" in span.attributes));
   assert.equal(span.attributes["cave.agent"], "real-agent");
 });
 

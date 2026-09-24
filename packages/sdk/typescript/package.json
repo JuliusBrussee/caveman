@@ -9,11 +9,13 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./middleware": {
       "types": "./dist/middleware/index.d.ts",
-      "import": "./dist/middleware/index.js"
+      "import": "./dist/middleware/index.js",
+      "default": "./dist/middleware/index.js"
     }
   },
   "files": [
@@ -40,7 +42,7 @@
     "optimization"
   ],
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.12"
   },
   "publishConfig": {
     "access": "public"
