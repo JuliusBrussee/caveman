@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -187,7 +188,7 @@ func runServe(logger *slog.Logger) {
 	// The wrap CLI spawns this process detached with stdio ignored, so without
 	// a file every warning the proxy emits (upstream failures, copy errors) is
 	// lost and field reports like #897 arrive with no proxy-side evidence.
-	if f := openProxyLog(filepath.Join(home, "proxy.log")); f != nil {
+	if f := openProxyLog(filepath.Join(home, "proxy.log"), proxyLogMaxBytes); f != nil {
 		defer f.Close()
 		logger = slog.New(slog.NewJSONHandler(io.MultiWriter(os.Stdout, f), &slog.HandlerOptions{ReplaceAttr: redact.SlogReplaceAttr}))
 	}
@@ -214,10 +215,12 @@ func runServe(logger *slog.Logger) {
 	// objects. Record mode still never writes recovery originals: it only permits
 	// metadata-safe native runtime state when an installed host pack sends events.
 	opts := standalone.Options{SessionMarkerKey: sessionMarkerKey, Logger: logger}
-	if runtime, err := standalone.NewMiddleware(cfg, spend, recovery, version); err != nil {
-		logger.Warn("framework middleware unavailable", "code", "runtime_initialization")
+	framework, err := standalone.NewMiddleware(cfg, spend, recovery, version, logger)
+	if err != nil {
+		// Store/config errors carry no secrets; key errors never echo the key.
+		logger.Warn("framework middleware unavailable", "code", "runtime_initialization", "error", err)
 	} else {
-		opts.Middleware = runtime
+		opts.Middleware = framework
 	}
 	switch {
 	case (cfg.Mode == "compress" || cfg.Mode == "pixel") && recovery != nil:
@@ -241,6 +244,10 @@ func runServe(logger *slog.Logger) {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if opts.Middleware != nil {
+		// Expiry sweeps and batched retrieve renewals, off the request path.
+		go framework.Run(ctx)
+	}
 	if nativeRuntime != nil {
 		go func() {
 			if err := nativeruntime.Serve(ctx, home, nativeRuntime); err != nil && ctx.Err() == nil {
@@ -1033,17 +1040,68 @@ func fatalJSON(logger *slog.Logger, err error) {
 }
 
 // mustHome resolves and creates the ~/.caveman directory, honoring CAVEMAN_HOME.
-// openProxyLog appends to path, rotating a single previous generation once the
-// file passes 16MB. Nil on any error: logging must never block serving.
-func openProxyLog(path string) *os.File {
-	if info, err := os.Stat(path); err == nil && info.Size() > 16<<20 {
-		_ = os.Rename(path, path+".1")
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
+// proxyLogMaxBytes is where proxy.log rotates to one previous generation.
+const proxyLogMaxBytes = 16 << 20
+
+// proxyLog appends to a file and rotates a single previous generation (.1)
+// whenever a write would pass max, while serving and not only at startup: the
+// middleware audit trail writes a line per request. Nil on any open error:
+// logging must never block serving.
+type proxyLog struct {
+	mu   sync.Mutex
+	path string
+	max  int64
+	f    *os.File
+	size int64
+}
+
+func openProxyLog(path string, max int64) *proxyLog {
+	l := &proxyLog{path: path, max: max}
+	if l.open() != nil {
 		return nil
 	}
-	return f
+	return l
+}
+
+func (l *proxyLog) open() error {
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	l.f, l.size = f, info.Size()
+	return nil
+}
+
+func (l *proxyLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f != nil && l.size > 0 && l.size+int64(len(p)) > l.max {
+		_ = l.f.Close()
+		_ = os.Rename(l.path, l.path+".1")
+		if l.open() != nil {
+			l.f = nil
+		}
+	}
+	if l.f == nil {
+		return len(p), nil // stdout still gets the line
+	}
+	n, err := l.f.Write(p)
+	l.size += int64(n)
+	return n, err
+}
+
+func (l *proxyLog) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return nil
+	}
+	return l.f.Close()
 }
 
 func mustHome(logger *slog.Logger) string {

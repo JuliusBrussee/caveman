@@ -59,6 +59,27 @@ func newFixture(t *testing.T) fixture {
 	return f
 }
 func (f fixture) close() { _ = f.state.Close(); _ = f.recovery.Close() }
+
+// db opens the fixture's middleware store directly, for assertions and faults.
+func (f fixture) db(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(f.dir, "spend.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+// originals counts stored original bodies (credit-only rows excluded).
+func (f fixture) originals(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := f.db(t).QueryRow(`SELECT count(*) FROM middleware_originals WHERE body IS NOT NULL`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
 func noisy() string {
 	var b strings.Builder
 	for i := 0; i < 150; i++ {
@@ -186,11 +207,13 @@ func TestIdenticalDocumentsKeepSeparateGrantsAndOneUniqueCredit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Three sources, one content: the authority stores that original once, in
+	// the middleware store, and nothing in the process-global CCR.
 	stats, err := f.recovery.Summary()
-	if err != nil || stats.Totals.Count != 1 || stats.Totals.TokensAfter != engineResult.TokensAfter {
-		t.Fatalf("scoped marker overhead leaked into shared CCR metadata: %+v, %v", stats.Totals, err)
+	if err != nil || stats.StorageBytes != 0 || f.originals(t) != 1 {
+		t.Fatalf("original not stored exactly once in the middleware store: ccr=%+v originals=%d %v", stats, f.originals(t), err)
 	}
-	if later.Replacements[0].TokensAfter <= stats.Totals.TokensAfter {
+	if later.Replacements[0].TokensAfter <= engineResult.TokensAfter {
 		t.Fatal("request plan omitted its scoped marker overhead")
 	}
 }
@@ -318,7 +341,7 @@ func TestConcurrentWritersChooseOneDurableReplacement(t *testing.T) {
 			req.RequestID = fmt.Sprintf("req-%d", i)
 			req.IdempotencyKey = req.RequestID
 			b, _ := json.Marshal(req)
-			out, err := r.optimize(context.Background(), "alice", req, digest(b))
+			out, err := r.optimize(context.Background(), "alice", req, digest(b), negotiated{})
 			if err != nil {
 				errors <- err
 				return
@@ -391,7 +414,7 @@ func TestConservativeModesDoNotStoreOriginals(t *testing.T) {
 				t.Fatal("fallback incorrectly claims persistent cache continuity")
 			}
 			stats, err := f.recovery.Summary()
-			if err != nil || stats.StorageBytes != 0 {
+			if err != nil || stats.StorageBytes != 0 || f.originals(t) != 0 {
 				t.Fatal("original stored in bypass mode")
 			}
 		})
@@ -423,7 +446,9 @@ func TestExpiryDeletionAndFailedRecoveryStayClosed(t *testing.T) {
 				}
 			}
 			if cause == "unavailable" {
-				_ = f.recovery.Close()
+				if _, err := f.db(t).Exec(`DELETE FROM middleware_originals`); err != nil {
+					t.Fatal(err)
+				}
 			}
 			code, body := call(t, f.runtime, "retrieve", RetrieveRequest{SchemaVersion: 1, Scope: req.Scope, Handle: out.Replacements[0].RecoveryHandle}, "alice")
 			if code == 200 || bytes.Contains(body, []byte("exact-value")) {
@@ -486,36 +511,40 @@ func TestProtocolLimitsAndReceipts(t *testing.T) {
 	}
 }
 
-// Expiry used to share the request's transaction, so every rejected optimize -
-// capacity, not_smaller, epoch_changed - rolled back the batch that would have
-// freed room. A store at its row cap could then never drain. Reclamation has to
-// commit on its own, independently of whether the request that triggered it won.
-func TestExpiryCommitsEvenWhenTheRequestFails(t *testing.T) {
+// Expiry used to run in front of every optimize, sharing its writer. It now
+// runs in the background sweep, in its own transactions, so it commits whether
+// or not any request succeeds, and it purges every elapsed scope rather than
+// the same first batch on every pass (A4).
+func TestSweepReclaimsWithoutRequests(t *testing.T) {
 	f := newFixture(t)
-	req := requestFor(f.runtime)
-	optimizeOK(t, f.runtime, req)
+	optimizeOK(t, f.runtime, requestFor(f.runtime))
 	ctx := context.Background()
 	if err := f.state.WithMiddleware(ctx, func(tx *store.MiddlewareTx) error {
 		if err := tx.SaveScope(store.MiddlewareScope{ID: "elapsed", Authority: "elapsed", Manifest: []byte("[]"), ExpiresAt: 10}); err != nil {
 			return err
 		}
-		return tx.SaveChoice("elapsed", "choice", "elapsed-grant", "handle", []byte("replacement"))
+		if _, err := tx.SaveOriginal("elapsed", "digest", []byte("original"), ""); err != nil {
+			return err
+		}
+		return tx.SaveChoice("elapsed", "choice", "elapsed-grant", "", []byte("replacement"))
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// A manifest shorter than the stored one is a rejected epoch, not a retry.
-	stale := requestFor(f.runtime)
-	stale.RequestID, stale.IdempotencyKey = "stale", "stale"
-	stale.ContextManifest = stale.ContextManifest[:1]
-	if code, body := call(t, f.runtime, "optimize", stale, "alice"); code == 200 {
-		t.Fatalf("truncated manifest was accepted: %s", body)
+	if err := f.runtime.sweep(ctx); err != nil {
+		t.Fatal(err)
 	}
 	if err := f.state.WithMiddleware(ctx, func(tx *store.MiddlewareTx) error {
 		if _, _, err := tx.Choice("elapsed", "choice"); !errors.Is(err, sql.ErrNoRows) {
-			t.Errorf("a failed request rolled back the expiry batch: %v", err)
+			t.Errorf("sweep left the elapsed choice: %v", err)
+		}
+		if _, _, err := tx.Original("elapsed", "digest"); !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("sweep left the elapsed original: %v", err)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if f.originals(t) != 1 {
+		t.Fatal("sweep touched a live scope's original")
 	}
 }

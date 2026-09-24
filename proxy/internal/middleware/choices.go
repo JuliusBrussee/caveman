@@ -12,19 +12,23 @@ import (
 	"unicode/utf8"
 
 	"github.com/JuliusBrussee/caveman/engine"
-	"github.com/JuliusBrussee/caveman/engine/ccr"
 	"github.com/JuliusBrussee/caveman/proxy/internal/store"
 )
 
 type preparedChoice struct {
 	replacement Replacement
-	handle      string
-	before      int
-	reason      string
-	eligible    bool
+	// handle is the CCR handle of a choice protocol 1.0 made; "" otherwise.
+	handle   string
+	before   int
+	reason   string
+	eligible bool
+	// sealed is the original as it will be stored (encrypted when a key is
+	// configured) and keyID the key that sealed it.
+	sealed []byte
+	keyID  string
 }
 
-func (r *Runtime) prepareChoice(ctx context.Context, scopeID string, req OptimizeRequest, s Segment) (preparedChoice, error) {
+func (r *Runtime) prepareChoice(ctx context.Context, auth, scopeID string, req OptimizeRequest, s Segment) (preparedChoice, error) {
 	p := preparedChoice{}
 	if req.Mode == "record" || r.cfg.Mode == "record" {
 		p.reason = "record"
@@ -34,7 +38,7 @@ func (r *Runtime) prepareChoice(ctx context.Context, scopeID string, req Optimiz
 		p.reason = "unsupported_shape"
 	} else if len(s.Content) > r.cfg.Limits.SegmentBytes {
 		p.reason = "payload_limit"
-	} else if req.RecoveryBinding == nil || r.cfg.Recovery == nil || !r.caps.Persistent {
+	} else if req.RecoveryBinding == nil || !r.caps.Persistent {
 		p.reason = "recovery_unavailable"
 	}
 	if p.reason != "" {
@@ -43,20 +47,30 @@ func (r *Runtime) prepareChoice(ctx context.Context, scopeID string, req Optimiz
 	}
 	p.eligible = true
 	var body []byte
+	stored := false
 	err := r.cfg.Store.ReadMiddleware(ctx, func(tx *store.MiddlewareTx) error {
 		var err error
 		body, p.handle, err = tx.Choice(scopeID, identity(s.ID, s.SourceID, s.SHA256))
+		if err == nil && p.handle == "" {
+			stored, err = tx.HasOriginal(auth, s.SHA256)
+		}
 		return err
 	})
 	if err == nil {
 		if json.Unmarshal(body, &p.replacement) != nil {
-			return p, Failure{"cache_state_unavailable"}
+			return p, Failure{ReasonCacheStateUnavailable}
 		}
-		if err := r.verifyOriginal(p.handle, s.SHA256); err != nil {
+		p.before = p.replacement.TokensBefore
+		// A persisted choice is reused byte for byte only under a policy that
+		// still allows its transform (§2); otherwise the segment is skipped.
+		if !slices.Contains(req.Policy.Transforms, p.replacement.TransformID) {
+			p.eligible, p.reason = false, CodeUnknownCapability
+			return p, nil
+		}
+		if err := r.verifyOriginal(p.handle, stored, s.SHA256); err != nil {
 			return p, err
 		}
 		p.replacement.Reused = true
-		p.before = p.replacement.TokensBefore
 		return p, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -64,14 +78,14 @@ func (r *Runtime) prepareChoice(ctx context.Context, scopeID string, req Optimiz
 	}
 	p.before = r.counter.Count([]byte(s.Content))
 	if s.CacheRegion == "frozen_prefix" {
-		p.reason = "cache_state_unavailable"
+		p.reason = ReasonCacheStateUnavailable
 		return p, nil
 	}
 	ct := r.eng.Detect([]byte(s.Content))
 	transform := "caveman.engine." + ct + ".v1"
 	cap, ok := r.transforms[transform]
 	if !ok || !slices.Contains(req.Policy.Transforms, transform) || !slices.Contains(cap.EligibleSegmentKinds, s.Kind) {
-		p.reason = "unknown_capability"
+		p.reason = CodeUnknownCapability
 		return p, nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -82,7 +96,7 @@ func (r *Runtime) prepareChoice(ctx context.Context, scopeID string, req Optimiz
 		return p, err
 	}
 	if result.TokensAfter >= result.TokensBefore {
-		p.reason = "not_smaller"
+		p.reason = ReasonNotSmaller
 		return p, nil
 	}
 	random := make([]byte, 24)
@@ -93,20 +107,12 @@ func (r *Runtime) prepareChoice(ctx context.Context, scopeID string, req Optimiz
 	text := "[caveman: shortened; exact original via caveman_retrieve handle=" + grant + "]\n" + string(result.Output)
 	after := r.counter.Count([]byte(text))
 	if after >= result.TokensBefore {
-		p.reason = "not_smaller"
+		p.reason = ReasonNotSmaller
 		return p, nil
 	}
-	if err := ctx.Err(); err != nil {
-		return p, err
-	}
-	// Only CCR writes originals. Durable storage precedes publishing any grant;
-	// its global content-addressed handle never reaches the application.
-	// CCR describes the Engine transform. Scoped marker overhead belongs only
-	// to the request plan; including its random handle here would rewrite the
-	// same original on every scope despite an unchanged Engine result.
-	p.handle, err = r.cfg.Recovery.Put(ccr.Recovery{Original: []byte(s.Content), ContentType: result.ContentType,
-		Compressor: result.ContentType, TokensBefore: result.TokensBefore, TokensAfter: result.TokensAfter})
-	if err != nil {
+	// The original is sealed here, off the writer, and stored only by the
+	// transaction that publishes a plan referencing it.
+	if p.sealed, p.keyID, err = r.cfg.Keys.seal(auth, s.SHA256, []byte(s.Content)); err != nil {
 		return p, err
 	}
 	p.replacement = Replacement{SegmentID: s.ID, SourceID: s.SourceID, OriginalSHA256: s.SHA256, Text: text, SHA256: digest([]byte(text)),
@@ -114,15 +120,24 @@ func (r *Runtime) prepareChoice(ctx context.Context, scopeID string, req Optimiz
 	return p, nil
 }
 
-func (r *Runtime) verifyOriginal(handle, originalDigest string) error {
+// verifyOriginal refuses to reuse a choice whose original is gone: its marker
+// would point at nothing. stored reports the middleware store's copy; a choice
+// protocol 1.0 made keeps its original in CCR under handle.
+func (r *Runtime) verifyOriginal(handle string, stored bool, originalDigest string) error {
+	if handle == "" {
+		if !stored {
+			return Failure{CodeRecoveryUnavailable}
+		}
+		return nil
+	}
 	original, err := r.eng.Retrieve(handle)
 	if err != nil || digest(original) != originalDigest {
-		return Failure{"recovery_unavailable"}
+		return Failure{CodeRecoveryUnavailable}
 	}
 	return nil
 }
 
-func (r *Runtime) publishChoice(tx *store.MiddlewareTx, scopeID string, s Segment, p preparedChoice) (Replacement, string, error) {
+func (r *Runtime) publishChoice(tx *store.MiddlewareTx, auth, scopeID string, req OptimizeRequest, s Segment, p preparedChoice) (Replacement, string, error) {
 	if !p.eligible {
 		return Replacement{}, p.reason, nil
 	}
@@ -130,12 +145,21 @@ func (r *Runtime) publishChoice(tx *store.MiddlewareTx, scopeID string, s Segmen
 	if body, handle, err := tx.Choice(scopeID, key); err == nil {
 		var chosen Replacement
 		if json.Unmarshal(body, &chosen) != nil {
-			return Replacement{}, "", Failure{"cache_state_unavailable"}
+			return Replacement{}, "", Failure{ReasonCacheStateUnavailable}
+		}
+		if !slices.Contains(req.Policy.Transforms, chosen.TransformID) {
+			return Replacement{}, CodeUnknownCapability, nil
 		}
 		// Usually already checked outside the write lock. Only a different
-		// first writer needs a fresh CCR read here.
+		// first writer needs a fresh check here.
 		if handle != p.handle || chosen.SHA256 != p.replacement.SHA256 {
-			if err := r.verifyOriginal(handle, s.SHA256); err != nil {
+			stored := false
+			if handle == "" {
+				if stored, err = tx.HasOriginal(auth, s.SHA256); err != nil {
+					return Replacement{}, "", err
+				}
+			}
+			if err := r.verifyOriginal(handle, stored, s.SHA256); err != nil {
 				return Replacement{}, "", err
 			}
 		}
@@ -146,13 +170,13 @@ func (r *Runtime) publishChoice(tx *store.MiddlewareTx, scopeID string, s Segmen
 		return Replacement{}, "", err
 	}
 	if p.replacement.Reused {
-		return Replacement{}, "", Failure{"cache_state_unavailable"}
+		return Replacement{}, "", Failure{ReasonCacheStateUnavailable}
 	}
 	if p.reason != "" {
 		return Replacement{}, p.reason, nil
 	}
 	body, _ := json.Marshal(p.replacement)
-	if err := tx.SaveChoice(scopeID, key, p.replacement.RecoveryHandle, p.handle, body); err != nil {
+	if err := tx.SaveChoice(scopeID, key, p.replacement.RecoveryHandle, "", body); err != nil {
 		return Replacement{}, "", err
 	}
 	return p.replacement, "", nil

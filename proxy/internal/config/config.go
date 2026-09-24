@@ -106,6 +106,9 @@ type Config struct {
 	// binary logs them at startup. An unusable bundle contributes nothing, never
 	// a partial set of roots.
 	SkippedCABundles []SkippedCABundle `yaml:"-"`
+	// Middleware configures the framework middleware runtime (see
+	// MiddlewareConfig); CAVEMAN_MIDDLEWARE_* environment variables override it.
+	Middleware MiddlewareConfig `yaml:"middleware"`
 
 	rootCAs             *x509.CertPool
 	upstreamProxy       func(*http.Request) (*url.URL, error)
@@ -363,6 +366,7 @@ func (c Config) withDefaults() Config {
 	if bundle := env.String("CAVE_CA_BUNDLE", ""); bundle != "" {
 		c.CABundle = bundle
 	}
+	c.Middleware = c.Middleware.withEnv()
 	if c.Listen == "" {
 		c.Listen = DefaultListen
 	}
