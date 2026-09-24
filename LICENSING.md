@@ -28,6 +28,7 @@ it as MIT adoption surface.
 | `packages/cli/` | MIT | Funnel/on-ramp. Launches BSL binaries but does not contain engine code. |
 | `packages/sdk/typescript/` | MIT | Thin client and structural SDK surface. |
 | `packages/sdk/python/` | MIT | Thin client; distribution name is `caveman-sdk`. |
+| `packages/middleware/` | MIT | Framework middleware adapters (`@caveman-ai/middleware`, `caveman-middleware`). Call the BSL runtime over HTTP; contain no Engine code. |
 | `packages/subagent-tax/` | MIT | Local zero-provider-call harness-prefix measurement tool. |
 | `extension/` | MIT shell | Manifest, popup, content scripts, and UI are MIT. Bundled `engine.wasm` is BSL-1.1, so artifacts embedding it carry BSL terms for that combined work. |
 | `packages/shared/contracts/` | MIT | Public wire schemas and ecosystem contracts. |
@@ -58,6 +59,37 @@ license from the Licensor. This is the OEM/platform boundary.
 
 Named commercial/OEM partners may receive a separate signed carve-out that
 allows the specific hosted, managed, or embedded use covered by that agreement.
+
+## Middleware licensing
+
+Framework middleware has two halves under two licenses:
+
+- **Client and adapters: MIT.** `packages/middleware/` and the `middleware`
+  modules of the SDKs (`@caveman-ai/sdk/middleware`, `caveman_cloud.middleware`).
+  Use, modify, and ship them inside any product, open or closed.
+- **Runtime: BSL-1.1.** The adapters do nothing on their own; they call the
+  `caveman-proxy` runtime (binary or container image), which embeds the Engine.
+  Running that runtime is use of the Licensed Work under `LICENSE.BSL` and its
+  Additional Use Grant. The MIT license of the client does not extend to it.
+
+So the licensing question for a deployment is always about the runtime: who
+runs it, and whose traffic it serves.
+
+## Common deployment topologies
+
+Answers below come only from the current text of `LICENSE.BSL`. Where that text
+does not settle the case, the row says so; ask the Licensor before relying on
+it. This table is guidance, not a license grant, and `LICENSE.BSL` wins if they
+ever disagree.
+
+| Topology | Runtime use under the current BSL text |
+|---|---|
+| Single application: you self-host the runtime for your own app and your own traffic | Permitted. Self-hosted production use for your own first-party traffic is in the Additional Use Grant. |
+| Internal platform: one team runs the runtime for other business units or affiliates | PENDING LICENSOR DECISION. The grant does not define "first-party" for affiliates or other entities in a group. |
+| Contractors operating the runtime on your behalf, for your traffic | PENDING LICENSOR DECISION. The grant does not say whether a contractor's operation counts as your first-party use. |
+| ISV SaaS: you use Caveman inside your own service to serve your customers | PENDING LICENSOR DECISION. Where "your own first-party traffic" ends and "offering its functionality to third parties" begins is not defined for this case. |
+| On-prem bundle: you ship the runtime inside a product your customers install | PENDING LICENSOR DECISION. The grant excludes offering the Licensed Work "as a hosted, managed, or embedded service" but does not address distributing it inside an installed product. |
+| Hosted or managed offering: third parties use Caveman, or its functionality, through your service | Commercial license required. The grant expressly excludes offering the Licensed Work or its functionality to third parties as a hosted, managed, or embedded service. |
 
 ## Change License
 

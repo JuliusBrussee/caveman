@@ -54,9 +54,36 @@ jobs:
         run: go build -o "$RUNNER_TEMP/caveman-proxy" ./proxy/cmd/caveman-proxy
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
-      - run: pnpm -r test
+      # The SDK and middleware suites run in middleware-typescript below, so a
+      # failure elsewhere in the workspace cannot skip them.
+      - run: pnpm -r --filter "!@caveman-ai/sdk" --filter "!@caveman-ai/middleware" test
         env:
           CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}/caveman-proxy
+          CAVEMAN_REQUIRE_FRAMEWORKS: "1"
+
+  # Its own job: `pnpm -r test` stops at the first failing package, and a red
+  # historical packages/agent copy used to mean these suites never ran.
+  middleware-typescript:
+    name: middleware-typescript / node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @caveman-ai/sdk test
+      - run: pnpm --filter @caveman-ai/middleware test
+        env:
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
       - run: pnpm --dir packages/middleware/typescript test:consumer
 

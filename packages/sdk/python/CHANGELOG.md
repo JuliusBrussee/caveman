@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Release process: each release gets a GitHub Release with these notes and a
+  CycloneDX SBOM of its dependency graph.
+
 ## 1.1.0 — 2026-09-15
 
 - Added `caveman_cloud.middleware`: the dependency-free protocol client, validation, deadlines and receipts that `caveman-middleware` adapters build on.

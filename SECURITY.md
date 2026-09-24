@@ -5,7 +5,25 @@ source; verify the tag you install when policy depends on an exact version.
 
 ## Supported versions
 
-Only the latest stable release receives security patches.
+| Component | Supported line | Security fixes |
+|---|---|---|
+| Caveman skill, installer, CLI (`@caveman-ai/cli`), runtime binaries (`bin-v*`, container image) | Latest stable release | Yes |
+| SDKs: `@caveman-ai/sdk`, `caveman-sdk` | 1.x, latest minor | Yes |
+| Middleware: `@caveman-ai/middleware`, `caveman-middleware` | 0.x, latest published version (alpha today) | Yes, in the next 0.x version. No backports to older 0.x versions. |
+| Anything older than the lines above | — | No |
+
+The `middleware` modules inside the 1.x SDKs (`@caveman-ai/sdk/middleware`,
+`caveman_cloud.middleware`) get security fixes on the SDK 1.x line, but their
+API is experimental like the 0.x middleware packages: it can change in a minor
+release.
+
+Response policy for reports sent through the channel below:
+
+- acknowledgement within 3 business days;
+- a fix or mitigation for a confirmed critical issue targeted within 30 days,
+  with a published advisory once a fixed version is available.
+
+These are policy targets for a small maintainer team, not a contractual SLA.
 
 ## Report a vulnerability
 
@@ -22,12 +40,63 @@ reporting](https://github.com/JuliusBrussee/caveman/security/advisories/new).
 | Local Proxy + Engine | No | Request content, possibly transformed, and provider credentials go to the provider selected by the agent. Recovery originals stay in local CCR storage unless the agent retrieves and sends them later. |
 | Agent SDK `observe-only` | No | Directly to the configured provider. No Caveman gateway telemetry. |
 | Managed Caveman gateway | Yes | Requests and responses transit Caveman Cloud and the selected provider. Do not treat managed mode as local-only. |
+| Framework middleware (client, adapters, and the runtime you host) | No | Your app keeps calling its provider directly. The adapters send eligible tool-result text to the runtime you point them at, and the runtime stores the originals so the model can fetch them back. Nothing goes to Caveman servers. See [Framework middleware data](#framework-middleware-data). |
 | Anonymous CLI telemetry | No | Content-free usage events, including token counts processed and saved, go to Caveman by default (opt-out). First interactive run prints the disclosure; `caveman telemetry off` or `DO_NOT_TRACK=1` turns it off for good. |
 | Authenticated dashboard sync | Yes | Local span metadata and aggregate findings go to Caveman Cloud when credentials are present. Raw prompt and response bodies are excluded. |
 
 Your model provider, MCP servers, browser targets, agent plugins, and any command
 the agent runs remain separate data processors. Caveman cannot make those tools
 offline or private.
+
+## Framework middleware data
+
+The middleware client (`@caveman-ai/sdk/middleware`, `caveman_cloud.middleware`),
+the adapters (`@caveman-ai/middleware`, `caveman-middleware`), and the
+`caveman-proxy` runtime make **no network calls to Caveman servers**. They send
+no telemetry. The client talks only to the runtime endpoint you configure; the
+runtime answers the `/caveman/v1/middleware/*` routes and does not call a model
+provider on this path. The Python import name `caveman_cloud` is historical: it
+does not mean a cloud service is involved.
+
+The CLI you may use to install and start the runtime (`caveman setup`,
+`caveman start`) is a separate program with its own opt-out
+[anonymous telemetry](#anonymous-cli-telemetry): content-free usage events,
+never prompts or tool results. Turn it off with `caveman telemetry off` or
+`DO_NOT_TRACK=1`. Running the binary or container image directly
+(`caveman-proxy serve`) involves no CLI and no telemetry.
+
+What the runtime stores, on its own disk:
+
+- **Tool-result originals** (exact text), so the model can recover them. Treat
+  them as sensitive as the tool output itself.
+- **Scope state** in the runtime database (`~/.caveman/caveman.db`, or under
+  `CAVEMAN_HOME` in the container): scope identifiers (namespace, session,
+  branch, cache epoch), the compressed replacement text the runtime chose,
+  recovery grants, and receipts. The replacement text is derived from tool
+  output, so it is sensitive too. No provider credentials, no model responses.
+
+Lifecycle **up to and including runtime `bin-v1.1.8`**: originals go into the
+shared recovery store (`~/.caveman/ccr.db`) in plaintext and are not deleted
+when a session is deleted or expires; retention (`retention_seconds`, default
+24 hours) covers scope metadata only. Delete the recovery store yourself when
+you need the originals gone.
+
+Lifecycle **from the next runtime release after `bin-v1.1.8`** (being built on
+the middleware hardening branch; check the release notes before relying on it):
+
+- originals live in the middleware store and belong to their scope, not to the
+  shared recovery store;
+- `retention_seconds` covers originals too, and a `max_retention_seconds` cap
+  bounds sliding renewal;
+- deleting a session (`sessions/delete`) deletes the scope's metadata and every
+  original it owns, and reports `originals_deleted: true` with counts;
+- originals are encrypted at rest when an encryption key is configured;
+  without a key they rely on file permissions, as today;
+- an original from a call that produced no replacement is not kept.
+
+The normative rules are in the protocol spec,
+[`docs/technical/middleware-protocol.md`](./docs/technical/middleware-protocol.md)
+(section 12, Lifecycle).
 
 ## Anonymous CLI telemetry
 
@@ -137,11 +206,24 @@ runtime databases, reports, backups, or credentials; inspect `~/.caveman/` and
 
 ## Local Proxy security
 
-`caveman start` defaults to `127.0.0.1:8787`. Standalone Proxy authentication
-accepts every inbound request because loopback, single-operator isolation is the
-security boundary. Startup rejects non-loopback `--host` and `CAVEMAN_LISTEN`
-values. A firewall does not turn standalone mode into an authenticated external
-gateway; use the managed authenticated gateway for remote access.
+`caveman start` defaults to `127.0.0.1:8787`. Without `CAVEMAN_AUTH_TOKEN`,
+the proxy accepts every inbound request, because loopback single-operator
+isolation is the security boundary, and startup rejects a non-loopback `--host`
+or `CAVEMAN_LISTEN` value.
+
+Setting `CAVEMAN_AUTH_TOKEN` (at least 16 bytes, no spaces or control
+characters) is what permits a non-loopback listener. Every inference and
+middleware request must then present the token in `x-cave-api-key` or
+`Authorization: Bearer`; `/health/*` and `/metrics` stay unauthenticated for
+load balancers. The container image listens on `0.0.0.0:8787`, so it refuses to
+start without the token.
+
+What a token-gated listener does **not** give you today: the token is one
+shared secret with no per-user identity, roles, or audit log, and the proxy
+speaks plain HTTP. Keep it on a private network, terminate TLS in front of it,
+and rotate the token when someone leaves. A firewall alone does not make it an
+authenticated external gateway. See
+[`docs/technical/deploy.md`](./docs/technical/deploy.md).
 
 Proxy upstream clients apply SSRF controls. Compression is recovery-first:
 parse failure, unsafe transform, unavailable durable recovery, storage failure,

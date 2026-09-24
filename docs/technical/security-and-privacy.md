@@ -8,8 +8,10 @@ local proxy.
 
 By default the proxy is a single-operator tool: it binds to loopback and accepts
 every request on it without authentication. In that configuration do not expose
-it on a LAN, container bridge, public interface, or shared host — a non-loopback
-listen address is refused at startup.
+it on a LAN, container bridge, public interface, or shared host — without
+`CAVEMAN_AUTH_TOKEN` a non-loopback listen address is refused at startup. The
+container image listens on `0.0.0.0:8787`, so it will not start without the
+token.
 
 A shared deployment is a separate, explicit configuration. It requires
 `CAVEMAN_AUTH_TOKEN`, and then every request must present that token in
@@ -17,7 +19,9 @@ A shared deployment is a separate, explicit configuration. It requires
 resolving a provider credential, so the shared token is never forwarded upstream
 and is never mistaken for a provider key. Provider credentials live on the
 server, in its environment or in an AWS role, not on the clients. The token is a
-single shared secret with no per-user identity: rotate it when someone leaves.
+single shared secret (at least 16 bytes) with no per-user identity, roles, or
+audit log: rotate it when someone leaves. The same token gates the framework
+middleware routes (`/caveman/v1/middleware/*`).
 Keep the listener inside a private network and terminate TLS in front of it —
 the proxy speaks plain HTTP. Health and metrics endpoints stay unauthenticated
 for load balancers, so do not expose them publicly. See
@@ -42,6 +46,15 @@ Potential local data stores include:
 
 Read [Context recovery](context-recovery.md) before treating a recovery handle
 as secret storage.
+
+Framework middleware: the client, adapters, and runtime make no calls to
+Caveman servers and send no telemetry. The runtime you host stores tool-result
+originals and scope state; what it keeps, for how long, and how deletion and
+encryption at rest work (current and next release) is in
+[SECURITY.md](../../SECURITY.md#framework-middleware-data). The CLI that can
+start the runtime has separate opt-out telemetry (`caveman telemetry off` or
+`DO_NOT_TRACK=1`); the Python import name `caveman_cloud` is historical and does
+not imply a cloud service.
 
 ## Credentials
 
@@ -118,9 +131,11 @@ can contain recovered prompts or remembered facts.
 ## Reporting a vulnerability
 
 Do not publish exploitable details in a public issue before maintainers can
-assess them. Use repository security policy or confidential contact listed on
-hosting page, and include affected version, minimal reproduction, impact, and
-suggested mitigation without real credentials or customer data.
+assess them. Use [GitHub private vulnerability
+reporting](https://github.com/JuliusBrussee/caveman/security/advisories/new),
+and include affected version, minimal reproduction, impact, and suggested
+mitigation without real credentials or customer data. Supported versions and
+response targets are in [SECURITY.md](../../SECURITY.md#supported-versions).
 
 ## Deployment checklist
 

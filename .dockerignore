@@ -8,6 +8,9 @@
 !mem/
 !proxy/
 !shared/
+!LICENSE
+!LICENSE.BSL
+!LICENSING.md
 
 # Re-exclude test-only weight inside those four directories. The embedded
 # assets live outside testdata, so this does not affect the build.
