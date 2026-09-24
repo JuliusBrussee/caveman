@@ -4,7 +4,9 @@
   "display_name": "Gemini CLI",
   "vendor": "Google",
   "homepage": "https://github.com/google-gemini/gemini-cli",
-  "binary_names": ["gemini"],
+  "binary_names": [
+    "gemini"
+  ],
   "args": [],
   "install": "npm i -g @google/gemini-cli",
   "wire_protocol": "gemini-generatecontent",
@@ -15,12 +17,16 @@
       "GOOGLE_VERTEX_BASE_URL": "{{cave_base_url}}/vertex"
     }
   },
-  "command_hook": { "method": "gemini-beforetool" },
-  "attribution": { "header": "x-cave-agent" },
-  "tested_agent_version": "0.60.0",
+  "command_hook": {
+    "method": "gemini-beforetool"
+  },
+  "attribution": {
+    "header": "x-cave-agent"
+  },
+  "tested_agent_version": "0.61.0",
   "injection_completeness": "declarative",
-  "last_verified_at": "2026-09-18",
-  "verified_by": "local pinned-binary probe (gemini 0.60.0, agents/probe-installed.mjs)",
+  "last_verified_at": "2026-09-24",
+  "verified_by": "local pinned-binary probe (gemini 0.61.0, agents/probe-installed.mjs)",
   "fallback": "generic-env",
   "maintainer": null
 }

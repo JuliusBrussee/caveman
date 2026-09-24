@@ -4,7 +4,9 @@
   "display_name": "Claude Code",
   "vendor": "Anthropic",
   "homepage": "https://code.claude.com/docs",
-  "binary_names": ["claude"],
+  "binary_names": [
+    "claude"
+  ],
   "args": [],
   "install": "npm i -g @anthropic-ai/claude-code",
   "wire_protocol": "anthropic-messages",
@@ -17,16 +19,26 @@
   },
   "skills": {
     "format": "skill-md",
-    "user_dirs": ["~/.claude/skills"],
-    "project_dirs": [".claude/skills"]
+    "user_dirs": [
+      "~/.claude/skills"
+    ],
+    "project_dirs": [
+      ".claude/skills"
+    ]
   },
-  "command_hook": { "method": "claude-pretooluse" },
-  "memory_hook": { "method": "claude-userpromptsubmit" },
-  "attribution": { "header": "x-cave-agent" },
-  "tested_agent_version": "2.1.280",
+  "command_hook": {
+    "method": "claude-pretooluse"
+  },
+  "memory_hook": {
+    "method": "claude-userpromptsubmit"
+  },
+  "attribution": {
+    "header": "x-cave-agent"
+  },
+  "tested_agent_version": "2.1.281",
   "injection_completeness": "builder-assisted",
-  "last_verified_at": "2026-09-23",
-  "verified_by": "local pinned-binary probe (claude 2.1.280, agents/probe-installed.mjs)",
+  "last_verified_at": "2026-09-24",
+  "verified_by": "local pinned-binary probe (claude 2.1.281, agents/probe-installed.mjs)",
   "fallback": "generic-env",
   "maintainer": null
 }
