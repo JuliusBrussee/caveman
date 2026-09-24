@@ -128,13 +128,13 @@ jobs:
           set -euo pipefail
           cd dist/binaries
           node ../../scripts/build-release-binaries.mjs --list | LC_ALL=C sort | xargs sha256sum -- > checksums.txt
-      # Every binary embeds BSL-1.1 Engine code (and MIT pixel/font notices),
+      # Every binary is Apache-2.0 and embeds MIT pixel/font-licensed code,
       # so the license texts ship with the release and sit in the signed manifest.
       - name: Add license and notice files to the release set
         run: |
           set -euo pipefail
           mkdir -p dist/licenses
-          cp LICENSE LICENSE.BSL LICENSING.md dist/licenses/
+          cp LICENSE NOTICE LICENSING.md dist/licenses/
           cp engine/pixel/NOTICE dist/licenses/NOTICE.engine-pixel
           cp engine/pixel/assets/SPLEEN_LICENSE.txt engine/pixel/assets/UNIFONT_LICENSE.txt dist/licenses/
           cp browse/NOTICE dist/licenses/NOTICE.browse
@@ -200,4 +200,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/binaries/* dist/licenses/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
-            --notes "Signed Caveman runtime companions for macOS, Linux, and Windows. The binaries embed Caveman Engine code under Business Source License 1.1 (LICENSE.BSL); see LICENSING.md and the attached third-party notices."
+            --notes "Signed Caveman runtime companions for macOS, Linux, and Windows. The binaries are licensed under the Apache License 2.0 (LICENSE, NOTICE); see LICENSING.md and the attached third-party notices."

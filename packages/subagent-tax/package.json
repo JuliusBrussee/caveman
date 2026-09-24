@@ -2,7 +2,7 @@
   "name": "subagent-tax",
   "version": "0.1.0",
   "description": "Measure how big a prefix each coding harness on your machine sends per call — local capture sink, no provider API calls.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "repository": {
     "type": "git",

@@ -18,7 +18,7 @@
 <a href="https://pypi.org/project/caveman-middleware/"><img src="https://img.shields.io/pypi/v/caveman-middleware?style=flat-square&color=F0A63C&label=middleware%20pypi" alt="middleware on PyPI"></a>
 <a href="./INSTALL.md"><img src="https://img.shields.io/badge/works_with-30%2B_agents-orange?style=flat-square" alt="30+ agents"></a>
 <a href="#wrap-any-agent"><img src="https://img.shields.io/badge/wraps-10_agents_natively-blue?style=flat-square" alt="10 native wrap profiles"></a>
-<a href="#-license"><img src="https://img.shields.io/badge/license-MIT_%2B_BSL-green?style=flat-square" alt="License"></a>
+<a href="#-license"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="License"></a>
 <a href="https://skills.sh/JuliusBrussee/caveman"><img src="https://skills.sh/b/JuliusBrussee/caveman" alt="skills.sh"></a>
 
 🏆 **#1 on GitHub Trending · July 2026** &nbsp;·&nbsp; 🥇 **#1 Repository of the Day on [Trendshift](https://trendshift.io/repositories/25391) · April 2026**
@@ -95,7 +95,7 @@ Caveman come in two sizes. Start small.
 
 ### Small rock: the skill
 
-A rule file that makes your agent answer in caveman. MIT, free forever, works in [30+ agents](./INSTALL.md) (Claude Code, Codex, Gemini, Cursor, Windsurf, Cline, Copilot, more). One command:
+A rule file that makes your agent answer in caveman. Apache-2.0, free forever, works in [30+ agents](./INSTALL.md) (Claude Code, Codex, Gemini, Cursor, Windsurf, Cline, Copilot, more). One command:
 
 ```bash
 npx skills add JuliusBrussee/caveman -g
@@ -105,7 +105,7 @@ Type `/caveman` if your agent doesn't wake up on its own. That the whole install
 
 ### Big rock: the proxy
 
-Runs on your machine, between your agent and the AI provider, and shrinks what the agent *reads* before every call. MIT CLI, BSL-1.1 runtime:
+Runs on your machine, between your agent and the AI provider, and shrinks what the agent *reads* before every call. Apache-2.0, CLI and runtime both:
 
 ```bash
 npm install -g @caveman-ai/cli && caveman setup --install
@@ -114,7 +114,7 @@ caveman claude        # or codex · gemini · aider · kilo · qwen · opencode 
 
 ### Your own app: the middleware
 
-Building an agent in code instead of running one in a terminal? Same shrinking, one wrapper around the call you already make. MIT client, alpha today:
+Building an agent in code instead of running one in a terminal? Same shrinking, one wrapper around the call you already make. Apache-2.0 client, alpha today:
 
 ```bash
 npm install @caveman-ai/middleware @caveman-ai/sdk        # TypeScript, plus your framework (ai, openai, …)
@@ -133,13 +133,13 @@ They stack. Most people start with the small rock and graduate.
 The full installer wires up Claude Code hooks and the statusline badge, finds every supported agent on your machine, and skips agents you no have. Safe to re-run. Needs Node.js 22.13+.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.7.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.0.0/install.sh | bash
 ```
 
 Windows, PowerShell 5.1+:
 
 ```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.7.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.0.0/install.ps1 | iex
 ```
 
 Just one agent:
@@ -584,11 +584,9 @@ Exact network, telemetry, and storage boundaries: [SECURITY.md](./SECURITY.md).
 
 ## 📜 License
 
-Split license. Skill and adoption surfaces are [MIT](./LICENSE). Engine-linked runtime is BSL-1.1 source-available, not OSI Open Source before Change Date.
+One license: [Apache-2.0](./LICENSE), whole repo, from Caveman 3.0.0 on. Skill, Agent SDK and initializer, CLI, client SDKs, middleware, contracts, provider catalog, extension, and the full runtime: Engine, Proxy, Cache Engine, rewriter, Browse, MCP server, `shrink`, cavemem, shared Go platform. Read it, fork it, ship it, host it. Free like mammoth on open plain.
 
-**MIT:** the skill, Agent SDK and initializer, the CLI, both client SDKs, contracts, provider catalog, extension shell, and the thin cavemem clients. Free like mammoth on open plain.
-
-**BSL-1.1:** Engine, Proxy, Cache Engine, rewriter, Browse, MCP server, `shrink`, cavemem Go core, and shared Go platform. New Engine-linked runtime modules default to BSL-1.1. Read it, fork it, self-host it for your own first-party traffic free, production included. Each version converts to **Apache-2.0** on the earlier of `2030-06-21` or four years after it ships. Hosting it for third parties needs a commercial license.
+Releases before 3.0.0 keep the license they shipped with. Details in [LICENSING.md](./LICENSING.md).
 
 `engine/pixel` embeds [pxpipe](https://github.com/teamchong/pxpipe) (MIT) plus glyph atlases derived from Spleen 5×8 (BSD-2-Clause) and GNU Unifont (dual OFL-1.1 / GPLv2-with-font-exception); its `NOTICE` travels with that source.
 
@@ -624,5 +622,5 @@ Caveman save you token, save you money. Star cost zero. Fair trade. ⭐
 <a href="./CLAUDE.md">Maintainer guide</a> ·
 <a href="https://github.com/JuliusBrussee/caveman/issues">Issues</a>
 <br>
-MIT skill · BSL-1.1 engine. Few token. No lie.
+One license, Apache-2.0. Few token. No lie.
 </sub>

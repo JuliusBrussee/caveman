@@ -111,8 +111,8 @@ the release PR renames that heading to the version.
 signs `checksums.txt` with the pinned release key (`checksums.txt.keysig`). The
 CLI and the npm launchers check that signature against the public key compiled
 into them before installing any binary. The signed manifest also covers the
-license files attached to every binary release: `LICENSE`, `LICENSE.BSL`,
-`LICENSING.md`, and the third-party notices for the embedded pixel renderer,
+license files attached to every binary release: `LICENSE` (Apache-2.0),
+`NOTICE`, `LICENSING.md`, and the third-party notices for the embedded pixel renderer,
 its fonts, and `caveman-browse`.
 
 Optional platform code signing runs when its secrets exist on the
@@ -130,7 +130,7 @@ Signing rewrites the binaries, so the workflow recomputes `checksums.txt` before
 the release key signs it.
 
 The container image carries OCI labels (`org.opencontainers.image.source`,
-`version`, `revision`, `licenses` = `BUSL-1.1`, `title`, `description`), ships the
+`version`, `revision`, `licenses` = `Apache-2.0`, `title`, `description`), ships the
 license texts under `/licenses/`, has buildx SBOM and provenance attestations,
 and is signed keyless with cosign through GitHub OIDC. Verify a release image
 with:

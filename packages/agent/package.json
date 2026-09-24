@@ -2,7 +2,7 @@
   "name": "@caveman-ai/agent",
   "version": "0.1.0",
   "description": "Efficiency-native TypeScript agent framework with cache-safe context, eval-gated compilation, and immutable Cave Builds.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JuliusBrussee/caveman.git",

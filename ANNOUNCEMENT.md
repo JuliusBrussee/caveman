@@ -1,3 +1,5 @@
+> **Superseded:** the licensing described below was replaced by Apache-2.0 for the whole repository from Caveman 3.0.0. See [LICENSING.md](LICENSING.md).
+
 # Caveman 2 is here. The skill is untouched and still MIT.
 
 Let me say the most important thing first, before anything else.

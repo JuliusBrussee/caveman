@@ -45,11 +45,11 @@ LABEL org.opencontainers.image.title="caveman-proxy" \
       org.opencontainers.image.source="$SOURCE" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$REVISION" \
-      org.opencontainers.image.licenses="BUSL-1.1"
+      org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /out/caveman-proxy /caveman-proxy
-# The binary embeds BSL-1.1 Engine code plus MIT pixel and font-licensed atlas
-# assets; their license texts and notices ship with every copy.
-COPY LICENSE LICENSE.BSL LICENSING.md /licenses/
+# The binary is Apache-2.0 and embeds MIT pixel and font-licensed atlas assets;
+# their license texts and notices ship with every copy.
+COPY LICENSE NOTICE LICENSING.md /licenses/
 COPY engine/pixel/NOTICE /licenses/NOTICE.engine-pixel
 COPY engine/pixel/assets/SPLEEN_LICENSE.txt engine/pixel/assets/UNIFONT_LICENSE.txt /licenses/
 # An empty, correctly-owned /data so a named or anonymous volume inherits uid

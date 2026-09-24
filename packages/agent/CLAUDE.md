@@ -344,7 +344,7 @@ failures; Claude detail distinguishes public execution from fail-closed Cave
 Build execution; third-party adapter readiness remains separate per harness.
 
 Claude Agent SDK dependency is governed by Anthropic Commercial Terms linked
-from its README, not package MIT license. Keep disclosure in public README.
+from its README, not package Apache-2.0 license. Keep disclosure in public README.
 
 Run `pnpm --dir public/agent test`. Unknown state fails closed. Transform failure
 passes original bytes. Missing usage/pricing/eval/recovery writes no optimized

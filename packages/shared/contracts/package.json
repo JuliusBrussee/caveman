@@ -2,7 +2,7 @@
   "name": "@caveman-ai/contracts",
   "version": "2.0.0",
   "description": "JSON Schema and OpenAPI wire contracts for Caveman, including the framework middleware protocol.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "repository": {
     "type": "git",

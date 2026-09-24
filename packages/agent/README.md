@@ -252,8 +252,8 @@ authoritative thinking-token split, so results expose
 placeholder and must not be read as measured zero.
 
 Package pins `@anthropic-ai/claude-agent-sdk` 0.3.220 and Claude Code 2.1.220
-identity. Anthropic SDK is not MIT; its README points to Anthropic Commercial
-Terms and describes data collection. Framework source remains MIT, but users of
+identity. Anthropic SDK is not Apache-2.0; its README points to Anthropic Commercial
+Terms and describes data collection. Framework source is Apache-2.0, but users of
 Claude lane must review Anthropic terms and data policy.
 
 ## Tools
@@ -510,5 +510,5 @@ Claude locked execution rejects before SDK/MCP launch until all named gaps close
 CLI: `dev`, `build`, `check`, `doctor`, and `register`. `doctor` makes no model
 request and prints `verified savings: $0` in human output.
 
-Requires Node.js 22.19+. Framework package license: MIT. Claude Agent SDK use is
+Requires Node.js 22.19+. Framework package license: Apache-2.0. Claude Agent SDK use is
 subject to Anthropic terms linked from that dependency's README.

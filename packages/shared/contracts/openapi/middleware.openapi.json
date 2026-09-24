@@ -7,8 +7,8 @@
     "summary": "Compression-only runtime used by Caveman framework middleware. Normative prose: docs/technical/middleware-protocol.md.",
     "description": "Status codes listed are the protocol 1.1 set, used only when the request carries the http_status_v2 feature in Caveman-Middleware-Features. Without it the runtime answers with the protocol 1.0 (legacy) mapping documented in the prose spec. Clients derive outcomes from error.code, never from the status alone.",
     "license": {
-      "name": "MIT",
-      "identifier": "MIT"
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
     }
   },
   "servers": [

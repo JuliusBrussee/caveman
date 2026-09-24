@@ -9,7 +9,7 @@
 !proxy/
 !shared/
 !LICENSE
-!LICENSE.BSL
+!NOTICE
 !LICENSING.md
 
 # Re-exclude test-only weight inside those four directories. The embedded

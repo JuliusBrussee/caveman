@@ -2,7 +2,7 @@
   "name": "@caveman-ai/create-agent",
   "version": "0.1.0",
   "description": "Create an efficiency-native TypeScript agent powered by @caveman-ai/agent.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JuliusBrussee/caveman.git",

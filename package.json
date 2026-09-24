@@ -1,8 +1,8 @@
 {
   "name": "caveman-installer",
-  "version": "2.7.0",
+  "version": "3.0.0",
   "description": "Caveman installer — detects your AI coding agents and installs caveman for each one.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "Julius Brussee",
   "homepage": "https://github.com/JuliusBrussee/caveman",
   "repository": {

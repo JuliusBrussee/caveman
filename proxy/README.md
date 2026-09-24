@@ -7,10 +7,7 @@ the original bytes are forwarded unchanged. Standalone records truthful per-requ
 spend to `~/.caveman/caveman.db` and only ever labels savings `inferred` — never
 `verified`.
 
-Source and binaries ship under BSL 1.1. This runtime is source-available, not
-OSI Open Source before Change Date. First-party self-hosted production is
-permitted; third-party hosted, managed, or embedded use requires commercial
-license. See `LICENSE` and `../LICENSING.md`.
+Source and binaries ship under Apache-2.0. See `LICENSE` and `../LICENSING.md`.
 
 ```bash
 go build ./proxy/...                 # build

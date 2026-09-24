@@ -2,7 +2,7 @@
   "name": "cavemem",
   "version": "1.0.0",
   "description": "Durable, compression-native agent memory — thin client over the cavemem binary.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "index.mjs",
   "exports": {

@@ -1,0 +1,22 @@
+Caveman
+Copyright 2026 Julius Brussee
+
+This product includes third-party software:
+
+- engine/pixel/ is a Go port of pxpipe (https://github.com/teamchong/pxpipe),
+  used under the MIT License.
+  Copyright (c) 2026 claude-image-proxy contributors
+
+- The glyph atlases embedded in engine/pixel/assets/ are rasterized from:
+  - Spleen 5x8, Copyright (c) 2018-2026, Frederic Cambus.
+    BSD 2-Clause License.
+  - GNU Unifont 16.0.04, dual-licensed under the SIL Open Font License 1.1 and
+    the GNU GPL version 2 (or later) with the GNU font-embedding exception.
+
+- browse/ links these MIT-licensed Go modules:
+  - github.com/chromedp/chromedp, Copyright (c) 2016-2025 Kenneth Shaw
+  - github.com/chromedp/cdproto, Copyright (c) 2016-2025 Kenneth Shaw
+  - github.com/chromedp/sysutil, Copyright (c) 2016-2017 Kenneth Shaw
+
+Full license texts: engine/pixel/NOTICE, engine/pixel/assets/SPLEEN_LICENSE.txt,
+engine/pixel/assets/UNIFONT_LICENSE.txt, and browse/NOTICE.

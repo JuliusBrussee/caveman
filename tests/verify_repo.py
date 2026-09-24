@@ -755,34 +755,65 @@ def verify_hook_install_flow() -> None:
 def verify_license_boundaries() -> None:
     section("License Boundaries")
 
-    bsl_text = (ROOT / "LICENSE.BSL").read_text(encoding="utf-8")
-    bsl_directories = (
-        "engine",
-        "proxy",
-        "rewriter",
-        "browse",
-        "mcp",
-        "shrink",
-        "mem",
-        "shared/platform",
+    # Whole repo is Apache-2.0 from Caveman 3.0.0. Root LICENSE is the verbatim
+    # apache.org text (sha256 of the LF form); every other tracked LICENSE or
+    # LICENSE.* is a byte copy. Upstream third-party texts are named NOTICE or
+    # *_LICENSE.txt and are not matched.
+    apache = (ROOT / "LICENSE").read_bytes().replace(b"\r\n", b"\n")
+    ensure(
+        hashlib.sha256(apache).hexdigest() == "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "root LICENSE is not the canonical Apache License 2.0 text",
     )
-    licensing = (ROOT / "LICENSING.md").read_text(encoding="utf-8")
-    for relative in bsl_directories:
-        license_path = ROOT / relative / "LICENSE"
-        ensure(license_path.exists(), f"BSL directory missing LICENSE: {relative}")
-        ensure(
-            license_path.read_text(encoding="utf-8") == bsl_text,
-            f"BSL directory license differs from LICENSE.BSL: {relative}",
-        )
-        ensure(f"`{relative}/`" in licensing, f"LICENSING.md omits BSL directory: {relative}")
+    notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
+    ensure("Copyright 2026 Julius Brussee" in notice, "root NOTICE missing copyright line")
 
-    package = read_json(ROOT / "package.json")
-    ensure(isinstance(package, dict) and package.get("license") == "MIT", "root installer must remain MIT")
+    # packages/sdk/** is relicensed by the SDK release prep; drop this once its LICENSE files match.
+    pending = ("packages/sdk/",)
+    tracked = [p for p in run(["git", "ls-files", "-z"]).stdout.split("\0") if p and (ROOT / p).is_file()]
+    license_files = [
+        p for p in tracked
+        if re.fullmatch(r"LICENSE(\.[^/]+)?", Path(p).name) and "vendor" not in Path(p).parts
+    ]
+    checked = [p for p in license_files if not p.startswith(pending)]
+    mismatched = sorted(p for p in checked if (ROOT / p).read_bytes().replace(b"\r\n", b"\n") != apache)
+    ensure(not mismatched, f"LICENSE files differ from root Apache-2.0 LICENSE: {mismatched}")
+    for relative in ("engine", "proxy", "rewriter", "browse", "mcp", "shrink", "mem", "shared/platform"):
+        ensure((ROOT / relative / "LICENSE").is_file(), f"runtime directory missing LICENSE: {relative}")
+
+    wrong_metadata = []
+    for p in tracked:
+        name = Path(p).name
+        if p.startswith(pending) or name not in {"package.json", "plugin.json", "pyproject.toml"}:
+            continue
+        text = (ROOT / p).read_text(encoding="utf-8")
+        if name == "pyproject.toml":
+            match = re.search(r'^license = "([^"]*)"', text, re.M)
+            declared = match.group(1) if match else None
+        else:
+            declared = json.loads(text).get("license")
+        if declared is not None and declared != "Apache-2.0":
+            wrong_metadata.append(f"{p}={declared}")
+    ensure(not wrong_metadata, f"license metadata must be Apache-2.0: {wrong_metadata}")
+
+    # The old split license survives only as history.
+    history = {"ANNOUNCEMENT.md", "LICENSING.md", "tests/verify_repo.py"}
+    stale = re.compile(r"\bBUSL\b|\bBSL\b|Business Source")
+    leftovers = []
+    for p in tracked:
+        if p in history or Path(p).name == "CHANGELOG.md":
+            continue
+        try:
+            text = (ROOT / p).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if stale.search(text):
+            leftovers.append(p)
+    ensure(not leftovers, f"BSL license text outside history files: {leftovers}")
+
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    ensure("New Engine-linked runtime modules default to BSL-1.1" in readme, "README missing new-runtime BSL rule")
-    ensure("not OSI Open Source before Change Date" in readme, "README missing BSL source-available boundary")
+    ensure("[Apache-2.0](./LICENSE)" in readme, "README license section must name Apache-2.0")
 
-    print(f"{len(bsl_directories)} BSL directories carry canonical license; MIT installer boundary preserved")
+    print(f"{len(checked)} LICENSE files match root Apache-2.0 text; no BSL text outside history")
 
 
 def verify_untrusted_git_invocations() -> None:

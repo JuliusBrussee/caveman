@@ -2,7 +2,7 @@
   "name": "@caveman-ai/pi",
   "version": "0.1.1",
   "description": "Native Caveman extension for the Pi coding agent \u2014 proxy routing, exact-recovery caveman_retrieve tool, native lifecycle events, Core injection, and tool-output shrinking.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "repository": {
     "type": "git",

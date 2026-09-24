@@ -231,10 +231,10 @@ certified. Disclose unavailable metrics rather than filling them with estimates.
 
 ## 8. Clarify licensing and release maturity
 
-Link the authoritative public license files. Explain MIT SDK/adapters versus the
-Engine runtime's BSL terms, first-party self-hosted use, and the separate commercial
-path for relevant hosted/managed/embedded offerings. Do not apply the Agent SDK's
-license to these packages or invent legal interpretations.
+Link the authoritative public license files. SDK, adapters, and Engine runtime
+are all Apache-2.0 from Caveman 3.0.0; earlier releases keep their original
+terms. Do not apply the Agent SDK's license to these packages or invent legal
+interpretations.
 
 State published package versions, runtime compatibility, alpha status, support
 policy, where to file issues, changelog location, and known limitations. Source
