@@ -27,6 +27,53 @@ The default example makes no provider request. It runs a deterministic native mo
 - [Troubleshooting](https://docs.caveman.so/docs/sdk/troubleshooting#middleware): final reason codes and strict readiness versus normal inference fallback.
 - [Measurement](https://docs.caveman.so/docs/sdk/middleware/deployment#what-to-measure): quality, latency, retries, recovery calls, cache effects, and provider usage.
 
+## Entry points: which ones compress
+
+Compression needs a recovery tool the adapter registered itself, so the model can always fetch an exact original. Entry points that cannot register one only record: in `compress` mode they pass content through unchanged, report `recovery_unbound`, and log once which entry point to use instead.
+
+| Adapter | Tier | Compresses | Records only (`recovery_unbound` in compress mode) |
+|---|---|---|---|
+| `ai-sdk` | certified | `withCaveman` | `createCavemanMiddleware` (`wrapLanguageModel`) |
+| `openai` | certified | `withCavemanOpenAITools`, `chat.completions.runTools` on `withCavemanOpenAI` | plain `create` calls on `withCavemanOpenAI` |
+| `anthropic` | certified | `beta.messages.toolRunner` on `withCavemanAnthropic` | `messages.create` / `messages.stream` |
+| `langchain` | certified | `withCavemanAgent`, `createCavemanLangChain` | `withCavemanModel`, `CavemanChatModel` |
+| `google` | experimental | `CavemanGoogleGenAI` with callable tools (automatic function calling) | calls without callable tools |
+| `strands` | experimental | `withCavemanStrands` | `withCavemanStrandsModel` |
+| `mastra` | experimental | `withCavemanMastra` | `createCavemanMastraProcessor` |
+| `mcp` | experimental | `CavemanMCPHost` with `register()`ed tools | |
+
+Certified adapters are gated by the conformance suite. Experimental ones get the same fail-open guard, logging and tests, but may change in a minor release. `CavemanGoogleGenAI` hooks the Google SDK's internal `ApiClient`; if that moves, the client falls back to the native one (`adapter_error`). `CavemanDocumentCompressor` (LangChain RAG) compresses only with a `sourceExpansion` reader. Every compressing entry point disables recovery if your tools already include one named `caveman_retrieve`; calls then report `recovery_name_conflict`.
+
+## Framework versions
+
+The package declares **no peer dependencies**. Optional framework peers made a plain `npm install` fail with `ERESOLVE` (0.1.0-alpha.1), so the version check happens at run time instead, against the copy your application installed. Under pnpm with `hoist=false`, add the frameworks you use to `public-hoist-pattern`. `@strands-agents/sdk` itself declares peers on `openai` 6, `@ai-sdk/provider` 3 and `@anthropic-ai/sdk` 0.109, so npm needs `--legacy-peer-deps` to install it next to newer versions of those.
+
+`inspectFrameworkCompatibility(adapter)` from `@caveman-ai/middleware/compatibility` reports the installed version, supported range, tested releases and tier without importing a framework. `package.json` lists the same data in `supportedFrameworkVersions` and `testedFrameworkVersions`.
+
+- **Out of range** (including every prerelease, such as `7.1.0-canary.3`): calls pass through unchanged, reporting `unsupported_version`, with one warning. After testing that version, set `acceptFrameworkVersion: true` in the adapter options.
+- **Unreadable** (a deploy bundle with no `node_modules`): the adapter checks that the framework hooks it needs exist and runs, with one `version_unverified` warning. If a hook is missing it passes through with `version_unavailable`.
+- Nothing throws when you wrap a client. With `strict: true`, the version decision surfaces from `runtime.ready()` / `preflight()`.
+
+## Scope per request
+
+Every adapter takes `scope` as a value or a function. A function is called for each request, inside that request's async context, so one module-level client can serve many users, and `runtime.deleteSession(scope)` removes exactly one user's originals:
+
+```ts
+const client = withCavemanOpenAI(new OpenAI(), { runtime, fetch, scope: () => ({ namespace: 'app', session_id: currentUser().id }) });
+```
+
+LangChain passes the `RunnableConfig` (`config => scopeFromConfig(config, 'app')` reads `configurable.thread_id`), Mastra its `RequestContext`, Strands the agent. Any ID text works: values outside `[A-Za-z0-9._:/-]` (emails, `user 42 / chat #7`) become a stable `h-` hash. A missing scope (no `thread_id`) runs the call recovery-free with `recovery_unbound`. An unusable one reports `invalid_scope`. Neither throws, except `invalid_scope` in strict mode.
+
+## Budgets and logs
+
+A large history never skips the whole call. Each tool result over the runtime's `segment_bytes` is skipped on its own (`payload_budget`), and images or bytes enter the context manifest as hashes. `manifestBytes` (default 2 MiB) bounds how much history is hashed, and `wireBytes` (default 16 MiB, OpenAI and Anthropic) bounds the request body the adapter parses. OpenAI Responses turns pass through with `provider_state_retained` unless `store: false`, because OpenAI would store the compressed turn; `allowStoredResponses: true` opts in.
+
+Each pass-through reason logs once per process through `console.warn`, as `adapter=<id> reason=<code>`, never content, scope values or credentials. Any exception inside adapter code becomes a pass-through with `adapter_error`.
+
+## Runtimes and module systems
+
+Node.js 22.12 or later, ESM `import` or CommonJS `require()`. TypeScript resolves the types with `moduleResolution` `bundler`, `nodenext`, `node16` or `node10`. A CommonJS project on `node16` also needs `skipLibCheck` (the `tsc --init` default). Edge runtimes (Cloudflare `workerd`, Vercel `edge-light`) are not supported: adapters rely on `node:async_hooks` call ownership, and importing one under those conditions throws an explanatory error. Run the adapter in a Node.js function instead.
+
 ## Contracts to keep
 
 Keep original stored history. Register the actual recovery executor through the native helper; a tool schema alone does not attest recovery. Handles are scope-bound and expire according to runtime retention. Recoverability does not guarantee model quality.
@@ -39,4 +86,4 @@ Close the runtime client and native framework/provider resources at shutdown. Cl
 
 ## Licence and support
 
-The client and adapters are MIT; the Engine runtime has separate BSL terms. Read [LICENSING.md](https://github.com/JuliusBrussee/caveman/blob/main/LICENSING.md). This package is separate from Caveman Agent SDK. File sanitized reproducible issues in [Caveman](https://github.com/JuliusBrussee/caveman/issues).
+The client, adapters, and Engine runtime are all Apache-2.0. Read [LICENSING.md](https://github.com/JuliusBrussee/caveman/blob/main/LICENSING.md). This package is separate from Caveman Agent SDK. File sanitized reproducible issues in [Caveman](https://github.com/JuliusBrussee/caveman/issues).

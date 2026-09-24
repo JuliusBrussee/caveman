@@ -1,17 +1,19 @@
-import { readFile } from 'node:fs/promises';
 import { createMiddlewareRuntime, sha256 } from '@caveman-ai/sdk/middleware';
+// A static JSON import, not a top-level await, so a CommonJS bundle of these tests can carry it.
+import fixture from '../../../sdk/parity/middleware.fixtures.json' with { type: 'json' };
 
 // Protocol fixture, not a compression algorithm or provider savings benchmark.
-const fixture = JSON.parse(await readFile(new URL('../../../sdk/parity/middleware.fixtures.json', import.meta.url), 'utf8'));
 export const original = fixture.request.segments[0].content;
 export const shortened = fixture.plan.replacements[0].text;
 export const handle = fixture.plan.replacements[0].recovery_handle;
 export const scope = { namespace: 'native-test', session_id: 'one', branch_id: 'main', cache_epoch: '0' };
 
-export function runtimeFixture() {
+// The deadline is far past any in-process answer: these tests assert behavior, not latency, and a loaded CI host
+// (load average 54 observed) must not turn the first capabilities fetch into a `deadline` bypass.
+export function runtimeFixture(options = {}) {
   const requests = [], receipts = [], reports = [], retrievals = [];
   let source;
-  const runtime = createMiddlewareRuntime({ deadlineMs: 2000, onReport: report => reports.push(report), fetch: async (url, options) => {
+  const runtime = createMiddlewareRuntime({ deadlineMs: 60_000, ...options, onReport: report => reports.push(report), fetch: async (url, options) => {
     if (url.endsWith('/capabilities')) return Response.json(fixture.capabilities);
     const request = JSON.parse(options.body);
     if (url.endsWith('/receipts')) { receipts.push(request); return Response.json({ ok: true }); }
@@ -28,10 +30,12 @@ export function runtimeFixture() {
     plan.request_id = request.request_id;
     plan.input_digest = await sha256(options.body);
     plan.recovery.binding_id = request.recovery_binding?.id ?? '';
-    const segments = request.segments;
-    if (request.recovery_binding && segments.length === 1) {
-      source = segments[0];
+    // Only the fixture original has a fixture replacement; every other segment is skipped.
+    const segments = request.segments, match = segments.find(segment => segment.content === original);
+    if (request.recovery_binding && match) {
+      source = match;
       Object.assign(plan.replacements[0], { segment_id: source.id, source_id: source.source_id, original_sha256: source.sha256 });
+      plan.skipped = segments.filter(segment => segment !== match).map(segment => ({ segment_id: segment.id, reason: 'not_smaller' }));
     } else {
       plan.status = 'bypassed'; plan.reason = 'recovery_unavailable'; plan.replacements = [];
       plan.skipped = segments.map(segment => ({ segment_id: segment.id, reason: 'recovery_unavailable' }));

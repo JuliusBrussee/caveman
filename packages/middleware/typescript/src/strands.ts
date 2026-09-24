@@ -1,11 +1,12 @@
 import { Model, Message, TextBlock, ToolResultBlock, FunctionTool, type AgentConfig, type BaseModelConfig,
   type StreamOptions, type CountTokensOptions, type ModelStreamEvent, type LocalAgent, type Plugin, type FunctionToolConfig, type Usage as NativeUsage } from '@strands-agents/sdk';
-import { MiddlewareRuntime, recoveryInputSchema, recoveryToolDescription, type Candidate, type RetrieveArgs, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
-import { currentOwner, manifest, observe, withOwner, type Attempt } from './common.js';
-import { adapterCompatible, frameworkVersion } from './compatibility.js';
+import { MiddlewareRuntime, recoveryInputSchema, recoveryToolDescription, warnOnce, type Candidate, type RetrieveArgs, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
+import { bindRecovery, currentOwner, hintRecovery, manifest, nameConflict, observe, passiveAttempt, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
+import { frameworkGate, frameworkVersion, type GateOptions, type GateReason } from './compatibility.js';
+import { guard } from './guard.js';
 
-export type StrandsScope = Scope | ((agent:LocalAgent) => Scope);
-export interface StrandsOptions { runtime:MiddlewareRuntime; scope:StrandsScope }
+export type StrandsScope = ScopeSource<LocalAgent>;
+export interface StrandsOptions extends GateOptions, BudgetOptions { runtime:MiddlewareRuntime; scope:StrandsScope }
 const adapter={id:'strands',version:'0.1.0',framework_version:frameworkVersion('@strands-agents/sdk')??'unknown',serialization_revision:'strands-message-v1'};
 const count=(n:unknown):number|null=>typeof n==='number'&&Number.isSafeInteger(n)&&n>=0?n:null;
 function nativeUsage(value:NativeUsage|undefined):Usage|null{
@@ -18,49 +19,51 @@ function nativeUsage(value:NativeUsage|undefined):Usage|null{
 /** Native streamAggregated and agent orchestration remain in Strands. */
 export class CavemanStrandsModel<T extends BaseModelConfig=BaseModelConfig> extends Model<T>{
   registration:StrandsRegistration|null=null;
-  private readonly versionSupported:boolean;
+  readonly blocked:GateReason|null;
   constructor(readonly inner:Model<T>,readonly options:StrandsOptions){
-    super();this.versionSupported=adapterCompatible('strands');
-    if(!this.versionSupported&&options.runtime.mode!=='off')options.runtime.decline('unsupported_version');
+    super();this.blocked=frameworkGate('strands',options,()=>typeof TextBlock==='function'&&typeof Message==='function'&&typeof FunctionTool==='function');
   }
   override get stateful(){return this.inner.stateful;}
   updateConfig(config:T){this.inner.updateConfig(config);}
   getConfig():T{return this.inner.getConfig();}
   override countTokens(messages:Message[],options?:CountTokensOptions){return this.inner.countTokens(messages,options);}
-  private scope():Scope{
-    if(typeof this.options.scope!=='function')return this.options.scope;
+  /** A dynamic scope needs the agent from withCavemanStrands; without it the call is recovery_unbound. */
+  private scope():Scope|null{
     const agent=this.registration?.agent?.deref();
-    if(!agent)throw new Error('A dynamic Strands scope requires the native agent registration');
-    return this.options.scope(agent);
+    return typeof this.options.scope!=='function'||agent?resolveScope(this.options.scope,agent!):null;
   }
 
   private async prepare(messages:Message[],options:StreamOptions):Promise<{messages:Message[];attempt:Attempt|null}>{
     if(options.cancelSignal?.aborted&&!currentOwner())this.options.runtime.report(null,{reason:'cancelled',adapter:adapter.id});
     options.cancelSignal?.throwIfAborted();
     if(currentOwner())return {messages,attempt:null};
-    const passive=(reason:string)=>({messages,attempt:{runtime:this.options.runtime,
-      scope:{namespace:'caveman-report',session_id:'passive',branch_id:'main',cache_epoch:'0'},
-      logicalCallId:crypto.randomUUID(),attemptId:crypto.randomUUID(),optimization:null,wireSHA256:null,passive:true,reason,adapter:adapter.id}});
+    const passive=(reason:string)=>({messages,attempt:passiveAttempt(this.options.runtime,adapter.id,reason)});
     if(this.options.runtime.mode==='off')return passive('disabled');
-    if(!this.versionSupported)return passive('unsupported_version');
+    if(this.blocked)return passive(this.blocked);
     if(this.stateful)return passive('opaque_context');
-    const context=await manifest([{system:options.systemPrompt??null},...messages.map(m=>m.toJSON())]);
-    if(!context)return passive('unsupported_shape');
+    const scope=this.scope();
+    if(!scope)return passive('recovery_unbound');
+    return guard(this.options.runtime,adapter.id,options.cancelSignal,()=>this.project(messages,options,scope),()=>passive('adapter_error'));
+  }
+
+  private async project(messages:Message[],options:StreamOptions,scope:Scope):Promise<{messages:Message[];attempt:Attempt}>{
+    const context=await manifest([{system:options.systemPrompt??null},...messages.map(m=>m.toJSON())],this.options.manifestBytes);
     const names=new Map<string,string>();
     for(const message of messages)for(const block of message.content)if(block.type==='toolUseBlock')names.set(block.toolUseId,block.name);
     const candidates:Candidate[]=[],paths=new Map<string,{mi:number;bi:number;pi:number}>();
     messages.forEach((message,mi)=>message.content.forEach((block,bi)=>{
       if(block.type!=='toolResultBlock'||block.status==='error'||!names.has(block.toolUseId)||names.get(block.toolUseId)==='caveman_retrieve')return;
       block.content.forEach((part,pi)=>{
-        if(part.type!=='textBlock'||Object.getPrototypeOf(part)?.constructor?.name!=='TextBlock')return;
+        // C6: the type marker and own fields survive minification; a class-name check does not.
+        if(part.type!=='textBlock'||typeof part.text!=='string'||Object.keys(part).length!==2)return;
         const id=`message-${mi}.block-${bi}.part-${pi}`;candidates.push({id,sourceId:id,content:part.text});paths.set(id,{mi,bi,pi});
       });
     }));
-    const scope=this.scope(),runtime=this.options.runtime;
+    const runtime=this.options.runtime;
     const automatic=!options.toolChoice||'auto'in options.toolChoice;
-    const binding=automatic&&this.registration?.bound(options)?runtime.recovery(scope):null;
+    const binding=automatic&&this.registration?.bound(options)?bindRecovery(runtime,scope):null;
     const attempt:Attempt={runtime,scope,logicalCallId:crypto.randomUUID(),attemptId:crypto.randomUUID(),optimization:null,wireSHA256:null,adapter:adapter.id};
-    const result=await runtime.optimize({scope,adapter,manifest:context,candidates,binding,logicalCallId:attempt.logicalCallId,attemptId:attempt.attemptId,
+    const result=await runtime.optimize({scope,adapter,...context,candidates,binding,logicalCallId:attempt.logicalCallId,attemptId:attempt.attemptId,
       model:this.inner.modelId?{provider:this.inner.constructor.name,id:this.inner.modelId,protocol:'strands'}:null,
       ...(binding?{recoveryOverheadText:JSON.stringify(this.registration!.recoveryTool.toolSpec)}:{}),...(options.cancelSignal?{signal:options.cancelSignal}:{})});
     attempt.optimization=result.replacements.length?null:result;
@@ -101,17 +104,17 @@ class StrandsRegistration implements Plugin{
   readonly recoveryTool:FunctionTool;
   constructor(readonly options:StrandsOptions){
     this.recoveryTool=new FunctionTool({name:'caveman_retrieve',description:recoveryToolDescription,inputSchema:{...structuredClone(recoveryInputSchema),required:[...recoveryInputSchema.required]} as NonNullable<FunctionToolConfig['inputSchema']>,
-      callback:async(input,context)=>{
-        const scope=typeof options.scope==='function'?options.scope(context.agent):options.scope;
-        return JSON.stringify(await options.runtime.retrieve(scope,input as RetrieveArgs,context.cancelSignal));
-      }});
+      callback:async(input,context)=>JSON.stringify(await options.runtime.retrieve(resolveScope(options.scope,context.agent) as Scope,input as RetrieveArgs,context.cancelSignal))});
   }
   initAgent(agent:LocalAgent){
-    if(this.agent&&this.agent.deref()!==agent)throw new Error('Create a separate Caveman Strands bundle for each agent');
+    // One bundle per agent. Nothing raises at wrap time (spec §8): a second agent keeps running, recovery-free.
+    if(this.agent&&this.agent.deref()!==agent){warnOnce(adapter.id,'invalid_configuration');return;}
     this.agent=new WeakRef(agent);
     // Registration runs after the host discovers its own tools. A collision
     // keeps the host's tool and prevents this model wrapper from using lossiness.
-    if(this.options.runtime.mode==='compress'&&!agent.toolRegistry.get('caveman_retrieve'))agent.toolRegistry.add(this.recoveryTool);
+    if(this.options.runtime.mode!=='compress')return;
+    if(agent.toolRegistry.get('caveman_retrieve'))nameConflict(this.options.runtime,adapter.id);
+    else agent.toolRegistry.add(this.recoveryTool);
   }
   bound(options:StreamOptions):boolean{
     const agent=this.agent?.deref(),matches=options.toolSpecs?.filter(t=>t.name==='caveman_retrieve')??[];
@@ -119,13 +122,17 @@ class StrandsRegistration implements Plugin{
   }
 }
 
+/** Model-only wrapper. It cannot register the recovery tool, so compress mode reports `recovery_unbound`;
+ * withCavemanStrands is the Strands entry point that compresses. */
 export function withCavemanStrandsModel<T extends BaseModelConfig>(model:Model<T>,options:StrandsOptions):Model<T>{
-  return new CavemanStrandsModel(model,options);
+  const wrapped=new CavemanStrandsModel(model,options);
+  if(!wrapped.blocked)hintRecovery(options.runtime,adapter.id,'withCavemanStrandsModel','withCavemanStrands');
+  return wrapped;
 }
 
 export function withCavemanStrands(input:AgentConfig&{model:Model},options:StrandsOptions):AgentConfig{
   const model=new CavemanStrandsModel(input.model,options);
-  if(options.runtime.mode==='off'||!adapterCompatible('strands'))return {...input,model};
+  if(options.runtime.mode==='off'||model.blocked)return {...input,model};
   const registration=new StrandsRegistration(options);
   model.registration=registration;
   return {...input,model,plugins:[...(input.plugins??[]),registration]};

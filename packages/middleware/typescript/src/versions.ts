@@ -1,35 +1,44 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { MiddlewareRuntime } from '@caveman-ai/sdk/middleware';
 
-// Resolve from this module, using the same ESM export conditions as its imports.
-// Supported Node bundles retain native frameworks as external packages, including
-// their package.json files. Missing metadata fails closed; never guess a version
-// from our build-time dependencies or from an unrelated process.cwd() install.
+function packageVersion(directory: string, name: string): string | null {
+  try {
+    const metadata = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));
+    return metadata.name === name && typeof metadata.version === 'string' ? metadata.version : null;
+  } catch { return null; }
+}
+
+// Decision 2: read the application's installed copy (node_modules above the working directory) before the copy next
+// to this module, so a stray hoisted copy cannot certify the app. Bundled deploys (CJS, esbuild, Next server bundles)
+// can have neither: the result is null and the adapter feature-detects instead (Decision 3).
 const installed = new Map<string, string | null>();
 export function installedFrameworkVersion(name: string, entry = name): string | null {
   const key = `${name}:${entry}`;
   if (installed.has(key)) return installed.get(key)!;
   let version: string | null = null;
   try {
-    let directory = dirname(fileURLToPath(import.meta.resolve(entry)));
-    for (let depth = 0; depth < 16; depth++) {
-      try {
-        const metadata = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));
-        if (metadata.name === name && typeof metadata.version === 'string') { version = metadata.version; break; }
-      } catch { /* Entry points may be several directories below their package. */ }
-      const parent = dirname(directory);
-      if (parent === directory) break;
-      directory = parent;
+    for (let directory = process.cwd(), depth = 0; version === null && depth < 32; depth++) {
+      version = packageVersion(join(directory, 'node_modules', name), name);
+      if (dirname(directory) === directory) break;
+      directory = dirname(directory);
     }
-  } catch { /* Missing or unreadable framework metadata cannot certify a version. */ }
+  } catch { /* no working directory */ }
+  try {
+    // import.meta.resolve is absent in CJS bundles; the throw leaves version null.
+    for (let directory = dirname(fileURLToPath(import.meta.resolve(entry))), depth = 0; version === null && depth < 16; depth++) {
+      version = packageVersion(directory, name);
+      if (dirname(directory) === directory) break;
+      directory = dirname(directory);
+    }
+  } catch { /* unresolvable from this module */ }
   if (installed.size >= 32) installed.clear();
   installed.set(key, version);
   return version;
 }
 
-/** Stable releases only. Prereleases have not passed the adapter contract. */
+/** Stable releases only, deliberately: a prerelease (`7.1.0-canary.3`) is outside every range, reports
+ * `unsupported_version`, and runs only with `acceptFrameworkVersion`. Build metadata is ignored. */
 function release(value: string): number[] {
   if (!/^(0|[1-9]\d*)(\.(0|[1-9]\d*)){0,2}(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(value)) return [];
   const parts = value.split('+')[0]!.split('.').map(Number);
@@ -56,11 +65,4 @@ export function inRange(version: string | null, low: string, high: string): bool
 /** Pure version check for adapters retaining a passive per-call delegate. */
 export function matchesFramework(name: string, low: string, high: string, entry = name): boolean {
   return inRange(installedFrameworkVersion(name, entry), low, high);
-}
-
-export function supportsFramework(runtime: MiddlewareRuntime, name: string, low: string, high: string, entry = name): boolean {
-  if (runtime.mode === 'off') return false;
-  if (matchesFramework(name, low, high, entry)) return true;
-  runtime.decline('unsupported_version');
-  return false;
 }
