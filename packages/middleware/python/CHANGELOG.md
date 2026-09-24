@@ -6,6 +6,42 @@ Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
 ## Unreleased
 
+- Every adapter fails open: outside strict mode, an adapter or runtime error
+  sends the original request and records a reason code (`adapter_error` for
+  adapter bugs). Strict mode raises `MiddlewareError`. Every pass-through
+  reason is logged once on `caveman.middleware`.
+- Version gate: a framework outside its tested range is skipped with
+  `unsupported_version` and one warning. `accept_framework_version=True`
+  overrides it, and an unreadable version runs with `version_unverified`. New
+  `preflight()` and `ready()` for startup checks; `COMPATIBILITY` lists tiers
+  and ranges.
+- Certified tier: langchain, openai, anthropic, litellm. Everything else is
+  experimental.
+- openai 2.x (httpx) and 3.x (httpx2) are both supported, so importing the
+  adapter no longer fails with `No module named 'httpx2'`. Stored Responses
+  calls pass through with `provider_state_retained` unless `store=False` or
+  `allow_stored_responses=True`.
+- Anthropic Bedrock and Vertex clients are supported.
+- An existing `caveman_retrieve` tool no longer raises: recovery is disabled
+  for that registration and `recovery_name_conflict` is logged once.
+- Free-form thread and session ids are hashed into valid scopes. A missing
+  scope passes through instead of failing the agent call.
+- Adapters accept a sync or async runtime on either code path.
+- Long histories are budgeted (`manifest_bytes`, 2 MiB), and bytes and images
+  are hashed instead of skipping the call. ASGI reports `payload_budget` for
+  oversize bodies and no longer requires fastapi or starlette.
+- Google: wrapping returns clones and never mutates or closes your client, and
+  `unwrap_google()` returns the original.
+- LiteLLM: bounded in-flight state, sync Router support for OpenAI and
+  Anthropic, `unsupported_provider` for other providers.
+- CrewAI registers its hooks once per process. AutoGen lists workbench tools
+  once per turn.
+- Accepted ranges now match the lowest versions actually tested. Python 3.11–3.13.
+  The `pydantic-ai` extra uses `pydantic-ai-slim`.
+- CI: floor and latest lanes with constraints files, and a nightly canary that
+  opens an issue on failure.
+- **Breaking (license):** relicensed from MIT to Apache-2.0, along with the rest of
+  the repository in Caveman 3.0.0. Releases before this one keep the MIT license.
 - Release process: each release gets a GitHub Release with these notes and a
   CycloneDX SBOM of its dependency graph.
 

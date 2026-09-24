@@ -181,7 +181,7 @@ jobs:
       - run: python -m pytest -q
         working-directory: packages/sdk/python
       - run: python -m pip install --no-deps -e packages/sdk/python
-      - run: python -m pip install "./packages/middleware/python[langchain,openai]"
+      - run: python -m pip install -c packages/middleware/python/constraints/latest.txt "./packages/middleware/python[langchain,openai]"
       - run: python -m pytest -q
         working-directory: packages/middleware/python
         env:

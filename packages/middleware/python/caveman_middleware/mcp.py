@@ -18,9 +18,10 @@ try:
 except ModuleNotFoundError as error:
     raise ImportError("Install caveman-middleware[mcp] for the native MCP adapter") from error
 
-from caveman_cloud.middleware import Adapter, AsyncMiddlewareRuntime, Candidate, MiddlewareError, Scope, sha256
+from caveman_cloud.middleware import Adapter, Candidate, Scope, ensure_async, sha256
+from ._guard import fail_open, recovery, recovery_name_conflict
 from ._native import owner
-from ._versions import matches_framework
+from ._versions import family_gate, installed_version
 
 
 @dataclass(frozen=True)
@@ -38,19 +39,24 @@ def bind_mcp_tool(client, tool: Tool) -> MCPToolBinding:
 
 
 class CavemanMCPHost:
-    def __init__(self, *, runtime: AsyncMiddlewareRuntime, scope: Scope,
-                 server_id: str, protocol_version: str):
-        if not isinstance(runtime, AsyncMiddlewareRuntime):
-            raise TypeError("Native MCP clients require AsyncMiddlewareRuntime")
-        self._version_supported = matches_framework(("mcp", "2.2", "3"))
-        if not self._version_supported and runtime.mode != "off":
-            runtime.decline("unsupported_version")
+    """Either SDK runtime type is accepted; recovery pages are awaited through its async view.
+
+    An unusable scope never raises here: recovery stays unregistered and calls
+    report ``invalid_scope``. A host tool already named ``caveman_retrieve``
+    keeps its name and recovery stays off (``recovery_name_conflict``).
+    """
+    def __init__(self, *, runtime, scope: Scope, server_id: str, protocol_version: str, accept_framework_version=False):
+        runtime = ensure_async(runtime)
+        self._version_supported = family_gate(runtime, "mcp", "mcp", accept_framework_version)
         if not server_id or not protocol_version:
             raise ValueError("Provide the host's server identity and negotiated protocol version")
         self.runtime, self.scope, self.server_id = runtime, scope, server_id
-        self.adapter = Adapter("mcp", "0.1.0", "2.2.0", "mcp-native-" + protocol_version + "-v1")
-        binding = runtime.recovery(scope)
+        self.adapter = Adapter("mcp", "0.1.0", installed_version("mcp") or "unknown", "mcp-native-" + protocol_version + "-v1")
+        binding = recovery(runtime, scope) if runtime.mode != "off" else None
         self._binding = binding
+        self.recovery = None
+        if binding is None:
+            return
         tool = Tool(name=binding.name, description=binding.description, input_schema=dict(binding.input_schema))
 
         async def execute(arguments=None, **_native_options):
@@ -63,7 +69,10 @@ class CavemanMCPHost:
 
     def register(self, tools: Sequence[MCPToolBinding]) -> list[MCPToolBinding]:
         """Append only our executable tool. A name collision leaves tools intact."""
-        if not self._version_supported or self.runtime.mode != "compress" or any(item.tool.name == self.recovery.tool.name for item in tools):
+        if not self._version_supported or self.runtime.mode != "compress" or self.recovery is None:
+            return list(tools)
+        if any(item.tool.name == self.recovery.tool.name for item in tools):
+            recovery_name_conflict(self.adapter.id)
             return list(tools)
         return [*tools, self.recovery]
 
@@ -83,6 +92,12 @@ class CavemanMCPHost:
 
         if owner.get() is not None:
             return result
+        try:
+            return await self._project(result, tool, call_id, context_manifest, registered_tools, sequence, skipped)
+        except Exception as error:  # Decision 4: the host keeps the original result
+            return skipped(fail_open(self.runtime, self.adapter.id, error))
+
+    async def _project(self, result, tool, call_id, context_manifest, registered_tools, sequence, skipped):
         if not self._version_supported or self.runtime.mode == "off":
             return skipped("unsupported_version")
         if type(result) is not CallToolResult or type(tool) is not Tool:
@@ -100,6 +115,8 @@ class CavemanMCPHost:
             return skipped("no_candidate")
 
         def registered():
+            if self.recovery is None:
+                return False
             matching = [item for item in registered_tools if item.tool.name == self._binding.name]
             return (self.runtime.owns_binding(self._binding, self.scope) and len(matching) == 1 and matching[0] is self.recovery and
                     self.recovery.execute is self._recovery_executor and
@@ -108,7 +125,7 @@ class CavemanMCPHost:
         bound = registered()
         outcome = await self.runtime.optimize(scope=self.scope, adapter=self.adapter, candidates=candidates,
                     manifest=context_manifest, sequence=sequence, binding=self._binding if bound else None,
-                    recovery_overhead_text=self.recovery.tool.model_dump_json(by_alias=True, exclude_none=True),
+                    recovery_overhead_text=self._recovery_definition if bound else None,
                     logical_call_id=str(uuid.uuid4()), attempt_id=str(uuid.uuid4()))
         if not outcome.replacements:
             self.runtime.report(outcome)

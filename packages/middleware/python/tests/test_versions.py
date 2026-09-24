@@ -63,3 +63,42 @@ def test_matches_framework_refuses_an_absent_distribution():
 def test_matches_framework_requires_every_pin():
     assert matches_framework(("pytest", "0", "99999"), ("caveman-no-such-framework", "1.0", "2")) is False
     assert matches_framework(("pytest", "0", "99999")) is True
+
+
+def test_gate_policy(monkeypatch, caplog):
+    """Decision 3: out of range skips and warns once, unreadable runs with version_unverified, never raises."""
+    from conftest import peer_runtime
+    from caveman_middleware import _versions
+
+    runtime, diagnostics = peer_runtime(strict=True), []
+    runtime._diagnostic = diagnostics.append
+    versions = {"old": "0.1.0", "good": "1.5.0", "vendored": None}
+    monkeypatch.setattr(_versions, "installed_version", versions.get)
+    assert _versions.gate(runtime, "demo", ("good", "1.4", "2")) is True
+    assert _versions.gate(runtime, "demo", ("old", "1.4", "2")) is False
+    assert _versions.gate(runtime, "demo", ("old", "1.4", "2"), accept=True) is True
+    assert _versions.gate(runtime, "demo", ("vendored", "1.4", "2"), ("good", "1.4", "2")) is True
+    assert _versions.framework_state(("old", "1.4", "2"), ("vendored", "1.4", "2")) == "unsupported"
+    assert caplog.text.count("adapter=demo reason=unsupported_version") == 1
+    assert "adapter=demo reason=version_unverified" in caplog.text
+    assert diagnostics == [{"code": "unsupported_version", "cache_continuity": "unavailable"}]
+    runtime.close()
+
+
+def test_preflight_and_ready_surface_an_untested_framework(monkeypatch):
+    """Strict version failures surface from preflight()/ready(), not from wrapping."""
+    import pytest
+    from conftest import peer_runtime
+    from caveman_cloud.middleware import MiddlewareError
+    import caveman_middleware
+    from caveman_middleware import _versions
+
+    runtime = peer_runtime(strict=True)
+    assert caveman_middleware.preflight(runtime, "langchain", accept_framework_version=True).status == "ready"
+    monkeypatch.setattr(_versions, "installed_version", lambda name: "0.0.1")
+    report = caveman_middleware.preflight(runtime.as_async(), "langchain")
+    assert (report.status, report.reason) == ("unavailable", "unsupported_version")
+    with pytest.raises(MiddlewareError, match="unsupported_version"):
+        caveman_middleware.ready(runtime, "langchain")
+    assert caveman_middleware.ready(runtime, "langchain", accept_framework_version=True)["schema_version"] == 1
+    runtime.close()

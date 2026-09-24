@@ -255,7 +255,7 @@ jobs:
               python -m venv "$gate"
               "$gate/bin/python" -m pip install --disable-pip-version-check --require-hashes -r "$GITHUB_WORKSPACE/.github/requirements/release-python.txt"
               "$gate/bin/python" -m pip install --disable-pip-version-check --no-build-isolation --no-deps -e ../../sdk/python
-              "$gate/bin/python" -m pip install --disable-pip-version-check --no-build-isolation ".[$family]"
+              "$gate/bin/python" -m pip install --disable-pip-version-check --no-build-isolation -c "$GITHUB_WORKSPACE/packages/middleware/python/constraints/latest.txt" ".[$family]"
               CAVEMAN_REQUIRED_ADAPTERS="$family" "$gate/bin/python" -m pytest
               echo "::endgroup::"
             done
@@ -277,8 +277,8 @@ jobs:
             packages/middleware/python)
               # Resolve the artifact's own extras and published SDK dependency.
               # A top-level namespace import would miss broken native imports.
-              "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install --disable-pip-version-check "${wheels[0]}[langchain,openai]"
-              "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install --disable-pip-version-check "${sdists[0]}[langchain,openai]"
+              "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install --disable-pip-version-check -c "$GITHUB_WORKSPACE/packages/middleware/python/constraints/latest.txt" "${wheels[0]}[langchain,openai]"
+              "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install --disable-pip-version-check -c "$GITHUB_WORKSPACE/packages/middleware/python/constraints/latest.txt" "${sdists[0]}[langchain,openai]"
               import='import caveman_middleware.langchain,caveman_middleware.openai,importlib.metadata; assert importlib.metadata.version("caveman-middleware") == "${{ steps.package.outputs.version }}"; assert callable(caveman_middleware.langchain.with_caveman_agent); assert callable(caveman_middleware.openai.with_caveman_openai)'
               ;;
           esac

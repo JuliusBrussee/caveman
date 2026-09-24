@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import copy
+import importlib
 import json
 import uuid
 from contextlib import contextmanager
@@ -26,45 +27,52 @@ try:
 except ModuleNotFoundError as error:
     raise ImportError("Install caveman-middleware[llama-index] to use the LlamaIndex adapter") from error
 
-from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, MiddlewareRuntime, RecoveryBinding, Scope
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, RecoveryBinding, Scope, ensure_async, ensure_sync
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION, RECOVERY_SCHEMA
+from ._guard import fail_open, recovery, recovery_name_conflict, resolve_scope
 from ._native import Attempt, manifest, owner
 from ._usage import usage
-from ._versions import matches_framework, supports_framework
+from ._versions import family_gate, gate, installed_version
 
-ADAPTER = Adapter("llama-index", "0.1.0", "0.14.24", "llama-index-message-v1")
-RAG_ADAPTER = Adapter("llama-index-rag", "0.1.0", "0.14.24", "llama-index-node-v1")
+ADAPTER = Adapter("llama-index", "0.1.0", installed_version("llama-index-core") or "unknown", "llama-index-message-v1")
+RAG_ADAPTER = Adapter("llama-index-rag", "0.1.0", ADAPTER.framework_version, "llama-index-node-v1")
+# Tested providers and the message shape they serialize. Subclasses (for example
+# llama-index-llms-azure-openai's AzureOpenAI) share the parent's shape. Others,
+# such as Bedrock Converse and Vertex, pass through as ``unsupported_provider``.
+# Only the LlamaIndex integration is pinned: projection works on ChatMessage
+# objects and never touches the provider SDK underneath.
+_PROVIDERS = (
+    ("llama_index.llms.openai", "OpenAI", (("llama-index-llms-openai", "0.6", "1"),), "openai-chat"),
+    ("llama_index.llms.anthropic", "Anthropic", (("llama-index-llms-anthropic", "0.12", "1"),), "anthropic-messages"),
+)
 
 
-def _check_version(runtime):
-    return supports_framework(runtime, ("llama-index-core", "0.14", "0.15"))
+def _check_version(runtime, accept=False):
+    return family_gate(runtime, "llama_index", ADAPTER.id, accept)
 
 
-def _scope(source, context=None):
-    result = source if isinstance(source, Scope) else source(context)
-    if not isinstance(result, Scope):
-        raise TypeError("LlamaIndex scope resolver must return a Caveman Scope")
-    return result
+def _scope(runtime, source, context=None, adapter="llama-index"):
+    return resolve_scope(runtime, adapter, source, context)
 
 
 def _async_runtime(runtime):
-    return runtime.as_async() if isinstance(runtime, MiddlewareRuntime) else runtime
+    return ensure_async(runtime)
 
 
-def _protocol(model, runtime):
-    provider = (type(model).__module__, type(model).__name__)
-    supported = {
-        ("llama_index.llms.openai.base", "OpenAI"): ("llama-index-llms-openai", "0.8", "1", "openai-chat"),
-        ("llama_index.llms.anthropic.base", "Anthropic"): ("llama-index-llms-anthropic", "0.12", "1", "anthropic-messages"),
-    }
-    match = supported.get(provider)
-    if match and not supports_framework(runtime, match[:3]):
-        return None
-    if match:
-        sdk = ("openai", "2.54", "4") if match[3] == "openai-chat" else ("anthropic", "0.125", "2")
-        if not supports_framework(runtime, sdk):
-            return None
-    return match[3] if match else None
+def _provider(model):
+    """(protocol, pins) for a tested provider class or subclass, else None."""
+    for module, name, pins, protocol in _PROVIDERS:
+        try:
+            if isinstance(model, getattr(importlib.import_module(module), name)):
+                return protocol, pins
+        except (ImportError, AttributeError):  # that provider package is not installed
+            continue
+    return None
+
+
+def _protocol(model, runtime, accept=False):
+    match = _provider(model)
+    return match[0] if match and gate(runtime, ADAPTER.id, *match[1], accept=accept) else None
 
 
 @dataclass
@@ -112,11 +120,12 @@ class _Recovery:
         self.runtime, self.scope = runtime, scope
 
         def recover(ctx: Context, handle: str, offset: int = 0, limit: int = 262144, query: str = ""):
-            page = runtime.retrieve(_scope(scope, ctx), handle=handle, offset=offset, limit=limit, query=query)
+            sync = ensure_sync(runtime)  # D5: an async runtime still serves the sync tool path
+            page = sync.retrieve(_scope(sync, scope, ctx), handle=handle, offset=offset, limit=limit, query=query)
             return json.dumps(page, ensure_ascii=False)
 
         async def arecover(ctx: Context, handle: str, offset: int = 0, limit: int = 262144, query: str = ""):
-            page = await _async_runtime(runtime).retrieve(_scope(scope, ctx), handle=handle, offset=offset, limit=limit, query=query)
+            page = await _async_runtime(runtime).retrieve(_scope(runtime, scope, ctx), handle=handle, offset=offset, limit=limit, query=query)
             return json.dumps(page, ensure_ascii=False)
 
         # FunctionTool inspects runtime annotations for its public context injection.
@@ -144,10 +153,14 @@ class _ApplicationTools:
         self.runtime, self.scope, self.successful = runtime, scope, {}
         selected = tuple(tool if isinstance(tool, FunctionTool) else FunctionTool.from_defaults(tool) for tool in tools)
         names = [tool.metadata.name for tool in selected]
-        if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names) or "caveman_retrieve" in names:
-            raise ValueError("Expected distinct native tools without caveman_retrieve")
-        self.binding = runtime.recovery(scope) if enabled else None
-        self.async_binding = _async_runtime(runtime).recovery(scope) if enabled else None
+        if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names):
+            raise ValueError("Expected distinct named native tools")
+        if enabled and "caveman_retrieve" in names:
+            recovery_name_conflict(ADAPTER.id)  # the host's tool keeps its name; recovery stays off
+            enabled = False
+        self.binding = recovery(ensure_sync(runtime), scope) if enabled and scope is not None else None
+        self.async_binding = recovery(_async_runtime(runtime), scope) if self.binding is not None else None
+        enabled = self.binding is not None and self.async_binding is not None
         if enabled:
             def recover(handle: str, offset: int = 0, limit: int = 262144, query: str = ""):
                 return json.dumps(self.binding.execute(dict(handle=handle, offset=offset, limit=limit, query=query)), ensure_ascii=False)
@@ -347,16 +360,15 @@ class CavemanLLM(FunctionCallingLLM):
     passthrough_reason: str = Field(exclude=True)
     registration: Any = Field(default=None, exclude=True)
 
-    def __init__(self, wrapped: LLM, *, runtime, scope, registration=None):
+    def __init__(self, wrapped: LLM, *, runtime, scope, registration=None, accept_framework_version=False):
         if not isinstance(wrapped, LLM):
             raise TypeError("Expected an existing native LlamaIndex LLM")
         # Copy public prompt settings so inherited predict/structured helpers
         # build exactly the same native input as the caller's LLM.
         settings = {name: getattr(wrapped, name) for name in LLM.model_fields}
-        supported = _check_version(runtime)
-        protocol = _protocol(wrapped, runtime) if supported else None
-        known_provider = (type(wrapped).__module__, type(wrapped).__name__) in {
-            ("llama_index.llms.openai.base", "OpenAI"), ("llama_index.llms.anthropic.base", "Anthropic")}
+        supported = _check_version(runtime, accept_framework_version)
+        protocol = _protocol(wrapped, runtime, accept_framework_version) if supported else None
+        known_provider = _provider(wrapped) is not None
         super().__init__(wrapped=wrapped, runtime=runtime, scope=scope, protocol=protocol,
                          passthrough_reason="unsupported_version" if not supported or (known_provider and protocol is None) else "unsupported_provider",
                          registration=registration, **settings)
@@ -407,9 +419,12 @@ class CavemanLLM(FunctionCallingLLM):
         current = _invocation.get()
         if current is not None and current.registration is not self.registration:
             current = None
+        scope = current.scope if current else _scope(self.runtime, self.scope)
+        if scope is None:
+            return self._passive("invalid_scope"), {}, None
         if current is None and isinstance(self.registration, _ApplicationTools):
             current = self.registration.invocation()
-            if _scope(self.scope) != current.scope:
+            if scope != current.scope:
                 current = None
         selected = _message_view(messages, current)
         if selected is None:
@@ -425,28 +440,42 @@ class CavemanLLM(FunctionCallingLLM):
                 return self._passive("opaque_payload"), {}, None
             if extra is None:
                 return self._passive("opaque_payload"), {}, None
-            context.append({**extra[0], "id": f"message-{len(context)}"})
-        scope = current.scope if current else _scope(self.scope)
+            if len(context) == context.sequence:  # only extend an untruncated (prefix-stable) window
+                context.append({**extra[0], "id": f"message-{len(context)}"})
+            context.sequence += 1
         binding, overhead = None, None
         settings = {**(getattr(self.wrapped, "additional_kwargs", None) or {}), **kwargs}
         if tools is not None and self._permits_recovery(settings, kwargs) and self.registration and self.registration.registered(tools, current):
             binding = self.registration.binding if isinstance(self.registration, _ApplicationTools) else self.runtime.recovery(scope)
+        if binding is not None:
             overhead = json.dumps(self.registration.metadata.to_openai_tool(), ensure_ascii=False, separators=(",", ":"))
         attempt = Attempt(self.runtime, scope, str(uuid.uuid4()), str(uuid.uuid4()), adapter=ADAPTER.id)
-        options = dict(scope=scope, adapter=ADAPTER, candidates=candidates, manifest=context, binding=binding,
+        options = dict(scope=scope, adapter=ADAPTER, candidates=candidates, manifest=context, sequence=context.sequence, binding=binding,
             recovery_overhead_text=overhead, model={"provider": "openai" if self.protocol == "openai-chat" else "anthropic",
                 "id": settings.get("model", self.metadata.model_name), "protocol": self.protocol},
             logical_call_id=attempt.logical_call_id, attempt_id=attempt.attempt_id)
         return attempt, paths, options
 
     def _prepare(self, messages, tools, kwargs):
+        try:
+            return self._project(messages, tools, kwargs)
+        except Exception as error:  # Decision 4: the provider still receives the caller's messages
+            return messages, self._passive(fail_open(self.runtime, ADAPTER.id, error))
+
+    async def _aprepare(self, messages, tools, kwargs):
+        try:
+            return await self._aproject(messages, tools, kwargs)
+        except Exception as error:
+            return messages, self._passive(fail_open(self.runtime, ADAPTER.id, error))
+
+    def _project(self, messages, tools, kwargs):
         state = self._options(messages, tools, kwargs)
         if state is None:
             return messages, None
         attempt, paths, options = state
         if options is None:
             return messages, attempt
-        result = self.runtime.optimize(**options)
+        result = ensure_sync(self.runtime).optimize(**options)  # D5: either runtime type on the sync path
         if not self._still_registered(options, tools, kwargs):
             attempt.reason = "recovery_unavailable"
             return messages, attempt
@@ -457,7 +486,7 @@ class CavemanLLM(FunctionCallingLLM):
             attempt.reason = "invalid_plan"
         return view, attempt
 
-    async def _aprepare(self, messages, tools, kwargs):
+    async def _aproject(self, messages, tools, kwargs):
         state = self._options(messages, tools, kwargs)
         if state is None:
             return messages, None
@@ -488,7 +517,7 @@ class CavemanLLM(FunctionCallingLLM):
             if not self._permits_recovery({**(getattr(self.wrapped, "additional_kwargs", None) or {}), **kwargs}, kwargs):
                 return False
             current = self.registration.invocation() if isinstance(self.registration, _ApplicationTools) else _invocation.get()
-            return bool(current is not None and (not isinstance(self.registration, _ApplicationTools) or _scope(self.scope) == current.scope)
+            return bool(current is not None and (not isinstance(self.registration, _ApplicationTools) or _scope(self.runtime, self.scope) == current.scope)
                         and self.runtime.owns_binding(options["binding"], current.scope)
                         and self.registration.registered(tools, current))
         except Exception:
@@ -666,23 +695,29 @@ class CavemanFunctionAgent(FunctionAgent):
     """
     caveman_recovery: Any = Field(exclude=True)
 
-    def __init__(self, *, runtime, scope, llm: LLM, tools=None, **kwargs):
-        if not _check_version(runtime):
-            super().__init__(llm=CavemanLLM(llm, runtime=runtime, scope=scope), tools=tools, caveman_recovery=None, **kwargs)
+    def __init__(self, *, runtime, scope, llm: LLM, tools=None, accept_framework_version=False, **kwargs):
+        options = dict(runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
+        if not _check_version(runtime, accept_framework_version):
+            super().__init__(llm=CavemanLLM(llm, **options), tools=tools, caveman_recovery=None, **kwargs)
             return
         registration = _Recovery(runtime, scope)
         selected = list(tools or [])
         names = [tool.metadata.name if hasattr(tool, "metadata") else getattr(tool, "__name__", None) for tool in selected]
-        if "caveman_retrieve" not in names:
+        if "caveman_retrieve" in names:
+            recovery_name_conflict(ADAPTER.id)  # the host's tool keeps its name; ours is never offered
+        else:
             selected.append(registration.tool)
-        super().__init__(llm=CavemanLLM(llm, runtime=runtime, scope=scope, registration=registration),
+        super().__init__(llm=CavemanLLM(llm, registration=registration, **options),
                          tools=selected, caveman_recovery=registration, **kwargs)
 
     async def take_step(self, ctx, llm_input, tools, memory):
         if self.caveman_recovery is None:
             return await super().take_step(ctx, llm_input, tools, memory)
         successful = await ctx.store.get("caveman_llama_index_successful_tools", default={})
-        current = _Invocation(self.caveman_recovery, _scope(self.caveman_recovery.scope, ctx), tools, successful,
+        scope = _scope(self.caveman_recovery.runtime, self.caveman_recovery.scope, ctx)  # strict raises invalid_scope
+        if scope is None:
+            return await super().take_step(ctx, llm_input, tools, memory)
+        current = _Invocation(self.caveman_recovery, scope, tools, successful,
                               self.output_cls is None and self.structured_output_fn is None)
         token = _invocation.set(current)
         try:
@@ -713,12 +748,14 @@ class CavemanNodePostprocessor(BaseNodePostprocessor):
     runtime: Any = Field(exclude=True)
     scope: Any = Field(exclude=True)
     source_expansion: Any = Field(default=None, exclude=True)
+    version_supported: bool = Field(default=True, exclude=True)
 
-    def __init__(self, *, runtime, scope, source_expansion=None, **kwargs):
-        super().__init__(runtime=runtime, scope=scope, source_expansion=source_expansion, **kwargs)
+    def __init__(self, *, runtime, scope, source_expansion=None, accept_framework_version=False, **kwargs):
+        super().__init__(runtime=runtime, scope=scope, source_expansion=source_expansion,
+                         version_supported=_check_version(runtime, accept_framework_version), **kwargs)
 
     def _options(self, nodes, query_bundle):
-        if not _check_version(self.runtime) or owner.get() is not None:
+        if not self.version_supported or owner.get() is not None or self.runtime.mode == "off":
             return None
         if type(nodes) is not list or any(type(item) is not NodeWithScore for item in nodes):
             return None
@@ -732,11 +769,13 @@ class CavemanNodePostprocessor(BaseNodePostprocessor):
                       for i, item in enumerate(nodes) if type(item.node) is TextNode
                       and item.node.start_char_idx is None and item.node.end_char_idx is None
                       and "citations" not in item.node.metadata]
-        selected_scope = _scope(self.scope, query_bundle)
+        selected_scope = _scope(self.runtime, self.scope, query_bundle, RAG_ADAPTER.id)
+        if selected_scope is None:
+            return "invalid_scope"
         reader = self.source_expansion
         binding = reader if isinstance(reader, RecoveryBinding) and callable(reader.execute) and self.runtime.owns_binding(reader, selected_scope) else None
         return dict(scope=selected_scope, adapter=RAG_ADAPTER, candidates=candidates,
-                    manifest=context, binding=binding)
+                    manifest=context, sequence=context.sequence, binding=binding)
 
     @staticmethod
     def _apply(nodes, result):
@@ -747,25 +786,33 @@ class CavemanNodePostprocessor(BaseNodePostprocessor):
     def _postprocess_nodes(self, nodes, query_bundle=None):
         if owner.get() is not None:
             return nodes
-        options = self._options(nodes, query_bundle)
-        if options is None:
-            self._report_original()
+        try:
+            options = self._options(nodes, query_bundle)
+            if not isinstance(options, dict):
+                self._report_original(options)
+                return nodes
+            result = ensure_sync(self.runtime).optimize(**options)  # D5: either runtime type
+            return self._finish(nodes, result, options, query_bundle)
+        except Exception as error:  # Decision 4: the synthesizer keeps the original nodes
+            self._report_original(fail_open(self.runtime, RAG_ADAPTER.id, error))
             return nodes
-        result = self.runtime.optimize(**options)
-        return self._finish(nodes, result, options, query_bundle)
 
     async def _apostprocess_nodes(self, nodes, query_bundle=None):
         if owner.get() is not None:
             return nodes
-        options = self._options(nodes, query_bundle)
-        if options is None:
-            self._report_original()
+        try:
+            options = self._options(nodes, query_bundle)
+            if not isinstance(options, dict):
+                self._report_original(options)
+                return nodes
+            result = await _async_runtime(self.runtime).optimize(**options)
+            return self._finish(nodes, result, options, query_bundle)
+        except Exception as error:
+            self._report_original(fail_open(self.runtime, RAG_ADAPTER.id, error))
             return nodes
-        result = await _async_runtime(self.runtime).optimize(**options)
-        return self._finish(nodes, result, options, query_bundle)
 
-    def _report_original(self):
-        reason = "disabled" if self.runtime.mode == "off" else "unsupported_version" if not matches_framework(("llama-index-core", "0.14", "0.15")) else "opaque_payload"
+    def _report_original(self, reason=None):
+        reason = reason or ("disabled" if self.runtime.mode == "off" else "unsupported_version" if not self.version_supported else "opaque_payload")
         self.runtime.report(reason=reason, adapter=RAG_ADAPTER.id, logical_call_id=str(uuid.uuid4()), attempt_id=str(uuid.uuid4()))
 
     def _finish(self, nodes, result, options, query_bundle):
@@ -781,18 +828,18 @@ class CavemanNodePostprocessor(BaseNodePostprocessor):
     def _reader_current(self, options, query_bundle):
         reader = options["binding"]
         try:
-            return self.runtime.mode != "off" and (reader is None or (self.source_expansion is reader and _scope(self.scope, query_bundle) == options["scope"]
+            return self.runtime.mode != "off" and (reader is None or (self.source_expansion is reader and _scope(self.runtime, self.scope, query_bundle, RAG_ADAPTER.id) == options["scope"]
                                       and self.runtime.owns_binding(reader, options["scope"])))
         except Exception:
             return False
 
 
-def with_caveman_model(llm: LLM, *, runtime, scope) -> LLM:
-    """Wrap an existing LLM. No recovery executor is implied by this function."""
-    return CavemanLLM(llm, runtime=runtime, scope=scope)
+def with_caveman_model(llm: LLM, *, runtime, scope, accept_framework_version=False) -> LLM:
+    """Record-only: no recovery executor, so compress mode reports ``recovery_unbound``."""
+    return CavemanLLM(llm, runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
 
 
-def with_caveman_tools(llm: LLM, *, runtime, scope, tools=()) -> CavemanLLMTools:
+def with_caveman_tools(llm: LLM, *, runtime, scope, tools=(), accept_framework_version=False) -> CavemanLLMTools:
     """Bundle native tools and their executor for an application-owned loop.
 
     Pass bundle.tools to bundle.model.chat_with_tools (or its native async or
@@ -800,8 +847,12 @@ def with_caveman_tools(llm: LLM, *, runtime, scope, tools=()) -> CavemanLLMTools
     through execute/aexecute. Keep the original ToolOutput in application
     history. This function never schedules calls or runs a second tool loop.
     """
-    selected_scope = _scope(scope)
-    enabled = _check_version(runtime) and _protocol(llm, runtime) is not None
+    try:
+        selected_scope = _scope(runtime, scope)
+    except MiddlewareError:  # strict: surfaced by the first call, never at wrap time (Decision 3)
+        selected_scope = None
+    enabled = _check_version(runtime, accept_framework_version) and _protocol(llm, runtime, accept_framework_version) is not None
     registration = _ApplicationTools(runtime, selected_scope, tools, enabled=enabled)
-    model = CavemanLLM(llm, runtime=runtime, scope=selected_scope, registration=registration)
+    model = CavemanLLM(llm, runtime=runtime, scope=selected_scope if selected_scope is not None else scope,
+                       registration=registration, accept_framework_version=accept_framework_version)
     return CavemanLLMTools(model, registration.tools, registration)
