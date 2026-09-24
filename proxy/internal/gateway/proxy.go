@@ -82,9 +82,24 @@ func connectionSetupFailure(err error) bool {
 	return opErr.Op == "dial" || opErr.Op == "proxyconnect"
 }
 
+func isOpenCodeChatGPTSubscription(r *http.Request) bool {
+
+	return r.Method == http.MethodPost &&
+		r.URL.Path == "/openai/v1/responses" &&
+		r.Header.Get("x-cave-agent") == "opencode" &&
+		r.Header.Get("ChatGPT-Account-ID") != ""
+
+}
+
 func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if !normalizeAgentPath(r) {
 		httpx.Error(w, r, http.StatusNotFound, "cave_route_not_found", "Proxy path is not recognized.")
+		return
+	}
+	if isOpenCodeChatGPTSubscription(r) {
+		r.URL.Path = "/chatgpt/responses"
+		r.URL.RawPath = ""
+		s.chatgpt(w, r)
 		return
 	}
 	start := time.Now()

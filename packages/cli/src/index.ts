@@ -11024,8 +11024,31 @@ function mcpServerInstalled(agentId: string, serverName: string): boolean {
     return false;
   }
 }
+function nativeOpencodeMcpInstalled(): boolean {
+  const journal = readNativeJournal("opencode");
+  if (!journal) return false;
+
+  const operation = journal.operations.find((item) => item.kind === "opencode-config");
+  if (!operation?.owned?.installed_mcp) return false;
+
+  const current = fileBytes(operation.file);
+  if (!current) return false;
+
+  try {
+    const root = parseJsonFileObject(operation.file, current);
+    const mcp = root.mcp && typeof root.mcp === "object" && !Array.isArray(root.mcp)
+      ? root.mcp as Record<string, unknown>
+      : {};
+
+    return JSON.stringify(mcp.caveman) === JSON.stringify(operation.owned.installed_mcp);
+  } catch {
+    return false;
+  }
+}
+
 function mcpInstalled(agentId: string, agentArgs: string[] = []): boolean {
   if (agentId === "kilo" || agentId === "qwen") return ownedMcpRegistration(agentId, agentArgs) !== null;
+  if (agentId === "opencode" && nativeOpencodeMcpInstalled()) return true;
   return mcpServerInstalled(agentId, "caveman");
 }
 
