@@ -40,8 +40,8 @@ export interface FetchOptions extends BudgetOptions {
   runtime:MiddlewareRuntime;
   /** A scope, or a function called per request so one shared client can serve many users. */
   scope:ScopeSource;
-  /** Preserve the exact fetch implementation already selected by the host. */
-  fetch:typeof globalThis.fetch;
+  /** Preserve the exact fetch implementation already selected by the host. Default: the global fetch at call time. */
+  fetch?:typeof globalThis.fetch;
   providerBaseURL:string;
   provider:'openai'|'anthropic'|'google';
   frameworkVersion:string;
@@ -59,6 +59,13 @@ export interface FetchOptions extends BudgetOptions {
 }
 const WIRE_BYTES=16<<20;
 
+/** The fetch a client was built with (a private SDK field, so read defensively), else the global one: omitting the
+ * `fetch` option keeps the client's own transport. */
+export function clientFetch(client:unknown):typeof globalThis.fetch{
+  const own=(client as {fetch?:unknown}).fetch;
+  return typeof own==='function'?own as typeof globalThis.fetch:(input,init)=>globalThis.fetch(input,init);
+}
+
 function protocolFor(url:URL,provider:FetchOptions['provider']):Protocol|null{
   if(provider==='openai'&&url.pathname.endsWith('/chat/completions'))return 'openai-chat';
   if(provider==='openai'&&url.pathname.endsWith('/responses'))return 'openai-responses';
@@ -70,19 +77,21 @@ function protocolFor(url:URL,provider:FetchOptions['provider']):Protocol|null{
 /** Fetch injection retains SDK-native promises, parsers, streams and retries. */
 export function createCavemanFetch(options:FetchOptions):typeof globalThis.fetch{
   const base=new URL(options.providerBaseURL);
+  const send:typeof globalThis.fetch=options.fetch??((input,init)=>globalThis.fetch(input,init));
   const cavemanFetch:typeof globalThis.fetch=async (input,init)=>{
     const url=new URL(input instanceof Request?input.url:String(input));
     const protocol=protocolFor(url,options.provider);
     const parent=currentOwner();
-    const passiveReason=options.runtime.mode==='off'?'disabled':options.passiveReason??(!protocol||url.origin!==base.origin||!url.pathname.startsWith(base.pathname.replace(/\/$/,''))?'unsupported_request':null);
-    if(parent?.passive||parent?.runtime.mode==='off')return options.fetch(input,init);
+    // Embeddings, files, models: no LLM request, so nothing to decide or report.
+    if(!protocol)return send(input,init);
+    const passiveReason=options.runtime.mode==='off'?'disabled':options.passiveReason??(url.origin!==base.origin||!url.pathname.startsWith(base.pathname.replace(/\/$/,''))?'unsupported_request':null);
+    if(parent?.passive||parent?.runtime.mode==='off')return send(input,init);
     if(passiveReason){
-      if(parent)return options.fetch(input,init);
+      if(parent)return send(input,init);
       const passive=passiveAttempt(options.runtime,`${options.provider}-sdk`,passiveReason);
       observe(passive,'dispatch_intent');
-      return withOwner(passive,()=>options.fetch(input,init));
+      return withOwner(passive,()=>send(input,init));
     }
-    if(!protocol)return options.fetch(input,init);
     const signal=init?.signal??(input instanceof Request?input.signal:undefined);
     signal?.throwIfAborted();
     let next=init;
@@ -113,13 +122,13 @@ export function createCavemanFetch(options:FetchOptions):typeof globalThis.fetch
       signal?.throwIfAborted();
       if(!parent)observe(attempt,'dispatch_intent');
       try{
-        const response=await withOwner(attempt,()=>options.fetch(input,next));
+        const response=await withOwner(attempt,()=>send(input,next));
         if(parent)return response;
         if(!response.ok){observe(attempt,'failed');return response;}
         return observeResponse(response,attempt,signal);
       }catch(error){if(!parent)observe(attempt,signal?.aborted?'cancelled':'failed');throw error;}
     }
-    return options.fetch(input,next);
+    return send(input,next);
   };
   return cavemanFetch;
 }

@@ -42,8 +42,8 @@ export class CavemanMCPHost {
       tool: { name: 'caveman_retrieve', description: recoveryToolDescription, inputSchema: structuredClone(recoveryInputSchema) as unknown as Tool['inputSchema'] },
       // A refused recovery is an MCP tool error result (isError) the model can read, never a throw (TS-1).
       execute: async (arguments_, call) => {
-        const page = typeof arguments_.handle === 'string' ? await recoveryResult('mcp', call?.signal,
-          () => options.runtime.retrieve(resolveScope(options.scope, undefined) as Scope, { ...arguments_, handle: arguments_.handle as string }, call?.signal)) : { error: 'invalid_request' };
+        const page = await recoveryResult('mcp', call?.signal, arguments_,
+          args => options.runtime.retrieve(resolveScope(options.scope, undefined) as Scope, args, call?.signal));
         return { content: [{ type: 'text', text: JSON.stringify(page) }], ...('error' in page ? { isError: true } : {}) };
       },
     };

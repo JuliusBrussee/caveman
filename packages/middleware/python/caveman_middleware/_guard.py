@@ -3,6 +3,8 @@
 Guard only Caveman's own preparation, never the native provider/handler call:
 a provider exception must still reach the caller unchanged.
 """
+from collections.abc import Mapping
+
 from caveman_cloud.middleware import MiddlewareError, Scope, normalize_scope, warn_once
 
 
@@ -49,14 +51,26 @@ def recovery(runtime, scope):
         return None
 
 
+_RECOVERY_FAILED = "Caveman recovery read was refused; the model got an error result"
+
+
 def recovery_failed(adapter, error):
     """A ``caveman_retrieve`` call the runtime refused (unknown or expired handle, 404/410/503) becomes the
     ``{"error": code}`` tool result the model reads, never an exception that ends the host's run. Warns once.
 
     Callers catch ``MiddlewareError`` only, so cancellation always propagates.
     """
-    warn_once(adapter, error.code)
+    warn_once(adapter, error.code, _RECOVERY_FAILED)
     return {"error": error.code}
+
+
+def recovery_args(args, kwargs=None):
+    """Model-written ``caveman_retrieve`` arguments, as an object or as keywords. Anything but an object with a string
+    ``handle`` (``None``, a list, a string) raises ``invalid_request``, which callers answer via ``recovery_failed``."""
+    value = kwargs if args is None and kwargs else args
+    if not isinstance(value, Mapping) or type(value.get("handle")) is not str:
+        raise MiddlewareError("invalid_request")
+    return value
 
 
 def recovery_name_conflict(runtime, adapter):

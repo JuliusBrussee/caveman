@@ -1,6 +1,6 @@
 import { Model, Message, TextBlock, ToolResultBlock, FunctionTool, type AgentConfig, type BaseModelConfig,
   type StreamOptions, type CountTokensOptions, type ModelStreamEvent, type LocalAgent, type Plugin, type FunctionToolConfig, type Usage as NativeUsage } from '@strands-agents/sdk';
-import { MiddlewareRuntime, recoveryInputSchema, recoveryToolDescription, warnOnce, type Candidate, type RetrieveArgs, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
+import { MiddlewareRuntime, recoveryInputSchema, recoveryToolDescription, warnOnce, type Candidate, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
 import { MIDDLEWARE_VERSION, bindRecovery, currentOwner, hintRecovery, manifest, nameConflict, observe, passiveAttempt, recoveryResult, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
 import { frameworkGate, frameworkVersion, type GateOptions, type GateReason } from './compatibility.js';
 import { guard } from './guard.js';
@@ -104,7 +104,7 @@ class StrandsRegistration implements Plugin{
   readonly recoveryTool:FunctionTool;
   constructor(readonly options:StrandsOptions){
     this.recoveryTool=new FunctionTool({name:'caveman_retrieve',description:recoveryToolDescription,inputSchema:{...structuredClone(recoveryInputSchema),required:[...recoveryInputSchema.required]} as NonNullable<FunctionToolConfig['inputSchema']>,
-      callback:async(input,context)=>JSON.stringify(await recoveryResult(adapter.id,context.cancelSignal,()=>options.runtime.retrieve(resolveScope(options.scope,context.agent) as Scope,input as RetrieveArgs,context.cancelSignal)))});
+      callback:async(input,context)=>JSON.stringify(await recoveryResult(adapter.id,context.cancelSignal,input,args=>options.runtime.retrieve(resolveScope(options.scope,context.agent) as Scope,args,context.cancelSignal)))});
   }
   initAgent(agent:LocalAgent){
     // One bundle per agent. Nothing raises at wrap time (spec §8): a second agent keeps running, recovery-free.
@@ -125,12 +125,18 @@ class StrandsRegistration implements Plugin{
 /** Model-only wrapper. It cannot register the recovery tool, so compress mode reports `recovery_unbound`;
  * withCavemanStrands is the Strands entry point that compresses. */
 export function withCavemanStrandsModel<T extends BaseModelConfig>(model:Model<T>,options:StrandsOptions):Model<T>{
+  if(model instanceof CavemanStrandsModel)return model;
   const wrapped=new CavemanStrandsModel(model,options);
   if(!wrapped.blocked)hintRecovery(options.runtime,adapter.id,'withCavemanStrandsModel','withCavemanStrands');
   return wrapped;
 }
 
 export function withCavemanStrands(input:AgentConfig&{model:Model},options:StrandsOptions):AgentConfig{
+  // Config this function already returned comes back unchanged; a model-only wrapper is replaced, not nested.
+  if(input.model instanceof CavemanStrandsModel){
+    if(input.model.registration)return input;
+    input={...input,model:input.model.inner};
+  }
   const model=new CavemanStrandsModel(input.model,options);
   if(options.runtime.mode==='off'||model.blocked)return {...input,model};
   const registration=new StrandsRegistration(options);

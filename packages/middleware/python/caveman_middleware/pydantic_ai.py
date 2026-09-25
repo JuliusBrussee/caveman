@@ -341,4 +341,6 @@ class CavemanModel(WrapperModel):
 
 def with_caveman_model(model: Model, *, runtime, scope: Scope, accept_framework_version=False) -> CavemanModel:
     """Record-only: wrap an existing model without a recovery executor (``recovery_unbound`` in compress mode)."""
+    if isinstance(model, CavemanModel):  # already wrapped: one Caveman layer, unchanged
+        return model
     return CavemanModel(model, runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)

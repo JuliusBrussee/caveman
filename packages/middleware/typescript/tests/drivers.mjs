@@ -6,6 +6,8 @@ import { original, scope } from './runtime-fixture.mjs';
 
 const clone = value => structuredClone(value);
 const finish = { unified: 'stop', raw: 'stop' }, usage = { inputTokens: { total: 1 }, outputTokens: { total: 1 } };
+// `twice: true` wraps with the entry point a second time, as a host that wraps defensively would.
+const again = (wrap, twice) => twice ? (input, options) => wrap(wrap(input, options), options) : wrap;
 
 export const drivers = {
   'ai-sdk': { id: 'ai-sdk', async run(runtime, extra = {}) {
@@ -19,12 +21,13 @@ export const drivers = {
     await generateText({ ...withCaveman({ model }, { runtime, scope, ...extra }), messages, maxRetries: 0 });
     return { seen: model.doGenerateCalls[0].prompt.at(-1).content[0].output.value, intact: isDeepStrictEqual(messages, before) };
   } },
-  openai: { id: 'openai-sdk', async run(runtime, extra = {}) {
-    const { default: OpenAI } = await import('openai'), { withCavemanOpenAITools } = await import('../dist/openai.js');
+  openai: { id: 'openai-sdk', async run(runtime, { twice, ...extra } = {}) {
+    const { default: OpenAI } = await import('openai'), { withCavemanOpenAI, withCavemanOpenAITools } = await import('../dist/openai.js');
     const seen = [];
     const fetch = async (_url, init) => { seen.push(JSON.parse(init.body)); return Response.json({ id: 'c', object: 'chat.completion', created: 1, model: 'm',
       choices: [{ index: 0, message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }); };
-    const bundle = withCavemanOpenAITools(new OpenAI({ apiKey: 'k', fetch, maxRetries: 0 }), { runtime, scope, fetch, protocol: 'openai-chat',
+    const client = new OpenAI({ apiKey: 'k', fetch, maxRetries: 0 });
+    const bundle = withCavemanOpenAITools(twice ? withCavemanOpenAI(client, { runtime, scope, fetch, ...extra }) : client, { runtime, scope, fetch, protocol: 'openai-chat',
       tools: [{ type: 'function', function: { name: 'read', description: 'Read', parameters: { type: 'object', properties: {} } } }], functions: { read: () => original }, ...extra });
     const messages = [{ role: 'user', content: 'go' },
       { role: 'assistant', content: null, tool_calls: [{ id: 'read-1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
@@ -33,12 +36,12 @@ export const drivers = {
     await bundle.client.chat.completions.create({ model: 'm', messages, tools: bundle.tools });
     return { seen: seen[0].messages.at(-1).content, intact: isDeepStrictEqual(messages, before) };
   } },
-  anthropic: { id: 'anthropic-sdk', async run(runtime, extra = {}) {
+  anthropic: { id: 'anthropic-sdk', async run(runtime, { twice, ...extra } = {}) {
     const { default: Anthropic } = await import('@anthropic-ai/sdk'), { withCavemanAnthropic } = await import('../dist/anthropic.js');
     const seen = [];
     const fetch = async (_url, init) => { seen.push(JSON.parse(init.body)); return Response.json({ id: 'msg_1', type: 'message', role: 'assistant', model: 'm',
       content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }); };
-    const client = withCavemanAnthropic(new Anthropic({ apiKey: 'k', fetch, maxRetries: 0 }), { runtime, scope, fetch, ...extra });
+    const client = again(withCavemanAnthropic, twice)(new Anthropic({ apiKey: 'k', fetch, maxRetries: 0 }), { runtime, scope, fetch, ...extra });
     const messages = [{ role: 'user', content: 'go' }, { role: 'assistant', content: [{ type: 'tool_use', id: 'read-1', name: 'read', input: {} }] },
       { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-1', content: original }] }];
     const before = clone(messages);
@@ -62,7 +65,7 @@ export const drivers = {
       return { seen: seen[0].contents.at(-1).parts[0].functionResponse.response.output, intact: isDeepStrictEqual(contents, before) };
     } finally { globalThis.fetch = native; }
   } },
-  langchain: { id: 'langchain', async run(runtime, { configurable = { thread_id: 'thread-1' }, ...extra } = {}) {
+  langchain: { id: 'langchain', async run(runtime, { configurable = { thread_id: 'thread-1' }, twice, ...extra } = {}) {
     const { createAgent, FakeToolCallingModel } = await import('langchain');
     const { AIMessage, HumanMessage, ToolMessage } = await import('@langchain/core/messages'), { tool } = await import('@langchain/core/tools');
     const { withCavemanAgent, scopeFromConfig } = await import('../dist/langchain.js');
@@ -70,14 +73,14 @@ export const drivers = {
     class Capture extends FakeToolCallingModel { bindTools(tools) { this.tools = tools; return this; }
       async _generate(messages, options, run) { seen.push(messages); return super._generate(messages, options, run); } }
     const read = tool(async () => original, { name: 'read', description: 'Read', schema: { type: 'object', properties: {} } });
-    const agent = createAgent(withCavemanAgent({ model: new Capture({ toolCalls: [] }), tools: [read] },
+    const agent = createAgent(again(withCavemanAgent, twice)({ model: new Capture({ toolCalls: [] }), tools: [read] },
       { runtime, scope: config => scopeFromConfig(config, scope.namespace), ...extra }));
     const messages = [new HumanMessage('go'), new AIMessage({ content: '', tool_calls: [{ id: 'read-1', name: 'read', args: {} }] }),
       new ToolMessage({ content: original, tool_call_id: 'read-1', name: 'read' })];
     await agent.invoke({ messages }, { configurable });
     return { seen: seen[0].at(-1).content, intact: messages[2].content === original };
   } },
-  strands: { id: 'strands', async run(runtime, extra = {}) {
+  strands: { id: 'strands', async run(runtime, { twice, ...extra } = {}) {
     const { Agent, Model, Message, ToolUseBlock, ToolResultBlock, TextBlock, FunctionTool } = await import('@strands-agents/sdk');
     const { withCavemanStrands } = await import('../dist/strands.js');
     const seen = [];
@@ -96,15 +99,15 @@ export const drivers = {
     const result = new ToolResultBlock({ toolUseId: 'read-1', status: 'success', content: [new TextBlock(original)] });
     const messages = [new Message({ role: 'user', content: [new TextBlock('go')] }),
       new Message({ role: 'assistant', content: [new ToolUseBlock({ name: 'read', toolUseId: 'read-1', input: {} })] }), new Message({ role: 'user', content: [result] })];
-    await new Agent(withCavemanStrands({ model: new Fake(), tools: [read], messages, printer: false }, { runtime, scope, ...extra })).invoke('continue');
+    await new Agent(again(withCavemanStrands, twice)({ model: new Fake(), tools: [read], messages, printer: false }, { runtime, scope, ...extra })).invoke('continue');
     const sent = seen[0].find(message => message.content.some(block => block.type === 'toolResultBlock'));
     return { seen: sent.content[0].content[0].text, intact: result.content[0].text === original };
   } },
-  mastra: { id: 'mastra', async run(runtime, extra = {}) {
+  mastra: { id: 'mastra', async run(runtime, { twice, ...extra } = {}) {
     const { Agent } = await import('@mastra/core/agent'), { MockLanguageModelV4 } = await import('ai/test');
     const { withCavemanMastra } = await import('../dist/mastra.js');
     const model = new MockLanguageModelV4({ doGenerate: { content: [{ type: 'text', text: 'done' }], finishReason: finish, usage, warnings: [] } });
-    const agent = withCavemanMastra(new Agent({ id: 'agent', name: 'agent', instructions: 'Be brief.', model }), { runtime, scope, ...extra });
+    const agent = again(withCavemanMastra, twice)(new Agent({ id: 'agent', name: 'agent', instructions: 'Be brief.', model }), { runtime, scope, ...extra });
     const messages = [{ role: 'user', content: 'go' },
       { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'read-1', toolName: 'read', input: {} }] },
       { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'read-1', toolName: 'read', output: { type: 'text', value: original } }] }];

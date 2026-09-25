@@ -853,6 +853,8 @@ class CavemanNodePostprocessor(BaseNodePostprocessor):
 
 def with_caveman_model(llm: LLM, *, runtime, scope, accept_framework_version=False) -> LLM:
     """Record-only: no recovery executor, so compress mode reports ``recovery_unbound``."""
+    if isinstance(llm, CavemanLLM):  # already wrapped: one Caveman layer, unchanged
+        return llm
     return CavemanLLM(llm, runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
 
 

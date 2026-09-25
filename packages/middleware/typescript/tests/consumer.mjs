@@ -32,7 +32,8 @@ try {
   pnpm(['install', '--no-frozen-lockfile', ...(process.argv.includes('--offline') ? ['--offline'] : []), '--ignore-scripts', '--config.auto-install-peers=false'], consumer);
   const metadata = JSON.parse(await readFile(join(consumer, 'node_modules/@caveman-ai/middleware/package.json'), 'utf8'));
   assert.equal(metadata.dependencies['@caveman-ai/sdk'], `^${sdkMetadata.version}`, 'packed dependency must not retain workspace protocol');
-  assert.equal(metadata.peerDependencies, undefined, 'framework peers make npm install fail with ERESOLVE (Decision 2)');
+  // Decision 2: ranged peers make npm install fail with ERESOLVE; unranged optional ones only declare the imports (Yarn PnP).
+  assert.ok(Object.values(metadata.peerDependencies).every(range => range === '*'), JSON.stringify(metadata.peerDependencies));
   const entry = join(consumer, 'entry.mjs');
   await writeFile(entry, `
     import assert from 'node:assert/strict';

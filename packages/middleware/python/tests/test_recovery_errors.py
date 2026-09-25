@@ -333,3 +333,32 @@ def test_cancellation_still_propagates_out_of_recovery():
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(loop.functions["caveman_retrieve"]({"handle": HANDLE}))
     runtime.close()
+
+
+@pytest.mark.parametrize("arguments", [None, [], "handle", 7, {}, {"handle": 1}, [{"handle": HANDLE}]])
+def test_malformed_recovery_arguments_are_invalid_request(arguments):
+    """Model-written arguments that are not an object with a string handle never reach the runtime or raise past it."""
+    from caveman_cloud.middleware import MiddlewareError
+    from caveman_middleware._guard import recovery_args
+
+    with pytest.raises(MiddlewareError) as raised:
+        recovery_args(arguments)
+    assert raised.value.code == "invalid_request"
+    assert recovery_args(None, {"handle": HANDLE}) == {"handle": HANDLE}
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_openai_recovery_answers_malformed_arguments(asynchronous):
+    require_adapter("openai")
+    from openai import AsyncOpenAI, OpenAI
+    from caveman_cloud.middleware import Scope
+    from caveman_middleware.openai import with_caveman_openai_tools
+
+    runtime = peer_runtime()
+    client = (AsyncOpenAI if asynchronous else OpenAI)(api_key="test", base_url="http://127.0.0.1:9")
+    loop = with_caveman_openai_tools(client, runtime=runtime, scope=Scope("tests", "args"), protocol="openai-chat", tools=[], functions={})
+    for arguments in (None, [], "handle", {}):
+        result = loop.functions["caveman_retrieve"](arguments)
+        assert (asyncio.run(result) if asynchronous else result) == {"error": "invalid_request"}
+    assert runtime.retrievals == []
+    runtime.close()

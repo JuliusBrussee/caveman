@@ -157,6 +157,54 @@
   "dependencies": {
     "@caveman-ai/sdk": "workspace:^"
   },
+  "peerDependencies": {
+    "ai": "*",
+    "@ai-sdk/provider": "*",
+    "openai": "*",
+    "@anthropic-ai/sdk": "*",
+    "@google/genai": "*",
+    "langchain": "*",
+    "@langchain/core": "*",
+    "@langchain/langgraph": "*",
+    "@strands-agents/sdk": "*",
+    "@mastra/core": "*",
+    "@modelcontextprotocol/sdk": "*"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    },
+    "@ai-sdk/provider": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    },
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@google/genai": {
+      "optional": true
+    },
+    "langchain": {
+      "optional": true
+    },
+    "@langchain/core": {
+      "optional": true
+    },
+    "@langchain/langgraph": {
+      "optional": true
+    },
+    "@strands-agents/sdk": {
+      "optional": true
+    },
+    "@mastra/core": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "typescript": "5.9.3",
     "@types/node": "22.13.10",

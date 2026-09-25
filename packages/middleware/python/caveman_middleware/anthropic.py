@@ -27,7 +27,7 @@ except ImportError:  # anthropic without public middleware: the version gate dec
     ToolError = Exception
 
 from caveman_cloud.middleware import MiddlewareError, ensure_async, ensure_sync
-from ._guard import fail_open, recovery_failed, recovery_name_conflict
+from ._guard import fail_open, recovery_args, recovery_failed, recovery_name_conflict
 from ._httpx2 import flavour, sdk_flavour
 from ._native import NativeSession, owner, plain
 from ._versions import family_gate
@@ -150,7 +150,7 @@ class _RecoveryTool(BetaBuiltinFunctionTool):
 
     def call(self, input):
         try:
-            page = self.execute(input)
+            page = self.execute(recovery_args(input))
         except MiddlewareError as error:  # the runner's native is_error result, without its traceback log
             raise ToolError(json.dumps(recovery_failed(ADAPTER_ID, error))) from error
         return json.dumps(page, ensure_ascii=False, separators=(",", ":"))
@@ -167,7 +167,7 @@ class _AsyncRecoveryTool(BetaAsyncBuiltinFunctionTool):
 
     async def call(self, input):
         try:
-            page = await self.execute(input)
+            page = await self.execute(recovery_args(input))
         except MiddlewareError as error:
             raise ToolError(json.dumps(recovery_failed(ADAPTER_ID, error))) from error
         return json.dumps(page, ensure_ascii=False, separators=(",", ":"))
@@ -183,13 +183,20 @@ def with_caveman_anthropic(client, *, runtime, scope, accept_framework_version=F
     """
     if not isinstance(client, SYNC_CLIENTS + ASYNC_CLIENTS):
         raise TypeError("Expected an Anthropic, AnthropicBedrock or AnthropicVertex client (sync or async)")
+    if getattr(client, "_caveman_source", None) is not None:  # already wrapped: one Caveman layer, unchanged
+        return client
     async_client = isinstance(client, ASYNC_CLIENTS)
     runtime = ensure_async(runtime) if async_client else ensure_sync(runtime)
     options = dict(accept_framework_version=accept_framework_version, manifest_bytes=manifest_bytes)
     middleware = CavemanAnthropicMiddleware(runtime, scope, **options)
     if middleware.session.passive_reason or runtime.mode == "off":
-        return _append(client, middleware) if Middleware is not object else client
+        if Middleware is object:
+            return client
+        native = _append(client, middleware)
+        native._caveman_source = client
+        return native
     native = _append(client, middleware)
+    native._caveman_source = client
     original_runner = native.beta.messages.tool_runner
 
     @functools.wraps(original_runner)

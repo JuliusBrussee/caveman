@@ -282,6 +282,8 @@ def with_caveman_agent(options: dict, *, runtime, scope, accept_framework_versio
     already named ``caveman_retrieve`` keeps its name and recovery stays off
     (``recovery_name_conflict``).
     """
+    if any(isinstance(item, CavemanMiddleware) for item in options.get("middleware", [])):  # already wrapped: unchanged
+        return options
     middleware = CavemanMiddleware(runtime=runtime, scope=scope, accept_framework_version=accept_framework_version,
                                    manifest_bytes=manifest_bytes)
     tools = list(options.get("tools", []))
@@ -303,6 +305,8 @@ def with_caveman_model(model: BaseChatModel, *, runtime, scope, accept_framework
     """
     if not isinstance(model, BaseChatModel):
         raise TypeError("Expected a native LangChain BaseChatModel")
+    if model.__dict__.get("_caveman_wrapped"):  # already wrapped: one Caveman layer, unchanged
+        return model
     native = model.model_copy()
     connection = _Connection(runtime, scope, accept_framework_version=accept_framework_version, manifest_bytes=manifest_bytes)
 
@@ -376,6 +380,7 @@ def with_caveman_model(model: BaseChatModel, *, runtime, scope, accept_framework
     # Native bind_tools/with_structured_output bind this clone as their target.
     for name, wrapper in (("invoke", wrap_call), ("ainvoke", wrap_acall), ("stream", wrap_stream), ("astream", wrap_astream)):
         object.__setattr__(native, name, wrapper(getattr(native, name)))
+    object.__setattr__(native, "_caveman_wrapped", True)
     return native
 
 

@@ -146,7 +146,7 @@ test('each adapter warns once per refused-recovery code', t => {
 test('a caller abort during recovery still propagates instead of becoming {error}', async t => {
   const { recoveryResult } = await import('../dist/common.js'), { MiddlewareError } = await import('@caveman-ai/sdk/middleware');
   const controller = new AbortController(); controller.abort(new Error('caller aborted'));
-  await assert.rejects(recoveryResult('test', controller.signal, async () => { throw new MiddlewareError('deadline'); }), { code: 'deadline' });
-  await assert.rejects(recoveryResult('test', undefined, async () => { throw new TypeError('bug'); }), TypeError);
-  assert.deepEqual(await recoveryResult('test', undefined, async () => { throw new MiddlewareError('not_found'); }), { error: 'not_found' });
+  await assert.rejects(recoveryResult('test', controller.signal, { handle: 'h' }, async () => { throw new MiddlewareError('deadline'); }), { code: 'deadline' });
+  await assert.rejects(recoveryResult('test', undefined, { handle: 'h' }, async () => { throw new TypeError('bug'); }), TypeError);
+  assert.deepEqual(await recoveryResult('test', undefined, { handle: 'h' }, async () => { throw new MiddlewareError('not_found'); }), { error: 'not_found' });
 });

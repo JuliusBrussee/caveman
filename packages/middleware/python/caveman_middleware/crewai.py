@@ -335,6 +335,8 @@ class CavemanLLM(BaseLLM):
 
 def with_caveman_llm(llm, *, runtime, scope, accept_framework_version=False):
     """Record-only unless its ``recovery_tool`` is registered with the agent (see ``with_caveman_agent``)."""
+    if isinstance(llm, CavemanLLM):  # already wrapped: one Caveman layer, unchanged
+        return llm
     return CavemanLLM(llm, runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
 
 
@@ -344,6 +346,10 @@ def with_caveman_agent(options, *, runtime, scope, accept_framework_version=Fals
     Compresses when the agent has tools. A host tool already named
     ``caveman_retrieve`` keeps its name and recovery stays off (``recovery_name_conflict``).
     """
+    if isinstance(options.get("llm"), CavemanLLM):
+        if any(tool is options["llm"]._recovery for tool in options.get("tools", [])):  # this function's own result
+            return options
+        options = {**options, "llm": options["llm"].delegate}  # a with_caveman_llm layer is replaced, not nested
     model = CavemanLLM(options["llm"], runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
     tools = list(options.get("tools", []))
     # Adding the first tool switches CrewAI out of its native no-tool/typed

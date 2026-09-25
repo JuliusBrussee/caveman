@@ -494,6 +494,8 @@ class CavemanWorkbench(StaticStreamWorkbench):
 
 def with_caveman_model(model_client, *, runtime, scope, runtime_key="default", accept_framework_version=False):
     """Wrap an existing client; record-only (``recovery_unbound`` in compress mode) unless paired with the workbench."""
+    if isinstance(model_client, CavemanChatCompletionClient):  # already wrapped: one Caveman layer, unchanged
+        return model_client
     return CavemanChatCompletionClient(model_client, runtime=runtime, scope=scope, runtime_key=runtime_key,
                                        accept_framework_version=accept_framework_version)
 
@@ -504,6 +506,10 @@ def with_caveman_agent(options: dict, *, runtime, scope, runtime_key="default", 
     Accepts the native ``tools`` list or ``workbench`` (including a workbench
     list), retaining tool order and the original native executor for every call.
     """
+    if isinstance(options.get("model_client"), CavemanChatCompletionClient):
+        if isinstance(options.get("workbench"), CavemanWorkbench):  # options this function already returned: unchanged
+            return options
+        options = {**options, "model_client": options["model_client"].model_client}  # a with_caveman_model layer is replaced
     model = CavemanChatCompletionClient(options["model_client"], runtime=runtime, scope=scope, runtime_key=runtime_key,
                                         accept_framework_version=accept_framework_version)
     if model.runtime.mode == "off" or not model.version_supported:

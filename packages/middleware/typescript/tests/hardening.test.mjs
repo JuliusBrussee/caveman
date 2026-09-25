@@ -364,3 +364,81 @@ test('nit: langchain-model reports @langchain/core as its framework version', as
   await drivers.langchain.run(f.runtime);
   assert.equal(f.requests[0].adapter.framework_version, inspectFrameworkCompatibility('langchain-core').frameworks[0].installed_version);
 });
+
+test('TS-1: recovery arguments that are not an object with a string handle answer invalid_request, never reach retrieve', async () => {
+  const { recoveryResult } = await import('../dist/common.js');
+  for (const input of [null, undefined, [], 'handle', 7, {}, { handle: 1 }, [{ handle: 'h' }]]) {
+    assert.deepEqual(await recoveryResult('test', undefined, input, () => { throw new Error('retrieve ran'); }), { error: 'invalid_request' }, JSON.stringify(input));
+  }
+  assert.deepEqual(await recoveryResult('test', undefined, { handle: 'h', limit: 5 }, async args => args), { handle: 'h', limit: 5 });
+});
+
+test('TS-1: a model calling caveman_retrieve with arguments "null" gets invalid_request; runTools finishes', async t => {
+  if (!requirePeers(t, 'openai')) return;
+  const { default: OpenAI } = await import('openai'), { withCavemanOpenAI } = await import('../dist/openai.js');
+  const f = runtimeFixture(); t.after(() => f.runtime.close());
+  for (const args of ['null', '[]', '"h"', '{}']) {
+    const sent = [];
+    const fetch = async (_url, init) => {
+      sent.push(JSON.parse(init.body));
+      return Response.json(sent.length === 1 ? chat({ role: 'assistant', content: null, tool_calls: [{ id: 'r', type: 'function', function: { name: 'caveman_retrieve', arguments: args } }] }, 'tool_calls')
+        : chat({ role: 'assistant', content: 'done' }));
+    };
+    const client = withCavemanOpenAI(new OpenAI({ apiKey: 'k', fetch, maxRetries: 0 }), { runtime: f.runtime, scope, fetch });
+    const runner = client.chat.completions.runTools({ model: 'm', messages: [{ role: 'user', content: 'go' }],
+      tools: [{ type: 'function', function: { name: 'read', parameters: readSchema, function: () => original, parse: JSON.parse } }] });
+    assert.equal(await runner.finalContent(), 'done', args);
+    assert.equal(sent[1].messages.at(-1).content, JSON.stringify({ error: 'invalid_request' }), args);
+  }
+  assert.equal(f.retrievals.length, 0);
+});
+
+test('fetch is optional: openai and anthropic wrappers default to the client\'s own fetch in every mode', async t => {
+  if (!requirePeers(t, 'openai') || !requirePeers(t, 'anthropic')) return;
+  const { default: OpenAI } = await import('openai'), { withCavemanOpenAI } = await import('../dist/openai.js');
+  const { default: Anthropic } = await import('@anthropic-ai/sdk'), { withCavemanAnthropic } = await import('../dist/anthropic.js');
+  for (const mode of ['off', 'record', 'compress']) {
+    const f = runtimeFixture({ mode }); t.after(() => f.runtime.close());
+    let calls = 0;
+    const openaiFetch = async () => { calls++; return Response.json(chat({ role: 'assistant', content: 'done' })); };
+    const anthropicFetch = async () => { calls++; return Response.json({ id: 'm', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'done' }],
+      stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }); };
+    const openai = withCavemanOpenAI(new OpenAI({ apiKey: 'k', fetch: openaiFetch, maxRetries: 0 }), { runtime: f.runtime, scope });
+    const anthropic = withCavemanAnthropic(new Anthropic({ apiKey: 'k', fetch: anthropicFetch, maxRetries: 0 }), { runtime: f.runtime, scope });
+    assert.equal((await openai.chat.completions.create({ model: 'm', messages: [{ role: 'user', content: 'go' }] })).choices[0].message.content, 'done', mode);
+    assert.equal((await anthropic.messages.create({ model: 'm', max_tokens: 1, messages: [{ role: 'user', content: 'go' }] })).content[0].text, 'done', mode);
+    assert.equal(calls, 2, `${mode}: both calls went through the client's own fetch`);
+  }
+});
+
+test('embeddings, files and models calls are not LLM requests: no report and no pass-through warning', async t => {
+  if (!requirePeers(t, 'openai')) return;
+  const lines = warnings(t);
+  const { default: OpenAI } = await import('openai'), { withCavemanOpenAI } = await import('../dist/openai.js');
+  for (const mode of ['record', 'compress']) {
+    const f = runtimeFixture({ mode }); t.after(() => f.runtime.close());
+    const fetch = async () => Response.json({ object: 'list', data: [{ object: 'embedding', index: 0, embedding: [0.1] }], model: 'e', usage: { prompt_tokens: 1, total_tokens: 1 } });
+    const client = withCavemanOpenAI(new OpenAI({ apiKey: 'k', fetch, maxRetries: 0 }), { runtime: f.runtime, scope, fetch });
+    await client.embeddings.create({ model: 'e', input: 'hello' });
+    await client.models.list();
+    assert.deepEqual(f.reports, [], mode);
+  }
+  assert.ok(!lines.some(line => line.includes('reason=')), lines.join('\n'));
+});
+
+test('wrapping twice runs one Caveman layer: compresses once, no false name conflict', async t => {
+  for (const name of ['openai', 'anthropic', 'langchain', 'strands', 'mastra']) {
+    if (!requirePeers(t, name)) return;
+    const f = runtimeFixture(); t.after(() => f.runtime.close());
+    const result = await drivers[name].run(f.runtime, { twice: true });
+    assert.equal(result.seen, shortened, name);
+    assert.deepEqual(f.reports.map(report => `${report.status}:${report.reason}`), ['applied:eligible'], name);
+  }
+  const { default: OpenAI } = await import('openai'), { withCavemanOpenAI } = await import('../dist/openai.js');
+  const { default: Anthropic } = await import('@anthropic-ai/sdk'), { withCavemanAnthropic } = await import('../dist/anthropic.js');
+  const f = runtimeFixture(); t.after(() => f.runtime.close());
+  const openai = withCavemanOpenAI(new OpenAI({ apiKey: 'k' }), { runtime: f.runtime, scope });
+  const anthropic = withCavemanAnthropic(new Anthropic({ apiKey: 'k' }), { runtime: f.runtime, scope });
+  assert.equal(withCavemanOpenAI(openai, { runtime: f.runtime, scope }), openai);
+  assert.equal(withCavemanAnthropic(anthropic, { runtime: f.runtime, scope }), anthropic);
+});

@@ -235,7 +235,7 @@ export function withCaveman<T extends { model: LanguageModelV4; tools?: ToolSet 
   }
   return guardSync(runtime, adapter.id, () => {
     const execute: RecoveryRegistration['execute'] = (args, call) =>
-      recoveryResult(adapter.id, call?.signal, () => runtime.retrieve(resolveScope(options.scope, undefined) as Scope, args, call?.signal));
+      recoveryResult(adapter.id, call?.signal, args, valid => runtime.retrieve(resolveScope(options.scope, undefined) as Scope, valid, call?.signal));
     // Keep the runtime's schema separate from native framework annotations.
     const expectedSchema: RecoveryBinding['inputSchema'] = structuredClone(recoveryInputSchema);
     const nativeSchema = structuredClone(expectedSchema);

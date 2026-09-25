@@ -3,7 +3,7 @@ import { ToolMessage, isAIMessage } from '@langchain/core/messages';
 import { tool, type ClientTool, type ServerTool } from '@langchain/core/tools';
 import { ensureConfig, type RunnableConfig } from '@langchain/core/runnables';
 import type { JSONSchema } from '@langchain/core/utils/json_schema';
-import { recoveryInputSchema, recoveryToolDescription, type RetrieveArgs, type Scope } from '@caveman-ai/sdk/middleware';
+import { recoveryInputSchema, recoveryToolDescription, type Scope } from '@caveman-ai/sdk/middleware';
 import { bindRecovery, currentOwner, nameConflict, observe, recoveryResult, withOwner } from './common.js';
 import { frameworkGate, type GateReason } from './compatibility.js';
 import { langChainUsage, prepareLangChain, resolveLangChainScope, type LangChainOptions } from './langchain-model.js';
@@ -22,7 +22,7 @@ export function createCavemanLangChain(options:LangChainOptions){
   const blocked=langChainGate(options,'langchain');
   const recoveryTool=tool(async(input:unknown,config?:RunnableConfig)=>{
     const scope=resolveLangChainScope(options.scope,config);
-    return JSON.stringify(await recoveryResult('langchain',config?.signal,()=>options.runtime.retrieve(scope as Scope,input as RetrieveArgs,config?.signal)));
+    return JSON.stringify(await recoveryResult('langchain',config?.signal,input,args=>options.runtime.retrieve(scope as Scope,args,config?.signal)));
   // LangChain's JSON Schema validator annotates its input schema. Give the
   // native tool its own copy rather than exposing the SDK's frozen contract.
   },{name:'caveman_retrieve',description:recoveryToolDescription,schema:structuredClone(recoveryInputSchema) as JSONSchema});
@@ -66,12 +66,16 @@ export function createCavemanLangChain(options:LangChainOptions){
   return {middleware,recoveryTool,blocked};
 }
 
+const agentMiddleware=new WeakSet<object>();
 /** Native createAgent options; the LangChain entry point that compresses. No new loop. */
 export function withCavemanAgent<T extends {tools?: (ClientTool|ServerTool)[];middleware?:AgentMiddleware[]}>(input:T,options:LangChainOptions):T&{tools:(ClientTool|ServerTool)[];middleware:AgentMiddleware[]}{
+  // Options this function already returned come back unchanged: a second CavemanMiddleware would make createAgent throw.
+  if(input.middleware?.some(m=>agentMiddleware.has(m)))return input as T&{tools:(ClientTool|ServerTool)[];middleware:AgentMiddleware[]};
   const {middleware:own,recoveryTool,blocked}=createCavemanLangChain(options),tools=[...(input.tools??[])];
   // Another wrapToolCall already owns tool-error handling (toolRetryMiddleware, toolErrorMiddleware mark failures
   // status:'error'); ours, innermost, would hide errors from it.
   const middleware=input.middleware?.some(m=>m.wrapToolCall)?{...own,wrapToolCall:undefined}:own;
+  agentMiddleware.add(middleware);
   if(options.runtime.mode==='compress'&&!blocked){
     if(tools.some(t=>t.name==='caveman_retrieve'))nameConflict(options.runtime,'langchain');
     else tools.push(recoveryTool);

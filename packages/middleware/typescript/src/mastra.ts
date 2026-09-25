@@ -5,7 +5,7 @@ import { hash } from 'node:crypto';
 import type { ProcessInputStepArgs, ProcessInputStepResult, ProcessLLMRequestArgs, Processor } from '@mastra/core/processors';
 import type { Agent, AgentExecutionOptions } from '@mastra/core/agent';
 import type { LanguageModelV4CallOptions, LanguageModelV4Usage } from '@ai-sdk/provider';
-import { MiddlewareRuntime, type Candidate, type RecoveryBinding, type RetrieveArgs, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
+import { MiddlewareRuntime, type Candidate, type RecoveryBinding, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
 import { MIDDLEWARE_VERSION, bindRecovery, currentOwner, hintRecovery, manifest, nameConflict, observe, observeStream, passiveAttempt as passive, plain,
   recoveryResult, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
 import { frameworkGate, frameworkVersion, type GateOptions, type GateReason } from './compatibility.js';
@@ -78,9 +78,10 @@ export function createCavemanMastraProcessor(options: CavemanMastraOptions): Pro
  * processors and prepareStep callback, then attests the executable tool table
  * at Mastra's enforced final prepareStep boundary. No Agent config is mutated. */
 export function withCavemanMastra<T extends Agent>(agent: T, options: CavemanMastraOptions): T {
+  if (mastraAgents.has(agent)) return agent;
   const blocked = gate(options);
   if (blocked) {
-    return new Proxy(agent, { get(target, key) {
+    return own(new Proxy(agent, { get(target, key) {
       const value = Reflect.get(target, key, target);
       if ((key === 'generate' || key === 'stream') && typeof value === 'function') return (...args: unknown[]) => {
         if (currentOwner()) return Reflect.apply(value, target, args);
@@ -88,7 +89,7 @@ export function withCavemanMastra<T extends Agent>(agent: T, options: CavemanMas
         return withOwner(attempt, () => Reflect.apply(value, target, args));
       };
       return typeof value === 'function' ? value.bind(target) : value;
-    } });
+    } }));
   }
   // Mastra can normalize imported error-text into a plain DB result. Remember protected text before native
   // normalization, including later memory turns of the same thread. Only hashes are kept; overflow declines loss for
@@ -102,7 +103,7 @@ export function withCavemanMastra<T extends Agent>(agent: T, options: CavemanMas
     if (threads.size > 256) threads.delete(threads.keys().next().value!);
     return { hashes, all: false };
   };
-  return new Proxy(agent, {
+  return own(new Proxy(agent, {
     get(target, key) {
       if (key === 'generate' || key === 'stream') return async (messages: Parameters<Agent['generate']>[0], call: AgentExecutionOptions = {}) => {
         call.abortSignal?.throwIfAborted();
@@ -130,8 +131,12 @@ export function withCavemanMastra<T extends Agent>(agent: T, options: CavemanMas
       const value = Reflect.get(target, key, target);
       return typeof value === 'function' ? value.bind(target) : value;
     },
-  });
+  }));
 }
+
+/** Every agent withCavemanMastra returned. Wrapping one again returns it unchanged. */
+const mastraAgents = new WeakSet<object>();
+function own<T extends object>(agent: T): T { mastraAgents.add(agent); return agent; }
 
 function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boolean, blocked: GateReason | null, isProtectedText: (text: string) => boolean = () => false, rememberProtected: (value: unknown) => void = () => {}): { processor: Processor; attest: (before: FinalStep, result: ProcessInputStepResult | undefined | void) => boolean } {
   if (blocked) {
@@ -257,7 +262,7 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
       steps.set(model, step);
       if (!binding) return { model };
       const recovery = createTool({ id: binding.name, description: binding.description, inputSchema: structuredClone(binding.inputSchema),
-        execute: (input, context) => recoveryResult('mastra', context?.abortSignal, () => binding.execute(input as RetrieveArgs, context?.abortSignal ? { signal: context.abortSignal } : undefined)),
+        execute: (input, context) => recoveryResult('mastra', context?.abortSignal, input, args => binding.execute(args, context?.abortSignal ? { signal: context.abortSignal } : undefined)),
       });
       ours.add(recovery);
       if (recovery.inputSchema) step.recoverySchema = structuredClone(standardSchemaToJSONSchema(recovery.inputSchema, { io: 'input' }));

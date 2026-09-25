@@ -39,8 +39,7 @@ function recoveryTool(binding: RecoveryBinding): CallableTool {
     async callTool(calls: FunctionCall[]): Promise<Part[]> {
       const parts: Part[] = [];
       for (const call of calls) if (call.name === binding.name) {
-        const args = call.args;
-        const output = args && typeof args.handle === 'string' ? await recoveryResult(ID, undefined, () => binding.execute({ ...args, handle: args.handle as string })) : { error: 'invalid_request' };
+        const output = await recoveryResult(ID, undefined, call.args, args => binding.execute(args));
         parts.push({ functionResponse: { name: binding.name, ...(call.id ? { id: call.id } : {}), response: { output } } });
       }
       return parts;

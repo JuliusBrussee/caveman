@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { hash } from 'node:crypto';
 import { MIDDLEWARE_DEFAULTS, MiddlewareError, MiddlewareRuntime, manifestWindow, normalizeScope, opaqueManifestValue, warnOnce,
-  type ManifestItem, type Optimization, type RecoveryBinding, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
+  type ManifestItem, type Optimization, type RecoveryBinding, type RetrieveArgs, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
 
 /** This package's version, sent as `adapter.version`; a test pins it to package.json. */
 export const MIDDLEWARE_VERSION = '1.0.0';
@@ -116,13 +116,19 @@ export function nameConflict(runtime: MiddlewareRuntime, adapter: string): 'reco
   return 'recovery_name_conflict';
 }
 
+const RECOVERY_FAILED = 'Caveman recovery read was refused; the model got an error result';
+
 /** TS-1: a recovery the runtime refuses (unknown or expired handle, runtime down) answers the model `{error: code}`
- * with a warn-once instead of failing the host's native tool loop. Caller aborts and non-SDK errors propagate. */
-export async function recoveryResult<T>(adapter: string, signal: AbortSignal | null | undefined, retrieve: () => Promise<T>): Promise<T | { error: string }> {
-  try { return await retrieve(); }
+ * with a warn-once instead of failing the host's native tool loop. Caller aborts and non-SDK errors propagate.
+ * `input` is model output: anything but an object with a string handle (`null`, a list, a string) is answered
+ * `{error: 'invalid_request'}` before the runtime sees it. */
+export async function recoveryResult<T>(adapter: string, signal: AbortSignal | null | undefined, input: unknown,
+  retrieve: (args: RetrieveArgs) => Promise<T>): Promise<T | { error: string }> {
+  if (!plain(input) || typeof input.handle !== 'string') return { error: 'invalid_request' };
+  try { return await retrieve(input as unknown as RetrieveArgs); }
   catch (error) {
     if (signal?.aborted || !(error instanceof MiddlewareError)) throw error;
-    warnOnce(adapter, error.code);
+    warnOnce(adapter, error.code, RECOVERY_FAILED);
     return { error: error.code };
   }
 }

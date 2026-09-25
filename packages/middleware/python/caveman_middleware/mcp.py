@@ -21,7 +21,7 @@ except ImportError as error:
     framework_import_failed("mcp", error, "Install caveman-middleware[mcp] for the native MCP adapter")
 
 from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, Scope, ensure_async, sha256
-from ._guard import fail_open, recovery, recovery_failed, recovery_name_conflict
+from ._guard import fail_open, recovery, recovery_args, recovery_failed, recovery_name_conflict
 from ._native import owner
 from ._versions import VERSION, family_gate, installed_version
 
@@ -64,7 +64,7 @@ class CavemanMCPHost:
         async def execute(arguments=None, **_native_options):
             # This is a host-local executor, not an outbound MCP tools/call.
             try:
-                page = await binding.execute(arguments or {})
+                page = await binding.execute(recovery_args(arguments))
             except MiddlewareError as error:  # MCP's native tool error: is_error with the code
                 return CallToolResult(content=[TextContent(type="text", text=json.dumps(recovery_failed(self.adapter.id, error)))], is_error=True)
             return CallToolResult(content=[TextContent(type="text", text=json.dumps(page, ensure_ascii=False, separators=(",", ":")))])

@@ -33,10 +33,13 @@ test('stable releases in compatibility range are distinct from the exact test pi
   assert.equal(inRange('1.0.0', '0.124', '1'), false);
 });
 
-test('no framework peers (Decision 2); tested releases, merge-gate pins and execution ranges stay aligned', async () => {
+test('framework peers are optional and unranged (Decision 2); tested releases, merge-gate pins and execution ranges stay aligned', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(pkg.peerDependencies, undefined, 'optional framework peers make npm install fail with ERESOLVE');
-  assert.equal(pkg.peerDependenciesMeta, undefined);
+  // Ranged peers made a plain npm install fail with ERESOLVE (0.1.0-alpha.1): the ranges live in the run-time gate. The
+  // peers only declare every framework the adapters import, so strict resolvers (Yarn PnP) let them resolve it.
+  const imported = Object.keys(pkg.testedFrameworkVersions);
+  assert.deepEqual(pkg.peerDependencies, Object.fromEntries(imported.map(name => [name, '*'])));
+  assert.deepEqual(pkg.peerDependenciesMeta, Object.fromEntries(imported.map(name => [name, { optional: true }])));
   const tiers = {};
   for (const adapter of ['ai-sdk', 'openai', 'anthropic', 'google', 'langchain', 'langchain-core', 'strands', 'mastra', 'mcp']) {
     const result = inspectFrameworkCompatibility(adapter);
@@ -74,7 +77,7 @@ test('the version gate never throws at wrap time: warn once, decline for strict 
     assert.equal(frameworkGate('openai', { runtime, acceptFrameworkVersion: true }, undefined, { openai: '8.0.0' }), null);
     // Unreadable (bundled): feature detection decides; version_unverified runs and never declines.
     assert.equal(frameworkGate('mcp', { runtime }, () => true, { '@modelcontextprotocol/sdk': null }), null);
-    assert.ok(lines.some(line => line.includes('adapter=mcp reason=version_unverified')));
+    assert.ok(lines.some(line => line.includes('adapter=mcp') && line.includes('reason=version_unverified')));
     await runtime.ready();
     assert.equal(frameworkGate('mcp', { runtime }, () => false, { '@modelcontextprotocol/sdk': null }), 'version_unavailable');
     await assert.rejects(runtime.ready(), { code: 'version_unavailable' });
@@ -163,4 +166,22 @@ test('every reason literal in src is a REASON_CATALOG key', async () => {
   assert.ok(literals.has('recovery_unbound') && literals.has('disabled'), 'the scan finds reasons');
   const unknown = [...literals].filter(([word]) => !NOT_REASONS.has(word) && !Object.hasOwn(REASON_CATALOG, word));
   assert.deepEqual(unknown, []);
+});
+
+test('check-latest-in-range reads every TypeScript and Python range and flags only a latest release outside one', async () => {
+  const { ranges, drift } = await import('../scripts/check-latest-in-range.mjs');
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  const entries = await ranges();
+  assert.deepEqual(entries.filter(([registry]) => registry === 'npm').map(([, name]) => name), Object.keys(pkg.supportedFrameworkVersions));
+  assert.deepEqual(entries.find(([registry, name]) => registry === 'pypi' && name === 'anthropic'), ['pypi', 'anthropic', '1.0', '2']);
+  assert.ok(entries.some(([registry, name]) => registry === 'pypi' && name === 'autogen-ext'));
+  const sample = [['npm', '@anthropic-ai/sdk', '0.124.0', '0.129'], ['pypi', 'openai', '2.20', '4'], ['npm', 'openai', '7.12.1', '8']];
+  assert.deepEqual(drift(sample, { 'npm:@anthropic-ai/sdk': '0.128.0', 'pypi:openai': '3.9.1', 'npm:openai': '7.23.0' }), []);
+  assert.deepEqual(drift(sample, { 'npm:@anthropic-ai/sdk': '0.129.0', 'pypi:openai': '4.0.0', 'npm:openai': '8.0.0-beta.1' }), [
+    'npm @anthropic-ai/sdk 0.129.0 is outside >=0.124.0 <0.129', 'pypi openai 4.0.0 is outside >=2.20 <4', 'npm openai 8.0.0-beta.1 is outside >=7.12.1 <8']);
+  // PyPI versions follow PEP 440, not semver: any release length, post and local labels are in range like the Python gate.
+  const pypi = [['pypi', 'google-genai', '2.18', '3'], ['pypi', 'litellm', '1.95', '2'], ['pypi', 'llama-index-core', '0.14.5', '0.15'], ['pypi', 'mcp', '2.0', '3']];
+  assert.deepEqual(drift(pypi, { 'pypi:google-genai': '2.21', 'pypi:litellm': '1.95.3.post1', 'pypi:llama-index-core': '0.14.5.1', 'pypi:mcp': '2.0+local.1' }), []);
+  assert.deepEqual(drift(pypi, { 'pypi:google-genai': '3.0', 'pypi:litellm': '2.0.0rc1', 'pypi:llama-index-core': '0.14.4.9', 'pypi:mcp': '1!2.1' }).length, 4);
+  assert.deepEqual(drift(pypi.slice(1, 2), { 'pypi:litellm': '1.96.0.dev1' }).length, 1, 'a dev release is outside');
 });

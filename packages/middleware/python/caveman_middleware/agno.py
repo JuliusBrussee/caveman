@@ -132,7 +132,7 @@ class _Frame:
 class _Connection:
     def __init__(self, runtime, scope, accept_framework_version=False):
         self.sync, self.async_runtime = ensure_sync(runtime), ensure_async(runtime)
-        self.scope, self.recovery_tool = scope, None
+        self.scope, self.recovery_tool, self.agent = scope, None, False  # agent: made by with_caveman_agent
         self.active = contextvars.ContextVar("caveman_agno_run", default=None)
         self.version_supported = family_gate(self.sync, "agno", ADAPTER.id, accept_framework_version)
 
@@ -510,6 +510,8 @@ class CavemanModel(Model):
 
 def with_caveman_model(model: Model, *, runtime, scope, accept_framework_version=False):
     """Record-only: no recovery executor, so compress mode reports ``recovery_unbound``."""
+    if isinstance(model, CavemanModel):  # already wrapped: one Caveman layer, unchanged
+        return model
     return CavemanModel(model, runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
 
 
@@ -527,7 +529,12 @@ def with_caveman_agent(options: dict, *, runtime, scope, accept_framework_versio
     invocation signature. Reasoning/output/parser/fallback models, when supplied,
     use the same connection but require recovery in their own actual tool list.
     """
+    if isinstance(options.get("model"), CavemanModel):
+        if options["model"].connection.agent:  # options this function already returned: unchanged
+            return options
+        options = {**options, "model": options["model"].model}  # a with_caveman_model layer is replaced, not nested
     connection = _Connection(runtime, scope, accept_framework_version)
+    connection.agent = True
     if connection.sync.mode == "off" or not connection.version_supported:
         result = dict(options)
         for name in ("model", "reasoning_model", "parser_model", "output_model", "followup_model"):

@@ -46,6 +46,11 @@ def driver(family, target):
     return register
 
 
+def again(wrap, twice):
+    """``twice=True`` wraps with the entry point a second time, as a host that wraps defensively would."""
+    return (lambda target, **options: wrap(wrap(target, **options), **options)) if twice else wrap
+
+
 def untouched(value):
     snapshot = copy.deepcopy(value)
     return lambda: value == snapshot
@@ -55,7 +60,7 @@ def untouched(value):
 
 
 @driver("langchain", "caveman_middleware.langchain:_message_view")
-def drive_langchain(runtime, scope, **options):
+def drive_langchain(runtime, scope, twice=False, **options):
     from langchain.agents.middleware.types import ModelRequest, ModelResponse
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -64,7 +69,7 @@ def drive_langchain(runtime, scope, **options):
     history = [HumanMessage("summarize"), AIMessage("", tool_calls=[{"id": "call-1", "name": "read_log", "args": {}}]),
                ToolMessage(ORIGINAL, tool_call_id="call-1", name="read_log")]
     same = untouched(history)
-    agent = with_caveman_agent({"tools": []}, runtime=runtime, scope=scope, **options)
+    agent = again(with_caveman_agent, twice)({"tools": []}, runtime=runtime, scope=scope, **options)
     request = ModelRequest(model=FakeListChatModel(responses=["unused"]), messages=history, tools=agent["tools"])
     seen = []
     agent["middleware"][0].wrap_model_call(request, lambda projected: seen.append(projected.messages[-1].content) or ModelResponse(result=[AIMessage("done")]))
@@ -80,9 +85,9 @@ def _openai_http():
 
 
 @driver("openai", "caveman_middleware._native:leaves")
-def drive_openai(runtime, scope, **options):
+def drive_openai(runtime, scope, twice=False, **options):
     from openai import OpenAI
-    from caveman_middleware.openai import with_caveman_openai_tools
+    from caveman_middleware.openai import with_caveman_openai, with_caveman_openai_tools
 
     http, received = _openai_http(), []
 
@@ -97,7 +102,8 @@ def drive_openai(runtime, scope, **options):
     same = untouched(messages)
     tools = [{"type": "function", "function": {"name": "read_log", "description": "Read", "parameters": {"type": "object", "properties": {}}}}]
     with OpenAI(api_key="test", http_client=http.Client(transport=http.MockTransport(provider))) as client:
-        loop = with_caveman_openai_tools(client, runtime=runtime, scope=scope, protocol="openai-chat", tools=tools,
+        base = with_caveman_openai(client, runtime=runtime, scope=scope, **options) if twice else client
+        loop = with_caveman_openai_tools(base, runtime=runtime, scope=scope, protocol="openai-chat", tools=tools,
                                          functions={"read_log": lambda _: ORIGINAL}, **options)
         loop.client.chat.completions.create(model="m", tools=loop.tools, messages=messages)
     assert same()
@@ -105,7 +111,7 @@ def drive_openai(runtime, scope, **options):
 
 
 @driver("anthropic", "caveman_middleware._native:leaves")
-def drive_anthropic(runtime, scope, **options):
+def drive_anthropic(runtime, scope, twice=False, **options):
     from anthropic import Anthropic, DefaultHttpxClient
     from anthropic.lib.tools import beta_tool
     from caveman_middleware._httpx2 import sdk_flavour
@@ -130,7 +136,7 @@ def drive_anthropic(runtime, scope, **options):
                 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": ORIGINAL}]}]
     same = untouched(messages)
     with Anthropic(api_key="test", http_client=http.Client(transport=http.MockTransport(provider))) as client:
-        wrapped = with_caveman_anthropic(client, runtime=runtime, scope=scope, **options)
+        wrapped = again(with_caveman_anthropic, twice)(client, runtime=runtime, scope=scope, **options)
         runner = wrapped.beta.messages.tool_runner(model="m", max_tokens=16, messages=messages, tools=[read_log])
         runner.until_done()
     assert same()
@@ -269,10 +275,10 @@ def drive_google(runtime, scope, **options):
 
 
 @driver("strands", "caveman_middleware.strands:manifest")
-def drive_strands(runtime, scope, **options):
+def drive_strands(runtime, scope, model_first=False, **options):
     from strands import Agent
     from strands.models.model import Model
-    from caveman_middleware.strands import with_caveman_agent
+    from caveman_middleware.strands import with_caveman_agent, with_caveman_model
 
     received = []
 
@@ -295,7 +301,8 @@ def drive_strands(runtime, scope, **options):
                 {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "read_log", "input": {}}}]},
                 {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "status": "success", "content": [{"text": ORIGINAL}]}}]}]
     same = untouched(messages)
-    agent_options = with_caveman_agent({"model": Provider(), "tools": []}, runtime=runtime, scope=scope, **options)
+    model = with_caveman_model(Provider(), runtime=runtime, scope=scope, **options) if model_first else Provider()
+    agent_options = with_caveman_agent({"model": model, "tools": []}, runtime=runtime, scope=scope, **options)
     agent = Agent(**agent_options, callback_handler=None)  # the plugin attests registration in this agent's tool registry
     specs = [tool.tool_spec for tool in agent_options.get("tools", [])]
 
@@ -310,11 +317,11 @@ def drive_strands(runtime, scope, **options):
 
 
 @driver("agno", "caveman_middleware.agno:manifest")
-def drive_agno(runtime, scope, **options):
+def drive_agno(runtime, scope, model_first=False, **options):
     from agno.models.base import Model
     from agno.models.message import Message
     from agno.models.response import ModelResponse
-    from caveman_middleware.agno import with_caveman_agent
+    from caveman_middleware.agno import with_caveman_agent, with_caveman_model
 
     received = []
 
@@ -343,7 +350,9 @@ def drive_agno(runtime, scope, **options):
                Message(role="assistant", tool_calls=[{"id": "call-1", "type": "function", "function": {"name": "read_log", "arguments": "{}"}}]),
                Message(role="tool", tool_call_id="call-1", tool_name="read_log", content=ORIGINAL)]
     same = untouched(history)
-    agent = with_caveman_agent({"model": Provider(id="fake"), "tools": []}, runtime=runtime, scope=scope, **options)
+    model = Provider(id="fake")
+    model = with_caveman_model(model, runtime=runtime, scope=scope, **options) if model_first else model
+    agent = with_caveman_agent({"model": model, "tools": []}, runtime=runtime, scope=scope, **options)
     model, tools = agent["model"], agent.get("tools") or []
     # Agno's Model.response() opens this per-run frame with the run's tools; drive one provider call inside it.
     token = model.connection.active.set(model._frame("response", (), {"messages": history, "tools": tools}))
@@ -356,7 +365,7 @@ def drive_agno(runtime, scope, **options):
 
 
 @driver("crewai", "caveman_middleware.crewai:manifest")
-def drive_crewai(runtime, scope, **options):
+def drive_crewai(runtime, scope, model_first=False, **options):
     from types import SimpleNamespace
     from crewai import BaseLLM
     from crewai.tools import BaseTool
@@ -384,7 +393,9 @@ def drive_crewai(runtime, scope, **options):
                 {"role": "assistant", "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "read_log", "arguments": "{}"}}]},
                 {"role": "tool", "tool_call_id": "call-1", "name": "read_log", "content": ORIGINAL}]
     same = untouched(messages)
-    agent = adapter.with_caveman_agent({"llm": Provider(model="fake"), "tools": [ReadLog()]}, runtime=runtime, scope=scope, **options)
+    llm = Provider(model="fake")
+    llm = adapter.with_caveman_llm(llm, runtime=runtime, scope=scope, **options) if model_first else llm
+    agent = adapter.with_caveman_agent({"llm": llm, "tools": [ReadLog()]}, runtime=runtime, scope=scope, **options)
     model, executor = agent["llm"], Executor()
     executor.llm, executor.messages, executor.task, executor.agent, executor.original_tools = model, messages, None, None, agent["tools"]
     adapter._before_model_call(SimpleNamespace(llm=model, executor=executor))
@@ -429,11 +440,11 @@ def drive_pydantic_ai(runtime, scope, **options):
 
 
 @driver("autogen", "caveman_middleware.autogen:manifest")
-def drive_autogen(runtime, scope, **options):
+def drive_autogen(runtime, scope, model_first=False, **options):
     from autogen_core import FunctionCall
     from autogen_core.models import AssistantMessage, FunctionExecutionResult, FunctionExecutionResultMessage, UserMessage
     from autogen_ext.models.replay import ReplayChatCompletionClient
-    from caveman_middleware.autogen import with_caveman_agent
+    from caveman_middleware.autogen import with_caveman_agent, with_caveman_model
 
     received = []
     provider = ReplayChatCompletionClient(["done"])
@@ -453,7 +464,8 @@ def drive_autogen(runtime, scope, **options):
                AssistantMessage(content=[FunctionCall(id="call-1", name="read_log", arguments="{}")], source="assistant"),
                FunctionExecutionResultMessage(content=[FunctionExecutionResult(call_id="call-1", name="read_log", content=ORIGINAL)])]
     same = untouched(history)
-    agent = with_caveman_agent({"model_client": provider, "tools": [read_log]}, runtime=runtime, scope=scope, **options)
+    client = with_caveman_model(provider, runtime=runtime, scope=scope, **options) if model_first else provider
+    agent = with_caveman_agent({"model_client": client, "tools": [read_log]}, runtime=runtime, scope=scope, **options)
 
     async def drive():
         workbench = agent.get("workbench")
@@ -545,6 +557,22 @@ def test_projection_applied_and_caller_input_untouched(family, session, view, pr
     hashed = normalize_scope_token(session)
     assert hashed.startswith("h-") and {request["scope"]["session_id"] for request in protocol_runtime.requests} == {hashed}
     assert all(receipt["scope"]["session_id"] == hashed for receipt in protocol_runtime.receipts)
+
+
+@pytest.mark.parametrize("family", ["openai", "anthropic", "langchain"])
+def test_wrapping_twice_runs_one_caveman_layer(family, protocol_runtime):
+    """A second wrap neither stacks middleware nor turns compression off with a false recovery_name_conflict."""
+    from caveman_cloud.middleware import Scope
+    assert _drive(family, protocol_runtime, Scope("tests", "one"), twice=True).startswith(MARKER)
+    assert [event.status for event in protocol_runtime.reports] == ["applied"], _reasons(protocol_runtime)
+
+
+@pytest.mark.parametrize("family", ["strands", "agno", "crewai", "autogen"])
+def test_agent_over_a_model_wrapper_still_binds_recovery(family, protocol_runtime):
+    """with_caveman_agent({"model": with_caveman_model(m)}) replaces the record-only layer: recovery binds and it compresses."""
+    from caveman_cloud.middleware import Scope
+    assert _drive(family, protocol_runtime, Scope("tests", "one"), model_first=True).startswith(MARKER)
+    assert [event.status for event in protocol_runtime.reports] == ["applied"], _reasons(protocol_runtime)
 
 
 @pytest.mark.parametrize("family", sorted(DRIVERS))

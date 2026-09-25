@@ -13,6 +13,11 @@ or pass `--pre`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-ve
   404/410/503) returns `{"error": code}` through each framework's tool-error
   result and warns once. The run carries on, and cancellation still
   propagates.
+- Recovery arguments that are not an object with a string `handle` (`None`,
+  a list) return `{"error": "invalid_request"}` in the OpenAI, Anthropic and
+  MCP adapters.
+- Wrapping a client, agent or model twice runs one Caveman layer instead of
+  stacking middleware and turning compression off.
 - A wrapped `AnthropicBedrock` client keeps `aws_profile`, so calls are signed
   with the caller's AWS identity.
 - LiteLLM registers one process-wide callback however many instances are

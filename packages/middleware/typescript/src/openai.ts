@@ -1,17 +1,17 @@
 import type OpenAI from 'openai';
-import { MiddlewareRuntime, recoveryInputSchema, recoveryToolDescription, warnOnce, type RetrieveArgs, type Scope } from '@caveman-ai/sdk/middleware';
+import { MiddlewareRuntime, recoveryInputSchema, recoveryToolDescription, warnOnce, type Scope } from '@caveman-ai/sdk/middleware';
 import { bindRecovery, hintRecovery, nameConflict, plain, recoveryResult, resolveScope, type BudgetOptions, type ScopeSource } from './common.js';
 import { frameworkGate, type GateOptions } from './compatibility.js';
 import { guardSync } from './guard.js';
 import { clientVersion } from './versions.js';
-import { createCavemanFetch, withNativeRecovery, type FetchOptions, type RecoveryContext } from './transport.js';
+import { clientFetch, createCavemanFetch, withNativeRecovery, type FetchOptions, type RecoveryContext } from './transport.js';
 
 export interface OpenAIOptions extends GateOptions, BudgetOptions, Pick<FetchOptions, 'wireBytes' | 'allowStoredResponses'> {
   runtime:MiddlewareRuntime;
   /** A scope, or a function called per request so one shared client can serve many users. */
   scope:ScopeSource;
-  /** Pass the same fetch function used to construct the original client. */
-  fetch:typeof globalThis.fetch;
+  /** The fetch function used to construct the original client. Default: the client's own. */
+  fetch?:typeof globalThis.fetch;
   cavemanProxy?:boolean;
 }
 
@@ -32,6 +32,8 @@ export function withCavemanOpenAITools<T extends OpenAI>(client:T,options:OpenAI
 export function withCavemanOpenAITools<T extends OpenAI>(client:T,options:OpenAIOptions & {protocol:'openai-responses';tools:ResponseFunction[];functions:Functions}):OpenAIToolLoop<T,ResponseFunction>;
 /** Native application-owned Chat/Responses calls, with no added scheduler. The OpenAI entry point that compresses. */
 export function withCavemanOpenAITools<T extends OpenAI>(client:T,options:OpenAIOptions & {protocol:'openai-chat'|'openai-responses';tools:(ChatFunction|ResponseFunction)[];functions:Functions}):OpenAIToolLoop<T,ChatFunction|ResponseFunction>{
+  // An already-wrapped client is rewrapped from its native source, so exactly one Caveman layer runs.
+  client=(sources.get(client) as T|undefined)??client;
   const definitions=structuredClone(options.tools);
   let functions=Object.freeze({...options.functions});
   const blocked=gate(client,options);
@@ -46,7 +48,7 @@ export function withCavemanOpenAITools<T extends OpenAI>(client:T,options:OpenAI
       const schema={name:'caveman_retrieve',description:recoveryToolDescription,parameters:structuredClone(recoveryInputSchema)};
       const definition=options.protocol==='openai-chat'?{type:'function' as const,function:schema}:{type:'function' as const,...schema,strict:false};
       definitions.push(definition);
-      const execute=(input:unknown)=>recoveryResult(ID,undefined,()=>options.runtime.retrieve(resolveScope(options.scope,undefined) as Scope,input as RetrieveArgs));
+      const execute=(input:unknown)=>recoveryResult(ID,undefined,input,args=>options.runtime.retrieve(resolveScope(options.scope,undefined) as Scope,args));
       functions=Object.freeze({...functions,caveman_retrieve:execute});
       const overhead=JSON.stringify(definition);
       // Per request, so a scope function resolves in each caller's own context.
@@ -63,14 +65,19 @@ export function withCavemanOpenAITools<T extends OpenAI>(client:T,options:OpenAI
 /** A native withOptions clone; APIPromise, parsers, streams and runners survive. `chat.completions.runTools`
  * compresses; plain `create` calls cannot bind the recovery tool and report `recovery_unbound` (hinted once, on use). */
 export function withCavemanOpenAI<T extends OpenAI>(client:T,options:OpenAIOptions):T{
-  return wrapOpenAI(client,options,gate(client,options));
+  return sources.has(client)?client:wrapOpenAI(client,options,gate(client,options));
 }
+
+/** Every client wrapOpenAI returned, mapped to the native client it wraps. Wrapping one again returns it unchanged. */
+const sources=new WeakMap<OpenAI,OpenAI>();
 
 interface Tools { context:(()=>RecoveryContext|null)|undefined; conflict:boolean; protocol:'openai-chat'|'openai-responses' }
 function wrapOpenAI<T extends OpenAI>(client:T,options:OpenAIOptions,blocked:string|null,tools?:Tools):T{
+  if(!options.fetch)options={...options,fetch:clientFetch(client)};
   const fetch=createCavemanFetch({...options,provider:'openai',providerBaseURL:client.baseURL,frameworkVersion:clientVersion(client)??'unknown',...(blocked?{passiveReason:blocked}:{}),
     ...(tools?{}:{onUnbound:()=>hintRecovery(options.runtime,ID,'withCavemanOpenAI create()','chat.completions.runTools or withCavemanOpenAITools')})});
   const native=client.withOptions({fetch});
+  sources.set(native,client);
   if(blocked||options.runtime.mode==='off')return native;
   guardSync(options.runtime,ID,()=>{
     const run=native.chat.completions.runTools.bind(native.chat.completions);
@@ -83,7 +90,7 @@ function wrapOpenAI<T extends OpenAI>(client:T,options:OpenAIOptions,blocked:str
         if(names.includes('caveman_retrieve'))return withNativeRecovery({runtime:options.runtime,reason:nameConflict(options.runtime,ID),logicalCallId,owner:fetch},()=>run(body as never,requestOptions as never));
         const binding=names.some(name=>typeof name!=='string'||!name)||new Set(names).size!==names.length?null:bindRecovery(options.runtime,resolveScope(options.scope,undefined));
         if(!binding)return run(body as never,requestOptions as never);
-        const execute=(input:Parameters<typeof binding.execute>[0],runner:{controller:AbortController})=>recoveryResult(ID,runner.controller.signal,()=>binding.execute(input,{signal:runner.controller.signal}));
+        const execute=(input:unknown,runner:{controller:AbortController})=>recoveryResult(ID,runner.controller.signal,input,args=>binding.execute(args,{signal:runner.controller.signal}));
         const recovery=Object.freeze({type:'function' as const,function:Object.freeze({name:binding.name,description:binding.description,parameters:binding.inputSchema,parse:JSON.parse,function:execute})});
         const params={...body,tools:[...bodyTools,recovery]};
         const overhead=JSON.stringify({type:'function',function:{name:binding.name,description:binding.description,parameters:binding.inputSchema}});

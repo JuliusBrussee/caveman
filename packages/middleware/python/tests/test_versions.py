@@ -82,7 +82,8 @@ def test_gate_policy(monkeypatch, caplog):
     assert _versions.framework_state(("old", "1.4", "2"), ("vendored", "1.4", "2")) == "unsupported"
     assert caplog.text.count("adapter=demo reason=unsupported_version") == 1
     assert "adapter=demo-async reason=unsupported_version" in caplog.text
-    assert "adapter=demo reason=version_unverified" in caplog.text
+    # The reason code and adapter, not the sentence around them: the wording of this warn-once line is the SDK's.
+    assert any("adapter=demo" in line and "reason=version_unverified" in line for line in caplog.text.splitlines())
     assert "adapter=-" not in caplog.text, "every decline names its adapter"
     assert diagnostics == [{"code": "unsupported_version", "cache_continuity": "unavailable"}] * 2
     runtime.close()

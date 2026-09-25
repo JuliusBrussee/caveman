@@ -205,6 +205,8 @@ class _Registration(Plugin):
 
 def with_caveman_model(model, *, runtime, scope, accept_framework_version=False):
     """Record-only: no recovery executor (``recovery_unbound`` in compress mode)."""
+    if isinstance(model, CavemanModel):  # already wrapped: one Caveman layer, unchanged
+        return model
     return CavemanModel(model, runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
 
 
@@ -214,6 +216,10 @@ def with_caveman_agent(options: dict, *, runtime, scope, accept_framework_versio
     Compresses. A host tool already named ``caveman_retrieve`` keeps its name
     and recovery stays off (``recovery_name_conflict``).
     """
+    if isinstance(options.get("model"), CavemanModel):
+        if options["model"].registration is not None:  # options this function already returned: unchanged
+            return options
+        options = {**options, "model": options["model"].model}  # a with_caveman_model layer is replaced, not nested
     model = CavemanModel(options["model"], runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
     if model.runtime.mode == "off" or not model.version_supported:
         return {**options, "model": model}

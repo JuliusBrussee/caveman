@@ -161,7 +161,7 @@ export class CavemanChatModel<Options extends BaseChatModelCallOptions=BaseChatM
 }
 
 export function withCavemanModel<Options extends BaseChatModelCallOptions>(model:BaseChatModel<Options>,options:LangChainOptions):BaseChatModel<Options>{
-  return new CavemanChatModel(model,options);
+  return model instanceof CavemanChatModel?model:new CavemanChatModel(model,options);
 }
 
 export interface LangChainDocumentOptions extends LangChainOptions {

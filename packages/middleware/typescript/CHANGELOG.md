@@ -19,7 +19,8 @@ npm dist-tag, never `latest`. Support policy: [SECURITY.md](../../../SECURITY.md
   - Bundled deploys run with a one-time `version_unverified` notice.
   - Nothing throws at wrap time; strict mode raises from `ready()`.
 - The framework version is read from the application's installed copy.
-  Framework peerDependencies are gone for good.
+  Framework peers are declared optional and unranged (`*`), so Yarn PnP can
+  resolve them without a plain `npm install` failing with ERESOLVE.
 - `require()` works, and TypeScript resolves with node10, node16, nodenext
   and bundler. `./compatibility` exposes a `tier`. Importing under
   `workerd`/`edge-light` throws a clear unsupported-runtime error. `engines` is
@@ -53,7 +54,14 @@ npm dist-tag, never `latest`. Support policy: [SECURITY.md](../../../SECURITY.md
   needs only `@langchain/core`.
 - A `caveman_retrieve` the runtime refuses (an unknown or expired handle, or
   the runtime being down) now returns `{"error":"<code>"}`, or an MCP
-  `isError` result, instead of crashing the native tool loop.
+  `isError` result, instead of crashing the native tool loop. So do
+  arguments that are not an object with a string `handle` (`null`, a list):
+  `{"error":"invalid_request"}`.
+- The `fetch` option of the OpenAI and Anthropic wrappers is optional and
+  defaults to the client's own. Embeddings, files and models calls are no
+  longer reported as skipped.
+- Wrapping a client, agent or model twice runs one Caveman layer instead of
+  turning compression off (or throwing, in LangChain and Strands).
 - The version gate reads the framework copy the adapter actually runs (openai
   and anthropic: the client's own version), whatever the working directory.
   It warns when the app resolves a different copy. `@ai-sdk/provider` is no

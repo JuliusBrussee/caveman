@@ -49,7 +49,8 @@ for (const format of ['esm', 'cjs']) {
     const { stdout } = await promisify(execFile)(process.execPath, [outfile], { cwd: directory, maxBuffer: 16 << 20 });
     const { results, warnings } = JSON.parse(stdout.trim().split('\n').at(-1));
     for (const name of adapters) assert.equal(results[name], true, `${name}: ${results[name]}`);
-    for (const id of adapters) assert.ok(warnings.some(line => line.includes(`adapter=${id} reason=version_unverified`)), warnings.join('\n'));
+    // The reason code and adapter, not the sentence around them: the wording of this warn-once line is the SDK's.
+    for (const id of adapters) assert.ok(warnings.some(line => line.includes(`adapter=${id}`) && line.includes('reason=version_unverified')), warnings.join('\n'));
     assert.ok(!warnings.some(line => /reason=(unsupported_version|version_unavailable)/.test(line)), warnings.join('\n'));
   });
 }

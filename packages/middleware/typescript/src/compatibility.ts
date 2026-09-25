@@ -1,8 +1,8 @@
 import { warnOnce, type MiddlewareRuntime } from '@caveman-ai/sdk/middleware';
 import { inRange, installedFrameworkVersion, warnFrameworkMismatch } from './versions.js';
 
-// No npm peerDependencies (Decision 2): optional peers made `npm install` fail with ERESOLVE. These ranges are the
-// execution gate. `floor` is the pinned merge-gate version; `tested` lists every release the suite has passed.
+// Decision 2: the npm peers are optional and unranged (`*`); ranged ones made `npm install` fail with ERESOLVE. These
+// ranges are the execution gate. `floor` is the pinned merge-gate version; `tested` lists every release the suite has passed.
 const frameworks = {
   ai: { floor: '7.0.94', high: '8', tested: ['7.0.94', '7.0.114'], entry: 'ai' },
   openai: { floor: '7.12.1', high: '8', tested: ['7.12.1', '7.23.0'], entry: 'openai' },

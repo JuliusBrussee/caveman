@@ -21,7 +21,7 @@ except ImportError as error:
     framework_import_failed("openai", error, "Install caveman-middleware[openai] to use the OpenAI adapter")
 
 from caveman_cloud.middleware import MiddlewareError, ensure_async, ensure_sync
-from ._guard import fail_open, recovery, recovery_failed, recovery_name_conflict
+from ._guard import fail_open, recovery, recovery_args, recovery_failed, recovery_name_conflict
 from ._httpx2 import flavour, sdk_flavour
 from ._usage import usage
 from ._native import NativeSession, owner, plain
@@ -48,6 +48,8 @@ def with_caveman_openai(client, *, runtime, scope, transport=None, allow_stored_
     the client's public http_client to observe physical SDK retries. Without
     that explicit seam, receipts describe one native operation.
     """
+    if getattr(client, "_caveman_source", None) is not None:  # already wrapped: one Caveman layer, unchanged
+        return client
     return _wrap(client, runtime=_runtime_for(client, runtime), scope=scope, transport=transport,
                  allow_stored_responses=allow_stored_responses, accept=accept_framework_version, manifest_bytes=manifest_bytes)
 
@@ -84,6 +86,8 @@ def with_caveman_openai_tools(client, *, runtime, scope, protocol, tools, functi
     """
     if protocol not in ("openai-chat", "openai-responses"):
         raise ValueError("Expected openai-chat or openai-responses protocol")
+    # An already-wrapped client is rewrapped from its native source, so exactly one Caveman layer runs.
+    client = getattr(client, "_caveman_source", None) or client
     definitions = copy.deepcopy(list(tools))
     if not plain(functions) or any(type(name) is not str or not callable(fn) for name, fn in functions.items()):
         raise TypeError("functions must map native tool names to callables")
@@ -121,13 +125,13 @@ def _recover(execute, asynchronous):
     if asynchronous:
         async def recover(args=None, **kwargs):
             try:
-                return await execute(args, **kwargs)
+                return await execute(recovery_args(args, kwargs))
             except MiddlewareError as error:
                 return recovery_failed(ADAPTER_ID, error)
     else:
         def recover(args=None, **kwargs):
             try:
-                return execute(args, **kwargs)
+                return execute(recovery_args(args, kwargs))
             except MiddlewareError as error:
                 return recovery_failed(ADAPTER_ID, error)
     return recover
@@ -141,6 +145,7 @@ def _wrap(client, *, runtime, scope, registration=None, transport=None, allow_st
         raise TypeError("Match the sync/async Caveman transport to the native client")
     version_supported = family_gate(runtime, "openai", ADAPTER_ID, accept)
     native = client.with_options()
+    native._caveman_source = client
     post = native.post
     sessions = {}
     for path, protocol in (("/chat/completions", "openai-chat"), ("/responses", "openai-responses")):
