@@ -70,7 +70,15 @@ function startTelemetryStub({ hang = false } = {}) {
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
   });
-  return { server, posts, close: () => { for (const socket of sockets) socket.destroy(); server.close(); } };
+  // Sends come from a detached child after the CLI exits, so assertions wait:
+  // waitForPosts for posts that should arrive, settle before asserting none did.
+  const waitForPosts = async (count, timeoutMs = 5000) => {
+    for (let waited = 0; posts.length < count && waited < timeoutMs; waited += 50) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+  const settle = (ms = 1500) => new Promise((resolve) => setTimeout(resolve, ms));
+  return { server, posts, waitForPosts, settle, close: () => { for (const socket of sockets) socket.destroy(); server.close(); } };
 }
 
 function listen(server) {
@@ -117,6 +125,7 @@ test("non-TTY run does not prompt or post telemetry", async (t) => {
   assert.equal(out.code, 0, out.stderr);
   assert.equal(out.stdout, "hello");
   assert.doesNotMatch(out.stderr, /Help improve Caveman|Send anonymous usage data/);
+  await stub.settle();
   assert.equal(stub.posts.length, 0, "telemetry must stay off in non-interactive runs unless env opts in");
 
   stub.close();
@@ -166,15 +175,16 @@ test("interactive first command persists default-on with disclosure and a stable
     t.skip("script(1) pty unavailable in this environment");
     return;
   }
-  assert.match(first.output, /anonymous usage stats on/, "first interactive run must print the disclosure");
+  assert.match(first.output, /usage stats on/, "first interactive run must print the disclosure");
   const cfg = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
   assert.equal(cfg.telemetry?.enabled, true);
   assert.match(cfg.telemetry?.anonymousId ?? "", uuidRe, "persisted decision must carry a stable anonymous id");
 
   const second = await runCliPty(["tools", "config", "get"], env);
   assert.ok(second && second.code === 0, "second run failed");
-  assert.doesNotMatch(second.output, /anonymous usage stats on/, "disclosure prints once, not per run");
+  assert.doesNotMatch(second.output, /usage stats on/, "disclosure prints once, not per run");
 
+  await stub.waitForPosts(2);
   const ids = new Set(stub.posts.map((p) => JSON.parse(p.body)[0]?.anonymous_id));
   assert.ok(stub.posts.length >= 2, `expected posts from both runs, got ${stub.posts.length}`);
   assert.equal(ids.size, 1, `all events must carry the persisted id, saw ${[...ids].join(", ")}`);
@@ -191,7 +201,7 @@ test("non-TTY run never persists the default-on telemetry decision", async (t) =
 
   const out = await runCli(["compress"], { ...env, CAVEMAN_ENGINE_BIN: join(tmpdir(), "missing-caveman-engine") }, { input: "hello" });
   assert.equal(out.code, 0, out.stderr);
-  assert.doesNotMatch(out.stderr, /anonymous usage stats on/, "disclosure line is TTY-only");
+  assert.doesNotMatch(out.stderr, /usage stats on/, "disclosure line is TTY-only");
   let persisted = {};
   try {
     persisted = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
@@ -199,6 +209,7 @@ test("non-TTY run never persists the default-on telemetry decision", async (t) =
     // no config written at all is the expected outcome
   }
   assert.ok(!("telemetry" in persisted), "automation must never mint a default-on decision or anonymous id");
+  await stub.settle();
   assert.equal(stub.posts.length, 0);
 
   stub.close();
@@ -220,6 +231,7 @@ test("persisted v1 opt-out survives the default-on era", async (t) => {
   assert.equal(status.state, "off", "an old explicit No must never be flipped by the new default");
   const cfg = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
   assert.deepEqual(cfg.telemetry, optOut, "the v1 decision must not be rewritten");
+  await stub.settle();
   assert.equal(stub.posts.length, 0);
 
   stub.close();
@@ -250,6 +262,7 @@ test("DO_NOT_TRACK=1 overrides CAVEMAN_TELEMETRY=1", async (t) => {
 
   const out = await runCli(["version"], env);
   assert.equal(out.code, 0, out.stderr);
+  await stub.settle();
   assert.equal(stub.posts.length, 0, "DO_NOT_TRACK must suppress env opt-in telemetry");
 
   stub.close();
@@ -266,6 +279,8 @@ test("CAVEMAN_TELEMETRY=1 emits one allowlisted command_run event", async (t) =>
 
   const out = await runCli(["version", "leaky-argv-sentinel", "/tmp/secret-path"], env);
   assert.equal(out.code, 0, out.stderr);
+  await stub.waitForPosts(1);
+  await stub.settle(500);
   assert.equal(stub.posts.length, 1, "exactly one telemetry POST");
   assert.doesNotMatch(stub.posts[0].body, /leaky-argv-sentinel|secret-path/, "payload must not contain raw argv strings");
   const events = JSON.parse(stub.posts[0].body);
@@ -311,6 +326,7 @@ test("agent spawn failure books error_class exec_failed", async (t) => {
   const out = await runCli(["wrap", "codex"], env, { timeoutMs: 30000 });
   assert.notEqual(out.code, 0, "wrap must exit non-zero when the agent cannot launch");
   assert.match(out.stderr, /failed to exec .*codex/);
+  await stub.waitForPosts(1);
   const events = stub.posts.flatMap((post) => JSON.parse(post.body));
   const run = events.find((event) => event.event === "command_run");
   assert.ok(run, `no command_run event posted; events: ${JSON.stringify(events)}`);
@@ -321,7 +337,9 @@ test("agent spawn failure books error_class exec_failed", async (t) => {
   stub.close();
 });
 
-test("telemetry POST timeout does not hold the CLI past roughly two seconds", async (t) => {
+// The send happens in a detached child, so a hung endpoint costs the CLI
+// nothing (the old in-process send waited out its 1.5s timeout).
+test("a hung telemetry endpoint does not hold the CLI's exit", async (t) => {
   const stub = startTelemetryStub({ hang: true });
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
@@ -332,7 +350,8 @@ test("telemetry POST timeout does not hold the CLI past roughly two seconds", as
 
   const out = await runCli(["version"], env, { timeoutMs: 5000 });
   assert.equal(out.code, 0, out.stderr);
-  assert.ok(out.elapsedMs < 2500, `CLI should exit after AbortSignal timeout, elapsed=${out.elapsedMs}ms`);
+  assert.ok(out.elapsedMs < 1200, `a hung endpoint must not hold the CLI, elapsed=${out.elapsedMs}ms`);
+  await stub.waitForPosts(1);
   assert.equal(stub.posts.length, 1, "the hung endpoint should still receive the attempted POST");
 
   stub.close();
@@ -358,8 +377,9 @@ test("an interactive stale-version opt-out stays byte-identical and silent", asy
     t.skip("script(1) pty unavailable in this environment");
     return;
   }
-  assert.doesNotMatch(out.output, /anonymous usage stats on/, "an opt-out must never be re-disclosed");
+  assert.doesNotMatch(out.output, /usage stats on/, "an opt-out must never be re-disclosed");
   assert.equal(readFileSync(join(configDir, "config.json"), "utf8"), raw, "an opt-out config must stay byte-identical");
+  await stub.settle();
   assert.equal(stub.posts.length, 0, "an opt-out must never send");
 
   stub.close();
@@ -396,6 +416,7 @@ test("command_run carries the proxy token delta, then stops repeating it", async
   // predates this disclosure and must never be reported retroactively.
   const first = await runCli(["version"], env);
   assert.equal(first.code, 0, first.stderr);
+  await stub.waitForPosts(1);
   const firstEvent = JSON.parse(stub.posts[0].body)[0];
   assert.ok(!("tokens_processed" in firstEvent), "pre-existing history must not be swept up by the first event");
   const watermark = JSON.parse(readFileSync(join(iso.home, ".caveman-cloud", "config.json"), "utf8")).telemetryTokens;
@@ -406,6 +427,7 @@ test("command_run carries the proxy token delta, then stops repeating it", async
   // rather than reporting a zero.
   const second = await runCli(["version"], env);
   assert.equal(second.code, 0, second.stderr);
+  await stub.waitForPosts(2);
   const secondEvent = JSON.parse(stub.posts[1].body)[0];
   assert.ok(!("tokens_processed" in secondEvent), "an unchanged store must not resend the same tokens");
   assert.ok(!("tokens_saved" in secondEvent));
@@ -415,6 +437,7 @@ test("command_run carries the proxy token delta, then stops repeating it", async
   const grown = stubProxyStats(iso, { tokensIn: 200000, tokensSaved: 45000 });
   const third = await runCli(["version"], grown);
   assert.equal(third.code, 0, third.stderr);
+  await stub.waitForPosts(3);
   const thirdEvent = JSON.parse(stub.posts[2].body)[0];
   assert.equal(thirdEvent.tokens_processed, 15680);
   assert.equal(thirdEvent.tokens_saved, 3800);
@@ -443,6 +466,13 @@ test("telemetry off drops the token watermark so re-enabling re-seeds", async (t
 
   const off = await runCli(["telemetry", "off"], iso.env);
   assert.equal(off.code, 0, off.stderr);
+  // The id leaves the config here; it is the only key to a deletion request.
+  const offOut = JSON.parse(off.stdout);
+  assert.equal(offOut.anonymous_id, "none");
+  assert.equal(offOut.discarded_anonymous_id, "123e4567-e89b-12d3-a456-426614174000");
+  assert.match(offOut.delete_sent_data, /SECURITY\.md#delete-sent-telemetry$/);
+  const again = JSON.parse((await runCli(["telemetry", "off"], iso.env)).stdout);
+  assert.equal("discarded_anonymous_id" in again, false, "an id already discarded is not reprinted");
   const afterOff = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
   assert.ok(!("telemetryTokens" in afterOff), "the watermark must not outlive the opt-out");
 
@@ -451,6 +481,7 @@ test("telemetry off drops the token watermark so re-enabling re-seeds", async (t
   const env = stubProxyStats(iso, { tokensIn: 900000, tokensSaved: 300000 });
   const back = await runCli(["version"], { ...env, CAVEMAN_TELEMETRY: "1" });
   assert.equal(back.code, 0, back.stderr);
+  await stub.waitForPosts(1);
   const events = stub.posts.flatMap((p) => JSON.parse(p.body));
   assert.ok(events.length > 0, "the run must still send its command_run event");
   for (const event of events) {
@@ -500,6 +531,7 @@ test("a log line on the proxy's stdout does not break or poison the token read",
 
   const out = await runCli(["version"], { ...iso.env, CAVEMAN_PROXY_BIN: bin });
   assert.equal(out.code, 0, out.stderr);
+  await stub.waitForPosts(1);
   const event = JSON.parse(stub.posts[0].body)[0];
   assert.equal(event.tokens_processed, 1000, "the payload must still be found behind the log line");
   assert.equal(event.tokens_saved, 200);
@@ -530,6 +562,7 @@ test("a rewound proxy store re-baselines instead of replaying or going negative"
 
   const out = await runCli(["version"], env);
   assert.equal(out.code, 0, out.stderr);
+  await stub.waitForPosts(1);
   const event = JSON.parse(stub.posts[0].body)[0];
   assert.ok(!("tokens_processed" in event), "a deleted/restored store must not report its history a second time");
   assert.ok(!("tokens_saved" in event));
@@ -552,6 +585,7 @@ test("a missing proxy binary drops the token fields, not the event", async (t) =
 
   const out = await runCli(["version"], env);
   assert.equal(out.code, 0, out.stderr);
+  await stub.waitForPosts(1);
   assert.equal(stub.posts.length, 1);
   const event = JSON.parse(stub.posts[0].body)[0];
   assert.equal(event.command, "version");
@@ -560,8 +594,8 @@ test("a missing proxy binary drops the token fields, not the event", async (t) =
   stub.close();
 });
 
-// A v3 "yes" was consent for command counts alone. v4 widened the payload with
-// token volume, so the decision stands but the new wording prints once.
+// A v4 "yes" was consent for command counts and token totals. v5 also stores the
+// client IP address, so the decision stands but the new wording prints once.
 test("a stale-version opt-in is re-disclosed once and never re-asked", async (t) => {
   const stub = startTelemetryStub();
   const port = await listenOrSkip(t, stub);
@@ -573,7 +607,7 @@ test("a stale-version opt-in is re-disclosed once and never re-asked", async (t)
     enabled: true,
     anonymousId: "123e4567-e89b-12d3-a456-426614174000",
     decidedAt: "2026-07-03T00:00:00.000Z",
-    promptVersion: 3,
+    promptVersion: 4,
   };
   writeFileSync(join(configDir, "config.json"), JSON.stringify({ telemetry: optIn }));
 
@@ -583,18 +617,168 @@ test("a stale-version opt-in is re-disclosed once and never re-asked", async (t)
     t.skip("script(1) pty unavailable in this environment");
     return;
   }
-  assert.match(first.output, /token totals/, "the widened scope must be disclosed");
+  assert.match(first.output, /IP address/, "the widened scope must be disclosed");
   assert.doesNotMatch(first.output, /\[y\/N\]/, "an existing decision is never re-asked");
   const cfg = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
-  assert.equal(cfg.telemetry.promptVersion, 4);
+  assert.equal(cfg.telemetry.promptVersion, 5);
   assert.equal(cfg.telemetry.anonymousId, optIn.anonymousId, "re-disclosure must not rotate the id");
   assert.equal(cfg.telemetry.decidedAt, optIn.decidedAt, "the original decision date stands");
 
   const second = await runCliPty(["tools", "config", "get"], env);
   assert.ok(second && second.code === 0, "second run failed");
-  assert.doesNotMatch(second.output, /anonymous usage stats on/, "re-disclosure prints once, not per run");
+  assert.doesNotMatch(second.output, /usage stats on/, "re-disclosure prints once, not per run");
 
   stub.close();
+});
+
+// `telemetry …` and help-like commands skip the re-disclosure, so they must not
+// send either — otherwise a stale-version yes ships the widened scope unseen.
+test("a stale-version opt-in sends nothing from a command that skips the re-disclosure", async (t) => {
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const { env, home } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
+  const configDir = join(home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+    telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-07-03T00:00:00.000Z", promptVersion: 4 },
+  }));
+
+  const out = await runCliPty(["telemetry", "status"], env);
+  if (out === null || out.code !== 0) {
+    stub.close();
+    t.skip("script(1) pty unavailable in this environment");
+    return;
+  }
+  const cfg = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  assert.equal(cfg.telemetry.promptVersion, 4, "status must not claim the new wording was shown");
+  await stub.settle();
+  assert.equal(stub.posts.length, 0, "nothing sends before the current disclosure has printed");
+
+  stub.close();
+});
+
+// Resolves when the hook's stdout closes — what a real host waits on.
+function runNativeSessionStart(env, payload) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const child = spawn("node", [cli, "native-hook", "claude"], { env, stdio: ["pipe", "pipe", "ignore"] });
+    child.stdout.resume();
+    child.stdout.on("close", () => resolve({ closedMs: Date.now() - started }));
+    child.on("error", reject);
+    child.stdin.end(JSON.stringify({ hook_event_name: "SessionStart", session_id: "telemetry-session", ...payload }));
+  });
+}
+
+async function waitForPosts(stub, predicate) {
+  let events = [];
+  for (let i = 0; i < 50 && !predicate(events); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    events = stub.posts.flatMap((p) => JSON.parse(p.body));
+  }
+  return events;
+}
+
+function nativeSessionEnv(port, telemetry, extra = {}) {
+  const iso = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`, ...extra });
+  mkdirSync(join(iso.home, ".caveman-cloud"), { recursive: true });
+  const config = { wrap: { proxy: false } };
+  if (telemetry) config.telemetry = telemetry;
+  writeFileSync(join(iso.home, ".caveman-cloud", "config.json"), JSON.stringify(config));
+  return iso.env;
+}
+
+// Native installs launch the agent directly and never run the CLI again, so the
+// SessionStart hook is the only place those users show up. The send happens in
+// a detached child, so the hook itself returns without waiting on the network.
+test("a native session start sends session_start in the background for a persisted opt-in", async (t) => {
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const anonymousId = "123e4567-e89b-12d3-a456-426614174000";
+  const env = nativeSessionEnv(port, { enabled: true, anonymousId, decidedAt: "2026-09-24T00:00:00.000Z", promptVersion: 5 });
+
+  await runNativeSessionStart(env, { source: "startup" });
+  // A repeat for the same host session (resume, re-asking plugin) is not a new session.
+  await runNativeSessionStart(env, { source: "resume" });
+  const events = await waitForPosts(stub, (seen) => seen.some((e) => e.event === "session_start"));
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  assert.equal(stub.posts.flatMap((p) => JSON.parse(p.body)).filter((e) => e.event === "session_start").length, 1, "one event per host session");
+  const session = events.find((e) => e.event === "session_start");
+  assert.ok(session, `expected a session_start post, got ${JSON.stringify(events)}`);
+  assert.equal(session.agent, "claude");
+  assert.equal(session.session_source, "startup");
+  assert.equal(session.anonymous_id, anonymousId);
+  assert.equal(session.account, "none");
+  assert.match(session.install_channel, /^(npx|pnpm|bun|npm|source)$/);
+  assert.ok(!("command" in session), "session_start carries no command");
+  assert.ok(!events.some((e) => e.event === "command_run"), "the hook and its sender never emit command_run");
+
+  stub.close();
+});
+
+test("a native session start sends nothing without a current persisted yes, or on compaction", async (t) => {
+  const stub = startTelemetryStub();
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const anonymousId = "123e4567-e89b-12d3-a456-426614174000";
+  const yes = { enabled: true, anonymousId, decidedAt: "2026-09-24T00:00:00.000Z", promptVersion: 5 };
+  const cases = [
+    [undefined, { source: "startup" }, {}],
+    [{ enabled: false, decidedAt: "2026-09-24T00:00:00.000Z", promptVersion: 5 }, { source: "startup" }, {}],
+    [{ ...yes, promptVersion: 4 }, { source: "startup" }, {}],
+    [{ enabled: true, decidedAt: "2026-09-24T00:00:00.000Z", promptVersion: 5 }, { source: "startup" }, {}],
+    [yes, { source: "compact" }, {}],
+    [yes, { source: "startup" }, { DO_NOT_TRACK: "1" }],
+    [yes, { source: "startup" }, { CAVEMAN_TELEMETRY: "0" }],
+    [yes, { source: "startup" }, { CI: "1" }],
+  ];
+  for (const [telemetry, payload, extra] of cases) {
+    await runNativeSessionStart(nativeSessionEnv(port, telemetry, extra), payload);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  assert.equal(stub.posts.length, 0, `expected no posts, got ${stub.posts.map((p) => p.body).join(" ")}`);
+
+  stub.close();
+});
+
+// CAVEMAN_TELEMETRY=1 makes every CLI process sendable; the hook process itself
+// must still never report command_run, or the host waits on that POST.
+test("a native hook never holds the host on a telemetry POST, even with CAVEMAN_TELEMETRY=1", async (t) => {
+  const stub = startTelemetryStub({ hang: true });
+  const port = await listenOrSkip(t, stub);
+  if (port === null) return;
+  const env = nativeSessionEnv(port, { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-09-24T00:00:00.000Z", promptVersion: 5 }, { CAVEMAN_TELEMETRY: "1" });
+
+  const { closedMs } = await runNativeSessionStart(env, { source: "startup", session_id: "env-on" });
+  assert.ok(closedMs < 1200, `hook held the host for ${closedMs}ms`);
+  const events = await waitForPosts(stub, (seen) => seen.some((e) => e.event === "session_start"));
+  assert.ok(events.some((e) => e.event === "session_start"), "the background sender still reports the session");
+  assert.ok(!events.some((e) => e.event === "command_run"), "the hook process reports no command_run");
+
+  stub.close();
+});
+
+// Native hooks run under hosts that often never read the shell rc, so an
+// env-only kill has to become a persisted opt-out the next time a terminal sees it.
+test("an interactive run under DO_NOT_TRACK persists the opt-out", async (t) => {
+  const { env, home } = isolatedEnv({ DO_NOT_TRACK: "1" });
+  const configDir = join(home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+    telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-07-03T00:00:00.000Z", promptVersion: 5 },
+    telemetryTokens: { tokensIn: 10, tokensSaved: 1, at: "2026-07-03T00:00:00.000Z" },
+  }));
+
+  const out = await runCliPty(["tools", "config", "get"], env);
+  if (out === null || out.code !== 0) {
+    t.skip("script(1) pty unavailable in this environment");
+    return;
+  }
+  const cfg = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  assert.equal(cfg.telemetry.enabled, false);
+  assert.ok(!("telemetryTokens" in cfg), "the watermark goes with the decision");
+  assert.match(out.output, /old install id 123e4567-e89b-12d3-a456-426614174000/, "the discarded id is shown for deletion requests");
 });
 
 test("logout preserves telemetry config", async () => {

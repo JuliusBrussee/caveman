@@ -1,14 +1,21 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { GoogleGenAI, Models, Chats, type GoogleGenAIOptions, type GenerateContentParameters, type GenerateContentConfig, type CallableTool, type FunctionCall, type HttpResponse, type Part, type Tool } from '@google/genai';
 import { MiddlewareRuntime, sha256, type RecoveryBinding, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
-import { currentOwner, manifest, observe, plain, withOwner, type Attempt } from './common.js';
+import { MIDDLEWARE_VERSION, bindRecovery, currentOwner, manifest, nameConflict, observe, passiveAttempt, plain, recoveryResult, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
 import { parseWire, patchWire, pathKey, type StringLeaf } from './wire.js';
-import { adapterCompatible, frameworkVersion } from './compatibility.js';
+import { frameworkGate, frameworkVersion, type GateOptions } from './compatibility.js';
+import { guard, guardSync } from './guard.js';
 
-export interface GoogleOptions { runtime: MiddlewareRuntime; scope: Scope }
+export interface GoogleOptions extends GateOptions, BudgetOptions {
+  runtime: MiddlewareRuntime;
+  /** A scope, or a function called per request so one shared client can serve many users. */
+  scope: ScopeSource;
+}
 type NativeClient = ConstructorParameters<typeof Models>[0];
 type NativeRequest = Parameters<NativeClient['request']>[0];
-interface Invocation { binding: RecoveryBinding | null; overhead?: string; logicalCallId: string }
+/** One generateContent call. `scope` is resolved once for it; `reason` makes its requests pass through. */
+interface Invocation { binding: RecoveryBinding | null; overhead?: string; logicalCallId: string; scope: Scope | null; reason?: string }
+const ID = 'google-sdk';
 const invocations = new AsyncLocalStorage<Invocation>();
 
 function permitsRecovery(config?: GenerateContentConfig): boolean {
@@ -32,8 +39,7 @@ function recoveryTool(binding: RecoveryBinding): CallableTool {
     async callTool(calls: FunctionCall[]): Promise<Part[]> {
       const parts: Part[] = [];
       for (const call of calls) if (call.name === binding.name) {
-        const args = call.args;
-        const output = args && typeof args.handle === 'string' ? await binding.execute({ ...args, handle: args.handle }) : { error: 'invalid_recovery_arguments' };
+        const output = await recoveryResult(ID, undefined, call.args, args => binding.execute(args));
         parts.push({ functionResponse: { name: binding.name, ...(call.id ? { id: call.id } : {}), response: { output } } });
       }
       return parts;
@@ -81,14 +87,16 @@ function selected(body: Record<string, unknown>, strings: Map<string, StringLeaf
 
 async function prepare(request: NativeRequest, options: GoogleOptions, defaults?: GoogleGenAIOptions['httpOptions'], passiveReason?: string): Promise<[NativeRequest, Attempt | null]> {
   if (currentOwner() || request.httpMethod !== 'POST' || !/:(?:generateContent|streamGenerateContent)(?:\?|$)/.test(request.path)) return [request, null];
-  const context = invocations.getStore();
-  const attempt: Attempt = { runtime: options.runtime, scope: options.scope, logicalCallId: context?.logicalCallId ?? crypto.randomUUID(), attemptId: crypto.randomUUID(), optimization: null, wireSHA256: null, adapter: 'google-sdk', reason: 'opaque_payload' };
-  if (options.runtime.mode === 'off' || passiveReason) {
-    attempt.passive = true;
-    attempt.reason = options.runtime.mode === 'off' ? 'disabled' : passiveReason ?? 'unsupported_version';
-    return [request, attempt];
-  }
+  const context = invocations.getStore(), logicalCallId = context?.logicalCallId ?? crypto.randomUUID();
+  const scope = options.runtime.mode === 'off' || passiveReason || context?.reason ? null : context ? context.scope : resolveScope(options.scope, undefined);
+  if (!scope) return [request, passiveAttempt(options.runtime, ID, options.runtime.mode === 'off' ? 'disabled' : passiveReason ?? context?.reason ?? 'recovery_unbound', logicalCallId)];
+  const attempt: Attempt = { runtime: options.runtime, scope, logicalCallId, attemptId: crypto.randomUUID(), optimization: null, wireSHA256: null, adapter: ID, reason: 'unsupported_shape' };
   request.abortSignal?.throwIfAborted();
+  return guard(options.runtime, ID, request.abortSignal, () => project(request, options, attempt, context, defaults),
+    () => { Object.assign(attempt, { passive: true, reason: 'adapter_error', optimization: null, wireSHA256: null }); return [request, attempt]; });
+}
+
+async function project(request: NativeRequest, options: GoogleOptions, attempt: Attempt, context: Invocation | undefined, defaults?: GoogleGenAIOptions['httpOptions']): Promise<[NativeRequest, Attempt]> {
   let outgoing = request;
   const headers = new Headers({ ...defaults?.headers, ...request.httpOptions?.headers });
   // Extra bodies are merged later by the native client. Do not optimize a view
@@ -96,35 +104,33 @@ async function prepare(request: NativeRequest, options: GoogleOptions, defaults?
   const protectedBody = defaults?.extraBody || request.httpOptions?.extraBody || ['content-encoding', 'digest', 'content-digest', 'content-md5', 'signature', 'signature-input', 'x-amz-content-sha256', 'dpop'].some(name => headers.has(name));
   if (typeof request.body === 'string' && !protectedBody) {
     const wire = parseWire(request.body);
-    if (wire && plain(wire.value) && wire.value.cachedContent) attempt.reason = 'opaque_history_reference';
+    if (wire && plain(wire.value) && wire.value.cachedContent) attempt.reason = 'unsupported_request'; // history held by the provider
     if (wire && plain(wire.value) && Array.isArray(wire.value.contents) && !wire.value.cachedContent) {
       const { contents, ...envelope } = wire.value;
-      const leaves = selected(wire.value, wire.strings), history = await manifest([envelope, ...contents]);
-      if (history) {
-        const binding = context?.binding && options.runtime.ownsBinding(context.binding, options.scope) && acceptsRecovery(wire.value, context.binding) ? context.binding : null;
-        const optimization = await options.runtime.optimize({ scope: options.scope, adapter: { id: 'google-sdk', version: '0.1.0', framework_version: frameworkVersion('@google/genai') ?? 'unknown', serialization_revision: 'google-genai-native-wire-v1' },
-          model: { provider: 'google', id: request.path.replace(/:(?:generateContent|streamGenerateContent).*$/, ''), protocol: 'google-genai' }, manifest: history,
-          candidates: leaves.map((leaf, i) => ({ id: `leaf-${i}`, sourceId: leaf.path.join('/'), content: leaf.value })), binding,
-          ...(binding ? { recoveryOverheadText: context?.overhead ?? JSON.stringify(schema(binding)) } : {}), logicalCallId: attempt.logicalCallId, attemptId: attempt.attemptId,
-          ...(request.abortSignal ? { signal: request.abortSignal } : {}) });
-        if (options.runtime.mode !== 'compress' && options.runtime.mode !== 'record' ||
-          (binding && (!options.runtime.ownsBinding(binding, options.scope) || !acceptsRecovery(wire.value, binding)))) {
-          attempt.reason = 'recovery_unavailable';
-          return [request, attempt];
-        }
-        attempt.optimization = optimization.replacements.length ? null : optimization;
-        attempt.reason = optimization.replacements.length ? 'invalid_plan' : optimization.reason;
-        const patches = optimization.replacements.map(r => ({ leaf: leaves[Number(r.segment_id.slice(5))]!, replacement: r.text }));
-        if (patches.length && patches.every(p => p.leaf)) {
-          const body = patchWire(request.body, patches);
-          if (body !== null) {
-            outgoing = { ...request, body };
-            attempt.optimization = optimization;
-            if (headers.has('content-length')) {
-              const updatedHeaders = { ...request.httpOptions?.headers };
-              for (const key of Object.keys({ ...defaults?.headers, ...request.httpOptions?.headers })) if (key.toLowerCase() === 'content-length') updatedHeaders[key] = String(new TextEncoder().encode(body).length);
-              outgoing.httpOptions = { ...request.httpOptions, headers: updatedHeaders };
-            }
+      const leaves = selected(wire.value, wire.strings), history = await manifest([envelope, ...contents], options.manifestBytes);
+      const binding = context?.binding && options.runtime.ownsBinding(context.binding, attempt.scope) && acceptsRecovery(wire.value, context.binding) ? context.binding : null;
+      const optimization = await options.runtime.optimize({ scope: attempt.scope, adapter: { id: ID, version: MIDDLEWARE_VERSION, framework_version: frameworkVersion('@google/genai') ?? 'unknown', serialization_revision: 'google-genai-native-wire-v1' },
+        model: { provider: 'google', id: request.path.replace(/:(?:generateContent|streamGenerateContent).*$/, ''), protocol: 'google-genai' }, ...history,
+        candidates: leaves.map((leaf, i) => ({ id: `leaf-${i}`, sourceId: leaf.path.join('/'), content: leaf.value })), binding,
+        ...(binding ? { recoveryOverheadText: context?.overhead ?? JSON.stringify(schema(binding)) } : {}), logicalCallId: attempt.logicalCallId, attemptId: attempt.attemptId,
+        ...(request.abortSignal ? { signal: request.abortSignal } : {}) });
+      if (options.runtime.mode !== 'compress' && options.runtime.mode !== 'record' ||
+        (binding && (!options.runtime.ownsBinding(binding, attempt.scope) || !acceptsRecovery(wire.value, binding)))) {
+        attempt.reason = 'recovery_unavailable';
+        return [request, attempt];
+      }
+      attempt.optimization = optimization.replacements.length ? null : optimization;
+      attempt.reason = optimization.replacements.length ? 'invalid_plan' : optimization.reason;
+      const patches = optimization.replacements.map(r => ({ leaf: leaves[Number(r.segment_id.slice(5))]!, replacement: r.text }));
+      if (patches.length && patches.every(p => p.leaf)) {
+        const body = patchWire(request.body, patches);
+        if (body !== null) {
+          outgoing = { ...request, body };
+          attempt.optimization = optimization;
+          if (headers.has('content-length')) {
+            const updatedHeaders = { ...request.httpOptions?.headers };
+            for (const key of Object.keys({ ...defaults?.headers, ...request.httpOptions?.headers })) if (key.toLowerCase() === 'content-length') updatedHeaders[key] = String(new TextEncoder().encode(body).length);
+            outgoing.httpOptions = { ...request.httpOptions, headers: updatedHeaders };
           }
         }
       }
@@ -191,36 +197,50 @@ async function invocation(params: GenerateContentParameters, options: GoogleOpti
   // Native AFC appends to contents; isolate that list from the caller's history.
   const copy: GenerateContentParameters = { ...params, ...(params.config ? { config: { ...params.config } } : {}) };
   if (Array.isArray(params.contents)) copy.contents = params.contents.slice() as typeof params.contents;
-  const context: Invocation = { binding: null, logicalCallId: crypto.randomUUID() };
+  const context: Invocation = { binding: null, logicalCallId: crypto.randomUUID(), scope: resolveScope(options.scope, undefined) };
   const tools = params.config?.tools, maximum = params.config?.automaticFunctionCalling?.maximumRemoteCalls;
   if (options.runtime.mode !== 'compress' || currentOwner() || !tools?.some(callable) || params.config?.automaticFunctionCalling?.disable || (maximum !== undefined && (!Number.isInteger(maximum) || maximum <= 0)) || !permitsRecovery(params.config)) return { params: copy, context };
-  // Use each callable's actual declaration to reject name collisions. An
-  // incompatible mixed native tool list retains the SDK's own error behavior.
-  const declarations = await Promise.all(tools.map(t => callable(t) ? t.tool() : t));
-  if (declarations.some(t => t.functionDeclarations?.some(f => f.name === 'caveman_retrieve')) || tools.some(t => !callable(t) && t.functionDeclarations?.length)) return { params: copy, context };
-  const binding = options.runtime.recovery(options.scope);
-  context.binding = binding; context.overhead = JSON.stringify(schema(binding));
-  copy.config = { ...copy.config, tools: [...tools, recoveryTool(binding)] };
-  return { params: copy, context };
+  return guard(options.runtime, ID, params.config?.abortSignal, async () => {
+    // Use each callable's actual declaration to reject name collisions. Each callable answers tool() once per turn
+    // (C14): the native call reuses this declaration instead of asking again (an MCP tool asks its server).
+    const declarations = await Promise.all(tools.map(t => callable(t) ? t.tool() : t));
+    const turnTools = tools.map((t, i) => callable(t) ? { tool: async () => declarations[i]!, callTool: (calls: FunctionCall[]) => t.callTool(calls) } : t);
+    copy.config = { ...copy.config, tools: turnTools };
+    // An incompatible mixed native tool list retains the SDK's own error behavior.
+    if (tools.some(t => !callable(t) && t.functionDeclarations?.length)) return { params: copy, context };
+    if (declarations.some(t => t.functionDeclarations?.some(f => f.name === 'caveman_retrieve'))) {
+      context.reason = nameConflict(options.runtime, ID);
+      return { params: copy, context };
+    }
+    const binding = bindRecovery(options.runtime, context.scope);
+    if (!binding) return { params: copy, context };
+    context.binding = binding; context.overhead = JSON.stringify(schema(binding));
+    copy.config = { ...copy.config, tools: [...turnTools, recoveryTool(binding)] };
+    return { params: copy, context };
+  }, () => ({ params: copy, context }));
 }
 
 /**
- * Native Google client with the same GoogleGenAIOptions and native Models/Chats.
- * Uses the SDK's protected ApiClient and public module constructors; it never
- * mutates a private SDK field or replaces the native automatic tool loop.
- * Already constructed Google clients have no public clone/transport injection:
- * reuse their original options here. Other modules retain the original client.
+ * **Experimental tier.** Native Google client with the same GoogleGenAIOptions and native Models/Chats. It hooks the
+ * SDK's protected ApiClient, which the SDK's own types mark internal: if that seam moves, construction and every call
+ * fall back to the native client (`adapter_error`) instead of failing. It never mutates a private SDK field or
+ * replaces the native automatic tool loop. Already constructed Google clients have no public clone/transport
+ * injection: reuse their original options here. Other modules retain the original client.
  */
 export class CavemanGoogleGenAI extends GoogleGenAI {
   declare readonly models: Models;
   declare readonly chats: Chats;
   constructor(nativeOptions: GoogleGenAIOptions, options: GoogleOptions) {
     super(nativeOptions);
-    const supported = options.runtime.mode !== 'off' && adapterCompatible('google');
-    if (!supported && options.runtime.mode !== 'off') options.runtime.decline('unsupported_version');
-    this.models = new Models(delegatedClient(this.apiClient, options, nativeOptions.httpOptions, supported ? undefined : options.runtime.mode === 'off' ? 'disabled' : 'unsupported_version'));
-    this.chats = new Chats(this.models, this.apiClient);
-    if (!supported) return;
+    const blocked = frameworkGate('google', options, () => typeof Models === 'function' && typeof Chats === 'function');
+    const passive = options.runtime.mode === 'off' ? 'disabled' : blocked ?? undefined;
+    const hooked = guardSync(options.runtime, ID, () => {
+      if (typeof this.apiClient?.request !== 'function' || typeof this.apiClient.requestStream !== 'function') throw new TypeError('ApiClient moved');
+      const models = new Models(delegatedClient(this.apiClient, options, nativeOptions.httpOptions, passive));
+      return { models, chats: new Chats(models, this.apiClient) };
+    }, () => null, true);
+    if (hooked) { this.models = hooked.models; this.chats = hooked.chats; }
+    if (!hooked || passive) return;
     const generate = this.models.generateContent.bind(this.models), stream = this.models.generateContentStream.bind(this.models);
     this.models.generateContent = async params => { const call = await invocation(params, options); return invocations.run(call.context, () => generate(call.params)); };
     this.models.generateContentStream = async params => {

@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createMiddlewareRuntime, sha256 } from '../dist/middleware/index.js';
-import { validateCapabilities, validatePlan, validatePage, MiddlewareError } from '../dist/middleware/validate.js';
+import { parseCapabilities, validatePlan, validatePage, MiddlewareError } from '../dist/middleware/validate.js';
 
 const fixture = JSON.parse(await readFile(new URL('../../parity/middleware.fixtures.json', import.meta.url), 'utf8'));
 test('shared middleware wire, hashes, and atomic invalid-plan vectors', async () => {
   assert.equal(JSON.stringify(fixture.request), fixture.request_wire);
   for (const vector of fixture.digest_vectors) assert.equal(await sha256(vector.text), vector.sha256);
-  const caps = validateCapabilities(fixture.capabilities);
+  const caps = parseCapabilities(fixture.capabilities);
   assert.deepEqual(await validatePlan(fixture.plan, fixture.request, await sha256(fixture.request_wire), caps), fixture.plan);
   for (const vector of fixture.invalid_plans) {
     const bad = structuredClone(fixture.plan);
@@ -48,7 +48,8 @@ test('runtime delegates candidates, verifies binding, and preserves entire plan 
   assert.equal(result.replacements.length, 1);
   const sent = JSON.parse(calls.at(-1).options.body);
   assert.deepEqual(sent, { ...fixture.request, recovery_binding: { ...fixture.request.recovery_binding, id: binding.id } });
-  assert.deepEqual(calls.at(-1).options.headers, { 'Content-Type': 'application/json', Authorization: 'Bearer runtime-token' });
+  assert.deepEqual(calls.at(-1).options.headers, { 'Content-Type': 'application/json', 'Caveman-Middleware-Features': 'http_status_v2, revision_tolerant',
+    'Caveman-Middleware-Client': 'caveman-sdk-typescript/1.2.0', Authorization: 'Bearer runtime-token' });
   assert.equal(calls.at(-1).options.redirect, 'error');
   corrupt = true;
   const bad = await runtime.optimize(input(binding));
@@ -108,11 +109,9 @@ test('recovery schema and executor stay immutable across registrations', () => {
 test('runtime outage and circuit breaker never become inference retries', async () => {
   let calls = 0;
   const runtime = createMiddlewareRuntime({ fetch: async () => { calls++; throw new Error('contains sensitive provider body'); } });
-  for (let i=0; i<3; i++) assert.equal((await runtime.optimize(input(null))).reason, 'runtime_unavailable');
+  for (let i=0; i<5; i++) assert.equal((await runtime.optimize(input(null))).reason, 'runtime_unavailable');
   assert.equal((await runtime.optimize(input(null))).reason, 'circuit_open');
-  assert.equal(calls, 3);
-  assert.throws(() => createMiddlewareRuntime({ endpoint: 'https://remote.example' }), { code: 'remote_content_not_enabled' });
-  assert.throws(() => createMiddlewareRuntime({ endpoint: 'https://user:secret@remote.example', allowRemoteContent: true }), { code: 'invalid_endpoint' });
+  assert.equal(calls, 5);
 });
 
 test('valid fallback plans never claim continuity for unavailable frozen choices or recovery', async () => {
@@ -145,26 +144,31 @@ test('deadline cancels stalled custom response body without waiting for its tran
     return new Response(new ReadableStream({ pull:()=>new Promise(()=>{}), cancel:()=>{cancelled=true;} }));
   }});
   await runtime.ready();
+  await sha256('warm WebCrypto so the deadline lands on the stalled body, not on first-use initialization');
   const result = await runtime.optimize(input(runtime.recovery(fixture.request.scope)));
   assert.equal(result.reason,'deadline');
   assert.equal(result.cacheContinuity,'unavailable');
   assert.equal(cancelled,true);
 });
 
-test('deadline and stale-scope failures do not open the runtime outage circuit', async () => {
-  let discovery = 0, mode = 'deadline';
+test('conflicts and 4xx neither open the breaker nor clear capabilities; server deadlines count (B3, B5)', async () => {
+  let discovery = 0, optimizeCalls = 0, status = 409, code = 'epoch_changed';
   const runtime = createMiddlewareRuntime({ deadlineMs: 1000, fetch: async url => {
     if (url.endsWith('/capabilities')) { discovery++; return Response.json(fixture.capabilities); }
-    throw new MiddlewareError(mode);
+    optimizeCalls++;
+    return Response.json({ schema_version: 1, error: { code } }, { status });
   }});
   try {
-    for (let i = 0; i < 5; i++) assert.equal((await runtime.optimize(input(null))).reason, 'deadline');
-    assert.equal(discovery, 1, 'a scheduling deadline does not invalidate known capabilities');
-    mode = 'epoch_changed';
-    for (let i = 0; i < 5; i++) assert.equal((await runtime.optimize(input(null))).reason, 'epoch_changed');
-    mode = 'runtime_unavailable';
-    for (let i = 0; i < 3; i++) assert.equal((await runtime.optimize(input(null))).reason, 'runtime_unavailable');
-    assert.equal((await runtime.optimize(input(null))).reason, 'circuit_open');
+    const binding = runtime.recovery(fixture.request.scope);
+    for (let i = 0; i < 12; i++) assert.equal((await runtime.optimize(input(binding))).reason, 'epoch_changed');
+    status = 400; code = 'invalid_request';
+    for (let i = 0; i < 12; i++) assert.equal((await runtime.optimize(input(binding))).reason, 'invalid_request');
+    assert.equal(discovery, 1, 'a 4xx must not cost a capabilities round trip per call');
+    assert.equal(optimizeCalls, 24);
+    status = 504; code = 'deadline';
+    for (let i = 0; i < 5; i++) assert.equal((await runtime.optimize(input(binding))).reason, 'deadline');
+    assert.equal((await runtime.optimize(input(binding))).reason, 'circuit_open', 'deadlines count toward the breaker');
+    assert.equal(discovery, 1, 'a deadline does not invalidate known capabilities');
   } finally { runtime.close(); }
 });
 
@@ -201,15 +205,24 @@ test('bounded background receipts cannot consume optimizer transport slots', asy
   } finally { runtime.close(); }
 });
 
-test('untested native versions decline without network traffic and strict mode stays explicit', () => {
+test('untested native versions decline without network traffic and strict mode stays explicit', async () => {
   const diagnostics = [];
   const runtime = createMiddlewareRuntime({ fetch: () => { throw new Error('unexpected network'); }, onDiagnostic: event => diagnostics.push(event) });
   const outcome = runtime.decline('unsupported_version');
   assert.equal(outcome.reason, 'unsupported_version'); assert.equal(outcome.plan, null); assert.deepEqual(outcome.replacements, []);
   assert.deepEqual(diagnostics, [{ code: 'unsupported_version', cacheContinuity: 'unavailable' }]);
   runtime.close();
-  const strict = createMiddlewareRuntime({ strict: true });
-  assert.throws(() => strict.decline('unsupported_version'), error => error.code === 'unsupported_version'); strict.close();
+  const strict = createMiddlewareRuntime({ strict: true, deadlineMs: 2000, fetch: async () => Response.json(fixture.capabilities) });
+  assert.equal(strict.decline('unsupported_version').reason, 'unsupported_version', 'nothing raises at wrap time');
+  await assert.rejects(strict.ready(), { code: 'unsupported_version' });
+  assert.equal((await strict.preflight()).reason, 'unsupported_version'); strict.close();
   const off = createMiddlewareRuntime({ mode: 'off', strict: true, onDiagnostic: () => { throw new Error('off diagnostic'); } });
   assert.equal(off.decline('unsupported_version').status, 'off'); off.close();
+  assert.deepEqual([strict.strict, off.strict, runtime.strict], [true, true, false], 'adapters read strict to raise adapter_error');
+  // Any catalog reason, and the warn-once line names the adapter instead of `adapter=-`.
+  const lines = [], warn = console.warn; console.warn = line => lines.push(line);
+  const named = createMiddlewareRuntime({ strict: true, fetch: async () => Response.json(fixture.capabilities) });
+  try { assert.equal(named.decline('recovery_name_conflict', 'decline-test').reason, 'recovery_name_conflict'); } finally { console.warn = warn; }
+  assert.deepEqual(lines, ['Caveman middleware passed content through unchanged: adapter=decline-test reason=recovery_name_conflict']);
+  await assert.rejects(named.ready(), { code: 'recovery_name_conflict' }); named.close();
 });

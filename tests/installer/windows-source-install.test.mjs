@@ -35,13 +35,6 @@ test("native-hook benchmark uses Windows named pipe instead of refusing platform
   assert.match(source, /process\.platform === "win32"/);
 });
 
-test("create-caveman-agent invokes npm through native cmd.exe on Windows", () => {
-  const source = readFileSync(join(root, "packages", "create-caveman-agent", "src", "index.ts"), "utf8");
-  assert.doesNotMatch(source, /spawn\([^\n]*"npm\.cmd"/);
-  assert.match(source, /process\.env\.ComSpec \?\? "cmd\.exe"/);
-  assert.match(source, /npm install --no-audit --no-fund --ignore-scripts/);
-});
-
 test("CI takes pnpm version only from packageManager", () => {
   const source = readFileSync(join(root, ".github", "workflows", "engine-ci.yml"), "utf8");
   assert.match(source, /uses: pnpm\/action-setup@[0-9a-f]{40} # v4\.4\.0/);

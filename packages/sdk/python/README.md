@@ -1,15 +1,15 @@
 # caveman-sdk
 
-`caveman-sdk` is the MIT-licensed Python client in the main Caveman repository. Import it as `caveman_cloud`. Version `1.1.0` requires Python 3.13 or newer, uses only the standard library at runtime, and includes `py.typed` type information.
+`caveman-sdk` is the Apache-2.0-licensed Python client in the main Caveman repository. Import it as `caveman_cloud`. It requires Python 3.11 or newer, uses only the standard library at runtime, and includes `py.typed` type information.
 
 ## Install
 
 ```bash
 mkdir caveman-python-example
 cd caveman-python-example
-python3.13 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install caveman-sdk==1.1.0
+python -m pip install caveman-sdk==1.2.0
 ```
 
 On Windows, activate with `.venv\Scripts\Activate.ps1` in PowerShell. Use `python -m pip` so installation targets the interpreter running your app. The PyPI package named `caveman` is unrelated.
@@ -26,7 +26,7 @@ export CAVE_MODEL="your-enabled-model-id"
 export OPENAI_API_KEY="your-provider-key"
 ```
 
-Replace the placeholder address with your configured service. The SDK does not supply a default address, obtain credentials, or start a local runtime. See [configuration](https://docs.caveman.so/docs/sdk/configuration).
+Replace the placeholder address with your configured service. The SDK does not supply a default address, obtain credentials, or start a local runtime. See [configure](https://docs.caveman.so/docs/sdk/python#configure).
 
 ## Make your first request
 
@@ -108,5 +108,7 @@ The SDK does not execute tool calls, process provider SSE streams, or install a 
 [SDK overview](https://docs.caveman.so/docs/sdk) · [API reference](https://docs.caveman.so/docs/sdk/reference) · [Troubleshooting](https://docs.caveman.so/docs/sdk/troubleshooting)
 
 ## Native framework middleware
+
+`caveman_cloud.middleware` is stable and follows semver with the rest of `caveman-sdk`, because `caveman-middleware` 1.x depends on it.
 
 For automatic projection of eligible tool results in an existing framework, use the separate [middleware package](https://docs.caveman.so/docs/sdk/middleware). Start with the complete [LangChain quickstart](https://docs.caveman.so/docs/sdk/middleware/python). The local runtime is accountless; inference stays in your provider client. The thin connected APIs above remain explicit calls.

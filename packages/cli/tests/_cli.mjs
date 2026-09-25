@@ -143,6 +143,13 @@ export async function runCliWithApi(argv, options = {}) {
   await options.prepare?.({ home: isolated.home, env: isolated.env });
   try {
     const result = await runCli(argv, { ...options, env: isolated.env });
+    // Telemetry arrives from detached children after the CLI exits.
+    if (options.telemetry) {
+      for (let waited = 0; !requests.some((r) => r.path === "/telemetry/cli") && waited < 5000; waited += 50) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
     return { ...result, requests };
   } finally {
     for (const socket of sockets) socket.destroy();

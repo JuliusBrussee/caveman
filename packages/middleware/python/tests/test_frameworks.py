@@ -20,7 +20,7 @@ def test_missing_required_adapter_fails(monkeypatch):
 
 def test_unsupported_required_adapter_fails(monkeypatch):
     monkeypatch.setenv("CAVEMAN_REQUIRED_ADAPTERS", "openai")
-    monkeypatch.setattr(frameworks, "version", lambda _: "2.20.0")
+    monkeypatch.setattr(frameworks, "version", lambda _: "1.99.0")
     with pytest.raises(pytest.fail.Exception, match="unsupported"):
         frameworks.require_adapter("openai")
 

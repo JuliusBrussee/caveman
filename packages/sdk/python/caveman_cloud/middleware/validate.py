@@ -5,7 +5,8 @@ import re
 from dataclasses import asdict
 from typing import Any
 
-from .types import MiddlewareError, Scope
+from .protocol import parse_capabilities
+from .types import RECOVERY_MARKER_PREFIX, CapabilitiesView, MiddlewareError, Scope
 
 
 def sha256(text: str) -> str:
@@ -14,6 +15,18 @@ def sha256(text: str) -> str:
 
 def token(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[a-zA-Z0-9._:/-]{1,256}", value) is not None
+
+
+def reason(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", value) is not None
+
+
+def utf8(text: Any) -> bytes | None:
+    """Strict UTF-8 of well-formed text; None for non-strings and unpaired surrogates."""
+    try:
+        return text.encode("utf-8") if isinstance(text, str) else None
+    except UnicodeEncodeError:
+        return None
 
 
 def digest(value: Any) -> bool:
@@ -32,30 +45,22 @@ def scope_key(scope: Scope) -> str:
 
 
 def capabilities(value: Any) -> dict[str, Any]:
-    try:
-        if (type(value["schema_version"]) is not int or value["schema_version"] != 1 or not token(value["policy_revision"])
-                or not isinstance(value["runtime_build"], str) or value["mode"] not in ("record", "compress")
-                or not isinstance(value["transforms"], list) or len(value["transforms"]) > 128
-                or not all(integer(value["limits"][k]) and value["limits"][k] > 0 for k in ("deadline_ms", "request_bytes", "segment_bytes", "page_bytes"))
-                or not integer(value["retention_seconds"]) or type(value["recovery"]) is not bool
-                or type(value["persistent"]) is not bool):
-            raise ValueError()
-        seen = set()
-        for t in value["transforms"]:
-            if (not token(t["transform_id"]) or t["transform_id"] in seen or not token(t["implementation_version"])
-                    or not isinstance(t["eligible_segment_kinds"], list) or t["recovery"] not in ("exact_ccr", "none") or t["deterministic"] is not True):
-                raise MiddlewareError("unknown_capability")
-            seen.add(t["transform_id"])
-        return value
-    except (KeyError, TypeError, ValueError) as error:
-        raise MiddlewareError("unsupported_version") from None
+    """Protocol 1.0 name, now the §4 tolerant reader: raises only unsupported_version and returns the document."""
+    return parse_capabilities(value).capabilities
 
 
-def plan(value: Any, request: dict, input_digest: str, caps: dict) -> dict:
+def plan(value: Any, request: dict, input_digest: str, caps: CapabilitiesView | dict) -> dict:
+    """Validate the whole plan before any replacement applies (§7, K5); any violation is invalid_plan.
+
+    `caps` is the capabilities snapshot the request was built from (view or raw document). Only transforms on the
+    client recovery allowlist apply, every replacement carries its marker and handle and is strictly shorter in
+    UTF-8 bytes. A differing policy_revision or transform_version is accepted (K3); the runtime refreshes.
+    """
+    view = caps if isinstance(caps, CapabilitiesView) else parse_capabilities(caps)
     try:
         p = value
         if (type(p["schema_version"]) is not int or p["schema_version"] != 1 or p["request_id"] != request["request_id"] or p["input_digest"] != input_digest
-                or p["policy_revision"] != request["policy"]["revision"] or not digest(p["replacement_set_id"])
+                or not token(p["policy_revision"]) or not digest(p["replacement_set_id"])
                 or p["status"] not in ("optimized", "bypassed", "record") or not token(p["reason"])
                 or not isinstance(p["replacements"], list) or not isinstance(p["skipped"], list)):
             raise ValueError()
@@ -69,22 +74,23 @@ def plan(value: Any, request: dict, input_digest: str, caps: dict) -> dict:
                 or type(recovery["available"]) is not bool or type(recovery["persistent"]) is not bool or not integer(recovery["expires_at"])):
             raise ValueError()
         segments = {s["id"]: s for s in request["segments"]}
-        transforms = {t["transform_id"]: t for t in caps["transforms"]}
+        transforms = {t["transform_id"]: t for t in view.transforms}  # allowlisted recovery only: `none` never applies
         seen, credited = set(), set()
         reduction = unique = 0
         for r in p["replacements"]:
             s, t = segments[r["segment_id"]], transforms[r["transform_id"]]
             if (r["segment_id"] in seen or r["original_sha256"] != s["sha256"] or r["source_id"] != s["source_id"]
-                    or r["transform_id"] not in request["policy"]["transforms"] or r["transform_version"] != t["implementation_version"]
-                    or s["kind"] not in t["eligible_segment_kinds"] or s["protected"] or s["opaque"] or request["mode"] == "record" or caps["mode"] == "record"
-                    or not isinstance(r["text"], str) or len(r["text"].encode("utf-8")) > caps["limits"]["segment_bytes"]
+                    or r["transform_id"] not in request["policy"]["transforms"] or not token(r["transform_version"])
+                    or s["kind"] not in t["eligible_segment_kinds"] or s["protected"] or s["opaque"] or request["mode"] == "record" or view.mode == "record"
+                    or not isinstance(r["text"], str) or len(r["text"].encode("utf-8")) > view.limits.segment_bytes
+                    or len(r["text"].encode("utf-8")) >= len(s["content"].encode("utf-8"))
                     or not digest(r["sha256"]) or r["sha256"] != sha256(r["text"])
                     or not integer(r["tokens_before"]) or not integer(r["tokens_after"]) or r["tokens_after"] >= r["tokens_before"] or type(r["reused"]) is not bool
                     or type(r["unique_original"]) is not bool or (r["unique_original"] and (r["reused"] or r["original_sha256"] in credited))):
                 raise ValueError()
-            if t["recovery"] == "exact_ccr" and (not request["recovery_binding"] or recovery["binding_id"] != request["recovery_binding"]["id"]
+            if (not request["recovery_binding"] or recovery["binding_id"] != request["recovery_binding"]["id"]
                     or not recovery["available"] or not recovery["persistent"] or re.fullmatch(r"cmw_[a-f0-9]{48}", r["recovery_handle"]) is None
-                    or not r["text"].startswith(f"[caveman: shortened; exact original via caveman_retrieve handle={r['recovery_handle']}]\n")):
+                    or not r["text"].startswith(f"{RECOVERY_MARKER_PREFIX}{r['recovery_handle']}]\n")):
                 raise ValueError()
             seen.add(r["segment_id"])
             reduction += r["tokens_before"] - r["tokens_after"]

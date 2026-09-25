@@ -63,3 +63,77 @@ def test_matches_framework_refuses_an_absent_distribution():
 def test_matches_framework_requires_every_pin():
     assert matches_framework(("pytest", "0", "99999"), ("caveman-no-such-framework", "1.0", "2")) is False
     assert matches_framework(("pytest", "0", "99999")) is True
+
+
+def test_gate_policy(monkeypatch, caplog):
+    """Decision 3: out of range skips and warns once, unreadable runs with version_unverified, never raises."""
+    from conftest import peer_runtime
+    from caveman_middleware import _versions
+
+    runtime, diagnostics = peer_runtime(strict=True), []
+    runtime._diagnostic = diagnostics.append
+    versions = {"old": "0.1.0", "good": "1.5.0", "vendored": None}
+    monkeypatch.setattr(_versions, "installed_version", versions.get)
+    assert _versions.gate(runtime, "demo", ("good", "1.4", "2")) is True
+    assert _versions.gate(runtime, "demo", ("old", "1.4", "2")) is False
+    assert _versions.gate(runtime, "demo", ("old", "1.4", "2"), accept=True) is True
+    assert _versions.gate(runtime, "demo", ("vendored", "1.4", "2"), ("good", "1.4", "2")) is True
+    assert _versions.gate(runtime.as_async(), "demo-async", ("old", "1.4", "2")) is False
+    assert _versions.framework_state(("old", "1.4", "2"), ("vendored", "1.4", "2")) == "unsupported"
+    assert caplog.text.count("adapter=demo reason=unsupported_version") == 1
+    assert "adapter=demo-async reason=unsupported_version" in caplog.text
+    # The reason code and adapter, not the sentence around them: the wording of this warn-once line is the SDK's.
+    assert any("adapter=demo" in line and "reason=version_unverified" in line for line in caplog.text.splitlines())
+    assert "adapter=-" not in caplog.text, "every decline names its adapter"
+    assert diagnostics == [{"code": "unsupported_version", "cache_continuity": "unavailable"}] * 2
+    runtime.close()
+
+
+def test_preflight_and_ready_surface_an_untested_framework(monkeypatch):
+    """Strict version failures surface from preflight()/ready(), not from wrapping."""
+    import pytest
+    from conftest import peer_runtime
+    from caveman_cloud.middleware import MiddlewareError
+    import caveman_middleware
+    from caveman_middleware import _versions
+
+    runtime = peer_runtime(strict=True)
+    assert caveman_middleware.preflight(runtime, "langchain", accept_framework_version=True).status == "ready"
+    monkeypatch.setattr(_versions, "installed_version", lambda name: "0.0.1")
+    report = caveman_middleware.preflight(runtime.as_async(), "langchain")
+    assert (report.status, report.reason) == ("unavailable", "unsupported_version")
+    with pytest.raises(MiddlewareError, match="unsupported_version"):
+        caveman_middleware.ready(runtime, "langchain")
+    assert caveman_middleware.ready(runtime, "langchain", accept_framework_version=True)["schema_version"] == 1
+    runtime.close()
+
+
+# The first framework module each adapter imports; blocking it stands in for a release that lacks it.
+FRAMEWORK_IMPORTS = {
+    "langchain": "langchain.agents.middleware", "openai": "openai", "anthropic": "anthropic", "google": "google.genai",
+    "litellm": "litellm", "strands": "strands", "agno": "agno.models.base", "crewai": "crewai", "pydantic_ai": "pydantic_ai",
+    "autogen": "autogen_core", "llama_index": "llama_index.core.agent.workflow", "mcp": "mcp.types",
+}
+
+
+@pytest.mark.parametrize("family,blocked", sorted(FRAMEWORK_IMPORTS.items()))
+def test_a_failed_framework_import_names_the_installed_version_and_range(family, blocked, monkeypatch):
+    """An out-of-range install is unsupported_version with both versions, never a misleading "Install ..." hint."""
+    import importlib
+    import sys
+    from caveman_middleware import _versions
+
+    assert sorted(FRAMEWORK_IMPORTS) == sorted(set(_versions.COMPATIBILITY) - {"asgi"})
+    module = f"caveman_middleware.{family}"
+    monkeypatch.delitem(sys.modules, module, raising=False)
+    monkeypatch.setitem(sys.modules, blocked, None)
+    monkeypatch.setattr(_versions, "installed_version", lambda name: "0.0.3")
+    with pytest.raises(ImportError) as raised:
+        importlib.import_module(module)
+    name, low, high = _versions.COMPATIBILITY[family].pins[0]
+    assert raised.value.code == "unsupported_version" and "unsupported_version" in str(raised.value)
+    assert f"{name} 0.0.3 is installed; this adapter requires {name}>={low},<{high}" in str(raised.value)
+    monkeypatch.setattr(_versions, "installed_version", lambda name: None)  # not installed at all: the install hint
+    with pytest.raises(ImportError, match=r"Install caveman-middleware\[") as raised:
+        importlib.import_module(module)
+    assert not hasattr(raised.value, "code")

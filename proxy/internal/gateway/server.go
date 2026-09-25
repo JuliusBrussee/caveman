@@ -14,7 +14,10 @@
 package gateway
 
 import (
+	"cmp"
 	"context"
+	"crypto/subtle"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -24,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/JuliusBrussee/caveman/proxy/internal/identity"
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/shared/platform/cacheguard"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
@@ -53,7 +57,9 @@ type RequestContext struct {
 
 // Authenticator accepts or rejects an inbound request and returns its context.
 // Standalone returns a static single-operator context; a connected build would
-// consult its key cache.
+// consult its key cache. One that refuses every request (the listener serves
+// only the middleware) should also implement RefusesAll() bool returning true,
+// so /health/ready fails when the middleware store does.
 type Authenticator interface {
 	Authenticate(ctx context.Context, r *http.Request) (RequestContext, error)
 }
@@ -361,6 +367,7 @@ type Server struct {
 	sessionMarkerKey []byte
 	sessionFallback  func(time.Time, string, string) (string, string)
 	middleware       http.Handler
+	metricsToken     string
 	logger           *slog.Logger
 	inflight         atomic.Int64
 	// unauthorized counts inbound requests the authenticator rejected. A token
@@ -439,7 +446,9 @@ func (s *Server) prefixStabilized(adapter providers.Adapter) bool {
 // binary passes an SSRF-guarded client (see StandaloneHTTPClient).
 type Config struct {
 	// Middleware is the independently authenticated compression-only API. It
-	// never enters provider forwarding or credential resolution.
+	// never enters provider forwarding or credential resolution. When it also
+	// implements Ready(ctx) and WriteMetrics(w), /health/ready and /metrics
+	// report it.
 	Middleware http.Handler
 	Adapters   []providers.Adapter
 	Auth       Authenticator
@@ -483,6 +492,10 @@ type Config struct {
 	// marker correlation; ambiguous cases return empty.
 	SessionFallback func(time.Time, string, string) (string, string)
 	Logger          *slog.Logger
+	// MetricsToken, when set, makes /metrics require `Authorization: Bearer
+	// <token>`. Empty falls back to CAVEMAN_METRICS_TOKEN; unset keeps /metrics
+	// open like the health probes.
+	MetricsToken string
 }
 
 // BoundUpstreamTransport puts the connection-level bounds on an upstream
@@ -560,6 +573,7 @@ func New(cfg Config) *Server {
 		sessionMarkerKey:     append([]byte(nil), cfg.SessionMarkerKey...),
 		sessionFallback:      cfg.SessionFallback,
 		middleware:           cfg.Middleware,
+		metricsToken:         strings.TrimSpace(cmp.Or(cfg.MetricsToken, env.String("CAVEMAN_METRICS_TOKEN", ""))),
 		logger:               cfg.Logger,
 		capture:              newBodyCapture(os.Getenv("CAVE_CAPTURE_DIR"), cfg.Logger),
 	}
@@ -580,14 +594,21 @@ func (s *Server) Handler() http.Handler {
 func serveMux(s *Server) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.health)
-	mux.HandleFunc("GET /health/ready", s.health)
+	mux.HandleFunc("GET /health/ready", s.ready)
 	mux.HandleFunc("GET /metrics", s.metrics)
 	mux.Handle("/caveman/v1/middleware/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.middleware == nil {
+			w.Header().Set("Retry-After", "1")
 			httpx.JSON(w, http.StatusServiceUnavailable, map[string]any{"schema_version": 1, "error": map[string]string{"code": "runtime_unavailable"}})
 			return
 		}
-		s.middleware.ServeHTTP(w, r)
+		// The middleware authenticates for itself, so its 401s would bypass
+		// rejectUnauthorized; count them on the way out instead.
+		recorder := &statusRecorder{ResponseWriter: w}
+		s.middleware.ServeHTTP(recorder, r)
+		if recorder.status == http.StatusUnauthorized {
+			s.noteUnauthorized(r)
+		}
 	}))
 	// ChatGPT-login Codex: OAuth-preserving forward with OpenAI Responses
 	// live-zone compression and exact-original fallback.
@@ -606,14 +627,71 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("content-type", "text/plain; version=0.0.4")
-	_, _ = w.Write([]byte("cave_proxy_inflight_requests "))
-	_, _ = w.Write([]byte(itoa(s.inflight.Load())))
-	_, _ = w.Write([]byte("\ncave_proxy_unauthorized_total "))
-	_, _ = w.Write([]byte(itoa(s.unauthorized.Load())))
-	_, _ = w.Write([]byte("\n"))
+// ready is /health/ready. The body reports the middleware ("unavailable" with
+// no runtime, "degraded" when its store cannot take a write), but only a
+// listener that serves nothing else goes unready over it. Provider routes never
+// touch that store, so a Postgres outage must not pull every replica's
+// inference out of the Service at once.
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	status, state := http.StatusOK, "unavailable"
+	if s.middleware != nil {
+		state = "ok"
+		if probe, ok := s.middleware.(interface{ Ready(context.Context) error }); ok {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			if err := probe.Ready(ctx); err != nil {
+				state = "degraded"
+				if closed, ok := s.auth.(interface{ RefusesAll() bool }); ok && closed.RefusesAll() {
+					status = http.StatusServiceUnavailable
+				}
+				if s.logger != nil {
+					s.logger.Warn("middleware store not writable", "error", err)
+				}
+			}
+		}
+	}
+	httpx.JSON(w, status, map[string]any{
+		"ok":         status == http.StatusOK,
+		"service":    "caveman-proxy",
+		"schema":     "caveman.proxy.health.v1",
+		"billing":    "byok",
+		"adapters":   len(s.adapters),
+		"middleware": state,
+	})
 }
+
+func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
+	if s.metricsToken != "" {
+		presented, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(presented)), []byte(s.metricsToken)) != 1 {
+			s.rejectUnauthorized(w, r)
+			return
+		}
+	}
+	w.Header().Set("content-type", "text/plain; version=0.0.4")
+	_, _ = io.WriteString(w, "# HELP cave_proxy_inflight_requests Proxied requests currently in flight.\n"+
+		"# TYPE cave_proxy_inflight_requests gauge\ncave_proxy_inflight_requests "+itoa(s.inflight.Load())+"\n"+
+		"# HELP cave_proxy_unauthorized_total Requests rejected for a missing or wrong credential, middleware and /metrics included.\n"+
+		"# TYPE cave_proxy_unauthorized_total counter\ncave_proxy_unauthorized_total "+itoa(s.unauthorized.Load())+"\n")
+	identity.WriteMetrics(w) // token map and TLS reloads
+	if m, ok := s.middleware.(interface{ WriteMetrics(io.Writer) }); ok {
+		m.WriteMetrics(w)
+	}
+}
+
+// statusRecorder notes the status a wrapped handler wrote. Unwrap keeps
+// http.ResponseController (read deadlines) working through it.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 // rejectUnauthorized is the single 401 exit for every handler behind the
 // inbound gate. It counts the rejection and logs it once — the path and the
@@ -622,6 +700,12 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 // missing token must not be distinguishable from a wrong one), so this is the
 // only place the operator learns the gate fired at all.
 func (s *Server) rejectUnauthorized(w http.ResponseWriter, r *http.Request) {
+	s.noteUnauthorized(r)
+	httpx.Error(w, r, http.StatusUnauthorized, "cave_unauthorized", "Request rejected by the proxy authenticator.")
+}
+
+// noteUnauthorized counts and logs one rejection; see rejectUnauthorized.
+func (s *Server) noteUnauthorized(r *http.Request) {
 	s.unauthorized.Add(1)
 	if s.logger != nil {
 		remote := r.RemoteAddr
@@ -630,7 +714,6 @@ func (s *Server) rejectUnauthorized(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logger.Warn("inbound token rejected", "path", r.URL.Path, "remote", remote)
 	}
-	httpx.Error(w, r, http.StatusUnauthorized, "cave_unauthorized", "Request rejected by the proxy authenticator.")
 }
 
 func itoa(n int64) string {

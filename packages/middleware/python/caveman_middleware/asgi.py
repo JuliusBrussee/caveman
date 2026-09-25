@@ -15,10 +15,10 @@ import json
 import uuid
 from typing import Any, Literal
 
-from caveman_cloud.middleware import AsyncMiddlewareRuntime, Scope
+from caveman_cloud.middleware import Scope, ensure_async
 
+from ._guard import fail_open
 from ._native import Attempt, NativeSession, owner, plain
-from ._versions import matches_framework
 from ._usage import UsageReader
 
 Protocol = Literal["openai-chat", "openai-responses", "anthropic-messages"]
@@ -53,37 +53,38 @@ def _reject_constant(_value):
 class CavemanASGIMiddleware:
     """Place inside authentication and original-content guard middleware.
 
+    Pure ASGI 3, so any ASGI server or framework works (no version gate).
     resolve_context may decline by returning None; existing application routing
     and auth then run unchanged. It must use authenticated server state, not
     namespace/session headers. This middleware never handles an auth rejection.
+    A body over ``max_body_bytes`` (default 2 MiB) passes through unchanged and
+    reports ``payload_budget``. Either SDK runtime type is accepted.
     """
-    def __init__(self, app, *, runtime: AsyncMiddlewareRuntime,
+    def __init__(self, app, *, runtime,
                  routes: Mapping[str, Protocol],
                  resolve_context: Callable[[ASGIScope], ASGIContext | None | Awaitable[ASGIContext | None]],
-                 max_body_bytes: int = 2 << 20, max_request_chunks: int = 256):
-        if not isinstance(runtime, AsyncMiddlewareRuntime):
-            raise TypeError("ASGI requires AsyncMiddlewareRuntime")
+                 max_body_bytes: int = 2 << 20, max_request_chunks: int = 256, manifest_bytes: int | None = None,
+                 allow_stored_responses: bool = False):
         if not routes or any(not isinstance(path, str) or not path.startswith("/") or "*" in path or "?" in path
                              or protocol not in ("openai-chat", "openai-responses", "anthropic-messages") for path, protocol in routes.items()):
             raise ValueError("Configure exact POST paths and native LLM protocols")
-        if not callable(resolve_context) or not 1 <= max_body_bytes <= 2 << 20 or not 1 <= max_request_chunks <= 4096:
+        if (not callable(resolve_context) or type(max_body_bytes) is not int or max_body_bytes < 1
+                or not 1 <= max_request_chunks <= 4096):
             raise ValueError("ASGI context resolver or request bounds are invalid")
-        self.app, self.runtime = app, runtime
+        self.app, self.runtime = app, ensure_async(runtime)
         self.routes, self.resolve_context = dict(routes), resolve_context
         self.max_body_bytes, self.max_request_chunks = max_body_bytes, max_request_chunks
-        self._version_supported = matches_framework(("fastapi", "0.141", "1"), ("starlette", "1.6", "2"))
-        if not self._version_supported and runtime.mode != "off":
-            runtime.decline("unsupported_version")
+        self.manifest_bytes, self.allow_stored_responses = manifest_bytes, allow_stored_responses
 
     async def __call__(self, scope, receive, send):
         if owner.get() is not None:
             return await self.app(scope, receive, send)
 
         protocol = self.routes.get(scope.get("path"))
+        if scope.get("type") != "http" or scope.get("method") != "POST" or protocol is None:
+            return await self.app(scope, receive, send)  # never a configured LLM route: nothing to report
+
         async def passthrough(reader, reason):
-            if scope.get("type") != "http" or scope.get("method") != "POST" or protocol is None:
-                self.runtime.report(None, reason=reason, adapter="asgi")
-                return await self.app(scope, reader, send)
             # This exact inference route still owns its native request when
             # projection is disabled or declined. A nested adapter must not
             # transform protected content or report the same decision twice.
@@ -96,14 +97,12 @@ class CavemanASGIMiddleware:
             finally:
                 owner.reset(token)
 
-        if not self._version_supported or self.runtime.mode == "off":
-            return await passthrough(receive, "unsupported_version")
-        if scope.get("type") != "http" or scope.get("method") != "POST" or protocol is None:
-            return await passthrough(receive, "unsupported_endpoint")
+        if self.runtime.mode == "off":
+            return await passthrough(receive, "disabled")
         headers = scope.get("headers", [])
         protected = {b"content-encoding", b"digest", b"content-digest", b"content-md5", b"signature", b"signature-input", b"x-amz-content-sha256"}
         if any(key.lower() in protected for key, _ in headers):
-            return await passthrough(receive, "protected_request")
+            return await passthrough(receive, "unsupported_request")
         types = [value.lower().split(b";", 1)[0].strip() for key, value in headers if key.lower() == b"content-type"]
         lengths = [value for key, value in headers if key.lower() == b"content-length"]
         if types != [b"application/json"] or len(lengths) > 1:
@@ -111,17 +110,20 @@ class CavemanASGIMiddleware:
         if lengths:
             try:
                 if not 0 <= int(lengths[0]) <= self.max_body_bytes:
-                    return await passthrough(receive, "payload_limit")
+                    return await passthrough(receive, "payload_budget")
             except ValueError:
                 return await passthrough(receive, "unsupported_shape")
 
-        context = self.resolve_context(scope)
-        if inspect.isawaitable(context):
-            context = await context
+        try:
+            context = self.resolve_context(scope)
+            if inspect.isawaitable(context):
+                context = await context
+            if context is not None and not isinstance(context, ASGIContext):
+                raise TypeError("ASGI context must come from authenticated server state")
+        except Exception as error:  # Decision 4: the application still handles the request
+            return await passthrough(receive, fail_open(self.runtime, "asgi", error))
         if context is None:
-            return await passthrough(receive, "scope_unavailable")
-        if not isinstance(context, ASGIContext):
-            raise TypeError("ASGI context must come from authenticated server state")
+            return await passthrough(receive, "invalid_scope")
 
         buffered, parts, size = deque(), [], 0
 
@@ -132,13 +134,13 @@ class CavemanASGIMiddleware:
             message = await receive()
             buffered.append(message)
             if message.get("type") != "http.request" or set(message) - {"type", "body", "more_body"}:
-                return await passthrough(replay, "request_interrupted")
+                return await passthrough(replay, "unsupported_request")
             body = message.get("body", b"")
             if type(body) is not bytes:
                 return await passthrough(replay, "unsupported_shape")
             size += len(body)
             if size > self.max_body_bytes or len(buffered) > self.max_request_chunks:
-                return await passthrough(replay, "payload_limit")
+                return await passthrough(replay, "payload_budget")
             parts.append(body)
             if not message.get("more_body", False):
                 break
@@ -149,7 +151,8 @@ class CavemanASGIMiddleware:
         if not plain(native) or type(native.get("model")) is not str:
             return await passthrough(replay, "unsupported_shape")
         session = NativeSession(self.runtime, context.scope, adapter_id="asgi", framework_version="3.0",
-                                protocol=protocol, binding=context.recovery, overhead=context.recovery_overhead)
+                                protocol=protocol, binding=context.recovery, overhead=context.recovery_overhead,
+                                manifest_bytes=self.manifest_bytes, allow_stored_responses=self.allow_stored_responses)
         projected, attempt = await session.prepare_async(native)
         if attempt is None:
             return await self.app(scope, replay, send)

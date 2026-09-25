@@ -1675,6 +1675,7 @@ class OTelExporter:
         cached_tokens: int | None = None,
         cost_usd: float | None = None,
         workflow: str | None = None,
+        cache_creation_tokens: int | None = None,
         status: str = "ok",
         start_time_ns: int | None = None,
         end_time_ns: int | None = None,
@@ -1695,10 +1696,14 @@ class OTelExporter:
             "gen_ai.usage.cached_tokens",
             "gen_ai.usage.cache_read.input_tokens",
             "gen_ai.usage.cost_usd",
+            "caveman.usage.cost_usd",
             "cave.agent",
             "cave.workflow",
         ):
             attrs.pop(reserved, None)
+        # SDK 1.1.0 passed a caller-supplied cache-write count through; the typed argument replaces it only when given.
+        if cache_creation_tokens is not None:
+            attrs.pop("gen_ai.usage.cache_creation.input_tokens", None)
         if operation is not None:
             attrs["gen_ai.operation.name"] = operation
         if provider is not None:
@@ -1717,8 +1722,14 @@ class OTelExporter:
             attrs["gen_ai.usage.output_tokens"] = valid_output
         if valid_cached is not None and (valid_input is None or valid_cached <= valid_input):
             attrs["gen_ai.usage.cache_read.input_tokens"] = valid_cached
+        valid_creation = _strict_non_negative_int(cache_creation_tokens)
+        if valid_creation is not None:  # never clamped to input: Anthropic reports cache writes outside input_tokens
+            attrs["gen_ai.usage.cache_creation.input_tokens"] = valid_creation
+        # `caveman.usage.cost_usd` carries the cost. `gen_ai.usage.cost_usd` is not an OTel GenAI semconv name and is
+        # deprecated; it stays through 1.x because the gateway importer reads it.
         if isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool) and math.isfinite(float(cost_usd)) and cost_usd >= 0:
             attrs["gen_ai.usage.cost_usd"] = float(cost_usd)
+            attrs["caveman.usage.cost_usd"] = float(cost_usd)
         attrs["cave.agent"] = self.cave.agent
         attrs["cave.workflow"] = workflow or self.cave.default_workflow
 
@@ -1955,7 +1966,7 @@ def policy_unit_fraction(*keys: str) -> float:
     """Deterministic [0,1) fraction for a tuple of keys — the experiment
     assignment unit.
 
-    Byte-for-byte port of the Go ``shared/platform/sampling.Fraction``: one
+    Byte-for-byte port of the Go Caveman-Cloud ``shared/platform/sampling.Fraction``: one
     SHA-256 over each key preceded by an 8-byte big-endian prefix carrying the
     key's UTF-8 byte length, then the first 8 digest bytes read big-endian,
     shifted right 11 and divided by 2^53. The length prefix is what keeps

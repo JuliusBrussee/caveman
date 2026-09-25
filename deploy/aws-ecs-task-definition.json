@@ -8,23 +8,59 @@
   "taskRoleArn": "arn:aws:iam::REPLACE_ACCOUNT_ID:role/REPLACE_caveman_proxy_task_role_with_bedrock_InvokeModel",
   "volumes": [
     {
-      "name": "caveman-data",
-      "efsVolumeConfiguration": {
-        "fileSystemId": "fs-REPLACE_EFS_FILESYSTEM_ID",
-        "rootDirectory": "/",
-        "transitEncryption": "ENABLED",
-        "authorizationConfig": {
-          "accessPointId": "fsap-REPLACE_ACCESS_POINT_THAT_MAPS_POSIX_UID_65532",
-          "iam": "ENABLED"
-        }
-      }
+      "name": "caveman-data"
+    },
+    {
+      "name": "caveman-tls"
     }
   ],
   "containerDefinitions": [
     {
+      "name": "tls-files",
+      "image": "public.ecr.aws/docker/library/busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e",
+      "essential": false,
+      "user": "0",
+      "readonlyRootFilesystem": true,
+      "entryPoint": ["sh", "-c"],
+      "command": [
+        "umask 277 && printf '%s' \"$TLS_CERT\" > /tls/tls.crt && printf '%s' \"$TLS_KEY\" > /tls/tls.key && chown 65532:65532 /tls/tls.crt /tls/tls.key"
+      ],
+      "secrets": [
+        {
+          "name": "TLS_CERT",
+          "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:caveman-proxy/tls-cert-REPLACE_SUFFIX"
+        },
+        {
+          "name": "TLS_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:caveman-proxy/tls-key-REPLACE_SUFFIX"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "caveman-tls",
+          "containerPath": "/tls",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/caveman-proxy",
+          "awslogs-region": "REPLACE_REGION",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    },
+    {
       "name": "caveman-proxy",
-      "image": "ghcr.io/juliusbrussee/caveman-proxy:bin-v1.1.7",
+      "image": "ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0@sha256:REPLACE_AT_RELEASE",
       "essential": true,
+      "dependsOn": [
+        {
+          "containerName": "tls-files",
+          "condition": "SUCCESS"
+        }
+      ],
       "portMappings": [
         {
           "containerPort": 8787,
@@ -39,12 +75,36 @@
         {
           "name": "CAVEMAN_MODE",
           "value": "record"
+        },
+        {
+          "name": "CAVEMAN_MIDDLEWARE_MODE",
+          "value": "compress"
+        },
+        {
+          "name": "CAVEMAN_TLS_CERT_FILE",
+          "value": "/etc/caveman/tls/tls.crt"
+        },
+        {
+          "name": "CAVEMAN_TLS_KEY_FILE",
+          "value": "/etc/caveman/tls/tls.key"
         }
       ],
       "secrets": [
         {
           "name": "CAVEMAN_AUTH_TOKEN",
           "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:caveman-proxy/auth-token-REPLACE_SUFFIX"
+        },
+        {
+          "name": "CAVEMAN_MIDDLEWARE_DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:caveman-proxy/middleware-database-url-REPLACE_SUFFIX"
+        },
+        {
+          "name": "CAVEMAN_MIDDLEWARE_ENCRYPTION_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:caveman-proxy/middleware-encryption-key-REPLACE_SUFFIX"
+        },
+        {
+          "name": "CAVE_POSTGRES_CA_CERT",
+          "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:caveman-proxy/rds-ca-bundle-REPLACE_SUFFIX"
         }
       ],
       "mountPoints": [
@@ -52,6 +112,11 @@
           "sourceVolume": "caveman-data",
           "containerPath": "/data",
           "readOnly": false
+        },
+        {
+          "sourceVolume": "caveman-tls",
+          "containerPath": "/etc/caveman/tls",
+          "readOnly": true
         }
       ],
       "user": "65532:65532",

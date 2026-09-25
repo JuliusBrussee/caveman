@@ -24,7 +24,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/JuliusBrussee/caveman/engine"
-	"github.com/JuliusBrussee/caveman/engine/ccr"
+	"github.com/JuliusBrussee/caveman/proxy/internal/store"
 )
 
 // These records follow assertions against the real Engine, stores and HTTP
@@ -342,19 +342,12 @@ func TestMiddlewareAcceptanceDefaultDeadlineIncludesQueue(t *testing.T) {
 }
 
 func TestMiddlewareAcceptanceCapacityRetainsLiveOriginals(t *testing.T) {
-	f := openFixture(t, t.TempDir(), "compress")
-	_ = f.recovery.Close()
-	limited, err := ccr.OpenWithBudget(filepath.Join(f.dir, "ccr.db"), 128<<10)
-	if err != nil {
-		f.close()
-		t.Fatal(err)
-	}
-	f.recovery = limited
+	f := newFixture(t)
+	// Originals live in the middleware store, so its byte cap is what fills.
 	cfg := f.runtime.cfg
-	cfg.Recovery = limited
-	f.runtime, err = New(cfg)
-	defer f.close()
-	if err != nil {
+	cfg.Capacity = store.MiddlewareLimits{Bytes: 128 << 10}
+	var err error
+	if f.runtime, err = New(cfg); err != nil {
 		t.Fatal(err)
 	}
 	firstRequest := requestFor(f.runtime)
@@ -380,21 +373,13 @@ func TestMiddlewareAcceptanceCapacityRetainsLiveOriginals(t *testing.T) {
 		accepted++
 	}
 	if capacityStatus == 0 {
-		t.Fatal("fixture did not reach actual SQLite/CCR storage capacity")
+		t.Fatal("fixture did not reach actual middleware storage capacity")
 	}
 	page := recovered(t, f.runtime, firstRequest.Scope, first.Replacements[0].RecoveryHandle, "alice")
 	if page.Text != noisy() {
 		t.Fatal("capacity evicted a live original")
 	}
-	_ = f.recovery.Close()
-	f.recovery, err = ccr.OpenWithBudget(filepath.Join(f.dir, "ccr.db"), 128<<10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.recovery.Close()
-	cfg.Recovery = f.recovery
-	f.runtime, err = New(cfg)
-	if err != nil {
+	if f.runtime, err = New(cfg); err != nil {
 		t.Fatal(err)
 	}
 	reopened := recovered(t, f.runtime, firstRequest.Scope, first.Replacements[0].RecoveryHandle, "alice")
@@ -402,7 +387,7 @@ func TestMiddlewareAcceptanceCapacityRetainsLiveOriginals(t *testing.T) {
 		t.Fatal("live source disappeared after reopening full storage")
 	}
 	acceptance(t, "retained_capacity_original", []string{"runtime.R5.AC07"}, map[string]any{"retention_seconds": f.runtime.caps.RetentionSeconds,
-		"configured_ccr_bytes": 128 << 10, "accepted_originals_before_capacity": accepted, "capacity_http_status": capacityStatus,
+		"configured_store_bytes": 128 << 10, "accepted_originals_before_capacity": accepted, "capacity_http_status": capacityStatus,
 		"first_original_sha256": page.OriginalSHA256, "reopened_original_sha256": reopened.OriginalSHA256,
 		"store_reopened": true, "process_restarted": false, "retention_elapsed": false})
 }

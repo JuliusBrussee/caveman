@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://caveman.so/schemas/cave-plan.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/cave-plan.schema.json",
   "title": "Caveman Agent Cave Plan",
   "type": "object",
   "additionalProperties": false,

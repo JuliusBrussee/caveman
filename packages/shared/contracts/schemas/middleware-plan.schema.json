@@ -1,6 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://caveman.so/schemas/middleware-plan.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/middleware-plan.schema.json",
+  "title": "Caveman middleware optimize plan",
+  "description": "optimize 200 response. Closed on purpose: describes exactly what a protocol 1.1 server emits, and the conformance kit holds servers to it. Clients MUST NOT validate responses against this schema; they ignore unknown fields (docs/technical/middleware-protocol.md §4, §16).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -23,20 +25,20 @@
       "const": 1
     },
     "request_id": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "middleware-common.schema.json#/$defs/token"
     },
     "input_digest": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+      "$ref": "middleware-common.schema.json#/$defs/sha256"
     },
     "runtime_build": {
       "type": "string",
       "maxLength": 256
     },
     "policy_revision": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "middleware-common.schema.json#/$defs/token"
     },
     "replacement_set_id": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+      "$ref": "middleware-common.schema.json#/$defs/sha256"
     },
     "status": {
       "enum": [
@@ -46,12 +48,12 @@
       ]
     },
     "reason": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "middleware-common.schema.json#/$defs/token"
     },
     "replacements": {
       "type": "array",
       "items": {
-        "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/replacement"
+        "$ref": "middleware-common.schema.json#/$defs/replacement"
       },
       "maxItems": 256
     },
@@ -66,10 +68,10 @@
         ],
         "properties": {
           "segment_id": {
-            "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+            "$ref": "middleware-common.schema.json#/$defs/token"
           },
           "reason": {
-            "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+            "$ref": "middleware-common.schema.json#/$defs/token"
           }
         }
       },
@@ -94,7 +96,7 @@
           "const": "inferred"
         },
         "tokenizer": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "middleware-common.schema.json#/$defs/token"
         },
         "scope": {
           "const": "segment"

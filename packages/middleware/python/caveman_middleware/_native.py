@@ -5,10 +5,16 @@ import contextvars
 import json
 import math
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
-from caveman_cloud.middleware import Adapter, Candidate, Scope, sha256
+from caveman_cloud.middleware import (
+    Adapter, Candidate, Scope, ensure_async, ensure_sync, manifest_window, normalize_scope, opaque_manifest_value, sha256,
+)
+from caveman_cloud.middleware.types import MIDDLEWARE_DEFAULTS
+
+from ._guard import fail_open
+from ._versions import VERSION
 
 owner: contextvars.ContextVar[Attempt | None] = contextvars.ContextVar("caveman_middleware_owner", default=None)
 
@@ -17,44 +23,85 @@ def plain(value: Any) -> bool:
     return type(value) is dict
 
 
-def manifest(items: list) -> list[dict] | None:
-    budget = 2 << 20
+MANIFEST_BYTES = MIDDLEWARE_DEFAULTS["manifest_bytes"]
+MANIFEST_ITEMS = MIDDLEWARE_DEFAULTS["max_manifest_items"]
+
+
+class Manifest(list):
+    """Head window of per-item digests (protocol §11). ``sequence`` is the untruncated history length."""
+    sequence = 0
+
+
+class _Full(Exception):
+    pass
+
+
+def _view(value, budget):
+    """JSON-safe copy and its hashing cost. Images/bytes and other non-JSON leaves become hashed
+    ``{"caveman_opaque": h}`` stand-ins instead of making the whole call bypass. Raises _Full past budget."""
     seen: set[int] = set()
+    used = 0
+
+    def charge(size):
+        nonlocal used
+        used += size
+        if used > budget:
+            raise _Full
 
     def visit(value, depth=0):
-        nonlocal budget
-        if depth > 64 or budget < 0:
+        if depth > 64:
             raise ValueError("bounded")
         if type(value) is str:
-            budget -= len(value.encode("utf-8"))
-        elif value is None or type(value) in (bool, int):
-            budget -= 32
-        elif type(value) is float and math.isfinite(value):
-            budget -= 32
-        elif type(value) in (dict, list):
+            try:
+                charge(len(value.encode("utf-8")))
+            except UnicodeEncodeError:
+                return opaque_manifest_value(value)
+            return value
+        if value is None or type(value) in (bool, int) or (type(value) is float and math.isfinite(value)):
+            charge(32)
+            return value
+        if type(value) in (dict, list, tuple):
             if id(value) in seen:
                 raise ValueError("cyclic")
             seen.add(id(value))
-            for key, entry in (value.items() if type(value) is dict else enumerate(value)):
+            try:
                 if type(value) is dict:
-                    if type(key) is not str:
-                        raise ValueError("opaque")
-                    budget -= len(key.encode("utf-8"))
-                visit(entry, depth + 1)
-            seen.remove(id(value))
-        else:
-            raise ValueError("opaque")
+                    if any(type(key) is not str for key in value):
+                        raise ValueError("opaque key")
+                    for key in value:
+                        charge(len(key.encode("utf-8")))
+                    return {key: visit(entry, depth + 1) for key, entry in value.items()}
+                return [visit(entry, depth + 1) for entry in value]
+            finally:
+                seen.discard(id(value))
+        charge(96)
+        return opaque_manifest_value(value)
 
+    return visit(value), used
+
+
+def manifest(items, max_bytes=None) -> Manifest | None:
+    """Digest the longest head of ``items`` inside the byte/item budget (``manifest_window``); never bypass
+    for size. None only for structurally unusable history (cycles, extreme depth, non-string keys)."""
+    items = list(items)
+    budget = MANIFEST_BYTES if max_bytes is None else max_bytes
+    views, sizes, used = [], [], 0
     try:
-        result = []
-        for i, item in enumerate(items):
-            visit(item)
-            if budget < 0:
-                return None
-            result.append({"id": f"message-{i}", "sha256": sha256(json.dumps(item, ensure_ascii=False, separators=(",", ":"), allow_nan=False))})
-        return result
+        for item in items[:MANIFEST_ITEMS]:
+            try:
+                view, size = _view(item, budget - used)
+            except _Full:
+                sizes.append(budget + 1)  # the window ends before this item
+                break
+            views.append(view)
+            sizes.append(size)
+            used += size
+        result = Manifest({"id": f"message-{i}", "sha256": sha256(json.dumps(view, ensure_ascii=False, separators=(",", ":"), allow_nan=False))}
+                          for i, view in enumerate(views[:manifest_window(sizes, MANIFEST_ITEMS, budget)]))
     except (TypeError, ValueError, RecursionError, UnicodeError):
         return None
+    result.sequence = len(items)
+    return result
 
 
 def leaves(body: dict, protocol: str) -> tuple[list, list[tuple[tuple, str]]] | None:
@@ -220,21 +267,31 @@ class Attempt:
             self._reported_attempt_id = self.attempt_id
             self.runtime.report(self.optimization, logical_call_id=self.logical_call_id, attempt_id=self.attempt_id,
                                 reason=self.reason, adapter=self.adapter)
-        if self.passive or self.runtime.mode == "off":
+        # Receipts carry the same normalized scope optimize() used; an unusable scope sends none.
+        scope = normalize_scope(self.scope) if self.scope is not None else None
+        if self.passive or self.runtime.mode == "off" or scope is None:
             return
-        self.runtime.observe_background({"schema_version": 1, "scope": self.scope.__dict__, "logical_call_id": self.logical_call_id,
+        self.runtime.observe_background({"schema_version": 1, "scope": asdict(scope), "logical_call_id": self.logical_call_id,
             "attempt_id": self.attempt_id, "event_kind": event,
             "plan_id": self.plan_id or (self.optimization.plan["replacement_set_id"] if self.optimization and self.optimization.plan else None),
             "usage": usage, "provider_request_sha256": self.wire_sha256})
 
 
 class NativeSession:
-    def __init__(self, runtime, scope, *, adapter_id, framework_version, protocol, binding=None, overhead=None, logical_call_id=None, is_registered=None, passive_reason=None):
+    """Provider-body projection shared by the OpenAI, Anthropic, LiteLLM and ASGI adapters.
+
+    ``runtime`` may be either SDK runtime type; sync and async paths each get the matching view.
+    Responses bodies that the provider would store (``store`` defaults to true) are never projected
+    unless ``allow_stored_responses``: the compressed turn would outlive the call (provider_state_retained).
+    """
+    def __init__(self, runtime, scope, *, adapter_id, framework_version, protocol, binding=None, overhead=None, logical_call_id=None,
+                 is_registered=None, passive_reason=None, allow_stored_responses=False, manifest_bytes=None):
         self.runtime, self.scope, self.protocol = runtime, scope, protocol
         self.binding, self.overhead, self.logical_call_id = binding, overhead, logical_call_id
         self.is_registered = is_registered
         self.passive_reason = passive_reason
-        self.adapter = Adapter(adapter_id, "0.1.0", framework_version, protocol + "-native-v1")
+        self.allow_stored_responses, self.manifest_bytes = allow_stored_responses, manifest_bytes
+        self.adapter = Adapter(adapter_id, VERSION, framework_version, protocol + "-native-v1")
 
     def registered(self):
         try:
@@ -243,19 +300,23 @@ class NativeSession:
             return False
 
     def options(self, body):
+        """Prepared (attempt, leaves, optimize options), a pass-through reason, or None (default reason)."""
         if owner.get() is not None or self.runtime.mode == "off" or self.passive_reason or not plain(body):
             return None
+        if self.protocol == "openai-responses" and body.get("store") is not False and not self.allow_stored_responses:
+            return "provider_state_retained"
         selected = leaves(body, self.protocol)
         if selected is None:
             return None
         context, selected_leaves = selected
-        context_manifest = manifest(context)
+        context_manifest = manifest(context, self.manifest_bytes)
         if context_manifest is None:
             return None
         attempt = Attempt(self.runtime, self.scope, self.logical_call_id or str(uuid.uuid4()), str(uuid.uuid4()), adapter=self.adapter.id)
         binding = self.binding if self.registered() and self.runtime.owns_binding(self.binding, self.scope) and accepts_recovery(body, self.protocol, self.binding) else None
         options = dict(scope=self.scope, adapter=self.adapter, candidates=[Candidate(id=f"leaf-{i}", source_id="/".join(map(str,path)), content=text) for i,(path,text) in enumerate(selected_leaves)],
-            manifest=context_manifest, model={"provider": self.adapter.id.removesuffix("-sdk"), "id": body["model"], "protocol": self.protocol} if type(body.get("model")) is str else None,
+            manifest=context_manifest, sequence=context_manifest.sequence,
+            model={"provider": self.adapter.id.removesuffix("-sdk"), "id": body["model"], "protocol": self.protocol} if type(body.get("model")) is str else None,
             binding=binding, recovery_overhead_text=self.overhead, logical_call_id=attempt.logical_call_id, attempt_id=attempt.attempt_id)
         return attempt, selected_leaves, options
 
@@ -284,9 +345,19 @@ class NativeSession:
                              passive=True, reason=reason or self.passive_reason or "unsupported_shape", adapter=self.adapter.id)
 
     def prepare(self, body):
-        state = self.options(body)
-        return self.passive(body) if state is None else self.apply(body, state, self.runtime.optimize(**state[2]))
+        try:
+            state = self.options(body)
+            if isinstance(state, tuple):
+                return self.apply(body, state, ensure_sync(self.runtime).optimize(**state[2]))
+        except Exception as error:  # Decision 4: never break the native call
+            state = fail_open(self.runtime, self.adapter.id, error)
+        return self.passive(body, state)
 
     async def prepare_async(self, body):
-        state = self.options(body)
-        return self.passive(body) if state is None else self.apply(body, state, await self.runtime.optimize(**state[2]))
+        try:
+            state = self.options(body)
+            if isinstance(state, tuple):
+                return self.apply(body, state, await ensure_async(self.runtime).optimize(**state[2]))
+        except Exception as error:
+            state = fail_open(self.runtime, self.adapter.id, error)
+        return self.passive(body, state)

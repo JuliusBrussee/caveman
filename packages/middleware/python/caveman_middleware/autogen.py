@@ -18,6 +18,8 @@ from dataclasses import asdict
 from importlib.metadata import version
 from typing import Any, Mapping
 
+from ._versions import framework_import_failed
+
 try:
     from autogen_core import CancellationToken, Component, ComponentModel, FunctionCall
     from autogen_core.models import (
@@ -26,17 +28,18 @@ try:
     )
     from autogen_core.tools import BaseTool, FunctionTool, StaticStreamWorkbench, TextResultContent, ToolResult, Workbench
     from pydantic import BaseModel
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[autogen] to use the AutoGen adapter") from error
+except ImportError as error:
+    framework_import_failed("autogen", error, "Install caveman-middleware[autogen] to use the AutoGen adapter")
 
-from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, MiddlewareRuntime, Scope
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, Scope, ensure_async
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION, RECOVERY_SCHEMA
+from ._guard import fail_open, recovery, recovery_failed, recovery_name_conflict
 from ._native import Attempt, manifest, owner
-from ._versions import matches_framework, supports_framework
+from ._versions import VERSION, family_gate
 from ._usage import usage
 
 FRAMEWORK_VERSION = version("autogen-core")
-ADAPTER = Adapter("autogen", "0.1.0", FRAMEWORK_VERSION, "autogen-messages-v1")
+ADAPTER = Adapter("autogen", VERSION, FRAMEWORK_VERSION, "autogen-messages-v1")
 _component_runtimes = contextvars.ContextVar("caveman_autogen_component_runtimes", default={})
 _loaded_components = contextvars.ContextVar("caveman_autogen_loaded_components", default=None)
 
@@ -66,18 +69,10 @@ def _runtime(key):
         raise ValueError(f"Bind runtime {key!r} with caveman_middleware.autogen.component_runtimes before loading") from None
 
 
-def _supported(runtime):
-    return supports_framework(runtime, ("autogen-core", "0.7", "0.8"), ("autogen-agentchat", "0.7", "0.8"), ("autogen-ext", "0.7", "0.8"))
-
-
-def _version_supported():
-    return matches_framework(("autogen-core", "0.7", "0.8"), ("autogen-agentchat", "0.7", "0.8"), ("autogen-ext", "0.7", "0.8"))
-
-
 def _check(runtime, scope):
     if not isinstance(scope, Scope):
         raise TypeError("AutoGen requires a stable Caveman Scope for each agent or model context")
-    return runtime.as_async() if isinstance(runtime, MiddlewareRuntime) else runtime
+    return ensure_async(runtime)
 
 
 def _schema():
@@ -162,15 +157,13 @@ class CavemanChatCompletionClient(ChatCompletionClient, Component[CavemanModelCo
     component_config_schema = CavemanModelConfig
     component_type = "model"
 
-    def __init__(self, model_client: ChatCompletionClient, *, runtime, scope: Scope, runtime_key="default"):
+    def __init__(self, model_client: ChatCompletionClient, *, runtime, scope: Scope, runtime_key="default", accept_framework_version=False):
         if not isinstance(model_client, ChatCompletionClient):
             raise TypeError("Expected an AutoGen ChatCompletionClient")
         self.model_client = model_client
         self.runtime, self.scope = _check(runtime, scope), scope
         self.runtime_key = runtime_key
-        self.version_supported = _version_supported()
-        if not self.version_supported and self.runtime.mode != "off":
-            self.runtime.decline("unsupported_version")
+        self.version_supported = family_gate(self.runtime, "autogen", ADAPTER.id, accept_framework_version)
         # Public configuration inspection occurs once, and only safe route
         # metadata is retained. Unknown contracts stay recovery-free.
         try:
@@ -230,7 +223,15 @@ class CavemanChatCompletionClient(ChatCompletionClient, Component[CavemanModelCo
             return None, None
         return workbench.binding, json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
 
-    async def _prepare(self, messages, tools, tool_choice, json_output, extra_create_args):
+    async def _prepare(self, messages, *args):
+        try:
+            return await self._project(messages, *args)
+        except Exception as error:  # Decision 4: the model client still receives the caller's messages
+            return messages, None if owner.get() is not None else Attempt(
+                self.runtime, None, str(uuid.uuid4()), str(uuid.uuid4()), passive=True,
+                reason=fail_open(self.runtime, ADAPTER.id, error), adapter=ADAPTER.id)
+
+    async def _project(self, messages, tools, tool_choice, json_output, extra_create_args):
         if owner.get() is not None:
             return messages, None
 
@@ -272,7 +273,7 @@ class CavemanChatCompletionClient(ChatCompletionClient, Component[CavemanModelCo
         binding, overhead = self._binding(tools, tool_choice, json_output, extra_create_args)
         model_id = extra_create_args.get("model", self.model_id)
         attempt = Attempt(self.runtime, self.scope, str(uuid.uuid4()), str(uuid.uuid4()), adapter=ADAPTER.id)
-        result = await self.runtime.optimize(scope=self.scope, adapter=ADAPTER, manifest=context, candidates=candidates,
+        result = await self.runtime.optimize(scope=self.scope, adapter=ADAPTER, manifest=context, sequence=context.sequence, candidates=candidates,
             binding=binding, recovery_overhead_text=overhead, logical_call_id=attempt.logical_call_id, attempt_id=attempt.attempt_id,
             model={"provider": type(self.model_client).__name__, "id": model_id, "protocol": "autogen-chat"} if type(model_id) is str else None)
         attempt.optimization = result if not result.replacements else None
@@ -299,9 +300,7 @@ class CavemanChatCompletionClient(ChatCompletionClient, Component[CavemanModelCo
             result = await cancellation.wait(self._prepare(messages, tools, tool_choice, json_output, extra_create_args))
             cancellation.check()
             return result
-        except asyncio.CancelledError:
-            if owner.get() is None:
-                self.runtime.report(reason="cancelled", adapter=ADAPTER.id)
+        except asyncio.CancelledError:  # nothing was dispatched: no decision to report
             raise
 
     async def create(self, messages, *, tools=(), tool_choice="auto", json_output=None, extra_create_args={}, cancellation_token=None):
@@ -373,7 +372,7 @@ class CavemanWorkbench(StaticStreamWorkbench):
     component_provider_override = "caveman_middleware.autogen.CavemanWorkbench"
     component_config_schema = CavemanWorkbenchConfig
 
-    def __init__(self, workbench: Workbench | list[Workbench], *, runtime, scope: Scope, runtime_key="default"):
+    def __init__(self, workbench: Workbench | list[Workbench], *, runtime, scope: Scope, runtime_key="default", accept_framework_version=False):
         delegates = workbench if type(workbench) is list else [workbench]
         if not all(isinstance(item, Workbench) for item in delegates):
             raise TypeError("Expected an AutoGen Workbench or list of workbenches")
@@ -382,25 +381,41 @@ class CavemanWorkbench(StaticStreamWorkbench):
         self.delegates = tuple(delegates)
         self.runtime, self.scope = _check(runtime, scope), scope
         self.runtime_key = runtime_key
-        self.binding = self.runtime.recovery(scope)
+        self.version_supported = family_gate(self.runtime, "autogen", ADAPTER.id, accept_framework_version)
+        self.binding = recovery(self.runtime, scope)  # None for an unusable scope: recovery stays off
         self.recovery_schema = _RecoverySchema(self)
         self.recovery_enabled = False
         self.stopped = False
+        self._owners = None
+
+    async def _refresh(self):
+        """List every delegate once. The agent calls list_tools() each turn, so call_tool reuses
+        that turn's listing (D13) and only re-lists when a name is missing from it."""
+        listing = [(workbench, await workbench.list_tools()) for workbench in self.delegates]
+        tools = [tool for _, found in listing for tool in found]
+        conflict = any(t.get("name") == "caveman_retrieve" for t in tools)
+        if conflict and self.runtime.mode == "compress":
+            recovery_name_conflict(self.runtime, ADAPTER.id)
+        self.recovery_enabled = (not self.stopped and self.version_supported and self.binding is not None
+                                 and self.runtime.mode == "compress" and not conflict)
+        # The first delegate that lists a name owns it; a collision always belongs to the original workbench.
+        self._owners = {tool["name"]: workbench for workbench, found in reversed(listing) for tool in found}
+        return tools
 
     async def list_tools(self):
-        tools = [tool for workbench in self.delegates for tool in await workbench.list_tools()]
-        self.recovery_enabled = (not self.stopped and _supported(self.runtime) and self.runtime.mode == "compress"
-                                 and not any(t.get("name") == "caveman_retrieve" for t in tools))
+        tools = await self._refresh()
         return [*tools, self.recovery_schema] if self.recovery_enabled else tools
 
+    async def _owner(self, name):
+        if self._owners is None or (name not in self._owners and name != "caveman_retrieve"):
+            await self._refresh()  # a dynamic registry changed since this turn's listing
+        return self._owners.get(name)
+
     async def call_tool(self, name, arguments=None, cancellation_token=None, call_id=None):
-        # Refresh dynamic registries before deciding which implementation owns
-        # the name. A collision always belongs to the original workbench.
-        await self.list_tools()
+        workbench = await self._owner(name)
         if name != "caveman_retrieve" or not self.recovery_enabled:
-            for workbench in self.delegates:
-                if any(tool["name"] == name for tool in await workbench.list_tools()):
-                    return await workbench.call_tool(name, arguments, cancellation_token, call_id)
+            if workbench is not None:
+                return await workbench.call_tool(name, arguments, cancellation_token, call_id)
             if self.delegates:
                 return await self.delegates[0].call_tool(name, arguments, cancellation_token, call_id)
             return ToolResult(name=name, result=[TextResultContent(content=f"Tool {name} not found.")], is_error=True)
@@ -409,22 +424,18 @@ class CavemanWorkbench(StaticStreamWorkbench):
         try:
             args = dict(arguments or {})
             if set(args) - set(RECOVERY_SCHEMA["properties"]) or "handle" not in args:
-                raise MiddlewareError("invalid_recovery_arguments")
+                raise MiddlewareError("invalid_request")
             result = await cancellation.wait(self.binding.execute(args))
             return ToolResult(name=name, result=[TextResultContent(content=json.dumps(result, ensure_ascii=False, separators=(",", ":")))])
         except MiddlewareError as error:
-            return ToolResult(name=name, result=[TextResultContent(content=json.dumps({"error": {"code": error.code}}))], is_error=True)
+            return ToolResult(name=name, result=[TextResultContent(content=json.dumps(recovery_failed(ADAPTER.id, error)))], is_error=True)
         except (TypeError, ValueError):
-            return ToolResult(name=name, result=[TextResultContent(content='{"error":{"code":"invalid_recovery_arguments"}}')], is_error=True)
+            return ToolResult(name=name, result=[TextResultContent(content='{"error":"invalid_request"}')], is_error=True)
 
     async def call_tool_stream(self, name, arguments=None, cancellation_token=None, call_id=None):
-        await self.list_tools()
-        workbench = None
-        if name != "caveman_retrieve" or not self.recovery_enabled:
-            for candidate in self.delegates:
-                if any(tool["name"] == name for tool in await candidate.list_tools()):
-                    workbench = candidate
-                    break
+        workbench = await self._owner(name)
+        if name == "caveman_retrieve" and self.recovery_enabled:
+            workbench = None
         if not isinstance(workbench, StaticStreamWorkbench):
             yield await self.call_tool(name, arguments, cancellation_token, call_id)
             return
@@ -481,19 +492,27 @@ class CavemanWorkbench(StaticStreamWorkbench):
         return _loaded(cls(workbench, runtime=runtime, scope=config.scope, runtime_key=config.runtime_key))
 
 
-def with_caveman_model(model_client, *, runtime, scope, runtime_key="default"):
-    """Wrap an existing client; recovery-free unless paired with the workbench."""
-    return CavemanChatCompletionClient(model_client, runtime=runtime, scope=scope, runtime_key=runtime_key)
+def with_caveman_model(model_client, *, runtime, scope, runtime_key="default", accept_framework_version=False):
+    """Wrap an existing client; record-only (``recovery_unbound`` in compress mode) unless paired with the workbench."""
+    if isinstance(model_client, CavemanChatCompletionClient):  # already wrapped: one Caveman layer, unchanged
+        return model_client
+    return CavemanChatCompletionClient(model_client, runtime=runtime, scope=scope, runtime_key=runtime_key,
+                                       accept_framework_version=accept_framework_version)
 
 
-def with_caveman_agent(options: dict, *, runtime, scope, runtime_key="default") -> dict:
+def with_caveman_agent(options: dict, *, runtime, scope, runtime_key="default", accept_framework_version=False) -> dict:
     """Return native AssistantAgent constructor options, leaving its loop intact.
 
     Accepts the native ``tools`` list or ``workbench`` (including a workbench
     list), retaining tool order and the original native executor for every call.
     """
-    model = CavemanChatCompletionClient(options["model_client"], runtime=runtime, scope=scope, runtime_key=runtime_key)
-    if runtime.mode == "off" or not model.version_supported:
+    if isinstance(options.get("model_client"), CavemanChatCompletionClient):
+        if isinstance(options.get("workbench"), CavemanWorkbench):  # options this function already returned: unchanged
+            return options
+        options = {**options, "model_client": options["model_client"].model_client}  # a with_caveman_model layer is replaced
+    model = CavemanChatCompletionClient(options["model_client"], runtime=runtime, scope=scope, runtime_key=runtime_key,
+                                        accept_framework_version=accept_framework_version)
+    if model.runtime.mode == "off" or not model.version_supported:
         return {**options, "model_client": model}
     if options.get("tools") and options.get("workbench") is not None:
         raise ValueError("AutoGen tools and workbench are mutually exclusive")
@@ -502,6 +521,7 @@ def with_caveman_agent(options: dict, *, runtime, scope, runtime_key="default") 
         tools = [t if isinstance(t, BaseTool) else FunctionTool(t, description=t.__doc__ or "") for t in options.get("tools", [])]
         workbench = StaticStreamWorkbench(tools)
     result = {**options, "model_client": model,
-              "workbench": CavemanWorkbench(workbench, runtime=runtime, scope=scope, runtime_key=runtime_key)}
+              "workbench": CavemanWorkbench(workbench, runtime=runtime, scope=scope, runtime_key=runtime_key,
+                                            accept_framework_version=accept_framework_version)}
     result.pop("tools", None)
     return result

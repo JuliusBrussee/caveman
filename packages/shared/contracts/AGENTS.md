@@ -10,9 +10,17 @@ Source-of-truth schemas for cross-service/SDK wire shapes:
 - `schemas/practice.schema.json` — strict JSON Schema 2020-12 for one practice record; unknown fields and enums fail closed
 - `schemas/adapter-conformance.schema.json` — static Pi/Claude contract-record
   shape; `evidence: static_contract_only` explicitly denies executable proof
+- `schemas/middleware-*.schema.json` + `openapi/middleware.openapi.json` — the
+  framework middleware protocol. Normative prose (negotiation, status/error and
+  reason catalogs, N-1 policy) is `docs/technical/middleware-protocol.md`;
+  executable vectors are `packages/sdk/parity/middleware-v1_1.fixtures.json`.
+  Additive changes keep `schema_version` 1; unknown `limits` keys must stay
+  positive safe integers because SDK 1.1.0 rejects anything else
 - `scripts/validate-schemas.mjs` — compiles every schema with AJV, validates
-  adapter fixtures, and checks their shared static contract fields
-- `package.json` — build/lint/test scripts run schema validation (no compiled output)
+  adapter fixtures, middleware fixture examples, `$id` = raw GitHub URL of the
+  file at tag `contracts-v<package.json version>` (bump both together),
+  relative cross-schema `$ref`s only, and every OpenAPI `$ref`
+- `package.json` — `@caveman-ai/contracts`; build/lint/test run both validators (no compiled output)
 
 ## Key schema fields
 
