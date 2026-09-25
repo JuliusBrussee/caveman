@@ -57,6 +57,13 @@ func claudeRoot() string {
 	if r := os.Getenv("CAVEMAN_CLAUDE_ROOT"); r != "" {
 		return r
 	}
+	// CLAUDE_CONFIG_DIR is the override Claude Code itself honors, and the one
+	// the CLI, the installer, and INSTALL.md already read. Falling through to
+	// ~/.claude instead leaves learn reporting "0 sessions" for a user whose
+	// config never lived there, so honor it before the home default.
+	if r := os.Getenv("CLAUDE_CONFIG_DIR"); r != "" {
+		return r
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
