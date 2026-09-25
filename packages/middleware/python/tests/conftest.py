@@ -89,6 +89,7 @@ def peer_runtime(**options):
     reports, receipts, requests, retrievals = [], [], [], []
     runtime = MiddlewareRuntime(on_report=reports.append, **options)
     runtime.reports, runtime.receipts, runtime.requests, runtime.retrievals = reports, receipts, requests, retrievals
+    runtime.refuse = None  # (status, code) every retrieve answers with, e.g. (410, "expired")
     originals = {}
 
     def http(path, body, timeout):
@@ -97,6 +98,11 @@ def peer_runtime(**options):
         request = json.loads(body)
         if path == "retrieve":
             retrievals.append(request)
+            if runtime.refuse or request["handle"] not in originals:
+                # The real runtime's §6 error envelope (404 not_found for an unknown handle), through the SDK's own HTTP error path.
+                status, code = runtime.refuse or (404, "not_found")
+                runtime._transport = lambda *_: (status, {}, json.dumps({"schema_version": 1, "error": {"code": code}}).encode())
+                return MiddlewareRuntime._http(runtime, path, body, timeout)
             scope, segment = originals[request["handle"]]
             assert request["scope"] == scope, "recovery crossed a session boundary"
             text = segment["content"]

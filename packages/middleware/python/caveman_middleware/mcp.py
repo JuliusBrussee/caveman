@@ -13,15 +13,17 @@ import json
 import uuid
 from typing import Any
 
+from ._versions import framework_import_failed
+
 try:
     from mcp.types import CallToolResult, TextContent, Tool
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[mcp] for the native MCP adapter") from error
+except ImportError as error:
+    framework_import_failed("mcp", error, "Install caveman-middleware[mcp] for the native MCP adapter")
 
-from caveman_cloud.middleware import Adapter, Candidate, Scope, ensure_async, sha256
-from ._guard import fail_open, recovery, recovery_name_conflict
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, Scope, ensure_async, sha256
+from ._guard import fail_open, recovery, recovery_failed, recovery_name_conflict
 from ._native import owner
-from ._versions import family_gate, installed_version
+from ._versions import VERSION, family_gate, installed_version
 
 
 @dataclass(frozen=True)
@@ -51,7 +53,7 @@ class CavemanMCPHost:
         if not server_id or not protocol_version:
             raise ValueError("Provide the host's server identity and negotiated protocol version")
         self.runtime, self.scope, self.server_id = runtime, scope, server_id
-        self.adapter = Adapter("mcp", "0.1.0", installed_version("mcp") or "unknown", "mcp-native-" + protocol_version + "-v1")
+        self.adapter = Adapter("mcp", VERSION, installed_version("mcp") or "unknown", "mcp-native-" + protocol_version + "-v1")
         binding = recovery(runtime, scope) if runtime.mode != "off" else None
         self._binding = binding
         self.recovery = None
@@ -61,7 +63,10 @@ class CavemanMCPHost:
 
         async def execute(arguments=None, **_native_options):
             # This is a host-local executor, not an outbound MCP tools/call.
-            page = await binding.execute(arguments or {})
+            try:
+                page = await binding.execute(arguments or {})
+            except MiddlewareError as error:  # MCP's native tool error: is_error with the code
+                return CallToolResult(content=[TextContent(type="text", text=json.dumps(recovery_failed(self.adapter.id, error)))], is_error=True)
             return CallToolResult(content=[TextContent(type="text", text=json.dumps(page, ensure_ascii=False, separators=(",", ":")))])
         self.recovery = MCPToolBinding(tool, execute)
         self._recovery_executor = execute
@@ -103,7 +108,7 @@ class CavemanMCPHost:
         if type(result) is not CallToolResult or type(tool) is not Tool:
             return skipped("unsupported_shape")
         if result.is_error or result.result_type != "complete" or "structured_content" in result.model_fields_set or tool.output_schema is not None or tool.name.startswith("caveman_"):
-            return skipped("protected_result")
+            return skipped("protected")
         candidates, indices = [], {}
         for i, part in enumerate(result.content):
             if type(part) is not TextContent or part.annotations and part.annotations.audience is not None and "assistant" not in part.annotations.audience:

@@ -24,6 +24,10 @@ def installed_version(name):
         return None
 
 
+# Adapter.version on the wire: the installed caveman-middleware release.
+VERSION = installed_version("caveman-middleware") or "unknown"
+
+
 def _stable_version(value):
     """Validate stable PEP 440 release/post/local forms without a dependency.
 
@@ -116,6 +120,25 @@ COMPATIBILITY = MappingProxyType({
     "mcp": Compatibility("experimental", (("mcp", "2.0", "3"),)),
     "asgi": Compatibility("experimental", ()),  # pure ASGI: no framework to gate
 })
+
+
+def framework_import_failed(family, error, hint):
+    """Raise for an adapter module whose framework import failed.
+
+    An installed distribution outside the tested range names its version and the range
+    (``unsupported_version``, also on ``.code``); a missing framework gets ``hint``; an in-range
+    install that still fails keeps its own error.
+    """
+    unsupported = [f"{name} {found} is installed; this adapter requires {name}>={low},<{high}"
+                   for name, low, high in COMPATIBILITY[family].pins
+                   if (found := installed_version(name)) is not None and not in_range(found, low, high)]
+    if unsupported:
+        failure = ImportError("Caveman middleware: unsupported_version: " + "; ".join(unsupported))
+        failure.code = "unsupported_version"
+        raise failure from error
+    if isinstance(error, ModuleNotFoundError):
+        raise ImportError(hint) from error
+    raise error
 
 
 def family_gate(runtime, family, adapter=None, accept=False):

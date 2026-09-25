@@ -105,3 +105,34 @@ def test_preflight_and_ready_surface_an_untested_framework(monkeypatch):
         caveman_middleware.ready(runtime, "langchain")
     assert caveman_middleware.ready(runtime, "langchain", accept_framework_version=True)["schema_version"] == 1
     runtime.close()
+
+
+# The first framework module each adapter imports; blocking it stands in for a release that lacks it.
+FRAMEWORK_IMPORTS = {
+    "langchain": "langchain.agents.middleware", "openai": "openai", "anthropic": "anthropic", "google": "google.genai",
+    "litellm": "litellm", "strands": "strands", "agno": "agno.models.base", "crewai": "crewai", "pydantic_ai": "pydantic_ai",
+    "autogen": "autogen_core", "llama_index": "llama_index.core.agent.workflow", "mcp": "mcp.types",
+}
+
+
+@pytest.mark.parametrize("family,blocked", sorted(FRAMEWORK_IMPORTS.items()))
+def test_a_failed_framework_import_names_the_installed_version_and_range(family, blocked, monkeypatch):
+    """An out-of-range install is unsupported_version with both versions, never a misleading "Install ..." hint."""
+    import importlib
+    import sys
+    from caveman_middleware import _versions
+
+    assert sorted(FRAMEWORK_IMPORTS) == sorted(set(_versions.COMPATIBILITY) - {"asgi"})
+    module = f"caveman_middleware.{family}"
+    monkeypatch.delitem(sys.modules, module, raising=False)
+    monkeypatch.setitem(sys.modules, blocked, None)
+    monkeypatch.setattr(_versions, "installed_version", lambda name: "0.0.3")
+    with pytest.raises(ImportError) as raised:
+        importlib.import_module(module)
+    name, low, high = _versions.COMPATIBILITY[family].pins[0]
+    assert raised.value.code == "unsupported_version" and "unsupported_version" in str(raised.value)
+    assert f"{name} 0.0.3 is installed; this adapter requires {name}>={low},<{high}" in str(raised.value)
+    monkeypatch.setattr(_versions, "installed_version", lambda name: None)  # not installed at all: the install hint
+    with pytest.raises(ImportError, match=r"Install caveman-middleware\[") as raised:
+        importlib.import_module(module)
+    assert not hasattr(raised.value, "code")

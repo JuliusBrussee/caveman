@@ -18,6 +18,8 @@ from dataclasses import asdict
 from importlib.metadata import version
 from typing import Any, Mapping
 
+from ._versions import framework_import_failed
+
 try:
     from autogen_core import CancellationToken, Component, ComponentModel, FunctionCall
     from autogen_core.models import (
@@ -26,18 +28,18 @@ try:
     )
     from autogen_core.tools import BaseTool, FunctionTool, StaticStreamWorkbench, TextResultContent, ToolResult, Workbench
     from pydantic import BaseModel
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[autogen] to use the AutoGen adapter") from error
+except ImportError as error:
+    framework_import_failed("autogen", error, "Install caveman-middleware[autogen] to use the AutoGen adapter")
 
 from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, Scope, ensure_async
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION, RECOVERY_SCHEMA
-from ._guard import fail_open, recovery, recovery_name_conflict
+from ._guard import fail_open, recovery, recovery_failed, recovery_name_conflict
 from ._native import Attempt, manifest, owner
-from ._versions import family_gate
+from ._versions import VERSION, family_gate
 from ._usage import usage
 
 FRAMEWORK_VERSION = version("autogen-core")
-ADAPTER = Adapter("autogen", "0.1.0", FRAMEWORK_VERSION, "autogen-messages-v1")
+ADAPTER = Adapter("autogen", VERSION, FRAMEWORK_VERSION, "autogen-messages-v1")
 _component_runtimes = contextvars.ContextVar("caveman_autogen_component_runtimes", default={})
 _loaded_components = contextvars.ContextVar("caveman_autogen_loaded_components", default=None)
 
@@ -298,9 +300,7 @@ class CavemanChatCompletionClient(ChatCompletionClient, Component[CavemanModelCo
             result = await cancellation.wait(self._prepare(messages, tools, tool_choice, json_output, extra_create_args))
             cancellation.check()
             return result
-        except asyncio.CancelledError:
-            if owner.get() is None:
-                self.runtime.report(reason="cancelled", adapter=ADAPTER.id)
+        except asyncio.CancelledError:  # nothing was dispatched: no decision to report
             raise
 
     async def create(self, messages, *, tools=(), tool_choice="auto", json_output=None, extra_create_args={}, cancellation_token=None):
@@ -424,13 +424,13 @@ class CavemanWorkbench(StaticStreamWorkbench):
         try:
             args = dict(arguments or {})
             if set(args) - set(RECOVERY_SCHEMA["properties"]) or "handle" not in args:
-                raise MiddlewareError("invalid_recovery_arguments")
+                raise MiddlewareError("invalid_request")
             result = await cancellation.wait(self.binding.execute(args))
             return ToolResult(name=name, result=[TextResultContent(content=json.dumps(result, ensure_ascii=False, separators=(",", ":")))])
         except MiddlewareError as error:
-            return ToolResult(name=name, result=[TextResultContent(content=json.dumps({"error": {"code": error.code}}))], is_error=True)
+            return ToolResult(name=name, result=[TextResultContent(content=json.dumps(recovery_failed(ADAPTER.id, error)))], is_error=True)
         except (TypeError, ValueError):
-            return ToolResult(name=name, result=[TextResultContent(content='{"error":{"code":"invalid_recovery_arguments"}}')], is_error=True)
+            return ToolResult(name=name, result=[TextResultContent(content='{"error":"invalid_request"}')], is_error=True)
 
     async def call_tool_stream(self, name, arguments=None, cancellation_token=None, call_id=None):
         workbench = await self._owner(name)

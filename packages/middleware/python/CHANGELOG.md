@@ -6,6 +6,22 @@ Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
 ## Unreleased
 
+- A refused `caveman_retrieve` (an unknown or expired handle, or a
+  404/410/503) returns `{"error": code}` through each framework's tool-error
+  result and warns once. The run carries on, and cancellation still
+  propagates.
+- A wrapped `AnthropicBedrock` client keeps `aws_profile`, so calls are signed
+  with the caller's AWS identity.
+- LiteLLM registers one process-wide callback however many instances are
+  live, so the host's own callbacks are never dropped.
+- Importing an adapter whose framework is out of range names the installed
+  version and the supported range.
+- Every reported reason is a spec §8 catalog code. Calls that were never LLM
+  calls (embeddings, token counting, non-LLM ASGI routes) report nothing.
+- `Adapter.version` is the installed package version.
+- Strands 1.43 recovery no longer fails on a missing `cancel_signal`.
+- CI tests the installed wheel, adds a Python 3.14 lane and classifier, and
+  watches `tests/middleware-e2e/**`.
 - `recovery_name_conflict` now reaches `on_diagnostic`, and strict `ready()`
   raises it.
 - Version-gate warnings name the adapter through `decline()`, on both sync

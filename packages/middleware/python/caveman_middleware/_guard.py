@@ -49,6 +49,16 @@ def recovery(runtime, scope):
         return None
 
 
+def recovery_failed(adapter, error):
+    """A ``caveman_retrieve`` call the runtime refused (unknown or expired handle, 404/410/503) becomes the
+    ``{"error": code}`` tool result the model reads, never an exception that ends the host's run. Warns once.
+
+    Callers catch ``MiddlewareError`` only, so cancellation always propagates.
+    """
+    warn_once(adapter, error.code)
+    return {"error": error.code}
+
+
 def recovery_name_conflict(runtime, adapter):
     """A host tool already owns ``caveman_retrieve``: recovery stays off for this registration.
 

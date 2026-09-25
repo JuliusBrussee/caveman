@@ -9,6 +9,8 @@ import uuid
 from dataclasses import asdict
 from contextlib import aclosing
 
+from ._versions import framework_import_failed
+
 try:
     from langchain.agents.middleware import AgentMiddleware
     from langchain_core.documents import Document, BaseDocumentCompressor
@@ -16,17 +18,17 @@ try:
     from langchain_core.messages import BaseMessage, ToolMessage, convert_to_messages
     from langchain_core.prompt_values import PromptValue
     from langchain_core.runnables import RunnableConfig, ensure_config
-    from langchain_core.tools import StructuredTool
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[langchain] to use the LangChain adapter") from error
+    from langchain_core.tools import StructuredTool, ToolException
+except ImportError as error:
+    framework_import_failed("langchain", error, "Install caveman-middleware[langchain] to use the LangChain adapter")
 
-from caveman_cloud.middleware import Adapter, Candidate, Scope, RecoveryBinding, ensure_async, ensure_sync
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, Scope, RecoveryBinding, ensure_async, ensure_sync
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION, RECOVERY_SCHEMA
-from ._guard import fail_open, recovery_name_conflict, resolve_scope
+from ._guard import fail_open, recovery_failed, recovery_name_conflict, resolve_scope
 from ._native import Attempt, manifest, owner, plain
-from ._versions import family_gate, installed_version
+from ._versions import VERSION, family_gate, installed_version
 
-ADAPTER = Adapter("langchain", "0.1.0", installed_version("langchain") or "unknown", "langchain-message-v1")
+ADAPTER = Adapter("langchain", VERSION, installed_version("langchain") or "unknown", "langchain-message-v1")
 OVERHEAD = json.dumps({"name": "caveman_retrieve", "description": RECOVERY_DESCRIPTION, "input_schema": RECOVERY_SCHEMA},
                       ensure_ascii=False, separators=(",", ":"))
 
@@ -106,7 +108,7 @@ class _Connection:
     def state(self, messages, config, runtime, binding=None, model=None, prefix=()):
         if owner.get() is not None:
             return None
-        reason = "off" if runtime.mode == "off" else "unsupported_version" if not self.supported else None
+        reason = "disabled" if runtime.mode == "off" else "unsupported_version" if not self.supported else None
         if reason:
             return self.passive(runtime, reason), {}, None
         view = _message_view(messages, prefix, self.manifest_bytes)
@@ -126,7 +128,7 @@ class _Connection:
     @staticmethod
     def _finish(messages, attempt, setters):
         if not all(replacement["segment_id"] in setters for replacement in attempt.optimization.replacements):
-            attempt.optimization, attempt.reason = None, "invalid_replacement_plan"
+            attempt.optimization, attempt.reason = None, "invalid_plan"
             return messages, attempt
         return _apply(messages, attempt.optimization, setters), attempt
 
@@ -183,17 +185,28 @@ class CavemanMiddleware(AgentMiddleware):
         if not connection.supported or connection.sync.mode == "off":
             return
 
+        # A refused handle is a ToolException: handle_tool_error turns it into an error ToolMessage, so the
+        # agent run (and its checkpointed thread) keeps going instead of raising out of the tools node.
         def recover(handle: str, config: RunnableConfig, offset: int = 0, limit: int = 262144, query: str = ""):
-            return json.dumps(connection.sync.retrieve(_scope(connection.sync, scope, config), handle=handle, offset=offset, limit=limit, query=query), ensure_ascii=False, separators=(",", ":"))
+            try:
+                page = connection.sync.retrieve(_scope(connection.sync, scope, config), handle=handle, offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:
+                raise ToolException(json.dumps(recovery_failed(ADAPTER.id, error))) from error
+            return json.dumps(page, ensure_ascii=False, separators=(",", ":"))
 
         async def arecover(handle: str, config: RunnableConfig, offset: int = 0, limit: int = 262144, query: str = ""):
-            return json.dumps(await connection.async_runtime.retrieve(_scope(connection.sync, scope, config), handle=handle, offset=offset, limit=limit, query=query), ensure_ascii=False, separators=(",", ":"))
+            try:
+                page = await connection.async_runtime.retrieve(_scope(connection.sync, scope, config), handle=handle, offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:
+                raise ToolException(json.dumps(recovery_failed(ADAPTER.id, error))) from error
+            return json.dumps(page, ensure_ascii=False, separators=(",", ":"))
 
         # Native tools expose mutable schemas and executor fields. Give the
         # framework its own schema, and attest the callable registration each
         # time before asking the runtime to issue lossy source grants.
         schema = copy.deepcopy(RECOVERY_SCHEMA)
-        self.recovery_tool = StructuredTool.from_function(func=recover, coroutine=arecover, name="caveman_retrieve", description=RECOVERY_DESCRIPTION, args_schema=schema)
+        self.recovery_tool = StructuredTool.from_function(func=recover, coroutine=arecover, name="caveman_retrieve", description=RECOVERY_DESCRIPTION,
+                                                          args_schema=schema, handle_tool_error=True)
         self._recovery_schema = json.dumps(schema, sort_keys=True, allow_nan=False)
         self._recovery_methods = {name: getattr(self.recovery_tool, name) for name in
                                   ("func", "coroutine", "invoke", "ainvoke", "run", "arun")}
@@ -402,7 +415,7 @@ class CavemanDocumentCompressor(BaseDocumentCompressor):
 
     def _options(self, documents, runtime):
         if runtime.mode == "off" or not family_gate(runtime, "langchain", "langchain-rag", self.accept_framework_version):
-            runtime.report(reason="off" if runtime.mode == "off" else "unsupported_version", adapter="langchain-rag")
+            runtime.report(reason="disabled" if runtime.mode == "off" else "unsupported_version", adapter="langchain-rag")
             return None
         if any(type(document) is not Document for document in documents):
             runtime.report(reason="unsupported_shape", adapter="langchain-rag")
@@ -418,14 +431,14 @@ class CavemanDocumentCompressor(BaseDocumentCompressor):
         reader = self.source_expansion
         binding = reader if (isinstance(reader, RecoveryBinding) and callable(reader.execute)
                              and runtime.owns_binding(reader, scope)) else None
-        return dict(scope=scope, adapter=Adapter("langchain-rag", "0.1.0", ADAPTER.framework_version, "langchain-document-v1"), manifest=context,
+        return dict(scope=scope, adapter=Adapter("langchain-rag", VERSION, ADAPTER.framework_version, "langchain-document-v1"), manifest=context,
                     sequence=context.sequence, binding=binding,
                     candidates=[Candidate(f"document-{i}", d.page_content, d.id or f"document-{i}", kind="artifact") for i, d in enumerate(documents)])
 
     def _apply_documents(self, documents, outcome, runtime):
         replacements = {r["segment_id"]: r["text"] for r in outcome.replacements}
         if not replacements.keys() <= {f"document-{i}" for i in range(len(documents))}:
-            runtime.report(reason="invalid_replacement_plan", adapter="langchain-rag")
+            runtime.report(reason="invalid_plan", adapter="langchain-rag")
             return documents
         result = [document.model_copy(update={"page_content": replacements[f"document-{i}"]}) if f"document-{i}" in replacements else document for i, document in enumerate(documents)]
         runtime.report(outcome, adapter="langchain-rag")

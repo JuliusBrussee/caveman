@@ -66,6 +66,7 @@ Each adapter checks the installed framework version against its tested range:
 
 - **Outside the range:** the adapter skips (original input, reason `unsupported_version`) and logs a warning once. Pass `accept_framework_version=True` after testing a newer release yourself.
 - **Unreadable version** (vendored or bundled builds): the adapter runs and logs `version_unverified` once.
+- **Too old or too new to import:** importing the adapter raises an `ImportError` that names the installed version and the tested range, with `code == "unsupported_version"`.
 
 Wrapping never raises for a version problem, even in strict mode. To fail fast at startup, call `caveman_middleware.preflight(runtime, "langchain")`, which reports `unavailable` for an untested framework. `caveman_middleware.ready(...)` raises instead.
 
@@ -85,14 +86,15 @@ Wrapping never raises for a version problem, even in strict mode. To fail fast a
 | `mcp` | mcp 2.0–<3 | 2.0.0 | 2.2.0 |
 | `asgi` | none (ASGI 3) | n/a | n/a |
 
-CI tests the oldest versions on Python 3.11 and the newest on Python 3.13, using `constraints/floor.txt` and `constraints/latest.txt`. It also runs the certified families on 3.12. A nightly run installs each extra's newest releases with no constraints and opens an issue when one breaks an adapter.
+CI tests the oldest versions on Python 3.11 and the newest on Python 3.13, using `constraints/floor.txt` and `constraints/latest.txt`. It also runs the certified families on 3.12 and 3.14. Every lane tests the built wheel, installed. A nightly run installs each extra's newest releases with no constraints and opens an issue when one breaks an adapter. The extras stop at the next major version, so a new major is only tested once its range is widened.
 
 `[openai]` accepts openai 2.20 through 3.x. LiteLLM and CrewAI require `openai<3`, so `[openai,litellm]` or `[openai,crewai]` installs openai 2.x. The adapter supports 2.x, but you can't get openai 3.x in the same environment as those two frameworks. `[asgi]` has no dependencies; it works with any ASGI 3 server or framework.
 
 ## Failures, scopes, and logging
 
 - **Fail-open:** outside strict mode, any adapter or runtime failure sends your original request and reports a reason (`adapter_error` for a bug in adapter code). In strict mode those reasons raise `MiddlewareError`, except version problems (see above).
-- **One warning per problem:** every adapter logs one `WARNING` per adapter and reason on the `caveman.middleware` logger. The line never contains content, scope values, or credentials.
+- **One warning per problem:** every adapter logs one `WARNING` per adapter and reason on the `caveman.middleware` logger. The line never contains content, scope values, or credentials. Calls that are never LLM calls (embeddings, token counting, other routes) pass through with no report and no warning.
+- **Recovery errors:** when the model calls `caveman_retrieve` with an unknown or expired handle, or the runtime is unavailable, the tool answers `{"error": "<code>"}` through the framework's own tool-error result (an error `ToolMessage` in LangChain, `ToolFailed` in Pydantic AI, `is_error` in Anthropic, MCP and AutoGen, an error `ToolResult` in Strands) and the run continues, even in strict mode. Cancellation still propagates.
 - **Scopes:** thread and session IDs may be free-form. An email or `"user 42 / chat #7"` is hashed into a valid scope token. A missing scope, such as `scope_from_config` without a `thread_id`, passes through with reason `invalid_scope`; strict mode raises.
 - **Runtimes:** every adapter accepts either `MiddlewareRuntime` or `AsyncMiddlewareRuntime` and uses the matching view on sync and async paths.
 - **Long histories:** history hashing stops at 2 MiB (`manifest_bytes`) and images or bytes are hashed, so a long or multimodal history never skips the whole call. The ASGI adapter's body limit is `max_body_bytes` (default 2 MiB); a larger body passes through with reason `payload_budget`.

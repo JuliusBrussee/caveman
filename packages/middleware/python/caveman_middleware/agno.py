@@ -11,22 +11,24 @@ import uuid
 from dataclasses import dataclass, field, fields
 from importlib.metadata import version
 
+from ._versions import framework_import_failed
+
 try:
     from agno.models.base import Model
     from agno.models.message import Message
     from agno.run.base import RunContext
     from agno.run.cancel import araise_if_cancelled, raise_if_cancelled
     from agno.tools.function import Function
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[agno] to use the Agno adapter") from error
+except ImportError as error:
+    framework_import_failed("agno", error, "Install caveman-middleware[agno] to use the Agno adapter")
 
 from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, Scope, ensure_async, ensure_sync
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION, RECOVERY_SCHEMA
-from ._guard import fail_open, recovery_name_conflict, resolve_scope
+from ._guard import fail_open, recovery_failed, recovery_name_conflict, resolve_scope
 from ._native import Attempt, manifest, owner, plain
-from ._versions import family_gate, installed_version
+from ._versions import VERSION, family_gate, installed_version
 
-ADAPTER = Adapter("agno", "0.1.0", installed_version("agno") or "unknown", "agno-message-v1")
+ADAPTER = Adapter("agno", VERSION, installed_version("agno") or "unknown", "agno-message-v1")
 _SIGNATURES = {name: inspect.signature(getattr(Model, name)) for name in
                ("response", "aresponse", "response_stream", "aresponse_stream")}
 
@@ -138,23 +140,30 @@ class _Connection:
         return Attempt(runtime, None, str(uuid.uuid4()), str(uuid.uuid4()), passive=True, reason=reason, adapter=ADAPTER.id), {}, None, None
 
     def register(self):
+        # A refused handle is the {"error": code} result the model reads; cancellation still raises.
         def recover(handle: str, run_context: RunContext, offset: int = 0, limit: int = 262144, query: str = ""):
             frame = self.active.get()
-            if frame is None or frame.scope is None:
-                raise MiddlewareError("recovery_unavailable")
-            if run_context is not None:
-                raise_if_cancelled(run_context.run_id)
-            return json.dumps(self.sync.retrieve(frame.scope, handle=handle, offset=offset, limit=limit, query=query),
-                              ensure_ascii=False, separators=(",", ":"))
+            try:
+                if frame is None or frame.scope is None:
+                    raise MiddlewareError("recovery_unavailable")
+                if run_context is not None:
+                    raise_if_cancelled(run_context.run_id)
+                page = self.sync.retrieve(frame.scope, handle=handle, offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:
+                return json.dumps(recovery_failed(ADAPTER.id, error))
+            return json.dumps(page, ensure_ascii=False, separators=(",", ":"))
 
         async def arecover(handle: str, run_context: RunContext, offset: int = 0, limit: int = 262144, query: str = ""):
             frame = self.active.get()
-            if frame is None or frame.scope is None:
-                raise MiddlewareError("recovery_unavailable")
-            if run_context is not None:
-                await araise_if_cancelled(run_context.run_id)
-            return json.dumps(await self.async_runtime.retrieve(frame.scope, handle=handle, offset=offset, limit=limit, query=query),
-                              ensure_ascii=False, separators=(",", ":"))
+            try:
+                if frame is None or frame.scope is None:
+                    raise MiddlewareError("recovery_unavailable")
+                if run_context is not None:
+                    await araise_if_cancelled(run_context.run_id)
+                page = await self.async_runtime.retrieve(frame.scope, handle=handle, offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:
+                return json.dumps(recovery_failed(ADAPTER.id, error))
+            return json.dumps(page, ensure_ascii=False, separators=(",", ":"))
 
         # Agno preserves a Function's entrypoint identity in its per-run copy.
         # Explicit processing avoids schema rewriting and keeps RunContext hidden.
@@ -185,7 +194,7 @@ class _Connection:
         if not self.version_supported:
             return self.passive(runtime, "unsupported_version")
         if options.get("compress_tool_results"):
-            return self.passive(runtime, "host_compression")
+            return self.passive(runtime, "unsupported_request")  # Agno compresses tool results itself
         selected = _message_view(messages)
         if selected is None:
             return self.passive(runtime, "unsupported_shape")

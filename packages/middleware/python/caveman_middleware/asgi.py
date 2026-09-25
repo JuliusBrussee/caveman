@@ -81,10 +81,10 @@ class CavemanASGIMiddleware:
             return await self.app(scope, receive, send)
 
         protocol = self.routes.get(scope.get("path"))
+        if scope.get("type") != "http" or scope.get("method") != "POST" or protocol is None:
+            return await self.app(scope, receive, send)  # never a configured LLM route: nothing to report
+
         async def passthrough(reader, reason):
-            if scope.get("type") != "http" or scope.get("method") != "POST" or protocol is None:
-                self.runtime.report(None, reason=reason, adapter="asgi")
-                return await self.app(scope, reader, send)
             # This exact inference route still owns its native request when
             # projection is disabled or declined. A nested adapter must not
             # transform protected content or report the same decision twice.
@@ -99,12 +99,10 @@ class CavemanASGIMiddleware:
 
         if self.runtime.mode == "off":
             return await passthrough(receive, "disabled")
-        if scope.get("type") != "http" or scope.get("method") != "POST" or protocol is None:
-            return await passthrough(receive, "unsupported_endpoint")
         headers = scope.get("headers", [])
         protected = {b"content-encoding", b"digest", b"content-digest", b"content-md5", b"signature", b"signature-input", b"x-amz-content-sha256"}
         if any(key.lower() in protected for key, _ in headers):
-            return await passthrough(receive, "protected_request")
+            return await passthrough(receive, "unsupported_request")
         types = [value.lower().split(b";", 1)[0].strip() for key, value in headers if key.lower() == b"content-type"]
         lengths = [value for key, value in headers if key.lower() == b"content-length"]
         if types != [b"application/json"] or len(lengths) > 1:
@@ -125,7 +123,7 @@ class CavemanASGIMiddleware:
         except Exception as error:  # Decision 4: the application still handles the request
             return await passthrough(receive, fail_open(self.runtime, "asgi", error))
         if context is None:
-            return await passthrough(receive, "scope_unavailable")
+            return await passthrough(receive, "invalid_scope")
 
         buffered, parts, size = deque(), [], 0
 
@@ -136,7 +134,7 @@ class CavemanASGIMiddleware:
             message = await receive()
             buffered.append(message)
             if message.get("type") != "http.request" or set(message) - {"type", "body", "more_body"}:
-                return await passthrough(replay, "request_interrupted")
+                return await passthrough(replay, "unsupported_request")
             body = message.get("body", b"")
             if type(body) is not bytes:
                 return await passthrough(replay, "unsupported_shape")

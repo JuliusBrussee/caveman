@@ -12,19 +12,22 @@ import uuid
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from ._versions import framework_import_failed
+
 try:
     import anthropic as _sdk
     from anthropic import Anthropic, AsyncAnthropic, DefaultHttpxClient, __version__
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[anthropic] to use the Anthropic adapter") from error
+except ImportError as error:
+    framework_import_failed("anthropic", error, "Install caveman-middleware[anthropic] to use the Anthropic adapter")
 try:
     from anthropic import Middleware, APIRequest
-    from anthropic.lib.tools import BetaBuiltinFunctionTool, BetaAsyncBuiltinFunctionTool
+    from anthropic.lib.tools import BetaBuiltinFunctionTool, BetaAsyncBuiltinFunctionTool, ToolError
 except ImportError:  # anthropic without public middleware: the version gate declines before these are used
     Middleware = BetaBuiltinFunctionTool = BetaAsyncBuiltinFunctionTool = object
+    ToolError = Exception
 
-from caveman_cloud.middleware import ensure_async, ensure_sync
-from ._guard import fail_open, recovery_name_conflict
+from caveman_cloud.middleware import MiddlewareError, ensure_async, ensure_sync
+from ._guard import fail_open, recovery_failed, recovery_name_conflict
 from ._httpx2 import flavour, sdk_flavour
 from ._native import NativeSession, owner, plain
 from ._versions import family_gate
@@ -39,9 +42,12 @@ def observe_response(response, attempt):
 
 
 def _append(client, middleware):
-    """``client.with_middleware(middleware)`` that keeps the caller's http_client (proxy/TLS settings):
-    AnthropicBedrock.copy() drops it (anthropic 1.8), which would send requests through a default client."""
-    return client.copy(middleware=[*client.middleware, middleware], http_client=getattr(client, "_client", None))
+    """``client.with_middleware(middleware)`` that keeps what AnthropicBedrock.copy() drops (anthropic 1.x): the
+    caller's http_client (proxy/TLS settings) and ``aws_profile``, without which requests are SigV4-signed by
+    the default credential chain, a different AWS identity. AnthropicVertex.copy() keeps its credentials."""
+    profile = getattr(client, "aws_profile", None)
+    return client.copy(middleware=[*client.middleware, middleware], http_client=getattr(client, "_client", None),
+                       **({"_extra_kwargs": {"aws_profile": profile}} if profile is not None else {}))
 
 
 class CavemanAnthropicMiddleware(Middleware):
@@ -52,6 +58,14 @@ class CavemanAnthropicMiddleware(Middleware):
         self.session = NativeSession(runtime, scope, adapter_id=ADAPTER_ID, framework_version=__version__, protocol="anthropic-messages",
                                      binding=_binding, overhead=_overhead, logical_call_id=_logical_call_id, is_registered=_is_registered,
                                      passive_reason=None if supported else "unsupported_version", manifest_bytes=manifest_bytes)
+
+    @staticmethod
+    def _messages_call(request):
+        """Only a Messages call is ever eligible; any other endpoint passes through without a report."""
+        try:
+            return request.method.upper() == "POST" and urlsplit(request.url).path in ("/v1/messages", "/messages")
+        except Exception:
+            return False
 
     @staticmethod
     def eligible(request: APIRequest):
@@ -84,6 +98,8 @@ class CavemanAnthropicMiddleware(Middleware):
             fail_open(self.session.runtime, ADAPTER_ID, error)
 
     def handle(self, request, call_next):
+        if not self._messages_call(request):
+            return call_next(request)
         reason = self._passive(request)
         body, attempt = self.session.passive(request.json, reason) if reason else self.session.prepare(request.json)
         if attempt is None:
@@ -101,6 +117,8 @@ class CavemanAnthropicMiddleware(Middleware):
             owner.reset(token)
 
     async def handle_async(self, request, call_next):
+        if not self._messages_call(request):
+            return await call_next(request)
         reason = self._passive(request)
         body, attempt = self.session.passive(request.json, reason) if reason else await self.session.prepare_async(request.json)
         if attempt is None:
@@ -131,7 +149,11 @@ class _RecoveryTool(BetaBuiltinFunctionTool):
         return json.loads(self.definition)
 
     def call(self, input):
-        return json.dumps(self.execute(input), ensure_ascii=False, separators=(",", ":"))
+        try:
+            page = self.execute(input)
+        except MiddlewareError as error:  # the runner's native is_error result, without its traceback log
+            raise ToolError(json.dumps(recovery_failed(ADAPTER_ID, error))) from error
+        return json.dumps(page, ensure_ascii=False, separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -144,7 +166,11 @@ class _AsyncRecoveryTool(BetaAsyncBuiltinFunctionTool):
         return json.loads(self.definition)
 
     async def call(self, input):
-        return json.dumps(await self.execute(input), ensure_ascii=False, separators=(",", ":"))
+        try:
+            page = await self.execute(input)
+        except MiddlewareError as error:
+            raise ToolError(json.dumps(recovery_failed(ADAPTER_ID, error))) from error
+        return json.dumps(page, ensure_ascii=False, separators=(",", ":"))
 
 
 def with_caveman_anthropic(client, *, runtime, scope, accept_framework_version=False, manifest_bytes=None):

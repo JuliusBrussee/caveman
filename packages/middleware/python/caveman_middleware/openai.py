@@ -13,13 +13,15 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from urllib.parse import urlsplit
 
+from ._versions import framework_import_failed
+
 try:
     from openai import OpenAI, AsyncOpenAI, Stream, AsyncStream, DefaultHttpxClient, __version__
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[openai] to use the OpenAI adapter") from error
+except ImportError as error:
+    framework_import_failed("openai", error, "Install caveman-middleware[openai] to use the OpenAI adapter")
 
-from caveman_cloud.middleware import ensure_async, ensure_sync
-from ._guard import fail_open, recovery, recovery_name_conflict
+from caveman_cloud.middleware import MiddlewareError, ensure_async, ensure_sync
+from ._guard import fail_open, recovery, recovery_failed, recovery_name_conflict
 from ._httpx2 import flavour, sdk_flavour
 from ._usage import usage
 from ._native import NativeSession, owner, plain
@@ -108,10 +110,27 @@ def with_caveman_openai_tools(client, *, runtime, scope, protocol, tools, functi
     tool = {"name": binding.name, "description": binding.description, "parameters": copy.deepcopy(binding.input_schema)}
     definition = {"type": "function", "function": tool} if protocol == "openai-chat" else {"type": "function", **tool}
     definitions.append(definition)
-    registry = MappingProxyType({**functions, binding.name: binding.execute})
-    registration = (protocol, binding, registry, registry[binding.name], json.dumps(definition, ensure_ascii=False, separators=(",", ":")))
+    registry = MappingProxyType({**functions, binding.name: _recover(binding.execute, isinstance(client, AsyncOpenAI))})
+    registration = (protocol, binding, registry, registry[binding.name], json.dumps(definition, ensure_ascii=False, separators=(",", ":")), binding.execute)
     return CavemanOpenAIToolLoop(_wrap(client, registration=registration, **options), registry,
                                 json.dumps(definitions, ensure_ascii=False, separators=(",", ":")))
+
+
+def _recover(execute, asynchronous):
+    """The loop's caveman_retrieve executor: a refused handle is the ``{"error": code}`` result, never a raise."""
+    if asynchronous:
+        async def recover(args=None, **kwargs):
+            try:
+                return await execute(args, **kwargs)
+            except MiddlewareError as error:
+                return recovery_failed(ADAPTER_ID, error)
+    else:
+        def recover(args=None, **kwargs):
+            try:
+                return execute(args, **kwargs)
+            except MiddlewareError as error:
+                return recovery_failed(ADAPTER_ID, error)
+    return recover
 
 
 def _wrap(client, *, runtime, scope, registration=None, transport=None, allow_stored_responses=False, accept=False, manifest_bytes=None):
@@ -128,13 +147,17 @@ def _wrap(client, *, runtime, scope, registration=None, transport=None, allow_st
         bound = registration is not None and registration[0] == protocol
         sessions[path] = NativeSession(runtime, scope, adapter_id=ADAPTER_ID, framework_version=__version__, protocol=protocol,
                                       binding=registration[1] if bound else None, overhead=registration[4] if bound else None,
-                                      is_registered=(lambda: registration[2].get(registration[1].name) is registration[3] and registration[1].execute is registration[3]) if bound else None,
+                                      is_registered=(lambda: registration[2].get(registration[1].name) is registration[3] and registration[1].execute is registration[5]) if bound else None,
                                       passive_reason=None if version_supported else "unsupported_version",
                                       allow_stored_responses=allow_stored_responses, manifest_bytes=manifest_bytes)
     passive_session = sessions["/chat/completions"]
 
     def select(path, kwargs):
+        """(session, None) to project, (None, reason) to pass through, or (None, None) for an endpoint that is
+        never an LLM call (embeddings, files, ...): nothing to decide or report."""
         try:
+            if not isinstance(path, str) or urlsplit(path).path not in sessions:
+                return None, None
             session = passive_session if runtime.mode == "off" or not version_supported else session_for(path, kwargs)
             return session, None if session else "unsupported_request"
         except Exception as error:  # Decision 4
@@ -171,6 +194,8 @@ def _wrap(client, *, runtime, scope, registration=None, transport=None, allow_st
     @functools.wraps(post)
     def sync_post(path, **kwargs):
         session, reason = select(path, kwargs)
+        if session is None and reason is None:
+            return post(path, **kwargs)
         body, attempt = session.prepare(kwargs.get("body")) if session else passive_session.passive(kwargs.get("body"), reason)
         if attempt is None:
             return post(path, **kwargs)
@@ -204,6 +229,8 @@ def _wrap(client, *, runtime, scope, registration=None, transport=None, allow_st
     @functools.wraps(post)
     async def async_post(path, **kwargs):
         session, reason = select(path, kwargs)
+        if session is None and reason is None:
+            return await post(path, **kwargs)
         body, attempt = await session.prepare_async(kwargs.get("body")) if session else passive_session.passive(kwargs.get("body"), reason)
         if attempt is None:
             return await post(path, **kwargs)

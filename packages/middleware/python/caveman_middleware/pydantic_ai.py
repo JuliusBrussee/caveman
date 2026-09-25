@@ -11,9 +11,12 @@ from dataclasses import replace
 from importlib.metadata import version
 from typing import Any
 
+from ._versions import framework_import_failed
+
 try:
     from pydantic_ai import RunContext, Tool
     from pydantic_ai.capabilities import AbstractCapability
+    from pydantic_ai.exceptions import ToolFailed
     from pydantic_ai.messages import (
         ModelMessage, ModelMessagesTypeAdapter, ModelRequest, ModelResponse,
         ToolCallPart, ToolReturnPart,
@@ -22,16 +25,16 @@ try:
     from pydantic_ai.models.wrapper import WrapperModel
     from pydantic_ai.toolsets import FunctionToolset
     from pydantic_core import PydanticSerializationError
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[pydantic-ai] to use the Pydantic AI adapter") from error
+except ImportError as error:
+    framework_import_failed("pydantic_ai", error, "Install caveman-middleware[pydantic-ai] to use the Pydantic AI adapter")
 
-from caveman_cloud.middleware import Adapter, Candidate, Scope, ensure_async
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, Scope, ensure_async
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION, RECOVERY_SCHEMA
-from ._guard import fail_open, recovery_name_conflict, resolve_scope
+from ._guard import fail_open, recovery_failed, recovery_name_conflict, resolve_scope
 from ._native import Attempt, manifest, owner
-from ._versions import family_gate, installed_version
+from ._versions import VERSION, family_gate, installed_version
 
-ADAPTER = Adapter("pydantic-ai", "0.1.0", installed_version("pydantic-ai-slim") or "unknown", "pydantic-ai-message-v1")
+ADAPTER = Adapter("pydantic-ai", VERSION, installed_version("pydantic-ai-slim") or "unknown", "pydantic-ai-message-v1")
 
 
 def scope_from_run(ctx: RunContext, *, namespace: str) -> Scope:
@@ -140,8 +143,11 @@ class CavemanCapability(AbstractCapability[Any]):
             return
 
         async def recover(ctx: RunContext, handle: str, offset: int = 0, limit: int = 262144, query: str = ""):
-            return await self.runtime.retrieve(_scope(self.runtime, self.scope_source, ctx), handle=handle,
-                                               offset=offset, limit=limit, query=query)
+            try:
+                return await self.runtime.retrieve(_scope(self.runtime, self.scope_source, ctx), handle=handle,
+                                                   offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:  # outcome="failed": the model sees {"error": code}; no retry budget spent
+                raise ToolFailed(recovery_failed(ADAPTER.id, error)["error"]) from error
 
         self.recovery_tool = Tool.from_schema(recover, name="caveman_retrieve", description=RECOVERY_DESCRIPTION,
             json_schema=copy.deepcopy(RECOVERY_SCHEMA), takes_ctx=True)
@@ -236,7 +242,7 @@ class CavemanModel(WrapperModel):
             return passive("unsupported_version" if not self.version_supported else "unsupported_provider")
         selected = _message_view(messages)
         if selected is None:
-            return passive("opaque_payload")
+            return passive("unsupported_shape")
         context, candidates, paths = selected
         scope = _scope(self.runtime, self.scope_source, self.run_context)
         if scope is None:

@@ -14,6 +14,7 @@ from caveman_cloud.middleware import (
 from caveman_cloud.middleware.types import MIDDLEWARE_DEFAULTS
 
 from ._guard import fail_open
+from ._versions import VERSION
 
 owner: contextvars.ContextVar[Attempt | None] = contextvars.ContextVar("caveman_middleware_owner", default=None)
 
@@ -290,7 +291,7 @@ class NativeSession:
         self.is_registered = is_registered
         self.passive_reason = passive_reason
         self.allow_stored_responses, self.manifest_bytes = allow_stored_responses, manifest_bytes
-        self.adapter = Adapter(adapter_id, "0.1.0", framework_version, protocol + "-native-v1")
+        self.adapter = Adapter(adapter_id, VERSION, framework_version, protocol + "-native-v1")
 
     def registered(self):
         try:

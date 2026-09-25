@@ -159,6 +159,132 @@ def test_every_adapter_family_has_a_tier():
     assert {entry.tier for entry in COMPATIBILITY.values()} == {"certified", "experimental"}
 
 
+def _reason_literals():
+    """Every string the package can report as a reason, found statically: arguments of the pass-through helpers
+    and MiddlewareError, ``reason=``-style keywords, ``reason``/``.reason`` assignments, and the returns of the
+    functions that hand a reason back to their caller. Only literals in value position count, so an adapter id
+    passed to a nested call is never mistaken for a reason."""
+    import ast
+    import caveman_middleware
+
+    sinks = {"passive", "_passive", "_passive_stream", "_passive_astream", "passthrough", "skipped", "_report", "_Skip", "MiddlewareError", "decline"}
+    keywords = {"reason", "passive_reason", "passthrough_reason", "passthrough"}
+    returning = {"fail_open", "options", "_passive", "select", "_passive_reason", "_admit", "_options"}
+
+    def direct(node):
+        if isinstance(node, ast.Constant):
+            return {node.value} if isinstance(node.value, str) else set()
+        children = {ast.IfExp: lambda n: (n.body, n.orelse), ast.BoolOp: lambda n: n.values, ast.Tuple: lambda n: n.elts}
+        return set().union(*map(direct, children[type(node)](node))) if type(node) in children else set()
+
+    def named_reason(target):
+        return (isinstance(target, ast.Name) and target.id == "reason") or (isinstance(target, ast.Attribute) and target.attr == "reason") \
+            or (isinstance(target, ast.Tuple) and any(map(named_reason, target.elts)))
+
+    found = {}
+    for path in sorted(Path(caveman_middleware.__file__).parent.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            values = []
+            if isinstance(node, ast.Call):
+                name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+                values = [*(node.args if name in sinks else node.args[1:] if name == "warn_once" else []),
+                          *(keyword.value for keyword in node.keywords if keyword.arg in keywords)]
+            elif isinstance(node, ast.Assign) and any(map(named_reason, node.targets)):
+                values = [node.value]
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in returning:
+                values = [child.value for child in ast.walk(node) if isinstance(child, ast.Return) and child.value is not None]
+            for value in values:
+                for literal in direct(value):
+                    found.setdefault(literal, f"{path.name}:{value.lineno}")
+    return found
+
+
+def test_every_reported_reason_is_in_the_spec_catalog():
+    """§8: every reason a client reports is a catalog key."""
+    from caveman_cloud.middleware import REASON_CATALOG
+
+    found = _reason_literals()
+    assert {"adapter_error", "invalid_plan", "provider_state_retained", "unsupported_version"} <= found.keys(), "the scan lost its sinks"
+    assert {reason: where for reason, where in found.items() if reason not in REASON_CATALOG} == {}
+
+
+def test_adapters_send_the_installed_package_version():
+    """Adapter.version on the wire is the installed caveman-middleware release, never a literal."""
+    import ast
+    import caveman_middleware
+    from caveman_middleware._versions import VERSION, installed_version
+
+    assert VERSION == (installed_version("caveman-middleware") or "unknown")
+    literal = [f"{path.name}:{node.lineno}" for path in Path(caveman_middleware.__file__).parent.glob("*.py")
+               for node in ast.walk(ast.parse(path.read_text()))
+               if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Adapter"
+               and len(node.args) > 1 and isinstance(node.args[1], ast.Constant)]
+    assert literal == []
+
+
+def _embeddings_openai(runtime):
+    import importlib
+    from openai import DefaultHttpxClient, OpenAI
+    from caveman_cloud.middleware import Scope
+    from caveman_middleware._httpx2 import sdk_flavour
+    from caveman_middleware.openai import with_caveman_openai
+
+    http = importlib.import_module(sdk_flavour(DefaultHttpxClient))
+    provider = lambda _: http.Response(200, json={"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": [0.0]}],
+                                                  "model": "e", "usage": {"prompt_tokens": 1, "total_tokens": 1}})
+    with OpenAI(api_key="test", http_client=http.Client(transport=http.MockTransport(provider))) as client:
+        with_caveman_openai(client, runtime=runtime, scope=Scope("tests", "embed")).embeddings.create(model="e", input="x")
+
+
+def _count_tokens_anthropic(runtime):
+    import importlib
+    from anthropic import Anthropic, DefaultHttpxClient
+    from caveman_cloud.middleware import Scope
+    from caveman_middleware._httpx2 import sdk_flavour
+    from caveman_middleware.anthropic import with_caveman_anthropic
+
+    http = importlib.import_module(sdk_flavour(DefaultHttpxClient))
+    with Anthropic(api_key="test", http_client=http.Client(transport=http.MockTransport(lambda _: http.Response(200, json={"input_tokens": 1})))) as client:
+        with_caveman_anthropic(client, runtime=runtime, scope=Scope("tests", "count")).messages.count_tokens(
+            model="m", messages=[{"role": "user", "content": "hi"}])
+
+
+def _health_asgi(runtime):
+    from caveman_cloud.middleware import Scope
+    from caveman_middleware.asgi import ASGIContext, CavemanASGIMiddleware
+
+    served = []
+
+    async def application(scope, receive, send):
+        served.append(scope["path"])
+
+    middleware = CavemanASGIMiddleware(application, runtime=runtime, routes={"/v1/chat/completions": "openai-chat"},
+                                       resolve_context=lambda _: ASGIContext(Scope("tests", "asgi")))
+    for method, path in (("GET", "/health"), ("POST", "/v1/embeddings")):
+        asyncio.run(middleware({"type": "http", "method": method, "path": path, "headers": []}, None, None))
+    assert served == ["/health", "/v1/embeddings"]
+
+
+def _embeddings_litellm(runtime):
+    from caveman_cloud.middleware import Scope
+    from caveman_middleware.litellm import CavemanLiteLLM
+
+    caveman = CavemanLiteLLM(runtime=runtime, proxy_scope=lambda auth, data: Scope("tests", "proxy"))
+    data = {"model": "e", "input": "x"}
+    assert asyncio.run(caveman.async_pre_call_hook(None, None, data, "aembedding")) is data
+
+
+@pytest.mark.parametrize("family,call", [("openai", _embeddings_openai), ("anthropic", _count_tokens_anthropic),
+                                         ("asgi", _health_asgi), ("litellm", _embeddings_litellm)])
+def test_endpoints_that_are_never_llm_calls_report_nothing(family, call, caplog):
+    """No decision, report or "passed content through unchanged" line for a call no adapter could ever project."""
+    require_adapter(family)
+    runtime = peer_runtime()
+    call(runtime)
+    runtime.close()
+    assert runtime.reports == [] and runtime.requests == [] and "reason=" not in caplog.text
+
+
 # ---------------------------------------------------------------- OpenAI
 
 
@@ -263,6 +389,36 @@ def test_anthropic_bedrock_client_is_supported():
     runtime.close()
 
 
+def test_anthropic_cloud_clients_keep_the_callers_credentials(monkeypatch):
+    """A wrapped AnthropicBedrock signs with the caller's aws_profile, never the default AWS credential chain;
+    every other Bedrock/Vertex auth setting survives the clone too."""
+    require_adapter("anthropic")
+    import importlib
+    import types
+    from anthropic import AnthropicBedrock, AnthropicVertex, DefaultHttpxClient
+    from caveman_cloud.middleware import Scope
+    from caveman_middleware._httpx2 import sdk_flavour
+    from caveman_middleware.anthropic import with_caveman_anthropic
+
+    signed, auth = [], types.ModuleType("anthropic.lib.bedrock._auth")
+    auth.get_auth_headers = lambda **request: signed.append(request["profile"]) or {}
+    monkeypatch.setitem(sys.modules, "anthropic.lib.bedrock._auth", auth)  # SigV4 signing without boto3
+    http = importlib.import_module(sdk_flavour(DefaultHttpxClient))
+    provider = lambda _: http.Response(200, json={"id": "m", "type": "message", "role": "assistant", "model": "m", "stop_reason": "end_turn",
+                                                  "stop_sequence": None, "content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 1, "output_tokens": 1}})
+    runtime, scope = peer_runtime(), Scope("tests", "cloud")
+    bedrock = AnthropicBedrock(aws_profile="p", aws_region="us-west-2", aws_session_token="t", http_client=http.Client(transport=http.MockTransport(provider)))
+    wrapped = with_caveman_anthropic(bedrock, runtime=runtime, scope=scope)
+    wrapped.messages.create(model="anthropic.claude", max_tokens=8, messages=[{"role": "user", "content": "hi"}])
+    assert signed == ["p"]
+    vertex = AnthropicVertex(region="us-east5", project_id="project", access_token="token")
+    for client, names in ((bedrock, ("aws_profile", "aws_region", "aws_access_key", "aws_secret_key", "aws_session_token", "api_key", "base_url")),
+                          (vertex, ("region", "project_id", "access_token", "credentials", "base_url"))):
+        clone = with_caveman_anthropic(client, runtime=runtime, scope=scope)
+        assert {name: getattr(clone, name) for name in names} == {name: getattr(client, name) for name in names}
+    runtime.close()
+
+
 # ---------------------------------------------------------------- LangChain
 
 
@@ -316,6 +472,42 @@ def test_litellm_pending_capacity_is_reported_not_silent(monkeypatch, caplog):
     caveman._forget(held[0])
     assert isinstance(caveman._admit("completion", Scope("tests", "two"), {"messages": []}, False), tuple)
     runtime.close()
+
+
+def test_litellm_live_instances_share_one_callback_and_the_hosts_still_runs():
+    """LiteLLM caps each callback list at 100 (MAX_CALLBACKS): 150 live instances must not push out the host's logger."""
+    require_adapter("litellm")
+    import time
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from caveman_middleware.litellm import CavemanLiteLLM
+
+    hits = []
+
+    class Host(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            hits.append(response_obj)
+
+    runtime, host = peer_runtime(), Host()
+    instances = [CavemanLiteLLM(runtime=runtime) for _ in range(150)]
+    for instance in instances:
+        instance.__enter__()
+    litellm.callbacks.append(host)
+    try:
+        litellm.completion(model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}], mock_response="ok")
+        deadline = time.monotonic() + 10
+        while not hits and time.monotonic() < deadline:  # sync success callbacks run on LiteLLM's worker thread
+            time.sleep(0.05)
+        assert hits, "LiteLLM dropped the host's own callback"
+        assert len(litellm.callbacks) == 2
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(host)
+        for instance in instances:
+            instance.__exit__(None, None, None)
+        runtime.close()
+    ours = [c for name in ("callbacks", "input_callback", "success_callback", "_async_success_callback")
+            for c in getattr(litellm, name) if type(c).__module__ == "caveman_middleware.litellm"]
+    assert ours == [], "the last exit must unregister the shared callback"
 
 
 def test_litellm_sync_router_reports_unsupported_provider_and_identity_breaks():

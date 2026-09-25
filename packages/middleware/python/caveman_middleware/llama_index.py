@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from importlib.metadata import version
 from typing import Any
 
+from ._versions import framework_import_failed
+
 try:
     from llama_index.core.agent.workflow import FunctionAgent
     from llama_index.core.base.llms.types import ChatMessage, MessageRole, TextBlock, ToolCallBlock
@@ -24,18 +26,18 @@ try:
     from llama_index.core.workflow import Context
     from pydantic import Field
     from pydantic_core import PydanticSerializationError
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[llama-index] to use the LlamaIndex adapter") from error
+except ImportError as error:
+    framework_import_failed("llama_index", error, "Install caveman-middleware[llama-index] to use the LlamaIndex adapter")
 
 from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, RecoveryBinding, Scope, ensure_async, ensure_sync
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION, RECOVERY_SCHEMA
-from ._guard import fail_open, recovery, recovery_name_conflict, resolve_scope
+from ._guard import fail_open, recovery, recovery_failed, recovery_name_conflict, resolve_scope
 from ._native import Attempt, manifest, owner
 from ._usage import usage
-from ._versions import family_gate, gate, installed_version
+from ._versions import VERSION, family_gate, gate, installed_version
 
-ADAPTER = Adapter("llama-index", "0.1.0", installed_version("llama-index-core") or "unknown", "llama-index-message-v1")
-RAG_ADAPTER = Adapter("llama-index-rag", "0.1.0", ADAPTER.framework_version, "llama-index-node-v1")
+ADAPTER = Adapter("llama-index", VERSION, installed_version("llama-index-core") or "unknown", "llama-index-message-v1")
+RAG_ADAPTER = Adapter("llama-index-rag", VERSION, ADAPTER.framework_version, "llama-index-node-v1")
 # Tested providers and the message shape they serialize. Subclasses (for example
 # llama-index-llms-azure-openai's AzureOpenAI) share the parent's shape. Others,
 # such as Bedrock Converse and Vertex, pass through as ``unsupported_provider``.
@@ -119,13 +121,20 @@ class _Recovery:
     def __init__(self, runtime, scope):
         self.runtime, self.scope = runtime, scope
 
+        # A refused handle is the {"error": code} result the model reads, never a raise into the agent.
         def recover(ctx: Context, handle: str, offset: int = 0, limit: int = 262144, query: str = ""):
             sync = ensure_sync(runtime)  # D5: an async runtime still serves the sync tool path
-            page = sync.retrieve(_scope(sync, scope, ctx), handle=handle, offset=offset, limit=limit, query=query)
+            try:
+                page = sync.retrieve(_scope(sync, scope, ctx), handle=handle, offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:
+                page = recovery_failed(ADAPTER.id, error)
             return json.dumps(page, ensure_ascii=False)
 
         async def arecover(ctx: Context, handle: str, offset: int = 0, limit: int = 262144, query: str = ""):
-            page = await _async_runtime(runtime).retrieve(_scope(runtime, scope, ctx), handle=handle, offset=offset, limit=limit, query=query)
+            try:
+                page = await _async_runtime(runtime).retrieve(_scope(runtime, scope, ctx), handle=handle, offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:
+                page = recovery_failed(ADAPTER.id, error)
             return json.dumps(page, ensure_ascii=False)
 
         # FunctionTool inspects runtime annotations for its public context injection.
@@ -163,9 +172,17 @@ class _ApplicationTools:
         enabled = self.binding is not None and self.async_binding is not None
         if enabled:
             def recover(handle: str, offset: int = 0, limit: int = 262144, query: str = ""):
-                return json.dumps(self.binding.execute(dict(handle=handle, offset=offset, limit=limit, query=query)), ensure_ascii=False)
+                try:
+                    page = self.binding.execute(dict(handle=handle, offset=offset, limit=limit, query=query))
+                except MiddlewareError as error:
+                    page = recovery_failed(ADAPTER.id, error)
+                return json.dumps(page, ensure_ascii=False)
             async def arecover(handle: str, offset: int = 0, limit: int = 262144, query: str = ""):
-                return json.dumps(await self.async_binding.execute(dict(handle=handle, offset=offset, limit=limit, query=query)), ensure_ascii=False)
+                try:
+                    page = await self.async_binding.execute(dict(handle=handle, offset=offset, limit=limit, query=query))
+                except MiddlewareError as error:
+                    page = recovery_failed(ADAPTER.id, error)
+                return json.dumps(page, ensure_ascii=False)
             self.sync, self.async_ = recover, arecover
             self.metadata = _FrozenRecoveryMetadata(name="caveman_retrieve", description=RECOVERY_DESCRIPTION, fn_schema=None)
             self.tool = _FrozenFunctionTool(fn=recover, async_fn=arecover, metadata=self.metadata)
@@ -428,18 +445,18 @@ class CavemanLLM(FunctionCallingLLM):
                 current = None
         selected = _message_view(messages, current)
         if selected is None:
-            return self._passive("opaque_payload"), {}, None
+            return self._passive("unsupported_shape"), {}, None
         context, candidates, paths = selected
         user_msg = kwargs.get("user_msg")
         if user_msg is not None:
             if type(user_msg) not in (str, ChatMessage):
-                return self._passive("opaque_payload"), {}, None
+                return self._passive("unsupported_shape"), {}, None
             try:
                 extra = manifest([{"user_msg": user_msg if type(user_msg) is str else user_msg.model_dump(mode="json", warnings="error")}])
             except (TypeError, ValueError, PydanticSerializationError, RecursionError):
-                return self._passive("opaque_payload"), {}, None
+                return self._passive("unsupported_shape"), {}, None
             if extra is None:
-                return self._passive("opaque_payload"), {}, None
+                return self._passive("unsupported_shape"), {}, None
             if len(context) == context.sequence:  # only extend an untruncated (prefix-stable) window
                 context.append({**extra[0], "id": f"message-{len(context)}"})
             context.sequence += 1
@@ -672,16 +689,16 @@ class CavemanLLM(FunctionCallingLLM):
         return await self._passive_astream(self.wrapped.astream_complete, (prompt,), {"formatted": formatted, **kwargs}, "no_candidate")
 
     def structured_predict(self, *args, **kwargs):
-        return self._call(lambda _: self.wrapped.structured_predict(*args, **kwargs), None, None, {}, passthrough="structured_output")
+        return self._call(lambda _: self.wrapped.structured_predict(*args, **kwargs), None, None, {}, passthrough="unsupported_request")
 
     async def astructured_predict(self, *args, **kwargs):
-        return await self._acall(lambda _: self.wrapped.astructured_predict(*args, **kwargs), None, None, {}, passthrough="structured_output")
+        return await self._acall(lambda _: self.wrapped.astructured_predict(*args, **kwargs), None, None, {}, passthrough="unsupported_request")
 
     def stream_structured_predict(self, *args, **kwargs):
-        return self._passive_stream(self.wrapped.stream_structured_predict, args, kwargs, "structured_output")
+        return self._passive_stream(self.wrapped.stream_structured_predict, args, kwargs, "unsupported_request")
 
     async def astream_structured_predict(self, *args, **kwargs):
-        return await self._passive_astream(self.wrapped.astream_structured_predict, args, kwargs, "structured_output")
+        return await self._passive_astream(self.wrapped.astream_structured_predict, args, kwargs, "unsupported_request")
 
     def as_structured_llm(self, *args, **kwargs):
         return self.wrapped.as_structured_llm(*args, **kwargs).model_copy(update={"llm": self})
@@ -812,7 +829,7 @@ class CavemanNodePostprocessor(BaseNodePostprocessor):
             return nodes
 
     def _report_original(self, reason=None):
-        reason = reason or ("disabled" if self.runtime.mode == "off" else "unsupported_version" if not self.version_supported else "opaque_payload")
+        reason = reason or ("disabled" if self.runtime.mode == "off" else "unsupported_version" if not self.version_supported else "unsupported_shape")
         self.runtime.report(reason=reason, adapter=RAG_ADAPTER.id, logical_call_id=str(uuid.uuid4()), attempt_id=str(uuid.uuid4()))
 
     def _finish(self, nodes, result, options, query_bundle):

@@ -6,22 +6,24 @@ import json
 import uuid
 import weakref
 
+from ._versions import framework_import_failed
+
 try:
     from strands import tool
     from strands.models.model import Model
     from strands.plugins import Plugin
     from strands.types.tools import ToolContext
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[strands] to use the Strands adapter") from error
+except ImportError as error:
+    framework_import_failed("strands", error, "Install caveman-middleware[strands] to use the Strands adapter")
 
-from caveman_cloud.middleware import Adapter, Candidate, ensure_async
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, ensure_async
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION, RECOVERY_SCHEMA
-from ._guard import fail_open, recovery_name_conflict, resolve_scope
+from ._guard import fail_open, recovery_failed, recovery_name_conflict, resolve_scope
 from ._native import Attempt, manifest, owner, plain, replace_path
-from ._versions import family_gate, installed_version
+from ._versions import VERSION, family_gate, installed_version
 from ._usage import usage
 
-ADAPTER = Adapter("strands", "0.1.0", installed_version("strands-agents") or "unknown", "strands-content-v1")
+ADAPTER = Adapter("strands", VERSION, installed_version("strands-agents") or "unknown", "strands-content-v1")
 
 
 def _scope(runtime, source, state):
@@ -72,7 +74,7 @@ class CavemanModel(Model):
         if not self.version_supported:
             return passive("unsupported_version")
         if self.stateful:
-            return passive("opaque_context")
+            return passive("provider_state_retained")  # the provider keeps the conversation
         prefix = system_prompt_content if system_prompt_content is not None else [{"text": system_prompt}] if system_prompt else []
         context = manifest([{"system": prefix}, *messages])
         if context is None:
@@ -150,15 +152,12 @@ class CavemanModel(Model):
                 await iterator.aclose()
 
     async def stream(self, messages, tool_specs=None, system_prompt=None, *, tool_choice=None, system_prompt_content=None, invocation_state=None, cancel_signal=None, **kwargs):
+        # A call cancelled before dispatch sent nothing: no decision to report.
         if cancel_signal is not None and cancel_signal.is_set():
-            if owner.get() is None:
-                self.runtime.report(None, reason="cancelled", adapter=ADAPTER.id)
             raise asyncio.CancelledError
         view, attempt = await self._prepare(messages, tool_specs, system_prompt, tool_choice=tool_choice,
             system_prompt_content=system_prompt_content, invocation_state=invocation_state)
         if cancel_signal is not None and cancel_signal.is_set():
-            if owner.get() is None:
-                self.runtime.report(None, reason="cancelled", adapter=ADAPTER.id)
             raise asyncio.CancelledError
         native = self.model.stream(view, tool_specs, system_prompt, tool_choice=tool_choice,
             system_prompt_content=system_prompt_content, invocation_state=invocation_state, cancel_signal=cancel_signal, **kwargs).__aiter__()
@@ -181,10 +180,14 @@ class _Registration(Plugin):
 
         @tool(name="caveman_retrieve", description=RECOVERY_DESCRIPTION, inputSchema={"json": RECOVERY_SCHEMA}, context=True)
         async def recover(handle: str, tool_context: ToolContext, offset: int = 0, limit: int = 262144, query: str = ""):
-            if tool_context.cancel_signal.is_set():
+            cancel = getattr(tool_context, "cancel_signal", None)  # strands 1.43's ToolContext has none
+            if cancel is not None and cancel.is_set():
                 raise asyncio.CancelledError
-            scope = _scope(model.runtime, model.scope, tool_context.invocation_state)
-            result = await model.runtime.retrieve(scope, handle=handle, offset=offset, limit=limit, query=query)
+            try:
+                scope = _scope(model.runtime, model.scope, tool_context.invocation_state)
+                result = await model.runtime.retrieve(scope, handle=handle, offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:  # Strands' native error ToolResult
+                return {"status": "error", "content": [{"text": json.dumps(recovery_failed(ADAPTER.id, error))}]}
             return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
         self.recovery_tool = recover
 

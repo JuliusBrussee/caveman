@@ -14,11 +14,13 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 
+from ._versions import framework_import_failed
+
 try:
     import litellm as native
     from litellm.integrations.custom_logger import CustomLogger
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[litellm] to use the LiteLLM adapter") from error
+except ImportError as error:
+    framework_import_failed("litellm", error, "Install caveman-middleware[litellm] to use the LiteLLM adapter")
 
 from caveman_cloud.middleware import MiddlewareError, Scope, ensure_async, ensure_sync, warn_once
 from ._guard import fail_open, resolve_scope
@@ -30,6 +32,7 @@ _active = contextvars.ContextVar("caveman_litellm_request", default=None)
 _sync_router = contextvars.ContextVar("caveman_litellm_sync_router", default=None)
 _prepared_sync = contextvars.ContextVar("caveman_litellm_prepared_sync", default=None)
 _registration_lock = threading.RLock()
+_entered = []  # CavemanLiteLLM instances inside their context manager, in entry order
 _KEY = "caveman_middleware_registration"
 _PENDING = 1024
 # LiteLLM has no documented sync pre-call hook after Router deployment selection, so the sync Router path
@@ -67,9 +70,6 @@ class CavemanLiteLLM(CustomLogger):
     def __init__(self, *, runtime, client=native, proxy_scope=None, operator_recovery=None, accept_framework_version=False,
                  allow_stored_responses=False, manifest_bytes=None):
         super().__init__(turn_off_message_logging=True)
-        # LiteLLM keys CustomLogger registrations by public scalar attributes.
-        # Concurrent runtimes must not collapse into the first callback object.
-        self.registration_id = uuid.uuid4().hex
         self.runtime, self.client = ensure_sync(runtime), client
         self.async_runtime = ensure_async(runtime)
         self.proxy_scope, self.operator_recovery = proxy_scope, operator_recovery
@@ -83,16 +83,20 @@ class CavemanLiteLLM(CustomLogger):
             return self
         with _registration_lock:
             if self._registrations == 0:
-                native.callbacks.append(self)
+                if _DISPATCHER not in native.callbacks:
+                    native.callbacks.append(_DISPATCHER)
+                _entered.append(self)
             self._registrations += 1
         return self
 
     def __exit__(self, *_):
         with _registration_lock:
             self._registrations = max(0, self._registrations - 1)
-            if self._registrations == 0:
-                native.logging_callback_manager.remove_callback_from_all_lists(self)
-                native.logging_callback_manager.remove_callback_from_list_by_object(native.input_callback, self, require_self=False)
+            if self._registrations == 0 and self in _entered:
+                _entered.remove(self)
+                if not _entered:
+                    native.logging_callback_manager.remove_callback_from_all_lists(_DISPATCHER)
+                    native.logging_callback_manager.remove_callback_from_list_by_object(native.input_callback, _DISPATCHER, require_self=False)
 
     def close(self):
         with _registration_lock:
@@ -169,7 +173,8 @@ class CavemanLiteLLM(CustomLogger):
         return None
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
-        if self.proxy_scope is None or owner.get() is not None:
+        # Only completion/responses calls can ever be projected; other call types are not reported.
+        if self.proxy_scope is None or owner.get() is not None or self._protocol(call_type) is None:
             return data
         if not self._version_supported or self.runtime.mode == "off":
             self._report("unsupported_version")
@@ -179,7 +184,7 @@ class CavemanLiteLLM(CustomLogger):
             # configured resolver must include virtual-key/team boundaries in scope.
             scope = self.proxy_scope(user_api_key_dict, data)
             if scope is None:
-                raise _Skip("scope_unavailable")
+                raise _Skip("invalid_scope")
             key, _ = self._remember(scope, call_type)
             return self._tag(data, key, self._protocol(call_type))
         except _Skip as skip:
@@ -228,7 +233,7 @@ class CavemanLiteLLM(CustomLogger):
                 return kwargs
             session = self._session(registered[1], call_type, self.async_runtime)
             if session is None:
-                self._report("unsupported_method", registered[1].logical_id)
+                self._report("unsupported_request", registered[1].logical_id)
                 return kwargs
         except Exception as error:  # Decision 4
             self._report(fail_open(self.runtime, "litellm", error))
@@ -361,12 +366,12 @@ class CavemanLiteLLM(CustomLogger):
         if router and self.runtime.strict:
             # Logging callbacks swallow their exceptions. Reject this capability
             # before calling the Router so strict failure cannot dispatch a request.
-            self._report("unsupported_sync_router_strict")
-            raise MiddlewareError("unsupported_sync_router_strict")
+            self._report("unsupported_request")
+            raise MiddlewareError("unsupported_request")
         if self._registrations == 0 and (router or method.startswith("a")):
             if self.runtime.strict:
                 raise RuntimeError("Use CavemanLiteLLM as a context manager while Router and async calls and streams are active")
-            return "not_registered"
+            return "invalid_configuration"  # used outside its context manager: no callback can observe the call
         try:
             return self._remember(scope, method)
         except _Skip as skip:
@@ -406,7 +411,7 @@ class CavemanLiteLLM(CustomLogger):
                 attempt.observe("dispatch_intent")
                 self._save_attempt(body, attempt)
             else:
-                self._report("router_ownership", request.logical_id)
+                self._report("unsupported_request", request.logical_id)  # a Router owns this call's provider body
             prepared = _prepared_sync.set(self if attempt else None)
             try:
                 try:
@@ -445,3 +450,64 @@ class CavemanLiteLLM(CustomLogger):
 
     async def aresponses(self, *, scope, **kwargs):
         return await self._async("aresponses", scope, kwargs)
+
+
+def _live():
+    with _registration_lock:
+        return list(_entered)
+
+
+class _Dispatcher(CustomLogger):
+    """The one LiteLLM callback for every entered CavemanLiteLLM.
+
+    LiteLLM caps each callback list at MAX_CALLBACKS (100): one callback per instance dropped the host's
+    own callbacks past 100 live instances. Each hook fans out to the entered instances, and every instance
+    ignores calls it did not tag. Fan-out rather than a contextvar route: proxy hooks and late success
+    callbacks run outside the call that entered an instance.
+    """
+    def __init__(self):
+        super().__init__(turn_off_message_logging=True)
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        for caveman in _live():
+            data = await caveman.async_pre_call_hook(user_api_key_dict, cache, data, call_type)
+        return data
+
+    async def async_pre_call_deployment_hook(self, kwargs, call_type):
+        for caveman in _live():
+            kwargs = await caveman.async_pre_call_deployment_hook(kwargs, call_type)
+        return kwargs
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        for caveman in _live():
+            caveman.log_pre_api_call(model, messages, kwargs)
+
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+        for caveman in _live():
+            caveman.log_post_api_call(kwargs, response_obj, start_time, end_time)
+
+    def _finish(self, data, response, event):
+        for caveman in _live():
+            caveman._finish(data, response, event)
+
+    async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+        self._finish(request_data, response, "completed")
+        return response
+
+    async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
+        self._finish(request_data, None, "failed")
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._finish(kwargs, response_obj, "completed")
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._finish(kwargs, response_obj, "completed")
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self._finish(kwargs, response_obj, "failed")
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self._finish(kwargs, response_obj, "failed")
+
+
+_DISPATCHER = _Dispatcher()

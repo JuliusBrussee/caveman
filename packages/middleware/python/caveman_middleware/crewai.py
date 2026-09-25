@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import Any
 
+from ._versions import framework_import_failed
+
 try:
     from crewai import BaseLLM
     from crewai.events import LLMCallCompletedEvent, crewai_event_bus
@@ -25,18 +27,18 @@ try:
     from crewai.utilities.agent_utils import convert_tools_to_openai_schema
     from crewai.utilities.string_utils import sanitize_tool_name
     from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[crewai] to use the CrewAI adapter") from error
+except ImportError as error:
+    framework_import_failed("crewai", error, "Install caveman-middleware[crewai] to use the CrewAI adapter")
 
 from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, Scope, ensure_async, ensure_sync
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION
-from ._guard import fail_open, recovery, recovery_name_conflict
+from ._guard import fail_open, recovery, recovery_failed, recovery_name_conflict
 from ._native import Attempt, leaves, manifest, owner, plain, replace_path
-from ._versions import family_gate
+from ._versions import VERSION, family_gate
 from ._usage import usage
 
 FRAMEWORK_VERSION = version("crewai")
-ADAPTER = Adapter("crewai", "0.1.0", FRAMEWORK_VERSION, "crewai-messages-v1")
+ADAPTER = Adapter("crewai", VERSION, FRAMEWORK_VERSION, "crewai-messages-v1")
 _call = contextvars.ContextVar("caveman_crewai_call", default=None)
 # (weakref to the CavemanLLM, weakref to its executor) set by the one PRE_MODEL_CALL hook for the next call.
 _executor = contextvars.ContextVar("caveman_crewai_executor", default=None)
@@ -102,9 +104,12 @@ class CavemanRecoveryTool(BaseTool):
 
     def _run(self, handle, offset=0, limit=262144, query=""):
         model = self._model()
-        if model is None or model.closed or self._binding is None:
-            raise MiddlewareError("recovery_unavailable")
-        result = self._binding.execute(handle=handle, offset=offset, limit=limit, query=query)
+        try:
+            if model is None or model.closed or self._binding is None:
+                raise MiddlewareError("recovery_unavailable")
+            result = self._binding.execute(handle=handle, offset=offset, limit=limit, query=query)
+        except MiddlewareError as error:  # the {"error": code} result the model reads
+            return json.dumps(recovery_failed(ADAPTER.id, error))
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -202,7 +207,7 @@ class CavemanLLM(BaseLLM):
         executor = entry[1]() if entry is not None and entry[0]() is self and entry[1] is not None else None
         if owner.get() is not None:
             return None
-        reason = ("closed" if self.closed else "off" if self.runtime.mode == "off" else
+        reason = ("closed" if self.closed else "disabled" if self.runtime.mode == "off" else
                   "unsupported_version" if not self.version_supported else
                   "unsupported_shape" if type(messages) is not list else None)
         if reason:
@@ -259,7 +264,7 @@ class CavemanLLM(BaseLLM):
             attempt.optimization = result
             attempt.plan_id = result.plan["replacement_set_id"] if result.plan else None
         else:
-            attempt.reason = "invalid_replacement_plan"
+            attempt.reason = "invalid_plan"
         return view, attempt
 
     def _native_call(self, attempt):

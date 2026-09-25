@@ -15,19 +15,21 @@ import re
 import uuid
 from urllib.parse import urlsplit
 
+from ._versions import framework_import_failed
+
 try:
     import httpx
     from google import genai
     from google.genai import types
     from google.genai.chats import Chat, AsyncChat
     from google.genai.client import AsyncClient
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[google] to use the Google adapter") from error
+except ImportError as error:
+    framework_import_failed("google", error, "Install caveman-middleware[google] to use the Google adapter")
 
-from caveman_cloud.middleware import Adapter, Candidate, ensure_async, ensure_sync, sha256
-from ._guard import fail_open, recovery_name_conflict
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, ensure_async, ensure_sync, sha256
+from ._guard import fail_open, recovery_failed, recovery_name_conflict
 from ._native import Attempt, manifest, owner, plain
-from ._versions import family_gate, installed_version
+from ._versions import VERSION, family_gate, installed_version
 from ._usage import usage
 from ._google_wire import parse, patch
 
@@ -103,11 +105,18 @@ def _register(config, runtime, scope, context, asynchronous):
     if binding is None:  # unusable scope: recovery-free
         return config, context
 
+    # A refused handle is the {"error": code} function response AFC sends back to the model.
     def caveman_retrieve(handle: str, offset: int = 0, limit: int = 262144, query: str = "") -> dict:
-        return binding.execute({"handle": handle, "offset": offset, "limit": limit, **({"query": query} if query else {})})
+        try:
+            return binding.execute({"handle": handle, "offset": offset, "limit": limit, **({"query": query} if query else {})})
+        except MiddlewareError as error:
+            return recovery_failed(ADAPTER_ID, error)
 
     async def async_retrieve(handle: str, offset: int = 0, limit: int = 262144, query: str = "") -> dict:
-        return await binding.execute({"handle": handle, "offset": offset, "limit": limit, **({"query": query} if query else {})})
+        try:
+            return await binding.execute({"handle": handle, "offset": offset, "limit": limit, **({"query": query} if query else {})})
+        except MiddlewareError as error:
+            return recovery_failed(ADAPTER_ID, error)
 
     function = async_retrieve if asynchronous else caveman_retrieve
     function.__name__, function.__doc__ = binding.name, binding.description
@@ -297,12 +306,13 @@ def _prepare(request, runtime, default_scope, supported=True):
     context = _invocation.get() or {}
     scope = context.get("scope") or default_scope  # per call: the wrapped clone's scope, else the transport default
     attempt = Attempt(runtime, scope, context.get("logical_call_id") or str(uuid.uuid4()), str(uuid.uuid4()),
-                      adapter=ADAPTER_ID, reason="opaque_payload")
+                      adapter=ADAPTER_ID, reason="unsupported_shape")
     if runtime.mode == "off" or not supported or scope is None:
         attempt.passive = True
         attempt.reason = "disabled" if runtime.mode == "off" else "unsupported_version" if not supported else "recovery_unbound"
         return attempt, None
     if any(name in request.headers for name in ("content-encoding", "digest", "content-digest", "content-md5", "signature", "signature-input", "x-amz-content-sha256", "dpop")):
+        attempt.reason = "unsupported_request"
         return attempt, None
     try:
         if len(request.content) > 2 << 20:
@@ -317,7 +327,7 @@ def _prepare(request, runtime, default_scope, supported=True):
     if not plain(body) or type(body.get("contents")) is not list:
         return attempt, None
     if body.get("cachedContent"):
-        attempt.reason = "opaque_history_reference"
+        attempt.reason = "unsupported_request"  # cachedContent: history held by the provider
         return attempt, None
     history = manifest([{key: value for key, value in body.items() if key != "contents"}, *body["contents"]])
     if history is None:
@@ -335,7 +345,7 @@ def _prepare(request, runtime, default_scope, supported=True):
     if not (runtime.owns_binding(binding, scope) and len(declarations) == 1 and declarations[0] in context.get("declarations", []) and mode in (None, "AUTO") and not generation.get("responseSchema") and not generation.get("responseJsonSchema") and generation.get("responseMimeType") in (None, "text/plain")):
         binding = None
     leaves = _selected(body, strings)
-    options = dict(scope=scope, adapter=Adapter(ADAPTER_ID, "0.1.0", FRAMEWORK_VERSION, "google-genai-wire-v1"), manifest=history,
+    options = dict(scope=scope, adapter=Adapter(ADAPTER_ID, VERSION, FRAMEWORK_VERSION, "google-genai-wire-v1"), manifest=history,
         sequence=history.sequence,
         model={"provider": "google", "id": re.sub(r":(?:generateContent|streamGenerateContent)$", "", request.url.path), "protocol": "google-genai"},
         candidates=[Candidate(id=f"leaf-{i}", source_id="/".join(map(str, path)), content=leaf[2]) for i, (path, leaf) in enumerate(leaves)],

@@ -3,10 +3,15 @@ name: middleware-python
 # Python SDK plus one environment per adapter extra, at the tested floor
 # (Python 3.11, packages/middleware/python/constraints/floor.txt) and latest
 # (Python 3.13, constraints/latest.txt), with the certified families again on
-# 3.12. A nightly canary installs the newest releases inside each extra's range,
-# unconstrained, and opens (or updates) an issue when one breaks an adapter.
-# Path-gated: it only proves anything when the SDK, the middleware package, or
-# the shared parity fixtures change.
+# 3.12 and 3.14. Every adapter lane builds the wheel, installs it, and runs the
+# suite from outside the checkout, so it tests the package users install, not
+# the source tree. A nightly canary installs the newest releases inside each
+# extra's range, unconstrained, and opens (or updates) an issue when one breaks
+# an adapter. The extras cap it at their major versions (langchain<2,
+# openai<4, ...): a new major never reaches the canary, or any lane, until a
+# deliberate change widens that extra's range.
+# Path-gated: it only proves anything when the SDK, the middleware package, the
+# shared parity fixtures, or the cross-language e2e drivers change.
 on:
   push:
     branches: [main]
@@ -14,12 +19,14 @@ on:
       - packages/middleware/python/**
       - packages/sdk/python/**
       - packages/sdk/parity/**
+      - tests/middleware-e2e/**
       - .github/workflows/middleware-python.yml
   pull_request:
     paths:
       - packages/middleware/python/**
       - packages/sdk/python/**
       - packages/sdk/parity/**
+      - tests/middleware-e2e/**
       - .github/workflows/middleware-python.yml
   schedule:
     - cron: "17 4 * * *"
@@ -60,7 +67,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [floor, latest, latest-3.12]
+        lane: [floor, latest, latest-3.12, latest-3.14]
         # Each family gets its own environment: upstream framework constraints
         # conflict, so a combined install cannot cover them.
         family: [langchain, openai, anthropic, litellm, google, strands, agno, crewai, pydantic-ai, autogen, llama-index, mcp, asgi]
@@ -74,16 +81,28 @@ jobs:
           - {lane: latest-3.12, family: llama-index}
           - {lane: latest-3.12, family: mcp}
           - {lane: latest-3.12, family: asgi}
+          - {lane: latest-3.14, family: google}
+          - {lane: latest-3.14, family: strands}
+          - {lane: latest-3.14, family: agno}
+          - {lane: latest-3.14, family: crewai}
+          - {lane: latest-3.14, family: pydantic-ai}
+          - {lane: latest-3.14, family: autogen}
+          - {lane: latest-3.14, family: llama-index}
+          - {lane: latest-3.14, family: mcp}
+          - {lane: latest-3.14, family: asgi}
         include:
           - {lane: floor, python: "3.11", constraints: floor}
           - {lane: latest, python: "3.13", constraints: latest}
           - {lane: latest-3.12, python: "3.12", constraints: latest}
+          # Every certified framework (and its compiled dependencies) ships cp314 wheels.
+          - {lane: latest-3.14, python: "3.14", constraints: latest}
           # openai and mcp are also dependencies of other families with
           # incompatible ranges, so the constraints files leave them out and
           # their own lanes pin them here.
           - {lane: floor, family: openai, with: "openai==2.20.0"}
           - {lane: latest, family: openai, with: "openai==3.19.2"}
           - {lane: latest-3.12, family: openai, with: "openai==3.19.2"}
+          - {lane: latest-3.14, family: openai, with: "openai==3.19.2"}
           - {lane: floor, family: mcp, with: "mcp==2.0.0"}
           - {lane: latest, family: mcp, with: "mcp==2.2.0"}
           # Provider packages the behavioral drivers use (versions from the constraints file).
@@ -99,11 +118,22 @@ jobs:
       - run: python -m pip install pytest==9.0.3
       # Test this checkout's SDK contract, not the most recent registry release.
       - run: python -m pip install --no-deps -e packages/sdk/python
-      - run: python -m pip install -c "packages/middleware/python/constraints/${{ matrix.constraints }}.txt" "./packages/middleware/python[${{ matrix.family }}]" ${{ matrix.with }}
-      - run: python -m pytest -q
-        working-directory: packages/middleware/python
+      # The wheel users install, with this lane's extra: a module or data file
+      # missing from the package fails here, not after release.
+      - name: Install the built wheel
+        run: |
+          python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/dist" ./packages/middleware/python
+          wheels=("$RUNNER_TEMP"/dist/caveman_middleware-*.whl)
+          python -m pip install -c "packages/middleware/python/constraints/${{ matrix.constraints }}.txt" "${wheels[0]}[${{ matrix.family }}]" ${{ matrix.with }}
+      # From outside the checkout, so `import caveman_middleware` can only resolve to the installed wheel.
+      - name: Test the installed wheel
+        working-directory: ${{ runner.temp }}
         env:
           CAVEMAN_REQUIRED_ADAPTERS: ${{ matrix.family }}
+          SUITE: ${{ github.workspace }}/packages/middleware/python
+        run: |
+          python -c 'import sys, caveman_middleware as m; sys.exit(0 if "site-packages" in m.__file__ else "imported from " + m.__file__)'
+          python -m pytest -q -p no:cacheprovider --rootdir "$SUITE" -c "$SUITE/pyproject.toml" "$SUITE/tests"
 
   canary:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -126,13 +156,22 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install pytest==9.0.3
       - run: python -m pip install --no-deps -e packages/sdk/python
-      # No constraints: the newest releases each extra's range admits, as a fresh install resolves them.
-      - run: python -m pip install "./packages/middleware/python[${{ matrix.family }}]" ${{ matrix.with }}
+      # No constraints: the newest releases each extra's range admits, as a fresh
+      # install resolves them. The range's upper bound is the extra's next major.
+      - name: Install the built wheel
+        run: |
+          python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/dist" ./packages/middleware/python
+          wheels=("$RUNNER_TEMP"/dist/caveman_middleware-*.whl)
+          python -m pip install "${wheels[0]}[${{ matrix.family }}]" ${{ matrix.with }}
       - run: python -m pip freeze | grep -iE '^(langchain|langgraph|openai|anthropic|litellm|google-genai|strands-agents|agno|crewai|pydantic-ai|autogen|llama-index|mcp)' || true
-      - run: python -m pytest -q
-        working-directory: packages/middleware/python
+      - name: Test the installed wheel
+        working-directory: ${{ runner.temp }}
         env:
           CAVEMAN_REQUIRED_ADAPTERS: ${{ matrix.family }}
+          SUITE: ${{ github.workspace }}/packages/middleware/python
+        run: |
+          python -c 'import sys, caveman_middleware as m; sys.exit(0 if "site-packages" in m.__file__ else "imported from " + m.__file__)'
+          python -m pytest -q -p no:cacheprovider --rootdir "$SUITE" -c "$SUITE/pyproject.toml" "$SUITE/tests"
 
   # Runs without checking out any code: it only files the failure.
   canary-issue:

@@ -534,10 +534,13 @@ def _reasons(runtime):
 @pytest.mark.parametrize("view", ["sync", "async"])  # D5: either runtime type works on every path
 def test_projection_applied_and_caller_input_untouched(family, session, view, protocol_runtime):
     from caveman_cloud.middleware import Scope, normalize_scope_token
+    from caveman_middleware._versions import installed_version
     runtime = protocol_runtime if view == "sync" else protocol_runtime.as_async()
     received = _drive(family, runtime, Scope("tests", session))
     assert received.startswith(MARKER), f"{family} did not apply the plan"
     assert "applied" in [event.status for event in protocol_runtime.reports]
+    # Adapter.version on the wire is the installed caveman-middleware release.
+    assert {request["adapter"]["version"] for request in protocol_runtime.requests} == {installed_version("caveman-middleware") or "unknown"}
     hashed = normalize_scope_token(session)
     assert hashed.startswith("h-") and {request["scope"]["session_id"] for request in protocol_runtime.requests} == {hashed}
     assert all(receipt["scope"]["session_id"] == hashed for receipt in protocol_runtime.receipts)
@@ -898,6 +901,7 @@ def _openai_tool_loop(client, runtime, scope):
 
 def test_anthropic_tool_runner_executes_recovery_and_the_model_receives_the_exact_original(protocol_runtime):
     """openai and langchain recovery run in their native suites; this is the anthropic tool_runner's."""
+    require_adapter("anthropic")
     import importlib
     import re
     from anthropic import Anthropic, DefaultHttpxClient
@@ -905,7 +909,6 @@ def test_anthropic_tool_runner_executes_recovery_and_the_model_receives_the_exac
     from caveman_cloud.middleware import Scope
     from caveman_middleware._httpx2 import sdk_flavour
     from caveman_middleware.anthropic import with_caveman_anthropic
-    require_adapter("anthropic")
     http, received = importlib.import_module(sdk_flavour(DefaultHttpxClient)), []
 
     def provider(request):
