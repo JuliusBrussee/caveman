@@ -632,6 +632,9 @@ test("repo slug never carries a remote credential, host or non-GitHub repository
   assert.equal(repoSlugFromRemote("git@github.example.internal:acme/checkout.git"), "", "an internal mirror is not github.com");
   assert.equal(repoSlugFromRemote("https://github.com/group/sub/project.git"), "", "nested paths are not owner/name");
   assert.equal(repoSlugFromRemote(""), "");
+  const started = Date.now();
+  assert.equal(repoSlugFromRemote(`https://github.com/acme/${"/".repeat(100_000)}x`), "", "a long run of '/' is linear, not a ReDoS");
+  assert.ok(Date.now() - started < 1000, `repo slug took ${Date.now() - started}ms`);
   for (const off of ["0", "false", "OFF", " no "]) assert.equal(workTagsOff(off), true, off);
   for (const on of [undefined, "", "1", "true", "on"]) assert.equal(workTagsOff(on), false, String(on));
 });

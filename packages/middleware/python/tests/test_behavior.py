@@ -701,15 +701,10 @@ def test_close_during_an_in_flight_call_passes_the_original_through_promptly(fam
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
 @pytest.mark.parametrize("family", sorted(DRIVERS))
 @pytest.mark.parametrize("view", ["sync", "async"])
-def test_forked_child_drives_the_adapter_without_hanging(family, view, lenient_runtime, monkeypatch, request):
+def test_forked_child_drives_the_adapter_without_hanging(family, view, lenient_runtime, monkeypatch):
     """D3: the parent's pools, threads and loops exist before the fork; the child must still finish, and compress."""
     from caveman_cloud.middleware import Scope
     require_adapter(family)
-    # Upstream, not the adapter: CPython < 3.12 leaves the parent's current event loop set in a forked child (reset at
-    # fork since 3.12, gh-66285), the driver's agent.run_sync() reuses it, and a kqueue selector does not survive fork.
-    request.applymarker(pytest.mark.xfail(
-        family == "pydantic_ai" and sys.platform == "darwin" and sys.version_info < (3, 12), strict=True,
-        reason="CPython < 3.12 keeps the parent's event loop in a forked child (gh-66285); pydantic-ai run_sync reuses it"))
     # macOS only: with no proxy variable set, urllib asks SystemConfiguration, which segfaults in a forked child
     # (litellm's httpx client does this). Any *_proxy variable skips that lookup; loopback is never proxied anyway.
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
@@ -722,6 +717,12 @@ def test_forked_child_drives_the_adapter_without_hanging(family, view, lenient_r
     if pid == 0:
         outcome = b"error"
         try:
+            # Upstream, not the adapter: CPython < 3.12 leaves the parent's current event loop set in a forked child
+            # (reset at fork since 3.12, gh-66285) and agent.run_sync() reuses it. Its kqueue (macOS) and its default
+            # executor's worker thread (everywhere) do not survive fork, so plain pydantic-ai hangs there, Caveman or
+            # not. Do what 3.12 does at fork so the adapter itself stays under test on the 3.11 floor.
+            if family == "pydantic_ai" and sys.version_info < (3, 12):
+                asyncio.set_event_loop(asyncio.new_event_loop())
             text = _drive(family, runtime, Scope("tests", "child"))
             outcome = b"compressed" if text.startswith(MARKER) else b"original" if text == ORIGINAL else b"other"
         finally:

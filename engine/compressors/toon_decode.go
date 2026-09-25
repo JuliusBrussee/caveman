@@ -215,7 +215,7 @@ func parseTOONArray(lines []toonLine, i, indent int) ([]any, int, bool) {
 	if !ok || len(cells) != n {
 		return nil, i, false
 	}
-	out := make([]any, 0, n)
+	out := make([]any, 0, len(cells)) // == n, checked above; bounded by the input
 	for _, cell := range cells {
 		val, ok := parseTOONScalar(cell)
 		if !ok {

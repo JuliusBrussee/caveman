@@ -505,6 +505,10 @@ test('a runtime token is trimmed of surrounding whitespace; a control character 
   const mounted = createMiddlewareRuntime({ token: ' secret\r\n', fetch: async (url, init) => { seen.push(init.headers.Authorization); return Response.json(caps); } });
   try { await mounted.ready(); } finally { mounted.close(); }
   assert.deepEqual(seen, ['Bearer secret']);
+  // A long inner whitespace run must not backtrack quadratically (CodeQL js/polynomial-redos).
+  const started = Date.now();
+  createMiddlewareRuntime({ token: 'a' + '\t'.repeat(200_000) + 'b', fetch: async () => Response.json(caps) }).close();
+  assert.ok(Date.now() - started < 1000, `token trim took ${Date.now() - started}ms`);
   const broken = createMiddlewareRuntime({ token: 'sec\nret', fetch: async () => assert.fail('an unsendable token sent a request') });
   try {
     assert.equal((await broken.preflight()).reason, 'invalid_configuration');

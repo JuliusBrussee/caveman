@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1250,8 +1251,7 @@ func joinRecoveryHandles(handles []string) string {
 
 func appendCCRMarker(out []byte, handle string) []byte {
 	marker := []byte("<<ccr:" + handle + ">>")
-	withMarker := make([]byte, 0, len(out)+1+len(marker))
-	withMarker = append(withMarker, out...)
+	withMarker := slices.Grow(slices.Clone(out), 1+len(marker))
 	if len(out) == 0 || out[len(out)-1] != '\n' {
 		withMarker = append(withMarker, '\n')
 	}

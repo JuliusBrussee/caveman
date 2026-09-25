@@ -117,6 +117,14 @@ const zeroCounts = (): DecisionCounts => ({ candidates: 0, sent: 0, protected: 0
 const failed = (outcome: FailureOutcome) => Object.assign(new MiddlewareError(outcome.reason), { failure: outcome });
 const failureOf = (error: unknown): FailureOutcome | undefined => (error as { failure?: FailureOutcome } | null)?.failure;
 const token = (value: unknown): string | null => isToken(value) ? value : null;
+/** Strips surrounding HTTP whitespace in linear time; /[\t\n\r ]+$/ backtracks quadratically on a long inner run. */
+function trimHttpWhitespace(value: string): string {
+  const ws = (i: number) => /[\t\n\r ]/.test(value.charAt(i));
+  let start = 0, end = value.length;
+  while (start < end && ws(start)) start++;
+  while (end > start && ws(end - 1)) end--;
+  return value.slice(start, end);
+}
 /** Host sinks are never awaited: neither a throw nor a rejected promise can change the call or crash the process. */
 function emit<T>(sink: ((event: T) => unknown) | undefined, event: T): void {
   try {
@@ -188,7 +196,7 @@ export class MiddlewareRuntime {
     catch (e) { error = e instanceof MiddlewareError ? e.code : 'invalid_endpoint'; }
     // A mounted secret file ends in a newline: surrounding HTTP whitespace is trimmed, as Headers would. Anything else
     // outside printable ASCII can never be sent, so it is a configuration error rather than a runtime outage per call.
-    if (typeof options.token === 'string') this.#options.token = options.token.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, '');
+    if (typeof options.token === 'string') this.#options.token = trimHttpWhitespace(options.token);
     if (!error && (this.mode !== mode || !valid(options.deadlineMs) || !valid(options.retrieveDeadlineMs) || !valid(options.maxConcurrency, 1024) ||
       !/^[\x20-\x7e]*$/.test(this.#options.token ?? ''))) error = 'invalid_configuration';
     const proc = (globalThis as { process?: { env?: Record<string, string | undefined>; execArgv?: string[]; versions?: { node?: string } } }).process;

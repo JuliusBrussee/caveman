@@ -69,7 +69,7 @@ test("update syncs binaries and reports up to date when npm has no newer CLI", a
   await registry.close();
   assert.equal(out.code, 0, out.stderr);
   assert.equal((out.stderr.match(/· checksum verified/g) ?? []).length, 6);
-  assert.match(out.stdout, new RegExp(`up to date — CLI ${cliVersion.replace(/\./g, "\\.")}, binaries ${release}`));
+  assert.ok(out.stdout.includes(`up to date — CLI ${cliVersion}, binaries ${release}`), out.stdout);
 });
 
 test("update exits non-zero and names the npm command when a newer CLI exists", async () => {

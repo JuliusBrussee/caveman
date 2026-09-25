@@ -329,7 +329,9 @@ func (r *Resolver) mapped(prefix, value, mechanism string, globs []string) (Prin
 
 // tokenFile is the token map file (YAML or JSON). Only token hashes are stored:
 // sha256 of the token, hex encoded, e.g.
-// `printf %s "$TOKEN" | sha256sum`.
+// `printf %s "$TOKEN" | sha256sum`. Tokens are random bearer secrets (e.g.
+// `openssl rand -hex 32`), never passwords: a fast digest is a lookup key here,
+// and a slow KDF would add per-request cost without protecting 256 bits.
 type tokenFile struct {
 	Principals []tokenEntry `yaml:"principals"`
 }

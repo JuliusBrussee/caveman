@@ -15,6 +15,11 @@ const repoPrefix = /^https:\/\/github\.com\/JuliusBrussee\/caveman\/(?:blob|tree
 const pages = new Map();
 const failures = [];
 
+// Exact host match: a prefix test would also accept docs.caveman.so.evil.example.
+function isDocsPage(link) {
+  try { return new URL(link).origin === "https://docs.caveman.so"; } catch { return false; }
+}
+
 async function page(url) {
   if (!pages.has(url)) {
     pages.set(url, fetch(url, { redirect: "follow", signal: AbortSignal.timeout(20_000) })
@@ -32,7 +37,7 @@ for (const file of process.argv.slice(2)) {
     const repo = link.match(repoPrefix);
     if (repo) {
       if (!existsSync(join(root, decodeURIComponent(repo[1])))) failures.push(`${file}: ${link} (missing in repo)`);
-    } else if (link.startsWith("https://docs.caveman.so")) {
+    } else if (isDocsPage(link)) {
       const [url, fragment] = link.split("#");
       const res = await page(url);
       if (res.status !== 200) failures.push(`${file}: ${link} (HTTP ${res.status}${res.error ? ` ${res.error}` : ""})`);

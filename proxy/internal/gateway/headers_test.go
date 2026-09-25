@@ -24,3 +24,17 @@ func TestChatGPTRequestHeadersRemovePrivateAndHopByHopFields(t *testing.T) {
 		}
 	}
 }
+
+func TestRelayedResponseHeadersForbidContentSniffing(t *testing.T) {
+	src := http.Header{}
+	src.Set("Content-Type", "text/html")
+	src.Add("X-Content-Type-Options", "sniff")
+	dst := http.Header{}
+	copySafeResponseHeaders(dst, src)
+	if got := dst.Values("X-Content-Type-Options"); len(got) != 1 || got[0] != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %v, want [nosniff]", got)
+	}
+	if dst.Get("Content-Type") != "text/html" {
+		t.Fatalf("Content-Type was not relayed: %v", dst)
+	}
+}

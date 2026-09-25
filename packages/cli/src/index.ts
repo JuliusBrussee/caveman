@@ -60,7 +60,7 @@ import {
 } from "./agent-mcp.js";
 import { portableInvocation } from "./portable-command.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
-import { publishedForwardHeadersOf, publishedUpstreamsOf, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
+import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
 
@@ -2651,7 +2651,7 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
     return;
   }
 
-  const base = (process.env.CAVE_BINARY_RELEASE_BASE ?? BINARY_RELEASE_BASE_DEFAULT).replace(/\/+$/, "");
+  const base = trimTrailingSlashes(process.env.CAVE_BINARY_RELEASE_BASE ?? BINARY_RELEASE_BASE_DEFAULT);
   const releaseBase = `${base}/${BINARY_RELEASE}`;
   let checksumsRaw: string;
   let signatureRaw: string;
@@ -2734,7 +2734,7 @@ function cliVersionBehind(current: string, latest: string): boolean {
 }
 
 async function latestPublishedCliVersion(timeoutSeconds: number): Promise<string | null> {
-  const registry = (process.env.CAVEMAN_NPM_REGISTRY ?? "https://registry.npmjs.org").replace(/\/+$/, "");
+  const registry = trimTrailingSlashes(process.env.CAVEMAN_NPM_REGISTRY ?? "https://registry.npmjs.org");
   try {
     const response = await fetch(`${registry}/@caveman-ai%2fcli`, {
       headers: { accept: "application/vnd.npm.install-v1+json" },
@@ -5702,7 +5702,7 @@ async function spawnWrapped(
   if (direct) {
     // buildWrapEnv writes the agent-attributed `${gw}/w/<agent>` form, and an
     // outer routed wrap may leak the bare form; a direct launch strips both.
-    const gwPrefix = `${gw.replace(/\/+$/, "")}/`;
+    const gwPrefix = `${trimTrailingSlashes(gw)}/`;
     for (const k of WRAP_BASE_URL_ENV_VARS) {
       const value = env[k];
       if (value !== undefined && (value === gw || value.startsWith(gwPrefix))) delete env[k];
@@ -6408,7 +6408,7 @@ function freshOpenClawModelRef(ctx: OverlayBuilderContext): OpenClawModelRef {
 }
 
 function appendUrlPath(base: string, path: string): string {
-  return `${base.replace(/\/+$/, "")}${path}`;
+  return `${trimTrailingSlashes(base)}${path}`;
 }
 
 export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -9764,7 +9764,7 @@ export function workTagValueSafe(value: string): boolean {
 // remote is on any other host or has no such shape. Never the URL itself: a
 // remote can embed a credential.
 export function repoSlugFromRemote(remote: string): string {
-  const cleaned = remote.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+  const cleaned = trimTrailingSlashes(remote.trim()).replace(/\.git$/i, "");
   let host = "";
   let path = "";
   const url = /^[a-z][a-z0-9+.-]*:\/\/([^/]+)\/(.*)$/i.exec(cleaned);
@@ -18908,7 +18908,7 @@ function renderRecipe(recipe: IntegrationRecipe, baseURL: string, app: string): 
 
 function renderRecipeTemplate(value: string, baseURL: string, app: string): string {
   return value
-    .replaceAll("{{baseURL}}", baseURL.replace(/\/+$/, ""))
+    .replaceAll("{{baseURL}}", trimTrailingSlashes(baseURL))
     .replaceAll("{{app}}", app);
 }
 
