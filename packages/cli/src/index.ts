@@ -10513,7 +10513,7 @@ function localScanSyncLine(out: Extract<LocalScanSyncOutcome, { kind: "synced" }
 }
 
 // syncRequestSpan converts one local `requests` row into a caveman-jsonl span
-// line (public/shared/platform/importers Span shape; timestamps are already in
+// line (Caveman-Cloud public/shared/platform/importers Span shape; timestamps are already in
 // the ClickHouse layout because the proxy writes them that way). The basis and
 // per-row inferred savings ride in attributes — the spans schema has no savings
 // column, and imported rows must never look like verified ledger entries.

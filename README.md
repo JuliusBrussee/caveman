@@ -584,9 +584,9 @@ Exact network, telemetry, and storage boundaries: [SECURITY.md](./SECURITY.md).
 
 Split license. Skill and adoption surfaces are [MIT](./LICENSE). Engine-linked runtime is BSL-1.1 source-available, not OSI Open Source before Change Date.
 
-**MIT:** the skill, Agent SDK and initializer, the CLI, both client SDKs, contracts, provider catalog, extension shell, and the thin cavemem clients. Free like mammoth on open plain.
+**MIT:** the skill, the CLI, both client SDKs, contracts, provider catalog, extension shell, and the thin cavemem clients. Free like mammoth on open plain.
 
-**BSL-1.1:** Engine, Proxy, Cache Engine, rewriter, Browse, MCP server, `shrink`, cavemem Go core, and shared Go platform. New Engine-linked runtime modules default to BSL-1.1. Read it, fork it, self-host it for your own first-party traffic free, production included. Each version converts to **Apache-2.0** on the earlier of `2030-06-21` or four years after it ships. Hosting it for third parties needs a commercial license.
+**BSL-1.1:** Engine, Proxy, Cache Engine, Browse, MCP server, `shrink`, cavemem Go core, and shared Go platform. New Engine-linked runtime modules default to BSL-1.1. Read it, fork it, self-host it for your own first-party traffic free, production included. Each version converts to **Apache-2.0** on the earlier of `2030-06-21` or four years after it ships. Hosting it for third parties needs a commercial license.
 
 `engine/pixel` embeds [pxpipe](https://github.com/teamchong/pxpipe) (MIT) plus glyph atlases derived from Spleen 5×8 (BSD-2-Clause) and GNU Unifont (dual OFL-1.1 / GPLv2-with-font-exception); its `NOTICE` travels with that source.
 

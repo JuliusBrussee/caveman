@@ -1,6 +1,6 @@
 # Public package releases
 
-`release-packages.yml` publishes four reviewed adoption artifacts from
+`release-packages.yml` publishes reviewed adoption artifacts from
 `JuliusBrussee/caveman`. Build jobs have no OIDC permission; only isolated
 publish jobs can mint registry tokens.
 
@@ -8,9 +8,7 @@ publish jobs can mint registry tokens.
 
 Bootstrap releases published and anonymously verified on 2026-08-11:
 
-- npm `@caveman-ai/agent@0.1.0`
 - npm `@caveman-ai/sdk@1.0.0`
-- npm `@caveman-ai/create-agent@0.1.0`
 - PyPI `caveman-sdk==1.0.0`
 
 Fresh installs and runtime imports passed, and registry downloads matched
@@ -45,8 +43,6 @@ tag whose version differs from package metadata.
 |---|---|---|
 | `sdk-ts-v1.0.0` | npm `@caveman-ai/sdk` | `1.0.0` |
 | `sdk-python-v1.0.0` | PyPI `caveman-sdk` | `1.0.0` |
-| `agent-v0.1.0` | npm `@caveman-ai/agent` | `0.1.0` |
-| `create-agent-v0.1.0` | npm `@caveman-ai/create-agent` | `0.1.0` |
 
 Release build uses portable committed lockfiles, `npm ci --ignore-scripts`, full
 tests, runtime and full-graph audits, tarball/wheel builds, one-day artifacts,
@@ -57,9 +53,7 @@ tarball tested by build job.
 
 Do not flip public install commands until each registry endpoint resolves to this
 project from clean environments. Prove exact version, package owner/repository,
-fresh install, import, and initializer output. For Agent SDK, run `caveman-agent
-doctor` in generated project without provider call, then one credential-backed
-stranger response. Provider spend is outside release workflow.
+fresh install, and import. Provider spend is outside release workflow.
 
 If smoke fails, deprecate affected npm version or yank PyPI release, remove public
 install command, fix forward with new version, and preserve failed artifact and

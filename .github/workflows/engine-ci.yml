@@ -131,16 +131,13 @@ jobs:
       - name: Prebuild caveman-proxy for conformance tests
         run: go build -o "$env:RUNNER_TEMP\caveman-proxy.exe" ./proxy/cmd/caveman-proxy
       - run: pnpm -r build
-      # Two POSIX-harnessed suites have never executed on Windows and are
-      # excluded until their harnesses are ported, not because coverage is
-      # unwanted: @caveman-ai/cli (149 failures — shebang-script stub agent
-      # binaries; Windows contracts run in the curated `npm run test:windows`
-      # gate below via windows-platform/portable-command/delegate-windows) and
-      # @caveman-ai/agent (42 failures — historical copy, source of truth is
-      # caveman-agent-sdk; its Windows contracts are windows-process and
-      # windows-shell-smoke in the same gate). Every other workspace suite
-      # passes on Windows and stays in.
-      - run: pnpm -r --filter "!@caveman-ai/cli" --filter "!@caveman-ai/agent" test
+      # @caveman-ai/cli's POSIX-harnessed suite has never executed on Windows
+      # and is excluded until its harness is ported, not because coverage is
+      # unwanted (149 failures — shebang-script stub agent binaries; Windows
+      # contracts run in the curated `npm run test:windows` gate below via
+      # windows-platform/portable-command/delegate-windows). Every other
+      # workspace suite passes on Windows and stays in.
+      - run: pnpm -r --filter "!@caveman-ai/cli" test
         env:
           CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}\caveman-proxy.exe
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"

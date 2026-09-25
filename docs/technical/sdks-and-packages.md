@@ -41,41 +41,6 @@ python -m pytest -q packages/sdk/python
 Neither SDK should guess cost for an unknown model. Unknown pricing remains zero
 and explicitly unpriced.
 
-## Agent SDK
-
-`packages/agent` is TypeScript runtime for constructing and running tool-using agents. It
-exports agent definitions, run and stream interfaces, subagent support, tools,
-memory and context assembly plus output handling, evaluation hooks and sandbox
-modes.
-
-Agent SDK source includes detailed package README and examples. Its sandbox
-selection controls runtime permission policy; it is not a substitute for
-operating-system isolation when untrusted code runs.
-
-Build and test:
-
-```bash
-pnpm --dir packages/agent build
-pnpm --dir packages/agent test
-```
-
-### Agent initializer
-
-`packages/create-caveman-agent` creates strict starter project for Agent SDK:
-
-```bash
-npm create @caveman-ai/agent@latest my-agent
-cd my-agent
-npm run doctor
-npm run dev
-```
-
-Initializer supports Anthropic, OpenAI and Google. Exactly one detected provider
-credential selects provider without prompt; zero or multiple credentials prompt
-once. Secrets are neither printed nor written. `--no-install` skips dependency
-installation. Generated evaluation begins unapproved and needs review before
-locked build.
-
 ## Shared contracts
 
 `packages/shared/contracts` stores JSON Schema wire contracts. Current schema

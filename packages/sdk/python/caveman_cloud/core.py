@@ -1955,7 +1955,7 @@ def policy_unit_fraction(*keys: str) -> float:
     """Deterministic [0,1) fraction for a tuple of keys — the experiment
     assignment unit.
 
-    Byte-for-byte port of the Go ``shared/platform/sampling.Fraction``: one
+    Byte-for-byte port of the Go Caveman-Cloud ``shared/platform/sampling.Fraction``: one
     SHA-256 over each key preceded by an 8-byte big-endian prefix carrying the
     key's UTF-8 byte length, then the first 8 digest bytes read big-endian,
     shifted right 11 and divided by 2^53. The length prefix is what keeps

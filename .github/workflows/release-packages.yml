@@ -7,8 +7,6 @@ on:
       - "sdk-python-v*"
       - "middleware-ts-v*"
       - "middleware-python-v*"
-      - "agent-v*"
-      - "create-agent-v*"
       - "pi-v*"
 
 permissions:
@@ -84,18 +82,6 @@ jobs:
               version="${GITHUB_REF_NAME#sdk-python-v}"
               actual="$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("packages/sdk/python/pyproject.toml").read_text())["project"]["version"])')"
               ;;
-            agent-v*)
-              package="packages/agent"
-              ecosystem="npm"
-              version="${GITHUB_REF_NAME#agent-v}"
-              actual="$(node -p "require('./$package/package.json').version")"
-              ;;
-            create-agent-v*)
-              package="packages/create-caveman-agent"
-              ecosystem="npm"
-              version="${GITHUB_REF_NAME#create-agent-v}"
-              actual="$(node -p "require('./$package/package.json').version")"
-              ;;
             pi-v*)
               package="packages/pi-extension"
               ecosystem="npm"
@@ -168,24 +154,10 @@ jobs:
             packages/sdk/typescript)
               (cd "$smoke" && node --input-type=module -e 'const m=await import("@caveman-ai/sdk"); if(typeof m.Cave!=="function") process.exit(1)')
               ;;
-            packages/agent)
-              (cd "$smoke" && node --input-type=module -e 'const m=await import("@caveman-ai/agent"); if(typeof m.agent!=="function") process.exit(1)')
-              "$smoke/node_modules/.bin/caveman-agent" --version
-              ;;
             packages/pi-extension)
               # The whole point: the published tarball must actually carry the
               # bundled extension that package.json's `pi.extensions` names.
               test -s "$smoke/node_modules/@caveman-ai/pi/dist/index.mjs"
-              ;;
-            packages/create-caveman-agent)
-              generated="$smoke/generated-agent"
-              "$smoke/node_modules/.bin/create-caveman-agent" "$generated" --provider openai --no-install
-              test -f "$generated/src/agent.ts"
-              test -f "$generated/src/run.ts"
-              node -e 'const p=require(process.argv[1]); if(p.dependencies?.["@caveman-ai/agent"]!=="^0.1.0") process.exit(1)' "$generated/package.json"
-              node -e 'const p=require(process.argv[1]); if(p.scripts?.run!=="node --experimental-strip-types src/run.ts") process.exit(1)' "$generated/package.json"
-              grep -F 'entryPath: "src/agent.ts"' "$generated/src/run.ts"
-              grep -F 'rootDir' "$generated/src/run.ts"
               ;;
           esac
       - name: Build and test Python package
@@ -240,7 +212,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: npm
-      url: https://www.npmjs.com/package/${{ needs.build.outputs.package == 'packages/agent' && '@caveman-ai/agent' || needs.build.outputs.package == 'packages/create-caveman-agent' && '@caveman-ai/create-agent' || needs.build.outputs.package == 'packages/pi-extension' && '@caveman-ai/pi' || needs.build.outputs.package == 'packages/middleware/typescript' && '@caveman-ai/middleware' || '@caveman-ai/sdk' }}
+      url: https://www.npmjs.com/package/${{ needs.build.outputs.package == 'packages/pi-extension' && '@caveman-ai/pi' || needs.build.outputs.package == 'packages/middleware/typescript' && '@caveman-ai/middleware' || '@caveman-ai/sdk' }}
     permissions:
       contents: read
       id-token: write

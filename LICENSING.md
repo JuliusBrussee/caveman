@@ -23,8 +23,6 @@ it as MIT adoption surface.
 | Path | License | Notes |
 |---|---|---|
 | `skills/` | MIT | Existing Caveman skill stays MIT and untouched. |
-| `packages/agent/` | MIT | Agent runtime, build compiler, Claude lane, framework adapters, and coding-agent API. |
-| `packages/create-caveman-agent/` | MIT | Zero-runtime-dependency Agent SDK initializer. |
 | `packages/cli/` | MIT | Funnel/on-ramp. Launches BSL binaries but does not contain engine code. |
 | `packages/sdk/typescript/` | MIT | Thin client and structural SDK surface. |
 | `packages/sdk/python/` | MIT | Thin client; distribution name is `caveman-sdk`. |
@@ -35,7 +33,6 @@ it as MIT adoption surface.
 | `mem/js/` | MIT | Thin JavaScript client for cavemem. |
 | `mem/py/` | MIT | Thin Python client for cavemem. |
 | `engine/` | BSL-1.1 | Core compression IP and CCR. |
-| `rewriter/` | BSL-1.1 | Engine-linked reflection rewriter and recovery gates. |
 | `browse/` | BSL-1.1 | Local browser driver; embeds the engine, vendors MIT chromedp modules. |
 | `proxy/` | BSL-1.1 | Standalone gateway and provider adapters. |
 | `mcp/` | BSL-1.1 | Go binary embeds the engine. |

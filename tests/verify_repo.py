@@ -759,7 +759,6 @@ def verify_license_boundaries() -> None:
     bsl_directories = (
         "engine",
         "proxy",
-        "rewriter",
         "browse",
         "mcp",
         "shrink",

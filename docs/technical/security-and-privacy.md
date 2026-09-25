@@ -75,7 +75,7 @@ Destinations that `NO_PROXY` sends direct keep the full guard and still need a
 
 ## Lossy transforms
 
-Engine, TOON, pixel, output shrinker, and trajectory rewriter can change
+Engine, TOON, pixel, and output shrinker can change
 model-visible context. Safety controls include:
 
 - record-mode byte pass-through;

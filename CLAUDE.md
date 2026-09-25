@@ -31,10 +31,10 @@ distribution, and conformance work belongs in
 `/Users/julb/Desktop/GitHub/caveman-coding-agent`
 (intended `JuliusBrussee/caveman-coding-agent`). Browse driver/MCP/benchmark/plugin work
 belongs in `/Users/julb/Desktop/GitHub/caveman-browse`
-(`JuliusBrussee/caveman-browse`). Matching `packages/agent/`,
-`packages/create-caveman-agent/`, and `browse/` directories here are
-historical/consumer copies; edit only for pinned integration, migration/removal,
-or an explicitly requested cross-repo sync.
+(`JuliusBrussee/caveman-browse`). The matching `browse/` directory here is a
+consumer copy (it still builds the `caveman-browse` release binary); edit only
+for pinned integration, migration/removal, or an explicitly requested
+cross-repo sync.
 
 Visibility is separate from ownership: this repo and `caveman-browse` are
 public now; `caveman-agent-sdk` is private during development and planned for
@@ -81,15 +81,12 @@ caveman/
 │   └── mcp-servers/             # caveman-shrink npm-published MCP middleware
 │
 ├── packages/                    # Current public packages
-│   ├── agent/                   # historical copy; source = caveman-agent-sdk
-│   ├── create-caveman-agent/    # historical copy; source = caveman-agent-sdk
 │   ├── cli/                     # @caveman-ai/cli
 │   ├── pi-extension/            # @caveman-ai/pi — native Pi extension (bundled into the CLI, published on `pi-v*` tags)
 │   ├── sdk/                     # TypeScript + Python gateway clients
 │   ├── subagent-tax/            # Local harness-prefix benchmark
 │   └── shared/                  # Contracts + binary installer
 ├── engine/ · proxy/             # BSL local compression runtime + provider proxy
-├── rewriter/                    # Prompt rewriter
 ├── mcp/ · mem/ · shrink/        # Recovery tools, memory, output compression
 ├── browse/                      # consumer copy; source = caveman-browse
 ├── extension/                   # MV3 extension source

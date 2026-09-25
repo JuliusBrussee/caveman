@@ -1501,7 +1501,7 @@ function normalizeExperiment(raw: unknown): NormalizedExperiment | null {
 
 /**
  * The deterministic unit fraction in [0,1) used for experiment assignment,
- * byte-for-byte the Go `shared/platform/sampling.Fraction`: SHA-256 over each
+ * byte-for-byte the Go Caveman-Cloud `shared/platform/sampling.Fraction`: SHA-256 over each
  * key prefixed by its 8-byte big-endian UTF-8 byte length, first 8 digest bytes
  * as a big-endian uint64, shifted right 11 and divided by 2^53.
  *
