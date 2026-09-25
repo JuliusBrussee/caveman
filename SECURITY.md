@@ -227,13 +227,23 @@ refuses to start without one.
   a token map of SHA-256 token hashes to principals with namespace globs and
   quotas (several tokens per principal, so rotation needs no outage; reloaded on
   change or `SIGHUP`), an OIDC/JWT bearer checked against the issuer's key set
-  (RS256/ES256 only), or a TLS client certificate. Each principal reaches only
-  its own sessions, and its allowed namespaces are enforced server-side on
-  every route (`403 forbidden_namespace`). Every middleware request writes one
-  audit line with the principal and how it authenticated, never content.
+  (RS256/ES256 only, fetched over https only, redirects included), or a TLS
+  client certificate. Principal names carry their source and are compared byte
+  for byte: `oidc:<issuer>#<claim>`, `mtls:uri:<SAN>`, `mtls:dns:<SAN>`, and
+  `mtls:cn:<CN>` only when `CAVEMAN_TLS_CLIENT_CN_FALLBACK` is set. So no JWT or
+  certificate can take over a token principal's sessions by spelling its name,
+  and no token map entry for such a principal may carry a token. Each principal
+  reaches only its own sessions, and its allowed namespaces are enforced
+  server-side on every route (`403 forbidden_namespace`). Every middleware
+  request writes one audit line with the principal and how it authenticated,
+  never content. A token map that fails to reload keeps the previous one,
+  revoked tokens included, and is counted in
+  `caveman_identity_reload_failures_total`: alert on it.
 - **TLS:** `CAVEMAN_TLS_CERT_FILE` / `CAVEMAN_TLS_KEY_FILE` serve TLS 1.2+
-  directly, reloaded on change; `CAVEMAN_TLS_CLIENT_CA_FILE` adds mTLS. Without
-  them the proxy speaks plain HTTP: terminate TLS in front of it.
+  directly, reloaded on change; `CAVEMAN_TLS_CLIENT_CA_FILE` adds mTLS, and a
+  client certificate is re-checked against the current CA on every request, so
+  replacing the CA also cuts live keep-alive connections. Without them the
+  proxy speaks plain HTTP: terminate TLS in front of it.
 - `/health/*` stay unauthenticated for load balancers; `/metrics` does too
   unless `CAVEMAN_METRICS_TOKEN` is set.
 

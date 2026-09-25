@@ -404,8 +404,13 @@ for (const v11 of views) {
     const s = scope(`epoch-${view}`), first = optimizeRequest(doc, { scope: s, sequence: 5 });
     assert.equal((await call('optimize', { v11, body: first })).status, 200);
     const rewritten = optimizeRequest(doc, { scope: s, sequence: 6, manifest: [{ id: 'msg-0', sha256: sha256('a different history') }] });
-    expectError(await call('optimize', { v11, body: rewritten }), 'epoch_changed', v11);
     const backwards = optimizeRequest(doc, { scope: s, sequence: 4, manifest: [...first.context_manifest, { id: 'msg-2', sha256: sha256('next') }] });
+    if (v11 && !legacyOnly) {
+      // §12: a 1.1 client starts a new epoch instead (trimmed history, nested agents).
+      for (const body of [rewritten, backwards]) assert.equal((await call('optimize', { v11, body })).status, 200);
+      return;
+    }
+    expectError(await call('optimize', { v11, body: rewritten }), 'epoch_changed', v11);
     expectError(await call('optimize', { v11, body: backwards }), 'epoch_changed', v11);
   });
 

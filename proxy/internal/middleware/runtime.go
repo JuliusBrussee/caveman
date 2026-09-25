@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/engine"
@@ -45,9 +46,20 @@ type Config struct {
 	Limits                  Limits
 	// Capacity bounds the middleware store in total and per principal. A
 	// principal at its quota gets capacity; other principals are unaffected.
+	// With more than one principal (TrustMode resolver), a per-principal cap
+	// left at 0 defaults to a quarter of the global one, so no single principal
+	// can fill the store for everyone; a principal's own quota overrides it.
 	Capacity store.MiddlewareLimits
-	// Keys seals originals at rest. Nil stores them in plaintext.
-	Keys *Keyring
+	// PrincipalInFlight bounds the slots one principal may hold in each request
+	// queue; it waits for its own slots before taking a shared one. 0 is half
+	// of each queue with more than one principal, else no bound. Server-side
+	// only: capabilities limits carry no such key (§13).
+	PrincipalInFlight int
+	// Keys seals originals at rest. Nil stores them in plaintext. Under a key,
+	// originals stored in plaintext are refused unless PlaintextOriginals is set,
+	// for the window while a store written before encryption expires.
+	Keys               *Keyring
+	PlaintextOriginals bool
 	// Logger receives one audit line per request (never content) and storage
 	// warnings. Nil disables both.
 	Logger *slog.Logger
@@ -63,11 +75,21 @@ type Runtime struct {
 	caps, legacyCaps             Capabilities
 	transforms, legacyTransforms map[string]compressors.Capability
 	queue, retrieveQueue         chan struct{}
-	quota                        rateQuota
-	metrics                      metrics
+	// fair and fairRetrieve are each principal's share of queue and retrieveQueue.
+	fair, fairRetrieve perPrincipal
+	quota              rateQuota
+	metrics            metrics
 
 	renewMu  sync.Mutex
 	renewals map[string]struct{}
+
+	// sweepBudget bounds one sweep; backlog is what the last one left behind.
+	sweepBudget time.Duration
+	backlog     atomic.Int64
+
+	readyMu  sync.Mutex
+	readyAt  time.Time
+	readyErr error
 }
 
 // serverFeatures are the negotiable 1.1 features, sorted (§3).
@@ -124,6 +146,29 @@ func New(cfg Config) (*Runtime, error) {
 	if cfg.Capacity.Bytes <= 0 {
 		cfg.Capacity.Bytes = store.DefaultMiddlewareBytes
 	}
+	multi := cfg.TrustMode != "single_operator"
+	if multi {
+		if cfg.Capacity.PrincipalRows <= 0 {
+			cfg.Capacity.PrincipalRows = cfg.Capacity.Rows / 4
+		}
+		if cfg.Capacity.PrincipalBytes <= 0 {
+			cfg.Capacity.PrincipalBytes = cfg.Capacity.Bytes / 4
+		}
+	}
+	share := func(depth int) int {
+		if cfg.PrincipalInFlight > 0 {
+			return min(cfg.PrincipalInFlight, depth)
+		}
+		if multi {
+			return max(depth/2, 1)
+		}
+		return 0
+	}
+	if cfg.Keys != nil {
+		keys := *cfg.Keys
+		keys.plaintext = cfg.PlaintextOriginals
+		cfg.Keys = &keys
+	}
 	// The contract schemas bound these, so configuration may only lower them.
 	for _, limit := range []struct {
 		value   *int
@@ -140,7 +185,8 @@ func New(cfg Config) (*Runtime, error) {
 	r := &Runtime{cfg: cfg, eng: engine.New(cfg.Recovery, counter), counter: counter,
 		transforms: map[string]compressors.Capability{}, legacyTransforms: map[string]compressors.Capability{},
 		queue: make(chan struct{}, l.QueueDepth), retrieveQueue: make(chan struct{}, l.RetrieveQueueDepth),
-		quota: rateQuota{limit: l.QuotaRequestsPerMinute}, renewals: map[string]struct{}{}}
+		fair: perPrincipal{limit: share(l.QueueDepth)}, fairRetrieve: perPrincipal{limit: share(l.RetrieveQueueDepth)},
+		quota: rateQuota{limit: l.QuotaRequestsPerMinute}, renewals: map[string]struct{}{}, sweepBudget: defaultSweepBudget}
 	caps := r.eng.Capabilities()
 	legacy := []compressors.Capability{}
 	for _, cap := range caps {
@@ -159,7 +205,31 @@ func New(cfg Config) (*Runtime, error) {
 	r.legacyCaps.Transforms, r.legacyCaps.PolicyRevision = legacy, policyRevision(legacy)
 	r.legacyCaps.Limits = Limits{DeadlineMS: l.DeadlineMS, RequestBytes: l.RequestBytes, SegmentBytes: l.SegmentBytes, PageBytes: l.PageBytes}
 	r.legacyCaps.Protocol, r.legacyCaps.Features, r.legacyCaps.MaxRetentionSeconds = nil, nil, 0
+	r.reportKeys(context.Background())
 	return r, nil
+}
+
+// reportKeys logs, once at startup, the stored originals this runtime cannot
+// open: sealed with a key it does not have, or plaintext under a keyring. Their
+// grants answer recovery_unavailable and their choices are not reused.
+func (r *Runtime) reportKeys(ctx context.Context) {
+	if r.cfg.Logger == nil {
+		return
+	}
+	keys, err := r.cfg.Store.MiddlewareKeys(ctx)
+	if err != nil {
+		r.warn("middleware key inventory failed", err)
+		return
+	}
+	for _, id := range slices.Sorted(maps.Keys(keys)) {
+		switch {
+		case r.cfg.Keys.usable(id):
+		case id == "":
+			r.cfg.Logger.Warn("middleware originals stored in plaintext are refused while a key is configured; set allow_plaintext_originals until they expire", "originals", keys[id])
+		default:
+			r.cfg.Logger.Warn("middleware originals sealed with an unavailable key cannot be recovered", "key_id", id, "originals", keys[id])
+		}
+	}
 }
 
 func policyRevision(caps []compressors.Capability) string {
@@ -201,9 +271,19 @@ func (r *Runtime) write(ctx context.Context, principal ident.Principal, fn func(
 		limits.PrincipalBytes = principal.Quota.Bytes
 	}
 	return r.cfg.Store.WithMiddleware(ctx, func(tx *store.MiddlewareTx) error {
-		tx.Principal, tx.Limits = principal.Name, limits
+		tx.Principal, tx.Limits, tx.Usable = principal.Name, limits, r.cfg.Keys.usable
 		return fn(tx)
 	})
+}
+
+// choiceKey identifies a segment's persisted choice within its scope.
+func choiceKey(s Segment) string { return identity(s.ID, s.SourceID, s.SHA256) }
+
+// held reports whether the authority holds an original for digest that this
+// runtime can open; one sealed with a key it lacks is as good as absent.
+func (r *Runtime) held(owned map[string]store.StoredOriginal, digest string) bool {
+	o, ok := owned[digest]
+	return ok && o.Body && r.cfg.Keys.usable(o.KeyID)
 }
 
 func (r *Runtime) optimize(ctx context.Context, principal ident.Principal, req OptimizeRequest, inputDigest string, n negotiated) (OptimizeResponse, error) {
@@ -229,16 +309,32 @@ func (r *Runtime) optimize(ctx context.Context, principal ident.Principal, req O
 	response.Recovery.Persistent = r.caps.Persistent
 	base := response
 	now := r.cfg.Now().Unix()
+	prepared := make([]preparedChoice, len(req.Segments))
+	var keys []string
+	for i, s := range req.Segments {
+		if prepared[i].reason = r.screen(req, s); prepared[i].reason == "" {
+			keys = append(keys, choiceKey(s))
+		}
+	}
 	// Read first, then perform Engine work without holding the metadata writer.
-	// The final transaction rechecks scope, plan and choices; a competing
-	// process's first published bytes always win. An exact replay needs no write
-	// at all: its renewal joins the batched ones.
+	// One snapshot answers scope, plan, choices and their originals in a
+	// constant number of round trips, whatever the segment count. The final
+	// transaction rechecks them; a competing process's first published bytes
+	// always win. An exact replay needs no write at all: its renewal joins the
+	// batched ones.
 	var replay *OptimizeResponse
 	var created int64
-	prepared := make([]preparedChoice, len(req.Segments))
+	var chosen map[string]store.MiddlewareChoice
+	var owned map[string]store.StoredOriginal
 	err := r.cfg.Store.ReadMiddleware(ctx, func(tx *store.MiddlewareTx) error {
 		var err error
-		replay, created, err = previousPlan(tx, scopeID, req, inputDigest, now)
+		if replay, created, _, err = previousPlan(tx, scopeID, auth, req, inputDigest, now, n.client); err != nil || replay != nil {
+			return err
+		}
+		if chosen, err = tx.Choices(scopeID, keys); err != nil {
+			return err
+		}
+		owned, err = tx.Originals(auth, ownedDigests(req, chosen))
 		return err
 	})
 	if err == nil && replay != nil {
@@ -249,13 +345,19 @@ func (r *Runtime) optimize(ctx context.Context, principal ident.Principal, req O
 	}
 	for i := 0; err == nil && i < len(req.Segments); i++ {
 		if err = ctx.Err(); err == nil {
-			prepared[i], err = r.prepareChoice(ctx, auth, scopeID, req, req.Segments[i])
+			prepared[i], err = r.prepareChoice(ctx, auth, req, req.Segments[i], prepared[i].reason, chosen, owned)
 		}
 	}
+	rebaselined := false
 	if err == nil {
 		err = r.write(ctx, principal, func(tx *store.MiddlewareTx) error {
-			return r.publish(ctx, tx, auth, scopeID, manifest, req, inputDigest, now, prepared, &response)
+			var err error
+			rebaselined, err = r.publish(ctx, tx, auth, scopeID, manifest, req, inputDigest, now, prepared, &response, n.client)
+			return err
 		})
+	}
+	if err == nil && rebaselined {
+		r.metrics.rebaselines.Add(1)
 	}
 	if reason := decision(err); reason != "" && n.statusV2 {
 		return r.bypass(base, req, prepared, scopeID, reason), nil
@@ -263,12 +365,25 @@ func (r *Runtime) optimize(ctx context.Context, principal ident.Principal, req O
 	return response, err
 }
 
+// ownedDigests are the digests of the chosen segments whose original lives in
+// this store (a choice without a CCR handle).
+func ownedDigests(req OptimizeRequest, chosen map[string]store.MiddlewareChoice) []string {
+	var digests []string
+	for _, s := range req.Segments {
+		if c, ok := chosen[choiceKey(s)]; ok && c.Handle == "" {
+			digests = append(digests, s.SHA256)
+		}
+	}
+	return digests
+}
+
 // publish is optimize's single write transaction: scope, choices, originals and
-// the plan commit together or not at all.
-func (r *Runtime) publish(ctx context.Context, tx *store.MiddlewareTx, auth, scopeID string, manifest []byte, req OptimizeRequest, inputDigest string, now int64, prepared []preparedChoice, response *OptimizeResponse) error {
-	prior, created, err := previousPlan(tx, scopeID, req, inputDigest, now)
+// the plan commit together or not at all, in a constant number of statements.
+// It reports whether the request started a new epoch (see previousPlan).
+func (r *Runtime) publish(ctx context.Context, tx *store.MiddlewareTx, auth, scopeID string, manifest []byte, req OptimizeRequest, inputDigest string, now int64, prepared []preparedChoice, response *OptimizeResponse, epochs bool) (bool, error) {
+	prior, created, rebaselined, err := previousPlan(tx, scopeID, auth, req, inputDigest, now, epochs)
 	if err != nil {
-		return err
+		return false, err
 	}
 	expires := r.expiry(now, created)
 	if prior != nil {
@@ -276,22 +391,39 @@ func (r *Runtime) publish(ctx context.Context, tx *store.MiddlewareTx, auth, sco
 		*response = *prior
 		response.PolicyRevision = policyRevision
 		response.Recovery.ExpiresAt = expires
-		return tx.Renew(auth, now, int64(r.cfg.Retention.Seconds()), int64(r.cfg.MaxRetention.Seconds()))
+		return false, tx.Renew(auth, now, int64(r.cfg.Retention.Seconds()), int64(r.cfg.MaxRetention.Seconds()))
 	}
 	if created == 0 {
 		created = now
 	}
 	response.Recovery.ExpiresAt = expires
 	if err := tx.SaveScope(store.MiddlewareScope{ID: scopeID, Authority: auth, Manifest: manifest, Sequence: req.Sequence, ExpiresAt: expires, CreatedAt: created}); err != nil {
-		return err
+		return false, err
 	}
+	var keys []string
+	for i, segment := range req.Segments {
+		if prepared[i].eligible {
+			keys = append(keys, choiceKey(segment))
+		}
+	}
+	chosen, err := tx.Choices(scopeID, keys)
+	if err != nil {
+		return false, err
+	}
+	owned, err := tx.Originals(auth, ownedDigests(req, chosen))
+	if err != nil {
+		return false, err
+	}
+	var choices []store.MiddlewareChoice
+	var originals []store.MiddlewareOriginal
+	var owners []int // the replacement each of originals belongs to
 	for i, segment := range req.Segments {
 		if err := ctx.Err(); err != nil {
-			return err
+			return false, err
 		}
-		replacement, reason, err := r.publishChoice(tx, auth, scopeID, req, segment, prepared[i])
+		replacement, reason, err := r.publishChoice(req, segment, prepared[i], chosen, owned)
 		if err != nil {
-			return err
+			return false, err
 		}
 		before := prepared[i].before
 		response.Measurement.TokensBefore += before
@@ -302,16 +434,10 @@ func (r *Runtime) publish(ctx context.Context, tx *store.MiddlewareTx, auth, sco
 		}
 		response.Measurement.TokensAfter += replacement.TokensAfter
 		if !replacement.Reused {
-			// The original commits with the plan that references it, so an
-			// aborted or not_smaller plan leaves nothing recoverable behind.
-			credit, err := tx.SaveOriginal(auth, segment.SHA256, prepared[i].sealed, prepared[i].keyID)
-			if err != nil {
-				return err
-			}
-			replacement.UniqueOriginal = credit
-			if credit {
-				response.Measurement.UniqueTokensReduced += replacement.TokensBefore - replacement.TokensAfter
-			}
+			body, _ := json.Marshal(replacement)
+			choices = append(choices, store.MiddlewareChoice{ID: choiceKey(segment), Grant: replacement.RecoveryHandle, Original: segment.SHA256, Payload: body})
+			originals = append(originals, store.MiddlewareOriginal{Digest: segment.SHA256, KeyID: prepared[i].keyID, Body: prepared[i].sealed})
+			owners = append(owners, len(response.Replacements))
 		}
 		response.Replacements = append(response.Replacements, replacement)
 	}
@@ -321,7 +447,25 @@ func (r *Runtime) publish(ctx context.Context, tx *store.MiddlewareTx, auth, sco
 	// unobserved, so this is always a segment estimate, never a request saving.
 	if len(response.Replacements) > 0 && response.Measurement.TokensBefore-response.Measurement.TokensAfter <= response.Measurement.RecoveryOverheadTokens {
 		// Abort all new choices and originals as well as the plan.
-		return Failure{ReasonNotSmaller}
+		return false, Failure{ReasonNotSmaller}
+	}
+	if len(choices) > 0 {
+		if err := tx.SaveChoices(scopeID, choices); err != nil {
+			return false, err
+		}
+		// The originals commit with the plan that references them, so an
+		// aborted or not_smaller plan leaves nothing recoverable behind.
+		credits, err := tx.SaveOriginals(auth, originals)
+		if err != nil {
+			return false, err
+		}
+		for j, credit := range credits {
+			replacement := &response.Replacements[owners[j]]
+			replacement.UniqueOriginal = credit
+			if credit {
+				response.Measurement.UniqueTokensReduced += replacement.TokensBefore - replacement.TokensAfter
+			}
+		}
 	}
 	if len(response.Replacements) > 0 {
 		response.Status = "optimized"
@@ -358,9 +502,9 @@ func (r *Runtime) publish(ctx context.Context, tx *store.MiddlewareTx, auth, sco
 	}
 	b, err := json.Marshal(stored)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return tx.SavePlan(scopeID, req.IdempotencyKey, inputDigest, b, now+int64(r.cfg.Retention.Seconds()))
+	return rebaselined, tx.SavePlan(scopeID, req.IdempotencyKey, inputDigest, b, now+int64(r.cfg.Retention.Seconds()))
 }
 
 // decision names an optimize outcome that is a verdict on the content, not a
@@ -420,24 +564,46 @@ func (r *Runtime) Run(ctx context.Context) {
 	}
 }
 
-// sweep expires in batches, each its own short write transaction, until a batch
-// finds nothing left. The pass cap bounds one sweep over a huge backlog.
+// defaultSweepBudget bounds one sweep; maxSweepBatch bounds one batch's rows
+// per kind.
+const (
+	defaultSweepBudget = 20 * time.Second
+	maxSweepBatch      = 1024
+)
+
+// sweep expires in batches, each its own short write transaction, for as long
+// as a batch comes back full (more is waiting) and sweepBudget allows; every
+// full batch doubles the next one, up to maxSweepBatch. It then counts what is
+// left for the backlog gauge.
+// ponytail: one sweeper per store (a try-lock elects one per Postgres fleet),
+// so reclamation tops out at what it does in sweepBudget a minute: measured
+// 2026-09 at ~16k elapsed scopes/s on SQLite and ~14k/s on local Postgres (each
+// with a choice, plan and original), a ceiling near 4.6k expiring scopes/s
+// sustained. A rising caveman_middleware_expiry_backlog is the signal to shard
+// the sweep by authority.
 func (r *Runtime) sweep(ctx context.Context) error {
-	for pass := 0; pass < 1000; pass++ {
-		var n int64
+	deadline := time.Now().Add(r.sweepBudget)
+	for limit := store.MiddlewareSweepBatch; ; limit = min(limit*2, maxSweepBatch) {
+		var full bool
 		err := r.cfg.Store.WithMiddleware(ctx, func(tx *store.MiddlewareTx) error {
 			var err error
-			n, err = tx.Expire(r.cfg.Now().Unix())
+			_, full, err = tx.ExpireBatch(r.cfg.Now().Unix(), limit)
 			return err
 		})
 		if err != nil {
 			r.warn("middleware expiry sweep failed", err)
 			return err
 		}
-		if n == 0 {
-			return nil
+		if !full || time.Now().After(deadline) {
+			break
 		}
 	}
+	backlog, err := r.cfg.Store.MiddlewareBacklog(ctx, r.cfg.Now().Unix())
+	if err != nil {
+		r.warn("middleware expiry backlog count failed", err)
+		return err
+	}
+	r.backlog.Store(backlog)
 	return nil
 }
 
@@ -486,53 +652,77 @@ func (r *Runtime) warn(message string, err error) {
 	}
 }
 
-// previousPlan validates a snapshot and returns the scope's creation time (0
-// when it has none). It is called again with the write lock, since another
+// previousPlan validates a snapshot and returns an exact replay if there is
+// one, the scope's creation time (0 when it has none) and whether the request
+// starts a new epoch. It is called again with the write lock, since another
 // process can append, revoke, or publish while Engine runs.
-func previousPlan(tx *store.MiddlewareTx, scopeID string, req OptimizeRequest, inputDigest string, now int64) (*OptimizeResponse, int64, error) {
+//
+// A manifest that does not extend the stored one (a trimmed or summarized
+// history, a nested agent on the same scope), or a sequence that went
+// backwards, is 1.0's epoch_changed. A 1.1 client (epochs) re-baselines
+// instead: the scope takes the new manifest and sequence and keeps its choices
+// and grants (§12).
+func previousPlan(tx *store.MiddlewareTx, scopeID, auth string, req OptimizeRequest, inputDigest string, now int64, epochs bool) (*OptimizeResponse, int64, bool, error) {
 	previous, err := tx.Scope(scopeID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, 0, nil
+		// A new scope id (another adapter or serialization revision) must not
+		// resume an authority sessions/delete revoked.
+		revoked, err := tx.Revoked(auth)
+		if err == nil && revoked {
+			err = Failure{CodeDeleted}
+		}
+		return nil, 0, false, err
 	}
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	if previous.ExpiresAt <= 0 {
-		return nil, 0, Failure{CodeDeleted}
+		return nil, 0, false, Failure{CodeDeleted}
 	}
 	if previous.ExpiresAt <= now {
-		return nil, 0, Failure{CodeExpired}
+		return nil, 0, false, Failure{CodeExpired}
 	}
 	// Exact replay may refer to a shorter, already prepared turn.
 	if b, err := tx.Plan(scopeID, req.IdempotencyKey, inputDigest); err == nil {
 		var response OptimizeResponse
 		if json.Unmarshal(b, &response) != nil {
-			return nil, 0, Failure{ReasonCacheStateUnavailable}
+			return nil, 0, false, Failure{ReasonCacheStateUnavailable}
+		}
+		// Protocol 1.0 stored a plan's text whole; later plans reference choices.
+		var keys []string
+		for _, replacement := range response.Replacements {
+			if replacement.Text == "" {
+				keys = append(keys, identity(replacement.SegmentID, replacement.SourceID, replacement.OriginalSHA256))
+			}
+		}
+		chosen, err := tx.Choices(scopeID, keys)
+		if err != nil {
+			return nil, 0, false, err
 		}
 		for i, replacement := range response.Replacements {
 			if replacement.Text != "" {
-				continue // stored whole by protocol 1.0
+				continue
 			}
-			body, _, err := tx.Choice(scopeID, identity(replacement.SegmentID, replacement.SourceID, replacement.OriginalSHA256))
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return nil, 0, err
+			var c Replacement
+			choice, ok := chosen[identity(replacement.SegmentID, replacement.SourceID, replacement.OriginalSHA256)]
+			if !ok || json.Unmarshal(choice.Payload, &c) != nil || c.SHA256 != replacement.SHA256 {
+				return nil, 0, false, Failure{ReasonCacheStateUnavailable}
 			}
-			var chosen Replacement
-			if err != nil || json.Unmarshal(body, &chosen) != nil || chosen.SHA256 != replacement.SHA256 {
-				return nil, 0, Failure{ReasonCacheStateUnavailable}
-			}
-			response.Replacements[i].Text = chosen.Text
+			response.Replacements[i].Text = c.Text
 		}
-		return &response, previous.CreatedAt, nil
+		return &response, previous.CreatedAt, false, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	var old []ManifestItem
 	if json.Unmarshal(previous.Manifest, &old) != nil {
-		return nil, 0, Failure{ReasonCacheStateUnavailable}
+		return nil, 0, false, Failure{ReasonCacheStateUnavailable}
 	}
 	if req.Sequence < previous.Sequence || len(old) > len(req.ContextManifest) || !slices.Equal(old, req.ContextManifest[:min(len(old), len(req.ContextManifest))]) {
-		return nil, 0, Failure{CodeEpochChanged}
+		if !epochs {
+			return nil, 0, false, Failure{CodeEpochChanged}
+		}
+		return nil, previous.CreatedAt, true, nil
 	}
-	return nil, previous.CreatedAt, nil
+	return nil, previous.CreatedAt, false, nil
 }

@@ -232,6 +232,7 @@ func runServe(logger *slog.Logger) {
 			logger.Error("cannot load TLS listener configuration", "error", err)
 			os.Exit(1)
 		}
+		ids.UseServerTLS(serverTLS) // client certificates re-verify per request
 	}
 	var middlewareStore store.MiddlewareStore = spend
 	if databaseURL := cfg.Middleware.DatabaseURL; databaseURL != "" {
@@ -245,14 +246,18 @@ func runServe(logger *slog.Logger) {
 	}
 	framework, err := standalone.NewMiddleware(cfg, middlewareStore, recovery, version, logger, ids)
 	switch {
-	case err != nil && cfg.Middleware.DatabaseURL != "":
-		// A replica that cannot reach the shared store exits (and restarts)
-		// rather than serving 503s behind a ready probe.
+	case err != nil && cfg.Middleware.Configured():
+		// A middleware the operator configured (a shared store, keys, identity,
+		// limits) that cannot start exits (and restarts) rather than serving
+		// 503s behind a ready probe. Errors carry no secrets; key errors never
+		// echo the key.
 		logger.Error("framework middleware unavailable", "code", "runtime_initialization", "error", err)
 		os.Exit(1)
 	case err != nil:
-		// Store/config errors carry no secrets; key errors never echo the key.
+		// The default local middleware: inference keeps working, and readiness
+		// says the middleware is down instead of 200.
 		logger.Warn("framework middleware unavailable", "code", "runtime_initialization", "error", err)
+		opts.Middleware = middlewareDown{err}
 	default:
 		opts.Middleware = framework
 	}
@@ -278,7 +283,7 @@ func runServe(logger *slog.Logger) {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	if opts.Middleware != nil {
+	if framework != nil {
 		// Expiry sweeps and batched retrieve renewals, off the request path.
 		go framework.Run(ctx)
 	}
@@ -381,6 +386,21 @@ func runServe(logger *slog.Logger) {
 	if err := runstate.RemoveMatching(home, state.Port, state.InstanceToken); err != nil {
 		logger.Warn("cannot remove proxy run state", "error", err)
 	}
+}
+
+// middlewareDown stands in for a default middleware that failed to start: its
+// routes answer 503 runtime_unavailable, as with no middleware at all, and
+// readiness fails with the startup error.
+type middlewareDown struct{ err error }
+
+func (d middlewareDown) Ready(context.Context) error { return d.err }
+
+func (middlewareDown) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	for name, value := range map[string]string{"Retry-After": "1", "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"} {
+		w.Header().Set(name, value)
+	}
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = io.WriteString(w, `{"schema_version":1,"error":{"code":"runtime_unavailable"}}`+"\n")
 }
 
 // withKeepalive answers the no-op beacon older CLIs still send. It sits OUTSIDE

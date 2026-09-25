@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,6 +39,9 @@ type metrics struct {
 	decisions    map[[2]string]int64 // plan status, reason
 	latency      map[string]*histogram
 	unauthorized int64
+	// rebaselines counts optimizes that started a new epoch; plaintextRefused
+	// and plaintextAllowed count retrieves of plaintext originals under a key.
+	rebaselines, plaintextRefused, plaintextAllowed atomic.Int64
 }
 
 var knownRoutes = []string{"capabilities", "optimize", "retrieve", "receipts", "sessions/delete"}
@@ -142,6 +146,12 @@ func (r *Runtime) WriteMetrics(w io.Writer) {
 	fmt.Fprintf(&b, "caveman_middleware_queue_depth{queue=\"optimize\"} %d\ncaveman_middleware_queue_depth{queue=\"retrieve\"} %d\n", len(r.queue), len(r.retrieveQueue))
 	series("caveman_middleware_queue_capacity", "gauge", "Configured middleware queue slots.")
 	fmt.Fprintf(&b, "caveman_middleware_queue_capacity{queue=\"optimize\"} %d\ncaveman_middleware_queue_capacity{queue=\"retrieve\"} %d\n", cap(r.queue), cap(r.retrieveQueue))
+	series("caveman_middleware_epoch_rebaselines_total", "counter", "Optimizes whose history no longer extended the stored manifest and started a new epoch (trimmed or summarized history, nested agents).")
+	fmt.Fprintf(&b, "caveman_middleware_epoch_rebaselines_total %d\n", m.rebaselines.Load())
+	series("caveman_middleware_plaintext_originals_total", "counter", "Retrieves of originals stored in plaintext while a key is configured: refused, or allowed by allow_plaintext_originals.")
+	fmt.Fprintf(&b, "caveman_middleware_plaintext_originals_total{outcome=\"refused\"} %d\ncaveman_middleware_plaintext_originals_total{outcome=\"allowed\"} %d\n", m.plaintextRefused.Load(), m.plaintextAllowed.Load())
+	series("caveman_middleware_expiry_backlog", "gauge", "Expired scopes, plans and receipts the last sweep left unreclaimed; growth means expiry outpaces the sweep.")
+	fmt.Fprintf(&b, "caveman_middleware_expiry_backlog %d\n", r.backlog.Load())
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if rows, size, err := r.cfg.Store.MiddlewareUsage(ctx); err == nil {
@@ -170,8 +180,17 @@ func sortedKeys[K comparable, V any](m map[K]V) []K {
 	return keys
 }
 
-// Ready reports whether the middleware store accepts writes.
-func (r *Runtime) Ready(ctx context.Context) error { return r.cfg.Store.MiddlewareWritable(ctx) }
+// Ready reports whether the middleware store accepts writes. Readiness is
+// unauthenticated, so the answer is kept for a second: a probe flood costs at
+// most one write transaction a second.
+func (r *Runtime) Ready(ctx context.Context) error {
+	r.readyMu.Lock()
+	defer r.readyMu.Unlock()
+	if time.Since(r.readyAt) >= time.Second {
+		r.readyErr, r.readyAt = r.cfg.Store.MiddlewareWritable(ctx), time.Now()
+	}
+	return r.readyErr
+}
 
 // rateQuota enforces quota_requests_per_minute per principal; a principal's
 // own requests_per_minute replaces the runtime-wide limit.
@@ -202,4 +221,52 @@ func (q *rateQuota) allow(principal string, limit int, now time.Time) (bool, int
 	}
 	q.counts[principal]++
 	return true, 0
+}
+
+// perPrincipal bounds how many slots of one queue a single principal holds: its
+// requests past limit wait for its own slots, before the shared queue, so one
+// caller's slow bodies cannot fill a queue every principal shares. limit 0 is
+// no bound.
+type perPrincipal struct {
+	limit int
+	mu    sync.Mutex
+	slots map[string]*principalSlots
+}
+
+type principalSlots struct {
+	held  chan struct{}
+	users int // requests holding or waiting for a slot
+}
+
+// acquire waits for one of principal's slots until ctx ends, and returns its
+// release.
+func (p *perPrincipal) acquire(ctx context.Context, principal string) (func(), error) {
+	if p.limit <= 0 {
+		return func() {}, nil
+	}
+	p.mu.Lock()
+	if p.slots == nil {
+		p.slots = map[string]*principalSlots{}
+	}
+	s := p.slots[principal]
+	if s == nil {
+		s = &principalSlots{held: make(chan struct{}, p.limit)}
+		p.slots[principal] = s
+	}
+	s.users++
+	p.mu.Unlock()
+	leave := func() {
+		p.mu.Lock()
+		if s.users--; s.users == 0 {
+			delete(p.slots, principal)
+		}
+		p.mu.Unlock()
+	}
+	select {
+	case s.held <- struct{}{}:
+		return func() { <-s.held; leave() }, nil
+	case <-ctx.Done():
+		leave()
+		return nil, ctx.Err()
+	}
 }

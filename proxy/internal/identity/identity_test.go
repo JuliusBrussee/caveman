@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,14 @@ func TestTokenMapRejectsAmbiguousFiles(t *testing.T) {
 		"bad name":            mapFile(entry(`"a b"`, `["*"]`, tokenA1)),
 		"unknown field":       "principals:\n  - name: a\n    tokens: [x]\n",
 		"negative quota":      "principals:\n  - name: a\n    quota: {rows: -1}\n",
+		// S2: a token must never resolve to an OIDC or certificate principal,
+		// and a malformed source prefix would silently match no one.
+		"token on mtls entry": mapFile(entry("mtls:uri:spiffe://example.org/a", `["*"]`, tokenA1)),
+		"token on oidc entry": mapFile(entry(`"oidc:https://idp.example#svc"`, `["*"]`, tokenA1)),
+		"mtls without kind":   mapFile(entry("mtls:spiffe://example.org/a", `["*"]`)),
+		"mtls unknown kind":   mapFile(entry("mtls:email:a@example.org", `["*"]`)),
+		"oidc without claim":  mapFile(entry("oidc:https://idp.example", `["*"]`)),
+		"oidc empty issuer":   mapFile(entry(`"oidc:#svc"`, `["*"]`)),
 	} {
 		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "_"))
 		writeFile(t, path, content)
@@ -209,4 +218,71 @@ func TestWatchReloadsOnFileChange(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("watch did not pick up the rewritten token map")
+}
+
+// S12: a token map that stops parsing keeps the old tokens valid, so the
+// failure is a metric an operator can alert on, not only a log line.
+func TestWatchCountsReloadFailures(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.yaml")
+	writeFile(t, path, mapFile(entry("team-a", `["*"]`, tokenA1)))
+	r, err := New(Config{TokenMapFile: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// value reads one reload_test series; -1 while it is absent.
+	value := func(series string) int64 {
+		var b strings.Builder
+		WriteMetrics(&b)
+		for _, line := range strings.Split(b.String(), "\n") {
+			if v, ok := strings.CutPrefix(line, series+`{source="reload_test"} `); ok {
+				n, _ := strconv.ParseInt(v, 10, 64)
+				return n
+			}
+		}
+		return -1
+	}
+	waitFor := func(what string, done func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); !done(); time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal(what)
+			}
+		}
+	}
+	started := time.Now().Unix()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Watch(ctx, slog.New(slog.DiscardHandler), 10*time.Millisecond, map[string]Reloader{"reload_test": r})
+	// Process-wide counters: compare against where this run starts.
+	failures := func() int64 { return value("caveman_identity_reload_failures_total") }
+	waitFor("no startup load recorded", func() bool {
+		stamp := value("caveman_identity_reload_last_success_timestamp_seconds")
+		return stamp >= started && stamp <= time.Now().Unix()
+	})
+	before := failures()
+	if before < 0 {
+		t.Fatal("no failure series at startup")
+	}
+	// A revocation that does not parse: team-a's token removed, plus a typo.
+	writeFile(t, path, "principals: [{name: team-a, token_sha256: [not-a-hash]}]\n")
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+	waitFor("the broken reload was not counted", func() bool { return failures() > before })
+	if _, err := r.Identify(bearer(tokenA1)); err != nil {
+		t.Fatal("the previous map should still be in force")
+	}
+	var b strings.Builder
+	WriteMetrics(&b)
+	for _, line := range []string{
+		"# HELP caveman_identity_reload_failures_total ",
+		"# TYPE caveman_identity_reload_failures_total counter",
+		"# HELP caveman_identity_reload_last_success_timestamp_seconds ",
+		"# TYPE caveman_identity_reload_last_success_timestamp_seconds gauge",
+	} {
+		if !strings.Contains(b.String(), line) {
+			t.Errorf("missing %q", line)
+		}
+	}
 }

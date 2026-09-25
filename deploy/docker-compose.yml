@@ -7,8 +7,8 @@ services:
       - "8787:8787"
     # Put configuration in deploy/.env, e.g.
     #   CAVEMAN_AUTH_TOKEN=<generate with: openssl rand -hex 32>
-    #     Required for the image's default 0.0.0.0 listen — the proxy has no
-    #     other inbound auth. Clients send it as x-cave-api-key or
+    #     This file's only inbound credential, so required for the image's
+    #     default 0.0.0.0 listen. Clients send it as x-cave-api-key or
     #     Authorization: Bearer.
     #   CAVEMAN_MODE=record          # record (default) | compress | pixel
     #   CAVEMAN_MIDDLEWARE_MODE=compress  # framework middleware; default follows CAVEMAN_MODE

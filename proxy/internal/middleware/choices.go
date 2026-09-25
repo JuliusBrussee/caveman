@@ -3,10 +3,8 @@ package middleware
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -28,36 +26,37 @@ type preparedChoice struct {
 	keyID  string
 }
 
-func (r *Runtime) prepareChoice(ctx context.Context, auth, scopeID string, req OptimizeRequest, s Segment) (preparedChoice, error) {
-	p := preparedChoice{}
-	if req.Mode == "record" || r.cfg.Mode == "record" {
-		p.reason = "record"
-	} else if s.Protected || (s.Kind != "tool_result" && s.Kind != "artifact") {
-		p.reason = "protected"
-	} else if s.Opaque || !utf8.ValidString(s.Content) || strings.ContainsRune(s.Content, '\x00') {
-		p.reason = "unsupported_shape"
-	} else if len(s.Content) > r.cfg.Limits.SegmentBytes {
-		p.reason = "payload_limit"
-	} else if req.RecoveryBinding == nil || !r.caps.Persistent {
-		p.reason = "recovery_unavailable"
+// screen is a segment's reason to be left alone before any lookup; "" makes it
+// a candidate.
+func (r *Runtime) screen(req OptimizeRequest, s Segment) string {
+	switch {
+	case req.Mode == "record" || r.cfg.Mode == "record":
+		return "record"
+	case s.Protected || (s.Kind != "tool_result" && s.Kind != "artifact"):
+		return "protected"
+	case s.Opaque || !utf8.ValidString(s.Content) || strings.ContainsRune(s.Content, '\x00'):
+		return "unsupported_shape"
+	case len(s.Content) > r.cfg.Limits.SegmentBytes:
+		return "payload_limit"
+	case req.RecoveryBinding == nil || !r.caps.Persistent:
+		return "recovery_unavailable"
 	}
+	return ""
+}
+
+// prepareChoice does a segment's Engine work, outside any transaction. reason
+// is its screen result; chosen and owned are the scope's choices and the
+// authority's originals as optimize's snapshot read them.
+func (r *Runtime) prepareChoice(ctx context.Context, auth string, req OptimizeRequest, s Segment, reason string, chosen map[string]store.MiddlewareChoice, owned map[string]store.StoredOriginal) (preparedChoice, error) {
+	p := preparedChoice{reason: reason}
 	if p.reason != "" {
 		p.before = r.counter.Count([]byte(s.Content))
 		return p, nil
 	}
 	p.eligible = true
-	var body []byte
-	stored := false
-	err := r.cfg.Store.ReadMiddleware(ctx, func(tx *store.MiddlewareTx) error {
-		var err error
-		body, p.handle, err = tx.Choice(scopeID, identity(s.ID, s.SourceID, s.SHA256))
-		if err == nil && p.handle == "" {
-			stored, err = tx.HasOriginal(auth, s.SHA256)
-		}
-		return err
-	})
-	if err == nil {
-		if json.Unmarshal(body, &p.replacement) != nil {
+	if c, ok := chosen[choiceKey(s)]; ok {
+		p.handle = c.Handle
+		if json.Unmarshal(c.Payload, &p.replacement) != nil {
 			return p, Failure{ReasonCacheStateUnavailable}
 		}
 		p.before = p.replacement.TokensBefore
@@ -67,14 +66,11 @@ func (r *Runtime) prepareChoice(ctx context.Context, auth, scopeID string, req O
 			p.eligible, p.reason = false, CodeUnknownCapability
 			return p, nil
 		}
-		if err := r.verifyOriginal(p.handle, stored, s.SHA256); err != nil {
+		if err := r.verifyOriginal(p.handle, r.held(owned, s.SHA256), s.SHA256); err != nil {
 			return p, err
 		}
 		p.replacement.Reused = true
 		return p, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return p, err
 	}
 	p.before = r.counter.Count([]byte(s.Content))
 	if s.CacheRegion == "frozen_prefix" {
@@ -137,47 +133,36 @@ func (r *Runtime) verifyOriginal(handle string, stored bool, originalDigest stri
 	return nil
 }
 
-func (r *Runtime) publishChoice(tx *store.MiddlewareTx, auth, scopeID string, req OptimizeRequest, s Segment, p preparedChoice) (Replacement, string, error) {
+// publishChoice is a segment's replacement under the write lock: the choice
+// another writer published first if there is one, else the prepared one.
+func (r *Runtime) publishChoice(req OptimizeRequest, s Segment, p preparedChoice, chosen map[string]store.MiddlewareChoice, owned map[string]store.StoredOriginal) (Replacement, string, error) {
 	if !p.eligible {
 		return Replacement{}, p.reason, nil
 	}
-	key := identity(s.ID, s.SourceID, s.SHA256)
-	if body, handle, err := tx.Choice(scopeID, key); err == nil {
-		var chosen Replacement
-		if json.Unmarshal(body, &chosen) != nil {
+	if c, ok := chosen[choiceKey(s)]; ok {
+		var existing Replacement
+		if json.Unmarshal(c.Payload, &existing) != nil {
 			return Replacement{}, "", Failure{ReasonCacheStateUnavailable}
 		}
-		if !slices.Contains(req.Policy.Transforms, chosen.TransformID) {
+		if !slices.Contains(req.Policy.Transforms, existing.TransformID) {
 			return Replacement{}, CodeUnknownCapability, nil
 		}
 		// Usually already checked outside the write lock. Only a different
 		// first writer needs a fresh check here.
-		if handle != p.handle || chosen.SHA256 != p.replacement.SHA256 {
-			stored := false
-			if handle == "" {
-				if stored, err = tx.HasOriginal(auth, s.SHA256); err != nil {
-					return Replacement{}, "", err
-				}
-			}
-			if err := r.verifyOriginal(handle, stored, s.SHA256); err != nil {
+		if c.Handle != p.handle || existing.SHA256 != p.replacement.SHA256 {
+			if err := r.verifyOriginal(c.Handle, r.held(owned, s.SHA256), s.SHA256); err != nil {
 				return Replacement{}, "", err
 			}
 		}
-		chosen.Reused = true
-		chosen.UniqueOriginal = false
-		return chosen, "", nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return Replacement{}, "", err
+		existing.Reused = true
+		existing.UniqueOriginal = false
+		return existing, "", nil
 	}
 	if p.replacement.Reused {
 		return Replacement{}, "", Failure{ReasonCacheStateUnavailable}
 	}
 	if p.reason != "" {
 		return Replacement{}, p.reason, nil
-	}
-	body, _ := json.Marshal(p.replacement)
-	if err := tx.SaveChoice(scopeID, key, p.replacement.RecoveryHandle, "", body); err != nil {
-		return Replacement{}, "", err
 	}
 	return p.replacement, "", nil
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -25,17 +26,30 @@ type MiddlewareConfig struct {
 	MaxManifestItems       int   `yaml:"max_manifest_items"`    // default 4096
 	ReceiptBytes           int   `yaml:"receipt_bytes"`         // default 16 KiB
 	QuotaRequestsPerMinute int   `yaml:"quota_requests_per_minute"`
-	// Storage admission for the whole middleware store, and per principal.
+
+	// PrincipalInFlight is how many slots of each queue one principal may hold;
+	// its other requests wait for its own slots. Default: half of each queue
+	// when a token map, OIDC or mTLS is configured, else unbounded.
+	PrincipalInFlight int `yaml:"principal_in_flight"`
+	// Storage admission for the whole middleware store, and per principal. A
+	// per-principal quota of 0 is a quarter of the global limit when a token
+	// map, OIDC or mTLS is configured (so no principal fills the store for the
+	// others), else only the global limit. The token map's per-principal
+	// quota overrides either.
 	MaxRows    int64 `yaml:"max_rows"`    // default 1,000,000
 	MaxBytes   int64 `yaml:"max_bytes"`   // default 576 MiB
-	QuotaRows  int64 `yaml:"quota_rows"`  // per principal; 0 = global limit only
-	QuotaBytes int64 `yaml:"quota_bytes"` // per principal; 0 = global limit only
+	QuotaRows  int64 `yaml:"quota_rows"`  // per principal
+	QuotaBytes int64 `yaml:"quota_bytes"` // per principal
 	// EncryptionKeyFile holds base64 32-byte keys, one per line, the first one
 	// sealing. EncryptionKey is the same list inline, comma separated, and is
 	// read only from CAVEMAN_MIDDLEWARE_ENCRYPTION_KEY: secrets never live in
 	// caveman.yaml. Neither set stores originals in plaintext.
 	EncryptionKeyFile string `yaml:"encryption_key_file"`
 	EncryptionKey     string `yaml:"-" json:"-"`
+	// AllowPlaintextOriginals keeps originals stored before a key was
+	// configured readable under it. Set it while such a store migrates (until
+	// max_retention_seconds has passed); otherwise they are refused.
+	AllowPlaintextOriginals bool `yaml:"allow_plaintext_originals"`
 	// Mode is the middleware's runtime mode: record or compress. Empty follows
 	// the proxy's mode (CAVEMAN_MODE), so the proxy can record while the
 	// middleware compresses.
@@ -80,7 +94,7 @@ func (m MiddlewareConfig) withEnv() MiddlewareConfig {
 		}
 	}
 	for name, field := range map[string]*int{
-		"QUEUE_DEPTH": &m.QueueDepth, "RETRIEVE_QUEUE_DEPTH": &m.RetrieveQueueDepth, "REQUEST_BYTES": &m.RequestBytes,
+		"QUEUE_DEPTH": &m.QueueDepth, "RETRIEVE_QUEUE_DEPTH": &m.RetrieveQueueDepth, "PRINCIPAL_IN_FLIGHT": &m.PrincipalInFlight, "REQUEST_BYTES": &m.RequestBytes,
 		"SEGMENT_BYTES": &m.SegmentBytes, "PAGE_BYTES": &m.PageBytes, "MAX_SEGMENTS": &m.MaxSegments,
 		"MAX_MANIFEST_ITEMS": &m.MaxManifestItems, "RECEIPT_BYTES": &m.ReceiptBytes, "QUOTA_REQUESTS_PER_MINUTE": &m.QuotaRequestsPerMinute,
 	} {
@@ -105,8 +119,15 @@ func (m MiddlewareConfig) withEnv() MiddlewareConfig {
 	if value := strings.TrimSpace(os.Getenv("CAVEMAN_MIDDLEWARE_OIDC_ALGORITHMS")); value != "" {
 		m.OIDC.Algorithms = strings.Split(strings.ReplaceAll(value, " ", ""), ",")
 	}
-	if value, err := strconv.ParseBool(strings.TrimSpace(os.Getenv("CAVEMAN_MIDDLEWARE_EPHEMERAL"))); err == nil {
-		m.Ephemeral = value
+	for name, field := range map[string]*bool{"EPHEMERAL": &m.Ephemeral, "ALLOW_PLAINTEXT_ORIGINALS": &m.AllowPlaintextOriginals} {
+		if value, err := strconv.ParseBool(strings.TrimSpace(os.Getenv("CAVEMAN_MIDDLEWARE_" + name))); err == nil {
+			*field = value
+		}
 	}
 	return m
 }
+
+// Configured reports whether the operator set any middleware key, in
+// caveman.yaml or the environment: a middleware that then cannot start is a
+// startup failure, not a proxy quietly serving 503s behind a ready probe.
+func (m MiddlewareConfig) Configured() bool { return !reflect.DeepEqual(m, MiddlewareConfig{}) }

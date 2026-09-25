@@ -72,6 +72,13 @@ func (r *Runtime) retrieve(ctx context.Context, principal ident.Principal, req R
 		original, err = r.eng.Retrieve(handle)
 	} else {
 		original, err = r.cfg.Keys.open(auth, choice.OriginalSHA256, sealed, keyID)
+		if keyID == "" && r.cfg.Keys != nil {
+			if err != nil {
+				r.metrics.plaintextRefused.Add(1)
+			} else {
+				r.metrics.plaintextAllowed.Add(1)
+			}
+		}
 	}
 	if err != nil || digest(original) != choice.OriginalSHA256 {
 		if err != nil {

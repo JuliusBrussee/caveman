@@ -6,8 +6,10 @@
 # state (spend rows, its recovery store, proxy.log) stays per pod on an emptyDir;
 # the proxy routes run in record mode, which needs no durable recovery.
 #
-# Needs runtime bin-v2.0.0 or later. This file holds no secrets and no
-# placeholders: pods wait (CreateContainerConfigError) until these exist.
+# Needs runtime bin-v2.0.0 or later. This file holds no secrets. Its one
+# placeholder is the image digest (REPLACE_AT_RELEASE), which the release fills
+# in; until then the pull fails (InvalidImageName) rather than run an unpinned
+# image. Pods wait (CreateContainerConfigError) until these Secrets exist:
 #
 #   # Environment. CAVEMAN_AUTH_TOKEN is optional: without it the provider
 #   # routes refuse every request and the replicas serve the middleware only.
@@ -32,6 +34,9 @@
 #       namespaces: ["team-a/*"]
 #       token_sha256: [<printf %s "$TOKEN" | sha256sum>]
 #       quota: {rows: 200000, bytes: 134217728, requests_per_minute: 1200}
+#     # With mTLS: a client certificate principal, named by source, no tokens.
+#     - name: "mtls:uri:spiffe://example.org/ns/ci/sa/agent"
+#       namespaces: ["ci/*"]
 #
 # Details: docs/technical/deploy.md#high-availability
 apiVersion: v1
@@ -64,7 +69,10 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
+        # Secret volumes below are group-readable through this group only.
         fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -74,7 +82,9 @@ spec:
               app: caveman-proxy-ha
       containers:
         - name: caveman-proxy
-          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0
+          # Pinned by digest; the release replaces REPLACE_AT_RELEASE with the
+          # bin-v2.0.0 image digest (docker buildx imagetools inspect <image>).
+          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0@sha256:REPLACE_AT_RELEASE
           imagePullPolicy: IfNotPresent
           ports:
             - name: https
@@ -97,8 +107,10 @@ spec:
               value: /etc/caveman/tls/tls.crt
             - name: CAVEMAN_TLS_KEY_FILE
               value: /etc/caveman/tls/tls.key
-            # mTLS: verify client certificates against a CA and map their SAN
-            # (URI, then DNS) or CN to a principal in the token map.
+            # mTLS: verify client certificates against a CA. A certificate is
+            # the principal mtls:uri:<URI SAN>, else mtls:dns:<DNS SAN>; name
+            # its token map entry that way. CAVEMAN_TLS_CLIENT_CN_FALLBACK=true
+            # adds mtls:cn:<CN> for certificates with neither SAN.
             # - name: CAVEMAN_TLS_CLIENT_CA_FILE
             #   value: /etc/caveman/tls/ca.crt
           volumeMounts:
@@ -148,15 +160,20 @@ spec:
         - name: data
           emptyDir:
             sizeLimit: 2Gi
+        # 0440: root-owned, readable by fsGroup 65532 only (the process is
+        # not root, so owner-only 0400 would lock it out).
         - name: identity
           secret:
             secretName: caveman-proxy-tokens
+            defaultMode: 0440
         - name: secrets
           secret:
             secretName: caveman-proxy-files
+            defaultMode: 0440
         - name: tls
           secret:
             secretName: caveman-proxy-tls
+            defaultMode: 0440
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

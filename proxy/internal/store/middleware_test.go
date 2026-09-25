@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -120,11 +123,13 @@ func testMiddlewareExpiryReclaimsPayloadAndKeepsTypedTombstone(t *testing.T, s m
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Two scope rows (one live, one tombstoned) and the original still credited
-	// to the authority the live scope shares; every payload-bearing row is gone,
-	// the elapsed scope's manifest included (that is what marks it purged).
-	if rows != 3 {
-		t.Fatalf("expired rows=%d, want scopes plus the live authority's original", rows)
+	// Two scope rows (one live, one tombstoned), the elapsed choice's
+	// content-free tombstone (its grant answers "expired" until grace ends) and
+	// the original still credited to the authority the live scope shares; every
+	// payload is gone, the elapsed scope's manifest included (that is what marks
+	// it purged).
+	if rows != 4 {
+		t.Fatalf("expired rows=%d, want scopes, the choice tombstone and the live authority's original", rows)
 	}
 	if size != 2+64 {
 		t.Fatalf("expired payload bytes=%d, want the live scope's manifest plus one credit", size)
@@ -434,7 +439,7 @@ INSERT INTO middleware_plans(scope,id,digest,payload,expires_at) SELECT 'scope-'
 			t.Fatal(err)
 		}
 	}
-	choices, plans := s.count(t, `SELECT count(*) FROM middleware_choices`), s.count(t, `SELECT count(*) FROM middleware_plans`)
+	choices, plans := s.count(t, `SELECT count(*) FROM middleware_choices WHERE length(payload)>0`), s.count(t, `SELECT count(*) FROM middleware_plans`)
 	tombstones := s.count(t, `SELECT count(*) FROM middleware_scopes WHERE length(manifest)=0`)
 	if choices != 0 || plans != 0 || tombstones != scopes {
 		t.Fatalf("after 50 passes inside grace: choices=%d plans=%d tombstones=%d, want 0 0 %d", choices, plans, tombstones, scopes)
@@ -510,7 +515,8 @@ func testMiddlewareDeleteCountsAndRemovesOriginals(t *testing.T, s middlewareBac
 			t.Fatal(err)
 		}
 	}
-	if first != (MiddlewareDeleted{Scopes: 1, Choices: 2, Originals: 1, Legacy: 1}) || second != (MiddlewareDeleted{}) {
+	// A retry deletes nothing more, and still says a CCR original was out of reach.
+	if first != (MiddlewareDeleted{Scopes: 1, Choices: 2, Originals: 1, Legacy: 1}) || second != (MiddlewareDeleted{Legacy: 1}) {
 		t.Fatalf("delete counts first=%+v second=%+v", first, second)
 	}
 	if left := s.count(t, `SELECT (SELECT count(*) FROM middleware_originals)+(SELECT count(*) FROM middleware_receipts)+(SELECT count(*) FROM middleware_plans)`); left != 0 {
@@ -540,7 +546,8 @@ INSERT INTO middleware_scopes VALUES ('scope','auth','[1]',0,100);
 INSERT INTO middleware_choices VALUES ('scope','choice','12345','grant','ccr_h');
 INSERT INTO middleware_plans VALUES ('scope','plan','d','1234');
 INSERT INTO middleware_receipts VALUES ('auth','receipt','d','12',1);
-INSERT INTO middleware_usage VALUES (1,4,14);
+INSERT INTO middleware_scopes VALUES ('revoked','revoked-auth','',0,0);
+INSERT INTO middleware_usage VALUES (1,5,14);
 INSERT INTO middleware_originals VALUES ('auth','digest');`); err != nil {
 		t.Fatal(err)
 	}
@@ -554,13 +561,20 @@ INSERT INTO middleware_originals VALUES ('auth','digest');`); err != nil {
 		}
 		return rows, size
 	}
-	if rows, size := usage(); rows != 5 || size != 78 {
-		t.Fatalf("migrated usage=(%d,%d), want (5,78)", rows, size)
+	if rows, size := usage(); rows != 6 || size != 78 {
+		t.Fatalf("migrated usage=(%d,%d), want (6,78)", rows, size)
 	}
+	var revokedAt int64
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
 		scope, err := tx.Scope("scope")
 		if err != nil || scope.CreatedAt <= 0 {
 			t.Errorf("legacy scope has no max-retention clock: %+v %v", scope, err)
+		}
+		// 1.0 revoked with expires_at=0; the sweep reads 0 as revoked at the epoch,
+		// long past grace, so the migration dates it now.
+		revoked, err := tx.Scope("revoked")
+		if revokedAt = -revoked.ExpiresAt; err != nil || revokedAt <= 0 {
+			t.Errorf("1.0 tombstone was not dated: %+v %v", revoked, err)
 		}
 		if _, handle, _, err := tx.Grant("auth", "grant"); err != nil || handle != "ccr_h" {
 			t.Errorf("legacy CCR grant lost: %q %v", handle, err)
@@ -573,13 +587,106 @@ INSERT INTO middleware_originals VALUES ('auth','digest');`); err != nil {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if rows, size := usage(); rows != 5 || size != 82 {
-		t.Fatalf("usage after filling a 1.0 credit=(%d,%d), want (5,82)", rows, size)
+	if rows, size := usage(); rows != 6 || size != 82 {
+		t.Fatalf("usage after filling a 1.0 credit=(%d,%d), want (6,82)", rows, size)
 	}
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(100 + MiddlewareGraceSeconds); return err }); err != nil {
 		t.Fatal(err)
 	}
-	if rows, size := usage(); rows != 0 || size != 0 {
-		t.Fatalf("usage after reclaiming every migrated row=(%d,%d), want (0,0)", rows, size)
+	if rows, size := usage(); rows != 1 || size != 0 {
+		t.Fatalf("usage after reclaiming the migrated rows=(%d,%d), want only the revocation tombstone (1,0)", rows, size)
 	}
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(revokedAt + MiddlewareGraceSeconds); return err }); err != nil {
+		t.Fatal(err)
+	}
+	if rows, size := usage(); rows != 0 || size != 0 {
+		t.Fatalf("usage after the tombstone's grace=(%d,%d), want (0,0)", rows, size)
+	}
+}
+
+// GO-7: a protocol 1.0 credit row that gets its body filled belongs to the
+// principal that filled it, so the body counts against that principal's quota.
+func TestMiddlewareFilledCreditCountsAgainstThePrincipal(t *testing.T) {
+	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
+		ctx := context.Background()
+		s.exec(t, `INSERT INTO middleware_originals(authority,digest) VALUES ('auth','one'),('auth','two')`)
+		fill := func(digest string) error {
+			return s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
+				tx.Principal, tx.Limits = "alice", MiddlewareLimits{PrincipalBytes: 300}
+				_, err := tx.SaveOriginal("auth", digest, make([]byte, 200), "")
+				return err
+			})
+		}
+		if err := fill("one"); err != nil {
+			t.Fatal(err)
+		}
+		rows := s.count(t, `SELECT coalesce(sum(rows),0) FROM middleware_principal_usage WHERE principal='alice'`)
+		size := s.count(t, `SELECT coalesce(sum(bytes),0) FROM middleware_principal_usage WHERE principal='alice'`)
+		if rows != 1 || size != 64+200 {
+			t.Fatalf("filled credit counted as (%d,%d) for alice, want (1,264)", rows, size)
+		}
+		if err := fill("two"); !errors.Is(err, ErrMiddlewareCapacity) {
+			t.Fatalf("a second fill bypassed alice's byte quota: %v", err)
+		}
+	})
+}
+
+// S7: the WAL and shared-memory files hold the same plaintext originals as the
+// database, so they get its 0600 mode, not the umask's.
+func TestSQLiteSidecarFilesArePrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes")
+	}
+	path := filepath.Join(t.TempDir(), "caveman.db")
+	s, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if err := s.InitMiddleware(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
+		_, err := tx.SaveOriginal("auth", "digest", []byte("plaintext original"), "")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		info, err := os.Stat(path + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("%s has mode %o, want 600", filepath.Base(path+suffix), perm)
+		}
+	}
+}
+
+// A store written before choices named their original gets the column
+// backfilled from each choice's payload, so the first sweep after the upgrade
+// does not reclaim originals that live choices still reference.
+func TestMiddlewareMigrationBackfillsChoiceOriginals(t *testing.T) {
+	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
+		digest := strings.Repeat("ab", 32)
+		s.exec(t, `DROP INDEX middleware_choices_original`)
+		s.exec(t, `ALTER TABLE middleware_choices DROP COLUMN original`)
+		s.exec(t, `ALTER TABLE middleware_choices DROP COLUMN legacy`)
+		s.exec(t, `INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) VALUES ('scope','new','{"segment_id":"tool-1","source_id":"d","original_sha256":"`+digest+`"}','grant-new','')`)
+		s.exec(t, `INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) VALUES ('scope','legacy','{"original_sha256":"`+digest+`"}','grant-legacy','ccr_h')`)
+		if _, ok := s.MiddlewareStore.(*PostgresMiddleware); ok {
+			s.exec(t, `DELETE FROM middleware_schema`)
+			s.exec(t, `INSERT INTO middleware_schema VALUES (1)`)
+		}
+		if err := s.MiddlewareStore.InitMiddleware(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if n := s.count(t, `SELECT count(*) FROM middleware_choices WHERE id='new' AND original='`+digest+`'`); n != 1 {
+			t.Fatal("the choice's original was not backfilled")
+		}
+		if n := s.count(t, `SELECT count(*) FROM middleware_choices WHERE id='legacy' AND original=''`); n != 1 {
+			t.Fatal("a protocol 1.0 choice (original in CCR) was given a middleware original")
+		}
+	})
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/JuliusBrussee/caveman/engine/ccr"
+	ident "github.com/JuliusBrussee/caveman/proxy/internal/identity"
 	"github.com/JuliusBrussee/caveman/proxy/internal/store"
 )
 
@@ -73,30 +74,49 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		fail(Failure{CodeNotFound})
 		return
 	}
+	// retrieve reads originals on its own queue and deadline, so a burst of
+	// recoveries cannot starve optimize and a large page is not held to 500ms.
+	queue, fair, budget := r.queue, &r.fair, time.Duration(r.cfg.Limits.DeadlineMS)*time.Millisecond
+	if o.route == "retrieve" {
+		queue, fair, budget = r.retrieveQueue, &r.fairRetrieve, time.Duration(r.cfg.Limits.RetrieveDeadlineMS)*time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), budget)
+	defer cancel()
+	// The body must arrive within the budget. The deadline outlives the
+	// handler on purpose: net/http then discards any unread body (every early
+	// answer below), and with no deadline a client that never sends it would
+	// hold that goroutine and connection forever.
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(budget))
+	// A principal allowed no namespace can use no scoped route: it is refused
+	// before it can hold a quota count, a queue slot or a body read.
+	if namespaceless(principal) {
+		fail(Failure{CodeForbiddenNamespace})
+		return
+	}
 	if ok, wait := r.quota.allow(principal.Name, principal.Quota.RequestsPerMinute, r.cfg.Now()); !ok {
 		fail(retryAfter{Failure{CodeQuotaExceeded}, wait})
 		return
 	}
-	// retrieve reads originals on its own queue and deadline, so a burst of
-	// recoveries cannot starve optimize and a large page is not held to 500ms.
-	queue, budget := r.queue, time.Duration(r.cfg.Limits.DeadlineMS)*time.Millisecond
-	if o.route == "retrieve" {
-		queue, budget = r.retrieveQueue, time.Duration(r.cfg.Limits.RetrieveDeadlineMS)*time.Millisecond
-	}
-	ctx, cancel := context.WithTimeout(request.Context(), budget)
-	defer cancel()
-	controller := http.NewResponseController(w)
-	_ = controller.SetReadDeadline(time.Now().Add(budget))
-	defer controller.SetReadDeadline(time.Time{})
-	select {
-	case queue <- struct{}{}:
-		defer func() { <-queue }()
-	case <-ctx.Done():
+	busy := func() {
 		if n.statusV2 {
 			fail(Failure{CodeCapacity})
 		} else {
 			fail(Failure{CodeDeadline}) // 1.0's answer (legacy_conditions)
 		}
+	}
+	// A principal takes one of its own slots before a shared one, so its slow
+	// bodies fill at most its share of the queue.
+	release, err := fair.acquire(ctx, principal.Name)
+	if err != nil {
+		busy()
+		return
+	}
+	defer release()
+	select {
+	case queue <- struct{}{}:
+		defer func() { <-queue }()
+	case <-ctx.Done():
+		busy()
 		return
 	}
 	contentType, _, _ := mime.ParseMediaType(request.Header.Get("Content-Type"))
@@ -194,6 +214,13 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	o.status, o.responseBytes = http.StatusOK, writeJSON(w, http.StatusOK, out)
+}
+
+// namespaceless reports a principal allowed no namespace at all. identity
+// keeps the globs unexported; such a principal is its name, mechanism and quota
+// and nothing else.
+func namespaceless(p ident.Principal) bool {
+	return p == ident.Principal{Name: p.Name, Mechanism: p.Mechanism, Quota: p.Quota}
 }
 
 // short is a log-safe identifier for a digest.

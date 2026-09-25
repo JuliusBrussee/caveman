@@ -24,12 +24,16 @@ import (
 // not used: it reads exactly one key from CAVE_LOCAL_ENCRYPTION_KEY, has no key
 // IDs to rotate with, and refuses local keys when CAVE_ENV=prod.
 //
-// A nil Keyring stores originals in plaintext (key ID ""). Plaintext rows stay
-// readable after a key is configured; sealed rows need their key to open.
+// A nil Keyring stores originals in plaintext (key ID ""). Once a key is
+// configured, plaintext rows are refused unless plaintext is set (the operator
+// is migrating a store written before encryption); sealed rows need their key.
 type Keyring struct {
-	active string
-	keys   map[string]cipher.AEAD
+	active    string
+	keys      map[string]cipher.AEAD
+	plaintext bool
 }
+
+var errPlaintextRefused = errors.New("middleware original stored in plaintext is refused while a key is configured")
 
 // LoadKeyring parses base64 32-byte keys from inline (comma or newline
 // separated) or, when inline is empty, from the file at path. Both empty means
@@ -83,8 +87,19 @@ func (k *Keyring) seal(authority, digest string, plaintext []byte) ([]byte, stri
 	return aead.Seal(nonce, nonce, plaintext, sealingData(authority, digest)), k.active, nil
 }
 
+// usable reports whether open can open an original sealed with keyID.
+func (k *Keyring) usable(keyID string) bool {
+	if keyID == "" {
+		return k == nil || k.plaintext
+	}
+	return k != nil && k.keys[keyID] != nil
+}
+
 func (k *Keyring) open(authority, digest string, body []byte, keyID string) ([]byte, error) {
 	if keyID == "" {
+		if !k.usable("") {
+			return nil, errPlaintextRefused
+		}
 		return body, nil
 	}
 	var aead cipher.AEAD

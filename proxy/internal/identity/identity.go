@@ -12,27 +12,35 @@
 // With none configured the listener is loopback-only and every caller is
 // single_operator ("open"), which is how the proxy always behaved there.
 //
-// Principals from every source share one name space: the token map entry named
-// like a JWT or certificate principal supplies that principal's namespaces (when
-// the token carries none) and quota. JWT and certificate principals may not be
-// named single_operator, so an identity provider cannot mint the legacy
-// principal's data access; the token map may, to move the legacy token's data
-// behind rotatable tokens.
+// A principal's name owns its data, so no source may mint another source's
+// names. Token map principals are named as listed; JWT principals are
+// oidc:<issuer>#<claim> and certificate principals mtls:uri:<URI SAN>,
+// mtls:dns:<DNS SAN> or (opt-in) mtls:cn:<CN>, all compared byte for byte. A
+// token map entry named with one of those prefixes supplies that principal's
+// namespaces (when the JWT carries none) and quota, and may list no token. The
+// token map may define single_operator, to move the legacy token's data behind
+// rotatable tokens.
 package identity
 
 import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/x509"
+	"encoding/asn1"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -68,7 +76,7 @@ type Principal struct {
 // namespace; "*" allows every one.
 func NewPrincipal(name, mechanism string, globs []string, quota Quota) (Principal, error) {
 	if !validName(name) {
-		return Principal{}, fmt.Errorf("principal %q: 1-256 printable characters, no spaces, quotes or backslashes", name)
+		return Principal{}, fmt.Errorf("principal %q: 1-1024 printable characters, no spaces, quotes or backslashes", name)
 	}
 	if quota.Rows < 0 || quota.Bytes < 0 || quota.RequestsPerMinute < 0 {
 		return Principal{}, fmt.Errorf("principal %q: quota values must not be negative", name)
@@ -102,8 +110,10 @@ func operator(mechanism string) Principal {
 // globPattern is the scope-token grammar plus "*".
 var globPattern = regexp.MustCompile(`^[A-Za-z0-9._:/*-]{1,256}$`)
 
+// validName bounds a principal name; 1024 leaves room for a source prefix and
+// an issuer URL before a 256-character claim.
 func validName(name string) bool {
-	if name == "" || len(name) > 256 {
+	if name == "" || len(name) > 1024 {
 		return false
 	}
 	for i := 0; i < len(name); i++ {
@@ -120,8 +130,12 @@ type Config struct {
 	Token        string
 	TokenMapFile string
 	OIDC         OIDC
-	// MTLS accepts a client certificate the TLS listener verified.
+	// MTLS accepts a client certificate the TLS listener verified; see
+	// UseServerTLS.
 	MTLS bool
+	// MTLSCommonName names a certificate with neither a URI nor a DNS SAN by its
+	// subject CN. Off by default: a CN is free text many CAs fill carelessly.
+	MTLSCommonName bool
 	// HTTPClient fetches the JWKS; nil uses a client with a 5 s timeout.
 	HTTPClient *http.Client
 	Logger     *slog.Logger
@@ -131,19 +145,22 @@ type Config struct {
 // Resolver authenticates middleware requests. Safe for concurrent use;
 // Reload swaps the token map atomically.
 type Resolver struct {
-	token  []byte
-	file   string
-	stamp  string
-	tokens atomic.Pointer[tokenMap]
-	oidc   *oidcVerifier
-	mtls   bool
-	now    func() time.Time
+	token     []byte
+	file      string
+	stamp     string
+	tokens    atomic.Pointer[tokenMap]
+	oidc      *oidcVerifier
+	mtls      bool
+	mtlsCN    bool
+	serverTLS *ServerTLS
+	logger    *slog.Logger
+	now       func() time.Time
 }
 
 var errUnauthorized = errors.New("identity: unauthenticated")
 
 func New(cfg Config) (*Resolver, error) {
-	r := &Resolver{token: []byte(cfg.Token), file: cfg.TokenMapFile, mtls: cfg.MTLS, now: cfg.Now}
+	r := &Resolver{token: []byte(cfg.Token), file: cfg.TokenMapFile, mtls: cfg.MTLS, mtlsCN: cfg.MTLSCommonName, logger: cfg.Logger, now: cfg.Now}
 	if r.now == nil {
 		r.now = time.Now
 	}
@@ -170,6 +187,12 @@ func (r *Resolver) Open() bool {
 
 // MultiPrincipal reports that callers can be principals other than the operator.
 func (r *Resolver) MultiPrincipal() bool { return r.file != "" || r.oidc != nil || r.mtls }
+
+// UseServerTLS re-verifies a client certificate against t's current client CA
+// on every request, so a CA rotation also cuts keep-alive connections opened
+// under the old one. Call it before serving; with MTLS and no ServerTLS, no
+// certificate identifies anyone.
+func (r *Resolver) UseServerTLS(t *ServerTLS) { r.serverTLS = t }
 
 // Identify resolves the request's principal from its credential alone: a bearer
 // (Authorization: Bearer, or x-cave-api-key for static tokens) decides when one
@@ -205,16 +228,47 @@ func (r *Resolver) Identify(req *http.Request) (Principal, error) {
 		return Principal{}, errUnauthorized
 	}
 	if r.mtls && req.TLS != nil && len(req.TLS.VerifiedChains) > 0 && len(req.TLS.PeerCertificates) > 0 {
-		cert := req.TLS.PeerCertificates[0]
-		name := cert.Subject.CommonName
-		if len(cert.URIs) > 0 {
-			name = cert.URIs[0].String()
-		} else if len(cert.DNSNames) > 0 {
-			name = cert.DNSNames[0]
+		// The handshake checked the certificate against the client CA of its
+		// moment; a keep-alive connection outlives a CA rotation.
+		if r.serverTLS == nil || !r.serverTLS.verified(req.TLS) {
+			return Principal{}, errUnauthorized
 		}
-		return r.mapped(name, "mtls", nil)
+		cert := req.TLS.PeerCertificates[0]
+		switch {
+		case len(cert.URIs) > 0:
+			// Not cert.URIs[0].String(): url.Parse lowercases the scheme, which
+			// would make SPIFFE://x and spiffe://x one principal.
+			uri, _ := firstURISAN(cert)
+			return r.mapped("mtls:uri:", uri, "mtls", nil)
+		case len(cert.DNSNames) > 0:
+			return r.mapped("mtls:dns:", cert.DNSNames[0], "mtls", nil)
+		case r.mtlsCN:
+			return r.mapped("mtls:cn:", cert.Subject.CommonName, "mtls", nil)
+		}
 	}
 	return Principal{}, errUnauthorized
+}
+
+var oidSubjectAltName = asn1.ObjectIdentifier{2, 5, 29, 17}
+
+// firstURISAN returns the certificate's first URI SAN exactly as issued.
+func firstURISAN(cert *x509.Certificate) (string, bool) {
+	for _, ext := range cert.Extensions {
+		if !ext.Id.Equal(oidSubjectAltName) {
+			continue
+		}
+		var names []asn1.RawValue
+		if rest, err := asn1.Unmarshal(ext.Value, &names); err != nil || len(rest) > 0 {
+			return "", false
+		}
+		for _, name := range names {
+			// GeneralName uniformResourceIdentifier: [6] IMPLICIT IA5String.
+			if name.Class == asn1.ClassContextSpecific && name.Tag == 6 {
+				return string(name.Bytes), true
+			}
+		}
+	}
+	return "", false
 }
 
 func (r *Resolver) oidcPrincipal(claims map[string]any) (Principal, error) {
@@ -239,16 +293,17 @@ func (r *Resolver) oidcPrincipal(claims map[string]any) (Principal, error) {
 			return Principal{}, errUnauthorized
 		}
 	}
-	return r.mapped(name, "oidc", globs)
+	return r.mapped("oidc:"+r.oidc.cfg.Issuer+"#", name, "oidc", globs)
 }
 
-// mapped builds a JWT or certificate principal. globs from the credential win;
-// otherwise the token map entry of the same name supplies them. Quota always
-// comes from that entry.
-func (r *Resolver) mapped(name, mechanism string, globs []string) (Principal, error) {
-	if name == Operator || !validName(name) {
+// mapped builds the JWT or certificate principal prefix+value. globs from the
+// credential win; otherwise the token map entry of that name supplies them.
+// Quota always comes from that entry.
+func (r *Resolver) mapped(prefix, value, mechanism string, globs []string) (Principal, error) {
+	if value == Operator || !validName(value) {
 		return Principal{}, errUnauthorized
 	}
+	name := prefix + value
 	entry := r.tokens.Load().byName[name]
 	if globs == nil {
 		globs = entry.Namespaces
@@ -311,6 +366,11 @@ func loadTokenMap(path string) (*tokenMap, error) {
 		if _, dup := m.byName[entry.Name]; dup {
 			return nil, fmt.Errorf("token map %s: principal %q listed twice", path, entry.Name)
 		}
+		// A token for an OIDC or certificate principal would let its holder
+		// into that principal's sessions; a malformed prefix matches no one.
+		if prefixed, ok := sourceName(entry.Name); prefixed && (!ok || len(entry.TokenSHA256) > 0) {
+			return nil, fmt.Errorf("token map %s: principal %q: entries named oidc:<issuer>#<claim> or mtls:{uri,dns,cn}:<name> set namespaces and quota only, with no token_sha256", path, entry.Name)
+		}
 		p, err := NewPrincipal(entry.Name, "token_map", entry.Namespaces, entry.Quota)
 		if err != nil {
 			return nil, fmt.Errorf("token map %s: %w", path, err)
@@ -334,6 +394,20 @@ func loadTokenMap(path string) (*tokenMap, error) {
 	return m, nil
 }
 
+// sourceName reports whether name carries an OIDC or certificate source
+// prefix, and whether it is well formed.
+func sourceName(name string) (prefixed, ok bool) {
+	if rest, found := strings.CutPrefix(name, "oidc:"); found {
+		issuer, claim, found := strings.Cut(rest, "#")
+		return true, found && issuer != "" && claim != ""
+	}
+	if rest, found := strings.CutPrefix(name, "mtls:"); found {
+		kind, value, found := strings.Cut(rest, ":")
+		return true, found && value != "" && (kind == "uri" || kind == "dns" || kind == "cn")
+	}
+	return false, true
+}
+
 // Reload re-reads the token map; unless force, only when the file changed. A
 // file that no longer parses keeps the previous map and returns the error.
 func (r *Resolver) Reload(force bool) (bool, error) {
@@ -347,6 +421,13 @@ func (r *Resolver) Reload(force bool) (bool, error) {
 	m, err := loadTokenMap(r.file)
 	if err != nil {
 		return false, err
+	}
+	for name, entry := range m.byName {
+		// Before source prefixes, this is how an OIDC or certificate principal
+		// was configured; it now configures nobody.
+		if prefixed, _ := sourceName(name); !prefixed && len(entry.TokenSHA256) == 0 && r.logger != nil {
+			r.logger.Warn("token map principal has no token_sha256 and matches no caller; name OIDC and certificate principals oidc:<issuer>#<claim> or mtls:{uri,dns,cn}:<name>", "principal", name)
+		}
 	}
 	r.tokens.Store(m)
 	r.stamp = stamp
@@ -378,13 +459,17 @@ type Reloader interface {
 
 // Watch reloads every reloader when its files change (checked every interval)
 // and unconditionally on SIGHUP, until ctx ends. A failed reload keeps the
-// previous configuration.
+// previous configuration, revoked tokens included, so it is counted for
+// WriteMetrics as well as logged.
 func Watch(ctx context.Context, logger *slog.Logger, every time.Duration, reloaders map[string]Reloader) {
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
 	tick := time.NewTicker(every)
 	defer tick.Stop()
+	for name := range reloaders {
+		noteReload(name, false) // each loaded before Watch starts
+	}
 	for {
 		force := false
 		select {
@@ -397,10 +482,57 @@ func Watch(ctx context.Context, logger *slog.Logger, every time.Duration, reload
 		for name, reloader := range reloaders {
 			reloaded, err := reloader.Reload(force)
 			if err != nil {
+				noteReload(name, true)
 				logger.Error("reload failed; keeping the previous configuration", "source", name, "error", err)
 			} else if reloaded {
+				noteReload(name, false)
 				logger.Info("reloaded", "source", name)
 			}
 		}
 	}
+}
+
+// reloads backs the reload metrics; process-wide, like SIGHUP. Sources are
+// Watch's map keys (token_map, tls), so labels stay bounded.
+var reloads struct {
+	sync.Mutex
+	failures    map[string]int64
+	lastSuccess map[string]time.Time
+}
+
+func noteReload(source string, failed bool) {
+	reloads.Lock()
+	defer reloads.Unlock()
+	if reloads.failures == nil {
+		reloads.failures, reloads.lastSuccess = map[string]int64{}, map[string]time.Time{}
+	}
+	if failed {
+		reloads.failures[source]++
+		return
+	}
+	reloads.failures[source] += 0 // the series exists from the first load
+	reloads.lastSuccess[source] = time.Now()
+}
+
+// WriteMetrics appends the reload series in Prometheus text format; nothing
+// before Watch starts.
+func WriteMetrics(w io.Writer) {
+	reloads.Lock()
+	defer reloads.Unlock()
+	if len(reloads.failures) == 0 {
+		return
+	}
+	sources := slices.Sorted(maps.Keys(reloads.failures))
+	var b strings.Builder
+	b.WriteString("# HELP caveman_identity_reload_failures_total Token map or TLS file reloads that failed; the previous configuration, revoked tokens included, stays in force.\n" +
+		"# TYPE caveman_identity_reload_failures_total counter\n")
+	for _, source := range sources {
+		fmt.Fprintf(&b, "caveman_identity_reload_failures_total{source=%q} %d\n", source, reloads.failures[source])
+	}
+	b.WriteString("# HELP caveman_identity_reload_last_success_timestamp_seconds When the configuration in force was loaded, in Unix seconds.\n" +
+		"# TYPE caveman_identity_reload_last_success_timestamp_seconds gauge\n")
+	for _, source := range sources {
+		fmt.Fprintf(&b, "caveman_identity_reload_last_success_timestamp_seconds{source=%q} %d\n", source, reloads.lastSuccess[source].Unix())
+	}
+	_, _ = io.WriteString(w, b.String())
 }

@@ -106,7 +106,9 @@ func TestOIDCAcceptsRS256AndES256WithNamespaces(t *testing.T) {
 	c := &clock{}
 	c.now.Store(1_800_000_000)
 	path := filepath.Join(t.TempDir(), "tokens.yaml")
-	writeFile(t, path, "principals:\n  - name: svc-mapped\n    namespaces: [\"mapped/*\"]\n    quota: {requests_per_minute: 7}\n")
+	// team-a is a token principal: a JWT whose sub is team-a is someone else.
+	writeFile(t, path, "principals:\n  - name: \"oidc:https://idp.example#svc-mapped\"\n    namespaces: [\"mapped/*\"]\n    quota: {requests_per_minute: 7}\n"+
+		entry("team-a", `["team-a/*"]`, tokenA1)+"    quota: {requests_per_minute: 9}\n")
 	r := oidcResolver(t, i, c, OIDC{NamespacesClaim: "caveman_namespaces"}, path)
 	claims := func(sub string, namespaces any) map[string]any {
 		out := map[string]any{"iss": "https://idp.example", "aud": []string{"other", "caveman"}, "sub": sub, "exp": c.Now().Unix() + 60}
@@ -119,12 +121,14 @@ func TestOIDCAcceptsRS256AndES256WithNamespaces(t *testing.T) {
 		token, name, allowed, denied string
 		rpm                          int
 	}{
-		{sign(t, map[string]any{"alg": "RS256", "kid": "r1"}, claims("svc-a", []string{"team-a/*"}), rsaKey), "svc-a", "team-a/x", "team-b/x", 0},
-		{sign(t, map[string]any{"alg": "ES256", "kid": "e1"}, claims("svc-b", "team-b/* shared"), ecKey), "svc-b", "shared", "team-a/x", 0},
-		{sign(t, map[string]any{"alg": "ES256", "kid": "e1"}, claims("svc-mapped", nil), ecKey), "svc-mapped", "mapped/x", "team-a/x", 7},
-		{sign(t, map[string]any{"alg": "ES256", "kid": "e1"}, claims("svc-unmapped", nil), ecKey), "svc-unmapped", "", "team-a/x", 0},
+		{sign(t, map[string]any{"alg": "RS256", "kid": "r1"}, claims("svc-a", []string{"team-a/*"}), rsaKey), "oidc:https://idp.example#svc-a", "team-a/x", "team-b/x", 0},
+		{sign(t, map[string]any{"alg": "ES256", "kid": "e1"}, claims("svc-b", "team-b/* shared"), ecKey), "oidc:https://idp.example#svc-b", "shared", "team-a/x", 0},
+		{sign(t, map[string]any{"alg": "ES256", "kid": "e1"}, claims("svc-mapped", nil), ecKey), "oidc:https://idp.example#svc-mapped", "mapped/x", "team-a/x", 7},
+		{sign(t, map[string]any{"alg": "ES256", "kid": "e1"}, claims("svc-unmapped", nil), ecKey), "oidc:https://idp.example#svc-unmapped", "", "team-a/x", 0},
 		// An explicitly empty claim means no namespace, not "use the mapping".
-		{sign(t, map[string]any{"alg": "ES256", "kid": "e1"}, claims("svc-mapped", []string{}), ecKey), "svc-mapped", "", "mapped/x", 7},
+		{sign(t, map[string]any{"alg": "ES256", "kid": "e1"}, claims("svc-mapped", []string{}), ecKey), "oidc:https://idp.example#svc-mapped", "", "mapped/x", 7},
+		// S2: sub=team-a gets neither the token principal's name nor its entry.
+		{sign(t, map[string]any{"alg": "ES256", "kid": "e1"}, claims("team-a", nil), ecKey), "oidc:https://idp.example#team-a", "", "team-a/x", 0},
 	} {
 		p, err := r.Identify(bearer(tc.token))
 		if err != nil || p.Name != tc.name || p.Mechanism != "oidc" || p.Quota.RequestsPerMinute != tc.rpm {
@@ -160,7 +164,7 @@ func TestOIDCRejectsForgedAndInvalidTokens(t *testing.T) {
 	}
 	rs := map[string]any{"alg": "RS256", "kid": "r1"}
 	good := sign(t, rs, valid(), rsaKey)
-	if p, err := r.Identify(bearer(good)); err != nil || p.Name != "svc" {
+	if p, err := r.Identify(bearer(good)); err != nil || p.Name != "oidc:https://idp.example#svc" {
 		t.Fatalf("control token rejected: %v", err)
 	}
 	publicDER, _ := x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)
@@ -274,9 +278,95 @@ func TestOIDCKeySetAndConfigValidation(t *testing.T) {
 		"no audience":    {Issuer: "i", JWKSURL: "https://idp.example/jwks"},
 		"hmac algorithm": {Issuer: "i", Audience: "a", JWKSURL: "https://idp.example/jwks", Algorithms: []string{"HS256"}},
 		"none algorithm": {Issuer: "i", Audience: "a", JWKSURL: "https://idp.example/jwks", Algorithms: []string{"none"}},
+		// oidc:<issuer>#<claim> must split one way only.
+		"issuer with #": {Issuer: "https://idp.example#x", Audience: "a", JWKSURL: "https://idp.example/jwks"},
 	} {
 		if _, err := New(Config{OIDC: oidc, HTTPClient: i.server.Client()}); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// S4: an unknown kid refetches the key set outside the lock, once for every
+// concurrent caller, while tokens with known kids keep verifying.
+func TestOIDCKnownKidDoesNotWaitForARefetch(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	var fetches atomic.Int32
+	release, requested := make(chan struct{}), make(chan struct{}, 8)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fetches.Add(1) > 1 {
+			requested <- struct{}{}
+			<-release // a slow or black-holed issuer
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{rsaJWK("good", key)}})
+	}))
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(func() { unblock(); server.Close() })
+	c := &clock{}
+	c.now.Store(1_800_000_000)
+	r, err := New(Config{OIDC: OIDC{Issuer: "https://idp.example", Audience: "caveman", JWKSURL: server.URL + "/jwks"}, HTTPClient: server.Client(), Now: c.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims := map[string]any{"iss": "https://idp.example", "aud": "caveman", "sub": "svc", "exp": c.Now().Unix() + 600}
+	good := sign(t, map[string]any{"alg": "RS256", "kid": "good"}, claims, key)
+	unknown := sign(t, map[string]any{"alg": "RS256", "kid": "attacker-random"}, claims, nil)
+	c.advance(jwksMinRefresh)
+	failed := make(chan error, 4)
+	for n := 0; n < 4; n++ {
+		go func() { _, err := r.Identify(bearer(unknown)); failed <- err }()
+	}
+	<-requested // the refetch is running
+	start := time.Now()
+	verified := make(chan error, 1)
+	go func() { _, err := r.Identify(bearer(good)); verified <- err }()
+	select {
+	case err := <-verified:
+		if elapsed := time.Since(start); err != nil || elapsed > 50*time.Millisecond {
+			t.Fatalf("known kid during a refetch: %v after %v", err, elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a known kid waited on the key set refetch")
+	}
+	unblock()
+	for n := 0; n < 4; n++ {
+		if err := <-failed; err == nil {
+			t.Fatal("unknown kid accepted")
+		}
+	}
+	if got := fetches.Load(); got != 2 {
+		t.Fatalf("fetches = %d, want startup plus one shared refetch", got)
+	}
+}
+
+// S5: jwks_url must be https, and so must every redirect it follows.
+func TestOIDCRefusesJWKSRedirectToHTTP(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	keys := func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{rsaJWK("k", key)}})
+	}
+	plain := httptest.NewServer(http.HandlerFunc(keys))
+	t.Cleanup(plain.Close)
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		switch q.URL.Path {
+		case "/to-http":
+			http.Redirect(w, q, plain.URL+"/keys", http.StatusFound)
+		case "/to-https":
+			http.Redirect(w, q, "/keys", http.StatusFound)
+		default:
+			keys(w, q)
+		}
+	}))
+	t.Cleanup(secure.Close)
+	token := sign(t, map[string]any{"alg": "RS256", "kid": "k"}, map[string]any{"iss": "https://idp.example", "aud": "caveman", "sub": "svc", "exp": time.Now().Unix() + 60}, key)
+	for path, want := range map[string]bool{"/to-https": true, "/to-http": false} {
+		r, err := New(Config{OIDC: OIDC{Issuer: "https://idp.example", Audience: "caveman", JWKSURL: secure.URL + path}, HTTPClient: secure.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Identify(bearer(token)); (err == nil) != want {
+			t.Errorf("%s: verified = %v, want %v", path, err == nil, want)
 		}
 	}
 }

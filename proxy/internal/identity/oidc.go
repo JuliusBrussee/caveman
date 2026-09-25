@@ -34,7 +34,8 @@ type OIDC struct {
 	Algorithms []string
 	// ClockSkew tolerates clock drift on exp and nbf; zero means 60 s.
 	ClockSkew time.Duration
-	// PrincipalClaim names the principal; empty means "sub".
+	// PrincipalClaim holds the principal, named oidc:<Issuer>#<claim value>;
+	// empty means "sub".
 	PrincipalClaim string
 	// NamespacesClaim, when set, is a claim holding namespace globs (an array
 	// of strings, or one space-separated string). A token without it falls back
@@ -62,6 +63,8 @@ type oidcVerifier struct {
 	keys      map[string]jwk
 	fetched   time.Time
 	attempted time.Time
+	// fetching is closed when the running key set fetch ends; nil when none runs.
+	fetching chan struct{}
 }
 
 type jwk struct {
@@ -72,6 +75,10 @@ type jwk struct {
 func newOIDCVerifier(cfg OIDC, client *http.Client, logger *slog.Logger, now func() time.Time) (*oidcVerifier, error) {
 	if cfg.Audience == "" {
 		return nil, errors.New("oidc: audience is required")
+	}
+	// The issuer is part of every principal name: oidc:<issuer>#<claim>.
+	if !validName(cfg.Issuer) || strings.Contains(cfg.Issuer, "#") {
+		return nil, errors.New("oidc: issuer must be printable, with no spaces, quotes, backslashes or #")
 	}
 	if u, err := url.Parse(cfg.JWKSURL); err != nil || u.Scheme != "https" || u.Host == "" {
 		return nil, errors.New("oidc: jwks_url must be an https URL")
@@ -93,25 +100,41 @@ func newOIDCVerifier(cfg OIDC, client *http.Client, logger *slog.Logger, now fun
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
-	v := &oidcVerifier{cfg: cfg, client: client, logger: logger, now: now, keys: map[string]jwk{}}
+	// https only holds through redirects too: keys fetched over http anchor nothing.
+	checked := *client
+	checked.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "https" {
+			return errors.New("oidc: jwks_url redirected to a non-https URL")
+		}
+		if client.CheckRedirect != nil {
+			return client.CheckRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("oidc: jwks_url redirected 10 times")
+		}
+		return nil
+	}
+	v := &oidcVerifier{cfg: cfg, client: &checked, logger: logger, now: now, keys: map[string]jwk{}}
 	// An identity provider that is down at startup is retried on first use.
-	v.mu.Lock()
+	v.attempted, v.fetching = now(), make(chan struct{})
 	v.refresh()
-	v.mu.Unlock()
 	return v, nil
 }
 
-// refresh fetches the key set; on failure the previous keys stay. Callers hold mu.
+// refresh runs the fetch key (or startup) began, without holding mu; on
+// failure the previous keys stay.
 func (v *oidcVerifier) refresh() {
-	v.attempted = v.now()
 	keys, err := v.fetch()
-	if err != nil {
-		if v.logger != nil {
-			v.logger.Warn("oidc key set unavailable; keeping the previous keys", "jwks_url", v.cfg.JWKSURL, "error", err)
-		}
-		return
+	v.mu.Lock()
+	if err == nil {
+		v.keys, v.fetched = keys, v.attempted
 	}
-	v.keys, v.fetched = keys, v.attempted
+	close(v.fetching)
+	v.fetching = nil
+	v.mu.Unlock()
+	if err != nil && v.logger != nil {
+		v.logger.Warn("oidc key set unavailable; keeping the previous keys", "jwks_url", v.cfg.JWKSURL, "error", err)
+	}
 }
 
 func (v *oidcVerifier) fetch() (map[string]jwk, error) {
@@ -170,22 +193,26 @@ func (v *oidcVerifier) fetch() (map[string]jwk, error) {
 	return keys, nil
 }
 
-// key returns the key for kid, refreshing a stale set, and refreshing once more
-// for an unknown kid (the issuer rotated) when the last attempt is not recent.
+// key returns the key for kid. A known kid never waits: a stale set refreshes
+// in the background. An unknown kid (the issuer rotated) waits for one fetch,
+// shared by every concurrent caller and started at most every jwksMinRefresh.
 func (v *oidcVerifier) key(kid string) (jwk, bool) {
 	v.mu.Lock()
-	defer v.mu.Unlock()
-	now := v.now()
-	recent := now.Sub(v.attempted) < jwksMinRefresh
-	if now.Sub(v.fetched) > jwksMaxAge && !recent {
-		v.refresh()
-		recent = true
-	}
 	k, ok := v.keys[kid]
-	if !ok && !recent {
-		v.refresh()
-		k, ok = v.keys[kid]
+	now := v.now()
+	if v.fetching == nil && (!ok || now.Sub(v.fetched) > jwksMaxAge) && now.Sub(v.attempted) >= jwksMinRefresh {
+		v.attempted, v.fetching = now, make(chan struct{})
+		go v.refresh()
 	}
+	fetching := v.fetching
+	v.mu.Unlock()
+	if ok || fetching == nil {
+		return k, ok
+	}
+	<-fetching
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	k, ok = v.keys[kid]
 	return k, ok
 }
 

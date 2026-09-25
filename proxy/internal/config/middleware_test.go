@@ -121,3 +121,28 @@ func TestListenAuthenticationSourcesAndTLSPairs(t *testing.T) {
 		}
 	})
 }
+
+// The per-principal queue share and the plaintext migration flag read the
+// environment like every other key; Configured tells an operator-set
+// middleware from the default.
+func TestMiddlewareShareAndPlaintextKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "caveman.yaml")
+	if err := os.WriteFile(path, []byte("mode: record\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Middleware.Configured() {
+		t.Fatalf("no middleware key set, yet Configured: %+v", cfg.Middleware)
+	}
+	t.Setenv("CAVEMAN_MIDDLEWARE_PRINCIPAL_IN_FLIGHT", "3")
+	t.Setenv("CAVEMAN_MIDDLEWARE_ALLOW_PLAINTEXT_ORIGINALS", "true")
+	if cfg, err = Load(path); err != nil {
+		t.Fatal(err)
+	}
+	if m := cfg.Middleware; m.PrincipalInFlight != 3 || !m.AllowPlaintextOriginals || !m.Configured() {
+		t.Fatalf("middleware config = %+v", m)
+	}
+}

@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/JuliusBrussee/caveman/proxy/internal/identity"
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/shared/platform/cacheguard"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
@@ -665,6 +666,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		"# TYPE cave_proxy_inflight_requests gauge\ncave_proxy_inflight_requests "+itoa(s.inflight.Load())+"\n"+
 		"# HELP cave_proxy_unauthorized_total Requests rejected for a missing or wrong credential, middleware and /metrics included.\n"+
 		"# TYPE cave_proxy_unauthorized_total counter\ncave_proxy_unauthorized_total "+itoa(s.unauthorized.Load())+"\n")
+	identity.WriteMetrics(w) // token map and TLS reloads
 	if m, ok := s.middleware.(interface{ WriteMetrics(io.Writer) }); ok {
 		m.WriteMetrics(w)
 	}

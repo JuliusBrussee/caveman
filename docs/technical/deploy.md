@@ -19,11 +19,14 @@ The server reads `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` and
 use the AWS default credential chain, so an ECS task role, an EKS pod role or an
 EC2 instance profile needs no keys at all.
 
-`CAVEMAN_AUTH_TOKEN` is the switch. Set it and the proxy accepts a non-loopback
-listen address; leave it unset and a non-loopback address is refused at startup,
-exactly as before. At least 16 characters, no whitespace or control characters,
-environment variable only — an `auth_token:` key in `caveman.yaml` is refused
-at startup rather than ignored.
+An inbound credential is the switch. With `CAVEMAN_AUTH_TOKEN`, or any
+[middleware identity](#identity) source (a token map, OIDC, or a TLS client CA),
+the proxy accepts a non-loopback listen address; with none of them, a
+non-loopback address is refused at startup, exactly as before. The provider
+routes accept only `CAVEMAN_AUTH_TOKEN`, so a service without it serves the
+middleware and nothing else. The token is at least 16 characters, no whitespace
+or control characters, environment variable only — an `auth_token:` key in
+`caveman.yaml` is refused at startup rather than ignored.
 
 Generate one, never type one — a memorable token is a guessable token:
 
@@ -61,11 +64,16 @@ docker run -d --name caveman-proxy \
 
 The image sets `CAVEMAN_HOME=/data` and `CAVEMAN_LISTEN=0.0.0.0:8787`, runs as
 non-root uid 65532, and exposes 8787. It is published multi-arch (amd64, arm64)
-by the signed `bin-v*` release workflow; always pin a `bin-vX.Y.Z` tag in
-production, never `:latest`. `bin-v1.1.7` is the first tag that publishes the
-image; the middleware identity, TLS listener and Postgres store below need
-`bin-v2.0.0` or later, which every example here names. To build it yourself, run
-`docker build -t caveman-proxy .` at the repository root.
+by the signed `bin-v*` release workflow; in production pin it by digest,
+`ghcr.io/juliusbrussee/caveman-proxy:bin-vX.Y.Z@sha256:<digest>` (find the
+digest with `docker buildx imagetools inspect <image>`), never `:latest`.
+`bin-v1.1.7` is the first tag that publishes the image; the middleware
+identity, TLS listener and Postgres store below need `bin-v2.0.0` or later,
+which every example here names. The Kubernetes and ECS manifests in `deploy/`
+carry `@sha256:REPLACE_AT_RELEASE` until the `bin-v2.0.0` release writes the
+real digest in; until then their image pull fails instead of running an
+unpinned image. To build it yourself, run `docker build -t caveman-proxy .` at
+the repository root.
 
 A named volume inherits the right owner. A **bind** mount does not — `chown` the
 host directory to `65532` or the proxy cannot create its SQLite store.
@@ -149,6 +157,32 @@ aws ecs register-task-definition \
   **service's** `deploymentConfiguration` to `maximumPercent: 100`,
   `minimumHealthyPercent: 0` (the old task stops before the new one starts),
   with a `desiredCount` of 1. Deployments then have a short outage.
+- **TLS all the way to the task.** Middleware requests carry tool results, so
+  they must not cross the load balancer in cleartext. The task definition runs
+  the proxy's own TLS listener. A short-lived `tls-files` container (busybox,
+  pinned by digest) writes the certificate and key from Secrets Manager into a
+  task-local volume as mode 0400 files owned by uid 65532, and the proxy starts
+  once it has succeeded. Store the PEM files as two secrets, then replace their
+  `REPLACE_` ARNs:
+
+  ```bash
+  aws secretsmanager create-secret --name caveman-proxy/tls-cert --secret-string file://tls.crt
+  aws secretsmanager create-secret --name caveman-proxy/tls-key --secret-string file://tls.key
+  ```
+
+  The ALB does not verify target certificates, so a private-CA or self-signed
+  certificate works. Its target group must speak HTTPS to the task, health
+  check included:
+
+  ```bash
+  aws elbv2 create-target-group --name caveman-proxy --target-type ip \
+    --protocol HTTPS --port 8787 --vpc-id <vpc-id> \
+    --health-check-protocol HTTPS --health-check-path /health/ready
+  ```
+
+  The ALB's own listener is HTTPS too, with an ACM certificate. The certificate
+  is read at task start; to rotate it, update the secrets and force a new
+  deployment.
 - Point the ALB target group health check at `/health/ready` on port 8787.
 - Run the service in private subnets. The ALB is the only thing with a listener
   the developers reach.
@@ -159,19 +193,25 @@ aws ecs register-task-definition \
 
 ## Kubernetes
 
-`deploy/kubernetes.yaml` holds a Secret, a PVC, a single-replica Deployment and
-a Service. For several replicas, use `deploy/kubernetes-ha.yaml` instead (see
-[High availability](#high-availability)).
+`deploy/kubernetes.yaml` holds a Secret, a PVC, a single-replica Deployment, a
+Service and a NetworkPolicy. For several replicas, use
+`deploy/kubernetes-ha.yaml` instead (see [High availability](#high-availability)).
 
-The Secret carries no `CAVEMAN_AUTH_TOKEN` on purpose: a placeholder long enough
-to look like a placeholder is also long enough to pass validation and serve as a
-real token. Create it first, then apply the file — the apply adds the provider
-key beside the token and leaves the token alone:
+The Secret carries no `CAVEMAN_AUTH_TOKEN` or `CAVEMAN_METRICS_TOKEN` on
+purpose: a placeholder long enough to look like a placeholder is also long
+enough to pass validation and serve as a real token. Create them first, then
+apply the file — the apply adds the provider key beside the tokens and leaves
+them alone:
 
 ```bash
 kubectl create secret generic caveman-proxy -n <namespace> \
-  --from-literal=CAVEMAN_AUTH_TOKEN="$(openssl rand -hex 32)"
+  --from-literal=CAVEMAN_AUTH_TOKEN="$(openssl rand -hex 32)" \
+  --from-literal=CAVEMAN_METRICS_TOKEN="$(openssl rand -hex 32)"
 ```
+
+The NetworkPolicy admits only pods labelled `caveman-client: "true"` (label
+your Prometheus too) and lets the proxy reach DNS and HTTPS alone. EKS Pod
+Identity also needs egress to `169.254.170.23/32` on port 80.
 
 Replace the remaining `REPLACE_...` provider key in the Secret, then:
 
@@ -336,9 +376,10 @@ could not be recovered.
 
 `deploy/kubernetes-ha.yaml` runs two replicas behind a Service with a rolling
 update (`maxUnavailable: 0`), a PodDisruptionBudget, a NetworkPolicy, a TLS
-listener, token-map identity and an encryption key. Its header lists the four
-Secrets to create first; the file itself carries no secrets or placeholders, so
-pods wait until the Secrets exist.
+listener, token-map identity and an encryption key, under the `RuntimeDefault`
+seccomp profile with secret files mode 0440 (readable through `fsGroup` only).
+Its header lists the four Secrets to create first; the file carries no secrets,
+so pods wait until the Secrets exist. Its one placeholder is the image digest.
 
 `CAVEMAN_MIDDLEWARE_DATABASE_URL` selects Postgres. It is read only from the
 environment, because it carries a password; a `middleware.database_url:` key in
@@ -465,6 +506,20 @@ the request gets `401`. With none of the four configured, a loopback listener
 accepts every caller as `single_operator`, as it always has. Any of the four
 makes a non-loopback listener legal.
 
+**Principal names carry their source.** Names are compared byte for byte, with
+no case folding, and no source can produce another source's names. So a JWT
+subject or a certificate that spells a token principal's name is still a
+different principal, with its own sessions:
+
+| Source | Principal name | Example |
+|---|---|---|
+| Shared token | `single_operator` | |
+| Token map | the entry's `name` | `team-a` |
+| OIDC | `oidc:<issuer>#<claim>`, with `issuer` exactly as configured | `oidc:https://login.example.com/#svc-a` |
+| Certificate, URI SAN | `mtls:uri:<first URI SAN, as issued>` | `mtls:uri:spiffe://example.org/ns/ci/sa/agent` |
+| Certificate, DNS SAN | `mtls:dns:<first DNS SAN>` (when there is no URI SAN) | `mtls:dns:agent.internal` |
+| Certificate, CN | `mtls:cn:<subject CN>`, only with `CAVEMAN_TLS_CLIENT_CN_FALLBACK=true` | `mtls:cn:build-agent` |
+
 **Token map.** YAML (JSON also parses). Only hashes are stored; unknown keys
 are an error.
 
@@ -481,10 +536,18 @@ principals:
       rows: 200000
       bytes: 134217728
       requests_per_minute: 1200
-  # A principal named by OIDC or a certificate: namespaces and quota only.
-  - name: spiffe://example.org/ns/ci/sa/agent
+  # An OIDC or certificate principal, named with its source prefix:
+  # namespaces and quota only, never token_sha256.
+  - name: "mtls:uri:spiffe://example.org/ns/ci/sa/agent"
     namespaces: ["ci/*"]
+  - name: "oidc:https://login.example.com/#svc-a"
+    namespaces: ["svc-a/*"]
 ```
+
+An entry named `oidc:…` or `mtls:…` that lists a `token_sha256`, or whose
+prefix is malformed (`mtls:` must be followed by `uri:`, `dns:` or `cn:`;
+`oidc:` needs `<issuer>#<claim>`), fails the load. An unprefixed entry with no
+`token_sha256` matches no caller and logs a warning at load.
 
 Create a token and its hash:
 
@@ -497,7 +560,9 @@ printf %s "$TOKEN" | sha256sum
 the new token, then remove the old hash. The file is re-read when it changes
 (checked every 10 s, which also catches Kubernetes Secret updates) and at once
 on `SIGHUP`. A file that no longer parses is logged and ignored: the previous
-map stays in force.
+map stays in force, **including tokens you meant to revoke**. It is retried
+every 10 s and counted in `caveman_identity_reload_failures_total`; alert on
+that counter (see [Health and metrics](#health-and-metrics)).
 
 **OIDC.** In `caveman.yaml`, or as `CAVEMAN_MIDDLEWARE_OIDC_<KEY>` variables
 (`ALGORITHMS` comma separated):
@@ -519,17 +584,24 @@ Tokens must carry a `kid`, an `exp`, the exact `iss`, and the audience in
 does not match the header's algorithm are refused. RSA keys under 2048 bits are
 ignored. The key set is cached for an hour; a token with an unknown `kid` makes
 it refetch once, at most every 10 seconds, and a failed fetch keeps the old
-keys. Without `namespaces_claim` (or when a token lacks the claim), namespaces
-and quota come from the token map entry named like the principal.
+keys. The refetch never blocks tokens whose `kid` is already known, and
+concurrent unknown `kid`s share one fetch. A `jwks_url` redirect to anything
+but https is refused. The issuer may not contain `#`. Without
+`namespaces_claim` (or when a token lacks the claim), namespaces and quota come
+from the token map entry named `oidc:<issuer>#<claim>`.
 
 **mTLS.** With `CAVEMAN_TLS_CLIENT_CA_FILE`, a client certificate that verifies
-against that CA names a principal: its first URI SAN, else its first DNS SAN,
-else its subject CN. Namespaces and quota come from the token map entry of that
-name; with no entry the principal may use no namespace. Clients without a
-certificate can still connect and use a bearer.
+against that CA names a principal from its first URI SAN, else its first DNS
+SAN (see the table above). The subject CN counts only with
+`CAVEMAN_TLS_CLIENT_CN_FALLBACK=true` (`tls.client_cn_fallback`); it is off by
+default because a CN is free text that many CAs fill carelessly. Namespaces and
+quota come from the token map entry of that name; with no entry the principal
+may use no namespace. Clients without a certificate can still connect and use a
+bearer.
 
-A JWT or certificate principal may not be named `single_operator`. The token
-map may define it, to move the shared token's sessions behind rotatable tokens.
+A JWT subject or certificate name that is literally `single_operator` is
+refused. The token map may define `single_operator`, to move the shared token's
+sessions behind rotatable tokens.
 
 **Provider routes are unchanged.** The token map, OIDC and mTLS apply to the
 middleware routes only. Provider routes (`/v1/messages`, `/openai/...`) accept
@@ -625,7 +697,10 @@ with only forward-secret AEAD cipher suites in TLS 1.2. The files are re-read
 when they change (checked every 10 s) and on `SIGHUP`, so a renewed certificate
 applies without a restart; files that no longer load are logged and the
 current certificate stays. `CAVEMAN_TLS_CLIENT_CA_FILE` adds client certificate
-verification (see [Identity](#identity)).
+verification (see [Identity](#identity)). A client certificate is checked
+against the client CA in force on every request, not only at the handshake, so
+replacing the CA file cuts off keep-alive connections opened under the old CA
+at their next request (`401`).
 
 Without these, the proxy speaks plain HTTP: terminate TLS at the load balancer,
 ingress, or service mesh in front of it, and keep the listener inside a private
@@ -652,7 +727,22 @@ Metrics: `cave_proxy_inflight_requests`, `cave_proxy_unauthorized_total`, and
 for the middleware `caveman_middleware_requests_total` (route, status, code),
 `caveman_middleware_decisions_total`, `caveman_middleware_request_duration_seconds`,
 `caveman_middleware_unauthorized_total`, `caveman_middleware_queue_depth` /
-`_capacity`, and `caveman_middleware_store_rows` / `_bytes` / `_limit`.
+`_capacity`, and `caveman_middleware_store_rows` / `_bytes` / `_limit`. With a
+token map or a TLS listener, `caveman_identity_reload_failures_total{source}`
+counts reloads that failed and `caveman_identity_reload_last_success_timestamp_seconds{source}`
+is when the configuration in force was loaded (process start, or the last good
+reload); `source` is `token_map` or `tls`.
+
+A failed reload keeps the previous token map, so a revocation that does not
+parse leaves the revoked token working. A broken file is retried every 10 s, so
+the counter keeps rising until the file is fixed. Page on it:
+
+```yaml
+- alert: CavemanIdentityReloadFailing
+  expr: increase(caveman_identity_reload_failures_total[5m]) > 0
+- alert: CavemanTokenRotationNotApplied   # after a rotation at time T
+  expr: caveman_identity_reload_last_success_timestamp_seconds{source="token_map"} < <T>
+```
 
 Every rejected request increments `cave_proxy_unauthorized_total` and writes one
 `inbound token rejected` warning with the request path and the caller's host —
@@ -675,6 +765,46 @@ team's sessions.
   forwarded unchanged. The MCP recovery tool a local `caveman wrap` installs
   reads a local store and cannot reach a remote one.
 
+## Migration notes
+
+**Principal names now carry their source** (runtime `bin-v2.0.0`). Before, a
+JWT subject or a certificate name shared one name space with token map
+principals, so a certificate with `CN=team-a` or a JWT with `sub=team-a` could
+reach the sessions of the token map principal `team-a`. Now OIDC and
+certificate principals are named `oidc:<issuer>#<claim>` and
+`mtls:{uri,dns,cn}:<name>` (see [Identity](#identity)). If you run a pre-release
+build with OIDC or mTLS, change the token map before you upgrade:
+
+1. Rename every entry that configures an OIDC or certificate principal:
+
+   | Before | After |
+   |---|---|
+   | `name: spiffe://example.org/ns/ci/sa/agent` (URI SAN) | `name: "mtls:uri:spiffe://example.org/ns/ci/sa/agent"` |
+   | `name: agent.internal` (DNS SAN) | `name: "mtls:dns:agent.internal"` |
+   | `name: build-agent` (subject CN) | `name: "mtls:cn:build-agent"`, and set `CAVEMAN_TLS_CLIENT_CN_FALLBACK=true` |
+   | `name: svc-a` (JWT `sub`) | `name: "oidc:<middleware.oidc.issuer>#svc-a"`, e.g. `"oidc:https://login.example.com/#svc-a"` |
+
+   Quote the names, and use the issuer byte for byte as configured, trailing
+   slash included.
+2. Remove any `token_sha256` from those renamed entries; the load now fails if
+   one is present. A token holder that needs the same namespaces gets its own
+   unprefixed entry.
+3. A certificate whose URI SAN differs from the entry only in case (for example
+   `SPIFFE://`) no longer matches it; names are compared byte for byte.
+4. Sessions that OIDC or certificate principals created before the upgrade
+   belong to the old names. They answer `404` and expire under the normal
+   retention; they are not migrated.
+
+An entry you forget to rename fails closed: its caller gets
+`403 forbidden_namespace`, and the load logs `token map principal has no
+token_sha256 and matches no caller` with the entry's name.
+
+**Manifests.** `deploy/kubernetes.yaml` now has a NetworkPolicy: label client
+pods (and Prometheus) `caveman-client: "true"`, and add `CAVEMAN_METRICS_TOKEN`
+to the `caveman-proxy` Secret. The ECS task definition now serves TLS to the
+task: create the `caveman-proxy/tls-cert` and `caveman-proxy/tls-key` secrets
+and switch the ALB target group to HTTPS (see [AWS ECS Fargate](#aws-ecs-fargate)).
+
 ## Checklist
 
 1. `CAVEMAN_AUTH_TOKEN` generated with `openssl rand -hex 32`, set from a
@@ -690,5 +820,6 @@ team's sessions.
    or not publicly reachable.
 7. `CAVE_SSRF_ALLOWLIST` entries only for the private endpoints you actually use.
 8. An encryption key for middleware originals, backed up apart from the data.
-9. Image pinned to a `bin-v*` tag (`bin-v2.0.0` or later for the middleware
-   identity, TLS and Postgres store), not `:latest`.
+9. Image pinned by digest to a `bin-v*` release (`bin-v2.0.0` or later for the
+   middleware identity, TLS and Postgres store), not `:latest`.
+10. An alert on `caveman_identity_reload_failures_total`.

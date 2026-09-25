@@ -52,7 +52,7 @@ func BenchmarkMiddlewarePreparation(b *testing.B) {
 		b.SetBytes(int64(len(content)))
 		b.ReportAllocs()
 		for b.Loop() {
-			if _, err := r.prepareChoice(context.Background(), "benchmark", "benchmark", req, req.Segments[0]); err != nil {
+			if _, err := r.prepareChoice(context.Background(), "benchmark", req, req.Segments[0], "", nil, nil); err != nil {
 				b.Fatal(err)
 			}
 		}

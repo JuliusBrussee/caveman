@@ -8,15 +8,17 @@ metadata:
 type: Opaque
 stringData:
   ANTHROPIC_API_KEY: REPLACE_WITH_YOUR_PROVIDER_KEY
-# CAVEMAN_AUTH_TOKEN is deliberately absent. It is REQUIRED for the container's
-# default 0.0.0.0 listen — the proxy has no other inbound authentication, and
-# clients send it as x-cave-api-key or Bearer — but any placeholder written here
-# passes validation and ships as a real, guessable token. Generate one and put it
-# in this same Secret BEFORE applying this file:
+# CAVEMAN_AUTH_TOKEN and CAVEMAN_METRICS_TOKEN are deliberately absent: any
+# placeholder written here passes validation and ships as a real, guessable
+# token. The auth token is this manifest's only inbound credential (clients send
+# it as x-cave-api-key or Bearer), so without it the pod exits at startup on its
+# default 0.0.0.0 listen. The metrics token gates /metrics, which is otherwise
+# open. Generate both and put them in this same Secret BEFORE applying this file:
 #   kubectl create secret generic caveman-proxy \
-#     --from-literal=CAVEMAN_AUTH_TOKEN="$(openssl rand -hex 32)"
-# A later `kubectl apply -f kubernetes.yaml` adds the provider key beside it and
-# leaves the token untouched. Without the token the pod exits at startup.
+#     --from-literal=CAVEMAN_AUTH_TOKEN="$(openssl rand -hex 32)" \
+#     --from-literal=CAVEMAN_METRICS_TOKEN="$(openssl rand -hex 32)"
+# A later `kubectl apply -f kubernetes.yaml` adds the provider key beside them
+# and leaves the tokens untouched.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -59,9 +61,13 @@ spec:
         runAsUser: 65532
         # Makes the mounted PVC writable by uid 65532.
         fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: caveman-proxy
-          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0
+          # Pinned by digest; the release replaces REPLACE_AT_RELEASE with the
+          # bin-v2.0.0 image digest. Until then the pull fails (InvalidImageName).
+          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0@sha256:REPLACE_AT_RELEASE
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8787
@@ -125,3 +131,34 @@ spec:
   ports:
     - port: 8787
       targetPort: 8787
+---
+# Only pods labelled caveman-client: "true" reach the proxy (label your
+# Prometheus too, or add a rule for it); the proxy reaches DNS and provider APIs
+# over HTTPS. EKS Pod Identity also needs egress to 169.254.170.23/32 on port 80.
+# Kubelet probes are not affected.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: caveman-proxy
+spec:
+  podSelector:
+    matchLabels:
+      app: caveman-proxy
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              caveman-client: "true"
+      ports:
+        - port: 8787
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 443
+          protocol: TCP

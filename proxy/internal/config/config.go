@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
@@ -129,6 +130,9 @@ type TLSConfig struct {
 	CertFile     string `yaml:"cert_file"`
 	KeyFile      string `yaml:"key_file"`
 	ClientCAFile string `yaml:"client_ca_file"`
+	// ClientCNFallback (CAVEMAN_TLS_CLIENT_CN_FALLBACK) names a client
+	// certificate with no URI or DNS SAN by its subject CN. Off by default.
+	ClientCNFallback bool `yaml:"client_cn_fallback"`
 }
 
 // SkippedCABundle names one inherited CA env var that Load could not use, with
@@ -409,6 +413,9 @@ func (c Config) withDefaults() Config {
 		if value := strings.TrimSpace(env.String("CAVEMAN_TLS_"+name, "")); value != "" {
 			*field = value
 		}
+	}
+	if value, err := strconv.ParseBool(strings.TrimSpace(env.String("CAVEMAN_TLS_CLIENT_CN_FALLBACK", ""))); err == nil {
+		c.TLS.ClientCNFallback = value
 	}
 	c.MetricsToken = strings.TrimSpace(env.String("CAVEMAN_METRICS_TOKEN", ""))
 	if c.Listen == "" {

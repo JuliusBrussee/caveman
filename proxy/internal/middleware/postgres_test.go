@@ -2,22 +2,47 @@ package middleware
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/store"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // postgresReplicas returns n runtimes, each with its own connection pool, on
 // one fresh schema of the database at CAVEMAN_TEST_POSTGRES_URL: n replicas of
 // an HA deployment. Skipped when the variable is unset.
 func postgresReplicas(t *testing.T, n int) []*Runtime {
+	t.Helper()
+	u := postgresSchema(t)
+	ctx := context.Background()
+	replicas := make([]*Runtime, n)
+	for i := range replicas {
+		shared, err := store.OpenPostgresMiddleware(ctx, u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(shared.Close)
+		// Replicas start together; migrations must not trip over each other.
+		if replicas[i], err = New(Config{Store: shared, Mode: "compress", Limits: Limits{DeadlineMS: 10000}, Identify: bearerIdentity}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return replicas
+}
+
+// postgresSchema returns CAVEMAN_TEST_POSTGRES_URL pointed at a fresh schema,
+// dropped when t ends. Skipped when the variable is unset.
+func postgresSchema(t *testing.T) string {
 	t.Helper()
 	base := os.Getenv("CAVEMAN_TEST_POSTGRES_URL")
 	if base == "" {
@@ -40,19 +65,85 @@ func postgresReplicas(t *testing.T, n int) []*Runtime {
 	q := u.Query()
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
-	replicas := make([]*Runtime, n)
-	for i := range replicas {
-		shared, err := store.OpenPostgresMiddleware(ctx, u.String())
+	return u.String()
+}
+
+// backend is one middleware store under test, with raw SQL both dialects
+// accept for seeding and assertions.
+type backend struct {
+	store store.MiddlewareStore
+	exec  func(t *testing.T, query string)
+	count func(t *testing.T, query string) int64
+}
+
+// eachStore runs test on SQLite and, when CAVEMAN_TEST_POSTGRES_URL is set, on
+// a fresh Postgres schema.
+func eachStore(t *testing.T, test func(t *testing.T, b backend)) {
+	t.Run("sqlite", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "spend.db")
+		s, err := store.Open(path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(shared.Close)
-		// Replicas start together; migrations must not trip over each other.
-		if replicas[i], err = New(Config{Store: shared, Mode: "compress", Limits: Limits{DeadlineMS: 10000}, Identify: bearerIdentity}); err != nil {
+		t.Cleanup(func() { _ = s.Close() })
+		db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = db.Close() })
+		test(t, backend{s, func(t *testing.T, query string) {
+			t.Helper()
+			if _, err := db.Exec(query); err != nil {
+				t.Fatal(err)
+			}
+		}, func(t *testing.T, query string) (n int64) {
+			t.Helper()
+			if err := db.QueryRow(query).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}})
+	})
+	t.Run("postgres", func(t *testing.T) {
+		u := postgresSchema(t)
+		ctx := context.Background()
+		p, err := store.OpenPostgresMiddleware(ctx, u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(p.Close)
+		conn, err := pgx.Connect(ctx, u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close(ctx) })
+		test(t, backend{p, func(t *testing.T, query string) {
+			t.Helper()
+			if _, err := conn.Exec(ctx, query); err != nil {
+				t.Fatal(err)
+			}
+		}, func(t *testing.T, query string) (n int64) {
+			t.Helper()
+			if err := conn.QueryRow(ctx, query).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}})
+	})
+}
+
+// runtimeOn is a compress-mode runtime over s with the fixtures' identity.
+func runtimeOn(t *testing.T, s store.MiddlewareStore, change func(*Config)) *Runtime {
+	t.Helper()
+	cfg := Config{Store: s, Mode: "compress", Limits: Limits{DeadlineMS: 5000}, Identify: bearerIdentity}
+	if change != nil {
+		change(&cfg)
 	}
-	return replicas
+	r, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 // A5: a handle minted by one replica is retrieved, continued and revoked
@@ -159,5 +250,60 @@ func TestPostgresConcurrentReplicasChooseOneDurableReplacement(t *testing.T) {
 		if w := send(t, r, "optimize", req, "alice", clientFeatures); w.Code != 410 {
 			t.Fatalf("turn after delete: %d %s", w.Code, w.Body)
 		}
+	}
+}
+
+// statements counts every statement a pool sends, BEGIN and COMMIT included.
+type statements struct{ n atomic.Int64 }
+
+func (s *statements) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	s.n.Add(1)
+	return ctx
+}
+func (s *statements) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// GO-1: an optimize is a constant number of round trips to Postgres, however
+// many segments it carries; a first turn and a turn reusing every choice alike.
+func TestPostgresOptimizeStatementsDoNotGrowWithSegments(t *testing.T) {
+	u := postgresSchema(t)
+	config, err := pgxpool.ParseConfig(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter := &statements{}
+	config.ConnConfig.Tracer = counter
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	r := runtimeOn(t, store.NewPostgresMiddleware(pool), nil)
+	turns := func(n int) (first, reuse int64) {
+		req := requestFor(r)
+		req.Scope.SessionID = fmt.Sprint("segments-", n)
+		req.Segments, req.ContextManifest = nil, nil
+		for i := range n {
+			content := noisy() + fmt.Sprintf("[ERROR] segment %d of %d\r\n", i, n)
+			s := Segment{ID: fmt.Sprint("tool-", i), Kind: "tool_result", CacheRegion: "live_zone", Content: content, SHA256: digest([]byte(content)), SourceID: fmt.Sprint("document-", i)}
+			req.Segments = append(req.Segments, s)
+			req.ContextManifest = append(req.ContextManifest, ManifestItem{s.ID, s.SHA256})
+		}
+		for turn, count := range []*int64{&first, &reuse} {
+			if turn == 1 {
+				req = nextTurn(req, "reuse")
+			}
+			counter.n.Store(0)
+			if plan := optimizeOK(t, r, req); len(plan.Replacements) != n || plan.Replacements[0].Reused != (turn == 1) {
+				t.Fatalf("%d segments, turn %d: %d replacements", n, turn+1, len(plan.Replacements))
+			}
+			*count = counter.n.Load()
+		}
+		return first, reuse
+	}
+	first2, reuse2 := turns(2)
+	first32, reuse32 := turns(32)
+	t.Logf("statements per optimize: first turn %d (2 segments) / %d (32); reuse %d / %d", first2, first32, reuse2, reuse32)
+	if first2 != first32 || reuse2 != reuse32 {
+		t.Fatalf("statements grow with segments: first turn %d -> %d, reuse %d -> %d", first2, first32, reuse2, reuse32)
 	}
 }

@@ -8,10 +8,10 @@ local proxy.
 
 By default the proxy is a single-operator tool: it binds to loopback and accepts
 every request on it without authentication. In that configuration do not expose
-it on a LAN, container bridge, public interface, or shared host — without
-`CAVEMAN_AUTH_TOKEN` a non-loopback listen address is refused at startup. The
-container image listens on `0.0.0.0:8787`, so it will not start without the
-token.
+it on a LAN, container bridge, public interface, or shared host. A non-loopback
+listen address is refused at startup unless an inbound credential is configured:
+`CAVEMAN_AUTH_TOKEN`, a middleware token map, an OIDC issuer, or a TLS client CA.
+The container image listens on `0.0.0.0:8787`, so it will not start without one.
 
 A shared deployment is a separate, explicit configuration. On the provider
 (inference) routes it requires `CAVEMAN_AUTH_TOKEN`, and every request must
@@ -28,15 +28,22 @@ identity, from runtime `bin-v2.0.0`: the shared token still means one
 certificates add per-team principals. A principal reaches only its own
 sessions; its allowed namespaces are checked server-side on every route, and
 each request is written to an audit log line with the principal, never the
-content. Originals can be encrypted at rest, and several replicas can share one
-Postgres store.
+content. Principal names carry their source (`oidc:<issuer>#<claim>`,
+`mtls:uri:…`, `mtls:dns:…`), so no JWT or certificate can take over a token
+principal's sessions by spelling its name; a certificate's subject CN names a
+principal only when `CAVEMAN_TLS_CLIENT_CN_FALLBACK` is set. Originals can be
+encrypted at rest, and several replicas can share one Postgres store.
 
 The proxy can serve TLS itself (`CAVEMAN_TLS_CERT_FILE`, `CAVEMAN_TLS_KEY_FILE`,
-optionally `CAVEMAN_TLS_CLIENT_CA_FILE` for mTLS); otherwise it speaks plain
-HTTP and TLS belongs in front of it. Keep the listener inside a private network
-either way. Health endpoints stay unauthenticated for load balancers, and
-`/metrics` does too unless `CAVEMAN_METRICS_TOKEN` is set, so do not expose them
-publicly. See [Deploy the proxy for a team](deploy.md#identity).
+optionally `CAVEMAN_TLS_CLIENT_CA_FILE` for mTLS, checked against the current CA
+on every request so a CA rotation also cuts live connections); otherwise it
+speaks plain HTTP and TLS belongs in front of it. Keep the listener inside a
+private network either way. Health endpoints stay unauthenticated for load
+balancers, and `/metrics` does too unless `CAVEMAN_METRICS_TOKEN` is set, so do
+not expose them publicly. A token map that fails to reload keeps the previous
+one, revoked tokens included; alert on
+`caveman_identity_reload_failures_total`. See
+[Deploy the proxy for a team](deploy.md#identity).
 
 Connected Caveman Cloud commands have separate account and organization
 controls. Those controls are not what gates a self-hosted shared proxy.
