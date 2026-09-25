@@ -186,6 +186,9 @@ func TestNewPrincipalGlobs(t *testing.T) {
 			t.Errorf("Allows(%q) = %v", tc.namespace, got)
 		}
 	}
+	if none.HasNamespaces() || !all.HasNamespaces() || !mid.HasNamespaces() {
+		t.Error("HasNamespaces must be false only for a principal with no globs")
+	}
 	if _, err := NewPrincipal("p", "test", []string{"a(b)"}, Quota{}); err == nil {
 		t.Error("regexp metacharacters accepted as a glob")
 	}

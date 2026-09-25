@@ -182,12 +182,17 @@ func sortedKeys[K comparable, V any](m map[K]V) []K {
 
 // Ready reports whether the middleware store accepts writes. Readiness is
 // unauthenticated, so the answer is kept for a second: a probe flood costs at
-// most one write transaction a second.
+// most one write transaction a second. Concurrent callers wait on the lock for
+// the one probe in flight (at most its 2s timeout) and share its answer.
 func (r *Runtime) Ready(ctx context.Context) error {
 	r.readyMu.Lock()
 	defer r.readyMu.Unlock()
 	if time.Since(r.readyAt) >= time.Second {
-		r.readyErr, r.readyAt = r.cfg.Store.MiddlewareWritable(ctx), time.Now()
+		// Not the caller's cancellation: a client that hangs up would have it
+		// cached as every probe's answer.
+		probe, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		r.readyErr, r.readyAt = r.cfg.Store.MiddlewareWritable(probe), time.Now()
+		cancel()
 	}
 	return r.readyErr
 }
@@ -223,50 +228,54 @@ func (q *rateQuota) allow(principal string, limit int, now time.Time) (bool, int
 	return true, 0
 }
 
-// perPrincipal bounds how many slots of one queue a single principal holds: its
-// requests past limit wait for its own slots, before the shared queue, so one
-// caller's slow bodies cannot fill a queue every principal shares. limit 0 is
-// no bound.
+// perPrincipal bounds how many slots of one queue a single principal holds, so
+// one caller's slow bodies cannot fill a queue every principal shares, and
+// keeps the last reserve free slots for principals holding none: however many
+// slots other principals hold, one with no request in flight still gets in
+// unless reserve distinct principals already took the reserve. Requests that
+// cannot take a slot wait for one to free. limit 0 is no bound.
 type perPrincipal struct {
-	limit int
-	mu    sync.Mutex
-	slots map[string]*principalSlots
-}
-
-type principalSlots struct {
-	held  chan struct{}
-	users int // requests holding or waiting for a slot
+	limit, depth, reserve int
+	mu                    sync.Mutex
+	total                 int            // slots held, all principals
+	held                  map[string]int // slots held per principal
+	freed                 chan struct{}  // closed and replaced when a slot frees
 }
 
 // acquire waits for one of principal's slots until ctx ends, and returns its
 // release.
+// ponytail: every release wakes every waiter; a per-principal wait queue if
+// waiter counts ever make that measurable.
 func (p *perPrincipal) acquire(ctx context.Context, principal string) (func(), error) {
 	if p.limit <= 0 {
 		return func() {}, nil
 	}
-	p.mu.Lock()
-	if p.slots == nil {
-		p.slots = map[string]*principalSlots{}
-	}
-	s := p.slots[principal]
-	if s == nil {
-		s = &principalSlots{held: make(chan struct{}, p.limit)}
-		p.slots[principal] = s
-	}
-	s.users++
-	p.mu.Unlock()
-	leave := func() {
+	for {
 		p.mu.Lock()
-		if s.users--; s.users == 0 {
-			delete(p.slots, principal)
+		if p.held == nil {
+			p.held, p.freed = map[string]int{}, make(chan struct{})
 		}
+		n, free := p.held[principal], p.depth-p.total
+		if n < p.limit && (free > p.reserve || (n == 0 && free > 0)) {
+			p.held[principal], p.total = n+1, p.total+1
+			p.mu.Unlock()
+			return func() {
+				p.mu.Lock()
+				if p.held[principal]--; p.held[principal] == 0 {
+					delete(p.held, principal)
+				}
+				p.total--
+				close(p.freed)
+				p.freed = make(chan struct{})
+				p.mu.Unlock()
+			}, nil
+		}
+		freed := p.freed
 		p.mu.Unlock()
-	}
-	select {
-	case s.held <- struct{}{}:
-		return func() { <-s.held; leave() }, nil
-	case <-ctx.Done():
-		leave()
-		return nil, ctx.Err()
+		select {
+		case <-freed:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 }

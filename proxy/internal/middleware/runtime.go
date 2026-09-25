@@ -164,6 +164,15 @@ func New(cfg Config) (*Runtime, error) {
 		}
 		return 0
 	}
+	// With several principals, the last quarter of a queue only goes to a
+	// principal holding none of it, so principals at their share cannot
+	// together fill it.
+	reserve := func(depth int) int {
+		if multi {
+			return max(depth/4, 1)
+		}
+		return 0
+	}
 	if cfg.Keys != nil {
 		keys := *cfg.Keys
 		keys.plaintext = cfg.PlaintextOriginals
@@ -185,7 +194,7 @@ func New(cfg Config) (*Runtime, error) {
 	r := &Runtime{cfg: cfg, eng: engine.New(cfg.Recovery, counter), counter: counter,
 		transforms: map[string]compressors.Capability{}, legacyTransforms: map[string]compressors.Capability{},
 		queue: make(chan struct{}, l.QueueDepth), retrieveQueue: make(chan struct{}, l.RetrieveQueueDepth),
-		fair: perPrincipal{limit: share(l.QueueDepth)}, fairRetrieve: perPrincipal{limit: share(l.RetrieveQueueDepth)},
+		fair: perPrincipal{limit: share(l.QueueDepth), depth: l.QueueDepth, reserve: reserve(l.QueueDepth)}, fairRetrieve: perPrincipal{limit: share(l.RetrieveQueueDepth), depth: l.RetrieveQueueDepth, reserve: reserve(l.RetrieveQueueDepth)},
 		quota: rateQuota{limit: l.QuotaRequestsPerMinute}, renewals: map[string]struct{}{}, sweepBudget: defaultSweepBudget}
 	caps := r.eng.Capabilities()
 	legacy := []compressors.Capability{}

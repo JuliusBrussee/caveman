@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/JuliusBrussee/caveman/engine/ccr"
-	ident "github.com/JuliusBrussee/caveman/proxy/internal/identity"
 	"github.com/JuliusBrussee/caveman/proxy/internal/store"
 )
 
@@ -89,7 +88,7 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(budget))
 	// A principal allowed no namespace can use no scoped route: it is refused
 	// before it can hold a quota count, a queue slot or a body read.
-	if namespaceless(principal) {
+	if !principal.HasNamespaces() {
 		fail(Failure{CodeForbiddenNamespace})
 		return
 	}
@@ -214,13 +213,6 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	o.status, o.responseBytes = http.StatusOK, writeJSON(w, http.StatusOK, out)
-}
-
-// namespaceless reports a principal allowed no namespace at all. identity
-// keeps the globs unexported; such a principal is its name, mechanism and quota
-// and nothing else.
-func namespaceless(p ident.Principal) bool {
-	return p == ident.Principal{Name: p.Name, Mechanism: p.Mechanism, Quota: p.Quota}
 }
 
 // short is a log-safe identifier for a digest.

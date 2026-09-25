@@ -35,6 +35,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"regexp"
@@ -101,6 +102,9 @@ func NewPrincipal(name, mechanism string, globs []string, quota Quota) (Principa
 func (p Principal) Allows(namespace string) bool {
 	return p.namespaces != nil && p.namespaces.MatchString(namespace)
 }
+
+// HasNamespaces reports whether the principal may use any namespace at all.
+func (p Principal) HasNamespaces() bool { return p.namespaces != nil }
 
 func operator(mechanism string) Principal {
 	p, _ := NewPrincipal(Operator, mechanism, []string{"*"}, Quota{})
@@ -262,9 +266,17 @@ func firstURISAN(cert *x509.Certificate) (string, bool) {
 			return "", false
 		}
 		for _, name := range names {
-			// GeneralName uniformResourceIdentifier: [6] IMPLICIT IA5String.
-			if name.Class == asn1.ClassContextSpecific && name.Tag == 6 {
-				return string(name.Bytes), true
+			// GeneralName uniformResourceIdentifier: [6] IMPLICIT IA5String,
+			// primitive only. Go's parser, and so its name-constraint check,
+			// skips a constructed [6].
+			if name.Class == asn1.ClassContextSpecific && name.Tag == 6 && !name.IsCompound {
+				// It must be the URI Go verified; if the two parsers disagree,
+				// identify no one rather than guess.
+				raw := string(name.Bytes)
+				if u, err := url.Parse(raw); err != nil || len(cert.URIs) == 0 || u.String() != cert.URIs[0].String() {
+					return "", false
+				}
+				return raw, true
 			}
 		}
 	}

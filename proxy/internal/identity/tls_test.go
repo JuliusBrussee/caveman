@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"io"
 	"log"
@@ -317,5 +318,56 @@ func TestCommonNameIsOptInAndPrefixed(t *testing.T) {
 		if p.Name != tc.want || (err == nil) != (tc.want != "") || p.Allows("team-a/x") {
 			t.Errorf("CN %v, ServerTLS %v: %q %v, want %q", tc.commonName, tc.attached, p.Name, err, tc.want)
 		}
+	}
+}
+
+// FX2: Go's x509 parser (and so its name-constraint check) skips a
+// constructed [6] SAN. A CA constrained to spiffe://td must not be able to
+// name spiffe://other through one: the principal is the URI Go verified, and
+// a first URI SAN that is not cert.URIs[0] identifies no one.
+func TestConstructedURISANNeverNamesThePrincipal(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	template := &x509.Certificate{SerialNumber: nextSerial(), Subject: pkix.Name{CommonName: "td CA"}, NotBefore: time.Now().Add(-time.Hour),
+		NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, PermittedURIDomains: []string{"td"}}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, _ := x509.ParseCertificate(der)
+	ca := issuer{caCert, key, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})}
+	name := func(tag byte, s string) []byte { return append([]byte{tag, byte(len(s))}, s...) }
+	sans := append(name(0xa6, "spiffe://other/ns/prod/sa/admin"), name(0x86, "spiffe://td/me")...)
+	value, _ := asn1.Marshal(asn1.RawValue{Tag: asn1.TagSequence, IsCompound: true, Bytes: sans})
+	certPEM, _ := ca.leaf(t, &x509.Certificate{ExtraExtensions: []pkix.Extension{{Id: oidSubjectAltName, Value: value}}}, x509.ExtKeyUsageClientAuth)
+	block, _ := pem.Decode(certPEM)
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(caCert)
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil || len(leaf.URIs) != 1 || leaf.URIs[0].String() != "spiffe://td/me" {
+		t.Fatalf("fixture: verify %v, URIs %v", err, leaf.URIs)
+	}
+	dir := serverFiles(t, ca)
+	writeFile(t, filepath.Join(dir, "tokens.yaml"), mapFile(entry("team-a", `["team-a/*"]`, tokenA1)))
+	serverTLS, err := NewServerTLS(filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key"), filepath.Join(dir, "ca.crt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := New(Config{TokenMapFile: filepath.Join(dir, "tokens.yaml"), MTLS: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.UseServerTLS(serverTLS)
+	req := bearer("")
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}, VerifiedChains: [][]*x509.Certificate{{leaf, caCert}}}
+	if p, err := r.Identify(req); err != nil || p.Name != "mtls:uri:spiffe://td/me" {
+		t.Fatalf("crafted SAN named %q (%v), want mtls:uri:spiffe://td/me", p.Name, err)
+	}
+	// The raw SAN and Go's parse disagree: refuse rather than guess.
+	leaf.URIs = []*url.URL{{Scheme: "spiffe", Host: "td", Path: "/someone-else"}}
+	if p, err := r.Identify(req); err == nil {
+		t.Fatalf("mismatched URI SAN identified %q", p.Name)
 	}
 }

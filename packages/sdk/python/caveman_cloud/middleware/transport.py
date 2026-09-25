@@ -1,4 +1,4 @@
-"""Default stdlib HTTP/1.1 transport for the middleware runtime (experimental API).
+"""Default stdlib HTTP/1.1 transport for the middleware runtime.
 
 A transport is any callable ``transport(method, url, headers, body, timeout) -> (status, headers, body)``
 where ``timeout`` is the whole remaining budget in seconds, ``headers`` in the result is a mapping and
@@ -278,9 +278,13 @@ class HTTPTransport:
             connection.sock.settimeout(_left(deadline))
             part = response.read1(min(65536, MAX_RESPONSE_BYTES + 1 - len(data)))
             if not part:
+                if response.length:  # the peer closed before Content-Length was met
+                    raise http.client.IncompleteRead(bytes(data), response.length)
                 break
             data += part
-        if watchdog.fired:  # the shutdown may have ended the body early
+        # Cancel before pooling: a timer firing later would shut the connection down under whoever checks it out next.
+        watchdog.cancel()
+        if watchdog.fired:  # the shutdown may have ended the body early; the caller drops the connection
             raise TimeoutError("caveman middleware deadline")
         result = response.status, {k.lower(): v for k, v in response.getheaders()}, bytes(data)
         with self._lock:

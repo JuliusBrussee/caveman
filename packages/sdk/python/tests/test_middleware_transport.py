@@ -1,6 +1,7 @@
 """Default middleware transport against real local sockets: keep-alive, deadlines, proxies, TLS (B9)."""
 import asyncio
 import hashlib
+import http.client
 import json
 import os
 import select
@@ -16,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from caveman_cloud.middleware import Adapter, Candidate, MiddlewareRuntime
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareRuntime, transport
 
 BASE = json.loads((Path(__file__).resolve().parents[2] / "parity" / "middleware.fixtures.json").read_text(encoding="utf-8"))
 CAPS = json.dumps(BASE["capabilities"]).encode()
@@ -296,6 +297,63 @@ class TestDefaultTransport(unittest.TestCase):
             time.sleep(1)  # the server idle-closes every pooled connection
             self.assertEqual([call() for _ in range(8)], ["not_smaller"] * 8)
             self.assertEqual(runtime._breaker.state, "closed")
+
+    def test_truncated_body_is_never_a_success(self):
+        # A peer that closes before Content-Length is met used to hand back the partial body as a 200.
+        head = b"HTTP/1.1 200 OK\r\nContent-Length: 1008\r\n\r\n"
+
+        def handler(conn):
+            try:
+                conn.recv(65536)
+                conn.sendall(head + b"x" * 100)
+            finally:
+                conn.close()
+        server = raw_server(handler)
+        self.addCleanup(server.close)
+        with self.assertRaises(http.client.IncompleteRead):
+            transport.HTTPTransport(env={})("GET", f"http://127.0.0.1:{server.getsockname()[1]}/", {}, None, 2.0)
+
+    def test_late_watchdog_never_shuts_down_a_pooled_connection(self):
+        # A's timer fired after A pooled its connection and shut it down under B, whose body came back truncated.
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                if self.path == "/a":
+                    time.sleep(0.15)
+                    body = b'{"a":1}'
+                else:
+                    body = b'{"b":"' + b"x" * 1000 + b'"}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body[:100])
+                self.wfile.flush()
+                time.sleep(0.3 if self.path == "/b" else 0)
+                self.wfile.write(body[100:])
+        server = self.start(Handler)
+        url = f"http://127.0.0.1:{server.server_port}"
+        pool = transport.HTTPTransport(env={})
+        cancel = transport._Watchdog.cancel
+
+        def descheduled(watchdog):  # widen the window between A's response and its watchdog's cancel
+            time.sleep(0.15)
+            cancel(watchdog)
+        def call_a():
+            try:
+                pool("GET", url + "/a", {}, None, 0.2)
+            except TimeoutError:
+                pass  # its deadline passed before its watchdog was cancelled
+        a = threading.Thread(target=call_a)
+        with patch.object(transport._Watchdog, "cancel", descheduled):
+            a.start()
+            time.sleep(0.17)  # A has its response; its 0.2 s timer has not fired yet
+        status, headers, body = pool("GET", url + "/b", {}, None, 2.0)
+        a.join()
+        self.assertEqual((status, len(body)), (200, 1008))
 
 
 class TestAsyncView(unittest.IsolatedAsyncioTestCase):

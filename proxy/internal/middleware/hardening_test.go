@@ -470,3 +470,72 @@ func TestTrimmedHistoryStartsANewEpoch(t *testing.T) {
 		}
 	})
 }
+
+// FX2: readiness is unauthenticated and cached, so a caller that hangs up must
+// not have its cancellation cached as "store not writable" for every probe,
+// and a flood of concurrent probes still costs one write.
+func TestCancelledProbeDoesNotMakeTheReplicaUnready(t *testing.T) {
+	f := newFixture(t)
+	counting := &countingStore{MiddlewareStore: f.state}
+	r := withRuntime(t, f, func(c *Config) { c.Store = counting })
+	gone, hangUp := context.WithCancel(t.Context())
+	hangUp()
+	_ = r.Ready(gone)
+	if err := r.Ready(t.Context()); err != nil {
+		t.Fatalf("a cancelled prober made the next probe fail: %v", err)
+	}
+	r.readyAt = time.Time{} // the cache expired
+	done := make(chan error)
+	for range 50 {
+		go func() { done <- r.Ready(t.Context()) }()
+	}
+	for range 50 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := counting.writes.Load(); n != 2 {
+		t.Fatalf("2 probe rounds ran %d write transactions", n)
+	}
+}
+
+// FX2: two principals each holding their full share of both queues still
+// leave a slot for a principal holding none: its optimize and retrieve answer
+// within budget.
+func TestTwoPrincipalsCannotFillAQueue(t *testing.T) {
+	f := newFixture(t)
+	r := withRuntime(t, f, func(c *Config) {
+		c.Identify = func(req *http.Request) (ident.Principal, error) {
+			return everyNamespace(strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "))
+		}
+	})
+	req := requestFor(r)
+	handle := optimizeOK(t, r, req).Replacements[0].RecoveryHandle
+	server := httptest.NewServer(r)
+	t.Cleanup(server.Close) // after the slow connections close
+	for _, attacker := range []string{"bob", "carol"} {
+		for range cap(r.queue) {
+			holdSlowBody(t, server, "optimize", attacker)
+		}
+		for range cap(r.retrieveQueue) {
+			holdSlowBody(t, server, "retrieve", attacker)
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+	fastRetrieve(t, server, req.Scope, handle)
+	body, _ := json.Marshal(uniqueRequest(r, "alice-2", "alice-2"))
+	post, _ := http.NewRequest("POST", server.URL+RoutePrefix+"optimize", bytes.NewReader(body))
+	post.Header.Set("Content-Type", "application/json")
+	post.Header.Set("Authorization", "Bearer alice")
+	post.Header.Set(HeaderFeatures, clientFeatures)
+	start := time.Now()
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(post)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	answer, _ := io.ReadAll(resp.Body)
+	if elapsed := time.Since(start); resp.StatusCode != 200 || elapsed > time.Second || !strings.Contains(string(answer), `"replacements":[{`) {
+		t.Fatalf("a third principal's optimize: %d after %s %s", resp.StatusCode, elapsed, answer)
+	}
+}
