@@ -14,6 +14,16 @@ export interface NodeTransport {
   close(): void;
 }
 
+/** Why this transport cannot use `proxy` (TLS to the proxy itself and SOCKS are unsupported), or null. Names the scheme,
+ * never the URL, which may carry credentials. `escape` names the caller's way around it. */
+export function unsupportedProxy(proxy: string, escape: string): string | null {
+  let url: URL | null = null;
+  try { url = new URL(proxy.includes('://') ? proxy : `http://${proxy}`); } catch { /* malformed */ }
+  if (url?.protocol === 'http:' && url.hostname) return null;
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(proxy)?.[1]?.toLowerCase();
+  return `${scheme && scheme !== 'http' ? `unsupported proxy scheme "${scheme}"` : 'malformed proxy URL'}: set HTTP(S)_PROXY to an http:// proxy URL, or pass a custom ${escape}`;
+}
+
 /** `proxy` is the resolveProxy() result for the runtime endpoint (null when none applies, loopback included). */
 export function createNodeTransport(options: { proxy: string | null; ca?: string | readonly string[] | undefined }): NodeTransport {
   let closed = false;
@@ -29,7 +39,9 @@ export function createNodeTransport(options: { proxy: string | null; ca?: string
     // ponytail: TLS to the proxy itself (https:// proxy URLs) is unsupported, as in the Python transport.
     if (proxy.protocol !== 'http:' || !proxy.hostname) throw new Error('unsupported proxy URL');
     const via = { host: unbracket(proxy.hostname), port: Number(proxy.port || 80) };
-    const user = `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`;
+    // Like Python's unquote: an invalid %-escape stays literal instead of failing every call.
+    const decode = (s: string) => { try { return decodeURIComponent(s); } catch { return s; } };
+    const user = `${decode(proxy.username)}:${decode(proxy.password)}`;
     const auth: Record<string, string> = proxy.username ? { 'proxy-authorization': `Basic ${btoa(String.fromCharCode(...new TextEncoder().encode(user)))}` } : {};
     const tunnel = new https.Agent({ keepAlive: true, ...ca });
     // One CONNECT per new pooled connection; the caller's signal bounds it, and a dropped tunnel is never retried here.

@@ -194,6 +194,12 @@ class CircuitBreaker:
                         or (len(self._window) == self._params.window_size and sum(self._window) >= self._params.window_failures)):
             self.state, self._opened_at = "open", now_ms
 
+    def release(self) -> None:
+        """An admitted call that ended with no outcome of its own (interrupted, or it only waited on another call's
+        capabilities fetch): records nothing, but frees the half-open probe slot so the next call can probe."""
+        if self.state == "half_open":
+            self._probing = False
+
 
 def resolve_deadlines(deadline_ms: int | None = None, retrieve_deadline_ms: int | None = None,
                       limits: EffectiveLimits | Mapping | None = None) -> tuple[int, int]:
@@ -335,14 +341,18 @@ def resolve_proxy(url: str, env: Mapping[str, str] | None = None) -> str | None:
     return proxy
 
 
-_warned: set[tuple[str, str]] = set()
+_warned: set[tuple[str, ...]] = set()
 _warned_lock = threading.Lock()
+# Reasons whose call does not pass content through unchanged get their own line (mirrored in the TS warnOnce).
+_WARNINGS = {"version_unverified": "Caveman middleware is running on an unverified framework version"}
 
 
-def warn_once(adapter: Any, reason: Any) -> bool:
+def warn_once(adapter: Any, reason: Any, message: str | None = None) -> bool:
     """Log one WARNING per (adapter, reason) per process (bounded); returns whether it logged.
 
     The line carries only `adapter=<id or ->` and `reason=<code>`: never content, scope, handles or credentials.
+    `message` replaces the lead-in for a caller whose failure is not a pass-through (a refused recovery read) and is
+    deduplicated apart from the same reason's pass-through line.
     """
     policy = REASON_CATALOG.get(reason) if isinstance(reason, str) else None
     if policy is not None and not policy.warn_once:
@@ -350,10 +360,11 @@ def warn_once(adapter: Any, reason: Any) -> bool:
     key = (adapter if _token(adapter) else "-", reason if isinstance(reason, str) and _REASON.fullmatch(reason) else "unknown_reason")
     with _warned_lock:
         # ponytail: a full set stops logging new pairs instead of evicting; 1024 pairs is far past real adapter x reason counts.
-        if key in _warned or len(_warned) >= MIDDLEWARE_DEFAULTS["warn_once_entries"]:
+        seen = key + (message,) if message else key
+        if seen in _warned or len(_warned) >= MIDDLEWARE_DEFAULTS["warn_once_entries"]:
             return False
-        _warned.add(key)
-    LOGGER.warning("Caveman middleware passed content through unchanged: adapter=%s reason=%s", *key)
+        _warned.add(seen)
+    LOGGER.warning("%s: adapter=%s reason=%s", message or _WARNINGS.get(key[1], "Caveman middleware passed content through unchanged"), *key)
     return True
 
 

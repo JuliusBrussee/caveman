@@ -49,11 +49,19 @@ test("node10 and CommonJS node16 TypeScript consumers type-check both entry poin
     await mkdir(join(directory, "node_modules/@caveman-ai"), { recursive: true });
     await symlink(fileURLToPath(new URL("../", import.meta.url)), join(directory, "node_modules/@caveman-ai/sdk"), "dir");
     // .cts is a CommonJS module whatever the package type: the TS1479 case under node16.
+    // import = require() and import * as must see values too, not only named imports (TS1361 when the shim was type-only).
     await writeFile(join(directory, "check.cts"), `
       import { Cave } from "@caveman-ai/sdk";
       import { createMiddlewareRuntime, type MiddlewareRuntime } from "@caveman-ai/sdk/middleware";
+      import sdk = require("@caveman-ai/sdk");
+      import middleware = require("@caveman-ai/sdk/middleware");
+      import * as namespace from "@caveman-ai/sdk/middleware";
       export const runtime: MiddlewareRuntime = createMiddlewareRuntime({ mode: "off" });
       export const client: typeof Cave = Cave;
+      const options: middleware.RuntimeOptions = { mode: "off" };
+      export const required: MiddlewareRuntime = new middleware.MiddlewareRuntime(options);
+      export const star: namespace.MiddlewareRuntime = new namespace.MiddlewareRuntime({ mode: "off" });
+      export const cave: typeof sdk.Cave = sdk.Cave;
     `);
     const tsc = createRequire(import.meta.url).resolve("typescript/bin/tsc");
     for (const [resolution, module] of [["node10", "commonjs"], ["node16", "node16"], ["nodenext", "nodenext"]]) {

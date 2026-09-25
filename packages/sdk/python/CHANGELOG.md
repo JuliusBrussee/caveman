@@ -4,6 +4,33 @@
 
 - **Breaking (license):** relicensed from MIT to Apache-2.0, along with the rest of
   the repository in Caveman 3.0.0. Releases before this one keep the MIT license.
+- Callers that only waited on another call's shared capabilities fetch no longer
+  record its failure in the breaker: one refused connect at cold start is one
+  failure, not one per waiter. An interrupted half-open probe records nothing
+  and frees the probe slot. New `CircuitBreaker.release()`.
+- `observe()`/`observe_background()` normalize the receipt scope, as TypeScript
+  does, and drop a receipt with an invalid scope. Async `observe()` has its own
+  receipt worker (one worker, sixteen queued), so receipts never take optimize's
+  slots.
+- A runtime token is stripped of surrounding whitespace (a mounted secret file's
+  trailing newline); a token with any other character outside printable ASCII
+  is `invalid_configuration` instead of a `runtime_unavailable` on every call.
+- An `https://` or `socks` proxy URL is `invalid_configuration`; `ready()` and
+  `preflight()` name the unsupported scheme. `MiddlewareError` takes an optional
+  detail.
+- `endpoint` is the runtime origin (`scheme://host[:port]`), as in TypeScript,
+  and `""` when the endpoint was refused; it never echoes userinfo.
+- `delete_session()` validates the response like TypeScript: `schema_version`
+  must be 1, `originals_deleted` is true only for a literal `true`, and
+  `deleted` appears only with four safe non-negative integer counts.
+- The recovery binding passes only `handle`/`offset`/`limit`/`query` to
+  `retrieve()`; non-object arguments or a missing handle raise
+  `MiddlewareError("invalid_request")`, which adapters turn into a tool error.
+- Coroutine sinks (`on_report`, `on_decision`, `on_diagnostic`) run on the
+  caller's event loop instead of leaking a "never awaited" warning; their
+  failures never reach the call.
+- The `version_unverified` warn-once line reads `Caveman middleware is running on
+  an unverified framework version`, because that call proceeds.
 - The transport bounds the whole exchange (connect, proxy tunnel, TLS, headers
   and body) by the deadline, and never reuses connections the server closed
   while idle.
@@ -25,7 +52,8 @@
 - Python floor lowered from 3.13 to 3.11.
 - `caveman_cloud.middleware` implements middleware protocol 1.1 and is stable:
   it follows semver, because `caveman-middleware` 1.0 depends on it. Requests carry `Caveman-Middleware-Features`,
-  `Caveman-Middleware-Client`, and `traceparent`/`tracestate`.
+  `Caveman-Middleware-Client`, and, when a `tracer` is configured, `traceparent`/`tracestate` for the SDK's own span
+  (never the application's ambient context, as in TypeScript).
 - Capabilities are parsed tolerantly and cached for 300 s with single-flight
   refresh. A new policy revision or transform version no longer rejects a plan.
 - Only `exact_ccr` replacements that carry the recovery marker and handle and are

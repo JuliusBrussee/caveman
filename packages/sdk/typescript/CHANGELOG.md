@@ -4,6 +4,26 @@
 
 - **Breaking (license):** relicensed from MIT to Apache-2.0, along with the rest of
   the repository in Caveman 3.0.0. Releases before this one keep the MIT license.
+- `onDecision` and `onDiagnostic` accept async sinks: a rejected promise is
+  swallowed like a throw, as `onReport` already was, instead of an unhandled
+  rejection that terminates Node.
+- Callers that only waited on another call's shared capabilities fetch no longer
+  record its failure in the breaker: one refused connect at cold start is one
+  failure, not one per waiter. A call its host aborts records nothing (it used to
+  record a success, so a cancelled half-open probe closed the breaker) and frees
+  the probe slot. New `CircuitBreaker.release()`.
+- A runtime token is trimmed of surrounding whitespace; any other character
+  outside printable ASCII is `invalid_configuration`, as in Python.
+- An `https://` or `socks` `HTTPS_PROXY`/`HTTP_PROXY` is `invalid_configuration`
+  with the unsupported scheme named by `ready()` and `preflight()`, instead of
+  `runtime_unavailable` on every call. `MiddlewareError` takes an optional detail.
+- `retrieve()` (and so the recovery binding) throws
+  `MiddlewareError('invalid_request')` for arguments that are not an object with
+  a string `handle`, never a `TypeError`.
+- The `version_unverified` warn-once line reads `Caveman middleware is running on
+  an unverified framework version`, because that call proceeds.
+- CommonJS `node16` consumers can use `import sdk = require(...)` and
+  `import * as` with values: the `.d.cts` shims re-export values, not only types.
 - `@caveman-ai/sdk/middleware` is stable: the `@experimental` marker is gone,
   and it follows semver, because `@caveman-ai/middleware` 1.0 depends on it.
 - A candidate whose `sourceId` is not a scope token is skipped as

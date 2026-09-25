@@ -13,6 +13,7 @@ connection instead of failing.
 import base64
 import http.client
 import ipaddress
+import re
 import socket
 import ssl
 import threading
@@ -132,6 +133,22 @@ def _dial(address: tuple, deadline: float, watchdog: _Watchdog) -> socket.socket
             sock.close()
             error = failure
     raise error or OSError("no address")
+
+
+def unsupported_proxy(proxy: str, escape: str) -> str | None:
+    """Why this transport cannot use ``proxy`` (TLS to the proxy itself and SOCKS are unsupported), or None. Names the
+    scheme, never the URL, which may carry credentials. ``escape`` names the caller's way around it."""
+    try:
+        p = urlsplit(proxy if "://" in proxy else "http://" + proxy)  # raises on a bad IPv6 literal
+        usable = p.scheme == "http" and bool(p.hostname) and p.port != -1  # .port raises on a malformed port
+    except ValueError:
+        usable = False
+    if usable:
+        return None
+    scheme = re.match(r"([a-z][a-z0-9+.-]*)://", proxy, re.I)
+    scheme = scheme[1].lower() if scheme else ""
+    what = f'unsupported proxy scheme "{scheme}"' if scheme and scheme != "http" else "malformed proxy URL"
+    return f"{what}: set HTTP(S)_PROXY to an http:// proxy URL, or pass a custom {escape}"
 
 
 class HTTPTransport:

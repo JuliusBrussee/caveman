@@ -166,6 +166,14 @@ test('examples: session delete responses parse; decision events carry exactly th
     } });
     try { assert.deepEqual(await runtime.deleteSession(v11.examples.session_delete_request.scope), response); } finally { runtime.close(); }
   }
+  for (const v of v11.examples.session_delete_malformed) {
+    const runtime = mw.createMiddlewareRuntime({ fetch: async () => Response.json(v.json) });
+    try {
+      const deleting = runtime.deleteSession(v11.examples.session_delete_request.scope);
+      if (v.expect.error) await assert.rejects(deleting, error => error instanceof mw.MiddlewareError && error.code === v.expect.error, v.id);
+      else assert.deepEqual(await deleting, v.expect.result, v.id);
+    } finally { runtime.close(); }
+  }
   const [applied, skipped] = v11.examples.decision_events;
   const events = [], runtime = mw.createMiddlewareRuntime({ onDecision: event => events.push(event), fetch: () => { throw new Error('no I/O'); } });
   try {

@@ -3,6 +3,8 @@
 ``caveman_cloud.middleware`` implements middleware protocol 1.1
 (docs/technical/middleware-protocol.md).
 """
+import asyncio
+import contextvars
 import copy
 import importlib.metadata
 import json
@@ -13,6 +15,7 @@ import time
 import uuid
 import weakref
 from collections import OrderedDict
+from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, replace
@@ -21,10 +24,10 @@ from urllib.parse import urlsplit
 
 from . import validate
 from .protocol import (
-    CAPABILITIES_TTL_S, CircuitBreaker, classify_failure, code_outcome, loads, normalize_scope, parse_capabilities, plan_budget,
-    resolve_deadlines, resolve_endpoint, warn_once,
+    CAPABILITIES_TTL_S, CircuitBreaker, _safe, classify_failure, code_outcome, loads, normalize_scope, parse_capabilities, plan_budget,
+    resolve_deadlines, resolve_endpoint, resolve_proxy, warn_once,
 )
-from .transport import MAX_RESPONSE_BYTES, HTTPTransport
+from .transport import MAX_RESPONSE_BYTES, HTTPTransport, unsupported_proxy
 from .types import (
     CLIENT_FEATURES_HEADER_VALUE, MIDDLEWARE_CLIENT_HEADER, MIDDLEWARE_CLIENT_PRODUCT, MIDDLEWARE_DEFAULTS, MIDDLEWARE_FEATURES_HEADER,
     OTEL, REASON_CATALOG, Adapter, BudgetItem, CallReport, CapabilitiesView, Candidate, DecisionCounts, DecisionEvent, FailureInput,
@@ -59,7 +62,7 @@ PREFLIGHT_ACTIONS = {
     "invalid_endpoint": "Set the endpoint to an http(s) URL without credentials, query or fragment.",
     "remote_content_not_enabled": "Set allow_remote_content to send content to a non-loopback runtime.",
     "insecure_transport_not_enabled": "Use https, or set allow_insecure_transport for plain HTTP inside a trusted network.",
-    "invalid_configuration": "Check mode, deadline_ms, retrieve_deadline_ms and max_concurrency.",
+    "invalid_configuration": "Check mode, token, deadline_ms, retrieve_deadline_ms, max_concurrency and the HTTP(S)_PROXY URL.",
 }
 _ZERO = DecisionCounts(0, 0, 0, 0, 0, 0, 0, 0, 0)
 _DEADLINE = FailureOutcome("deadline", True, False, None)
@@ -76,12 +79,12 @@ def _client_header() -> str:
 CLIENT_HEADER_VALUE = _client_header()
 
 
-def _preflight_report(mode: str, reason: str, view: CapabilitiesView | None = None) -> PreflightReport:
+def _preflight_report(mode: str, reason: str, view: CapabilitiesView | None = None, action: str | None = None) -> PreflightReport:
     reason = reason if reason in PREFLIGHT_ACTIONS else "runtime_unavailable"
     caps = view.capabilities if view else {}
     return PreflightReport(1, "disabled" if reason == "disabled" else "ready" if reason in ("ready", "record_only") else "unavailable",
                            reason, mode, view.mode if view else None, caps.get("runtime_build") if validate.token(caps.get("runtime_build")) else None,
-                           caps.get("policy_revision"), caps.get("persistent"), caps.get("recovery"), PREFLIGHT_ACTIONS[reason])
+                           caps.get("policy_revision"), caps.get("persistent"), caps.get("recovery"), action or PREFLIGHT_ACTIONS[reason])
 
 
 def _json(value: Any) -> str:
@@ -98,6 +101,45 @@ def _credential(token: str | None) -> Callable[[], str | None]:
     return lambda: header
 
 
+_sink_loop: contextvars.ContextVar = contextvars.ContextVar("caveman_sink_loop", default=None)
+_sink_futures: set = set()  # strong references until each scheduled coroutine sink finishes
+
+
+def _emit(sink: Callable[[Any], Any] | None, value: Any) -> None:
+    """Call a host sink; never awaited, and neither an exception nor a failing coroutine can change the call.
+
+    A coroutine sink runs on the caller's event loop (the async view carries it into its workers); with no loop it is
+    closed unrun instead of leaking a "never awaited" warning.
+    """
+    if sink is None:
+        return
+    try:
+        result = sink(value)
+    except Exception:
+        return
+    if not asyncio.iscoroutine(result):
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = _sink_loop.get()
+    try:
+        future = asyncio.run_coroutine_threadsafe(result, loop)
+    except Exception:  # no loop, or it closed
+        result.close()
+        return
+    _sink_futures.add(future)
+    future.add_done_callback(lambda done: (_sink_futures.discard(done), done.cancelled() or done.exception()))
+
+
+def _retrieve_args(args: Any, kwargs: dict) -> dict:
+    """Model-written recovery arguments: known keys only; a non-object or a missing handle is invalid_request."""
+    value = kwargs if args is None else args
+    if not isinstance(value, Mapping) or type(value.get("handle")) is not str:
+        raise MiddlewareError("invalid_request")
+    return {key: value[key] for key in ("handle", "offset", "limit", "query") if value.get(key) is not None}
+
+
 def _failure(failure: FailureInput, status: int | None = None) -> MiddlewareError:
     outcome = classify_failure(failure)
     error = MiddlewareError(outcome.reason)
@@ -105,9 +147,13 @@ def _failure(failure: FailureInput, status: int | None = None) -> MiddlewareErro
     return error
 
 
+_traced: contextvars.ContextVar = contextvars.ContextVar("caveman_traced", default=False)
+
+
 def _trace_context(headers: dict) -> None:
-    """W3C traceparent/tracestate when the application already loaded OpenTelemetry; never imports it otherwise."""
-    if "opentelemetry.trace" not in sys.modules and "opentelemetry.propagate" not in sys.modules:
+    """W3C traceparent/tracestate for the SDK's own CLIENT span (§15): only inside one, so never without a configured
+    tracer and never for the application's ambient context, as in the TS SDK. Never imports OpenTelemetry itself."""
+    if not _traced.get() or ("opentelemetry.trace" not in sys.modules and "opentelemetry.propagate" not in sys.modules):
         return
     try:
         from opentelemetry import propagate
@@ -174,19 +220,34 @@ class MiddlewareRuntime:
         self.retrieve_deadline_ms = retrieve_deadline_ms if valid(retrieve_deadline_ms) else None
         self._config_error: str | None = None
         self._declined: str | None = None  # first wrap-time decline; strict ready()/preflight() surface it
+        self._config_detail: str | None = None  # names an unsupported proxy scheme in ready() and preflight()
         try:
             base = resolve_endpoint(endpoint, allow_remote_content, allow_insecure_transport)
         except MiddlewareError as error:
             base, self._config_error = "", error.code
+        # A mounted secret file ends in a newline: surrounding HTTP whitespace is trimmed. Anything else outside
+        # printable ASCII can never be sent, so it is a configuration error rather than a runtime outage per call.
+        token = token.strip(" \t\r\n") if isinstance(token, str) else token
         if not self._config_error and (self.mode != mode or not valid(max_concurrency, 1024)
-                                       or not valid(deadline_ms) or not valid(retrieve_deadline_ms)):
+                                       or not valid(deadline_ms) or not valid(retrieve_deadline_ms)
+                                       or (isinstance(token, str) and not all(" " <= c <= "~" for c in token))):
             self._config_error = "invalid_configuration"
+        if not self._config_error and transport is None:
+            # A proxy the default transport cannot speak would fail every call as runtime_unavailable; name its scheme.
+            proxy = resolve_proxy(base)
+            self._config_detail = unsupported_proxy(proxy, "transport") if proxy else None
+            if self._config_detail:
+                self._config_error = "invalid_configuration"
         if self._config_error:
             warn_once(None, self._config_error)
-        self.endpoint = base[:-1] if base else endpoint
-        self._routes = base + PREFIX[1:]
+            base = ""
         url = urlsplit(base)
-        self._server = {"server.address": url.hostname, "server.port": url.port or (443 if url.scheme == "https" else 80)} if base else {}
+        # The runtime origin (scheme://host[:port], default port omitted), as in the TS SDK; "" when refused.
+        default_port = 443 if url.scheme == "https" else 80
+        host = f"[{url.hostname}]" if url.hostname and ":" in url.hostname else url.hostname
+        self.endpoint = f"{url.scheme}://{host}{'' if url.port in (None, default_port) else f':{url.port}'}" if base else ""
+        self._routes = base + PREFIX[1:]
+        self._server = {"server.address": url.hostname, "server.port": url.port or default_port} if base else {}
         self._auth = _credential(token)
         self._transport = transport if transport is not None else HTTPTransport(ssl_context=ssl_context)
         self._diagnostic, self._report_sink, self._decision_sink = on_diagnostic, on_report, on_decision
@@ -255,14 +316,14 @@ class MiddlewareRuntime:
 
     def _discover(self) -> CapabilitiesView:
         if self._config_error:
-            raise MiddlewareError(self._config_error)
+            raise MiddlewareError(self._config_error, self._config_detail)
         if self.strict and self._declined:
             raise MiddlewareError(self._declined)
         return self._store(parse_capabilities(self._http("capabilities", None, self._deadlines()[0] / 1000)))
 
     def ready(self) -> dict:
         if self._config_error:
-            raise MiddlewareError(self._config_error)
+            raise MiddlewareError(self._config_error, self._config_detail)
         if self.mode == "off":
             raise MiddlewareError("off")
         return copy.deepcopy(self._discover().capabilities)
@@ -283,14 +344,14 @@ class MiddlewareRuntime:
                 self._caps = None
                 reason = ("closed" if self._closed else error.code if isinstance(error, MiddlewareError)
                           else "deadline" if isinstance(error, TimeoutError) else "runtime_unavailable")
-            return _preflight_report(self.mode, reason)
+            return _preflight_report(self.mode, reason, action=self._config_detail if reason == self._config_error else None)
 
     def recovery(self, scope: Scope) -> RecoveryBinding | None:
         """Owned caveman_retrieve binding, or None for an unusable scope (raises invalid_scope in strict mode)."""
         normalized = normalize_scope(scope)
         if normalized is None:
             return self._no_scope()
-        return self._new_binding(normalized, lambda args=None, **kwargs: self.retrieve(normalized, **(args or kwargs)))
+        return self._new_binding(normalized, lambda args=None, **kwargs: self.retrieve(normalized, **_retrieve_args(args, kwargs)))
 
     def _no_scope(self) -> None:
         if self.strict:
@@ -361,12 +422,8 @@ class MiddlewareRuntime:
             self._last_report = event
         if event.status == "skipped":  # §8: warn only when content passed through unchanged
             warn_once(event.adapter, event.reason)
-        for sink, value in ((self._report_sink, event), (self._decision_sink, decision)):
-            if sink:
-                try:
-                    sink(value)
-                except Exception:
-                    pass  # A reporting sink cannot change native behavior.
+        _emit(self._report_sink, event)  # A reporting sink cannot change native behavior.
+        _emit(self._decision_sink, decision)
         if self._decisions is not None:
             try:
                 self._decisions.add(1, {k: v for k, v in (("caveman.middleware.adapter", event.adapter), ("caveman.middleware.status", event.status),
@@ -393,23 +450,24 @@ class MiddlewareRuntime:
             return self._bypass("capacity", adapter=adapter_id)
         deadline_at = _deadline_at if _deadline_at is not None else started + self._deadlines()[0] / 1000
         telemetry, span = ExitStack(), None
-        consulted, caps, counts, result = False, None, None, None
+        consulted, sent, caps, counts, result = False, False, None, None, None
         outcome: FailureOutcome | None = None
         code, strict, status_code = "adapter_error", None, None
 
-        def gate():
-            # §10: consult the breaker immediately before the first network request, once per call.
-            nonlocal consulted, span
-            if consulted:
-                return
-            with self._lock:
-                now = time.monotonic()
-                if now < self._retry_until:
-                    raise _Stop("circuit_open" if self._breaker.state == "open" else self._retry_reason)
-                if not self._breaker.allow(now * 1000):
-                    raise _Stop("circuit_open")
-                consulted = True
-            span = telemetry.enter_context(self._telemetry("optimize"))
+        def gate(sending: bool = True):
+            # §10: consult the breaker immediately before the first network request, once per call. `sending` is false
+            # for a call that only waits on another call's capabilities fetch: that outcome is not its own (§5).
+            nonlocal consulted, sent, span
+            if not consulted:
+                with self._lock:
+                    now = time.monotonic()
+                    if now < self._retry_until:
+                        raise _Stop("circuit_open" if self._breaker.state == "open" else self._retry_reason)
+                    if not self._breaker.allow(now * 1000):
+                        raise _Stop("circuit_open")
+                    consulted = True
+                span = telemetry.enter_context(self._telemetry("optimize"))
+            sent = sent or sending
 
         try:
             caps = self._capabilities(deadline_at, gate)
@@ -484,11 +542,8 @@ class MiddlewareRuntime:
             unavailable = {"cache_state_unavailable", "recovery_unavailable"}
             continuity = ("unavailable" if plan["reason"] in unavailable or any(item["reason"] in unavailable for item in plan["skipped"])
                           else plan["stability"]["native"])
-            if plan["status"] == "bypassed" and self._diagnostic:
-                try:
-                    self._diagnostic({"code": plan["reason"], "cache_continuity": continuity})
-                except Exception:
-                    pass  # Diagnostics cannot change the host request.
+            if plan["status"] == "bypassed":
+                _emit(self._diagnostic, {"code": plan["reason"], "cache_continuity": continuity})
             build = plan.get("runtime_build")
             result = Optimization(plan["status"], plan["reason"], plan["replacements"], plan, request, continuity,
                                   counts, _ms(started), build if build is not None else caps.capabilities["runtime_build"])
@@ -497,13 +552,21 @@ class MiddlewareRuntime:
         except _Failure as failure:
             outcome, status_code, strict = failure.outcome, failure.status, failure.strict
             code = outcome.reason
-            self._failed(outcome)
+            if sent:  # the fetch leader already applied a shared capabilities failure
+                self._failed(outcome)
         except Exception:
             pass  # a local error, e.g. an unserializable manifest or model: adapter_error, never a runtime outage
+        except BaseException:
+            sent = False  # interrupted (KeyboardInterrupt, a killed green thread): no outcome of its own
+            raise
         finally:
             if consulted:
+                # Only a call that sent its own request records (§10); any other admitted call frees a half-open probe.
                 with self._lock:
-                    self._breaker.record("failure" if outcome is not None and outcome.breaker else "success", time.monotonic() * 1000)
+                    if sent:
+                        self._breaker.record("failure" if outcome is not None and outcome.breaker else "success", time.monotonic() * 1000)
+                    else:
+                        self._breaker.release()
             self._slots.release()
         try:
             if result is None:
@@ -539,7 +602,7 @@ class MiddlewareRuntime:
             if leader:
                 flight = self._flight = Future()
         try:
-            gate()  # §10: every call consults the breaker and Retry-After before its first request, shared or not
+            gate(leader)  # §10: every call consults the breaker and Retry-After before its first request, shared or not
             if not leader:
                 try:
                     return flight.result(max(0.0, deadline_at - time.monotonic()))
@@ -588,7 +651,9 @@ class MiddlewareRuntime:
     def _failed(self, outcome: FailureOutcome) -> None:
         now = time.monotonic()
         with self._lock:
-            if outcome.clear_capabilities:
+            # As the TS #apply: only a rejected cached view spends the one unknown_capability refresh; a failed
+            # capabilities fetch has cleared the cache already and leaves that state alone.
+            if outcome.clear_capabilities and (outcome.reason != "unknown_capability" or self._caps is not None):
                 if outcome.reason == "unknown_capability" and self._unknown_refreshed:
                     self._negative_until = now + CAPABILITIES_TTL_S  # B5: one refresh, then negative-cache
                 else:
@@ -613,13 +678,14 @@ class MiddlewareRuntime:
     def _telemetry(self, operation: str):
         """Opt-in OpenTelemetry CLIENT span and duration histogram; the caller fills the yielded dict."""
         info: dict = {"attributes": {}}
-        started, span, active, trace = time.monotonic(), None, None, None
+        started, span, active, trace, traced = time.monotonic(), None, None, None, None
         if self._tracer is not None:
             try:
                 from opentelemetry import trace
                 span = self._tracer.start_span(OTEL["spans"][operation], kind=trace.SpanKind.CLIENT, attributes=dict(self._server))
                 active = trace.use_span(span, end_on_exit=False)
                 active.__enter__()
+                traced = _traced.set(True)
             except Exception:
                 span = None
         try:
@@ -628,6 +694,8 @@ class MiddlewareRuntime:
             error = info.get("error")
             if span is not None:
                 try:
+                    if traced is not None:
+                        _traced.reset(traced)
                     active.__exit__(None, None, None)
                     span.set_attributes({k: v for k, v in info["attributes"].items() if v is not None})
                     if info.get("status_code"):
@@ -650,6 +718,8 @@ class MiddlewareRuntime:
         normalized = normalize_scope(scope)
         if normalized is None:
             raise MiddlewareError("invalid_scope")
+        if type(handle) is not str:
+            raise MiddlewareError("invalid_request")
         caps = self._caps
         limit = limit if limit is not None else caps.limits.page_bytes if caps else 262144
         args = {"handle": handle, "offset": offset, "limit": limit, "query": query}
@@ -665,17 +735,32 @@ class MiddlewareRuntime:
         caps = self._caps
         return caps.limits.receipt_bytes if caps else MIDDLEWARE_DEFAULTS["receipt_bytes"]
 
+    def _receipt(self, receipt: Any) -> tuple[str, dict] | None:
+        """The body with its scope normalized (§9) plus its usage span attributes, or None: a receipt with an invalid
+        scope or over limits.receipt_bytes is dropped."""
+        try:
+            scope = normalize_scope(receipt.get("scope"))
+            if scope is None:
+                return None
+            body = _json({**receipt, "scope": asdict(scope)})
+            if len(body.encode("utf-8")) > self._receipt_bytes():
+                return None
+        except (AttributeError, TypeError, ValueError, RecursionError):
+            return None
+        usage = receipt.get("usage")
+        return body, {name: usage.get(key) for key, name in OTEL["usage"].items() if _safe(usage.get(key))} if isinstance(usage, dict) else {}
+
     def observe(self, receipt: dict) -> None:
         if self.mode == "off" or self._closed or self._config_error:
             return
+        prepared = self._receipt(receipt)
+        if prepared is not None:
+            self._deliver(*prepared)
+
+    def _deliver(self, body: str, usage: dict) -> None:
         try:
-            body = _json(receipt)
-            if len(body.encode("utf-8")) > self._receipt_bytes():
-                return
             with self._telemetry("receipt") as info:
-                usage = receipt.get("usage") if isinstance(receipt, dict) else None
-                if isinstance(usage, dict):
-                    info["attributes"] = {name: usage.get(key) for key, name in OTEL["usage"].items() if type(usage.get(key)) is int}
+                info["attributes"] = usage
                 try:
                     self._http("receipts", body, self._deadlines()[0] / 1000)
                 except Exception as error:
@@ -690,16 +775,20 @@ class MiddlewareRuntime:
         if normalized is None:
             raise MiddlewareError("invalid_scope")
         value = self._http("sessions/delete", _json({"schema_version": 1, "scope": asdict(normalized)}), self._deadlines()[1] / 1000)
-        if not isinstance(value, dict) or value.get("status") != "revoked":
+        if (not isinstance(value, dict) or type(value.get("schema_version")) is not int or value["schema_version"] != 1
+                or value.get("status") != "revoked"):
             raise MiddlewareError("runtime_unavailable")
-        return value
+        # Only a literal true confirms deletion; counts appear only when all four are safe non-negative integers.
+        deleted, keys = value.get("deleted"), ("scopes", "choices", "grants", "originals")
+        counts = ({key: deleted[key] for key in keys} if isinstance(deleted, dict)
+                  and all(_safe(deleted.get(key)) for key in keys) else None)
+        return {"schema_version": 1, "status": "revoked", "originals_deleted": value.get("originals_deleted") is True,
+                **({"deleted": counts} if counts else {})}
 
     def observe_background(self, receipt: dict) -> bool:
         """Bounded metadata-only delivery; never delay the provider response."""
-        try:
-            if len(_json(receipt).encode("utf-8")) > self._receipt_bytes():
-                return False
-        except (TypeError, ValueError, RecursionError, UnicodeError):
+        prepared = self._receipt(receipt)
+        if prepared is None:
             return False
         if self.mode == "off" or self._config_error or not self._receipt_slots.acquire(blocking=False):
             return False
@@ -711,7 +800,7 @@ class MiddlewareRuntime:
             if self._receipt_pool is None:
                 self._receipt_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="caveman-receipts")
             try:
-                future = self._receipt_pool.submit(self.observe, copy.deepcopy(receipt))
+                future = self._receipt_pool.submit(self._deliver, *prepared)
             except BaseException:
                 slots.release()
                 raise
@@ -751,11 +840,8 @@ class MiddlewareRuntime:
     def _bypass(self, code: str, *, adapter: str | None = None, diagnostic: bool = True, strict: bool | None = None,
                 counts: DecisionCounts | None = None, started: float | None = None, caps: CapabilitiesView | None = None) -> Optimization:
         warn_once(adapter, code)  # §8: every bypass warns once, naming the adapter or "-"
-        if diagnostic and self._diagnostic:
-            try:
-                self._diagnostic({"code": code, "cache_continuity": "unavailable"})
-            except Exception:
-                pass
+        if diagnostic:
+            _emit(self._diagnostic, {"code": code, "cache_continuity": "unavailable"})
         if self.strict and diagnostic:
             policy = REASON_CATALOG.get(code)
             # §8: only `raise` reasons raise on the request path; `ready` reasons surface from ready()/preflight().

@@ -336,10 +336,13 @@ test('B11: client headers, trace context, decision events, OpenTelemetry and war
   const lines = [], warn = console.warn;
   console.warn = line => lines.push(line);
   try {
-    assert.deepEqual([warnOnce('warn-test', 'capacity'), warnOnce('warn-test', 'capacity'), warnOnce('warn-test', 'no_candidate'), warnOnce('has space', 'Bad Reason')], [true, false, false, true]);
+    assert.deepEqual([warnOnce('warn-test', 'capacity'), warnOnce('warn-test', 'capacity'), warnOnce('warn-test', 'no_candidate'), warnOnce('has space', 'Bad Reason'),
+      warnOnce('warn-test', 'version_unverified')], [true, false, false, true, true]);
   } finally { console.warn = warn; }
   assert.deepEqual(lines, ['Caveman middleware passed content through unchanged: adapter=warn-test reason=capacity',
-    'Caveman middleware passed content through unchanged: adapter=- reason=unknown_reason']);
+    'Caveman middleware passed content through unchanged: adapter=- reason=unknown_reason',
+    // The adapter goes on to compress after feature detection: this line must not claim a pass-through.
+    'Caveman middleware is running on an unverified framework version: adapter=warn-test reason=version_unverified']);
 });
 
 test('close() aborts in-flight requests; later calls pass through as closed without I/O', async () => {
@@ -423,5 +426,119 @@ test('B9/§15: the default transport honors HTTP(S)_PROXY / NO_PROXY itself, nev
   } finally {
     for (const server of [loopback, plain, secure, proxy]) { server.closeAllConnections?.(); server.close(); }
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Adversarial review fixes (big-things): each test fails against HEAD 3ee02ba0.
+
+test('async sinks that reject never become unhandled rejections', async () => {
+  const unhandled = [], listener = reason => unhandled.push(reason);
+  process.on('unhandledRejection', listener);
+  const sink = async () => { throw new Error('sink'); };
+  const runtime = createMiddlewareRuntime({ deadlineMs: 5000, onDecision: sink, onDiagnostic: sink, onReport: sink,
+    fetch: async () => Response.json(caps) });
+  try {
+    runtime.report(await runtime.optimize(input(null))); // recovery_unbound bypass: onDiagnostic, then onReport + onDecision
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(unhandled, []);
+  } finally { process.off('unhandledRejection', listener); runtime.close(); }
+});
+
+test('a cold-start herd sharing one refused capabilities fetch records one breaker failure, not one per caller', async () => {
+  let gets = 0;
+  const runtime = createMiddlewareRuntime({ deadlineMs: 5000, fetch: async () => {
+    gets++;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    throw new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED') });
+  } });
+  try {
+    const binding = runtime.recovery(r.scope);
+    const herd = await Promise.all(Array.from({ length: 8 }, () => runtime.optimize(input(binding))));
+    assert.deepEqual(herd.map(o => o.reason), Array(8).fill('runtime_unavailable'));
+    assert.equal(gets, 1);
+    assert.equal((await runtime.optimize(input(binding))).reason, 'runtime_unavailable', 'one network failure cannot open the breaker');
+    assert.equal(gets, 2);
+  } finally { runtime.close(); }
+});
+
+test('an aborted half-open probe neither closes the breaker nor strands it half-open', async () => {
+  let hang = false, posted = false;
+  const monoNow = performance.now;
+  let mono = 0;
+  performance.now = () => monoNow.call(performance) + mono;
+  const runtime = createMiddlewareRuntime({ deadlineMs: 5000, fetch: async (url, init) => {
+    if (url.endsWith('/capabilities')) return Response.json(caps);
+    posted = true;
+    if (hang) return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
+    return Response.json({ schema_version: 1, error: { code: 'runtime_unavailable' } }, { status: 503 });
+  } });
+  try {
+    const binding = runtime.recovery(r.scope);
+    for (let i = 0; i < 5; i++) assert.equal((await runtime.optimize(input(binding))).reason, 'runtime_unavailable');
+    assert.equal((await runtime.optimize(input(binding))).reason, 'circuit_open');
+    mono = 31_000;
+    hang = true; posted = false;
+    const host = new AbortController(), probe = runtime.optimize(input(binding, { signal: host.signal }));
+    while (!posted) await tick();
+    host.abort(new Error('host cancelled'));
+    await assert.rejects(probe, /host cancelled/);
+    hang = false;
+    assert.equal((await runtime.optimize(input(binding))).reason, 'runtime_unavailable', 'the next call is the probe');
+    assert.equal((await runtime.optimize(input(binding))).reason, 'circuit_open', 'the abort was not recorded as a success');
+  } finally { performance.now = monoNow; runtime.close(); }
+});
+
+test('recovery refuses model arguments that are not an object with a string handle as invalid_request', async () => {
+  let requests = 0;
+  const runtime = createMiddlewareRuntime({ fetch: async () => { requests++; return Response.json(caps); } });
+  try {
+    const binding = runtime.recovery(r.scope);
+    for (const args of [null, undefined, [], 'cmw_x', { reason: 'r' }, { handle: 7 }]) {
+      await assert.rejects(binding.execute(args), error => error.code === 'invalid_request', JSON.stringify(args));
+    }
+    assert.equal(requests, 0);
+  } finally { runtime.close(); }
+});
+
+test('a runtime token is trimmed of surrounding whitespace; a control character inside it is invalid_configuration', async () => {
+  const seen = [];
+  const mounted = createMiddlewareRuntime({ token: ' secret\r\n', fetch: async (url, init) => { seen.push(init.headers.Authorization); return Response.json(caps); } });
+  try { await mounted.ready(); } finally { mounted.close(); }
+  assert.deepEqual(seen, ['Bearer secret']);
+  const broken = createMiddlewareRuntime({ token: 'sec\nret', fetch: async () => assert.fail('an unsendable token sent a request') });
+  try {
+    assert.equal((await broken.preflight()).reason, 'invalid_configuration');
+    await assert.rejects(broken.ready(), { code: 'invalid_configuration' });
+    assert.equal((await broken.optimize(input(null))).reason, 'invalid_configuration');
+  } finally { broken.close(); }
+});
+
+test('an https or socks proxy is invalid_configuration naming its scheme, not a runtime outage on every call', async () => {
+  const keys = ['https_proxy', 'HTTPS_PROXY', 'no_proxy', 'NO_PROXY'], saved = Object.fromEntries(keys.map(k => [k, process.env[k]]));
+  try {
+    for (const k of keys) delete process.env[k];
+    for (const scheme of ['https', 'socks5']) {
+      process.env.https_proxy = `${scheme}://user:hunter2@proxy.internal:3128`;
+      const runtime = createMiddlewareRuntime({ endpoint: 'https://runtime.internal', allowRemoteContent: true });
+      try {
+        const report = await runtime.preflight();
+        assert.equal(report.reason, 'invalid_configuration');
+        assert.match(report.action, new RegExp(`unsupported proxy scheme "${scheme}"`));
+        assert.ok(!report.action.includes('hunter2'), 'the proxy URL is never echoed');
+        await assert.rejects(runtime.ready(), error => error.code === 'invalid_configuration' && error.message.includes(`"${scheme}"`));
+        assert.equal((await runtime.optimize(input(runtime.recovery(r.scope)))).reason, 'invalid_configuration');
+      } finally { runtime.close(); }
+    }
+  } finally { for (const k of keys) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+});
+
+test('deleteSession confirms deletion only for a literal true and rejects a wrong schema_version', async () => {
+  const answer = body => createMiddlewareRuntime({ fetch: async () => Response.json(body) });
+  const ok = { schema_version: 1, status: 'revoked', originals_deleted: 'false', deleted: { scopes: 1, choices: 0, grants: '2', originals: 0 } };
+  let runtime = answer(ok);
+  try { assert.deepEqual(await runtime.deleteSession(r.scope), { schema_version: 1, status: 'revoked', originals_deleted: false }); } finally { runtime.close(); }
+  for (const bad of [{ ...ok, schema_version: 9 }, { ...ok, schema_version: true }, { ...ok, status: 'deleted' }, null]) {
+    runtime = answer(bad);
+    try { await assert.rejects(runtime.deleteSession(r.scope), { code: 'runtime_unavailable' }); } finally { runtime.close(); }
   }
 });

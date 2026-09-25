@@ -79,6 +79,9 @@ export class CircuitBreaker {
       this.#state = 'open'; this.#openedAt = nowMs;
     }
   }
+  /** An admitted call that ended with no outcome of its own (caller abort, or it only waited on another call's
+   * capabilities fetch): records nothing, but frees the half-open probe slot so the next call can probe. */
+  release(): void { if (this.#state === 'half_open') this.#probing = false; }
 }
 
 /** Spec §10: optimize = override, else capabilities `deadline_ms` (capped at 5000), else 500; retrieve/delete =
@@ -168,14 +171,19 @@ export function resolveProxy(url: string, env: Readonly<Record<string, string | 
 }
 
 const warned = new Set<string>();
+/** Reasons whose call does not pass content through unchanged get their own line (mirrored in Python's warn_once). */
+const WARNINGS: Readonly<Record<string, string>> = { version_unverified: 'Caveman middleware is running on an unverified framework version' };
 /** One `console.warn` per (adapter, reason) per process, bounded at 1024 pairs; returns whether it logged. The line
- * carries only `adapter=<id or ->` and `reason=<code>`: never content, scope values, handles or credentials. */
-export function warnOnce(adapter: unknown, reason: unknown): boolean {
+ * carries only `adapter=<id or ->` and `reason=<code>`: never content, scope values, handles or credentials.
+ * `message` replaces the lead-in for a caller whose failure is not a pass-through (a refused recovery read) and is
+ * deduplicated apart from the same reason's pass-through line. */
+export function warnOnce(adapter: unknown, reason: unknown, message?: string): boolean {
   if (typeof reason === 'string' && reasonPolicy(reason)?.warn_once === false) return false;
   const a = isToken(adapter) ? adapter : '-', r = typeof reason === 'string' && REASON.test(reason) ? reason : 'unknown_reason';
   // ponytail: a full set stops logging new pairs instead of evicting; 1024 is far past real adapter x reason counts.
-  if (warned.has(`${a} ${r}`) || warned.size >= MIDDLEWARE_DEFAULTS.warn_once_entries) return false;
-  warned.add(`${a} ${r}`);
-  console.warn(`Caveman middleware passed content through unchanged: adapter=${a} reason=${r}`);
+  const key = message ? `${a} ${r} ${message}` : `${a} ${r}`;
+  if (warned.has(key) || warned.size >= MIDDLEWARE_DEFAULTS.warn_once_entries) return false;
+  warned.add(key);
+  console.warn(`${message ?? WARNINGS[r] ?? 'Caveman middleware passed content through unchanged'}: adapter=${a} reason=${r}`);
   return true;
 }

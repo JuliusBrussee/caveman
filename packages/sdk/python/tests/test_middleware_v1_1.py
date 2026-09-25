@@ -3,6 +3,7 @@ import asyncio
 import base64
 import copy
 import dataclasses
+import gc
 import json
 import logging
 import os
@@ -27,7 +28,7 @@ from caveman_cloud.middleware import (
     normalize_scope, normalize_scope_token, opaque_manifest_value, parse_capabilities, plan_budget, resolve_deadlines,
     resolve_endpoint, resolve_proxy, sha256, validate, warn_once,
 )
-from caveman_cloud.middleware import protocol, types as mw_types
+from caveman_cloud.middleware import protocol, runtime as mw_runtime, types as mw_types
 
 PARITY = Path(__file__).resolve().parents[2] / "parity"
 V11 = json.loads((PARITY / "middleware-v1_1.fixtures.json").read_text(encoding="utf-8"))
@@ -234,6 +235,20 @@ class TestParityVectors(unittest.TestCase):
             counts = mw_types.DecisionCounts(**example["counts"])
             event = DecisionEvent(**{**example, "counts": counts, "transform_ids": tuple(example["transform_ids"])})
             self.assertEqual(json.loads(json.dumps(dataclasses.asdict(event))), example)
+
+    def test_session_delete_responses(self):
+        scope = V11["examples"]["session_delete_request"]["scope"]
+        for v in [{"id": f"ok-{i}", "json": r, "expect": {"result": r}} for i, r in enumerate(V11["examples"]["session_delete_responses"])] + \
+                V11["examples"]["session_delete_malformed"]:
+            with self.subTest(v["id"]):
+                runtime = MiddlewareRuntime(transport=lambda *_, body=json.dumps(v["json"]).encode(): (200, {}, body))
+                self.addCleanup(runtime.close)
+                if "error" in v["expect"]:
+                    with self.assertRaises(MiddlewareError) as raised:
+                        runtime.delete_session(scope)
+                    self.assertEqual(raised.exception.code, v["expect"]["error"])
+                else:
+                    self.assertEqual(runtime.delete_session(scope), v["expect"]["result"])
 
 
 class Scripted:
@@ -517,8 +532,10 @@ class TestRuntimeProtocol(unittest.TestCase):
             self.assertEqual(runtime.as_async().decline("version_unverified", "decline-async").reason, "version_unverified")
             runtime.decline("unsupported_version")
         self.assertEqual(logs.output, [
-            f"WARNING:caveman.middleware:Caveman middleware passed content through unchanged: adapter={adapter} reason={reason}"
-            for adapter, reason in (("decline-test", "recovery_name_conflict"), ("decline-async", "version_unverified"), ("-", "unsupported_version"))])
+            "WARNING:caveman.middleware:Caveman middleware passed content through unchanged: adapter=decline-test reason=recovery_name_conflict",
+            # version_unverified has its own line: the adapter goes on to compress (bundled deploys always hit it).
+            "WARNING:caveman.middleware:Caveman middleware is running on an unverified framework version: adapter=decline-async reason=version_unverified",
+            "WARNING:caveman.middleware:Caveman middleware passed content through unchanged: adapter=- reason=unsupported_version"])
         self.assertEqual([d["code"] for d in diagnostics], ["recovery_name_conflict", "version_unverified", "unsupported_version"])
         with self.assertRaises(ValueError):
             runtime.decline("not_a_catalog_reason")
@@ -554,7 +571,7 @@ class TestRuntimeProtocol(unittest.TestCase):
             runtime, binding = runtime_with(peer, tracer=tracer, meter=meter)
             self.addCleanup(runtime.close)
             runtime.report(call(runtime, binding))
-            runtime.observe({"schema_version": 1, "usage": {"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 4,
+            runtime.observe({"schema_version": 1, "scope": BASE["request"]["scope"], "usage": {"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 4,
                                                             "cache_write_tokens": 1, "reasoning_tokens": 7}})
             runtime.retrieve(SCOPE, handle=BASE["page"]["handle"])
         self.assertEqual([s.name for s in spans], ["caveman.middleware.optimize", "caveman.middleware.receipt", "caveman.middleware.retrieve"])
@@ -589,7 +606,7 @@ class TestRuntimeProtocol(unittest.TestCase):
         mesh = MiddlewareRuntime(endpoint="http://mesh.svc:8787/rt", allow_remote_content=True, allow_insecure_transport=True,
                                  transport=Peer())
         self.addCleanup(mesh.close)
-        self.assertEqual((mesh.preflight().reason, mesh.endpoint), ("ready", "http://mesh.svc:8787/rt"))
+        self.assertEqual((mesh.preflight().reason, mesh.endpoint), ("ready", "http://mesh.svc:8787"), "origin only, as in the TS SDK")
         # Invalid option values never raise either: warn once, pass every call through with no I/O, surface from
         # ready()/preflight(). A bad mode reads as off; bad numbers fall back to defaults (matches the TS SDK).
         for bad, status in (({"max_concurrency": 0}, "bypassed"), ({"max_concurrency": 1025}, "bypassed"),
@@ -710,7 +727,7 @@ class TestAsyncRuntime(unittest.IsolatedAsyncioTestCase):
         binding = runtime.recovery(SCOPE)
         await runtime.ready()
         # Force the queued case deterministically: one worker, ten admitted jobs.
-        runtime._executor = ThreadPoolExecutor(max_workers=1)
+        runtime._pools["optimize"] = (ThreadPoolExecutor(max_workers=1), runtime._pools["optimize"][1])
         peer.gate["optimize"] = threading.Event()
         calls = [asyncio.create_task(runtime.optimize(scope=SCOPE, adapter=ADAPTER, candidates=candidates(), manifest=[], binding=binding))
                  for _ in range(10)]
@@ -834,6 +851,197 @@ def otel_stub():
     root = types.ModuleType("opentelemetry")
     root.trace, root.propagate = trace, propagate
     return {"opentelemetry": root, "opentelemetry.trace": trace, "opentelemetry.propagate": propagate}, Tracer(), spans, carrier_keys
+
+# Adversarial review fixes (big-things): each test fails against HEAD 3ee02ba0.
+class TestReviewFixes(unittest.TestCase):
+    def setUp(self):
+        protocol._warned.clear()
+
+    def test_coroutine_sinks_without_a_loop_are_closed_not_leaked(self):
+        async def sink(_):
+            raise RuntimeError("sink")
+        runtime, _ = runtime_with(Peer(), on_decision=sink, on_report=sink, on_diagnostic=sink)
+        self.addCleanup(runtime.close)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            runtime.report(call(runtime))  # recovery_unbound bypass: on_diagnostic, then on_report + on_decision
+            gc.collect()
+        self.assertEqual([str(w.message) for w in caught if "never awaited" in str(w.message)], [])
+
+    def test_cold_start_herd_sharing_one_refused_fetch_records_one_failure(self):
+        requests = []
+
+        def refused(method, url, headers, body, timeout):
+            requests.append(url)
+            time.sleep(0.2)
+            raise ConnectionRefusedError("connect refused")
+        runtime, binding = runtime_with(refused)
+        self.addCleanup(runtime.close)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            reasons = list(pool.map(lambda _: call(runtime, binding).reason, range(8)))
+        self.assertEqual((reasons, len(requests)), (["runtime_unavailable"] * 8, 1))
+        self.assertEqual(call(runtime, binding).reason, "runtime_unavailable", "one network failure cannot open the breaker")
+        self.assertEqual((len(requests), runtime._breaker.state), (2, "closed"))
+
+    def test_interrupted_half_open_probe_neither_closes_nor_strands_the_breaker(self):
+        class Interrupt(BaseException):
+            pass
+        peer, clock = Peer(), [time.monotonic()]
+        peer.optimize = error("runtime_unavailable", 503)
+        runtime, binding = runtime_with(peer)
+        self.addCleanup(runtime.close)
+        with patch.object(mw_runtime, "time", SimpleNamespace(monotonic=lambda: clock[0])):
+            for _ in range(5):
+                self.assertEqual(call(runtime, binding).reason, "runtime_unavailable")
+            self.assertEqual(call(runtime, binding).reason, "circuit_open")
+            clock[0] += 31
+            peer.optimize = lambda *_: (_ for _ in ()).throw(Interrupt())
+            with self.assertRaises(Interrupt):
+                call(runtime, binding)
+            peer.optimize = error("runtime_unavailable", 503)
+            self.assertEqual(call(runtime, binding).reason, "runtime_unavailable", "the next call is the probe")
+            self.assertEqual(call(runtime, binding).reason, "circuit_open", "the interrupt was not recorded as a success")
+
+    def test_observe_normalizes_the_scope_and_drops_an_invalid_one(self):
+        peer = Peer()
+        runtime, _ = runtime_with(peer)
+        self.addCleanup(runtime.close)
+        raw = {"namespace": "tenant@example.com", "session_id": "s 1"}
+        runtime.observe({"schema_version": 1, "scope": raw})
+        sent = json.loads(peer.calls[-1].body)["scope"]
+        self.assertEqual(sent, dataclasses.asdict(normalize_scope(raw)))
+        self.assertNotIn("tenant@example.com", peer.calls[-1].body.decode())
+        runtime.observe({"schema_version": 1, "scope": {"namespace": "", "session_id": "s"}})
+        runtime.observe({"schema_version": 1})
+        self.assertEqual(peer.paths("receipts"), ["receipts"])
+        self.assertFalse(runtime.observe_background({"schema_version": 1, "scope": {"session_id": "s"}}))
+
+    def test_token_whitespace_is_trimmed_and_control_characters_are_invalid_configuration(self):
+        peer = Peer()
+        runtime = MiddlewareRuntime(transport=peer, token=" secret\r\n")
+        self.addCleanup(runtime.close)
+        runtime.ready()
+        self.assertEqual(peer.calls[-1].headers["Authorization"], "Bearer secret")
+        broken = MiddlewareRuntime(transport=lambda *_: self.fail("an unsendable token sent a request"), token="sec\nret")
+        self.addCleanup(broken.close)
+        self.assertEqual(broken.preflight().reason, "invalid_configuration")
+        self.assertEqual(call(broken, broken.recovery(SCOPE)).reason, "invalid_configuration")
+
+    def test_endpoint_is_the_origin_and_empty_when_refused(self):
+        leaky = MiddlewareRuntime(endpoint="https://svc:hunter2@runtime.internal", allow_remote_content=True)
+        self.addCleanup(leaky.close)
+        self.assertEqual(leaky.endpoint, "")
+        for endpoint, origin in (("https://runtime.internal:443/prefix", "https://runtime.internal"),
+                                 ("http://127.0.0.1:8787/rt/", "http://127.0.0.1:8787"), ("http://[::1]", "http://[::1]")):
+            runtime = MiddlewareRuntime(endpoint=endpoint, allow_remote_content=True, transport=Peer())
+            self.addCleanup(runtime.close)
+            self.assertEqual(runtime.endpoint, origin)
+
+    def test_recovery_execute_takes_known_keys_and_refuses_malformed_arguments(self):
+        peer = Peer()
+        runtime, binding = runtime_with(peer)
+        self.addCleanup(runtime.close)
+        handle = BASE["page"]["handle"]
+        self.assertEqual(binding.execute({"handle": handle, "reason": "model chatter", "offset": None})["handle"], handle)
+        self.assertEqual(binding.execute(handle=handle, reason="kwargs too")["handle"], handle)
+        for args in (None, [], "cmw_x", {"reason": "r"}, {"handle": 7}):
+            with self.subTest(args=args), self.assertRaises(MiddlewareError) as raised:
+                binding.execute(args)
+            self.assertEqual(raised.exception.code, "invalid_request")
+        self.assertEqual(peer.paths("retrieve"), ["retrieve", "retrieve"])
+
+    def test_https_or_socks_proxy_is_invalid_configuration_naming_the_scheme(self):
+        clean = {k: v for k, v in os.environ.items() if k.lower() not in ("https_proxy", "http_proxy", "no_proxy")}
+        for scheme in ("https", "socks5"):
+            with self.subTest(scheme), patch.dict(os.environ, {**clean, "https_proxy": f"{scheme}://user:hunter2@proxy.internal:3128"}, clear=True):
+                runtime = MiddlewareRuntime(endpoint="https://runtime.internal", allow_remote_content=True)
+                self.addCleanup(runtime.close)
+                report = runtime.preflight()
+                self.assertEqual(report.reason, "invalid_configuration")
+                self.assertIn(f'unsupported proxy scheme "{scheme}"', report.action)
+                self.assertNotIn("hunter2", report.action)
+                with self.assertRaisesRegex(MiddlewareError, f'invalid_configuration.*"{scheme}"'):
+                    runtime.ready()
+                self.assertEqual(call(runtime, runtime.recovery(SCOPE)).reason, "invalid_configuration")
+
+    def test_malformed_proxy_is_invalid_configuration_never_a_constructor_error(self):
+        clean = {k: v for k, v in os.environ.items() if k.lower() not in ("https_proxy", "http_proxy", "no_proxy")}
+        for proxy in ("http://[::1", "http://user:hunter2@[bad", "http://user:hunter2@proxy.internal:99999", "http://"):
+            with self.subTest(proxy), patch.dict(os.environ, {**clean, "HTTPS_PROXY": proxy, "NO_PROXY": "[::1,:,]x,a:b:c"}, clear=True):
+                runtime = MiddlewareRuntime(endpoint="https://runtime.internal", allow_remote_content=True)
+                self.addCleanup(runtime.close)
+                report = runtime.preflight()
+                self.assertEqual(report.reason, "invalid_configuration")
+                self.assertIn("malformed proxy URL", report.action)
+                self.assertNotIn("hunter2", report.action)
+
+    def test_receipt_usage_span_attributes_are_safe_non_negative_integers(self):
+        runtime = MiddlewareRuntime(transport=lambda *_: (200, {}, b"{}"))
+        self.addCleanup(runtime.close)
+        usage = {"input_tokens": 10, "output_tokens": -1, "cache_read_tokens": 2**53, "cache_write_tokens": True}
+        _, attributes = runtime._receipt({"scope": dataclasses.asdict(SCOPE), "usage": usage})
+        self.assertEqual(attributes, {"gen_ai.usage.input_tokens": 10})
+
+    def test_delete_session_confirms_deletion_only_for_a_literal_true(self):
+        ok = {"schema_version": 1, "status": "revoked", "originals_deleted": "false", "deleted": {"scopes": 1, "choices": 0, "grants": "2", "originals": 0}}
+
+        def answering(body):
+            return lambda *_: (200, {}, json.dumps(body).encode())
+        runtime = MiddlewareRuntime(transport=answering(ok))
+        self.addCleanup(runtime.close)
+        self.assertEqual(runtime.delete_session(SCOPE), {"schema_version": 1, "status": "revoked", "originals_deleted": False})
+        for bad in ({**ok, "schema_version": 9}, {**ok, "schema_version": True}, {**ok, "status": "deleted"}, None):
+            with self.subTest(bad=bad), self.assertRaises(MiddlewareError) as raised:
+                MiddlewareRuntime(transport=answering(bad)).delete_session(SCOPE)
+            self.assertEqual(raised.exception.code, "runtime_unavailable")
+
+    def test_trace_headers_only_with_a_configured_tracer(self):
+        modules, _, _, _ = otel_stub()
+        with patch.dict(sys.modules, modules), modules["opentelemetry.trace"].use_span(object()):
+            peer = Peer()
+            runtime, binding = runtime_with(peer)
+            self.addCleanup(runtime.close)
+            call(runtime, binding)
+        self.assertTrue(peer.calls)
+        self.assertEqual([c.path for c in peer.calls if "traceparent" in c.headers], [], "§15: no tracer, no trace headers")
+
+
+class TestAsyncReviewFixes(unittest.IsolatedAsyncioTestCase):
+    async def test_coroutine_sinks_run_on_the_callers_loop_and_cannot_fail_the_call(self):
+        seen = []
+
+        async def sink(value):
+            seen.append(value)
+            raise RuntimeError("sink")
+        runtime = AsyncMiddlewareRuntime(transport=Peer(), deadline_ms=5000, on_decision=sink, on_diagnostic=sink)
+        result = await runtime.optimize(scope=SCOPE, adapter=ADAPTER, candidates=candidates(), manifest=[])  # diagnostic in a worker
+        runtime.report(result)
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+        self.assertEqual([type(v).__name__ for v in seen], ["dict", "DecisionEvent"])
+        await runtime.aclose()
+
+    async def test_receipts_never_take_optimize_slots(self):
+        peer = Peer()
+        runtime = AsyncMiddlewareRuntime(transport=peer, deadline_ms=4000)
+        binding = runtime.recovery(SCOPE)
+        await runtime.ready()
+        peer.gate["receipts"] = threading.Event()
+        receipts = [asyncio.create_task(runtime.observe({"schema_version": 1, "scope": BASE["request"]["scope"]})) for _ in range(16)]
+        await asyncio.sleep(0.05)
+        result = await runtime.optimize(scope=SCOPE, adapter=ADAPTER, candidates=candidates(), manifest=[], binding=binding)
+        self.assertEqual(result.status, "optimized")
+        peer.gate["receipts"].set()
+        await asyncio.gather(*receipts)
+        await runtime.aclose()
+
+    async def test_async_recovery_refuses_malformed_arguments(self):
+        runtime = AsyncMiddlewareRuntime(transport=Peer())
+        binding = runtime.recovery(SCOPE)
+        with self.assertRaises(MiddlewareError) as raised:
+            await binding.execute(None)
+        self.assertEqual(raised.exception.code, "invalid_request")
+        await runtime.aclose()
 
 
 if __name__ == "__main__":

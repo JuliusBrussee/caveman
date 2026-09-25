@@ -85,9 +85,9 @@ class PreflightReport:
 
 
 class MiddlewareError(Exception):
-    def __init__(self, code: str):
+    def __init__(self, code: str, detail: str | None = None):
         self.code = code
-        super().__init__(f"Caveman middleware: {code}")
+        super().__init__(f"Caveman middleware: {code}: {detail}" if detail else f"Caveman middleware: {code}")
 
 
 # ---- Protocol 1.1 (docs/technical/middleware-protocol.md). Values are pinned by

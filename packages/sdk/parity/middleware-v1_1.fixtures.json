@@ -13,6 +13,7 @@
     "failure_classification": "input.body is raw response text; retry_after is the raw header value.",
     "breaker_sequences": "Fresh breaker per sequence. success/failure: call allow(at_ms); if it returns true, record(result, at_ms). local: do not touch the breaker. expect.sent is allow()'s result, expect.state is the state after the step.",
     "budgets": "replaced lists item keys; admitted/skipped are ids in input order; bypass payload_budget when items exist and none is admitted.",
+    "session_delete_malformed": "examples.session_delete_malformed: sessions/delete answers 200 with `json`; deleteSession / delete_session returns exactly expect.result (originals_deleted is true only for the boolean true; deleted is kept only when all four counts are safe integers >= 0; unknown fields are dropped) or raises MiddlewareError(expect.error).",
     "endpoints": "expect.capabilities_url is the resolved base plus caveman/v1/middleware/capabilities, or expect.error is the refusal code.",
     "runtime_scenarios": "Runtime-level parity over a scripted transport. The runtime gets deadline_ms 5000 plus `options`. Each route answers from the step's `responses` queue, else a default: capabilities = base.capabilities with the scenario `capabilities` patches; optimize = base.plan with request_id and recovery.binding_id from the request and input_digest = sha256 of the sent body. A response is {route, status, json | body_text | body_base64 | plan | caps, headers}; plan/caps are patches on those defaults. `latency_ms` delays a route's answers during the step. Ops: optimize sends base.request (scope, adapter with id `adapter_id`, candidates from base.request.segments, manifest base.request.context_manifest, request_id, an owned binding) unless the step overrides scope (then no binding), adapter (null = none), candidates or manifest; concurrent_optimize runs `count` optimize calls at once; report reports the step's `optimization` ({status, reason}) with context `adapter`, else the last optimize result; decline calls decline(reason, adapter); preflight calls preflight(). expect.reason/status read the optimize result; expect.requests lists the routes requested during the step in order; expect.capabilities_gets counts capabilities requests; expect.warnings is the exact list of warn-once lines logged during the step; expect.event is a subset of the last decision event; expect.preflight compares status and reason."
   },
@@ -506,6 +507,14 @@
       "legacy_status": 503,
       "legacy_code": "runtime_unavailable",
       "note": "bug fix for all clients: 1.0 retrieve answered 404 not_found"
+    },
+    {
+      "condition": "quota_exceeded",
+      "status": 429,
+      "code": "quota_exceeded",
+      "legacy_status": 503,
+      "legacy_code": "capacity",
+      "note": "per-principal quota_requests_per_minute; 1.0 had no quota code, so 1.0 clients get its saturation answer"
     }
   ],
   "scope_tokens": [
@@ -4417,6 +4426,199 @@
         }
       }
     ],
+    "session_delete_malformed": [
+      {
+        "id": "originals_deleted_string_false",
+        "json": {
+          "schema_version": 1,
+          "status": "revoked",
+          "originals_deleted": "false"
+        },
+        "expect": {
+          "result": {
+            "schema_version": 1,
+            "status": "revoked",
+            "originals_deleted": false
+          }
+        }
+      },
+      {
+        "id": "originals_deleted_string_true_is_not_true",
+        "json": {
+          "schema_version": 1,
+          "status": "revoked",
+          "originals_deleted": "true"
+        },
+        "expect": {
+          "result": {
+            "schema_version": 1,
+            "status": "revoked",
+            "originals_deleted": false
+          }
+        }
+      },
+      {
+        "id": "originals_deleted_missing",
+        "json": {
+          "schema_version": 1,
+          "status": "revoked"
+        },
+        "expect": {
+          "result": {
+            "schema_version": 1,
+            "status": "revoked",
+            "originals_deleted": false
+          }
+        }
+      },
+      {
+        "id": "malformed_counts_are_dropped_unknown_fields_ignored",
+        "json": {
+          "schema_version": 1,
+          "status": "revoked",
+          "originals_deleted": true,
+          "deleted": {
+            "scopes": 1,
+            "choices": "3",
+            "grants": 3,
+            "originals": 2
+          },
+          "future_field": {
+            "nested": true
+          }
+        },
+        "expect": {
+          "result": {
+            "schema_version": 1,
+            "status": "revoked",
+            "originals_deleted": true
+          }
+        }
+      },
+      {
+        "id": "schema_version_9",
+        "json": {
+          "schema_version": 9,
+          "status": "revoked",
+          "originals_deleted": true
+        },
+        "expect": {
+          "error": "runtime_unavailable"
+        }
+      },
+      {
+        "id": "status_not_revoked",
+        "json": {
+          "schema_version": 1,
+          "status": "deleted",
+          "originals_deleted": true
+        },
+        "expect": {
+          "error": "runtime_unavailable"
+        }
+      },
+      {
+        "id": "array_body",
+        "json": [],
+        "expect": {
+          "error": "runtime_unavailable"
+        }
+      },
+      {
+        "id": "string_body",
+        "json": "revoked",
+        "expect": {
+          "error": "runtime_unavailable"
+        }
+      },
+      {
+        "id": "null_body",
+        "json": null,
+        "expect": {
+          "error": "runtime_unavailable"
+        }
+      },
+      {
+        "id": "integral_floats_are_integers",
+        "json": {
+          "schema_version": 1.0,
+          "status": "revoked",
+          "originals_deleted": true,
+          "deleted": {
+            "scopes": 1.0,
+            "choices": 0,
+            "grants": 5.0,
+            "originals": 2
+          }
+        },
+        "expect": {
+          "result": {
+            "schema_version": 1,
+            "status": "revoked",
+            "originals_deleted": true,
+            "deleted": {
+              "scopes": 1,
+              "choices": 0,
+              "grants": 5,
+              "originals": 2
+            }
+          }
+        }
+      },
+      {
+        "id": "fractional_count_drops_deleted",
+        "json": {
+          "schema_version": 1,
+          "status": "revoked",
+          "originals_deleted": true,
+          "deleted": {
+            "scopes": 1.5,
+            "choices": 0,
+            "grants": 1,
+            "originals": 2
+          }
+        },
+        "expect": {
+          "result": {
+            "schema_version": 1,
+            "status": "revoked",
+            "originals_deleted": true
+          }
+        }
+      },
+      {
+        "id": "fractional_schema_version",
+        "json": {
+          "schema_version": 1.5,
+          "status": "revoked",
+          "originals_deleted": true
+        },
+        "expect": {
+          "error": "runtime_unavailable"
+        }
+      },
+      {
+        "id": "negative_count_drops_deleted",
+        "json": {
+          "schema_version": 1,
+          "status": "revoked",
+          "originals_deleted": false,
+          "deleted": {
+            "scopes": 1,
+            "choices": -1,
+            "grants": 1,
+            "originals": 2
+          }
+        },
+        "expect": {
+          "result": {
+            "schema_version": 1,
+            "status": "revoked",
+            "originals_deleted": false
+          }
+        }
+      }
+    ],
     "receipt_response": {
       "schema_version": 1,
       "status": "recorded",
@@ -4646,6 +4848,44 @@
       ]
     },
     {
+      "id": "shared_capabilities_failure_records_one_outcome",
+      "adapter_id": "scn-herd-fail",
+      "steps": [
+        {
+          "op": "concurrent_optimize",
+          "count": 8,
+          "latency_ms": {
+            "capabilities": 100
+          },
+          "responses": [
+            {
+              "route": "capabilities",
+              "status": 503,
+              "json": {
+                "schema_version": 1,
+                "error": {
+                  "code": "runtime_unavailable"
+                }
+              }
+            }
+          ],
+          "expect": {
+            "capabilities_gets": 1
+          }
+        },
+        {
+          "op": "optimize",
+          "expect": {
+            "status": "optimized",
+            "requests": [
+              "capabilities",
+              "optimize"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "id": "capabilities_integral_numbers_are_integers",
       "adapter_id": "scn-float",
       "steps": [
@@ -4842,7 +5082,7 @@
           "adapter": "scn-warn",
           "expect": {
             "warnings": [
-              "Caveman middleware passed content through unchanged: adapter=scn-warn reason=version_unverified"
+              "Caveman middleware is running on an unverified framework version: adapter=scn-warn reason=version_unverified"
             ]
           }
         },
@@ -4902,6 +5142,64 @@
             "reason": "adapter_error",
             "requests": [
               "capabilities"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "failed_capabilities_fetch_does_not_spend_the_unknown_capability_refresh",
+      "adapter_id": "scn-refresh",
+      "steps": [
+        {
+          "op": "optimize",
+          "responses": [
+            {
+              "route": "capabilities",
+              "status": 400,
+              "json": {
+                "schema_version": 1,
+                "error": {
+                  "code": "unknown_capability"
+                }
+              }
+            }
+          ],
+          "expect": {
+            "reason": "unknown_capability",
+            "requests": [
+              "capabilities"
+            ]
+          }
+        },
+        {
+          "op": "optimize",
+          "responses": [
+            {
+              "route": "optimize",
+              "status": 400,
+              "json": {
+                "schema_version": 1,
+                "error": {
+                  "code": "unknown_capability"
+                }
+              }
+            }
+          ],
+          "expect": {
+            "reason": "unknown_capability",
+            "requests": [
+              "capabilities",
+              "optimize"
+            ]
+          }
+        },
+        {
+          "op": "optimize",
+          "expect": {
+            "requests": [
+              "capabilities",
+              "optimize"
             ]
           }
         }

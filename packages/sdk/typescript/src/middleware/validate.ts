@@ -40,7 +40,7 @@ export function scopeKey(scope: Scope): string {
   return JSON.stringify([scope.namespace, scope.session_id, scope.branch_id, scope.cache_epoch]);
 }
 export class MiddlewareError extends Error {
-  constructor(readonly code: string) { super(`Caveman middleware: ${code}`); this.name = 'MiddlewareError'; }
+  constructor(readonly code: string, detail?: string | null) { super(`Caveman middleware: ${code}${detail ? `: ${detail}` : ''}`); this.name = 'MiddlewareError'; }
 }
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
