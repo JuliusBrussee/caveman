@@ -6,7 +6,7 @@ transcripts separate and return only evidence needed by solver.
 
 ## FastContext-style explorer
 
-`@caveman/explorer` supplies Claude Code agent file named `fastcontext`. It is
+The CLI supplies a Claude Code agent file named `fastcontext`. It is
 inspired by FastContext research but does not implement paper's trained model or
 inherit paper's reported results.
 

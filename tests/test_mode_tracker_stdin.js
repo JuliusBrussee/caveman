@@ -232,6 +232,25 @@ test('defaultMode off (via cwd-scoped repo config) suppresses reinforcement but 
   }
 });
 
+// ---------- #303: per-turn reinforcement must carry enough style rules ----------
+
+test('active full-mode reinforcement restates core anti-drift rules (#303)', () => {
+  const cfg = makeConfigDir();
+  try {
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'full');
+
+    const ctx = contextOf(send(cfg, { prompt: 'ordinary follow-up' }));
+    assert.match(ctx, /CAVEMAN MODE ACTIVE \(full\)/);
+    assert.match(ctx, /Drop articles \(a\/an\/the\), filler, pleasantries, and hedging/);
+    assert.match(ctx, /Prefer fragments over full natural-prose sentences/);
+    assert.match(ctx, /No preamble or recap/);
+    assert.match(ctx, /Technical terms, code, commands, paths, and errors stay exact/);
+    assert.doesNotMatch(ctx, /session ruleset applies/);
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
 // ---------- #618: stats delivery via additionalContext, not decision:block ----------
 
 test('/caveman-stats emits hookSpecificOutput.additionalContext, not decision:block', () => {

@@ -102,7 +102,8 @@ type Runtime struct {
 	store                 *ccr.Store
 	receiptDir            string
 	usage                 sessionusage.Reader
-	mu                    sync.Mutex
+	mu                    sync.Mutex // activeSessions and lastActivity only
+	sessionLocks          [64]sync.Mutex
 	repositoryMu          sync.RWMutex
 	repositoryMaps        map[string]*repositoryMapEntry
 	repositorySessionRefs map[string]string
@@ -203,8 +204,9 @@ func resolveProfile(raw, policyMode string) (string, profileFeatures, error) {
 
 func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 	started := time.Now()
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	sessionLock := r.sessionLock(request.Session.ID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
 
 	if request.ProtocolVersion != ProtocolVersion {
 		return Response{}, fmt.Errorf("native runtime: unsupported protocol version %d", request.ProtocolVersion)
@@ -228,7 +230,16 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 		return Response{}, err
 	}
 	request.Profile = profile
+	r.mu.Lock()
 	r.lastActivity = time.Now()
+	// Listener lifetime is independent of session bookkeeping. Prune abandoned
+	// correlation entries lazily so a persistent proxy does not retain them
+	// forever when a host disappears without session.end.
+	for sessionID, activity := range r.activeSessions {
+		if r.lastActivity.Sub(activity.At) >= 30*time.Minute {
+			delete(r.activeSessions, sessionID)
+		}
+	}
 	if request.Event.Type == "session.end" {
 		delete(r.activeSessions, request.Session.ID)
 	} else {
@@ -247,6 +258,7 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 		}
 		r.activeSessions[request.Session.ID] = activity
 	}
+	r.mu.Unlock()
 	response := Response{
 		ProtocolVersion: ProtocolVersion,
 		PolicyMode:      policyMode,
@@ -271,6 +283,12 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 			evidenceContext, evidenceRef, err = r.repositoryEvidenceContext(request)
 			response.Context = joinContext(response.Context, evidenceContext)
 			response.RecoveryRef = evidenceRef
+			// A silent turn is the intended outcome when nothing was proven,
+			// but the ledger must still separate "declined, evidence weak"
+			// from "mechanism off or broken".
+			if err == nil && evidenceRef == "" && evidenceContext == "" {
+				response.decisionReason = "repository_evidence_declined_no_direct_match"
+			}
 		}
 		if err == nil && features.mask && !directOutputRewriteAgent(request.Agent.ID) {
 			var deferred string
@@ -317,6 +335,19 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 		}
 	}
 	return response, nil
+}
+
+// sessionLock preserves event order within one session without making unrelated
+// coding-agent sessions spend their shared 250 ms hook budget waiting on each
+// other's repository and CCR work. Fixed stripes bound lock memory for a
+// long-lived runtime; hash collisions only serialize, never weaken isolation.
+func (r *Runtime) sessionLock(sessionID string) *sync.Mutex {
+	var hash uint32 = 2166136261
+	for i := 0; i < len(sessionID); i++ {
+		hash ^= uint32(sessionID[i])
+		hash *= 16777619
+	}
+	return &r.sessionLocks[hash%uint32(len(r.sessionLocks))]
 }
 
 func directOutputRewriteAgent(agentID string) bool {
@@ -490,42 +521,6 @@ func (r *Runtime) Keepalive() {
 	r.mu.Unlock()
 }
 
-// WaitForIdle returns true only after every observed session ended and timeout
-// elapsed. Explicit long-running gateway owners do not call it.
-func (r *Runtime) WaitForIdle(ctx context.Context, idleTimeout time.Duration) bool {
-	if idleTimeout <= 0 {
-		return false
-	}
-	poll := idleTimeout / 4
-	if poll < 10*time.Millisecond {
-		poll = 10 * time.Millisecond
-	}
-	if poll > time.Second {
-		poll = time.Second
-	}
-	ticker := time.NewTicker(poll)
-	defer ticker.Stop()
-	for {
-		now := time.Now()
-		r.mu.Lock()
-		for sessionID, activity := range r.activeSessions {
-			if now.Sub(activity.At) >= idleTimeout {
-				delete(r.activeSessions, sessionID)
-			}
-		}
-		active, last := len(r.activeSessions), r.lastActivity
-		r.mu.Unlock()
-		if active == 0 && time.Since(last) >= idleTimeout {
-			return true
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-ticker.C:
-		}
-	}
-}
-
 // startRepositoryEvidence warms deterministic repository metadata outside hook
 // latency. No model/network call occurs; prompt hooks consume only completed maps.
 func (r *Runtime) startRepositoryEvidence(request Request) {
@@ -673,6 +668,18 @@ func (r *Runtime) repositoryEvidenceContext(request Request) (string, string, er
 			terms = request.TaskProfile.Terms
 		}
 		bundle := repointel.Evidence(repoMap, terms)
+		// Only a path or symbol that actually carries a task term is shown.
+		// BM25 metadata proximity ranked unrelated dependency files highly and
+		// handed them to the model every turn behind a ccr:// handle that read
+		// as authoritative; a low-confidence guess is worth less than silence.
+		if !bundle.HasDirectEvidence() {
+			return "", "", nil
+		}
+		// The ccr:// handle reads as authoritative, so what sits behind it must
+		// be what the block claims. Dropping non-direct items only at render
+		// time left the BM25-proximity guesses stored in the bundle and one
+		// retrieval away from the model.
+		bundle = bundle.DirectOnly()
 		data, err := json.Marshal(bundle)
 		if err != nil {
 			return "", "", err
@@ -693,13 +700,18 @@ func (r *Runtime) repositoryEvidenceContext(request Request) (string, string, er
 }
 
 func renderRepositoryEvidence(bundle repointel.Bundle, ref string) string {
-	if len(bundle.Items) == 0 {
-		return "Likely implementation path (observed local metadata): no task-specific match; inspect directly before editing. Evidence: " + ref
+	if !bundle.HasDirectEvidence() {
+		return ""
 	}
 	var out strings.Builder
 	out.WriteString("Likely implementation path (observed local metadata):")
-	for index, item := range bundle.Items[:min(5, len(bundle.Items))] {
-		fmt.Fprintf(&out, "\n%d. %s", index+1, item.Path)
+	shown := 0
+	for _, item := range bundle.Items {
+		if !item.Direct || shown == 5 {
+			continue
+		}
+		shown++
+		fmt.Fprintf(&out, "\n%d. %s", shown, item.Path)
 		if item.LineStart > 0 {
 			fmt.Fprintf(&out, ":%d", item.LineStart)
 			if item.LineEnd > item.LineStart {

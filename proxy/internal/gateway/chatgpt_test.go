@@ -521,3 +521,52 @@ func TestChatGPTNoCredentialFallback(t *testing.T) {
 		t.Fatalf("upstream 401 must pass through, got %d", rec.Code)
 	}
 }
+
+// TestChatGPTCodexArrayToolOutputCompresses pins the Codex 0.149+ wire shape:
+// custom_tool_call_output.output is an ARRAY of input_text parts, not a string.
+// The extractor only accepted the string form, so every real Codex tool turn
+// had an empty live zone and the subscription route compressed nothing
+// (measured 2026-09-04: 75-116 KB requests, zero compression, on real traffic).
+func TestChatGPTCodexArrayToolOutputCompresses(t *testing.T) {
+	live := strings.Repeat("codex shell output line that is long enough to matter ", 40)
+	body := `{"model":"gpt-5.6","stream":true,"store":false,"input":[` +
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"Read the file."}]},` +
+		`{"type":"custom_tool_call","call_id":"call_1","name":"shell_command","input":"sed -n 1,200p README.md"},` +
+		`{"type":"custom_tool_call_output","call_id":"call_1","output":[{"type":"input_text","text":"Chunk ID: 1 exit code 0"},{"type":"input_text","text":"` + live + `"}]}]}`
+	rt := &captureTransport{responses: []string{`{"id":"resp","usage":{"input_tokens":900,"output_tokens":10}}`}}
+	sink := &captureSink{}
+	comp := &liveZoneCompressor{}
+	srv := New(Config{
+		Auth:            stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "compress"}},
+		Sink:            sink,
+		Compressor:      comp,
+		PrefixCache:     newTestPrefixCache(),
+		RecoveryViaMCP:  true,
+		ChatGPTUpstream: "https://chatgpt.test/backend-api/codex",
+		HTTPClient:      &http.Client{Transport: rt},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/chatgpt/responses", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer codex-oauth-secret")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	upstream := string(rt.bodies[0])
+	if strings.Contains(upstream, live) || !strings.Contains(upstream, "<<ccr:") {
+		t.Fatalf("array-shaped Codex tool output was not compressed: %s", upstream)
+	}
+	if !strings.Contains(upstream, "Chunk ID: 1 exit code 0") {
+		t.Fatalf("the short header part must survive untouched: %s", upstream)
+	}
+	if comp.calls == 0 {
+		t.Fatal("compressor was never called")
+	}
+	row := sink.last(t)
+	if !row.CompressionEligible {
+		t.Fatalf("the ChatGPT route must record eligibility so the CLI can tell routing-never-applied from nothing-to-compress: %+v", row)
+	}
+	if row.CompressionTokensBefore <= row.CompressionTokensAfter {
+		t.Fatalf("compression accounting missing: %+v", row)
+	}
+}

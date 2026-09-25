@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="362" viewBox="0 0 880 362" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" role="img" aria-label="Provider-reported input tokens per benchmark case, direct Claude Code versus caveman wrap">
+<text x="0" y="16" font-size="13" font-weight="600" fill="#1f2328">Provider-reported input tokens per case — pinned Claude Code benchmark, 3 runs each</text>
+<text x="0" y="34" font-size="12" fill="#59636e">Total: 885,793 → 591,673 (−33.2%) · all 18/18 exact-answer checks passed</text>
+<rect x="0" y="47" width="10" height="10" rx="2" fill="#0969da"/>
+<text x="16" y="56" font-size="12" fill="#59636e">Direct Claude Code</text>
+<rect x="168" y="47" width="10" height="10" rx="2" fill="#e8590c"/>
+<text x="184" y="56" font-size="12" fill="#59636e">Caveman wrap</text>
+<text x="236" y="91.0" font-size="12" text-anchor="end" fill="#1f2328">CSV outlier hunt</text>
+<path d="M248,76 h426.0 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-426.0 z" fill="#0969da"/>
+<text x="684.0" y="85" font-size="11" fill="#59636e">165,823</text>
+<path d="M248,88 h189.1 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-189.1 z" fill="#e8590c"/>
+<text x="447.1464272145601" y="97" font-size="11" fill="#59636e">74,484 <tspan font-weight="700" fill="#e8590c">-55.1%</tspan></text>
+<text x="236" y="131.0" font-size="12" text-anchor="end" fill="#1f2328">Log needle-in-haystack</text>
+<path d="M248,116 h381.9 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-381.9 z" fill="#0969da"/>
+<text x="639.8753610777757" y="125" font-size="11" fill="#59636e">148,807</text>
+<path d="M248,128 h188.1 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-188.1 z" fill="#e8590c"/>
+<text x="446.0676866297197" y="137" font-size="11" fill="#59636e">74,068 <tspan font-weight="700" fill="#e8590c">-50.2%</tspan></text>
+<text x="236" y="171.0" font-size="12" text-anchor="end" fill="#1f2328">YAML config drift</text>
+<path d="M248,156 h338.6 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-338.6 z" fill="#0969da"/>
+<text x="596.614233248705" y="165" font-size="11" fill="#59636e">132,124</text>
+<path d="M248,168 h180.2 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-180.2 z" fill="#e8590c"/>
+<text x="438.18198922947965" y="177" font-size="11" fill="#59636e">71,027 <tspan font-weight="700" fill="#e8590c">-46.2%</tspan></text>
+<text x="236" y="211.0" font-size="12" text-anchor="end" fill="#1f2328">Test-output failure</text>
+<path d="M248,196 h385.9 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-385.9 z" fill="#0969da"/>
+<text x="643.9465695349861" y="205" font-size="11" fill="#59636e">150,377</text>
+<path d="M248,208 h277.4 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-277.4 z" fill="#e8590c"/>
+<text x="535.390518806197" y="217" font-size="11" fill="#59636e">108,514 <tspan font-weight="700" fill="#e8590c">-27.8%</tspan></text>
+<text x="236" y="251.0" font-size="12" text-anchor="end" fill="#1f2328">Deployment JSON drift</text>
+<path d="M248,236 h379.7 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-379.7 z" fill="#0969da"/>
+<text x="637.7178799080948" y="245" font-size="11" fill="#59636e">147,975</text>
+<path d="M248,248 h278.5 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-278.5 z" fill="#e8590c"/>
+<text x="536.4925975286902" y="257" font-size="11" fill="#59636e">108,939 <tspan font-weight="700" fill="#e8590c">-26.4%</tspan></text>
+<text x="236" y="291.0" font-size="12" text-anchor="end" fill="#1f2328">Dashboard HTML alert</text>
+<path d="M248,276 h360.8 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-360.8 z" fill="#0969da"/>
+<text x="618.8191746621397" y="285" font-size="11" fill="#59636e">140,687</text>
+<path d="M248,288 h397.0 a4,4 0 0 1 4,4 v2 a4,4 0 0 1 -4,4 h-397.0 z" fill="#e8590c"/>
+<text x="655.0036605296009" y="297" font-size="11" fill="#59636e">154,641 <tspan font-weight="700" fill="#e8590c">+9.9%</tspan></text>
+<line x1="248" y1="70" x2="248" y2="304" stroke="#d1d9e0" stroke-width="1"/>
+<text x="0" y="352" font-size="11" fill="#59636e">HTML got no transform, caveman still paid its own overhead — loss shown, not hidden · docs/WRAP-BENCHMARK.md</text>
+</svg>

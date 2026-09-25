@@ -22,7 +22,7 @@
   "required": ["schema_version", "id", "display_name", "vendor", "homepage", "binary_names", "install", "wire_protocol", "injection"],
   "properties": {
     "schema_version": { "const": "1" },
-    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "description": "kebab-case, globally unique; the `caveman wrap <id>` selector" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "maxLength": 64, "description": "kebab-case, globally unique; the `caveman wrap <id>` selector and `/w/<id>` proxy slug" },
     "display_name": { "type": "string" },
     "vendor": { "type": "string" },
     "homepage": { "type": "string", "format": "uri" },
@@ -58,6 +58,7 @@
             "env_var": { "type": "string", "description": "the env var that carries the rendered inline JSON config (e.g. OPENCODE_CONFIG_CONTENT)" },
             "config_content": {
               "type": "object",
+              "additionalProperties": false,
               "required": ["local"],
               "properties": {
                 "local": { "type": "object", "description": "config for local BYOK mode (caveman start)" },
@@ -87,15 +88,20 @@
                     "env_var": { "type": "string", "description": "if set and env_var is absent, read filename from this state directory" },
                     "filename": { "type": "string", "description": "config filename inside state_dir env_var" }
                   }
+                },
+                "platform_default": {
+                  "enum": ["qwen-system-settings"],
+                  "description": "closed resolver for a vendor's OS-default settings file, used only when env_var and state_dir do not select a path"
                 }
               }
             },
             "config_overlay": {
               "type": "object",
+              "additionalProperties": false,
               "required": ["local"],
               "properties": {
                 "local": { "description": "overlay merged over the base config for local BYOK mode (caveman start)" },
-                "managed": { "description": "overlay merged over the base config when CAVE_GATEWAY_URL points off-loopback" }
+                "managed": { "description": "overlay merged over the base config when CAVE_GATEWAY_URL points off-loopback; Qwen OpenAI provider x-cave-upstream-key may use {{cave_optional_openai_key_env}} as its whole value so the property is omitted when OPENAI_API_KEY is unavailable" }
               }
             }
           }

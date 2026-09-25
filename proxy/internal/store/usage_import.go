@@ -472,6 +472,8 @@ func quotaEventsFromAny(provider, sourceKind, basis, observedAt string, v any) [
 	return out
 }
 
+var sinceClock = time.Now
+
 func parseSince(expr string) time.Time {
 	expr = strings.TrimSpace(expr)
 	if expr == "" {
@@ -480,7 +482,7 @@ func parseSince(expr string) time.Time {
 	if strings.HasSuffix(expr, "d") {
 		n, _ := strconv.Atoi(strings.TrimSuffix(expr, "d"))
 		if n > 0 {
-			return time.Now().UTC().Add(-time.Duration(n) * 24 * time.Hour)
+			return sinceClock().UTC().Add(-time.Duration(n) * 24 * time.Hour)
 		}
 	}
 	for _, layout := range []string{time.RFC3339, "2006-01-02"} {

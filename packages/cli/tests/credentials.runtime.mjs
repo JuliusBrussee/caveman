@@ -161,7 +161,12 @@ test("stored gateway key reaches every managed-agent injection without entering 
     const openclaw = buildWrapEnv(profile("openclaw"), gateway);
     const openclawConfig = JSON.parse(readFileSync(openclaw.OPENCLAW_CONFIG_PATH, "utf8"));
     assert.equal(openclaw.CAVE_API_KEY, credentials.gateway_api_key);
-    assert.equal(openclawConfig.models.providers.caveman.apiKey, credentials.gateway_api_key);
+    assert.equal(openclawConfig.models.providers.caveman, undefined, "an existing provider needs endpoint proof before managed routing");
+    assert.equal(openclawConfig.models.providers.openai.apiKey, "${OPENAI_API_KEY}");
+    writeFileSync(openclawBase, "{}");
+    const freshOpenclaw = buildWrapEnv(profile("openclaw"), gateway);
+    const freshConfig = JSON.parse(readFileSync(freshOpenclaw.OPENCLAW_CONFIG_PATH, "utf8"));
+    assert.equal(freshConfig.models.providers.caveman.apiKey, credentials.gateway_api_key, "a new managed provider uses the gateway credential");
 
     assert.doesNotMatch(readFileSync(paths.configPath, "utf8"), /refresh-secret|cave_live_stored_key/);
   } finally {

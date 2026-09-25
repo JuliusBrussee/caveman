@@ -81,11 +81,6 @@ func (s codexSessionSource) scanSession(ref sessionRef, since time.Time, emit fu
 		ctx, hasUsage := codexContextTotal(usage)
 		fresh, cached, out, hasBilling := codexBillingUsage(usage)
 		payloads := codexTextPayloads(obj)
-		skillHaystack := ""
-		role := firstString(payload["role"])
-		if firstString(obj["type"]) == "response_item" && firstString(payload["type"]) == "message" && (role == "user" || role == "assistant") {
-			skillHaystack = strings.ToLower(string(line))
-		}
 		emit(turnEvent{
 			Timestamp: ts, ContextTotal: ctx, ContextUsagePresent: hasUsage,
 			// CacheUsagePresent stays false: OpenAI reports cache reads but no
@@ -97,8 +92,8 @@ func (s codexSessionSource) scanSession(ref sessionRef, since time.Time, emit fu
 			Model:          firstString(payload["model"], info["model"], obj["model"], model), ProviderKey: "openai",
 			ToolCalls: codexTurnToolCalls(payload, pendingTools), TextPayloads: payloads,
 			TaskSpawns: codexTaskSpawns(payload), SkillUses: codexStructuredSkillReferences(payload, payloads),
-			SkillHaystack: skillHaystack, Compaction: strings.Contains(strings.ToLower(firstString(payload["type"])), "compact"),
-			JSONLLine: lineNo, RelPath: ref.relPath, Repo: repo,
+			Compaction: strings.Contains(strings.ToLower(firstString(payload["type"])), "compact"),
+			JSONLLine:  lineNo, RelPath: ref.relPath, Repo: repo,
 		})
 	}
 	return false

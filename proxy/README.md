@@ -18,6 +18,25 @@ ANTHROPIC_API_KEY=… caveman-proxy    # serve on 127.0.0.1:8787
 caveman-proxy stats                  # print the local spend summary as JSON
 ```
 
+## Shared / VPC deployment
+
+The same binary runs as one shared service for a team. `CAVEMAN_AUTH_TOKEN` is
+the gate: set it and a non-loopback listen address is accepted, and every request
+must then carry the token in `x-cave-api-key` or `Authorization: Bearer`. The
+proxy consumes that header before resolving the provider credential, so the
+shared token is never forwarded upstream. Without the token a non-loopback listen
+address is still refused. Provider keys live on the server; Bedrock can use the
+task/pod/instance role instead.
+
+```bash
+docker run -d -p 8787:8787 -v caveman-data:/data \
+  -e CAVEMAN_AUTH_TOKEN="$(openssl rand -hex 32)" -e ANTHROPIC_API_KEY=… \
+  ghcr.io/juliusbrussee/caveman-proxy:bin-v1.1.7
+```
+
+See `../docs/technical/deploy.md` for Compose, ECS, Kubernetes, Cloud Run, and
+Fly.io recipes.
+
 Bedrock Runtime is first-party in standalone mode; no raw endpoint is required.
 Use either the low-friction bearer key or a complete IAM pair:
 

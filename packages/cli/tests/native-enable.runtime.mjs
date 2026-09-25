@@ -1,20 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
-function fixture() {
+function fixture({ opencodeVersion = "opencode 1.0.0" } = {}) {
   const home = mkdtempSync(join(tmpdir(), "cave-native-enable-"));
   const bin = join(home, "bin");
   mkdirSync(bin, { recursive: true });
-  for (const agent of ["claude", "codex", "hermes", "gemini", "opencode", "aider"]) {
+  for (const agent of ["claude", "codex", "hermes", "gemini", "aider"]) {
     writeFileSync(join(bin, agent), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${agent} 1.0.0'; fi\n`, { mode: 0o755 });
   }
+  writeFileSync(join(bin, "opencode"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${opencodeVersion}'; fi\n`, { mode: 0o755 });
   const mcp = join(bin, "caveman-mcp");
   writeFileSync(mcp, `#!/bin/sh
 if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
@@ -22,9 +23,14 @@ if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
 fi
 `, { mode: 0o755 });
   const proxy = join(bin, "caveman-proxy");
+  // The bare-spawn branch (no "version --json" args — how enable/wrap actually
+  // launch the proxy) only records anything when CAVEMAN_PROXY_SPAWN_LOG is
+  // set, so it stays silent for the other tests in this file that never opt in.
   writeFileSync(proxy, `#!/bin/sh
 if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
   printf '%s\n' '{"version":"1.0.0","capabilities":["run_state","native_runtime_v1","native_hook_bridge_v1","typed_ccr"]}'
+elif [ -n "$CAVEMAN_PROXY_SPAWN_LOG" ]; then
+  printf 'listen=%s recovery=%s owner=%s\n' "$CAVEMAN_LISTEN" "$CAVEMAN_RECOVERY" "$CAVEMAN_PROXY_OWNER" >> "$CAVEMAN_PROXY_SPAWN_LOG"
 fi
 `, { mode: 0o755 });
   writeFileSync(join(bin, "caveman"), `#!/usr/bin/env node
@@ -36,6 +42,8 @@ if (process.argv[2] === "shrink-hook") {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { updatedInput: { command: "caveman shrink -- git status" } } }));
 } else if (event === "SessionStart" || event === "PostCompact") {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { additionalContext: "Caveman Core fixture" } }));
+} else if (event === "UserPromptSubmit") {
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { additionalContext: "prompt hint fixture" } }));
 } else if (event === "PreToolUse") {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { additionalContext: "current observation fixture" } }));
 } else if (event === "PostToolUse") {
@@ -108,7 +116,7 @@ test("enable/disable claude is idempotent and preserves unrelated later edits", 
   assert.match(installedBytes, /shrink-hook/);
   assert.match(JSON.stringify(settings.hooks.PreToolUse), /native-hook claude/);
   assert.match(JSON.stringify(settings.hooks.PostToolUseFailure), /native-hook claude/);
-  assert.match(JSON.stringify(settings.hooks.PostCompact), /native-hook claude/);
+  assert.equal(settings.hooks.PostCompact, undefined, "Claude compact context is delivered by SessionStart source=compact");
   assert.equal(JSON.parse(readFileSync(mcpPath, "utf8")).mcpServers.other.command, "other-mcp");
   assert.match(readFileSync(mcpPath, "utf8"), /caveman-mcp/);
   assert.ok(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")));
@@ -206,6 +214,7 @@ test("enable/disable codex owns marked config blocks and preserves unrelated dri
   const installed = readFileSync(configPath, "utf8");
   assert.match(installed, /^# >>> caveman:native-root\nmodel_provider = "caveman"/);
   assert.match(installed, /\[model_providers\.caveman\]/);
+  assert.match(installed, /base_url = "http:\/\/127\.0\.0\.1:8787\/w\/codex\/v1"/);
   assert.match(installed, /\[mcp_servers\.caveman\]/);
   assert.match(readFileSync(hooksPath, "utf8"), /native-hook codex/);
   assert.match(readFileSync(hooksPath, "utf8"), /keep-codex/);
@@ -228,6 +237,130 @@ test("enable/disable codex owns marked config blocks and preserves unrelated dri
   assert.equal(afterHooks.extra, "keep");
   assert.match(JSON.stringify(afterHooks), /keep-codex/);
   assert.doesNotMatch(JSON.stringify(afterHooks), /native-hook|shrink-hook/);
+});
+
+// The tables block ends with [mcp_servers.caveman] followed by the end marker.
+// The legacy table stripper used to run before marker removal and swallowed
+// that end marker, so the block enable had itself written was rejected as
+// "corrupted" on the very next enable/wrap, and doctor reported drift forever.
+test("enable codex twice re-parses its own block instead of calling it corrupted", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(configPath, 'approval_policy = "never"\n');
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const first = readFileSync(configPath, "utf8");
+  const again = await run(["enable", "codex"], fx.env);
+  assert.equal(again.code, 0, again.stderr);
+  assert.doesNotMatch(again.stderr, /corrupted/);
+  const second = readFileSync(configPath, "utf8");
+  assert.equal(second.split("# >>> caveman:native-tables").length, 2, "exactly one tables begin marker");
+  assert.equal(second.split("# <<< caveman:native-tables").length, 2, "exactly one tables end marker");
+  assert.equal(second, first, "a second enable is byte-idempotent");
+});
+
+// An upgrade or a moved install changes the binary path inside the hook
+// command. That is the same hook, so enable must replace the stale entry, not
+// append a second (then third) caveman hook per event.
+test("enable codex after a binary path change keeps one caveman hook per event", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  writeFileSync(join(fx.home, ".codex", "config.toml"), 'approval_policy = "never"\n');
+  writeFileSync(join(fx.home, ".codex", "hooks.json"), JSON.stringify({ hooks: {} }, null, 2) + "\n");
+  const first = await run(["enable", "codex"], fx.env);
+  assert.equal(first.code, 0, first.stderr);
+  const movedProxy = join(fx.home, "moved-caveman-proxy");
+  writeFileSync(movedProxy, readFileSync(fx.env.CAVEMAN_PROXY_BIN), { mode: 0o755 });
+  // The journal from the earlier install is gone (a different CAVEMAN_HOME, a
+  // reinstall), so enable cannot refuse as "degraded" and must merge into the
+  // host file it finds. This is the flow that stacked three hook sets.
+  rmSync(join(fx.home, ".caveman", "integrations", "codex.json"), { force: true });
+  const again = await run(["enable", "codex"], { ...fx.env, CAVEMAN_PROXY_BIN: movedProxy });
+  assert.equal(again.code, 0, again.stderr);
+  const hooks = JSON.parse(readFileSync(join(fx.home, ".codex", "hooks.json"), "utf8")).hooks;
+  for (const [event, list] of Object.entries(hooks)) {
+    const native = list.filter((entry) => JSON.stringify(entry).includes("native-hook codex"));
+    assert.equal(native.length, 1, `${event} has ${native.length} caveman native hooks`);
+    assert.match(JSON.stringify(native[0]), /moved-caveman-proxy/, `${event} must point at the current binary`);
+  }
+});
+
+// enable writes config.toml to route every Codex request through the local
+// proxy but, until this test, nothing asserted the proxy is actually spawned
+// — config.toml pointed at a proxy that might never be running (#1051). Also
+// guards the two follow-up review findings on that fix: CAVEMAN_RECOVERY must
+// be recomputed, never let a stray inherited value survive into the spawned
+// proxy's env, and CAVEMAN_PROXY_OWNER must be "wrap" (the hook-revived
+// proxy's 30-minute-idle-exit lifecycle), not the immortal one "start" gets.
+test("enable codex spawns the local proxy with explicit recovery/owner, not inherited env", async () => {
+  const fx = fixture();
+  const spawnLog = join(fx.home, "proxy-spawn.log");
+  // A stray CAVEMAN_RECOVERY in the parent env (left over from an earlier
+  // wrap/start in the same shell) must not leak into the proxy this spawns —
+  // the fixture's caveman-mcp stub reports mcp_recovery, so the correctly
+  // recomputed value is "mcp"; this planted value is neither that nor empty,
+  // so it only proves anything if it does NOT show up in the log.
+  const env = { ...fx.env, CAVEMAN_PROXY_SPAWN_LOG: spawnLog, CAVEMAN_RECOVERY: "stale-leaked-value" };
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+
+  const out = await run(["enable", "codex"], env);
+  assert.equal(out.code, 0, out.stderr);
+
+  // The spawn is fire-and-forget from enable's own perspective; give the
+  // detached stub a moment to write its log line.
+  for (let i = 0; i < 20 && !existsSync(spawnLog); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(existsSync(spawnLog), "enable never spawned the local proxy");
+  const logged = readFileSync(spawnLog, "utf8").trim();
+  assert.match(logged, /listen=127\.0\.0\.1:8787\b/, "spawned proxy must listen where config.toml just routed Codex to");
+  assert.match(logged, /recovery=mcp\b/, "CAVEMAN_RECOVERY must be recomputed from the current MCP install, not inherited");
+  assert.doesNotMatch(logged, /stale-leaked-value/, "a stray parent-env CAVEMAN_RECOVERY must never survive into the spawn");
+  assert.match(logged, /owner=wrap\b/, "enable's proxy must share the hook-revived (wrap) lifecycle, not the immortal one \"start\" gets");
+});
+
+// Re-running `enable` is exactly what someone does when the route is dead, so
+// the installed-state branch has to reach the proxy startup too. It returns
+// "already" before the mutation work, so gating startup on a fresh install made
+// it an accidental side effect of the first install rather than something the
+// command does.
+test("a second enable still starts the proxy when nothing is listening", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+
+  const first = await run(["enable", "codex"], fx.env);
+  assert.equal(first.code, 0, first.stderr);
+
+  // Only now start recording, so the log can only contain the second run's spawn.
+  const spawnLog = join(fx.home, "proxy-spawn-second.log");
+  const second = await run(["enable", "codex"], { ...fx.env, CAVEMAN_PROXY_SPAWN_LOG: spawnLog });
+  assert.equal(second.code, 0, second.stderr);
+  assert.match(second.stderr, /already enabled/, "precondition: the second run must take the installed-state branch");
+
+  for (let i = 0; i < 20 && !existsSync(spawnLog); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(existsSync(spawnLog), "a repeated enable must still revive a dead proxy");
+  assert.match(readFileSync(spawnLog, "utf8").trim(), /listen=127\.0\.0\.1:8787\b/);
+});
+
+// Every other spawn site (agentShortcut, the native hook) gates on !opts.noProxy.
+test("enable does not start the proxy when the user's config disables it", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  mkdirSync(join(fx.home, ".caveman-cloud"), { recursive: true });
+  writeFileSync(
+    join(fx.home, ".caveman-cloud", "config.json"),
+    JSON.stringify({ wrap: { proxy: false } }, null, 2),
+  );
+
+  const spawnLog = join(fx.home, "proxy-spawn-disabled.log");
+  const out = await run(["enable", "codex"], { ...fx.env, CAVEMAN_PROXY_SPAWN_LOG: spawnLog });
+  assert.equal(out.code, 0, out.stderr);
+
+  // Give a spawn that should never happen the same grace the positive test gives one.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(existsSync(spawnLog), false, "enable must not start a proxy the config switched off");
 });
 
 test("enable fails before host writes when current MCP binary is missing", async () => {
@@ -290,6 +423,53 @@ test("disable refuses a removed pre-existing file and keeps journal", async () =
   assert.ok(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")));
 });
 
+// `caveman enable codex` still writes a shrink-hook entry into ~/.codex/hooks.json,
+// but since #1037 that hook declines every Codex tool event. Reporting the component
+// off a substring of the hooks file therefore claimed a rewrite that no longer
+// happens. Codex is an installed, healthy integration WITHOUT command-output rewrite.
+test("doctor does not claim a Codex tool rewrite that shrink-hook declines", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  writeFileSync(join(fx.home, ".codex", "config.toml"), 'approval_policy = "never"\n');
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const out = await run(["doctor", "codex"], fx.env);
+  const result = JSON.parse(out.stdout);
+  assert.equal(result.components.tool_rewrite, false, "Codex commands are no longer rewritten");
+  // The rest of the integration is untouched: this is a claim fix, not a downgrade.
+  assert.equal(result.components.lifecycle_hooks, true);
+  assert.equal(result.components.routing, true);
+});
+
+// Everyone who ran `caveman enable codex` on an api key before #1045 has the
+// route-less base_url in ~/.codex/config.toml and a 404 on every `codex exec`.
+// They must land in the state the CLI already knows how to fix, not in a
+// silently-wrong install that reads healthy.
+test("a codex install carrying the pre-/v1 route reads degraded and repairs to /v1", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(join(fx.home, ".codex", "auth.json"), JSON.stringify({ OPENAI_API_KEY: "sk-local" }));
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  assert.match(readFileSync(configPath, "utf8"), /base_url = "http:\/\/127\.0\.0\.1:8787\/w\/codex\/v1"/);
+
+  // Rewind to exactly what the old writer produced, journal included.
+  const journalPath = join(fx.home, ".caveman", "integrations", "codex.json");
+  const rewind = (text) => text.replaceAll("/w/codex/v1", "/w/codex");
+  writeFileSync(configPath, rewind(readFileSync(configPath, "utf8")));
+  writeFileSync(journalPath, rewind(readFileSync(journalPath, "utf8")));
+
+  const doctor = await run(["doctor", "codex"], fx.env);
+  assert.notEqual(doctor.code, 0);
+  const result = JSON.parse(doctor.stdout);
+  assert.equal(result.state, "degraded");
+  assert.equal(result.components.routing, false);
+  assert.equal(result.repair, "caveman doctor codex --fix");
+
+  assert.equal((await run(["doctor", "codex", "--fix"], fx.env)).code, 0);
+  assert.match(readFileSync(configPath, "utf8"), /base_url = "http:\/\/127\.0\.0\.1:8787\/w\/codex\/v1"/);
+  assert.equal(JSON.parse((await run(["doctor", "codex"], fx.env)).stdout).state, "installed");
+});
+
 test("doctor reports Codex routing degraded when auth lane changes", async () => {
   const fx = fixture();
   mkdirSync(join(fx.home, ".codex"), { recursive: true });
@@ -322,6 +502,107 @@ test("doctor reports a present but unlaunchable host as unavailable", async () =
   assert.equal(result.available, false);
   assert.equal(result.state, "unavailable");
   assert.equal(result.version_probe_error, "version_probe_exit_127");
+});
+
+test("a native install honors think.shrink=false, and a repair keeps the entry out", async () => {
+  const fx = fixture();
+
+  // Accept control first: with the rewrite ON the entry is written, so the
+  // assertions below separate "off is honored" from "nothing was written".
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  assert.match(readFileSync(settingsPath, "utf8"), /shrink-hook/);
+
+  const configDir = join(fx.home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { shrink: false } }, null, 2));
+
+  // Turning the switch off makes the existing install genuinely out of sync,
+  // and doctor says so instead of calling an unwanted entry healthy.
+  const degraded = await run(["doctor", "claude"], fx.env);
+  assert.notEqual(degraded.code, 0);
+  assert.equal(JSON.parse(degraded.stdout).state, "degraded");
+
+  // ...and the repair the CLI itself recommends now HONORS the choice. Before
+  // #1049 this is where the manual removal was undone: --fix rewrote the entry
+  // back in, every time, and `caveman disable` was the only way out.
+  const repaired = await run(["doctor", "claude", "--fix"], fx.env);
+  assert.equal(repaired.code, 0, repaired.stderr);
+  const afterFix = readFileSync(settingsPath, "utf8");
+  assert.doesNotMatch(afterFix, /shrink-hook/, "doctor --fix must honor think.shrink=false");
+  // ...and takes nothing else with it.
+  assert.match(afterFix, /native-hook claude/);
+  assert.equal(JSON.parse(afterFix).env.ANTHROPIC_BASE_URL, "http://127.0.0.1:8787/w/claude");
+
+  // The install is healthy again, so nothing keeps nagging the user to --fix.
+  const healthy = await run(["doctor", "claude"], fx.env);
+  assert.equal(JSON.parse(healthy.stdout).state, "installed");
+
+  // A second repair is a no-op rather than a reinstatement.
+  assert.equal((await run(["doctor", "claude", "--fix"], fx.env)).code, 0);
+  assert.doesNotMatch(readFileSync(settingsPath, "utf8"), /shrink-hook/);
+
+  // And turning it back on is still a one-command round trip.
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { shrink: true } }, null, 2));
+  assert.equal((await run(["doctor", "claude", "--fix"], fx.env)).code, 0);
+  assert.match(readFileSync(settingsPath, "utf8"), /shrink-hook/);
+});
+
+test("the env switch honors think.shrink=false the same way", async () => {
+  const fx = fixture();
+  const off = { ...fx.env, CAVEMAN_SHRINK: "0" };
+  assert.equal((await run(["enable", "claude"], off)).code, 0);
+  const settings = readFileSync(join(fx.home, ".claude", "settings.json"), "utf8");
+  assert.doesNotMatch(settings, /shrink-hook/);
+  assert.match(settings, /native-hook claude/);
+});
+
+test("a shrink entry an earlier install left behind does not survive think.shrink=false", async () => {
+  const fx = fixture();
+  // A standalone/plugin install, or any caveman old enough to predate #1049,
+  // leaves this entry in the host file. `enable` merges into that file rather
+  // than starting from an empty one, so honoring the switch only on the
+  // entries we ADD leaves the rewrite live on exactly the machines that asked
+  // for it to be off — and the brand new install is born degraded, because
+  // nativeHookEntriesHealthy rejects a managed entry the expected document lacks.
+  mkdirSync(join(fx.home, ".claude"), { recursive: true });
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  writeFileSync(settingsPath, JSON.stringify({
+    hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "/usr/local/bin/caveman shrink-hook" }] }] },
+  }, null, 2));
+  writeFileSync(join(fx.home, ".claude", "keep.txt"), "unrelated");
+
+  const configDir = join(fx.home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { shrink: false } }, null, 2));
+
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  const settings = readFileSync(settingsPath, "utf8");
+  assert.doesNotMatch(settings, /shrink-hook/, "a stale shrink entry must be withdrawn, not merged through");
+  assert.match(settings, /native-hook claude/);
+
+  // Born healthy, not degraded — otherwise the very next `caveman enable`
+  // refuses and the user is told to repair an install nothing broke.
+  const doctor = await run(["doctor", "claude"], fx.env);
+  assert.equal(JSON.parse(doctor.stdout).state, "installed");
+
+  // ...and `disable` still restores the host file it found, stale entry included.
+  assert.equal((await run(["disable", "claude"], fx.env)).code, 0);
+  assert.match(readFileSync(settingsPath, "utf8"), /shrink-hook/);
+});
+
+test("the degraded gate names the repair that actually repairs", async () => {
+  const fx = fixture();
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  const configDir = join(fx.home, ".caveman-cloud");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { shrink: false } }, null, 2));
+
+  // `caveman doctor claude` alone only prints JSON saying `degraded`; nothing in
+  // it says how to get out. Pointing at the bare command dead-ends the user.
+  const blocked = await run(["enable", "claude"], fx.env);
+  assert.equal(blocked.code, 1);
+  assert.match(blocked.stderr, /caveman doctor claude --fix/);
 });
 
 test("doctor surfaces independently disabled Core without degrading native integration", async () => {
@@ -386,13 +667,40 @@ test("doctor requires exact native hook entries, not matching text", async () =>
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
   const path = join(fx.home, ".claude", "settings.json");
   const settings = JSON.parse(readFileSync(path, "utf8"));
-  settings.hooks.SessionStart = [{ hooks: [{ type: "command", command: "echo native-hook claude" }] }];
+  settings.hooks.SessionStart = [{ hooks: [{ type: "command", command: "echo native-hook claude", timeout: 30 }] }];
   writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
   const out = await run(["doctor", "claude"], fx.env);
   assert.notEqual(out.code, 0);
   const result = JSON.parse(out.stdout);
   assert.equal(result.state, "degraded");
   assert.equal(result.components.lifecycle_hooks, false);
+});
+
+test("doctor and disable tolerate executable path drift with unchanged hook semantics", async () => {
+  const fx = fixture();
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  const path = join(fx.home, ".claude", "settings.json");
+  const settings = JSON.parse(readFileSync(path, "utf8"));
+  for (const entries of Object.values(settings.hooks)) {
+    for (const entry of entries) {
+      const hook = entry.hooks?.[0];
+      if (typeof hook?.command === "string" && /native-hook claude|shrink-hook|mem recall-hook/.test(hook.command)) {
+        hook.command = hook.command.includes("native-hook claude")
+          ? hook.command
+              .replace(/^.*?(?=native-hook claude)/, "'/new/caveman/bin/caveman-proxy' ")
+              .replace(/--adapter\s+.*$/, "--adapter '/new/caveman/native-hook-fast.js'")
+          : hook.command.replace(/^.*?(?=shrink-hook|mem recall-hook)/, "'/new/fnm/node' '/new/caveman/index.js' ");
+      }
+    }
+  }
+  writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
+
+  const doctor = await run(["doctor", "claude"], fx.env);
+  assert.equal(doctor.code, 0, doctor.stderr);
+  assert.equal(JSON.parse(doctor.stdout).state, "installed");
+  const disabled = await run(["disable", "claude"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  assert.doesNotMatch(readFileSync(path, "utf8"), /native-hook claude|shrink-hook|mem recall-hook/);
 });
 
 test("doctor --fix transactionally repairs missing owned hooks and preserves unrelated edits", async () => {
@@ -594,7 +902,7 @@ test("enable/disable hermes installs native lifecycle pack and preserves unrelat
   const installed = readFileSync(configPath, "utf8");
   assert.match(installed, /caveman:native-hermes-routing/);
   assert.match(installed, /provider: "custom"/);
-  assert.match(installed, /base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes"/);
+  assert.match(installed, /base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"/);
   assert.match(installed, /caveman_native/);
   assert.match(installed, /caveman-native/);
   const pluginDir = join(hermesHome, "plugins", "caveman_native");
@@ -608,7 +916,11 @@ test("enable/disable hermes installs native lifecycle pack and preserves unrelat
     encoding: "utf8",
   });
   assert.equal(compiled.status, 0, compiled.stderr);
-  assert.ok(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")));
+  const journal = JSON.parse(readFileSync(join(fx.home, ".caveman", "integrations", "hermes.json"), "utf8"));
+  assert.equal(journal.operations.find((operation) => operation.kind === "hermes-config").owned.route, "http://127.0.0.1:8787/w/hermes/v1");
+  const status = await run(["doctor", "hermes"], env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).components.routing, true);
 
   writeFileSync(configPath, `${installed}# later user setting\n`);
   const disabled = await run(["disable", "hermes"], env);
@@ -717,6 +1029,7 @@ test("enable/disable opencode installs one native plugin, routed providers and r
     assert.match(plugin, new RegExp(surface.replaceAll(".", "\\.")));
   }
   assert.match(plugin, /native-hook", "opencode/);
+  assert.match(plugin, /export const CavemanNative/, "an OpenCode 1.x host keeps the V1 hook map (#1083)");
   const syntax = spawnSync(process.execPath, ["--check", pluginPath], { encoding: "utf8" });
   assert.equal(syntax.status, 0, syntax.stderr);
   const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
@@ -769,6 +1082,172 @@ test("enable/disable opencode installs one native plugin, routed providers and r
   assert.equal(restored.mcp.caveman, undefined);
   assert.equal(existsSync(pluginPath), false);
   assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "opencode.json")), false);
+});
+
+test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {
+  const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  const plugin = readFileSync(pluginPath, "utf8");
+  assert.match(plugin, /caveman:native-opencode/);
+  assert.match(plugin, /id: "caveman-native"/, "the V2 plugin must carry a stable id (#1083)");
+  assert.match(plugin, /async setup\(ctx\)/);
+  assert.doesNotMatch(plugin, /export const CavemanNative/, "no V1 hook map on an OpenCode 2 host");
+  const syntax = spawnSync(process.execPath, ["--check", pluginPath], { encoding: "utf8" });
+  assert.equal(syntax.status, 0, syntax.stderr);
+
+  const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+  assert.equal(pluginModule.default.id, "caveman-native");
+  assert.equal(typeof pluginModule.default.setup, "function");
+
+  const sessionHooks = new Map();
+  const toolHooks = new Map();
+  const scripted = [
+    { type: "session.created", location: { directory: fx.home }, data: { sessionID: "oc2-1" } },
+    { type: "session.created", location: { directory: "/elsewhere" }, data: { sessionID: "oc2-x" } },
+    { type: "session.idle", location: { directory: fx.home }, data: { sessionID: "oc2-1" } },
+    { type: "session.compaction.ended", location: { directory: fx.home }, data: { sessionID: "oc2-1" } },
+    { type: "session.deleted", location: { directory: fx.home }, data: { sessionID: "oc2-1" } },
+  ];
+  const fakeCtx = {
+    location: { directory: fx.home, workspaceID: undefined },
+    event: { async *subscribe() { for (const event of scripted) yield event; } },
+    session: { hook: async (name, cb) => { sessionHooks.set(name, cb); return { dispose: async () => {} }; } },
+    tool: { hook: async (name, cb) => { toolHooks.set(name, cb); return { dispose: async () => {} }; } },
+  };
+  const readCapture = () => readFileSync(fx.env.CAVE_NATIVE_CAPTURE, "utf8").trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+  const flush = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r)); };
+  const previousCapture = process.env.CAVE_NATIVE_CAPTURE;
+  process.env.CAVE_NATIVE_CAPTURE = fx.env.CAVE_NATIVE_CAPTURE;
+  writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+  try {
+    const cleanup = await pluginModule.default.setup(fakeCtx);
+    assert.deepEqual([...sessionHooks.keys()].sort(), ["compaction", "context", "prompt"]);
+    assert.deepEqual([...toolHooks.keys()].sort(), ["execute.after", "execute.before"]);
+    await flush();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
+      ["SessionStart", "oc2-1"],
+      ["Stop", "oc2-1"],
+      ["PostCompact", "oc2-1"],
+      ["SessionEnd", "oc2-1"],
+    ]);
+
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    await sessionHooks.get("prompt")({ sessionID: "oc2-2", prompt: { text: "Yes, add billing support" } });
+    await sessionHooks.get("prompt")({ sessionID: "oc2-2", prompt: { text: "fix that" } });
+    const profiles = readCapture();
+    assert.equal(profiles.length, 2, JSON.stringify(profiles));
+    assert.equal(profiles[0].task_continuation, false);
+    assert.equal(profiles[1].task_continuation, true);
+
+    const system = { sessionID: "oc2-2", system: [] };
+    await sessionHooks.get("context")(system);
+    assert.deepEqual(system.system, [
+      { type: "text", text: "Caveman Core fixture" },
+      { type: "text", text: "prompt hint fixture" },
+    ]);
+    const once = { sessionID: "oc2-2", system: [] };
+    await sessionHooks.get("context")(once);
+    assert.deepEqual(once.system, [{ type: "text", text: "Caveman Core fixture" }]);
+
+    const shrinkable = { tool: "shell", sessionID: "oc2-2", input: { command: "git status" } };
+    await toolHooks.get("execute.before")(shrinkable);
+    assert.equal(shrinkable.input.command, "caveman shrink -- git status");
+    const legacy = { tool: "bash", sessionID: "oc2-2", input: { command: "git status" } };
+    await toolHooks.get("execute.before")(legacy);
+    assert.equal(legacy.input.command, "caveman shrink -- git status");
+    const other = { tool: "read", sessionID: "oc2-2", input: { filePath: "x" } };
+    await toolHooks.get("execute.before")(other);
+    assert.deepEqual(other.input, { filePath: "x" });
+
+    const replaced = { status: "completed", tool: "shell", sessionID: "oc2-2", input: {}, result: { content: "large exact output" } };
+    await toolHooks.get("execute.after")(replaced);
+    assert.equal(replaced.result.content, "[CommandResult] full: ccr://fixture");
+    const failed = { status: "error", tool: "shell", sessionID: "oc2-2", error: { message: "x" } };
+    await toolHooks.get("execute.after")(failed);
+    assert.equal(failed.result, undefined);
+
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    const compacting = { sessionID: "oc2-3", system: [] };
+    await sessionHooks.get("compaction")(compacting);
+    assert.deepEqual(compacting.system, [{ type: "text", text: "Caveman Core fixture" }]);
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
+      ["PreCompact", "oc2-3"],
+      ["SessionStart", "oc2-3"],
+    ]);
+
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    await cleanup();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]).sort(), [
+      ["SessionEnd", "oc2-2"],
+      ["SessionEnd", "oc2-3"],
+    ]);
+  } finally {
+    if (previousCapture === undefined) delete process.env.CAVE_NATIVE_CAPTURE;
+    else process.env.CAVE_NATIVE_CAPTURE = previousCapture;
+  }
+});
+
+test("enable opencode with an unreadable version keeps the V1 plugin", async () => {
+  // nativeHostProbe reports version: null whenever `opencode --version` yields
+  // nothing, exits non-zero, or cannot be spawned ("version_probe_failed").
+  // #1081 records that state on a live OpenCode 1.18.31 host, so "unknown" is
+  // not a proxy for "new": defaulting it to V2 would hand a 1.x user whose
+  // probe merely flaked a plugin their host cannot load, breaking an install
+  // that works today. Unknown therefore keeps the status quo (V1); only a
+  // version that positively reads as major >= 2 opts into the V2 API.
+  const fx = fixture({ opencodeVersion: "" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const plugin = readFileSync(join(configDir, "plugins", "caveman-native.js"), "utf8");
+  assert.match(plugin, /export const CavemanNative/,
+    "an unreadable version must not silently upgrade a V1 host to the V2 API (#1083, #1081)");
+  assert.doesNotMatch(plugin, /async setup\(ctx\)/);
+});
+
+test("doctor reports opencode degraded after the host upgrades past the installed plugin API", async () => {
+  // The plugin API is chosen while building native mutations, so a V1 install
+  // stays on disk after the host becomes V2 — and `caveman opencode` skips
+  // enableNative whenever a journal exists, by design (status probes spawn
+  // subprocesses). That makes doctor the repair door for this drift, exactly
+  // as the comment on that skip says. Before this check, doctor compared
+  // journaled bytes and pack version only, never the installed plugin API
+  // against the current host major, so it called a plugin OpenCode 2 refuses
+  // to load "installed".
+  const fx = fixture({ opencodeVersion: "opencode 1.18.31" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  assert.equal((await run(["enable", "opencode"], fx.env)).code, 0);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  assert.match(readFileSync(pluginPath, "utf8"), /export const CavemanNative/, "V1 host gets the V1 plugin");
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
+
+  // The user upgrades OpenCode. Nothing else changes: same journal, same bytes.
+  writeFileSync(join(fx.home, "bin", "opencode"),
+    `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'opencode 2.0.7'; fi\n`, { mode: 0o755 });
+
+  const doctor = await run(["doctor", "opencode"], fx.env);
+  assert.notEqual(doctor.code, 0, "a plugin the host cannot load must not report healthy");
+  const result = JSON.parse(doctor.stdout);
+  assert.equal(result.state, "degraded");
+  assert.equal(result.components.lifecycle_hooks, false);
+  assert.equal(result.repair, "caveman doctor opencode --fix");
+
+  assert.equal((await run(["doctor", "opencode", "--fix"], fx.env)).code, 0);
+  assert.match(readFileSync(pluginPath, "utf8"), /async setup\(ctx\)/, "--fix regenerates against the new host major");
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
 });
 
 test("enable/disable aider stays shallow, preserves native repo map, and restores config", async () => {

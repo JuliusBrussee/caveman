@@ -142,7 +142,7 @@ func TestFallbackContextWindowKeepsDepthCountsButOmitsTokenFloorAndCrossProvider
 	}
 }
 
-func TestLearnV2StructuredSkillUseAndSubstringGuard(t *testing.T) {
+func TestLearnV2StructuredSkillUseRejectsBareSubstring(t *testing.T) {
 	slugs := []string{"alpha", "beta", "gamma", "delta"}
 	seen := map[string]bool{}
 	known := knownSkillSlugs(slugs)
@@ -169,11 +169,11 @@ func TestLearnV2StructuredSkillUseAndSubstringGuard(t *testing.T) {
 	}
 	beh := behaviorScan{SkillUse: map[string]int{}, SessionsBySource: map[string]int{}}
 	scanClaudeTranscriptBehavior(path, "repo/guard.jsonl", time.Time{}, []string{"epsilon"}, &beh, newRecurringMiner())
-	if beh.SkillUse["epsilon"] != 1 {
-		t.Fatalf("substring false-negative guard missed bare slug: %+v", beh.SkillUse)
+	if beh.SkillUse["epsilon"] != 0 {
+		t.Fatalf("bare prose must not count as skill use: %+v", beh.SkillUse)
 	}
 	dead := deadLoadSink(10, []string{"unused"}, behaviorScan{SessionsScanned: 1}, 1)[0]
-	if dead.Evidence["detection"] != "structured+substring_guard" {
+	if dead.Evidence["detection"] != "structured" {
 		t.Fatalf("dead-load detection evidence = %+v", dead.Evidence)
 	}
 }
@@ -220,6 +220,73 @@ func TestLearnV2ConfigSnapshotsUseO200kAndNameBasis(t *testing.T) {
 	sink := configSinksWithBehavior(cfg, behaviorScan{}, 1)[0]
 	if sink.Evidence["token_basis"] != "o200k" {
 		t.Fatalf("config sink token basis = %+v", sink.Evidence)
+	}
+}
+
+func TestConfigTaxMarksPluginTokensUnmeasured(t *testing.T) {
+	sinks := configSinks(configScan{
+		SkillDescTokens: 10,
+		PluginCount:     2,
+		TokenBasis:      "o200k",
+	}, 1)
+	if len(sinks) == 0 {
+		t.Fatal("missing config-tax sink")
+	}
+	evidence := sinks[0].Evidence
+	if value, exists := evidence["plugin_desc_tokens"]; !exists || value != nil {
+		t.Fatalf("plugin token value = %#v, want explicit null", value)
+	}
+	if evidence["plugin_token_measurement"] != "unavailable" || evidence["config_tax_coverage"] != "partial" {
+		t.Fatalf("plugin measurement evidence = %+v", evidence)
+	}
+}
+
+func TestScanSkillsSkipsMissingAndDanglingSkillFiles(t *testing.T) {
+	root := t.TempDir()
+	valid := filepath.Join(root, "valid")
+	missing := filepath.Join(root, "missing")
+	dangling := filepath.Join(root, "dangling")
+	for _, dir := range []string{valid, missing, dangling} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(valid, "SKILL.md"), []byte("---\nname: valid\ndescription: real\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "does-not-exist"), filepath.Join(dangling, "SKILL.md")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	got := scanSkills(root)
+	if len(got) != 1 || got[0].Name != "valid" {
+		t.Fatalf("skills = %+v, want only valid file", got)
+	}
+}
+
+func TestScanConfigCountsAncestorClaudeFiles(t *testing.T) {
+	project := t.TempDir()
+	cwd := filepath.Join(project, "nested", "work")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rootText := "root project instructions\n"
+	nearText := "nearest project instructions\n"
+	if err := os.WriteFile(filepath.Join(project, "CLAUDE.md"), []byte(rootText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte(nearText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CAVEMAN_CLAUDE_ROOT", t.TempDir())
+	t.Setenv("CAVEMAN_CODEX_ROOT", t.TempDir())
+	cfg := scanConfig(cwd)
+	if len(cfg.ClaudeMDProjects) != 2 || cfg.ClaudeMDProject == nil || cfg.ClaudeMDProject.Path != filepath.Join(cwd, "CLAUDE.md") {
+		t.Fatalf("project config chain = %+v, nearest=%+v", cfg.ClaudeMDProjects, cfg.ClaudeMDProject)
+	}
+	wantRoot, _ := configTokenCount(rootText)
+	wantNear, _ := configTokenCount(nearText)
+	if got := cfg.configTaxPerTurn(); got != wantRoot+wantNear {
+		t.Fatalf("config tax = %d, want %d", got, wantRoot+wantNear)
 	}
 }
 

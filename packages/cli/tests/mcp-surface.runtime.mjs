@@ -284,8 +284,9 @@ function openclawBase() {
     models: {
       providers: {
         myprov: {
+          baseUrl: "https://relay.example/tenant/v1",
           apiKey: "${MYPROV_API_KEY}",
-          api: "openai-completions",
+          api: "openai-responses",
           models: [{ id: "gpt-test", name: "GPT Test" }],
         },
       },
@@ -306,7 +307,7 @@ function renderOpenclawConfig(mcpMode) {
   try {
     const agent = PROFILES.find((p) => p.id === "openclaw");
     assert.ok(agent, "missing generated openclaw profile");
-    const env = buildWrapEnv(agent, "http://127.0.0.1:19500", mcpMode);
+    const env = buildWrapEnv(agent, "http://127.0.0.1:19500", mcpMode, [], { compat_upstreams: { myprov: "https://relay.example/tenant" } });
     return JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
   } finally {
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
@@ -327,7 +328,7 @@ test("config-file agents get the caveman MCP server under auto and not under mar
     assert.ok(stripped.mcp === undefined || stripped.mcp.servers === undefined
       || Object.keys(stripped.mcp.servers).length > 0);
     // Everything else the overlay does must survive untouched.
-    assert.equal(stripped.models.providers.caveman.headers["x-cave-agent"], "openclaw");
+    assert.equal(stripped.models.providers.myprov.headers["x-cave-agent"], "openclaw");
   }
 });
 

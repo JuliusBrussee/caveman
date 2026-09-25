@@ -171,6 +171,29 @@ test('uninstall removes session state but keeps lifetime history', () => {
   }
 });
 
+test('uninstall unlinks a replaced session directory without touching its target', {
+  skip: process.platform === 'win32' ? 'symlink setup requires Windows developer mode' : false,
+}, () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const outside = path.join(dir, 'outside');
+  const sentinel = path.join(outside, 'keep.txt');
+  const env = isolatedInstallEnv(dir);
+  try {
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.mkdirSync(outside);
+    fs.writeFileSync(sentinel, 'keep');
+    fs.symlinkSync(outside, path.join(configDir, '.caveman-sessions'));
+
+    const removed = runInstaller(['--uninstall'], configDir, env);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    assert.equal(fs.existsSync(path.join(configDir, '.caveman-sessions')), false);
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), 'keep');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('uninstall dry-run reports planned removals and deletes nothing', () => {
   const dir = freshTmpDir();
   const configDir = path.join(dir, 'claude');
@@ -267,6 +290,150 @@ test('fresh install populates hooks dir and settings.json (skipped without `clau
     assert.ok(settings.statusLine, 'statusLine not set');
     assert.match(getStatuslineCommand(settings), /caveman-statusline/,
       'statusLine command does not reference caveman');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standalone hooks keep a stable PATH node symlink', { skip: process.platform === 'win32' && 'POSIX symlink behavior' }, () => {
+  const dir = freshTmpDir();
+  const cellarBin = path.join(dir, 'Cellar', 'node', '26.5.0', 'bin');
+  const upgradedCellarBin = path.join(dir, 'Cellar', 'node', '26.8.1', 'bin');
+  const stableBin = path.join(dir, 'bin');
+  const configDir = path.join(dir, 'claude-config');
+  fs.mkdirSync(cellarBin, { recursive: true });
+  fs.mkdirSync(upgradedCellarBin, { recursive: true });
+  fs.mkdirSync(stableBin, { recursive: true });
+  const cellarNode = path.join(cellarBin, 'node');
+  const upgradedCellarNode = path.join(upgradedCellarBin, 'node');
+  const stableNode = path.join(stableBin, 'node');
+
+  try {
+    fs.linkSync(process.execPath, cellarNode);
+    fs.symlinkSync(cellarNode, stableNode);
+    const r = spawnSync(stableNode, [
+      INSTALLER, '--only', 'claude', '--with-hooks', '--skip-skills',
+      '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink',
+    ], {
+      env: { ...process.env, PATH: stableBin, CLAUDE_CONFIG_DIR: configDir, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+
+    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    const command = cavemanHookCommands(settings, 'SessionStart', 'caveman-activate')[0]?.command || '';
+    assert.match(command, new RegExp(stableNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      'hook command should preserve the stable node path found on PATH');
+    assert.doesNotMatch(command, new RegExp(cellarNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      'hook command must not persist the versioned node target');
+
+    fs.linkSync(process.execPath, upgradedCellarNode);
+    fs.unlinkSync(stableNode);
+    fs.symlinkSync(upgradedCellarNode, stableNode);
+    fs.rmSync(path.join(dir, 'Cellar', 'node', '26.5.0'), { recursive: true });
+
+    const storedNode = command.match(/^"([^"]+)"/)?.[1];
+    assert.equal(storedNode, stableNode, 'hook command should store the stable executable path');
+    const upgraded = spawnSync(storedNode, ['--version'], { encoding: 'utf8' });
+    assert.equal(upgraded.status, 0,
+      `stored hook executable should survive a Node upgrade: ${upgraded.error?.message || upgraded.stderr}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Preferring the PATH node over process.execPath is only an improvement while
+// that node RUNS. `command -v node` names stale version-manager shims and
+// dangling symlinks just as readily as real binaries, and baking one of those
+// into settings.json breaks every session — a worse failure than the #805
+// upgrade drift it is meant to fix, because process.execPath was by
+// construction a working node. So a candidate that cannot report a version
+// must lose to process.execPath.
+test('a PATH node that does not run loses to the running node (#805)', { skip: process.platform === 'win32' && 'POSIX shim behavior' }, () => {
+  const dir = freshTmpDir();
+  const brokenBin = path.join(dir, 'broken-bin');
+  const configDir = path.join(dir, 'claude-config');
+  fs.mkdirSync(brokenBin, { recursive: true });
+  // A shim that exists and is executable but always fails — the shape a stale
+  // nvm/asdf shim takes once its target version is uninstalled.
+  const brokenNode = path.join(brokenBin, 'node');
+  fs.writeFileSync(brokenNode, '#!/bin/sh\necho "node: version not installed" 1>&2\nexit 1\n');
+  fs.chmodSync(brokenNode, 0o755);
+
+  try {
+    const r = spawnSync(process.execPath, [
+      INSTALLER, '--only', 'claude', '--with-hooks', '--skip-skills',
+      '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink',
+    ], {
+      env: { ...process.env, PATH: `${brokenBin}:${process.env.PATH || ''}`, CLAUDE_CONFIG_DIR: configDir, NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+
+    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    const command = cavemanHookCommands(settings, 'SessionStart', 'caveman-activate')[0]?.command || '';
+    const storedNode = command.match(/^"([^"]+)"/)?.[1];
+    assert.ok(storedNode, `no node path in hook command: ${command}`);
+    assert.notEqual(storedNode, brokenNode, 'installer baked a node that cannot run');
+
+    const probe = spawnSync(storedNode, ['--version'], { encoding: 'utf8' });
+    assert.equal(probe.status, 0,
+      `stored hook executable must run: ${probe.error?.message || probe.stderr}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// absoluteNodePath() answers "which node do we WRITE INTO settings.json", where
+// the stable PATH symlink is what survives a `brew upgrade node` (#805). The
+// two runInit() spawns are a different question — they execute caveman-init
+// right now, in this process's lifetime — and there the answer is
+// process.execPath: the interpreter already known to work, the one running the
+// installer. Routing those through absoluteNodePath() broadened the persisted-
+// hook fix into same-process execution and broke launching the installer with
+// an explicit good Node while PATH resolves to a different or stale one.
+//
+// The fake node reports a CURRENT version for `--version` on purpose, so it
+// passes the MIN_NODE_MAJOR probe and absoluteNodePath() genuinely SELECTS it.
+// A fixture that fails outright also catches the regression, but only because
+// the version probe invokes it on the way to rejecting it — the marker records
+// the probe rather than caveman-init actually running on the wrong Node. This
+// shape exercises the real failure, so it keeps its meaning if the probe ever
+// changes. The marker is written only when the fake is handed a script, which
+// is what running caveman-init looks like.
+test('caveman-init runs on the installer\'s own Node, not the PATH one (#805)', { skip: process.platform === 'win32' && 'POSIX executable fixture' }, () => {
+  const dir = freshTmpDir();
+  const fakeBin = path.join(dir, 'fake-bin');
+  const fakeNodeCalled = path.join(dir, 'fake-node-called');
+  fs.mkdirSync(fakeBin);
+  const major = Number(process.versions.node.split('.')[0]);
+  fs.writeFileSync(path.join(fakeBin, 'node'),
+    '#!/bin/sh\n'
+    + `if [ "$1" = --version ]; then echo "v${major}.0.0"; exit 0; fi\n`
+    + `: > "${fakeNodeCalled}"\n`
+    + 'exit 1\n');
+  fs.chmodSync(path.join(fakeBin, 'node'), 0o755);
+
+  try {
+    const r = spawnSync(process.execPath, [
+      INSTALLER, '--with-init', '--skip-skills', '--non-interactive',
+      '--no-mcp-shrink', '--config-dir', path.join(dir, 'claude-config'),
+    ], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        HOME: path.join(dir, 'home'),
+        PATH: fakeBin,
+        NO_COLOR: '1',
+      },
+      encoding: 'utf8',
+    });
+
+    assert.equal(r.status, 0, r.stderr || r.stdout);
+    assert.equal(fs.existsSync(fakeNodeCalled), false,
+      'caveman-init must not use a different Node executable found on PATH');
+    assert.ok(fs.existsSync(path.join(dir, '.cursor', 'rules', 'caveman.mdc')),
+      'caveman-init did not write the per-repo rule files');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, readFileSync, cpSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, cpSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -107,14 +107,24 @@ test("agent compile fails closed when a conformance pin diverges from the profil
   const profiles = join(dir, "profiles");
   cpSync(profilesDir, profiles, { recursive: true });
   const wf = join(dir, "agent-conformance.yml");
+  // Every shipped profile must be pinned (a separate gate); only claude's pin
+  // is made to diverge so the version gate is the one that trips.
+  const lanes = readdirSync(profiles)
+    .filter((file) => file.endsWith(".json") && file !== "schema.json")
+    .map((file) => JSON.parse(readFileSync(join(profiles, file), "utf8")))
+    .map((profile) => {
+      const version = profile.id === "claude" ? "1.2.3" : profile.tested_agent_version;
+      const pin = /^\d+\.\d+\.\d+/.test(String(version)) ? `@${version}` : "";
+      return [`          - id: ${profile.id}`, `            install: npm install --global ${profile.id}-upstream${pin}`];
+    })
+    .flat();
   writeFileSync(wf, [
     "jobs:",
-    "  upstream-binary:",
+    "  pinned-upstream-binary:",
     "    strategy:",
     "      matrix:",
     "        include:",
-    "          - id: claude",
-    "            install: npm install --global @anthropic-ai/claude-code@1.2.3",
+    ...lanes,
     "",
   ].join("\n"));
   const res = run(agentsCompile, [], { CAVEMAN_PROFILES_DIR: profiles, CAVEMAN_CLI_DIR: cli, CAVEMAN_CONFORMANCE_WORKFLOW: wf });

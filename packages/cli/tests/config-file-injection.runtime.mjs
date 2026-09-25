@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const cliModule = await import(pathToFileURL(join(here, "..", "dist", "index.js")).href);
-const { readJson5Lenient, deepMerge, buildWrapEnv, overlayBuilders } = cliModule;
+const { readJson5Lenient, deepMerge, buildWrapEnv, overlayBuilders, platformDefaultConfigPath } = cliModule;
 const { PROFILES } = await import(pathToFileURL(join(here, "..", "dist", "agents.generated.js")).href);
 
 function attributed(gw, id) {
@@ -114,6 +114,28 @@ test("deepMerge recursively merges plain objects and replaces arrays and scalars
     ),
     { obj: { keep: 1, replace: 9, add: 3 }, arr: [2], scalar: { now: "object" }, keepRoot: true, nil: null },
   );
+});
+
+test("deepMerge skips prototype-chain keys at every object depth", () => {
+  const base = JSON.parse('{"safe":{"keep":1,"constructor":{"base":true}}}');
+  const overlay = JSON.parse('{"safe":{"add":2,"__proto__":{"polluted":true}},"prototype":{"bad":true}}');
+  const merged = deepMerge(base, overlay);
+
+  assert.deepEqual(merged, { safe: { keep: 1, add: 2 } });
+  assert.equal(Object.prototype.polluted, undefined);
+});
+
+test("platform config defaults resolve only closed vendor settings paths", () => {
+  assert.equal(platformDefaultConfigPath("qwen-system-settings", "linux", {}), "/etc/qwen-code/settings.json");
+  assert.equal(
+    platformDefaultConfigPath("qwen-system-settings", "darwin", {}),
+    "/Library/Application Support/QwenCode/settings.json",
+  );
+  assert.equal(
+    platformDefaultConfigPath("qwen-system-settings", "win32", { ProgramData: "D:\\ManagedData" }),
+    "C:\\ProgramData\\qwen-code\\settings.json",
+  );
+  assert.equal(platformDefaultConfigPath("qwen-system-settings", "freebsd", {}), undefined);
 });
 
 test("config-file injection merges a rendered overlay over a temp base config", () => withEnv({
@@ -253,6 +275,61 @@ test("config-file injection selects local vs managed overlays by gateway mode", 
   assert.deepEqual(managedCfg, { mode: "managed", url: attributed("https://gateway.example.com", agent.id) });
 });
 
+test("optional upstream-key references omit unavailable credentials without serializing secrets", () => {
+  const agent = fakeProfile("fake-optional-upstream", {
+    method: "config-file",
+    env_var: "FAKE_OPTIONAL_UPSTREAM_CONFIG",
+    base_config: { path: join(tmpdir(), "caveman-missing-optional-upstream.json") },
+    config_overlay: {
+      local: {},
+      managed: {
+        modelProviders: {
+          openai: [{
+            generationConfig: {
+              customHeaders: {
+                "x-cave-upstream-key": "{{cave_optional_openai_key_env}}",
+                "X-Cave-Agent": "fake-optional-upstream",
+              },
+            },
+          }],
+        },
+      },
+    },
+  });
+
+  for (const scenario of [
+    { name: "present", value: "sk-upstream-secret", expected: "$OPENAI_API_KEY" },
+    { name: "absent", value: undefined, expected: undefined },
+    { name: "blank", value: "  ", expected: undefined },
+    { name: "newline", value: "sk-invalid\nheader", expected: undefined },
+  ]) {
+    withEnv({ OPENAI_API_KEY: scenario.value }, () => {
+      const env = buildWrapEnv(agent, "https://gateway.example");
+      const raw = readFileSync(env.FAKE_OPTIONAL_UPSTREAM_CONFIG, "utf8");
+      const cfg = JSON.parse(raw);
+      const headers = cfg.modelProviders.openai[0].generationConfig.customHeaders;
+      assert.equal(headers["x-cave-upstream-key"], scenario.expected, scenario.name);
+      assert.equal(headers["X-Cave-Agent"], "fake-optional-upstream");
+      assert.doesNotMatch(raw, /sk-upstream-secret|sk-invalid/);
+    });
+  }
+});
+
+test("optional credential references fail closed inside arrays", () => withEnv({
+  OPENAI_API_KEY: undefined,
+  FAKE_OPTIONAL_ARRAY_CONFIG: undefined,
+}, () => {
+  const agent = fakeProfile("fake-optional-array", {
+    method: "config-file",
+    env_var: "FAKE_OPTIONAL_ARRAY_CONFIG",
+    base_config: { path: join(tmpdir(), "caveman-missing-optional-array.json") },
+    config_overlay: { local: { invalid: ["{{cave_optional_openai_key_env}}"] } },
+  });
+  const { result: env, stderr } = captureStderr(() => buildWrapEnv(agent, "http://127.0.0.1:19007"));
+  assert.equal(env.FAKE_OPTIONAL_ARRAY_CONFIG, undefined);
+  assert.match(stderr, /optional profile credentials cannot be array elements/);
+}));
+
 test("openclaw config-file injection keeps attribution header and uses path-attributed gateway", () => {
   const dir = mkdtempSync(join(tmpdir(), "cave-openclaw-config-file-"));
   const home = mkdtempSync(join(tmpdir(), "cave-openclaw-home-"));
@@ -263,8 +340,9 @@ test("openclaw config-file injection keeps attribution header and uses path-attr
     models: {
       providers: {
         myprov: {
+          baseUrl: "https://relay.example/tenant/v1",
           apiKey: "${MYPROV_API_KEY}",
-          api: "openai-completions",
+          api: "openai-responses",
           models: [{ id: "gpt-test", name: "GPT Test" }],
         },
       },
@@ -278,7 +356,7 @@ test("openclaw config-file injection keeps attribution header and uses path-attr
     MYPROV_API_KEY: "sk-openclaw",
   }, () => {
     const agent = profile("openclaw");
-    const env = buildWrapEnv(agent, "http://127.0.0.1:19006");
+    const env = buildWrapEnv(agent, "http://127.0.0.1:19006", "auto", [], { compat_upstreams: { myprov: "https://relay.example/tenant" } });
     const expectedGateway = attributed("http://127.0.0.1:19006", "openclaw");
     assert.equal(env.OPENAI_BASE_URL, expectedGateway);
     assert.equal(env.OPENAI_API_BASE, expectedGateway);
@@ -286,8 +364,8 @@ test("openclaw config-file injection keeps attribution header and uses path-attr
     assert.equal(env.GOOGLE_GEMINI_BASE_URL, expectedGateway);
 
     const cfg = JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
-    assert.equal(cfg.models.providers.caveman.baseUrl, `${expectedGateway}/v1`);
-    assert.equal(cfg.models.providers.caveman.headers["x-cave-agent"], "openclaw");
-    assert.equal(cfg.models.providers.caveman.apiKey, "sk-openclaw");
+    assert.equal(cfg.models.providers.myprov.baseUrl, `${expectedGateway}/compat/myprov/v1`);
+    assert.equal(cfg.models.providers.myprov.headers["x-cave-agent"], "openclaw");
+    assert.equal(cfg.models.providers.myprov.apiKey, "${MYPROV_API_KEY}");
   });
 });

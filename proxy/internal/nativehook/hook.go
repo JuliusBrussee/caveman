@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JuliusBrussee/caveman/proxy/internal/gitsafe"
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
 )
 
@@ -162,7 +163,14 @@ func currentRepositoryState(ctx context.Context, cwd string) string {
 	}
 	statusCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
-	cmd := exec.CommandContext(statusCtx, "git", "-C", cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all")
+	// `status` refreshes the index, which runs core.fsmonitor — this is the
+	// hottest git call we make against a repository we do not trust. Disabling
+	// fsmonitor costs the people who configured it BECAUSE their repo is huge:
+	// if status then misses the 100ms budget above, repository state comes back
+	// empty and reuse silently stops. That degrades safely, and moving the
+	// budget is a latency decision for every user, so it needs a measurement
+	// this fix does not have.
+	cmd := gitsafe.Command(statusCtx, cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all")
 	var status bytes.Buffer
 	cmd.Stdout = &status
 	cmd.Stderr = io.Discard

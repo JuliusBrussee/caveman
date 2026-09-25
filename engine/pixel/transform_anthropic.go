@@ -585,6 +585,16 @@ func normalizeTransformOptions(opts TransformOptions) TransformOptions {
 	return d
 }
 
+// decodeRequestJSON preserves numeric lexemes inside dynamic provider fields.
+// A float64 round trip changes large integer tool arguments/schema constraints
+// even when only an unrelated system block is being rendered. Callers supply
+// JSON already validated by the raw request envelope or by json.Marshal.
+func decodeRequestJSON(raw []byte, dst any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	return decoder.Decode(dst)
+}
+
 func parseAnthropicRequest(body []byte, fallbackModel string) (anthropicRequestState, error) {
 	var env map[string]json.RawMessage
 	if err := json.Unmarshal(body, &env); err != nil {
@@ -598,18 +608,18 @@ func parseAnthropicRequest(body []byte, fallbackModel string) (anthropicRequestS
 	if !ok {
 		return req, nil
 	}
-	if err := json.Unmarshal(rawMessages, &req.messages); err != nil {
+	if err := decodeRequestJSON(rawMessages, &req.messages); err != nil {
 		return req, err
 	}
 	if raw, ok := env["system"]; ok {
 		req.systemPresent = true
-		if err := json.Unmarshal(raw, &req.system); err != nil {
+		if err := decodeRequestJSON(raw, &req.system); err != nil {
 			return req, err
 		}
 	}
 	if raw, ok := env["tools"]; ok {
 		req.toolsPresent = true
-		if err := json.Unmarshal(raw, &req.tools); err != nil {
+		if err := decodeRequestJSON(raw, &req.tools); err != nil {
 			return req, err
 		}
 		_ = json.Unmarshal(raw, &req.toolRaw)
@@ -1432,7 +1442,7 @@ func cloneMessages(messages []Message) []Message {
 		return out
 	}
 	var out []Message
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := decodeRequestJSON(raw, &out); err != nil {
 		out = make([]Message, len(messages))
 		copy(out, messages)
 	}
@@ -1460,7 +1470,7 @@ func cloneRawMap(in map[string]json.RawMessage) map[string]json.RawMessage {
 func structToMap(v any) map[string]any {
 	raw, _ := json.Marshal(v)
 	var out map[string]any
-	_ = json.Unmarshal(raw, &out)
+	_ = decodeRequestJSON(raw, &out)
 	return out
 }
 

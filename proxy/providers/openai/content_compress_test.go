@@ -151,6 +151,28 @@ func TestExtractCompressible_ResponsesLatestUserAndToolOutputOnly(t *testing.T) 
 	}
 }
 
+func TestExtractCompressible_ResponsesCustomToolOutputAndRecovery(t *testing.T) {
+	tool := strings.Repeat("CUSTOM_TOOL_OUTPUT ", 50)
+	recovered := strings.Repeat("RECOVERED_BYTES ", 50)
+	body := []byte(`{"model":"gpt-5.5","input":[` +
+		`{"type":"custom_tool_call","call_id":"recover","name":"mcp__caveman__retrieve","input":"{}"},` +
+		`{"type":"custom_tool_call_output","call_id":"recover","output":` + string(mustJSON(t, recovered)) + `},` +
+		`{"type":"custom_tool_call","call_id":"normal","name":"shell","input":"{}"},` +
+		`{"type":"custom_tool_call_output","call_id":"normal","output":` + string(mustJSON(t, tool)) + `}` +
+		`]}`)
+	segments, reassemble, ok := New("https://api.openai.com").ExtractCompressible(body, providers.RequestMetadata{Endpoint: "/v1/responses"})
+	if !ok || len(segments) != 1 || string(segments[0]) != tool {
+		t.Fatalf("segments=%q ok=%v", segments, ok)
+	}
+	out, err := reassemble([][]byte{[]byte("CUSTOM_SHORT")})
+	if err != nil || !json.Valid(out) {
+		t.Fatalf("reassemble=%v body=%s", err, out)
+	}
+	if !bytes.Contains(out, []byte(recovered)) {
+		t.Fatalf("recovery output changed: %s", out)
+	}
+}
+
 func mustJSON(t *testing.T, value string) []byte {
 	t.Helper()
 	out, err := json.Marshal(value)

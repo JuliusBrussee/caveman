@@ -28,18 +28,13 @@ it as MIT adoption surface.
 | `packages/cli/` | MIT | Funnel/on-ramp. Launches BSL binaries but does not contain engine code. |
 | `packages/sdk/typescript/` | MIT | Thin client and structural SDK surface. |
 | `packages/sdk/python/` | MIT | Thin client; distribution name is `caveman-sdk`. |
-| `packages/kit/` | MIT | React/headless honesty UI kit and badges. |
-| `packages/graders/` | MIT | Public grader package; cloud eval-gating remains commercial. |
-| `packages/mastra/` | MIT | Mastra telemetry and outcome adapter. |
 | `packages/subagent-tax/` | MIT | Local zero-provider-call harness-prefix measurement tool. |
 | `extension/` | MIT shell | Manifest, popup, content scripts, and UI are MIT. Bundled `engine.wasm` is BSL-1.1, so artifacts embedding it carry BSL terms for that combined work. |
 | `packages/shared/contracts/` | MIT | Public wire schemas and ecosystem contracts. |
 | `shared/provider-catalog/` | MIT | Public provider/model metadata and catalog schemas. |
 | `mem/js/` | MIT | Thin JavaScript client for cavemem. |
 | `mem/py/` | MIT | Thin Python client for cavemem. |
-| `ui/` | MIT | In-tree utility package; `package.json` disables registry publication. |
 | `engine/` | BSL-1.1 | Core compression IP and CCR. |
-| `cacheengine/` | BSL-1.1 | Provider-native prompt-cache planner and wire engine. |
 | `rewriter/` | BSL-1.1 | Engine-linked reflection rewriter and recovery gates. |
 | `browse/` | BSL-1.1 | Local browser driver; embeds the engine, vendors MIT chromedp modules. |
 | `proxy/` | BSL-1.1 | Standalone gateway and provider adapters. |
@@ -78,7 +73,7 @@ Free/source-available:
 - local and single-tenant use
 - BYOK/self-hosted first-party traffic
 - inferred savings
-- SDKs, CLI, kit, extension shell, contracts, provider catalog
+- SDKs, CLI, extension shell, contracts, provider catalog
 
 Commercial:
 

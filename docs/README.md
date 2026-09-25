@@ -26,10 +26,15 @@ this repository. Hosted-service implementation details are outside its scope.
   retrieval, and retention limits
 - [Local proxy and providers](./technical/proxy-and-providers.md): routes,
   credentials, usage parsing, and network boundaries
+- [Deploy the proxy for a team](./technical/deploy.md): shared VPC and cloud
+  deployment, inbound token, containers, and manifests
 - [TOON and Pixel](./technical/toon-and-pixel.md): structured-data and image
   transforms
 - [Cache planner and rewriter](./technical/cache-and-rewriter.md): provider
   prompt caching and gated trajectory rewriting
+- Framework middleware: [TypeScript](../packages/middleware/typescript/README.md)
+  and [Python](../packages/middleware/python/README.md) adapters that wrap one call
+  in your own app; hosted guide at https://docs.caveman.so/docs/sdk/middleware
 
 ## Agent-facing tools
 

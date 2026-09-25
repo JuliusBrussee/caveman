@@ -69,3 +69,16 @@ func copySafeResponseHeaders(dst, src http.Header) {
 		}
 	}
 }
+
+// streamingResponse recognizes wire streaming even when request metadata cannot
+// (for example gzip-encoded SSE). It keys off the media type only, so a stream
+// sent as chunked application/json is not detected and still buffers.
+func streamingResponse(headers http.Header) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(headers.Get("Content-Type"), ";", 2)[0]))
+	switch mediaType {
+	case "text/event-stream", "application/vnd.amazon.eventstream", "application/x-ndjson", "application/jsonl":
+		return true
+	default:
+		return false
+	}
+}

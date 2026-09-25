@@ -3,6 +3,7 @@ package compressors
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"math"
 	"regexp"
 	"sort"
@@ -85,8 +86,8 @@ func (c *jsonCompressor) compress(input []byte, query string) ([]byte, bool) {
 	if err := dec.Decode(&v); err != nil {
 		return nil, false // malformed JSON → pass-through
 	}
-	if dec.More() {
-		return nil, false // more than one value → not a single JSON payload
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, false // extra value or malformed suffix → not a single JSON payload
 	}
 	collapsed := false
 	shaped := c.transform(v, false, query, &collapsed)

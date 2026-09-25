@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import Ajv2020 from "ajv/dist/2020.js";
@@ -721,21 +720,19 @@ test("generateCandidatePlans enforces catalog pricing and policy when a policy i
   assert.ok(noPolicy.every((candidate) => candidate.static_rejection === undefined));
 });
 
-test("knownGrader recognizes the full public/evals taxonomy and rejects the rest", async () => {
-  // Parity against the single source of truth so the lock check never rejects a
-  // valid grader as unknown, nor accepts one the taxonomy dropped.
-  const upstreamEvals = new URL("../../../public/evals/src/index.ts", import.meta.url);
-  const mirroredGraders = new URL("../../graders/src/index.ts", import.meta.url);
-  const evalsSource = await readFile(existsSync(upstreamEvals) ? upstreamEvals : mirroredGraders, "utf8");
-  const block = evalsSource.match(/SUPPORTED_GRADER_TYPES = new Set<Grader\["type"\]>\(\[([\s\S]*?)\]\)/);
-  assert.ok(block, "could not locate SUPPORTED_GRADER_TYPES in public grader taxonomy");
-  const evalsTypes = [...block[1].matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]).sort();
-  assert.equal(evalsTypes.length, 27);
-  // Every type public/evals supports is known here...
-  for (const type of evalsTypes) {
+test("knownGrader recognizes the full locked-evidence taxonomy and rejects the rest", () => {
+  const supported = [
+    "exact_match", "contains", "not_contains", "regex", "not_regex", "blocklist",
+    "json_schema", "json_path_assertion", "tool_called", "tool_not_called", "tool_sequence",
+    "tool_argument_assertion", "http_status", "latency_threshold", "cost_threshold",
+    "token_threshold", "bleu_score", "rouge_score", "context_f1", "no_pii", "custom_webhook",
+    "localization_f1", "llm_judge", "llm_score", "llm_category", "llm_pairwise",
+    "llm_answer_match",
+  ];
+  assert.equal(supported.length, 27);
+  for (const type of supported) {
     assert.equal(knownGrader(type), true, `knownGrader should accept ${type}`);
   }
-  // ...and nothing outside it is.
   assert.equal(knownGrader("semantic"), false);
   assert.equal(knownGrader("custom"), false);
   assert.equal(knownGrader("totally_made_up"), false);

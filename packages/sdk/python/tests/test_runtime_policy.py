@@ -117,7 +117,7 @@ def _refresh_with(client: RuntimePolicyClient, payload: Any, captured: list[dict
             )
         return _fake_response(payload)
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         return client.refresh()
 
 
@@ -513,7 +513,7 @@ def test_refresh_failure_keeps_last_known_good() -> None:
     def boom(req: Any, timeout: float) -> MagicMock:  # noqa: ANN401
         raise OSError("gateway unreachable")
 
-    with patch("urllib.request.urlopen", side_effect=boom):
+    with patch("caveman_cloud.core._urlopen", side_effect=boom):
         result = client.refresh()
     assert result.ok is False
     assert result.error == "transport"
@@ -541,7 +541,7 @@ def test_refresh_response_is_capped_and_keeps_last_known_good() -> None:
     response = MagicMock()
     response.__enter__ = MagicMock(return_value=MagicMock(read=body_reader))
     response.__exit__ = MagicMock(return_value=False)
-    with patch("urllib.request.urlopen", return_value=response):
+    with patch("caveman_cloud.core._urlopen", return_value=response):
         result = client.refresh()
     assert result.error == "oversized_response"
     assert client.state().policy_version == 7
@@ -567,7 +567,7 @@ def test_auto_refresh_thread_polls_and_stops() -> None:
         calls.set()
         return _fake_response(_signed_payload())
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         client = _make_cave().runtime_policy(public_key=PINNED_KEY, auto_refresh_seconds=0.01)
         try:
             assert calls.wait(timeout=5.0) is True
@@ -982,7 +982,7 @@ def test_decision_span_through_a_trace_parents_onto_the_trace() -> None:
             captured_request.append(req)
             return _fake_response({"ok": True, "spans_accepted": 2, "spans_total": 2})
 
-        with patch("urllib.request.urlopen", side_effect=fake_export):
+        with patch("caveman_cloud.core._urlopen", side_effect=fake_export):
             assert exporter.export() == {"ok": True, "spans_accepted": 2, "spans_total": 2}
         assert exporter.pending == 0
         assert captured_request[0].full_url == f"{CONFIG['base_url']}/v1/traces"
@@ -1006,7 +1006,7 @@ def test_decide_performs_no_network_io() -> None:
     def explode(req: Any, timeout: float) -> MagicMock:  # noqa: ANN401
         raise AssertionError("decide() must never touch the network")
 
-    with patch("urllib.request.urlopen", side_effect=explode):
+    with patch("caveman_cloud.core._urlopen", side_effect=explode):
         for family in ("fix_failing_test_with_stacktrace", "summarize_ticket"):
             client.decide(family, "task-a", {"stack_trace_location_confidence": 0.95, "language": "typescript"})
 

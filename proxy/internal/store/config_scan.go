@@ -27,14 +27,15 @@ type skillInfo struct {
 
 // configScan is the measured config-tax picture used by the detectors.
 type configScan struct {
-	Snapshots       []ConfigSnapshot
-	ClaudeMDUser    *ConfigSnapshot
-	ClaudeMDProject *ConfigSnapshot
-	CodexAgents     *ConfigSnapshot
-	Skills          []skillInfo
-	SkillDescTokens int // per-turn skill catalog tax (name+description only)
-	TokenBasis      string
-	HookCount       int
+	Snapshots        []ConfigSnapshot
+	ClaudeMDUser     *ConfigSnapshot
+	ClaudeMDProject  *ConfigSnapshot
+	ClaudeMDProjects []*ConfigSnapshot
+	CodexAgents      *ConfigSnapshot
+	Skills           []skillInfo
+	SkillDescTokens  int // per-turn skill catalog tax (name+description only)
+	TokenBasis       string
+	HookCount        int
 	// PerTurnHooks labels hooks configured on events that fire every turn. They
 	// are cache-churn CANDIDATES, not identified causes: config is visible here,
 	// hook output is not.
@@ -169,8 +170,19 @@ func scanConfig(cwd string) configScan {
 	}
 
 	if cwd != "" {
-		sc.ClaudeMDProject = readMarkdownConfig("project", filepath.Join(cwd, "CLAUDE.md"), "claude_md")
-		add(sc.ClaudeMDProject)
+		for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
+			if snap := readMarkdownConfig("project", filepath.Join(dir, "CLAUDE.md"), "claude_md"); snap != nil {
+				sc.ClaudeMDProjects = append(sc.ClaudeMDProjects, snap)
+				if sc.ClaudeMDProject == nil {
+					sc.ClaudeMDProject = snap
+				}
+				add(snap)
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+		}
 	}
 
 	croot2 := codexRoot()
@@ -258,15 +270,20 @@ func parseMCPServerNames(raw []byte, cwd string, includeProject bool) []string {
 	return out
 }
 
-// configTaxPerTurn is the token tax loaded on every turn: CLAUDE.md (user +
-// project) + the skill catalog. Hooks/plugins are reported as counts, not folded
-// into the token figure, because their context cost can't be measured statically.
+// configTaxPerTurn is the statically measured token tax loaded on every turn:
+// CLAUDE.md (user + project) + the user skill catalog. Hooks/plugins are
+// reported as counts, not folded into the token figure, because this scanner
+// does not resolve their effective context contribution.
 func (sc configScan) configTaxPerTurn() int {
 	total := sc.SkillDescTokens
 	if sc.ClaudeMDUser != nil {
 		total += sc.ClaudeMDUser.Tokens
 	}
-	if sc.ClaudeMDProject != nil {
+	if len(sc.ClaudeMDProjects) > 0 {
+		for _, snap := range sc.ClaudeMDProjects {
+			total += snap.Tokens
+		}
+	} else if sc.ClaudeMDProject != nil {
 		total += sc.ClaudeMDProject.Tokens
 	}
 	return total
@@ -303,6 +320,10 @@ func scanSkills(skillsDir string) []skillInfo {
 			continue
 		}
 		path := filepath.Join(skillsDir, e.Name(), "SKILL.md")
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
 		name, desc := readSkillFrontmatter(path)
 		if name == "" {
 			name = e.Name()

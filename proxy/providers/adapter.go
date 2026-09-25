@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
+	"github.com/JuliusBrussee/caveman/shared/platform/ssrf"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -31,6 +32,35 @@ type requestPayloadHashKey struct{}
 func WithRequestPayloadHash(ctx context.Context, body []byte) context.Context {
 	sum := sha256.Sum256(body)
 	return context.WithValue(ctx, requestPayloadHashKey{}, hex.EncodeToString(sum[:]))
+}
+
+type upstreamProxyKey struct{}
+
+// WithUpstreamProxy records the Transport.Proxy selector the upstream client
+// will use, so an adapter can tell whether the request it is about to resolve
+// leaves this process through an outbound HTTP proxy.
+func WithUpstreamProxy(ctx context.Context, proxy func(*http.Request) (*url.URL, error)) context.Context {
+	if proxy == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, upstreamProxyKey{}, proxy)
+}
+
+// ValidateUpstreamEndpoint pre-flights a resolved provider endpoint against the
+// SSRF policy. When the upstream client will hand this destination to a proxy,
+// the check is resolution-free: on a proxy-only corporate network the process
+// has no outbound DNS at all, so resolving here fails the request before the
+// proxy is ever consulted (#1001), and where it does resolve it describes the
+// client's view of the name rather than the proxy's. Host syntax, the localhost
+// block and IP-literal range checks still apply; hostname policy past that is
+// the proxy's ACL. Unproxied destinations keep the full resolving check.
+func ValidateUpstreamEndpoint(ctx context.Context, endpoint *url.URL, cfg ssrf.Config) error {
+	if selector, ok := ctx.Value(upstreamProxyKey{}).(func(*http.Request) (*url.URL, error)); ok {
+		if proxy, err := selector(&http.Request{URL: endpoint, Header: http.Header{}}); err == nil && proxy != nil {
+			return ssrf.ValidateURLNoResolve(endpoint.String(), cfg)
+		}
+	}
+	return ssrf.ValidateURL(ctx, endpoint.String(), cfg)
 }
 
 // RequestPayloadHash returns a hash installed by WithRequestPayloadHash.
@@ -62,8 +92,11 @@ type Credential struct {
 	// inbound request: "bearer" means the agent sent `Authorization: Bearer`
 	// (e.g. Claude Pro/Max OAuth tokens, which Anthropic only accepts as a
 	// Bearer — remapping them to x-api-key guarantees a 401). Empty means an
-	// operator/BYOK key with the provider's default header. Resolvers that
-	// don't set it get the pre-existing mapping unchanged.
+	// operator/BYOK key with the provider's default header. "sigv4" means an
+	// incoming AWS-signed request whose configured credentials must be checked
+	// and used to sign the rewritten upstream request. Resolvers that
+	// don't set it get the pre-existing mapping unchanged. "api_key" selects
+	// Vertex Express's native key header instead of its default OAuth bearer.
 	Scheme string
 }
 
@@ -231,6 +264,10 @@ type UsageObservation struct {
 	ServiceTier              string
 	InferenceGeo             string
 	PricingUnsupportedReason string
+	// ProviderError records an SDK-visible error envelope or stream error event.
+	// It contains no provider message or caller data. Usage completeness remains
+	// independent: an unsuccessful call can still carry authoritative billed usage.
+	ProviderError bool
 	// RawUsage is the provider's usage fields exactly as reported, MERGED
 	// across every usage-bearing chunk seen for a non-streaming body or an SSE
 	// stream (re-marshaled from the parsed values, so key order/whitespace may
@@ -356,11 +393,15 @@ type RewritableBlock struct {
 	ID string
 }
 
-// recoveryToolSuffix identifies the caveman recovery tool in any namespace an
-// agent host may register it under: bare `caveman_retrieve` for the server-side
-// injected tool, `mcp__caveman__caveman_retrieve` under Claude Code's MCP
-// naming, and whatever prefix another host chooses.
-const recoveryToolSuffix = "caveman_retrieve"
+// Recovery tool names stay a closed allowlist. Bare spelling belongs to
+// server-side injection; Claude/Qwen and Kilo expose two verified MCP spellings.
+// Accepting arbitrary suffixes would let caller-owned namespaces falsely prove
+// recovery and make otherwise unrecoverable compression possible.
+const (
+	recoveryToolName     = "caveman_retrieve"
+	mcpRecoveryToolName  = "mcp__caveman__caveman_retrieve"
+	kiloRecoveryToolName = "caveman_caveman_retrieve"
+)
 
 // IsRecoveryToolName reports whether a tool call is a caveman recovery call.
 //
@@ -372,13 +413,32 @@ const recoveryToolSuffix = "caveman_retrieve"
 // elision it was trying to escape. Measured on 2026-08-06: the agent called
 // retrieve, reported "Same truncation", and re-read the same file seven times.
 func IsRecoveryToolName(name string) bool {
-	return name == recoveryToolSuffix || strings.HasSuffix(name, "__"+recoveryToolSuffix)
+	return name == recoveryToolName || name == mcpRecoveryToolName || name == kiloRecoveryToolName
 }
 
 type Base struct {
 	Provider string
 	BaseURL  string
 	Routes   []string
+	// UsageProvider overrides which provider's dialect USAGE ACCOUNTING parses
+	// with (ParseUsage and NewUsageScanner key on it instead of Provider).
+	// Empty keeps Provider itself, so every existing adapter is unchanged. It
+	// exists for named compatibility mounts whose upstream answers one
+	// provider's wire protocol on another provider's route set — an
+	// Anthropic-protocol compat endpoint reports input_tokens EXCLUSIVE of
+	// cache reads/writes, and the shared OpenAI-shape parser reads that shape
+	// as a cache-total-over-input contradiction (issue #1026). Telemetry,
+	// header mapping, and pricing keep following Provider; only the usage
+	// parser follows this override.
+	UsageProvider string
+}
+
+// usageParseProvider is the provider key usage accounting parses with.
+func (b Base) usageParseProvider() string {
+	if b.UsageProvider != "" {
+		return b.UsageProvider
+	}
+	return b.Provider
 }
 
 func (b Base) Name() string { return b.Provider }
@@ -429,11 +489,17 @@ func (b Base) ResolveUpstreamURL(ctx context.Context, req *http.Request, route R
 func (b Base) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, credential Credential, _ *url.URL) (http.Header, error) {
 	out := http.Header{}
 	copyIfPresent(out, req.Header, "content-type")
+	copyIfPresent(out, req.Header, "content-encoding")
 	copyIfPresent(out, req.Header, "accept")
 	copyIfPresent(out, req.Header, "accept-encoding")
 	copyIfPresent(out, req.Header, "idempotency-key")
 	copyIfPresent(out, req.Header, "openai-organization")
 	copyIfPresent(out, req.Header, "openai-project")
+	// Pi/OpenClaw SDKs use these end-to-end headers for provider session
+	// affinity and request identity. Preserve them when routing the same model.
+	for _, name := range SessionAffinityHeaders {
+		copyIfPresent(out, req.Header, name)
+	}
 	copyIfPresent(out, req.Header, "anthropic-version")
 	copyIfPresent(out, req.Header, "anthropic-beta")
 	copyIfPresent(out, req.Header, "api-version")
@@ -441,6 +507,11 @@ func (b Base) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, cred
 		copyIfPresent(out, req.Header, "traceparent")
 		copyIfPresent(out, req.Header, "tracestate")
 	}
+	// Strip the caller's hop-by-hop nominations from what was copied FROM the
+	// caller, before this proxy adds anything of its own. Running it afterwards
+	// would let an inbound `Connection: authorization` delete the credential
+	// this function just set and send the request upstream unauthenticated.
+	RemoveConnectionHeaders(out, req.Header)
 	out.Set("user-agent", appendUserAgent(req.UserAgent()))
 	switch b.Provider {
 	case "anthropic":
@@ -496,14 +567,14 @@ func (b Base) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, cred
 			if credential.Scheme == "bearer" && credential.Key == "no-key-required" {
 				break
 			}
-			// Real bearer/JWT credentials remain fail-closed until an auth-kind is
-			// persisted and mapped end-to-end. They must never be silently
-			// relabeled as an api-key.
-			fields := strings.Fields(strings.TrimSpace(credential.Key))
-			if credential.Scheme == "bearer" || len(fields) > 1 && strings.EqualFold(fields[0], "bearer") || strings.HasPrefix(strings.TrimSpace(credential.Key), "eyJ") {
-				return nil, fmt.Errorf("azure bearer credentials are unsupported; use an API key")
+			// Azure accepts explicit Bearer auth for Entra tokens and for API keys
+			// on its OpenAI v1 surface. Preserve the caller's declared scheme.
+			// Credential bytes alone cannot identify their authentication kind.
+			if credential.Scheme == "bearer" {
+				out.Set("authorization", "Bearer "+credential.Key)
+			} else {
+				out.Set("api-key", credential.Key)
 			}
-			out.Set("api-key", credential.Key)
 		}
 	default:
 		if credential.Key != "" {
@@ -511,6 +582,33 @@ func (b Base) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, cred
 		}
 	}
 	return out, nil
+}
+
+// SessionAffinityHeaders are the end-to-end headers Pi/OpenClaw SDKs use for
+// provider session affinity and request identity. They identify the caller's
+// session, so a mount that is not the provider the caller selected drops them
+// (see openaicompat).
+var SessionAffinityHeaders = []string{"session_id", "x-session-id", "x-client-request-id", "x-session-affinity"}
+
+// RemoveConnectionHeaders removes fields declared private to the inbound
+// connection. Dropping Connection itself is insufficient: the next transport
+// would no longer know which otherwise allowed fields must not be forwarded.
+//
+// Call it on the headers copied from the caller and BEFORE adding credentials,
+// signatures or defaults of this proxy's own: RFC 9110 §7.6.1 nominates fields
+// of the message as received, and a caller must not be able to name a field
+// this hop generates.
+func RemoveConnectionHeaders(out, inbound http.Header) {
+	for name, values := range inbound {
+		if !strings.EqualFold(name, "Connection") {
+			continue
+		}
+		for _, value := range values {
+			for _, token := range strings.Split(value, ",") {
+				out.Del(strings.TrimSpace(token))
+			}
+		}
+	}
 }
 
 func validGoogleQuotaProject(value string) bool {
@@ -588,14 +686,14 @@ func (b Base) ParseUsage(ctx context.Context, responseHeaders http.Header, strea
 		usage.PricingUnsupportedReason = reason
 		return usage, bytes.NewReader(data), nil
 	}
-	ParseUsageBytes(b.Provider, accountingBody, &usage)
+	ParseUsageBytes(b.usageParseProvider(), accountingBody, &usage)
 	usage.CacheStatus = cacheStatusFor(usage)
 	return usage, bytes.NewReader(data), nil
 }
 
 func (b Base) NewUsageScanner(responseHeaders http.Header) *UsageScanner {
 	return &UsageScanner{
-		provider:    b.Provider,
+		provider:    b.usageParseProvider(),
 		requestID:   providerRequestID(responseHeaders),
 		serviceTier: responseServiceTier(responseHeaders),
 		encoding:    responseHeaders.Get("Content-Encoding"),
@@ -711,13 +809,13 @@ func (s *UsageScanner) Usage() UsageObservation {
 	if s.parse != nil {
 		s.parse(accountingBody, &usage)
 		if s.truncated && !usage.Complete() {
-			return UsageObservation{CacheStatus: "unknown", ProviderRequestID: s.requestID, ServiceTier: s.serviceTier, ObservationCount: 1, PricingUnsupportedReason: "response_scan_limit_exceeded"}
+			return UsageObservation{CacheStatus: "unknown", ProviderRequestID: s.requestID, ServiceTier: s.serviceTier, ObservationCount: 1, PricingUnsupportedReason: "response_scan_limit_exceeded", ProviderError: usage.ProviderError}
 		}
 		return usage
 	}
 	ParseUsageBytes(s.provider, accountingBody, &usage)
 	if s.truncated && !usage.Complete() {
-		return UsageObservation{CacheStatus: "unknown", ProviderRequestID: s.requestID, ServiceTier: s.serviceTier, ObservationCount: 1, PricingUnsupportedReason: "response_scan_limit_exceeded"}
+		return UsageObservation{CacheStatus: "unknown", ProviderRequestID: s.requestID, ServiceTier: s.serviceTier, ObservationCount: 1, PricingUnsupportedReason: "response_scan_limit_exceeded", ProviderError: usage.ProviderError}
 	}
 	usage.CacheStatus = cacheStatusFor(usage)
 	return usage
@@ -813,9 +911,21 @@ func ParseUsageBytes(provider string, data []byte, usage *UsageObservation) {
 		maxLine = 64 * 1024
 	}
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLine)
+	eventType := ""
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "event:") || strings.HasPrefix(line, ":") {
+		if line == "" {
+			eventType = ""
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			if eventType == "error" {
+				usage.ProviderError = true
+			}
+			continue
+		}
+		if line == "" || strings.HasPrefix(line, ":") {
 			continue
 		}
 		line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
@@ -824,6 +934,11 @@ func ParseUsageBytes(provider string, data []byte, usage *UsageObservation) {
 		}
 		var obj map[string]any
 		if decodeUsageObject([]byte(line), &obj) == nil {
+			// Anthropic's SDK obtains a missing JSON type from the SSE event name.
+			// The accounting side-copy must apply the same terminal-usage rule.
+			if _, hasType := obj["type"]; !hasType && eventType != "" {
+				obj["type"] = eventType
+			}
 			typ, _ := obj["type"].(string)
 			switch typ {
 			case "message_start":
@@ -960,9 +1075,11 @@ func decodeUsageObject(data []byte, dst *map[string]any) error {
 // cumulative stream counters with a max rule. Each object is normalized to the
 // provider-neutral totals documented on UsageObservation before it is merged.
 func mergeUsage(provider string, obj map[string]any, usage *UsageObservation) {
+	usage.ProviderError = usage.ProviderError || ProviderErrorReported(obj)
 	mergePricingQualifiers(obj, usage)
 	mergeProviderOutcomeQualifiers(provider, obj, usage)
 	if resp, ok := obj["response"].(map[string]any); ok {
+		usage.ProviderError = usage.ProviderError || ProviderErrorReported(resp)
 		// OpenAI Responses stream events put the authoritative service_tier on
 		// response.completed.response, beside (not inside) response.usage.
 		mergePricingQualifiers(resp, usage)
@@ -991,6 +1108,23 @@ func mergeUsage(provider string, obj map[string]any, usage *UsageObservation) {
 			usage.OutputTokens = 0
 			usage.OutputTokensReported = true
 		}
+	}
+}
+
+// ProviderErrorReported checks only a protocol envelope, never model content or
+// tool arguments. OpenAI/Google use a nonempty error object; Anthropic also
+// identifies error events with type=error. Nil/empty error fields are not errors.
+func ProviderErrorReported(obj map[string]any) bool {
+	if obj["type"] == "error" {
+		return true
+	}
+	switch value := obj["error"].(type) {
+	case map[string]any:
+		return len(value) > 0
+	case string:
+		return strings.TrimSpace(value) != ""
+	default:
+		return false
 	}
 }
 

@@ -150,9 +150,103 @@ test('questions about caveman do not activate', () => {
   assert.strictEqual(parseModeChange('what is caveman mode?', defaultFull), null);
 });
 
+// #187: the gap between the activation verb and "caveman" was any 40
+// characters, so ordinary prose that merely mentioned caveman downstream of a
+// common verb switched the mode on. The gap is a whitelist of determiners and
+// particles now.
+test('prose with a verb and a downstream "caveman" does not activate (#187)', () => {
+  for (const prompt of [
+    'i want to start building a caveman-themed game',
+    'help me start a caveman fire for the demo scene',
+    'we should use the sprite sheet from the caveman assets folder',
+    'switch to the branch that renames the caveman skill directory',
+  ]) {
+    assert.strictEqual(parseModeChange(prompt, defaultFull), null, prompt);
+  }
+});
+
+test('real activation phrasings still activate (positive control, #187)', () => {
+  for (const prompt of [
+    'activate caveman',
+    'activate caveman mode',
+    'enable the caveman mode',
+    'turn on caveman',
+    'turn on the caveman mode please',
+    'switch to caveman',
+    'i want caveman mode',
+    'give me caveman',
+    'please use caveman now',
+    'talk like caveman',
+    'talk like a caveman',
+  ]) {
+    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'full' }, prompt);
+  }
+});
+
+// #187: "don't activate caveman" activated. The guard is activation-only —
+// see the asymmetry note in caveman-parse.js and the #838 test below, which
+// keeps "don't stop caveman" deactivating on purpose.
+test('a negated activation does not activate (#187)', () => {
+  for (const prompt of [
+    "don't activate caveman",
+    'do not turn on caveman',
+    'never enable caveman mode',
+    "i don't want caveman for this file",
+    "please don't talk like a caveman",
+    'no need to use caveman here',
+  ]) {
+    assert.strictEqual(parseModeChange(prompt, defaultFull), null, prompt);
+  }
+});
+
+// The negator does not always sit next to the verb it negates: "don't want you
+// to use caveman" negates `want`, while the trigger that actually matches is
+// the `use` in the complement clause. Scoping the guard to the clause rather
+// than to a fixed word window is what catches these.
+test('a negated activation with a complement clause does not activate (#187)', () => {
+  for (const prompt of [
+    "i don't want you to use caveman",
+    "don't ask me to enable caveman",
+    "please don't switch me to caveman",
+    "i don't need you to talk like a caveman",
+    'never ask me to turn on caveman mode',
+  ]) {
+    assert.strictEqual(parseModeChange(prompt, defaultFull), null, prompt);
+  }
+});
+
+// The other half of clause scoping: a negation must not swallow a LATER,
+// independent positive command. Widening the guard to "a negator appears
+// anywhere earlier in the prompt" would break exactly these.
+test('a negated clause does not suppress a later activation (#187)', () => {
+  for (const prompt of [
+    "don't use vim, activate caveman",
+    "i don't like verbose output. activate caveman",
+    "never mind the linter — turn on caveman",
+  ]) {
+    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'full' }, prompt);
+  }
+});
+
 test('natural-language deactivation', () => {
   assert.deepStrictEqual(parseModeChange('turn caveman mode off', defaultFull), { action: 'clear' });
   assert.deepStrictEqual(parseModeChange('normal mode', defaultFull), { action: 'clear' });
+});
+
+// "go back to normal mode" and "go to normal mode" are ordinary switch-back
+// phrasings, but the verb alternation listed "go" and "back to" as separate,
+// mutually exclusive prefixes, so "go back to" matched nothing and "go to" had
+// no alternative at all. Both deactivations were silently dropped, leaving the
+// user in the mode with no feedback.
+test('"go back to normal mode" / "go to normal mode" deactivate like the other switch-back phrasings', () => {
+  for (const prompt of [
+    'go back to normal mode',
+    'go to normal mode',
+    'please go back to normal mode',
+    'go back to normal mode and summarize the diff',
+  ]) {
+    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'clear' }, prompt);
+  }
 });
 
 test('vim "normal mode" (no caveman context) does not deactivate', () => {

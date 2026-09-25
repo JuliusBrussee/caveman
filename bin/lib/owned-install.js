@@ -221,6 +221,9 @@ function installOwned({ root, integration, operations, force = false, note = () 
       if (!pathExists(stage)) throw new Error(`owned installer did not materialize ${relative}`);
       const stagedDigest = digestPath(stage);
       if (unchangedOwned && !force && stagedDigest === currentDigest) {
+        // Host registration can disappear independently of the owned payload.
+        // Reconcile it even when no file replacement is necessary.
+        if (operation.register) operation.register(target);
         note(`  kept owned ${target}`);
         continue;
       }
@@ -241,6 +244,10 @@ function installOwned({ root, integration, operations, force = false, note = () 
       writeJournal(journalPath, journal);
       committed = true;
       removePath(displaced);
+      // Hosts can fail after linking the payload. Commit ownership first and
+      // retain recoverable bytes/backups on registration failure; never leave
+      // an external registration pointing at a rolled-back or missing target.
+      if (operation.register) operation.register(target);
       note(`  installed owned ${target}`);
     } finally {
       removePath(stage);
@@ -259,7 +266,7 @@ function installOwned({ root, integration, operations, force = false, note = () 
   return { journalPath, journal };
 }
 
-function uninstallOwned({ root, integration, dryRun = false, note = () => {}, warn = () => {} }) {
+function uninstallOwned({ root, integration, dryRun = false, note = () => {}, warn = () => {}, unregister }) {
   const { journalPath, backupRoot } = journalPaths(root, integration);
   if (!pathExists(journalPath)) return { hadJournal: false, changed: [], preserved: [] };
   const journal = loadJournal(journalPath, integration);
@@ -292,6 +299,18 @@ function uninstallOwned({ root, integration, dryRun = false, note = () => {}, wa
       changed.push(relative);
       continue;
     }
+    if (restoreBackup) {
+      const backupStat = fs.lstatSync(backupRoot);
+      if (backupStat.isSymbolicLink() || !backupStat.isDirectory()) {
+        throw new Error(`invalid backup root: ${backupRoot}`);
+      }
+      // Backup paths have the same no-symlink contract as installed payloads.
+      // Validate before host deregistration or removal of the current payload.
+      digestPath(restoreBackup);
+    }
+    // Never leave a live host registration pointing at removed payload bytes.
+    // Ownership/digest checks and dry-run handling must precede this callback.
+    if (unregister) unregister(target);
     removePath(target);
     if (restoreBackup) {
       fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });

@@ -1,0 +1,69 @@
+{
+  "family": "caveman-proxy",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::REPLACE_ACCOUNT_ID:role/REPLACE_ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::REPLACE_ACCOUNT_ID:role/REPLACE_caveman_proxy_task_role_with_bedrock_InvokeModel",
+  "volumes": [
+    {
+      "name": "caveman-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-REPLACE_EFS_FILESYSTEM_ID",
+        "rootDirectory": "/",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "fsap-REPLACE_ACCESS_POINT_THAT_MAPS_POSIX_UID_65532",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "caveman-proxy",
+      "image": "ghcr.io/juliusbrussee/caveman-proxy:bin-v1.1.7",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8787,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "AWS_REGION",
+          "value": "REPLACE_REGION"
+        },
+        {
+          "name": "CAVEMAN_MODE",
+          "value": "record"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "CAVEMAN_AUTH_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:caveman-proxy/auth-token-REPLACE_SUFFIX"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "caveman-data",
+          "containerPath": "/data",
+          "readOnly": false
+        }
+      ],
+      "user": "65532:65532",
+      "readonlyRootFilesystem": true,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/caveman-proxy",
+          "awslogs-region": "REPLACE_REGION",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

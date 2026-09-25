@@ -28,7 +28,10 @@ Works in any Chromium browser (Chrome, Edge, Brave, Arc). No build step.
 - Type and send as normal. The extension prepends the caveman directive and
   submits — the AI's replies come back terse.
 - The on-page flame pill shows it's active; click it to turn off (or say
-  `stop caveman` in chat).
+  `stop caveman` in chat). The stop command sends unchanged and turns the extension
+  off across sites, like the popup switch.
+- If you edit the draft, change chats, or turn the extension off while a send is
+  waiting, automatic submission stops. Review the draft and send it yourself.
 
 ## How it works
 

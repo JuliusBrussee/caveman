@@ -1,36 +1,46 @@
 # caveman-stats
 
-Real session token receipts. No AI estimation.
+Recorded session usage. Savings stay unknown without a measured comparison.
 
 ## What it does
 
-Reads the current Claude Code session log directly and reports actual input/output token usage plus estimated savings versus a non-caveman baseline. Numbers come from the JSONL session log on disk — the model itself does not compute or estimate them. Output is injected by the `caveman-mode-tracker` hook, which intercepts `/caveman-stats` and returns the formatted stats as a blocked-decision reason.
+Reads the current Claude Code session log and reports output tokens, cache-read input tokens, and response counts. When a mode-transition log is available, it separates output by the mode active for each response. Missing mode attribution stays unknown. Numbers come from the JSONL session log on disk — the model itself does not compute or estimate them. Output is injected by the `caveman-mode-tracker` hook, which intercepts `/caveman-stats`, runs the stats script, and hands the formatted block back as `additionalContext` with an instruction to print it verbatim.
 
-Output also includes an `Est. rule overhead` and `Est. net` line whenever the savings figure above them is unambiguous (a single benchmarked mode with a known turn count — no guessing across mixed or unattributed spans). Overhead estimates the per-turn INPUT-token cost of the rules the skill injects every turn — default 1,250 tokens/turn, override with `CAVEMAN_RULE_OVERHEAD_TOKENS` if you've measured your own setup. Net is savings minus that overhead. On short, terse replies this can go negative — caveman's OUTPUT savings don't clear its INPUT cost — and the line says so directly instead of hiding it behind a gross-savings number. Background: `docs/HONEST-NUMBERS.md`.
+The transcript does not contain the same session without Caveman, so the report cannot calculate tokens saved, a reduction percentage, dollars saved, rule overhead, or a net result. Earlier releases applied a fixed ratio without a committed reviewed benchmark. Those estimates no longer appear in session reports, lifetime totals, shared summaries, or the statusline.
 
-Each run also writes a lifetime-savings suffix file used by the statusline badge (`⛏ 12.4k`). That badge stays a gross-savings figure on purpose — it is a glanceable summary, not a full accounting; run `/caveman-stats` for the net picture.
+Recorded history stays on disk. New snapshots contain observed usage and mode attribution; historical estimated-savings fields are ignored. Original/current memory-file pairs show byte-size differences separately, without treating them as provider savings.
 
 ## How to invoke
 
 ```
 /caveman-stats
+/caveman-stats --all
+/caveman-stats --since 7d
+/caveman-stats --share
 ```
+
+Claude Code's hook runs `src/hooks/caveman-stats.js` and tells the model to relay the generated report verbatim. The model does not estimate the numbers.
 
 ## Example output
 
-```
-Session: 47 turns
-Input:   12,304 tokens
-Output:   3,891 tokens (caveman)
-Baseline: 11,247 tokens (estimated without caveman)
-Saved:    7,356 tokens (~65%)
-Est. rule overhead: 58,750 (input, ~1,250/turn over 47 turns)
-Est. net: -51,394 (caveman cost more than it saved for this workload — consider turning it off)
-```
+An illustrative transcript with one response and 1,000 output tokens produces:
 
-(Numbers above are illustrative — see `docs/HONEST-NUMBERS.md` for why short, terse-reply sessions tend to land net-negative even at a healthy output-savings percentage.)
+```
+Turns:    1
+──────────────────────────────────
+Output tokens:         1,000
+Cache-read tokens:     2,400
+──────────────────────────────────
+Mode: full (current mode; no transition log)
+Savings: unknown — no measured comparison for this session.
+```
 
 ## See also
 
-- [`SKILL.md`](./SKILL.md) — hook contract and mechanics
+- [`SKILL.md`](./SKILL.md) — hook contract
+- [Honest Numbers](../../docs/HONEST-NUMBERS.md) — measurement limits
 - [Caveman README](../../README.md) — repo overview
+
+Gemini CLI uses its native `/stats model` or `/stats session` report. The Caveman
+command points there; it cannot access Gemini's live metrics or aggregate Claude
+transcripts as Gemini usage. [Gemini command reference](https://geminicli.com/docs/reference/commands/).

@@ -151,12 +151,13 @@ test("start: no MCP recovery stamps nothing and says compression is off", async 
   assert.doesNotMatch(out.stderr, CLAIM, "must not announce compression the proxy has off");
 });
 
-test("start: an unrelated installed MCP marker cannot enable global recovery", async () => {
+test("start: an installed MCP marker reports per-session recovery, never a global stamp", async () => {
   const out = await run(["start"], { mcpAgent: "claude" });
   assert.equal(out.proxyEnv.entitled, "<unset>");
   assert.equal(out.proxyEnv.recovery, "<unset>");
-  assert.match(out.stderr, NO_RECOVERY);
-  assert.doesNotMatch(out.stderr, CLAIM);
+  assert.match(out.stderr, CLAIM);
+  assert.match(out.stderr, /for sessions whose agent carries caveman_retrieve/);
+  assert.doesNotMatch(out.stderr, NO_RECOVERY);
 });
 
 test("start: inherited CAVEMAN_RECOVERY=mcp cannot bypass agent binding", async () => {
@@ -179,8 +180,7 @@ test("start: no entitlement does not weaken recovery binding", async () => {
   const out = await run(["start"], { entitled: false, mcpAgent: "claude" });
   assert.equal(out.proxyEnv.entitled, "<unset>", "no account signal reaches the proxy");
   assert.equal(out.proxyEnv.recovery, "<unset>");
-  assert.match(out.stderr, NO_RECOVERY);
-  assert.doesNotMatch(out.stderr, CLAIM);
+  assert.match(out.stderr, /for sessions whose agent carries caveman_retrieve/);
 });
 
 test("wrap: an agent without the MCP retrieve tool says compression is off", async () => {

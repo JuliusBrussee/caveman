@@ -9,6 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +24,10 @@ import (
 
 const Schema = "caveman.proxy.run.v1"
 
+// InstanceHeader binds a health response to this process's private run-state
+// file. Probes never send the expected token to the listener.
+const InstanceHeader = "X-Caveman-Instance"
+
 type State struct {
 	Schema         string    `json:"schema"`
 	PID            int       `json:"pid"`
@@ -32,21 +39,52 @@ type State struct {
 	StartedAt      time.Time `json:"started_at"`
 	Version        string    `json:"version"`
 	RecoveryViaMCP bool      `json:"recovery_via_mcp"`
+	// CompatUpstreams maps each named OpenAI-compatible mount this proxy serves
+	// at /compat/<name>/ to its upstream base URL. A client routes a custom
+	// provider through a mount only after matching this map, so an absent field
+	// (an older proxy) simply means "no custom mount is verifiable".
+	CompatUpstreams map[string]string `json:"compat_upstreams,omitempty"`
+	// ProviderUpstreams identifies the actual native endpoints of this listener.
+	// Missing entries cannot certify a wrapper's original provider endpoint.
+	ProviderUpstreams    map[string]string   `json:"provider_upstreams,omitempty"`
+	CompatForwardHeaders map[string][]string `json:"compat_forward_headers,omitempty"`
 }
 
 type PublicState struct {
-	Owner          string    `json:"owner"`
-	Mode           string    `json:"mode,omitempty"`
-	InstanceToken  string    `json:"instance_token,omitempty"`
-	PID            int       `json:"pid,omitempty"`
-	Port           int       `json:"port,omitempty"`
-	StartedAt      time.Time `json:"started_at,omitempty"`
-	Version        string    `json:"version,omitempty"`
-	RecoveryViaMCP bool      `json:"recovery_via_mcp"`
+	Owner                string              `json:"owner"`
+	Mode                 string              `json:"mode,omitempty"`
+	InstanceToken        string              `json:"instance_token,omitempty"`
+	PID                  int                 `json:"pid,omitempty"`
+	Port                 int                 `json:"port,omitempty"`
+	StartedAt            time.Time           `json:"started_at,omitempty"`
+	Version              string              `json:"version,omitempty"`
+	RecoveryViaMCP       bool                `json:"recovery_via_mcp"`
+	CompatUpstreams      map[string]string   `json:"compat_upstreams,omitempty"`
+	ProviderUpstreams    map[string]string   `json:"provider_upstreams,omitempty"`
+	CompatForwardHeaders map[string][]string `json:"compat_forward_headers,omitempty"`
 }
 
 func Unknown() PublicState {
 	return PublicState{Owner: "unknown"}
+}
+
+// RoutingUpstreams publishes only credential-free endpoint identities. Keep an
+// unavailable entry as an empty string so it cannot become a same-named default
+// route after the credential-bearing URL was suppressed.
+func RoutingUpstreams(upstreams map[string]string) map[string]string {
+	if upstreams == nil {
+		return nil
+	}
+	out := make(map[string]string, len(upstreams))
+	for name, raw := range upstreams {
+		out[name] = ""
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			continue
+		}
+		out[name] = raw
+	}
+	return out
 }
 
 func PortFromListen(listen string) (int, error) {
@@ -91,6 +129,8 @@ func New(listen, mode, owner, version string) (State, error) {
 }
 
 func Write(home string, state State) error {
+	state.CompatUpstreams = RoutingUpstreams(state.CompatUpstreams)
+	state.ProviderUpstreams = RoutingUpstreams(state.ProviderUpstreams)
 	dir := filepath.Join(home, "run")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -139,13 +179,17 @@ func read(home string, port int) (State, error) {
 		state.InstanceToken == "" || (state.Owner != "wrap" && state.Owner != "start") {
 		return State{}, errors.New("invalid run-state contract")
 	}
+	listenPort, err := PortFromListen(state.Listen)
+	if err != nil || listenPort != state.Port {
+		return State{}, errors.New("run-state listen address does not match its port")
+	}
 	return state, nil
 }
 
 type validators struct {
 	alive      func(int) bool
 	executable func(int) (string, error)
-	bound      func(string) bool
+	instance   func(string, string) bool
 }
 
 func validate(state State, checks validators) bool {
@@ -156,7 +200,7 @@ func validate(state State, checks validators) bool {
 	if err != nil || !strings.Contains(strings.ToLower(filepath.Base(exe)), "caveman-proxy") {
 		return false
 	}
-	return checks.bound(state.Listen)
+	return checks.instance(state.Listen, state.InstanceToken)
 }
 
 func ReadValidated(home string, port int) PublicState {
@@ -164,19 +208,22 @@ func ReadValidated(home string, port int) PublicState {
 	if err != nil {
 		return Unknown()
 	}
-	checks := validators{alive: processAlive, executable: processExecutable, bound: portBound}
+	checks := validators{alive: processAlive, executable: processExecutable, instance: instanceMatches}
 	if !validate(state, checks) {
 		return Unknown()
 	}
 	return PublicState{
-		Owner:          state.Owner,
-		Mode:           state.Mode,
-		InstanceToken:  state.InstanceToken,
-		PID:            state.PID,
-		Port:           state.Port,
-		StartedAt:      state.StartedAt,
-		Version:        state.Version,
-		RecoveryViaMCP: state.RecoveryViaMCP,
+		Owner:                state.Owner,
+		Mode:                 state.Mode,
+		InstanceToken:        state.InstanceToken,
+		PID:                  state.PID,
+		Port:                 state.Port,
+		StartedAt:            state.StartedAt,
+		Version:              state.Version,
+		RecoveryViaMCP:       state.RecoveryViaMCP,
+		CompatUpstreams:      RoutingUpstreams(state.CompatUpstreams),
+		ProviderUpstreams:    RoutingUpstreams(state.ProviderUpstreams),
+		CompatForwardHeaders: state.CompatForwardHeaders,
 	}
 }
 
@@ -209,8 +256,8 @@ func processAlive(pid int) bool {
 		// process handle there and fails for exited processes, so a
 		// successful open is the liveness signal. Caveat: a terminated
 		// process whose handle another process still holds also opens, so on
-		// Windows validate()'s portBound probe carries the real liveness
-		// weight — a dead proxy is not listening.
+		// Windows validate()'s instance probe carries the real liveness
+		// weight — a dead proxy cannot return its generation's token.
 		return true
 	}
 	return process.Signal(syscall.Signal(0)) == nil
@@ -230,11 +277,51 @@ func processExecutable(pid int) (string, error) {
 	return "", fmt.Errorf("executable identity unsupported on %s", runtime.GOOS)
 }
 
-func portBound(listen string) bool {
-	conn, err := net.DialTimeout("tcp", listen, 200*time.Millisecond)
+func instanceMatches(listen, token string) bool {
+	if token == "" {
+		return false
+	}
+	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
 		return false
 	}
-	_ = conn.Close()
-	return true
+	// A wildcard bind is reached through loopback, never a corporate proxy or
+	// an unspecified remote destination.
+	switch host {
+	case "", "0.0.0.0":
+		host = "127.0.0.1"
+	case "::":
+		host = "::1"
+	}
+	// The listen address comes out of a file. config.validateListen allows a
+	// non-loopback bind only behind CAVEMAN_AUTH_TOKEN; this probe deliberately
+	// holds a stricter rule and only ever dials loopback, rather than issuing a
+	// request to whatever remote host that file happens to name. A local CLI
+	// next to an explicitly non-loopback listener therefore runs direct.
+	if addr, err := netip.ParseAddr(host); err != nil || !addr.IsLoopback() {
+		return false
+	}
+	target := url.URL{Scheme: "http", Host: net.JoinHostPort(host, port), Path: "/health/live"}
+	transport := &http.Transport{
+		Proxy:                  nil,
+		DialContext:            (&net.Dialer{Timeout: 250 * time.Millisecond}).DialContext,
+		DisableKeepAlives:      true,
+		MaxResponseHeaderBytes: 16 << 10,
+		ResponseHeaderTimeout:  500 * time.Millisecond,
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   750 * time.Millisecond,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	response, err := client.Get(target.String())
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	values := response.Header.Values(InstanceHeader)
+	return response.StatusCode == http.StatusOK && len(values) == 1 && values[0] == token
 }

@@ -41,3 +41,30 @@ test("both public shims pin bootstrap package to immutable release", () => {
   assert.doesNotMatch(shellShim, /caveman\/main\/install\.sh/);
   assert.doesNotMatch(powershellShim, /caveman\/main\/install\.ps1/);
 });
+
+test("every bootstrap pin names the same release", () => {
+  // v2.3.0 shipped with install.sh and install.ps1 still pinned to v2.2.0:
+  // bumping bin/install.js and the README one-liners is not enough, because
+  // each shim carries its own default ref and the curl-pipe path uses that
+  // one. Keep the four pins (plus the installer package version) in lockstep.
+  const pins = {
+    "install.sh": shellShim.match(/^PINNED_REF="\$\{CAVEMAN_REF:-(v[^}"]+)\}"$/m)?.[1],
+    "install.ps1": powershellShim.match(/\$PinnedRef = if \(\$env:CAVEMAN_REF\) \{ \$env:CAVEMAN_REF \} else \{ "(v[^"]+)" \}/)?.[1],
+    "bin/install.js": readFileSync(join(root, "bin", "install.js"), "utf8")
+      .match(/^const PINNED_REF = process\.env\.CAVEMAN_REF \|\| '(v[^']+)';$/m)?.[1],
+  };
+  for (const [file, pin] of Object.entries(pins)) {
+    assert.ok(pin, `${file} must declare a parseable pinned ref`);
+  }
+  assert.equal(new Set(Object.values(pins)).size, 1, `bootstrap pins disagree: ${JSON.stringify(pins)}`);
+
+  const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+  assert.equal(`v${version}`, pins["install.sh"], "installer package version must match the pinned release");
+
+  for (const doc of ["README.md", "INSTALL.md"]) {
+    const text = readFileSync(join(root, doc), "utf8");
+    const refs = [...text.matchAll(/raw\.githubusercontent\.com\/JuliusBrussee\/caveman\/(v[\d.]+)\//g)].map((m) => m[1]);
+    assert.ok(refs.length > 0, `${doc} must carry at least one pinned install one-liner`);
+    for (const ref of refs) assert.equal(ref, pins["install.sh"], `${doc} one-liner pins ${ref}`);
+  }
+});

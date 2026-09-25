@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +16,28 @@ export const BINARY_RELEASE_BASE_DEFAULT = ${JSON.stringify(releaseBase)};
 export const BINARY_SIGNING_PUBKEY = ${JSON.stringify(publicKey)};
 `;
 
+// mcp, shrink, and browse each run this from their own prepack/pretest, and
+// `pnpm -r` runs those in parallel — so several processes rewrite these same
+// files at once, each writing all four targets rather than just its own. On
+// Windows the loser of that race dies with `EBUSY: resource busy or locked`.
+// Every writer produces identical bytes and the outputs are committed, so the
+// normal case is to write nothing; a real change lands through a rename so no
+// concurrent reader sees a half-written file.
+function publish(path, bytes) {
+  if (existsSync(path) && readFileSync(path).equals(bytes)) return;
+  const temp = `${path}.${process.pid}.tmp`;
+  writeFileSync(temp, bytes);
+  try {
+    renameSync(temp, path);
+  } catch (error) {
+    try { unlinkSync(temp); } catch { /* the temp file is ours alone */ }
+    // Losing the rename is only fatal if the winner wrote something else.
+    if (!(existsSync(path) && readFileSync(path).equals(bytes))) throw error;
+  }
+}
+
+const generatedBytes = Buffer.from(generated);
+let sourceBytes;
 for (const target of [
   join(publicRoot, "shared", "binary-installer"),
   join(stackRoot, "mcp", "bin"),
@@ -23,9 +45,10 @@ for (const target of [
   join(stackRoot, "browse", "bin"),
 ]) {
   if (!existsSync(target)) continue;
-  writeFileSync(join(target, "release.generated.mjs"), generated);
+  publish(join(target, "release.generated.mjs"), generatedBytes);
   if (target !== join(publicRoot, "shared", "binary-installer")) {
-    copyFileSync(source, join(target, "binary-installer.generated.mjs"));
+    sourceBytes ??= readFileSync(source);
+    publish(join(target, "binary-installer.generated.mjs"), sourceBytes);
   }
 }
 console.log(`generated standalone wedge installers for ${release}`);

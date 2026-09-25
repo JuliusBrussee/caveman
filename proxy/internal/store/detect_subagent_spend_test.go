@@ -77,3 +77,31 @@ func TestSubagentSpendSilentWithoutFanOut(t *testing.T) {
 		t.Fatalf("a single session must not carry a finding: %+v", got)
 	}
 }
+
+// TestSubagentSpendCountsAgentNamedSpawns covers the other half of the tool
+// rename behind #1075. The raw-line spawn counter learned the new "Agent"
+// name, but observeSpawn still matched "task" alone, so subagent SPEND — the
+// measured cost split and the per-type breakdown that names which subagent
+// burned it — stayed at zero on exactly the transcripts the counter had just
+// started detecting. This is the shared sink for every source, not a
+// Claude-only path.
+func TestSubagentSpendCountsAgentNamedSpawns(t *testing.T) {
+	tracker := subagentSpendTracker{}
+	tracker.observeSpawn("Agent", `{"subagent_type":"Explore","prompt":"find the thing"}`)
+	tracker.observeSpawn("agent", `{"subagent_type":"Explore"}`)
+	tracker.observeSpawn("Task", `{"subagent_type":"Plan"}`)
+	// Neither name, so still not a spawn — the fix must widen the predicate,
+	// not disable it.
+	tracker.observeSpawn("Read", `{"file_path":"/x"}`)
+	tracker.observeSpawn("AgentToolbox", `{"subagent_type":"nope"}`)
+
+	if tracker.Spawns != 3 {
+		t.Fatalf("Spawns = %d, want 3 (Agent and Task both spawn subagents)", tracker.Spawns)
+	}
+	if got := tracker.SpawnsByType["Explore"]; got != 2 {
+		t.Fatalf("SpawnsByType[Explore] = %d, want 2", got)
+	}
+	if got := tracker.SpawnsByType["Plan"]; got != 1 {
+		t.Fatalf("SpawnsByType[Plan] = %d, want 1", got)
+	}
+}

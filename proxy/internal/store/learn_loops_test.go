@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDetectLearningLoopsRequiresThreeCallsWithinOneSession(t *testing.T) {
@@ -52,6 +53,9 @@ func TestDetectLearningLoopsDistinguishesPaginationVariants(t *testing.T) {
 }
 
 func TestBuildLearnPlanSurfacesHashedFailureLoopEvidence(t *testing.T) {
+	previousSinceClock := sinceClock
+	sinceClock = func() time.Time { return time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { sinceClock = previousSinceClock })
 	home := t.TempDir()
 	claudeDir := t.TempDir()
 	t.Setenv("CAVEMAN_HOME", home)

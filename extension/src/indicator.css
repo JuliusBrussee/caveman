@@ -1,10 +1,7 @@
-@font-face {
-  font-family: "Caveman Mono";
-  src: url("../fonts/geist-mono.woff2") format("woff2");
-  font-weight: 100 900;
-  font-display: swap;
-}
-
+/* Content-script CSS is injected into chat pages, where relative url()s resolve
+   against the PAGE origin — a @font-face here would 404 on every host (measured
+   on chatgpt.com + a local harness, 2026-09-03). ui-monospace is the look users
+   have always seen, so no custom font is declared. */
 #caveman-indicator {
   position: fixed;
   right: 16px;
@@ -14,7 +11,7 @@
   align-items: center;
   gap: 8px;
   padding: 6px 12px 6px 9px;
-  font-family: "Caveman Mono", ui-monospace, "SF Mono", monospace;
+  font-family: ui-monospace, "SF Mono", monospace;
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.16em;

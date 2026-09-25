@@ -3,9 +3,54 @@ package gemini
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/JuliusBrussee/caveman/proxy/providers"
 )
+
+func TestQueryCredentialsDoNotOverrideResolvedPrincipal(t *testing.T) {
+	a := New("https://upstream.test")
+	for _, credential := range []providers.Credential{
+		{Mode: "managed", Key: "resolved-key"},
+		{Mode: "ephemeral_header", Key: "resolved-key"},
+		{Mode: "managed", Scheme: "bearer", Key: "resolved-oauth"},
+		{Mode: "ephemeral_header", Scheme: "bearer", Key: "resolved-oauth"},
+		{Mode: "ephemeral_header", Scheme: "bearer", Key: "caller-oauth"},
+	} {
+		t.Run(credential.Mode+"/"+credential.Scheme+"/"+credential.Key, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/gemini/v1beta/models/gemini-2.5-pro:generateContent?key=caller-query-key", nil)
+			req.Header.Set("Authorization", "Bearer caller-oauth")
+			req.Header.Set("x-goog-user-project", "caller-project")
+			u, err := a.ResolveUpstreamURL(req.Context(), req, providers.RouteContext{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := a.SanitizeAndMapHeaders(req.Context(), req, credential, u)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if credential.Scheme == "bearer" {
+				// The caller's own OAuth credential keeps BOTH of its inputs: the
+				// bearer it authenticated with and the URL key it also supplied.
+				// A separately resolved bearer must not gain that key.
+				wantKey := ""
+				if credential.Key == "caller-oauth" {
+					wantKey = "caller-query-key"
+				}
+				if got.Get("Authorization") != "Bearer "+credential.Key || got.Get("x-goog-api-key") != wantKey {
+					t.Fatalf("query key changed resolved OAuth principal: %v", got)
+				}
+			} else if got.Get("x-goog-api-key") != credential.Key || got.Get("Authorization") != "" {
+				t.Fatalf("query key changed resolved API-key principal: %v", got)
+			}
+			if u.RawQuery != "" {
+				t.Fatal("query credential leaked into upstream URL")
+			}
+		})
+	}
+}
 
 func TestGeminiRouteMetadata(t *testing.T) {
 	a := New("http://upstream").(Adapter)

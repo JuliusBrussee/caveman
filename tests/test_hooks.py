@@ -31,6 +31,7 @@ class HookScriptTests(unittest.TestCase):
             cwd=REPO_ROOT,
             env=env,
             text=True,
+            encoding="utf-8",
             stdin=subprocess.DEVNULL,
             capture_output=True,
             check=True,
@@ -234,6 +235,191 @@ class HookScriptTests(unittest.TestCase):
             )
 
             self.assertIn("PLUGIN ROOT MARKER RULESET", result.stdout)
+
+
+class SessionStartSourceTests(unittest.TestCase):
+    """SessionStart must re-emit the ruleset on every source, but must only
+    re-derive the configured default when a session genuinely begins.
+
+    #691 fixed half of this by branching on `source`. It could not fix the
+    other half: deactivation was spelled "no flag file", so a session that had
+    been turned off found nothing stored and fell back to getDefaultMode() —
+    "stop caveman" was still silently undone by the next auto-compaction. The
+    durable 'off' in the per-session store is what closes that.
+    """
+
+    ACTIVATE = "src/hooks/caveman-activate.js"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="caveman-source-")
+        self.home = Path(self._tmp.name)
+        self.claude_dir = self.home / ".claude"
+        self.claude_dir.mkdir(parents=True)
+        self.sessions = self.claude_dir / ".caveman-sessions"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def activate(self, payload=None, extra_env=None, timeout=30):
+        env = os.environ.copy()
+        env.pop("CLAUDE_PLUGIN_ROOT", None)
+        env.pop("CAVEMAN_DEFAULT_MODE", None)
+        env["HOME"] = str(self.home)
+        env["USERPROFILE"] = str(self.home)
+        env["CLAUDE_CONFIG_DIR"] = str(self.claude_dir)
+        if extra_env:
+            env.update(extra_env)
+        return subprocess.run(
+            ["node", self.ACTIVATE],
+            cwd=REPO_ROOT,
+            env=env,
+            input="" if payload is None else json.dumps(payload),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+            timeout=timeout,
+        )
+
+    def set_session_mode(self, session_id, mode):
+        self.sessions.mkdir(parents=True, exist_ok=True)
+        (self.sessions / f"{session_id}.mode").write_text(mode)
+
+    def session_mode(self, session_id):
+        p = self.sessions / f"{session_id}.mode"
+        return p.read_text() if p.exists() else None
+
+    def test_startup_persists_the_session_mode(self):
+        self.activate({"session_id": "sessA", "source": "startup"})
+        self.assertEqual(self.session_mode("sessA"), "full")
+        self.assertEqual((self.claude_dir / ".caveman-active").read_text(), "full")
+
+    def test_compact_does_not_resurrect_a_deactivated_session(self):
+        self.set_session_mode("sessA", "off")
+        r = self.activate({"session_id": "sessA", "source": "compact"})
+        self.assertNotIn("CAVEMAN MODE ACTIVE", r.stdout)
+        self.assertEqual(self.session_mode("sessA"), "off", "state must stay off")
+
+    def test_compact_still_re_emits_the_ruleset_when_active(self):
+        # Compaction is exactly what prunes the rules out of context, so the
+        # hook must keep re-injecting them — it just must not change the mode.
+        self.set_session_mode("sessA", "ultra")
+        r = self.activate({"session_id": "sessA", "source": "compact"})
+        self.assertIn("CAVEMAN MODE ACTIVE — level: ultra", r.stdout)
+
+    def test_compact_does_not_re_derive_the_configured_default(self):
+        self.set_session_mode("sessA", "lite")
+        r = self.activate(
+            {"session_id": "sessA", "source": "compact"},
+            extra_env={"CAVEMAN_DEFAULT_MODE": "ultra"},
+        )
+        self.assertIn("level: lite", r.stdout)
+        self.assertNotIn("level: ultra", r.stdout)
+
+    def test_resume_preserves_a_deactivated_session_too(self):
+        # Not just compaction: a resumed session that was turned off must stay
+        # off. #691's flag read could not tell "off" from "never set".
+        self.set_session_mode("sessA", "off")
+        r = self.activate({"session_id": "sessA", "source": "resume"})
+        self.assertNotIn("CAVEMAN MODE ACTIVE", r.stdout)
+
+    def test_resume_without_stored_state_uses_the_default(self):
+        r = self.activate({"session_id": "brandnew", "source": "resume"})
+        self.assertIn("CAVEMAN MODE ACTIVE — level: full", r.stdout)
+
+    def test_clear_re_applies_the_default(self):
+        # /clear is an explicit user reset, unlike a compaction: nothing else
+        # in the conversation survives it, so neither does a "stop caveman".
+        self.set_session_mode("sessA", "off")
+        r = self.activate({"session_id": "sessA", "source": "clear"})
+        self.assertIn("CAVEMAN MODE ACTIVE", r.stdout)
+
+    def test_a_pre_upgrade_legacy_flag_survives_a_compaction(self):
+        # Upgrade path: the session began before per-session state existed, so
+        # only the machine-wide flag holds its mode.
+        (self.claude_dir / ".caveman-active").write_text("lite")
+        r = self.activate(
+            {"session_id": "sessA", "source": "compact"},
+            extra_env={"CAVEMAN_DEFAULT_MODE": "ultra"},
+        )
+        self.assertIn("level: lite", r.stdout)
+
+    def test_payloadless_invocation_behaves_as_before(self):
+        for payload in (None, {}, {"source": "startup"}):
+            r = self.activate(payload)
+            self.assertIn("CAVEMAN MODE ACTIVE — level: full", r.stdout)
+
+    def test_malformed_payload_degrades_instead_of_failing(self):
+        env = os.environ.copy()
+        env.pop("CLAUDE_PLUGIN_ROOT", None)
+        env.pop("CAVEMAN_DEFAULT_MODE", None)
+        env["HOME"] = str(self.home)
+        env["USERPROFILE"] = str(self.home)
+        env["CLAUDE_CONFIG_DIR"] = str(self.claude_dir)
+        r = subprocess.run(
+            ["node", self.ACTIVATE],
+            cwd=REPO_ROOT, env=env, input="not json {{{",
+            text=True, encoding="utf-8", capture_output=True, check=True, timeout=30,
+        )
+        self.assertIn("CAVEMAN MODE ACTIVE", r.stdout)
+
+    def test_rejected_session_id_writes_no_state_file(self):
+        self.activate({"session_id": "../../escape", "source": "startup"})
+        self.assertEqual((self.claude_dir / ".caveman-active").read_text(), "full")
+        stray = list(self.claude_dir.rglob("*.mode")) + list(self.claude_dir.rglob("*escape*"))
+        self.assertEqual(stray, [], f"unexpected files: {stray}")
+
+    def test_startup_sweeps_stale_session_files(self):
+        self.set_session_mode("staleSess", "full")
+        stale = self.sessions / "staleSess.mode"
+        old = 1.0  # epoch-ish; far older than any TTL
+        os.utime(stale, (old, old))
+
+        self.activate({"session_id": "freshSess", "source": "startup"})
+        self.assertFalse(stale.exists(), "stale session file should be swept")
+        self.assertTrue((self.sessions / "freshSess.mode").exists())
+
+    def test_compact_does_not_sweep(self):
+        # GC walks a directory inside a 5s hook budget; compactions are frequent.
+        self.set_session_mode("staleSess", "full")
+        self.set_session_mode("sessA", "full")
+        stale = self.sessions / "staleSess.mode"
+        os.utime(stale, (1.0, 1.0))
+
+        self.activate({"session_id": "sessA", "source": "compact"})
+        self.assertTrue(stale.exists(), "compact must not spend budget on GC")
+
+    def test_hook_never_blocks_on_stdin_that_never_closes(self):
+        """The hook must finish while the host still holds the write end open.
+
+        Claude Code writes one payload and closes, but that close can lag
+        arbitrarily on Windows (#729/#833) — and several suites invoke this hook
+        with no `input=` at all, inheriting a stdin that never reaches EOF. The
+        payload watchdog plus stdin.unref() is what keeps a slow or absent close
+        from spending the whole 5s budget.
+        """
+        read_fd, write_fd = os.pipe()  # write end stays open: no EOF, ever
+        try:
+            r = subprocess.run(
+                ["node", self.ACTIVATE],
+                cwd=REPO_ROOT,
+                env={
+                    **os.environ,
+                    "HOME": str(self.home),
+                    "USERPROFILE": str(self.home),
+                    "CLAUDE_CONFIG_DIR": str(self.claude_dir),
+                },
+                stdin=read_fd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=15,  # TimeoutExpired => the hook hangs => test fails
+            )
+            self.assertEqual(r.returncode, 0)
+            self.assertIn("CAVEMAN MODE ACTIVE", r.stdout)
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
 
 
 if __name__ == "__main__":

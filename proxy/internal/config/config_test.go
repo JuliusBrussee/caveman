@@ -1,10 +1,33 @@
 package config
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/JuliusBrussee/caveman/proxy/providers/openaicompat"
 )
+
+// TestMain isolates the suite from the host's corporate-network variables,
+// which Load now reads (#1001).
+func TestMain(m *testing.M) {
+	for _, name := range []string{"CAVE_UPSTREAM_PROXY", "CAVE_CA_BUNDLE", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"} {
+		os.Unsetenv(name)
+	}
+	os.Exit(m.Run())
+}
 
 func TestLoad_MissingFileYieldsRecordDefaults(t *testing.T) {
 	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
@@ -19,15 +42,96 @@ func TestLoad_MissingFileYieldsRecordDefaults(t *testing.T) {
 	}
 }
 
+func TestCompatForwardHeaderConfiguration(t *testing.T) {
+	for _, header := range []string{"X-API-Tenant", "CF-AIG-Authorization", "Host", "Connection", "Content-Length", "Authorization", "X-Api-Key", "Proxy-Authorization", "X-Cave-Key", "X-Caveman-Instance", "Cookie", "bad name", ""} {
+		t.Run(header, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "caveman.yaml")
+			body := "compat:\n  relay:\n    base_url: https://relay.example\n    forward_headers: [\"" + header + "\"]\n"
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if header == "X-API-Tenant" || header == "CF-AIG-Authorization" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(cfg.Compat["relay"].ForwardHeaders) != 1 || cfg.Compat["relay"].ForwardHeaders[0] != header {
+					t.Fatal("header contract lost")
+				}
+			} else if err == nil {
+				t.Fatal("unsafe forward header accepted")
+			}
+		})
+	}
+}
+
 func TestLoad_RejectsNonLoopbackListen(t *testing.T) {
 	for _, listen := range []string{"0.0.0.0:8787", "[::]:8787", ":8787", "192.0.2.1:8787"} {
 		t.Run(listen, func(t *testing.T) {
+			// Explicit: a developer's exported token must not be what decides
+			// whether this rejection test passes.
+			t.Setenv("CAVEMAN_AUTH_TOKEN", "")
 			path := filepath.Join(t.TempDir(), "caveman.yaml")
 			if err := os.WriteFile(path, []byte("listen: \""+listen+"\"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Load(path); err == nil {
+			_, err := Load(path)
+			if err == nil {
 				t.Fatalf("Load accepted unauthenticated non-loopback listen %q", listen)
+			}
+			if !strings.Contains(err.Error(), "CAVEMAN_AUTH_TOKEN") {
+				t.Fatalf("error %q does not name the way out (CAVEMAN_AUTH_TOKEN)", err)
+			}
+		})
+	}
+}
+
+func TestLoad_AuthTokenAllowsNonLoopbackListen(t *testing.T) {
+	const token = "cave_tok_0123456789abcdef012345"
+	for _, listen := range []string{"0.0.0.0:8787", "[::]:8787", ":8787", "192.0.2.1:8787"} {
+		t.Run(listen, func(t *testing.T) {
+			t.Setenv("CAVEMAN_AUTH_TOKEN", "  "+token+"  ")
+			path := filepath.Join(t.TempDir(), "caveman.yaml")
+			if err := os.WriteFile(path, []byte("listen: \""+listen+"\"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load rejected token-gated listen %q: %v", listen, err)
+			}
+			if cfg.Listen != listen {
+				t.Fatalf("listen = %q, want %q", cfg.Listen, listen)
+			}
+			if cfg.AuthToken != token {
+				t.Fatalf("AuthToken = %q, want the trimmed env value", cfg.AuthToken)
+			}
+		})
+	}
+}
+
+func TestLoad_RejectsUnusableAuthToken(t *testing.T) {
+	for name, token := range map[string]string{
+		"too short":       "cave_tok",
+		"embedded return": "cave_tok_0123456789ab\ncdef",
+		"embedded space":  "cave_tok_0123456789 abcdef",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CAVEMAN_AUTH_TOKEN", token)
+			path := filepath.Join(t.TempDir(), "caveman.yaml")
+			// Loopback: an unusable token fails Load outright, it does not merely
+			// fail to unlock a wider bind.
+			if err := os.WriteFile(path, []byte("listen: \"127.0.0.1:8787\"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load accepted an unusable CAVEMAN_AUTH_TOKEN")
+			}
+			if !strings.Contains(err.Error(), "CAVEMAN_AUTH_TOKEN") {
+				t.Fatalf("error %q does not name CAVEMAN_AUTH_TOKEN", err)
+			}
+			if strings.Contains(err.Error(), strings.TrimSpace(token)) {
+				t.Fatalf("error echoed the secret: %q", err)
 			}
 		})
 	}
@@ -168,6 +272,34 @@ func TestLoad_ParsesProvidersAndOptimizers(t *testing.T) {
 	}
 }
 
+func TestLoad_CacheOptimizersDefaultOnWithExplicitOff(t *testing.T) {
+	t.Setenv("CAVEMAN_BREAKPOINT_PLAN", "")
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, optimizerID := range []string{"anthropic-cache-breakpoints", "openai-prompt-cache-key", "bedrock-cache-points"} {
+		if !cfg.Optimizers[optimizerID] {
+			t.Fatalf("default optimizer %q disabled: %#v", optimizerID, cfg.Optimizers)
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "caveman.yaml")
+	if err := os.WriteFile(path, []byte("optimizers:\n  openai-prompt-cache-key: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("load explicit off: %v", err)
+	}
+	if cfg.Optimizers["openai-prompt-cache-key"] {
+		t.Fatal("explicit OpenAI cache off-switch was overwritten")
+	}
+	if !cfg.Optimizers["anthropic-cache-breakpoints"] || !cfg.Optimizers["bedrock-cache-points"] {
+		t.Fatalf("unconfigured cache defaults lost: %#v", cfg.Optimizers)
+	}
+}
+
 func TestLoad_ParsesCompatUpstreams(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "caveman.yaml")
 	yaml := "compat:\n" +
@@ -176,7 +308,10 @@ func TestLoad_ParsesCompatUpstreams(t *testing.T) {
 		"    api_key_env: OPENROUTER_API_KEY\n" +
 		"  ollama:\n" +
 		"    base_url: http://localhost:11434\n" +
-		"    api_key_env: \"\"\n"
+		"    api_key_env: \"\"\n" +
+		"  zai:\n" +
+		"    base_url: https://api.z.ai/api/anthropic\n" +
+		"    wire_dialect: anthropic\n"
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -193,6 +328,12 @@ func TestLoad_ParsesCompatUpstreams(t *testing.T) {
 	if got := cfg.Compat["ollama"].APIKeyEnv; got != "" {
 		t.Errorf("ollama api_key_env = %q, want empty", got)
 	}
+	if got := cfg.Compat["zai"].WireDialect; got != "anthropic" {
+		t.Errorf("zai wire_dialect = %q, want anthropic", got)
+	}
+	if got := cfg.Compat["openrouter"].WireDialect; got != "" {
+		t.Errorf("openrouter wire_dialect = %q, want empty default", got)
+	}
 }
 
 func TestLoad_CompatMalformedErrors(t *testing.T) {
@@ -202,6 +343,7 @@ func TestLoad_CompatMalformedErrors(t *testing.T) {
 		"missing url":  "compat:\n  groq:\n    api_key_env: GROQ_API_KEY\n",
 		"bad url":      "compat:\n  groq:\n    base_url: ://bad\n",
 		"bad shape":    "compat:\n  groq: []\n",
+		"bad dialect":  "compat:\n  zai:\n    base_url: https://api.example.test\n    wire_dialect: openai-ish\n",
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -310,6 +452,57 @@ func TestCompatCredential_UsesPerNameEnvAndEmptyMeansNoAuth(t *testing.T) {
 	}
 }
 
+// A built-in compat mount has its own BYOK policy with no user config. Thus a
+// keyless request never uses the OPENAI_COMPAT_API_KEY secret.
+func TestCompatCredential_BuiltinMountReadsItsOwnEnv(t *testing.T) {
+	t.Setenv("OPENCODE_API_KEY", "sk-opencode")
+	t.Setenv("OPENAI_COMPAT_API_KEY", "sk-legacy")
+	if got, ok := (Config{}).CompatCredential("opencode-go"); !ok || got != "sk-opencode" {
+		t.Errorf("opencode-go credential = (%q,%v), want (sk-opencode,true)", got, ok)
+	}
+}
+
+func TestCompatUpstreams_UserEntryWins(t *testing.T) {
+	builtin := Config{}.CompatUpstreams()
+	if got := builtin["opencode-go"].BaseURL; got != "https://opencode.ai/zen/go" {
+		t.Fatalf("built-in opencode-go base_url = %q, want the OpenCode Go upstream", got)
+	}
+	user := CompatConfig{BaseURL: "https://opencode.example.test", APIKeyEnv: "OPENCODE_ZEN_API_KEY"}
+	cfg := Config{Compat: map[string]CompatConfig{
+		"opencode-go": user,
+		"openrouter":  {BaseURL: "https://openrouter.ai/api", APIKeyEnv: "OPENROUTER_API_KEY"},
+	}}
+	merged := cfg.CompatUpstreams()
+	if got := merged["opencode-go"]; !reflect.DeepEqual(got, user) {
+		t.Errorf("opencode-go upstream = %+v, want the user entry %+v", got, user)
+	}
+	if _, ok := merged["openrouter"]; !ok {
+		t.Errorf("user-only upstream openrouter missing from %v", merged)
+	}
+	if len(merged) != 2 {
+		t.Errorf("merged upstreams = %v, want exactly the built-in and user names", merged)
+	}
+	if _, ok := cfg.Compat["opencode-go"]; !ok || len(cfg.Compat) != 2 {
+		t.Errorf("CompatUpstreams must not mutate cfg.Compat: %v", cfg.Compat)
+	}
+}
+
+// buildAdapters panics on a compat entry that fails validation. Only config.Load
+// validates the user entries. This test validates the built-in entries.
+func TestBuiltinCompat_EntriesPassValidation(t *testing.T) {
+	for name, upstream := range builtinCompat {
+		if err := openaicompat.ValidateName(name); err != nil {
+			t.Errorf("built-in compat %q: %v", name, err)
+		}
+		if err := openaicompat.ValidateBaseURL(upstream.BaseURL); err != nil {
+			t.Errorf("built-in compat %q base_url: %v", name, err)
+		}
+		if strings.TrimSpace(upstream.APIKeyEnv) == "" {
+			t.Errorf("built-in compat %q has no api_key_env", name)
+		}
+	}
+}
+
 // The tool-schema strip is DEFAULT OFF: it changes model-visible bytes, so only
 // the explicit value "annotations" turns it on and every other spelling —
 // including a bare config and an unrecognized value — normalizes to off.
@@ -356,17 +549,16 @@ func TestLoad_ToolSchemaStripDefaultsOffAndFailsClosed(t *testing.T) {
 	}
 }
 
-// The breakpoint planner is DEFAULT OFF for the same reason: it ships behind the
-// escalation ladder, so only the explicit value "frontier" turns it on and every
-// other spelling normalizes to off.
-func TestLoad_BreakpointPlanDefaultsOffAndFailsClosed(t *testing.T) {
+// Cache planning defaults on in optimization modes. Explicit off and unknown
+// values remain fail-closed off-switches; record mode never runs planner.
+func TestLoad_BreakpointPlanDefaultsFrontierAndFailsClosed(t *testing.T) {
 	t.Setenv("CAVEMAN_BREAKPOINT_PLAN", "")
 	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.BreakpointPlan != "off" {
-		t.Fatalf("bare config breakpoint_plan = %q, want off", cfg.BreakpointPlan)
+	if cfg.BreakpointPlan != "frontier" {
+		t.Fatalf("bare config breakpoint_plan = %q, want frontier", cfg.BreakpointPlan)
 	}
 
 	path := filepath.Join(t.TempDir(), "caveman.yaml")
@@ -401,5 +593,192 @@ func TestLoad_BreakpointPlanDefaultsOffAndFailsClosed(t *testing.T) {
 	}
 	if cfg.BreakpointPlan != "off" {
 		t.Fatalf("env override breakpoint_plan = %q, want off", cfg.BreakpointPlan)
+	}
+}
+
+func TestLoad_UpstreamProxy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "caveman.yaml")
+	if err := os.WriteFile(path, []byte("upstream_proxy: http://proxy.corp.example:3128\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	u, err := cfg.UpstreamProxyFunc()(&http.Request{URL: &url.URL{Scheme: "https", Host: "api.openai.com"}})
+	if err != nil || u == nil || u.Host != "proxy.corp.example:3128" {
+		t.Fatalf("proxy selector = %v, %v; want the yaml proxy", u, err)
+	}
+
+	t.Setenv("CAVE_UPSTREAM_PROXY", "off")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load with env override: %v", err)
+	}
+	if cfg.UpstreamProxy != "off" || cfg.UpstreamProxyFunc() != nil {
+		t.Fatalf("env override not applied: %q", cfg.UpstreamProxy)
+	}
+	t.Setenv("CAVE_UPSTREAM_PROXY", "OFF")
+	if cfg, err := Load(path); err != nil || cfg.UpstreamProxyFunc() != nil {
+		t.Fatalf("keywords are case-insensitive: %q err=%v", cfg.UpstreamProxy, err)
+	}
+
+	// A pinned proxy keeps env-mode's direct exemptions: loopback (an allowlisted
+	// local model server) and NO_PROXY are never handed to the corporate proxy.
+	t.Setenv("CAVE_UPSTREAM_PROXY", "http://proxy.corp.example:3128")
+	t.Setenv("NO_PROXY", "internal.example")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for host, wantDirect := range map[string]bool{"api.openai.com": false, "127.0.0.1:11434": true, "localhost:11434": true, "models.internal.example": true} {
+		u, err := cfg.UpstreamProxyFunc()(&http.Request{URL: &url.URL{Scheme: "http", Host: host}})
+		if err != nil || (u == nil) != wantDirect {
+			t.Fatalf("%s: proxy=%v err=%v, want direct=%v", host, u, err, wantDirect)
+		}
+	}
+
+	// Default: honour the environment like every other tool on the host (#1001).
+	t.Setenv("CAVE_UPSTREAM_PROXY", "")
+	if cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml")); err != nil || cfg.UpstreamProxyFunc() == nil {
+		t.Fatalf("default must be the environment selector: cfg=%q err=%v", cfg.UpstreamProxy, err)
+	}
+
+	for _, bad := range []string{"ftp://proxy:21", "proxy.corp.example:3128", "not a url"} {
+		t.Setenv("CAVE_UPSTREAM_PROXY", bad)
+		if _, err := Load(path); err == nil {
+			t.Fatalf("upstream_proxy %q must be rejected", bad)
+		}
+	}
+}
+
+func TestLoad_CABundle(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "corp-root.pem")
+	if err := os.WriteFile(good, selfSignedPEM(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	garbage := filepath.Join(dir, "garbage.pem")
+	if err := os.WriteFile(garbage, []byte("not a certificate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	absent := filepath.Join(dir, "absent.pem")
+	yaml := filepath.Join(dir, "caveman.yaml")
+	for _, name := range append([]string{"CAVE_CA_BUNDLE"}, inheritedCABundleEnv...) {
+		t.Setenv(name, "")
+	}
+
+	if cfg, err := Load(yaml); err != nil || cfg.RootCAs() != nil {
+		t.Fatalf("no bundle configured: roots=%v err=%v, want nil (Go default verification)", cfg.RootCAs(), err)
+	}
+
+	if err := os.WriteFile(yaml, []byte("ca_bundle: "+good+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(yaml)
+	if err != nil || cfg.RootCAs() == nil {
+		t.Fatalf("ca_bundle: roots=%v err=%v", cfg.RootCAs(), err)
+	}
+
+	for _, bad := range []string{absent, garbage} {
+		t.Setenv("CAVE_CA_BUNDLE", bad)
+		if _, err := Load(yaml); err == nil {
+			t.Fatalf("ca_bundle %s must fail Load closed", bad)
+		}
+	}
+	t.Setenv("CAVE_CA_BUNDLE", "")
+
+	// Inherited toolchain variables: a missing, corrupt, or directory-valued file
+	// is skipped and reported (never a startup failure, never partially trusted);
+	// a good one is trusted additively.
+	for _, bad := range []string{absent, garbage, dir} {
+		t.Setenv("NODE_EXTRA_CA_CERTS", bad)
+		cfg, err = Load(yaml)
+		if err != nil || len(cfg.SkippedCABundles) != 1 || cfg.RootCAs() == nil {
+			t.Fatalf("NODE_EXTRA_CA_CERTS=%s: skipped=%v roots=%v err=%v", bad, cfg.SkippedCABundles, cfg.RootCAs(), err)
+		}
+		// Structured, so the startup log names the variable and the reason as
+		// separate fields instead of one opaque string.
+		if skipped := cfg.SkippedCABundles[0]; skipped.Env != "NODE_EXTRA_CA_CERTS" || skipped.Error == "" {
+			t.Fatalf("skipped bundle = %+v, want the env var name and a reason", skipped)
+		}
+	}
+	t.Setenv("NODE_EXTRA_CA_CERTS", "")
+	t.Setenv("REQUESTS_CA_BUNDLE", good)
+	if cfg, err := Load(filepath.Join(dir, "absent.yaml")); err != nil || cfg.RootCAs() == nil {
+		t.Fatalf("REQUESTS_CA_BUNDLE alone: roots=%v err=%v", cfg.RootCAs(), err)
+	}
+}
+
+func selfSignedPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "corp-root"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// The accessor is a cached-field read for a loaded Config and must never panic
+// on a Config assembled in code: a request path is a bad place to discover that
+// a value Load would have rejected was set by hand. A value Load would reject
+// dials direct — never the environment default, which would hide the mistake
+// behind a proxy the caller never named.
+func TestUpstreamProxyFunc_HandBuiltConfigNeverPanics(t *testing.T) {
+	for raw, wantSelector := range map[string]bool{"": true, "env": true, "off": false, "http://proxy.corp.example:3128": true, "not a url": false} {
+		if got := (Config{UpstreamProxy: raw}).UpstreamProxyFunc(); (got != nil) != wantSelector {
+			t.Fatalf("UpstreamProxyFunc(%q) selector = %v, want %v", raw, got != nil, wantSelector)
+		}
+	}
+}
+
+// `auth_token:` in caveman.yaml used to be dropped silently by the yaml:"-" tag,
+// leaving an operator convinced their non-loopback proxy was gated when it was
+// not. It is now a hard startup error that names the environment variable.
+func TestLoad_AuthTokenInYAMLIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "caveman.yaml")
+	const yamlToken = "cave_tok_from_the_yaml_file_0123"
+	if err := os.WriteFile(path, []byte("listen: \"127.0.0.1:8787\"\nauth_token: \""+yamlToken+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load accepted auth_token: in caveman.yaml")
+	}
+	if !strings.Contains(err.Error(), "CAVEMAN_AUTH_TOKEN") || !strings.Contains(err.Error(), "auth_token") {
+		t.Fatalf("error %q must name both the ignored key and the environment variable", err)
+	}
+	if strings.Contains(err.Error(), yamlToken) {
+		t.Fatalf("error echoed the secret: %q", err)
+	}
+}
+
+// AuthToken is env-only in both directions: a YAML or JSON value never reaches
+// it, and the environment is assigned unconditionally so a stale field cannot
+// survive.
+func TestLoad_AuthTokenIsEnvironmentOnly(t *testing.T) {
+	t.Setenv("CAVEMAN_AUTH_TOKEN", "")
+	path := filepath.Join(t.TempDir(), "caveman.yaml")
+	// Aliases and mixed case are not the key the probe catches, so they exercise
+	// the original hole: a YAML value that survives Load must never land in
+	// AuthToken.
+	if err := os.WriteFile(path, []byte("listen: \"127.0.0.1:8787\"\nAuthToken: \"cave_tok_0123456789abcdef012345\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthToken != "" {
+		t.Fatalf("AuthToken = %q, want empty: no file value may populate it", cfg.AuthToken)
+	}
+	// A hand-built Config carrying a token is overwritten by the (empty) env too.
+	if got := (Config{AuthToken: "cave_tok_0123456789abcdef012345"}).withDefaults(); got.AuthToken != "" {
+		t.Fatalf("withDefaults kept a non-environment AuthToken %q", got.AuthToken)
 	}
 }

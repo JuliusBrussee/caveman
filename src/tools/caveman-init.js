@@ -187,7 +187,7 @@ function processAgent(agent, targetDir, ruleBody, opts) {
   // "our older ruleset" from "a user file that happens to quote the rule".
   // Refreshing on a guess would clobber their content, so skip and let the
   // existing --force flag be the deliberate refresh path.
-  if (existing.includes(SENTINEL)) {
+  if (!opts.force && existing.includes(SENTINEL)) {
     return { status: 'skipped-already-installed', label: '=' };
   }
 

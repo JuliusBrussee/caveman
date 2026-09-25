@@ -7,6 +7,21 @@ import (
 	"testing"
 )
 
+func TestRetrievalUnitsDoNotRepairMalformedJSONRecords(t *testing.T) {
+	const payload = `{"rows":[{"id":"first","state":"ok"},{"id":"second","state":"pending"}]}`
+	valid, _ := retrievalUnits([]byte(payload))
+	if len(valid) != 4 {
+		t.Fatalf("valid fixture must yield two complete records with envelope gaps: %q", valid)
+	}
+	for _, suffix := range []string{"}", "]", " {}", " trailing"} {
+		input := payload + suffix
+		units, prelude := retrievalUnits([]byte(input))
+		if len(units) != 1 || units[0] != input || prelude != "" {
+			t.Fatalf("suffix=%q was repaired into invented JSON record boundaries: units=%q prelude=%q", suffix, units, prelude)
+		}
+	}
+}
+
 // ordersPage is the payload shape that produced the wrong answer: pretty-printed
 // JSON records where one order carries `"status": "unfulfilled"` and the next
 // record's `order_id` line follows it immediately in the source text.

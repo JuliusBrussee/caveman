@@ -15,6 +15,7 @@ import (
 	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/rust"
+	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 
 	"github.com/JuliusBrussee/caveman/engine/safety"
@@ -58,14 +59,17 @@ func (c *codeCompressor) Compress(input []byte) ([]byte, bool) {
 	if l == nil {
 		return nil, false // unsupported language → pass-through
 	}
-	root, tree, ok := parse(l, input)
+	root, tree, ok := parseClean(l, input)
+	if !ok && l.name == "ts" {
+		// JSX is not TypeScript: a React component fails the TypeScript grammar
+		// at its first `<div>`. The TSX grammar is a superset, so retry with it.
+		l = &lang{name: "tsx", language: tsx.GetLanguage(), braceBody: true}
+		root, tree, ok = parseClean(l, input)
+	}
 	if !ok {
 		return nil, false
 	}
 	defer tree.Close()
-	if root.HasError() {
-		return nil, false // never edit code we cannot cleanly parse
-	}
 
 	var repls []replacement
 	elision := pyElision
@@ -82,15 +86,27 @@ func (c *codeCompressor) Compress(input []byte) ([]byte, bool) {
 	out := applyReplacements(input, repls)
 
 	// Byte-safe guarantee: the result must re-parse without error.
-	vroot, vtree, ok := parse(l, out)
+	_, vtree, ok := parseClean(l, out)
 	if !ok {
 		return nil, false
 	}
-	defer vtree.Close()
-	if vroot.HasError() {
-		return nil, false
-	}
+	vtree.Close()
 	return out, true
+}
+
+// parseClean parses src with l and reports false, with the tree closed, when
+// the parse fails or the tree carries an error node: code that does not parse
+// cleanly is never edited.
+func parseClean(l *lang, src []byte) (*sitter.Node, *sitter.Tree, bool) {
+	root, tree, ok := parse(l, src)
+	if !ok {
+		return nil, nil, false
+	}
+	if root.HasError() {
+		tree.Close()
+		return nil, nil, false
+	}
+	return root, tree, true
 }
 
 func parse(l *lang, src []byte) (*sitter.Node, *sitter.Tree, bool) {

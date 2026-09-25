@@ -63,7 +63,6 @@ type turnEvent struct {
 	TextPayloads        []string
 	TaskSpawns          int
 	SkillUses           []string
-	SkillHaystack       string
 	Compaction          bool
 	JSONLLine           int
 	RelPath             string
@@ -96,6 +95,7 @@ type sessionEventConsumer struct {
 	metric         learnSessionMetric
 	repo           string
 	opened         bool
+	counted        bool
 }
 
 func newSessionEventConsumer(sourceID string, ref sessionRef, slugs []string, behavior *behaviorScan, miner *recurringMiner) *sessionEventConsumer {
@@ -117,8 +117,14 @@ func newSessionEventConsumer(sourceID string, ref sessionRef, slugs []string, be
 func (c *sessionEventConsumer) consume(event turnEvent) {
 	if event.sessionStart {
 		c.opened = true
-		c.behavior.recordSession(c.sourceID)
 		return
+	}
+	// A source's scanSession applies the `since` cutoff before emitting a
+	// real turn, so the first non-start event here already fell inside the
+	// window; sessionStart counted every session file, in range or not.
+	if !c.counted {
+		c.counted = true
+		c.behavior.recordSession(c.sourceID)
 	}
 	if event.Repo != "" {
 		c.repo = event.Repo
@@ -223,11 +229,6 @@ func (c *sessionEventConsumer) consume(event turnEvent) {
 
 	for _, raw := range event.SkillUses {
 		if slug, ok := c.knownSlugs[normalizeSkillReference(raw)]; ok {
-			c.seenSlugs[slug] = true
-		}
-	}
-	for _, slug := range c.slugs {
-		if slug != "" && !c.seenSlugs[slug] && strings.Contains(event.SkillHaystack, slug) {
 			c.seenSlugs[slug] = true
 		}
 	}

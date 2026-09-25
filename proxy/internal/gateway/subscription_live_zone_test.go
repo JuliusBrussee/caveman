@@ -459,3 +459,40 @@ func TestSubscriptionLiveZoneRecordsTokensNeverDollars(t *testing.T) {
 		t.Fatalf("would_save_usd = %v, want nil for subscription", *row.WouldSaveUSD)
 	}
 }
+
+func claudeCodeConversationWithMcpRetrieve(liveText string) string {
+	return strings.Replace(
+		claudeCodeConversation(liveText),
+		`"tools":[`,
+		`"tools":[{"name":"mcp__caveman__caveman_retrieve","description":"Recover original content","input_schema":{"type":"object"}},`,
+		1,
+	)
+}
+
+func TestSubscriptionRecoveryFromRequestToolList(t *testing.T) {
+	live := strings.Repeat("newest live turn bytes ", 40)
+	withTool := claudeCodeConversationWithMcpRetrieve(live)
+	rt := &captureTransport{responses: []string{subMessageRespBody}}
+	comp := &liveZoneCompressor{}
+	srv, sink := newSubscriptionCompressServer(comp, rt, Config{})
+
+	serveBody(t, srv, "/v1/messages", withTool, subscriptionAgentHeaders)
+	if strings.Contains(string(rt.bodies[0]), live) || !strings.Contains(string(rt.bodies[0]), "<<ccr:") {
+		t.Fatalf("namespaced retrieve tool must enable recoverable compression: %s", rt.bodies[0])
+	}
+	if row := sink.last(t); !row.CompressionEligible || row.CompressionTokensBefore <= 0 {
+		t.Fatalf("request must be compression-eligible: %+v", row)
+	}
+
+	without := claudeCodeConversation(live)
+	rt2 := &captureTransport{responses: []string{subMessageRespBody}}
+	comp2 := &liveZoneCompressor{}
+	srv2, sink2 := newSubscriptionCompressServer(comp2, rt2, Config{})
+	serveBody(t, srv2, "/v1/messages", without, subscriptionAgentHeaders)
+	if sha256.Sum256(rt2.bodies[0]) != sha256.Sum256([]byte(without)) || comp2.calls != 0 {
+		t.Fatalf("request without recovery proof must pass through: %s", rt2.bodies[0])
+	}
+	if row := sink2.last(t); row.CompressionEligible {
+		t.Fatalf("passthrough request must stay outside eligibility denominator: %+v", row)
+	}
+}

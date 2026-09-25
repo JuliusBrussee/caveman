@@ -83,6 +83,12 @@ export function stubEnv(base, dir) {
   if (!isWindows) return env;
   const dispatch = join(dir, "stub-dispatch.cjs");
   writeFileSync(dispatch, DISPATCH);
-  env.NODE_OPTIONS = `${env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ` : ""}--require "${dispatch}"`;
+  // Node parses NODE_OPTIONS itself, and inside a quoted value a backslash is
+  // an escape character — a raw Windows path arrives with every separator
+  // eaten (`C:UsersRUNNER~1AppData…`) and the preload never resolves. The
+  // quotes still have to stay for a temp dir under a profile name with spaces,
+  // so the separators are doubled rather than the quotes dropped.
+  const quoted = `"${dispatch.replace(/\\/g, "\\\\")}"`;
+  env.NODE_OPTIONS = `${env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ` : ""}--require ${quoted}`;
   return env;
 }

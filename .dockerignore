@@ -1,0 +1,16 @@
+# Allowlist: only the proxy binary's in-module import closure is sent to the
+# daemon. Everything else (node_modules, .git, extension/, packages/, docs/)
+# would only slow the build and bust the layer cache on unrelated edits.
+*
+!go.mod
+!go.sum
+!engine/
+!mem/
+!proxy/
+!shared/
+
+# Re-exclude test-only weight inside those four directories. The embedded
+# assets live outside testdata, so this does not affect the build.
+**/node_modules
+**/*_test.go
+**/testdata

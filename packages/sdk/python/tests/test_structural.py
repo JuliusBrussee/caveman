@@ -81,7 +81,7 @@ def test_all_job_methods_fail_locally_without_network_or_persistence_claims() ->
         lambda: cave.jobs.submit_and_wait({"kind": "audit"}),
         lambda: cave.jobs.cancel("job-9"),
     ]
-    with patch("urllib.request.urlopen") as urlopen:
+    with patch("caveman_cloud.core._urlopen") as urlopen:
         for call in calls:
             with pytest.raises(AsyncJobsUnavailableError) as exc:
                 call()

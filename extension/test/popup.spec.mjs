@@ -88,3 +88,19 @@ test("popup file-preview fallback uses localStorage and safe generic review URL"
     level: "lite",
   });
 });
+
+test("Firefox popup hides the review CTA when no verified AMO listing is configured", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.chrome = {
+      runtime: {
+        id: "{2bcb73e7-3cca-405a-9c36-2a9bd218face}",
+        getManifest: () => ({ browser_specific_settings: { gecko: { id: "{2bcb73e7-3cca-405a-9c36-2a9bd218face}" } } }),
+      },
+      storage: { sync: { get: (defaults, callback) => queueMicrotask(() => callback(defaults)) } },
+    };
+  });
+  await routePopup(page);
+  await page.goto("https://extension.fixture/popup.html");
+  await expect(page.locator("#review")).toHaveCount(0);
+  await expect(page.locator("#master")).toBeChecked();
+});

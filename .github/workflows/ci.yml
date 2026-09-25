@@ -8,32 +8,28 @@ on:
 permissions:
   contents: read
 
+# One live run per PR (or per branch on push); a newer push supersedes it.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Node 18 is the supported floor (engines ">=18"; bin/install.js refuses to
+  # run below it) and the only version nothing else covers: engine-ci's
+  # root-surfaces job and the macos job below already run these suites on 22.
   node:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      matrix:
-        node-version: [18, 20, 22]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: ${{ matrix.node-version }}
-      # package.json's "test" passes --test-force-exit, which needs Node >=20.14.
-      # Node 18 is still a supported RUNTIME (engines ">=18"; bin/install.js
-      # refuses to run below 18), so it stays in the matrix and runs the suite
-      # without the flag rather than being dropped — testing a version we claim
-      # to support matters more than uniform invocation. Verified flagless on
-      # 18.20.8: 172/172, no hang. The job timeout is the backstop the flag
-      # would otherwise provide.
+          node-version: 18
+      # package.json's "test" passes --test-force-exit, which needs Node >=20.14,
+      # so the suite runs flagless here. Verified on 18.20.8: 172/172, no hang.
+      # The job timeout is the backstop the flag would otherwise provide.
       - name: Installer test suite
-        run: |
-          if node -e 'process.exit(process.versions.node.split(".")[0] >= 20 ? 0 : 1)'; then
-            npm test
-          else
-            node --test tests/installer/*.test.mjs
-          fi
+        run: node --test tests/installer/*.test.mjs tests/hooks/*.test.mjs
       - name: Standalone hook/tool tests
         run: |
           for f in tests/test_*.js; do
@@ -41,21 +37,8 @@ jobs:
             node "$f"
           done
 
-  python:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: '3.11'
-      # Several python tests shell out to node for hook checks — don't rely
-      # on the runner image happening to ship it.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 20
-      - name: Python test suite
-        run: python -m unittest discover -s tests -v
+  # The Python suites run on ubuntu in engine-ci's root-surfaces job and on
+  # macOS below; no separate ubuntu Python job here.
 
   # The Windows surface nothing else covers.
   #
@@ -95,6 +78,9 @@ jobs:
       - name: Hook command shape parses under the real Git Bash
         shell: pwsh
         run: node --test --test-force-exit tests/installer/platform-paths.test.mjs
+      - name: OMP installer ownership and Windows launch contracts
+        shell: pwsh
+        run: node --test --test-force-exit tests/installer/omp.test.mjs tests/installer/owned-install.test.mjs tests/installer/portable-process.test.mjs
       - name: Hook stdin lifecycle (no waiting on a lagging pipe close)
         shell: pwsh
         run: node tests/test_hook_stdin_lifecycle.js
@@ -173,3 +159,61 @@ jobs:
       # platform this job exists to cover.
       - name: Go test suite
         run: go test ./engine/... ./proxy/... ./shared/...
+
+  # The Dockerfile is a deploy artifact like the installer is: nothing else in
+  # CI builds it, so a broken COPY or a moved package path would only surface at
+  # release time. Cheap check — one native-arch build, no registry, no push.
+  container-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build the proxy image
+        run: docker build --build-arg VERSION=ci -t caveman-proxy:ci .
+      # Proves the binary runs in the distroless image AND that the ldflags
+      # version stamp actually reached `var version` in main.go.
+      - name: Image runs and reports the stamped version
+        run: |
+          set -euo pipefail
+          got="$(docker run --rm caveman-proxy:ci version)"
+          [[ "$got" == "ci" ]] || { echo "expected version 'ci', got '$got'" >&2; exit 1; }
+      # The image listens on 0.0.0.0 by default, so booting without an inbound
+      # token would put every configured provider credential on the network with
+      # no authentication. That refusal is the one container behaviour worth
+      # proving on every push. Output is combined: the proxy's structured log
+      # goes to stdout.
+      - name: Image refuses to serve with no CAVEMAN_AUTH_TOKEN
+        run: |
+          set -euo pipefail
+          if out="$(docker run --rm caveman-proxy:ci serve 2>&1)"; then
+            echo "serve started on 0.0.0.0 with no inbound token: $out" >&2
+            exit 1
+          fi
+          grep -q CAVEMAN_AUTH_TOKEN <<<"$out" || {
+            echo "refusal did not name CAVEMAN_AUTH_TOKEN: $out" >&2
+            exit 1
+          }
+      # ...and with a token it serves: readiness answers unauthenticated for the
+      # load balancer, inference does not answer at all without the token.
+      - name: Image serves readiness open and inference gated
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f caveman-proxy-ci >/dev/null 2>&1 || true; docker volume rm -f caveman-ci-data >/dev/null 2>&1 || true' EXIT
+          docker volume create caveman-ci-data >/dev/null
+          docker run -d --name caveman-proxy-ci \
+            --read-only -v caveman-ci-data:/data \
+            -e CAVEMAN_AUTH_TOKEN="$(openssl rand -hex 32)" \
+            -p 127.0.0.1:18787:8787 caveman-proxy:ci >/dev/null
+          for _ in $(seq 1 30); do
+            [[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18787/health/ready || true)" == "200" ]] && break
+            sleep 1
+          done
+          ready="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18787/health/ready)"
+          [[ "$ready" == "200" ]] || {
+            echo "readiness = $ready, want 200"; docker logs caveman-proxy-ci; exit 1
+          }
+          gated="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18787/v1/messages \
+            -H 'content-type: application/json' -d '{"model":"claude-sonnet-4-5","max_tokens":1,"messages":[]}')"
+          [[ "$gated" == "401" ]] || {
+            echo "unauthenticated inference = $gated, want 401"; docker logs caveman-proxy-ci; exit 1
+          }

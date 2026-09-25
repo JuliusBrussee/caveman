@@ -42,7 +42,7 @@ const toolSchemaStripVersion = "v1"
 // the first lever to do so. A session whose measured cache-creation blew up after
 // this strip ran loses the strip for the rest of that session, and falls open to
 // forwarding the catalog unchanged.
-func (s *Server) toolSchemaStripAllowed(adapter providers.Adapter, sessionID string) bool {
+func (s *Server) toolSchemaStripAllowed(adapter providers.Adapter, body []byte, sessionID string) bool {
 	if s.toolSchemaStrip != toolSchemaStripMode || s.compressor == nil {
 		return false
 	}
@@ -52,7 +52,7 @@ func (s *Server) toolSchemaStripAllowed(adapter providers.Adapter, sessionID str
 	if !s.ledger.LeverAllowed(sessionID, leverToolSchemaStrip) {
 		return false
 	}
-	return s.liveZoneCompressionAllowed(adapter)
+	return s.liveZoneCompressionAllowed(adapter, body)
 }
 
 // toolSchemaCacheScope returns the suffix the strip contributes to a prefix-cache

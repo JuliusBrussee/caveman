@@ -118,7 +118,7 @@ func retrievalUnits(content []byte) ([]string, string) {
 	var root any
 	decoder := json.NewDecoder(bytes.NewReader(content))
 	decoder.UseNumber()
-	if err := decoder.Decode(&root); err == nil && !decoder.More() {
+	if err := decoder.Decode(&root); err == nil && decoder.Decode(new(any)) == io.EOF {
 		// JSON units are complete object records, never bare values taken from a
 		// field named content/text. Those names are ordinary tool-output fields;
 		// extracting their strings would orphan them from record ids and recreate

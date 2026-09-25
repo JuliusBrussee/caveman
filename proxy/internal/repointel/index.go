@@ -3,12 +3,13 @@
 package repointel
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -16,15 +17,37 @@ import (
 	"time"
 
 	"github.com/JuliusBrussee/caveman/engine/contextwindow"
+	"github.com/JuliusBrussee/caveman/proxy/internal/gitsafe"
 	"github.com/JuliusBrussee/caveman/shared/platform/redact"
 )
 
 const (
 	MapSchema    = "caveman.repository-map.v1"
 	BundleSchema = "caveman.repository-evidence.v1"
+	// ScoutNotConfigured advises that a local Scout might help. It is advice
+	// only: whether evidence may be shown to the model is decided by Strength.
+	ScoutNotConfigured = "not_started_no_configured_local_scout"
+	// StrengthDirect means at least one item matched a task term in its own
+	// path or symbol name. Only this strength may be shown to the model.
+	StrengthDirect = "direct_path_or_symbol_match"
+	// StrengthMetadata means every item ranked on BM25 metadata proximity
+	// alone — the shape that produced unrelated vendored-file guesses.
+	StrengthMetadata = "metadata_only"
+	StrengthNone     = "none"
+	// ListingGit and ListingWalk disclose how the file set was obtained. The
+	// two can disagree (git omits submodule contents; the walk sees them), so
+	// the basis is part of the map and of its content hash.
+	ListingGit   = "git_index_and_untracked_excluding_ignored"
+	ListingWalk  = "filesystem_walk_dependency_marker_filtered"
 	maxFiles     = 20_000
 	maxFileBytes = 2 << 20
 	maxEvidence  = 8
+	// gitListTimeout caps the listing so a slow one degrades to the walk. It is
+	// further capped at half the caller's remaining budget (gitListBudget): the
+	// fallback walk is the MORE expensive path, so spending most of the warm
+	// window on git leaves the walk unable to finish and the map fails closed —
+	// exactly the case the fallback exists for.
+	gitListTimeout = 2 * time.Second
 )
 
 type Symbol struct {
@@ -52,6 +75,7 @@ type Map struct {
 	Files           []File `json:"files"`
 	Truncated       bool   `json:"truncated"`
 	ParserBasis     string `json:"parser_basis"`
+	ListingBasis    string `json:"listing_basis"`
 }
 
 type EvidenceItem struct {
@@ -61,6 +85,9 @@ type EvidenceItem struct {
 	Kind      string   `json:"kind"`
 	Reasons   []string `json:"reasons"`
 	Score     float64  `json:"score"`
+	// Direct records that a task term appears in this file's own path or in
+	// one of its symbol names, as opposed to BM25 metadata proximity.
+	Direct bool `json:"direct,omitempty"`
 }
 
 type ScoutDecision struct {
@@ -75,10 +102,33 @@ type Bundle struct {
 	QueryTerms      []string       `json:"query_terms"`
 	Items           []EvidenceItem `json:"items"`
 	FilesScanned    int            `json:"files_scanned"`
+	FilesRanked     int            `json:"files_ranked"`
 	Candidates      int            `json:"candidates"`
 	MapTruncated    bool           `json:"map_truncated"`
 	Scout           ScoutDecision  `json:"scout"`
+	Strength        string         `json:"strength"`
 	EvidenceStatus  string         `json:"evidence_status"`
+}
+
+// HasDirectEvidence reports whether the bundle earned the right to be shown to
+// a model: at least one ranked item matched a task term in its own path or
+// symbol name. BM25 metadata proximity alone never qualifies — that is the
+// ranking that pointed at unrelated dependency files.
+func (b Bundle) HasDirectEvidence() bool { return b.Strength == StrengthDirect && len(b.Items) > 0 }
+
+// DirectOnly drops the items that ranked on metadata proximity alone. A bundle
+// qualifies on one direct item, so the rest ride along otherwise — into the
+// stored evidence object and behind the ccr:// handle the model is handed,
+// which is the same wrong-file claim the block refuses to render.
+func (b Bundle) DirectOnly() Bundle {
+	items := make([]EvidenceItem, 0, len(b.Items))
+	for _, item := range b.Items {
+		if item.Direct {
+			items = append(items, item)
+		}
+	}
+	b.Items = items
+	return b
 }
 
 type TestImpact struct {
@@ -103,7 +153,7 @@ func Build(ctx context.Context, root, repositoryState string, queryTerms []strin
 	if err != nil || !info.IsDir() {
 		return Map{}, Bundle{}, errors.New("repository intelligence: cwd is not a directory")
 	}
-	files, truncated, err := listFiles(ctx, resolved)
+	files, truncated, listingBasis, err := listFiles(ctx, resolved)
 	if err != nil {
 		return Map{}, Bundle{}, err
 	}
@@ -125,10 +175,10 @@ func Build(ctx context.Context, root, repositoryState string, queryTerms []strin
 		mapped = append(mapped, entry)
 	}
 	parserBasis := symbolParserBasis()
-	contentHash := mapHash(repositoryState, mapped, truncated, parserBasis)
+	contentHash := mapHash(repositoryState, mapped, truncated, parserBasis, listingBasis)
 	repoMap := Map{
 		Schema: MapSchema, RepositoryState: repositoryState, ContentSHA256: contentHash,
-		Files: mapped, Truncated: truncated, ParserBasis: parserBasis,
+		Files: mapped, Truncated: truncated, ParserBasis: parserBasis, ListingBasis: listingBasis,
 	}
 	bundle := Evidence(repoMap, queryTerms)
 	return repoMap, bundle, nil
@@ -184,7 +234,101 @@ func ImpactTests(repoMap Map, changedPaths []string) TestImpact {
 	}
 }
 
-func listFiles(ctx context.Context, root string) ([]string, bool, error) {
+// gitListFiles is a seam: tests force the filesystem walk by replacing it.
+var gitListFiles = gitTrackedFiles
+
+// listFiles prefers git's own ignore rules over any name list we could write:
+// a dependency tree the project installs (node_modules, .pixi/envs, .venv,
+// a conda prefix under any name) is ignored by that project's .gitignore, so
+// git already knows which files are source. Checkouts without git, any git
+// failure, and an empty git listing all fall back to a filesystem walk — an
+// empty answer is indistinguishable from "this directory is itself ignored by
+// an enclosing repository", which must not be reported as a complete map.
+func listFiles(ctx context.Context, root string) ([]string, bool, string, error) {
+	if files, truncated, ok := gitListFiles(ctx, root); ok && len(files) > 0 {
+		return files, truncated, ListingGit, nil
+	}
+	files, truncated, err := walkFiles(ctx, root)
+	return files, truncated, ListingWalk, err
+}
+
+// gitListBudget leaves the fallback walk at least as much time as git gets.
+func gitListBudget(parent context.Context) time.Duration {
+	deadline, ok := parent.Deadline()
+	if !ok {
+		return gitListTimeout
+	}
+	if half := time.Until(deadline) / 2; half < gitListTimeout {
+		return half
+	}
+	return gitListTimeout
+}
+
+func gitTrackedFiles(parent context.Context, root string) ([]string, bool, bool) {
+	ctx, cancel := context.WithTimeout(parent, gitListBudget(parent))
+	defer cancel()
+	cmd := gitsafe.Command(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	stdout, pipeErr := cmd.StdoutPipe()
+	if pipeErr != nil {
+		return nil, false, false
+	}
+	if startErr := cmd.Start(); startErr != nil {
+		return nil, false, false
+	}
+	// git knows which files exist, not which of them are dependency trees a
+	// .gitignore forgot, so the same content-based filter the walk uses runs
+	// over every listed path, memoised per directory.
+	filter := newDirectoryFilter(root)
+	files := make([]string, 0, 1024)
+	seen := map[string]bool{}
+	truncated := false
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxFileBytes)
+	scanner.Split(scanNULSeparated)
+	for scanner.Scan() {
+		relative := filepath.ToSlash(scanner.Text())
+		if relative == "" || relative == "." || filepath.IsAbs(relative) || strings.HasPrefix(relative, "../") || seen[relative] {
+			continue
+		}
+		if filter.excludes(relative) {
+			continue
+		}
+		// ls-files also reports submodule gitlinks and symlinks; only regular
+		// files of this repository may enter the map.
+		info, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(relative)))
+		if statErr != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if len(files) == maxFiles {
+			truncated = true
+			break
+		}
+		seen[relative] = true
+		files = append(files, relative)
+	}
+	scanErr := scanner.Err()
+	if truncated {
+		cancel()
+	}
+	waitErr := cmd.Wait()
+	if scanErr != nil || (waitErr != nil && !truncated) {
+		return nil, false, false
+	}
+	sort.Strings(files)
+	return files, truncated, true
+}
+
+func scanNULSeparated(data []byte, atEOF bool) (int, []byte, error) {
+	if index := bytes.IndexByte(data, 0); index >= 0 {
+		return index + 1, data[:index], nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+func walkFiles(ctx context.Context, root string) ([]string, bool, error) {
 	files := make([]string, 0, 1024)
 	truncated := false
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
@@ -196,37 +340,147 @@ func listFiles(ctx context.Context, root string) ([]string, bool, error) {
 			return ctx.Err()
 		default:
 		}
+		// Symlinks and Windows junctions/reparse points are never followed:
+		// they loop, and they commonly point at an installed dependency tree.
+		if entry.Type()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			return nil
+		}
 		if entry.IsDir() {
-			if path != root && excludedDirectory(entry.Name()) {
+			if path != root && excludedDirectory(entry.Name(), path) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
+		if !entry.Type().IsRegular() {
 			return nil
 		}
 		relative, relErr := filepath.Rel(root, path)
 		if relErr != nil || relative == "." || strings.HasPrefix(relative, "..") {
 			return nil
 		}
-		files = append(files, filepath.ToSlash(relative))
-		if len(files) >= maxFiles {
+		if len(files) == maxFiles {
 			truncated = true
 			return filepath.SkipAll
 		}
+		files = append(files, filepath.ToSlash(relative))
 		return nil
 	})
 	sort.Strings(files)
 	return files, truncated, err
 }
 
-func excludedDirectory(name string) bool {
-	switch name {
-	case ".git", "node_modules", "vendor", ".venv", "venv", "dist", "build", ".next", "target", "coverage", ".cache":
-		return true
-	default:
+// directoryFilter answers "is this path inside a dependency tree" for a list
+// of paths, probing each distinct directory at most once. A listing of N files
+// costs one decision per directory rather than per file.
+type directoryFilter struct {
+	root     string
+	decision map[string]bool
+}
+
+func newDirectoryFilter(root string) *directoryFilter {
+	return &directoryFilter{root: root, decision: map[string]bool{}}
+}
+
+func (f *directoryFilter) excludes(relative string) bool {
+	segments := strings.Split(relative, "/")
+	if len(segments) < 2 {
 		return false
 	}
+	current := ""
+	for _, segment := range segments[:len(segments)-1] {
+		if current == "" {
+			current = segment
+		} else {
+			current += "/" + segment
+		}
+		decided, known := f.decision[current]
+		if !known {
+			decided = excludedDirectory(segment, filepath.Join(f.root, filepath.FromSlash(current)))
+			f.decision[current] = decided
+		}
+		if decided {
+			return true
+		}
+	}
+	return false
+}
+
+// dependencyDirectoryNames are directory names that are never first-party
+// source in any ecosystem, so the name alone is sufficient evidence.
+var dependencyDirectoryNames = map[string]bool{
+	".git": true, "node_modules": true, "bower_components": true, "site-packages": true,
+	"__pycache__": true, "__pypackages__": true, ".pnpm-store": true, ".yarn-cache": true,
+	".venv": true, "venv": true, "virtualenv": true, ".tox": true, ".nox": true, ".eggs": true,
+	".pixi": true, ".conda": true, ".mamba": true, "miniconda3": true, "anaconda3": true, "miniforge3": true,
+	".direnv": true, ".bundle": true, ".gradle": true, ".m2": true, ".cargo": true, ".dart_tool": true,
+	".pub-cache": true, "elm-stuff": true, ".next": true, ".nuxt": true, ".svelte-kit": true,
+	".terraform": true, ".cache": true,
+}
+
+// generatedDirectoryManifests are directory names that are dependency or build
+// output in one ecosystem and ordinary source in another. `internal/build` and
+// a committed Go `vendor/` are first-party; `target/` beside a Cargo.toml is
+// not. Each name is excluded only when a sibling manifest proves the ecosystem.
+var generatedDirectoryManifests = map[string][]string{
+	"vendor":   {"go.mod", "composer.json", "Gemfile"},
+	"target":   {"Cargo.toml", "pom.xml"},
+	"build":    {"build.gradle", "build.gradle.kts", "CMakeLists.txt", "pyproject.toml", "setup.py"},
+	"dist":     {"package.json", "pyproject.toml", "setup.py"},
+	"coverage": {"package.json", "pyproject.toml"},
+	"pods":     {"Podfile"},
+}
+
+// dependencyRootMarkers identify an installed environment by its contents
+// rather than its name, which is what makes this scale: a conda prefix, a
+// pixi env, or a virtualenv is caught whether it is called `.pixi`, `envs`,
+// `default`, or `py314`. It also stops the interpreter's own standard library
+// (`<env>/lib/python3.14/...`), which carries no marker of its own.
+var dependencyRootMarkers = []string{"conda-meta", "pyvenv.cfg", "site-packages"}
+
+func excludedDirectory(name, path string) bool {
+	folded := strings.ToLower(name)
+	if dependencyDirectoryNames[folded] {
+		return true
+	}
+	if manifests, ambiguous := generatedDirectoryManifests[folded]; ambiguous && hasSibling(path, manifests) {
+		return true
+	}
+	return hasDependencyMarker(path)
+}
+
+func hasSibling(path string, names []string) bool {
+	parent := filepath.Dir(path)
+	for _, name := range names {
+		if info, err := os.Stat(filepath.Join(parent, name)); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDependencyMarker(path string) bool {
+	for _, marker := range dependencyRootMarkers {
+		if _, err := os.Lstat(filepath.Join(path, marker)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// excludedPath is the content-blind guard on the exported Evidence entry
+// point, which ranks a caller-supplied Map. No caller today feeds it anything
+// but a freshly built map that listFiles already filtered, so this fires only
+// for a map that reaches ranking some other way — a persisted
+// ObjectRepositoryMap replayed later, or a map built by an older version. It
+// can only judge unambiguous names, so it is a floor under excludedDirectory,
+// never a replacement for it.
+func excludedPath(relative string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(relative), "/") {
+		if dependencyDirectoryNames[strings.ToLower(part)] {
+			return true
+		}
+	}
+	return false
 }
 
 func packageBoundaries(files []string) []string {
@@ -337,7 +591,7 @@ func testTarget(path string, files []string) string {
 func gitActivity(parent context.Context, root string) map[string]int {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "log", "-n", "50", "--format=", "--name-only", "--", ".")
+	cmd := gitsafe.Command(ctx, root, "log", "-n", "50", "--format=", "--name-only", "--", ".")
 	raw, err := cmd.Output()
 	if err != nil {
 		return map[string]int{}
@@ -353,9 +607,16 @@ func gitActivity(parent context.Context, root string) map[string]int {
 }
 
 func buildBundle(repoMap Map, terms []string) Bundle {
+	files := make([]File, 0, len(repoMap.Files))
+	for _, file := range repoMap.Files {
+		if excludedPath(file.Path) {
+			continue
+		}
+		files = append(files, file)
+	}
 	query := strings.Join(terms, " ")
-	docs := make([]string, len(repoMap.Files))
-	for i, file := range repoMap.Files {
+	docs := make([]string, len(files))
+	for i, file := range files {
 		var symbols []string
 		for _, symbol := range file.Symbols {
 			symbols = append(symbols, symbol.Name, symbol.Kind)
@@ -372,55 +633,81 @@ func buildBundle(repoMap Map, terms []string) Bundle {
 		if score <= 0 {
 			continue
 		}
-		score += 0.05 * float64(min(repoMap.Files[i].RecentChanges, 10))
-		if repoMap.Files[i].TestFor != "" {
+		score += 0.05 * float64(min(files[i].RecentChanges, 10))
+		if files[i].TestFor != "" {
 			score += 0.1
 		}
 		candidates = append(candidates, candidate{i, score})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].score == candidates[j].score {
-			return repoMap.Files[candidates[i].index].Path < repoMap.Files[candidates[j].index].Path
+			return files[candidates[i].index].Path < files[candidates[j].index].Path
 		}
 		return candidates[i].score > candidates[j].score
 	})
 	items := make([]EvidenceItem, 0, min(maxEvidence, len(candidates)))
 	for _, candidate := range candidates[:min(maxEvidence, len(candidates))] {
-		file := repoMap.Files[candidate.index]
+		file := files[candidate.index]
 		item := EvidenceItem{Path: file.Path, Kind: "file", Score: candidate.score, Reasons: evidenceReasons(file, terms)}
+		item.Direct = fileNameMatches(file.Path, terms)
 		for _, symbol := range file.Symbols {
 			if containsAny(strings.ToLower(symbol.Name), terms) {
 				item.Kind = symbol.Kind
 				item.LineStart = symbol.LineStart
 				item.LineEnd = symbol.LineEnd
+				item.Direct = true
 				break
 			}
 		}
 		items = append(items, item)
 	}
 	dirs := map[string]bool{}
+	direct := 0
 	for _, item := range items {
 		dirs[filepath.Dir(item.Path)] = true
+		if item.Direct {
+			direct++
+		}
 	}
-	recommended := repoMap.Truncated || len(repoMap.Files) > 1500 && (len(items) < 3 || len(dirs) > 4)
+	strength := StrengthNone
+	switch {
+	case direct > 0:
+		strength = StrengthDirect
+	case len(items) > 0:
+		strength = StrengthMetadata
+	}
+	// Scout advice is about repository shape, not about whether these items may
+	// be shown; the two were conflated, so a truncated map alone silenced good
+	// hits. Injection is gated on Strength by the caller.
+	large := repoMap.Truncated || len(files) > 1500
+	recommended := large && (strength != StrengthDirect || len(items) < 3 || len(dirs) > 4)
 	reason := "direct deterministic evidence sufficient"
 	status := "not_needed"
 	if recommended {
 		reason = "repository large/distributed and direct evidence weak; Scout may be net-positive"
-		status = "not_started_no_configured_local_scout"
+		status = ScoutNotConfigured
 	}
 	return Bundle{
 		Schema: BundleSchema, RepositoryState: repoMap.RepositoryState, QueryTerms: terms, Items: items,
-		FilesScanned: len(repoMap.Files), Candidates: len(candidates), MapTruncated: repoMap.Truncated,
+		FilesScanned: len(repoMap.Files), FilesRanked: len(files), Candidates: len(candidates), MapTruncated: repoMap.Truncated,
 		Scout:          ScoutDecision{Recommended: recommended, Status: status, Reason: reason},
+		Strength:       strength,
 		EvidenceStatus: "observed_local_repository_metadata",
 	}
 }
 
+// fileNameMatches deliberately tests the final path component only. Matching
+// the whole path made a term naming any ancestor directory ("src", "internal",
+// "lib" — ordinary words in a prompt) mark every file beneath it as a direct
+// hit, which is no gate at all.
+func fileNameMatches(path string, terms []string) bool {
+	return containsAny(strings.ToLower(filepath.Base(path)), terms)
+}
+
 func evidenceReasons(file File, terms []string) []string {
 	var reasons []string
-	if containsAny(strings.ToLower(file.Path), terms) {
-		reasons = append(reasons, "path matches task terms")
+	if fileNameMatches(file.Path, terms) {
+		reasons = append(reasons, "file name matches task terms")
 	}
 	for _, symbol := range file.Symbols {
 		if containsAny(strings.ToLower(symbol.Name), terms) {
@@ -447,7 +734,11 @@ func NormalizeTerms(values []string) []string {
 	for _, value := range values {
 		value = strings.ToLower(strings.TrimSpace(value))
 		_, secretRules := redact.String(value)
-		if len(value) < 2 || len(value) > 64 || !safeTerm(value) || len(secretRules) > 0 || seen[value] {
+		// Three characters, matching the hook that produces terms. Direct
+		// evidence is a substring test on a file's own name, so a two-letter
+		// term ("go", "py", "js") would mark every file of that language a
+		// direct hit and hand the gate away.
+		if len(value) < 3 || len(value) > 64 || !safeTerm(value) || len(secretRules) > 0 || seen[value] {
 			continue
 		}
 		seen[value] = true
@@ -463,7 +754,7 @@ func safeTerm(value string) bool {
 	if strings.Contains(value, "..") || strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") {
 		return false
 	}
-	for _, prefix := range []string{"sk-", "pk-", "rk-", "ghp-", "ghp_", "github_pat-", "github_pat_", "xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-", "akia-", "akia_"} {
+	for _, prefix := range []string{"sk-", "pk-", "rk-", "ghp-", "ghp_", "gho_", "ghu_", "ghr_", "ghs_", "github_pat-", "github_pat_", "xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-", "akia-", "akia_"} {
 		if strings.HasPrefix(value, prefix) {
 			return false
 		}
@@ -476,11 +767,13 @@ func safeTerm(value string) bool {
 	return true
 }
 
-func mapHash(repositoryState string, files []File, truncated bool, basis string) string {
+func mapHash(repositoryState string, files []File, truncated bool, basis, listingBasis string) string {
 	hash := sha256.New()
 	hash.Write([]byte(repositoryState))
 	hash.Write([]byte{0})
 	hash.Write([]byte(basis))
+	hash.Write([]byte{0})
+	hash.Write([]byte(listingBasis))
 	for _, file := range files {
 		hash.Write([]byte{0})
 		hash.Write([]byte(file.Path))

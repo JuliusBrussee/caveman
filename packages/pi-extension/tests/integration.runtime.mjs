@@ -20,7 +20,7 @@ const mcpStub = join(here, "fixtures", "stub-caveman-mcp.mjs");
 const stubProviderExtension = join(here, "fixtures", "stub-provider-extension.mjs");
 const havePi = existsSync(piCli);
 
-function startStub() {
+function startStub({ instanceToken = "test-token", healthRedirect } = {}) {
   const requests = [];
   const server = createServer((req, res) => {
     let body = "";
@@ -28,7 +28,8 @@ function startStub() {
     req.on("end", () => {
       requests.push({ method: req.method, path: req.url, body });
       if (req.method === "GET" && req.url === "/health/live") {
-        res.writeHead(200, { "content-type": "application/json" });
+        if (healthRedirect) { res.writeHead(302, { location: healthRedirect }); res.end(); return; }
+        res.writeHead(200, { "content-type": "application/json", ...(instanceToken ? { "x-caveman-instance": instanceToken } : {}) });
         res.end("{}");
         return;
       }
@@ -99,11 +100,14 @@ process.stdin.unref();
       started_at: new Date().toISOString(),
       version: "test",
       recovery_via_mcp: recoveryViaMcp,
+      provider_upstreams: { openai: "http://127.0.0.1:1/native-openai" },
+      compat_upstreams: { "stub-relay": "http://127.0.0.1:1", "opencode-go": "http://127.0.0.1:1/tenant-go" },
     }));
   }
   const env = {
     ...process.env,
     HOME: home,
+    USERPROFILE: home,
     CAVEMAN_HOME: cavemanHome,
     CAVE_GATEWAY_URL: `http://127.0.0.1:${port}`,
     CAVEMAN_PI_HOOK_CMD: JSON.stringify([process.execPath, hook, "placeholder"]),
@@ -184,7 +188,7 @@ test("open gate: first request routes through /w/pi with Core in the system prom
     const out = await runPi(fx.env, [
       "--extension", stubProviderExtension, "--extension", extension,
       "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
-      "--provider", "stubprov", "--model", "stub-model",
+      "--provider", "openai", "--model", "stub-model",
       "-p", "say hi",
     ]);
     assert.match(out.stdout, /CAVEMAN_STUB_OK/, `stdout: ${out.stdout}\nstderr: ${out.stderr}`);
@@ -209,11 +213,12 @@ test("closed gate (no run-state): zero proxy requests and a visible direct-mode 
     const out = await runPi(fx.env, [
       "--extension", stubProviderExtension, "--extension", extension,
       "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
-      "--provider", "stubprov", "--model", "stub-model",
+      "--provider", "anthropic", "--model", "stub-local",
       "-p", "say hi",
     ]);
-    // Direct mode points at the dead loopback port the stub provider declares —
-    // the call fast-fails locally; what matters is honesty and zero routed traffic.
+    // Direct mode points at the dead loopback port of the "anthropic" stub
+    // provider. The call fast-fails locally. What matters is honesty and zero
+    // routed traffic.
     const providerHits = requests.filter((r) => r.method === "POST");
     assert.equal(providerHits.length, 0, `gate closed but stub saw: ${JSON.stringify(providerHits)}`);
     assert.match(out.stderr + out.stdout, /direct mode, no compression/, `stderr: ${out.stderr}`);
@@ -230,7 +235,7 @@ test("published recovery=false: gate refuses even with a live proxy and working 
     const out = await runPi(fx.env, [
       "--extension", stubProviderExtension, "--extension", extension,
       "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
-      "--provider", "stubprov", "--model", "stub-model",
+      "--provider", "anthropic", "--model", "stub-local",
       "-p", "say hi",
     ]);
     // Proxy is alive (health probe hits the stub) but published recovery is
@@ -243,3 +248,109 @@ test("published recovery=false: gate refuses even with a live proxy and working 
     server.close();
   }
 });
+
+// The seam of #946: the extension route string, the /w/pi prefix strip in the
+// proxy, and the built-in compat mount name are three separate literals. This
+// test drives an opencode-go model through the stub gateway and asserts the
+// path that the proxy must accept.
+test("open gate: opencode-go routes through the compat mount", { skip: !havePi && "pi devDependency missing" }, async () => {
+  const { server, requests, port } = await startStub();
+  const fx = fixture(port);
+  try {
+    const out = await runPi(fx.env, [
+      "--extension", stubProviderExtension, "--extension", extension,
+      "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
+      "--provider", "opencode-go", "--model", "stub-go-model",
+      "-p", "say hi",
+    ]);
+    assert.match(out.stdout, /CAVEMAN_STUB_OK/, `stdout: ${out.stdout}\nstderr: ${out.stderr}`);
+    const providerHits = requests.filter((r) => r.method === "POST");
+    assert.ok(providerHits.length >= 1, `no provider request reached the stub; all: ${JSON.stringify(requests)}`);
+    assert.equal(providerHits[0].path, "/w/pi/compat/opencode-go/v1/chat/completions");
+  } finally {
+    fx.cleanup();
+    server.close();
+  }
+});
+
+// A provider with an allowlisted name but a custom endpoint (a local relay, or
+// Azure under the name "openai") must stay direct. The stub "anthropic" provider
+// points at a dead loopback port, so the direct call fast-fails and nothing
+// leaves the machine.
+test("open gate: a provider with a custom endpoint stays direct with a notice", { skip: !havePi && "pi devDependency missing" }, async () => {
+  const { server, requests, port } = await startStub();
+  const fx = fixture(port);
+  try {
+    const out = await runPi(fx.env, [
+      "--extension", stubProviderExtension, "--extension", extension,
+      "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
+      "--provider", "anthropic", "--model", "stub-local",
+      "-p", "say hi",
+    ]);
+    const providerHits = requests.filter((r) => r.method === "POST");
+    assert.equal(providerHits.length, 0, `custom endpoint was routed: ${JSON.stringify(providerHits)}`);
+    assert.match(out.stderr + out.stdout, /pass-through for anthropic\/stub-local \(provider endpoint 127\.0\.0\.1:1 is not api\.anthropic\.com\)/, `stderr: ${out.stderr}`);
+  } finally {
+    fx.cleanup();
+    server.close();
+  }
+});
+
+// A custom-named provider routes only when the running proxy published a compat
+// mount with that exact name. The stub gateway answers the routed request, so
+// the dead loopback endpoint of the provider is never reached.
+test("open gate: a published compat mount routes a custom provider", { skip: !havePi && "pi devDependency missing" }, async () => {
+  const { server, requests, port } = await startStub();
+  const fx = fixture(port);
+  try {
+    const out = await runPi(fx.env, [
+      "--extension", stubProviderExtension, "--extension", extension,
+      "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
+      "--provider", "stub-relay", "--model", "stub-relay-model",
+      "-p", "say hi",
+    ]);
+    assert.match(out.stdout, /CAVEMAN_STUB_OK/, `stdout: ${out.stdout}\nstderr: ${out.stderr}`);
+    const providerHits = requests.filter((r) => r.method === "POST");
+    assert.ok(providerHits.length >= 1, `no provider request reached the stub; all: ${JSON.stringify(requests)}`);
+    assert.equal(providerHits[0].path, "/w/pi/compat/stub-relay/v1/chat/completions");
+  } finally {
+    fx.cleanup();
+    server.close();
+  }
+});
+
+// Same endpoint, no published mount: direct, with a notice naming the fix.
+test("open gate: a custom provider with no compat mount stays direct and says why", { skip: !havePi && "pi devDependency missing" }, async () => {
+  const { server, requests, port } = await startStub();
+  const fx = fixture(port);
+  try {
+    const out = await runPi(fx.env, [
+      "--extension", stubProviderExtension, "--extension", extension,
+      "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
+      "--provider", "unlisted-relay", "--model", "stub-unlisted-model",
+      "-p", "say hi",
+    ]);
+    const providerHits = requests.filter((r) => r.method === "POST");
+    assert.equal(providerHits.length, 0, `unmounted provider was routed: ${JSON.stringify(providerHits)}`);
+    assert.match(out.stderr + out.stdout, /no compat mount named "unlisted-relay" in the local proxy; add compat\.unlisted-relay\.base_url to caveman\.yaml/, `stderr: ${out.stderr}`);
+  } finally {
+    fx.cleanup();
+    server.close();
+  }
+});
+
+for (const instanceToken of [undefined, 'another-listener-token']) {
+  test(`stale run state cannot route credentials to listener with ${instanceToken ? 'wrong' : 'missing'} identity`, { skip: !havePi && 'pi devDependency missing' }, async () => {
+    const { server, requests, port } = await startStub({ instanceToken: instanceToken ?? '' });
+    const fx = fixture(port);
+    try {
+      const out = await runPi(fx.env, [
+        '--extension', stubProviderExtension, '--extension', extension,
+        '--no-session', '--no-skills', '--no-context-files', '--no-prompt-templates', '--no-themes', '--no-extensions',
+        '--provider', 'openai', '--model', 'stub-model', '-p', 'say hi',
+      ]);
+      assert.equal(requests.filter(r => r.method === 'POST').length, 0);
+      assert.match(out.stderr + out.stdout, /local proxy not running/);
+    } finally { fx.cleanup(); server.close(); }
+  });
+}

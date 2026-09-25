@@ -113,6 +113,9 @@ func writeRetroUsageFreeSessions(t *testing.T, root string, sessions, repeats in
 
 func newRetroFixture(t *testing.T) retroFixture {
 	t.Helper()
+	previousSinceClock := sinceClock
+	sinceClock = func() time.Time { return time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { sinceClock = previousSinceClock })
 	fx := retroFixture{claudeRoot: t.TempDir(), codexRoot: t.TempDir(), cwd: t.TempDir()}
 	t.Setenv("CAVEMAN_HOME", t.TempDir())
 	t.Setenv("CAVEMAN_CLAUDE_ROOT", fx.claudeRoot)

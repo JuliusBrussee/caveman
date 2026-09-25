@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -90,7 +91,7 @@ func (s Signer) Sign(req *http.Request, creds Credentials, payloadHash string, n
 	canonicalHeaders, signedHeaders := canonicalHeaderSet(req, host)
 	canonicalRequest := strings.Join([]string{
 		req.Method,
-		canonicalURI(req.URL),
+		canonicalURI(req.URL, s.Service),
 		canonicalQuery(req.URL),
 		canonicalHeaders,
 		signedHeaders,
@@ -161,15 +162,24 @@ func canonicalHeaderValue(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }
 
-// canonicalURI returns the URI-encoded path. AWS does not re-encode an already
-// path-escaped URL except for the bedrock model id; using EscapedPath keeps any
-// pre-encoded segments intact, matching what the client actually sends.
-func canonicalURI(u *url.URL) string {
-	path := u.EscapedPath()
-	if path == "" {
+// canonicalURI follows the non-S3 SigV4 path rules: normalize dot segments and
+// repeated slashes, then URI-encode the escaped wire path again. This includes
+// colons in Bedrock model versions/ARNs and percent signs in SDK-escaped paths.
+// S3 object keys are the exception: neither normalization nor re-encoding may
+// change their path. Only the canonical request changes; the wire URL does not.
+func canonicalURI(u *url.URL, service string) string {
+	escaped := u.EscapedPath()
+	if escaped == "" {
 		return "/"
 	}
-	return path
+	if service == "s3" {
+		return escaped
+	}
+	normalized := path.Clean(escaped)
+	if strings.HasSuffix(escaped, "/") && normalized != "/" {
+		normalized += "/"
+	}
+	return awsURIEncode(normalized, false)
 }
 
 // canonicalQuery returns the query string sorted by key with each key and value

@@ -45,6 +45,7 @@ counted.
 - Three rotated repetitions for direct Claude Code, Caveman, and Headroom: 54
   total agent runs and 18 direct/Caveman pairs.
 - Claude Code `2.1.223`, model `claude-sonnet-5`.
+- Headroom `0.33.0`, pinned at upstream commit `e0ce4b1d`.
 - Every arm called the same fixture exactly once and returned a structured answer
   checked by an exact semantic JSON oracle.
 - Every arm used Claude Code's `modelUsage` counters. Primary input metric:

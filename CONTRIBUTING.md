@@ -24,11 +24,11 @@ That appends a `Signed-off-by: Your Name <your@email>` trailer. No CLA, no forms
 
 Caveman is split-licensed per directory (see [LICENSING.md](LICENSING.md)):
 
-- MIT directories (`packages/{agent,create-caveman-agent,cli,sdk,kit,graders,mastra,subagent-tax}/`,
+- MIT directories (`packages/{agent,create-caveman-agent,cli,sdk,subagent-tax}/`,
   `packages/shared/contracts/`, `shared/provider-catalog/`, the extension shell, the skill): contributions are
   inbound = outbound. You license your change under the same MIT terms. Simple.
 
-- BSL-1.1 directories (`engine/`, `proxy/`, `cacheengine/`, `rewriter/`,
+- BSL-1.1 directories (`engine/`, `proxy/`, `rewriter/`,
   `browse/`, `mcp/`, `shrink/`, the cavemem Go core, `shared/platform/`): by
   contributing, you also **grant Julius Brussee the
   right to relicense your contribution** under commercial or OEM terms. This keeps

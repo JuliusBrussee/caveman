@@ -33,18 +33,36 @@ runPnpm("build agent", ["--dir", "packages/agent", "build"]);
 run("Node Windows contracts", process.execPath, [
   "--test",
   "--test-force-exit",
+  // Each file launches real child-process fixtures. Bound the outer fan-out so
+  // host scheduling does not exhaust production binary-probe deadlines.
+  "--test-concurrency=2",
   "packages/cli/tests/windows-platform.runtime.mjs",
   "packages/cli/tests/portable-command.runtime.mjs",
   "packages/cli/tests/delegate-windows.runtime.mjs",
+  "packages/cli/tests/agent-binary-probe.runtime.mjs",
+  "packages/cli/tests/codex-home.runtime.mjs",
+  "packages/cli/tests/codex-mcp-environment.runtime.mjs",
+  "packages/cli/tests/opencode-wrap.runtime.mjs",
+  "packages/cli/tests/hermes-direct.runtime.mjs",
+  "packages/cli/tests/hermes-home.runtime.mjs",
+  "packages/cli/tests/agent-config-home.runtime.mjs",
+  "packages/cli/tests/skills-add.runtime.mjs",
+  "packages/cli/tests/status.runtime.mjs",
+  "packages/cli/tests/stats.runtime.mjs",
   // Full CLI round trips, not unit contracts: both spawn the built CLI against
   // stub binaries (tests/harness/stub-bin.mjs) that are real .exe/.cmd on
   // Windows, so `enable pi` and `wrap pi` are exercised end to end there.
   "packages/cli/tests/pi-enable.runtime.mjs",
   "packages/cli/tests/pi-wrap.runtime.mjs",
+  "packages/cli/tests/openclaw-wrap.runtime.mjs",
   "tests/installer/binary-installer-platform.test.mjs",
   "tests/installer/release-binaries.test.mjs",
   "tests/installer/windows-source-install.test.mjs",
   "tests/installer/portable-process.test.mjs",
+  "tests/installer/skills-global-install.test.mjs",
+  "tests/installer/provider-skills.test.mjs",
+  "tests/installer/provider-skills-integration.test.mjs",
+  "tests/installer/mcp-command-args.test.mjs",
   "tests/installer/mcp-shrink-windows.test.mjs",
   "packages/subagent-tax/tests/process-tree.test.mjs",
   "packages/agent/tests/windows-process.runtime.mjs",

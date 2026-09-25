@@ -303,7 +303,7 @@ def main():
     parser.add_argument("--trials", type=int, default=3, help="Trials per prompt per mode (default: 3)")
     parser.add_argument("--dry-run", action="store_true", help="Print config, no API calls")
     parser.add_argument("--update-readme", action="store_true", help="Update README.md benchmark table")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514", help="Model to use")
+    parser.add_argument("--model", default="claude-sonnet-4-6", help="Model to use")
     args = parser.parse_args()
 
     if args.trials < 1:

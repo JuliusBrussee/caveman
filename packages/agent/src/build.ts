@@ -939,8 +939,8 @@ function completeEvidence(value: RunEvidence): boolean {
     /^[0-9a-f]{64}$/.test(value.output_digest);
 }
 
-// Full supported grader taxonomy. MUST match @caveman/graders
-// `SUPPORTED_GRADER_TYPES`; compiler tests enforce parity.
+// Full supported grader taxonomy accepted by locked run evidence. Keep changes
+// explicit: compiler tests assert every public type and reject unknown types.
 const KNOWN_GRADER_TYPES: ReadonlySet<string> = new Set([
   "exact_match",
   "contains",

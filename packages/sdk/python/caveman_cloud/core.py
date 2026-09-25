@@ -9,11 +9,33 @@ import os
 import secrets
 import threading
 import time
+import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from urllib.parse import quote, urlsplit
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Literal
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Keep gateway and upstream credentials on the configured endpoint."""
+
+    def http_error_302(self, req: Any, fp: Any, code: int, msg: str, response_headers: Any) -> Any:
+        # urllib otherwise forwards Authorization and custom credential headers
+        # to another origin. Close the redirect response before raising, since
+        # the caller never receives a response context manager in this case.
+        fp.close()
+        raise urllib.error.HTTPError(req.full_url, code, "cave_redirect_not_allowed", response_headers, None)
+
+    http_error_301 = http_error_302
+    http_error_303 = http_error_302
+    http_error_307 = http_error_302
+    http_error_308 = http_error_302
+
+
+def _urlopen(req: urllib.request.Request, *, timeout: float) -> Any:
+    # A private opener avoids changing urllib's process-wide redirect policy.
+    return urllib.request.build_opener(_RejectRedirects()).open(req, timeout=timeout)
 
 
 def _strict_non_negative_int(value: Any) -> int | None:
@@ -735,7 +757,7 @@ class Cave:
             headers=headers(self, wf),
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with _urlopen(req, timeout=30) as response:
             data = json.loads(response.read())
 
         sent = _strict_non_negative_int(data.get("sent_schema_tokens"))
@@ -799,7 +821,7 @@ class Cave:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=300) as response:
+            with _urlopen(req, timeout=300) as response:
                 data = json.loads(response.read())
         except Exception:  # noqa: BLE001 — fail-closed: any failure ⇒ pass-through.
             return passthrough()
@@ -864,7 +886,7 @@ class Cave:
             headers=otlp_headers(self),
             method="GET",
         )
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with _urlopen(req, timeout=30) as response:
             return json.loads(response.read())
 
     def runtime_policy(
@@ -930,7 +952,7 @@ class _SharedContext:
             headers=headers(self._cave, self._cave.default_workflow),
             method=method,
         )
-        with urllib.request.urlopen(req, timeout=300) as response:
+        with _urlopen(req, timeout=300) as response:
             return json.loads(response.read())
 
 
@@ -1004,7 +1026,7 @@ class _ContextPacking:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=30) as response:
+            with _urlopen(req, timeout=30) as response:
                 data = json.loads(response.read())
         except Exception:  # noqa: BLE001 — lossy selector must fail closed to caller-owned context.
             return passthrough()
@@ -1236,7 +1258,7 @@ class Trace:
             headers=request_headers,
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with _urlopen(req, timeout=30) as response:
             return json.loads(response.read())
 
     def _get(self, path: str) -> dict[str, Any]:
@@ -1250,7 +1272,7 @@ class Trace:
             ),
             method="GET",
         )
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with _urlopen(req, timeout=30) as response:
             return json.loads(response.read())
 
 
@@ -1293,7 +1315,7 @@ class Provider:
             ),
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=300) as response:
+        with _urlopen(req, timeout=300) as response:
             return json.loads(response.read())
 
     def raw(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -1764,7 +1786,7 @@ class OTelExporter:
                     headers=otlp_headers(self.cave),
                     method="POST",
                 )
-                with urllib.request.urlopen(req, timeout=30) as response:
+                with _urlopen(req, timeout=30) as response:
                     data: dict[str, Any] = json.loads(response.read())
                 succeeded = True
                 return data
@@ -2292,7 +2314,7 @@ class RuntimePolicyClient:
             method="GET",
         )
         try:
-            with urllib.request.urlopen(req, timeout=30) as response:
+            with _urlopen(req, timeout=30) as response:
                 raw = response.read(_POLICY_MAX_RESPONSE_BYTES + 1)
         except Exception:  # noqa: BLE001 — the agent's path must not depend on this call.
             return RuntimePolicyRefresh(ok=False, signed=self._signed, error="transport")

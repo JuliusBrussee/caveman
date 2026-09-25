@@ -5,6 +5,7 @@ package ccr
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 func validateSQLiteParentSecurity(path string, info os.FileInfo) error {
@@ -14,4 +15,20 @@ func validateSQLiteParentSecurity(path string, info os.FileInfo) error {
 		return fmt.Errorf("sqlite parent %q is group/world writable", path)
 	}
 	return nil
+}
+
+func createSQLiteFile(path string) error {
+	// Close before publishing: another Store in this process may open the
+	// database as soon as its name exists. Closing even a creation descriptor
+	// after that point would discard SQLite's process-wide POSIX locks.
+	file, err := os.CreateTemp(filepath.Dir(path), ".caveman-sqlite-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if err := file.Close(); err != nil {
+		return err
+	}
+	// Link is atomic and refuses to replace an existing file or symlink.
+	return os.Link(file.Name(), path)
 }

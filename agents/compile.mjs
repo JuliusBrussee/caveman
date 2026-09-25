@@ -36,6 +36,7 @@ const INJECTION_METHODS = new Set(["env", "config-env-content", "config-file", "
 const NATIVE_EXTENSION_HOSTS = new Set(["pi"]);
 const NATIVE_EXTENSION_ASSETS = new Set(["caveman-pi-extension"]);
 const NATIVE_EXTENSION_LOADER_FLAGS = new Set(["--extension"]);
+const PLATFORM_CONFIG_DEFAULTS = new Set(["qwen-system-settings"]);
 const COMMAND_HOOK_METHODS = new Set(["claude-pretooluse", "codex-pretooluse", "gemini-beforetool", "opencode-plugin", "hermes-plugin", "openclaw-plugin", "pi-extension", "instruction-note"]);
 const MEMORY_HOOK_METHODS = new Set(["claude-userpromptsubmit"]);
 const SKILL_FORMATS = new Set(["skill-md"]);
@@ -45,7 +46,8 @@ const PROFILE_PATH_PATTERN = "^~/\\.[a-z0-9][a-z0-9-]*/[A-Za-z0-9._/-]+$";
 const ENV_KEY_RE = new RegExp(ENV_KEY_PATTERN);
 const ENV_VALUE_RE = new RegExp(ENV_VALUE_PATTERN);
 const PROFILE_PATH_RE = new RegExp(PROFILE_PATH_PATTERN);
-const TEMPLATE_RE = /\{\{cave_(?:base_url|proxy_url|api_key|org_id)\}\}/g;
+const OPTIONAL_OPENAI_KEY_ENV_TEMPLATE = "{{cave_optional_openai_key_env}}";
+const TEMPLATE_RE = /\{\{cave_(?:base_url|proxy_url|api_key|org_id|optional_openai_key_env)\}\}/g;
 const ENV_VAR_RE = /^[A-Z][A-Z0-9_]*$/;
 
 function die(msg) {
@@ -118,13 +120,53 @@ function validateEnvVariableName(value, need, label) {
   need(typeof value === "string" && ENV_VAR_RE.test(value) && !loaderControlKey(value), `${label} is not a safe environment variable name`);
 }
 
-function validateConfigStrings(value, need, path = "injection config") {
+function validateKnownKeys(value, allowed, need, label) {
+  need(value && typeof value === "object" && !Array.isArray(value), `${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    need(allowed.has(key), `${label} has unknown key "${key}"`);
+  }
+}
+
+function optionalOpenAIKeyEnvPathAllowed(profileId, segments) {
+  const qwenManagedHeader = profileId === "qwen"
+    && segments.length === 9
+    && segments[0] === "injection"
+    && segments[1] === "config_overlay"
+    && segments[2] === "managed"
+    && segments[3] === "modelProviders"
+    && segments[4] === "openai"
+    && Number.isInteger(segments[5])
+    && segments[6] === "generationConfig"
+    && segments[7] === "customHeaders"
+    && segments[8] === "x-cave-upstream-key";
+  const kiloManagedHeader = profileId === "kilo"
+    && segments.length === 8
+    && segments[0] === "injection"
+    && segments[1] === "config_content"
+    && segments[2] === "managed"
+    && segments[3] === "provider"
+    && segments[4] === "caveman"
+    && segments[5] === "options"
+    && segments[6] === "headers"
+    && segments[7] === "x-cave-upstream-key";
+  return qwenManagedHeader || kiloManagedHeader;
+}
+
+function validateConfigStrings(value, need, path = "injection config", profileId = "", segments = []) {
   if (typeof value === "string") {
     const tokens = value.match(/\{\{[^}]+\}\}/g) ?? [];
     const knownTokens = value.match(TEMPLATE_RE) ?? [];
     need(tokens.length === knownTokens.length, `${path} contains an unknown template token`);
     need(!/[`;]|\$\(|\r|\n|\0/.test(value), `${path} contains a shell or loader metacharacter`);
     const key = path.split(".").at(-1) ?? "";
+    if (value.includes(OPTIONAL_OPENAI_KEY_ENV_TEMPLATE)) {
+      need(value === OPTIONAL_OPENAI_KEY_ENV_TEMPLATE, `${path} must use ${OPTIONAL_OPENAI_KEY_ENV_TEMPLATE} as the entire value`);
+      need(
+        optionalOpenAIKeyEnvPathAllowed(profileId, segments),
+        `${path} may use ${OPTIONAL_OPENAI_KEY_ENV_TEMPLATE} only as Qwen or Kilo's closed managed OpenAI provider x-cave-upstream-key`,
+      );
+      return;
+    }
     if (/^(baseurl|base_url|api_base|host|endpoint|url)$/i.test(key)) {
       const remainder = value.replace(TEMPLATE_RE, "");
       need(knownTokens.length > 0 && /^[A-Za-z0-9._/-]*$/.test(remainder), `${path} must route through a cave template token`);
@@ -134,11 +176,13 @@ function validateConfigStrings(value, need, path = "injection config") {
     return;
   }
   if (Array.isArray(value)) {
-    value.forEach((item, index) => validateConfigStrings(item, need, `${path}[${index}]`));
+    value.forEach((item, index) => validateConfigStrings(item, need, `${path}[${index}]`, profileId, [...segments, index]));
     return;
   }
   if (value && typeof value === "object") {
-    for (const [key, item] of Object.entries(value)) validateConfigStrings(item, need, `${path}.${key}`);
+    for (const [key, item] of Object.entries(value)) {
+      validateConfigStrings(item, need, `${path}.${key}`, profileId, [...segments, key]);
+    }
   }
 }
 
@@ -171,14 +215,24 @@ function bareModelId(id) {
   return id.replace(/^[a-z0-9][a-z0-9-]*\//, "");
 }
 const CATALOG_MODEL_IDS = loadCatalogModelIds(catalogFile);
-// Collect model ids from a profile's injection config: values of a `model` key and the
-// keys of a `models` map (the opencode/openai-compatible convention).
+// Collect model ids from every supported profile shape: values of a `model` key,
+// keys of a `models` map (AI SDK/OpenCode), and entries in a `modelProviders`
+// array (Qwen Code). Missing one shape would let routed traffic bypass catalog
+// pricing validation and later book at an unpriced zero.
 function collectInjectionModelIds(node, out) {
   if (Array.isArray(node)) { for (const v of node) collectInjectionModelIds(v, out); return; }
   if (node && typeof node === "object") {
     for (const [k, v] of Object.entries(node)) {
       if (k === "model" && typeof v === "string" && v) out.add(bareModelId(v));
       if (k === "models" && v && typeof v === "object" && !Array.isArray(v)) for (const mk of Object.keys(v)) out.add(bareModelId(mk));
+      if (k === "modelProviders" && v && typeof v === "object" && !Array.isArray(v)) {
+        for (const models of Object.values(v)) {
+          if (!Array.isArray(models)) continue;
+          for (const model of models) {
+            if (model && typeof model === "object" && typeof model.id === "string" && model.id) out.add(bareModelId(model.id));
+          }
+        }
+      }
       collectInjectionModelIds(v, out);
     }
   }
@@ -238,6 +292,7 @@ function validate(p, file) {
   for (const key of Object.keys(p)) need(schemaProperties.has(key), `unknown top-level key "${key}"`);
   need(p.schema_version === "1", `schema_version must be "1"`);
   need(typeof p.id === "string" && /^[a-z0-9][a-z0-9-]*$/.test(p.id), "id must be kebab-case");
+  need(p.id.length <= 64, "id must fit the proxy's 64-byte agent slug limit");
   need(!reservedVerbs.includes(p.id), `id "${p.id}" collides with a reserved command`);
   for (const k of ["display_name", "vendor", "homepage", "install"]) {
     need(typeof p[k] === "string" && p[k].length > 0, `${k} must be a non-empty string`);
@@ -249,6 +304,7 @@ function validate(p, file) {
   need(inj && typeof inj === "object", "injection must be an object");
   need(INJECTION_METHODS.has(inj.method), `unknown injection.method "${inj.method}" (fail-closed)`);
   if (inj.method === "env") {
+    validateKnownKeys(inj, new Set(["method", "env"]), need, "injection");
     need(inj.env && typeof inj.env === "object" && !Array.isArray(inj.env), "injection.env must be an object");
     for (const [key, value] of Object.entries(inj.env)) {
       need(ENV_KEY_RE.test(key) && !loaderControlKey(key), `injection.env key "${key}" is not allowlisted`);
@@ -258,26 +314,36 @@ function validate(p, file) {
       }
     }
   } else if (inj.method === "config-env-content") {
+    validateKnownKeys(inj, new Set(["method", "env_var", "config_content"]), need, "injection");
     validateEnvVariableName(inj.env_var, need, "injection.env_var");
-    need(inj.config_content && typeof inj.config_content === "object", "injection.config_content must be an object");
-    need(inj.config_content.local && typeof inj.config_content.local === "object", "injection.config_content.local is required");
-    validateConfigStrings(inj.config_content, need, "injection.config_content");
+    validateKnownKeys(inj.config_content, new Set(["local", "managed"]), need, "injection.config_content");
+    need(inj.config_content.local && typeof inj.config_content.local === "object" && !Array.isArray(inj.config_content.local), "injection.config_content.local is required");
+    if (inj.config_content.managed !== undefined) {
+      need(inj.config_content.managed && typeof inj.config_content.managed === "object" && !Array.isArray(inj.config_content.managed), "injection.config_content.managed must be an object");
+    }
+    validateConfigStrings(inj.config_content, need, "injection.config_content", p.id, ["injection", "config_content"]);
   } else if (inj.method === "config-file") {
+    validateKnownKeys(inj, new Set(["method", "env_var", "base_config", "config_overlay"]), need, "injection");
     validateEnvVariableName(inj.env_var, need, "injection.env_var");
     if (inj.base_config !== undefined) {
-      need(inj.base_config && typeof inj.base_config === "object" && !Array.isArray(inj.base_config), "injection.base_config must be an object");
+      validateKnownKeys(inj.base_config, new Set(["path", "env_var", "state_dir", "platform_default"]), need, "injection.base_config");
       need(typeof inj.base_config.path === "string" && profilePathAllowed(inj.base_config.path, p.id), `injection.base_config.path must stay under ~/.${p.id}/ without ..`);
       if (inj.base_config.env_var !== undefined) validateEnvVariableName(inj.base_config.env_var, need, "injection.base_config.env_var");
       if (inj.base_config.state_dir !== undefined) {
-        need(inj.base_config.state_dir && typeof inj.base_config.state_dir === "object" && !Array.isArray(inj.base_config.state_dir), "injection.base_config.state_dir must be an object");
+        validateKnownKeys(inj.base_config.state_dir, new Set(["env_var", "filename"]), need, "injection.base_config.state_dir");
         validateEnvVariableName(inj.base_config.state_dir.env_var, need, "injection.base_config.state_dir.env_var");
         need(typeof inj.base_config.state_dir.filename === "string" && inj.base_config.state_dir.filename.length > 0, "injection.base_config.state_dir.filename must be a non-empty string");
       }
+      if (inj.base_config.platform_default !== undefined) {
+        need(PLATFORM_CONFIG_DEFAULTS.has(inj.base_config.platform_default), `injection.base_config.platform_default "${inj.base_config.platform_default}" is not allowlisted`);
+        need(inj.base_config.platform_default === `${p.id}-system-settings`, "injection.base_config.platform_default must belong to the profile id");
+      }
     }
-    need(inj.config_overlay && typeof inj.config_overlay === "object" && !Array.isArray(inj.config_overlay), "injection.config_overlay must be an object");
+    validateKnownKeys(inj.config_overlay, new Set(["local", "managed"]), need, "injection.config_overlay");
     need(Object.prototype.hasOwnProperty.call(inj.config_overlay, "local"), "injection.config_overlay.local is required");
-    validateConfigStrings(inj.config_overlay, need, "injection.config_overlay");
+    validateConfigStrings(inj.config_overlay, need, "injection.config_overlay", p.id, ["injection", "config_overlay"]);
   } else if (inj.method === "native-extension") {
+    validateKnownKeys(inj, new Set(["method", "host", "asset", "loader_flag"]), need, "injection");
     need(NATIVE_EXTENSION_HOSTS.has(inj.host), `injection.host "${inj.host}" is not an allowlisted native-extension host (fail-closed)`);
     need(inj.host === p.id, `injection.host must equal the profile id (got "${inj.host}" for "${p.id}")`);
     need(NATIVE_EXTENSION_ASSETS.has(inj.asset), `injection.asset "${inj.asset}" is not an allowlisted extension asset (fail-closed)`);
@@ -289,6 +355,7 @@ function validate(p, file) {
     const ch = p.command_hook;
     need(ch && typeof ch === "object", "command_hook must be an object");
     need(COMMAND_HOOK_METHODS.has(ch.method), `unknown command_hook.method "${ch.method}" (fail-closed)`);
+    validateKnownKeys(ch, new Set(ch.method === "instruction-note" || ch.method === "codex-pretooluse" ? ["method", "file"] : ["method"]), need, "command_hook");
     if (ch.method === "instruction-note" || ch.method === "codex-pretooluse") {
       need(typeof ch.file === "string" && profilePathAllowed(ch.file, p.id), `command_hook.file must stay under ~/.${p.id}/ without ..`);
     }
@@ -299,17 +366,23 @@ function validate(p, file) {
     const mh = p.memory_hook;
     need(mh && typeof mh === "object", "memory_hook must be an object");
     need(MEMORY_HOOK_METHODS.has(mh.method), `unknown memory_hook.method "${mh.method}" (fail-closed)`);
+    validateKnownKeys(mh, new Set(["method"]), need, "memory_hook");
   }
   // skills is optional (the agent's on-disk skill surface for `caveman convert`);
   // if present its format must be one we can parse — unknown fails the build.
   if (p.skills !== undefined) {
     const sk = p.skills;
     need(sk && typeof sk === "object", "skills must be an object");
+    validateKnownKeys(sk, new Set(["format", "user_dirs", "project_dirs"]), need, "skills");
     need(SKILL_FORMATS.has(sk.format), `unknown skills.format "${sk.format}" (fail-closed)`);
     need(Array.isArray(sk.user_dirs) && sk.user_dirs.length > 0 && sk.user_dirs.every((d) => typeof d === "string" && d.length > 0), "skills.user_dirs must be a non-empty string array");
     if (sk.project_dirs !== undefined) {
       need(Array.isArray(sk.project_dirs) && sk.project_dirs.every((d) => typeof d === "string" && d.length > 0), "skills.project_dirs must be a string array");
     }
+  }
+  if (p.attribution !== undefined) {
+    validateKnownKeys(p.attribution, new Set(["header"]), need, "attribution");
+    if (p.attribution.header !== undefined) need(typeof p.attribution.header === "string", "attribution.header must be a string");
   }
   // Every model id pinned in the injection config must be priced by the provider catalog
   // (issue #136): an unpriced pin under-reports the operator's spend. Fail closed.
@@ -353,26 +426,63 @@ function validate(p, file) {
 }
 
 // checkConformancePins derives every agent-conformance matrix pin from the profile's
-// tested_agent_version so the two cannot silently diverge (issue #135). The workflow is
-// absent in the published CLI-only layout, so skip it there rather than fail.
+// tested_agent_version so the two cannot silently diverge (issue #135). This compiler runs
+// from the source registry, where the workflow is part of the contract: a missing or
+// unparseable workflow must fail rather than silently disable the pin gate.
 function checkConformancePins(agentsById) {
   const wf = process.env.CAVEMAN_CONFORMANCE_WORKFLOW
     ? resolve(process.env.CAVEMAN_CONFORMANCE_WORKFLOW)
-    : join(here, "..", "..", ".github", "workflows", "agent-conformance.yml");
-  if (!existsSync(wf)) return;
-  const text = readFileSync(wf, "utf8");
-  const entryRe = /- id:\s*(\S+)\s*\r?\n\s*install:\s*([^\r\n]+)/g;
-  let m;
-  while ((m = entryRe.exec(text)) !== null) {
-    const id = m[1].trim();
-    const install = m[2];
+    : join(here, "..", ".github", "workflows", "agent-conformance.yml");
+  let text;
+  try {
+    text = readFileSync(wf, "utf8");
+  } catch (error) {
+    die(`conformance workflow not readable at ${wf} — cannot verify shipped profile pins (fail-closed): ${error.message}`);
+  }
+
+  // Parse only pinned-upstream-binary.matrix.include. A repository-wide `- id:` scan
+  // would mix in the @latest matrix and could let one lane accidentally satisfy another.
+  const jobMatch = /^  pinned-upstream-binary:\s*$/m.exec(text);
+  if (!jobMatch) die(`${wf}: missing pinned-upstream-binary job (fail-closed)`);
+  const jobStart = jobMatch.index + jobMatch[0].length;
+  const afterJob = text.slice(jobStart);
+  const nextJob = /^  [A-Za-z0-9_-]+:\s*$/m.exec(afterJob);
+  const job = nextJob ? afterJob.slice(0, nextJob.index) : afterJob;
+  const includeMatch = /^ {8}include:\s*$/m.exec(job);
+  if (!includeMatch) die(`${wf}: pinned-upstream-binary matrix.include is missing or unparseable (fail-closed)`);
+  const includeStart = includeMatch.index + includeMatch[0].length;
+  const afterInclude = job.slice(includeStart);
+  const includeEnd = /^ {4}[A-Za-z0-9_-]+:\s*$/m.exec(afterInclude);
+  const include = includeEnd ? afterInclude.slice(0, includeEnd.index) : afterInclude;
+
+  const declaredIds = [...include.matchAll(/^ {10}- id:\s*(\S+)\s*$/gm)].map((match) => match[1]);
+  const entries = [...include.matchAll(/^ {10}- id:\s*(\S+)\s*\r?\n {12}install:\s*(\S[^\r\n]*)$/gm)]
+    .map((match) => ({ id: match[1], install: match[2].trim() }));
+  if (declaredIds.length === 0 || entries.length !== declaredIds.length) {
+    die(`${wf}: pinned-upstream-binary matrix entries must each be exactly an id followed by one single-line install command (fail-closed)`);
+  }
+
+  const duplicateIds = declaredIds.filter((id, index) => declaredIds.indexOf(id) !== index);
+  if (duplicateIds.length > 0) die(`${wf}: duplicate pinned profile id(s): ${[...new Set(duplicateIds)].join(", ")}`);
+  const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+  const shippedIds = [...agentsById.keys()].sort();
+  const missing = shippedIds.filter((id) => !entryById.has(id));
+  const unknown = declaredIds.filter((id) => !agentsById.has(id));
+  gate(missing.length === 0, `${wf}: pinned-upstream-binary is missing shipped profile id(s): ${missing.join(", ")}`);
+  gate(unknown.length === 0, `${wf}: pinned-upstream-binary contains unknown profile id(s): ${unknown.join(", ")}`);
+
+  for (const id of shippedIds) {
     const profile = agentsById.get(id);
-    if (!profile || !profile.tested_agent_version || profile.tested_agent_version === "x") continue;
+    const entry = entryById.get(id);
+    if (!entry || !profile?.tested_agent_version || profile.tested_agent_version === "x") continue;
     const pv = profile.tested_agent_version;
-    if (!/^\d+\.\d+\.\d+/.test(pv)) continue; // non-semver pin (e.g. a git sha) — not derivable
-    const iv = (install.match(/@(\d+\.\d+\.\d+[0-9A-Za-z.-]*)/) || install.match(/==(\d+\.\d+\.\d+[0-9A-Za-z.-]*)/))?.[1];
-    if (!iv) continue;
-    if (iv !== pv) gate(false, `.github/workflows/agent-conformance.yml pins ${id}@${iv} but profile tested_agent_version is ${pv} — the CI pin must equal the profile pin (issue #135)`);
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pv)) continue; // non-semver pin (e.g. a git sha) — not derivable
+    const versions = [...entry.install.matchAll(/(?:@|==)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?=$|[^0-9A-Za-z.-])/g)]
+      .map((match) => match[1]);
+    gate(versions.length === 1, `${wf}: pinned install for ${id} must carry exactly one parseable version pin matching tested_agent_version ${pv} (found ${versions.length})`);
+    if (versions.length === 1 && versions[0] !== pv) {
+      gate(false, `${wf} pins ${id}@${versions[0]} but profile tested_agent_version is ${pv} — the CI pin must equal the profile pin (issue #135)`);
+    }
   }
 }
 
@@ -421,7 +531,7 @@ export type WireProtocol = "anthropic-messages" | "openai-chat" | "openai-respon
 export type Injection =
   | { method: "env"; env: Record<string, string> }
   | { method: "config-env-content"; env_var: string; config_content: { local: unknown; managed?: unknown } }
-  | { method: "config-file"; env_var: string; base_config?: { path: string; env_var?: string; state_dir?: { env_var: string; filename: string } }; config_overlay: { local: unknown; managed?: unknown } }
+  | { method: "config-file"; env_var: string; base_config?: { path: string; env_var?: string; state_dir?: { env_var: string; filename: string }; platform_default?: "qwen-system-settings" }; config_overlay: { local: unknown; managed?: unknown } }
   | { method: "native-extension"; host: string; asset: string; loader_flag: string };
 
 export type CommandHook =

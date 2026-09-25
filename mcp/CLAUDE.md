@@ -50,13 +50,19 @@ per-call tax for every wrapped agent.
 
 See ../../CLAUDE.md (root) · ../engine/CLAUDE.md
 
-## Retrieve anti-storm
+## Recovery across host compaction
 
-`caveman_retrieve` costs a whole agent turn: the model re-reads the entire conversation prefix, and everything a previous retrieve returned is part of that prefix from then on — so N retrieves cost N turns over a transcript each one grew. A 2026-08-10 read-only sweep of 229 local CaveBench stdout files found 34 recovery sessions and 534 assistant recovery-tool calls: buckets 1 / 2–5 / >5 contained 3 / 16 / 15 sessions, p95 was 118, and max was 143. Eight of the 15 >5-call sessions still passed their exact task grader. Only 3 of 534 normalized `(handle, trimmed query)` pairs repeated exactly; many calls used new handles or pointer chains. The batches mix arms, tasks, and repetitions, so this is descriptive call-shape evidence—not a same-task counterfactual, the managed gateway's final-result population, or validation of a universal cutoff.
+Every valid `caveman_retrieve` call executes the requested handle and query,
+including identical repeats and calls after many earlier recoveries. An empty
+query always returns the exact stored original. The MCP server cannot infer
+which earlier results remain in the model context from its process lifetime:
+hosts can compact their conversation without restarting MCP connections.
 
-`EngineTools` therefore carries a per-process (= per-session) recovery ledger, and neither rule may ever withhold content the session has not already been given:
-
-1. An identical `(handle, query)` returns a one-line pointer to the answer already verbatim in the transcript, not the bytes again.
-2. Past `retrieveStormThreshold` (5) distinct retrieves, the next one returns the handle's **full** stored original instead of a query-narrowed view, and says so. This is preserved historical policy intended to avoid later narrow paging; no paired experiment has validated the threshold, token effect, or task-outcome effect.
-
-A nil `*retrieveSession` is safe and disables both, so any caller without a session concept keeps the old semantics.
+The previous per-process repeat suppression and forced full-payout threshold
+have been removed. Current Codex source replaces compacted history and excludes
+tool-output items while its thread retains the live MCP runtime; see
+[compacted-history filtering](https://github.com/openai/codex/blob/main/codex-rs/core/src/compact_remote.rs)
+and [session services](https://github.com/openai/codex/blob/main/codex-rs/core/src/state/service.rs).
+Tests exercise repeated recovery and more than five distinct queries in the same
+server process. Query narrowing and complete-record boundaries remain owned by
+the Engine.

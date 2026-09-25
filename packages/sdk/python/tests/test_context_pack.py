@@ -47,7 +47,7 @@ def test_context_pack_maps_wire_and_exact_deferred_ids() -> None:
         ContextPackItem(id="deploy", text="deploy ERROR", tokens=30, pin=True),
         ContextPackItem(id="billing", text="billing polish", tokens=25),
     ]
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         result = _cave().context.pack(
             "deploy failure",
             items,
@@ -98,7 +98,7 @@ def test_context_pack_fails_closed_to_honest_zero_on_malformed_report() -> None:
         "basis": "verified",
     }
 
-    with patch("urllib.request.urlopen", return_value=_response(response)):
+    with patch("caveman_cloud.core._urlopen", return_value=_response(response)):
         result = _cave().context.pack(
             "alpha",
             items,

@@ -3,13 +3,18 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   accessSync,
   appendFileSync,
+  closeSync,
   cpSync,
   existsSync,
+  fchmodSync,
+  fsyncSync,
   chmodSync,
   constants,
   copyFileSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   lstatSync,
   readdirSync,
   readFileSync,
@@ -22,14 +27,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { chmod, mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir, hostname, tmpdir } from "node:os";
-import { basename, delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { homedir, hostname, tmpdir, userInfo } from "node:os";
+import { basename, delimiter, dirname, extname, isAbsolute, join, normalize, parse, relative, resolve, sep } from "node:path";
 import { connect as netConnect, createServer as netCreateServer, isIP, type AddressInfo } from "node:net";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createHash, createHmac, createPublicKey, randomBytes, randomUUID, verify as edVerify, type KeyObject } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { parseEnv } from "node:util";
 
 const requireCjs = createRequire(import.meta.url);
 
@@ -50,6 +56,7 @@ import {
   BINARY_RELEASE_BASE_DEFAULT,
   BINARY_SIGNING_PUBKEY,
 } from "./binaries.generated.js";
+import { installProxyAwareFetch, resolveProxyUrl } from "./proxy-fetch.js";
 import { RECIPES, type IntegrationRecipe } from "./recipes.generated.js";
 import { PRACTICE_REGISTRY } from "./practices.generated.js";
 import { RESERVED_VERBS } from "./reserved-verbs.generated.js";
@@ -67,6 +74,10 @@ import {
   type JSONValue,
 } from "./agent-mcp.js";
 import { portableInvocation } from "./portable-command.js";
+import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
+import { publishedForwardHeadersOf, publishedUpstreamsOf, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
+import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
+import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
 
 type TokenStore = "keychain" | "file";
 type TelemetryConfig = { enabled: boolean; anonymousId?: string; decidedAt: string; promptVersion: number };
@@ -95,7 +106,7 @@ type Config = {
   telemetryTokens?: TelemetryTokenWatermark;
 };
 type WrapMode = "local" | "managed";
-export type OverlayBuilderContext = { mode: WrapMode; gatewayUrl: string; env: NodeJS.ProcessEnv };
+export type OverlayBuilderContext = { mode: WrapMode; gatewayUrl: string; env: NodeJS.ProcessEnv; upstreams?: PublishedUpstreams | undefined };
 export const overlayBuilders: Record<string, (agent: AgentProfile, baseConfig: unknown, ctx: OverlayBuilderContext) => unknown> = {};
 const wrapTempDirs = new Set<string>();
 
@@ -138,8 +149,12 @@ function gatewayUrlFromConfigFile(): string {
 // still runs verbatim with the generic provider base-URL injection.
 const AGENTS: AgentProfile[] = PROFILES;
 
-// binOf is the primary binary name to resolve on PATH for an agent profile.
+// binOf prefers the first installed published binary and falls back to the
+// primary name for install hints. Some packages intentionally publish aliases.
 function binOf(a: AgentProfile): string {
+  for (const name of a.binary_names) {
+    if (which(name)) return name;
+  }
   return a.binary_names[0] ?? a.id;
 }
 
@@ -212,7 +227,7 @@ const CLOUD_DISCOVERY: DiscoveryGroup[] = [
   { heading: "governance", verbs: [
     { verb: "audit", description: "import or report audit evidence" },
     { verb: "sync", description: "sync local metadata to connected org" },
-    { verb: "agent", description: "inspect proposal-only optimization PRs" },
+    { verb: "agent", description: "inspect agents and optimization proposals" },
   ] },
 ];
 
@@ -316,11 +331,18 @@ const CLOUD_HANDLERS: Record<string, CommandHandler> = {
   },
   audit,
   sync: () => sync(),
-  agent: (argv) => {
+  agent: async (argv) => {
+    if (argv[0] === "factory") {
+      if (argv[1] === "list" && argv.length === 2) return get(`/api/v1/projects/${await projectId()}/agents`).then(print);
+      if (argv[1] === "show" && argv.length === 3 && /^[A-Za-z0-9_-]+$/.test(argv[2]!)) {
+        return get(`/api/v1/projects/${await projectId()}/agents/${argv[2]}`).then(print);
+      }
+      return commandUsage("agent factory list|show <id>");
+    }
     if (argv[0] === "list") return get("/api/v1/optimization-proposals").then(print);
     if (argv[0] === "show") return get(`/api/v1/optimization-proposals/${argv[1] ?? ""}`).then(print);
     if (argv[0] === "run") return post(`/api/v1/optimization-proposals/${argv[1] ?? ""}/run`, {}).then(print);
-    return commandUsage("agent list|show <id>|run <id>");
+    return commandUsage("agent list|show <id>|run <id> | agent factory list|show <id>");
   },
 };
 
@@ -396,6 +418,7 @@ function printDiscovery(group: CommandGroup, all = false): void {
 function resolveInvocation(raw: string[]): ResolvedInvocation {
   const top = raw[0] ?? "help";
   if (top === "--help") return { verb: "help", argv: [], handler: help };
+  if (top === "--version") return { verb: "version", argv: [], handler: LEGACY_HANDLERS.version! };
   if ((top === "tools" || top === "cloud") && raw.length === 1) {
     return { verb: top, argv: [], group: top, handler: () => printDiscovery(top) };
   }
@@ -515,6 +538,9 @@ let telemetryCommandSent = false;
 let telemetryEphemeralId = "";
 
 async function main() {
+  // Node's fetch does not read HTTP_PROXY/HTTPS_PROXY, so do it here before any
+  // request is made; without this every call fails on a proxy-only host.
+  installProxyAwareFetch();
   await ensureTelemetryDefault();
   try {
     await dispatch();
@@ -1091,7 +1117,7 @@ function exploreUsage(): never {
   console.error(`usage: ${invokedCommand("explore")} install [--agent claude] [--user] [--dir <path>]`);
   console.error("  legacy alias for tools skills install caveman-explore");
   console.error("  --agent claude   target Claude Code (default; codex is not wired yet)");
-  console.error("  --user           install for all repos (~/.claude/skills) instead of this one");
+  console.error("  --user           install in the Claude profile's skills directory for all repos");
   console.error("  --dir <path>     write SKILL.md into <path>");
   process.exit(2);
 }
@@ -1273,7 +1299,7 @@ function discoverSkillTargets(rest: string[]): SkillTarget[] {
       targets.push({ name: profile.id, dir: "", agent: profile.id });
       continue;
     }
-    const roots = [...profile.skills.user_dirs.map(resolveSkillRoot)];
+    const roots = profile.skills.user_dirs.map((path) => resolveSkillRoot(agentUserPath(profile.id, path)));
     if (rest.includes("--project")) roots.push(...(profile.skills.project_dirs ?? []).map(resolveSkillRoot));
     for (const root of roots) targets.push(...discoverTargetsInRoot(root, skill, profile.id));
   }
@@ -1534,8 +1560,8 @@ function skillsUsage(): never {
   console.error("  add <source>     install any Git/URL/local source through the official Skills CLI, then pixelize new Claude Code/Codex skills");
   console.error("                   accepts npx skills add flags such as --skill, --agent, --global, --list, --yes, and --all");
   console.error("  --agent claude   Claude Code (default) — writes .claude/skills/<name>/SKILL.md");
-  console.error("  --agent codex    Codex — writes ~/.codex/skills/<name>/SKILL.md");
-  console.error("  --user           install for all repos (~/.claude/skills) instead of this one");
+  console.error("  --agent codex    Codex — writes skills/<name>/SKILL.md inside CODEX_HOME (default ~/.codex)");
+  console.error("  --user           install in the Claude profile's skills directory for all repos");
   console.error("  --dir <path>     single: write SKILL.md there; suite: write <path>/<name>/SKILL.md");
   console.error("  --density LEVEL  pixel pack geometry (default balanced): conservative|balanced|max");
   console.error("  --no-pixel       install plain SKILL.md without pixel conversion");
@@ -1732,11 +1758,11 @@ function skillDestination(name: string, rest: string[], multiple: boolean, agent
   if (directDir) return join(directDir, ...(multiple ? [name, "SKILL.md"] : ["SKILL.md"]));
   if (agent === "claude") {
     const root = rest.includes("--user")
-      ? join(homedir(), ".claude", "skills")
+      ? join(claudeConfigDir(), "skills")
       : join(process.cwd(), ".claude", "skills");
     return join(root, name, "SKILL.md");
   }
-  if (agent === "codex") return join(homedir(), ".codex", "skills", name, "SKILL.md");
+  if (agent === "codex") return join(codexHomeDir(), "skills", name, "SKILL.md");
   console.error(`caveman skills: --agent must be claude or codex (got ${agent})`);
   process.exit(2);
 }
@@ -1747,9 +1773,9 @@ function externalSkillRoots(args: string[]): ExternalSkillRoot[] {
   const global = args.includes("--global") || args.includes("-g");
   if (global) {
     return [
-      { root: join(homedir(), ".claude", "skills"), agent: "claude" },
+      { root: join(claudeConfigDir(), "skills"), agent: "claude" },
       { root: join(homedir(), ".agents", "skills"), agent: "codex" },
-      { root: join(homedir(), ".codex", "skills"), agent: "codex" },
+      { root: join(codexHomeDir(), "skills"), agent: "codex" },
     ];
   }
   return [
@@ -1815,7 +1841,9 @@ function runExternalSkillAdd(rest: string[]) {
   const noPixel = rest.includes("--no-pixel");
   const args = stripCavemanSkillAddOptions(rest);
   const listOnly = args.includes("--list") || args.includes("-l");
-  const roots = externalSkillRoots(args);
+  // Listing and plain installation delegate all path decisions upstream.
+  // Resolving unrelated profiles here can reject an otherwise valid command.
+  const roots = noPixel || listOnly ? [] : externalSkillRoots(args);
   const before = noPixel || listOnly ? new Map<string, string>() : snapshotExternalSkills(roots);
   if (!noPixel && !listOnly && !args.includes("--copy")) args.push("--copy");
 
@@ -1922,7 +1950,7 @@ async function skills(rest: string[]) {
     installed.push({ name, dest, pixelResult });
   }
   const note = agent === "codex"
-    ? "Codex auto-loads skill directories from ~/.codex/skills."
+    ? `Codex auto-loads skill directories from ${join(codexHomeDir(), "skills")}.`
     : "Claude Code auto-loads this skill when its description matches.";
   const lines = installed.flatMap(({ name, dest, pixelResult }) => [
     `${mark("ok")} ${name}: ${cyan(dest)}`,
@@ -2018,8 +2046,10 @@ async function start(argv: string[] = []) {
   const subscriptionCompress = subscriptionCompressEnabled(startGate);
   // A bare proxy has no active-agent identity, so it cannot prove that whichever
   // subscription client arrives owns a compatible recovery tool. Keep the global
-  // recovery signal off; only `caveman wrap <agent>` can bind recovery to a checked
-  // agent profile. Inherited environment claims never cross this boundary.
+  // recovery signal off; `caveman wrap <agent>` binds recovery to a checked agent
+  // profile out of band, and for every other client the proxy reads the retrieve
+  // tool out of the request itself. Inherited environment claims never cross this
+  // boundary.
   const mcpRecovery = startMcpRecoveryAvailable();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -2040,8 +2070,8 @@ async function start(argv: string[] = []) {
   env.CAVE_ENGINE_TOON = runtime.mode === "compress" && runtime.toon ? "best-of" : "";
   env.CAVE_PIXEL_MODELS = runtime.pixelModels ?? "";
   env.CAVE_PIXEL_DENSITY = runtime.pixelDensity ?? "";
-  if (subscriptionCompress && mcpRecovery) {
-    process.stderr.write(dim("→ subscription logins (Claude Pro/Max) compress locally too — live zone only; compressed turns are re-sent byte-identically so the provider cache stays warm\n"));
+  if (subscriptionCompress && anyMcpInstalled()) {
+    process.stderr.write(dim("→ subscription logins (Claude Pro/Max) compress locally too, for sessions whose agent carries caveman_retrieve — live zone only; compressed turns are re-sent byte-identically so the provider cache stays warm\n"));
     process.stderr.write(dim(`→ ${SUBSCRIPTION_TOKENS_ONLY_NOTE}\n`));
   } else if (subscriptionCompress) {
     // Deliberately NOT the marker-only variant. That note's remedy is
@@ -2145,7 +2175,12 @@ function probeVersionedBinary(binary: string, requiredCapability: string): Versi
 
   let result: Omit<VersionedBinaryProbe, "current"> = { version: "pre-versioned", capabilities: [] };
   try {
-    const raw = execFileSync(binary, ["version", "--json"], {
+    // An npm-installed caveman-mcp on Windows is a `.cmd` shim, which Node
+    // refuses to execFile directly (CVE-2024-27980). Route through the same
+    // shim-aware invocation every other launch site uses; a shim that cannot
+    // be launched safely throws and lands in the fail-closed branch below.
+    const invocation = portableInvocation(binary, ["version", "--json"]);
+    const raw = execFileSync(invocation.command, invocation.args, {
       encoding: "utf8",
       env: process.env,
       timeout: versionedBinaryProbeTimeoutMs(),
@@ -2588,18 +2623,53 @@ function readPendingAgentNativeBundleRemoval(agent: "claude" | "codex"): AgentNa
   }
 }
 
-function readMcpServerMarker(agent: string, serverName: string): { command: string; args: string[] } | null {
+type McpServerMarker = { command: string; args: string[]; config_path?: string; schema_version?: 1 };
+
+function mcpServerToolName(serverName: string): string | undefined {
+  if (serverName === "caveman") return "caveman_retrieve";
+  if (serverName === "caveman-browse") return "caveman_browse";
+  if (serverName === "caveman-cloud") return "caveman_context";
+  if (serverName === "caveman-delegate") return "caveman_delegate";
+  return undefined;
+}
+
+function parseMcpServerMarkerBytes(agent: string, serverName: string, bytes: Buffer): McpServerMarker | null {
   try {
-    const value = JSON.parse(readFileSync(mcpServerMarkerPath(agent, serverName), "utf8")) as Record<string, unknown>;
-    if (typeof value.command !== "string" || !Array.isArray(value.args) || !value.args.every((arg) => typeof arg === "string")) return null;
-    return { command: value.command, args: value.args as string[] };
+    const value = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+    const expectedTool = mcpServerToolName(serverName);
+    if (!expectedTool || value.tool !== expectedTool) return null;
+    const hasConfigPath = Object.hasOwn(value, "config_path");
+    const expectedKeys = hasConfigPath
+      ? ["args", "command", "config_path", "schema_version", "tool"]
+      : ["args", "command", "tool"];
+    if (Object.keys(value).sort().join("\0") !== expectedKeys.join("\0")) return null;
+    if (typeof value.command !== "string" || !value.command.trim() || /[\r\n]/.test(value.command) || !Array.isArray(value.args) || !value.args.every((arg) => typeof arg === "string")) return null;
+    if (hasConfigPath && (value.schema_version !== 1
+      || agent !== "kilo" && agent !== "qwen"
+      || typeof value.config_path !== "string"
+      || value.config_path !== canonicalMcpConfigPath(value.config_path))) return null;
+    return {
+      command: value.command,
+      args: value.args as string[],
+      ...(hasConfigPath ? { config_path: value.config_path as string, schema_version: 1 as const } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readMcpServerMarker(agent: string, serverName: string): McpServerMarker | null {
+  try {
+    const path = mcpServerMarkerPath(agent, serverName);
+    if ((agent === "kilo" || agent === "qwen") && lstatSync(path).isSymbolicLink()) return null;
+    return parseMcpServerMarkerBytes(agent, serverName, readFileSync(path));
   } catch {
     return null;
   }
 }
 
 function claudeMcpRegistration(serverName: string): { present: boolean; command: string; args: string[]; exact_shape: boolean } {
-  const path = join(homedir(), ".claude.json");
+  const path = claudeGlobalConfigPath();
   const bytes = fileBytes(path);
   if (!bytes) return { present: false, command: "", args: [], exact_shape: false };
   const root = parseJsonFileObject(path, bytes);
@@ -2631,7 +2701,7 @@ function installAgentNativeCloudMcp(agent: "claude" | "codex", mcp: { command: s
     return;
   }
   const installed = agent === "claude"
-    ? installMcpJson(join(homedir(), ".claude.json"), ["mcpServers", "caveman-cloud"], { command: mcp.command, args: mcp.args })
+    ? installMcpJson(claudeGlobalConfigPath(), ["mcpServers", "caveman-cloud"], { command: mcp.command, args: mcp.args })
     : installMcpForAgent(findAgent(agent)!, mcp, "caveman-cloud");
   if (!installed) throw new Error(`could not install caveman-cloud MCP for ${agent}`);
   writeMcpServerMarker(agent, "caveman-cloud", mcp, "caveman_context");
@@ -2639,7 +2709,7 @@ function installAgentNativeCloudMcp(agent: "claude" | "codex", mcp: { command: s
 
 function uninstallAgentNativeCloudMcp(agent: "claude" | "codex"): void {
   const removed = agent === "claude"
-    ? removeMcpJson(join(homedir(), ".claude.json"), ["mcpServers", "caveman-cloud"])
+    ? removeMcpJson(claudeGlobalConfigPath(), ["mcpServers", "caveman-cloud"])
     : uninstallMcpForAgent(findAgent(agent)!, "caveman-cloud");
   if (!removed) throw new Error(`could not remove caveman-cloud MCP for ${agent}`);
   try { unlinkSync(mcpServerMarkerPath(agent, "caveman-cloud")); } catch (error) {
@@ -2649,7 +2719,7 @@ function uninstallAgentNativeCloudMcp(agent: "claude" | "codex"): void {
 
 function agentNativeSkillFiles(agent: "claude" | "codex"): Array<{ name: string; file: string; body: string }> {
   const names = AGENT_SKILL_SUITES["agent-native"] ?? [];
-  const root = agent === "claude" ? join(homedir(), ".claude", "skills") : join(homedir(), ".codex", "skills");
+  const root = agent === "claude" ? join(claudeConfigDir(), "skills") : join(codexHomeDir(), "skills");
   return names.map((name) => ({ name, file: join(root, name, "SKILL.md"), body: SKILLS[name]! }));
 }
 
@@ -2720,7 +2790,7 @@ function skillMatchesBefore(skill: AgentNativeBundleSkill): boolean {
 
 function agentNativeCloudMcpHostAbsent(agent: "claude" | "codex"): boolean {
   if (agent === "claude") return !claudeMcpRegistration("caveman-cloud").present;
-  const config = fileBytes(join(homedir(), ".codex", "config.toml"))?.toString("utf8") ?? "";
+  const config = fileBytes(join(codexHomeDir(), "config.toml"))?.toString("utf8") ?? "";
   return !config.includes("[mcp_servers.caveman-cloud]");
 }
 
@@ -2826,7 +2896,7 @@ function preflightAgentNativeBundleComponents(
     }
     return;
   }
-  const config = fileBytes(join(homedir(), ".codex", "config.toml"))?.toString("utf8") ?? "";
+  const config = fileBytes(join(codexHomeDir(), "config.toml"))?.toString("utf8") ?? "";
   if (!config.includes("[mcp_servers.caveman-cloud]")) return;
   if (!readMcpServerMarker("codex", "caveman-cloud")) {
     throw new Error("[mcp_servers.caveman-cloud] exists but is not Caveman-journaled; refusing overwrite");
@@ -3041,11 +3111,12 @@ type WrapRuntimeMode = "compress" | "record" | "pixel";
 //   auto        — install the caveman MCP server when a real binary resolves
 //                 (today's behavior); the agent gets caveman_retrieve and the
 //                 proxy may compress streams marker-only.
-//   marker-only — inject NOTHING. Wrap stops managing the MCP surface: it does
-//                 not install, and it does not uninstall what is already there.
-//                 Recovery is then answered purely by what the agent actually
-//                 has (see wrapMcpRecoveryAvailable), so the proxy is never told
-//                 a retrieval tool exists when none does.
+//   marker-only — install NOTHING new and strip profile-owned automatic MCP.
+//                 Wrap does not uninstall a prior explicit install; agents whose
+//                 highest-precedence config can shadow that install may receive
+//                 an ephemeral copy only after marker + native entry validation.
+//                 Recovery is answered from that effective registration (see
+//                 wrapMcpRecoveryAvailable), never marker existence alone.
 //   off         — the pre-existing `execute.mcp: false`; same install behavior
 //                 as marker-only, kept as its own name for config compatibility.
 type McpSurfaceMode = "auto" | "marker-only" | "off";
@@ -3577,23 +3648,13 @@ export const OFF_STATES = {
   },
   runningModeMismatch: (running: string, resolvedMode: string): OffState => ({
     id: "running-mode-mismatch",
-    line: `a caveman proxy is already running in ${running} mode — this session is not compressed; the next run restarts it to pick up ${resolvedMode}`,
-    fix: "caveman run -- <your agent>",
-  }),
-  runningModeHeld: (running: string, resolvedMode: string): OffState => ({
-    id: "running-mode-mismatch",
-    line: `a caveman proxy is already running in ${running} mode — another live session holds it, so this session keeps that mode instead of restarting to ${resolvedMode}`,
-    fix: "caveman run -- <your agent>",
+    line: `a caveman proxy is already running in ${running} mode; keeping it running to protect existing sessions instead of switching to ${resolvedMode}`,
+    fix: "restart the proxy explicitly after existing sessions finish, then retry",
   }),
   runningGateMismatch: {
     id: "running-gate-mismatch",
     line: "running caveman proxy has stale recovery state — launching this agent direct to avoid unsafe compression",
-    fix: "stop other wrapped sessions, then run this command again",
-  },
-  runningGateHeld: {
-    id: "running-gate-mismatch",
-    line: "another live session holds a caveman proxy with different recovery state — launching this agent direct to avoid unsafe compression",
-    fix: "stop other wrapped sessions, then run this command again",
+    fix: "restart the proxy explicitly after existing sessions finish, then retry",
   },
   foreignProcess: (host: string, port: number): OffState => ({
     id: "foreign-process",
@@ -4497,11 +4558,17 @@ async function wrap(rest: string[]) {
     console.error("caveman wrap: --pixel not yet supported for codex subscription sessions");
     process.exit(1);
   }
-  await bootstrapLocalWrapRuntime(parsed);
-  await firstRunExperience();
+  // Route-changing agent flags intentionally bypass Caveman. Decide before any
+  // first-run install, proxy bootstrap, or welcome work so a direct launch has
+  // no Caveman side effects beyond its explicit warning.
+  const routeDecision = agent ? agentRouteOverride(agent, extra) : null;
+  if (!routeDecision) {
+    await bootstrapLocalWrapRuntime(parsed);
+    await firstRunExperience();
+  }
   // `wrap` is a zero-commit trial. Native hooks/MCP/config live only in a temp
   // host pack for this child; persistent integration requires an explicit install.
-  await runWrapped(resolved, extra, agent, parsed, codexAuthMode === "subscription");
+  await runWrapped(resolved, extra, agent, parsed, codexAuthMode === "subscription", routeDecision);
 }
 
 // ===========================================================================
@@ -4920,7 +4987,7 @@ function wrapUsage(stream: "stdout" | "stderr" = "stderr") {
   write(`Capability groups: think / remember / execute — inspect with \`${invokedAs()} tools config get\`.`);
   write("Auth passes through untouched: API keys AND subscription OAuth logins (Claude Pro/Max) both work.");
   write("Subscription logins compress locally too, no account needed (live zone only — compressed turns are re-sent byte-identically so the provider cache stays warm;");
-  write("needs MCP recovery; Claude/Codex wrap provide it ephemerally when caveman-mcp is available). Subscription savings are reported in tokens, never dollars. An account adds the dashboard, not compression.");
+  write("needs MCP recovery; Claude/Codex wrap provide it ephemerally when caveman-mcp is available, and sessions carrying caveman_retrieve prove it per request). Subscription savings are reported in tokens, never dollars. An account adds the dashboard, not compression.");
 }
 
 function normalizeAgentShortcutWrapArgs(input: string[]): string[] {
@@ -4969,6 +5036,21 @@ async function agentShortcut(rest: string[]) {
   const agent = findAgent(rest[0] ?? "");
   const native = agent ? nativeAgentId(agent.id) : undefined;
   if (!agent || !native) return wrap(rest);
+  // Host help is observational. Never turn `caveman claude --help` into a
+  // machine-wide integration install before printing another program's usage.
+  if (rest.slice(1).some((arg) => arg === "--help" || arg === "-h")) {
+    const bin = which(binOf(agent));
+    if (!bin) {
+      wrapNotFoundUI(rest[0]!, agent);
+      process.exitCode = 127;
+      return;
+    }
+    const invocation = portableInvocation(bin, [...agent.args, ...rest.slice(1)]);
+    const result = spawnSync(invocation.command, invocation.args, { stdio: "inherit" });
+    if (result.error) throw new Error(`failed to exec ${bin}: ${result.error.message}`);
+    process.exitCode = result.status ?? 1;
+    return;
+  }
   // A Cave Build lock is enforced at the wrap door (claudeCaveBuildEnv); the
   // native door applies none of its transforms, so a locked project must keep
   // routing through wrap or the lock would be silently unenforced.
@@ -5066,8 +5148,11 @@ async function agentShortcut(rest: string[]) {
 // is the one-command compression path. If the proxy can't be reached, a TTY run
 // offers to launch the agent directly (no Caveman, no compression this run) rather
 // than wire it to a dead endpoint; non-TTY runs warn and route through as before.
-async function runWrapped(bin: string, cmdArgs: string[], agent?: AgentProfile, opts: WrapOptions = { mode: "compress", noProxy: false, toon: true, noShrink: false, mcpMode: "auto", noBrowse: false, delegate: false, minimal: false, command: [] }, codexSubscription = false) {
-  const result = await spawnWrapped(bin, cmdArgs, agent, opts, gatewayURL(), codexSubscription);
+async function runWrapped(bin: string, cmdArgs: string[], agent?: AgentProfile, opts: WrapOptions = { mode: "compress", noProxy: false, toon: true, noShrink: false, mcpMode: "auto", noBrowse: false, delegate: false, minimal: false, command: [] }, codexSubscription?: boolean, routeDecision?: AgentRouteOverride | null) {
+  const result = await spawnWrapped(bin, cmdArgs, agent, opts, gatewayURL(), codexSubscription, routeDecision);
+  // Preflight route bypass is intentionally outside Caveman's lifecycle: no
+  // savings read, sync, telemetry, or other post-child mutation.
+  if (result.routeBypass) process.exit(result.code);
   const summary = result.summaryKind && result.sessionStart
     ? printSessionSavings(result.summaryKind, result.sessionStart, agent?.id)
     : null;
@@ -5127,8 +5212,23 @@ async function spawnWrapped(
   agent: AgentProfile | undefined,
   opts: WrapOptions,
   gw: string,
-  codexSubscription = false,
-): Promise<{ code: number; proxyStarted: boolean; sessionStart?: string | undefined; summaryKind?: "observe" | "compress" | undefined }> {
+  codexSubscriptionOverride?: boolean,
+  routeDecision?: AgentRouteOverride | null,
+): Promise<{ code: number; proxyStarted: boolean; routeBypass: boolean; sessionStart?: string | undefined; summaryKind?: "observe" | "compress" | undefined }> {
+  // Which Codex route is correct is a fact about ~/.codex/auth.json, not about
+  // the caller: a ChatGPT login must reach the `/chatgpt` mux handler, an api-key
+  // login the attributed `/w/codex/v1`. This used to be a defaulted parameter, so
+  // every caller had to remember to pass it. `wrap codex` did (it resolves the
+  // mode for --pixel anyway); `trial` and the interactive picker did not, and
+  // their `false` built an ephemeral CODEX_HOME pinning the api-key route. Codex
+  // then sent the OAuth token to the platform Responses API, which rejects it
+  // with "Missing scopes: api.responses.write", while the model refresh 404s
+  // because `/w/codex/v1/models` is not in the openai adapter's closed
+  // allowlist (#1092). Resolving it here fixes every caller that forgets; an
+  // explicit override still wins, which is what `wrap` passes.
+  const codexSubscription = agent?.id === "codex"
+    ? codexSubscriptionOverride ?? detectCodexWrapAuthMode() === "subscription"
+    : false;
   const { host, port } = gatewayHostPort(gw);
   const local = wrapMode(gw) === "local";
   let proxyStarted = false;
@@ -5137,14 +5237,23 @@ async function spawnWrapped(
   // Gemini cannot preserve both contracts. Launch direct instead of routing a
   // request that will 401 or misuse one credential as the other.
   const managedGeminiUnsupported = !local && agent?.id === "gemini";
-  let direct = managedGeminiUnsupported;
+  // `wrap` resolves this before first-run work and passes even a null decision.
+  // Other callers resolve here. Never reread mutable settings across that boundary.
+  const routeOverride = agent
+    ? routeDecision === undefined ? agentRouteOverride(agent, cmdArgs) : routeDecision
+    : null;
+  const routeBypass = routeOverride !== null;
+  let direct = managedGeminiUnsupported || routeOverride !== null;
   if (managedGeminiUnsupported) {
     process.stderr.write("caveman: managed Gemini CLI wrap is unsupported because Gemini CLI cannot send separate Caveman and upstream credentials; launching directly\n");
+  }
+  if (routeOverride && agent) {
+    process.stderr.write(`caveman: ${routeOverrideLabel(agent)} ${routeOverride.surface} ${routeOverride.reason}; launching directly\n`);
   }
   // The local proxy compresses with no account. When wrap runs the LOCAL
   // proxy path we resolve the mode; managed gateway traffic is governed by the cloud
   // policy engine, so we never resolve it here.
-  const gateApplies = local && !opts.noProxy;
+  const gateApplies = !direct && local && !opts.noProxy;
   const entitlement = gateApplies ? readWrapEntitlement() : null;
   const entitlementState = gateApplies ? readWrapEntitlementState() : null;
   const gate = gateApplies ? resolveWrapGate(entitlement, new Date(), opts.mode) : null;
@@ -5166,19 +5275,19 @@ async function spawnWrapped(
   // detail itself — i.e. it has the caveman MCP retrieve tool installed (run
   // `caveman mcp install <agent>`). When it does, signal the proxy to use MCP
   // recovery (which lets it compress streams); otherwise streams pass through.
-  const ephemeralMcp = agent && (agent.id === "claude" || agent.id === "codex")
+  const ephemeralMcp = !direct && agent && (agent.id === "claude" || agent.id === "codex")
     && !opts.minimal && opts.mcpMode === "auto" && wrapRecoveryEligible(opts)
     ? probeMcpBinary()
     : null;
   if (ephemeralMcp && !ephemeralMcp.probe.current) queueStaleMcpBinary(ephemeralMcp.probe);
   const ephemeralMcpBinary = ephemeralMcp?.probe.current ? ephemeralMcp.binary : undefined;
-  const mcpRecovery = Boolean(ephemeralMcpBinary) || wrapMcpRecoveryAvailable(agent, opts);
-  const delegateAlreadyInstalled = Boolean(agent && mcpServerInstalled(agent.id, "caveman-delegate"));
-  const ephemeralDelegateMcp = agent && (agent.id === "claude" || agent.id === "codex")
+  const mcpRecovery = !direct && (Boolean(ephemeralMcpBinary) || wrapMcpRecoveryAvailable(agent, opts, cmdArgs));
+  const delegateAlreadyInstalled = Boolean(!direct && agent && mcpServerInstalled(agent.id, "caveman-delegate"));
+  const ephemeralDelegateMcp = !direct && agent && (agent.id === "claude" || agent.id === "codex")
     && !opts.minimal && opts.delegate && !delegateAlreadyInstalled
     ? resolveDelegateMcpCommand()
     : null;
-  if (agent && (agent.id === "claude" || agent.id === "codex") && opts.delegate && !delegateAlreadyInstalled && !ephemeralDelegateMcp) {
+  if (!direct && agent && (agent.id === "claude" || agent.id === "codex") && opts.delegate && !delegateAlreadyInstalled && !ephemeralDelegateMcp) {
     process.stderr.write("caveman: delegate enabled but caveman-delegate server is unavailable; launching without delegate\n");
   }
   const desiredRecoveryViaMCP = observeEstimate ? false : mcpRecovery;
@@ -5186,7 +5295,7 @@ async function spawnWrapped(
   const proxyVersion = gateApplies ? probeProxyVersion() : null;
   let runtime: ProxyRuntimeState = { owner: "unknown" };
   let runtimeState: OffState | null = null;
-  let proxyReady = await portListening(host, port);
+  let proxyReady = direct ? false : await portListening(host, port);
   if (proxyReady && gateApplies) {
     runtime = readProxyRuntimeState(port, proxyVersion);
     if (runtime.owner === "unknown") {
@@ -5194,75 +5303,22 @@ async function spawnWrapped(
         ? OFF_STATES.foreignProcess(host, port)
         : OFF_STATES.staleBinary("caveman-proxy", proxyVersion?.version ?? "unknown", cliVersion());
     } else if (!proxyRuntimeMatches(runtime, effectiveMode, desiredRecoveryViaMCP)) {
-      if (countOtherLiveProxySessions(port, sessionMarker) > 0) {
-        runtimeState = !proxyRuntimeGateMatches(runtime, desiredRecoveryViaMCP)
-          ? OFF_STATES.runningGateHeld
-          : OFF_STATES.runningModeHeld(runtime.mode ?? "unknown", effectiveMode);
-      } else {
-        const beforeSignal = readRawProxyRunState(port);
-        const sameGeneration = beforeSignal.owner !== "unknown"
-          && beforeSignal.instance_token === runtime.instance_token
-          && beforeSignal.pid === runtime.pid;
-        if (sameGeneration && typeof runtime.pid === "number") {
-          try {
-            process.kill(runtime.pid, "SIGTERM");
-            const deadline = Date.now() + proxyRestartTimeoutMs();
-            let successor = false;
-            while (Date.now() < deadline) {
-              await sleep(100);
-              const generation = readRawProxyRunState(port);
-              if (generation.owner !== "unknown" && generation.instance_token !== runtime.instance_token) {
-                successor = true;
-                break;
-              }
-              if (!(await portListening(host, port))) break;
-            }
-            proxyReady = await portListening(host, port);
-            if (!proxyReady && !successor) {
-              proxyStarted = await startWrapProxy(
-                effectiveMode,
-                desiredRecoveryViaMCP,
-                codexSubscription ? false : observeEstimate ? false : opts.toon,
-                opts.pixelModels,
-                opts.pixelDensity,
-                gw,
-                codexSubscription ? "codex-subscription" : "standard",
-                observeEstimate,
-              );
-              proxyReady = await portListening(host, port);
-            }
-            runtime = proxyReady ? readProxyRuntimeState(port, proxyVersion) : { owner: "unknown" };
-            if (runtime.owner === "unknown" || !proxyRuntimeMatches(runtime, effectiveMode, desiredRecoveryViaMCP)) {
-              runtimeState = runtime.owner === "unknown"
-                ? OFF_STATES.foreignProcess(host, port)
-                : !proxyRuntimeGateMatches(runtime, desiredRecoveryViaMCP)
-                  ? OFF_STATES.runningGateMismatch
-                  : OFF_STATES.runningModeMismatch(runtime.mode ?? "unknown", effectiveMode);
-            }
-          } catch {
-            runtime = readProxyRuntimeState(port, proxyVersion);
-            runtimeState = runtime.owner === "unknown"
-              ? OFF_STATES.foreignProcess(host, port)
-              : !proxyRuntimeMatches(runtime, effectiveMode, desiredRecoveryViaMCP)
-                ? !proxyRuntimeGateMatches(runtime, desiredRecoveryViaMCP)
-                  ? OFF_STATES.runningGateMismatch
-                  : OFF_STATES.runningModeMismatch(runtime.mode ?? "unknown", effectiveMode)
-                : null;
-          }
-        } else {
-          runtime = readProxyRuntimeState(port, proxyVersion);
-          runtimeState = runtime.owner === "unknown"
-            ? OFF_STATES.foreignProcess(host, port)
-            : !proxyRuntimeMatches(runtime, effectiveMode, desiredRecoveryViaMCP)
-              ? !proxyRuntimeGateMatches(runtime, desiredRecoveryViaMCP)
-                ? OFF_STATES.runningGateMismatch
-                : OFF_STATES.runningModeMismatch(runtime.mode ?? "unknown", effectiveMode)
-              : null;
-        }
-      }
+      // A missing wrapper marker does not prove this listener is unused:
+      // native hooks, IDEs, and resumed sessions retain its base URL. Never
+      // signal a shared proxy to change this new session's mode or recovery.
+      // Re-read once in case another operator already replaced the generation.
+      runtime = readProxyRuntimeState(port, proxyVersion);
+      runtimeState = runtime.owner === "unknown"
+        ? OFF_STATES.foreignProcess(host, port)
+        : !proxyRuntimeMatches(runtime, effectiveMode, desiredRecoveryViaMCP)
+          ? !proxyRuntimeGateMatches(runtime, desiredRecoveryViaMCP)
+            ? OFF_STATES.runningGateMismatch
+            : OFF_STATES.runningModeMismatch(runtime.mode ?? "unknown", effectiveMode)
+          : null;
     }
   }
-  if (!proxyReady) {
+
+  if (!proxyReady && !direct) {
     if (local && !opts.noProxy) {
       proxyStarted = codexSubscription
         ? await startWrapProxy(effectiveMode, desiredRecoveryViaMCP, false, undefined, undefined, gw, "codex-subscription", observeEstimate)
@@ -5270,18 +5326,23 @@ async function spawnWrapped(
     }
     proxyReady = await portListening(host, port);
     if (proxyReady && gateApplies) {
-      runtime = readProxyRuntimeState(port, proxyVersion);
+      runtime = proxyStarted ? await awaitProxyRuntimeState(port, proxyVersion) : readProxyRuntimeState(port, proxyVersion);
       if (runtime.owner === "unknown") {
         runtimeState = proxyVersion?.capabilities.includes("run_state")
           ? OFF_STATES.foreignProcess(host, port)
           : OFF_STATES.staleBinary("caveman-proxy", proxyVersion?.version ?? "unknown", cliVersion());
       }
     }
-    if (!proxyReady && !direct) {
+    if (!proxyReady) {
       const startHint = codexSubscription || opts.mode === "record" ? "caveman start" : `CAVEMAN_MODE=${opts.mode} caveman start`;
       if (codexSubscription && opts.noProxy) {
         // Explicit proxy:false leaves subscription Codex in pass-through launch mode
         // without extra status noise; useful for tests and managed launchers.
+      } else if (local && !opts.noProxy) {
+        // A failed local optimization layer must not wire the agent to a dead
+        // listener. Direct launch preserves the agent's own provider setup.
+        direct = true;
+        process.stderr.write(`${mark("warn")} Caveman proxy not reachable on ${host}:${port}; launching directly without compression or metering\n`);
       } else if (interactive()) {
         // The proxy is down and we couldn't bring it up. Launching the agent now
         // would wire it to a dead endpoint (every request fails), so offer to run
@@ -5297,7 +5358,7 @@ async function spawnWrapped(
           process.stderr.write(`${mark("warn")} cancelled — run ${cyan(startHint)}, then re-run your wrap\n`);
           emitCommandRunOnce("error", "usage");
           removeProxySessionMarker(sessionMarker);
-          return { code: 130, proxyStarted };
+          return { code: 130, proxyStarted, routeBypass };
         }
       } else {
         process.stderr.write(
@@ -5307,8 +5368,17 @@ async function spawnWrapped(
       }
     }
   }
-  if (runtimeState?.id === "running-gate-mismatch") {
+  // A foreign listener on the proxy port is the same failure as a gate
+  // mismatch, with a worse consequence: launching routed would hand the
+  // operator's provider keys to a process caveman does not own (#945).
+  if (runtimeState?.id === "running-gate-mismatch" || runtimeState?.id === "running-mode-mismatch") {
     process.stderr.write(`${mark("warn")} ${runtimeState.line}\n`);
+    direct = true;
+  } else if (proxyReady && gateApplies && !proxyStarted && runtime.owner === "unknown") {
+    // A listener caveman did not start this run and cannot prove it owns: a
+    // foreign process, or a proxy binary too old to answer. Routing anyway
+    // would hand the operator's provider keys to that listener (#945).
+    if (runtimeState) process.stderr.write(`${mark("warn")} ${runtimeState.line}\n`);
     direct = true;
   }
   const subscriptionCompressionActive = !direct && proxyReady && subscriptionCompress && desiredRecoveryViaMCP
@@ -5373,7 +5443,13 @@ async function spawnWrapped(
   // Direct mode: inherit the shell env with NO profile injection, stripping only
   // our own routing if it leaked in — so the agent talks straight to the provider
   // with its own key. Any unrelated base URL the user set themselves stays put.
-  const includeShrink = !opts.noShrink && wrapCompressEnabled(opts);
+  // Codex is excluded by design, and the README has said so all along: its runtime
+  // rejects the rewrite (openai/codex#18491). No door actually implemented that, and
+  // since #1037 shrinkHook declines every Codex tool event — so registering it here
+  // bought nothing but a node spawn per tool call. The persistent `caveman enable
+  // codex` door still writes the entry; removing it there needs a migration, since
+  // nativeHookEntriesHealthy would read every existing install as degraded.
+  const includeShrink = !opts.noShrink && wrapCompressEnabled(opts) && agent?.id !== "codex";
   let childArgs = cmdArgs;
   let env: NodeJS.ProcessEnv;
   try {
@@ -5381,7 +5457,7 @@ async function spawnWrapped(
       ? { ...process.env }
       : agent?.id === "codex"
         ? buildCodexEphemeralWrapEnv(gw, codexSubscription, ephemeralMcpBinary, includeShrink, ephemeralDelegateMcp)
-        : buildWrapEnv(agent, gw, opts.mcpMode);
+        : buildWrapEnv(agent, gw, opts.mcpMode, cmdArgs, runtime.owner === "unknown" ? undefined : runtime);
     if (!direct && agent?.id === "claude") {
       const pluginDir = buildClaudeEphemeralPlugin(ephemeralMcpBinary, includeShrink, Boolean(opts.autoRecall), ephemeralDelegateMcp);
       childArgs = ["--plugin-dir", pluginDir, ...cmdArgs];
@@ -5394,11 +5470,22 @@ async function spawnWrapped(
     childArgs = cmdArgs;
     process.stderr.write(`${mark("warn")} temporary native pack unavailable: ${(error as Error).message}; launching ${agent?.display_name ?? bin} directly\n`);
   }
+  // Qwen's extension lock and Hermes's forced custom provider are routing
+  // injection too. Remove them on direct fallback so the host keeps the user's
+  // provider and policy. OpenClaw's `chat` is a command, not a routing override.
+  if (direct && (agent?.id === "qwen" || agent?.id === "hermes")
+    && agent.args.every((arg, index) => childArgs[index] === arg)) {
+    childArgs = childArgs.slice(agent.args.length);
+  }
   if (!direct && agent?.id === "claude") Object.assign(env, claudeCaveBuildEnv());
   if (!direct) maybeWarnHermesMissingKey(agent, gw);
   if (direct) {
+    // buildWrapEnv writes the agent-attributed `${gw}/w/<agent>` form, and an
+    // outer routed wrap may leak the bare form; a direct launch strips both.
+    const gwPrefix = `${gw.replace(/\/+$/, "")}/`;
     for (const k of WRAP_BASE_URL_ENV_VARS) {
-      if (env[k] === gw) delete env[k];
+      const value = env[k];
+      if (value !== undefined && (value === gw || value.startsWith(gwPrefix))) delete env[k];
     }
   }
   // Only a local proxy session that survived native-pack setup can produce a
@@ -5477,7 +5564,7 @@ async function spawnWrapped(
     cleanupWrapTempDirs();
     removeProxySessionMarker(sessionMarker);
   }
-  return { code, proxyStarted, sessionStart, summaryKind };
+  return { code, proxyStarted, routeBypass, sessionStart, summaryKind };
 }
 
 export function claudeCaveBuildEnv(): NodeJS.ProcessEnv {
@@ -5575,7 +5662,13 @@ function applyHermesAuthEnv(env: NodeJS.ProcessEnv, gw: string, modeGw = gw) {
   if (key && name) env[name] = key;
 }
 
-async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon: boolean, pixelModels: string | undefined, pixelDensity: string | undefined, gw = gatewayURL(), purpose: "standard" | "codex-subscription" = "standard", observeEstimate = false): Promise<boolean> {
+// spawnLocalProxyProcess resolves the proxy binary, builds its env, and spawns
+// it detached + unref'd — the part every caller needs identically. Split out
+// of startWrapProxy so a caller that only wants to kick the proxy off (never
+// waiting to confirm it came up) doesn't have to either duplicate this env
+// assembly or pay for the readiness-poll loop below, which holds this
+// process's event loop open via a non-unref'd sleep() timer.
+function spawnLocalProxyProcess(mode: WrapRuntimeMode, mcpRecovery: boolean, toon: boolean, pixelModels: string | undefined, pixelDensity: string | undefined, gw: string, purpose: "standard" | "codex-subscription", observeEstimate: boolean): { host: string; port: number } | null {
   const bin = cavemanBin("caveman-proxy", "CAVEMAN_PROXY_BIN");
   const resolved = which(bin);
   if (!resolved) {
@@ -5584,7 +5677,7 @@ async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon:
     } else {
       process.stderr.write(`${mark("warn")} ${bin} not found; wrap will still launch, but no local compression/metering will run — run ${cyan("caveman setup")} to see what's missing\n`);
     }
-    return false;
+    return null;
   }
   const { host, port } = gatewayHostPort(gw);
   const env: NodeJS.ProcessEnv = {
@@ -5632,20 +5725,62 @@ async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon:
     process.stderr.write(`${mark("warn")} could not start ${bin}: ${(error as Error).message}\n`);
   });
   child.unref();
+  return { host, port };
+}
+
+// Best-effort "there should be a proxy on this port now" for the `enable` door.
+// Fire-and-forget: the caller never waits, so `enable` returns at its own pace.
+//
+// Deliberately not startWrapProxy: that readiness poll's sleep() timer is not
+// unref'd, so awaiting it would hold this command's process open for up to two
+// seconds on every enable where nothing is listening yet — the common case this
+// exists to cover. Probe first (one fast TCP connect, not the retry loop) so a
+// second enable against a live proxy spawns nothing; the redundant process that
+// skipping the probe would create is harmless, since run state is only written
+// once the listener binds, but free beats harmless.
+//
+// aider is excluded on purpose. It is the one native agent installed without an
+// MCP binary (see nativeMcpBinaryRequired's aider branch), so the recovery flag
+// derived below would stamp CAVEMAN_RECOVERY=mcp onto a proxy with no retrieve
+// tool to back it — the exact leak the explicit stamping elsewhere exists to
+// prevent. Giving aider a proxy needs recovery pinned off and its own coverage;
+// until then it keeps the pre-existing behaviour, no better and no worse.
+function ensureLocalProxyForNative(agent: NativeAgent, gw: string): void {
+  if (agent === "aider" || wrapMode(gw) !== "local") return;
+  void (async () => {
+    try {
+      const opts = defaultWrapOptions();
+      // Every other spawn site gates on this (agentShortcut, the native hook).
+      // Without it, `enable` starts a proxy the user's config switched off.
+      if (opts.noProxy) return;
+      const { host, port } = gatewayHostPort(gw);
+      if (await portListening(host, port)) return;
+      const subscription = agent === "codex" && detectCodexWrapAuthMode() === "subscription";
+      const mode = subscription && opts.mode === "pixel" ? "record" : opts.mode;
+      const recovery = Boolean(probeMcpBinary()?.probe.current);
+      spawnLocalProxyProcess(mode, recovery, subscription ? false : opts.toon, opts.pixelModels, opts.pixelDensity, gw, subscription ? "codex-subscription" : "standard", false);
+    } catch { /* fail-open, same as the SessionStart hook and the shortcut door */ }
+  })();
+}
+
+async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon: boolean, pixelModels: string | undefined, pixelDensity: string | undefined, gw = gatewayURL(), purpose: "standard" | "codex-subscription" = "standard", observeEstimate = false): Promise<boolean> {
+  const spawned = spawnLocalProxyProcess(mode, mcpRecovery, toon, pixelModels, pixelDensity, gw, purpose, observeEstimate);
+  if (!spawned) return false;
+  const { host, port } = spawned;
   for (let i = 0; i < 20; i++) {
     await sleep(100);
     if (await portListening(host, port)) {
-      process.stderr.write(dim(`→ started Caveman proxy on ${host}:${port} (${env.CAVEMAN_MODE})\n`));
+      process.stderr.write(dim(`→ started Caveman proxy on ${host}:${port} (${mode})\n`));
       return true;
     }
   }
-  process.stderr.write(`${mark("warn")} started ${bin}, but proxy did not become ready on ${host}:${port}\n`);
+  process.stderr.write(`${mark("warn")} started ${cavemanBin("caveman-proxy", "CAVEMAN_PROXY_BIN")}, but proxy did not become ready on ${host}:${port}\n`);
   return false;
 }
 
 // startProxyKeepalive heartbeats the local proxy while the wrapped agent process
-// is alive, so a wrap-owned proxy's idle exit cannot fire under an open-but-quiet
-// session whose ANTHROPIC_BASE_URL still points at it (#860). The proxy treats
+// is alive, for compatibility with older proxies that still idle-exit (#860).
+// Current proxy versions never idle-exit. The proxy treats
 // the beat as activity only — nothing is recorded. No immediate beat: launching
 // is already activity, and short-lived runs should never touch the port. The
 // timer is unref'd and every failure is ignored (fail-open, like the hooks).
@@ -5687,14 +5822,39 @@ function renderTemplate(s: string, gw = gatewayURL()): string {
     .replaceAll("{{cave_org_id}}", orgIdFromConfigFile());
 }
 
+const OPTIONAL_OPENAI_KEY_ENV_TEMPLATE = "{{cave_optional_openai_key_env}}";
+type RenderDeepOptions = {
+  optionalOpenAIKeyEnvAvailable?: boolean;
+  optionalOpenAIKeyReference?: "$OPENAI_API_KEY" | "{env:OPENAI_API_KEY}";
+};
+
 // renderDeep applies renderTemplate to every string leaf of a JSON value — used to
 // render an agent's inline-config template before it is stringified into an env var.
-function renderDeep(v: unknown, gw = gatewayURL()): unknown {
+// Optional credential references disappear as whole object properties when their
+// source variable is unavailable. Secrets never enter generated JSON: the retained
+// value is the agent-native `$OPENAI_API_KEY` reference, not its expansion.
+function renderDeep(v: unknown, gw = gatewayURL(), env: NodeJS.ProcessEnv = process.env, options: RenderDeepOptions = {}): unknown {
+  if (v === OPTIONAL_OPENAI_KEY_ENV_TEMPLATE) {
+    const key = env.OPENAI_API_KEY;
+    const inherited = typeof key === "string" && !!key.trim() && !/[\r\n]/.test(key);
+    return (options.optionalOpenAIKeyEnvAvailable ?? inherited)
+      ? options.optionalOpenAIKeyReference ?? "$OPENAI_API_KEY"
+      : undefined;
+  }
   if (typeof v === "string") return renderTemplate(v, gw);
-  if (Array.isArray(v)) return v.map((item) => renderDeep(item, gw));
+  if (Array.isArray(v)) {
+    return v.map((item) => {
+      const rendered = renderDeep(item, gw, env, options);
+      if (rendered === undefined) throw new Error("optional profile credentials cannot be array elements");
+      return rendered;
+    });
+  }
   if (v && typeof v === "object") {
     const out: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = renderDeep(val, gw);
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      const rendered = renderDeep(val, gw, env, options);
+      if (rendered !== undefined) out[k] = rendered;
+    }
     return out;
   }
   return v;
@@ -5720,18 +5880,26 @@ function stripJson5Comments(s: string): string {
       continue;
     }
     if (ch === "/" && next === "/") {
+      out += "  ";
       i += 2;
-      while (i < s.length && s[i] !== "\n" && s[i] !== "\r") i++;
+      while (i < s.length && s[i] !== "\n" && s[i] !== "\r") {
+        out += /\s/.test(s[i]!) ? s[i]! : " ";
+        i++;
+      }
       if (i < s.length) out += s[i]!;
       continue;
     }
     if (ch === "/" && next === "*") {
+      out += "  ";
       i += 2;
       while (i < s.length && !(s[i] === "*" && s[i + 1] === "/")) {
-        if (s[i] === "\n" || s[i] === "\r") out += s[i];
+        out += /\s/.test(s[i]!) ? s[i]! : " ";
         i++;
       }
-      if (i < s.length) i++;
+      if (i < s.length) {
+        out += "  ";
+        i++;
+      }
       continue;
     }
     out += ch;
@@ -5767,13 +5935,16 @@ function stripTrailingCommas(s: string): string {
   return out;
 }
 
-export function readJson5Lenient(path: string): unknown {
-  const raw = readFileSync(path, "utf8");
+function parseJsonc(raw: string): unknown {
   try {
     return JSON.parse(raw);
   } catch {
     return JSON.parse(stripTrailingCommas(stripJson5Comments(raw)));
   }
+}
+
+export function readJson5Lenient(path: string): unknown {
+  return parseJsonc(readFileSync(path, "utf8"));
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -5782,10 +5953,21 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+function isSafeObjectKey(key: string): boolean {
+  return key !== "__proto__" && key !== "constructor" && key !== "prototype";
+}
+
 export function deepMerge(base: unknown, overlay: unknown): unknown {
-  if (isPlainObject(base) && isPlainObject(overlay)) {
-    const out: Record<string, unknown> = { ...base };
-    for (const [k, v] of Object.entries(overlay)) out[k] = deepMerge(out[k], v);
+  if (isPlainObject(overlay)) {
+    const out: Record<string, unknown> = {};
+    if (isPlainObject(base)) {
+      for (const [k, v] of Object.entries(base)) {
+        if (isSafeObjectKey(k)) out[k] = isPlainObject(v) ? deepMerge({}, v) : v;
+      }
+    }
+    for (const [k, v] of Object.entries(overlay)) {
+      if (isSafeObjectKey(k)) out[k] = deepMerge(out[k], v);
+    }
     return out;
   }
   return overlay;
@@ -5793,11 +5975,28 @@ export function deepMerge(base: unknown, overlay: unknown): unknown {
 
 type ConfigFileInjection = Extract<AgentProfile["injection"], { method: "config-file" }>;
 
+export function platformDefaultConfigPath(
+  kind: NonNullable<NonNullable<ConfigFileInjection["base_config"]>["platform_default"]>,
+  platform: NodeJS.Platform = process.platform,
+  _env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (kind !== "qwen-system-settings") return undefined;
+  if (platform === "darwin") return "/Library/Application Support/QwenCode/settings.json";
+  // Qwen 0.22.3 deliberately does not consult %ProgramData% here.
+  if (platform === "win32") return "C:\\ProgramData\\qwen-code\\settings.json";
+  if (platform === "linux") return "/etc/qwen-code/settings.json";
+  return undefined;
+}
+
 function baseConfigPath(base: NonNullable<ConfigFileInjection["base_config"]>): string {
   const envPath = base.env_var ? process.env[base.env_var] : undefined;
   if (envPath && envPath.trim()) return expandTilde(envPath);
   const stateDir = base.state_dir?.env_var ? process.env[base.state_dir.env_var] : undefined;
   if (stateDir && stateDir.trim()) return join(expandTilde(stateDir), base.state_dir!.filename);
+  const platformDefault = base.platform_default
+    ? platformDefaultConfigPath(base.platform_default)
+    : undefined;
+  if (platformDefault) return platformDefault;
   return expandTilde(base.path);
 }
 
@@ -5833,9 +6032,9 @@ const OPENCLAW_API_BASE_PATH: Record<string, string> = {
 };
 
 const OPENCLAW_WELL_KNOWN_PROVIDERS: Record<string, JsonObject> = {
-  openai: { api: "openai-responses", apiKey: "${OPENAI_API_KEY}" },
-  anthropic: { api: "anthropic-messages", apiKey: "${ANTHROPIC_API_KEY}" },
-  google: { api: "google-generative-ai", apiKey: "${GEMINI_API_KEY}" },
+  openai: { baseUrl: "https://api.openai.com/v1", api: "openai-responses", apiKey: "${OPENAI_API_KEY}" },
+  anthropic: { baseUrl: "https://api.anthropic.com", api: "anthropic-messages", apiKey: "${ANTHROPIC_API_KEY}" },
+  google: { baseUrl: "https://generativelanguage.googleapis.com/v1beta", api: "google-generative-ai", apiKey: "${GEMINI_API_KEY}" },
   "openai-codex": { api: "openai-chatgpt-responses", auth: "oauth" },
 };
 
@@ -5943,6 +6142,12 @@ function openClawProviderApi(providerId: string, provider: JsonObject, model?: J
   return modelApi || providerApi || wellKnownApi;
 }
 
+function openClawEffectiveBaseUrl(api: string | undefined, baseUrl: string | undefined): string | undefined {
+  // OpenClaw normalizeModelCompat removes /v1 before the Anthropic SDK appends
+  // /v1/messages. Pi passes its model base URL to that SDK unchanged.
+  return api === "anthropic-messages" ? baseUrl?.replace(/\/v1\/?$/, "") : baseUrl;
+}
+
 function openClawProviderModel(provider: JsonObject, modelId: string): JsonObject | undefined {
   const models = Array.isArray(provider.models) ? provider.models : [];
   for (const item of models) {
@@ -5986,8 +6191,51 @@ function appendUrlPath(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
 }
 
-function codexHomeDir(): string {
-  return join(homedir(), ".codex");
+export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CLAUDE_CONFIG_DIR ? resolve(env.CLAUDE_CONFIG_DIR) : join(homedir(), ".claude");
+}
+
+export function claudeGlobalConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  // Claude keeps its default global/MCP config beside ~/.claude, but moves
+  // that file inside a nonempty CLAUDE_CONFIG_DIR override.
+  return env.CLAUDE_CONFIG_DIR ? join(claudeConfigDir(env), ".claude.json") : join(homedir(), ".claude.json");
+}
+
+export function geminiConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+  // GEMINI_CLI_HOME replaces the home directory, not the .gemini directory.
+  return resolve(env.GEMINI_CLI_HOME || homedir(), ".gemini");
+}
+
+function agentUserPath(agent: string, path: string): string {
+  const prefix = agent === "claude" ? "~/.claude/" : agent === "codex" ? "~/.codex/" : undefined;
+  if (!prefix || !path.startsWith(prefix)) return path;
+  const root = agent === "claude" ? claudeConfigDir() : codexHomeDir();
+  return join(root, path.slice(prefix.length));
+}
+
+export function codexHomeDir(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.CODEX_HOME;
+  if (!configured) return join(homedir(), ".codex");
+  // Match Codex's own home resolver: a nonempty override may be relative, but
+  // must already be a directory and is canonicalized before use. Never fall
+  // back to another account's default home when the override is invalid.
+  let metadata: ReturnType<typeof statSync>;
+  try {
+    metadata = statSync(configured);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`CODEX_HOME points to ${JSON.stringify(configured)}, but that path does not exist`);
+    }
+    throw new Error(`failed to read CODEX_HOME ${JSON.stringify(configured)}: ${(error as Error).message}`);
+  }
+  if (!metadata.isDirectory()) {
+    throw new Error(`CODEX_HOME points to ${JSON.stringify(configured)}, but that path is not a directory`);
+  }
+  try {
+    return realpathSync(configured);
+  } catch (error) {
+    throw new Error(`failed to canonicalize CODEX_HOME ${JSON.stringify(configured)}: ${(error as Error).message}`);
+  }
 }
 
 function codexAuthPath(): string {
@@ -6059,12 +6307,35 @@ function stripCodexCavemanProviderToml(text: string): string {
   return out.join("\n").trimEnd();
 }
 
+// The api-key Codex route, in ONE place: the provider TOML writes it, the
+// install journal records it, and the doctor compares against it, and a route
+// only three of those four agree on reads as permanently degraded.
+const CODEX_API_KEY_ROUTE = "/w/codex/v1";
+
+function codexGatewayBase(gw: string, subscription: boolean): string {
+  // Codex's OpenAI-Responses client appends "/responses" onto base_url itself,
+  // exactly as it does against the real api.openai.com, so what the proxy
+  // receives is `<this path>/responses`. The openai adapter's Routes are a
+  // closed, exact allowlist holding "/v1/responses" and never "/responses", so
+  // the api-key route needs the "/v1" or every api-key Codex session 404s with
+  // cave_route_not_found before one request reaches OpenAI (#1045). Same
+  // convention aider already uses (`/w/aider/openai/v1`). The subscription
+  // route is a different mux handler (`/chatgpt/`) that takes the suffix
+  // verbatim, so it must NOT gain a "/v1".
+  return appendUrlPath(gw, subscription ? "/chatgpt" : CODEX_API_KEY_ROUTE);
+}
+
+// Codex clears the stdio MCP environment, including these non-secret store
+// selectors. Forward their names so the proxy and recovery server share the
+// current launch's store without persisting provider credentials or stale paths.
+const CODEX_RECOVERY_ENV = 'env_vars = ["CAVEMAN_HOME", "CAVEMAN_CCR_DB"]';
+
 function codexCavemanProviderToml(gw: string, subscription = true): string {
   return [
     `model_provider = "caveman"`,
     `[model_providers.caveman]`,
     `name = "Caveman"`,
-    `base_url = ${JSON.stringify(subscription ? appendUrlPath(gw, "/chatgpt") : appendUrlPath(gw, "/w/codex"))}`,
+    `base_url = ${JSON.stringify(codexGatewayBase(gw, subscription))}`,
     `wire_api = "responses"`,
     `requires_openai_auth = true`,
   ].join("\n");
@@ -6143,6 +6414,7 @@ export function hookExecutableInvocation(
   executable: string,
   script: string | undefined,
   platform: NodeJS.Platform = process.platform,
+  powershell: boolean = platform === "win32",
 ): string {
   const invocation = script
     ? `${quoteHookPath(executable, platform)} ${quoteHookPath(script, platform)}`
@@ -6150,7 +6422,7 @@ export function hookExecutableInvocation(
   // Claude/Codex/Gemini dispatch command hooks through PowerShell on native
   // Windows. A quoted executable is only a string literal there; `&` is the
   // required invocation operator. POSIX hook commands keep their exact shape.
-  return platform === "win32" ? `& ${invocation}` : invocation;
+  return platform === "win32" && powershell ? `& ${invocation}` : invocation;
 }
 
 function nativeHookCommand(agentId: string): string {
@@ -6168,14 +6440,123 @@ function nativeHookCommand(agentId: string): string {
   return `${cavemanBinForHook()} native-hook ${agentId}`;
 }
 
-function nativeHookEntry(command: string): Record<string, unknown> {
-  return { hooks: [{ type: "command", command }] };
+function nativeHookEntry(command: string, agentId?: "claude" | "codex" | "gemini"): Record<string, unknown> {
+  const hook: Record<string, unknown> = { type: "command", command };
+  if (agentId === "claude") {
+    hook.timeout = 30;
+    if (process.platform === "win32") hook.shell = "powershell";
+  }
+  return { hooks: [hook] };
 }
 
 function hookEntryCommand(entry: Record<string, unknown>): string | undefined {
   const hooks = Array.isArray(entry.hooks) ? entry.hooks as Array<Record<string, unknown>> : [];
   if (hooks.length !== 1 || hooks[0]?.type !== "command") return undefined;
   return typeof hooks[0].command === "string" ? hooks[0].command : undefined;
+}
+
+function hookCommandTokens(command: string): string[] | undefined {
+  const tokens: string[] = [];
+  let token = "";
+  let started = false;
+  let quote: "'" | '"' | undefined;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index]!;
+    if (quote) {
+      if (char === quote) {
+        if (quote === "'" && command[index + 1] === "'") {
+          token += "'";
+          index += 1;
+        } else {
+          quote = undefined;
+        }
+      } else if (quote === '"' && char === "\\" && index + 1 < command.length) {
+        token += command[++index]!;
+      } else {
+        token += char;
+      }
+      started = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (started) {
+        tokens.push(token);
+        token = "";
+        started = false;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      started = true;
+      continue;
+    }
+    if (char === "\\" && index + 1 < command.length) {
+      token += command[++index]!;
+      started = true;
+      continue;
+    }
+    if (/[|;<>\n\r`]/.test(char) || (char === "&" && (started || tokens.length > 0))) return undefined;
+    token += char;
+    started = true;
+  }
+  if (quote) return undefined;
+  if (started) tokens.push(token);
+  if (tokens[0] === "&") tokens.shift();
+  return tokens.length > 0 ? tokens : undefined;
+}
+
+function hookCommandBasename(token: string): string {
+  return basename(token.replace(/\\/g, "/")).toLowerCase().replace(/\.(?:exe|cmd|bat)$/i, "");
+}
+
+function isCavemanCliInvocation(tokens: string[]): boolean {
+  const executable = hookCommandBasename(tokens[0] ?? "");
+  if (executable === "caveman" || executable === "cave") return true;
+  return executable === "node" && hookCommandBasename(tokens[1] ?? "") === "index.js";
+}
+
+function managedHookIdentity(command: string): string | undefined {
+  const tokens = hookCommandTokens(command);
+  if (!tokens) return undefined;
+
+  const executable = hookCommandBasename(tokens[0] ?? "");
+  const nodeScript = executable === "node" ? hookCommandBasename(tokens[1] ?? "") : undefined;
+  const argsStart = executable === "node" ? 2 : 1;
+  const args = tokens.slice(argsStart);
+  const agent = args[1];
+  const nativeAgent = agent === "claude" || agent === "codex" || agent === "gemini";
+  const supportedNative =
+    (executable === "caveman-proxy" && args.length === 4 && args[0] === "native-hook" && nativeAgent && args[2] === "--adapter")
+    || ((executable === "caveman" || executable === "cave") && args.length === 2 && args[0] === "native-hook" && nativeAgent)
+    || (nodeScript !== undefined && ["index.js", "native-hook-fast.js"].includes(nodeScript) && args.length === 2 && args[0] === "native-hook" && nativeAgent);
+  if (supportedNative) return `native-hook:${agent}`;
+
+  if (isCavemanCliInvocation(tokens)) {
+    if (args.length === 1 && args[0] === "shrink-hook") return "shrink-hook";
+    if (args.length === 2 && args[0] === "mem" && args[1] === "recall-hook") return "mem:recall-hook";
+  }
+  return undefined;
+}
+
+function canonicalManagedHookEntry(entry: Record<string, unknown>): string | undefined {
+  const identity = managedHookIdentity(hookEntryCommand(entry) ?? "");
+  if (!identity) return undefined;
+  const clone = JSON.parse(JSON.stringify(entry)) as Record<string, unknown>;
+  const hooks = clone.hooks as Array<Record<string, unknown>>;
+  hooks[0]!.command = identity;
+  return JSON.stringify(clone);
+}
+
+// Why: `think.shrink` (and its `CAVEMAN_SHRINK` env form) is the persisted
+// switch for the command-output rewrite, but only the ephemeral launcher ever
+// read it — every native writer passed a literal `true`, so `caveman enable` /
+// `doctor --fix` / `repairNativeAgent` reinstated `shrink-hook` no matter what
+// the config said and there was no persistent way to run the native
+// integration without it (#1049). Read in ONE place so the writers and the
+// health check that judges them cannot disagree about what is expected.
+function nativeShrinkEnabled(): boolean {
+  return resolveCapabilities().values["think.shrink"].value as boolean;
 }
 
 function nativeHooksDocument(agentId: "claude" | "codex" | "gemini", includeShrink: boolean, base: Record<string, unknown> = {}, includeRecall = false): Record<string, unknown> {
@@ -6187,29 +6568,53 @@ function nativeHooksDocument(agentId: "claude" | "codex" | "gemini", includeShri
     ? ["SessionStart", "BeforeAgent", "BeforeModel", "BeforeTool", "AfterTool", "AfterModel", "PreCompress", "AfterAgent", "SessionEnd"]
     : agentId === "codex"
     ? ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "PostToolUseFailure", "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"]
-    : ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"];
+    : ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PreCompact", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"];
   const command = nativeHookCommand(agentId);
+  const identity = `native-hook:${agentId}`;
   for (const event of lifecycle) {
-    const list = Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [];
-    if (!list.some((entry) => hookEntryCommand(entry) === command)) list.push(nativeHookEntry(command));
+    // Replace, never accumulate: a caveman native-hook entry for this agent
+    // that points at another binary or adapter path (an upgrade, a moved
+    // install, a dev build) is the SAME hook, so it goes before ours is added.
+    // Matching on the exact command string alone appended a new set on every
+    // path change and the host ran three caveman hooks per event.
+    const list = (Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [])
+      .filter((entry) => managedHookIdentity(hookEntryCommand(entry) ?? "") !== identity);
+    list.push(nativeHookEntry(command, agentId));
     hooks[event] = list;
   }
-  if (includeShrink) {
+  {
     const shrinkEvent = agentId === "gemini" ? "BeforeTool" : "PreToolUse";
     const list = Array.isArray(hooks[shrinkEvent]) ? hooks[shrinkEvent] as Array<Record<string, unknown>> : [];
     const shrinkCommand = `${cavemanBinForHook()} shrink-hook`;
-    if (!list.some((entry) => hookEntryCommand(entry) === shrinkCommand)) {
-      list.push(agentId === "gemini"
-        ? { matcher: "run_shell_command", ...nativeHookEntry(shrinkCommand) }
-        : nativeHookEntry(shrinkCommand));
+    // Same replace-not-accumulate rule as the native hook: a shrink-hook entry
+    // under another caveman path is ours. When the switch is OFF the rule has
+    // to reach OUR path too (#1049): `base` is the host's live file, so a
+    // standalone install, or any caveman old enough to predate the switch,
+    // leaves an entry here that honoring the switch only on the entries we ADD
+    // would merge straight through — the rewrite stays live on exactly the
+    // machines that asked for it off, and the install is born degraded because
+    // nativeHookEntriesHealthy rejects a managed entry the expected document
+    // lacks. Withdrawing ours is not a claim on the user's other hooks:
+    // managedHookIdentity only matches a caveman binary.
+    for (let i = list.length - 1; i >= 0; i--) {
+      const entry = list[i];
+      const existing = entry ? hookEntryCommand(entry) : undefined;
+      if (existing === undefined || managedHookIdentity(existing) !== "shrink-hook") continue;
+      if (!includeShrink || existing !== shrinkCommand) list.splice(i, 1);
     }
+    if (includeShrink && !list.some((entry) => hookEntryCommand(entry) === shrinkCommand)) {
+      list.push(agentId === "gemini"
+        ? { matcher: "run_shell_command", ...nativeHookEntry(shrinkCommand, agentId) }
+        : nativeHookEntry(shrinkCommand, agentId));
+    }
+    // The lifecycle loop above always writes this event, so the key exists either way.
     hooks[shrinkEvent] = list;
   }
   if (agentId === "claude" && includeRecall) {
     const list = Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit as Array<Record<string, unknown>> : [];
     const recallCommand = `${cavemanBinForHook()} mem recall-hook`;
     if (!list.some((entry) => hookEntryCommand(entry) === recallCommand)) {
-      list.push(nativeHookEntry(recallCommand));
+      list.push(nativeHookEntry(recallCommand, agentId));
     }
     hooks.UserPromptSubmit = list;
   }
@@ -6223,6 +6628,8 @@ function assertNativeHooksShape(path: string, root: Record<string, unknown>, age
   }
   const hooks = root.hooks as Record<string, unknown> | undefined;
   if (!hooks) return;
+  // `true` on purpose, unlike the writers: this only reads the event NAMES to
+  // refuse a non-array, so the superset is the safer set to check.
   const expected = nativeHooksDocument(agentId, true).hooks as Record<string, unknown>;
   for (const event of Object.keys(expected)) {
     if (hooks[event] !== undefined && !Array.isArray(hooks[event])) {
@@ -6236,11 +6643,27 @@ function nativeHookEntriesHealthy(root: Record<string, unknown>, agentId: "claud
     ? root.hooks as Record<string, unknown>
     : undefined;
   if (!hooks) return false;
-  const expected = nativeHooksDocument(agentId, true).hooks as Record<string, unknown>;
-  return Object.entries(expected).every(([event, expectedRaw]) => {
+  const expected = nativeHooksDocument(agentId, nativeShrinkEnabled()).hooks as Record<string, unknown>;
+  const required = Object.entries(expected).every(([event, expectedRaw]) => {
     const actual = Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [];
-    const actualEntries = new Set(actual.map((entry) => JSON.stringify(entry)));
-    return (expectedRaw as Array<Record<string, unknown>>).every((entry) => actualEntries.has(JSON.stringify(entry)));
+    const actualEntries = new Set(actual.map(canonicalManagedHookEntry).filter(Boolean));
+    return (expectedRaw as Array<Record<string, unknown>>).every((entry) => {
+      const canonical = canonicalManagedHookEntry(entry);
+      return canonical !== undefined && actualEntries.has(canonical);
+    });
+  });
+  if (!required) return false;
+  return Object.entries(hooks).every(([event, raw]) => {
+    const expectedEvent = new Set(
+      (Array.isArray(expected[event]) ? expected[event] as Array<Record<string, unknown>> : [])
+        .map(canonicalManagedHookEntry)
+        .filter(Boolean),
+    );
+    const actual = Array.isArray(raw) ? raw as Array<Record<string, unknown>> : [];
+    return actual.every((entry) => {
+      const canonical = canonicalManagedHookEntry(entry);
+      return canonical === undefined || expectedEvent.has(canonical);
+    });
   });
 }
 
@@ -6271,7 +6694,7 @@ function buildCodexEphemeralHome(
   const providerRoot = providerLines.shift()!;
   const providerTables = providerLines.join("\n");
   const mcp = mcpBinary
-    ? `\n\n[mcp_servers.caveman]\ncommand = ${JSON.stringify(mcpBinary)}\n`
+    ? `\n\n[mcp_servers.caveman]\ncommand = ${JSON.stringify(mcpBinary)}\n${CODEX_RECOVERY_ENV}\n`
     : "\n";
   const delegateArgs = delegateMcp?.args.length
     ? `\nargs = [${delegateMcp.args.map((arg) => JSON.stringify(arg)).join(", ")}]`
@@ -6302,6 +6725,9 @@ function buildCodexEphemeralWrapEnv(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of WRAP_BASE_URL_ENV_VARS) delete env[key];
+  // The ephemeral CODEX_HOME points Codex at the same loopback gateway, so it
+  // needs the same proxy exemption the base-url wrap path gets.
+  Object.assign(env, gatewayNoProxyEnv(gw));
   env.CODEX_HOME = buildCodexEphemeralHome(gw, subscription, mcpBinary, includeShrink, delegateMcp);
   return env;
 }
@@ -6480,6 +6906,103 @@ function atomicWriteFile(path: string, bytes: Buffer, mode = 0o600): void {
   }
 }
 
+function fsyncParentDirectory(path: string): void {
+  let fd: number | undefined;
+  try {
+    fd = openSync(dirname(path), constants.O_RDONLY);
+    fsyncSync(fd);
+  } catch {
+    // Some platforms/filesystems reject directory fsync. File fsync + atomic
+    // rename still provides strongest portable guarantee available to Node.
+  } finally {
+    if (fd !== undefined) try { closeSync(fd); } catch { /* best effort */ }
+  }
+}
+
+function durableAtomicWriteFile(path: string, bytes: Buffer, mode = 0o600): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temp = join(dirname(path), `.${basename(path)}.caveman-${process.pid}-${randomUUID()}.tmp`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, mode);
+    writeFileSync(fd, bytes);
+    fchmodSync(fd, mode);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(temp, path);
+    fsyncParentDirectory(path);
+  } catch (error) {
+    if (fd !== undefined) try { closeSync(fd); } catch { /* original error wins */ }
+    try { unlinkSync(temp); } catch { /* no partial */ }
+    throw error;
+  }
+}
+
+// Publish a fully-synced file without replacing an existing intent. Hard-linking
+// a same-directory temp gives O_EXCL semantics plus atomic visibility.
+function durableCreateFile(path: string, bytes: Buffer, mode = 0o600): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temp = join(dirname(path), `.${basename(path)}.caveman-create-${process.pid}-${randomUUID()}.tmp`);
+  try {
+    durableAtomicWriteFile(temp, bytes, mode);
+    linkSync(temp, path);
+    fsyncParentDirectory(path);
+  } finally {
+    try { unlinkSync(temp); } catch { /* published or failed before temp creation */ }
+  }
+}
+
+function optionalBytesEqual(left: Buffer | null, right: Buffer | null): boolean {
+  return left === null ? right === null : right !== null && left.equals(right);
+}
+
+function durableReplaceFileIfUnchanged(path: string, expected: Buffer | null, next: Buffer | null, mode = 0o600): void {
+  const current = fileBytes(path);
+  if (!optionalBytesEqual(current, expected)) throw new Error(`${path} changed during MCP update; refusing overwrite`);
+  if (next === null) {
+    if (current !== null) {
+      const atDelete = fileBytes(path);
+      if (!optionalBytesEqual(atDelete, expected)) throw new Error(`${path} changed during MCP update; refusing removal`);
+      unlinkSync(path);
+      fsyncParentDirectory(path);
+    }
+    return;
+  }
+
+  // Prepare durable replacement first, then run final compare immediately
+  // before rename. Per-agent lock serializes Caveman writers; this CAS catches
+  // external edits observed before commit without erasing them.
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temp = join(dirname(path), `.${basename(path)}.caveman-cas-${process.pid}-${randomUUID()}.tmp`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, mode);
+    writeFileSync(fd, next);
+    fchmodSync(fd, mode);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    const atCommit = fileBytes(path);
+    if (!optionalBytesEqual(atCommit, expected)) throw new Error(`${path} changed during MCP update; refusing overwrite`);
+    renameSync(temp, path);
+    fsyncParentDirectory(path);
+  } catch (error) {
+    if (fd !== undefined) try { closeSync(fd); } catch { /* original error wins */ }
+    try { unlinkSync(temp); } catch { /* no partial */ }
+    throw error;
+  }
+}
+
+function durableUnlink(path: string): void {
+  try {
+    unlinkSync(path);
+    fsyncParentDirectory(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
 function parseJsonFileObject(path: string, bytes: Buffer | null): Record<string, unknown> {
   if (!bytes || bytes.length === 0) return {};
   const parsed = JSON.parse(bytes.toString("utf8"));
@@ -6541,6 +7064,12 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const assumeFirstParty = env[CLAUDE_ASSUME_FIRST_PARTY_ENV] === undefined
     && wrapMode(gw) === "local" && proxyAnthropicUpstreamIsFirstParty();
   if (assumeFirstParty) env[CLAUDE_ASSUME_FIRST_PARTY_ENV] = "1";
+  // Native routing points every later turn at the same loopback gateway, so it
+  // needs the wrap path's proxy exemption too (#1001). Never clobber a value the
+  // user already carries in settings.
+  for (const [key, value] of Object.entries(gatewayNoProxyEnv(gw))) {
+    if (env[key] === undefined) env[key] = value;
+  }
   // Claude Code turns tool search (progressive MCP tool disclosure) OFF as soon
   // as ANTHROPIC_BASE_URL is not a first-party Anthropic host, so pointing it at
   // caveman would otherwise force every MCP tool schema inline on every request
@@ -6549,9 +7078,9 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   // Claude Code names for the override. Never clobber an explicit user value.
   if (env.ENABLE_TOOL_SEARCH === undefined) env.ENABLE_TOOL_SEARCH = TOOL_SEARCH_DEFAULT;
   settings.env = env;
-  const withHooks = nativeHooksDocument("claude", true, settings);
+  const withHooks = nativeHooksDocument("claude", nativeShrinkEnabled(), settings);
 
-  const mcpPath = join(homedir(), ".claude.json");
+  const mcpPath = claudeGlobalConfigPath();
   const mcpBefore = fileBytes(mcpPath);
   const mcpRoot = parseJsonFileObject(mcpPath, mcpBefore);
   if (mcpRoot.mcpServers !== undefined && (typeof mcpRoot.mcpServers !== "object" || mcpRoot.mcpServers === null || Array.isArray(mcpRoot.mcpServers))) {
@@ -6619,9 +7148,9 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const installedMcp = { command: mcpBinary, args: [] };
   servers.caveman = installedMcp;
   settings.mcpServers = servers;
-  const withHooks = nativeHooksDocument("gemini", true, settings);
+  const withHooks = nativeHooksDocument("gemini", nativeShrinkEnabled(), settings);
 
-  const envPath = join(homedir(), ".gemini", ".env");
+  const envPath = join(geminiConfigDir(), ".env");
   const envBefore = fileBytes(envPath);
   const route = appendUrlPath(gw, "/w/gemini");
   const nativeEnv = geminiNativeEnv(envBefore?.toString("utf8") ?? "", route);
@@ -6647,7 +7176,31 @@ function opencodeNativePluginPath(): string {
   return join(homedir(), ".config", "opencode", "plugins", "caveman-native.js");
 }
 
+function opencodePluginMajor(): number | null {
+  const profile = AGENTS.find((agent) => agent.id === "opencode");
+  const semver = parsedSemver(profile ? detectedAgentVersion(profile) : null);
+  return semver ? semver[0]! : null;
+}
+
 function opencodeNativePluginSource(): string {
+  // OpenCode 2 replaced the plugin API: a V1 hook map no longer loads
+  // (PluginModule.LoadError, missing "default"). Emit the implementation
+  // matching the detected host major. See #1083.
+  //
+  // An unreadable version keeps V1, the status quo. nativeHostProbe returns
+  // version: null for an empty/non-zero/unspawnable `opencode --version`
+  // ("version_probe_failed"), and #1081 records exactly that state on a live
+  // OpenCode 1.18.31 host — so "unknown" is not evidence of "new". Defaulting
+  // it to V2 would break a 1.x user whose probe merely flaked, turning a
+  // working install into one whose plugin the host refuses to load; a 2.x user
+  // in the same state is no worse off than before this gate existed. Only a
+  // version that positively reads as major >= 2 opts into the V2 API.
+  const major = opencodePluginMajor();
+  if (major === null || major < 2) return opencodeNativePluginSourceV1();
+  return opencodeNativePluginSourceV2();
+}
+
+function opencodeNativePluginSourceV1(): string {
   const { cmd, pre } = cavemanInvocation();
   return `// caveman:native-opencode — GENERATED by \`caveman enable opencode\`.
 // Contract: @opencode-ai/plugin 1.17.8 Hooks (installed local type source).
@@ -6819,6 +7372,212 @@ export const CavemanNative = async () => ({
 `;
 }
 
+function opencodeNativePluginSourceV2(): string {
+  const { cmd, pre } = cavemanInvocation();
+  return `// caveman:native-opencode — GENERATED by \`caveman enable opencode\`.
+// Contract: OpenCode 2 plugin API — default export { id, setup }
+// (https://opencode.ai/v2/docs/build/plugins/migrate-v1).
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+
+const command = ${JSON.stringify(cmd)};
+const prefix = ${JSON.stringify(pre)};
+
+function call(event, payload = {}) {
+  try {
+    const raw = execFileSync(command, [...prefix, "native-hook", "opencode", event], {
+      input: JSON.stringify({ event_name: event, ...payload }),
+      encoding: "utf8",
+      timeout: 2000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    if (!raw.trim()) return undefined;
+    const value = JSON.parse(raw);
+    return value && typeof value === "object" ? value : undefined;
+  } catch { return undefined; }
+}
+
+function digest(value) {
+  try {
+    const raw = JSON.stringify(value);
+    return { bytes: Buffer.byteLength(raw), sha256: "sha256:" + createHash("sha256").update(raw).digest("hex") };
+  } catch { return undefined; }
+}
+
+function taskType(value) {
+  let text;
+  try { text = JSON.stringify(value).toLowerCase(); } catch { return "general"; }
+  const has = (...terms) => terms.some((term) => text.includes(term));
+  if (has("migration", "migrate", "schema change", "backfill", "rollback")) return "migration";
+  if (has("bug", "fix", "broken", "regression", "crash", "error", "incorrect")) return "bugfix";
+  if (has("investigate", "diagnose", "root cause", "why does", "trace")) return "investigation";
+  if (has("refactor", "restructure", "reorganize", "cleanup")) return "refactor";
+  if (has("review", "audit", "critique", "assess")) return "review";
+  if (has("verify", "verification", "prove", "validate", "check that")) return "verification";
+  if (has("build", "implement", "add", "create", "ship", "feature")) return "feature";
+  return "general";
+}
+
+function taskTerms(value) {
+  let text;
+  try { text = JSON.stringify(value); } catch { return []; }
+  const stop = new Set(["about", "after", "agent", "before", "build", "change", "code", "create", "from", "have", "help", "implement", "into", "make", "please", "project", "repository", "should", "spec", "task", "that", "then", "there", "these", "they", "this", "through", "user", "want", "what", "when", "where", "which", "with", "would", "your"]);
+  const out = [];
+  const seen = new Set();
+  for (const raw of text.match(/[A-Za-z][A-Za-z0-9_./-]{2,63}/g) ?? []) {
+    const term = raw.toLowerCase().replace(/^[-./]+|[-./]+$/g, "");
+    if (!term || term.includes("..") || stop.has(term) || seen.has(term) || /^(?:sk|pk|rk|ghp|github_pat|xox[baprs]|akia)[-_]/i.test(term) || /^[a-z0-9_-]{40,}$/i.test(term)) continue;
+    seen.add(term);
+    out.push(term);
+    if (out.length === 12) break;
+  }
+  return out;
+}
+
+function taskContinuation(value) {
+  const visit = (item) => {
+    if (typeof item === "string") return item;
+    if (Array.isArray(item)) return item.map(visit).filter(Boolean).join(" ");
+    if (!item || typeof item !== "object") return "";
+    return visit(item.text ?? item.content ?? item.message ?? "");
+  };
+  const prompt = visit(value).trim().toLowerCase();
+  if (!prompt || prompt.length > 160 || prompt.split(/\\s+/).length > 14) return false;
+  return /^(?:please\\s+)?(?:continue|go ahead|keep going|proceed|do (?:it|that)|fix (?:it|that)|retry|try again|explain (?:it|that)|what do you mean|yes|yep|yeah|why\\??|how\\??)[.!?\\s]*$/.test(prompt);
+}
+
+export default {
+  id: "caveman-native",
+  async setup(ctx) {
+    // Per-plugin-instance state: one setup() runs per location, so two
+    // projects never share session context through module scope.
+    const contexts = new Map();
+    const pending = new Map();
+
+    function sessionContext(sessionID) {
+      if (!contexts.has(sessionID)) {
+        const out = call("SessionStart", { session_id: sessionID, surface: "cli" });
+        const context = out?.hookSpecificOutput?.additionalContext;
+        contexts.set(sessionID, typeof context === "string" ? context : "");
+      }
+      return contexts.get(sessionID);
+    }
+
+    const controller = new AbortController();
+    const events = (async () => {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        handleEvent(event);
+      }
+    })().catch(() => {
+      if (!controller.signal.aborted) console.warn("[caveman-native] Event subscription failed");
+    });
+
+    function sameLocation(event) {
+      return event.location?.directory === ctx.location.directory &&
+        event.location?.workspaceID === ctx.location.workspaceID;
+    }
+
+    function handleEvent(event) {
+      if (!sameLocation(event)) return;
+      const type = event.type;
+      const sessionID = event.data?.sessionID;
+      if (typeof sessionID !== "string" || !sessionID) return;
+      if (type === "session.created") sessionContext(sessionID);
+      if (type === "session.idle") call("Stop", { session_id: sessionID });
+      // "session.compacted" is the V1 event name; V2 reports compaction
+      // through "session.compaction.ended". Handle both.
+      if (type === "session.compaction.ended" || type === "session.compacted") {
+        const out = call("PostCompact", { session_id: sessionID });
+        const context = out?.hookSpecificOutput?.additionalContext;
+        if (typeof context === "string" && context) contexts.set(sessionID, context);
+      }
+      if (type === "session.deleted") {
+        call("SessionEnd", { session_id: sessionID });
+        contexts.delete(sessionID);
+        pending.delete(sessionID);
+      }
+    }
+
+    await ctx.session.hook("prompt", (event) => {
+      const prompt = event.prompt ?? {};
+      const decision = call("UserPromptSubmit", {
+        session_id: event.sessionID,
+        prompt: digest(prompt),
+        task_type: taskType(prompt),
+        task_terms: taskTerms(prompt),
+        task_continuation: taskContinuation(prompt),
+      });
+      const dynamic = decision?.hookSpecificOutput?.additionalContext;
+      if (typeof dynamic === "string" && dynamic) pending.set(event.sessionID, dynamic);
+    });
+
+    await ctx.session.hook("context", (event) => {
+      const stable = sessionContext(event.sessionID);
+      if (stable) event.system.push({ type: "text", text: stable });
+      const hint = pending.get(event.sessionID);
+      if (hint) {
+        event.system.push({ type: "text", text: hint });
+        pending.delete(event.sessionID);
+      }
+    });
+
+    await ctx.session.hook("compaction", (event) => {
+      call("PreCompact", { session_id: event.sessionID });
+      const stable = sessionContext(event.sessionID);
+      if (stable) event.system.push({ type: "text", text: stable });
+    });
+
+    await ctx.tool.hook("execute.before", (event) => {
+      const decision = call("PreToolUse", {
+        session_id: event.sessionID,
+        tool_name: event.tool,
+        tool_input: event.input,
+      });
+      if (typeof decision?.hookSpecificOutput?.additionalContext === "string") {
+        pending.set(event.sessionID, decision.hookSpecificOutput.additionalContext);
+      }
+      // V1 named this tool "bash"; V2 renamed the permission action to
+      // "shell". Accept both so the rewrite survives either host.
+      const input = event.input;
+      if ((event.tool === "bash" || event.tool === "shell") &&
+          input && typeof input === "object" && typeof input.command === "string") {
+        try {
+          const raw = execFileSync(command, [...prefix, "shrink-hook"], {
+            input: JSON.stringify({ tool_name: "Bash", tool_input: { command: input.command } }),
+            encoding: "utf8",
+            timeout: 750,
+          });
+          const rewritten = JSON.parse(raw)?.hookSpecificOutput?.updatedInput?.command;
+          if (typeof rewritten === "string" && rewritten) input.command = rewritten;
+        } catch {}
+      }
+    });
+
+    await ctx.tool.hook("execute.after", (event) => {
+      if (event.status !== "completed") return;
+      const decision = call("PostToolUse", {
+        session_id: event.sessionID,
+        tool_name: event.tool,
+        tool_input: event.input,
+        tool_output: event.result,
+      });
+      const replacement = decision?.hookSpecificOutput?.updatedToolOutput ?? decision?.output_replacement;
+      if (typeof replacement === "string") {
+        event.result = { ...event.result, content: replacement };
+      }
+    });
+
+    return () => {
+      controller.abort();
+      for (const sessionID of contexts.keys()) call("SessionEnd", { session_id: sessionID });
+      contexts.clear();
+      pending.clear();
+    };
+  },
+};
+`;
+}
+
 function opencodeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const configPath = join(homedir(), ".config", "opencode", "opencode.json");
   const before = fileBytes(configPath);
@@ -6974,13 +7733,21 @@ function aiderNativeMutations(gw: string): NativeMutation[] {
 }
 
 function codexNativeConfig(source: string, gw: string, subscription: boolean, mcpBinary: string): { text: string; rootBlock: string; tablesBlock: string } {
-  let stripped = stripCodexCavemanMcpToml(stripCodexCavemanProviderToml(source));
+  // Remove caveman's own marker blocks FIRST. The legacy table strippers below
+  // skip every line after a caveman table until the next TOML header, and the
+  // tables block ends with [mcp_servers.caveman] followed by the end marker, so
+  // running them first ate "# <<< caveman:native-tables" and the block this
+  // function had itself written failed its own re-parse as "corrupted" on the
+  // next wrap (every `caveman codex` run fell back to session-only wrap and
+  // doctor reported drift).
+  let stripped = source;
   for (const [begin, end] of [[CODEX_NATIVE_ROOT_BEGIN, CODEX_NATIVE_ROOT_END], [CODEX_NATIVE_TABLES_BEGIN, CODEX_NATIVE_TABLES_END]] as const) {
     const start = stripped.indexOf(begin);
     const finish = stripped.indexOf(end);
-    if ((start === -1) !== (finish === -1)) throw new Error("existing Codex Caveman block is corrupted; run `caveman doctor codex`");
+    if ((start === -1) !== (finish === -1) || finish < start) throw new Error("existing Codex Caveman block is corrupted; run `caveman doctor codex`");
     if (start !== -1) stripped = `${stripped.slice(0, start)}${stripped.slice(finish + end.length)}`.trim();
   }
+  stripped = stripCodexCavemanMcpToml(stripCodexCavemanProviderToml(stripped));
   const rootBlock = `${CODEX_NATIVE_ROOT_BEGIN}\nmodel_provider = "caveman"\n${CODEX_NATIVE_ROOT_END}`;
   const providerLines = codexCavemanProviderToml(gw, subscription).split("\n").slice(1).join("\n");
   const tablesBlock = [
@@ -6989,6 +7756,7 @@ function codexNativeConfig(source: string, gw: string, subscription: boolean, mc
     "",
     "[mcp_servers.caveman]",
     `command = ${JSON.stringify(mcpBinary)}`,
+    CODEX_RECOVERY_ENV,
     CODEX_NATIVE_TABLES_END,
   ].join("\n");
   const middle = stripped ? `\n\n${stripped}` : "";
@@ -7000,12 +7768,12 @@ function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const hooksBefore = fileBytes(hooksPath);
   const hooksRoot = parseJsonFileObject(hooksPath, hooksBefore);
   assertNativeHooksShape(hooksPath, hooksRoot, "codex");
-  const hooks = nativeHooksDocument("codex", true, hooksRoot);
+  const hooks = nativeHooksDocument("codex", nativeShrinkEnabled(), hooksRoot);
   const configPath = join(codexHomeDir(), "config.toml");
   const configBefore = fileBytes(configPath);
   const subscription = detectCodexWrapAuthMode() === "subscription";
   const native = codexNativeConfig(configBefore?.toString("utf8") ?? "", gw, subscription, mcpBinary);
-  const route = appendUrlPath(gw, subscription ? "/chatgpt" : "/w/codex");
+  const route = codexGatewayBase(gw, subscription);
   return [
     { file: hooksPath, before: hooksBefore, after: Buffer.from(JSON.stringify(hooks, null, 2) + "\n"), kind: "codex-hooks" },
     {
@@ -7242,7 +8010,7 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   const routeBlock = [
     `  ${HERMES_NATIVE_ROUTE_BEGIN}`,
     '  provider: "custom"',
-    `  base_url: ${yamlQuote(appendUrlPath(gw, "/w/hermes"))}`,
+    `  base_url: ${yamlQuote(appendUrlPath(gw, "/w/hermes/v1"))}`,
     `  ${HERMES_NATIVE_ROUTE_END}`,
   ];
   lines.splice(insertAt, 0, ...routeBlock);
@@ -7284,7 +8052,7 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   return {
     text: yamlText(lines),
     owned: {
-      route: appendUrlPath(gw, "/w/hermes"),
+      route: appendUrlPath(gw, "/w/hermes/v1"),
       route_block: routeBlock.join("\n"),
       previous_route_lines: previousRouteLines,
       plugin_block: pluginBlock,
@@ -7355,6 +8123,78 @@ function withIntegrationLock<T>(agent: string, run: () => T): T {
   }
 }
 
+function withMcpConfigLock<T>(configPath: string, run: () => T): T {
+  const canonicalPath = canonicalMcpConfigPath(configPath);
+  const key = createHash("sha256").update(canonicalPath).digest("hex").slice(0, 20);
+  const lock = join(dirname(canonicalPath), `.caveman-mcp-${key}.lock`);
+  const token = randomUUID();
+  const claim = `${lock}.claim-${token}`;
+  const owner = { schema_version: 1, pid: process.pid, token, config_path: canonicalPath, started_at: new Date().toISOString() };
+  mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
+  mkdirSync(claim, { mode: 0o700 });
+  try {
+    durableAtomicWriteFile(join(claim, "owner.json"), Buffer.from(JSON.stringify(owner) + "\n"));
+    try {
+      renameSync(claim, lock);
+      fsyncParentDirectory(lock);
+    } catch (error) {
+      // Rename-to-existing differs by platform (EEXIST, ENOTEMPTY, EPERM,
+      // EACCES). Existing published lock is authority regardless of errno.
+      try { lstatSync(lock); } catch { throw error; }
+      let stale = false;
+      try {
+        const lockStat = lstatSync(lock);
+        const ownerPath = join(lock, "owner.json");
+        const ownerStat = lstatSync(ownerPath);
+        const existing = JSON.parse(readFileSync(ownerPath, "utf8")) as Record<string, unknown>;
+        const keys = ["config_path", "pid", "schema_version", "started_at", "token"];
+        if (!lockStat.isDirectory() || lockStat.isSymbolicLink()
+          || !ownerStat.isFile() || ownerStat.isSymbolicLink()
+          || readdirSync(lock).sort().join("\0") !== "owner.json"
+          || Object.keys(existing).sort().join("\0") !== keys.join("\0")
+          || existing.schema_version !== 1
+          || typeof existing.pid !== "number" || !Number.isInteger(existing.pid) || existing.pid <= 1
+          || typeof existing.token !== "string"
+          || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(existing.token)
+          || existing.config_path !== canonicalPath
+          || typeof existing.started_at !== "string"
+          || new Date(existing.started_at).toISOString() !== existing.started_at
+          || process.platform !== "win32" && ((lockStat.mode | ownerStat.mode) & 0o077) !== 0) {
+          throw new Error("invalid MCP lock owner");
+        }
+        try { process.kill(existing.pid, 0); }
+        catch (probeError) { stale = (probeError as NodeJS.ErrnoException).code === "ESRCH"; }
+      } catch {
+        // Populated claim is durable before publication, so malformed or
+        // ownerless lock can never be our crash residue. Never delete it.
+        stale = false;
+      }
+      if (!stale) throw new Error(`MCP config change already running for ${canonicalPath}`);
+      const quarantine = `${lock}.stale-${token}`;
+      try {
+        renameSync(lock, quarantine);
+        renameSync(claim, lock);
+        fsyncParentDirectory(lock);
+        process.stderr.write(`${mark("warn")} reclaimed stale MCP config lock for ${canonicalPath}\n`);
+      } catch {
+        throw new Error(`MCP config change already running for ${canonicalPath}`);
+      } finally {
+        try { rmSync(quarantine, { recursive: true, force: true }); } catch { /* isolated stale lock only */ }
+      }
+    }
+    return run();
+  } finally {
+    try { rmSync(claim, { recursive: true, force: true }); } catch { /* published or absent */ }
+    try {
+      const current = JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")) as { token?: unknown };
+      if (current.token === token) {
+        rmSync(lock, { recursive: true, force: true });
+        fsyncParentDirectory(lock);
+      }
+    } catch { /* only owning token may remove a published lock */ }
+  }
+}
+
 function applyNativeMutations(agent: NativeAgent, profile: AgentProfile, mutations: NativeMutation[]): NativeJournal {
   const base = join(cavemanHome(), "integrations", "backups", agent, randomUUID());
   mkdirSync(base, { recursive: true, mode: 0o700 });
@@ -7417,6 +8257,67 @@ function readNativeJournal(agent: string): NativeJournal | undefined {
 
 function readPendingNativeJournal(agent: string): NativeJournal | undefined {
   return readNativeJournalAt(nativePendingJournalPath(agent), agent);
+}
+
+// nativeRoutePinnedFor reports the config file that pins this agent's base URL,
+// when native routing is installed for it, or null when nothing is pinned.
+//
+// It reads the install journal rather than re-deriving per-agent config shapes,
+// so it covers every native host by construction: claude's settings.json env
+// block, codex's config.toml model_provider, hermes/gemini/aider's marker
+// fences, opencode's routes map, pi's bundle. A caller that needs to point an
+// agent somewhere else for one run has to know that any of these outranks the
+// environment it is about to set.
+//
+// Deliberately journal-only and file-cheap: unlike nativeIntegrationStatus this
+// probes no binary, proxy or MCP server, because the question is only "is a
+// route pinned on disk", not "is the whole integration healthy".
+//
+// The PENDING journal has to be consulted too, and the two are read differently.
+// installNativeAgent writes the pending journal first, then each host file, and
+// publishes the committed journal LAST. So a process death between those leaves
+// a fully applied, fully readable pinned route on disk with only the pending
+// journal to show for it — which is exactly the state this guard exists to
+// catch, reached by a crash instead of a successful install.
+//
+// A committed journal is taken at its word: enable finished, the route is
+// pinned. A pending one is genuinely ambiguous — the mutation may or may not
+// have landed before the process died — so it is resolved against the file
+// itself using the after_sha256 the journal already records. That is
+// agent-agnostic (no per-host config shapes here) and avoids refusing a trial
+// over a stale pending journal whose writes never happened.
+function nativeRoutePinnedFor(agent: string): { file: string; route: string; pending: boolean } | null {
+  const routeIn = (owned: Record<string, unknown> | undefined): string | null => {
+    if (!owned) return null;
+    if (typeof owned.route === "string" && owned.route) return owned.route;
+    // opencode pins one route per protocol instead of a single base URL.
+    const routes = owned.routes;
+    if (routes && typeof routes === "object" && !Array.isArray(routes)) {
+      for (const value of Object.values(routes as Record<string, unknown>)) {
+        if (typeof value === "string" && value) return value;
+      }
+    }
+    return null;
+  };
+
+  const committed = readNativeJournal(agent);
+  for (const operation of committed?.operations ?? []) {
+    const route = routeIn(operation.owned);
+    if (route) return { file: operation.file, route, pending: false };
+  }
+
+  const pending = readPendingNativeJournal(agent);
+  for (const operation of pending?.operations ?? []) {
+    const route = routeIn(operation.owned);
+    if (!route) continue;
+    const current = fileBytes(operation.file);
+    // No file, or contents that are not what this operation would have written,
+    // means the interrupted install never got as far as pinning this route.
+    if (current && bytesHash(current) === operation.after_sha256) {
+      return { file: operation.file, route, pending: true };
+    }
+  }
+  return null;
 }
 
 function recoverPendingNativeInstallUnlocked(agent: NativeAgent): boolean {
@@ -7496,7 +8397,10 @@ function enableNative(argv: string[]) {
       const existing = nativeIntegrationStatus(agent);
       if (existing.installed) {
         if (existing.state === "installed") return "already" as const;
-        throw new Error(`${profile.display_name} integration is degraded; run \`caveman doctor ${agent}\` before changing it`);
+        // `--fix` on purpose: bare `caveman doctor <agent>` prints JSON that says
+        // `degraded` and nothing that says how to leave that state, so pointing
+        // at it alone dead-ends the user who followed this line here (#1049).
+        throw new Error(`${profile.display_name} integration is degraded; run \`caveman doctor ${agent} --fix\` before changing it`);
       }
       const mutations = nativeMutationsFor(agent, gw, mcpBinary);
       const route = mutations.find((item) => typeof item.owned?.route === "string")?.owned?.route;
@@ -7508,10 +8412,31 @@ function enableNative(argv: string[]) {
         ? `  Core: read-only ${aiderCorePath()}; lifecycle/tool interception unavailable; Ledger observational\n`
         : agent === "pi"
           ? `  lifecycle/Core/tool rewrite: bundled Pi extension -> ${nativeHookCommand(agent)}\n`
-          : `  lifecycle/Core/tool rewrite: ${nativeHookCommand(agent)}${agent === "hermes" ? " via native plugin" : ` + ${cavemanBinForHook()} shrink-hook`}\n`);
+          // Codex gets the lifecycle line without the "tool rewrite" claim: since
+          // #1037 shrink-hook declines every Codex tool event, so promising one here
+          // would be the same false claim `doctor` used to report.
+          : agent === "codex"
+            ? `  lifecycle/Core: ${nativeHookCommand(agent)}; command-output rewrite unavailable in Codex\n`
+            : `  lifecycle/Core/tool rewrite: ${nativeHookCommand(agent)}${agent === "hermes" ? " via native plugin" : ` + ${cavemanBinForHook()} shrink-hook`}\n`);
       applyNativeMutations(agent, profile, mutations);
       return "enabled" as const;
     });
+    // Outside the lock, and on BOTH outcomes. The native SessionStart hook
+    // autostarts the proxy, but only once the host has approved the installed
+    // hooks (Codex gates this behind /hooks), and `enable` run on its own —
+    // outside the `caveman <agent>` shortcut, which has its own blocking
+    // pre-start at its call site — otherwise leaves that window open
+    // indefinitely: config.toml/settings route every request through a proxy
+    // nothing has confirmed is listening, which is what turns a fresh Codex
+    // session into a mid-stream disconnect rather than a connection error.
+    //
+    // "already" has to run it too. Re-running `enable` is exactly what someone
+    // does when the route is dead, and the installed-state branch returns
+    // before any of this; gating on a fresh install would make proxy startup an
+    // accidental side effect of the first install rather than something the
+    // command does. The integration lock is for file mutations — a liveness
+    // probe and a detached spawn need no part of it.
+    ensureLocalProxyForNative(agent, gw);
     if (outcome === "already") {
       process.stderr.write(`${mark("ok")} ${profile.display_name}: ${agent === "aider" ? "shallow" : "native"} Caveman already enabled\n`);
       continue;
@@ -7541,21 +8466,35 @@ function removeNativeHookEntries(root: Record<string, unknown>, agent: "claude" 
     ? root.hooks as Record<string, unknown>
     : undefined;
   if (!hooks) return root;
+  // `true` on purpose, unlike the writers: disable must withdraw a shrink entry
+  // an earlier install wrote, whatever the config says now.
   const expected = nativeHooksDocument(agent, true).hooks as Record<string, unknown>;
-  for (const [event, expectedRaw] of Object.entries(expected)) {
+  const allowedManaged = new Set(
+    Object.values(expected)
+      .flatMap((raw) => Array.isArray(raw) ? raw as Array<Record<string, unknown>> : [])
+      .map(canonicalManagedHookEntry)
+      .filter(Boolean),
+  );
+  for (const event of Object.keys(hooks)) {
+    const expectedRaw = expected[event];
     const list = Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [];
     const expectedEntries = Array.isArray(expectedRaw) ? expectedRaw as Array<Record<string, unknown>> : [];
-    const expectedStrings = new Set(expectedEntries.map((entry) => JSON.stringify(entry)));
+    const expectedStrings = new Set(expectedEntries.map(canonicalManagedHookEntry).filter(Boolean));
     for (const entry of list) {
-      const encoded = JSON.stringify(entry);
       const command = hookEntryCommand(entry) ?? "";
-      const nativeMarker = `native-hook ${agent}`;
-      const looksManagedNative = command.endsWith(nativeMarker) || command.includes(`${nativeMarker} --adapter `);
-      if ((looksManagedNative || /(?:^|\s)shrink-hook$/.test(command)) && !expectedStrings.has(encoded)) {
+      const identity = managedHookIdentity(command);
+      const canonical = canonicalManagedHookEntry(entry);
+      const ownedNative = identity === `native-hook:${agent}`;
+      if (identity && !ownedNative && !allowedManaged.has(canonical)) {
         throw new Error(`${agent} ${event} Caveman hook changed after enable; refusing destructive disable`);
       }
     }
-    const kept = list.filter((entry) => !expectedStrings.has(JSON.stringify(entry)));
+    const kept = list.filter((entry) => {
+      const identity = managedHookIdentity(hookEntryCommand(entry) ?? "");
+      if (!identity) return true;
+      if (identity === `native-hook:${agent}`) return false;
+      return !expectedStrings.has(canonicalManagedHookEntry(entry));
+    });
     if (kept.length > 0) hooks[event] = kept;
     else delete hooks[event];
   }
@@ -7938,7 +8877,9 @@ function nativeIntegrationStatus(agent: NativeAgent) {
   const coreResolution = runtimeConfig.resolution.values["think.core"];
   const coreConfigured = coreResolution.value === true;
   const mcp = probeMcpBinary();
-  const expectedRoute = appendUrlPath(gatewayURL(), agent === "claude" ? "/w/claude" : agent === "hermes" ? "/w/hermes" : agent === "gemini" ? "/w/gemini" : agent === "opencode" ? "/w/opencode" : agent === "pi" ? "/w/pi" : agent === "aider" ? "/w/aider/openai/v1" : detectCodexWrapAuthMode() === "subscription" ? "/chatgpt" : "/w/codex");
+  const expectedRoute = agent === "codex"
+    ? codexGatewayBase(gatewayURL(), detectCodexWrapAuthMode() === "subscription")
+    : appendUrlPath(gatewayURL(), agent === "claude" ? "/w/claude" : agent === "hermes" ? "/w/hermes/v1" : agent === "gemini" ? "/w/gemini" : agent === "opencode" ? "/w/opencode" : agent === "pi" ? "/w/pi" : "/w/aider/openai/v1");
   const routeKind: NativeMutation["kind"] = agent === "claude" ? "claude-settings" : agent === "codex" ? "codex-config" : agent === "hermes" ? "hermes-config" : agent === "gemini" ? "gemini-env" : agent === "opencode" ? "opencode-config" : agent === "pi" ? "pi-extension" : "aider-config";
   const routeOperation = journal?.operations.find((operation) => operation.kind === routeKind);
   // Pi's artifact encodes no route: the extension resolves the gateway at
@@ -7956,13 +8897,35 @@ function nativeIntegrationStatus(agent: NativeAgent) {
       return false;
     }
   })();
+  // Same class as piBundleCurrent above, one step removed: opencode's plugin API
+  // is chosen when the mutations are built, so an install made against OpenCode
+  // 1.x keeps its V1 hook map after the host upgrades to 2.x — which that host
+  // refuses to load (#1083). Nothing else drifts on that upgrade: same journal,
+  // same bytes, so packCurrent and ownedHealthy both still pass and doctor called
+  // an unloadable plugin "installed". `caveman opencode` deliberately skips
+  // enableNative whenever a journal exists (status probes spawn subprocesses),
+  // which is exactly why that skip's own comment names doctor as the repair door
+  // for drifted installs — so the drift has to be visible here to be repairable.
+  // An unreadable version yields no judgement, matching opencodeNativePluginSource:
+  // "unknown" is not evidence of a new host, so it must not degrade a good install.
+  const opencodePluginApiCurrent = agent !== "opencode" || (() => {
+    const operation = journal?.operations.find((item) => item.kind === "opencode-plugin");
+    const current = operation ? fileBytes(operation.file)?.toString("utf8") : null;
+    if (!current) return true;
+    const installedV2 = current.includes("async setup(ctx)");
+    const installedV1 = current.includes("export const CavemanNative");
+    if (installedV1 === installedV2) return true;
+    const semver = parsedSemver(host.version);
+    if (!semver) return true;
+    return (semver[0]! >= 2) === installedV2;
+  })();
   const routeHealthy = ownedHealthy && (agent === "opencode"
     ? (routeOperation?.owned?.routes as Record<string, unknown> | undefined)?.openai === appendUrlPath(expectedRoute, "/openai/v1")
       && (routeOperation?.owned?.routes as Record<string, unknown> | undefined)?.anthropic === appendUrlPath(expectedRoute, "/anthropic/v1")
     : agent === "pi" ? piBundleCurrent : routeOperation?.owned?.route === expectedRoute);
   const proxyHealthy = wrapMode(gatewayURL()) === "managed" || Boolean(probeProxyVersion()?.capabilities.includes("native_runtime_v1"));
   const recoveryHealthy = agent === "aider" || Boolean(mcp?.probe.current);
-  const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy ? "degraded" : "installed";
+  const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy || !opencodePluginApiCurrent ? "degraded" : "installed";
 	const coreSupported = agent === "aider" ? ownedHealthy : ownedHealthy && Boolean(NATIVE_PACK.core);
 	const coreActive = agent === "aider"
 	  ? ownedHealthy
@@ -7970,10 +8933,17 @@ function nativeIntegrationStatus(agent: NativeAgent) {
   const fileText = checks.map((check) => fileBytes(check.file)?.toString("utf8") ?? "").join("\n");
   const components: NativeComponents = {
     routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? fileText.includes(HERMES_NATIVE_ROUTE_BEGIN) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
-    lifecycle_hooks: agent !== "aider" && ownedHealthy,
+    // A plugin the host cannot load runs no hooks, whatever its bytes hash to.
+    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent,
     core: coreActive,
     mcp_recovery: agent !== "aider" && ownedHealthy && Boolean(mcp?.probe.current),
-    tool_rewrite: agent !== "aider" && ownedHealthy && (agent === "hermes" ? false : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes("shrink-hook")),
+    // Codex is false for the same reason hermes is: no command rewrite happens. The
+    // shrink-hook entry is still written into ~/.codex/hooks.json (removing it from
+    // nativeHooksDocument would make every existing install read as degraded, since
+    // nativeHookEntriesHealthy rejects a managed entry the expected document lacks),
+    // but since #1037 shrinkHook declines every Codex tool event, so the presence of
+    // that entry no longer evidences a rewrite. Report the behavior, not the file.
+    tool_rewrite: agent !== "aider" && ownedHealthy && (agent === "hermes" || agent === "codex" ? false : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes("shrink-hook")),
     shared_runtime: proxyHealthy,
   };
   const versionStatus = nativeVersionStatus(host.version, profile.tested_agent_version);
@@ -8280,9 +9250,6 @@ function buildOpenClawOverlay(_agent: AgentProfile, baseConfig: unknown, ctx: Ov
   const configuredRef = resolveOpenClawPrimaryRef(baseConfig);
   const ref = configuredRef ?? freshOpenClawModelRef(ctx);
   const synthesized = configuredRef === undefined;
-  if (synthesized) {
-    process.stderr.write(`caveman: openclaw primary model not found; routing fresh config through caveman/${ref.model}\n`);
-  }
   const provider = resolveOpenClawProvider(baseConfig, ref.provider);
   if (!provider) {
     process.stderr.write(`caveman: openclaw provider "${ref.provider}" not found; leaving primary model unchanged\n`);
@@ -8299,11 +9266,72 @@ function buildOpenClawOverlay(_agent: AgentProfile, baseConfig: unknown, ctx: Ov
     process.stderr.write(`caveman: openclaw provider "${ref.provider}" has no API adapter; leaving primary model unchanged\n`);
     return overlay;
   }
-  const baseUrl = openClawProxyBaseUrl(api, ctx.gatewayUrl);
+  const originalBaseUrl = getString(provider, ["baseUrl"]) ?? getString(OPENCLAW_WELL_KNOWN_PROVIDERS[ref.provider], ["baseUrl"]);
+  // A fresh managed setup has no original provider endpoint to preserve. An
+  // existing setup needs the actual listener's routing map, unavailable from a
+  // managed gateway. Preserve it until that endpoint proof exists.
+  const baseUrl = synthesized && ctx.mode === "managed"
+    ? openClawProxyBaseUrl(api, ctx.gatewayUrl)
+    : ctx.mode === "local" ? verifiedProviderRoute(ctx.gatewayUrl, api, ref.provider, openClawEffectiveBaseUrl(api, originalBaseUrl), ctx.upstreams) : undefined;
   if (!baseUrl) {
-    process.stderr.write(`caveman: openclaw provider API "${api}" is not mapped to Caveman; leaving primary model unchanged\n`);
+    process.stderr.write(`caveman: openclaw provider "${ref.provider}" endpoint is not verified by the running proxy; leaving primary model unchanged\n`);
     return overlay;
   }
+  if (ctx.mode === "local") {
+    // baseUrl is provider-wide in OpenClaw. A fallback or later model switch
+    // must retain its own API, and every model sharing this override must map
+    // to the same verified SDK base URL.
+    const catalog = Array.isArray(provider.models) ? provider.models : [];
+    const providerApi = openClawProviderApi(ref.provider, provider);
+    const modelApis = [providerApi, ...catalog.map(model => openClawProviderApi(ref.provider, provider, asJsonObject(model)))].filter((value): value is string => value !== undefined);
+    if (modelApis.some(modelApi => verifiedProviderRoute(ctx.gatewayUrl, modelApi, ref.provider, openClawEffectiveBaseUrl(modelApi, originalBaseUrl), ctx.upstreams) !== baseUrl)) {
+      process.stderr.write(`caveman: openclaw provider "${ref.provider}" uses model APIs with different routes; leaving provider unchanged\n`);
+      return overlay;
+    }
+    const request = asJsonObject(provider.request);
+    const requestIssue = openClawRequestCompatibilityIssue(provider.request);
+    if (requestIssue) {
+      process.stderr.write(`caveman: openclaw provider "${ref.provider}" stays direct because ${requestIssue}; proxy compression is off for this provider\n`);
+      return overlay;
+    }
+    const headerRequirements = [{ api: providerApi ?? api, headers: { ...asJsonObject(provider.headers), ...asJsonObject(request?.headers) } }, ...catalog.map(model => ({
+      api: openClawProviderApi(ref.provider, provider, asJsonObject(model)),
+      headers: { ...asJsonObject(provider.headers), ...asJsonObject(asJsonObject(model)?.headers), ...asJsonObject(request?.headers) },
+    }))];
+    const missingHeaders = uniqueStrings(headerRequirements.flatMap(requirement => unforwardedProviderHeaders(requirement.api, ref.provider, requirement.headers, ctx.upstreams)));
+    if (missingHeaders.length) {
+      const remedy = missingHeaders.some(name => ["authorization", "x-api-key", "x-goog-api-key"].includes(name.toLowerCase()))
+        ? "the proxy cannot preserve this authentication override; keep the provider direct"
+        : `configure compat.${ref.provider}.forward_headers or keep the provider direct`;
+      process.stderr.write(`caveman: openclaw provider "${ref.provider}" requires headers not preserved by the running proxy (${missingHeaders.join(", ")}); ${remedy}\n`);
+      return overlay;
+    }
+    const routedModels: JsonObject[] = [];
+    for (const rawModel of catalog.length ? catalog : [openClawMirroredModel(ref, provider, providerModel)]) {
+      const model = asJsonObject(rawModel);
+      const modelApi = openClawProviderApi(ref.provider, provider, model);
+      if (!model || typeof model.id !== "string" || !modelApi || !originalBaseUrl) {
+        process.stderr.write(`caveman: openclaw provider "${ref.provider}" has an unresolved model catalog; leaving provider unchanged\n`);
+        return overlay;
+      }
+      const preserved = preserveOpenClawProviderCompat({ provider: ref.provider, id: model.id, api: modelApi, baseUrl: originalBaseUrl, compat: model.compat });
+      if (!preserved.ok) {
+        process.stderr.write(`caveman: openclaw provider "${ref.provider}" stays direct because ${preserved.reason}; proxy compression is off for this provider\n`);
+        return overlay;
+      }
+      routedModels.push({ ...model, ...(preserved.compat ? { compat: preserved.compat } : {}) });
+    }
+    const headers: JsonObject = { ...asJsonObject(provider.headers), [OPENCLAW_AGENT_HEADER]: "openclaw" };
+    const workflowSlug = normalizeWorkflowSlug(process.env["CAVE_WORKFLOW"]);
+    if (workflowSlug) headers["x-cave-workflow"] = workflowSlug;
+    const routedProvider = { ...provider, baseUrl, ...(providerApi ? { api: providerApi } : {}), headers,
+      models: routedModels };
+    return deepMerge(overlay, {
+      models: { mode: "merge", providers: { [ref.provider]: routedProvider } },
+      ...(synthesized ? { agents: { defaults: { model: { primary: ref.raw } } } } : {}),
+    }) as JsonObject;
+  }
+  if (synthesized) process.stderr.write(`caveman: openclaw primary model not found; routing fresh config through caveman/${ref.model}\n`);
   const sourceApiKey = openClawResolvedProviderApiKey(ref.provider, provider);
   const headers: Record<string, string> = { [OPENCLAW_AGENT_HEADER]: "openclaw" };
   const workflowSlug = normalizeWorkflowSlug(process.env["CAVE_WORKFLOW"]);
@@ -8358,14 +9386,55 @@ function withoutCavemanMcpServer(overlay: JsonObject): JsonObject {
   return next;
 }
 
-function applyConfigFileInjection(env: NodeJS.ProcessEnv, agent: AgentProfile, inj: ConfigFileInjection, gw: string, modeGw = gw, mcpMode: McpSurfaceMode = "auto") {
+function applyConfigFileInjection(env: NodeJS.ProcessEnv, agent: AgentProfile, inj: ConfigFileInjection, gw: string, modeGw = gw, mcpMode: McpSurfaceMode = "auto", agentArgs: string[] = [], upstreams?: PublishedUpstreams) {
   const baseConfig = readBaseConfig(inj);
   const mode = wrapMode(modeGw);
   const staticOverlay = mode === "managed" && inj.config_overlay.managed !== undefined ? inj.config_overlay.managed : inj.config_overlay.local;
   const builder = overlayBuilders[agent.id];
-	const rawOverlay = renderDeep(builder ? builder(agent, baseConfig, { mode, gatewayUrl: gw, env }) : staticOverlay, gw);
-  const overlay = mcpMode === "auto" ? rawOverlay : withoutCavemanMcpServer(rawOverlay as JsonObject);
-  const merged = deepMerge(baseConfig, overlay);
+  const renderOptions: RenderDeepOptions = {};
+  if (agent.id === "qwen" && mode === "managed") {
+    const available = qwenEffectiveOpenAIKeyAvailable();
+    if (available === null) throw new Error("cannot safely resolve Qwen's effective OPENAI_API_KEY");
+    renderOptions.optionalOpenAIKeyEnvAvailable = available;
+  }
+  let rawOverlay = renderDeep(
+    builder ? builder(agent, baseConfig, { mode, gatewayUrl: gw, env, upstreams }) : staticOverlay,
+    gw,
+    env,
+    renderOptions,
+  );
+  if (agent.id === "qwen" && mcpMode === "auto") {
+    const ownedMcp = ownedMcpRegistration(agent.id, agentArgs);
+    if (ownedMcp) {
+      // Qwen merges system settings last. Mirror only a still-journaled native
+      // entry into this temporary system overlay so project settings cannot
+      // replace the recovery server after Caveman has claimed it is available.
+      rawOverlay = deepMerge(rawOverlay, { mcpServers: { caveman: qwenMcpEntry(ownedMcp) } });
+    } else {
+      // Qwen can advertise MCP schemas even when enterprise policy blocks calls.
+      // Suppress the exact server in this highest-precedence temporary overlay
+      // whenever native registration + journal + effective policy do not agree.
+      const configured = jsonValueAt(baseConfig, ["mcp", "excluded"]);
+      const preserved = Array.isArray(configured)
+        ? configured.filter((item): item is string => typeof item === "string")
+        : [];
+      rawOverlay = deepMerge(rawOverlay, {
+        mcp: { excluded: [...new Set([...preserved, "caveman"])] },
+      });
+    }
+  }
+  const overlay = (mcpMode === "auto" ? rawOverlay : withoutCavemanMcpServer(rawOverlay as JsonObject)) as JsonObject;
+  const merged = deepMerge(baseConfig, overlay) as JsonObject;
+  if (agent.id === "qwen") {
+    // Qwen treats these as whole-object REPLACE settings. Our generic merge is
+    // intentionally conservative for other agents, but retaining a sibling
+    // provider here would make it selectable at runtime outside /w/qwen.
+    for (const key of ["modelProviders", "providerProtocol"] as const) {
+      const value = overlay[key];
+      if (value === undefined) throw new Error(`Qwen routed profile is missing ${key}`);
+      merged[key] = cloneJsonValue(value);
+    }
+  }
   const rendered = JSON.stringify(merged, null, 2);
   if (rendered === undefined) throw new Error("merged config is not JSON");
   const outDir = mkdtempSync(join(tmpdir(), "caveman-wrap-"));
@@ -8389,15 +9458,109 @@ function cleanupWrapTempDirs() {
 
 const WRAP_BASE_URL_ENV_VARS = ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "OPENAI_API_BASE", "GOOGLE_GEMINI_BASE_URL"] as const;
 
+// A corporate HTTP(S)_PROXY in the operator's shell applies to the wrapped agent
+// too, so the agent's own hop to caveman's loopback listener gets handed to that
+// proxy and times out — #1001's symptom, one layer above the proxy's own
+// upstream_proxy support. Exempt exactly the gateway host, appending to whatever
+// NO_PROXY the operator already set and using the spelling they already use.
+// resolveProxyUrl returns null both when no proxy applies and when NO_PROXY
+// already covers the gateway, which are precisely the cases needing no change.
+function gatewayNoProxyEnv(gw: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  let target: URL;
+  try {
+    target = new URL(gw);
+  } catch {
+    return {};
+  }
+  // Only a loopback listener needs the exemption. A managed gateway is a public
+  // host that the operator's proxy is supposed to carry; exempting it there
+  // sends the agent straight at a firewall that drops direct egress.
+  if (wrapMode(gw) !== "local") return {};
+  if (!resolveProxyUrl(target, env)) return {};
+  // Append to each spelling the operator actually set, reading the value from
+  // the same variable it is written back to. Choosing the name by definedness
+  // and the value with ?? dropped the other spelling's entries.
+  const names = env.NO_PROXY === undefined && env.no_proxy !== undefined ? ["no_proxy"] : ["NO_PROXY"];
+  if (env.NO_PROXY !== undefined && env.no_proxy !== undefined) names.push("no_proxy");
+  const out: NodeJS.ProcessEnv = {};
+  for (const name of names) {
+    const current = (env[name] ?? "").trim();
+    out[name] = current ? `${current},${target.hostname}` : target.hostname;
+  }
+  return out;
+}
+
 function wrapBaseUrlEnv(gw: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of WRAP_BASE_URL_ENV_VARS) env[key] = gw;
+  Object.assign(env, gatewayNoProxyEnv(gw));
   // Same reason as the native-enable path: redirecting ANTHROPIC_BASE_URL makes
   // Claude Code drop tool search and inline every MCP tool schema. Inert for the
   // other wrappable agents, which never read this variable. A value already in
   // the environment is the user's choice and wins.
   if (process.env.ENABLE_TOOL_SEARCH === undefined) env.ENABLE_TOOL_SEARCH = TOOL_SEARCH_DEFAULT;
   return env;
+}
+
+// wrapWorkTags names the repository and branch a wrapped session is launched
+// in, as the managed gateway's x-cave-tags value ("repo=owner/name,branch=…").
+// Delivery joins coding-agent spend to merged changes on exactly these two
+// keys, and nothing else in the request carries them. Read once at spawn with
+// hardened git (git-safe.ts); a launch outside a repository, without an origin,
+// or on a detached HEAD yields the tags it can and never fails the wrap.
+// The value is fixed for the process: a branch switch mid-session is picked up
+// by the next launch, not this one.
+//
+// Only github.com remotes are tagged: Cloud joins tags['repo'] to the GitHub
+// pull requests it imported, keyed owner/name, so a same-named fork on another
+// host would collide with the wrong repository. Values are printable ASCII
+// without comma or equals — a header value must be a ByteString, and the tag
+// list is comma/equals delimited — anything else drops the tag, never the wrap.
+export function wrapWorkTags(cwd = process.cwd()): string {
+  const read = (...args: string[]): string => {
+    try {
+      return execFileSync("git", hardenedGitArgs(cwd, ...args), {
+        encoding: "utf8", env: hardenedGitEnv(), stdio: ["ignore", "pipe", "ignore"], timeout: 2000,
+      }).trim();
+    } catch {
+      return "";
+    }
+  };
+  const parts: string[] = [];
+  const repo = repoSlugFromRemote(read("remote", "get-url", "origin"));
+  if (repo) parts.push(`repo=${repo}`);
+  const branch = read("branch", "--show-current");
+  if (branch && branch.length <= 255 && workTagValueSafe(branch)) parts.push(`branch=${branch}`);
+  return parts.join(",");
+}
+
+// workTagValueSafe: printable ASCII (0x21–0x7E) with no comma or equals.
+export function workTagValueSafe(value: string): boolean {
+  return /^[\x21-\x2B\x2D-\x3C\x3E-\x7E]+$/.test(value);
+}
+
+// repoSlugFromRemote reduces a github.com remote URL to owner/name — the form
+// Cloud's Delivery join and its imported pull requests use — or "" when the
+// remote is on any other host or has no such shape. Never the URL itself: a
+// remote can embed a credential.
+export function repoSlugFromRemote(remote: string): string {
+  const cleaned = remote.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+  let host = "";
+  let path = "";
+  const url = /^[a-z][a-z0-9+.-]*:\/\/([^/]+)\/(.*)$/i.exec(cleaned);
+  const scp = /^(?:[^@/:]+@)?([^/:]+):(.*)$/.exec(cleaned);
+  if (url) {
+    host = url[1]!.replace(/^[^@]*@/, "").replace(/:\d+$/, "");
+    path = url[2]!;
+  } else if (scp) {
+    host = scp[1]!;
+    path = scp[2]!;
+  } else {
+    return "";
+  }
+  if (host.toLowerCase() !== "github.com") return "";
+  const match = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/.exec(path);
+  return match ? `${match[1]}/${match[2]}` : "";
 }
 
 function attributedGatewayUrl(gw: string, agent: AgentProfile): string {
@@ -8419,6 +9582,29 @@ function mergeAnthropicCustomHeader(raw: string | undefined, name: string, value
     });
   if (value !== undefined) kept.push(`${name}: ${value}`);
   return kept.join("\n");
+}
+
+// existingCustomHeader returns the value of one header inside the newline-
+// separated ANTHROPIC_CUSTOM_HEADERS block, or "" when absent.
+function existingCustomHeader(raw: string | undefined, name: string): string {
+  const target = name.toLowerCase();
+  for (const line of (raw ?? "").split(/\r\n|\n|\r/)) {
+    const colon = line.indexOf(":");
+    if (colon > 0 && line.slice(0, colon).trim().toLowerCase() === target) return line.slice(colon + 1).trim();
+  }
+  return "";
+}
+
+// mergeWorkTags adds the repo/branch entries of `computed` that `existing`
+// (a caller's own "k=v,k=v" tag list) does not already name.
+export function mergeWorkTags(existing: string, computed: string): string {
+  const entries = existing.split(",").map((part) => part.trim()).filter(Boolean);
+  const keys = new Set(entries.map((part) => part.slice(0, part.indexOf("=") < 0 ? part.length : part.indexOf("="))));
+  for (const part of computed.split(",").filter(Boolean)) {
+    const key = part.slice(0, part.indexOf("="));
+    if (!keys.has(key)) entries.push(part);
+  }
+  return entries.join(",");
 }
 
 function bedrockCredentialEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -8509,14 +9695,14 @@ function applyClaudeBedrockWrap(env: NodeJS.ProcessEnv, agent: AgentProfile, ren
 //   - config-env-content: render the mode-selected inline config and set it as one var
 //   - config-file:        merge a mode-selected overlay into a temp config file
 // An unrecognized method falls through to the generic union (fail-open), not a guess.
-// mcpMode governs the config-file arm only (it is the arm that can inject the
-// caveman MCP server). It defaults to "auto" — today's behavior — rather than
+// mcpMode governs every temporary config arm that can inject the caveman MCP
+// server. It defaults to "auto" — today's behavior — rather than
 // resolving config here, so this exported function stays a function of its
 // arguments and cannot pick up the developer's own global config in tests. The
 // one production caller passes the SAME opts.mcpMode that wrapMcpRecoveryAvailable
 // reads, which is what keeps "what we inject" and "what we tell the proxy" from
 // ever disagreeing.
-export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: McpSurfaceMode = "auto"): NodeJS.ProcessEnv {
+export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: McpSurfaceMode = "auto", agentArgs: string[] = [], upstreams?: PublishedUpstreams): NodeJS.ProcessEnv {
   if (agent?.id === "gemini" && wrapMode(gw) === "managed") {
     throw new Error("managed Gemini CLI routing is unsupported because Gemini CLI cannot send separate Caveman and upstream credentials");
   }
@@ -8531,6 +9717,22 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
   }
   if (!agent) return env;
   if (applyClaudeBedrockWrap(env, agent, renderedGw, gw)) return env;
+  const routeOverride = agentRouteOverride(agent, agentArgs);
+  if (agent.id === "qwen") {
+    const override = routeOverride;
+    if (override?.surface === "effective settings") {
+      throw new Error("cannot safely resolve Qwen's effective settings");
+    }
+    if (override?.surface === "--safe-mode" && override.reason === "ignores Caveman system settings") {
+      throw new Error("Qwen safe mode ignores Caveman system settings");
+    }
+    // These environment switches outrank settings in pinned Qwen 0.22.3.
+    // Keep side-request tools and workflow-spawned agents off in routed mode;
+    // corresponding system settings provide the durable second lock.
+    env.ENABLE_WEB_SEARCH = "0";
+    env.QWEN_CODE_DISABLE_WORKFLOWS = "1";
+  }
+  if (routeOverride) throw new Error(`${routeOverrideLabel(agent)} ${routeOverride.surface} ${routeOverride.reason}`);
   const inj = agent.injection;
   if (inj.method === "env") {
     for (const [k, raw] of Object.entries(inj.env)) {
@@ -8540,19 +9742,58 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
   } else if (inj.method === "config-env-content") {
     const cc = inj.config_content;
     const content = wrapMode(gw) === "managed" && cc.managed !== undefined ? cc.managed : cc.local;
-    env[inj.env_var] = JSON.stringify(renderDeep(content, renderedGw));
+    const renderOptions: RenderDeepOptions = agent.id === "kilo"
+      ? { optionalOpenAIKeyReference: "{env:OPENAI_API_KEY}" }
+      : {};
+    let rendered = renderDeep(content, renderedGw, env, renderOptions);
+    if (agent.id === "kilo" && mcpMode === "auto") {
+      const ownedMcp = ownedMcpRegistration(agent.id, agentArgs);
+      if (ownedMcp) {
+        // Project exact owned registration into Kilo's highest user-controlled
+        // layer. Route preflight rejects active org/managed sources that load
+        // afterward, so no later known policy can silently disable recovery.
+        rendered = deepMerge(rendered, { mcp: { caveman: kiloMcpEntry(ownedMcp) } });
+      }
+    }
+    if (agent.id === "opencode" && process.env[inj.env_var]) {
+      // OpenCode treats inline JSONC as its own configuration layer. Replacing
+      // that layer loses the user's model, account, permissions and MCP servers.
+      // Preserve native {env:...}/{file:...} references for OpenCode to resolve
+      // in the same context; only our routing fields take precedence.
+      let original: unknown;
+      try { original = parseJsonc(process.env[inj.env_var]!); }
+      catch { throw new Error("cannot preserve opencode inline configuration; launching with the original configuration is required"); }
+      if (!isPlainObject(original)) throw new Error("opencode inline configuration must be a JSON object");
+      rendered = deepMerge(original, rendered);
+    }
+    env[inj.env_var] = JSON.stringify(rendered);
   } else if (inj.method === "config-file") {
     try {
-      applyConfigFileInjection(env, agent, inj, renderedGw, gw, mcpMode);
+      applyConfigFileInjection(env, agent, inj, renderedGw, gw, mcpMode, agentArgs, upstreams);
     } catch (e) {
       // OpenClaw ignores the generic base-URL union. Config injection is its only
       // provider redirect, so a failed/missing route must abort the wrapped path;
       // spawnWrapped then launches direct with an explicit warning.
-      if (agent.id === "openclaw") throw e;
+      if (agent.id === "openclaw" || agent.id === "qwen") throw e;
       process.stderr.write(`caveman: ${agent.id} config-file injection failed; using generic env wrap (${(e as Error).message})\n`);
     }
   }
+  // Qwen 0.22 discovers MCP servers in the background by default. Its first
+  // request can therefore omit caveman_retrieve even though our durable marker
+  // says recovery is installed. Proxy compression must never outrun recovery,
+  // so marker-backed Qwen wraps use Qwen's compatibility switch to finish MCP
+  // discovery before the first model request.
+  if (agent.id === "qwen" && mcpInstalled(agent.id, agentArgs)) {
+    env.QWEN_CODE_LEGACY_MCP_BLOCKING = "1";
+  }
   if (agent.id === "hermes") applyHermesAuthEnv(env, renderedGw, gw);
+  if (agent.id === "claude" && wrapMode(gw) === "managed") {
+    // Repository and branch ride every request as x-cave-tags so the managed
+    // gateway can join this session's spend to the change it ships. A user's
+    // own x-cave-tags keeps its keys; only repo/branch it did not set are added.
+    const tags = mergeWorkTags(existingCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags"), wrapWorkTags());
+    if (tags) env.ANTHROPIC_CUSTOM_HEADERS = mergeAnthropicCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags", tags);
+  }
   if (agent.id === "claude" && wrapMode(gw) === "local" && env[CLAUDE_ASSUME_FIRST_PARTY_ENV] === undefined && proxyAnthropicUpstreamIsFirstParty()) {
     // Keep Claude Code's first-party capability set (1M context window /
     // ~600k auto-compact window) intact behind the local pass-through proxy
@@ -8691,27 +9932,58 @@ export function shouldOpenLoginBrowser(noBrowser: boolean, interactive = Boolean
   return interactive && !noBrowser;
 }
 
-function validateLoginArgs(argv: string[]): { noBrowser: boolean } {
+function validateLoginArgs(argv: string[]): { noBrowser: boolean; instance?: string } {
   let noBrowser = false;
+  const values = new Map<string, string>();
+  const usage = "login [--no-browser] [--instance <https-origin> | --base-url <url> [--gateway-url <url>]]";
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
     if (arg === "--no-browser") {
-      if (noBrowser) commandUsage("login [--no-browser] [--base-url <url>] [--gateway-url <url>]");
+      if (noBrowser) commandUsage(usage);
       noBrowser = true;
       continue;
     }
-    if (arg === "--base-url" || arg === "--gateway-url") {
-      const value = argv[++index];
-      if (!value || value.startsWith("-")) commandUsage("login [--no-browser] [--base-url <url>] [--gateway-url <url>]");
+    const flag = arg.split("=", 1)[0]!;
+    if (["--instance", "--base-url", "--gateway-url"].includes(flag)) {
+      const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : argv[++index];
+      if (!value || value.startsWith("-") || values.has(flag)) commandUsage(usage);
+      values.set(flag, value);
       continue;
     }
-    if (arg.startsWith("--base-url=") || arg.startsWith("--gateway-url=")) {
-      if (!arg.slice(arg.indexOf("=") + 1)) commandUsage("login [--no-browser] [--base-url <url>] [--gateway-url <url>]");
-      continue;
-    }
-    commandUsage("login [--no-browser] [--base-url <url>] [--gateway-url <url>]");
+    commandUsage(usage);
   }
-  return { noBrowser };
+  const instance = values.get("--instance");
+  if (instance === undefined) return { noBrowser };
+  if (values.has("--base-url") || values.has("--gateway-url")) commandUsage(usage);
+  const url = new URL(instance);
+  if (!secureLoginURL(url) || url.pathname !== "/" || url.search || url.hash || url.hostname.replace(/\.$/, "") === new URL(PROD_API_URL).hostname) {
+    throw new Error("--instance requires a private HTTPS origin (HTTP loopback is allowed for local development)");
+  }
+  return { noBrowser, instance: url.origin };
+}
+
+function secureLoginURL(url: URL, allowLoopback = true): boolean {
+  return !url.username && !url.password && (url.protocol === "https:" ||
+    (allowLoopback && url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)));
+}
+
+function privateVerificationURL(code: Record<string, unknown>, instance: string): string {
+  if (typeof code.device_code !== "string" || !code.device_code || code.device_code.length > 4096 ||
+      typeof code.user_code !== "string" || !/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/.test(code.user_code) ||
+      typeof code.expires_in !== "number" || !Number.isFinite(code.expires_in) || code.expires_in <= 0 || code.expires_in > 3600 ||
+      (code.interval !== undefined && (typeof code.interval !== "number" || !Number.isFinite(code.interval) || code.interval < 0 || code.interval > 60))) {
+    throw new Error("private device authorization returned an invalid code response");
+  }
+  const value = code.verification_uri_complete ?? code.verification_uri;
+  if (typeof value !== "string") throw new Error("private device authorization omitted its browser URL");
+  const url = new URL(value);
+  if (!secureLoginURL(url, new URL(instance).protocol === "http:") || url.hash) {
+    throw new Error("private device authorization returned an unsafe browser URL");
+  }
+  url.searchParams.set("user_code", code.user_code);
+  url.searchParams.set("connection", "mcp");
+  url.searchParams.set("client_name", "Caveman CLI");
+  return url.href;
 }
 
 function openLoginBrowser(url: string): void {
@@ -8736,6 +10008,7 @@ async function acknowledgeDeviceGrant(baseURL: string, accessToken: string, devi
     try {
       const response = await fetch(`${baseURL}/api/v1/auth/device/ack`, {
         method: "POST",
+        redirect: "manual",
         headers: {
           authorization: `Bearer ${accessToken}`,
           "content-type": "application/json",
@@ -8761,28 +10034,28 @@ async function acknowledgeDeviceGrant(baseURL: string, accessToken: string, devi
 
 // 0600 credentials file) — never in plaintext config. organization_id is bound
 // from the returned token, never from any local input.
-// Keep device-flow implementation dormant for later beta reopening. This gate
-// runs before argument parsing, network requests, browser launch, or local writes.
+// Hosted login remains gated; explicit private instances use project access.
 function blockCloudLoginWhileBeta(): void {
   throw new Error("Caveman Cloud platform is still in beta.");
 }
 
 async function login(argv: string[] = []) {
-  blockCloudLoginWhileBeta();
-  const { noBrowser } = validateLoginArgs(argv);
-  const baseURL = resolveLoginBaseUrl(argv);
+  if (!argv.some((arg) => arg === "--instance" || arg.startsWith("--instance="))) blockCloudLoginWhileBeta();
+  const { noBrowser, instance } = validateLoginArgs(argv);
+  const baseURL = instance ?? resolveLoginBaseUrl(argv);
 
   const codeResp = await fetch(`${baseURL}/api/v1/auth/device/code`, {
     method: "POST",
+    redirect: "error",
     headers: { "content-type": "application/json" },
     body: "{}",
     signal: AbortSignal.timeout(5000),
   });
   if (!codeResp.ok) throw new Error(`device authorization failed: HTTP ${codeResp.status}`);
   const code = await codeResp.json();
-  if (!code.device_code) throw new Error(`device authorization failed: ${JSON.stringify(code)}`);
+  if (!code.device_code) throw new Error("device authorization failed: missing device code");
 
-  const verificationURL = code.verification_uri_complete ?? code.verification_uri;
+  const verificationURL = instance ? privateVerificationURL(code, instance) : code.verification_uri_complete ?? code.verification_uri;
   console.error(`\n  Authorize this device in your browser:`);
   console.error(`    ${verificationURL}`);
   console.error(`    code: ${code.user_code}\n`);
@@ -8797,6 +10070,7 @@ async function login(argv: string[] = []) {
     try {
       const tokResp = await fetch(`${baseURL}/api/v1/auth/device/token`, {
         method: "POST",
+        redirect: "manual",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ device_code: code.device_code }),
         signal: AbortSignal.timeout(5000),
@@ -8807,7 +10081,7 @@ async function login(argv: string[] = []) {
         const seconds = Number(retryAfter);
         if (Number.isFinite(seconds) && seconds >= 0) retryAfterMs = seconds * 1000;
       }
-      tok = await tokResp.json() as Record<string, unknown>;
+      tok = tokenStatus >= 300 && tokenStatus < 400 ? {} : await tokResp.json() as Record<string, unknown>;
     } catch (error) {
       // RFC 8628 polling is retryable: a dropped connection or malformed
       // transient response must not consume the approved code or abort login
@@ -8819,6 +10093,7 @@ async function login(argv: string[] = []) {
       await sleep(Math.max(intervalMs, retryAfterMs, 200));
       continue;
     }
+    if (tokenStatus >= 300 && tokenStatus < 400) throw new Error("device login refused a redirected token endpoint");
     if (tokenStatus === 429) {
       // rateLimitAuth returns a nested cave error envelope rather than the RFC
       // `error` string. Status is the authoritative retry signal here.
@@ -8827,6 +10102,13 @@ async function login(argv: string[] = []) {
     }
     const accessToken = typeof tok.access_token === "string" ? tok.access_token : "";
     if (accessToken) {
+	  if (instance && (tokenStatus < 200 || tokenStatus >= 300 || tok.credential_kind !== "none" ||
+	      ["gateway_api_key", "gateway_key_id", "gateway_url"].some((key) => tok[key] != null) ||
+	      typeof tok.refresh_token !== "string" || !tok.refresh_token || typeof tok.project_id !== "string" || !tok.project_id ||
+	      typeof tok.delivery_ack_token !== "string" || !tok.delivery_ack_token || typeof tok.scope !== "string" || !tok.scope ||
+	      tok.scope.split(/\s+/).some((scope) => scope === "proxy:write" || scope === "sdk:write"))) {
+	    throw new Error("private device login requires a keyless project grant with a refresh token and delivery acknowledgement");
+	  }
 	  const credentials: StoredCredentials = {
 	    access_token: accessToken,
 	    ...(typeof tok.refresh_token === "string" && tok.refresh_token ? { refresh_token: tok.refresh_token } : {}),
@@ -8836,7 +10118,7 @@ async function login(argv: string[] = []) {
 	  };
 	  const tokenStore = storeCredentials(credentials);
 	  const organizationId = orgFromToken(accessToken);
-	  const gateway = resolveLoginGatewayUrl(baseURL, tok, code, argv);
+	  const gateway = instance ? "" : resolveLoginGatewayUrl(baseURL, tok, code, argv);
 	  const saved: Config = { baseURL, token: "", tokenStore };
 	  if (organizationId) saved.organizationId = organizationId;
 	  if (credentials.project_id) saved.projectId = credentials.project_id;
@@ -8854,6 +10136,10 @@ async function login(argv: string[] = []) {
 	    // until the control plane has recorded that this CLI stored the bundle.
 	    await acknowledgeDeviceGrant(baseURL, credentials.access_token, code.device_code, ackToken);
 	  }
+      if (instance) {
+        print({ authenticated: true, baseURL, organization_id: organizationId ?? null, project_id: credentials.project_id, scope: tok.scope, credential_kind: "none", token_store: tokenStore });
+        return;
+      }
       // Mint/refresh the local-wrap entitlement for this device. Best
       // effort: login never fails for seats or a down entitlement service.
       await fetchAndStoreWrapEntitlement(baseURL, credentials.access_token);
@@ -8908,6 +10194,7 @@ async function logout() {
 	  };
 	  const request: RequestInit = {
 	    method: "POST",
+	    redirect: "manual",
 	    headers,
 	    signal: AbortSignal.timeout(5000),
 	  };
@@ -9711,6 +10998,37 @@ function cavemanBin(name: string, envVar: string): string {
 function mcpServerMarkerPath(agentId: string, serverName: string): string {
   return join(cavemanHome(), "mcp", serverName === "caveman" ? `${agentId}.json` : `${agentId}.${serverName}.json`);
 }
+
+function canonicalOwnedMcpMarkerPath(agent: "kilo" | "qwen", serverName: string): string {
+  const path = mcpServerMarkerPath(agent, serverName);
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      throw new Error(`${path} is a symlink; refusing transactional ownership mutation`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return canonicalMcpConfigPath(path);
+}
+
+// A native MCP registration and its Caveman ownership journal form one logical
+// write. Prove the journal directory is writable before touching agent config;
+// otherwise Kilo/Qwen would refuse both a later upgrade and removal because the
+// surviving registration has no trustworthy owner.
+function preflightMcpServerMarker(agentId: string, serverName: string): void {
+  const path = mcpServerMarkerPath(agentId, serverName);
+  const probe = join(dirname(path), `.${basename(path)}.preflight-${process.pid}-${randomUUID()}`);
+  try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    chmodSync(dirname(path), 0o700);
+    durableAtomicWriteFile(probe, Buffer.alloc(0));
+    unlinkSync(probe);
+    fsyncParentDirectory(probe);
+  } catch (error) {
+    try { unlinkSync(probe); } catch { /* no probe survived */ }
+    throw new Error(`cannot persist ${agentId} ${serverName} MCP ownership journal at ${path}: ${(error as Error).message}`);
+  }
+}
 function mcpMarkerPath(agentId: string): string {
   return mcpServerMarkerPath(agentId, "caveman");
 }
@@ -9721,7 +11039,8 @@ function mcpServerInstalled(agentId: string, serverName: string): boolean {
     return false;
   }
 }
-function mcpInstalled(agentId: string): boolean {
+function mcpInstalled(agentId: string, agentArgs: string[] = []): boolean {
+  if (agentId === "kilo" || agentId === "qwen") return ownedMcpRegistration(agentId, agentArgs) !== null;
   return mcpServerInstalled(agentId, "caveman");
 }
 
@@ -9761,7 +11080,7 @@ function queueStaleMcpBinary(probe: VersionedBinaryProbe): void {
 // that is — the proxy would otherwise either elide bytes nothing can expand, or
 // pass through while the agent still pays for tools it isn't allowed to use.
 // (honesty rule: no-placeholder)
-function wrapMcpRecoveryAvailable(agent: AgentProfile | undefined, opts: WrapOptions): boolean {
+function wrapMcpRecoveryAvailable(agent: AgentProfile | undefined, opts: WrapOptions, agentArgs: string[] = []): boolean {
   if (!wrapRecoveryEligible(opts) || !agent) return false;
   if (agent.id === "pi") {
     const compatibility = probeMcpBinary();
@@ -9769,13 +11088,18 @@ function wrapMcpRecoveryAvailable(agent: AgentProfile | undefined, opts: WrapOpt
     if (!compatibility.probe.current) queueStaleMcpBinary(compatibility.probe);
     return compatibility.probe.current;
   }
+  // Kilo and Qwen can apply policy after user-owned config. Never turn their
+  // durable marker into a proxy-wide recovery assertion: each request must
+  // carry the exact namespaced retrieve tool and prove recovery in band. The
+  // validated registration below still drives launch-time projection/blocking.
+  if (agent.id === "kilo" || agent.id === "qwen") return false;
   // Two independent sources of a real caveman_retrieve: a marker from
   // `caveman tools mcp install`, or the profile's own config-file overlay. The
   // second only counts under `auto`, because that is exactly when buildWrapEnv
   // still merges it — under marker-only/false the overlay is stripped, so
   // counting it here would tell the proxy about a tool this launch removed.
   const overlayInjects = opts.mcpMode === "auto" && configFileOverlayHasCavemanMcp(agent);
-  if (!mcpInstalled(agent.id) && !overlayInjects) return false;
+  if (!mcpInstalled(agent.id, agentArgs) && !overlayInjects) return false;
   const compatibility = probeMcpBinary();
   if (!compatibility) return false;
   if (!compatibility.probe.current) {
@@ -9786,10 +11110,16 @@ function wrapMcpRecoveryAvailable(agent: AgentProfile | undefined, opts: WrapOpt
 }
 
 // Bare start cannot bind a machine-level MCP marker or inherited opt-in to the
-// client issuing a later request. Recovery therefore stays off. Agent-scoped wrap
-// performs the only supported compatibility check.
+// client issuing a later request, so it never CLAIMS recovery on their behalf:
+// CAVEMAN_RECOVERY stays off and the proxy decides per request, from the caveman
+// retrieve tool the caller's own tool list carries (gateway.mcpRecoveryAvailable).
+// Agent-scoped wrap performs the only supported out-of-band compatibility check.
 function startMcpRecoveryAvailable(): boolean {
   return false;
+}
+
+function anyMcpInstalled(): boolean {
+  return AGENTS.some((agent) => mcpInstalled(agent.id));
 }
 
 // resolveMcpCommand decides how to launch the caveman MCP server, in order:
@@ -9851,8 +11181,15 @@ const HERMES_PLUGIN_ENABLE_BEGIN = "# >>> caveman:hermes-plugin-enable";
 const HERMES_PLUGIN_ENABLE_END = "# <<< caveman:hermes-plugin-enable";
 const HERMES_PLUGIN_NAME = "caveman_shrink";
 
-function hermesHome(): string {
-  return expandTilde(process.env.HERMES_HOME || "~/.hermes");
+export function hermesHome(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  // Hermes 0.19.1 hermes_constants.py: native Windows uses LOCALAPPDATA,
+  // overrides are stripped, and Path(value) does not expand a literal tilde.
+  const override = env.HERMES_HOME?.trim();
+  if (override) return resolve(override);
+  if (platform === "win32") {
+    return join(env.LOCALAPPDATA?.trim() || join(homedir(), "AppData", "Local"), "hermes");
+  }
+  return join(homedir(), ".hermes");
 }
 
 function hermesConfigPath(): string {
@@ -10051,19 +11388,29 @@ function mcpUninstall(target?: string, serverName = "caveman") {
     }
     targets = [a];
   } else {
-    targets = AGENTS.filter((a) => mcpServerInstalled(a.id, serverName));
+    targets = AGENTS.filter((a) => mcpServerInstalled(a.id, serverName)
+      || ((a.id === "kilo" || a.id === "qwen") && (
+        existsSync(mcpPendingJournalPath(a.id, serverName))
+        || existsSync(mcpConfigPendingJournalPath(a.id === "kilo" ? kiloConfigPath() : qwenConfigPath()))
+      )));
     if (targets.length === 0) {
       console.error(`no agents have the ${serverName} MCP tool installed`);
       return;
     }
   }
   for (const a of targets) {
-    if (uninstallMcpForAgent(a, serverName)) {
-      try {
-        unlinkSync(mcpServerMarkerPath(a.id, serverName));
-      } catch {
-        // marker already gone — the visible state is what matters.
+    const uninstallOne = (lockedConfigPath?: string): boolean => {
+      if (a.id === "kilo" || a.id === "qwen") {
+        return transactOwnedMcpConfig(a.id, serverName, "uninstall", undefined, lockedConfigPath);
       }
+      if (!uninstallMcpForAgent(a, serverName)) return false;
+      durableUnlink(mcpServerMarkerPath(a.id, serverName));
+      return true;
+    };
+    const removed = a.id === "kilo" || a.id === "qwen"
+      ? withOwnedMcpTransactionLock(a.id, serverName, uninstallOne)
+      : uninstallOne();
+    if (removed) {
       process.stderr.write(`${mark("ok")} ${a.display_name}: ${serverName} MCP tool removed\n`);
     }
   }
@@ -10085,8 +11432,11 @@ function uninstallMcpForAgent(a: AgentProfile, serverName = "caveman"): boolean 
       return removeMcpCodexToml(serverName);
     case "opencode":
       return removeMcpJson(join(homedir(), ".config", "opencode", "opencode.json"), ["mcp", serverName]);
+    case "kilo":
+    case "qwen":
+      throw new Error(`${a.display_name} MCP changes require the ownership transaction`);
     case "gemini":
-      return removeMcpJson(join(homedir(), ".gemini", "settings.json"), ["mcpServers", serverName]);
+      return removeMcpJson(geminiSettingsPath(), ["mcpServers", serverName]);
     case "hermes":
       return removeMcpHermesYaml(serverName);
     case "openclaw":
@@ -10099,7 +11449,7 @@ function uninstallMcpForAgent(a: AgentProfile, serverName = "caveman"): boolean 
 // removeMcpCodexToml drops the exact [mcp_servers.<name>] block mcpInstall wrote
 // (header + its command/args lines, up to the next section or EOF).
 function removeMcpCodexToml(serverName = "caveman"): boolean {
-  const path = join(homedir(), ".codex", "config.toml");
+  const path = join(codexHomeDir(), "config.toml");
   let existing = "";
   try {
     existing = readFileSync(path, "utf8");
@@ -10154,6 +11504,1872 @@ function removeMcpJson(path: string, keyPath: string[]): boolean {
     console.error(`${mark("warn")} cannot write ${path}: ${(e as Error).message}`);
     return false;
   }
+}
+
+type KiloConfigLocation = {
+  path: string;
+  jsonc: boolean;
+  source: "KILO_CONFIG_DIR" | "KILO_CONFIG" | "XDG_CONFIG_HOME";
+};
+
+function kiloPathFromEnv(value: string, name: string): string {
+  if (/[\0\r\n]/.test(value)) throw new Error(`${name} contains an invalid path character`);
+  // Kilo passes env paths directly to its loader. Shell-style "~/" expansion
+  // does not occur inside an environment value; relative paths resolve from cwd.
+  return normalize(isAbsolute(value) ? value : resolve(value));
+}
+
+function kiloConfigInDirectory(directory: string, source: KiloConfigLocation["source"]): KiloConfigLocation {
+  // Mirror pinned Kilo's native global writer: prefer an existing canonical
+  // config in this order, otherwise create kilo.json. JSONC stays read-only here
+  // because a JSON stringify would destroy comments.
+  const candidates = ["kilo.jsonc", "kilo.json", "opencode.jsonc", "opencode.json"];
+  const selected = candidates.map((name) => join(directory, name)).find((path) => existsSync(path))
+    ?? join(directory, "kilo.json");
+  return { path: selected, jsonc: extname(selected).toLowerCase() === ".jsonc", source };
+}
+
+// Kilo 7.5.6's native config writer targets KILO_CONFIG_DIR when present. That
+// directory is also loaded after KILO_CONFIG, so it must win for effective MCP
+// ownership. Explicit KILO_CONFIG wins only without a custom config directory;
+// xdg-basedir is the final fallback.
+function kiloConfigLocation(): KiloConfigLocation {
+  const configuredDirectory = process.env.KILO_CONFIG_DIR;
+  if (configuredDirectory) {
+    return kiloConfigInDirectory(kiloPathFromEnv(configuredDirectory, "KILO_CONFIG_DIR"), "KILO_CONFIG_DIR");
+  }
+  const explicit = process.env.KILO_CONFIG;
+  if (explicit) {
+    const path = kiloPathFromEnv(explicit, "KILO_CONFIG");
+    return { path, jsonc: extname(path).toLowerCase() === ".jsonc", source: "KILO_CONFIG" };
+  }
+  // Pinned Kilo strips accidental newlines from xdg-basedir output before use.
+  const configuredRoot = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  const cleanedRoot = configuredRoot.replace(/[\r\n]+/g, "");
+  if (!cleanedRoot) throw new Error("Kilo config root resolves to an empty path");
+  const root = normalize(isAbsolute(cleanedRoot) ? cleanedRoot : resolve(cleanedRoot));
+  return kiloConfigInDirectory(join(root, "kilo"), "XDG_CONFIG_HOME");
+}
+
+function kiloConfigPath(): string {
+  return kiloConfigLocation().path;
+}
+
+function kiloMcpEntry(mcp: { command: string; args: string[] }): Record<string, unknown> {
+  return {
+    type: "local",
+    command: [mcp.command, ...mcp.args],
+    enabled: true,
+  };
+}
+
+function kiloMcpEntryMatches(value: unknown, mcp: { command: string; args: string[] }): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const keys = Object.keys(entry).sort();
+  const command = [mcp.command, ...mcp.args];
+  if (keys.length !== 3 || keys[0] !== "command" || keys[1] !== "enabled" || keys[2] !== "type") return false;
+  return entry.type === "local"
+    && entry.enabled === true
+    && Array.isArray(entry.command)
+    && entry.command.length === command.length
+    && entry.command.every((arg, index) => typeof arg === "string" && arg === command[index]);
+}
+
+function readStrictMcpJsonRoot(path: string): { root: Record<string, unknown>; exists: boolean; bytes: Buffer | null } | null {
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return { root: {}, exists: false, bytes: null };
+    console.error(`${mark("warn")} cannot read ${path}: ${(e as Error).message}; not modifying it`);
+    return null;
+  }
+  const raw = bytes.toString("utf8");
+  try {
+    if (!raw.trim()) {
+      console.error(`${mark("warn")} ${path} is empty; not modifying it`);
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      console.error(`${mark("warn")} ${path} is not a JSON object; not modifying it`);
+      return null;
+    }
+    return { root: parsed as Record<string, unknown>, exists: true, bytes };
+  } catch (e) {
+    console.error(`${mark("warn")} cannot read ${path}: ${(e as Error).message}; not modifying it`);
+    return null;
+  }
+}
+
+type OwnedMcpConfigPlan = {
+  agent: "kilo" | "qwen";
+  path: string;
+  before: Buffer | null;
+  beforeMode: number;
+  after: Buffer | null;
+  changed: boolean;
+};
+
+function canonicalMcpConfigPath(path: string): string {
+  const absolute = normalize(resolve(path));
+  const missing: string[] = [];
+  let ancestor = absolute;
+  while (true) {
+    try {
+      return normalize(join(realpathSync(ancestor), ...missing));
+    } catch {
+      try {
+        if (lstatSync(ancestor).isSymbolicLink()) {
+          throw new Error(`MCP config path contains dangling symlink ${ancestor}; refusing mutation`);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      const parent = dirname(ancestor);
+      if (parent === ancestor) return absolute;
+      missing.unshift(basename(ancestor));
+      ancestor = parent;
+    }
+  }
+}
+
+function ownedMcpConfigPlan(
+  agent: "kilo" | "qwen",
+  path: string,
+  loaded: { bytes: Buffer | null; exists: boolean },
+  after: Buffer | null,
+): OwnedMcpConfigPlan {
+  const canonicalPath = canonicalMcpConfigPath(path);
+  let beforeMode = 0o600;
+  if (loaded.exists) {
+    beforeMode = statSync(canonicalPath).mode & 0o777;
+    if (!optionalBytesEqual(fileBytes(canonicalPath), loaded.bytes)) {
+      throw new Error(`${canonicalPath} changed while planning MCP update; refusing overwrite`);
+    }
+  }
+  return {
+    agent,
+    path: canonicalPath,
+    before: loaded.bytes,
+    beforeMode,
+    after,
+    changed: !optionalBytesEqual(loaded.bytes, after),
+  };
+}
+
+function movedOwnedMcpEntryState(
+  agent: "kilo" | "qwen",
+  serverName: string,
+  marker: McpServerMarker,
+): "absent" | "present" | "ambiguous" {
+  const activePath = canonicalMcpConfigPath(agent === "kilo" ? kiloConfigPath() : qwenConfigPath());
+  if (marker.config_path === activePath || fileBytes(activePath) === null) return "absent";
+  const root = agent === "kilo" ? readOptionalJsonObject(activePath) : readQwenJsonObject(activePath);
+  if (!root) return "ambiguous";
+  const entry = jsonValueAt(root, agent === "kilo" ? ["mcp", serverName] : ["mcpServers", serverName]);
+  if (entry === undefined) return "absent";
+  // Exact match proves a physical move; a different value can be same moved
+  // registration edited afterward. Both retain ownership marker fail-closed.
+  return "present";
+}
+
+function movedOwnedMcpRemovalBlocked(agent: "kilo" | "qwen", serverName: string, marker: McpServerMarker): boolean {
+  const state = movedOwnedMcpEntryState(agent, serverName, marker);
+  if (state === "absent") return false;
+  const activePath = canonicalMcpConfigPath(agent === "kilo" ? kiloConfigPath() : qwenConfigPath());
+  console.error(`${mark("warn")} recorded ${agent} MCP config is missing while ${activePath} ${state === "present" ? "contains" : "may contain"} moved ${serverName} state; retaining ownership marker`);
+  return true;
+}
+
+function kiloJsoncBlocksMutation(path: string): boolean {
+  const location = kiloConfigLocation();
+  if (location.jsonc && canonicalMcpConfigPath(location.path) === path) {
+    console.error(`${mark("warn")} ${location.source} selects JSONC ${path}; refusing comment-destructive mutation`);
+    return true;
+  }
+  return false;
+}
+
+function planMcpKiloJson(mcp: { command: string; args: string[] }, serverName = "caveman"): OwnedMcpConfigPlan | null {
+  const path = canonicalMcpConfigPath(kiloConfigPath());
+  const marker = readMcpServerMarker("kilo", serverName);
+  if (marker?.config_path && marker.config_path !== path) {
+    console.error(`${mark("warn")} ${serverName} is owned in ${marker.config_path}; uninstall it before installing into ${path}`);
+    return null;
+  }
+  if (kiloJsoncBlocksMutation(path)) return null;
+  const loaded = readStrictMcpJsonRoot(path);
+  if (!loaded) return null;
+  const { root } = loaded;
+  if (root.mcp !== undefined && (!root.mcp || typeof root.mcp !== "object" || Array.isArray(root.mcp))) {
+    console.error(`${mark("warn")} ${path} mcp must be a JSON object; not modifying it`);
+    return null;
+  }
+  const servers = root.mcp as Record<string, unknown> | undefined;
+  const current = servers?.[serverName];
+  if (marker && !marker.config_path && current === undefined) {
+    console.error(`${mark("warn")} legacy ${serverName} ownership marker does not identify its Kilo config; refusing relocation`);
+    return null;
+  }
+  if (current !== undefined) {
+    if (!marker) {
+      console.error(`${mark("warn")} ${path} mcp.${serverName} exists but is not Caveman-journaled; refusing overwrite`);
+      return null;
+    }
+    if (!kiloMcpEntryMatches(current, marker)) {
+      console.error(`${mark("warn")} ${path} mcp.${serverName} changed since Caveman installed it; refusing overwrite`);
+      return null;
+    }
+    if (kiloMcpEntryMatches(current, mcp)) {
+      return ownedMcpConfigPlan("kilo", path, loaded, loaded.bytes!);
+    }
+  }
+  const nextServers = servers ?? {};
+  nextServers[serverName] = kiloMcpEntry(mcp);
+  root.mcp = nextServers;
+  return ownedMcpConfigPlan("kilo", path, loaded, Buffer.from(JSON.stringify(root, null, 2) + "\n"));
+}
+
+function planRemoveMcpKiloJson(serverName = "caveman"): OwnedMcpConfigPlan | null {
+  const marker = readMcpServerMarker("kilo", serverName);
+  const path = marker?.config_path ?? canonicalMcpConfigPath(kiloConfigPath());
+  const loaded = readStrictMcpJsonRoot(path);
+  if (!loaded) return null;
+  if (!loaded.exists) {
+    if (marker && !marker.config_path) {
+      console.error(`${mark("warn")} legacy ${serverName} ownership marker does not identify its Kilo config; refusing removal`);
+      return null;
+    }
+    if (marker?.config_path && movedOwnedMcpRemovalBlocked("kilo", serverName, marker)) return null;
+    return ownedMcpConfigPlan("kilo", path, loaded, null);
+  }
+  const { root } = loaded;
+  if (root.mcp !== undefined && (!root.mcp || typeof root.mcp !== "object" || Array.isArray(root.mcp))) {
+    console.error(`${mark("warn")} ${path} mcp must be a JSON object; not modifying it`);
+    return null;
+  }
+  const servers = root.mcp as Record<string, unknown> | undefined;
+  const current = servers?.[serverName];
+  if (current === undefined) {
+    if (marker && !marker.config_path) {
+      console.error(`${mark("warn")} legacy ${serverName} ownership marker does not identify its Kilo config; refusing removal`);
+      return null;
+    }
+    return ownedMcpConfigPlan("kilo", path, loaded, loaded.bytes);
+  }
+  if (!marker) {
+    console.error(`${mark("warn")} ${path} mcp.${serverName} exists but is not Caveman-journaled; refusing removal`);
+    return null;
+  }
+  if (!kiloMcpEntryMatches(current, marker)) {
+    console.error(`${mark("warn")} ${path} mcp.${serverName} changed since Caveman installed it; refusing removal`);
+    return null;
+  }
+  delete servers![serverName];
+  if (Object.keys(servers!).length === 0) delete root.mcp;
+  return ownedMcpConfigPlan("kilo", path, loaded, Buffer.from(JSON.stringify(root, null, 2) + "\n"));
+}
+
+type QwenHomeState = { root: string; env: NodeJS.ProcessEnv; ambiguous: boolean };
+const qwenHomeBootstrapKeys = [
+  "QWEN_HOME",
+  "QWEN_RUNTIME_DIR",
+  "QWEN_CODE_MCP_APPROVALS_PATH",
+  "QWEN_CODE_TRUSTED_FOLDERS_PATH",
+] as const;
+
+function qwenReadDotEnv(path: string): Record<string, string> | null {
+  try {
+    const parsed = parseEnv(readFileSync(path, "utf8"));
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    return null;
+  }
+}
+
+function qwenResolveHomeRoot(value: string | undefined): string {
+  const configured = value?.trim();
+  const root = configured ? expandTilde(configured) : join(homedir(), ".qwen");
+  return isAbsolute(root) ? root : resolve(root);
+}
+
+// Qwen resolves QWEN_HOME from user-level dotenv before reading settings.
+// Mirror that bootstrap so install, uninstall, and recovery checks all inspect
+// the same settings file as pinned Qwen 0.22.3.
+function qwenHomeState(): QwenHomeState {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  const initialHome = env.QWEN_HOME;
+  const initialRoot = qwenResolveHomeRoot(initialHome);
+  const candidates = [join(initialRoot, ".env")];
+  if (!initialHome) candidates.push(join(homedir(), ".env"));
+  let ambiguous = false;
+  const load = (path: string) => {
+    const parsed = qwenReadDotEnv(path);
+    if (!parsed) {
+      ambiguous = true;
+      return;
+    }
+    for (const key of qwenHomeBootstrapKeys) {
+      if (parsed[key] && !Object.hasOwn(env, key)) env[key] = parsed[key];
+    }
+  };
+  for (const path of candidates) load(path);
+  const discoveredRoot = qwenResolveHomeRoot(env.QWEN_HOME);
+  if (env.QWEN_HOME && env.QWEN_HOME !== initialHome && discoveredRoot !== initialRoot) {
+    // Pinned Qwen performs a second pass through a newly discovered QWEN_HOME.
+    // Trust and approval paths can live there, not only QWEN_RUNTIME_DIR.
+    load(join(discoveredRoot, ".env"));
+  }
+  return { root: discoveredRoot, env, ambiguous };
+}
+
+function qwenHomeEnvFallback(state: QwenHomeState = qwenHomeState()): Record<string, string> | null {
+  if (state.ambiguous) return null;
+  const candidates = [join(state.root, ".env")];
+  if (!state.env.QWEN_HOME) candidates.push(join(homedir(), ".env"));
+  const fallback: Record<string, string> = {};
+  for (const path of candidates) {
+    const parsed = qwenReadDotEnv(path);
+    if (!parsed) return null;
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!Object.hasOwn(state.env, key) && fallback[key] === undefined) fallback[key] = value;
+    }
+  }
+  return fallback;
+}
+
+function qwenConfigPath(): string {
+  return join(qwenHomeState().root, "settings.json");
+}
+
+function qwenMcpEntry(mcp: { command: string; args: string[] }): Record<string, unknown> {
+  return { command: mcp.command, args: mcp.args };
+}
+
+function qwenMcpEntryMatches(value: unknown, mcp: { command: string; args: string[] }): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const keys = Object.keys(entry).sort();
+  if (keys.length !== 2 || keys[0] !== "args" || keys[1] !== "command") return false;
+  return entry.command === mcp.command
+    && Array.isArray(entry.args)
+    && entry.args.length === mcp.args.length
+    && entry.args.every((arg, index) => typeof arg === "string" && arg === mcp.args[index]);
+}
+
+function jsonValueAt(root: unknown, path: string[]): unknown {
+  let current = root;
+  for (const key of path) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+function readOptionalJsonObject(path: string): JsonObject | null {
+  try {
+    const value = readJson5Lenient(path);
+    return asJsonObject(value) ?? null;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? {} : null;
+  }
+}
+
+// Qwen settings and trust files are JSON-with-comments, not JSON5: trailing
+// commas are corruption in 0.22.3. Read-only safety checks must not accept a
+// policy or credential source the pinned binary will discard during recovery.
+function readQwenJsonObject(path: string): JsonObject | null {
+  try {
+    const value = JSON.parse(stripJson5Comments(readFileSync(path, "utf8")));
+    return asJsonObject(value) ?? null;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? {} : null;
+  }
+}
+
+function qwenResolvedSettingString(value: string, fallback: Record<string, string> = {}): string {
+  return value.replace(/\$(?:(\w+)|{([^}]+)})/g, (match, bare: string | undefined, braced: string | undefined) => {
+    const name = bare || braced || "";
+    if (typeof fallback[name] === "string") return fallback[name]!;
+    return typeof process.env[name] === "string" ? process.env[name]! : match;
+  });
+}
+
+const qwenEnvReference = /\$(?:(\w+)|{([^}]+)})/;
+
+// Qwen 0.22.3 uses this complete indicator set to decide whether any legacy
+// V1 shape triggers migration for the whole settings scope. Keep detection
+// exact even though Caveman only materializes fields used by its safety gates.
+const qwenV1IndicatorKeys = [
+  "theme", "model", "autoAccept", "hideTips", "vimMode", "checkpointing",
+  "accessibility", "allowedTools", "allowMCPServers", "autoConfigureMaxOldSpaceSize",
+  "bugCommand", "chatCompression", "coreTools", "contextFileName", "customThemes",
+  "customWittyPhrases", "debugKeystrokeLogging", "dnsResolutionOrder", "enforcedAuthType",
+  "excludeTools", "excludeMCPServers", "excludedProjectEnvVars", "fileFiltering",
+  "folderTrustFeature", "folderTrust", "hasSeenIdeIntegrationNudge", "hideWindowTitle",
+  "showStatusInTitle", "showLineNumbers", "showCitations", "ideMode", "includeDirectories",
+  "loadMemoryFromIncludeDirectories", "maxSessionTurns", "mcpServerCommand",
+  "memoryImportFormat", "preferredEditor", "sandbox", "selectedAuthType",
+  "shouldUseNodePtyShell", "shellPager", "shellShowColor", "skipNextSpeakerCheck",
+  "toolDiscoveryCommand", "toolCallCommand", "usageStatisticsEnabled", "useExternalAuth",
+  "useRipgrep", "enableWelcomeBack", "approvalMode", "sessionTokenLimit", "contentGenerator",
+  "skipLoopDetection", "skipStartupContext", "enableOpenAILogging", "tavilyApiKey",
+  "disableAutoUpdate", "disableUpdateNag", "disableLoadingPhrases", "disableFuzzySearch",
+  "disableCacheControl",
+] as const;
+
+// Subset of V1 -> V2 relocations consumed by credential/trust/MCP gates below.
+// Migration still triggers from the complete upstream indicator set above.
+const qwenV1PolicyMigrationMap: Record<string, string> = {
+  allowMCPServers: "mcp.allowed",
+  coreTools: "tools.core",
+  excludeMCPServers: "mcp.excluded",
+  excludeTools: "tools.exclude",
+  excludedProjectEnvVars: "advanced.excludedEnvVars",
+  folderTrust: "security.folderTrust.enabled",
+};
+
+function qwenSetNestedPropertySafe(root: JsonObject, path: string, value: unknown): void {
+  const keys = path.split(".");
+  if (keys.some((key) => !isSafeObjectKey(key))) return;
+  const last = keys.pop();
+  if (!last) return;
+  let current = root;
+  for (const key of keys) {
+    if (current[key] === undefined) current[key] = {};
+    const next = current[key];
+    if (!next || typeof next !== "object") return;
+    current = next as JsonObject;
+  }
+  current[last] = value;
+}
+
+// Mirror policy-relevant output of Qwen's per-scope V1 migration without
+// rewriting user files. Existing nested V2 content wins exactly as upstream's
+// parent-path carry step does.
+function qwenMigratePolicySettings(source: JsonObject): JsonObject {
+  const version = source["$version"];
+  if (typeof version === "number" && version >= 2) return cloneJsonValue(source);
+  const shouldMigrate = qwenV1IndicatorKeys.some((key) => {
+    if (!Object.hasOwn(source, key)) return false;
+    const value = source[key];
+    return !value || typeof value !== "object" || Array.isArray(value);
+  });
+  if (!shouldMigrate) return cloneJsonValue(source);
+
+  const result: JsonObject = {};
+  const processed = new Set<string>();
+  for (const [legacyKey, targetPath] of Object.entries(qwenV1PolicyMigrationMap)) {
+    if (!Object.hasOwn(source, legacyKey)) continue;
+    qwenSetNestedPropertySafe(result, targetPath, source[legacyKey]);
+    processed.add(legacyKey);
+  }
+  for (const [key, value] of Object.entries(source)) {
+    if (processed.has(key)) continue;
+    const parentOfMigratedPath = [...processed].some((legacyKey) =>
+      qwenV1PolicyMigrationMap[legacyKey]!.startsWith(`${key}.`));
+    if (!parentOfMigratedPath) {
+      result[key] = value;
+      continue;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      result[key] = value;
+      continue;
+    }
+    for (const [nestedKey, nestedValue] of Object.entries(value)) {
+      const nestedPath = `${key}.${nestedKey}`;
+      const alreadyMigrated = [...processed].some((legacyKey) =>
+        qwenV1PolicyMigrationMap[legacyKey] === nestedPath);
+      if (!alreadyMigrated) qwenSetNestedPropertySafe(result, nestedPath, nestedValue);
+    }
+  }
+  result["$version"] = 2;
+  return result;
+}
+
+function qwenResolveSettingValue(value: unknown, fallback: Record<string, string>): unknown {
+  if (typeof value === "string") return qwenResolvedSettingString(value, fallback);
+  if (Array.isArray(value)) return value.map((item) => qwenResolveSettingValue(item, fallback));
+  if (!value || typeof value !== "object") return value;
+  const resolved = { ...(value as JsonObject) };
+  for (const [key, child] of Object.entries(resolved)) resolved[key] = qwenResolveSettingValue(child, fallback);
+  return resolved;
+}
+
+function qwenStringList(root: JsonObject, path: string[], fallback: Record<string, string> | null): string[] | undefined | null {
+  const value = jsonValueAt(root, path);
+  if (value === undefined) return undefined;
+  if (!fallback) return null;
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) return null;
+  const resolved = value.map((item) => qwenResolvedSettingString(item as string, fallback)).filter(Boolean);
+  // Qwen loads .env files after this wrapper starts. An unresolved reference
+  // can therefore become a restrictive rule later; unknown policy fails closed.
+  if (resolved.some((item) => qwenEnvReference.test(item))) return null;
+  return resolved;
+}
+
+// Exact wildcard matcher used by Qwen 0.22 for mcp.allowed/mcp.excluded:
+// `*` spans any run, `?` spans one character, everything else is literal.
+function qwenMcpServerPatternMatches(name: string, pattern: string): boolean {
+  let nameIndex = 0;
+  let patternIndex = 0;
+  let starNameIndex = -1;
+  let starPatternIndex = -1;
+  while (nameIndex < name.length) {
+    if (patternIndex < pattern.length && (pattern[patternIndex] === "?" || pattern[patternIndex] === name[nameIndex])) {
+      nameIndex++;
+      patternIndex++;
+    } else if (patternIndex < pattern.length && pattern[patternIndex] === "*") {
+      starPatternIndex = patternIndex++;
+      starNameIndex = nameIndex;
+    } else if (starPatternIndex !== -1) {
+      patternIndex = starPatternIndex + 1;
+      nameIndex = ++starNameIndex;
+    } else {
+      return false;
+    }
+  }
+  while (patternIndex < pattern.length && pattern[patternIndex] === "*") patternIndex++;
+  return patternIndex === pattern.length;
+}
+
+const qwenCavemanToolName = "mcp__caveman__caveman_retrieve";
+
+function qwenSanitizeToolName(value: string): string {
+  const sanitized = value.replace(/[^A-Za-z0-9_-]/g, "_");
+  return /^[A-Za-z]/.test(sanitized) ? sanitized : `tool_${sanitized}`;
+}
+
+function qwenNormalizeToolName(value: string): string {
+  if (value.length <= 63 && /^[A-Za-z][A-Za-z0-9_-]*$/.test(value)) return value;
+  const sanitized = qwenSanitizeToolName(value);
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+  const suffix = `_${(hash >>> 0).toString(36).padStart(7, "0")}`;
+  return `${sanitized.slice(0, 63 - suffix.length)}${suffix}`;
+}
+
+// Port of Qwen 0.22.3's MCP permission matcher for one exact target tool.
+function qwenCavemanToolDenied(rule: string): boolean {
+  let pattern = rule.trim();
+  const open = pattern.indexOf("(");
+  if (open !== -1) {
+    if (!pattern.endsWith(")") || pattern.slice(open + 1, -1).trim() !== "") return false;
+    pattern = pattern.slice(0, open).trim();
+  } else if (pattern.includes(")")) {
+    return false;
+  }
+  if (pattern === qwenCavemanToolName) return true;
+  if (!pattern.endsWith("*") && pattern.split("__").length >= 3) {
+    const normalized = pattern.startsWith("mcp__") ? qwenNormalizeToolName(pattern) : pattern;
+    if (normalized === qwenCavemanToolName) return true;
+  }
+  if (pattern.endsWith("*")) {
+    return qwenCavemanToolName.startsWith(qwenSanitizeToolName(pattern.slice(0, -1)));
+  }
+  const patternParts = pattern.split("__");
+  const toolParts = qwenCavemanToolName.split("__");
+  return patternParts.length === 2
+    && patternParts[0] === toolParts[0]
+    && qwenSanitizeToolName(patternParts[1]!) === qwenSanitizeToolName(toolParts[1]!);
+}
+
+function qwenCavemanToolDisabled(name: string): boolean {
+  return name.trim() === qwenCavemanToolName;
+}
+
+function qwenConfigFileInjection(): ConfigFileInjection | undefined {
+  const profile = AGENTS.find((agent) => agent.id === "qwen");
+  return profile?.injection.method === "config-file" ? profile.injection : undefined;
+}
+
+function qwenSettingsLayerPaths(): string[] | null {
+  const injection = qwenConfigFileInjection();
+  if (!injection?.base_config) return null;
+  const state = qwenHomeState();
+  if (state.ambiguous) return null;
+  const system = baseConfigPath(injection.base_config);
+  const configuredDefaults = process.env.QWEN_CODE_SYSTEM_DEFAULTS_PATH?.trim();
+  const defaultsRoot = configuredDefaults ? expandTilde(configuredDefaults) : join(dirname(system), "system-defaults.json");
+  const defaults = isAbsolute(defaultsRoot) ? defaultsRoot : resolve(defaultsRoot);
+  // Keep system settings last even when operator paths alias another layer;
+  // last-layer identity matters for enterprise MCP server shadow checks.
+  return [
+    defaults,
+    join(state.root, "settings.json"),
+    join(process.cwd(), ".qwen", "settings.json"),
+    system,
+  ];
+}
+
+function qwenMergedSettings(layers: JsonObject[]): JsonObject {
+  let merged: unknown = {};
+  for (const layer of layers) merged = deepMerge(merged, layer);
+  return merged as JsonObject;
+}
+
+function qwenPathVariants(rawPath: string): Set<string> {
+  const variants = new Set<string>([normalize(resolve(rawPath))]);
+  try {
+    variants.add(normalize(realpathSync(rawPath)));
+  } catch {
+    // Qwen compares a lexical absolute path when a target cannot be resolved.
+  }
+  return variants;
+}
+
+function qwenPathWithinRoot(childPath: string, parentPath: string): boolean {
+  const remainder = relative(parentPath, childPath);
+  return remainder === "" || (!remainder.startsWith(`..${sep}`) && remainder !== ".." && !isAbsolute(remainder));
+}
+
+function qwenPathDepth(path: string): number {
+  const remainder = relative(parse(path).root, path);
+  return remainder === "" ? 0 : remainder.split(sep).filter(Boolean).length;
+}
+
+// Mirror Qwen 0.22.3's persisted trust-rule precedence. Unknown workspaces are
+// trusted by Qwen's initial settings load; malformed trust state is ambiguous
+// here and must fail closed before an optional credential reference is emitted.
+function qwenWorkspaceTrusted(settings: JsonObject, workspacePath: string): boolean | null {
+  const enabled = jsonValueAt(settings, ["security", "folderTrust", "enabled"]);
+  if (enabled === undefined || enabled === false) return true;
+  if (enabled !== true) return null;
+  const state = qwenHomeState();
+  if (state.ambiguous) return null;
+  const configuredPath = state.env.QWEN_CODE_TRUSTED_FOLDERS_PATH;
+  const trustedPath = configuredPath || join(state.root, "trustedFolders.json");
+  const config = readQwenJsonObject(trustedPath);
+  if (!config) return null;
+
+  const workspaceVariants = qwenPathVariants(workspacePath);
+  let winnerDepth = -1;
+  let winnerTrusted: boolean | undefined;
+  for (const [rulePath, rawLevel] of Object.entries(config)) {
+    if (rawLevel !== "TRUST_FOLDER" && rawLevel !== "TRUST_PARENT" && rawLevel !== "DO_NOT_TRUST") return null;
+    const rootPath = rawLevel === "TRUST_PARENT" ? dirname(rulePath) : rulePath;
+    let matchDepth = -1;
+    for (const workspaceVariant of workspaceVariants) {
+      for (const ruleVariant of qwenPathVariants(rootPath)) {
+        if (qwenPathWithinRoot(workspaceVariant, ruleVariant)) {
+          matchDepth = Math.max(matchDepth, qwenPathDepth(ruleVariant));
+        }
+      }
+    }
+    if (matchDepth < 0) continue;
+    const trusted = rawLevel !== "DO_NOT_TRUST";
+    if (matchDepth > winnerDepth || (matchDepth === winnerDepth && !trusted && winnerTrusted !== false)) {
+      winnerDepth = matchDepth;
+      winnerTrusted = trusted;
+    }
+  }
+  return winnerTrusted ?? true;
+}
+
+function qwenSettingsLayers(): JsonObject[] | null {
+  const paths = qwenSettingsLayerPaths();
+  if (!paths) return null;
+  const fallback = qwenHomeEnvFallback();
+  if (!fallback) return null;
+  const layers: JsonObject[] = [];
+  for (const path of paths) {
+    const layer = readQwenJsonObject(path);
+    if (!layer) return null;
+    const migrated = qwenMigratePolicySettings(layer);
+    layers.push(qwenResolveSettingValue(migrated, fallback) as JsonObject);
+  }
+  // Qwen decides workspace trust from System + User settings (User wins in
+  // this initial check), then drops the entire workspace layer when untrusted.
+  const initialTrustSettings = deepMerge(layers[3], layers[1]) as JsonObject;
+  const workspaceTrusted = qwenWorkspaceTrusted(initialTrustSettings, process.cwd());
+  if (workspaceTrusted === null) return null;
+  if (!workspaceTrusted) layers[2] = {};
+  return layers;
+}
+
+function qwenSettingsPermitRecovery(marker: McpServerMarker, layers: JsonObject[]): boolean {
+  const fallback = qwenHomeEnvFallback();
+  if (!fallback) return false;
+
+  // System settings are enterprise-owned and outrank Caveman's user entry.
+  // Never replace a different server carrying the same name.
+  const systemEntry = jsonValueAt(layers[layers.length - 1], ["mcpServers", "caveman"]);
+  if (systemEntry !== undefined && !qwenMcpEntryMatches(systemEntry, marker)) return false;
+
+  let allowedConfigured = false;
+  let allowed = false;
+  for (const layer of layers) {
+    const allowList = qwenStringList(layer, ["mcp", "allowed"], fallback);
+    const excludeList = qwenStringList(layer, ["mcp", "excluded"], fallback);
+    const denyRules = qwenStringList(layer, ["permissions", "deny"], fallback);
+    const legacyDenyRules = qwenStringList(layer, ["tools", "exclude"], fallback);
+    const disabledTools = qwenStringList(layer, ["tools", "disabled"], fallback);
+    if (allowList === null || excludeList === null || denyRules === null || legacyDenyRules === null || disabledTools === null) return false;
+    if (allowList !== undefined) {
+      allowedConfigured = true;
+      if (allowList.some((pattern) => qwenMcpServerPatternMatches("caveman", pattern))) allowed = true;
+    }
+    if (excludeList?.some((pattern) => qwenMcpServerPatternMatches("caveman", pattern))) return false;
+    if (denyRules?.some(qwenCavemanToolDenied) || legacyDenyRules?.some(qwenCavemanToolDenied)) return false;
+    if (disabledTools?.some(qwenCavemanToolDisabled)) return false;
+  }
+  return !allowedConfigured || allowed;
+}
+
+function qwenUserLevelEnvPaths(state: QwenHomeState = qwenHomeState()): Set<string> {
+  return new Set([
+    normalize(join(homedir(), ".env")),
+    normalize(join(state.root, ".env")),
+    normalize(join(homedir(), ".qwen", ".env")),
+  ]);
+}
+
+function qwenEnvFileIsQwenScoped(path: string, state: QwenHomeState): boolean {
+  const normalized = normalize(path);
+  return qwenUserLevelEnvPaths(state).has(normalized) || basename(dirname(normalized)) === ".qwen";
+}
+
+// advanced.excludedEnvVars uses Qwen's UNION merge strategy. Malformed final
+// state is ambiguous; fail closed instead of guessing which project env keys
+// the pinned binary will accept.
+function qwenExcludedEnvVars(layers: JsonObject[]): string[] | null {
+  let merged: unknown;
+  for (const layer of layers) {
+    const next = jsonValueAt(layer, ["advanced", "excludedEnvVars"]);
+    if (next === undefined) continue;
+    if (Array.isArray(merged)) {
+      const additions = Array.isArray(next) ? next : [next];
+      merged = [...new Set([...merged, ...additions])];
+    } else {
+      merged = next;
+    }
+  }
+  if (merged === undefined) return ["DEBUG", "DEBUG_MODE"];
+  return Array.isArray(merged) && merged.every((item) => typeof item === "string")
+    ? merged as string[]
+    : null;
+}
+
+function qwenEnvironmentFilePaths(layers: JsonObject[]): string[] | null {
+  const state = qwenHomeState();
+  const home = homedir();
+  const legacy = join(home, ".qwen");
+  const effectiveSettings = qwenMergedSettings(layers);
+  const found: string[] = [];
+  const push = (path: string) => {
+    if (existsSync(path) && !found.includes(path)) found.push(path);
+  };
+  const pushWorkspace = (path: string, workspacePath: string): boolean | null => {
+    if (!existsSync(path)) return false;
+    const trusted = qwenWorkspaceTrusted(effectiveSettings, workspacePath);
+    if (trusted === null) return null;
+    if (!trusted) return false;
+    push(path);
+    return true;
+  };
+  const pushHome = () => {
+    push(join(state.root, ".env"));
+    if (state.root !== legacy) push(join(legacy, ".env"));
+    push(join(home, ".env"));
+  };
+  let current: string;
+  try {
+    current = realpathSync(process.cwd());
+  } catch {
+    current = resolve(process.cwd());
+  }
+  while (true) {
+    if (current === home) {
+      pushHome();
+      break;
+    }
+    const scoped = join(current, ".qwen", ".env");
+    const scopedAdded = pushWorkspace(scoped, current);
+    if (scopedAdded === null) return null;
+    if (scopedAdded) {
+      pushHome();
+      break;
+    }
+    const plain = join(current, ".env");
+    const plainAdded = pushWorkspace(plain, current);
+    if (plainAdded === null) return null;
+    if (plainAdded) {
+      pushHome();
+      break;
+    }
+    const parent = dirname(current);
+    if (!parent || parent === current) {
+      pushHome();
+      break;
+    }
+    current = parent;
+  }
+  return found;
+}
+
+function qwenEffectiveEnvValue(layers: JsonObject[], key: string): string | undefined | null {
+  const inherited = process.env[key];
+  if (inherited) return inherited;
+  const state = qwenHomeState();
+  const excluded = qwenExcludedEnvVars(layers);
+  if (!excluded) return null;
+  const envPaths = qwenEnvironmentFilePaths(layers);
+  if (!envPaths) return null;
+  for (const path of envPaths) {
+    const parsed = qwenReadDotEnv(path);
+    if (!parsed) return null;
+    if (!qwenEnvFileIsQwenScoped(path, state) && excluded.includes(key)) continue;
+    const candidate = parsed[key];
+    if (candidate) return candidate;
+  }
+  // settings.env is the lowest environment tier; system settings win over
+  // workspace, user, and system defaults for each key. Qwen's normal loader
+  // intentionally does not apply excludedEnvVars to settings.env.
+  const env = jsonValueAt(qwenMergedSettings(layers), ["env"]);
+  if (env === undefined) return undefined;
+  if (!env || typeof env !== "object" || Array.isArray(env)) return null;
+  const candidate = (env as Record<string, unknown>)[key];
+  if (candidate === undefined) return undefined;
+  return typeof candidate === "string" ? candidate : null;
+}
+
+function qwenOpenAIKeyAvailability(value: string | undefined | null): boolean | null {
+  if (value === null) return null;
+  if (value === undefined || !value.trim()) return false;
+  if (qwenEnvReference.test(value) || /[\r\n]/.test(value)) return null;
+  return true;
+}
+
+// Qwen resolves settings before loading project dotenv/settings.env. Its normal
+// process then relaunches once, inheriting those late-loaded values, and resolves
+// the temporary system settings again. Pre-existing no-relaunch/sandbox processes
+// skip that second pass, so only process env or Qwen's home fallback can safely
+// satisfy a header reference there.
+function qwenEffectiveOpenAIKeyAvailable(): boolean | null {
+  const layers = qwenSettingsLayers();
+  if (!layers) return null;
+  const noRelaunch = qwenEffectiveEnvValue(layers, "QWEN_CODE_NO_RELAUNCH");
+  const sandbox = qwenEffectiveEnvValue(layers, "SANDBOX");
+  if (noRelaunch === null || sandbox === null) return null;
+  if (!noRelaunch && !sandbox) {
+    return qwenOpenAIKeyAvailability(qwenEffectiveEnvValue(layers, "OPENAI_API_KEY"));
+  }
+  const fallback = qwenHomeEnvFallback();
+  if (!fallback) return null;
+  const inherited = process.env.OPENAI_API_KEY;
+  return qwenOpenAIKeyAvailability(typeof inherited === "string" ? inherited : fallback.OPENAI_API_KEY);
+}
+
+type AgentRouteOverride = { surface: string; reason: string };
+type QwenMatchedOption = { inline: boolean; value?: string };
+
+function qwenMatchedOption(arg: string, names: readonly string[]): QwenMatchedOption | null {
+  for (const name of names) {
+    if (arg === name) return { inline: false };
+    if (arg.startsWith(`${name}=`)) return { inline: true, value: arg.slice(name.length + 1) };
+  }
+  return null;
+}
+
+function kiloProfileModelIds(agent: AgentProfile): Set<string> {
+  if (agent.id !== "kilo" || agent.injection.method !== "config-env-content") return new Set();
+  const contents = [agent.injection.config_content.local, agent.injection.config_content.managed ?? agent.injection.config_content.local];
+  let shared: Set<string> | undefined;
+  for (const content of contents) {
+    const enabled = jsonValueAt(content, ["enabled_providers"]);
+    const models = jsonValueAt(content, ["provider", "caveman", "models"]);
+    if (!Array.isArray(enabled) || enabled.length !== 1 || enabled[0] !== "caveman"
+      || !models || typeof models !== "object" || Array.isArray(models)) return new Set();
+    const ids = new Set(Object.keys(models).filter((id) => id && id.trim() === id).map((id) => `caveman/${id}`));
+    shared = shared === undefined ? ids : new Set([...shared].filter((id) => ids.has(id)));
+  }
+  return shared ?? new Set();
+}
+
+function kiloManagedPolicyPresent(): boolean {
+  const directory = process.env.KILO_TEST_MANAGED_CONFIG_DIR || (process.platform === "darwin"
+    ? "/Library/Application Support/kilo"
+    : process.platform === "win32"
+      ? join(process.env.ProgramData || "C:\\ProgramData", "kilo")
+      : "/etc/kilo");
+  // Exact Kilo 7.5.6 managed file set. config.json is a legacy global filename,
+  // but managed loading deliberately excludes it.
+  const configFiles = ["kilo.jsonc", "kilo.json", "opencode.jsonc", "opencode.json"];
+  if (configFiles.some((name) => existsSync(join(directory, name)))) return true;
+  if (process.platform !== "darwin") return false;
+  const preferenceFiles = ["/Library/Managed Preferences/ai.opencode.managed.plist"];
+  try {
+    preferenceFiles.unshift(join("/Library/Managed Preferences", userInfo().username, "ai.opencode.managed.plist"));
+  } catch {
+    // System-level preference remains covered; an unreadable username is itself
+    // unusual, but no user path can be resolved safely enough to claim absence.
+    return true;
+  }
+  return preferenceFiles.some((path) => existsSync(path));
+}
+
+function kiloDatabasePath(): string | null {
+  const rawDataRoot = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+  const cleanedDataRoot = rawDataRoot.replace(/[\r\n]+/g, "");
+  if (!cleanedDataRoot) throw new Error("Kilo data root resolves to an empty path");
+  const dataRoot = normalize(isAbsolute(cleanedDataRoot) ? cleanedDataRoot : resolve(cleanedDataRoot));
+  const configured = process.env.KILO_DB;
+  if (configured === ":memory:") return null;
+  if (configured) {
+    if (/[\0\r\n]/.test(configured)) throw new Error("KILO_DB contains an invalid path character");
+    return normalize(isAbsolute(configured) ? configured : join(dataRoot, "kilo", configured));
+  }
+  return join(dataRoot, "kilo", "kilo.db");
+}
+
+function kiloActiveOrganizationState(): "none" | "active" | "unknown" {
+  let path: string | null;
+  try {
+    path = kiloDatabasePath();
+    if (path === null) return "none";
+    const stat = statSync(path);
+    if (!stat.isFile()) return "unknown";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "none";
+    return "unknown";
+  }
+  const script = [
+    'const { DatabaseSync } = require("node:sqlite");',
+    'const db = new DatabaseSync(process.argv[1], { readOnly: true });',
+    'try {',
+    '  const row = db.prepare("SELECT 1 AS active FROM account_state WHERE id = 1 AND active_account_id IS NOT NULL AND active_org_id IS NOT NULL LIMIT 1").get();',
+    '  process.stdout.write(row?.active === 1 ? "active" : "none");',
+    '} finally { db.close(); }',
+  ].join("\n");
+  const probe = spawnSync(process.execPath, ["--no-warnings", "-e", script, path], {
+    encoding: "utf8",
+    timeout: 2_000,
+    env: { ...process.env, NODE_NO_WARNINGS: "1", NODE_OPTIONS: "" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (probe.status !== 0 || probe.signal || probe.error) return "unknown";
+  return probe.stdout === "active" ? "active" : probe.stdout === "none" ? "none" : "unknown";
+}
+
+function kiloHigherPriorityRouteOverride(): AgentRouteOverride | null {
+  if (kiloManagedPolicyPresent()) {
+    return { surface: "managed policy", reason: "loads after Caveman's inline routing config" };
+  }
+  const organization = kiloActiveOrganizationState();
+  if (organization === "active") {
+    return { surface: "active organization", reason: "can load routing policy after Caveman's inline config" };
+  }
+  if (organization === "unknown") {
+    return { surface: "organization state", reason: "cannot be verified safely" };
+  }
+  return null;
+}
+
+// Kilo's inline config selects a routed default, but its CLI model option has
+// higher precedence and attach mode delegates inference to another server whose
+// environment this process cannot control. Detect both before proxy/bootstrap
+// work. Unknown short-option clusters fail direct instead of guessing yargs.
+function kiloRouteOverride(agent: AgentProfile, args: string[]): AgentRouteOverride | null {
+  const higherPriority = kiloHigherPriorityRouteOverride();
+  if (higherPriority) return higherPriority;
+  const separator = args.indexOf("--");
+  const parsedArgs = separator === -1 ? args : args.slice(0, separator);
+  const valueOptions = new Set([
+    "--log-level", "--port", "--hostname", "--mdns-domain", "--cors",
+    "--session", "-s", "--worktree", "--prompt", "--agent", "--replay-limit",
+    "--command", "--format", "--file", "-f", "--title", "--password", "-p",
+    "--username", "-u", "--dir", "--variant", "--timeout", "--parallel", "--output",
+    "--repo", "--repo-type", "--branch", "--mode", "--org-id", "--session-id", "--message-id",
+  ]);
+  const booleanOptions = new Set([
+    "-h", "--help", "-v", "--version", "--print-logs", "--pure", "--mdns",
+    "-c", "--continue", "--fork", "--cloud-fork", "--auto", "--mini", "--no-replay",
+    "--share", "--thinking", "-i", "--interactive", "--stream", "--verbose", "--quiet",
+  ]);
+  let command: string | undefined;
+  let modelValue: string | undefined;
+  let modelOccurrences = 0;
+  for (let index = 0; index < parsedArgs.length; index++) {
+    const arg = parsedArgs[index]!;
+    if (arg === "--attach" || arg.startsWith("--attach=")) {
+      return { surface: "--attach", reason: "uses another server's provider route" };
+    }
+    const model = qwenMatchedOption(arg, ["--model", "--m", "-m"]);
+    if (model) {
+      modelOccurrences++;
+      const value = model?.inline ? model.value : parsedArgs[index + 1];
+      if (typeof value !== "string" || !value || value.startsWith("-")) {
+        return { surface: "--model", reason: "is repeated or malformed" };
+      }
+      modelValue = value;
+      if (!model?.inline) index++;
+      continue;
+    }
+    if (arg.startsWith("-") && !arg.startsWith("--") && arg.slice(1).includes("m")) {
+      return { surface: "-m", reason: "is ambiguous inside a short-option cluster" };
+    }
+    const equals = arg.indexOf("=");
+    const optionName = equals === -1 ? arg : arg.slice(0, equals);
+    if (valueOptions.has(optionName)) {
+      if (equals === -1) {
+        const value = parsedArgs[index + 1];
+        if (typeof value !== "string" || !value || value.startsWith("-")) {
+          return { surface: optionName, reason: "is malformed and makes command routing ambiguous" };
+        }
+        index++;
+      } else if (!arg.slice(equals + 1)) {
+        return { surface: optionName, reason: "is malformed and makes command routing ambiguous" };
+      }
+      continue;
+    }
+    if (booleanOptions.has(optionName)) {
+      if (equals !== -1) {
+        const value = arg.slice(equals + 1);
+        if (value !== "true" && value !== "false") {
+          return { surface: optionName, reason: "has a non-boolean value and makes command routing ambiguous" };
+        }
+      } else if (parsedArgs[index + 1] === "true" || parsedArgs[index + 1] === "false") {
+        index++;
+      }
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return { surface: "arguments", reason: "cannot be parsed safely with Kilo 7.5.6 option arities" };
+    }
+    if (command === undefined) {
+      command = arg;
+      if (command === "attach") return { surface: "attach", reason: "uses another server's provider route" };
+      if (command === "cloud" || command === "roll-call") {
+        return { surface: command, reason: "runs outside Kilo's local single-model route" };
+      }
+      if (command === "daemon" || command === "console") {
+        return { surface: command, reason: "can outlive Caveman's wrap session" };
+      }
+    }
+  }
+  if (modelOccurrences > 1) return { surface: "--model", reason: "is repeated or malformed" };
+
+  const routedModels = kiloProfileModelIds(agent);
+  if (routedModels.size === 0) return { surface: "routing profile", reason: "does not confine Kilo to Caveman providers" };
+  if (modelValue !== undefined && !routedModels.has(modelValue)) {
+    return { surface: "--model", reason: "selects a model outside Caveman's routed profile" };
+  }
+  return null;
+}
+
+function qwenProfileModelIds(agent: AgentProfile): Set<string> {
+  if (agent.id !== "qwen" || agent.injection.method !== "config-file") return new Set();
+  const overlays = [agent.injection.config_overlay.local, agent.injection.config_overlay.managed ?? agent.injection.config_overlay.local];
+  let shared: Set<string> | undefined;
+  for (const overlay of overlays) {
+    const models = jsonValueAt(overlay, ["modelProviders", "openai"]);
+    if (!Array.isArray(models)) return new Set();
+    const ids = new Set(models.flatMap((model) => {
+      const id = jsonValueAt(model, ["id"]);
+      return typeof id === "string" && id.trim() === id && id ? [id] : [];
+    }));
+    shared = shared === undefined ? ids : new Set([...shared].filter((id) => ids.has(id)));
+  }
+  return shared ?? new Set();
+}
+
+function qwenBooleanArg(
+  args: string[],
+  index: number,
+  positive: readonly string[],
+  negative: readonly string[],
+): { matched: boolean; value?: boolean; malformed: boolean; consumed: number } {
+  const arg = args[index]!;
+  const negated = qwenMatchedOption(arg, negative);
+  if (negated?.inline) return { matched: true, malformed: true, consumed: 0 };
+  if (negated) return { matched: true, value: false, malformed: false, consumed: 0 };
+  const enabled = qwenMatchedOption(arg, positive);
+  if (!enabled) return { matched: false, malformed: false, consumed: 0 };
+  if (enabled.inline) {
+    if (enabled.value === "true" || enabled.value === "false") {
+      return { matched: true, value: enabled.value === "true", malformed: false, consumed: 0 };
+    }
+    return { matched: true, malformed: true, consumed: 0 };
+  }
+  const next = args[index + 1];
+  if (next === "true" || next === "false") {
+    return { matched: true, value: next === "true", malformed: false, consumed: 1 };
+  }
+  return { matched: true, value: true, malformed: false, consumed: 0 };
+}
+
+// Qwen's temporary system settings route can be superseded by CLI routing and
+// auth flags, while safe/bare modes can discard it entirely. Parse the pinned
+// 0.22.3 spellings before proxy startup. Ambiguous or repeated selectors launch
+// direct: preserving the user's argv is safer than claiming traffic was routed.
+function qwenShortOptionLetters(arg: string): Set<string> {
+  if (!arg.startsWith("-") || arg.startsWith("--") || arg.length < 2) return new Set();
+  const letters = new Set<string>();
+  // yargs expands boolean clusters left-to-right, but these aliases consume the
+  // remaining suffix as their value. Do not mistake model/prompt text for flags.
+  const takesValue = new Set(["e", "i", "m", "o", "p", "r"]);
+  for (const letter of arg.slice(1).split("=", 1)[0]!) {
+    letters.add(letter);
+    if (takesValue.has(letter)) break;
+  }
+  return letters;
+}
+
+function qwenExtensionRouteOverride(args: string[]): AgentRouteOverride | null {
+  let confined = 0;
+  for (const arg of args) {
+    if (arg === "--extensions=none") {
+      confined++;
+      continue;
+    }
+    if (arg === "--extensions" || arg === "-e" || arg.startsWith("--extensions=") || arg.startsWith("-e")
+      || qwenShortOptionLetters(arg).has("e")) {
+      return { surface: "--extensions", reason: "can load model-routing code outside Caveman's locked session" };
+    }
+  }
+  return confined > 1
+    ? { surface: "--extensions", reason: "is repeated or ambiguous" }
+    : null;
+}
+
+function qwenControlSurfaceOverride(args: string[]): AgentRouteOverride | null {
+  for (const arg of args) {
+    if (arg === "--") break;
+    const shortOptions = qwenShortOptionLetters(arg);
+    if (arg === "--continue" || arg.startsWith("--continue=") || shortOptions.has("c")
+      || arg === "--resume" || arg.startsWith("--resume=") || shortOptions.has("r")
+      || arg === "--fork-session" || arg.startsWith("--fork-session=")
+      || arg === "--forkSession" || arg.startsWith("--forkSession=")) {
+      return { surface: "session restore", reason: "can reactivate a recorded provider route outside Caveman's locked session" };
+    }
+  }
+  const directFlags = ["--acp", "--experimental-acp", "--experimentalAcp", "--experimental-skills", "--experimentalSkills"] as const;
+  for (let index = 0; index < args.length; index++) {
+    const match = qwenBooleanArg(args, index, directFlags, []);
+    if (!match.matched) continue;
+    if (match.malformed || match.value === true) {
+      return { surface: args[index]!.split("=", 1)[0]!, reason: "exposes runtime model selection outside Caveman's locked session" };
+    }
+    index += match.consumed;
+  }
+  if (args.some((arg) => {
+    return arg === "--list-extensions" || arg === "--listExtensions" || qwenShortOptionLetters(arg).has("l") || arg.startsWith("--channel=") || arg === "--channel";
+  })) {
+    return { surface: "control mode", reason: "does not run one confined Qwen model session" };
+  }
+
+  const controlCommands = new Set(["auth", "channel", "extensions", "hooks", "mcp", "review", "serve", "sessions", "update"]);
+  const booleanOptions = new Set([
+    "--telemetry", "--debug", "--bare", "--safe-mode", "--insecure", "--chat-recording",
+    "--sandbox", "--yolo", "--experimental-lsp", "--restore-ask-user-question",
+    "--screen-reader", "--include-partial-messages", "--continue", "--fork-session", "--worktree",
+    "-s", "-c", "-v", "--version", "-h", "--help",
+  ]);
+  const valueOptions = new Set([
+    "--telemetry-target", "--telemetry-otlp-endpoint", "--telemetry-otlp-protocol", "--telemetry-log-prompts",
+    "--telemetry-outfile", "--proxy", "--model", "-m", "--prompt", "-p", "--prompt-interactive", "-i",
+    "--system-prompt", "--append-system-prompt", "--sandbox-image", "--approval-mode", "--allowed-mcp-server-names",
+    "--mcp-config", "--allowed-tools", "--include-directories", "--openai-logging", "--openai-logging-dir",
+    "--openai-api-key", "--openai-base-url", "--input-format", "--output-format", "-o", "--json-fd",
+    "--json-file", "--json-schema", "--input-file", "--resume", "-r", "--session-id", "--sandbox-session-id",
+    "--max-session-turns", "--max-wall-time", "--max-tool-calls", "--max-subagent-depth", "--core-tools",
+    "--exclude-tools", "--disabled-slash-commands", "--auth-type",
+  ]);
+  const routedArgs = args.filter((arg) => arg !== "--extensions=none");
+  for (let index = 0; index < routedArgs.length; index++) {
+    const arg = routedArgs[index]!;
+    if (arg === "--") break;
+    if (arg.startsWith("--") && arg.includes("=")) continue;
+    if (booleanOptions.has(arg)) {
+      if (routedArgs[index + 1] === "true" || routedArgs[index + 1] === "false") index++;
+      continue;
+    }
+    if (valueOptions.has(arg)) {
+      if (routedArgs[index + 1] !== undefined) index++;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    return controlCommands.has(arg)
+      ? { surface: arg, reason: "is a Qwen control command, not one confined model session" }
+      : null;
+  }
+  return null;
+}
+
+function qwenRouteOverride(agent: AgentProfile, args: string[]): AgentRouteOverride | null {
+  const extensionOverride = qwenExtensionRouteOverride(args);
+  if (extensionOverride) return extensionOverride;
+  const controlOverride = qwenControlSurfaceOverride(args);
+  if (controlOverride) return controlOverride;
+  // Qwen 0.22.3 checks raw process.argv before yargs and forces SIMPLE mode
+  // whenever this exact token occurs, even after `--` or beside `false`.
+  if (args.includes("--bare")) return { surface: "--bare", reason: "ignores Caveman system settings" };
+  const modelValues: string[] = [];
+  const fallbackValues: string[] = [];
+  const authValues: string[] = [];
+  const safeValues: boolean[] = [];
+  const bareValues: boolean[] = [];
+  let modelOccurrences = 0;
+  let authOccurrences = 0;
+  let safeMalformed = false;
+  let bareMalformed = false;
+  let modelMalformed = false;
+  let fallbackMalformed = false;
+  let authMalformed = false;
+
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (arg === "--") break;
+
+    if (qwenMatchedOption(arg, ["--openai-api-key", "--openaiApiKey"])) {
+      return { surface: "--openai-api-key", reason: "overrides Caveman's credential route" };
+    }
+    if (qwenMatchedOption(arg, ["--openai-base-url", "--openaiBaseUrl"])) {
+      return { surface: "--openai-base-url", reason: "overrides Caveman's gateway route" };
+    }
+
+    const model = qwenMatchedOption(arg, ["--model", "--m"]);
+    if (model || arg === "-m") {
+      modelOccurrences++;
+      const value = model?.inline ? model.value : args[index + 1];
+      if (typeof value !== "string" || !value || value === "--" || (!model?.inline && value.startsWith("-"))) {
+        modelMalformed = true;
+      } else {
+        modelValues.push(value);
+        if (!model?.inline) index++;
+      }
+      continue;
+    }
+    if (arg.startsWith("-") && !arg.startsWith("--") && arg.slice(1).includes("m")) {
+      if (!arg.startsWith("-m=")) {
+        return { surface: "-m", reason: "is ambiguous inside a short-option cluster" };
+      }
+      modelOccurrences++;
+      const value = arg.slice(3);
+      if (!value) modelMalformed = true;
+      else modelValues.push(value);
+      continue;
+    }
+
+    const fallback = qwenMatchedOption(arg, ["--fallback-model", "--fallbackModel"]);
+    if (fallback) {
+      const raw: string[] = [];
+      if (fallback.inline) {
+        if (fallback.value !== undefined) raw.push(fallback.value);
+      }
+      // yargs arrays consume every following non-option token even when first
+      // value used `=`; all of them participate in the effective fallback list.
+      while (index + 1 < args.length && !args[index + 1]!.startsWith("-")) raw.push(args[++index]!);
+      const values = raw.flatMap((value) => value.split(",").map((item) => item.trim()).filter(Boolean));
+      if (values.length === 0) fallbackMalformed = true;
+      else fallbackValues.push(...values);
+      continue;
+    }
+
+    const auth = qwenMatchedOption(arg, ["--auth-type", "--authType"]);
+    if (auth) {
+      authOccurrences++;
+      const value = auth.inline ? auth.value : args[index + 1];
+      if (typeof value !== "string" || !value || value === "--" || (!auth.inline && value.startsWith("-"))) {
+        authMalformed = true;
+      } else {
+        authValues.push(value);
+        if (!auth.inline) index++;
+      }
+      continue;
+    }
+
+    const safe = qwenBooleanArg(args, index, ["--safe-mode", "--safeMode"], ["--no-safe-mode", "--no-safeMode"]);
+    if (safe.matched) {
+      safeMalformed ||= safe.malformed;
+      if (safe.value !== undefined) safeValues.push(safe.value);
+      index += safe.consumed;
+      continue;
+    }
+    const bare = qwenBooleanArg(args, index, ["--bare"], ["--no-bare"]);
+    if (bare.matched) {
+      bareMalformed ||= bare.malformed;
+      if (bare.value !== undefined) bareValues.push(bare.value);
+      index += bare.consumed;
+    }
+  }
+
+  if (modelMalformed || modelOccurrences > 1 || modelValues.length !== modelOccurrences) {
+    return { surface: "--model", reason: "is repeated or malformed" };
+  }
+  if (fallbackMalformed || fallbackValues.length > 3) {
+    return { surface: "--fallback-model", reason: "is repeated or malformed" };
+  }
+  if (authMalformed || authOccurrences > 1 || authValues.length !== authOccurrences) {
+    return { surface: "--auth-type", reason: "is repeated or malformed" };
+  }
+  if (safeMalformed || safeValues.length > 1) return { surface: "--safe-mode", reason: "is repeated or malformed" };
+  if (bareMalformed || bareValues.length > 1) return { surface: "--bare", reason: "is repeated or malformed" };
+
+  const routedModels = qwenProfileModelIds(agent);
+  if (routedModels.size === 0) return { surface: "routing profile", reason: "has no common local and managed model" };
+  if (modelValues.some((model) => !routedModels.has(model))) {
+    return { surface: "--model", reason: "selects a model outside Caveman's routed profile" };
+  }
+  if (fallbackValues.some((model) => !routedModels.has(model))) {
+    return { surface: "--fallback-model", reason: "selects a model outside Caveman's routed profile" };
+  }
+  if (authValues.some((auth) => auth !== "openai")) {
+    return { surface: "--auth-type", reason: "selects an auth provider outside Caveman's routed profile" };
+  }
+
+  const layers = qwenSettingsLayers();
+  if (!layers) return { surface: "effective settings", reason: "cannot be resolved safely" };
+  for (const layer of layers) {
+    const enforcedType = jsonValueAt(layer, ["security", "auth", "enforcedType"]);
+    if (enforcedType !== undefined && enforcedType !== "openai") {
+      return { surface: "enforced auth policy", reason: "requires a provider outside Caveman's routed profile" };
+    }
+  }
+  const safeEnv = qwenEffectiveEnvValue(layers, "QWEN_CODE_SAFE_MODE");
+  const bareEnv = qwenEffectiveEnvValue(layers, "QWEN_CODE_SIMPLE");
+  if (safeEnv === null || bareEnv === null) return { surface: "effective settings", reason: "cannot be resolved safely" };
+  const truthy = (value: string | undefined) => !!value && ["1", "true", "yes", "on"].includes(value.toLowerCase().trim());
+  const safeMode = safeValues[0] ?? truthy(safeEnv);
+  // Pinned Qwen implements bare mode as CLI-true OR QWEN_CODE_SIMPLE. An
+  // explicit CLI false cannot neutralize an ambient true value.
+  const bareMode = bareValues[0] === true || truthy(bareEnv);
+  if (safeMode) return { surface: "--safe-mode", reason: "ignores Caveman system settings" };
+  if (bareMode) return { surface: "--bare", reason: "ignores Caveman system settings" };
+  return null;
+}
+
+function agentRouteOverride(agent: AgentProfile, args: string[]): AgentRouteOverride | null {
+  if (agent.id === "kilo") return kiloRouteOverride(agent, args);
+  if (agent.id === "qwen") return qwenRouteOverride(agent, args);
+  // Claude Code 2.1.196+ refuses Remote Control unless ANTHROPIC_BASE_URL is
+  // api.anthropic.com, and the first-party escape hatch does not apply (#947).
+  if (agent.id === "claude" && args.includes("remote-control")) {
+    return { surface: "remote-control", reason: "only runs against api.anthropic.com, so it cannot route through the proxy" };
+  }
+  return null;
+}
+
+function routeOverrideLabel(agent: AgentProfile): string {
+  if (agent.id === "qwen") return "Qwen";
+  if (agent.id === "kilo") return "Kilo";
+  return agent.display_name;
+}
+
+function qwenCliBoolean(args: string[], name: string): boolean | undefined {
+  let value: boolean | undefined;
+  const camel = name.replace(/-([a-z])/g, (_match, char: string) => char.toUpperCase());
+  const names = new Set([name, camel]);
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (arg === "--") break;
+    if ([...names].some((candidate) => arg === `--no-${candidate}`)) {
+      value = false;
+      continue;
+    }
+    const withValue = [...names].find((candidate) => arg.startsWith(`--${candidate}=`));
+    if (withValue) {
+      value = arg.slice(arg.indexOf("=") + 1) === "true";
+      continue;
+    }
+    if (![...names].some((candidate) => arg === `--${candidate}`)) continue;
+    const next = args[index + 1];
+    if (next === "true" || next === "false") {
+      value = next === "true";
+      index++;
+    } else {
+      value = true;
+    }
+  }
+  return value;
+}
+
+function qwenModeEnabled(args: string[], name: string, envKey: string, layers: JsonObject[]): boolean | null {
+  const explicit = qwenCliBoolean(args, name);
+  if (explicit !== undefined) return explicit;
+  const raw = qwenEffectiveEnvValue(layers, envKey);
+  if (raw === null) return null;
+  return !!raw && ["1", "true", "yes", "on"].includes(raw.toLowerCase().trim());
+}
+
+function qwenArgsPermitRecovery(args: string[], layers: JsonObject[]): boolean {
+  if (qwenModeEnabled(args, "safe-mode", "QWEN_CODE_SAFE_MODE", layers) !== false) return false;
+  if (qwenModeEnabled(args, "bare", "QWEN_CODE_SIMPLE", layers) !== false) return false;
+  let allowedConfigured = false;
+  const allowed: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (arg === "--") break;
+    if (arg === "--mcp-config" || arg.startsWith("--mcp-config=")) return false;
+    if (arg.startsWith("--exclude-tools=")) {
+      const denied = arg.slice(arg.indexOf("=") + 1).split(",").map((item) => item.trim()).filter(Boolean);
+      if (denied.some(qwenCavemanToolDenied)) return false;
+      continue;
+    }
+    if (arg === "--exclude-tools") {
+      while (index + 1 < args.length && !args[index + 1]!.startsWith("-")) {
+        const denied = args[++index]!.split(",").map((item) => item.trim()).filter(Boolean);
+        if (denied.some(qwenCavemanToolDenied)) return false;
+      }
+      continue;
+    }
+    if (arg.startsWith("--allowed-mcp-server-names=")) {
+      allowedConfigured = true;
+      allowed.push(...arg.slice(arg.indexOf("=") + 1).split(",").map((item) => item.trim()).filter(Boolean));
+      continue;
+    }
+    if (arg !== "--allowed-mcp-server-names") continue;
+    allowedConfigured = true;
+    while (index + 1 < args.length && !args[index + 1]!.startsWith("-")) {
+      allowed.push(...args[++index]!.split(",").map((item) => item.trim()).filter(Boolean));
+    }
+  }
+  return !allowedConfigured || allowed.some((pattern) => qwenMcpServerPatternMatches("caveman", pattern));
+}
+
+function ownedMcpRegistration(agentId: string, agentArgs: string[] = []): McpServerMarker | null {
+  const marker = readMcpServerMarker(agentId, "caveman");
+  if (!marker) return null;
+  if (agentId === "kilo") {
+    const activePath = canonicalMcpConfigPath(kiloConfigPath());
+    if (marker.config_path && marker.config_path !== activePath) return null;
+    const config = readOptionalJsonObject(marker.config_path ?? activePath);
+    return config && kiloMcpEntryMatches(jsonValueAt(config, ["mcp", "caveman"]), marker) ? marker : null;
+  }
+  if (agentId === "qwen") {
+    const activePath = canonicalMcpConfigPath(qwenConfigPath());
+    if (marker.config_path && marker.config_path !== activePath) return null;
+    const layers = qwenSettingsLayers();
+    if (!layers || !qwenArgsPermitRecovery(agentArgs, layers)) return null;
+    const config = readQwenJsonObject(marker.config_path ?? activePath);
+    if (!config || !qwenMcpEntryMatches(jsonValueAt(config, ["mcpServers", "caveman"]), marker)) return null;
+    return qwenSettingsPermitRecovery(marker, layers) ? marker : null;
+  }
+  return marker;
+}
+
+function planMcpQwenJson(mcp: { command: string; args: string[] }, serverName = "caveman"): OwnedMcpConfigPlan | null {
+  const path = canonicalMcpConfigPath(qwenConfigPath());
+  const marker = readMcpServerMarker("qwen", serverName);
+  if (marker?.config_path && marker.config_path !== path) {
+    console.error(`${mark("warn")} ${serverName} is owned in ${marker.config_path}; uninstall it before installing into ${path}`);
+    return null;
+  }
+  const loaded = readStrictMcpJsonRoot(path);
+  if (!loaded) return null;
+  const { root } = loaded;
+  if (root.mcpServers !== undefined && (!root.mcpServers || typeof root.mcpServers !== "object" || Array.isArray(root.mcpServers))) {
+    console.error(`${mark("warn")} ${path} mcpServers must be a JSON object; not modifying it`);
+    return null;
+  }
+  const servers = root.mcpServers as Record<string, unknown> | undefined;
+  const current = servers?.[serverName];
+  if (marker && !marker.config_path && current === undefined) {
+    console.error(`${mark("warn")} legacy ${serverName} ownership marker does not identify its Qwen config; refusing relocation`);
+    return null;
+  }
+  if (current !== undefined) {
+    if (!marker) {
+      console.error(`${mark("warn")} ${path} mcpServers.${serverName} exists but is not Caveman-journaled; refusing overwrite`);
+      return null;
+    }
+    if (!qwenMcpEntryMatches(current, marker)) {
+      console.error(`${mark("warn")} ${path} mcpServers.${serverName} changed since Caveman installed it; refusing overwrite`);
+      return null;
+    }
+    if (qwenMcpEntryMatches(current, mcp)) {
+      return ownedMcpConfigPlan("qwen", path, loaded, loaded.bytes!);
+    }
+  }
+  const nextServers = servers ?? {};
+  nextServers[serverName] = qwenMcpEntry(mcp);
+  root.mcpServers = nextServers;
+  return ownedMcpConfigPlan("qwen", path, loaded, Buffer.from(JSON.stringify(root, null, 2) + "\n"));
+}
+
+function planRemoveMcpQwenJson(serverName = "caveman"): OwnedMcpConfigPlan | null {
+  const marker = readMcpServerMarker("qwen", serverName);
+  const path = marker?.config_path ?? canonicalMcpConfigPath(qwenConfigPath());
+  const loaded = readStrictMcpJsonRoot(path);
+  if (!loaded) return null;
+  if (!loaded.exists) {
+    if (marker && !marker.config_path) {
+      console.error(`${mark("warn")} legacy ${serverName} ownership marker does not identify its Qwen config; refusing removal`);
+      return null;
+    }
+    if (marker?.config_path && movedOwnedMcpRemovalBlocked("qwen", serverName, marker)) return null;
+    return ownedMcpConfigPlan("qwen", path, loaded, null);
+  }
+  const { root } = loaded;
+  if (root.mcpServers !== undefined && (!root.mcpServers || typeof root.mcpServers !== "object" || Array.isArray(root.mcpServers))) {
+    console.error(`${mark("warn")} ${path} mcpServers must be a JSON object; not modifying it`);
+    return null;
+  }
+  const servers = root.mcpServers as Record<string, unknown> | undefined;
+  const current = servers?.[serverName];
+  if (current === undefined) {
+    if (marker && !marker.config_path) {
+      console.error(`${mark("warn")} legacy ${serverName} ownership marker does not identify its Qwen config; refusing removal`);
+      return null;
+    }
+    return ownedMcpConfigPlan("qwen", path, loaded, loaded.bytes);
+  }
+  if (!marker) {
+    console.error(`${mark("warn")} ${path} mcpServers.${serverName} exists but is not Caveman-journaled; refusing removal`);
+    return null;
+  }
+  if (!qwenMcpEntryMatches(current, marker)) {
+    console.error(`${mark("warn")} ${path} mcpServers.${serverName} changed since Caveman installed it; refusing removal`);
+    return null;
+  }
+  delete servers![serverName];
+  if (Object.keys(servers!).length === 0) delete root.mcpServers;
+  return ownedMcpConfigPlan("qwen", path, loaded, Buffer.from(JSON.stringify(root, null, 2) + "\n"));
+}
+
+type OwnedMcpPendingJournal = {
+  schema_version: 1;
+  transaction_id: string;
+  agent: "kilo" | "qwen";
+  server_name: string;
+  action: "install" | "uninstall";
+  config_path: string;
+  marker_path: string;
+  config_before_base64: string | null;
+  config_before_mode: number;
+  config_before_sha256: string | null;
+  config_after_sha256: string | null;
+  marker_before_base64: string | null;
+  marker_before_mode: number;
+  marker_before_sha256: string | null;
+  marker_after_base64: string | null;
+  marker_after_sha256: string | null;
+};
+
+function optionalBytesHash(bytes: Buffer | null): string | null {
+  return bytes ? bytesHash(bytes) : null;
+}
+
+function mcpPendingJournalPath(agent: "kilo" | "qwen", serverName: string): string {
+  return `${canonicalOwnedMcpMarkerPath(agent, serverName)}.pending`;
+}
+
+function mcpConfigPendingJournalPath(configPath: string): string {
+  const canonicalPath = canonicalMcpConfigPath(configPath);
+  return join(dirname(canonicalPath), `.${basename(canonicalPath)}.caveman-mcp.pending.json`);
+}
+
+function mcpMarkerBytes(mcp: { command: string; args: string[] }, tool: string, configPath?: string): Buffer {
+  return Buffer.from(JSON.stringify({
+    ...(configPath ? { schema_version: 1 } : {}),
+    tool,
+    command: mcp.command,
+    args: mcp.args,
+    ...(configPath ? { config_path: canonicalMcpConfigPath(configPath) } : {}),
+  }, null, 2) + "\n");
+}
+
+function validMcpMarkerBytes(bytes: Buffer, agent: "kilo" | "qwen", serverName: string): boolean {
+  return parseMcpServerMarkerBytes(agent, serverName, bytes) !== null;
+}
+
+function decodePendingBytes(value: unknown, field: string): Buffer | null {
+  if (value === null) return null;
+  if (typeof value !== "string") throw new Error(`${field} must be base64 or null`);
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.toString("base64") !== value) throw new Error(`${field} is not canonical base64`);
+  return bytes;
+}
+
+function validOptionalHash(value: unknown): value is string | null {
+  return value === null || (typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value));
+}
+
+type ReadOwnedMcpPendingJournal = {
+  journal: OwnedMcpPendingJournal;
+  configBefore: Buffer | null;
+  markerBefore: Buffer | null;
+  markerAfter: Buffer | null;
+  path: string;
+  bytes: Buffer;
+};
+
+function ownedMcpPendingLabel(agent?: string, serverName?: string): string {
+  return agent && serverName ? `${agent} ${serverName} MCP` : "owned MCP";
+}
+
+function readOwnedMcpPendingJournalAt(
+  path: string,
+  expected: { agent?: "kilo" | "qwen"; serverName?: string; configPath?: string; locatorPath?: string } = {},
+): ReadOwnedMcpPendingJournal | null {
+  const label = ownedMcpPendingLabel(expected.agent, expected.serverName);
+  let bytes: Buffer;
+  let value: Record<string, unknown>;
+  try {
+    bytes = readFileSync(path);
+    value = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error(`cannot read pending ${label} transaction: ${(error as Error).message}`);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`pending ${label} transaction is malformed; refusing recovery`);
+  }
+  if (process.platform !== "win32" && (statSync(path).mode & 0o077) !== 0) {
+    throw new Error(`pending ${label} transaction has unsafe permissions; refusing recovery`);
+  }
+  const keys = [
+    "action", "agent", "config_after_sha256", "config_before_base64", "config_before_mode", "config_path",
+    "config_before_sha256", "marker_after_base64", "marker_after_sha256", "marker_before_base64", "marker_before_mode",
+    "marker_before_sha256", "marker_path", "schema_version", "server_name", "transaction_id",
+  ].sort();
+  const journalAgent = value.agent;
+  const journalServer = value.server_name;
+  if (Object.keys(value).sort().join("\0") !== keys.join("\0")
+    || value.schema_version !== 1
+    || typeof value.transaction_id !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.transaction_id)
+    || (journalAgent !== "kilo" && journalAgent !== "qwen")
+    || typeof journalServer !== "string"
+    || !mcpServerToolName(journalServer)
+    || (expected.agent !== undefined && journalAgent !== expected.agent)
+    || (expected.serverName !== undefined && journalServer !== expected.serverName)
+    || (value.action !== "install" && value.action !== "uninstall")
+    || typeof value.config_path !== "string"
+    || value.config_path !== canonicalMcpConfigPath(value.config_path)
+    || (expected.configPath !== undefined && value.config_path !== canonicalMcpConfigPath(expected.configPath))
+    || typeof value.marker_path !== "string"
+    || value.marker_path !== canonicalMcpConfigPath(value.marker_path)
+    || (expected.locatorPath !== undefined && `${value.marker_path}.pending` !== canonicalMcpConfigPath(expected.locatorPath))
+    || !Number.isInteger(value.config_before_mode) || (value.config_before_mode as number) < 0 || (value.config_before_mode as number) > 0o777
+    || !Number.isInteger(value.marker_before_mode) || (value.marker_before_mode as number) < 0 || (value.marker_before_mode as number) > 0o777
+    || !validOptionalHash(value.config_before_sha256)
+    || !validOptionalHash(value.config_after_sha256)
+    || !validOptionalHash(value.marker_before_sha256)
+    || !validOptionalHash(value.marker_after_sha256)) {
+    throw new Error(`pending ${label} transaction is malformed; refusing recovery`);
+  }
+  try {
+    const configBefore = decodePendingBytes(value.config_before_base64, "config_before_base64");
+    const markerBefore = decodePendingBytes(value.marker_before_base64, "marker_before_base64");
+    const markerAfter = decodePendingBytes(value.marker_after_base64, "marker_after_base64");
+    if (optionalBytesHash(configBefore) !== value.config_before_sha256
+      || optionalBytesHash(markerBefore) !== value.marker_before_sha256
+      || optionalBytesHash(markerAfter) !== value.marker_after_sha256
+      || (markerBefore !== null && !validMcpMarkerBytes(markerBefore, journalAgent, journalServer))
+      || (markerAfter !== null && !validMcpMarkerBytes(markerAfter, journalAgent, journalServer))
+      || (markerBefore !== null && parseMcpServerMarkerBytes(journalAgent, journalServer, markerBefore)?.config_path !== undefined
+        && parseMcpServerMarkerBytes(journalAgent, journalServer, markerBefore)?.config_path !== value.config_path)
+      || (markerAfter !== null && parseMcpServerMarkerBytes(journalAgent, journalServer, markerAfter)?.config_path !== value.config_path)
+      || (value.action === "install") !== (markerAfter !== null)) {
+      throw new Error("journal bytes do not match declared transaction state");
+    }
+    return {
+      journal: value as OwnedMcpPendingJournal,
+      configBefore,
+      markerBefore,
+      markerAfter,
+      path,
+      bytes,
+    };
+  } catch (error) {
+    throw new Error(`pending ${label} transaction is malformed: ${(error as Error).message}`);
+  }
+}
+
+function readOwnedMcpPendingLocator(agent: "kilo" | "qwen", serverName: string): ReadOwnedMcpPendingJournal | null {
+  const path = canonicalMcpConfigPath(mcpPendingJournalPath(agent, serverName));
+  return readOwnedMcpPendingJournalAt(path, { agent, serverName, locatorPath: path });
+}
+
+function readOwnedMcpConfigPending(configPath: string): ReadOwnedMcpPendingJournal | null {
+  const canonicalPath = canonicalMcpConfigPath(configPath);
+  return readOwnedMcpPendingJournalAt(mcpConfigPendingJournalPath(canonicalPath), { configPath: canonicalPath });
+}
+
+type OwnedMcpRecovery = "none" | "discarded" | "finalized" | "rolled-back";
+
+function recoverOwnedMcpTransaction(pending: ReadOwnedMcpPendingJournal | null): OwnedMcpRecovery {
+  if (!pending) return "none";
+  const { journal, configBefore, markerBefore } = pending;
+  const agent = journal.agent;
+  const serverName = journal.server_name;
+  const configPath = journal.config_path;
+  const markerPath = journal.marker_path;
+  const configPendingPath = mcpConfigPendingJournalPath(configPath);
+  const locatorPath = `${markerPath}.pending`;
+  const configPending = readOwnedMcpPendingJournalAt(configPendingPath, { agent, serverName, configPath });
+  const locatorPending = readOwnedMcpPendingJournalAt(locatorPath, { agent, serverName, configPath, locatorPath });
+  if (configPending && locatorPending && !configPending.bytes.equals(locatorPending.bytes)) {
+    throw new Error(`${agent} ${serverName} MCP transaction journals disagree; refusing recovery`);
+  }
+  const configCurrent = fileBytes(configPath);
+  const markerCurrent = fileBytes(markerPath);
+  const configHash = optionalBytesHash(configCurrent);
+  const markerHash = optionalBytesHash(markerCurrent);
+  const configIsBefore = configHash === journal.config_before_sha256;
+  const configIsAfter = configHash === journal.config_after_sha256;
+  const markerIsBefore = markerHash === journal.marker_before_sha256;
+  const markerIsAfter = markerHash === journal.marker_after_sha256;
+  const removePendingCopies = () => {
+    if (configPending) durableUnlink(configPendingPath);
+    if (locatorPending) durableUnlink(locatorPath);
+  };
+
+  if (configIsAfter && markerIsAfter) {
+    removePendingCopies();
+    process.stderr.write(`${mark("warn")} finalized interrupted ${agent} ${serverName} MCP transaction\n`);
+    return "finalized";
+  }
+  if (configIsBefore && markerIsBefore) {
+    removePendingCopies();
+    process.stderr.write(`${mark("warn")} discarded uncommitted ${agent} ${serverName} MCP transaction\n`);
+    return "discarded";
+  }
+  if ((!configIsBefore && !configIsAfter) || (!markerIsBefore && !markerIsAfter)) {
+    throw new Error(`${agent} ${serverName} MCP config or ownership journal changed during interrupted transaction; refusing destructive recovery`);
+  }
+  if (!configPending || !locatorPending) {
+    throw new Error(`${agent} ${serverName} MCP transaction lost one durable journal copy; refusing destructive recovery`);
+  }
+
+  if (!configIsBefore) {
+    durableReplaceFileIfUnchanged(configPath, configCurrent, configBefore, journal.config_before_mode);
+  }
+  if (!markerIsBefore) {
+    durableReplaceFileIfUnchanged(markerPath, markerCurrent, markerBefore, journal.marker_before_mode);
+  }
+  if (optionalBytesHash(fileBytes(configPath)) !== journal.config_before_sha256
+    || optionalBytesHash(fileBytes(markerPath)) !== journal.marker_before_sha256) {
+    throw new Error(`${agent} ${serverName} MCP rollback postflight mismatch`);
+  }
+  removePendingCopies();
+  process.stderr.write(`${mark("warn")} rolled back interrupted ${agent} ${serverName} MCP transaction\n`);
+  return "rolled-back";
+}
+
+function transactOwnedMcpConfig(
+  agent: "kilo" | "qwen",
+  serverName: string,
+  action: "install" | "uninstall",
+  mcp?: { command: string; args: string[] },
+  lockedConfigPath?: string,
+): boolean {
+  const plan = action === "install"
+    ? agent === "kilo" ? planMcpKiloJson(mcp!, serverName) : planMcpQwenJson(mcp!, serverName)
+    : agent === "kilo" ? planRemoveMcpKiloJson(serverName) : planRemoveMcpQwenJson(serverName);
+  if (!plan) return false;
+  if (lockedConfigPath && plan.path !== canonicalMcpConfigPath(lockedConfigPath)) {
+    throw new Error(`${agent} ${serverName} MCP config target changed while acquiring lock; refusing mutation`);
+  }
+
+  const markerPath = canonicalOwnedMcpMarkerPath(agent, serverName);
+  const markerBefore = fileBytes(markerPath);
+  if (markerBefore !== null && !validMcpMarkerBytes(markerBefore, agent, serverName)) {
+    throw new Error(`${markerPath} is not a valid Caveman ownership journal; refusing overwrite`);
+  }
+  const markerBeforeMode = markerBefore === null ? 0o600 : statSync(markerPath).mode & 0o777;
+  if (!optionalBytesEqual(fileBytes(markerPath), markerBefore)) {
+    throw new Error(`${markerPath} changed while planning MCP update; refusing overwrite`);
+  }
+  const markerAfter = action === "install" ? mcpMarkerBytes(mcp!, mcpServerToolName(serverName)!, plan.path) : null;
+  if (!plan.changed && optionalBytesEqual(markerBefore, markerAfter)) return true;
+
+  const journal: OwnedMcpPendingJournal = {
+    schema_version: 1,
+    transaction_id: randomUUID(),
+    agent,
+    server_name: serverName,
+    action,
+    config_path: plan.path,
+    marker_path: markerPath,
+    config_before_base64: plan.before?.toString("base64") ?? null,
+    config_before_mode: plan.beforeMode,
+    config_before_sha256: optionalBytesHash(plan.before),
+    config_after_sha256: optionalBytesHash(plan.after),
+    marker_before_base64: markerBefore?.toString("base64") ?? null,
+    marker_before_mode: markerBeforeMode,
+    marker_before_sha256: optionalBytesHash(markerBefore),
+    marker_after_base64: markerAfter?.toString("base64") ?? null,
+    marker_after_sha256: optionalBytesHash(markerAfter),
+  };
+  const locatorPath = `${markerPath}.pending`;
+  const configPendingPath = mcpConfigPendingJournalPath(plan.path);
+  const pendingBytes = Buffer.from(JSON.stringify(journal, null, 2) + "\n");
+  if (fileBytes(locatorPath) !== null || fileBytes(configPendingPath) !== null) {
+    throw new Error(`${agent} ${serverName} MCP transaction journal already exists; refusing overwrite`);
+  }
+  durableCreateFile(locatorPath, pendingBytes);
+  try {
+    durableCreateFile(configPendingPath, pendingBytes);
+  } catch (error) {
+    durableUnlink(locatorPath);
+    throw error;
+  }
+
+  try {
+    if (action === "install") {
+      if (plan.changed) durableReplaceFileIfUnchanged(plan.path, plan.before, plan.after, plan.beforeMode);
+      if (!optionalBytesEqual(markerBefore, markerAfter)) durableReplaceFileIfUnchanged(markerPath, markerBefore, markerAfter);
+    } else {
+      if (!optionalBytesEqual(markerBefore, markerAfter)) durableReplaceFileIfUnchanged(markerPath, markerBefore, markerAfter);
+      if (plan.changed) durableReplaceFileIfUnchanged(plan.path, plan.before, plan.after, plan.beforeMode);
+    }
+    if (optionalBytesHash(fileBytes(plan.path)) !== journal.config_after_sha256
+      || optionalBytesHash(fileBytes(markerPath)) !== journal.marker_after_sha256) {
+      throw new Error(`${agent} ${serverName} MCP transaction postflight mismatch`);
+    }
+    durableUnlink(configPendingPath);
+    durableUnlink(locatorPath);
+    return true;
+  } catch (error) {
+    try {
+      const recovery = recoverOwnedMcpTransaction(readOwnedMcpConfigPending(plan.path) ?? readOwnedMcpPendingLocator(agent, serverName));
+      if (recovery === "finalized") return true;
+    } catch (recoveryError) {
+      throw new Error(`${agent} ${serverName} MCP transaction failed and safe recovery was blocked: ${(recoveryError as Error).message}; original error: ${(error as Error).message}`);
+    }
+    throw new Error(`${agent} ${serverName} MCP transaction failed and rolled back: ${(error as Error).message}`);
+  }
+}
+
+function withOwnedMcpTransactionLock<T>(
+  agent: "kilo" | "qwen",
+  serverName: string,
+  run: (lockedConfigPath: string) => T,
+): T {
+  const markerPath = canonicalOwnedMcpMarkerPath(agent, serverName);
+  return withMcpConfigLock(markerPath, () => {
+    const activeConfigPath = () => canonicalMcpConfigPath(agent === "kilo" ? kiloConfigPath() : qwenConfigPath());
+    const resourcePath = () => readOwnedMcpPendingLocator(agent, serverName)?.journal.config_path
+      ?? readMcpServerMarker(agent, serverName)?.config_path
+      ?? activeConfigPath();
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const lockPath = canonicalMcpConfigPath(resourcePath());
+      const outcome = withMcpConfigLock<{ retry: true } | { retry: false; value: T }>(lockPath, () => {
+        const locatorPending = readOwnedMcpPendingLocator(agent, serverName);
+        if (locatorPending) {
+          if (locatorPending.journal.config_path !== lockPath) return { retry: true };
+          recoverOwnedMcpTransaction(locatorPending);
+          return { retry: true };
+        }
+        const configPending = readOwnedMcpConfigPending(lockPath);
+        if (configPending) {
+          recoverOwnedMcpTransaction(configPending);
+          return { retry: true };
+        }
+        if (canonicalMcpConfigPath(resourcePath()) !== lockPath) return { retry: true };
+        return { retry: false, value: run(lockPath) };
+      });
+      if (!outcome.retry) return outcome.value;
+    }
+    throw new Error(`${agent} ${serverName} MCP transaction state kept changing; refusing mutation`);
+  });
 }
 
 function mcpInstall(target?: string, serverName = "caveman"): number {
@@ -10216,17 +13432,32 @@ function mcpInstall(target?: string, serverName = "caveman"): number {
   }
   let installed = 0;
   for (const a of targets) {
-    if (installMcpForAgent(a, mcp, serverName)) {
-      if (serverName === "caveman") {
-        writeMcpMarker(a.id, mcp);
-      } else {
-        writeMcpServerMarker(
-          a.id,
-          serverName,
-          mcp,
-          serverName === "caveman-browse" ? "caveman_browse" : serverName === "caveman-delegate" ? "caveman_delegate" : "caveman_context",
-        );
+    preflightMcpServerMarker(a.id, serverName);
+    const installOne = (lockedConfigPath?: string): boolean => {
+      if (a.id === "kilo" || a.id === "qwen") {
+        return transactOwnedMcpConfig(a.id, serverName, "install", mcp, lockedConfigPath);
       }
+      if (!installMcpForAgent(a, mcp, serverName)) return false;
+      try {
+        if (serverName === "caveman") {
+          writeMcpMarker(a.id, mcp);
+        } else {
+          writeMcpServerMarker(
+            a.id,
+            serverName,
+            mcp,
+            serverName === "caveman-browse" ? "caveman_browse" : serverName === "caveman-delegate" ? "caveman_delegate" : "caveman_context",
+          );
+        }
+      } catch (error) {
+        throw new Error(`${a.display_name}: MCP ownership journal failed; native config may already contain the registration: ${(error as Error).message}`);
+      }
+      return true;
+    };
+    const installedForAgent = a.id === "kilo" || a.id === "qwen"
+      ? withOwnedMcpTransactionLock(a.id, serverName, installOne)
+      : installOne();
+    if (installedForAgent) {
       installed++;
       const tool = serverName === "caveman"
         ? "caveman_retrieve"
@@ -10321,8 +13552,11 @@ function installMcpForAgent(a: AgentProfile, mcp: { command: string; args: strin
         command: [mcp.command, ...mcp.args],
         enabled: true,
       });
+    case "kilo":
+    case "qwen":
+      throw new Error(`${a.display_name} MCP changes require the ownership transaction`);
     case "gemini":
-      return installMcpJson(join(homedir(), ".gemini", "settings.json"), ["mcpServers", serverName], {
+      return installMcpJson(geminiSettingsPath(), ["mcpServers", serverName], {
         command: mcp.command,
         args: mcp.args,
       });
@@ -10404,7 +13638,7 @@ function installMcpClaude(mcp: { command: string; args: string[] }, serverName =
 }
 
 function installMcpCodexToml(mcp: { command: string; args: string[] }, serverName = "caveman"): boolean {
-  const path = join(homedir(), ".codex", "config.toml");
+  const path = join(codexHomeDir(), "config.toml");
   let existing = "";
   try {
     existing = readFileSync(path, "utf8");
@@ -10416,7 +13650,8 @@ function installMcpCodexToml(mcp: { command: string; args: string[] }, serverNam
   }
   const header = `[mcp_servers.${serverName}]`;
   const argsLine = mcp.args.length ? `\nargs = [${mcp.args.map((s) => JSON.stringify(s)).join(", ")}]` : "";
-  const expectedBlock = `${header}\ncommand = ${JSON.stringify(mcp.command)}${argsLine}\n`;
+  const recoveryEnv = serverName === "caveman" ? `\n${CODEX_RECOVERY_ENV}` : "";
+  const expectedBlock = `${header}\ncommand = ${JSON.stringify(mcp.command)}${argsLine}${recoveryEnv}\n`;
   if (existing.includes(header)) {
     const headerMatch = new RegExp(`(^|\\n)[ \\t]*\\[mcp_servers\\.${escapeRegExp(serverName)}\\][ \\t]*(?:\\r?\\n|$)`, "m").exec(existing);
     if (!headerMatch) {
@@ -10452,7 +13687,7 @@ function installMcpCodexToml(mcp: { command: string; args: string[] }, serverNam
 }
 
 function codexMcpRegistrationMatches(serverName: string, mcp: { command: string; args: string[] }): boolean {
-  const path = join(homedir(), ".codex", "config.toml");
+  const path = join(codexHomeDir(), "config.toml");
   let existing = "";
   try { existing = readFileSync(path, "utf8"); } catch { return false; }
   const headerMatch = new RegExp(`(^|\\n)[ \\t]*\\[mcp_servers\\.${escapeRegExp(serverName)}\\][ \\t]*(?:\\r?\\n|$)`, "m").exec(existing);
@@ -10462,7 +13697,8 @@ function codexMcpRegistrationMatches(serverName: string, mcp: { command: string;
   const nextHeaderOffset = existing.slice(contentStart).search(/^[ \\t]*\[/m);
   const blockEnd = nextHeaderOffset === -1 ? existing.length : contentStart + nextHeaderOffset;
   const argsLine = mcp.args.length ? `\nargs = [${mcp.args.map((arg) => JSON.stringify(arg)).join(", ")}]` : "";
-  const expected = `[mcp_servers.${serverName}]\ncommand = ${JSON.stringify(mcp.command)}${argsLine}`;
+  const recoveryEnv = serverName === "caveman" ? `\n${CODEX_RECOVERY_ENV}` : "";
+  const expected = `[mcp_servers.${serverName}]\ncommand = ${JSON.stringify(mcp.command)}${argsLine}${recoveryEnv}`;
   return existing.slice(blockStart, blockEnd).trim() === expected.trim();
 }
 
@@ -10511,12 +13747,7 @@ function writeMcpMarker(agentId: string, mcp: { command: string; args: string[] 
 
 function writeMcpServerMarker(agentId: string, serverName: string, mcp: { command: string; args: string[] }, tool: string): void {
   const path = mcpServerMarkerPath(agentId, serverName);
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify({ tool, command: mcp.command, args: mcp.args }, null, 2) + "\n");
-  } catch {
-    // best-effort: without the marker, wrap simply tries the loadout again later.
-  }
+  durableAtomicWriteFile(path, mcpMarkerBytes(mcp, tool));
 }
 
 // compress streams stdin through the caveman-engine binary (resolved via
@@ -10773,11 +14004,11 @@ function shouldShrink(command: string): boolean {
 
 // cavemanBinForHook is the invocation a Claude hook uses to call back into this
 // CLI, robust to PATH: a resolved `caveman`/`cave`, else this very script's node.
-function cavemanBinForHook(): string {
+function cavemanBinForHook(powershell: boolean = process.platform === "win32"): string {
   const command = which("caveman") ?? which("cave");
   return command
-    ? hookExecutableInvocation(command, undefined)
-    : hookExecutableInvocation(process.execPath, process.argv[1]!);
+    ? hookExecutableInvocation(command, undefined, process.platform, powershell)
+    : hookExecutableInvocation(process.execPath, process.argv[1]!, process.platform, powershell);
 }
 
 // shrinkHook is the settings-hook callback for the agents whose harness can
@@ -10786,23 +14017,34 @@ function cavemanBinForHook(): string {
 // CLI (BeforeTool, tool "run_shell_command"). It reads the tool event on stdin and,
 // for a noisy command, rewrites it to run through `caveman shrink`. Anything it won't
 // safely shrink it passes through: exit 0 with NO stdout = "no rewrite, run as-is".
+//
+// Codex is deliberately NOT in that list, and re-adding it is the #1037 regression:
+// Codex matches a saved approval against the command text itself (`prefix_rule`), so
+// any rewrite makes an already-approved command look new and re-prompts the user —
+// and the rewrite leads with the resolved caveman/node path, which differs per
+// machine, so no rule the user writes can cover it either. The old Codex branch also
+// answered the host's approval question with permissionDecision:"allow" against an
+// unverified contract; if Codex ever honors that, caveman silently auto-approves a
+// command the user's `approval_policy` meant to gate. Both ends fail closed instead.
 async function shrinkHook() {
   if (nativePolicyMode() === "record" || !new Set(["full-safe", "full-max"]).has(nativeProfile())) process.exit(0);
   let raw: Buffer;
-  try { raw = await readStdin(); } catch { process.exit(0); }
+  try { raw = await readHookStdin(); } catch { process.exit(0); }
   let evt: { tool_name?: string; tool_input?: { command?: string } };
   try { evt = JSON.parse(raw.toString("utf8") || "{}"); } catch { process.exit(0); }
   const tool = evt?.tool_name;
   const isGemini = tool === "run_shell_command"; // Gemini CLI's shell tool
   const isBash = tool === "Bash";                // Claude Code + the opencode plugin
-  const isCodex = tool === "shell" || tool === "shell_command" || tool === "exec_command";
-  if (!isGemini && !isBash && !isCodex) process.exit(0);
+  // Every other tool name — Codex's shell/shell_command/exec_command included — runs
+  // as the host received it. See the #1037 note above before widening this.
+  if (!isGemini && !isBash) process.exit(0);
   const command = evt.tool_input?.command;
   if (typeof command !== "string" || !shouldShrink(command)) process.exit(0);
-  const rewritten = `${cavemanBinForHook()} shrink -- ${command.trim()}`;
-  // Each harness has a different (silent-on-mismatch) override contract: Gemini merges
-  // hookSpecificOutput.tool_input (snake_case, no event discriminator); Claude replaces
-  // via hookSpecificOutput.updatedInput (camelCase + hookEventName). Emit the right one.
+  // updatedInput.command executes in host shell (Git Bash on Claude Windows),
+  // not hook's explicit PowerShell shell. Never leak PowerShell `&` into it.
+  const rewritten = `${cavemanBinForHook(false)} shrink -- ${command.trim()}`;
+  // Gemini merges hookSpecificOutput.tool_input (snake_case, no event discriminator);
+  // Claude replaces via hookSpecificOutput.updatedInput (camelCase + hookEventName).
   const out = isGemini
     ? { hookSpecificOutput: { tool_input: { command: rewritten } } }
     : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: { command: rewritten } } };
@@ -11090,7 +14332,8 @@ function nativeGitDir(cwd: string): string | undefined {
 function nativeRepositoryState(cwd: string | undefined): string | undefined {
   if (!cwd) return undefined;
   try {
-    const status = execFileSync("git", ["-C", cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"], {
+    const status = execFileSync("git", hardenedGitArgs(cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"), {
+      env: hardenedGitEnv(),
       timeout: 100,
       maxBuffer: 8 * 1024 * 1024,
       encoding: "buffer",
@@ -11393,7 +14636,7 @@ async function nativeHook(argv: string[]) {
   const agent = argv[0] === "claude" || argv[0] === "codex" || argv[0] === "hermes" || argv[0] === "gemini" || argv[0] === "opencode" || argv[0] === "pi" ? argv[0] : undefined;
   if (!agent) process.exit(0);
   let raw: Buffer;
-  try { raw = await readStdin(); } catch { process.exit(0); }
+  try { raw = await readHookStdin(); } catch { process.exit(0); }
   if (raw.length > 2 * 1024 * 1024) process.exit(0);
   let event: Record<string, unknown>;
   try {
@@ -11428,7 +14671,13 @@ async function nativeHook(argv: string[]) {
   if (sessionId) entry.host_session_id = sessionId;
   if (toolName) entry.tool_name = toolName;
   if (cwd) entry.cwd_sha256 = `sha256:${createHash("sha256").update(cwd).digest("hex")}`;
-  if (normalizedEvent === "SessionStart") {
+  // SessionStart revives a missing local proxy, but native routing points every
+  // LATER turn of the session at that proxy too. Current proxies never expire,
+  // but crashes and older binaries can still leave a dead base URL. A plain
+  // session needs prompt-time recovery as well. The port check makes revival
+  // idempotent, so run
+  // it for the mid-session events that reach the full CLI as well.
+  if (normalizedEvent === "SessionStart" || normalizedEvent === "UserPromptSubmit" || normalizedEvent === "PostCompact") {
     try {
       const opts = defaultWrapOptions();
       const gw = gatewayURL();
@@ -11512,13 +14761,13 @@ async function nativeHook(argv: string[]) {
 }
 
 function claudeSettingsPath(): string {
-  return join(homedir(), ".claude", "settings.json");
+  return join(claudeConfigDir(), "settings.json");
 }
 function geminiSettingsPath(): string {
-  return join(homedir(), ".gemini", "settings.json");
+  return join(geminiConfigDir(), "settings.json");
 }
 function codexHooksPath(): string {
-  return join(homedir(), ".codex", "hooks.json");
+  return join(codexHomeDir(), "hooks.json");
 }
 
 // installSettingsHook registers a command-output shrink hook in a settings.json that
@@ -11651,7 +14900,7 @@ function commandHookKind(a: AgentProfile): "hard" | "soft" | "native" | "none" {
 
 function instructionFileForAgent(a: AgentProfile): string | undefined {
   const hook = a.command_hook;
-  return hook && "file" in hook ? hook.file : undefined;
+  return hook && "file" in hook ? agentUserPath(a.id, hook.file) : undefined;
 }
 // (hard methods: claude-pretooluse, codex-pretooluse, opencode-plugin, gemini-beforetool, hermes-plugin, openclaw-plugin.)
 
@@ -11772,7 +15021,7 @@ function writeRecallHookMarker(agentId: string) {
 // agent, never injects a guess).
 async function memRecallHook() {
   let raw: Buffer;
-  try { raw = await readStdin(); } catch { process.exit(0); }
+  try { raw = await readHookStdin(); } catch { process.exit(0); }
   let evt: { prompt?: string };
   try { evt = JSON.parse(raw.toString("utf8") || "{}"); } catch { process.exit(0); }
   const prompt = typeof evt.prompt === "string" ? evt.prompt.trim() : "";
@@ -11842,6 +15091,18 @@ function hookInstalledPhrase(a: AgentProfile): string {
   const ch = a.command_hook;
   if (ch?.method === "instruction-note") return `shrink preference added to ${ch.file} ${dim("(a model nudge, not a hard rewrite)")}`;
   return "command-output rewrite hook installed";
+}
+
+// codexRewriteRetired: codex's profile still declares the `codex-pretooluse` hard
+// tier, but shrinkHook has declined every Codex tool event since #1037 — rewriting
+// the command breaks the user's saved approval rules. Installing that hook would
+// register a callback with no behavior behind it and report a rewrite that does not
+// happen. Retiring the tier in the profile is the real fix and is NOT done here: the
+// same `command_hook` entry carries codex's directives instructions-file, and
+// nativeHooksDocument would have to migrate the entry `caveman enable codex` already
+// wrote. Both are maintainer decisions; this just stops making the false claim.
+function codexRewriteRetired(a: AgentProfile): boolean {
+  return a.id === "codex";
 }
 
 // ── soft tier: instruction-note ──────────────────────────────────────────────
@@ -12578,6 +15839,10 @@ function hooksCmd(rest: string[]) {
     let n = 0;
     let hard = 0;
     for (const a of targets) {
+      if (codexRewriteRetired(a)) {
+        process.stderr.write(`${mark("warn")} ${a.display_name}: no command-output rewrite — it breaks saved Codex approval rules (#1037); run noisy commands through ${cyan("caveman shrink -- <cmd>")}\n`);
+        continue;
+      }
       if (installShrinkHookForAgent(a)) {
         writeShrinkHookMarker(a.id);
         n++;
@@ -12653,11 +15918,39 @@ function evalsRun(argv: string[] = []) {
 // owns the ~/.caveman/ SQLite store. The CLI carries no database dependency, so
 // it reads through the same Go binary `caveman start` launches.
 function stats(argv: string[] = []) {
-  if (argv.length > 1 || (argv.length === 1 && argv[0] !== "--json")) commandUsage("stats [--json]");
+  if (argv.length === 1 && ["--help", "-h", "help"].includes(argv[0]!)) {
+    process.stdout.write(STATS_HELP);
+    return;
+  }
+  let options;
+  try {
+    options = parseStatsOptions(argv);
+  } catch (error) {
+    console.error((error as Error).message);
+    commandUsage(STATS_USAGE);
+  }
   const bin = cavemanBin("caveman-proxy", "CAVEMAN_PROXY_BIN");
   try {
-    const out = execFileSync(bin, ["stats", ...argv], { encoding: "utf8" });
-    process.stdout.write(out);
+    const args = ["stats", "--report", ...options.filters];
+    if (!options.json || options.out) args.push("--write-report");
+    if (options.out) args.push("--out", resolve(options.out));
+    const out = execFileSync(bin, args, { encoding: "utf8", timeout: 60_000, maxBuffer: 32 * 1024 * 1024 });
+    const report = JSON.parse(out) as StatsCLIReport;
+    // Older companion binaries ignore --report. Keep their measurements
+    // readable, but never pretend they generated the new accounting report.
+    if (report.schema !== "caveman.stats.v1") {
+      if (options.filters.length || options.out || options.open) {
+        throw new Error("installed proxy does not support filtered stats or HTML reports; run caveman setup --install");
+      }
+      process.stdout.write(out);
+      if (!options.json) process.stderr.write("Detailed stats require an updated proxy: caveman setup --install\n");
+      return;
+    }
+    if (options.json) process.stdout.write(out);
+    else {
+      process.stdout.write(renderStatsSummary(report));
+      if (report.report_path && (options.open || (!options.plain && learnTuiTerminal()))) openLearnReport(report.report_path);
+    }
   } catch (error) {
     console.error(`failed to read stats via ${bin}: ${(error as Error).message}`);
     process.exit(1);
@@ -12782,6 +16075,40 @@ async function trial(rest: string[]) {
 
   const proxyResolved = which(proxyBin());
   if (!proxyResolved) return startMissingProxyUI(proxyBin());
+
+  // A trial measures traffic by standing up its OWN proxy on a free port under
+  // a `trial:<id>` label and pointing the child at it through the environment.
+  // Native routing pins the base URL inside the agent's own config file, and an
+  // agent reads its config in preference to its environment — so the child goes
+  // to the persistent listener instead, which carries no trial label.
+  // RecordPayload only stores payloads for a `trial:` label, so trial_payloads
+  // stays empty, the replay optimizer has nothing to replay, and every number
+  // in the report renders 0. Nothing errors; the trial exits 0 and reports a
+  // measurement of nothing. Refuse up front instead of producing that report,
+  // and refuse BEFORE `trial start` so no orphan trial row is opened. (#1068)
+  const pinned = nativeRoutePinnedFor(agent?.id ?? requested);
+  if (pinned) {
+    console.error(pinned.pending
+      ? `caveman trial cannot measure ${agent?.id ?? requested}: an interrupted native install left its routing in place.`
+      : `caveman trial cannot measure ${agent?.id ?? requested} while native routing is enabled.`);
+    console.error("");
+    console.error(`  ${pinned.file}`);
+    console.error(`  pins the base URL to ${pinned.route}`);
+    console.error("");
+    console.error("A trial runs its own proxy on its own port and points the agent at it through");
+    console.error("the environment. That config file wins, so the agent would keep talking to the");
+    console.error("persistent listener, the trial would capture nothing, and the report would say");
+    console.error("zero requests and $0.0000 — which reads as a measurement rather than as silence.");
+    console.error("");
+    // invokedAs(), not invokedCommand(): invokedCommand renders the verb of the
+    // CURRENT invocation, which is always "trial" here, so it would print
+    // "caveman trial <agent>" for the disable and enable lines.
+    console.error(`Turn native routing off for the duration of the trial, then put it back:`);
+    console.error(`  ${invokedAs()} disable ${agent?.id ?? requested}`);
+    console.error(`  ${invokedAs()} trial -- ${command.join(" ")}`);
+    console.error(`  ${invokedAs()} enable ${agent?.id ?? requested}`);
+    process.exit(2);
+  }
 
   const port = await freePort();
   const listen = `127.0.0.1:${port}`;
@@ -13641,7 +16968,7 @@ function learnImplementPrompt(focus: string): string {
 function ensureLearnAgentGuide(agent: AgentProfile): string {
   const path = agent.id === "claude"
     ? join(process.cwd(), ".claude", "skills", "caveman-learn", "SKILL.md")
-    : join(homedir(), ".codex", "skills", "caveman-learn", "SKILL.md");
+    : join(codexHomeDir(), "skills", "caveman-learn", "SKILL.md");
   try {
     readFileSync(path);
     return "";
@@ -14183,6 +17510,48 @@ function readStdin(): Promise<Buffer> {
   });
 }
 
+// readHookStdin is for host hook callbacks (shrink-hook, mem recall, native-hook):
+// the host writes ONE JSON object and closes, but under the Windows pipe
+// implementation that close can lag arbitrarily (#729/#833, #949), and a hook that
+// waits for EOF burns the host's whole budget with its work already done. Resolve
+// on the first complete JSON object; EOF still resolves for hosts that close
+// promptly. Same 2 MiB cap as native-hook-fast.
+function readHookStdin(): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    if (process.stdin.isTTY) {
+      reject(new Error("no hook payload on stdin"));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      // pause() stops the flow but the 'data' listener keeps the handle referenced;
+      // unref() lets the process exit as soon as stdout flushes.
+      process.stdin.pause();
+      try { process.stdin.unref(); } catch { /* not every stream type supports it */ }
+      resolve(Buffer.concat(chunks));
+    };
+    process.stdin.on("data", (chunk: Buffer) => {
+      if (done) return;
+      bytes += chunk.length;
+      if (bytes > 2 * 1024 * 1024) {
+        done = true;
+        reject(new Error("hook payload too large"));
+        return;
+      }
+      chunks.push(chunk);
+      // A partial payload throws here and we simply wait for more bytes.
+      try { JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return; }
+      finish();
+    });
+    process.stdin.on("end", finish);
+    process.stdin.on("error", reject);
+  });
+}
+
 async function init(argv: string[]) {
   // Reuse login's own resolution (C8 review finding 6): init used to compute
   // its own baseURL with a bare localhost:8080 literal and no CAVE_API_URL
@@ -14200,7 +17569,7 @@ async function init(argv: string[]) {
   sdkSnippet();
 }
 
-type ProxyRuntimeState = {
+type ProxyRuntimeState = PublishedUpstreams & {
   owner: "wrap" | "start" | "unknown";
   mode?: string;
   instance_token?: string;
@@ -14254,6 +17623,9 @@ function readRawProxyRunState(port: number): ProxyRuntimeState {
       ...(typeof parsed.started_at === "string" ? { started_at: parsed.started_at } : {}),
       ...(typeof parsed.version === "string" ? { version: parsed.version } : {}),
       ...(typeof parsed.recovery_via_mcp === "boolean" ? { recovery_via_mcp: parsed.recovery_via_mcp } : {}),
+      provider_upstreams: publishedUpstreamsOf(parsed.provider_upstreams),
+      compat_upstreams: publishedUpstreamsOf(parsed.compat_upstreams),
+      compat_forward_headers: publishedForwardHeadersOf(parsed.compat_forward_headers),
     };
   } catch {
     return { owner: "unknown" };
@@ -14270,6 +17642,7 @@ function processAlive(pid: number): boolean {
 }
 
 function createProxySessionMarker(port: number): string | null {
+  pruneDeadProxySessionMarkers(port);
   const dir = proxySessionDir(port);
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -14289,6 +17662,27 @@ function createProxySessionMarker(port: number): string | null {
   return null;
 }
 
+// pruneDeadProxySessionMarkers removes markers whose owner died. Their absence
+// never authorizes a restart, so nothing reads the surviving count.
+function pruneDeadProxySessionMarkers(port: number): void {
+  let names: string[];
+  try {
+    names = readdirSync(proxySessionDir(port));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const match = /^(\d+)-/.exec(name);
+    const pid = match ? Number(match[1]) : NaN;
+    if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) continue;
+    try {
+      unlinkSync(join(proxySessionDir(port), name));
+    } catch {
+      // Concurrent cleanup or a read-only directory: neither upgrades ownership.
+    }
+  }
+}
+
 function removeProxySessionMarker(marker: string | null): void {
   if (!marker) return;
   try {
@@ -14298,38 +17692,6 @@ function removeProxySessionMarker(marker: string | null): void {
       // Marker cleanup is best-effort; the next reader prunes a dead owner.
     }
   }
-}
-
-function countOtherLiveProxySessions(port: number, ownMarker: string | null): number {
-  let names: string[];
-  try {
-    names = readdirSync(proxySessionDir(port));
-  } catch {
-    return 0;
-  }
-  let live = 0;
-  for (const name of names) {
-    const marker = join(proxySessionDir(port), name);
-    if (ownMarker && marker === ownMarker) continue;
-    const match = /^(\d+)-/.exec(name);
-    const pid = match ? Number(match[1]) : NaN;
-    if (!Number.isSafeInteger(pid) || pid <= 0 || !processAlive(pid)) {
-      try {
-        unlinkSync(marker);
-      } catch {
-        // Concurrent cleanup or a read-only directory: neither upgrades ownership.
-      }
-      continue;
-    }
-    live++;
-  }
-  return live;
-}
-
-function proxyRestartTimeoutMs(): number {
-  const seconds = Number(process.env.CAVE_PROXY_RESTART_TIMEOUT ?? "10");
-  if (!Number.isFinite(seconds)) return 10_000;
-  return Math.max(100, Math.min(60_000, Math.round(seconds * 1000)));
 }
 
 type StatusView = {
@@ -14390,9 +17752,23 @@ function readProxyRuntimeState(port: number, versionInfo: ReturnType<typeof prob
       ...(typeof parsed.started_at === "string" ? { started_at: parsed.started_at } : {}),
       ...(typeof parsed.version === "string" ? { version: parsed.version } : {}),
       ...(typeof parsed.recovery_via_mcp === "boolean" ? { recovery_via_mcp: parsed.recovery_via_mcp } : {}),
+      provider_upstreams: publishedUpstreamsOf(parsed.provider_upstreams),
+      compat_upstreams: publishedUpstreamsOf(parsed.compat_upstreams),
+      compat_forward_headers: publishedForwardHeadersOf(parsed.compat_forward_headers),
     };
   } catch {
     return { owner: "unknown" };
+  }
+}
+
+// A proxy caveman just started binds its port before its run state is
+// readable; polling briefly keeps that window from reading as a foreign owner.
+async function awaitProxyRuntimeState(port: number, versionInfo: ReturnType<typeof probeProxyVersion>, timeoutMs = 3000): Promise<ProxyRuntimeState> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const state = readProxyRuntimeState(port, versionInfo);
+    if (state.owner !== "unknown" || Date.now() >= deadline) return state;
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }
 
@@ -14533,7 +17909,7 @@ async function status(argv: string[]) {
   const mcpCompatibility = probeMcpBinary();
   if (mcpCompatibility && !mcpCompatibility.probe.current) {
     states.push(OFF_STATES.staleBinary("caveman-mcp", mcpCompatibility.probe.version, cliVersion()));
-  } else if (!startMcpRecoveryAvailable()) {
+  } else if (!anyMcpInstalled()) {
     states.push(fixedOffState(
       "mcp-missing",
       mcpSurfaceMode(resolution.values["execute.mcp"].value) === "marker-only"
@@ -15715,6 +19091,7 @@ async function refreshCLIConfig(cfg: Config): Promise<Config> {
 	try {
 	  const response = await fetch(`${cfg.baseURL}/api/v1/auth/refresh`, {
 	    method: "POST",
+	    redirect: "manual",
 	    headers: { "content-type": "application/json", "x-cave-client": "cli" },
 	    body: JSON.stringify({ refresh_token: cfg.refreshToken }),
 	    signal: AbortSignal.timeout(5000),

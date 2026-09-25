@@ -30,7 +30,6 @@ Individual packages expose narrower scripts:
 pnpm --dir packages/cli test
 pnpm --dir packages/agent test
 npm --prefix extension test
-pnpm --dir packages/graders test
 pnpm --dir packages/shared/contracts test
 ```
 
@@ -49,7 +48,23 @@ python tests/verify_repo.py
 ```
 
 Verifier checks repository invariants that ordinary unit tests do not cover,
-including generated or packaging expectations.
+including generated or packaging expectations. Editing anything in `src/hooks/`
+requires regenerating `src/hooks/checksums.sha256`, which the verifier compares
+digest by digest.
+
+### Claude Code hooks
+
+```bash
+npm test                                   # includes tests/hooks/*.test.mjs
+node --test --test-force-exit tests/*.js
+python -m unittest discover -s tests
+bash tests/manual/session-mode-smoke.sh    # end-to-end, throwaway config dir
+```
+
+The smoke script drives the real hook binaries with the payloads Claude Code
+sends and never touches your own `~/.claude`. `docs/testing-session-modes.md`
+carries the full plan for per-session mode state, including the checks that
+need a live Claude Code (statusline badge across two windows, `/compact`).
 
 ## Platform coverage
 

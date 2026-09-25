@@ -218,7 +218,7 @@ def test_provider_client_attaches_assembly_declaration_header() -> None:
     built = cave.assemble(
         _options(provider="openai", session_id="header", turn=1)
     )
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+    with patch("caveman_cloud.core._urlopen", side_effect=fake_urlopen):
         cave.openai().chat["completions"].create(built.request)
 
     assert captured["url"] == "http://localhost:8787/openai/v1/chat/completions"

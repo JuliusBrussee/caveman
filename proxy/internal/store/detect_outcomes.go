@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/JuliusBrussee/caveman/proxy/internal/gitsafe"
 )
 
 // detect_outcomes.go asks the question every other detector dances around: did
@@ -104,12 +106,11 @@ func gitCommitTimes(repo string, from, to time.Time) ([]time.Time, bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), outcomeGitTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", repo,
+	cmd := gitsafe.Command(ctx, repo,
 		"log", "--all", "--no-merges", "--format=%ct",
 		"--since="+from.Add(-time.Hour).UTC().Format(time.RFC3339),
 		"--until="+to.Add(outcomeCommitGraceWindow).UTC().Format(time.RFC3339),
 		"--max-count="+strconv.Itoa(outcomeMaxCommits))
-	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, false

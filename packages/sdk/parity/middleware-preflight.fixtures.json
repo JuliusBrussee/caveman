@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "evidence": "startup_discovery_only",
+  "cases": [
+    {
+      "id": "compress_ready",
+      "mode": "compress",
+      "capabilities": {},
+      "expected": {
+        "schema_version": 1,
+        "status": "ready",
+        "reason": "ready",
+        "configured_mode": "compress",
+        "runtime_mode": "compress",
+        "runtime_build": "protocol-fixture",
+        "policy_revision": "middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "persistent": true,
+        "recovery": true,
+        "action": "Run a tool-result workflow and inspect the decision callback or latest call report for the applied or skipped decision."
+      }
+    },
+    {
+      "id": "record_client",
+      "mode": "record",
+      "capabilities": {},
+      "expected": {
+        "schema_version": 1,
+        "status": "ready",
+        "reason": "record_only",
+        "configured_mode": "record",
+        "runtime_mode": "compress",
+        "runtime_build": "protocol-fixture",
+        "policy_revision": "middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "persistent": true,
+        "recovery": true,
+        "action": "Record mode preserves original input. Set both client and runtime mode to compress to apply eligible changes."
+      }
+    },
+    {
+      "id": "record_runtime",
+      "mode": "compress",
+      "capabilities": {
+        "mode": "record"
+      },
+      "expected": {
+        "schema_version": 1,
+        "status": "ready",
+        "reason": "record_only",
+        "configured_mode": "compress",
+        "runtime_mode": "record",
+        "runtime_build": "protocol-fixture",
+        "policy_revision": "middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "persistent": true,
+        "recovery": true,
+        "action": "Record mode preserves original input. Set both client and runtime mode to compress to apply eligible changes."
+      }
+    },
+    {
+      "id": "off_no_io",
+      "mode": "off",
+      "expected": {
+        "schema_version": 1,
+        "status": "disabled",
+        "reason": "disabled",
+        "configured_mode": "off",
+        "runtime_mode": null,
+        "runtime_build": null,
+        "policy_revision": null,
+        "persistent": null,
+        "recovery": null,
+        "action": "Set the client mode to record or compress to enable runtime discovery."
+      }
+    },
+    {
+      "id": "down_runtime",
+      "mode": "compress",
+      "transport_error": true,
+      "expected": {
+        "schema_version": 1,
+        "status": "unavailable",
+        "reason": "runtime_unavailable",
+        "configured_mode": "compress",
+        "runtime_mode": null,
+        "runtime_build": null,
+        "policy_revision": null,
+        "persistent": null,
+        "recovery": null,
+        "action": "Start the Caveman runtime and check the configured endpoint and network access."
+      }
+    },
+    {
+      "id": "closed_runtime",
+      "mode": "compress",
+      "closed": true,
+      "expected": {
+        "schema_version": 1,
+        "status": "unavailable",
+        "reason": "closed",
+        "configured_mode": "compress",
+        "runtime_mode": null,
+        "runtime_build": null,
+        "policy_revision": null,
+        "persistent": null,
+        "recovery": null,
+        "action": "Create a new runtime instance; this instance has been closed."
+      }
+    },
+    {
+      "id": "unsupported_protocol",
+      "mode": "compress",
+      "capabilities": {
+        "schema_version": 2
+      },
+      "expected": {
+        "schema_version": 1,
+        "status": "unavailable",
+        "reason": "unsupported_version",
+        "configured_mode": "compress",
+        "runtime_mode": null,
+        "runtime_build": null,
+        "policy_revision": null,
+        "persistent": null,
+        "recovery": null,
+        "action": "Install compatible Caveman SDK and runtime versions."
+      }
+    },
+    {
+      "id": "no_recovery",
+      "mode": "compress",
+      "capabilities": {
+        "recovery": false
+      },
+      "expected": {
+        "schema_version": 1,
+        "status": "unavailable",
+        "reason": "recovery_unavailable",
+        "configured_mode": "compress",
+        "runtime_mode": "compress",
+        "runtime_build": "protocol-fixture",
+        "policy_revision": "middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "persistent": true,
+        "recovery": false,
+        "action": "Enable persistent recovery storage in the runtime before using recoverable compression."
+      }
+    },
+    {
+      "id": "no_persistence",
+      "mode": "compress",
+      "capabilities": {
+        "persistent": false
+      },
+      "expected": {
+        "schema_version": 1,
+        "status": "unavailable",
+        "reason": "recovery_unavailable",
+        "configured_mode": "compress",
+        "runtime_mode": "compress",
+        "runtime_build": "protocol-fixture",
+        "policy_revision": "middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "persistent": false,
+        "recovery": true,
+        "action": "Enable persistent recovery storage in the runtime before using recoverable compression."
+      }
+    },
+    {
+      "id": "runtime_authentication",
+      "mode": "compress",
+      "error": "unauthorized",
+      "expected": {
+        "schema_version": 1,
+        "status": "unavailable",
+        "reason": "unauthorized",
+        "configured_mode": "compress",
+        "runtime_mode": null,
+        "runtime_build": null,
+        "policy_revision": null,
+        "persistent": null,
+        "recovery": null,
+        "action": "Check the runtime authentication token; do not use a model provider API key."
+      }
+    },
+    {
+      "id": "bounded_deadline",
+      "mode": "compress",
+      "error": "deadline",
+      "expected": {
+        "schema_version": 1,
+        "status": "unavailable",
+        "reason": "deadline",
+        "configured_mode": "compress",
+        "runtime_mode": null,
+        "runtime_build": null,
+        "policy_revision": null,
+        "persistent": null,
+        "recovery": null,
+        "action": "Check runtime responsiveness or increase the configured request deadline."
+      }
+    },
+    {
+      "id": "unknown_runtime_error",
+      "mode": "compress",
+      "error": "sensitive_content_should_not_escape",
+      "expected": {
+        "schema_version": 1,
+        "status": "unavailable",
+        "reason": "runtime_unavailable",
+        "configured_mode": "compress",
+        "runtime_mode": null,
+        "runtime_build": null,
+        "policy_revision": null,
+        "persistent": null,
+        "recovery": null,
+        "action": "Start the Caveman runtime and check the configured endpoint and network access."
+      }
+    },
+    {
+      "id": "untrusted_build_text",
+      "mode": "compress",
+      "capabilities": {
+        "runtime_build": "source text with api-key=must-not-log"
+      },
+      "expected": {
+        "schema_version": 1,
+        "status": "ready",
+        "reason": "ready",
+        "configured_mode": "compress",
+        "runtime_mode": "compress",
+        "runtime_build": null,
+        "policy_revision": "middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "persistent": true,
+        "recovery": true,
+        "action": "Run a tool-result workflow and inspect the decision callback or latest call report for the applied or skipped decision."
+      }
+    },
+    {
+      "id": "native_transport_timeout",
+      "mode": "compress",
+      "expected": {
+        "schema_version": 1,
+        "status": "unavailable",
+        "reason": "deadline",
+        "configured_mode": "compress",
+        "runtime_mode": null,
+        "runtime_build": null,
+        "policy_revision": null,
+        "persistent": null,
+        "recovery": null,
+        "action": "Check runtime responsiveness or increase the configured request deadline."
+      },
+      "timeout_error": true
+    }
+  ]
+}

@@ -1,11 +1,9 @@
 ---
 name: caveman-manage
 description: >
-  Inspect Caveman Cloud's eval-gated experiment lifecycle and block unsafe
-  execution. Use when the user asks to start, approve,
-  cancel, promote, or roll back a Caveman experiment, or asks what action an
-  experiment's evidence supports. Read evidence first; do not execute lifecycle
-  mutations until server-authoritative transition and evidence gates ship.
+  Inspect Caveman Cloud's experiment lifecycle and block unsafe execution. Use
+  when asked to start, approve, cancel, promote or roll back a Caveman
+  experiment.
 ---
 
 # Manage eval-gated experiments

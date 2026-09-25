@@ -32,6 +32,28 @@ func TestMatchRoute(t *testing.T) {
 	}
 }
 
+func TestIsRecoveryToolName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{name: "caveman_retrieve", want: true},
+		{name: "mcp__caveman__caveman_retrieve", want: true},
+		{name: "caveman_caveman_retrieve", want: true}, // Kilo CLI 7.5.6
+		{name: "mcp__evil__caveman_retrieve", want: false},
+		{name: "user_caveman_retrieve", want: false},
+		{name: "caveman_caveman_retrieve_extra", want: false},
+		{name: "prefix_caveman_caveman_retrieve", want: false},
+		{name: "caveman-retrieve", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsRecoveryToolName(tc.name); got != tc.want {
+				t.Fatalf("IsRecoveryToolName(%q) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestInspectRequestFailsPricingClosedForNonTokenCharges(t *testing.T) {
 	tests := []struct {
 		name, provider, body, reason string
@@ -176,17 +198,26 @@ func TestSanitizeAndMapHeaders_NoKeyLeakAndCorrectMapping(t *testing.T) {
 	}
 }
 
-func TestSanitizeAndMapHeaders_AzureRejectsBearerUntilAuthContractExists(t *testing.T) {
+func TestSanitizeAndMapHeaders_AzurePreservesDeclaredAuthScheme(t *testing.T) {
 	b := Base{Provider: "azure_openai"}
 	req, _ := http.NewRequest(http.MethodPost, "/x", nil)
-	if _, err := b.SanitizeAndMapHeaders(req.Context(), req, Credential{Key: "access-token", Scheme: "bearer"}, nil); err == nil {
-		t.Fatal("Azure bearer credential should fail closed")
-	}
-	if _, err := b.SanitizeAndMapHeaders(req.Context(), req, Credential{Key: "Bearer access-token"}, nil); err == nil {
-		t.Fatal("Azure bearer-shaped credential should fail closed")
-	}
-	if _, err := b.SanitizeAndMapHeaders(req.Context(), req, Credential{Key: "eyJheader.payload.signature"}, nil); err == nil {
-		t.Fatal("Azure JWT credential should fail closed")
+	for _, tc := range []struct {
+		credential           Credential
+		wantAPIKey, wantAuth string
+	}{
+		{Credential{Key: "access-token", Scheme: "bearer"}, "", "Bearer access-token"},
+		{Credential{Key: "eyJheader.payload.signature", Scheme: "bearer"}, "", "Bearer eyJheader.payload.signature"},
+		{Credential{Key: "provider-api-key", Scheme: "bearer"}, "", "Bearer provider-api-key"},
+		{Credential{Key: "eyJopaque-api-key"}, "eyJopaque-api-key", ""},
+		{Credential{Key: "Bearer opaque-api-key"}, "Bearer opaque-api-key", ""},
+	} {
+		out, err := b.SanitizeAndMapHeaders(req.Context(), req, tc.credential, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Get("api-key") != tc.wantAPIKey || out.Get("authorization") != tc.wantAuth {
+			t.Errorf("credential scheme %q: api-key=%q authorization=%q", tc.credential.Scheme, out.Get("api-key"), out.Get("authorization"))
+		}
 	}
 }
 

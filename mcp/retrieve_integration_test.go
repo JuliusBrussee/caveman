@@ -14,7 +14,7 @@ import (
 
 // The live path, end to end: a real toolwork page goes through the real engine,
 // the handle it emits goes back through the real caveman_retrieve tool handler
-// built by EngineTools (session and all), and what comes out has to be the raw
+// built by EngineTools, and what comes out has to be the raw
 // original rows.
 //
 // This exists at this level because the unit tests all passed while the bench
@@ -57,7 +57,7 @@ func liveEngine(t *testing.T) *engine.Engine {
 }
 
 // callRetrieveTool drives the caveman_retrieve tool exactly as the MCP server
-// does: through the handler EngineTools built, with its session attached.
+// does: through the handler EngineTools built.
 func callRetrieveTool(t *testing.T, tools []Tool, handle, query string) string {
 	t.Helper()
 	for _, tool := range tools {
@@ -258,7 +258,7 @@ func TestRetrieveHandleFormsAllResolve(t *testing.T) {
 		"ccr://" + bare,
 	} {
 		t.Run(form, func(t *testing.T) {
-			// A fresh session per form: this is about handle parsing, not anti-storm.
+			// Each reference form must resolve through the public tool handler.
 			recovered := callRetrieveTool(t, EngineTools(eng, nil), form, "")
 			assertNoPointers(t, "handle form "+form, recovered)
 			if !strings.Contains(recovered, "SKU-60000") {
@@ -268,28 +268,33 @@ func TestRetrieveHandleFormsAllResolve(t *testing.T) {
 	}
 }
 
-// TestAntiStormPayoutIsTheRawOriginal guards the K-threshold path specifically:
-// the one big payout must be the raw stored original, not the compressed side and
-// not another pointer.
-func TestAntiStormPayoutIsTheRawOriginal(t *testing.T) {
+// More than five distinct queries must not prevent a later exact recovery,
+// including when the host has compacted away an earlier full tool result.
+func TestRepeatedFullRecoveryAfterManyQueriesIsTheRawOriginal(t *testing.T) {
 	eng := liveEngine(t)
 	tools := EngineTools(eng, nil)
 	page := corpusPage(t, "inventory_catalog_page.json")
 	result, err := eng.Compress(page, engine.Options{Mode: engine.ModeCompress})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || result.RecoveryHandle == "" {
+		t.Fatalf("compress fixture: %+v err=%v", result, err)
 	}
-
-	var last string
-	for i := 0; i <= retrieveStormThreshold+2; i++ {
-		last = callRetrieveTool(t, tools, result.RecoveryHandle, "query variant "+strings.Repeat("x", i+1))
-		assertNoPointers(t, "retrieve "+strings.Repeat("x", i+1), last)
+	for i := 0; i < 9; i++ {
+		query := "query variant " + strings.Repeat("x", i+1)
+		want, err := eng.RetrieveQuery(result.RecoveryHandle, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := callRetrieveTool(t, tools, result.RecoveryHandle, query)
+		if got != string(want) {
+			t.Fatalf("query %d changed based on prior calls", i)
+		}
 	}
-	if !strings.Contains(last, "COMPLETE stored original") {
-		t.Fatalf("past the threshold the payout note must appear: %q", excerpt(last, 0))
-	}
-	if !strings.Contains(last, "SKU-60000") || !strings.Contains(last, "supplier_contract_ended") {
-		t.Fatalf("the payout is not the raw original: %q", excerpt(last, 0))
+	for i := 0; i < 3; i++ {
+		got := callRetrieveTool(t, tools, result.RecoveryHandle, "")
+		if got != string(page) {
+			t.Fatalf("full recovery %d did not return exact stored original", i)
+		}
+		assertNoPointers(t, "full recovery", got)
 	}
 }
 

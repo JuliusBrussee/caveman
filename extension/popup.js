@@ -87,14 +87,17 @@ document.querySelectorAll("input[data-site]").forEach((c) => {
 
 document.getElementById("brand").addEventListener("click", (e) => e.preventDefault());
 
-// Review CTA → the Chrome Web Store reviews tab for THIS install. The id is read
-// from chrome.runtime at runtime (in a published install it is the store id), so
-// there is no hardcoded extension id to drift; the file:// preview shim falls
-// back to the store home.
+// Firefox add-on IDs are UUIDs, not Chrome Web Store listing IDs. Until an
+// authoritative AMO review URL is available, hide that CTA in Firefox builds.
 (() => {
   const link = document.getElementById("review");
   if (!link) return;
   const id = typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.id;
+  const manifest = typeof chrome !== "undefined" && chrome.runtime?.getManifest?.();
+  if (manifest?.browser_specific_settings?.gecko || (id && /^\{.*\}$/.test(id))) {
+    link.remove();
+    return;
+  }
   link.href = id ? `https://chromewebstore.google.com/detail/${id}/reviews` : "https://chromewebstore.google.com/";
 })();
 

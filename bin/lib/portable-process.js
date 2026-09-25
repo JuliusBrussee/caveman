@@ -9,9 +9,7 @@ function envValue(env, name) {
 }
 
 function resolveWindowsCommand(command, env = process.env) {
-  if (path.isAbsolute(command) || /[\\/]/.test(command)) {
-    return fs.existsSync(command) ? command : null;
-  }
+  const hasPath = path.isAbsolute(command) || /[\\/]/.test(command);
   const pathExt = envValue(env, 'PATHEXT') || '.COM;.EXE;.BAT;.CMD';
   // Extensionless commands resolve only through PATHEXT, matching Windows
   // semantics. npm/pnpm .bin dirs place a non-executable Unix shim under the
@@ -21,11 +19,14 @@ function resolveWindowsCommand(command, env = process.env) {
     ? [command]
     : pathExt.split(';').map(extension =>
       `${command}${extension.startsWith('.') ? extension : `.${extension}`}`);
-  for (const directory of (envValue(env, 'PATH') || '').split(';')) {
+  // Absolute and relative paths follow the same PATHEXT rule as bare names.
+  // An extensionless npm shim is still a POSIX script when supplied by path.
+  const directories = hasPath ? ['.'] : (envValue(env, 'PATH') || '').split(';');
+  for (const directory of directories) {
     if (!directory) continue;
     for (const name of names) {
-      const candidate = path.join(directory, name);
-      if (fs.existsSync(candidate)) return candidate;
+      const candidate = hasPath ? name : path.join(directory.replace(/^"(.*)"$/, '$1'), name);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch (_) {}
     }
   }
   return null;
@@ -54,6 +55,7 @@ function portableInvocation(command, args, {
   platform = process.platform,
   env = process.env,
   execPath = process.execPath,
+  allowBun = false,
 } = {}) {
   if (platform !== 'win32') return { command, args: [...args] };
   const executable = resolveWindowsCommand(command, env) || command;
@@ -70,6 +72,20 @@ function portableInvocation(command, args, {
     ? relativeScript
     : path.resolve(path.dirname(executable), ...relativeScript.split(/[\\/]+/));
   if (!fs.statSync(script).isFile()) throw new Error(`Windows command shim target is missing: ${script}`);
+  if (allowBun) {
+    // OMP's npm shim wraps a Bun CLI. Keep argv out of cmd.exe and use the
+    // declared runtime instead of evaluating Bun-specific code with Node.
+    const fd = fs.openSync(script, 'r');
+    const header = Buffer.alloc(128);
+    let length;
+    try { length = fs.readSync(fd, header, 0, header.length, 0); }
+    finally { fs.closeSync(fd); }
+    if (/^#!\/usr\/bin\/env bun(?:\r?\n|$)/.test(header.subarray(0, length).toString('utf8'))) {
+      const bun = resolveWindowsCommand('bun', env);
+      if (!bun || !/\.exe$/i.test(bun)) throw new Error('Bun CLI requires bun.exe on PATH');
+      return { command: bun, args: [script, ...args] };
+    }
+  }
   return { command: execPath, args: [script, ...args] };
 }
 

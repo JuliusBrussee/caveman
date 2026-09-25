@@ -28,6 +28,10 @@ type Engine struct {
 	store    *ccr.Store
 }
 
+// Capabilities exposes the active registry, including any explicitly configured
+// strategy. Middleware uses this authority rather than maintaining a second list.
+func (e *Engine) Capabilities() []compressors.Capability { return e.registry.Capabilities() }
+
 // New builds an engine with the default compressor registry. store backs CCR
 // recovery and stats and may be nil — without it the engine still detects and
 // pass-through-compresses, but it will never run a lossy compressor, because a

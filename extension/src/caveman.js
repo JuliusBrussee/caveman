@@ -26,41 +26,51 @@
   // each site keeps an aria-label fallback after its primary selector.
   const SITES = {
     "chatgpt.com": {
-      editor: ["#prompt-textarea", 'div.ProseMirror[contenteditable="true"]'],
-      send: ['button[data-testid="send-button"]', "#composer-submit-button", 'button[aria-label="Send prompt"]'],
+      editor: ['textarea[data-mobile-composer-prompt]', "#prompt-textarea", 'div.ProseMirror[contenteditable="true"]'],
+      send: ['button[data-composer-submit]', 'button[data-testid="send-button"]', "#composer-submit-button", 'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]'],
       message: ["[data-message-author-role]"],
     },
     "chat.openai.com": {
-      editor: ["#prompt-textarea", 'div.ProseMirror[contenteditable="true"]'],
-      send: ['button[data-testid="send-button"]', "#composer-submit-button", 'button[aria-label="Send prompt"]'],
+      editor: ['textarea[data-mobile-composer-prompt]', "#prompt-textarea", 'div.ProseMirror[contenteditable="true"]'],
+      send: ['button[data-composer-submit]', 'button[data-testid="send-button"]', "#composer-submit-button", 'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]'],
       message: ["[data-message-author-role]"],
     },
     "claude.ai": {
-      editor: ['div.ProseMirror[contenteditable="true"]', 'div[contenteditable="true"]'],
-      send: ['button[aria-label="Send message"]', 'button[aria-label="Send Message"]', 'button[aria-label*="Send" i]'],
+      editor: ['[data-testid="chat-input"][contenteditable="true"]', 'div.ProseMirror[contenteditable="true"]'],
+      send: ['button[data-testid="chat-input-send"]', 'button[aria-label="Send message"]', 'button[aria-label="Send Message"]'],
       message: ['[data-testid="user-message"]', "div.font-claude-message"],
     },
     "gemini.google.com": {
       // `button.send-button` was removed in a Gemini redesign; the live control is
-      // a Material icon button labelled "Send message" — keep both plus a loose
-      // aria fallback so a future rename still resolves.
-      editor: ['.ql-editor[contenteditable="true"]', 'rich-textarea div[contenteditable="true"]', 'div[contenteditable="true"]'],
-      send: ['button[aria-label="Send message"]', "button.send-button", 'button[aria-label*="Send" i]', 'button[mattooltip*="Send" i]'],
+      // a Material icon button labelled "Send message" — keep both, but never
+      // match unrelated actions such as "Send feedback".
+      editor: ['.ql-editor[contenteditable="true"]', 'rich-textarea div[contenteditable="true"]'],
+      send: ['button[aria-label="Send message"]', "button.send-button", 'button[mattooltip="Send message"]'],
       message: ["user-query", "model-response"],
     },
   };
 
-  const cfg = SITES[HOST] || SITES[Object.keys(SITES).find((k) => HOST.endsWith(k)) || ""];
+  const cfg = SITES[HOST];
   if (!cfg) return;
 
   // ---- live state from storage ----
   let enabled = false;
   let level = "full";
-  let bypass = false; // true while we re-fire the user's own send
+  let bypass = false; // true only during our synchronous button click
+  let pending = null;
+  let settingsVersion = 0;
+
+  function cancelPending() {
+    if (pending) clearTimeout(pending.timer);
+    pending = null;
+  }
 
   function refresh() {
+    const version = ++settingsVersion;
+    cancelPending();
     chrome.storage.sync.get({ enabled: true, level: "full", sites: {} }, (s) => {
-      const siteOn = s.sites[HOST] !== false; // default on per site
+      if (version !== settingsVersion) return;
+      const siteOn = (s.sites || {})[HOST === "chat.openai.com" ? "chatgpt.com" : HOST] !== false;
       enabled = !!s.enabled && siteOn;
       level = D.normLevel(s.level);
       renderIndicator();
@@ -77,22 +87,18 @@
   }
   function pick(selectors) {
     for (const sel of selectors) {
-      let el = null;
+      let matches = [];
       try {
-        el = document.querySelector(sel);
+        matches = document.querySelectorAll(sel);
       } catch (_e) {
         continue; // a selector the browser can't parse — skip it
       }
-      if (el && isVisible(el)) return el;
+      for (const el of matches) if (isVisible(el)) return el;
     }
     return null;
   }
   function getEditor() {
-    const el = pick(cfg.editor);
-    if (el) return el;
-    // fallback: the last visible textarea / contenteditable (usually the composer)
-    const list = [...document.querySelectorAll('textarea, [contenteditable="true"]')].filter(isVisible);
-    return list.length ? list[list.length - 1] : null;
+    return pick(cfg.editor);
   }
   // A button is a usable send target only if it is visible, NOT disabled (the
   // sites gate with either the `disabled` prop OR `aria-disabled`), and is not the
@@ -100,39 +106,34 @@
   // that can share the composer's button slot; clicking it would abort the reply
   // and never send.
   const SEND_NEG = /\b(stop|abort|cancel)\b/i;
-  function looksSendable(btn) {
+  function looksSendable(btn, allowDisabled = false) {
     if (!btn || !isVisible(btn)) return false;
-    if (btn.disabled || btn.getAttribute("aria-disabled") === "true") return false;
+    if (!allowDisabled && (btn.disabled || btn.getAttribute("aria-disabled") === "true")) return false;
     const meta =
       (btn.getAttribute("aria-label") || "") + " " + (btn.getAttribute("data-testid") || "") + " " + (btn.title || "");
     return !SEND_NEG.test(meta);
   }
-  function composerBox() {
-    const ed = getEditor();
-    if (!ed) return null;
-    let box = ed;
-    for (let i = 0; i < 6 && box.parentElement; i++) box = box.parentElement;
-    return box;
-  }
-  function getSend() {
-    // 1) precise per-site selectors (send-specific), document-wide.
-    for (const sel of cfg.send) {
-      let el = null;
-      try {
-        el = document.querySelector(sel);
-      } catch (_e) {
-        continue; // unparseable selector — skip
-      }
-      if (looksSendable(el)) return el;
+  function composerBox(ed) {
+    // Stop at the editor's form, or the nearest container with a known send
+    // control. Never search the document/body for a loosely named action.
+    const form = ed.closest("form");
+    // Only when the form actually holds the send control. A composer whose
+    // button lives outside its form (portal, sibling toolbar) would otherwise
+    // stop the search at a container getSend can never resolve in, and the
+    // extension would be silently inert on that site.
+    if (form && cfg.send.some((selector) => form.querySelector(selector))) return form;
+    let box = ed.parentElement;
+    for (let i = 0; i < 10 && box && box !== document.body && box !== document.documentElement; i++, box = box.parentElement) {
+      if (cfg.send.some((selector) => box.querySelector(selector))) return box;
     }
-    // 2) loose fallback, scoped to the composer only so a page-level "Send
-    //    feedback" / "Resend" button can never be mistaken for the composer send.
-    const box = composerBox();
-    if (box) {
-      const cand = [...box.querySelectorAll("button")].find(
-        (b) => /send/i.test(b.getAttribute("aria-label") || "") && looksSendable(b)
-      );
-      if (cand) return cand;
+    return null;
+  }
+  function getSend(box, allowDisabled = false) {
+    if (!box) return null;
+    for (const selector of cfg.send) {
+      for (const button of box.querySelectorAll(selector)) {
+        if (looksSendable(button, allowDisabled)) return button;
+      }
     }
     return null;
   }
@@ -150,136 +151,149 @@
     return n;
   }
 
-  // Replace the composer's content with `text`. Returns true on success.
+  // Prepend through the editor's input path. Returns true on success.
   //
   // For rich editors (ProseMirror / Quill / Lexical) we drive the SAME path the
-  // framework listens to — focus, select-all, execCommand("insertText") — so its
-  // internal document model updates and the send button re-enables. We do NOT
-  // fall back to `el.textContent = text`: writing the DOM directly desyncs those
-  // editors from their model and can wipe the draft on the next keystroke. On any
-  // failure we return false and the caller fails closed (sends the original).
-  function setText(el, text) {
+  // framework listens to — focus, collapsed selection, insertText — so its
+  // document model updates. Never reconstruct the existing rich document from
+  // innerText: that discards embedded nodes and can multiply blank lines.
+  function prependText(el, prefix) {
     el.focus();
     if (isTextarea(el)) {
       const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
-      setter.call(el, text);
+      setter.call(el, prefix + el.value);
       el.dispatchEvent(new Event("input", { bubbles: true }));
       return true;
     }
     const sel = window.getSelection();
     const range = document.createRange();
     range.selectNodeContents(el);
+    range.collapse(true);
     sel.removeAllRanges();
     sel.addRange(range);
     try {
-      return document.execCommand("insertText", false, text) === true;
+      return document.execCommand("insertText", false, prefix) === true;
     } catch (_e) {
       sel.collapseToEnd();
       return false;
     }
   }
 
-  // dispatchEnter — a full synthetic Enter key sequence on the editor. Fallback
-  // for the rare site/state where no send button can be resolved.
-  function dispatchEnter(el) {
-    for (const type of ["keydown", "keypress", "keyup"]) {
-      el.dispatchEvent(
-        new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true })
-      );
-    }
-  }
-
-  // fireSend — send the (already-injected) draft. The site renders/enables the
-  // send button a render tick AFTER setText, so we POLL for an enabled, visible
-  // send button (up to ~820ms) and click it; only if none resolves do we fall
-  // back to dispatching Enter. `bypass` keeps our own interceptors off our
-  // synthetic gesture. Exactly one trigger fires per gesture (click OR Enter,
-  // never both), so a successful suppression can't become a double-send.
-  function fireSend(el) {
-    bypass = true;
+  // A delayed render must never redirect the user's send to a different draft
+  // or conversation. If the original transaction changes, leave the draft for
+  // the user to send explicitly. An unknown button is not a reason to synthesize
+  // Enter: it can mean newline, Stop, or another action in the current site state.
+  function fireSend(transaction) {
+    cancelPending();
+    pending = transaction;
     let tries = 0;
-    const release = () => setTimeout(() => (bypass = false), 200);
     const tick = () => {
-      const btn = getSend(); // already filtered: visible, enabled, not Stop
+      if (pending !== transaction) return;
+      const { editor, box, href, draft, richDraft, version } = transaction;
+      if (!enabled || version !== settingsVersion || location.href !== href ||
+          !editor.isConnected || !box.isConnected || !box.contains(editor) ||
+          getEditor() !== editor || getText(editor) !== draft ||
+          (richDraft !== undefined && editor.innerHTML !== richDraft)) {
+        cancelPending();
+        return;
+      }
+      const btn = getSend(box);
       if (btn) {
-        btn.click();
-        release();
+        pending = null;
+        bypass = true;
+        try { btn.click(); } finally { bypass = false; }
         return;
       }
       if (tries++ < 16) {
-        setTimeout(tick, 50); // ~820ms budget for the button to mount + enable
+        transaction.timer = setTimeout(tick, 50);
         return;
       }
-      dispatchEnter(el); // last resort: no send button resolved
-      release();
+      cancelPending();
     };
-    setTimeout(tick, 20);
+    transaction.timer = setTimeout(tick, 20);
   }
 
-  function injectAndSend(el) {
+  function injectAndSend(el, box) {
     const original = getText(el);
+    const transaction = { editor: el, box, href: location.href, version: settingsVersion };
     // "First message of this conversation" — the only state that earns the full
     // primer — is when no messages have rendered yet. Keying off the live message
     // count (not a per-load flag) means reloading or deep-linking into an existing
     // chat correctly gets the short reminder, not another full primer.
     const isFirst = messageCount() === 0;
     const prefix = isFirst ? D.buildPrimer(level) : D.buildReminder(level);
-    const ok = setText(el, prefix + "\n\n" + original);
+    let ok = false;
+    try { ok = prependText(el, prefix + "\n\n"); } catch (_e) { /* check the draft below */ }
     if (!ok) {
-      // Injection failed. Restore the original and send it un-prefixed — but only
-      // if the restore left a real draft; never fire send on an empty/garbled box.
-      setText(el, original);
-      if (!getText(el).trim()) return;
+      // Only replay an unsuccessful edit when the original draft is intact.
+      // A partial edit stays visible for the user to review; do not destroy rich
+      // content while trying to restore it from plain text.
+      if (getText(el) !== original) return;
     }
-    fireSend(el);
+    transaction.draft = getText(el);
+    if (!isTextarea(el)) transaction.richDraft = el.innerHTML;
+    if (ok && (!transaction.draft.startsWith(prefix) || !transaction.draft.endsWith(original) ||
+        !/^\n{2,}$/.test(transaction.draft.slice(prefix.length, -original.length)))) return;
+    if (!transaction.draft.trim()) return;
+    fireSend(transaction);
+  }
+
+  function stopRequested(text) {
+    if (!/^\s*stop caveman[.!]?\s*$/i.test(text)) return false;
+    ++settingsVersion;
+    cancelPending();
+    enabled = false;
+    renderIndicator();
+    chrome.storage.sync.set({ enabled: false });
+    return true;
+  }
+
+  function intercept(e, el, box) {
+    cancelPending();
+    const text = getText(el);
+    // Send the user's stop command unchanged and persist the same switch used by
+    // the popup. Merely asking the model to stop would be undone next turn.
+    if (stopRequested(text) || !text.trim() || D.isPrefixed(text)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    try { injectAndSend(el, box); } catch (_e) { cancelPending(); }
   }
 
   // ---- intercept the send gesture (capture phase, so we beat the app) ----
-  // run injectAndSend after we've already cancelled the native gesture. If
-  // anything throws, still attempt a plain send so cancelling the user's Enter can
-  // never leave them unable to send (a thrown error here would otherwise swallow
-  // every send until reload).
-  function safeInjectAndSend(el) {
-    try {
-      injectAndSend(el);
-    } catch (_e) {
-      try {
-        fireSend(el);
-      } catch (_e2) {
-        /* give up silently; the draft is untouched and the user can retry */
-      }
-    }
-  }
-
   function onKeydown(e) {
     if (bypass || !enabled) return;
-    if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    // At an IME composition boundary isComposing can already be false while the
+    // Enter event still carries keyCode 229. It confirms text, not a chat send.
+    if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.keyCode === 229) return;
     const el = getEditor();
     if (!el) return;
     if (!(e.target === el || el.contains(e.target))) return;
-    const text = getText(el);
-    if (!text.trim() || D.isPrefixed(text)) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    safeInjectAndSend(el);
+    const box = composerBox(el);
+    if (!box || !getSend(box, true)) return;
+    intercept(e, el, box);
   }
 
   function onClick(e) {
     if (bypass || !enabled) return;
-    const btn = getSend();
-    if (!btn) return;
-    if (!(e.target === btn || btn.contains(e.target))) return;
     const el = getEditor();
     if (!el) return;
-    const text = getText(el);
-    if (!text.trim() || D.isPrefixed(text)) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    safeInjectAndSend(el);
+    const box = composerBox(el);
+    const btn = getSend(box);
+    if (!btn || !(e.target === btn || btn.contains(e.target))) return;
+    intercept(e, el, box);
   }
 
   document.addEventListener("keydown", onKeydown, true);
   document.addEventListener("click", onClick, true);
+  document.addEventListener("input", (e) => {
+    // Formatting and reference changes can keep innerText identical. Any new
+    // input in this editor invalidates the send the user requested earlier.
+    if (pending && (e.target === pending.editor || pending.editor.contains(e.target))) cancelPending();
+  }, true);
+  window.addEventListener("popstate", cancelPending);
+  window.addEventListener("hashchange", cancelPending);
+  window.addEventListener("pagehide", cancelPending);
+  window.navigation?.addEventListener("navigate", cancelPending);
 
   // ---- on-page indicator: dark-glass pill + ember flame (click to toggle off) ----
   const FLAME = ["00011000", "00111100", "00111100", "01122110", "01122110", "11222211", "01122110", "00111100"];
@@ -349,6 +363,8 @@
   // cleanly when the extension is reloaded and this script is orphaned.
   const heartbeat = setInterval(() => {
     if (!chrome.runtime || !chrome.runtime.id) {
+      enabled = false;
+      cancelPending();
       clearInterval(heartbeat);
       if (indicatorEl) indicatorEl.remove();
       return;

@@ -1,11 +1,9 @@
 ---
 name: caveman-evidence-review
 description: >
-  Review Caveman Cloud evidence read-only: costs, Cave Score, Cave Plan,
-  workflows, traces, latency, errors, compression, routing, and verified
-  savings. Use when the user asks what Caveman found, where LLM spend goes,
-  why cost or quality changed, which workflows need attention, or asks for a
-  trace or analytics review. Prefer Caveman MCP tools; fall back to CLI JSON.
+  Read-only review of Caveman Cloud evidence: cost, Cave Score, workflows,
+  traces, latency, errors, routing, savings. Use when asked what Caveman found
+  or where LLM spend goes.
 ---
 
 # Review Caveman evidence

@@ -1,2 +1,2 @@
-description = "Real session token usage + lifetime savings + USD. Tweetable line via --share."
-prompt = "/caveman-stats {{args}}"
+description = "Find Gemini CLI session token usage; Caveman savings remain unknown."
+prompt = "Tell the user to run Gemini CLI's built-in /stats model for current session token usage, or /stats session for session statistics. This custom prompt cannot invoke a built-in slash command or access the host's live metrics. Do not run the Claude Code caveman-stats reader, inspect .claude transcripts, or estimate saved tokens, percentages, dollars, or lifetime savings. Caveman savings are unknown. Requested options: {{args}}"

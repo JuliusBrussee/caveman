@@ -1,12 +1,9 @@
 ---
 name: caveman-optimize
 description: >
-  Turn Caveman's exact report-only repository observations into an
-  operator-chosen optimization candidate with a paired baseline/candidate
-  evaluation. Use when the user asks to inspect an optimization observation,
-  evaluate a candidate change, or act on the current Caveman optimization
-  report. Require a logged-in Caveman CLI connection and explicit approval;
-  never infer money or actuation from a profile.
+  Turn a Caveman optimization observation into an operator-chosen candidate
+  with a paired baseline evaluation. Use when asked to inspect or evaluate a
+  Caveman optimization report. Needs explicit approval.
 ---
 
 # Evaluate an optimization observation

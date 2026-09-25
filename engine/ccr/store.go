@@ -33,6 +33,10 @@ var ErrNotFound = errors.New("ccr: recovery handle not found")
 // Existing handles remain intact and retrievable; callers must pass through.
 var ErrBudgetExceeded = errors.New("ccr: storage budget exceeded")
 
+// ErrStorageChanged means the recovery database no longer matches the open
+// connection. Callers must preserve the original input and report the error.
+var ErrStorageChanged = errors.New("ccr: recovery storage changed; restart the process and restore missing recovery files")
+
 // ObjectType is a closed typed-working-memory enum. Unknown values fail closed:
 // adapters may preserve unknown native payloads outside CCR, but may not invent
 // retrieval semantics for them.

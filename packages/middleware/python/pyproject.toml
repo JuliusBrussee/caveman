@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "caveman-middleware"
+version = "0.1.0a1"
+description = "Native framework adapters for the Caveman compression runtime."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = ["caveman-sdk>=1.1,<2"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Documentation = "https://docs.caveman.so/docs/sdk/middleware/python"
+Repository = "https://github.com/JuliusBrussee/caveman"
+Issues = "https://github.com/JuliusBrussee/caveman/issues"
+
+# One extra per adapter family, each naming only the framework the adapter
+# imports. Provider SDKs (openai, anthropic, google-genai) are deliberately
+# absent: pinning them here made extras mutually unsatisfiable - `openai==3.10.0`
+# under [mcp] against `openai==2.54.0` under [agno] - so no two families could be
+# installed together. The framework's own dependency ranges pick the provider.
+[project.optional-dependencies]
+openai = ["openai>=3.10,<4"]
+anthropic = ["anthropic>=1.4,<2"]
+google = ["google-genai>=2.22,<3"]
+langchain = ["langchain>=1.4,<2", "langchain-core>=1.6,<2", "langgraph>=1.2,<2"]
+litellm = ["litellm>=1.100,<2"]
+strands = ["strands-agents>=1.55,<2"]
+agno = ["agno>=3.0,<4"]
+asgi = ["fastapi>=0.141,<1", "starlette>=1.6,<2"]
+mcp = ["mcp>=2.2,<3"]
+crewai = ["crewai>=1.15,<2"]
+pydantic-ai = ["pydantic-ai>=2.42,<3"]
+autogen = ["autogen-agentchat>=0.7,<0.8", "autogen-core>=0.7,<0.8", "autogen-ext>=0.7,<0.8"]
+llama-index = ["llama-index-core>=0.14,<0.15"]
+
+[tool.setuptools]
+packages = ["caveman_middleware"]
+
+[tool.setuptools.package-data]
+caveman_middleware = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

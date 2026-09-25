@@ -3,6 +3,7 @@ package compressors
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"regexp"
 	"sort"
 	"strconv"
@@ -370,8 +371,23 @@ func summarizeElided(units [][]field, elidedBytes int) string {
 	for i := range selected {
 		selected[i] = true
 	}
+	// Shedding is declared, never silent. A marker states only what it verified,
+	// and a trimmed `all …` list that reads as complete would let an agent
+	// conclude a field it cannot see was not constant — the same error
+	// enumerateField refuses a partial list to avoid. The count rides in a
+	// trailing `+N omitted` section.
+	//
+	// The notice is charged to the same budget as the facts, so both caps that
+	// govern a marker still hold exactly: the invariantMaxBytes ceiling, and the
+	// rule that a summary never costs more than half the bytes it replaced. A
+	// notice that rode outside the budget would break both on a tight run, and a
+	// marker that stops shrinking what it stands in for is the one thing a
+	// marker may never do. On the first pass nothing has been shed yet, so no
+	// notice is charged and an untrimmed summary renders byte-identically to
+	// before.
+	omitted := 0
 	for {
-		rendered := renderInvariants(entries, selected)
+		rendered := renderInvariants(entries, selected, omitted)
 		if len(rendered) <= budget {
 			return rendered
 		}
@@ -391,13 +407,20 @@ func summarizeElided(units [][]field, elidedBytes int) string {
 			return "" // nothing left to shed; the run buys no summary at all
 		}
 		selected[victim] = false
+		omitted++
 	}
 }
 
 // renderInvariants joins the selected entries into the marker summary: the
 // constants as one `all …` section, each enumeration as its own `name: v×n …`
 // section, the ranges as one `range …` section.
-func renderInvariants(entries []entry, selected []bool) string {
+//
+// omitted is how many entries the budget shed. When it is non-zero a trailing
+// `+N omitted` section says so, because every section above reads as the
+// complete set of facts of its kind and silently trimming one inverts its
+// meaning. A render with no sections left stays empty and takes no suffix: an
+// absent summary claims nothing, so it has nothing to qualify.
+func renderInvariants(entries []entry, selected []bool, omitted int) string {
 	sections := make([]string, 0, len(entries))
 	collect := func(kind int) []string {
 		var out []string
@@ -420,6 +443,12 @@ func renderInvariants(entries []entry, selected []bool) string {
 	}
 	if ranges := collect(kindRange); len(ranges) > 0 {
 		sections = append(sections, "range "+strings.Join(ranges, " "))
+	}
+	if len(sections) == 0 {
+		return ""
+	}
+	if omitted > 0 {
+		sections = append(sections, "+"+strconv.Itoa(omitted)+" omitted")
 	}
 	return strings.Join(sections, "; ")
 }
@@ -567,7 +596,7 @@ func lineFields(line []byte) []field {
 		decoder := json.NewDecoder(bytes.NewReader(trimmed))
 		decoder.UseNumber()
 		var event any
-		if err := decoder.Decode(&event); err == nil && !decoder.More() {
+		if err := decoder.Decode(&event); err == nil && decoder.Decode(new(any)) == io.EOF {
 			if fields := objectFields(event); len(fields) > 0 {
 				return fields
 			}
@@ -578,6 +607,9 @@ func lineFields(line []byte) []field {
 
 // logfmtFields extracts the `key=value` tokens of one log line, in order.
 func logfmtFields(line []byte) []field {
+	if !bytes.ContainsRune(line, '=') {
+		return nil
+	}
 	matches := logfmtPairRe.FindAllSubmatch(line, invariantMaxFieldsPerUnit)
 	if len(matches) == 0 {
 		return nil

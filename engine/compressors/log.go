@@ -17,6 +17,31 @@ var (
 	logMarkerRe = regexp.MustCompile(`lines elided \(caveman\)`)
 )
 
+// Keep the canonical regexp's word boundaries and Unicode case folding. Most
+// plain log lines contain none of its required literals; avoid trying every
+// regexp alternative at every byte of those lines. Non-ASCII and possible
+// stack-frame prefixes go directly to the original matcher.
+func importantLogLine(line []byte) bool {
+	if len(line) == 0 {
+		return false
+	}
+	if line[0] <= ' ' {
+		return importantLineRe.Match(line)
+	}
+	for _, b := range line {
+		if b >= utf8.RuneSelf {
+			return importantLineRe.Match(line)
+		}
+	}
+	lower := bytes.ToLower(line)
+	for _, literal := range []string{"error", "fatal", "panic", "exception", "traceback", "fail", "warn", ".go:", "caused by"} {
+		if bytes.Contains(lower, []byte(literal)) {
+			return importantLineRe.Match(line)
+		}
+	}
+	return false
+}
+
 // logMarker renders the elision marker for a run of dropped lines. summary is
 // the class-invariant description of exactly those lines (see invariants.go); it
 // is empty when the run carries no extractable structure, and the marker is then
@@ -77,7 +102,7 @@ func (c *logCompressor) compress(input []byte, query string) ([]byte, bool) {
 			keep[i] = true
 			continue
 		}
-		if importantLineRe.Match(ln) || logMarkerRe.Match(ln) || bytes.HasPrefix(ln, []byte(elisionNotePrefix)) {
+		if importantLogLine(ln) || logMarkerRe.Match(ln) || bytes.HasPrefix(ln, []byte(elisionNotePrefix)) {
 			keep[i] = true
 		}
 	}

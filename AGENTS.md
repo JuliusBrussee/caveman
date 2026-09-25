@@ -1,11 +1,13 @@
 Read `CLAUDE.md` before repository work. Binding routing: this repo owns
 skills, Engine, and MV3 extension; Agent SDK work belongs in
 `/Users/julb/Desktop/GitHub/caveman-agent-sdk`; Browse driver/MCP/benchmark/plugin
-work belongs in `/Users/julb/Desktop/GitHub/caveman-browse`.
+work belongs in `/Users/julb/Desktop/GitHub/caveman-browse`; proprietary Pebble
+product work belongs in `/Users/julb/Desktop/GitHub/caveman-coding-agent`.
 
 Visibility: this repo and `caveman-browse` are public now;
 `caveman-agent-sdk` is private during development with planned public release
-after its gates; Caveman-Cloud remains private commercial source.
+after its gates; `caveman-coding-agent` and Caveman-Cloud remain private
+commercial source.
 
 @./skills/caveman/SKILL.md
 @./skills/caveman-commit/SKILL.md

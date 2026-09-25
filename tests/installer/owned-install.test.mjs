@@ -80,3 +80,74 @@ test('broken symbolic-link targets are conflicts even with force', { skip: proce
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('host registration failure retains committed payload and ownership for recovery', () => {
+  const root = freshRoot();
+  try {
+    const options = { root, integration: 'test' };
+    OWNED.installOwned({ ...options, operations: [fileOperation('payload.txt', 'v1')] });
+    const journalPath = OWNED.journalPaths(root, 'test').journalPath;
+    const before = fs.readFileSync(journalPath, 'utf8');
+    const upgrade = fileOperation('payload.txt', 'v2');
+    upgrade.register = (target) => {
+      assert.equal(fs.readFileSync(target, 'utf8'), 'v2');
+      throw new Error('host registration failed');
+    };
+    assert.throws(() => OWNED.installOwned({ ...options, operations: [upgrade] }), /host registration failed/);
+    assert.equal(fs.readFileSync(path.join(root, 'payload.txt'), 'utf8'), 'v2');
+    assert.notEqual(fs.readFileSync(journalPath, 'utf8'), before);
+    assert.equal(JSON.parse(fs.readFileSync(journalPath, 'utf8')).entries['payload.txt'].installedDigest, OWNED.digestPath(path.join(root, 'payload.txt')));
+    assert.deepEqual(fs.readdirSync(root).sort(), ['.caveman-test-ownership.json', 'payload.txt']);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('failed host deregistration retains owned bytes and journal', () => {
+  const root = freshRoot();
+  try {
+    const options = { root, integration: 'test' };
+    OWNED.installOwned({ ...options, operations: [fileOperation('payload.txt', 'v1')] });
+    const journalPath = OWNED.journalPaths(root, 'test').journalPath;
+    const before = fs.readFileSync(journalPath, 'utf8');
+    assert.throws(() => OWNED.uninstallOwned({ ...options, unregister() { throw new Error('host unavailable'); } }), /host unavailable/);
+    assert.equal(fs.readFileSync(path.join(root, 'payload.txt'), 'utf8'), 'v1');
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), before);
+    let calls = 0;
+    OWNED.uninstallOwned({ ...options, dryRun: true, unregister() { calls++; } });
+    assert.equal(calls, 0, 'dry run must never mutate host registration');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('journal failure never reaches host registration', () => {
+  const root = freshRoot();
+  try {
+    let calls = 0;
+    const { journalPath } = OWNED.journalPaths(root, 'test');
+    const operation = fileOperation('payload.txt', 'managed', () => fs.mkdirSync(journalPath));
+    operation.register = () => { calls++; };
+    assert.throws(() => OWNED.installOwned({ root, integration: 'test', operations: [operation] }));
+    assert.equal(calls, 0);
+    assert.equal(fs.existsSync(path.join(root, 'payload.txt')), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('uninstall refuses a symlinked backup root before unregistering', { skip: process.platform === 'win32' }, () => {
+  const root = freshRoot();
+  const elsewhere = freshRoot();
+  try {
+    const target = path.join(root, 'payload.txt');
+    fs.writeFileSync(target, 'user bytes');
+    OWNED.installOwned({ root, integration: 'test', force: true, operations: [fileOperation('payload.txt', 'managed')] });
+    const { journalPath, backupRoot } = OWNED.journalPaths(root, 'test');
+    const journal = fs.readFileSync(journalPath, 'utf8');
+    const backupName = JSON.parse(journal).entries['payload.txt'].restoreBackup;
+    fs.renameSync(path.join(backupRoot, backupName), path.join(elsewhere, backupName));
+    fs.rmdirSync(backupRoot);
+    fs.symlinkSync(elsewhere, backupRoot);
+    let calls = 0;
+    assert.throws(() => OWNED.uninstallOwned({ root, integration: 'test', unregister() { calls++; } }), /invalid backup root/);
+    assert.equal(calls, 0);
+    assert.equal(fs.readFileSync(target, 'utf8'), 'managed');
+    assert.equal(fs.readFileSync(path.join(elsewhere, backupName), 'utf8'), 'user bytes');
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), journal);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(elsewhere, { recursive: true, force: true }); }
+});

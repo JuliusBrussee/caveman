@@ -47,15 +47,29 @@ function validEntitlement() {
 // Raw `caveman wrap <command>` must inject the provider base URL union into the child
 // environment before exec, so the wrapped agent's LLM traffic flows through the
 // local proxy with no code change. No profile means no attribution suffix.
-test("raw wrap injects bare provider base URL union before exec", async () => {
-  const { mkdtempSync } = await import("node:fs");
+test("raw wrap injects bare provider base URL union before exec", async (t) => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   // Isolate HOME: gateway resolution is now dynamic (reads config.json), so a real
   // logged-in ~/.caveman-cloud/config.json carrying a persisted gatewayUrl must not
   // be able to flip this logged-out, local-proxy assertion.
   const home = mkdtempSync(join(tmpdir(), "cave-wrap-local-"));
-  const childEnv = { ...process.env, HOME: home, CAVEMAN_HOME: home };
-  delete childEnv.CAVE_GATEWAY_URL;
+  // Injection is valid only with a live, owned proxy. A missing listener must
+  // launch direct rather than export a dead base URL.
+  const listener = createServer((socket) => socket.end());
+  await new Promise((resolve, reject) => {
+    listener.once("error", reject);
+    listener.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => { listener.close(); rmSync(home, { recursive: true, force: true }); });
+  const port = listener.address().port;
+  const gateway = `http://127.0.0.1:${port}`;
+  const proxy = join(home, "proxy-fixture");
+  writeFileSync(proxy, `#!/usr/bin/env node
+if (process.argv[2] === "version") console.log(JSON.stringify({version:"test",capabilities:["run_state","sessions_scanned","observe_token_accounting"]}));
+else if (process.argv[2] === "status") console.log(JSON.stringify({owner:"wrap",mode:"compress",recovery_via_mcp:false,pid:${process.pid},port:${port},instance_token:"raw-wrap-test"}));
+`, { mode: 0o755 });
+  const childEnv = { ...process.env, HOME: home, CAVEMAN_HOME: home, CAVEMAN_PROXY_BIN: proxy, CAVE_GATEWAY_URL: gateway };
   const printEnv = `const keys=${JSON.stringify(UNION_BASE_URL_VARS)};process.stdout.write(JSON.stringify(Object.fromEntries(keys.map((k)=>[k,process.env[k]||null]))))`;
   const out = await new Promise((resolve, reject) => {
     const child = spawn("node", [cli, "wrap", "node", "-e", printEnv], { env: childEnv });
@@ -70,7 +84,7 @@ test("raw wrap injects bare provider base URL union before exec", async () => {
   assert.equal(out.code, 0, `cli exited ${out.code}: ${out.stderr}`);
   const env = JSON.parse(out.stdout);
   for (const key of UNION_BASE_URL_VARS) {
-    assert.equal(env[key], "http://127.0.0.1:8787", `${key} must point at the bare local proxy`);
+    assert.equal(env[key], gateway, `${key} must point at the bare local proxy`);
     assert.ok(!env[key].includes("/w/"), `${key} must not be path-attributed for raw wraps`);
   }
 });
@@ -247,7 +261,7 @@ async function wrapAndEchoEnv(agentId, envVar, extraEnv = {}) {
   });
 }
 
-async function wrapAndEchoEnvJson(agentId, envVars, extraEnv = {}) {
+async function wrapAndEchoEnvJson(agentId, envVars, extraEnv = {}, cwd = undefined) {
   const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const binDir = mkdtempSync(join(tmpdir(), `cave-${agentId}-`));
@@ -263,7 +277,7 @@ process.stdout.write(JSON.stringify(Object.fromEntries(keys.map((key) => [key, p
   delete env.CAVE_GATEWAY_URL;
   Object.assign(env, extraEnv);
   return await new Promise((resolve, reject) => {
-    const child = spawn("node", [cli, "wrap", agentId], { env });
+    const child = spawn("node", [cli, "wrap", agentId], { env, ...(cwd ? { cwd } : {}) });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -549,6 +563,71 @@ test("managed claude wrap does not assert first-party (upstream unverifiable)", 
   });
   assert.equal(out.code, 0, out.stderr);
   assert.equal(JSON.parse(out.stdout)[ASSUME_FIRST_PARTY], null);
+});
+
+// Delivery joins a session's spend to its merged change on tags['repo'] and
+// tags['branch']; the managed wrap is the one place that knows both at launch.
+async function tempRepo(branch, remote) {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { execFileSync } = await import("node:child_process");
+  const repo = mkdtempSync(join(tmpdir(), "cave-wrap-repo-"));
+  // Deterministic git: no user or system config can redirect or break it.
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", HOME: repo };
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { stdio: "ignore", env });
+  git("init", "-q", "-b", branch);
+  if (remote) git("remote", "add", "origin", remote);
+  return repo;
+}
+
+test("wrapWorkTags reads the launch repository deterministically and drops unsafe values", async () => {
+  const { wrapWorkTags, workTagValueSafe } = await import(pathToFileURL(join(dirname(cli), "index.js")).href);
+  const repo = await tempRepo("feat/tags", "git@github.com:acme/checkout.git");
+  const tags = wrapWorkTags(repo);
+  assert.equal(tags, "repo=acme/checkout,branch=feat/tags", "a github remote and an ASCII branch are both tagged");
+  // A non-ASCII branch is dropped (a header value must be a ByteString); the repo survives.
+  assert.equal(wrapWorkTags(await tempRepo("féature/ünïcode-🚀", "https://github.com/acme/checkout.git")), "repo=acme/checkout");
+  // A non-GitHub host is never tagged as a repo: Cloud joins owner/name to GitHub pull requests only.
+  assert.equal(wrapWorkTags(await tempRepo("main", "git@gitlab.example.com:acme/checkout.git")), "branch=main");
+  // No remote at all still yields the branch; outside a repository yields nothing.
+  assert.equal(wrapWorkTags(await tempRepo("main", "")), "branch=main");
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  assert.equal(wrapWorkTags(mkdtempSync(join(tmpdir(), "cave-wrap-norepo-"))), "");
+  for (const bad of ["a,b", "a=b", "with space", "tab\there", "ünïcode"]) assert.equal(workTagValueSafe(bad), false, bad);
+  assert.equal(workTagValueSafe("feat/x_y-1.2"), true);
+});
+
+test("managed claude wrap names repo and branch as x-cave-tags", async () => {
+  const repo = await tempRepo("feat/tags", "git@github.com:acme/checkout.git");
+  const out = await wrapAndEchoEnvJson("claude", ["ANTHROPIC_CUSTOM_HEADERS"], {
+    CAVE_GATEWAY_URL: "https://gateway.example.com",
+    ANTHROPIC_CUSTOM_HEADERS: "x-cave-tags: team=billing,branch=user-said-so\nx-other: 1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+  }, repo);
+  assert.equal(out.code, 0, out.stderr);
+  const lines = JSON.parse(out.stdout).ANTHROPIC_CUSTOM_HEADERS.split("\n");
+  assert.ok(lines.includes("x-other: 1"), "unrelated custom headers survive");
+  assert.ok(lines.includes("x-cave-tags: team=billing,branch=user-said-so,repo=acme/checkout"), lines.join(" | "));
+  // Local mode: the local proxy strips x-cave-* before forwarding, so no tag is written.
+  const local = await wrapAndEchoEnvJson("claude", ["ANTHROPIC_CUSTOM_HEADERS"], { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" }, repo);
+  assert.equal(local.code, 0, local.stderr);
+  assert.equal(JSON.parse(local.stdout).ANTHROPIC_CUSTOM_HEADERS, null);
+});
+
+test("repo slug never carries a remote credential, host or non-GitHub repository", async () => {
+  const { repoSlugFromRemote, mergeWorkTags } = await import(pathToFileURL(join(dirname(cli), "index.js")).href);
+  assert.equal(repoSlugFromRemote("https://user:token@github.com/acme/checkout.git"), "acme/checkout");
+  assert.equal(repoSlugFromRemote("git@github.com:acme/checkout"), "acme/checkout");
+  assert.equal(repoSlugFromRemote("ssh://git@github.com/acme/checkout.git/"), "acme/checkout");
+  assert.equal(repoSlugFromRemote("ssh://git@GitHub.com:22/acme/checkout.git"), "acme/checkout");
+  assert.equal(repoSlugFromRemote("https://gitlab.example.com/acme/checkout.git"), "", "another host is never tagged as this repository");
+  assert.equal(repoSlugFromRemote("git@github.example.internal:acme/checkout.git"), "", "an internal mirror is not github.com");
+  assert.equal(repoSlugFromRemote("https://github.com/group/sub/project.git"), "", "nested paths are not owner/name");
+  assert.equal(repoSlugFromRemote(""), "");
+  assert.equal(mergeWorkTags("", "repo=a/b,branch=x"), "repo=a/b,branch=x");
+  assert.equal(mergeWorkTags("repo=mine/own", "repo=a/b,branch=x"), "repo=mine/own,branch=x");
 });
 
 test("gemini profile injects distinct Gemini and Vertex local routes", async () => {
@@ -885,5 +964,59 @@ test("wrap injects delegate MCP before startup without persisting agent config",
     assert.doesNotMatch(off.capture, /caveman-delegate/, "delegate must stay off by default");
     assert.equal(off.readFileSync(off.userConfig, "utf8"), off.userConfigBefore);
     assert.equal(off.existsSync(join(off.home, ".caveman", "mcp", `${agentId}.caveman-delegate.json`)), false);
+  }
+});
+
+test("Claude remote-control launches direct because Claude Code refuses a proxied base URL (#947)", async () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const { buildWrapEnv } = await import(`${pathToFileURL(join(here, "..", "dist", "index.js")).href}?claude-remote-control`);
+  const claude = PROFILES.find((profile) => profile.id === "claude");
+  assert.throws(
+    () => buildWrapEnv(claude, "http://127.0.0.1:8787", "auto", ["remote-control"]),
+    /Claude Code remote-control only runs against api.anthropic.com/,
+  );
+  const env = buildWrapEnv(claude, "http://127.0.0.1:8787", "auto", ["-p", "hello"]);
+  assert.equal(env.ANTHROPIC_BASE_URL, "http://127.0.0.1:8787/w/claude");
+});
+
+test("a corporate HTTPS_PROXY does not swallow the agent's loopback hop (#1001)", async () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const { buildWrapEnv } = await import(`${pathToFileURL(join(here, "..", "dist", "index.js")).href}?gateway-no-proxy`);
+  const claude = PROFILES.find((profile) => profile.id === "claude");
+  const saved = { https: process.env.HTTPS_PROXY, no: process.env.NO_PROXY, lower: process.env.no_proxy };
+  const restore = () => {
+    for (const [key, value] of [["HTTPS_PROXY", saved.https], ["NO_PROXY", saved.no], ["no_proxy", saved.lower]]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+  try {
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
+    delete process.env.HTTPS_PROXY;
+    // No proxy configured: nothing to exempt, so nothing is added.
+    assert.equal(buildWrapEnv(claude, "http://127.0.0.1:8787", "auto", ["-p", "hi"]).NO_PROXY, undefined);
+
+    process.env.HTTPS_PROXY = "http://corp-proxy.internal:3128";
+    process.env.http_proxy = "http://corp-proxy.internal:3128";
+    assert.equal(buildWrapEnv(claude, "http://127.0.0.1:8787", "auto", ["-p", "hi"]).NO_PROXY, "127.0.0.1");
+
+    // An operator's existing NO_PROXY is preserved, not replaced.
+    process.env.NO_PROXY = "example.internal";
+    assert.equal(buildWrapEnv(claude, "http://127.0.0.1:8787", "auto", ["-p", "hi"]).NO_PROXY, "example.internal,127.0.0.1");
+
+    // Already exempt: inherited unchanged, no duplicate entry appended.
+    process.env.NO_PROXY = "127.0.0.1";
+    assert.equal(buildWrapEnv(claude, "http://127.0.0.1:8787", "auto", ["-p", "hi"]).NO_PROXY, "127.0.0.1");
+
+    // Lowercase spelling stays lowercase so one name does not shadow the other.
+    delete process.env.NO_PROXY;
+    process.env.no_proxy = "example.internal";
+    const lower = buildWrapEnv(claude, "http://127.0.0.1:8787", "auto", ["-p", "hi"]);
+    assert.equal(lower.no_proxy, "example.internal,127.0.0.1");
+    assert.equal(lower.NO_PROXY, undefined);
+  } finally {
+    delete process.env.http_proxy;
+    restore();
   }
 });

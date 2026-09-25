@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/config"
 )
@@ -39,6 +40,39 @@ func TestInitializeNativePersistenceHealthyCCRRetainsRequestedMode(t *testing.T)
 	}
 }
 
+func TestReadNativeHookPayloadReturnsBeforeEOF(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+
+	got := make(chan []byte, 1)
+	errs := make(chan error, 1)
+	go func() {
+		raw, err := readNativeHookPayload(reader)
+		if err != nil {
+			errs <- err
+			return
+		}
+		got <- raw
+	}()
+
+	payload := []byte(`{"hook_event_name":"SessionStart","session_id":"codex-1"}`)
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	case raw := <-got:
+		if string(raw) != string(payload) {
+			t.Fatalf("payload = %q, want %q", raw, payload)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("native hook payload read waited for EOF after a complete JSON object")
+	}
+}
+
 func TestLearnRetroOptionsCarriesBothPassBudgets(t *testing.T) {
 	got := learnRetroOptions([]string{
 		"--retro",
@@ -56,5 +90,21 @@ func TestFirstPositionalDoesNotConsumeValueAfterBooleanFlag(t *testing.T) {
 	}
 	if got := firstPositional([]string{"--since", "30d", "--json", "sink"}); got != "sink" {
 		t.Fatalf("value/boolean flag positionals = %q", got)
+	}
+}
+
+func TestCompatUpstreamsPublishesBuiltinAndUserMounts(t *testing.T) {
+	cfg := config.Config{Compat: map[string]config.CompatConfig{
+		"myprovider": {BaseURL: "http://127.0.0.1:4000", APIKeyEnv: "MYPROVIDER_API_KEY"},
+	}}
+	got := compatUpstreams(cfg)
+	if got["myprovider"] != "http://127.0.0.1:4000" {
+		t.Fatalf("user mount = %q", got["myprovider"])
+	}
+	if got["opencode-go"] != "https://opencode.ai/zen/go" {
+		t.Fatalf("built-in mount = %q", got["opencode-go"])
+	}
+	if len(got) != 2 {
+		t.Fatalf("published mounts = %v", got)
 	}
 }

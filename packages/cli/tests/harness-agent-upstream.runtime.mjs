@@ -73,7 +73,7 @@ test("real proxy wraps stub agent through stub upstream and records SQLite telem
   const home = mkdtempSync(join(tmpdir(), "cave-agent-home-"));
   const caveHome = mkdtempSync(join(tmpdir(), "cave-agent-store-"));
   const binDir = mkdtempSync(join(tmpdir(), "cave-agent-bin-"));
-  const proxyBin = join(binDir, "caveman-proxy");
+  const proxyBin = join(binDir, process.platform === "win32" ? "caveman-proxy.exe" : "caveman-proxy");
   let proxy = null;
   try {
     const proxyPort = await freePort();
@@ -116,13 +116,16 @@ test("real proxy wraps stub agent through stub upstream and records SQLite telem
     const env = {
       ...proxyEnv,
       HOME: home,
+      USERPROFILE: home,
       CAVE_GATEWAY_URL: `http://127.0.0.1:${proxyPort}`,
       CAVEMAN_PROXY_BIN: proxyBin,
       PATH: `${agent.dir}${delimiter}${process.env.PATH}`,
       CAVE_NO_KEYCHAIN: "1",
       NO_COLOR: "1",
     };
-    const wrapped = await runCli(cli, ["wrap", agent.name], { env });
+    // This journey verifies byte-safe metering against an existing record
+    // listener. The wrapper must not change another session's runtime mode.
+    const wrapped = await runCli(cli, ["wrap", "--off", agent.name], { env });
     assert.equal(wrapped.code, 0, wrapped.stderr);
     assert.match(wrapped.stdout, /stub-agent: ok/);
     assert.equal(upstream.requests.length, 1);
@@ -131,11 +134,15 @@ test("real proxy wraps stub agent through stub upstream and records SQLite telem
 
     const db = new DatabaseSync(join(caveHome, "caveman.db"), { readOnly: true });
     try {
-      const rows = db
-        .prepare(
-          "SELECT provider, model, status_code, input_tokens, output_tokens, token_usage_basis FROM requests ORDER BY id",
-        )
-        .all();
+      const query = db.prepare(
+        "SELECT provider, model, status_code, input_tokens, output_tokens, token_usage_basis FROM requests ORDER BY id",
+      );
+      const deadline = Date.now() + 2_000;
+      let rows = query.all();
+      while (rows.length === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        rows = query.all();
+      }
       assert.equal(rows.length, 1);
       const row = rows[0];
       assert.equal(row.provider, "anthropic");

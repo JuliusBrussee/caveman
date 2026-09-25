@@ -17,9 +17,21 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+// The `/v1` is not decoration. Codex's OpenAI-Responses client appends
+// "/responses" onto base_url itself, exactly as it does against the real
+// api.openai.com, so the route the proxy actually receives is
+// `base_url + "/responses"`. The proxy's allowlist is closed and exact
+// (proxy/providers/openai/openai.go Routes), and it holds "/v1/responses",
+// never "/responses" — so a base_url without the "/v1" 404s with
+// cave_route_not_found before a single request reaches OpenAI (#1045).
+// Same convention aider already uses (`/w/aider/openai/v1`).
 function attributed(gw) {
-  return `${gw.replace(/\/+$/, "")}/w/codex`;
+  return `${gw.replace(/\/+$/, "")}/w/codex/v1`;
 }
+
+// What Codex builds from it, and what the proxy sees after it strips `/w/codex`.
+const CODEX_CLIENT_SUFFIX = "/responses";
+const PROXY_OPENAI_ROUTE = "/v1/responses";
 
 function snapshotTree(root) {
   if (!existsSync(root)) return [];
@@ -168,9 +180,31 @@ test("wrap codex API-key auth uses an ephemeral native home and leaves real ~/.c
   assert.equal(existsSync(dump.env.CODEX_HOME), false, "ephemeral home must be cleaned");
   assert.equal(dump.env.OPENAI_BASE_URL, null);
   assert.match(dump.config, new RegExp(`base_url = "${attributed(GW).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
+  // Pin the whole contract, not just the string: what Codex concatenates has to
+  // land on a route the proxy's closed allowlist actually holds.
+  assert.equal(
+    `${attributed(GW)}${CODEX_CLIENT_SUFFIX}`.slice(`${GW}/w/codex`.length),
+    PROXY_OPENAI_ROUTE,
+  );
   assert.match(dump.hooks, /native-hook codex/);
   assert.doesNotMatch(dump.hooks, /shrink-hook/, "shrink:false must omit command rewrite");
   assert.deepEqual(snapshotTree(fx.codexDir), before);
+});
+
+// The README has said all along that "Codex skips the shrink hook because its
+// runtime rejects the rewrite" (openai/codex#18491), but no door implemented it —
+// wrap registered the hook whenever compression was on. Since #1037 shrinkHook
+// declines every Codex tool event, so the entry only bought a node spawn per tool
+// call. shrink:false already omits it (asserted above); the DEFAULT must too.
+test("wrap codex omits the shrink hook even with compression left on", async () => {
+  const fx = fixture({ agents: undefined, skills: false });
+  writeWrapConfig(fx.home, { proxy: false, mcp: false, browse: false });
+
+  const out = await runCli(fx, ["wrap", "codex"], GW);
+  assert.equal(out.code, 0, out.stderr);
+  const dump = readDump(fx);
+  assert.match(dump.hooks, /native-hook codex/, "the lifecycle hook must still be registered");
+  assert.doesNotMatch(dump.hooks, /shrink-hook/, "Codex rewrites nothing — do not register a dead hook");
 });
 
 test("wrap codex with missing auth.json still uses ephemeral native home", async () => {
@@ -290,4 +324,106 @@ test("wrap codex subscription rejects --pixel with the exact one-line error", as
   assert.equal(out.stderr, PIXEL_ERROR);
   assert.equal(existsSync(fx.dumpFile), false, "codex must not spawn after --pixel subscription error");
   assert.deepEqual(snapshotTree(fx.codexDir), before, "real ~/.codex must stay untouched on --pixel error");
+});
+
+// ---------------------------------------------------------------------------
+// #1092: the route has to follow the LOGIN, not the caller.
+//
+// Which Codex route is correct is a fact about ~/.codex/auth.json, but it used
+// to be a parameter every caller of spawnWrapped had to remember to pass.
+// `wrap codex` passed it (it needs the mode for --pixel anyway); `trial` and the
+// interactive picker did not, so their ephemeral CODEX_HOME was built with
+// subscription=false and a ChatGPT login was handed the api-key route. Codex
+// then forwarded the OAuth access token to the platform Responses API, which
+// rejects it with "Missing scopes: api.responses.write" — and the model refresh
+// 404s on /w/codex/v1/models, because that suffix is not in the openai adapter's
+// closed allowlist. The trial retried five times and reported insufficient_data.
+//
+// These pin the behaviour at the door the reporter actually used.
+
+function stubTrialProxy(binDir) {
+  const path = join(binDir, "caveman-proxy-stub.mjs");
+  writeFileSync(path, `#!/usr/bin/env node
+import http from "node:http";
+const argv = process.argv.slice(2);
+if (argv[0] === "serve") {
+  const [host, port] = String(process.env.CAVEMAN_LISTEN || "127.0.0.1:0").split(":");
+  http.createServer((req, res) => res.end("{}")).listen(Number(port), host);
+} else if (argv[0] === "trial" && argv[1] === "report") {
+  console.log(JSON.stringify({ trial_id: argv[argv.indexOf("--trial-id") + 1], basis: "inferred" }));
+} else {
+  console.log(JSON.stringify({ ok: true, argv }));
+}
+`, { mode: 0o755 });
+  return path;
+}
+
+async function runTrialCodex(fx) {
+  const proxy = stubTrialProxy(fx.binDir);
+  const out = await runCli(fx, ["trial", "--trial-id", "trial_route", "--", "codex", "exec", "hi"], GW, {
+    CAVEMAN_PROXY_BIN: proxy,
+  });
+  assert.equal(out.code, 0, out.stderr);
+  const dump = readDump(fx);
+  const base = dump.config.match(/^base_url = "([^"]+)"$/m)?.[1];
+  assert.ok(base, `ephemeral config.toml must pin a base_url; got:\n${dump.config}`);
+  return { out, dump, base };
+}
+
+test("trial codex subscription login routes through /chatgpt, not the api-key route", async () => {
+  const fx = fixture({
+    auth: { auth_mode: "chatgpt", OPENAI_API_KEY: null, tokens: { account_id: "acct_trial", access_token: "tok", refresh_token: "ref" } },
+  });
+  const before = snapshotTree(fx.codexDir);
+
+  const { dump, base } = await runTrialCodex(fx);
+
+  // The trial stands up its OWN proxy on its OWN port, so the host:port is not
+  // the persistent gateway's — only the ROUTE is under test here.
+  assert.match(base, /^http:\/\/127\.0\.0\.1:\d+\/chatgpt$/, `subscription trial must use the /chatgpt route; got ${base}`);
+  assert.doesNotMatch(base, /\/w\/codex\/v1/, "a ChatGPT login must never get the api-key route (#1092)");
+  assert.match(dump.config, /wire_api = "responses"/);
+  assert.match(dump.config, /requires_openai_auth = true/);
+  assert.equal(dump.env.OPENAI_BASE_URL, null, "subscription mode must not set OPENAI_BASE_URL");
+  assert.deepEqual(snapshotTree(fx.codexDir), before, "real ~/.codex must stay byte-identical");
+});
+
+// The mirror image: fixing the above must not hand an api-key login the
+// subscription route, which would strip the "/v1" the openai adapter requires.
+test("trial codex api-key login keeps the attributed /w/codex/v1 route", async () => {
+  const fx = fixture({
+    auth: { auth_mode: "api_key", OPENAI_API_KEY: "sk-file", tokens: null },
+    agents: undefined,
+    skills: false,
+  });
+
+  const { base } = await runTrialCodex(fx);
+
+  assert.match(base, /^http:\/\/127\.0\.0\.1:\d+\/w\/codex\/v1$/, `api-key trial must keep the attributed route; got ${base}`);
+  assert.equal(`${base}${CODEX_CLIENT_SUFFIX}`.slice(base.lastIndexOf("/w/codex") + "/w/codex".length), PROXY_OPENAI_ROUTE);
+});
+
+// The behavioural tests above go through `trial`. The interactive picker
+// (`caveman wrap` with no agent) reaches the same builder and had the same bug,
+// but it needs a real TTY to drive selectMenu, so it cannot be spawned here.
+// What actually protects it is that the decision lives at the shared choke
+// point rather than in each caller — pin that, so a refactor cannot quietly
+// push it back out to the call sites and re-break the paths that forget.
+test("spawnWrapped resolves the codex auth mode itself instead of trusting the caller", async () => {
+  const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "index.ts"), "utf8");
+  const body = source.slice(source.indexOf("async function spawnWrapped("));
+  const resolved = body.slice(0, body.indexOf("\n}\n"));
+  assert.match(
+    resolved,
+    /detectCodexWrapAuthMode\(\)/,
+    "spawnWrapped must derive the codex auth mode for itself; a caller-supplied default silently mis-routes every caller that omits it (#1092)",
+  );
+  for (const caller of ["async function runWrapped(", "async function spawnWrapped("]) {
+    const signature = source.slice(source.indexOf(caller), source.indexOf(")", source.indexOf(caller)) + 1);
+    assert.doesNotMatch(
+      signature,
+      /codexSubscription\s*=\s*false/,
+      `${caller.trim()} must not default codexSubscription to a bare false — "unspecified" has to stay distinguishable from "api-key" (#1092)`,
+    );
+  }
 });

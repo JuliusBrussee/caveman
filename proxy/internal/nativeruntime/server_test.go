@@ -163,8 +163,13 @@ func waitForSocket(t *testing.T, path string, done <-chan error) {
 			t.Fatalf("server exited before socket appeared: %v", err)
 		default:
 		}
-		if _, err := os.Stat(path); err == nil {
-			return
+		if info, err := os.Stat(path); err == nil {
+			// Listen publishes the socket before ServeUnix applies its restrictive
+			// mode. The parent directory is already 0700, but readiness means the
+			// final socket contract is visible too.
+			if info.Mode().Perm() == 0o600 {
+				return
+			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

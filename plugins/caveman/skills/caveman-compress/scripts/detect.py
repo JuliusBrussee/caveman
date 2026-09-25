@@ -5,8 +5,12 @@ import json
 import re
 from pathlib import Path
 
-# Extensions that are natural language and compressible
-COMPRESSIBLE_EXTENSIONS = {".md", ".txt", ".markdown", ".rst", ".typ", ".typst", ".tex"}
+# Extensions that are natural language and compressible. `.mdc` is a Cursor
+# rule: prose with YAML frontmatter, the same shape as a SKILL.md, and the
+# format caveman's own `--with-init` writes to `.cursor/rules/caveman.mdc`.
+# Content sniffing below runs only for EXTENSIONLESS files, so an extension
+# that is on neither list falls through to `unknown` and is never compressed.
+COMPRESSIBLE_EXTENSIONS = {".md", ".mdc", ".txt", ".markdown", ".rst", ".typ", ".typst", ".tex"}
 
 # Extensions that are code/config and should be skipped
 SKIP_EXTENSIONS = {
@@ -22,8 +26,9 @@ SKIP_EXTENSIONS = {
 # `CMakeLists.txt` would ride the compressible `.txt` rule. Checked by
 # basename before any extension rule.
 KNOWN_CODE_FILENAMES = {
-    "dockerfile", "makefile", "gnumakefile", "jenkinsfile", "vagrantfile",
-    "rakefile", "gemfile", "justfile", "procfile", "brewfile",
+    "dockerfile", "containerfile", "makefile", "gnumakefile", "jenkinsfile",
+    "vagrantfile", "rakefile", "gemfile", "justfile", "procfile", "brewfile",
+    "earthfile", "fastfile", "podfile",
     "cmakelists.txt",
 }
 

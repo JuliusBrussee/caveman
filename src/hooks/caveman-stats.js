@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // caveman-stats — read the active Claude Code session log, print real token
-// usage plus an estimated savings figure from the benchmark in benchmarks/.
+// usage and mode attribution. A transcript alone cannot establish savings.
 //
-// Run directly:    node hooks/caveman-stats.js
+// Run directly:    node src/hooks/caveman-stats.js  (installed: next to the
+//                  other hooks, wherever the installer or plugin put them)
 // Inside Claude:   /caveman-stats triggers this via the UserPromptSubmit hook.
 // Hook integration passes --session-file <transcript_path> so we always read
 // the active session, not whichever JSONL was modified most recently.
@@ -64,60 +65,15 @@ if (configFailure) {
 }
 const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME } = cavemanConfig;
 
-// Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
-// 10 tasks, sonnet-4-20250514). Only 'full' has measured data; lite / ultra /
-// wenyan modes show no estimate until benchmarked. Add an entry here when a new
-// run is committed.
-const COMPRESSION = { 'full': 0.65 };
-
-// Per-turn INPUT cost the rules add: SKILL.md (~5 KB) is injected into
-// context, plus the per-turn reinforcement the mode tracker emits. This is
-// the ~1-1.5k/turn figure docs/HONEST-NUMBERS.md admits and #145/#677 flag as
-// hidden — gross output savings alone can look great while the session is
-// still net-negative. 1250 sits mid-range; override with
-// CAVEMAN_RULE_OVERHEAD_TOKENS if you've measured your own setup.
-const DEFAULT_RULE_OVERHEAD_TOKENS_PER_TURN = 1250;
-
-function ruleOverheadPerTurn() {
-  const raw = process.env.CAVEMAN_RULE_OVERHEAD_TOKENS;
-  if (raw === undefined) return DEFAULT_RULE_OVERHEAD_TOKENS_PER_TURN;
-  const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : DEFAULT_RULE_OVERHEAD_TOKENS_PER_TURN;
-}
-
-// Approximate Anthropic public output-token pricing, USD per million.
-// Match by model id prefix so this stays correct across point releases
-// (e.g. claude-sonnet-4-20250514, claude-sonnet-4-7). Update from
-// https://www.anthropic.com/pricing if a release changes the tier.
-// Most-specific prefixes MUST come first — priceForModel returns the first match.
-const MODEL_OUTPUT_PRICE_PER_M = [
-  // Legacy Opus 4.0 / 4.1 (pre-4.5) billed at the old $75/M output tier,
-  // including the dated ids (e.g. claude-opus-4-20250514).
-  ['claude-opus-4-0',    75.00],
-  ['claude-opus-4-1',    75.00],
-  ['claude-opus-4-2025', 75.00],
-  // Opus 4.5–4.8 dropped to $25/M output (rate card held since 4.5).
-  ['claude-opus-4',      25.00],
-  ['claude-sonnet-4',    15.00],
-  ['claude-haiku-4',      5.00],   // Haiku 4.5 = $5/M output
-  ['claude-3-5-sonnet',  15.00],
-  ['claude-3-5-haiku',    4.00],
-  ['claude-3-opus',      75.00],
-];
-
-function priceForModel(model) {
-  if (!model) return null;
-  for (const [prefix, price] of MODEL_OUTPUT_PRICE_PER_M) {
-    if (model.startsWith(prefix)) return price;
-  }
-  return null;
-}
-
-function formatUsd(amount) {
-  if (amount >= 1) return `$${amount.toFixed(2)}`;
-  if (amount >= 0.01) return `$${amount.toFixed(3)}`;
-  return `$${amount.toFixed(4)}`;
-}
+// Per-session helpers, resolved individually and NOT added to the shape check
+// above: a config module from before per-session state still produces correct
+// (machine-wide) figures, and hard-failing stats over the newer exports would
+// turn a working report into an error. Each stub is the pre-per-session read.
+const resolveActiveMode = cavemanConfig.resolveActiveMode
+  || ((dir) => { const m = readFlag(path.join(dir, '.caveman-active')); return (!m || m === 'off') ? null : m; });
+const validateSessionId = cavemanConfig.validateSessionId || (() => null);
+const sessionActivePath = cavemanConfig.sessionActivePath || (() => null);
+const legacyFlagPath = cavemanConfig.legacyFlagPath || ((dir) => path.join(dir, '.caveman-active'));
 
 function findRecentSession(claudeDir) {
   const projectsDir = path.join(claudeDir, 'projects');
@@ -142,41 +98,80 @@ function findRecentSession(claudeDir) {
   return best ? best.file : null;
 }
 
-function parseSession(filePath) {
-  let raw;
-  try { raw = fs.readFileSync(filePath, 'utf8'); }
-  catch { return { outputTokens: 0, cacheReadTokens: 0, turns: 0, model: null, messages: [] }; }
+const isTokenCount = (value) => Number.isSafeInteger(value) && value >= 0;
 
-  let outputTokens = 0;
-  let cacheReadTokens = 0;
-  let turns = 0;
+// A total contains only reported, valid counts. Availability travels with it
+// so a known subtotal cannot become a complete total when history is read.
+function totalCounts(counts) {
+  let total = 0;
+  let known = 0;
+  let complete = true;
+  for (const { value, availability } of counts) {
+    const state = availability === undefined ? 'complete' : availability;
+    if (!isTokenCount(value) || !['complete', 'partial'].includes(state)) {
+      complete = false;
+      continue;
+    }
+    total += value;
+    if (!Number.isSafeInteger(total)) return { value: null, availability: 'unknown' };
+    known++;
+    if (state !== 'complete') complete = false;
+  }
+  return known === 0
+    ? { value: null, availability: 'unknown' }
+    : { value: total, availability: complete ? 'complete' : 'partial' };
+}
+
+function parseSession(filePath) {
+  // The caller reports read failure separately from an empty conversation.
+  const raw = fs.readFileSync(filePath, 'utf8');
   let model = null;
-  const messages = []; // per-message {ts, outputTokens} for mode attribution (#601)
+  const messages = []; // one response, including responses whose usage is absent
+  // Claude Code writes one JSONL line PER CONTENT BLOCK of an API response
+  // (text block, then each tool_use block), all sharing the same message.id +
+  // requestId and repeating the same usage object. Summing every line counts
+  // the same response's tokens once per block — 1.5-2.1x inflation measured
+  // on real tool-heavy sessions. Count each (requestId, message.id) once.
+  // Entries without a message.id (synthetic/legacy logs) keep per-line
+  // counting — there is no key to dedupe on.
+  const seenResponses = new Map();
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
-    if (entry.type !== 'assistant' || !entry.message) continue;
-    const usage = entry.message.usage;
-    if (!usage) continue;
-    outputTokens    += usage.output_tokens           || 0;
-    cacheReadTokens += usage.cache_read_input_tokens || 0;
-    turns++;
+    if (!entry || entry.type !== 'assistant' || !entry.message || typeof entry.message !== 'object') continue;
     if (!model && entry.message.model) model = entry.message.model;
-    const ts = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
-    messages.push({
-      ts: Number.isFinite(ts) ? ts : null,
-      outputTokens: usage.output_tokens || 0,
-    });
+    const key = entry.message.id ? (entry.requestId || '') + ':' + entry.message.id : null;
+    let response = key ? seenResponses.get(key) : null;
+    if (!response) {
+      const ts = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
+      response = { ts: Number.isFinite(ts) ? ts : null, outputTokens: null, cacheReadTokens: null };
+      messages.push(response);
+      if (key) seenResponses.set(key, response);
+    }
+    // Some content blocks omit usage that a later block supplies. Fill each
+    // missing counter once, preserving the existing response deduplication.
+    const usage = entry.message.usage || {};
+    if (response.outputTokens === null && isTokenCount(usage.output_tokens)) {
+      response.outputTokens = usage.output_tokens;
+    }
+    if (response.cacheReadTokens === null && isTokenCount(usage.cache_read_input_tokens)) {
+      response.cacheReadTokens = usage.cache_read_input_tokens;
+    }
   }
-  return { outputTokens, cacheReadTokens, turns, model, messages };
+  const output = totalCounts(messages.map(m => ({ value: m.outputTokens })));
+  const cacheRead = totalCounts(messages.map(m => ({ value: m.cacheReadTokens })));
+  return {
+    outputTokens: output.value, outputAvailability: output.availability,
+    cacheReadTokens: cacheRead.value, cacheReadAvailability: cacheRead.availability,
+    turns: messages.length, model, messages,
+  };
 }
 
 // Detect *.original.md / *.md pairs left behind by caveman-compress. The
 // presence of a *.original.md backup means the *.md sibling is a compressed
-// memory file — every session start reads the compressed version, so the
-// delta is per-session input-token savings (passive). Returns a summary or
-// null if nothing was found in the given dirs.
+// memory file. Compare file bytes only: this does not establish whether an
+// agent loaded either file, its token count, or a change in provider usage.
 function findCompressedPairs(dirs) {
   const pairs = [];
   for (const dir of dirs) {
@@ -204,11 +199,7 @@ function summarizeCompressed(pairs) {
   if (!pairs || pairs.length === 0) return null;
   const totalOriginal = pairs.reduce((s, p) => s + p.originalSize, 0);
   const totalCompressed = pairs.reduce((s, p) => s + p.compressedSize, 0);
-  const bytesSaved = totalOriginal - totalCompressed;
-  // English prose runs ~4 chars per token. Label result as approximate so we
-  // don't make claims tighter than the method warrants.
-  const tokensSaved = Math.round(bytesSaved / 4);
-  return { count: pairs.length, bytesSaved, tokensSaved };
+  return { count: pairs.length, totalOriginal, totalCompressed, bytesReduced: totalOriginal - totalCompressed };
 }
 
 // ── Per-mode attribution (#601) ─────────────────────────────────────────────
@@ -220,12 +211,21 @@ function summarizeCompressed(pairs) {
 // stats joins those timestamps against the session JSONL message timestamps.
 
 // Read + validate the transition log. Returns rows sorted by ts.
-function readModeLog(logPath) {
+//
+// When sessionId is given, rows belonging to a DIFFERENT session are dropped.
+// Without this the log is a machine-wide interleaving: a mode switch in window
+// B lands between two of window A's messages and gets joined onto A's timeline,
+// skewing A's savings estimate. Rows with no session_id predate the tagging and
+// are kept — for a single-session user they are still the right answer, and
+// discarding them would silently downgrade attribution to 'whole-session'.
+function readModeLog(logPath, sessionId) {
+  const wanted = validateSessionId(sessionId);
   const rows = [];
   for (const line of readHistory(logPath)) {
     let e;
     try { e = JSON.parse(line); } catch { continue; }
     if (!e || typeof e !== 'object' || !Number.isFinite(e.ts)) continue;
+    if (wanted && e.session_id != null && e.session_id !== wanted) continue;
     const norm = (v) => (v == null ? null : (VALID_MODES.includes(String(v)) ? String(v) : undefined));
     const mode = norm(e.mode);
     const prev = norm(e.prev);
@@ -251,6 +251,7 @@ function readModeLog(logPath) {
 // Returns { byMode: {modeKey: tokens}, unknownTokens, basis } where modeKey is
 // a mode string or 'none' (caveman inactive).
 function attributeByMode({ messages, modeLog, mode, flagMtimeMs, outputTokens }) {
+  if (!isTokenCount(outputTokens)) return { byMode: {}, unknownTokens: 0, basis: 'unavailable' };
   const currentKey = mode || 'none';
   const msgs = messages || [];
   let firstTs = null;
@@ -283,6 +284,7 @@ function attributeByMode({ messages, modeLog, mode, flagMtimeMs, outputTokens })
   let unknownTokens = 0;
   const add = (key, tokens) => { byMode[key] = (byMode[key] || 0) + tokens; };
   for (const m of msgs) {
+    if (!isTokenCount(m.outputTokens)) continue;
     if (m.ts == null) { unknownTokens += m.outputTokens; continue; }
     let active;
     for (const ev of events) {
@@ -297,46 +299,20 @@ function attributeByMode({ messages, modeLog, mode, flagMtimeMs, outputTokens })
 }
 
 // Attribution shape for callers without a session log to join against
-// (kept for formatStats/formatShare backward compatibility in tests).
+// (kept for formatStats callers without a transcript).
 function wholeSessionAttribution(mode, outputTokens) {
+  if (!isTokenCount(outputTokens)) return { byMode: {}, unknownTokens: 0, basis: 'unavailable' };
   return { byMode: { [mode || 'none']: outputTokens || 0 }, unknownTokens: 0, basis: 'whole-session' };
 }
 
-// Compute the savings figures we want to log/share for one session snapshot.
-// Sums per-mode: only spans whose mode has benchmark data earn an estimate;
-// unknown spans earn nothing.
-function deriveSavings({ byMode, model }) {
-  let estSavedTokens = 0;
-  for (const [key, tokens] of Object.entries(byMode || {})) {
-    const ratio = COMPRESSION[key];
-    if (ratio == null || tokens <= 0) continue;
-    estSavedTokens += Math.round(tokens / (1 - ratio)) - tokens;
-  }
-  const price = priceForModel(model);
-  const estSavedUsd = price !== null ? (estSavedTokens / 1_000_000) * price : 0;
-  return { estSavedTokens, estSavedUsd };
-}
+// Pin grouping to en-US so token counts do not depend on the host locale.
+const fmt = (n) => n.toLocaleString('en-US');
+const SAVINGS_UNKNOWN = 'Savings: unknown — no measured comparison for this session.';
 
-// Net token effect = output tokens saved minus the input tokens the rules
-// cost. Savings are OUTPUT tokens, overhead is INPUT tokens — different
-// buckets, but summing them is the only honest whole-budget delta (see
-// docs/HONEST-NUMBERS.md). Never called with an unattributed savings figure —
-// callers only invoke this where mode attribution and turn counts both exist.
-function deriveNet({ estSavedTokens, turns }) {
-  const overheadTokens = Math.max(0, turns || 0) * ruleOverheadPerTurn();
-  return { overheadTokens, netTokens: (estSavedTokens || 0) - overheadTokens };
-}
-
-// Shared "rule overhead" + "net" lines for the session and lifetime views.
-function netLines({ estSavedTokens, turns }) {
-  const perTurn = ruleOverheadPerTurn();
-  const { overheadTokens, netTokens } = deriveNet({ estSavedTokens, turns });
-  const overhead = `Est. rule overhead:    ${overheadTokens.toLocaleString()} ` +
-    `(input, ~${perTurn.toLocaleString()}/turn over ${turns} turn${turns === 1 ? '' : 's'})`;
-  const net = netTokens >= 0
-    ? `Est. net:              +${netTokens.toLocaleString()} (net saving after rule overhead)`
-    : `Est. net:              ${netTokens.toLocaleString()} (caveman cost more than it saved for this workload — consider turning it off)`;
-  return `${overhead}\n${net}`;
+function formatCount(value, availability) {
+  const count = totalCounts([{ value, availability }]);
+  if (count.availability === 'unknown') return 'unknown (usage unavailable)';
+  return fmt(count.value) + (count.availability === 'partial' ? ' known (partial; total unknown)' : '');
 }
 
 // Parse "7d", "12h" etc. to milliseconds. Returns null on invalid input.
@@ -349,7 +325,7 @@ function parseDuration(spec) {
 }
 
 // Aggregate history into latest-per-session totals, optionally filtered to a
-// time window. Returns { sessions, outputTokens, estSavedTokens, estSavedUsd }.
+// time window. Preserve incomplete snapshots instead of claiming full totals.
 function aggregateHistory(historyPath, sinceMs) {
   const lines = readHistory(historyPath);
   const cutoff = sinceMs ? Date.now() - sinceMs : null;
@@ -363,90 +339,42 @@ function aggregateHistory(historyPath, sinceMs) {
     const prev = latestPerSession.get(id);
     if (!prev || (entry.ts || 0) >= (prev.ts || 0)) latestPerSession.set(id, entry);
   }
-  let outputTokens = 0, estSavedTokens = 0, estSavedUsd = 0;
-  // Net (rule-overhead) figures only ever sum rows that actually logged a
-  // turn count. Legacy history rows predate #145's `turns` field — folding
-  // their savings into a net computed from someone else's turns would either
-  // over- or under-state the overhead, so they're excluded from net entirely
-  // (they still count toward the plain gross totals above, unchanged).
-  let netSavedTokens = 0, netTurns = 0;
-  for (const e of latestPerSession.values()) {
-    outputTokens   += e.output_tokens     || 0;
-    estSavedTokens += e.est_saved_tokens  || 0;
-    estSavedUsd    += e.est_saved_usd     || 0;
-    if (e.turns != null) {
-      netSavedTokens += e.est_saved_tokens || 0;
-      netTurns       += e.turns            || 0;
-    }
-  }
-  return { sessions: latestPerSession.size, outputTokens, estSavedTokens, estSavedUsd, netSavedTokens, netTurns };
+  // Legacy est_saved_* fields came from an unsupported fixed ratio. Keep
+  // the source history intact, but never treat those fields as measurements.
+  const output = totalCounts([...latestPerSession.values()].map(e => ({
+    value: e.output_tokens, availability: e.output_tokens_availability,
+  })));
+  return { sessions: latestPerSession.size, outputTokens: output.value, outputAvailability: output.availability };
 }
 
-// Output-reduction share: saved / (saved + used) = the fraction of the
-// would-be OUTPUT tokens that caveman avoided. That is the only ratio we can
-// honestly compute from output counts alone. It is NOT a share of session or
-// limit usage — input + cache tokens dominate agentic sessions, count against
-// Pro/Max limits, and are not reduced by caveman, so real limit relief is far
-// smaller (docs/HONEST-NUMBERS.md: session-level totals land ~14–21%, below
-// zero on terse workloads). Never label this "usage" or "budget". Returns a
-// rounded percent, or null when there is nothing measured to divide.
-function outputReductionPct(savedTokens, usedTokens) {
-  if (!Number.isFinite(savedTokens) || !Number.isFinite(usedTokens)) return null;
-  if (savedTokens <= 0 || usedTokens < 0) return null;
-  const total = savedTokens + usedTokens;
-  if (total <= 0) return null;
-  return Math.round((savedTokens / total) * 100);
-}
-
-function humanizeTokens(n) {
-  if (!Number.isFinite(n) || n <= 0) return '0';
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
-  return String(Math.round(n));
-}
-
-function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, netSavedTokens, netTurns, since }) {
+function formatHistory({ sessions, outputTokens, outputAvailability, since }) {
   const sep = '──────────────────────────────────';
   const window = since ? ` (last ${since})` : '';
   if (sessions === 0) {
     return `\nCaveman Stats — Lifetime${window}\n${sep}\nNo sessions logged yet — run /caveman-stats inside any session to start tracking.\n${sep}\n`;
   }
-  const usdLine = estSavedUsd > 0 ? `Est. saved (USD):      ~${formatUsd(estSavedUsd)}\n` : '';
-  const pct = outputReductionPct(estSavedTokens, outputTokens);
-  const budgetLine = pct !== null
-    ? `Est. output reduction: ~${pct}% (output tokens only, est.)\n`
-    : '';
-  // Only sessions that logged a turn count feed the net figure (older rows
-  // predate #145) — omit rather than understate the overhead.
-  const netBlock = netTurns > 0 ? netLines({ estSavedTokens: netSavedTokens, turns: netTurns }) + '\n' : '';
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
-    `Sessions:   ${sessions.toLocaleString()}\n${sep}\n` +
-    `Output tokens:         ${outputTokens.toLocaleString()}\n` +
-    `Est. tokens saved:     ${estSavedTokens.toLocaleString()}\n` +
-    netBlock + budgetLine + usdLine + sep + '\n';
+    `Sessions:   ${fmt(sessions)}\n${sep}\n` +
+    `Output tokens:         ${formatCount(outputTokens, outputAvailability)}\n` +
+    'Savings: unknown — historical estimates are not verified measurements.\n' + sep + '\n';
 }
 
-// Single-line tweetable summary. Stays human-friendly when no ratio is known.
-// Savings come from per-mode attribution (#601) so a mid-session mode change
-// never inflates the shared number.
-function formatShare({ outputTokens, turns, mode, model, attribution }) {
+// Share only observed transcript usage, with the missing comparison explicit.
+function formatShare({ outputTokens, outputAvailability, turns }) {
   if (turns === 0) {
-    return '🪨 caveman armed but no turns yet — caveman.sh';
+    return '🪨 No turns yet; savings unknown — caveman.sh';
   }
-  const attr = attribution || wholeSessionAttribution(mode, outputTokens);
-  const { estSavedTokens, estSavedUsd } = deriveSavings({ byMode: attr.byMode, model });
-
-  if (estSavedTokens > 0) {
-    const usd = estSavedUsd > 0 ? ` (~${formatUsd(estSavedUsd)})` : '';
-    return `🪨 Saved ${estSavedTokens.toLocaleString()} output tokens${usd} across ${turns} turns this session — caveman.sh`;
-  }
-  return `🪨 ${turns} turns, ${outputTokens.toLocaleString()} output tokens this session — caveman.sh`;
+  const count = totalCounts([{ value: outputTokens, availability: outputAvailability }]);
+  const usage = count.availability === 'unknown' ? 'output tokens unknown (usage unavailable)'
+    : `${fmt(count.value)}${count.availability === 'partial' ? ' known' : ''} output tokens` +
+      (count.availability === 'partial' ? ' (partial; total unknown)' : '');
+  return `🪨 ${turns} turn${turns === 1 ? '' : 's'}, ${usage} this session; savings unknown — caveman.sh`;
 }
 
 // Pure formatter — separated from main() so tests can pass synthetic inputs.
 // `attribution` (from attributeByMode, #601) splits output tokens per mode;
 // when omitted, the current mode is assumed for the whole session.
-function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessionPath, compressed, attribution }) {
+function formatStats({ outputTokens, outputAvailability, cacheReadTokens, cacheReadAvailability, turns, mode, sessionPath, compressed, attribution }) {
   const sep = '──────────────────────────────────';
   const shortPath = sessionPath && sessionPath.length > 45
     ? '...' + sessionPath.slice(-45)
@@ -464,94 +392,65 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
   const uniform = attr.unknownTokens === 0 &&
     (activeKeys.length === 0 || (activeKeys.length === 1 && activeKeys[0] === (mode || 'none')));
 
-  const ratio = COMPRESSION[mode] != null ? COMPRESSION[mode] : null;
-  const price = priceForModel(model);
-
-  let savings;
-  let footer = '';
+  let modeDetails;
   if (!uniform) {
-    const { estSavedTokens, estSavedUsd } = deriveSavings({ byMode: attr.byMode, model });
     const lines = [attr.basis === 'flag-mtime'
       ? 'Mode was set mid-session — only output after the change is attributed:'
       : 'Mode changed mid-session — output attributed per mode:'];
     for (const key of activeKeys) {
-      const tokens = attr.byMode[key];
-      const r = COMPRESSION[key];
       const label = key === 'none' ? 'caveman off' : key;
-      const note = r != null
-        ? `est. ${(Math.round(tokens / (1 - r)) - tokens).toLocaleString()} saved`
-        : 'no benchmark estimate';
-      lines.push(`  ${label}: ${tokens.toLocaleString()} tokens (${note})`);
+      lines.push(`  ${label}: ${fmt(attr.byMode[key])} tokens`);
     }
     if (attr.unknownTokens > 0) {
-      lines.push(`  unattributed: ${attr.unknownTokens.toLocaleString()} tokens (mode unknown — excluded from estimate)`);
+      lines.push(`  unattributed: ${fmt(attr.unknownTokens)} tokens (mode unknown)`);
     }
-    lines.push(`Est. tokens saved:     ${estSavedTokens.toLocaleString()}`);
-    if (estSavedUsd > 0) lines.push(`Est. saved (USD):      ~${formatUsd(estSavedUsd)}`);
-    savings = lines.join('\n');
-
-    footer = 'Savings est. from benchmarks/ (mean per-task), applied only to spans whose mode is known.';
-    if (estSavedUsd > 0) footer += ` Pricing for ${model}.`;
-    if (attr.basis === 'flag-mtime') {
-      footer += ' Tokens before the mode change could not be attributed and are excluded rather than guessed.';
-    } else if (attr.unknownTokens > 0) {
-      footer += ' Unattributed tokens are excluded rather than guessed.';
-    }
-    footer += ' Reduction is of output tokens only; input/cache usage is unchanged.';
-  } else if (ratio !== null) {
-    const estNormal = Math.round(outputTokens / (1 - ratio));
-    const estSaved = estNormal - outputTokens;
-    let usdLine = '';
-    if (price !== null) {
-      const usd = (estSaved / 1_000_000) * price;
-      usdLine = `Est. saved (USD):      ~${formatUsd(usd)}\n`;
-      footer = `Savings est. from benchmarks/ (mean per-task). Pricing for ${model}. Actual varies by task.`;
-    } else {
-      footer = 'Savings est. from benchmarks/ (mean per-task). Actual varies by task.';
-    }
-    // No "% of your usage/budget" line here on purpose: from output tokens
-    // alone the only computable ratio is the output reduction already shown
-    // on the line above, and input + cache tokens (which dominate agentic
-    // sessions and count against Pro/Max limits) are untouched by caveman —
-    // any session-usage % would overstate real limit relief. See
-    // docs/HONEST-NUMBERS.md.
-    footer += ' Reduction is of output tokens only; input/cache usage is unchanged.';
-    footer += ` Net subtracts the rules' est. input cost (~${ruleOverheadPerTurn().toLocaleString()}/turn — docs/HONEST-NUMBERS.md).`;
-    savings = (`Est. without caveman:  ${estNormal.toLocaleString()}\n` +
-              `Est. tokens saved:     ${estSaved.toLocaleString()} (~${Math.round(ratio * 100)}% of output)\n` +
-              usdLine).replace(/\n$/, '');
-    // Net only makes sense where the savings figure above is unambiguous: a
-    // single benchmarked mode ran the whole span (uniform) with a known turn
-    // count. Mixed-mode or partially-unattributed spans (the !uniform branch
-    // above) intentionally get no net line rather than a guessed one.
-    if (turns > 0) savings += '\n' + netLines({ estSavedTokens: estSaved, turns });
-  } else if (mode && mode !== 'off') {
-    savings = `No savings estimate for '${mode}' mode — only 'full' has benchmark data.`;
+    modeDetails = lines.join('\n');
   } else {
-    savings = 'Caveman not active this session.';
+    modeDetails = `Mode: ${mode && mode !== 'off' ? mode : 'caveman off'}`;
+    if (attr.basis === 'whole-session') {
+      modeDetails += ' (current mode; no transition log)';
+    }
   }
+  if (outputAvailability === 'partial') modeDetails += '\nMode attribution covers known output tokens only.';
 
   let memoryLine = '';
   if (compressed && compressed.count > 0) {
-    const tokensApprox = compressed.tokensSaved.toLocaleString();
-    memoryLine = `${sep}\nMemory compressed:     ${compressed.count} file${compressed.count === 1 ? '' : 's'}, ` +
-      `~${tokensApprox} tokens saved per session start (approx)\n`;
+    memoryLine = `${sep}\nMemory file sizes:     ${compressed.count} pair${compressed.count === 1 ? '' : 's'}, ` +
+      `${fmt(compressed.totalOriginal)} original bytes → ${fmt(compressed.totalCompressed)} current bytes ` +
+      `(${fmt(compressed.bytesReduced)} fewer bytes)\n` +
+      'File sizes do not measure provider token or billing savings.\n';
   }
 
   return `\nCaveman Stats\n${sep}\n` +
     (shortPath ? `Session:  ${shortPath}\n` : '') +
     `Turns:    ${turns}\n${sep}\n` +
-    `Output tokens:         ${outputTokens.toLocaleString()}\n` +
-    `Cache-read tokens:     ${cacheReadTokens.toLocaleString()}\n${sep}\n` +
-    `${savings}\n` +
-    memoryLine +
-    (footer ? footer + '\n' : '');
+    `Output tokens:         ${formatCount(outputTokens, outputAvailability)}\n` +
+    `Cache-read tokens:     ${formatCount(cacheReadTokens, cacheReadAvailability)}\n${sep}\n` +
+    `${modeDetails}\n${SAVINGS_UNKNOWN}\n` +
+    memoryLine;
 }
 
 function main() {
   const args = process.argv.slice(2);
+  const hostIdx = args.indexOf('--host');
+  const host = hostIdx !== -1 ? args[hostIdx + 1]
+    : process.env.GEMINI_CLI === '1' ? 'gemini' : 'claude';
+  if (host === 'gemini') {
+    // Gemini CLI's ShellExecutionService identifies child commands with
+    // GEMINI_CLI=1. Its statistics live in the host session, not Claude JSONL.
+    // Stop before reading or updating another host's history/flags (#403).
+    process.stdout.write('Gemini CLI: use /stats model for current session token usage, or /stats session for session statistics.\nCaveman savings: unknown. Claude Code transcripts are not Gemini usage.\n');
+    return;
+  }
+  if (host !== 'claude') {
+    process.stderr.write('caveman-stats: --host must be claude or gemini.\n');
+    process.exitCode = 2;
+    return;
+  }
   const i = args.indexOf('--session-file');
   const sessionFileArg = i !== -1 ? args[i + 1] : null;
+  const sessionIdIdx = args.indexOf('--session-id');
+  const sessionIdArg = sessionIdIdx !== -1 ? args[sessionIdIdx + 1] : null;
   const share = args.includes('--share');
   const all = args.includes('--all');
   const sinceIdx = args.indexOf('--since');
@@ -559,6 +458,10 @@ function main() {
 
   const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   const historyPath = path.join(claudeDir, '.caveman-history.jsonl');
+
+  // Retire the old numeric badge even for lifetime, empty, or failed reads.
+  // safeWriteFlag refuses symlinks; original history rows remain untouched.
+  safeWriteFlag(path.join(claudeDir, '.caveman-statusline-suffix'), '');
 
   // Lifetime aggregation paths short-circuit before we need a live session.
   if (all || sinceArg) {
@@ -579,16 +482,37 @@ function main() {
     process.exit(1);
   }
 
-  const parsed = parseSession(sessionFile);
-  const flagPath = path.join(claudeDir, '.caveman-active');
-  const mode = readFlag(flagPath);
+  let parsed;
+  try { parsed = parseSession(sessionFile); }
+  catch (error) {
+    process.stderr.write(`caveman-stats: could not read Claude Code session ${sessionFile} (${error.code || 'read failed'}). Usage unavailable.\n`);
+    process.exitCode = 1;
+    return;
+  }
+
+  // Session id: the hook forwards --session-id from the UserPromptSubmit
+  // payload. Falling back to the transcript filename is not a guess — Claude
+  // Code names transcripts by session id, which is why the lifetime history has
+  // always keyed on it.
+  const sessionId = validateSessionId(sessionIdArg)
+    || validateSessionId(path.basename(sessionFile, '.jsonl'));
+
+  // Read whichever layer holds this session's state, and take the mtime from
+  // that same file so the 'flag-mtime' attribution fallback measures the right
+  // thing. resolveActiveMode collapses a durable 'off' to null, matching the
+  // pre-existing "no flag file means no mode" contract the formatters expect.
+  const sessionPath = sessionActivePath(claudeDir, sessionId);
+  const flagPath = (sessionPath && fs.existsSync(sessionPath))
+    ? sessionPath
+    : legacyFlagPath(claudeDir);
+  const mode = resolveActiveMode(claudeDir, sessionId);
 
   // #601: attribute tokens to the mode active when each message happened,
   // via the transition log the hooks maintain (fallbacks documented on
   // attributeByMode). Never credit the whole session to the current flag.
   let flagMtimeMs = null;
   try { flagMtimeMs = fs.statSync(flagPath).mtimeMs; } catch (e) {}
-  const modeLog = readModeLog(path.join(claudeDir, MODE_LOG_BASENAME));
+  const modeLog = readModeLog(path.join(claudeDir, MODE_LOG_BASENAME), sessionId);
   const attribution = attributeByMode({
     messages: parsed.messages,
     modeLog,
@@ -601,26 +525,20 @@ function main() {
   // /caveman-stats calls in one session emit multiple lines for the same
   // session_id; aggregateHistory keeps only the latest per session_id.
   if (parsed.turns > 0) {
-    const { estSavedTokens, estSavedUsd } = deriveSavings({ byMode: attribution.byMode, model: parsed.model });
-    const sessionId = path.basename(sessionFile, '.jsonl');
     appendFlag(historyPath, JSON.stringify({
       ts: Date.now(),
-      session_id: sessionId,
+      session_id: sessionId || path.basename(sessionFile, '.jsonl'),
       mode: mode || null,
       model: parsed.model || null,
       output_tokens: parsed.outputTokens,
+      output_tokens_availability: parsed.outputAvailability,
       turns: parsed.turns,
-      est_saved_tokens: estSavedTokens,
-      est_saved_usd: estSavedUsd,
+      cache_read_input_tokens: parsed.cacheReadTokens,
+      cache_read_input_tokens_availability: parsed.cacheReadAvailability,
+      output_tokens_by_mode: attribution.byMode,
+      unattributed_output_tokens: attribution.unknownTokens,
+      mode_attribution: attribution.basis,
     }));
-
-    // Statusline suffix: tiny pre-rendered string the shell statusline can
-    // cat without parsing JSONL. Updated on every /caveman-stats run.
-    // Routed through safeWriteFlag — the suffix path is predictable and
-    // user-owned, same symlink-clobber surface as the .caveman-active flag.
-    const agg = aggregateHistory(historyPath, null);
-    const suffix = agg.estSavedTokens > 0 ? `⛏  ${humanizeTokens(agg.estSavedTokens)}` : '';
-    safeWriteFlag(path.join(claudeDir, '.caveman-statusline-suffix'), suffix);
   }
 
   if (share) {
@@ -635,8 +553,6 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
-  deriveNet, ruleOverheadPerTurn, parseSession, priceForModel, formatUsd, COMPRESSION,
-  MODEL_OUTPUT_PRICE_PER_M, findCompressedPairs, summarizeCompressed, humanizeTokens,
-  outputReductionPct, readModeLog, attributeByMode,
+  formatStats, formatShare, formatHistory, aggregateHistory, parseDuration,
+  parseSession, findCompressedPairs, summarizeCompressed, readModeLog, attributeByMode,
 };

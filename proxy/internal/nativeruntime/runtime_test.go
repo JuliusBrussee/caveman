@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/JuliusBrussee/caveman/engine/ccr"
+	"github.com/JuliusBrussee/caveman/proxy/internal/repointel"
 	"github.com/JuliusBrussee/caveman/proxy/internal/sessionusage"
 )
 
@@ -438,6 +439,162 @@ func TestFullProfileWarmsRepositoryMapAndInjectsTypedTaskEvidence(t *testing.T) 
 	}
 	if !foundImpact {
 		t.Fatalf("conservative test-impact state missing: %+v", objects)
+	}
+}
+
+func waitForRepositoryMap(t *testing.T, store *ccr.Store, sessionID string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		objects, err := store.ListSessionObjects(sessionID, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if containsType(objects, ccr.ObjectRepositoryMap) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("repository map did not warm: %+v", objects)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRenderRepositoryEvidenceShowsOnlyDirectMatches(t *testing.T) {
+	ref := "ccr://ccr_obj_09f4b7e4dd159d2070fb87854ab9b67f"
+	for _, tc := range []struct {
+		name   string
+		bundle repointel.Bundle
+	}{
+		{"metadata only", repointel.Bundle{
+			Strength: repointel.StrengthMetadata,
+			Items:    []repointel.EvidenceItem{{Path: "lib/python3.14/xml/sax/xmlreader.py", LineStart: 107, Reasons: []string{"BM25 metadata relevance"}}},
+		}},
+		{"no items", repointel.Bundle{Strength: repointel.StrengthNone}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := renderRepositoryEvidence(tc.bundle, ref); got != "" {
+				t.Fatalf("low-confidence bundle still injected a claim: %q", got)
+			}
+		})
+	}
+
+	mixed := repointel.Bundle{
+		Strength: repointel.StrengthDirect,
+		Items: []repointel.EvidenceItem{
+			{Path: "src/auth/rotate.go", LineStart: 12, Direct: true, Reasons: []string{"symbol matches task terms"}},
+			{Path: "internal/unrelated.go", Reasons: []string{"BM25 metadata relevance"}},
+		},
+		Scout: repointel.ScoutDecision{Status: repointel.ScoutNotConfigured, Recommended: true},
+	}
+	got := renderRepositoryEvidence(mixed, ref)
+	if !strings.Contains(got, "src/auth/rotate.go:12") {
+		t.Fatalf("direct hit dropped even though scout is unconfigured: %q", got)
+	}
+	if strings.Contains(got, "internal/unrelated.go") {
+		t.Fatalf("metadata-only item rendered alongside direct hit: %q", got)
+	}
+}
+
+func TestRepositoryEvidenceInjectsNothingWithoutDirectMatch(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "handler.go"), []byte("package main\n\nfunc Serve() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := ccr.Open(filepath.Join(t.TempDir(), "weak-evidence.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runtime := New(store)
+	session := Session{ID: "weak-evidence", CWD: root, RepositoryState: "git:weak"}
+	if _, err := runtime.Handle(context.Background(), Request{
+		ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "claude"},
+		Session: session, Event: Event{Type: "session.start"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRepositoryMap(t, store, session.ID)
+	response, err := runtime.Handle(context.Background(), Request{
+		ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "claude"},
+		Session: session, Event: Event{Type: "prompt.submit"}, Prompt: &PayloadDigest{Bytes: 20, SHA256: "sha256:weak"},
+		TaskProfile: &TaskProfile{Type: "bugfix", Terms: []string{"unrelatedterm"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(response.Context, "Likely implementation path") || strings.Contains(response.Context, "ccr://") {
+		t.Fatalf("weak evidence injected a path claim: %q", response.Context)
+	}
+	if response.RecoveryRef != "" {
+		t.Fatalf("weak evidence still published a recovery handle: %q", response.RecoveryRef)
+	}
+	objects, err := store.ListSessionObjects(session.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsType(objects, ccr.ObjectEvidenceBundle) {
+		t.Fatalf("weak evidence bundle must not be recorded as shown evidence: %+v", objects)
+	}
+
+	// Positive control: the same warmed session must still inject when a term
+	// actually matches, so the assertions above cannot pass on a dead path.
+	matched, err := runtime.Handle(context.Background(), Request{
+		ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "claude"},
+		Session: session, Event: Event{Type: "prompt.submit"}, Prompt: &PayloadDigest{Bytes: 20, SHA256: "sha256:matched"},
+		TaskProfile: &TaskProfile{Type: "bugfix", Terms: []string{"handler"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(matched.Context, "handler.go") || matched.RecoveryRef == "" {
+		t.Fatalf("direct match must still inject evidence: context=%q ref=%q", matched.Context, matched.RecoveryRef)
+	}
+}
+
+func TestRepositoryEvidenceIgnoresPixiVendorTree(t *testing.T) {
+	root := t.TempDir()
+	write := func(path, body string) {
+		t.Helper()
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("src/proxy.py", "def proxy():\n    return 1\n")
+	write(".pixi/envs/default/conda-meta/history", "")
+	write(".pixi/envs/default/lib/python3.14/site-packages/zmq/devices/proxydevice.py", "class ProxyDevice:\n    pass\n")
+	write(".pixi/envs/default/lib/python3.14/xml/sax/xmlreader.py", "class XMLReader:\n    def parse(self):\n        pass\n")
+	store, err := ccr.Open(filepath.Join(t.TempDir(), "pixi-evidence.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runtime := New(store)
+	session := Session{ID: "pixi-evidence", CWD: root, RepositoryState: "git:pixi"}
+	if _, err := runtime.Handle(context.Background(), Request{
+		ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "claude"},
+		Session: session, Event: Event{Type: "session.start"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRepositoryMap(t, store, session.ID)
+	response, err := runtime.Handle(context.Background(), Request{
+		ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "claude"},
+		Session: session, Event: Event{Type: "prompt.submit"}, Prompt: &PayloadDigest{Bytes: 40, SHA256: "sha256:proxy-prompt"},
+		TaskProfile: &TaskProfile{Type: "bugfix", Terms: []string{"proxy"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(response.Context, ".pixi") || strings.Contains(response.Context, "proxydevice.py") || strings.Contains(response.Context, "xmlreader.py") {
+		t.Fatalf("injected pixi/vendored path: %q", response.Context)
+	}
+	if !strings.Contains(response.Context, "src/proxy.py") {
+		t.Fatalf("project source missing from evidence: %q", response.Context)
 	}
 }
 
@@ -960,7 +1117,7 @@ func TestRuntimeFailsClosedOnUnknownProtocolOrEvent(t *testing.T) {
 	}
 }
 
-func TestRuntimeIdleLifecycleTracksSessionsAndRecoversFromMissingEnd(t *testing.T) {
+func TestRuntimeTracksSessionsUntilSessionEnd(t *testing.T) {
 	store, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -975,16 +1132,6 @@ func TestRuntimeIdleLifecycleTracksSessionsAndRecoversFromMissingEnd(t *testing.
 	}
 	if active, _ := runtime.IdleSnapshot(); active != 1 {
 		t.Fatalf("active sessions = %d, want 1", active)
-	}
-	started := time.Now()
-	if !runtime.WaitForIdle(context.Background(), 30*time.Millisecond) {
-		t.Fatal("crashed session without SessionEnd must eventually idle")
-	}
-	if elapsed := time.Since(started); elapsed < 25*time.Millisecond {
-		t.Fatalf("idle returned too early: %v", elapsed)
-	}
-	if active, _ := runtime.IdleSnapshot(); active != 0 {
-		t.Fatalf("expired sessions = %d, want 0", active)
 	}
 
 	if _, err := runtime.Handle(context.Background(), Request{
@@ -1002,45 +1149,25 @@ func TestRuntimeIdleLifecycleTracksSessionsAndRecoversFromMissingEnd(t *testing.
 	}
 }
 
-// A wrap heartbeat must hold off idle exit even with zero session activity: an
-// open-but-quiet agent still points its ANTHROPIC_BASE_URL at this proxy (#860).
-func TestKeepaliveHoldsOffIdleExit(t *testing.T) {
+// Keepalive is the CLI's heartbeat for older proxies that still idle-exit. It
+// must move lastActivity without touching session accounting: a beat is activity
+// only, and counting it as a session would keep a dead wrap's proxy alive.
+func TestKeepaliveMarksActivityWithoutOpeningASession(t *testing.T) {
 	store, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	runtime := New(store)
-	stop := make(chan struct{})
-	// Heartbeat interval must sit far below the idle threshold, not merely
-	// under it. Windows' default timer granularity is ~15.6ms, so a 10ms ticker
-	// really fires every ~16ms and a loaded CI runner stretches that further; a
-	// 30ms threshold left barely a 2x margin and the idle timer won this race
-	// intermittently on windows-latest. 5ms against 250ms is ~50x, which
-	// survives a scheduling stall an order of magnitude worse than anything
-	// observed.
-	const heartbeat = 5 * time.Millisecond
-	const idleAfter = 250 * time.Millisecond
-	go func() {
-		ticker := time.NewTicker(heartbeat)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				runtime.Keepalive()
-			}
-		}
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
-	defer cancel()
-	if runtime.WaitForIdle(ctx, idleAfter) {
-		t.Fatal("idle exit fired while keepalive heartbeats were arriving")
+	_, before := runtime.IdleSnapshot()
+	time.Sleep(2 * time.Millisecond)
+	runtime.Keepalive()
+	active, after := runtime.IdleSnapshot()
+	if active != 0 {
+		t.Fatalf("Keepalive opened %d sessions", active)
 	}
-	close(stop)
-	if !runtime.WaitForIdle(context.Background(), idleAfter) {
-		t.Fatal("idle exit must fire once heartbeats stop")
+	if !after.After(before) {
+		t.Fatalf("Keepalive did not advance last activity: %v then %v", before, after)
 	}
 }
 
@@ -1253,4 +1380,95 @@ func containsType(objects []ccr.Object, objectType ccr.ObjectType) bool {
 		}
 	}
 	return false
+}
+
+// The rendered block drops metadata-only items, but the ccr:// handle it hands
+// the model must not carry them either: retrieving the bundle is one step away,
+// and the handle reads as authoritative.
+func TestStoredEvidenceBundleCarriesOnlyDirectItems(t *testing.T) {
+	root := t.TempDir()
+	// `handler.go` matches the term in its own name; `handler/serve.go` matches
+	// only because an ancestor directory does, which is the ranking that pointed
+	// at unrelated files. Fillers keep BM25 IDF positive.
+	files := map[string]string{
+		"handler.go":       "package main\n\nfunc Serve() {}\n",
+		"handler/serve.go": "package handler\n\nfunc Relay() {}\n",
+	}
+	for index := 0; index < 12; index++ {
+		files[filepath.Join("pkg", fmt.Sprintf("filler%d", index), "mod.go")] = "package filler\n"
+	}
+	for name, body := range files {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := ccr.Open(filepath.Join(t.TempDir(), "direct-only.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runtime := New(store)
+	session := Session{ID: "direct-only", CWD: root, RepositoryState: "git:direct-only"}
+	if _, err := runtime.Handle(context.Background(), Request{
+		ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "claude"},
+		Session: session, Event: Event{Type: "session.start"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRepositoryMap(t, store, session.ID)
+	response, err := runtime.Handle(context.Background(), Request{
+		ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "claude"},
+		Session: session, Event: Event{Type: "prompt.submit"}, Prompt: &PayloadDigest{Bytes: 20, SHA256: "sha256:direct"},
+		TaskProfile: &TaskProfile{Type: "bugfix", Terms: []string{"handler"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.RecoveryRef == "" {
+		t.Fatal("direct match published no recovery handle")
+	}
+	object, err := store.GetObject(strings.TrimPrefix(response.RecoveryRef, "ccr://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle repointel.Bundle
+	if err := json.Unmarshal(object.Data, &bundle); err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Items) == 0 {
+		t.Fatal("stored bundle has no items")
+	}
+	for _, item := range bundle.Items {
+		if !item.Direct {
+			t.Fatalf("metadata-only item stored behind the ccr:// handle: %+v", item)
+		}
+	}
+}
+
+func TestPersistentRuntimePrunesAbandonedCorrelationEntries(t *testing.T) {
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	r := New(store)
+	r.activeSessions["abandoned"] = sessionActivity{At: time.Now().Add(-time.Hour)}
+	r.activeSessions["recent"] = sessionActivity{At: time.Now()}
+	_, err = r.Handle(context.Background(), Request{
+		ProtocolVersion: 1, Agent: Agent{ID: "claude", Surface: "cli"},
+		Session: Session{ID: "new"}, Event: Event{Type: "prompt.submit"}, PolicyMode: "record",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.activeSessions["abandoned"]; ok {
+		t.Fatal("abandoned session retained forever")
+	}
+	if active, _ := r.IdleSnapshot(); active != 2 {
+		t.Fatalf("active correlation entries = %d, want recent and new", active)
+	}
 }

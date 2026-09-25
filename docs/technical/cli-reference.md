@@ -2,7 +2,7 @@
 
 `caveman` and `cave` invoke the same command-line program. The short alias is
 useful in terminals; scripts should prefer `caveman` because its meaning is
-clearer to readers.
+clearer to readers. The npm CLI requires Node.js 22.13 or newer.
 
 Run `caveman help <command>` for installed-version help. This page explains the
 command groups and important behavior; command help remains the exact source
@@ -12,7 +12,8 @@ for accepted flags.
 
 | Command | Purpose | Account needed |
 |---|---|---:|
-| `caveman <agent>` | Run a supported agent through the local layer | No |
+| `caveman <agent>` | Persistently enable native integration, then run supported agent | No |
+| `caveman wrap <agent>` | Run one ephemeral wrapped session without persistent host config | No |
 | `caveman run -- <command>` | Run an arbitrary command through the local layer | No |
 | `caveman learn` | Rank locally observed improvements | No |
 | `caveman status` | Show local runtime, mode, and connection state | No |
@@ -21,10 +22,12 @@ for accepted flags.
 | `caveman cloud` | Open the connected-service namespace | Yes |
 
 Supported agent shortcuts are `aider`, `claude`, `codex`, `gemini`, `hermes`,
-`openclaw`, and `opencode`.
+`kilo` (`kilocode` alias), `openclaw`, `opencode`, `pi`, and `qwen`.
 
 ```bash
 caveman claude
+caveman kilo run "review this repository"
+caveman qwen -p "review this repository"
 caveman codex --full-auto
 caveman run -- my-agent --project .
 ```
@@ -89,7 +92,13 @@ and opt-in delegation tools.
 ```bash
 caveman tools mcp install claude --server caveman
 caveman tools mcp uninstall claude --server caveman
+caveman tools mcp install qwen --server caveman
+caveman tools mcp uninstall qwen --server caveman
 ```
+
+Qwen registration is written to `~/.qwen/settings.json`. Caveman preserves
+sibling settings and refuses to replace or remove an entry that is not recorded
+as Caveman-owned.
 
 `caveman-mcp` binary itself serves compression, recovery, statistics, and TOON
 tools over standard input and output.
@@ -189,6 +198,7 @@ caveman wrap claude
 caveman wrap --off codex
 caveman wrap --pixel gemini
 caveman wrap --workflow review opencode
+caveman wrap qwen
 ```
 
 - Default mode enables supported local compression, structured-data encoding,
