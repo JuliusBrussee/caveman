@@ -243,6 +243,8 @@ def verify_manifests_and_syntax() -> None:
     manifest_paths = [
         claude_manifest_path,
         ROOT / ".claude-plugin/marketplace.json",
+        ROOT / ".cursor-plugin/plugin.json",
+        ROOT / "hooks/hooks-cursor.json",
         ROOT / ".codex/hooks.json",
         ROOT / "gemini-extension.json",
         ROOT / "plugins/caveman/.codex-plugin/plugin.json",
