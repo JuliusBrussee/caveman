@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-error.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/middleware-error.schema.json",
   "title": "Caveman middleware error envelope",
-  "description": "Every non-2xx middleware response. The code catalog and status mapping live in docs/technical/middleware-protocol.md.",
+  "description": "Every non-2xx middleware response. The code catalog and status mapping live in docs/technical/middleware-protocol.md. Closed on purpose: describes exactly what a protocol 1.1 server emits, and the conformance kit holds servers to it. Clients MUST NOT validate responses against this schema; they ignore unknown fields (docs/technical/middleware-protocol.md §4, §16).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -21,7 +21,7 @@
       ],
       "properties": {
         "code": {
-          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/reason"
+          "$ref": "middleware-common.schema.json#/$defs/reason"
         }
       }
     }

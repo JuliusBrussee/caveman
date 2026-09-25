@@ -18,7 +18,8 @@ Source-of-truth schemas for cross-service/SDK wire shapes:
   positive safe integers because SDK 1.1.0 rejects anything else
 - `scripts/validate-schemas.mjs` — compiles every schema with AJV, validates
   adapter fixtures, middleware fixture examples, `$id` = raw GitHub URL of the
-  file, and every OpenAPI `$ref`
+  file at tag `contracts-v<package.json version>` (bump both together),
+  relative cross-schema `$ref`s only, and every OpenAPI `$ref`
 - `package.json` — `@caveman-ai/contracts`; build/lint/test run both validators (no compiled output)
 
 ## Key schema fields

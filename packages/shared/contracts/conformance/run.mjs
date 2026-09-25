@@ -51,7 +51,8 @@ const ajv = new Ajv2020({ allErrors: true, strict: true });
 for (const file of (await readdir(path.join(contracts, 'schemas'))).filter(name => name.endsWith('.schema.json'))) {
   ajv.addSchema(JSON.parse(await readFile(path.join(contracts, 'schemas', file), 'utf8')));
 }
-const SCHEMA_BASE = 'https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/';
+const { version } = JSON.parse(await readFile(path.join(contracts, 'package.json'), 'utf8'));
+const SCHEMA_BASE = `https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v${version}/packages/shared/contracts/schemas/`;
 function assertSchema(name, value, label = name) {
   const validate = ajv.getSchema(`${SCHEMA_BASE}middleware-${name}.schema.json`);
   if (!validate(value)) throw new assert.AssertionError({ message: `${label} violates middleware-${name}: ${ajv.errorsText(validate.errors)}` });
@@ -328,10 +329,23 @@ for (const v11 of views) {
     else expectError(response, 'invalid_request', v11);
   });
 
-  await test(`[${view}] unsupported_version: schema_version 2`, async () => {
+  await test(`[${view}] unsupported_version: schema_version 2 on optimize and sessions/delete`, async () => {
     const request = optimizeRequest(doc, { scope: scope('version') });
     request.schema_version = 2;
     expectError(await call('optimize', { v11, body: request }), 'unsupported_version', v11);
+    if (legacyOnly) return 'a protocol 1.0 runtime answers a sessions/delete version mismatch with invalid_request';
+    expectError(await call('sessions/delete', { v11, body: { schema_version: 2, scope: scope('delete-version') } }), 'unsupported_version', v11);
+  });
+
+  await test(`[${view}] invalid_request: a key differing only by case from a defined field (§4)`, async () => {
+    // Go's encoding/json matches keys case-insensitively, so SEQUENCE would silently override sequence.
+    if (legacyOnly) return 'protocol 1.0 runtimes decode keys case-insensitively';
+    const request = optimizeRequest(doc, { scope: scope(`case-${view}`) });
+    request.SEQUENCE = 7;
+    expectError(await call('optimize', { v11, body: request }), 'invalid_request', v11);
+    const nested = optimizeRequest(doc, { scope: scope(`case-nested-${view}`) });
+    nested.scope.Session_Id = 'kit-other-session';
+    expectError(await call('optimize', { v11, body: nested }), 'invalid_request', v11);
   });
 
   await test(`[${view}] unknown_capability: unadvertised transform${v11 ? '' : ' and stale revision'}`, async () => {
@@ -346,10 +360,12 @@ for (const v11 of views) {
     assert.equal(response.json.policy_revision, doc.policy_revision);
   });
 
-  await test(`[${view}] not_found: unknown handle, unknown route, wrong method`, async () => {
+  await test(`[${view}] not_found: unknown handle, unknown route (before its body is read), wrong method`, async () => {
     expectError(await call('retrieve', { v11, body: retrieveRequest(scope('unknown'), unknownHandle()) }), 'not_found', v11);
     expectError(await call('conformance-no-such-route', { v11, body: {} }), 'not_found', v11);
     expectError(await call('optimize', { v11, method: 'GET' }), 'not_found', v11);
+    if (legacyOnly) return 'protocol 1.0 runtimes validate the content type before routing';
+    expectError(await call('conformance-no-such-route', { v11, body: 'not json', contentType: 'text/plain' }), 'not_found', v11);
   });
 
   await test(`[${view}] invalid_range / legacy_conditions retrieve_limit_out_of_range`, async () => {
@@ -447,6 +463,8 @@ for (const v11 of views) {
     }
     expectError(await call('retrieve', { v11, body: retrieveRequest(live.scope, live.handle) }), 'deleted', v11);
     expectError(await call('optimize', { v11, body: optimizeRequest(doc, { scope: live.scope, sequence: 2 }) }), 'deleted', v11);
+    // Protocol 1.0 runtimes still recorded receipts for a revoked scope.
+    if (!legacyOnly) expectError(await call('receipts', { v11, body: receipt(live.scope) }), 'deleted', v11);
     const unknown = await call('sessions/delete', { v11, body: { schema_version: 1, scope: scope(`never-used-${view}`) } });
     assert.equal(unknown.status, 200, 'delete of an unknown scope is not idempotent');
     if (lifecycle) assert.deepEqual(unknown.json.deleted, { scopes: 0, choices: 0, grants: 0, originals: 0 });
@@ -466,9 +484,10 @@ await test('quota_exceeded: a burst past quota_requests_per_minute is 429 with R
   }
   assert.ok(response, 'no quota response within twice the advertised quota');
   expectError(response, 'quota_exceeded', true);
-  const legacy = await call('retrieve', { body: retrieveRequest(scope('quota'), unknownHandle()) });
-  assert.equal(legacy.status, 503, `legacy client over quota: ${legacy.status}`);
-  assert.equal(legacy.json.error.code, 'capacity');
+  expectCondition(response, 'quota_exceeded', true);
+  expectCondition(await call('retrieve', { body: retrieveRequest(scope('quota'), unknownHandle()) }), 'quota_exceeded', false);
+  // Routing comes before the quota: an unknown route is 404 even for a principal over its quota.
+  expectError(await call('conformance-no-such-route', { v11: true, body: {} }), 'not_found', true);
 });
 
 // Coverage: every catalog entry either ran above or says why a black box cannot reach it.
@@ -478,6 +497,7 @@ const unreachable = { capacity: queue, queue_wait_exceeded: queue, deadline: 'se
   expired: 'needs retention_seconds to elapse', identity_conflict: 'needs a concurrent-writer race', runtime_unavailable: fault, storage_error: fault,
   optimize_cache_state_unavailable: fault, optimize_recovery_unavailable: fault, optimize_store_capacity: 'needs the store capacity filled',
   forbidden_namespace: 'pass --foreign-token (a principal without this namespace)', quota_exceeded: 'runtime advertises no quota_requests_per_minute',
+  ...!token && { unauthorized: 'no --token: runtime assumed open' },
   ...legacyOnly && { request_timeout: 'protocol 1.1 status: the 1.0 view answers slow_request_body as 413 payload_limit',
     slow_request_body: 'a protocol 1.0 runtime withholds its answer until the client closes the stalled body' } };
 for (const { code } of fixture.server_error_codes) {

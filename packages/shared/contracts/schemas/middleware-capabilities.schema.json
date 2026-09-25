@@ -1,6 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-capabilities.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/middleware-capabilities.schema.json",
+  "title": "Caveman middleware capabilities",
+  "description": "GET capabilities response. Closed on purpose: describes exactly what a protocol 1.1 server emits, and the conformance kit holds servers to it. Clients MUST NOT validate responses against this schema; they ignore unknown fields (docs/technical/middleware-protocol.md §4, §16).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -24,19 +26,19 @@
       "maxLength": 256
     },
     "policy_revision": {
-      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "middleware-common.schema.json#/$defs/token"
     },
     "transforms": {
       "type": "array",
       "items": {
-        "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/transform-capability.schema.json#/$defs/capability"
+        "$ref": "transform-capability.schema.json#/$defs/capability"
       },
       "maxItems": 128
     },
     "limits": {
       "type": "object",
       "additionalProperties": {
-        "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+        "$ref": "middleware-common.schema.json#/$defs/positive_limit"
       },
       "required": [
         "deadline_ms",
@@ -62,25 +64,25 @@
           "minimum": 1
         },
         "retrieve_deadline_ms": {
-          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+          "$ref": "middleware-common.schema.json#/$defs/positive_limit"
         },
         "queue_depth": {
-          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+          "$ref": "middleware-common.schema.json#/$defs/positive_limit"
         },
         "retrieve_queue_depth": {
-          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+          "$ref": "middleware-common.schema.json#/$defs/positive_limit"
         },
         "max_segments": {
-          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+          "$ref": "middleware-common.schema.json#/$defs/positive_limit"
         },
         "max_manifest_items": {
-          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+          "$ref": "middleware-common.schema.json#/$defs/positive_limit"
         },
         "receipt_bytes": {
-          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+          "$ref": "middleware-common.schema.json#/$defs/positive_limit"
         },
         "quota_requests_per_minute": {
-          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+          "$ref": "middleware-common.schema.json#/$defs/positive_limit"
         }
       }
     },
@@ -128,7 +130,7 @@
     "features": {
       "type": "array",
       "items": {
-        "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/feature"
+        "$ref": "middleware-common.schema.json#/$defs/feature"
       },
       "maxItems": 64,
       "uniqueItems": true

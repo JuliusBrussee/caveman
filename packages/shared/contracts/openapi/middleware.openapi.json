@@ -5,7 +5,7 @@
     "title": "Caveman middleware runtime protocol",
     "version": "1.1.0",
     "summary": "Compression-only runtime used by Caveman framework middleware. Normative prose: docs/technical/middleware-protocol.md.",
-    "description": "Status codes listed are the protocol 1.1 set, used only when the request carries the http_status_v2 feature in Caveman-Middleware-Features. Without it the runtime answers with the protocol 1.0 (legacy) mapping documented in the prose spec. Clients derive outcomes from error.code, never from the status alone.",
+    "description": "Status codes listed are the protocol 1.1 set, used only when the request carries the http_status_v2 feature in Caveman-Middleware-Features. Without it the runtime answers with the protocol 1.0 (legacy) mapping documented in the prose spec. Clients derive outcomes from error.code, never from the status alone. The referenced JSON Schemas are closed: they describe exactly what a protocol 1.1 server emits and are what the conformance kit checks servers against. Clients MUST NOT validate responses against them; clients ignore unknown response fields so later minor versions can add fields (spec §4, §16). Unknown routes and unlisted methods answer 404 not_found before any quota, queue or body handling.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -30,7 +30,7 @@
       "get": {
         "operationId": "getCapabilities",
         "summary": "Discover transforms, limits, features and protocol range.",
-        "description": "Without Caveman-Middleware-Features the runtime omits transforms a protocol 1.0 client would reject.",
+        "description": "Without Caveman-Middleware-Features the runtime omits transforms a protocol 1.0 client would reject. Served from memory before any quota or queue, so it never answers 429; 403 is forbidden_origin only, and 503 means the runtime has no usable middleware store.",
         "parameters": [
           {
             "$ref": "#/components/parameters/Features"
@@ -61,9 +61,6 @@
           },
           "403": {
             "$ref": "#/components/responses/E403"
-          },
-          "429": {
-            "$ref": "#/components/responses/E429"
           },
           "503": {
             "$ref": "#/components/responses/E503"
@@ -221,7 +218,7 @@
       "post": {
         "operationId": "recordReceipt",
         "summary": "Record a content-free call observation.",
-        "description": "Aggregated or retention-bounded; never creates rows that outlive retention_seconds.",
+        "description": "Aggregated or retention-bounded; never creates rows that outlive retention_seconds. Deduplicated on (logical_call_id, attempt_id, event_kind): the first write wins, and a retry, even with a different body, gets the same 200. A scope revoked by sessions/delete answers 410 deleted.",
         "parameters": [
           {
             "$ref": "#/components/parameters/Features"
@@ -269,6 +266,12 @@
           "408": {
             "$ref": "#/components/responses/E408"
           },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "410": {
+            "$ref": "#/components/responses/E410"
+          },
           "413": {
             "$ref": "#/components/responses/E413"
           },
@@ -288,7 +291,7 @@
       "post": {
         "operationId": "deleteSession",
         "summary": "Revoke a scope and delete every original it owns.",
-        "description": "Idempotent. An unknown scope answers 200 with zero counts.",
+        "description": "Idempotent. An unknown scope answers 200 with zero counts. Runs on the retrieve queue and limits.retrieve_deadline_ms. The revocation commits first, so later use of the scope is 410 deleted at once; the scope's content is then deleted in bounded batches. A delete that fails or runs out of time (including a Postgres write conflict) answers 503 runtime_unavailable or 504 deadline, never 200 and never 409; retrying resumes where it stopped, and the retry's counts cover only what it removed.",
         "parameters": [
           {
             "$ref": "#/components/parameters/Features"
@@ -465,7 +468,7 @@
         }
       },
       "E409": {
-        "description": "epoch_changed (context manifest is not an extension of the stored one) or identity_conflict.",
+        "description": "epoch_changed (optimize only, protocol 1.0 clients only: the context manifest is not an extension of the stored one, or sequence went backwards) or identity_conflict (retryable: an optimize replayed under the same idempotency_key with a different body, or a concurrent-writer conflict such as a Postgres deadlock or serialization failure on optimize or receipts).",
         "content": {
           "application/json": {
             "schema": {
@@ -475,7 +478,7 @@
         }
       },
       "E410": {
-        "description": "deleted or expired scope.",
+        "description": "deleted (scope revoked by sessions/delete; receipts included) or expired (scope past retention or max retention).",
         "content": {
           "application/json": {
             "schema": {
@@ -495,7 +498,7 @@
         }
       },
       "E429": {
-        "description": "capacity (queue saturated; legacy clients get 504 deadline) or quota_exceeded.",
+        "description": "capacity (queue saturated) or quota_exceeded (per-principal quota_requests_per_minute). Legacy clients: a queue wait past the deadline is 504 deadline, and quota_exceeded is 503 capacity.",
         "content": {
           "application/json": {
             "schema": {
@@ -510,7 +513,7 @@
         }
       },
       "E503": {
-        "description": "runtime_unavailable (storage or dependency outage). retrieve also uses recovery_unavailable.",
+        "description": "runtime_unavailable (storage or dependency outage, a failed sessions/delete, or no middleware store mounted). retrieve also uses recovery_unavailable. Legacy clients also get 503 for optimize decisions (not_smaller, cache_state_unavailable, recovery_unavailable, capacity) and for quota_exceeded (as capacity).",
         "content": {
           "application/json": {
             "schema": {

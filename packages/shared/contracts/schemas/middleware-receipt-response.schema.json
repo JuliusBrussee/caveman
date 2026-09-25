@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-receipt-response.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/middleware-receipt-response.schema.json",
   "title": "Caveman middleware receipts response",
+  "description": "receipts 200 response. Closed on purpose: describes exactly what a protocol 1.1 server emits, and the conformance kit holds servers to it. Clients MUST NOT validate responses against this schema; they ignore unknown fields (docs/technical/middleware-protocol.md §4, §16).",
   "type": "object",
   "additionalProperties": false,
   "required": [

@@ -7,10 +7,16 @@
 - **Breaking (package):** renamed `@caveman/contracts` → `@caveman-ai/contracts`.
   `package.json` had stayed at 1.0.0 after the 1.1.0 entry below; this release
   realigns them.
-- **Breaking (schema IDs):** every `$id` is now the resolvable
-  `https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/<file>`
-  (previously `https://caveman.so/schemas/…` and `https://caveman.cloud/schemas/…`,
-  which did not resolve). No wire shape changed because of this.
+- **Breaking (schema IDs):** every `$id` is now
+  `https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/<file>`,
+  pinned to this release's immutable tag (previously `https://caveman.so/schemas/…`
+  and `https://caveman.cloud/schemas/…`, which did not resolve). Every
+  cross-schema `$ref` is relative (`middleware-common.schema.json#/$defs/token`),
+  so tools that load the schemas or the OpenAPI document from the package
+  directory resolve them locally, with no network access. Each release moves
+  the tag in every `$id`; `scripts/validate-schemas.mjs` fails when an `$id`
+  does not embed the `package.json` version or a `$ref` is absolute. No wire
+  shape changed because of this.
 - Middleware protocol 1.1 (additive; `schema_version` stays 1), specified in
   `docs/technical/middleware-protocol.md`:
   - `middleware-capabilities`: optional `protocol {min,max}`, `features`,
@@ -25,6 +31,10 @@
     `reason`, `positive_limit`.
   - New `openapi/middleware.openapi.json` (OpenAPI 3.1) covering
     `capabilities`, `optimize`, `retrieve`, `receipts`, `sessions/delete`.
+  - The response schemas are closed (`additionalProperties: false`) on
+    purpose: they describe exactly what a 1.1 server emits and are what the
+    conformance kit checks servers against. Clients must not validate
+    responses against them (spec §4, §16); each schema's `description` says so.
 - `build` / `lint` / `test` run both `scripts/validate-schemas.mjs` and
   `scripts/validate.mjs`. The former now also checks `$id` against the file
   name, the protocol 1.1 fixture examples, and every OpenAPI `$ref`.

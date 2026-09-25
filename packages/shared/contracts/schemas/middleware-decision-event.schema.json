@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-decision-event.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/middleware-decision-event.schema.json",
   "title": "Caveman middleware decision event",
   "description": "Client-side, content-free record of one native call decision. Emitted once per report(); never sent to the runtime.",
   "type": "object",
@@ -32,12 +32,12 @@
       ]
     },
     "reason": {
-      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/reason"
+      "$ref": "middleware-common.schema.json#/$defs/reason"
     },
     "adapter": {
       "oneOf": [
         {
-          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "middleware-common.schema.json#/$defs/token"
         },
         {
           "type": "null"
@@ -47,7 +47,7 @@
     "logical_call_id": {
       "oneOf": [
         {
-          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "middleware-common.schema.json#/$defs/token"
         },
         {
           "type": "null"
@@ -57,7 +57,7 @@
     "attempt_id": {
       "oneOf": [
         {
-          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "middleware-common.schema.json#/$defs/token"
         },
         {
           "type": "null"
@@ -67,7 +67,7 @@
     "transform_ids": {
       "type": "array",
       "items": {
-        "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+        "$ref": "middleware-common.schema.json#/$defs/token"
       },
       "maxItems": 128,
       "uniqueItems": true

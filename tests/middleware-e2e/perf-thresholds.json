@@ -1,46 +1,114 @@
 {
   "$comment": [
     "Limits for tests/middleware-e2e/perf.mjs. The gate fails when a measured value exceeds its limit.",
-    "Derivation: `node tests/middleware-e2e/perf.mjs --measure` run 3 times on the host in `measured`; each limit is",
-    "max(5 x the largest of the 3 values, floor), rounded up to 2 significant digits. The floor is 25 ms for the HTTP",
-    "values only: a small optimize is dominated by the SQLite WAL fsync per commit, which is far slower on CI disks than",
-    "on a laptop SSD. The Go benchmark is CPU-bound and has no floor. Re-derive after a deliberate performance change.",
-    "p99 is measured and printed but not gated: on a shared or CI host, 100-200 samples swing it several-fold (observed 47 -> 72 ms small, 86 -> 190 ms large at load average 12-18), so a p99 limit fails on noise. Medians and the Go benchmarks gate."
+    "Optimize p50 is gated as a ratio to a calibration request sent in the same round, so a slower host moves both sides.",
+    "The small optimize is dominated by its SQLite commit, so it is divided by a receipt (same HTTP, auth and queue path",
+    "plus one commit, no optimize work). The large optimize is CPU-bound, so it is divided by capabilities (HTTP and auth",
+    "only, no storage), which a slow CI disk cannot inflate.",
+    "Ratio limits: 3 x the median of the 5 `node tests/middleware-e2e/perf.mjs --measure` runs in `measured`, rounded up",
+    "to 2 significant digits. On that host the gate fails at a 3.0x rise of small/receipt (median 2.33, limit 7.0) and a",
+    "3.1x rise of large/capabilities (median 61.38, limit 190). A disk with slower fsync adds the same commit time to the",
+    "small optimize and the receipt, which lowers the small ratio: there the small gate needs a larger regression of the",
+    "optimize work to fail. The large gate has no storage in its baseline and keeps its threshold.",
+    "p99 is not gated as a ratio: it is the 2nd-3rd largest of 100-200 samples, and dividing two such tails swung 0.9-2.8",
+    "(small) and 18-51 (large) across runs. p99 gets an absolute ceiling, max(20 x the median of the 5 runs, 250 ms),",
+    "which catches a pathological tail (a lock wait, a stalled queue), not an fsync stall or a busy host.",
+    "The receipt p50 is not gated against capabilities: it pays one WAL fsync (synchronous=FULL) that costs 10-15 ms on",
+    "Linux CI disks against ~0.4 ms for capabilities. It gets an absolute 50 ms ceiling (~3x a slow CI fsync, ~77x the",
+    "local median 0.65 ms), so it catches only a pathological commit path.",
+    "Go benchmarks are CPU-bound absolute ns/op: 5 x the largest of 3 runs.",
+    "Re-derive after a deliberate performance change."
   ],
   "measured": {
-    "host": "Apple M3 Pro, darwin/arm64, go1.26.5, node 22.22.2 (shared with other workloads)",
+    "host": "Apple M3 Pro, darwin/arm64, go1.26.5, node 22.22.2 (shared with other workloads, load average 4-17)",
     "date": "2026-09-24",
-    "runs": [
+    "go_runs": [
       {
         "go_engine_ns_per_op": 3077942,
-        "go_prepare_ns_per_op": 3853133,
-        "http_optimize_small_p50_ms": 1.58,
-        "http_optimize_small_p99_ms": 8.93,
-        "http_optimize_large_p50_ms": 24.97,
-        "http_optimize_large_p99_ms": 47.28
+        "go_prepare_ns_per_op": 3853133
       },
       {
         "go_engine_ns_per_op": 3064033,
-        "go_prepare_ns_per_op": 3323990,
-        "http_optimize_small_p50_ms": 1.3,
-        "http_optimize_small_p99_ms": 3.35,
-        "http_optimize_large_p50_ms": 24.45,
-        "http_optimize_large_p99_ms": 41.07
+        "go_prepare_ns_per_op": 3323990
       },
       {
         "go_engine_ns_per_op": 3088390,
-        "go_prepare_ns_per_op": 3171817,
-        "http_optimize_small_p50_ms": 1.66,
-        "http_optimize_small_p99_ms": 6.3,
-        "http_optimize_large_p50_ms": 23.99,
-        "http_optimize_large_p99_ms": 46.35
+        "go_prepare_ns_per_op": 3171817
       }
-    ]
+    ],
+    "http_runs": [
+      {
+        "http_capabilities_p50_ms": 0.41,
+        "http_capabilities_p99_ms": 1.7,
+        "http_receipt_p50_ms": 0.69,
+        "http_receipt_p99_ms": 5.13,
+        "http_optimize_small_p50_ms": 1.59,
+        "http_optimize_small_p99_ms": 6.73,
+        "http_optimize_large_p50_ms": 25,
+        "http_optimize_large_p99_ms": 86.28,
+        "http_optimize_small_p50_x_receipt": 2.31,
+        "http_optimize_large_p50_x_capabilities": 60.53
+      },
+      {
+        "http_capabilities_p50_ms": 0.38,
+        "http_capabilities_p99_ms": 1.07,
+        "http_receipt_p50_ms": 0.6,
+        "http_receipt_p99_ms": 2.48,
+        "http_optimize_small_p50_ms": 1.42,
+        "http_optimize_small_p99_ms": 4.22,
+        "http_optimize_large_p50_ms": 23.8,
+        "http_optimize_large_p99_ms": 28.33,
+        "http_optimize_small_p50_x_receipt": 2.38,
+        "http_optimize_large_p50_x_capabilities": 62.28
+      },
+      {
+        "http_capabilities_p50_ms": 0.41,
+        "http_capabilities_p99_ms": 1.65,
+        "http_receipt_p50_ms": 0.65,
+        "http_receipt_p99_ms": 2.59,
+        "http_optimize_small_p50_ms": 1.52,
+        "http_optimize_small_p99_ms": 4.08,
+        "http_optimize_large_p50_ms": 24.98,
+        "http_optimize_large_p99_ms": 36.17,
+        "http_optimize_small_p50_x_receipt": 2.33,
+        "http_optimize_large_p50_x_capabilities": 61.38
+      },
+      {
+        "http_capabilities_p50_ms": 0.36,
+        "http_capabilities_p99_ms": 1.37,
+        "http_receipt_p50_ms": 0.57,
+        "http_receipt_p99_ms": 1.88,
+        "http_optimize_small_p50_ms": 1.39,
+        "http_optimize_small_p99_ms": 3.9,
+        "http_optimize_large_p50_ms": 23.63,
+        "http_optimize_large_p99_ms": 38.76,
+        "http_optimize_small_p50_x_receipt": 2.42,
+        "http_optimize_large_p50_x_capabilities": 64.8
+      },
+      {
+        "http_capabilities_p50_ms": 0.43,
+        "http_capabilities_p99_ms": 2.47,
+        "http_receipt_p50_ms": 0.73,
+        "http_receipt_p99_ms": 2.18,
+        "http_optimize_small_p50_ms": 1.66,
+        "http_optimize_small_p99_ms": 4.61,
+        "http_optimize_large_p50_ms": 25.77,
+        "http_optimize_large_p99_ms": 44.45,
+        "http_optimize_small_p50_x_receipt": 2.28,
+        "http_optimize_large_p50_x_capabilities": 60.32
+      }
+    ],
+    "http_host": "same host, load average 3.5-5.6; proxy binary built before the receipt Revoked-query change"
   },
   "limits": {
     "go_engine_ns_per_op": 16000000,
     "go_prepare_ns_per_op": 20000000,
-    "http_optimize_small_p50_ms": 25,
-    "http_optimize_large_p50_ms": 130
+    "http_optimize_small_p99_ms": 250,
+    "http_optimize_large_p99_ms": 780,
+    "http_receipt_p50_ms": 50
+  },
+  "ratio_limits": {
+    "http_optimize_small_p50_x_receipt": 7.0,
+    "http_optimize_large_p50_x_capabilities": 190
   }
 }

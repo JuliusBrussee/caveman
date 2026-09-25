@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Version skew in both directions (docs/technical/middleware-protocol.md §16, plan Decision 10):
 //   runtime  HEAD SDK clients (TS ai-sdk, Python openai) against the published protocol 1.0 runtime for this host,
-//            downloaded with gh and verified by the repo's signed-checksum installer. They must negotiate the legacy
-//            view and still compress and recover.
+//            downloaded with gh and verified against the committed signing key and its signed checksum manifest.
+//            They must negotiate the legacy view and still compress and recover.
 //   clients  The published clients, unchanged and with their default deadlines, against a HEAD runtime:
 //            @caveman-ai/sdk@1.1.0 + @caveman-ai/middleware@0.1.0-alpha.2, and caveman-sdk==1.1.0 +
 //            caveman-middleware==0.1.0a1 (Python 3.13+).
@@ -13,13 +13,11 @@
 // tag is N1_RUNTIME, not the installer's pin (which moves to the runtime under test); CAVEMAN_SKEW_RUNTIME_TAG
 // overrides it.
 import assert from 'node:assert/strict';
-import { createReadStream } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
-import http from 'node:http';
-import { once } from 'node:events';
+import { chmod, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { ensureBinary, targetPlatform } from '../../packages/shared/binary-installer/installer.mjs';
-import { TOKEN, buildProxy, drivePython, driveTS, finish, kit, kitResult, npmEnv, pythonEnv, requireBuilt, sh, startRuntime, step, tempDir } from './harness.mjs';
+import { targetPlatform } from '../../packages/shared/binary-installer/installer.mjs';
+import { verifyChecksumSignatureBundle } from '../../scripts/sign-binary-checksums.mjs';
+import { TOKEN, buildProxy, drivePython, driveTS, finish, kit, kitResult, npmEnv, pythonEnv, requireBuilt, root, sh, sha256, startRuntime, step, tempDir } from './harness.mjs';
 
 const REPO = 'JuliusBrussee/caveman';
 // N-1: the newest published 1.x runtime (protocol 1.0). bin-v1.1.8 was pinned but never published, and the next
@@ -34,30 +32,29 @@ if (!['runtime', 'clients', 'both'].includes(which)) {
 }
 const work = await tempDir('skew');
 
-/** gh-downloads the proxy asset for this host and installs it through installer.mjs's ensureBinary, served from a
- * loopback mirror, so the signed checksums.txt and the asset digest are checked exactly as users' installs do. */
+/** gh-downloads the proxy asset for this host and verifies it directly: the checksums.txt.keysig bundle against the
+ * committed binary signing public key, then the asset's sha256 against its signed manifest entry. Not through
+ * ensureBinary: that now requires a RELEASE entry naming its own pin, which 1.x manifests do not carry. */
 async function publishedRuntime() {
   const tag = process.env.CAVEMAN_SKEW_RUNTIME_TAG ?? N1_RUNTIME;
   if ((await sh('gh', ['release', 'view', tag, '-R', REPO, '--json', 'tagName'], { allowFail: true })).code !== 0) {
     throw new Error(`${tag} is not a published release of ${REPO}`);
   }
   const { os, arch } = targetPlatform();
+  const artifact = `caveman-proxy_${os}_${arch}`;
   const assets = path.join(work, 'assets');
   await mkdir(assets, { recursive: true });
-  await sh('gh', ['release', 'download', tag, '-R', REPO, '-D', assets, '--clobber', '-p', 'checksums.txt', '-p', 'checksums.txt.keysig', '-p', `caveman-proxy_${os}_${arch}`]);
-  const mirror = http.createServer((request, response) => createReadStream(path.join(assets, path.basename(request.url)))
-    .on('error', () => { response.statusCode = 404; response.end(); }).pipe(response)).listen(0, '127.0.0.1');
-  await once(mirror, 'listening');
-  // PATH is emptied so an installed caveman-proxy cannot stand in for the download.
-  const overrides = { CAVE_BINARY_RELEASE_BASE: `http://127.0.0.1:${mirror.address().port}`, CAVEMAN_HOME: path.join(work, 'home'), PATH: '' };
-  const saved = Object.fromEntries(Object.keys(overrides).map(key => [key, process.env[key]]));
-  Object.assign(process.env, overrides);
-  try {
-    return { tag, bin: await ensureBinary({ name: 'caveman-proxy', envVar: 'CAVEMAN_SKEW_UNSET_BINARY' }) };
-  } finally {
-    for (const [key, value] of Object.entries(saved)) value === undefined ? delete process.env[key] : process.env[key] = value;
-    mirror.close();
-  }
+  await sh('gh', ['release', 'download', tag, '-R', REPO, '-D', assets, '--clobber', '-p', 'checksums.txt', '-p', 'checksums.txt.keysig', '-p', artifact]);
+  const checksums = await readFile(path.join(assets, 'checksums.txt'));
+  const bundle = JSON.parse(await readFile(path.join(assets, 'checksums.txt.keysig'), 'utf8'));
+  const publicKey = await readFile(path.join(root, 'packages/cli/BINARY_SIGNING_PUBKEY.pub'), 'utf8');
+  if (!verifyChecksumSignatureBundle(checksums, bundle, publicKey)) throw new Error(`${tag} checksums.txt signature check failed`);
+  const entry = checksums.toString('utf8').split('\n').find(line => line.endsWith(`  ${artifact}`));
+  if (!entry) throw new Error(`${tag} signed manifest does not contain ${artifact}`);
+  const bin = path.join(assets, artifact);
+  if (sha256(await readFile(bin)) !== entry.slice(0, 64)) throw new Error(`${tag} ${artifact} digest does not match its signed manifest entry`);
+  await chmod(bin, 0o755);
+  return { tag, bin };
 }
 
 if (which !== 'clients') {

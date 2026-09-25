@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/continuous-improvement-report.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/continuous-improvement-report.schema.json",
   "title": "Caveman Continuous Improvement Report v1",
   "type": "object",
   "additionalProperties": false,

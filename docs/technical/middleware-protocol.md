@@ -46,6 +46,24 @@ The receipt route is `receipts` (plural) on the wire.
 - Every response body is JSON. Servers MUST send `Cache-Control: no-store` and
   `X-Content-Type-Options: nosniff`.
 - Unknown routes, and methods other than those listed, get 404 `not_found`.
+  Routing comes first after authentication: an unknown route or method is 404
+  before the server takes a quota count or a queue slot, or reads or checks the
+  body (a `text/plain` POST to an unknown route is 404, not 400).
+  Exception: a caveman-proxy with no middleware store, or whose middleware
+  failed to start, answers every path under `/caveman/v1/middleware/`, unknown
+  routes included, with 503 `runtime_unavailable` and `Retry-After: 1` before
+  browser refusal and authentication run.
+- Every POST body carries `schema_version`. A value outside `protocol` is 400
+  `unsupported_version` on every route, `sessions/delete` included. The
+  required-field check runs first: a body missing a required field is 400
+  `invalid_request` whatever its `schema_version`, so `schema_version: 2` with
+  an incomplete body gets `invalid_request`, not `unsupported_version`.
+- Object keys are case-sensitive. A body containing a key that differs only by
+  case from a field the schema defines at that position (for example
+  `SEQUENCE` next to, or instead of, `sequence`) is 400 `invalid_request`. This
+  holds with and without the tolerant reader (§4): such a key is never
+  "unknown", because a case-insensitive decoder would silently read it as the
+  defined field.
 - Clients MUST NOT follow redirects (outcome `redirect_refused`) and MUST stop
   reading a response body after 4 MiB (outcome `payload_limit`).
 
@@ -137,6 +155,8 @@ appear in both views, because 1.0 clients ignore unknown top-level fields.
 **Servers**
 
 - MUST ignore unknown request body fields at any depth and unknown headers.
+  A key that matches a defined field case-insensitively but not exactly is not
+  unknown; it is rejected (§1).
 - MUST still require every required field and validate the known ones.
 - MUST NOT give an unknown field any meaning. Anything security-relevant is a
   negotiated feature.
@@ -145,7 +165,18 @@ appear in both views, because 1.0 clients ignore unknown top-level fields.
   no request body fields.
 
 **Clients** MUST ignore unknown response fields at any depth. They MUST NOT
-reject a whole capabilities document over one entry. Parsing capabilities:
+reject a whole capabilities document over one entry.
+
+**The JSON Schemas describe servers, not clients.** The response schemas
+(`middleware-capabilities`, `transform-capability`, `middleware-plan`,
+`middleware-page`, `middleware-error`, and the other response schemas) are
+closed (`additionalProperties: false`): they describe exactly what a 1.1 server
+emits, and the conformance kit holds servers to them. Clients MUST NOT
+validate responses against them. A future minor version may add response
+fields, and a client that rejected them would break forward compatibility.
+Clients parse responses by the rules in this document; the fixture's
+client-accept vectors (`capabilities_parsing`) deliberately include documents
+the closed schemas reject. Parsing capabilities:
 
 1. Reject the document with `unsupported_version` if any of these fails:
    - it is a JSON object;
@@ -181,8 +212,11 @@ capabilities view.
 - **Acceptance with `revision_tolerant` active:** accept iff every id in
   `policy.transforms` is unique and currently advertised to this request's
   view. `policy.revision` is ignored.
-- **Acceptance otherwise (1.0):** accept iff `policy.revision` equals the
-  current revision of the legacy view and every transform is supported.
+- **Acceptance otherwise (1.0 rule):** accept iff `policy.revision` equals the
+  current revision of the request's own view and every transform is advertised
+  to that view. For a request without `Caveman-Middleware-Features` that is the
+  legacy view; for a 1.1 client that did not send `revision_tolerant` it is the
+  full view.
 - A rejection is 400 `unknown_capability`.
 - The plan's `policy_revision` MUST be the server's current revision for the
   request's view.
@@ -207,7 +241,12 @@ capabilities view.
   of waiting for a restart or an error. It does so once: an unusable answer to
   that refresh is kept until it expires.
 - Without a cached view, concurrent calls share one capabilities fetch; each
-  still consults the breaker first (vectors: `runtime_scenarios`).
+  still consults the breaker first. Only the call that started the fetch (the
+  leader) records its outcome in the breaker; calls that joined it record
+  nothing for the fetch. One failed shared fetch is one breaker failure, not
+  one per waiter (vectors: `runtime_scenarios`
+  `bootstrap_capabilities_single_flight`,
+  `shared_capabilities_failure_records_one_outcome`).
 
 ## 6. Errors and HTTP semantics (K4)
 
@@ -233,7 +272,7 @@ on every 429 and 503, in both modes.
 | `expired` | 410 | 410 | no | Scope passed retention or max retention |
 | `payload_limit` | 413 | 413 | no | Body exceeds a size limit (actual size only) |
 | `capacity` | 429 | 503 | yes | Queue saturated |
-| `quota_exceeded` | 429 | (new) | yes | Per-principal quota |
+| `quota_exceeded` | 429 | 503 `capacity` | yes | Per-principal quota. 1.0 had no quota code: a 1.0 client gets 503 `capacity` (`legacy_conditions`) |
 | `runtime_unavailable` | 503 | 503 | yes | Storage or dependency outage |
 | `recovery_unavailable` | 503 | 503 | yes | Retrieve cannot read a stored original |
 | `deadline` | 504 | 504 | yes | Server work exceeded its deadline |
@@ -246,11 +285,31 @@ on every 429 and 503, in both modes.
 | Slow request body | 408 `request_timeout` | 413 `payload_limit` |
 | Retrieve `limit` < 4 or > `page_bytes` | 400 `invalid_range` | 413 `payload_limit` |
 | No queue slot before the deadline | 429 `capacity` | 504 `deadline` |
+| Principal over `quota_requests_per_minute` | 429 `quota_exceeded` | 503 `capacity` |
 | Malformed `recovery_binding` | 400 `invalid_request` | 503 `recovery_unavailable` |
 | Optimize: total saving ≤ overhead | 200 plan, reason `not_smaller` | 503 `not_smaller` |
 | Optimize: stored plan/choice unreadable | 200 plan, reason `cache_state_unavailable` | 503 same code |
-| Optimize: recovery store unusable | 200 plan, reason `recovery_unavailable` | 503 same code |
+| Optimize: a concurrently published choice's original unreadable (a lost original is otherwise re-sealed from the request, or skips only its segment) | 200 plan, reason `recovery_unavailable` | 503 same code |
 | Optimize: store capacity reached | 200 plan, reason `capacity` | 503 `capacity` |
+
+**Exception: an unreadable original found before the write.** This is the
+one optimize outcome that does not answer as 1.0 did, in either mode. When a
+choice the server read before its write transaction names an original it can
+no longer read, 1.0 answered 503 `recovery_unavailable` for the whole
+request. Now:
+
+- An original this store held (lost, or sealed with a key the runtime can no
+  longer open) is stored again from the request's own copy, verified against
+  the choice's digest, and the plan proceeds.
+- A protocol 1.0 original that CCR no longer holds leaves only its segment
+  unreplaced, with skip reason `recovery_unavailable`. The server answers the
+  rest of the request as usual: a 200 plan, `bypassed` when that segment was
+  the only candidate.
+
+A 1.0 client already accepts both answers: a 200 plan, and
+`recovery_unavailable` as a segment's skip reason (1.0 sent it for a segment
+without a recovery binding). The `recovery_unavailable` row above, a choice
+another writer published concurrently, keeps the 1.0 answer.
 
 **Decisions are 200.** Under `http_status_v2`, an optimize outcome that is a
 decision about the content is a 200 plan with `status: "bypassed"`,
@@ -451,7 +510,12 @@ window of 20 outcomes, 10 failures, 30 000 ms open.
   Any other outcome closes it and resets the counters and the window.
 - A call consults the breaker immediately before its first network request and
   records exactly one outcome after its last. A call that bypasses locally
-  before any I/O neither consults nor records.
+  before any I/O neither consults nor records. A call that joined another
+  call's shared capabilities fetch (§5) records nothing for that fetch; if the
+  fetch failed, the call ends there and records nothing at all.
+- An admitted call that ends with no outcome of its own (it only waited on
+  another call's fetch, or its caller aborted it) records nothing, but in
+  half-open it frees the probe slot so the next call can probe.
 - Retrieve, receipts and delete neither consult nor feed the breaker.
 - `now` is a monotonic clock, for the breaker, `Retry-After` windows and the
   capabilities TTL alike: a wall-clock step (NTP, VM resume) never holds the
@@ -479,11 +543,12 @@ Vectors: `breaker_sequences` (`local` = bypass before I/O).
 
 **Server queues.**
 
-- optimize, receipts and sessions/delete share a queue of
-  `limits.queue_depth` slots (default 16) and the `deadline_ms` budget.
-- retrieve has its own queue, `limits.retrieve_queue_depth` (default 16), and
-  its own `retrieve_deadline_ms` (default 5000). It MUST NOT hold the metadata
-  writer while reading an original.
+- optimize and receipts share a queue of `limits.queue_depth` slots
+  (default 16) and the `deadline_ms` budget.
+- retrieve and sessions/delete share their own queue,
+  `limits.retrieve_queue_depth` (default 16), and their own
+  `retrieve_deadline_ms` (default 5000), the deadline clients use for both.
+  Retrieve MUST NOT hold the metadata writer while reading an original.
 - `capabilities` is served from memory and is not queued.
 
 **Retry-After.** After an outcome with `retry_after_ms > 0`, the client MUST
@@ -572,10 +637,22 @@ client.
 - **Originals** are stored per authority. They are encrypted at rest when a key
   is configured, and they never outlive their scope. An original written by an
   optimize that did not publish a plan (aborted, `not_smaller`, error) MUST NOT
-  persist.
+  persist. When a reused choice's stored original is missing or cannot be
+  opened (for example sealed under a rotated-away key), an optimize that sends
+  the same content, verified against the choice's `sha256`, stores it again;
+  the segment is replaced as usual rather than bypassed.
+- **Plans** are kept for idempotent replay (same `idempotency_key` and request
+  body) for `min(900 s, retention_seconds)`: long enough for an SDK retry
+  within its deadline and a framework retry after a provider timeout. A later
+  request with the same key is planned afresh and, because choices persist,
+  gets the same replacement bytes. The same key with a different body while
+  the plan is kept is 409 `identity_conflict`.
 - **`sessions/delete`**
-  - Synchronously deletes every scope, choice, grant, plan and original of the
-    request's authority.
+  - Synchronously deletes every scope, choice, grant, plan, receipt and
+    original of the request's authority. It runs on the retrieve queue and
+    deadline (§10). The revocation commits first, so every later use answers
+    410 at once however large the session; the content then goes in bounded
+    batches, each its own transaction.
   - Answers 200 `{"schema_version":1,"status":"revoked","originals_deleted":true,"deleted":{"scopes","choices","grants","originals"}}`.
     This shape goes to every client; 1.0 clients ignore the body.
   - `originals_deleted` is `false` when the authority holds grants a 1.0
@@ -584,15 +661,25 @@ client.
     them. It stays `false` for such an authority on a retried delete and after
     a sweep.
   - Is idempotent: an unknown scope answers the same shape with zero counts.
-  - If deletion fails, the answer is 503, never a success.
+    The counts cover what this call removed, so a retry of a partly finished
+    delete reports only the remainder. The expiry sweep may purge part of a
+    delete's content between its batches; the call does not count that part,
+    so its counts can be lower than what the session held.
+  - If deletion fails, including a storage write conflict, the answer is 503
+    `runtime_unavailable` (or 504 `deadline` when it ran out of time), never a
+    success and never 409. A retry resumes where it stopped; the expiry sweep
+    finishes a delete nobody retries.
   - Later use of the scope answers 410 `deleted` for the grace period.
   - Against a 1.0 runtime, clients surface `originals_deleted: false` as
     received.
 - **Receipts** MUST NOT create per-call rows that outlive `retention_seconds`.
   Servers SHOULD aggregate into per-(authority, UTC hour, `event_kind`)
   counters with token sums, deduplicating `(logical_call_id, attempt_id,
-  event_kind)` within retention. The body limit is `limits.receipt_bytes`
-  (413 above it). The response is always
+  event_kind)` within retention. The first write wins: a retry of the same
+  triple, even with a different body, answers the same success and changes
+  nothing. A receipt for a scope revoked by `sessions/delete` is 410
+  `deleted` and stores nothing. The body limit is `limits.receipt_bytes`
+  (413 above it). The success response is always
   `{"schema_version":1,"status":"recorded","basis":"client_observed","verified_saved_usd":0}`.
 
 ## 13. Capabilities limits (K12)
@@ -614,8 +701,13 @@ otherwise. A key that does not apply is omitted, never sent as 0 or null.
 | `receipt_bytes` | 16 384 | receipt cap |
 | `quota_requests_per_minute` | omitted = unlimited | informational, per principal |
 
-Top level: `max_retention_seconds` (§12). Clients fill absent 1.1 keys with the
-defaults above (`capabilities_parsing` → `limits`).
+Top level: `max_retention_seconds` (§12). Clients fill an absent
+`retrieve_deadline_ms`, `max_segments`, `max_manifest_items` or
+`receipt_bytes` with the default above. The informational keys
+(`queue_depth`, `retrieve_queue_depth`, `quota_requests_per_minute`) and
+`max_retention_seconds` stay null when absent: their defaults describe the
+reference server, and a client does not act on them (`capabilities_parsing` →
+`limits`).
 
 ## 14. Observability (K9)
 
@@ -646,7 +738,9 @@ exception MUST NOT affect the call. `no_candidate` emits an event too.
 
 **Warn-once line** (§8). Both SDKs MUST log exactly
 `Caveman middleware passed content through unchanged: adapter=<id or -> reason=<code>`;
-any extra field follows as ` key=value`.
+any extra field follows as ` key=value`. The one exception is
+`version_unverified`, whose call proceeds: its line is
+`Caveman middleware is running on an unverified framework version: adapter=<id or -> reason=version_unverified`.
 
 **OpenTelemetry** is opt-in. The SDK never imports OTel unless the caller
 supplies a tracer and/or meter.
@@ -676,8 +770,10 @@ supplies a tracer and/or meter.
   most 256 chars, e.g. `caveman-sdk-typescript/1.2.0` or
   `caveman-sdk-python/1.2.0`; adapters MAY append their own. Servers log it and
   MUST NOT branch on it.
-- `traceparent` and `tracestate` (W3C): the active trace context whenever one
-  is available.
+- `traceparent` and `tracestate` (W3C): sent only when the caller supplied a
+  tracer. They carry the SDK's own CLIENT span for the request (a child of the
+  active context), so runtime spans nest under it. Without a tracer the SDK
+  sends no trace headers, even if the application has an active context.
 
 **Server metrics** (SHOULD, Prometheus text format with HELP/TYPE):
 
@@ -763,6 +859,10 @@ would feed the breaker.
   - adding a required request field;
   - sending 1.0 clients a transform, `limits` value or status they reject;
   - changing an existing code's status without negotiation.
+- **Adding a response field is additive** for clients, which ignore unknown
+  response fields (§4) and MUST NOT validate responses against the closed
+  JSON Schemas. The schemas then gain the field in the same release, because
+  they describe exactly what a server of that version emits.
 - **N-1 both directions.** A runtime MUST serve clients of the previous minor
   protocol with that protocol's shapes and statuses: today, protocol 1.0
   clients (SDK 1.1.0, middleware `0.1.0-alpha.2` / `0.1.0a1`) via the legacy

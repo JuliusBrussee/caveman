@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-support.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/middleware-support.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -48,10 +48,10 @@
       "pattern": "^(?:@[a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+$"
     },
     "version": {
-      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "middleware-common.schema.json#/$defs/token"
     },
     "method": {
-      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "middleware-common.schema.json#/$defs/token"
     },
     "runtime_protocol": {
       "const": 1
@@ -92,7 +92,7 @@
             "maxLength": 1024
           },
           "sha256": {
-            "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/sha256"
+            "$ref": "middleware-common.schema.json#/$defs/sha256"
           }
         }
       },
@@ -111,7 +111,7 @@
       "maxLength": 256
     },
     "adapter_version": {
-      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "middleware-common.schema.json#/$defs/token"
     },
     "provider": {
       "type": "string",

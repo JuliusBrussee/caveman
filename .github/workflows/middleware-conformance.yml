@@ -129,7 +129,7 @@ jobs:
           python-version: "3.13"
       - run: pnpm install --frozen-lockfile --filter "@caveman-ai/middleware..." --filter @caveman-ai/contracts
       - run: pnpm --filter "@caveman-ai/middleware..." build
-      # gh downloads the release asset; the repo's installer verifies its signed checksum.
+      # gh downloads the release asset; skew.mjs verifies its signed checksum manifest and digest.
       - run: node tests/middleware-e2e/skew.mjs runtime
         env:
           GH_TOKEN: ${{ github.token }}

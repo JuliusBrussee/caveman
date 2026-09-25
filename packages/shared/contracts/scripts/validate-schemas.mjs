@@ -13,15 +13,25 @@ if (files.length === 0) {
   throw new Error("no JSON schemas found");
 }
 
+// $ids pin the immutable release tag of this package version, so a version bump
+// that forgets them fails here. Cross-schema $refs stay relative so tools that
+// load from the package directory resolve locally instead of fetching.
+const { version } = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
+const SCHEMA_BASE = `https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v${version}/packages/shared/contracts/schemas/`;
 const schemas = [];
 for (const file of files) {
   const schema = JSON.parse(await readFile(path.join(schemaRoot, file), "utf8"));
   if (schema.$schema !== "https://json-schema.org/draft/2020-12/schema") {
     throw new Error(`${file}: unsupported or missing $schema`);
   }
-  if (typeof schema.$id !== "string" || schema.$id.length === 0) {
-    throw new Error(`${file}: missing $id`);
-  }
+  if (schema.$id !== SCHEMA_BASE + file) throw new Error(`${file}: $id must be ${SCHEMA_BASE + file}`);
+  (function walk(node) {
+    if (!node || typeof node !== "object") return;
+    if (typeof node.$ref === "string" && /^[a-z][a-z0-9+.-]*:/i.test(node.$ref)) {
+      throw new Error(`${file}: $ref ${node.$ref} must be relative`);
+    }
+    for (const value of Object.values(node)) walk(value);
+  })(schema);
   schemas.push(schema);
 }
 
@@ -44,9 +54,7 @@ if (fixtureFiles.length !== 2) {
 const fixtures = await Promise.all(
   fixtureFiles.map(async (file) => JSON.parse(await readFile(path.join(agentFixtureRoot, file), "utf8"))),
 );
-const validateAdapterConformance = ajv.getSchema(
-  "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/adapter-conformance.schema.json",
-);
+const validateAdapterConformance = ajv.getSchema(`${SCHEMA_BASE}adapter-conformance.schema.json`);
 if (!validateAdapterConformance) {
   throw new Error("adapter conformance schema failed to compile");
 }
@@ -82,10 +90,6 @@ if (claude.failure_fallback !== "original") {
   throw new Error("unknown adapter failure must preserve original bytes");
 }
 
-const SCHEMA_BASE = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/";
-for (const [file, schema] of files.map((file, i) => [file, schemas[i]])) {
-  if (schema.$id !== SCHEMA_BASE + file) throw new Error(`${file}: $id must be ${SCHEMA_BASE + file}`);
-}
 function check(schemaName, value, label) {
   const validate = ajv.getSchema(`${SCHEMA_BASE}middleware-${schemaName}.schema.json`);
   if (!validate?.(value)) throw new Error(`middleware ${label}: ${ajv.errorsText(validate?.errors)}`);
