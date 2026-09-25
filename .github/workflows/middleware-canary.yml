@@ -1,0 +1,73 @@
+name: middleware-canary
+
+# Nightly: the TypeScript middleware suite against the LATEST release of every
+# framework it adapts, so an upstream release that breaks an adapter or leaves
+# the supported range shows up as an issue instead of a user report. The
+# pinned-version suite in engine-ci stays the merge gate.
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: middleware-canary
+  cancel-in-progress: true
+
+jobs:
+  latest-frameworks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - name: Install the latest release of every adapted framework
+        working-directory: packages/middleware/typescript
+        run: |
+          set -euo pipefail
+          # The framework list is the package's tested-version map (tooling such
+          # as typescript and esbuild stays pinned).
+          mapfile -t frameworks < <(node -p 'Object.keys(require("./package.json").testedFrameworkVersions ?? {}).join("\n")')
+          [[ "${#frameworks[@]}" -gt 0 && -n "${frameworks[0]}" ]] || { echo "package.json has no testedFrameworkVersions" >&2; exit 1; }
+          pnpm add --save-dev "${frameworks[@]/%/@latest}"
+          pnpm list --depth 0 "${frameworks[@]}"
+          # Keep the manifest at its committed pins so the pin-alignment test
+          # still checks the source; node_modules now holds the latest releases.
+          git checkout -- package.json "$GITHUB_WORKSPACE/pnpm-lock.yaml"
+      - run: pnpm --filter @caveman-ai/sdk run build
+      - run: pnpm --filter @caveman-ai/middleware test
+        env:
+          CAVEMAN_REQUIRE_FRAMEWORKS: "1"
+
+  # Separate job: code from upstream @latest never runs with issue-write
+  # credentials, and there is no checkout to tamper with.
+  report:
+    needs: latest-frameworks
+    if: always() && github.event_name == 'schedule' && needs.latest-frameworks.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the canary issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="middleware-canary: TypeScript adapters fail against latest framework releases"
+          body="Nightly canary failed: $RUN_URL"$'\n\n'"The pinned suite in engine-ci is unaffected. Check the run for the framework that moved, then widen the tested range or fix the adapter."
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n1)"
+          if [[ -n "$number" ]]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "Still failing: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

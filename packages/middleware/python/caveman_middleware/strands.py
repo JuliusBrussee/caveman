@@ -6,41 +6,40 @@ import json
 import uuid
 import weakref
 
+from ._versions import framework_import_failed
+
 try:
     from strands import tool
     from strands.models.model import Model
     from strands.plugins import Plugin
     from strands.types.tools import ToolContext
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[strands] to use the Strands adapter") from error
+except ImportError as error:
+    framework_import_failed("strands", error, "Install caveman-middleware[strands] to use the Strands adapter")
 
-from caveman_cloud.middleware import Adapter, Candidate, MiddlewareRuntime, Scope
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, ensure_async
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION, RECOVERY_SCHEMA
+from ._guard import fail_open, recovery_failed, recovery_name_conflict, resolve_scope
 from ._native import Attempt, manifest, owner, plain, replace_path
-from ._versions import matches_framework
+from ._versions import VERSION, family_gate, installed_version
 from ._usage import usage
 
-ADAPTER = Adapter("strands", "0.1.0", "1.55.0", "strands-content-v1")
+ADAPTER = Adapter("strands", VERSION, installed_version("strands-agents") or "unknown", "strands-content-v1")
 
 
-def _scope(source, state):
-    scope = source if isinstance(source, Scope) else source(state or {})
-    if not isinstance(scope, Scope):
-        raise TypeError("Strands scope resolver must return a Caveman Scope")
-    return scope
+def _scope(runtime, source, state):
+    return resolve_scope(runtime, ADAPTER.id, source, state or {})
 
 
 class CavemanModel(Model):
-    """Public native model delegate. A model wrapper alone is recovery-free."""
-    def __init__(self, model, *, runtime, scope):
+    """Public native model delegate. A model wrapper alone is record-only (``recovery_unbound``
+    in compress mode); ``with_caveman_agent`` registers recovery and compresses."""
+    def __init__(self, model, *, runtime, scope, accept_framework_version=False):
         if not isinstance(model, Model):
             raise TypeError("Expected a native Strands Model")
         self.model = model
-        self.runtime = runtime.as_async() if isinstance(runtime, MiddlewareRuntime) else runtime
+        self.runtime = ensure_async(runtime)
         self.scope, self.registration = scope, None
-        self.version_supported = matches_framework(("strands-agents", "1.55", "2"))
-        if not self.version_supported and self.runtime.mode != "off":
-            self.runtime.decline("unsupported_version")
+        self.version_supported = family_gate(self.runtime, "strands", ADAPTER.id, accept_framework_version)
 
     @property
     def stateful(self):
@@ -55,7 +54,15 @@ class CavemanModel(Model):
     async def count_tokens(self, *args, **kwargs):
         return await self.model.count_tokens(*args, **kwargs)
 
-    async def _prepare(self, messages, tool_specs, system_prompt, *, tool_choice=None, system_prompt_content=None, invocation_state=None, structured=False):
+    async def _prepare(self, messages, *args, **kwargs):
+        try:
+            return await self._project(messages, *args, **kwargs)
+        except Exception as error:  # Decision 4: the native model still receives the caller's messages
+            return messages, None if owner.get() is not None else Attempt(
+                self.runtime, None, str(uuid.uuid4()), str(uuid.uuid4()), passive=True,
+                reason=fail_open(self.runtime, ADAPTER.id, error), adapter=ADAPTER.id)
+
+    async def _project(self, messages, tool_specs, system_prompt, *, tool_choice=None, system_prompt_content=None, invocation_state=None, structured=False):
         if owner.get() is not None:
             return messages, None
 
@@ -67,16 +74,18 @@ class CavemanModel(Model):
         if not self.version_supported:
             return passive("unsupported_version")
         if self.stateful:
-            return passive("opaque_context")
+            return passive("provider_state_retained")  # the provider keeps the conversation
         prefix = system_prompt_content if system_prompt_content is not None else [{"text": system_prompt}] if system_prompt else []
         context = manifest([{"system": prefix}, *messages])
         if context is None:
             return passive("unsupported_shape")
-        scope = _scope(self.scope, invocation_state)
+        scope = _scope(self.runtime, self.scope, invocation_state)
+        if scope is None:
+            return passive("invalid_scope")
         binding, overhead = None, None
         if not structured and tool_choice in (None, {"auto": {}}) and self.registration and self.registration.bound(tool_specs):
             binding = self.runtime.recovery(scope)
-            overhead = json.dumps(self.registration.recovery_tool.tool_spec, ensure_ascii=False, separators=(",", ":"))
+            overhead = json.dumps(self.registration.recovery_tool.tool_spec, ensure_ascii=False, separators=(",", ":")) if binding else None
         names = {p["toolUse"]["toolUseId"]: p["toolUse"]["name"] for m in messages if plain(m) for p in m.get("content", [])
             if plain(p) and plain(p.get("toolUse")) and type(p["toolUse"].get("toolUseId")) is str and type(p["toolUse"].get("name")) is str}
         candidates, paths = [], {}
@@ -96,7 +105,7 @@ class CavemanModel(Model):
         config = self.get_config()
         model_id = config.get("model_id") if plain(config) else None
         attempt = Attempt(self.runtime, scope, str(uuid.uuid4()), str(uuid.uuid4()), adapter=ADAPTER.id)
-        result = await self.runtime.optimize(scope=scope, adapter=ADAPTER, manifest=context, candidates=candidates, binding=binding,
+        result = await self.runtime.optimize(scope=scope, adapter=ADAPTER, manifest=context, sequence=context.sequence, candidates=candidates, binding=binding,
             recovery_overhead_text=overhead, model={"provider": type(self.model).__name__, "id": model_id, "protocol": "strands"} if isinstance(model_id, str) else None,
             logical_call_id=attempt.logical_call_id, attempt_id=attempt.attempt_id)
         attempt.optimization = result if not result.replacements else None
@@ -143,15 +152,12 @@ class CavemanModel(Model):
                 await iterator.aclose()
 
     async def stream(self, messages, tool_specs=None, system_prompt=None, *, tool_choice=None, system_prompt_content=None, invocation_state=None, cancel_signal=None, **kwargs):
+        # A call cancelled before dispatch sent nothing: no decision to report.
         if cancel_signal is not None and cancel_signal.is_set():
-            if owner.get() is None:
-                self.runtime.report(None, reason="cancelled", adapter=ADAPTER.id)
             raise asyncio.CancelledError
         view, attempt = await self._prepare(messages, tool_specs, system_prompt, tool_choice=tool_choice,
             system_prompt_content=system_prompt_content, invocation_state=invocation_state)
         if cancel_signal is not None and cancel_signal.is_set():
-            if owner.get() is None:
-                self.runtime.report(None, reason="cancelled", adapter=ADAPTER.id)
             raise asyncio.CancelledError
         native = self.model.stream(view, tool_specs, system_prompt, tool_choice=tool_choice,
             system_prompt_content=system_prompt_content, invocation_state=invocation_state, cancel_signal=cancel_signal, **kwargs).__aiter__()
@@ -174,10 +180,14 @@ class _Registration(Plugin):
 
         @tool(name="caveman_retrieve", description=RECOVERY_DESCRIPTION, inputSchema={"json": RECOVERY_SCHEMA}, context=True)
         async def recover(handle: str, tool_context: ToolContext, offset: int = 0, limit: int = 262144, query: str = ""):
-            if tool_context.cancel_signal.is_set():
+            cancel = getattr(tool_context, "cancel_signal", None)  # strands 1.43's ToolContext has none
+            if cancel is not None and cancel.is_set():
                 raise asyncio.CancelledError
-            scope = _scope(model.scope, tool_context.invocation_state)
-            result = await model.runtime.retrieve(scope, handle=handle, offset=offset, limit=limit, query=query)
+            try:
+                scope = _scope(model.runtime, model.scope, tool_context.invocation_state)
+                result = await model.runtime.retrieve(scope, handle=handle, offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:  # Strands' native error ToolResult
+                return {"status": "error", "content": [{"text": json.dumps(recovery_failed(ADAPTER.id, error))}]}
             return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
         self.recovery_tool = recover
 
@@ -193,18 +203,26 @@ class _Registration(Plugin):
                 and any(s == self.recovery_tool.tool_spec for s in specs))
 
 
-def with_caveman_model(model, *, runtime, scope):
-    return CavemanModel(model, runtime=runtime, scope=scope)
+def with_caveman_model(model, *, runtime, scope, accept_framework_version=False):
+    """Record-only: no recovery executor (``recovery_unbound`` in compress mode)."""
+    return CavemanModel(model, runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
 
 
-def with_caveman_agent(options: dict, *, runtime, scope) -> dict:
-    """Return native Agent constructor options; Strands keeps its own loop."""
-    model = CavemanModel(options["model"], runtime=runtime, scope=scope)
-    if runtime.mode == "off" or not model.version_supported:
+def with_caveman_agent(options: dict, *, runtime, scope, accept_framework_version=False) -> dict:
+    """Return native Agent constructor options; Strands keeps its own loop.
+
+    Compresses. A host tool already named ``caveman_retrieve`` keeps its name
+    and recovery stays off (``recovery_name_conflict``).
+    """
+    model = CavemanModel(options["model"], runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
+    if model.runtime.mode == "off" or not model.version_supported:
         return {**options, "model": model}
     registration = _Registration(model)
     model.registration = registration
     tools = list(options.get("tools", []))
-    if runtime.mode == "compress" and not any(getattr(t, "tool_name", None) == "caveman_retrieve" for t in tools):
-        tools.append(registration.recovery_tool)
+    if model.runtime.mode == "compress":
+        if any(getattr(t, "tool_name", None) == "caveman_retrieve" for t in tools):
+            recovery_name_conflict(model.runtime, ADAPTER.id)
+        else:
+            tools.append(registration.recovery_tool)
     return {**options, "model": model, "tools": tools, "plugins": [*options.get("plugins", []), registration]}

@@ -5,29 +5,27 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
 func TestMiddlewareQuotaCountersPersistAndRollback(t *testing.T) {
+	eachMiddlewareBackend(t, testMiddlewareQuotaCountersPersistAndRollback)
+}
+
+func testMiddlewareQuotaCountersPersistAndRollback(t *testing.T, s middlewareBackend) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "store.db")
-	s, err := Open(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if err = s.InitMiddleware(ctx); err != nil {
-		t.Fatal(err)
-	}
-	err = s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
+	err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
 		if err := tx.SaveScope(MiddlewareScope{ID: "scope", Authority: "auth", Manifest: []byte("[]"), ExpiresAt: 100}); err != nil {
 			return err
 		}
 		if err := tx.SaveChoice("scope", "choice", "grant", "ccr", make([]byte, 256)); err != nil {
 			return err
 		}
-		if err := tx.SavePlan("scope", "plan", "hash", make([]byte, 128)); err != nil {
+		if err := tx.SavePlan("scope", "plan", "hash", make([]byte, 128), 1<<40); err != nil {
 			return err
 		}
 		if err := tx.Receipt("auth", "receipt", "hash", make([]byte, 64), 1<<40); err != nil {
@@ -42,10 +40,10 @@ func TestMiddlewareQuotaCountersPersistAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	check := func(rows, size int) {
+	check := func(rows, size int64) {
 		t.Helper()
-		var gotRows, gotSize int
-		if err := s.db.QueryRow(`SELECT rows,bytes FROM middleware_usage`).Scan(&gotRows, &gotSize); err != nil {
+		gotRows, gotSize, err := s.MiddlewareUsage(ctx)
+		if err != nil {
 			t.Fatal(err)
 		}
 		if gotRows != rows || gotSize != size {
@@ -63,14 +61,7 @@ func TestMiddlewareQuotaCountersPersistAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(5, 514)
-	other, err := Open(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close()
-	if err := other.InitMiddleware(ctx); err != nil {
-		t.Fatal(err)
-	}
+	other := s.reopen(t)
 	if err := other.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
 		credit, err := tx.CreditOriginal("auth", "original")
 		if credit {
@@ -84,10 +75,12 @@ func TestMiddlewareQuotaCountersPersistAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(5, 515)
-	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { return tx.Delete("auth", 50) }); err != nil {
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Delete("auth", 50); return err }); err != nil {
 		t.Fatal(err)
 	}
-	check(4, 128) // scope/grant tombstones, receipt metadata, original credit.
+	// Only the scope and grant tombstones remain: revocation deletes the
+	// authority's plans, receipts and originals (credits included).
+	check(2, 0)
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
 		body, handle, expiry, err := tx.Grant("auth", "grant")
 		if err == nil && (len(body) != 0 || handle != "" || expiry > 0) {
@@ -100,15 +93,11 @@ func TestMiddlewareQuotaCountersPersistAndRollback(t *testing.T) {
 }
 
 func TestMiddlewareExpiryReclaimsPayloadAndKeepsTypedTombstone(t *testing.T) {
-	s, err := Open(filepath.Join(t.TempDir(), "store.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	eachMiddlewareBackend(t, testMiddlewareExpiryReclaimsPayloadAndKeepsTypedTombstone)
+}
+
+func testMiddlewareExpiryReclaimsPayloadAndKeepsTypedTombstone(t *testing.T, s middlewareBackend) {
 	ctx := context.Background()
-	if err := s.InitMiddleware(ctx); err != nil {
-		t.Fatal(err)
-	}
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
 		if err := tx.SaveScope(MiddlewareScope{ID: "expired", Authority: "auth", Manifest: []byte("[]"), ExpiresAt: 10}); err != nil {
 			return err
@@ -119,27 +108,31 @@ func TestMiddlewareExpiryReclaimsPayloadAndKeepsTypedTombstone(t *testing.T) {
 		if err := tx.SaveChoice("expired", "choice", "grant", "ccr", []byte("replacement")); err != nil {
 			return err
 		}
-		if err := tx.SavePlan("expired", "plan", "digest", []byte("plan")); err != nil {
+		if err := tx.SavePlan("expired", "plan", "digest", []byte("plan"), 1<<40); err != nil {
 			return err
 		}
 		if _, err := tx.CreditOriginal("auth", "shared-original"); err != nil {
 			return err
 		}
-		return tx.Expire(11)
+		_, err := tx.Expire(11)
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var size, rows int
-	if err := s.db.QueryRow(`SELECT rows,bytes FROM middleware_usage`).Scan(&rows, &size); err != nil {
+	rows, size, err := s.MiddlewareUsage(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	// Two scope rows (one live, one tombstoned) and the original still credited
-	// to the authority the live scope shares; every payload-bearing row is gone.
-	if rows != 3 {
-		t.Fatalf("expired rows=%d, want scopes plus the live authority's original", rows)
+	// Two scope rows (one live, one tombstoned), the elapsed choice's
+	// content-free tombstone (its grant answers "expired" until grace ends) and
+	// the original still credited to the authority the live scope shares; every
+	// payload is gone, the elapsed scope's manifest included (that is what marks
+	// it purged).
+	if rows != 4 {
+		t.Fatalf("expired rows=%d, want scopes, the choice tombstone and the live authority's original", rows)
 	}
-	if size != 4+64 {
-		t.Fatalf("expired payload bytes=%d, want the two empty manifests plus one credit", size)
+	if size != 2+64 {
+		t.Fatalf("expired payload bytes=%d, want the live scope's manifest plus one credit", size)
 	}
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
 		credit, err := tx.CreditOriginal("auth", "shared-original")
@@ -161,7 +154,7 @@ func TestMiddlewareExpiryReclaimsPayloadAndKeepsTypedTombstone(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { return tx.Expire(11 + MiddlewareGraceSeconds) }); err != nil {
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(11 + MiddlewareGraceSeconds); return err }); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
@@ -181,31 +174,26 @@ func TestMiddlewareExpiryReclaimsPayloadAndKeepsTypedTombstone(t *testing.T) {
 // 100,000-row admission cap stayed tripped forever once a few thousand sessions
 // had elapsed. Fill past the cap with elapsed scopes and prove expiry drains it.
 func TestMiddlewareExpiryReclaimsCapacityFromElapsedScopes(t *testing.T) {
-	s, err := Open(filepath.Join(t.TempDir(), "store.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	eachMiddlewareBackend(t, testMiddlewareExpiryReclaimsCapacityFromElapsedScopes)
+}
+
+func testMiddlewareExpiryReclaimsCapacityFromElapsedScopes(t *testing.T, s middlewareBackend) {
 	ctx := context.Background()
-	if err := s.InitMiddleware(ctx); err != nil {
-		t.Fatal(err)
-	}
 	const scopes, choices = 300, 100200
 	seed := []string{
 		fmt.Sprintf(`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v<%d)
-INSERT INTO middleware_scopes(id,authority,manifest,sequence,expires_at) SELECT 'scope-'||v,'auth-'||(v%%8),x'',0,1 FROM n`, scopes-1),
+INSERT INTO middleware_scopes(id,authority,manifest,sequence,expires_at) SELECT 'scope-'||v,'auth-'||(v%%8),'',0,1 FROM n`, scopes-1),
 		fmt.Sprintf(`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v<%d)
-INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) SELECT 'scope-'||(v%%%d),'choice-'||v,x'',   'grant-'||v,'' FROM n`, choices-1, scopes),
-		`INSERT INTO middleware_receipts(authority,id,digest,payload,expires_at) VALUES ('auth-0','receipt','hash',x'',1)`,
+INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) SELECT 'scope-'||(v%%%d),'choice-'||v,'',   'grant-'||v,'' FROM n`, choices-1, scopes),
+		`INSERT INTO middleware_receipts(authority,id,digest,payload,expires_at) VALUES ('auth-0','receipt','hash','',1)`,
 		`INSERT INTO middleware_originals(authority,digest) VALUES ('auth-0','original')`,
 	}
 	for _, statement := range seed {
-		if _, err := s.db.ExecContext(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
+		s.exec(t, statement)
 	}
 	admit := func() error {
 		return s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
+			tx.Limits = MiddlewareLimits{Rows: 100000}
 			return tx.SaveScope(MiddlewareScope{ID: "fresh", Authority: "fresh", Manifest: []byte("[]"), ExpiresAt: 1 << 40})
 		})
 	}
@@ -216,12 +204,12 @@ INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) SELECT 'sco
 	// one bounded batch; a wedged store recovers over a handful of requests.
 	now := 1 + MiddlewareGraceSeconds + 1
 	for pass := 0; pass < scopes/128+3; pass++ {
-		if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { return tx.Expire(now) }); err != nil {
+		if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(now); return err }); err != nil {
 			t.Fatal(err)
 		}
 	}
-	var rows, size int64
-	if err := s.db.QueryRow(`SELECT rows,bytes FROM middleware_usage`).Scan(&rows, &size); err != nil {
+	rows, size, err := s.MiddlewareUsage(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if rows != 0 || size != 0 {
@@ -236,15 +224,11 @@ INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) SELECT 'sco
 // the same window an elapsed scope's tombstone gets, and only then reclaim:
 // neither earlier (the replay guarantee) nor never (the capacity leak this fixes).
 func TestMiddlewareRevocationTombstoneSurvivesGraceThenReclaims(t *testing.T) {
-	s, err := Open(filepath.Join(t.TempDir(), "store.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	eachMiddlewareBackend(t, testMiddlewareRevocationTombstoneSurvivesGraceThenReclaims)
+}
+
+func testMiddlewareRevocationTombstoneSurvivesGraceThenReclaims(t *testing.T, s middlewareBackend) {
 	ctx := context.Background()
-	if err := s.InitMiddleware(ctx); err != nil {
-		t.Fatal(err)
-	}
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
 		if err := tx.SaveScope(MiddlewareScope{ID: "revoked", Authority: "auth", Manifest: []byte("[]"), ExpiresAt: 1 << 40}); err != nil {
 			return err
@@ -252,11 +236,11 @@ func TestMiddlewareRevocationTombstoneSurvivesGraceThenReclaims(t *testing.T) {
 		if err := tx.SaveChoice("revoked", "choice", "grant", "ccr", []byte("replacement")); err != nil {
 			return err
 		}
-		return tx.SavePlan("revoked", "plan", "digest", []byte("plan"))
+		return tx.SavePlan("revoked", "plan", "digest", []byte("plan"), 1<<40)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { return tx.Delete("auth", 100) }); err != nil {
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Delete("auth", 100); return err }); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
@@ -270,7 +254,7 @@ func TestMiddlewareRevocationTombstoneSurvivesGraceThenReclaims(t *testing.T) {
 	}
 	// One tick short of the grace deadline: the tombstone must still answer
 	// "deleted" rather than let a marker issued before the revocation lapse.
-	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { return tx.Expire(100 + MiddlewareGraceSeconds - 1) }); err != nil {
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(100 + MiddlewareGraceSeconds - 1); return err }); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
@@ -282,7 +266,7 @@ func TestMiddlewareRevocationTombstoneSurvivesGraceThenReclaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	// At the grace deadline: the tombstone, and only the tombstone, is gone.
-	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { return tx.Expire(100 + MiddlewareGraceSeconds) }); err != nil {
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(100 + MiddlewareGraceSeconds); return err }); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
@@ -299,31 +283,26 @@ func TestMiddlewareRevocationTombstoneSurvivesGraceThenReclaims(t *testing.T) {
 // from the trigger that mechanism never covered: revocation traffic alone, with
 // no scope ever elapsing, which used to be permanently invisible to Expire.
 func TestMiddlewareExpiryReclaimsCapacityFromRevokedScopes(t *testing.T) {
-	s, err := Open(filepath.Join(t.TempDir(), "store.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	eachMiddlewareBackend(t, testMiddlewareExpiryReclaimsCapacityFromRevokedScopes)
+}
+
+func testMiddlewareExpiryReclaimsCapacityFromRevokedScopes(t *testing.T, s middlewareBackend) {
 	ctx := context.Background()
-	if err := s.InitMiddleware(ctx); err != nil {
-		t.Fatal(err)
-	}
 	const scopes, choices = 300, 100200
 	seed := []string{
 		fmt.Sprintf(`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v<%d)
-INSERT INTO middleware_scopes(id,authority,manifest,sequence,expires_at) SELECT 'scope-'||v,'auth-'||(v%%8),x'',0,-1 FROM n`, scopes-1),
+INSERT INTO middleware_scopes(id,authority,manifest,sequence,expires_at) SELECT 'scope-'||v,'auth-'||(v%%8),'',0,-1 FROM n`, scopes-1),
 		fmt.Sprintf(`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v<%d)
-INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) SELECT 'scope-'||(v%%%d),'choice-'||v,x'',   'grant-'||v,'' FROM n`, choices-1, scopes),
-		`INSERT INTO middleware_receipts(authority,id,digest,payload,expires_at) VALUES ('auth-0','receipt','hash',x'',1)`,
+INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) SELECT 'scope-'||(v%%%d),'choice-'||v,'',   'grant-'||v,'' FROM n`, choices-1, scopes),
+		`INSERT INTO middleware_receipts(authority,id,digest,payload,expires_at) VALUES ('auth-0','receipt','hash','',1)`,
 		`INSERT INTO middleware_originals(authority,digest) VALUES ('auth-0','original')`,
 	}
 	for _, statement := range seed {
-		if _, err := s.db.ExecContext(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
+		s.exec(t, statement)
 	}
 	admit := func() error {
 		return s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
+			tx.Limits = MiddlewareLimits{Rows: 100000}
 			return tx.SaveScope(MiddlewareScope{ID: "fresh", Authority: "fresh", Manifest: []byte("[]"), ExpiresAt: 1 << 40})
 		})
 	}
@@ -334,12 +313,12 @@ INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) SELECT 'sco
 	// batched reclaim over a handful of passes, never one unbounded sweep.
 	now := 1 + MiddlewareGraceSeconds + 1
 	for pass := 0; pass < scopes/128+3; pass++ {
-		if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { return tx.Expire(now) }); err != nil {
+		if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(now); return err }); err != nil {
 			t.Fatal(err)
 		}
 	}
-	var rows, size int64
-	if err := s.db.QueryRow(`SELECT rows,bytes FROM middleware_usage`).Scan(&rows, &size); err != nil {
+	rows, size, err := s.MiddlewareUsage(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if rows != 0 || size != 0 {
@@ -365,15 +344,11 @@ INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) SELECT 'sco
 // payloads become collectable would collapse the revocation grace to zero on
 // this path while leaving it at a full week on the other.
 func TestMiddlewareRevokedGrantAnswersDeletedThroughItsGracePeriod(t *testing.T) {
-	s, err := Open(filepath.Join(t.TempDir(), "store.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	eachMiddlewareBackend(t, testMiddlewareRevokedGrantAnswersDeletedThroughItsGracePeriod)
+}
+
+func testMiddlewareRevokedGrantAnswersDeletedThroughItsGracePeriod(t *testing.T, s middlewareBackend) {
 	ctx := context.Background()
-	if err := s.InitMiddleware(ctx); err != nil {
-		t.Fatal(err)
-	}
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
 		if err := tx.SaveScope(MiddlewareScope{ID: "revoked", Authority: "auth", Manifest: []byte("[]"), ExpiresAt: 1 << 40}); err != nil {
 			return err
@@ -382,7 +357,7 @@ func TestMiddlewareRevokedGrantAnswersDeletedThroughItsGracePeriod(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { return tx.Delete("auth", 100) }); err != nil {
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Delete("auth", 100); return err }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -413,19 +388,19 @@ func TestMiddlewareRevokedGrantAnswersDeletedThroughItsGracePeriod(t *testing.T)
 
 	// Expire runs in front of every optimize request, so this is the very next
 	// thing that happens to the store in practice.
-	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { return tx.Expire(101) }); err != nil {
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(101); return err }); err != nil {
 		t.Fatal(err)
 	}
 	assertTypedDeleted(t, "after an Expire pass inside the grace period")
 
-	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { return tx.Expire(100 + MiddlewareGraceSeconds - 1) }); err != nil {
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(100 + MiddlewareGraceSeconds - 1); return err }); err != nil {
 		t.Fatal(err)
 	}
 	assertTypedDeleted(t, "one tick before the grace deadline")
 
 	// Past the deadline the row is reclaimed with the rest of the scope; that
 	// is the capacity leak this whole change exists to fix.
-	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { return tx.Expire(100 + MiddlewareGraceSeconds) }); err != nil {
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(100 + MiddlewareGraceSeconds); return err }); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
@@ -436,4 +411,282 @@ func TestMiddlewareRevokedGrantAnswersDeletedThroughItsGracePeriod(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A4: the purge batch used to be the first 128 elapsed scopes, and purged
+// scopes stayed elapsed for the whole grace period, so every pass reselected
+// the same 128 and the other scopes kept their payload until grace ended
+// (reviewer repro: 300 scopes, 50 passes, 172 choices and plans left).
+func TestMiddlewareExpiryPurgesEveryElapsedScopeInsideGrace(t *testing.T) {
+	eachMiddlewareBackend(t, testMiddlewareExpiryPurgesEveryElapsedScopeInsideGrace)
+}
+
+func testMiddlewareExpiryPurgesEveryElapsedScopeInsideGrace(t *testing.T, s middlewareBackend) {
+	ctx := context.Background()
+	const scopes = 300
+	for _, statement := range []string{
+		fmt.Sprintf(`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v<%d)
+INSERT INTO middleware_scopes(id,authority,manifest,sequence,expires_at,created_at) SELECT 'scope-'||v,'auth-'||v,'[]',0,10,1 FROM n`, scopes-1),
+		fmt.Sprintf(`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v<%d)
+INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) SELECT 'scope-'||v,'choice','a','grant-'||v,'' FROM n`, scopes-1),
+		fmt.Sprintf(`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v<%d)
+INSERT INTO middleware_plans(scope,id,digest,payload,expires_at) SELECT 'scope-'||v,'plan','d','a',%d FROM n`, scopes-1, int64(1)<<40),
+	} {
+		s.exec(t, statement)
+	}
+	for pass := 0; pass < 50; pass++ {
+		if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(11); return err }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	choices, plans := s.count(t, `SELECT count(*) FROM middleware_choices WHERE length(payload)>0`), s.count(t, `SELECT count(*) FROM middleware_plans`)
+	tombstones := s.count(t, `SELECT count(*) FROM middleware_scopes WHERE length(manifest)=0`)
+	if choices != 0 || plans != 0 || tombstones != scopes {
+		t.Fatalf("after 50 passes inside grace: choices=%d plans=%d tombstones=%d, want 0 0 %d", choices, plans, tombstones, scopes)
+	}
+}
+
+// A principal at its quota gets capacity; another principal is unaffected.
+func TestMiddlewarePrincipalQuotaIsolatesPrincipals(t *testing.T) {
+	eachMiddlewareBackend(t, testMiddlewarePrincipalQuotaIsolatesPrincipals)
+}
+
+func testMiddlewarePrincipalQuotaIsolatesPrincipals(t *testing.T, s middlewareBackend) {
+	ctx := context.Background()
+	save := func(principal, id string, manifest int) error {
+		return s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
+			tx.Principal, tx.Limits = principal, MiddlewareLimits{PrincipalRows: 2, PrincipalBytes: 100}
+			return tx.SaveScope(MiddlewareScope{ID: id, Authority: principal, Manifest: make([]byte, manifest), ExpiresAt: 1 << 40})
+		})
+	}
+	for _, id := range []string{"alice-1", "alice-2"} {
+		if err := save("alice", id, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := save("alice", "alice-3", 10); !errors.Is(err, ErrMiddlewareCapacity) {
+		t.Fatalf("row quota not enforced: %v", err)
+	}
+	if err := save("bob", "bob-1", 10); err != nil {
+		t.Fatalf("one principal's quota blocked another: %v", err)
+	}
+	if err := save("bob", "bob-2", 101); !errors.Is(err, ErrMiddlewareCapacity) {
+		t.Fatalf("byte quota not enforced: %v", err)
+	}
+	s.exec(t, `DELETE FROM middleware_scopes WHERE id='alice-1'`)
+	if err := save("alice", "alice-3", 10); err != nil {
+		t.Fatalf("deleted rows were not returned to the principal: %v", err)
+	}
+}
+
+func TestMiddlewareDeleteCountsAndRemovesOriginals(t *testing.T) {
+	eachMiddlewareBackend(t, testMiddlewareDeleteCountsAndRemovesOriginals)
+}
+
+func testMiddlewareDeleteCountsAndRemovesOriginals(t *testing.T, s middlewareBackend) {
+	ctx := context.Background()
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
+		tx.Principal = "alice"
+		if err := tx.SaveScope(MiddlewareScope{ID: "scope", Authority: "auth", Manifest: []byte("[]"), ExpiresAt: 1 << 40}); err != nil {
+			return err
+		}
+		if err := tx.SaveChoice("scope", "new", "grant-new", "", []byte("r")); err != nil {
+			return err
+		}
+		if err := tx.SaveChoice("scope", "legacy", "grant-legacy", "ccr_legacy", []byte("r")); err != nil {
+			return err
+		}
+		if _, err := tx.SaveOriginal("auth", "stored", []byte("original"), ""); err != nil {
+			return err
+		}
+		if _, err := tx.CreditOriginal("auth", "credit-only"); err != nil {
+			return err
+		}
+		if err := tx.SavePlan("scope", "plan", "d", []byte("p"), 1<<40); err != nil {
+			return err
+		}
+		return tx.Receipt("auth", "receipt", "d", []byte("r"), 1<<40)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var first, second MiddlewareDeleted
+	for _, out := range []*MiddlewareDeleted{&first, &second} {
+		if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { var err error; *out, err = tx.Delete("auth", 50); return err }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A retry deletes nothing more, and still says a CCR original was out of reach.
+	if first != (MiddlewareDeleted{Scopes: 1, Choices: 2, Originals: 1, Legacy: 1}) || second != (MiddlewareDeleted{Legacy: 1}) {
+		t.Fatalf("delete counts first=%+v second=%+v", first, second)
+	}
+	if left := s.count(t, `SELECT (SELECT count(*) FROM middleware_originals)+(SELECT count(*) FROM middleware_receipts)+(SELECT count(*) FROM middleware_plans)`); left != 0 {
+		t.Fatalf("revocation left %d originals/receipts/plans", left)
+	}
+}
+
+// A store written by protocol 1.0 migrates in place: its counters stay right
+// under the new triggers, scopes get a max-retention clock, and legacy CCR
+// grants keep resolving.
+func TestMiddlewareMigratesProtocol10Store(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "store.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if _, err := s.db.Exec(`
+CREATE TABLE middleware_scopes (id TEXT PRIMARY KEY, authority TEXT NOT NULL, manifest BLOB NOT NULL, sequence INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TABLE middleware_choices (scope TEXT NOT NULL, id TEXT NOT NULL, payload BLOB NOT NULL, grant_id TEXT NOT NULL UNIQUE, ccr_handle TEXT NOT NULL, PRIMARY KEY(scope,id));
+CREATE TABLE middleware_plans (scope TEXT NOT NULL, id TEXT NOT NULL, digest TEXT NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(scope,id));
+CREATE TABLE middleware_receipts (authority TEXT NOT NULL, id TEXT NOT NULL, digest TEXT NOT NULL, payload BLOB NOT NULL, expires_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(authority,id));
+CREATE TABLE middleware_originals (authority TEXT NOT NULL, digest TEXT NOT NULL, PRIMARY KEY(authority,digest));
+CREATE TABLE middleware_usage (singleton INTEGER PRIMARY KEY CHECK(singleton=1), rows INTEGER NOT NULL, bytes INTEGER NOT NULL);
+CREATE TRIGGER middleware_originals_usage_insert AFTER INSERT ON middleware_originals BEGIN UPDATE middleware_usage SET rows=rows+1,bytes=bytes+64 WHERE singleton=1; END;
+INSERT INTO middleware_scopes VALUES ('scope','auth','[1]',0,100);
+INSERT INTO middleware_choices VALUES ('scope','choice','12345','grant','ccr_h');
+INSERT INTO middleware_plans VALUES ('scope','plan','d','1234');
+INSERT INTO middleware_receipts VALUES ('auth','receipt','d','12',1);
+INSERT INTO middleware_scopes VALUES ('revoked','revoked-auth','',0,0);
+INSERT INTO middleware_usage VALUES (1,5,14);
+INSERT INTO middleware_originals VALUES ('auth','digest');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InitMiddleware(ctx); err != nil {
+		t.Fatal(err)
+	}
+	usage := func() (rows, size int64) {
+		t.Helper()
+		if rows, size, err = s.MiddlewareUsage(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return rows, size
+	}
+	if rows, size := usage(); rows != 6 || size != 78 {
+		t.Fatalf("migrated usage=(%d,%d), want (6,78)", rows, size)
+	}
+	var revokedAt int64
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
+		scope, err := tx.Scope("scope")
+		if err != nil || scope.CreatedAt <= 0 {
+			t.Errorf("legacy scope has no max-retention clock: %+v %v", scope, err)
+		}
+		// 1.0 revoked with expires_at=0; the sweep reads 0 as revoked at the epoch,
+		// long past grace, so the migration dates it now.
+		revoked, err := tx.Scope("revoked")
+		if revokedAt = -revoked.ExpiresAt; err != nil || revokedAt <= 0 {
+			t.Errorf("1.0 tombstone was not dated: %+v %v", revoked, err)
+		}
+		if _, handle, _, err := tx.Grant("auth", "grant"); err != nil || handle != "ccr_h" {
+			t.Errorf("legacy CCR grant lost: %q %v", handle, err)
+		}
+		credit, err := tx.SaveOriginal("auth", "digest", []byte("body"), "")
+		if credit {
+			t.Error("a 1.0 credit was credited again")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rows, size := usage(); rows != 6 || size != 82 {
+		t.Fatalf("usage after filling a 1.0 credit=(%d,%d), want (6,82)", rows, size)
+	}
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(100 + MiddlewareGraceSeconds); return err }); err != nil {
+		t.Fatal(err)
+	}
+	if rows, size := usage(); rows != 1 || size != 0 {
+		t.Fatalf("usage after reclaiming the migrated rows=(%d,%d), want only the revocation tombstone (1,0)", rows, size)
+	}
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error { _, err := tx.Expire(revokedAt + MiddlewareGraceSeconds); return err }); err != nil {
+		t.Fatal(err)
+	}
+	if rows, size := usage(); rows != 0 || size != 0 {
+		t.Fatalf("usage after the tombstone's grace=(%d,%d), want (0,0)", rows, size)
+	}
+}
+
+// GO-7: a protocol 1.0 credit row that gets its body filled belongs to the
+// principal that filled it, so the body counts against that principal's quota.
+func TestMiddlewareFilledCreditCountsAgainstThePrincipal(t *testing.T) {
+	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
+		ctx := context.Background()
+		s.exec(t, `INSERT INTO middleware_originals(authority,digest) VALUES ('auth','one'),('auth','two')`)
+		fill := func(digest string) error {
+			return s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
+				tx.Principal, tx.Limits = "alice", MiddlewareLimits{PrincipalBytes: 300}
+				_, err := tx.SaveOriginal("auth", digest, make([]byte, 200), "")
+				return err
+			})
+		}
+		if err := fill("one"); err != nil {
+			t.Fatal(err)
+		}
+		rows := s.count(t, `SELECT coalesce(sum(rows),0) FROM middleware_principal_usage WHERE principal='alice'`)
+		size := s.count(t, `SELECT coalesce(sum(bytes),0) FROM middleware_principal_usage WHERE principal='alice'`)
+		if rows != 1 || size != 64+200 {
+			t.Fatalf("filled credit counted as (%d,%d) for alice, want (1,264)", rows, size)
+		}
+		if err := fill("two"); !errors.Is(err, ErrMiddlewareCapacity) {
+			t.Fatalf("a second fill bypassed alice's byte quota: %v", err)
+		}
+	})
+}
+
+// S7: the WAL and shared-memory files hold the same plaintext originals as the
+// database, so they get its 0600 mode, not the umask's.
+func TestSQLiteSidecarFilesArePrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes")
+	}
+	path := filepath.Join(t.TempDir(), "caveman.db")
+	s, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if err := s.InitMiddleware(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
+		_, err := tx.SaveOriginal("auth", "digest", []byte("plaintext original"), "")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		info, err := os.Stat(path + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("%s has mode %o, want 600", filepath.Base(path+suffix), perm)
+		}
+	}
+}
+
+// A store written before choices named their original gets the column
+// backfilled from each choice's payload, so the first sweep after the upgrade
+// does not reclaim originals that live choices still reference.
+func TestMiddlewareMigrationBackfillsChoiceOriginals(t *testing.T) {
+	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
+		digest := strings.Repeat("ab", 32)
+		s.exec(t, `DROP INDEX middleware_choices_original`)
+		s.exec(t, `ALTER TABLE middleware_choices DROP COLUMN original`)
+		s.exec(t, `ALTER TABLE middleware_choices DROP COLUMN legacy`)
+		s.exec(t, `INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) VALUES ('scope','new','{"segment_id":"tool-1","source_id":"d","original_sha256":"`+digest+`"}','grant-new','')`)
+		s.exec(t, `INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) VALUES ('scope','legacy','{"original_sha256":"`+digest+`"}','grant-legacy','ccr_h')`)
+		if _, ok := s.MiddlewareStore.(*PostgresMiddleware); ok {
+			s.exec(t, `DELETE FROM middleware_schema`)
+			s.exec(t, `INSERT INTO middleware_schema VALUES (1)`)
+		}
+		if err := s.MiddlewareStore.InitMiddleware(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if n := s.count(t, `SELECT count(*) FROM middleware_choices WHERE id='new' AND original='`+digest+`'`); n != 1 {
+			t.Fatal("the choice's original was not backfilled")
+		}
+		if n := s.count(t, `SELECT count(*) FROM middleware_choices WHERE id='legacy' AND original=''`); n != 1 {
+			t.Fatal("a protocol 1.0 choice (original in CCR) was given a middleware original")
+		}
+	})
 }

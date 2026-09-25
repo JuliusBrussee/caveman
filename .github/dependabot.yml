@@ -1,0 +1,79 @@
+# Weekly, grouped version updates: one PR per ecosystem. Dependabot SECURITY
+# updates are a repository setting (Settings -> Code security), not this file.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      go:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      docker:
+        patterns: ["*"]
+
+  # pnpm workspace at the root, plus the packages that release from their own
+  # npm lockfile. packages/agent is a historical copy owned by another repo.
+  - package-ecosystem: npm
+    directories:
+      - /
+      - /extension
+      - /packages/sdk/typescript
+      - /packages/pi-extension
+      - /packages/device-auth
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+    # The middleware's framework pins are its tested versions and must move
+    # together with its compatibility table; the nightly middleware-canary
+    # workflow reports new framework releases instead.
+    ignore:
+      - dependency-name: "ai"
+      - dependency-name: "@ai-sdk/*"
+      - dependency-name: "openai"
+      - dependency-name: "@anthropic-ai/sdk"
+      - dependency-name: "@google/genai"
+      - dependency-name: "langchain"
+      - dependency-name: "@langchain/*"
+      - dependency-name: "@strands-agents/sdk"
+      - dependency-name: "@mastra/core"
+      - dependency-name: "@modelcontextprotocol/sdk"
+    groups:
+      npm:
+        patterns: ["*"]
+
+  # Pinned tool and CI requirement files. The SDK and middleware pyprojects are
+  # libraries: their ranges are compatibility claims, not pins to bump.
+  - package-ecosystem: pip
+    directories:
+      - /.github/requirements
+      - /shared/provider-catalog
+      - /benchmarks
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      pip:
+        patterns: ["*"]

@@ -29,6 +29,37 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
+  # The middleware store suite on both backends, and the multi-replica runtime
+  # tests, against a real Postgres. Locally they skip unless
+  # CAVEMAN_TEST_POSTGRES_URL is set.
+  middleware-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        env:
+          POSTGRES_USER: caveman
+          POSTGRES_PASSWORD: caveman
+          POSTGRES_DB: caveman_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U caveman -d caveman_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - run: go test -count=1 -race ./proxy/internal/store/... ./proxy/internal/middleware/...
+        env:
+          CAVEMAN_TEST_POSTGRES_URL: postgres://caveman:caveman@localhost:5432/caveman_test?sslmode=disable
+
   typescript:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -54,9 +85,36 @@ jobs:
         run: go build -o "$RUNNER_TEMP/caveman-proxy" ./proxy/cmd/caveman-proxy
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
-      - run: pnpm -r test
+      # The SDK and middleware suites run in middleware-typescript below, so a
+      # failure elsewhere in the workspace cannot skip them.
+      - run: pnpm -r --filter "!@caveman-ai/sdk" --filter "!@caveman-ai/middleware" test
         env:
           CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}/caveman-proxy
+          CAVEMAN_REQUIRE_FRAMEWORKS: "1"
+
+  # Its own job: `pnpm -r test` stops at the first failing package, and a red
+  # historical packages/agent copy used to mean these suites never ran.
+  middleware-typescript:
+    name: middleware-typescript / node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @caveman-ai/sdk test
+      - run: pnpm --filter @caveman-ai/middleware test
+        env:
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
       - run: pnpm --dir packages/middleware/typescript test:consumer
 
@@ -151,7 +209,7 @@ jobs:
       - run: python -m pytest -q
         working-directory: packages/sdk/python
       - run: python -m pip install --no-deps -e packages/sdk/python
-      - run: python -m pip install "./packages/middleware/python[langchain,openai]"
+      - run: python -m pip install -c packages/middleware/python/constraints/latest.txt "./packages/middleware/python[langchain,openai]"
       - run: python -m pytest -q
         working-directory: packages/middleware/python
         env:

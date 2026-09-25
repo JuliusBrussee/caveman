@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://caveman.so/schemas/middleware-capabilities.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-capabilities.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -24,18 +24,20 @@
       "maxLength": 256
     },
     "policy_revision": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
     },
     "transforms": {
       "type": "array",
       "items": {
-        "$ref": "https://caveman.so/schemas/transform-capability.schema.json#/$defs/capability"
+        "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/transform-capability.schema.json#/$defs/capability"
       },
       "maxItems": 128
     },
     "limits": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": {
+        "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+      },
       "required": [
         "deadline_ms",
         "request_bytes",
@@ -58,6 +60,27 @@
         "page_bytes": {
           "type": "integer",
           "minimum": 1
+        },
+        "retrieve_deadline_ms": {
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+        },
+        "queue_depth": {
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+        },
+        "retrieve_queue_depth": {
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+        },
+        "max_segments": {
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+        },
+        "max_manifest_items": {
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+        },
+        "receipt_bytes": {
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
+        },
+        "quota_requests_per_minute": {
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/positive_limit"
         }
       }
     },
@@ -83,6 +106,37 @@
         "record",
         "compress"
       ]
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min",
+        "max"
+      ],
+      "properties": {
+        "min": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/feature"
+      },
+      "maxItems": 64,
+      "uniqueItems": true
+    },
+    "max_retention_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
     }
   }
 }

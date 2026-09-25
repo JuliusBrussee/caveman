@@ -9688,6 +9688,67 @@ function wrapBaseUrlEnv(gw: string): NodeJS.ProcessEnv {
   return env;
 }
 
+// wrapWorkTags names the repository and branch a wrapped session is launched
+// in, as the managed gateway's x-cave-tags value ("repo=owner/name,branch=…").
+// Delivery joins coding-agent spend to merged changes on exactly these two
+// keys, and nothing else in the request carries them. Read once at spawn with
+// hardened git (git-safe.ts); a launch outside a repository, without an origin,
+// or on a detached HEAD yields the tags it can and never fails the wrap.
+// The value is fixed for the process: a branch switch mid-session is picked up
+// by the next launch, not this one.
+//
+// Only github.com remotes are tagged: Cloud joins tags['repo'] to the GitHub
+// pull requests it imported, keyed owner/name, so a same-named fork on another
+// host would collide with the wrong repository. Values are printable ASCII
+// without comma or equals — a header value must be a ByteString, and the tag
+// list is comma/equals delimited — anything else drops the tag, never the wrap.
+export function wrapWorkTags(cwd = process.cwd()): string {
+  const read = (...args: string[]): string => {
+    try {
+      return execFileSync("git", hardenedGitArgs(cwd, ...args), {
+        encoding: "utf8", env: hardenedGitEnv(), stdio: ["ignore", "pipe", "ignore"], timeout: 2000,
+      }).trim();
+    } catch {
+      return "";
+    }
+  };
+  const parts: string[] = [];
+  const repo = repoSlugFromRemote(read("remote", "get-url", "origin"));
+  if (repo) parts.push(`repo=${repo}`);
+  const branch = read("branch", "--show-current");
+  if (branch && branch.length <= 255 && workTagValueSafe(branch)) parts.push(`branch=${branch}`);
+  return parts.join(",");
+}
+
+// workTagValueSafe: printable ASCII (0x21–0x7E) with no comma or equals.
+export function workTagValueSafe(value: string): boolean {
+  return /^[\x21-\x2B\x2D-\x3C\x3E-\x7E]+$/.test(value);
+}
+
+// repoSlugFromRemote reduces a github.com remote URL to owner/name — the form
+// Cloud's Delivery join and its imported pull requests use — or "" when the
+// remote is on any other host or has no such shape. Never the URL itself: a
+// remote can embed a credential.
+export function repoSlugFromRemote(remote: string): string {
+  const cleaned = remote.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+  let host = "";
+  let path = "";
+  const url = /^[a-z][a-z0-9+.-]*:\/\/([^/]+)\/(.*)$/i.exec(cleaned);
+  const scp = /^(?:[^@/:]+@)?([^/:]+):(.*)$/.exec(cleaned);
+  if (url) {
+    host = url[1]!.replace(/^[^@]*@/, "").replace(/:\d+$/, "");
+    path = url[2]!;
+  } else if (scp) {
+    host = scp[1]!;
+    path = scp[2]!;
+  } else {
+    return "";
+  }
+  if (host.toLowerCase() !== "github.com") return "";
+  const match = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/.exec(path);
+  return match ? `${match[1]}/${match[2]}` : "";
+}
+
 function attributedGatewayUrl(gw: string, agent: AgentProfile): string {
   return appendUrlPath(gw, `/w/${agent.id}`);
 }
@@ -9707,6 +9768,29 @@ function mergeAnthropicCustomHeader(raw: string | undefined, name: string, value
     });
   if (value !== undefined) kept.push(`${name}: ${value}`);
   return kept.join("\n");
+}
+
+// existingCustomHeader returns the value of one header inside the newline-
+// separated ANTHROPIC_CUSTOM_HEADERS block, or "" when absent.
+function existingCustomHeader(raw: string | undefined, name: string): string {
+  const target = name.toLowerCase();
+  for (const line of (raw ?? "").split(/\r\n|\n|\r/)) {
+    const colon = line.indexOf(":");
+    if (colon > 0 && line.slice(0, colon).trim().toLowerCase() === target) return line.slice(colon + 1).trim();
+  }
+  return "";
+}
+
+// mergeWorkTags adds the repo/branch entries of `computed` that `existing`
+// (a caller's own "k=v,k=v" tag list) does not already name.
+export function mergeWorkTags(existing: string, computed: string): string {
+  const entries = existing.split(",").map((part) => part.trim()).filter(Boolean);
+  const keys = new Set(entries.map((part) => part.slice(0, part.indexOf("=") < 0 ? part.length : part.indexOf("="))));
+  for (const part of computed.split(",").filter(Boolean)) {
+    const key = part.slice(0, part.indexOf("="));
+    if (!keys.has(key)) entries.push(part);
+  }
+  return entries.join(",");
 }
 
 function bedrockCredentialEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -9889,6 +9973,13 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
     env.QWEN_CODE_LEGACY_MCP_BLOCKING = "1";
   }
   if (agent.id === "hermes") applyHermesAuthEnv(env, renderedGw, gw);
+  if (agent.id === "claude" && wrapMode(gw) === "managed") {
+    // Repository and branch ride every request as x-cave-tags so the managed
+    // gateway can join this session's spend to the change it ships. A user's
+    // own x-cave-tags keeps its keys; only repo/branch it did not set are added.
+    const tags = mergeWorkTags(existingCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags"), wrapWorkTags());
+    if (tags) env.ANTHROPIC_CUSTOM_HEADERS = mergeAnthropicCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags", tags);
+  }
   if (agent.id === "claude" && wrapMode(gw) === "local" && env[CLAUDE_ASSUME_FIRST_PARTY_ENV] === undefined && proxyAnthropicUpstreamIsFirstParty()) {
     // Keep Claude Code's first-party capability set (1M context window /
     // ~600k auto-compact window) intact behind the local pass-through proxy
@@ -12093,6 +12184,10 @@ function qwenStringList(root: JsonObject, path: string[], fallback: Record<strin
   return resolved;
 }
 
+// Through qwenCavemanToolDenied below: ported, with changes, from Qwen Code
+// 0.22.3 (https://github.com/QwenLM/qwen-code), Copyright 2025 Google LLC and
+// Copyright 2025 Qwen, Apache License 2.0. See NOTICE.
+//
 // Exact wildcard matcher used by Qwen 0.22 for mcp.allowed/mcp.excluded:
 // `*` spans any run, `?` spans one character, everything else is literal.
 function qwenMcpServerPatternMatches(name: string, pattern: string): boolean {

@@ -6,6 +6,7 @@
 package standalone
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
@@ -35,13 +36,20 @@ import (
 	"github.com/JuliusBrussee/caveman/shared/platform/ssrf"
 )
 
-// Auth is the single-operator authenticator: it returns a static context built
-// from caveman.yaml. There is still no multi-tenant key to validate — token is
-// one shared secret (CAVEMAN_AUTH_TOKEN), and it exists only so an operator can
-// bind past loopback (config.validateListen refuses that bind without it).
+// Auth is the single-operator authenticator for the provider routes: it
+// returns a static context built from caveman.yaml. There is still no
+// multi-tenant key to validate — token is one shared secret
+// (CAVEMAN_AUTH_TOKEN). The middleware's token map, OIDC and mTLS identities
+// are not accepted here: a provider-route caller spends the server's provider
+// keys, which is exactly the operator's shared authority.
+//
+// closed covers a non-loopback listener that is legal only because a
+// middleware identity source is configured: with no token, the provider routes
+// then refuse every request instead of accepting every one.
 type Auth struct {
-	rc    gateway.RequestContext
-	token string
+	rc     gateway.RequestContext
+	token  string
+	closed bool
 }
 
 // errInboundTokenRejected is deliberately uniform: the gateway maps any non-nil
@@ -53,6 +61,9 @@ type Auth struct {
 var errInboundTokenRejected = errors.New("inbound token rejected")
 
 func (a Auth) Authenticate(ctx context.Context, r *http.Request) (gateway.RequestContext, error) {
+	if a.closed {
+		return gateway.RequestContext{}, errInboundTokenRejected
+	}
 	if a.token == "" {
 		// Loopback single-operator mode, unchanged: accept everything.
 		return a.rc, nil
@@ -280,10 +291,12 @@ func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.S
 	if client == nil {
 		client = StandaloneHTTPClient(cfg, time.Duration(env.Int("CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS", 0))*time.Millisecond)
 	}
+	auth := Auth{rc: gateway.RequestContext{Label: cfg.Label, RuntimeMode: cfg.Mode, Optimizers: cfg.Optimizers, ProviderBillingTiers: cfg.BillingTiers()}, token: cfg.AuthToken,
+		closed: cfg.AuthToken == "" && !config.LoopbackListen(cmp.Or(cfg.Listen, config.DefaultListen))}
 	return gateway.New(gateway.Config{
 		Middleware:           opts.Middleware,
 		Adapters:             buildAdapters(cfg),
-		Auth:                 Auth{rc: gateway.RequestContext{Label: cfg.Label, RuntimeMode: cfg.Mode, Optimizers: cfg.Optimizers, ProviderBillingTiers: cfg.BillingTiers()}, token: cfg.AuthToken},
+		Auth:                 auth,
 		Creds:                Creds{cfg: cfg, bedrock: awscreds.New(awscreds.Options{Region: cfg.BedrockRegion()}), logger: opts.Logger, sourceLogged: new(sync.Once)},
 		Sink:                 sink,
 		Compressor:           opts.Compressor,
@@ -297,6 +310,7 @@ func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.S
 		BreakpointPlan:       cfg.BreakpointPlan,
 		HTTPClient:           client,
 		Logger:               opts.Logger,
+		MetricsToken:         cfg.MetricsToken,
 	})
 }
 

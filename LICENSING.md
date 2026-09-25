@@ -1,109 +1,66 @@
 # Caveman Licensing
 
-This repository uses a split license model. The public repo identity stays MIT
-for the Caveman skill and adoption surfaces. The compression engine and Go
-binaries that embed it use Business Source License 1.1 (BSL-1.1), with an
-Additional Use Grant that permits first-party self-hosted production use and
-requires a commercial license for third-party hosted, managed, or embedded
-services.
+Everything in this repository is licensed under the Apache License, Version 2.0,
+starting with Caveman 3.0.0. That covers the skill, CLI, SDKs, middleware,
+extension, and the whole runtime: Engine, Proxy, rewriter, Browse, MCP server,
+`shrink`, the cavemem Go core, and the shared Go platform.
+
+Caveman Cloud, the hosted service, is separate commercial software. Its source
+is not in this repository and this license does not cover it.
 
 ## Canonical Files
 
-- Root `LICENSE` is the MIT license plus a top-level scope note that points
-  engine-linked directories to `LICENSE.BSL`.
-- `LICENSE.BSL` is the canonical BSL-1.1 text for Caveman Engine-linked code.
-- `LICENSING.md` is the per-directory source of truth.
+- Root `LICENSE` is the verbatim Apache License 2.0 text.
+- Root `NOTICE` carries the copyright line and third-party attributions.
+- Every directory that ships its own `LICENSE` (npm and PyPI packages, the npm
+  launchers, the Go modules) carries a byte-identical copy of the root `LICENSE`.
 
-## Per-Directory License
+Copyright 2026 Julius Brussee.
 
-Default rule: a new module that imports, links, embeds, or ships as part of
-Engine-linked runtime is BSL-1.1 unless a later decision explicitly classifies
-it as MIT adoption surface.
+## What changed in 3.0.0
 
-| Path | License | Notes |
-|---|---|---|
-| `skills/` | MIT | Existing Caveman skill stays MIT and untouched. |
-| `packages/cli/` | MIT | Funnel/on-ramp. Launches BSL binaries but does not contain engine code. |
-| `packages/sdk/typescript/` | MIT | Thin client and structural SDK surface. |
-| `packages/sdk/python/` | MIT | Thin client; distribution name is `caveman-sdk`. |
-| `packages/subagent-tax/` | MIT | Local zero-provider-call harness-prefix measurement tool. |
-| `extension/` | MIT shell | Manifest, popup, content scripts, and UI are MIT. Bundled `engine.wasm` is BSL-1.1, so artifacts embedding it carry BSL terms for that combined work. |
-| `packages/shared/contracts/` | MIT | Public wire schemas and ecosystem contracts. |
-| `shared/provider-catalog/` | MIT | Public provider/model metadata and catalog schemas. |
-| `mem/js/` | MIT | Thin JavaScript client for cavemem. |
-| `mem/py/` | MIT | Thin Python client for cavemem. |
-| `engine/` | BSL-1.1 | Core compression IP and CCR. |
-| `browse/` | BSL-1.1 | Local browser driver; embeds the engine, vendors MIT chromedp modules. |
-| `proxy/` | BSL-1.1 | Standalone gateway and provider adapters. |
-| `mcp/` | BSL-1.1 | Go binary embeds the engine. |
-| `shrink/` | BSL-1.1 | Go binary/package embeds the engine tool-schema compressor. |
-| `mem/` Go core | BSL-1.1 | Go core embeds the engine; `mem/js` and `mem/py` remain MIT clients. |
-| `shared/platform/` | BSL-1.1 | Statically linked into BSL Go binaries. |
+Before 3.0.0 the repository was split-licensed. The skill and adoption surfaces
+(skill, CLI, SDKs, middleware, contracts, provider catalog, extension shell,
+cavemem clients) were MIT. The Engine-linked runtime (`engine/`, `proxy/`,
+`rewriter/`, `browse/`, `mcp/`, `shrink/`, the `mem/` Go core,
+`shared/platform/`, and the extension's bundled `engine.wasm`) was Business
+Source License 1.1 with an Additional Use Grant.
 
-Paths are relative to repository root. Skill's own benchmark harness lives at
-`evals/` and is MIT alongside skill.
+From 3.0.0 on, all of it is Apache-2.0. There is no longer a hosted-service
+restriction, Change Date, or commercial license requirement for the code in this
+repository.
 
-## Additional Use Grant
-
-The BSL grant permits internal evaluation, local development, CI testing,
-integration, and self-hosted use for your own first-party traffic, including
-production.
-
-Offering Caveman, the Licensed Work, or the Licensed Work's functionality to
-third parties as a hosted, managed, or embedded service requires a commercial
-license from the Licensor. This is the OEM/platform boundary.
-
-Named commercial/OEM partners may receive a separate signed carve-out that
-allows the specific hosted, managed, or embedded use covered by that agreement.
-
-## Change License
-
-BSL-licensed versions convert to Apache License, Version 2.0 on the earlier of:
-
-- `2030-06-21`
-- the fourth anniversary of that version's first public distribution under BSL
-
-## Commercial Boundary
-
-Free/source-available:
-
-- local and single-tenant use
-- BYOK/self-hosted first-party traffic
-- inferred savings
-- SDKs, CLI, extension shell, contracts, provider catalog
-
-Commercial:
-
-- third-party hosted/managed/embedded optimization service
-- verified savings across an org
-- multi-tenant control plane, SSO/RBAC/RLS, governance, audit
-- signed metering receipts, gainshare billing, Enterprise/OEM licenses
+Releases published before 3.0.0 keep the terms they shipped with. The Apache
+license applies to 3.0.0 and later.
 
 ## Contributions
 
-MIT areas use inbound=outbound MIT.
-
-BSL areas require DCO sign-off and a relicense grant to Julius Brussee so
-commercial and OEM licenses can include community contributions. The public repo
-`CONTRIBUTING.md` must document both requirements before accepting external
-contributions to BSL-covered code.
+Contributions are inbound=outbound: you license your change under Apache-2.0,
+the same terms as the rest of the repository. See `CONTRIBUTING.md`.
 
 ## Third-party code
 
 `engine/pixel/` is a Go port of pxpipe (MIT, Copyright (c) 2026
 claude-image-proxy contributors) with embedded glyph atlases derived from the
 Spleen 5x8 (BSD-2-Clause) and GNU Unifont (OFL-1.1 / GPLv2 with font-embedding
-exception) fonts. BSL-1.1 applies to the combined work; the upstream MIT and
-font notices are preserved in `engine/pixel/NOTICE` and
-`engine/pixel/assets/`.
+exception) fonts. The upstream MIT and font notices are preserved in
+`engine/pixel/NOTICE` and `engine/pixel/assets/`.
 
-`browse/` vendors MIT-licensed chromedp modules; see `browse/NOTICE`.
+`browse/` links MIT-licensed chromedp modules; see `browse/NOTICE`.
+
+The runtime binaries and container image link third-party Go modules (MIT,
+BSD-3-Clause, Apache-2.0); every binary release ships their license texts as
+`THIRD_PARTY_GO_LICENSES.tar.gz`, and the image under `/licenses/third_party/`.
+The CLI contains a port of part of Qwen Code (Apache-2.0) and bundles
+MIT-licensed `@clack/prompts` and its dependencies; see `packages/cli/NOTICE`.
+The extension ships the Geist fonts under the SIL Open Font License 1.1
+(`extension/fonts/GEIST_LICENSE.txt`).
 
 ## Trademarks
 
-"Caveman" and Caveman logos are trademarks of Julius Brussee. Code licenses do
-not grant trademark rights. Nominative use such as "Powered by Caveman" or
-"Optimized by Caveman" is allowed when truthful. Naming a product, hosted
+"Caveman" and Caveman logos are trademarks of Julius Brussee. The Apache
+License grants no trademark rights. Nominative use such as "Powered by Caveman"
+or "Optimized by Caveman" is allowed when truthful. Naming a product, hosted
 service, or fork in a way that implies Caveman sponsorship requires written
 permission.
 

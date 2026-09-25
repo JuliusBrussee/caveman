@@ -1,0 +1,43 @@
+Caveman
+Copyright 2026 Julius Brussee
+
+This product includes third-party software:
+
+- engine/pixel/ is a Go port of pxpipe (https://github.com/teamchong/pxpipe),
+  used under the MIT License.
+  Copyright (c) 2026 claude-image-proxy contributors
+
+- The glyph atlases embedded in engine/pixel/assets/ are rasterized from:
+  - Spleen 5x8, Copyright (c) 2018-2026, Frederic Cambus.
+    BSD 2-Clause License.
+  - GNU Unifont 16.0.04, dual-licensed under the SIL Open Font License 1.1 and
+    the GNU GPL version 2 (or later) with the GNU font-embedding exception.
+
+- browse/ links these MIT-licensed Go modules:
+  - github.com/chromedp/chromedp, Copyright (c) 2016-2025 Kenneth Shaw
+  - github.com/chromedp/cdproto, Copyright (c) 2016-2025 Kenneth Shaw
+  - github.com/chromedp/sysutil, Copyright (c) 2016-2017 Kenneth Shaw
+
+- The runtime binaries and the container image link third-party Go modules
+  under the MIT, BSD-3-Clause and Apache-2.0 licenses. Their license texts, and
+  the Go runtime's, ship with every binary release as
+  THIRD_PARTY_GO_LICENSES.tar.gz and in the image under /licenses/third_party/.
+
+- packages/cli/src/index.ts contains a port, with changes, of Qwen Code
+  0.22.3's MCP server and permission-rule matchers and its tool-name
+  normalization (https://github.com/QwenLM/qwen-code), used under the Apache
+  License, Version 2.0.
+  Copyright 2025 Google LLC
+  Copyright 2025 Qwen
+
+- The @caveman-ai/cli package bundles MIT-licensed npm packages
+  (@clack/prompts, @clack/core, sisteransi, fast-string-width,
+  fast-string-truncated-width, fast-wrap-ansi); see packages/cli/NOTICE.
+
+- extension/fonts/ holds the Geist and Geist Mono fonts,
+  Copyright (c) 2023 Vercel, in collaboration with basement.studio,
+  under the SIL Open Font License 1.1.
+
+Full license texts: engine/pixel/NOTICE, engine/pixel/assets/SPLEEN_LICENSE.txt,
+engine/pixel/assets/UNIFONT_LICENSE.txt, browse/NOTICE, packages/cli/NOTICE, and
+extension/fonts/GEIST_LICENSE.txt.

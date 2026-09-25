@@ -1,7 +1,11 @@
 """Native version gates over release ranges, without importing the frameworks."""
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version
+from types import MappingProxyType
 import re
+
+from caveman_cloud.middleware import MiddlewareError, ensure_sync, warn_once
 
 
 _STABLE_VERSION = re.compile(
@@ -18,6 +22,10 @@ def installed_version(name):
         return version(name)
     except (PackageNotFoundError, ValueError, OSError):
         return None
+
+
+# Adapter.version on the wire: the installed caveman-middleware release.
+VERSION = installed_version("caveman-middleware") or "unknown"
 
 
 def _stable_version(value):
@@ -63,10 +71,96 @@ def matches_framework(*pins):
     return all(in_range(installed_version(name), low, high) for name, low, high in pins)
 
 
-def supports_framework(runtime, *pins):
-    if runtime.mode == "off":
-        return False
-    if matches_framework(*pins):
+def framework_state(*pins):
+    """``supported``; ``unsupported`` when a readable version is outside its pin; ``unverified`` when unreadable."""
+    versions = [installed_version(name) for name, _, _ in pins]
+    if any(found is not None and not in_range(found, low, high) for found, (_, low, high) in zip(versions, pins)):
+        return "unsupported"
+    return "unverified" if None in versions else "supported"
+
+
+def gate(runtime, adapter, *pins, accept=False):
+    """Decision 3: whether the adapter runs. Never raises.
+
+    A readable version outside the tested range skips the adapter and warns once
+    (``unsupported_version``) unless ``accept_framework_version=True``. An
+    unreadable version (vendored or bundled builds) runs after the adapter's own
+    imports proved the hooks exist, with a one-time ``version_unverified``.
+    Strict mode surfaces the skip from ``preflight()``/``ready()``, not here.
+    """
+    state = "supported" if accept else framework_state(*pins)
+    if state == "supported" or runtime.mode == "off":
+        return state != "unsupported"  # an off runtime is inert: nothing to warn about
+    if state == "unverified":
+        warn_once(adapter, "version_unverified")
         return True
-    runtime.decline("unsupported_version")
+    runtime.decline("unsupported_version", adapter)  # warns once and keeps the on_diagnostic signal for existing hosts
     return False
+
+
+@dataclass(frozen=True)
+class Compatibility:
+    """Decision 11 tier plus the tested ranges ``(distribution, oldest tested, exclusive maximum)``."""
+    tier: str
+    pins: tuple
+
+
+COMPATIBILITY = MappingProxyType({
+    "langchain": Compatibility("certified", (("langchain", "1.1", "2"), ("langchain-core", "1.1", "2"), ("langgraph", "1.0.2", "2"))),
+    "openai": Compatibility("certified", (("openai", "2.20", "4"),)),
+    "anthropic": Compatibility("certified", (("anthropic", "1.0", "2"),)),
+    "litellm": Compatibility("certified", (("litellm", "1.95", "2"),)),
+    "google": Compatibility("experimental", (("google-genai", "2.18", "3"),)),
+    "strands": Compatibility("experimental", (("strands-agents", "1.43", "2"),)),
+    "agno": Compatibility("experimental", (("agno", "3.0", "4"),)),
+    "crewai": Compatibility("experimental", (("crewai", "1.15.3", "2"),)),
+    "pydantic_ai": Compatibility("experimental", (("pydantic-ai-slim", "2.36", "3"),)),
+    "autogen": Compatibility("experimental", (("autogen-core", "0.7", "0.8"), ("autogen-agentchat", "0.7", "0.8"), ("autogen-ext", "0.7", "0.8"))),
+    "llama_index": Compatibility("experimental", (("llama-index-core", "0.14.5", "0.15"),)),
+    "mcp": Compatibility("experimental", (("mcp", "2.0", "3"),)),
+    "asgi": Compatibility("experimental", ()),  # pure ASGI: no framework to gate
+})
+
+
+def framework_import_failed(family, error, hint):
+    """Raise for an adapter module whose framework import failed.
+
+    An installed distribution outside the tested range names its version and the range
+    (``unsupported_version``, also on ``.code``); a missing framework gets ``hint``; an in-range
+    install that still fails keeps its own error.
+    """
+    unsupported = [f"{name} {found} is installed; this adapter requires {name}>={low},<{high}"
+                   for name, low, high in COMPATIBILITY[family].pins
+                   if (found := installed_version(name)) is not None and not in_range(found, low, high)]
+    if unsupported:
+        failure = ImportError("Caveman middleware: unsupported_version: " + "; ".join(unsupported))
+        failure.code = "unsupported_version"
+        raise failure from error
+    if isinstance(error, ModuleNotFoundError):
+        raise ImportError(hint) from error
+    raise error
+
+
+def family_gate(runtime, family, adapter=None, accept=False):
+    return gate(runtime, adapter or family, *COMPATIBILITY[family].pins, accept=accept)
+
+
+def preflight(runtime, family, *, accept_framework_version=False):
+    """The runtime's preflight plus this adapter family's version gate (Decision 3); never raises.
+
+    Blocking discovery: call it at startup, not from inside a running event loop.
+    """
+    report = ensure_sync(runtime).preflight()
+    if (report.status != "disabled" and not accept_framework_version
+            and framework_state(*COMPATIBILITY[family].pins) == "unsupported"):
+        return replace(report, status="unavailable", reason="unsupported_version", action=(
+            f"Install a {family} version inside caveman_middleware.COMPATIBILITY[{family!r}].pins, "
+            "or pass accept_framework_version=True after testing it."))
+    return report
+
+
+def ready(runtime, family, *, accept_framework_version=False):
+    """Strict startup gate: raises ``unsupported_version`` for an untested framework, else the runtime's ready()."""
+    if not accept_framework_version and framework_state(*COMPATIBILITY[family].pins) == "unsupported":
+        raise MiddlewareError("unsupported_version")
+    return ensure_sync(runtime).ready()

@@ -8,8 +8,9 @@ import (
 
 // encoding/json assigns zero values to missing or null scalar fields. The
 // protocol distinguishes those from explicit zero/false, so check presence
-// before decoding into native Go values. DisallowUnknownFields still owns
-// unknown-key rejection; validate owns bounds and cross-field invariants.
+// before decoding into native Go values, for every client: the tolerant reader
+// (§4) ignores unknown fields but still requires known ones. Protocol 1.0
+// clients also get DisallowUnknownFields; validate owns bounds and invariants.
 func requiredObject(raw json.RawMessage, fields, nullable string) (map[string]json.RawMessage, error) {
 	var object map[string]json.RawMessage
 	if json.Unmarshal(raw, &object) != nil || object == nil {

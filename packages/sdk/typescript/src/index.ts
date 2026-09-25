@@ -310,7 +310,12 @@ export type SpanOptions = {
   outputTokens?: number;
   /** Provider-reported cached-input subset; never added to inputTokens. */
   cachedTokens?: number;
-  /** Provider-reported/request-attributed cost in USD. */
+  /** Provider-reported cache-write input tokens (`gen_ai.usage.cache_creation.input_tokens`). Never clamped to
+   * inputTokens: Anthropic reports cache writes outside input_tokens. When absent, a caller-supplied attribute of the
+   * same name passes through. */
+  cacheCreationTokens?: number;
+  /** Provider-reported/request-attributed cost in USD, exported as `caveman.usage.cost_usd` plus the deprecated
+   * non-semconv `gen_ai.usage.cost_usd` (kept through 1.x). */
   costUsd?: number;
   workflow?: string;
   status?: "unset" | "ok" | "error";
@@ -2228,9 +2233,12 @@ export class OTelExporter {
       "gen_ai.usage.cached_tokens",
       "gen_ai.usage.cache_read.input_tokens",
       "gen_ai.usage.cost_usd",
+      "caveman.usage.cost_usd",
       "cave.agent",
       "cave.workflow",
     ]) delete attrs[key];
+    // SDK 1.1.0 passed a caller-supplied cache-write count through; the typed field replaces it only when given.
+    if (options.cacheCreationTokens != null) delete attrs["gen_ai.usage.cache_creation.input_tokens"];
     if (options.operation !== undefined) attrs["gen_ai.operation.name"] = options.operation;
     if (options.provider !== undefined) attrs["gen_ai.provider.name"] = options.provider;
     if (options.model !== undefined) {
@@ -2241,10 +2249,15 @@ export class OTelExporter {
     const inputTokens = strictNonNegativeInt(options.inputTokens);
     const outputTokens = strictNonNegativeInt(options.outputTokens);
     const cachedTokens = strictNonNegativeInt(options.cachedTokens);
+    const cacheCreationTokens = strictNonNegativeInt(options.cacheCreationTokens);
     if (inputTokens !== null) attrs["gen_ai.usage.input_tokens"] = inputTokens;
     if (outputTokens !== null) attrs["gen_ai.usage.output_tokens"] = outputTokens;
     if (cachedTokens !== null && (inputTokens === null || cachedTokens <= inputTokens)) attrs["gen_ai.usage.cache_read.input_tokens"] = cachedTokens;
-    if (typeof options.costUsd === "number" && Number.isFinite(options.costUsd) && options.costUsd >= 0) attrs["gen_ai.usage.cost_usd"] = options.costUsd;
+    if (cacheCreationTokens !== null) attrs["gen_ai.usage.cache_creation.input_tokens"] = cacheCreationTokens;
+    if (typeof options.costUsd === "number" && Number.isFinite(options.costUsd) && options.costUsd >= 0) {
+      attrs["gen_ai.usage.cost_usd"] = options.costUsd; // deprecated: not an OTel GenAI semconv name; kept through 1.x
+      attrs["caveman.usage.cost_usd"] = options.costUsd;
+    }
     attrs["cave.agent"] = this.cave.options.agent;
     attrs["cave.workflow"] = options.workflow ?? this.cave.options.defaultWorkflow ?? "unlabeled-workflow";
 
@@ -2347,15 +2360,18 @@ function spanToOtlp(sp: OTelSpan): Record<string, unknown> {
   };
 }
 
+/** Always `doubleValue`, even for a whole number: Python exports these as floats. */
+const DOUBLE_ATTRIBUTES = new Set(["gen_ai.usage.cost_usd", "caveman.usage.cost_usd"]);
+
 /**
  * Encode one attribute as an OTLP/JSON KeyValue.
  * Ints → `intValue` (proto3 int64 → JSON string), bools → `boolValue`,
- * non-integer numbers → `doubleValue`; everything else → `stringValue`.
+ * non-integer numbers and cost → `doubleValue`; everything else → `stringValue`.
  */
 function otlpKV(key: string, value: string | number | boolean): Record<string, unknown> {
   if (typeof value === "boolean") return { key, value: { boolValue: value } };
   if (typeof value === "number") {
-    return Number.isInteger(value) ? { key, value: { intValue: String(value) } } : { key, value: { doubleValue: value } };
+    return Number.isInteger(value) && !DOUBLE_ATTRIBUTES.has(key) ? { key, value: { intValue: String(value) } } : { key, value: { doubleValue: value } };
   }
   return { key, value: { stringValue: String(value) } };
 }

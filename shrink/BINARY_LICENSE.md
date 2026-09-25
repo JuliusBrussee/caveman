@@ -1,4 +1,5 @@
 # Downloaded binary license
 
-MIT covers npm launcher files only. `caveman-shrink` Go source and official
-binary are governed by BSL 1.1; see repository `LICENSE.BSL` and `LICENSING.md`.
+The npm launcher files, the `caveman-shrink` Go source, and the official
+binary are all licensed under Apache-2.0; see `LICENSE.launcher` (identical to
+the repository `LICENSE`) and the repository `NOTICE` and `LICENSING.md`.

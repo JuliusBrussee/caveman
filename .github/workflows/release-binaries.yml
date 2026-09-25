@@ -20,6 +20,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+      # Keyless cosign signature for the GHCR image (Sigstore, GitHub OIDC).
+      id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -58,6 +60,108 @@ jobs:
             diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
             exit 1
           }
+      # Platform code signing is optional until the certificates exist. Each
+      # step no-ops when its secret is absent; a partial secret set fails.
+      - name: Detect optional platform code-signing credentials
+        id: codesign
+        env:
+          APPLE_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          WINDOWS_PFX: ${{ secrets.WINDOWS_AUTHENTICODE_PFX_BASE64 }}
+        run: |
+          apple=false; windows=false
+          [[ -n "$APPLE_P12" ]] && apple=true
+          [[ -n "$WINDOWS_PFX" ]] && windows=true
+          { echo "apple=$apple"; echo "windows=$windows"; } >> "$GITHUB_OUTPUT"
+          echo "macOS signing+notarization: $apple; Windows Authenticode: $windows"
+      - name: Authenticode-sign Windows binaries
+        if: steps.codesign.outputs.windows == 'true'
+        env:
+          WINDOWS_PFX: ${{ secrets.WINDOWS_AUTHENTICODE_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_AUTHENTICODE_PFX_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [[ -n "$WINDOWS_PFX_PASSWORD" ]] || { echo "WINDOWS_AUTHENTICODE_PFX_PASSWORD is missing" >&2; exit 1; }
+          sudo apt-get update -qq && sudo apt-get install -y -qq osslsigncode
+          keys="$(mktemp -d)"; trap 'rm -rf "$keys"' EXIT
+          printf '%s' "$WINDOWS_PFX" | base64 -d > "$keys/cert.pfx"
+          printf '%s' "$WINDOWS_PFX_PASSWORD" > "$keys/pass"
+          for f in dist/binaries/*_win32_*; do
+            osslsigncode sign -pkcs12 "$keys/cert.pfx" -readpass "$keys/pass" -h sha256 \
+              -n "Caveman" -i "https://github.com/$GITHUB_REPOSITORY" \
+              -ts http://timestamp.digicert.com -in "$f" -out "$f.signed"
+            mv "$f.signed" "$f"
+          done
+      - name: Sign and notarize macOS binaries
+        if: steps.codesign.outputs.apple == 'true'
+        env:
+          APPLE_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          APPLE_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_NOTARY_API_KEY_JSON: ${{ secrets.APPLE_NOTARY_API_KEY_JSON }}
+        run: |
+          set -euo pipefail
+          [[ -n "$APPLE_P12_PASSWORD" && -n "$APPLE_NOTARY_API_KEY_JSON" ]] || {
+            echo "APPLE_DEVELOPER_ID_P12_PASSWORD and APPLE_NOTARY_API_KEY_JSON are required with the P12" >&2
+            exit 1
+          }
+          # rcodesign (apple-codesign 0.29.0) signs and notarizes from Linux.
+          curl -fsSL -o "$RUNNER_TEMP/rcodesign.tgz" \
+            https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/0.29.0/apple-codesign-0.29.0-x86_64-unknown-linux-musl.tar.gz
+          echo "dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002  $RUNNER_TEMP/rcodesign.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/rcodesign.tgz" -C "$RUNNER_TEMP" --strip-components=1 apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign
+          keys="$(mktemp -d)"; trap 'rm -rf "$keys"' EXIT
+          printf '%s' "$APPLE_P12" | base64 -d > "$keys/cert.p12"
+          printf '%s' "$APPLE_P12_PASSWORD" > "$keys/pass"
+          printf '%s' "$APPLE_NOTARY_API_KEY_JSON" > "$keys/notary.json"
+          for f in dist/binaries/*_darwin_*; do
+            "$RUNNER_TEMP/rcodesign" sign --p12-file "$keys/cert.p12" --p12-password-file "$keys/pass" \
+              --code-signature-flags runtime "$f"
+          done
+          # Bare Mach-O files cannot be stapled; Apple's notary accepts them
+          # zipped and Gatekeeper then finds the ticket online.
+          (cd dist/binaries && zip -q "$RUNNER_TEMP/darwin-notarize.zip" ./*_darwin_*)
+          "$RUNNER_TEMP/rcodesign" notary-submit --api-key-file "$keys/notary.json" --wait "$RUNNER_TEMP/darwin-notarize.zip"
+      # Code signing rewrites binaries, so their digests are recomputed in the
+      # build script's exact format (sorted, two-space separated).
+      - name: Recompute checksums after code signing
+        if: steps.codesign.outputs.apple == 'true' || steps.codesign.outputs.windows == 'true'
+        run: |
+          set -euo pipefail
+          cd dist/binaries
+          node ../../scripts/build-release-binaries.mjs --list | LC_ALL=C sort | xargs sha256sum -- > checksums.txt
+      # License texts of every third-party Go module the six binaries link, per
+      # platform (build tags differ), plus the Go runtime's. go-licenses is
+      # pinned and fails on a module whose license it cannot classify.
+      - name: Collect third-party Go module licenses
+        run: |
+          set -euo pipefail
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/google/go-licenses/v2@v2.0.1
+          bundle="$RUNNER_TEMP/third-party-go"
+          mkdir -p "$bundle/go.dev/go" dist/licenses
+          cp "$(go env GOROOT)/LICENSE" "$bundle/go.dev/go/LICENSE"
+          # The binaries scripts/build-release-binaries.mjs builds, with its CGO_ENABLED=0.
+          packages=(./proxy/cmd/caveman-proxy ./engine/cmd/caveman-engine ./mcp/cmd/caveman-mcp
+            ./mem/cmd/cavemem ./browse/cmd/caveman-browse ./shrink/cmd/caveman-shrink)
+          for goos in darwin linux windows; do
+            for goarch in amd64 arm64; do
+              CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" "$RUNNER_TEMP/bin/go-licenses" save "${packages[@]}" \
+                --ignore github.com/JuliusBrussee/caveman --save_path "$RUNNER_TEMP/go-licenses-$goos-$goarch"
+              # -f: go-licenses writes read-only files, and platforms share most of them.
+              cp -Rf "$RUNNER_TEMP/go-licenses-$goos-$goarch/." "$bundle/"
+            done
+          done
+          tar -C "$bundle" --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - . \
+            | gzip -n > dist/licenses/THIRD_PARTY_GO_LICENSES.tar.gz
+      # Every binary is Apache-2.0 and embeds MIT pixel/font-licensed code,
+      # so the license texts ship with the release and sit in the signed manifest.
+      - name: Add license and notice files to the release set
+        run: |
+          set -euo pipefail
+          mkdir -p dist/licenses
+          cp LICENSE NOTICE LICENSING.md dist/licenses/
+          cp engine/pixel/NOTICE dist/licenses/NOTICE.engine-pixel
+          cp engine/pixel/assets/SPLEEN_LICENSE.txt engine/pixel/assets/UNIFONT_LICENSE.txt dist/licenses/
+          cp browse/NOTICE dist/licenses/NOTICE.browse
+          (cd dist/licenses && sha256sum -- *) >> dist/binaries/checksums.txt
       - name: Sign checksum manifest with pinned release key
         env:
           CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM }}
@@ -85,9 +189,28 @@ jobs:
             --platform linux/amd64,linux/arm64 \
             --provenance=true --sbom=true \
             --build-arg VERSION="$GITHUB_REF_NAME" \
+            --build-arg REVISION="$GITHUB_SHA" \
+            --build-arg SOURCE="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --metadata-file "$RUNNER_TEMP/image-metadata.json" \
             -t "ghcr.io/$owner/caveman-proxy:$GITHUB_REF_NAME" \
             -t "ghcr.io/$owner/caveman-proxy:latest" \
             --push .
+          digest="$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/image-metadata.json")"
+          [[ "$digest" == sha256:* ]] || { echo "no pushed image digest in buildx metadata" >&2; exit 1; }
+          echo "IMAGE_REF=ghcr.io/$owner/caveman-proxy@$digest" >> "$GITHUB_ENV"
+      # Keyless: the certificate names this workflow and tag, and the signature
+      # is logged in Rekor. Verify with
+      #   cosign verify ghcr.io/<owner>/caveman-proxy:<tag> \
+      #     --certificate-identity-regexp '^https://github.com/<owner>/caveman/.github/workflows/release-binaries.yml@refs/tags/bin-v' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      # Plain download pinned by digest, matching the no-new-action rule above.
+      - name: Sign container image with cosign (keyless)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/cosign" https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-amd64
+          echo "4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71  $RUNNER_TEMP/cosign" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/cosign"
+          "$RUNNER_TEMP/cosign" sign --yes "$IMAGE_REF"
       - name: Publish binary-only release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -97,7 +220,7 @@ jobs:
             echo "release $GITHUB_REF_NAME already exists; refusing overwrite" >&2
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" dist/binaries/* \
+          gh release create "$GITHUB_REF_NAME" dist/binaries/* dist/licenses/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
-            --notes "Signed Caveman runtime companions for macOS, Linux, and Windows."
+            --notes "Signed Caveman runtime companions for macOS, Linux, and Windows. The binaries are licensed under the Apache License 2.0 (LICENSE, NOTICE); see LICENSING.md and the attached third-party notices."

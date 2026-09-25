@@ -11,27 +11,34 @@ import uuid
 from dataclasses import dataclass, field, fields
 from importlib.metadata import version
 
+from ._versions import framework_import_failed
+
 try:
     from agno.models.base import Model
     from agno.models.message import Message
     from agno.run.base import RunContext
     from agno.run.cancel import araise_if_cancelled, raise_if_cancelled
     from agno.tools.function import Function
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[agno] to use the Agno adapter") from error
+except ImportError as error:
+    framework_import_failed("agno", error, "Install caveman-middleware[agno] to use the Agno adapter")
 
-from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, MiddlewareRuntime, Scope
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, Scope, ensure_async, ensure_sync
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION, RECOVERY_SCHEMA
+from ._guard import fail_open, recovery_failed, recovery_name_conflict, resolve_scope
 from ._native import Attempt, manifest, owner, plain
-from ._versions import matches_framework
+from ._versions import VERSION, family_gate, installed_version
 
-ADAPTER = Adapter("agno", "0.1.0", "3.0.9", "agno-message-v1")
+ADAPTER = Adapter("agno", VERSION, installed_version("agno") or "unknown", "agno-message-v1")
 _SIGNATURES = {name: inspect.signature(getattr(Model, name)) for name in
                ("response", "aresponse", "response_stream", "aresponse_stream")}
 
 
 def scope_from_run(run, *, namespace: str) -> Scope:
-    """Resolve a native Agent or Team run's session, with explicit branch metadata."""
+    """Resolve a native Agent or Team run's session, with explicit branch metadata.
+
+    Raises ValueError without a session; as an adapter ``scope`` resolver that
+    becomes a pass-through with ``invalid_scope`` (warned once) in non-strict mode.
+    """
     session = getattr(run, "session_id", None)
     if not isinstance(session, str) or not session:
         raise ValueError("Agno middleware requires a nonempty native session_id")
@@ -39,11 +46,8 @@ def scope_from_run(run, *, namespace: str) -> Scope:
     return Scope(namespace, session, metadata.get("caveman_branch_id", "main"), metadata.get("caveman_cache_epoch", "0"))
 
 
-def _scope(source, run):
-    result = source if isinstance(source, Scope) else source(run)
-    if not isinstance(result, Scope):
-        raise TypeError("Agno scope resolver must return a Caveman Scope")
-    return result
+def _scope(runtime, source, run):
+    return resolve_scope(runtime, ADAPTER.id, source, run)
 
 
 def _message_view(messages):
@@ -126,38 +130,40 @@ class _Frame:
 
 
 class _Connection:
-    def __init__(self, runtime, scope):
-        self.sync = runtime if isinstance(runtime, MiddlewareRuntime) else None
-        self.async_runtime = runtime.as_async() if self.sync else runtime
+    def __init__(self, runtime, scope, accept_framework_version=False):
+        self.sync, self.async_runtime = ensure_sync(runtime), ensure_async(runtime)
         self.scope, self.recovery_tool = scope, None
         self.active = contextvars.ContextVar("caveman_agno_run", default=None)
-        self.version_supported = matches_framework(("agno", "3.0", "4"))
-        if not self.version_supported and runtime.mode != "off":
-            runtime.decline("unsupported_version")
+        self.version_supported = family_gate(self.sync, "agno", ADAPTER.id, accept_framework_version)
 
     def passive(self, runtime, reason):
         return Attempt(runtime, None, str(uuid.uuid4()), str(uuid.uuid4()), passive=True, reason=reason, adapter=ADAPTER.id), {}, None, None
 
     def register(self):
+        # A refused handle is the {"error": code} result the model reads; cancellation still raises.
         def recover(handle: str, run_context: RunContext, offset: int = 0, limit: int = 262144, query: str = ""):
             frame = self.active.get()
-            if frame is None:
-                raise MiddlewareError("recovery_unavailable")
-            if self.sync is None:
-                raise TypeError("Synchronous Agno recovery requires MiddlewareRuntime")
-            if run_context is not None:
-                raise_if_cancelled(run_context.run_id)
-            return json.dumps(self.sync.retrieve(frame.scope, handle=handle, offset=offset, limit=limit, query=query),
-                              ensure_ascii=False, separators=(",", ":"))
+            try:
+                if frame is None or frame.scope is None:
+                    raise MiddlewareError("recovery_unavailable")
+                if run_context is not None:
+                    raise_if_cancelled(run_context.run_id)
+                page = self.sync.retrieve(frame.scope, handle=handle, offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:
+                return json.dumps(recovery_failed(ADAPTER.id, error))
+            return json.dumps(page, ensure_ascii=False, separators=(",", ":"))
 
         async def arecover(handle: str, run_context: RunContext, offset: int = 0, limit: int = 262144, query: str = ""):
             frame = self.active.get()
-            if frame is None:
-                raise MiddlewareError("recovery_unavailable")
-            if run_context is not None:
-                await araise_if_cancelled(run_context.run_id)
-            return json.dumps(await self.async_runtime.retrieve(frame.scope, handle=handle, offset=offset, limit=limit, query=query),
-                              ensure_ascii=False, separators=(",", ":"))
+            try:
+                if frame is None or frame.scope is None:
+                    raise MiddlewareError("recovery_unavailable")
+                if run_context is not None:
+                    await araise_if_cancelled(run_context.run_id)
+                page = await self.async_runtime.retrieve(frame.scope, handle=handle, offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:
+                return json.dumps(recovery_failed(ADAPTER.id, error))
+            return json.dumps(page, ensure_ascii=False, separators=(",", ":"))
 
         # Agno preserves a Function's entrypoint identity in its per-run copy.
         # Explicit processing avoids schema rewriting and keeps RunContext hidden.
@@ -188,13 +194,15 @@ class _Connection:
         if not self.version_supported:
             return self.passive(runtime, "unsupported_version")
         if options.get("compress_tool_results"):
-            return self.passive(runtime, "host_compression")
+            return self.passive(runtime, "unsupported_request")  # Agno compresses tool results itself
         selected = _message_view(messages)
         if selected is None:
             return self.passive(runtime, "unsupported_shape")
         context, candidates, paths = selected
         frame = self.active.get()
-        scope = frame.scope if frame else _scope(self.scope, options.get("run_response"))
+        scope = frame.scope if frame else _scope(runtime, self.scope, options.get("run_response"))
+        if scope is None:
+            return self.passive(runtime, "invalid_scope")
         binding, overhead = None, None
         actual = self.binding_details(frame, options)
         if actual is not None:
@@ -202,7 +210,7 @@ class _Connection:
             overhead = json.dumps({"type": "function", "function": actual}, ensure_ascii=False, separators=(",", ":"))
         attempt = Attempt(runtime, scope, str(uuid.uuid4()), str(uuid.uuid4()), adapter=ADAPTER.id)
         recheck = lambda: binding is None or (runtime.owns_binding(binding, scope) and self.binding_details(frame, options) is not None)
-        runtime_options = dict(scope=scope, adapter=ADAPTER, manifest=context, candidates=candidates, binding=binding,
+        runtime_options = dict(scope=scope, adapter=ADAPTER, manifest=context, sequence=context.sequence, candidates=candidates, binding=binding,
             model={"provider": model.provider or type(model).__name__, "id": model.id, "protocol": "agno"}, recovery_overhead_text=overhead,
             logical_call_id=attempt.logical_call_id, attempt_id=attempt.attempt_id)
         return attempt, paths, runtime_options, recheck
@@ -215,12 +223,12 @@ class CavemanModel(Model):
     their streaming equivalents receive a separate model-facing Message view.
     The caller owns both its existing provider clients and the shared runtime.
     """
-    def __init__(self, model: Model, *, runtime=None, scope=None, connection=None):
+    def __init__(self, model: Model, *, runtime=None, scope=None, connection=None, accept_framework_version=False):
         if not isinstance(model, Model):
             raise TypeError("Expected an existing native Agno Model")
         super().__init__(**{item.name: getattr(model, item.name) for item in fields(Model) if not item.name.startswith("_")})
         self.model = model
-        self.connection = connection or _Connection(runtime, scope)
+        self.connection = connection or _Connection(runtime, scope, accept_framework_version)
         self.signatures = {name: inspect.signature(getattr(model, name)) for name in ("invoke", "ainvoke", "invoke_stream", "ainvoke_stream")}
 
     def get_provider(self):
@@ -253,9 +261,13 @@ class CavemanModel(Model):
     def _frame(self, name, args, kwargs):
         if self.connection.async_runtime.mode == "off" or not self.connection.version_supported:
             return _Frame(None, [])
-        values = _SIGNATURES[name].bind_partial(self, *args, **kwargs).arguments
-        run = values.get("run_response")
-        return _Frame(_scope(self.connection.scope, run), values.get("tools") or [], getattr(run, "run_id", None))
+        try:
+            values = _SIGNATURES[name].bind_partial(self, *args, **kwargs).arguments
+            run = values.get("run_response")
+            return _Frame(_scope(self.connection.sync, self.connection.scope, run), values.get("tools") or [], getattr(run, "run_id", None))
+        except Exception as error:  # Decision 4: invalid_scope was already warned; other failures pass through
+            fail_open(self.connection.sync, ADAPTER.id, error)
+            return _Frame(None, [])
 
     def _check_cancelled(self):
         frame = self.connection.active.get()
@@ -345,6 +357,31 @@ class CavemanModel(Model):
         values = self.signatures[name].bind_partial(messages, *args, **kwargs).arguments
         return self.connection.state(self.model, messages, values, runtime)
 
+    def _project(self, name, messages, args, kwargs, runtime):
+        """(model-facing messages, attempt); any Caveman failure keeps the caller's messages (Decision 4)."""
+        try:
+            state = self._prepare(name, messages, args, kwargs, runtime)
+            if not state:
+                return messages, None
+            attempt, _, options, _ = state
+            if options is not None:
+                return self._apply_prepared(messages, state, runtime.optimize(**options)), attempt
+            return messages, attempt
+        except Exception as error:
+            return messages, self.connection.passive(runtime, fail_open(runtime, ADAPTER.id, error))[0]
+
+    async def _aproject(self, name, messages, args, kwargs, runtime):
+        try:
+            state = self._prepare(name, messages, args, kwargs, runtime)
+            if not state:
+                return messages, None
+            attempt, _, options, _ = state
+            if options is not None:
+                return self._apply_prepared(messages, state, await runtime.optimize(**options)), attempt
+            return messages, attempt
+        except Exception as error:
+            return messages, self.connection.passive(runtime, fail_open(runtime, ADAPTER.id, error))[0]
+
     def _apply_prepared(self, messages, state, outcome):
         attempt, paths, _, recheck = state
         attempt.optimization = outcome if not outcome.replacements else None
@@ -360,15 +397,7 @@ class CavemanModel(Model):
 
     def invoke(self, messages, *args, **kwargs):
         self._check_cancelled()
-        runtime = self.connection.sync
-        if runtime is None:
-            raise TypeError("Synchronous Agno calls require MiddlewareRuntime")
-        state = self._prepare("invoke", messages, args, kwargs, runtime)
-        attempt = None
-        if state:
-            attempt, _, options, _ = state
-            if options is not None:
-                messages = self._apply_prepared(messages, state, runtime.optimize(**options))
+        messages, attempt = self._project("invoke", messages, args, kwargs, self.connection.sync)
         self._check_cancelled()
         if attempt:
             attempt.observe("dispatch_intent")
@@ -388,13 +417,7 @@ class CavemanModel(Model):
 
     async def ainvoke(self, messages, *args, **kwargs):
         await self._acheck_cancelled()
-        runtime = self.connection.async_runtime
-        state = self._prepare("ainvoke", messages, args, kwargs, runtime)
-        attempt = None
-        if state:
-            attempt, _, options, _ = state
-            if options is not None:
-                messages = self._apply_prepared(messages, state, await runtime.optimize(**options))
+        messages, attempt = await self._aproject("ainvoke", messages, args, kwargs, self.connection.async_runtime)
         await self._acheck_cancelled()
         if attempt:
             attempt.observe("dispatch_intent")
@@ -418,15 +441,7 @@ class CavemanModel(Model):
 
     def invoke_stream(self, messages, *args, **kwargs):
         self._check_cancelled()
-        runtime = self.connection.sync
-        if runtime is None:
-            raise TypeError("Synchronous Agno calls require MiddlewareRuntime")
-        state = self._prepare("invoke_stream", messages, args, kwargs, runtime)
-        attempt = None
-        if state:
-            attempt, _, options, _ = state
-            if options is not None:
-                messages = self._apply_prepared(messages, state, runtime.optimize(**options))
+        messages, attempt = self._project("invoke_stream", messages, args, kwargs, self.connection.sync)
         self._check_cancelled()
         if attempt:
             attempt.observe("dispatch_intent")
@@ -460,13 +475,7 @@ class CavemanModel(Model):
 
     async def ainvoke_stream(self, messages, *args, **kwargs):
         await self._acheck_cancelled()
-        runtime = self.connection.async_runtime
-        state = self._prepare("ainvoke_stream", messages, args, kwargs, runtime)
-        attempt = None
-        if state:
-            attempt, _, options, _ = state
-            if options is not None:
-                messages = self._apply_prepared(messages, state, await runtime.optimize(**options))
+        messages, attempt = await self._aproject("ainvoke_stream", messages, args, kwargs, self.connection.async_runtime)
         await self._acheck_cancelled()
         if attempt:
             attempt.observe("dispatch_intent")
@@ -499,8 +508,9 @@ class CavemanModel(Model):
             await stream.iterator.aclose()
 
 
-def with_caveman_model(model: Model, *, runtime, scope):
-    return CavemanModel(model, runtime=runtime, scope=scope)
+def with_caveman_model(model: Model, *, runtime, scope, accept_framework_version=False):
+    """Record-only: no recovery executor, so compress mode reports ``recovery_unbound``."""
+    return CavemanModel(model, runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
 
 
 def _has_recovery(tool):
@@ -510,15 +520,15 @@ def _has_recovery(tool):
             or "caveman_retrieve" in (getattr(tool, "functions", None) or {}))
 
 
-def with_caveman_agent(options: dict, *, runtime, scope) -> dict:
+def with_caveman_agent(options: dict, *, runtime, scope, accept_framework_version=False) -> dict:
     """Return native Agent/Team constructor options, including scoped recovery.
 
     Pass an existing native Model. Dynamic tool factories keep their native
     invocation signature. Reasoning/output/parser/fallback models, when supplied,
     use the same connection but require recovery in their own actual tool list.
     """
-    connection = _Connection(runtime, scope)
-    if runtime.mode == "off" or not connection.version_supported:
+    connection = _Connection(runtime, scope, accept_framework_version)
+    if connection.sync.mode == "off" or not connection.version_supported:
         result = dict(options)
         for name in ("model", "reasoning_model", "parser_model", "output_model", "followup_model"):
             if name == "model" or result.get(name) is not None:
@@ -530,9 +540,11 @@ def with_caveman_agent(options: dict, *, runtime, scope) -> dict:
 
     def add_tools(tools):
         result = list(tools or [])
-        if (runtime.mode == "compress" and options.get("output_schema") is None and options.get("tool_choice") in (None, "auto")
-                and not any(_has_recovery(tool) for tool in result)):
-            result.append(connection.recovery_tool)
+        if connection.sync.mode == "compress" and options.get("output_schema") is None and options.get("tool_choice") in (None, "auto"):
+            if any(_has_recovery(tool) for tool in result):
+                recovery_name_conflict(connection.sync, ADAPTER.id)
+            else:
+                result.append(connection.recovery_tool)
         return result
 
     tools = options.get("tools")

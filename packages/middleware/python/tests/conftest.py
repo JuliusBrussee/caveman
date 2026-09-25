@@ -1,4 +1,5 @@
 """Shared fail-open fixtures: a runtime whose proxy is guaranteed unreachable."""
+import os
 import socket
 import copy
 import json
@@ -10,6 +11,10 @@ from frameworks import required_adapters
 
 
 def pytest_configure(config):
+    # Hermetic: LiteLLM otherwise fetches its model cost map over the network at import.
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    for name in ("CREWAI_DISABLE_TELEMETRY", "CREWAI_DISABLE_TRACKING", "OTEL_SDK_DISABLED"):
+        os.environ.setdefault(name, "true")
     required_adapters()
 
 
@@ -47,6 +52,32 @@ def bypassed(runtime):
 
 @pytest.fixture
 def protocol_runtime():
+    """A strict SDK runtime with a deterministic protocol peer, never a provider."""
+    runtime = peer_runtime(strict=True)
+    try:
+        yield runtime
+    finally:
+        runtime.close()
+
+
+@pytest.fixture
+def lenient_runtime():
+    """The same peer in non-strict mode: every failure must become a pass-through."""
+    runtime = peer_runtime(strict=False)
+    try:
+        yield runtime
+    finally:
+        runtime.close()
+
+
+@pytest.fixture(autouse=True)
+def fresh_warnings():
+    """warn_once is per process; each test sees its own first warnings."""
+    from caveman_cloud.middleware import protocol
+    protocol._warned.clear()
+
+
+def peer_runtime(**options):
     """A real SDK runtime with a deterministic protocol peer, never a provider.
 
     This validates adapter projection and recovery plumbing, not Engine quality
@@ -56,19 +87,22 @@ def protocol_runtime():
 
     fixture = json.loads((Path(__file__).parents[3] / "sdk/parity/middleware.fixtures.json").read_text())
     reports, receipts, requests, retrievals = [], [], [], []
-    runtime = MiddlewareRuntime(on_report=reports.append, strict=True)
+    runtime = MiddlewareRuntime(on_report=reports.append, **options)
     runtime.reports, runtime.receipts, runtime.requests, runtime.retrievals = reports, receipts, requests, retrievals
+    runtime.refuse = None  # (status, code) every retrieve answers with, e.g. (410, "expired")
     originals = {}
 
     def http(path, body, timeout):
         if path == "capabilities":
-            caps = copy.deepcopy(fixture["capabilities"])
-            recovery_free = {**caps["transforms"][0], "transform_id": "fixture.literal.v1", "recovery": "none"}
-            caps["transforms"].append(recovery_free)
-            return caps
+            return copy.deepcopy(fixture["capabilities"])
         request = json.loads(body)
         if path == "retrieve":
             retrievals.append(request)
+            if runtime.refuse or request["handle"] not in originals:
+                # The real runtime's §6 error envelope (404 not_found for an unknown handle), through the SDK's own HTTP error path.
+                status, code = runtime.refuse or (404, "not_found")
+                runtime._transport = lambda *_: (status, {}, json.dumps({"schema_version": 1, "error": {"code": code}}).encode())
+                return MiddlewareRuntime._http(runtime, path, body, timeout)
             scope, segment = originals[request["handle"]]
             assert request["scope"] == scope, "recovery crossed a session boundary"
             text = segment["content"]
@@ -80,13 +114,14 @@ def protocol_runtime():
         plan.update(request_id=request["request_id"], input_digest=sha256(body), replacements=[])
         bound = request["recovery_binding"]
         plan["recovery"]["binding_id"] = bound["id"] if bound else None
+        # Like the real runtime: only marked exact_ccr replacements (K5). The SDK
+        # never sends a compress request without an owned recovery binding.
         for index, segment in enumerate(request["segments"]):
             handle = "cmw_" + sha256(segment["content"])[:48]
             originals[handle] = (request["scope"], segment)
-            text = f"[caveman: shortened; exact original via caveman_retrieve handle={handle}]\nshort excerpt" if bound else "short excerpt"
+            text = f"[caveman: shortened; exact original via caveman_retrieve handle={handle}]\nshort excerpt"
             replacement = {**fixture["plan"]["replacements"][0], "segment_id": segment["id"], "source_id": segment["source_id"],
-                           "original_sha256": segment["sha256"], "text": text, "sha256": sha256(text), "recovery_handle": handle,
-                           "transform_id": "caveman.engine.log.v1" if bound else "fixture.literal.v1"}
+                           "original_sha256": segment["sha256"], "text": text, "sha256": sha256(text), "recovery_handle": handle}
             plan["replacements"].append(replacement)
         count = len(plan["replacements"])
         plan["measurement"].update(tokens_before=1000 * count, tokens_after=100 * count, unique_tokens_reduced=900 * count)
@@ -94,7 +129,4 @@ def protocol_runtime():
 
     runtime._http = http
     runtime.observe_background = lambda receipt: receipts.append(receipt)
-    try:
-        yield runtime
-    finally:
-        runtime.close()
+    return runtime

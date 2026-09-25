@@ -1,0 +1,539 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "Caveman middleware runtime protocol",
+    "version": "1.1.0",
+    "summary": "Compression-only runtime used by Caveman framework middleware. Normative prose: docs/technical/middleware-protocol.md.",
+    "description": "Status codes listed are the protocol 1.1 set, used only when the request carries the http_status_v2 feature in Caveman-Middleware-Features. Without it the runtime answers with the protocol 1.0 (legacy) mapping documented in the prose spec. Clients derive outcomes from error.code, never from the status alone.",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8787",
+      "description": "Local runtime. A deployment may add a path prefix; clients preserve it."
+    }
+  ],
+  "security": [
+    {
+      "bearer": []
+    },
+    {
+      "mtls": []
+    }
+  ],
+  "paths": {
+    "/caveman/v1/middleware/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "summary": "Discover transforms, limits, features and protocol range.",
+        "description": "Without Caveman-Middleware-Features the runtime omits transforms a protocol 1.0 client would reject.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Features"
+          },
+          {
+            "$ref": "#/components/parameters/Client"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          },
+          {
+            "$ref": "#/components/parameters/Tracestate"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Capabilities for the authenticated principal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/middleware-capabilities.schema.json"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        }
+      }
+    },
+    "/caveman/v1/middleware/optimize": {
+      "post": {
+        "operationId": "optimize",
+        "summary": "Plan replacements for candidate segments.",
+        "description": "Every decision, including bypasses (not_smaller, cache_state_unavailable, recovery_unavailable, capacity), is a 200 plan under http_status_v2.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Features"
+          },
+          {
+            "$ref": "#/components/parameters/Client"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          },
+          {
+            "$ref": "#/components/parameters/Tracestate"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/middleware-optimize.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replacement plan or bypass decision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/middleware-plan.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "408": {
+            "$ref": "#/components/responses/E408"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "410": {
+            "$ref": "#/components/responses/E410"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
+          }
+        }
+      }
+    },
+    "/caveman/v1/middleware/retrieve": {
+      "post": {
+        "operationId": "retrieve",
+        "summary": "Read a page or excerpt of an original by recovery handle.",
+        "description": "Has its own deadline (limits.retrieve_deadline_ms) and queue (limits.retrieve_queue_depth).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Features"
+          },
+          {
+            "$ref": "#/components/parameters/Client"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          },
+          {
+            "$ref": "#/components/parameters/Tracestate"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/middleware-retrieve.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One page of the original.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/middleware-page.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "408": {
+            "$ref": "#/components/responses/E408"
+          },
+          "410": {
+            "$ref": "#/components/responses/E410"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
+          }
+        }
+      }
+    },
+    "/caveman/v1/middleware/receipts": {
+      "post": {
+        "operationId": "recordReceipt",
+        "summary": "Record a content-free call observation.",
+        "description": "Aggregated or retention-bounded; never creates rows that outlive retention_seconds.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Features"
+          },
+          {
+            "$ref": "#/components/parameters/Client"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          },
+          {
+            "$ref": "#/components/parameters/Tracestate"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/middleware-receipt.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Observation accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/middleware-receipt-response.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "408": {
+            "$ref": "#/components/responses/E408"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
+          }
+        }
+      }
+    },
+    "/caveman/v1/middleware/sessions/delete": {
+      "post": {
+        "operationId": "deleteSession",
+        "summary": "Revoke a scope and delete every original it owns.",
+        "description": "Idempotent. An unknown scope answers 200 with zero counts.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Features"
+          },
+          {
+            "$ref": "#/components/parameters/Client"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          },
+          {
+            "$ref": "#/components/parameters/Tracestate"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/middleware-session-delete.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Scope revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/middleware-session-delete-response.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "408": {
+            "$ref": "#/components/responses/E408"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Runtime credential (static token or OIDC JWT). Never a model provider API key."
+      },
+      "mtls": {
+        "type": "mutualTLS",
+        "description": "Client certificate; the principal comes from the certificate SAN."
+      }
+    },
+    "parameters": {
+      "Features": {
+        "name": "Caveman-Middleware-Features",
+        "in": "header",
+        "required": false,
+        "description": "Comma-separated client features (for example `http_status_v2, revision_tolerant`). Absent means a protocol 1.0 client.",
+        "schema": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      },
+      "Client": {
+        "name": "Caveman-Middleware-Client",
+        "in": "header",
+        "required": false,
+        "description": "Space-separated product tokens, for example `caveman-sdk-typescript/1.2.0`. Informational only.",
+        "schema": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "Traceparent": {
+        "name": "traceparent",
+        "in": "header",
+        "required": false,
+        "description": "W3C Trace Context.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Tracestate": {
+        "name": "tracestate",
+        "in": "header",
+        "required": false,
+        "description": "W3C Trace Context.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "headers": {
+      "RetryAfter": {
+        "description": "Delay in whole seconds (>= 1).",
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "responses": {
+      "E400": {
+        "description": "invalid_request, unsupported_version, unknown_capability or invalid_range (legacy clients get 413 payload_limit for an out-of-range retrieve limit).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/middleware-error.schema.json"
+            }
+          }
+        }
+      },
+      "E401": {
+        "description": "unauthorized: missing or unknown runtime credential.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/middleware-error.schema.json"
+            }
+          }
+        }
+      },
+      "E403": {
+        "description": "forbidden_origin (browser request) or forbidden_namespace (principal may not use scope.namespace).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/middleware-error.schema.json"
+            }
+          }
+        }
+      },
+      "E404": {
+        "description": "not_found: unknown or foreign recovery handle.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/middleware-error.schema.json"
+            }
+          }
+        }
+      },
+      "E408": {
+        "description": "request_timeout: the request body did not arrive before the deadline. Legacy clients: 413 payload_limit.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/middleware-error.schema.json"
+            }
+          }
+        }
+      },
+      "E409": {
+        "description": "epoch_changed (context manifest is not an extension of the stored one) or identity_conflict.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/middleware-error.schema.json"
+            }
+          }
+        }
+      },
+      "E410": {
+        "description": "deleted or expired scope.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/middleware-error.schema.json"
+            }
+          }
+        }
+      },
+      "E413": {
+        "description": "payload_limit: the request body exceeds a size limit.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/middleware-error.schema.json"
+            }
+          }
+        }
+      },
+      "E429": {
+        "description": "capacity (queue saturated; legacy clients get 504 deadline) or quota_exceeded.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/middleware-error.schema.json"
+            }
+          }
+        },
+        "headers": {
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        }
+      },
+      "E503": {
+        "description": "runtime_unavailable (storage or dependency outage). retrieve also uses recovery_unavailable.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/middleware-error.schema.json"
+            }
+          }
+        },
+        "headers": {
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        }
+      },
+      "E504": {
+        "description": "deadline: the runtime could not finish before its deadline.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/middleware-error.schema.json"
+            }
+          }
+        }
+      }
+    }
+  }
+}

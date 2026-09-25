@@ -86,11 +86,11 @@ caveman/
 │   ├── sdk/                     # TypeScript + Python gateway clients
 │   ├── subagent-tax/            # Local harness-prefix benchmark
 │   └── shared/                  # Contracts + binary installer
-├── engine/ · proxy/             # BSL local compression runtime + provider proxy
+├── engine/ · proxy/             # Local compression runtime + provider proxy
 ├── mcp/ · mem/ · shrink/        # Recovery tools, memory, output compression
 ├── browse/                      # consumer copy; source = caveman-browse
 ├── extension/                   # MV3 extension source
-├── shared/                       # Provider catalog + BSL platform libraries
+├── shared/                       # Provider catalog + platform libraries
 │
 ├── .claude-plugin/              # Claude Code plugin manifest (REQUIRED at root)
 ├── plugins/caveman/             # Claude Code plugin distribution (CI-mirrored)

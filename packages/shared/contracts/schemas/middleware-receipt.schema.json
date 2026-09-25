@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://caveman.so/schemas/middleware-receipt.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-receipt.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,13 +18,13 @@
       "const": 1
     },
     "scope": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/scope"
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/scope"
     },
     "logical_call_id": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
     },
     "attempt_id": {
-      "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+      "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/token"
     },
     "event_kind": {
       "enum": [
@@ -36,14 +36,14 @@
     },
     "plan_id": {
       "oneOf": [
-        { "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256" },
+        { "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/sha256" },
         { "type": "null" }
       ]
     },
     "usage": {
       "oneOf": [
         {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/usage"
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/usage"
         },
         {
           "type": "null"
@@ -53,7 +53,7 @@
     "provider_request_sha256": {
       "oneOf": [
         {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+          "$ref": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/middleware-common.schema.json#/$defs/sha256"
         },
         {
           "type": "null"

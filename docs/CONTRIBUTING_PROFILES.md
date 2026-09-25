@@ -8,10 +8,9 @@ AI coding harness through an existing wire protocol and hook surface.
 
 ## License boundary
 
-Profiles, CLI launcher, SDKs, contracts, kit, graders, provider catalog,
-integration recipes, extension shell, and non-core skills are MIT. Engine-linked
-runtime source uses BSL 1.1. Both are contribution targets under terms in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md) and [`LICENSING.md`](../LICENSING.md).
+The whole repository, profiles and Engine-linked runtime alike, is Apache-2.0.
+Contribution terms are in [`CONTRIBUTING.md`](../CONTRIBUTING.md) and
+[`LICENSING.md`](../LICENSING.md).
 
 ## Add an agent profile
 

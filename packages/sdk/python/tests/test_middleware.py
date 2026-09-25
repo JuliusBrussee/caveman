@@ -30,10 +30,10 @@ class TestMiddlewareProtocol(unittest.TestCase):
         self.assertIsNone(outcome.plan)
         self.assertEqual(len(outcome.replacements), 0)
         self.assertEqual(diagnostics, [{"code": "unsupported_version", "cache_continuity": "unavailable"}])
+        # §8: unsupported_version is a `ready` reason. The request path passes through even in strict mode.
         strict = MiddlewareRuntime(strict=True)
         self.addCleanup(strict.close)
-        with self.assertRaisesRegex(MiddlewareError, "unsupported_version"):
-            strict.decline("unsupported_version")
+        self.assertEqual(strict.decline("unsupported_version").reason, "unsupported_version")
         off = MiddlewareRuntime(mode="off", strict=True)
         self.addCleanup(off.close)
         self.assertEqual(off.decline("unsupported_version").status, "off")
@@ -95,8 +95,15 @@ class TestMiddlewareProtocol(unittest.TestCase):
         runtime = MiddlewareRuntime(mode="off")
         runtime._http = lambda *_: self.fail("off transferred content")
         self.assertEqual(runtime.optimize(**inputs()).status, "off")
-        with self.assertRaisesRegex(MiddlewareError, "remote_content_not_enabled"):
-            MiddlewareRuntime(endpoint="https://remote.example")
+        # Endpoint refusals never raise at construction (decision 3); calls bypass and preflight reports them.
+        for strict in (False, True):
+            remote = MiddlewareRuntime(endpoint="https://remote.example", strict=strict)
+            self.addCleanup(remote.close)
+            remote._transport = lambda *_: self.fail("refused endpoint transferred content")
+            self.assertEqual(remote.optimize(**inputs()).reason, "remote_content_not_enabled")
+            self.assertEqual(remote.preflight().reason, "remote_content_not_enabled")
+            with self.assertRaisesRegex(MiddlewareError, "remote_content_not_enabled"):
+                remote.ready()
 
     def test_record_mode_never_prepares_replacements(self):
         with MiddlewareRuntime(mode="record") as runtime:
@@ -144,26 +151,27 @@ class TestMiddlewareProtocol(unittest.TestCase):
                 finally:
                     runtime.close()
 
-    def test_deadline_and_stale_scope_do_not_open_outage_circuit(self):
-        runtime = MiddlewareRuntime()
-        discovery, mode = [], ["deadline"]
+    def test_breaker_counts_deadlines_and_outages_not_client_codes(self):
+        # §10/K8: deadlines now count (B3); 4xx decisions such as epoch_changed are successes.
+        runtime = MiddlewareRuntime(deadline_ms=5000)
+        discovery, mode = [], ["epoch_changed"]
         def http(path, *_):
             if path == "capabilities":
                 discovery.append(path)
                 return copy.deepcopy(FIXTURE["capabilities"])
             raise MiddlewareError(mode[0])
         runtime._http = http
+        binding = runtime.recovery(Scope(**FIXTURE["request"]["scope"]))
         try:
+            for _ in range(8):
+                self.assertEqual(runtime.optimize(**inputs(binding)).reason, "epoch_changed")
+            self.assertEqual(len(discovery), 1, "a 4xx decision keeps cached capabilities")
+            mode[0] = "deadline"
             for _ in range(5):
-                self.assertEqual(runtime.optimize(**inputs()).reason, "deadline")
-            self.assertEqual(len(discovery), 1)
-            mode[0] = "epoch_changed"
-            for _ in range(5):
-                self.assertEqual(runtime.optimize(**inputs()).reason, "epoch_changed")
-            mode[0] = "runtime_unavailable"
-            for _ in range(3):
-                self.assertEqual(runtime.optimize(**inputs()).reason, "runtime_unavailable")
-            self.assertEqual(runtime.optimize(**inputs()).reason, "circuit_open")
+                self.assertEqual(runtime.optimize(**inputs(binding)).reason, "deadline")
+            self.assertEqual(len(discovery), 1, "a deadline does not clear capabilities")
+            self.assertEqual(runtime.optimize(**inputs(binding)).reason, "circuit_open")
+            self.assertEqual(runtime._breaker.state, "open")
         finally:
             runtime.close()
 
@@ -194,27 +202,23 @@ class TestAsyncMiddleware(unittest.IsolatedAsyncioTestCase):
         release.set()
         await runtime.aclose()
 
-    async def test_queued_work_counts_against_one_deadline(self):
-        runtime = AsyncMiddlewareRuntime(deadline_ms=20)
+    async def test_full_pool_is_capacity_and_stuck_io_is_deadline(self):
+        # Workers == slots, so no job ever waits in a queue; a stuck worker is bounded by the outer deadline.
+        runtime = AsyncMiddlewareRuntime(deadline_ms=50, max_concurrency=4)
         release = threading.Event()
         paths = []
         def blocked_discovery(path, *_):
             paths.append(path)
-            release.wait(2)
+            release.wait(6)
             return copy.deepcopy(FIXTURE["capabilities"])
         runtime._runtime._http = blocked_discovery
-        startup = [asyncio.create_task(runtime.ready()) for _ in range(4)]
-        while len(paths) < 4:
-            await asyncio.sleep(0.001)
-        tasks = [asyncio.create_task(runtime.optimize(**inputs())) for _ in range(20)]
-        # Hold the worker boundary until all submissions have had a chance to
-        # enter. CPU scheduling cannot turn the capacity assertion into a race.
-        await asyncio.sleep(0.06)
-        release.set()
-        await asyncio.gather(*startup)
+        binding = runtime.recovery(Scope(**FIXTURE["request"]["scope"]))
+        started = time.monotonic()
+        tasks = [asyncio.create_task(runtime.optimize(**inputs(binding))) for _ in range(10)]
         outcomes = await asyncio.gather(*tasks)
+        self.assertLess(time.monotonic() - started, 3)  # unbounded: 6 s
+        release.set()
         self.assertTrue(all(out.status == "bypassed" for out in outcomes))
-        self.assertIn("capacity", [out.reason for out in outcomes])
-        self.assertIn("deadline", [out.reason for out in outcomes])
-        self.assertEqual(paths, ["capabilities"] * 4, "expired queued calls never start optimization I/O")
+        self.assertEqual(sorted(out.reason for out in outcomes), ["capacity"] * 6 + ["deadline"] * 4)
+        self.assertLessEqual(len(paths), 4)
         await runtime.aclose()

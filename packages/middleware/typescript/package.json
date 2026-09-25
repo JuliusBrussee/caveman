@@ -1,8 +1,8 @@
 {
   "name": "@caveman-ai/middleware",
-  "version": "0.1.0-alpha.2",
+  "version": "1.0.0",
   "description": "Native framework middleware over the Caveman compression runtime.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JuliusBrussee/caveman.git",
@@ -15,54 +15,139 @@
   "type": "module",
   "sideEffects": false,
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.12"
   },
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "exports": {
     "./ai-sdk": {
-      "types": "./dist/ai-sdk.d.ts",
-      "import": "./dist/ai-sdk.js"
+      "workerd": "./dist/edge.js",
+      "edge-light": "./dist/edge.js",
+      "import": {
+        "types": "./dist/ai-sdk.d.ts",
+        "default": "./dist/ai-sdk.js"
+      },
+      "default": {
+        "types": "./dist/ai-sdk.d.cts",
+        "default": "./dist/ai-sdk.js"
+      }
     },
     "./openai": {
-      "types": "./dist/openai.d.ts",
-      "import": "./dist/openai.js"
+      "workerd": "./dist/edge.js",
+      "edge-light": "./dist/edge.js",
+      "import": {
+        "types": "./dist/openai.d.ts",
+        "default": "./dist/openai.js"
+      },
+      "default": {
+        "types": "./dist/openai.d.cts",
+        "default": "./dist/openai.js"
+      }
     },
     "./anthropic": {
-      "types": "./dist/anthropic.d.ts",
-      "import": "./dist/anthropic.js"
+      "workerd": "./dist/edge.js",
+      "edge-light": "./dist/edge.js",
+      "import": {
+        "types": "./dist/anthropic.d.ts",
+        "default": "./dist/anthropic.js"
+      },
+      "default": {
+        "types": "./dist/anthropic.d.cts",
+        "default": "./dist/anthropic.js"
+      }
     },
     "./google": {
-      "types": "./dist/google.d.ts",
-      "import": "./dist/google.js"
+      "workerd": "./dist/edge.js",
+      "edge-light": "./dist/edge.js",
+      "import": {
+        "types": "./dist/google.d.ts",
+        "default": "./dist/google.js"
+      },
+      "default": {
+        "types": "./dist/google.d.cts",
+        "default": "./dist/google.js"
+      }
     },
     "./langchain": {
-      "types": "./dist/langchain.d.ts",
-      "import": "./dist/langchain.js"
+      "workerd": "./dist/edge.js",
+      "edge-light": "./dist/edge.js",
+      "import": {
+        "types": "./dist/langchain.d.ts",
+        "default": "./dist/langchain.js"
+      },
+      "default": {
+        "types": "./dist/langchain.d.cts",
+        "default": "./dist/langchain.js"
+      }
+    },
+    "./langchain-model": {
+      "workerd": "./dist/edge.js",
+      "edge-light": "./dist/edge.js",
+      "import": {
+        "types": "./dist/langchain-model.d.ts",
+        "default": "./dist/langchain-model.js"
+      },
+      "default": {
+        "types": "./dist/langchain-model.d.cts",
+        "default": "./dist/langchain-model.js"
+      }
     },
     "./strands": {
-      "types": "./dist/strands.d.ts",
-      "import": "./dist/strands.js"
+      "workerd": "./dist/edge.js",
+      "edge-light": "./dist/edge.js",
+      "import": {
+        "types": "./dist/strands.d.ts",
+        "default": "./dist/strands.js"
+      },
+      "default": {
+        "types": "./dist/strands.d.cts",
+        "default": "./dist/strands.js"
+      }
     },
     "./mastra": {
-      "types": "./dist/mastra.d.ts",
-      "import": "./dist/mastra.js"
+      "workerd": "./dist/edge.js",
+      "edge-light": "./dist/edge.js",
+      "import": {
+        "types": "./dist/mastra.d.ts",
+        "default": "./dist/mastra.js"
+      },
+      "default": {
+        "types": "./dist/mastra.d.cts",
+        "default": "./dist/mastra.js"
+      }
     },
     "./mcp": {
-      "types": "./dist/mcp.d.ts",
-      "import": "./dist/mcp.js"
+      "workerd": "./dist/edge.js",
+      "edge-light": "./dist/edge.js",
+      "import": {
+        "types": "./dist/mcp.d.ts",
+        "default": "./dist/mcp.js"
+      },
+      "default": {
+        "types": "./dist/mcp.d.cts",
+        "default": "./dist/mcp.js"
+      }
     },
-    "./package.json": "./package.json",
     "./compatibility": {
-      "types": "./dist/compatibility.d.ts",
-      "import": "./dist/compatibility.js"
-    }
+      "workerd": "./dist/edge.js",
+      "edge-light": "./dist/edge.js",
+      "import": {
+        "types": "./dist/compatibility.d.ts",
+        "default": "./dist/compatibility.js"
+      },
+      "default": {
+        "types": "./dist/compatibility.d.cts",
+        "default": "./dist/compatibility.js"
+      }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/cjs-types.mjs",
     "lint": "tsc --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "prepack": "npm run build",
@@ -92,77 +177,71 @@
     "access": "public"
   },
   "testedFrameworkVersions": {
-    "ai": "7.0.94",
-    "@ai-sdk/provider": "4.0.11",
-    "openai": "7.12.1",
-    "@anthropic-ai/sdk": "0.124.0",
-    "@google/genai": "2.21.0",
-    "langchain": "1.5.10",
-    "@langchain/core": "1.2.9",
-    "@langchain/langgraph": "1.4.14",
-    "@strands-agents/sdk": "1.17.0",
-    "@mastra/core": "1.65.0",
-    "@modelcontextprotocol/sdk": "1.30.0"
+    "ai": [
+      "7.0.94",
+      "7.0.114"
+    ],
+    "@ai-sdk/provider": [
+      "4.0.11",
+      "4.0.18"
+    ],
+    "openai": [
+      "7.12.1",
+      "7.23.0"
+    ],
+    "@anthropic-ai/sdk": [
+      "0.124.0",
+      "0.125.0",
+      "0.126.0",
+      "0.127.0",
+      "0.128.0"
+    ],
+    "@google/genai": [
+      "2.21.0",
+      "2.24.0"
+    ],
+    "langchain": [
+      "1.5.10",
+      "1.5.12"
+    ],
+    "@langchain/core": [
+      "1.2.9",
+      "1.2.12"
+    ],
+    "@langchain/langgraph": [
+      "1.4.14",
+      "1.4.17"
+    ],
+    "@strands-agents/sdk": [
+      "1.17.0",
+      "1.19.0"
+    ],
+    "@mastra/core": [
+      "1.65.0",
+      "1.70.0"
+    ],
+    "@modelcontextprotocol/sdk": [
+      "1.30.0",
+      "1.30.1"
+    ]
   },
   "supportedFrameworkVersions": {
     "ai": ">=7.0.94 <8",
     "@ai-sdk/provider": ">=4.0.11 <5",
     "openai": ">=7.12.1 <8",
-    "@anthropic-ai/sdk": ">=0.124.0 <0.125",
+    "@anthropic-ai/sdk": ">=0.124.0 <0.129",
     "@google/genai": ">=2.21.0 <3",
     "langchain": ">=1.5.10 <2",
     "@langchain/core": ">=1.2.9 <2",
-    "@langchain/langgraph": ">=1.4.14 <2",
     "@strands-agents/sdk": ">=1.17.0 <2",
     "@mastra/core": ">=1.65.0 <2",
     "@modelcontextprotocol/sdk": ">=1.30.0 <2"
   },
-  "peerDependencies": {
-    "ai": "*",
-    "@ai-sdk/provider": "*",
-    "openai": "*",
-    "@anthropic-ai/sdk": "*",
-    "@google/genai": "*",
-    "langchain": "*",
-    "@langchain/core": "*",
-    "@langchain/langgraph": "*",
-    "@strands-agents/sdk": "*",
-    "@mastra/core": "*",
-    "@modelcontextprotocol/sdk": "*"
-  },
-  "peerDependenciesMeta": {
-    "ai": {
-      "optional": true
-    },
-    "@ai-sdk/provider": {
-      "optional": true
-    },
-    "openai": {
-      "optional": true
-    },
-    "@anthropic-ai/sdk": {
-      "optional": true
-    },
-    "@google/genai": {
-      "optional": true
-    },
-    "langchain": {
-      "optional": true
-    },
-    "@langchain/core": {
-      "optional": true
-    },
-    "@langchain/langgraph": {
-      "optional": true
-    },
-    "@strands-agents/sdk": {
-      "optional": true
-    },
-    "@mastra/core": {
-      "optional": true
-    },
-    "@modelcontextprotocol/sdk": {
-      "optional": true
+  "typesVersions": {
+    "*": {
+      "*": [
+        "./dist/*.d.ts"
+      ]
     }
   }
 }

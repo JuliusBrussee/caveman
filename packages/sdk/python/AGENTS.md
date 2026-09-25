@@ -11,7 +11,8 @@ gateway with `x-cave-agent` / `x-cave-workflow` / `x-cave-retention` headers set
 - `tests/test_sdk.py` — pytest tests; mock `urllib.request.urlopen` with `patch()`
 - `tests/test_parity.py` — cross-language conformance suite; drives `../../parity/fixtures.json` (shared with sdk-ts). Same fixtures, two languages → a field in one SDK and not the other fails CI.
 - `tests/test_trace_continuity.py` — trace/span id minting + which requests carry `x-cave-trace-id` / `x-cave-parent-span-id`; mirrors the TS `tests/trace-continuity.runtime.mjs`
-- `pyproject.toml` — distribution name `caveman-sdk` (import package stays `caveman_cloud`), `requires-python = ">=3.13"`, no runtime dependencies
+- `caveman_cloud/middleware/` — stable framework-middleware client for protocol 1.1 (`docs/technical/middleware-protocol.md`): `protocol.py` pure rules (scope normalization, tolerant capabilities, failure classification, breaker, budgets, endpoint/proxy resolution, `warn_once`), `transport.py` default keep-alive stdlib transport, `runtime.py` / `async_runtime.py` clients, `validate.py` plan/page checks. `tests/test_middleware_v1_1.py` drives `../../parity/middleware-v1_1.fixtures.json`; `tests/test_middleware_transport.py` uses real local sockets
+- `pyproject.toml` — distribution name `caveman-sdk` (import package stays `caveman_cloud`), `requires-python = ">=3.11"`, no runtime dependencies
 
 ## Key API surface (`core.py`)
 
@@ -39,7 +40,7 @@ gateway with `x-cave-agent` / `x-cave-workflow` / `x-cave-retention` headers set
 - Add new gateway endpoints via `Trace._request(path, body)` or `Provider.create(path, body)`
 - `headers()` is the single source for all outgoing headers; edit there, nowhere else
 - Deferred tool-search session handoff uses request/result `session_id` plus provider header `x-cave-tool-session`; update sdk-ts + parity fixtures with any change
-- Run tests: `pytest` from this directory (Python ≥ 3.13 required)
+- Run tests: `pytest` from this directory (Python ≥ 3.11 required)
 
 ## Gotchas
 

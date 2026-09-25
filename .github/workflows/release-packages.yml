@@ -8,6 +8,7 @@ on:
       - "middleware-ts-v*"
       - "middleware-python-v*"
       - "pi-v*"
+      - "contracts-v*"
 
 permissions:
   contents: read
@@ -24,6 +25,7 @@ jobs:
       ecosystem: ${{ steps.package.outputs.ecosystem }}
       packager: ${{ steps.package.outputs.packager }}
       package: ${{ steps.package.outputs.package }}
+      name: ${{ steps.package.outputs.name }}
       version: ${{ steps.package.outputs.version }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -55,6 +57,8 @@ jobs:
           set -euo pipefail
           # @caveman-ai/middleware depends on the workspace SDK, so its tarball is
           # built with pnpm, which rewrites `workspace:^` to a concrete range.
+          # @caveman-ai/contracts has no lockfile of its own: it is a workspace
+          # package too.
           packager="npm"
           case "$GITHUB_REF_NAME" in
             middleware-ts-v*)
@@ -88,6 +92,13 @@ jobs:
               version="${GITHUB_REF_NAME#pi-v}"
               actual="$(node -p "require('./$package/package.json').version")"
               ;;
+            contracts-v*)
+              package="packages/shared/contracts"
+              ecosystem="npm"
+              packager="pnpm"
+              version="${GITHUB_REF_NAME#contracts-v}"
+              actual="$(node -p "require('./$package/package.json').version")"
+              ;;
             *)
               echo "unsupported package release tag: $GITHUB_REF_NAME" >&2
               exit 2
@@ -101,16 +112,61 @@ jobs:
             echo "tag version $version does not match package version $actual" >&2
             exit 1
           }
-          echo "package=$package" >> "$GITHUB_OUTPUT"
-          echo "ecosystem=$ecosystem" >> "$GITHUB_OUTPUT"
-          echo "packager=$packager" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$ecosystem" == "npm" ]]; then
+            name="$(node -p "require('./$package/package.json').name")"
+          else
+            name="$(python -c 'import pathlib,sys,tomllib; print(tomllib.loads(pathlib.Path(sys.argv[1]).read_text())["project"]["name"])' "$package/pyproject.toml")"
+          fi
+          {
+            echo "package=$package"
+            echo "ecosystem=$ecosystem"
+            echo "packager=$packager"
+            echo "name=$name"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+      # Middleware, SDK and contracts tags get a GitHub Release. Its notes come
+      # from the package CHANGELOG, so a missing entry stops the release before publish.
+      - name: Require changelog entry and write release notes
+        if: startsWith(github.ref_name, 'middleware-') || startsWith(github.ref_name, 'sdk-') || startsWith(github.ref_name, 'contracts-')
+        env:
+          PACKAGE: ${{ steps.package.outputs.package }}
+          NAME: ${{ steps.package.outputs.name }}
+          VERSION: ${{ steps.package.outputs.version }}
+          ECOSYSTEM: ${{ steps.package.outputs.ecosystem }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/github-release"
+          mkdir -p "$out"
+          # Heading is `## <version> — <date>` (or `## [<version>]`).
+          awk -v v="$VERSION" '
+            /^## / { if (found) exit; h = substr($0, 4); gsub(/^\[|\].*$| .*$/, "", h); found = (h == v); next }
+            found { print }
+          ' "$PACKAGE/CHANGELOG.md" > "$RUNNER_TEMP/changelog-excerpt.md"
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/changelog-excerpt.md" || {
+            echo "$PACKAGE/CHANGELOG.md has no non-empty '## $VERSION' section" >&2
+            exit 1
+          }
+          if [[ "$ECOSYSTEM" == "npm" ]]; then
+            provenance="https://www.npmjs.com/package/$NAME/v/$VERSION#provenance"
+          else
+            provenance="https://pypi.org/project/$NAME/$VERSION/#files"
+          fi
+          {
+            cat "$RUNNER_TEMP/changelog-excerpt.md"
+            echo
+            echo "### Verify this release"
+            echo
+            echo "- Registry provenance (trusted publishing from this workflow): $provenance"
+            echo "- CycloneDX SBOM of the published dependency graph: attached \`.cdx.json\`"
+            echo "- Built from annotated, GitHub-verified tag \`$GITHUB_REF_NAME\` on \`main\`"
+          } > "$out/notes.md"
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         if: steps.package.outputs.packager == 'pnpm'
       - name: Build and test pnpm workspace package
         if: steps.package.outputs.packager == 'pnpm'
         env:
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
+          PACKAGE: ${{ steps.package.outputs.package }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/package-dist"
@@ -118,14 +174,22 @@ jobs:
           # Build the workspace dependencies first: the adapters import the SDK's
           # built `./middleware` types, which do not exist until the SDK is built.
           pnpm --filter @caveman-ai/sdk run build
-          pnpm --filter ./${{ steps.package.outputs.package }} test
-          pnpm --filter ./${{ steps.package.outputs.package }} test:consumer
-          pnpm --filter ./${{ steps.package.outputs.package }} pack --pack-destination "$RUNNER_TEMP/package-dist"
+          pnpm --filter "./$PACKAGE" test
+          if [[ "$PACKAGE" == packages/middleware/typescript ]]; then
+            pnpm --filter "./$PACKAGE" test:consumer
+          fi
+          pnpm --filter "./$PACKAGE" pack --pack-destination "$RUNNER_TEMP/package-dist"
           mapfile -t tarballs < <(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name '*.tgz' -print)
           [[ "${#tarballs[@]}" == 1 ]] || { echo "expected exactly one npm tarball" >&2; exit 1; }
           smoke="$RUNNER_TEMP/npm-artifact-smoke"
           mkdir -p "$smoke"
           (cd "$smoke" && npm init --yes >/dev/null)
+          if [[ "$PACKAGE" == packages/shared/contracts ]]; then
+            (cd "$smoke" && npm install --ignore-scripts --no-audit --no-fund "${tarballs[0]}")
+            # Resolved through the package's exports map, as a consumer does.
+            (cd "$smoke" && node -e 'const fs=require("fs"); for (const f of ["schemas/middleware-plan.schema.json", "openapi/middleware.openapi.json"]) JSON.parse(fs.readFileSync(require.resolve("@caveman-ai/contracts/" + f), "utf8"))')
+            exit 0
+          fi
           # The ai-sdk adapter imports `ai` at runtime, so the smoke installs the
           # framework it exercises; every other adapter stays uninstalled.
           (cd "$smoke" && npm install --ignore-scripts --no-audit --no-fund "${tarballs[0]}" "ai@^7.0.94" "@ai-sdk/provider@^4.0.11")
@@ -166,16 +230,29 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/package-dist"
-          python -m pip install --disable-pip-version-check build==1.3.0 pytest==9.0.3
+          # Hash-locked tools, and no build isolation, so nothing that shapes
+          # the artifact is fetched unpinned. Build before the frameworks are
+          # installed: the backend then sees only the locked tool set.
+          python -m pip install --disable-pip-version-check --require-hashes -r "$GITHUB_WORKSPACE/.github/requirements/release-python.txt"
+          python -m build --sdist --wheel --no-isolation --outdir "$RUNNER_TEMP/package-dist"
           if [[ "${{ steps.package.outputs.package }}" == "packages/middleware/python" ]]; then
-            # Exercise native primary integrations rather than publishing after
-            # an all-skipped adapter run. Other families have isolated CI jobs.
-            python -m pip install --no-deps -e ../../sdk/python
-            python -m pip install ".[langchain,openai]"
-            export CAVEMAN_REQUIRED_ADAPTERS=langchain,openai
+            # Exercise every certified adapter family natively rather than
+            # publishing after an all-skipped run. One virtualenv per family:
+            # their framework constraints can conflict (openai vs litellm).
+            # Experimental families run in middleware-python.yml.
+            for family in langchain openai anthropic litellm; do
+              echo "::group::release gate: [$family]"
+              gate="$RUNNER_TEMP/gate-$family"
+              python -m venv "$gate"
+              "$gate/bin/python" -m pip install --disable-pip-version-check --require-hashes -r "$GITHUB_WORKSPACE/.github/requirements/release-python.txt"
+              "$gate/bin/python" -m pip install --disable-pip-version-check --no-build-isolation --no-deps -e ../../sdk/python
+              "$gate/bin/python" -m pip install --disable-pip-version-check --no-build-isolation -c "$GITHUB_WORKSPACE/packages/middleware/python/constraints/latest.txt" ".[$family]"
+              CAVEMAN_REQUIRED_ADAPTERS="$family" "$gate/bin/python" -m pytest
+              echo "::endgroup::"
+            done
+          else
+            python -m pytest
           fi
-          python -m pytest
-          python -m build --sdist --wheel --outdir "$RUNNER_TEMP/package-dist"
           mapfile -t wheels < <(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name '*.whl' -print)
           mapfile -t sdists < <(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name '*.tar.gz' -print)
           [[ "${#wheels[@]}" == 1 && "${#sdists[@]}" == 1 ]] || { echo "expected exactly one wheel and one sdist" >&2; exit 1; }
@@ -191,19 +268,60 @@ jobs:
             packages/middleware/python)
               # Resolve the artifact's own extras and published SDK dependency.
               # A top-level namespace import would miss broken native imports.
-              "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install --disable-pip-version-check "${wheels[0]}[langchain,openai]"
-              "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install --disable-pip-version-check "${sdists[0]}[langchain,openai]"
+              "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install --disable-pip-version-check -c "$GITHUB_WORKSPACE/packages/middleware/python/constraints/latest.txt" "${wheels[0]}[langchain,openai]"
+              "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install --disable-pip-version-check -c "$GITHUB_WORKSPACE/packages/middleware/python/constraints/latest.txt" "${sdists[0]}[langchain,openai]"
               import='import caveman_middleware.langchain,caveman_middleware.openai,importlib.metadata; assert importlib.metadata.version("caveman-middleware") == "${{ steps.package.outputs.version }}"; assert callable(caveman_middleware.langchain.with_caveman_agent); assert callable(caveman_middleware.openai.with_caveman_openai)'
               ;;
           esac
           "$RUNNER_TEMP/wheel-smoke/bin/python" -c "$import"
           "$RUNNER_TEMP/sdist-smoke/bin/python" -c "$import"
+          # SBOM of what `pip install <package>` brings in: the wheel plus its
+          # required dependencies, no extras, in a pip-less environment.
+          python -m venv --without-pip "$RUNNER_TEMP/sbom-env"
+          python -m pip --python "$RUNNER_TEMP/sbom-env/bin/python" install --disable-pip-version-check "${wheels[0]}"
+          mkdir -p "$RUNNER_TEMP/github-release"
+          python -m cyclonedx_py environment --pyproject pyproject.toml --mc-type library --output-reproducible \
+            -o "$RUNNER_TEMP/github-release/${{ steps.package.outputs.name }}-${{ steps.package.outputs.version }}.cdx.json" \
+            "$RUNNER_TEMP/sbom-env"
+      # The tarball's own runtime graph (dependencies, not peers), resolved the
+      # way a consumer gets it. For the pnpm lane this is the audit gate:
+      # `pnpm audit` is workspace-wide (it would fail on unrelated packages) and
+      # npm cannot resolve the adapters' framework test graph, whose optional
+      # peers conflict.
+      - name: Audit runtime dependency graph and write SBOM (npm)
+        if: steps.package.outputs.ecosystem == 'npm'
+        env:
+          NAME: ${{ steps.package.outputs.name }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/npm-runtime-graph"
+          mkdir -p "$work" "$RUNNER_TEMP/github-release"
+          tar -xzf "$RUNNER_TEMP"/package-dist/*.tgz -C "$work"
+          cd "$work/package"
+          # Peers are the consumer's choice (frameworks, host agents), not ours to ship.
+          node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("package.json","utf8")); for (const k of ["devDependencies","peerDependencies","peerDependenciesMeta","scripts"]) delete p[k]; fs.writeFileSync("package.json", JSON.stringify(p, null, 2))'
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm audit --package-lock-only --omit=dev --audit-level=low
+          file="${NAME#@}"
+          sbom="$RUNNER_TEMP/github-release/${file//\//-}-$VERSION.cdx.json"
+          npm sbom --package-lock-only --omit dev --sbom-format cyclonedx --sbom-type library > "$sbom"
+          # npm names the root component after its directory ("package"); the purl is already right.
+          node -e 'const fs=require("fs"); const [f, n]=process.argv.slice(1); const d=JSON.parse(fs.readFileSync(f,"utf8")); d.metadata.component.name=n; fs.writeFileSync(f, JSON.stringify(d, null, 2))' "$sbom" "$NAME"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: package-dist
           path: ${{ runner.temp }}/package-dist/*
           if-no-files-found: error
           retention-days: 1
+      # Separate from package-dist: the PyPI publisher uploads every file in its
+      # dist directory, and an SBOM there would fail the upload.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: github-release
+          path: ${{ runner.temp }}/github-release/*
+          if-no-files-found: error
+          retention-days: 7
 
   publish-npm:
     if: needs.build.outputs.ecosystem == 'npm'
@@ -212,7 +330,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: npm
-      url: https://www.npmjs.com/package/${{ needs.build.outputs.package == 'packages/pi-extension' && '@caveman-ai/pi' || needs.build.outputs.package == 'packages/middleware/typescript' && '@caveman-ai/middleware' || '@caveman-ai/sdk' }}
+      url: https://www.npmjs.com/package/${{ needs.build.outputs.name }}
     permissions:
       contents: read
       id-token: write
@@ -226,16 +344,41 @@ jobs:
           node-version: "24.16.0"
           registry-url: https://registry.npmjs.org
       - name: Publish with npm trusted publishing
+        env:
+          NAME: ${{ needs.build.outputs.name }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
           npm install --global npm@11.5.1
-          # A prerelease must not displace a stable `latest`. While the package has
-          # no stable release yet, the newest prerelease IS `latest`: leaving the
-          # tag on an older (possibly deprecated) prerelease serves a worse build.
-          name="$(node -p "require('./dist/package.json').name" 2>/dev/null || tar -xOf ./dist/*.tgz package/package.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).name")"
-          current="$(npm view "$name" dist-tags.latest 2>/dev/null || true)"
+          # Only a stable version may take `latest`, so a bare `npm install`
+          # never resolves a prerelease. Prereleases go to their channel
+          # (alpha/beta/rc) or `next`.
           tag=latest
-          if [[ "${{ needs.build.outputs.version }}" == *-* && -n "$current" && "$current" != *-* ]]; then tag=alpha; fi
+          if [[ "$VERSION" == *-* ]]; then
+            tag="${VERSION#*-}"
+            tag="${tag%%.*}"
+            case "$tag" in alpha|beta|rc) ;; *) tag=next ;; esac
+          else
+            # A stable release takes `latest` only when it is semver-greater than
+            # the current `latest`: a patch on an older line goes to
+            # `release-<major>.x`. A package not on npm yet (404) takes it.
+            # Read anonymously: setup-node's placeholder token is not a credential.
+            status="$(curl -sS -H 'Accept: application/vnd.npm.install-v1+json' -o "$RUNNER_TEMP/packument.json" \
+              -w '%{http_code}' "https://registry.npmjs.org/${NAME/\//%2f}")"
+            case "$status" in
+              200) current="$(node -p 'require(process.argv[1])["dist-tags"]?.latest ?? ""' "$RUNNER_TEMP/packument.json")" ;;
+              404) current="" ;;
+              *) echo "npm registry answered HTTP $status for $NAME" >&2; exit 1 ;;
+            esac
+            if [[ -n "$current" ]] && ! node -e '
+              const parse = v => { const [core, pre] = v.split("+")[0].split(/-(.*)/s); return [...core.split(".").map(Number), pre === undefined ? 1 : 0]; };
+              const [next, latest] = process.argv.slice(1).map(parse);
+              const i = next.findIndex((part, index) => part !== latest[index]);
+              process.exit(i !== -1 && next[i] > latest[i] ? 0 : 1);' "$VERSION" "$current"; then
+              tag="release-${VERSION%%.*}.x"
+            fi
+          fi
+          echo "publishing $NAME@$VERSION under dist-tag $tag"
           npm publish ./dist/*.tgz --access public --tag "$tag"
 
   publish-pypi:
@@ -256,3 +399,45 @@ jobs:
           path: dist
       - name: Publish with PyPI trusted publishing
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+
+  # Runs only after a registry publish succeeded, so a release page never
+  # advertises a version the registry does not have. No checkout: notes and
+  # SBOM come from the build job's artifact.
+  github-release:
+    if: >-
+      always() && needs.build.result == 'success' &&
+      (needs.publish-npm.result == 'success' || needs.publish-pypi.result == 'success') &&
+      (startsWith(github.ref_name, 'middleware-') || startsWith(github.ref_name, 'sdk-') || startsWith(github.ref_name, 'contracts-'))
+    needs: [build, publish-npm, publish-pypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: github-release
+          path: release
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ needs.build.outputs.name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists; refusing overwrite" >&2
+            exit 1
+          fi
+          # npm prereleases carry a hyphen; PEP 440 ones end in aN/bN/rcN.
+          prerelease=()
+          [[ "$VERSION" == *-* || "$VERSION" =~ (a|b|rc)[0-9]+$ ]] && prerelease=(--prerelease)
+          # --latest=false: the repo's "Latest" badge belongs to the Caveman
+          # product release, not to a package release.
+          gh release create "$GITHUB_REF_NAME" release/*.cdx.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --latest=false \
+            "${prerelease[@]}" \
+            --title "$NAME $VERSION" \
+            --notes-file release/notes.md

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import importlib
 import json
 import uuid
 from contextlib import asynccontextmanager
@@ -10,9 +11,12 @@ from dataclasses import replace
 from importlib.metadata import version
 from typing import Any
 
+from ._versions import framework_import_failed
+
 try:
     from pydantic_ai import RunContext, Tool
     from pydantic_ai.capabilities import AbstractCapability
+    from pydantic_ai.exceptions import ToolFailed
     from pydantic_ai.messages import (
         ModelMessage, ModelMessagesTypeAdapter, ModelRequest, ModelResponse,
         ToolCallPart, ToolReturnPart,
@@ -21,19 +25,24 @@ try:
     from pydantic_ai.models.wrapper import WrapperModel
     from pydantic_ai.toolsets import FunctionToolset
     from pydantic_core import PydanticSerializationError
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[pydantic-ai] to use the Pydantic AI adapter") from error
+except ImportError as error:
+    framework_import_failed("pydantic_ai", error, "Install caveman-middleware[pydantic-ai] to use the Pydantic AI adapter")
 
-from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, MiddlewareRuntime, Scope
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, Scope, ensure_async
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION, RECOVERY_SCHEMA
+from ._guard import fail_open, recovery_failed, recovery_name_conflict, resolve_scope
 from ._native import Attempt, manifest, owner
-from ._versions import supports_framework
+from ._versions import VERSION, family_gate, installed_version
 
-ADAPTER = Adapter("pydantic-ai", "0.1.0", "2.42.0", "pydantic-ai-message-v1")
+ADAPTER = Adapter("pydantic-ai", VERSION, installed_version("pydantic-ai-slim") or "unknown", "pydantic-ai-message-v1")
 
 
 def scope_from_run(ctx: RunContext, *, namespace: str) -> Scope:
-    """Use native conversation identity plus application-owned branch metadata."""
+    """Use native conversation identity plus application-owned branch metadata.
+
+    Raises ValueError without a conversation_id; as an adapter ``scope``
+    resolver that becomes a pass-through with ``invalid_scope`` in non-strict mode.
+    """
     if not isinstance(ctx.conversation_id, str) or not ctx.conversation_id:
         raise ValueError("Pydantic AI middleware requires a native conversation_id")
     metadata = ctx.metadata or {}
@@ -41,30 +50,23 @@ def scope_from_run(ctx: RunContext, *, namespace: str) -> Scope:
                  metadata.get("caveman_cache_epoch", "0"))
 
 
-def _scope(source, ctx=None):
-    scope = source if isinstance(source, Scope) else source(ctx)
-    if not isinstance(scope, Scope):
-        raise TypeError("Pydantic AI scope resolver must return a Caveman Scope")
-    return scope
-
-
-def _runtime(runtime):
-    return runtime.as_async() if isinstance(runtime, MiddlewareRuntime) else runtime
-
-
-def _check_version(runtime):
-    return supports_framework(runtime, ("pydantic-ai-slim", "2.42", "3"))
+def _scope(runtime, source, ctx=None):
+    return resolve_scope(runtime, ADAPTER.id, source, ctx)
 
 
 def _protocol(model):
-    # Capability-only integration wraps the model selected for this request.
-    # Routing containers and other providers stay opaque until separately tested.
+    """Tested message shapes: OpenAI Chat (incl. Azure/OpenAI-compatible providers) and Anthropic
+    (incl. Bedrock/Vertex clients). FallbackModel, Google/Gemini, Bedrock Converse and others report
+    ``unsupported_provider`` and pass through."""
     while isinstance(model, WrapperModel):
         model = model.wrapped
-    if type(model).__name__ == "OpenAIChatModel" and type(model).__module__ == "pydantic_ai.models.openai":
-        return "openai-chat"
-    if type(model).__name__ == "AnthropicModel" and type(model).__module__ == "pydantic_ai.models.anthropic":
-        return "anthropic-messages"
+    for module, name, protocol in (("pydantic_ai.models.openai", "OpenAIChatModel", "openai-chat"),
+                                   ("pydantic_ai.models.anthropic", "AnthropicModel", "anthropic-messages")):
+        try:
+            if isinstance(model, getattr(importlib.import_module(module), name)):
+                return protocol
+        except ImportError:  # that provider's SDK is not installed, so this model cannot be one
+            continue
     return None
 
 
@@ -131,27 +133,44 @@ class CavemanCapability(AbstractCapability[Any]):
     Other capabilities and the native Agent own authorization, history, tools,
     retries, dependencies, and execution. The caller owns the shared runtime.
     """
-    def __init__(self, *, runtime, scope):
-        self.runtime, self.scope_source = _runtime(runtime), scope
-        self.version_supported = _check_version(runtime)
-        if not self.version_supported:
+    def __init__(self, *, runtime, scope, accept_framework_version=False, _supported=None):
+        self.runtime, self.scope_source = ensure_async(runtime), scope
+        self.accept_framework_version = accept_framework_version
+        self.version_supported = (family_gate(self.runtime, "pydantic_ai", ADAPTER.id, accept_framework_version)
+                                  if _supported is None else _supported)
+        if not self.version_supported or scope is None:
             self.toolset = None
             return
 
         async def recover(ctx: RunContext, handle: str, offset: int = 0, limit: int = 262144, query: str = ""):
-            return await self.runtime.retrieve(_scope(self.scope_source, ctx), handle=handle,
-                                               offset=offset, limit=limit, query=query)
+            try:
+                return await self.runtime.retrieve(_scope(self.runtime, self.scope_source, ctx), handle=handle,
+                                                   offset=offset, limit=limit, query=query)
+            except MiddlewareError as error:  # outcome="failed": the model sees {"error": code}; no retry budget spent
+                raise ToolFailed(recovery_failed(ADAPTER.id, error)["error"]) from error
 
         self.recovery_tool = Tool.from_schema(recover, name="caveman_retrieve", description=RECOVERY_DESCRIPTION,
             json_schema=copy.deepcopy(RECOVERY_SCHEMA), takes_ctx=True)
+        self.recovery_tool.prepare = self._omit_on_name_conflict
         self.recovery_callable = recover
         self.toolset = FunctionToolset([self.recovery_tool], id="caveman-recovery")
+
+    async def _omit_on_name_conflict(self, ctx, tool_def):
+        # A host tool named caveman_retrieve keeps its name; ours is omitted instead of a UserError.
+        for toolset in getattr(getattr(ctx, "agent", None), "toolsets", None) or ():
+            tools = getattr(toolset, "tools", None)
+            if toolset is not self.toolset and isinstance(tools, dict) and "caveman_retrieve" in tools:
+                recovery_name_conflict(self.runtime, ADAPTER.id)
+                return None
+        return tool_def
 
     async def for_run(self, ctx: RunContext):
         if not self.version_supported:
             return self
-        # Each native run receives its own resolved scope and actual toolset.
-        return CavemanCapability(runtime=self.runtime, scope=_scope(self.scope_source, ctx))
+        # Each native run receives its own resolved scope and actual toolset. An
+        # unusable scope (warned once) runs the agent without recovery.
+        return CavemanCapability(runtime=self.runtime, scope=_scope(self.runtime, self.scope_source, ctx),
+                                 accept_framework_version=self.accept_framework_version, _supported=True)
 
     def get_toolset(self):
         return self.toolset
@@ -185,21 +204,32 @@ class CavemanCapability(AbstractCapability[Any]):
 
     async def wrap_model_request(self, ctx: RunContext, *, request_context: ModelRequestContext, handler):
         model = CavemanModel(request_context.model, runtime=self.runtime, scope=self.scope_source,
-                             registration=self, run_context=ctx)
+                             registration=self, run_context=ctx, _supported=self.version_supported)
         return await handler(replace(request_context, model=model))
 
 
 class CavemanModel(WrapperModel):
-    """Native Model delegate; direct model-only use has no recovery executor."""
-    def __init__(self, wrapped: Model, *, runtime, scope, registration=None, run_context=None):
+    """Native Model delegate. Direct model-only use has no recovery executor, so compress mode
+    reports ``recovery_unbound``; add ``CavemanCapability`` to the Agent to compress."""
+    def __init__(self, wrapped: Model, *, runtime, scope, registration=None, run_context=None, accept_framework_version=False,
+                 _supported=None):
         if not isinstance(wrapped, Model):
             raise TypeError("Expected an existing native Pydantic AI Model")
         super().__init__(wrapped)
-        self.runtime, self.scope_source = _runtime(runtime), scope
-        self.version_supported = _check_version(runtime)
+        self.runtime, self.scope_source = ensure_async(runtime), scope
+        self.version_supported = (family_gate(self.runtime, "pydantic_ai", ADAPTER.id, accept_framework_version)
+                                  if _supported is None else _supported)
         self.registration, self.run_context = registration, run_context
 
     async def _prepare(self, messages, settings, parameters):
+        try:
+            return await self._project(messages, settings, parameters)
+        except Exception as error:  # Decision 4: the provider still receives the caller's messages
+            return messages, None if owner.get() is not None else Attempt(
+                self.runtime, None, str(uuid.uuid4()), str(uuid.uuid4()), passive=True,
+                reason=fail_open(self.runtime, ADAPTER.id, error), adapter=ADAPTER.id)
+
+    async def _project(self, messages, settings, parameters):
         if owner.get() is not None:
             return messages, None
         protocol = _protocol(self.wrapped)
@@ -212,24 +242,28 @@ class CavemanModel(WrapperModel):
             return passive("unsupported_version" if not self.version_supported else "unsupported_provider")
         selected = _message_view(messages)
         if selected is None:
-            return passive("opaque_payload")
+            return passive("unsupported_shape")
         context, candidates, paths = selected
-        scope = _scope(self.scope_source, self.run_context)
+        scope = _scope(self.runtime, self.scope_source, self.run_context)
+        if scope is None:
+            return passive("invalid_scope")
         binding, overhead = None, None
         resolved_settings = {**(self.wrapped.settings or {}), **(settings or {})}
         if self.registration and self.registration.registered(self.run_context, parameters, resolved_settings):
             binding = self.runtime.recovery(scope)
+        if binding is not None:
             overhead = json.dumps({"name": binding.name, "description": binding.description,
                                    "parameters": binding.input_schema}, ensure_ascii=False, separators=(",", ":"))
         attempt = Attempt(self.runtime, scope, str(uuid.uuid4()), str(uuid.uuid4()), adapter=ADAPTER.id)
         try:
             outcome = await self.runtime.optimize(scope=scope, adapter=ADAPTER, candidates=candidates, manifest=context,
+                sequence=context.sequence,
                 binding=binding, recovery_overhead_text=overhead,
                 model={"provider": self.wrapped.system, "id": self.wrapped.model_name, "protocol": protocol},
                 logical_call_id=attempt.logical_call_id, attempt_id=attempt.attempt_id)
             try:
                 current = self.runtime.mode != "off" and (binding is None or
-                    (_scope(self.scope_source, self.run_context) == scope and self.runtime.owns_binding(binding, scope)
+                    (_scope(self.runtime, self.scope_source, self.run_context) == scope and self.runtime.owns_binding(binding, scope)
                      and self.registration.registered(self.run_context, parameters, {**(self.wrapped.settings or {}), **(settings or {})})))
             except Exception:
                 current = False
@@ -305,6 +339,6 @@ class CavemanModel(WrapperModel):
                 owner.reset(token)
 
 
-def with_caveman_model(model: Model, *, runtime, scope: Scope) -> CavemanModel:
-    """Wrap an existing model with the recovery-free default."""
-    return CavemanModel(model, runtime=runtime, scope=scope)
+def with_caveman_model(model: Model, *, runtime, scope: Scope, accept_framework_version=False) -> CavemanModel:
+    """Record-only: wrap an existing model without a recovery executor (``recovery_unbound`` in compress mode)."""
+    return CavemanModel(model, runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)

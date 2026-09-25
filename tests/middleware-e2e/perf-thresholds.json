@@ -1,0 +1,46 @@
+{
+  "$comment": [
+    "Limits for tests/middleware-e2e/perf.mjs. The gate fails when a measured value exceeds its limit.",
+    "Derivation: `node tests/middleware-e2e/perf.mjs --measure` run 3 times on the host in `measured`; each limit is",
+    "max(5 x the largest of the 3 values, floor), rounded up to 2 significant digits. The floor is 25 ms for the HTTP",
+    "values only: a small optimize is dominated by the SQLite WAL fsync per commit, which is far slower on CI disks than",
+    "on a laptop SSD. The Go benchmark is CPU-bound and has no floor. Re-derive after a deliberate performance change.",
+    "p99 is measured and printed but not gated: on a shared or CI host, 100-200 samples swing it several-fold (observed 47 -> 72 ms small, 86 -> 190 ms large at load average 12-18), so a p99 limit fails on noise. Medians and the Go benchmarks gate."
+  ],
+  "measured": {
+    "host": "Apple M3 Pro, darwin/arm64, go1.26.5, node 22.22.2 (shared with other workloads)",
+    "date": "2026-09-24",
+    "runs": [
+      {
+        "go_engine_ns_per_op": 3077942,
+        "go_prepare_ns_per_op": 3853133,
+        "http_optimize_small_p50_ms": 1.58,
+        "http_optimize_small_p99_ms": 8.93,
+        "http_optimize_large_p50_ms": 24.97,
+        "http_optimize_large_p99_ms": 47.28
+      },
+      {
+        "go_engine_ns_per_op": 3064033,
+        "go_prepare_ns_per_op": 3323990,
+        "http_optimize_small_p50_ms": 1.3,
+        "http_optimize_small_p99_ms": 3.35,
+        "http_optimize_large_p50_ms": 24.45,
+        "http_optimize_large_p99_ms": 41.07
+      },
+      {
+        "go_engine_ns_per_op": 3088390,
+        "go_prepare_ns_per_op": 3171817,
+        "http_optimize_small_p50_ms": 1.66,
+        "http_optimize_small_p99_ms": 6.3,
+        "http_optimize_large_p50_ms": 23.99,
+        "http_optimize_large_p99_ms": 46.35
+      }
+    ]
+  },
+  "limits": {
+    "go_engine_ns_per_op": 16000000,
+    "go_prepare_ns_per_op": 20000000,
+    "http_optimize_small_p50_ms": 25,
+    "http_optimize_large_p50_ms": 130
+  }
+}

@@ -261,7 +261,7 @@ async function wrapAndEchoEnv(agentId, envVar, extraEnv = {}) {
   });
 }
 
-async function wrapAndEchoEnvJson(agentId, envVars, extraEnv = {}) {
+async function wrapAndEchoEnvJson(agentId, envVars, extraEnv = {}, cwd = undefined) {
   const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const binDir = mkdtempSync(join(tmpdir(), `cave-${agentId}-`));
@@ -277,7 +277,7 @@ process.stdout.write(JSON.stringify(Object.fromEntries(keys.map((key) => [key, p
   delete env.CAVE_GATEWAY_URL;
   Object.assign(env, extraEnv);
   return await new Promise((resolve, reject) => {
-    const child = spawn("node", [cli, "wrap", agentId], { env });
+    const child = spawn("node", [cli, "wrap", agentId], { env, ...(cwd ? { cwd } : {}) });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -563,6 +563,71 @@ test("managed claude wrap does not assert first-party (upstream unverifiable)", 
   });
   assert.equal(out.code, 0, out.stderr);
   assert.equal(JSON.parse(out.stdout)[ASSUME_FIRST_PARTY], null);
+});
+
+// Delivery joins a session's spend to its merged change on tags['repo'] and
+// tags['branch']; the managed wrap is the one place that knows both at launch.
+async function tempRepo(branch, remote) {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { execFileSync } = await import("node:child_process");
+  const repo = mkdtempSync(join(tmpdir(), "cave-wrap-repo-"));
+  // Deterministic git: no user or system config can redirect or break it.
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", HOME: repo };
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { stdio: "ignore", env });
+  git("init", "-q", "-b", branch);
+  if (remote) git("remote", "add", "origin", remote);
+  return repo;
+}
+
+test("wrapWorkTags reads the launch repository deterministically and drops unsafe values", async () => {
+  const { wrapWorkTags, workTagValueSafe } = await import(pathToFileURL(join(dirname(cli), "index.js")).href);
+  const repo = await tempRepo("feat/tags", "git@github.com:acme/checkout.git");
+  const tags = wrapWorkTags(repo);
+  assert.equal(tags, "repo=acme/checkout,branch=feat/tags", "a github remote and an ASCII branch are both tagged");
+  // A non-ASCII branch is dropped (a header value must be a ByteString); the repo survives.
+  assert.equal(wrapWorkTags(await tempRepo("féature/ünïcode-🚀", "https://github.com/acme/checkout.git")), "repo=acme/checkout");
+  // A non-GitHub host is never tagged as a repo: Cloud joins owner/name to GitHub pull requests only.
+  assert.equal(wrapWorkTags(await tempRepo("main", "git@gitlab.example.com:acme/checkout.git")), "branch=main");
+  // No remote at all still yields the branch; outside a repository yields nothing.
+  assert.equal(wrapWorkTags(await tempRepo("main", "")), "branch=main");
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  assert.equal(wrapWorkTags(mkdtempSync(join(tmpdir(), "cave-wrap-norepo-"))), "");
+  for (const bad of ["a,b", "a=b", "with space", "tab\there", "ünïcode"]) assert.equal(workTagValueSafe(bad), false, bad);
+  assert.equal(workTagValueSafe("feat/x_y-1.2"), true);
+});
+
+test("managed claude wrap names repo and branch as x-cave-tags", async () => {
+  const repo = await tempRepo("feat/tags", "git@github.com:acme/checkout.git");
+  const out = await wrapAndEchoEnvJson("claude", ["ANTHROPIC_CUSTOM_HEADERS"], {
+    CAVE_GATEWAY_URL: "https://gateway.example.com",
+    ANTHROPIC_CUSTOM_HEADERS: "x-cave-tags: team=billing,branch=user-said-so\nx-other: 1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+  }, repo);
+  assert.equal(out.code, 0, out.stderr);
+  const lines = JSON.parse(out.stdout).ANTHROPIC_CUSTOM_HEADERS.split("\n");
+  assert.ok(lines.includes("x-other: 1"), "unrelated custom headers survive");
+  assert.ok(lines.includes("x-cave-tags: team=billing,branch=user-said-so,repo=acme/checkout"), lines.join(" | "));
+  // Local mode: the local proxy strips x-cave-* before forwarding, so no tag is written.
+  const local = await wrapAndEchoEnvJson("claude", ["ANTHROPIC_CUSTOM_HEADERS"], { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" }, repo);
+  assert.equal(local.code, 0, local.stderr);
+  assert.equal(JSON.parse(local.stdout).ANTHROPIC_CUSTOM_HEADERS, null);
+});
+
+test("repo slug never carries a remote credential, host or non-GitHub repository", async () => {
+  const { repoSlugFromRemote, mergeWorkTags } = await import(pathToFileURL(join(dirname(cli), "index.js")).href);
+  assert.equal(repoSlugFromRemote("https://user:token@github.com/acme/checkout.git"), "acme/checkout");
+  assert.equal(repoSlugFromRemote("git@github.com:acme/checkout"), "acme/checkout");
+  assert.equal(repoSlugFromRemote("ssh://git@github.com/acme/checkout.git/"), "acme/checkout");
+  assert.equal(repoSlugFromRemote("ssh://git@GitHub.com:22/acme/checkout.git"), "acme/checkout");
+  assert.equal(repoSlugFromRemote("https://gitlab.example.com/acme/checkout.git"), "", "another host is never tagged as this repository");
+  assert.equal(repoSlugFromRemote("git@github.example.internal:acme/checkout.git"), "", "an internal mirror is not github.com");
+  assert.equal(repoSlugFromRemote("https://github.com/group/sub/project.git"), "", "nested paths are not owner/name");
+  assert.equal(repoSlugFromRemote(""), "");
+  assert.equal(mergeWorkTags("", "repo=a/b,branch=x"), "repo=a/b,branch=x");
+  assert.equal(mergeWorkTags("repo=mine/own", "repo=a/b,branch=x"), "repo=mine/own,branch=x");
 });
 
 test("gemini profile injects distinct Gemini and Vertex local routes", async () => {

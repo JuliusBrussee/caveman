@@ -1,32 +1,64 @@
-"""Google GenAI 2.22 native HTTP transports and native AFC registration.
+"""Google GenAI native HTTP transports and native AFC registration.
 
 Install the transport through HttpOptions.httpx_client/httpx_async_client. Wrap
 the existing client or chat to register the recovery executor in its native AFC
-loop. The SDK keeps provider auth, Vertex configuration, retries and history.
+loop; wrapping returns a clone and never changes the caller's object. The
+transport reads each call's scope from the wrapped clone that made it. The SDK
+keeps provider auth, Vertex configuration, retries and history.
 """
 import codecs
 import contextvars
+import copy
 import functools
 import json
 import re
 import uuid
 from urllib.parse import urlsplit
 
+from ._versions import framework_import_failed
+
 try:
     import httpx
     from google import genai
     from google.genai import types
     from google.genai.chats import Chat, AsyncChat
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[google] to use the Google adapter") from error
+    from google.genai.client import AsyncClient
+except ImportError as error:
+    framework_import_failed("google", error, "Install caveman-middleware[google] to use the Google adapter")
 
-from caveman_cloud.middleware import Adapter, Candidate, MiddlewareRuntime, AsyncMiddlewareRuntime, sha256
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, ensure_async, ensure_sync, sha256
+from ._guard import fail_open, recovery_failed, recovery_name_conflict
 from ._native import Attempt, manifest, owner, plain
-from ._versions import supports_framework
+from ._versions import VERSION, family_gate, installed_version
 from ._usage import usage
 from ._google_wire import parse, patch
 
 _invocation = contextvars.ContextVar("caveman_google_invocation", default=None)
+ADAPTER_ID = "google-sdk"
+FRAMEWORK_VERSION = installed_version("google-genai") or "unknown"
+
+
+class _Client(genai.Client):
+    """Wrapped clone sharing the caller's API client. Collecting it never closes the caller's transport."""
+    def __del__(self):
+        pass
+
+
+class _AsyncClient(AsyncClient):
+    def __del__(self):
+        pass
+
+
+def _clone(instance, cls, **attributes):
+    clone = object.__new__(cls)
+    clone.__dict__.update(instance.__dict__)
+    clone.__dict__.update(attributes)
+    return clone
+
+
+def unwrap_google(value):
+    """The caller's original Client/Chat behind a Caveman wrapper; anything else unchanged."""
+    return value.__dict__.get("_caveman_original", value) if hasattr(value, "__dict__") else value
 
 
 def _get(value, name, default=None):
@@ -43,9 +75,18 @@ def _permits(config):
 
 
 def _bind(config, runtime, scope, *, asynchronous=False):
-    context = {"binding": None, "logical_call_id": str(uuid.uuid4()), "streams": set()}
+    """(config with recovery registered, invocation context); fail-open to the caller's config."""
     if _invocation.get() is not None:
         return config, _invocation.get()
+    context = {"binding": None, "logical_call_id": str(uuid.uuid4()), "streams": set(), "scope": scope}
+    try:
+        return _register(config, runtime, scope, context, asynchronous)
+    except Exception as error:  # Decision 4
+        fail_open(runtime, ADAPTER_ID, error)
+        return config, context
+
+
+def _register(config, runtime, scope, context, asynchronous):
     if type(config) not in (dict, types.GenerateContentConfig):
         return config, context
     tools = _get(config, "tools")
@@ -55,17 +96,27 @@ def _bind(config, runtime, scope, *, asynchronous=False):
         return config, context
     for tool in tools:
         if callable(tool) and getattr(tool, "__name__", None) == "caveman_retrieve":
+            recovery_name_conflict(runtime, ADAPTER_ID)
             return config, context
         if not callable(tool) and _get(tool, "function_declarations"):
             # Preserve the SDK's mixed callable/declaration handling.
             return config, context
     binding = runtime.recovery(scope)
+    if binding is None:  # unusable scope: recovery-free
+        return config, context
 
+    # A refused handle is the {"error": code} function response AFC sends back to the model.
     def caveman_retrieve(handle: str, offset: int = 0, limit: int = 262144, query: str = "") -> dict:
-        return binding.execute({"handle": handle, "offset": offset, "limit": limit, **({"query": query} if query else {})})
+        try:
+            return binding.execute({"handle": handle, "offset": offset, "limit": limit, **({"query": query} if query else {})})
+        except MiddlewareError as error:
+            return recovery_failed(ADAPTER_ID, error)
 
     async def async_retrieve(handle: str, offset: int = 0, limit: int = 262144, query: str = "") -> dict:
-        return await binding.execute({"handle": handle, "offset": offset, "limit": limit, **({"query": query} if query else {})})
+        try:
+            return await binding.execute({"handle": handle, "offset": offset, "limit": limit, **({"query": query} if query else {})})
+        except MiddlewareError as error:
+            return recovery_failed(ADAPTER_ID, error)
 
     function = async_retrieve if asynchronous else caveman_retrieve
     function.__name__, function.__doc__ = binding.name, binding.description
@@ -154,37 +205,42 @@ def _wrap_model(module, runtime, scope, asynchronous=False):
     module.generate_content, module.generate_content_stream = generate_content, generate_content_stream
 
 
-def with_caveman_google(client, *, runtime, scope):
-    """Register native model AFC on an existing, transport-configured Client.
+def with_caveman_google(client, *, runtime, scope, accept_framework_version=False):
+    """Return a clone of a transport-configured Client whose model AFC registers recovery.
 
-    This is instance-scoped registration on public methods. Construct the client
-    with the transports below; existing auth and client options remain native.
-    Use with_caveman_google_chat for a Chat, which owns a separate AFC loop.
+    The caller's client is not modified; wrapping a wrapped client re-wraps its
+    original (no stacking); ``unwrap_google`` returns the original. Calls made
+    through the clone carry ``scope`` to the Caveman transports. Chats created
+    from ``clone.chats`` share it. Either SDK runtime type is accepted.
     """
-    if not isinstance(client, genai.Client) or not isinstance(runtime, MiddlewareRuntime):
-        raise TypeError("Expected a Google Client and synchronous MiddlewareRuntime")
-    if not supports_framework(runtime, ("google-genai", "2.22", "3")):
+    client = unwrap_google(client)
+    if not isinstance(client, genai.Client):
+        raise TypeError("Expected a Google Client")
+    sync_runtime = ensure_sync(runtime)
+    if not family_gate(sync_runtime, "google", ADAPTER_ID, accept_framework_version):
         return client
-    _wrap_model(client.models, runtime, scope)
-    _wrap_model(client.aio.models, runtime.as_async(), scope, True)
-    return client
+    models, aio_models = copy.copy(client.models), copy.copy(client.aio.models)
+    _wrap_model(models, sync_runtime, scope)
+    _wrap_model(aio_models, ensure_async(runtime), scope, True)
+    return _clone(client, _Client, _models=models, _aio=_clone(client.aio, _AsyncClient, _models=aio_models), _caveman_original=client)
 
 
-def with_caveman_google_chat(chat, *, runtime, scope, config=None):
-    """Register recovery in an existing native Chat/AsyncChat's own AFC loop.
+def with_caveman_google_chat(chat, *, runtime, scope, config=None, accept_framework_version=False):
+    """Return a clone of a native Chat/AsyncChat whose own AFC loop registers recovery.
 
-    Pass the original default config here, or supply config on each send. No
-    private chat configuration/history is read or modified.
+    Pass the original default config here, or supply config on each send. The
+    clone shares the chat's history; the caller's chat object is not modified.
+    Re-wrapping wraps the original; ``unwrap_google`` returns it.
     """
+    chat = unwrap_google(chat)
     asynchronous = isinstance(chat, AsyncChat)
     if not isinstance(chat, (Chat, AsyncChat)):
         raise TypeError("Expected a native Google Chat or AsyncChat")
-    if asynchronous and isinstance(runtime, MiddlewareRuntime):
-        runtime = runtime.as_async()
-    if not isinstance(runtime, AsyncMiddlewareRuntime if asynchronous else MiddlewareRuntime):
-        raise TypeError("Match the sync/async runtime to the chat")
-    if not supports_framework(runtime, ("google-genai", "2.22", "3")):
+    runtime = ensure_async(runtime) if asynchronous else ensure_sync(runtime)
+    if not family_gate(runtime, "google", ADAPTER_ID, accept_framework_version):
         return chat
+    original, chat = chat, copy.copy(chat)
+    chat._caveman_original = original
     send, stream, default = chat.send_message, chat.send_message_stream, config
     if asynchronous:
         @functools.wraps(send)
@@ -244,17 +300,19 @@ def _selected(body, strings):
     return leaves
 
 
-def _prepare(request, runtime, scope):
+def _prepare(request, runtime, default_scope, supported=True):
     if owner.get() is not None or request.method != "POST" or not re.search(r":(?:generateContent|streamGenerateContent)$", request.url.path):
         return None
     context = _invocation.get() or {}
+    scope = context.get("scope") or default_scope  # per call: the wrapped clone's scope, else the transport default
     attempt = Attempt(runtime, scope, context.get("logical_call_id") or str(uuid.uuid4()), str(uuid.uuid4()),
-                      adapter="google-sdk", reason="opaque_payload")
-    if runtime.mode == "off" or not supports_framework(runtime, ("google-genai", "2.22", "3")):
+                      adapter=ADAPTER_ID, reason="unsupported_shape")
+    if runtime.mode == "off" or not supported or scope is None:
         attempt.passive = True
-        attempt.reason = "disabled" if runtime.mode == "off" else "unsupported_version"
+        attempt.reason = "disabled" if runtime.mode == "off" else "unsupported_version" if not supported else "recovery_unbound"
         return attempt, None
     if any(name in request.headers for name in ("content-encoding", "digest", "content-digest", "content-md5", "signature", "signature-input", "x-amz-content-sha256", "dpop")):
+        attempt.reason = "unsupported_request"
         return attempt, None
     try:
         if len(request.content) > 2 << 20:
@@ -269,7 +327,7 @@ def _prepare(request, runtime, scope):
     if not plain(body) or type(body.get("contents")) is not list:
         return attempt, None
     if body.get("cachedContent"):
-        attempt.reason = "opaque_history_reference"
+        attempt.reason = "unsupported_request"  # cachedContent: history held by the provider
         return attempt, None
     history = manifest([{key: value for key, value in body.items() if key != "contents"}, *body["contents"]])
     if history is None:
@@ -287,7 +345,8 @@ def _prepare(request, runtime, scope):
     if not (runtime.owns_binding(binding, scope) and len(declarations) == 1 and declarations[0] in context.get("declarations", []) and mode in (None, "AUTO") and not generation.get("responseSchema") and not generation.get("responseJsonSchema") and generation.get("responseMimeType") in (None, "text/plain")):
         binding = None
     leaves = _selected(body, strings)
-    options = dict(scope=scope, adapter=Adapter("google-sdk", "0.1.0", "2.22.0", "google-genai-wire-v1"), manifest=history,
+    options = dict(scope=scope, adapter=Adapter(ADAPTER_ID, VERSION, FRAMEWORK_VERSION, "google-genai-wire-v1"), manifest=history,
+        sequence=history.sequence,
         model={"provider": "google", "id": re.sub(r":(?:generateContent|streamGenerateContent)$", "", request.url.path), "protocol": "google-genai"},
         candidates=[Candidate(id=f"leaf-{i}", source_id="/".join(map(str, path)), content=leaf[2]) for i, (path, leaf) in enumerate(leaves)],
         binding=binding, recovery_overhead_text=context.get("overhead"), logical_call_id=attempt.logical_call_id, attempt_id=attempt.attempt_id)
@@ -419,23 +478,34 @@ class _AsyncStream(_Observed, httpx.AsyncByteStream):
             self.finish("cancelled")
 
 
+def _passive(runtime, reason):
+    return Attempt(runtime, None, str(uuid.uuid4()), str(uuid.uuid4()), passive=True, reason=reason, adapter=ADAPTER_ID)
+
+
 class CavemanGoogleTransport(httpx.BaseTransport):
-    """Public HTTPX transport; original-content request hooks run before it."""
-    def __init__(self, *, runtime, scope, provider_base_url="https://generativelanguage.googleapis.com", transport=None):
-        if not isinstance(runtime, MiddlewareRuntime):
-            raise TypeError("Use MiddlewareRuntime with the synchronous transport")
-        self.runtime, self.scope, self.transport = runtime, scope, transport or httpx.HTTPTransport()
+    """Public HTTPX transport; original-content request hooks run before it.
+
+    ``scope`` is only the default for calls not made through a wrapped client;
+    each wrapped call supplies its own. Either SDK runtime type is accepted.
+    """
+    def __init__(self, *, runtime, scope=None, provider_base_url="https://generativelanguage.googleapis.com", transport=None,
+                 accept_framework_version=False):
+        self.runtime, self.scope, self.transport = ensure_sync(runtime), scope, transport or httpx.HTTPTransport()
         self.base = urlsplit(provider_base_url)
+        self.supported = family_gate(self.runtime, "google", ADAPTER_ID, accept_framework_version)
 
     def handle_request(self, request):
         url = urlsplit(str(request.url))
         if (url.scheme, url.netloc) != (self.base.scheme, self.base.netloc) or not url.path.startswith(self.base.path.rstrip("/") + "/"):
             return self.transport.handle_request(request)
-        state = _prepare(request, self.runtime, self.scope)
-        if state is None:
-            return self.transport.handle_request(request)
-        attempt, plan = state
-        outgoing = _apply(request, state, self.runtime.optimize(**plan[2]) if plan else None)
+        try:
+            state = _prepare(request, self.runtime, self.scope, self.supported)
+            if state is None:
+                return self.transport.handle_request(request)
+            attempt, plan = state
+            outgoing = _apply(request, state, self.runtime.optimize(**plan[2]) if plan else None)
+        except Exception as error:  # Decision 4
+            attempt, outgoing = _passive(self.runtime, fail_open(self.runtime, ADAPTER_ID, error)), request
         attempt.observe("dispatch_intent")
         token = owner.set(attempt)
         try:
@@ -457,23 +527,24 @@ class CavemanGoogleTransport(httpx.BaseTransport):
 
 class CavemanGoogleAsyncTransport(httpx.AsyncBaseTransport):
     """Async HTTPX transport with the runtime's bounded async execution path."""
-    def __init__(self, *, runtime, scope, provider_base_url="https://generativelanguage.googleapis.com", transport=None):
-        if isinstance(runtime, MiddlewareRuntime):
-            runtime = runtime.as_async()
-        if not isinstance(runtime, AsyncMiddlewareRuntime):
-            raise TypeError("Use AsyncMiddlewareRuntime with the asynchronous transport")
-        self.runtime, self.scope, self.transport = runtime, scope, transport or httpx.AsyncHTTPTransport()
+    def __init__(self, *, runtime, scope=None, provider_base_url="https://generativelanguage.googleapis.com", transport=None,
+                 accept_framework_version=False):
+        self.runtime, self.scope, self.transport = ensure_async(runtime), scope, transport or httpx.AsyncHTTPTransport()
         self.base = urlsplit(provider_base_url)
+        self.supported = family_gate(self.runtime, "google", ADAPTER_ID, accept_framework_version)
 
     async def handle_async_request(self, request):
         url = urlsplit(str(request.url))
         if (url.scheme, url.netloc) != (self.base.scheme, self.base.netloc) or not url.path.startswith(self.base.path.rstrip("/") + "/"):
             return await self.transport.handle_async_request(request)
-        state = _prepare(request, self.runtime, self.scope)
-        if state is None:
-            return await self.transport.handle_async_request(request)
-        attempt, plan = state
-        outgoing = _apply(request, state, await self.runtime.optimize(**plan[2]) if plan else None)
+        try:
+            state = _prepare(request, self.runtime, self.scope, self.supported)
+            if state is None:
+                return await self.transport.handle_async_request(request)
+            attempt, plan = state
+            outgoing = _apply(request, state, await self.runtime.optimize(**plan[2]) if plan else None)
+        except Exception as error:  # Decision 4
+            attempt, outgoing = _passive(self.runtime, fail_open(self.runtime, ADAPTER_ID, error)), request
         attempt.observe("dispatch_intent")
         token = owner.set(attempt)
         try:
