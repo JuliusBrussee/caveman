@@ -1,7 +1,7 @@
 // Run: node --test supabase/functions/cli-telemetry/ingest.test.ts (Node >= 22.18)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clientIp, readBounded, validateEvent } from "./ingest.ts";
+import { clientIp, fromCli, readBounded, validateEvent } from "./ingest.ts";
 
 const base = {
   schema: "cli/v1",
@@ -152,4 +152,17 @@ test("body reads are bounded", async () => {
   assert.equal(await readBounded(stream("[1,2]"), 10), "[1,2]");
   assert.equal(await readBounded(stream("x".repeat(11)), 10), null);
   assert.equal(await readBounded(null, 10), null);
+});
+
+test("only the CLI's request shape is stored, never a browser's", () => {
+  const h = (init: Record<string, string>) => new Headers(init);
+  // What packages/cli postTelemetry sends through Node's fetch.
+  assert.equal(fromCli(h({ "content-type": "application/json", "sec-fetch-mode": "cors", "user-agent": "node" })), true);
+  assert.equal(fromCli(h({ "content-type": "Application/JSON; charset=utf-8" })), true);
+  // A page's no-cors POST: text/plain body, no preflight.
+  assert.equal(fromCli(h({ "content-type": "text/plain;charset=UTF-8", origin: "https://evil.example" })), false);
+  assert.equal(fromCli(h({ "content-type": "text/plain" })), false, "a safelisted type skips the preflight");
+  assert.equal(fromCli(h({})), false);
+  assert.equal(fromCli(h({ "content-type": "application/json", origin: "https://evil.example" })), false);
+  assert.equal(fromCli(h({ "content-type": "application/json", "sec-fetch-site": "cross-site" })), false);
 });

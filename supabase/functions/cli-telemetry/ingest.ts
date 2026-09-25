@@ -225,6 +225,17 @@ function validEngineSession(e: Engine): boolean {
   return e.estimated_cut_tokens === 0;
 }
 
+// fromCli refuses what a web page can send. A page's no-cors POST with a
+// text/plain body skips the CORS preflight, which would let any site record its
+// visitors' IPs and spend the global cap. Requiring JSON forces a preflight
+// (OPTIONS gets 405, so the browser never sends the POST), and browsers attach
+// Origin to every POST and Sec-Fetch-Site to every request. Node's fetch sends
+// neither (it does send Sec-Fetch-Mode, so that one cannot be used).
+export function fromCli(headers: Headers): boolean {
+  const type = (headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+  return type === "application/json" && !headers.has("origin") && !headers.has("sec-fetch-site");
+}
+
 // Hosted Supabase sits behind Cloudflare, which sets cf-connecting-ip itself and
 // rejects client-supplied copies. Nothing else is read: x-forwarded-for and
 // true-client-ip can carry client-chosen values, so a local `functions serve`
