@@ -566,9 +566,9 @@ Frozen ones still install and work. Their best ideas moved in here.
 
 Your agent still talks to the provider you chose. The skill and hooks run entirely on your machine, and nothing here needs an account.
 
-The `caveman` CLI does send anonymous usage stats by default, and here's the honest why: caveman is free, one person maintains it, and those stats are how I find out which commands people actually use and which optimizations run in real workflows. That's what keeps this thing free and pointed in the right direction. Fair trade, we think.
+The `caveman` CLI does send usage stats by default, and here's the honest why: caveman is free, one person maintains it, and those stats are how I find out which commands people actually use and which optimizations run in real workflows. That's what keeps this thing free and pointed in the right direction. Fair trade, we think.
 
-What it sends: which commands ran, plus token counts through and cut. What it never sends: your prompts, your code, your file paths, or anything that could identify you. It tells you all this the first time you run it.
+What it sends: which commands ran, when your agent starts a session, token counts through and cut, a random install ID, whether you're signed in, how you installed it, your timezone and language, and the IP address the stats come from (IPs get wiped after 90 days). What it never sends: your prompts, your code, or your file paths. It tells you all this the first time you run it.
 
 Not into it? One command and it's off forever, no hard feelings:
 

@@ -485,19 +485,19 @@ function invokedCommand(legacyVerb: string, groupedTail = ""): string {
 
 let currentInvocation: ResolvedInvocation;
 currentInvocation = resolveInvocation(process.argv.slice(2));
-// Version 4 = default-on (opt-out) plus token volume: command_run now carries
-// the local proxy's processed/saved token deltas, so a v3 "yes" was given for a
-// narrower scope and gets the new disclosure reprinted once (never re-asked, and
-// never flipped on). A persisted decision from any version — including a "no" to
-// the old v1 [y/N] prompt — is honored forever; the default only fills the
-// undecided gap, and the first default-on run prints the disclosure line.
-const TELEMETRY_PROMPT_VERSION = 4;
-const TELEMETRY_URL = "https://api.caveman.so/telemetry/cli";
-// The production control-API origin — derived from TELEMETRY_URL (the CLI's
-// other hardcoded prod-host literal) so the two can never drift apart.
-const PROD_API_URL = new URL(TELEMETRY_URL).origin;
+// Version 5 = the receiver stores the client IP address with each event. v4 was
+// default-on (opt-out) plus token volume (command_run carries the local proxy's
+// processed/saved token deltas). A stale-version "yes" was given for a narrower
+// scope and gets the new disclosure reprinted once (never re-asked, and never
+// flipped on). A persisted decision from any version — including a "no" to the
+// old v1 [y/N] prompt — is honored forever; the default only fills the undecided
+// gap, and the first default-on run prints the disclosure line.
+const TELEMETRY_PROMPT_VERSION = 5;
+// Supabase Edge Function; source and schema live in supabase/ at the repo root.
+const TELEMETRY_URL = "https://xvfgtprkhzlvegvmeefq.supabase.co/functions/v1/cli-telemetry";
+const PROD_API_URL = "https://api.caveman.so";
 const TELEMETRY_DISCLOSURE_LINE =
-  "anonymous usage stats on — command counts and token totals only, never prompts, code, or file paths · caveman telemetry off";
+  "usage stats on — commands, agent sessions, token totals, account and install type, timezone and language, and your IP address; never prompts, code, or file paths · caveman telemetry off";
 // Reading token totals means spawning caveman-proxy to query the local SQLite
 // store. It runs after the command's own work, so the cost lands on process exit;
 // a slow or wedged binary drops the token fields rather than holding the CLI.
@@ -571,9 +571,23 @@ function telemetryState(): TelemetryRuntimeState {
 
 // telemetrySendable is the single choke point every emitter must pass: on, and
 // never the un-persisted default (no silent sends, no ephemeral-id retention
-// noise from commands that skipped the disclosure).
+// noise from commands that skipped the disclosure). A config-sourced yes given
+// under older wording also waits until the current disclosure has printed —
+// help-like and `telemetry …` invocations skip that reprint, so without this
+// they would send the widened scope unseen.
 function telemetrySendable(state: TelemetryRuntimeState): boolean {
+  if (state.source === "config" && (state.config?.promptVersion ?? 0) < TELEMETRY_PROMPT_VERSION) return false;
   return state.state === "on" && state.source !== "default";
+}
+
+// Native agent sessions never have a TTY. A decision persisted by an
+// interactive run (which printed the disclosure) still covers them; CI and the
+// env kills still win, and no default is ever minted here.
+function sessionTelemetryState(): TelemetryRuntimeState {
+  const state = telemetryState();
+  if (state.source !== "runtime" || envTruthy(process.env.CI)) return state;
+  const cfg = state.config;
+  return cfg?.decidedAt ? { state: cfg.enabled ? "on" : "off", source: "config", config: cfg } : state;
 }
 
 function envTruthy(v: string | undefined): boolean {
@@ -616,6 +630,7 @@ function parseTelemetryConfig(value: unknown): TelemetryConfig | undefined {
 // any persisted decision — including a "no" to the old v1 prompt — win.
 async function ensureTelemetryDefault() {
   const state = telemetryState();
+  await persistTelemetryEnvKill(state);
   if (isHelpLikeInvocation()) return;
   // `caveman telemetry …` manages the decision explicitly — don't pre-mint an
   // "on" for someone whose first-ever command is `telemetry off`.
@@ -637,6 +652,22 @@ async function ensureTelemetryDefault() {
     return;
   }
   process.stderr.write(`${dim(TELEMETRY_DISCLOSURE_LINE)}\n`);
+}
+
+// persistTelemetryEnvKill turns DO_NOT_TRACK / CAVEMAN_TELEMETRY=0, seen by an
+// interactive run, into a persisted opt-out. Native agent hooks run under hosts
+// that often never read the shell rc (GUI apps, launchd/systemd services), so an
+// env-only kill would not reach them while config still says yes.
+async function persistTelemetryEnvKill(state: TelemetryRuntimeState) {
+  if (state.source !== "env" || state.state !== "off" || !state.config?.enabled || !interactive()) return;
+  try {
+    await saveTelemetryConfig({ enabled: false, decidedAt: new Date().toISOString(), promptVersion: TELEMETRY_PROMPT_VERSION });
+    mutateRawConfig((out) => {
+      delete out.telemetryTokens;
+    });
+  } catch {
+    /* best effort: the env var still wins for this process */
+  }
 }
 
 // ensureTelemetryDisclosureVersion reprints the disclosure once for someone who
@@ -707,13 +738,18 @@ async function telemetryCmd(argv: string[]) {
   if (sub === "status") return telemetryStatus();
   if (sub === "on") return telemetryOn();
   if (sub === "off") return telemetryOff();
+  // Unprinted: the detached children startSessionTelemetry and emitTelemetryEvents spawn.
+  if (sub === "session") return telemetrySession(argv.slice(1));
+  if (sub === "send") return telemetrySend();
   emitCommandRunOnce("error", "usage");
   console.error(`usage: ${invokedCommand("telemetry")} [status|on|off]`);
   process.exit(2);
 }
 
 function telemetryStatus() {
-  const state = telemetryState();
+  // Session state, not command state: an agent or pipe running this has no TTY,
+  // yet native hooks still send under a persisted yes.
+  const state = sessionTelemetryState();
   print({
     enabled: state.state === "on",
     state: state.state,
@@ -732,6 +768,8 @@ async function telemetryOn() {
     promptVersion: TELEMETRY_PROMPT_VERSION,
   };
   await saveTelemetryConfig(telemetry);
+  // The stored version claims this wording was shown, so show it.
+  process.stderr.write(`${dim(TELEMETRY_DISCLOSURE_LINE)}\n`);
   if (!(prior?.enabled && prior.anonymousId) && !telemetryEnvForcesOff()) emitConsentGranted(anonymousId);
   if (telemetryEnvForcesOff()) {
     print({ telemetry: "on", anonymous_id: anonymousId, note: "env override active (DO_NOT_TRACK/CAVEMAN_TELEMETRY) — nothing is sent until it is unset" });
@@ -758,6 +796,84 @@ async function telemetryOff() {
     /* best effort: the decision itself is already persisted */
   }
   print({ telemetry: "off", anonymous_id: "none" });
+}
+
+// Native sessions are where installed users show up: after setup most people
+// launch the agent directly and never run the CLI. The host waits on the
+// SessionStart hook, so the send runs in a detached child and never delays the
+// agent's start.
+function startSessionTelemetry(agent: string, sessionId: string | undefined, source: unknown) {
+  if (!telemetrySendable(sessionTelemetryState())) return;
+  // One event per host session: resumes, repeated SessionStart calls (the
+  // OpenCode V1 plugin re-asks on every model step when it gets no context) and
+  // hooks registered in two scopes would otherwise each count. Checked here so
+  // a repeat costs one failed file create, not a process spawn.
+  if (sessionId) {
+    const dir = join(cavemanHome(), "runtime", "telemetry-sessions");
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      closeSync(openSync(join(dir, createHash("sha256").update(`${agent}\0${sessionId}`).digest("hex")), "wx", 0o600));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
+      /* unwritable home: count it rather than lose it */
+    }
+  }
+  const sessionSource = source === "startup" || source === "resume" || source === "clear" ? source : "unknown";
+  try {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "telemetry", "session", agent, sessionSource], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    /* telemetry never blocks a session */
+  }
+}
+
+async function telemetrySession(argv: string[]) {
+  // session_start stands in for this invocation's command_run.
+  telemetryCommandSent = true;
+  pruneSessionMarkers();
+  const agent = findAgent(argv[0] ?? "")?.id;
+  const state = sessionTelemetryState();
+  // No persisted id means every session would mint a fresh "user".
+  if (!agent || !telemetrySendable(state) || !state.config?.anonymousId) return;
+  const event: Record<string, unknown> = {
+    schema: "cli/v1",
+    anonymous_id: state.config.anonymousId,
+    event: "session_start",
+    agent,
+    session_source: argv[1] === "startup" || argv[1] === "resume" || argv[1] === "clear" ? argv[1] : "unknown",
+    cli_version: cliVersion(),
+    os: process.platform,
+    arch: process.arch,
+    node_major: Number(process.versions.node.split(".")[0] ?? 0),
+    ts: new Date().toISOString(),
+  };
+  const tokens = telemetryTokenDelta();
+  if (tokens) {
+    event.tokens_processed = tokens.processed;
+    event.tokens_saved = tokens.saved;
+    event.tokens_basis = tokens.basis;
+  }
+  await postTelemetry(telemetryBody([event]), 10_000);
+}
+
+// Markers only need to outlive one session's repeated SessionStart calls; a
+// resume the next day counts as a new session. Bounded per run.
+function pruneSessionMarkers() {
+  const dir = join(cavemanHome(), "runtime", "telemetry-sessions");
+  try {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const name of readdirSync(dir).slice(0, 500)) {
+      const path = join(dir, name);
+      if (statSync(path).mtimeMs < cutoff) unlinkSync(path);
+    }
+  } catch {
+    /* nothing to prune */
+  }
 }
 
 function telemetryCommandName(): string {
@@ -856,6 +972,8 @@ function readProxyTokenTotals(): { tokensIn: number; tokensSaved: number; basis:
       encoding: "utf8",
       timeout: TELEMETRY_TOKEN_READ_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "ignore"],
+      // The detached session sender has no console; without this Windows opens one.
+      windowsHide: true,
     });
     const parsed = parseProxyStatsPayload(out);
     if (!parsed) return null;
@@ -971,8 +1089,8 @@ function commandRunEventOnce(exitClass: TelemetryExitClass, errorClass?: Telemet
   if (sub) event.subcommand = sub;
   if (agent) event.agent = agent;
   if (exitClass === "error") event.error_class = errorClass ?? "other";
-  // Token volume rides on command_run only — runtime_bootstrap shares the same
-  // watermark and would race it into a double count.
+  // Token volume rides on command_run and session_start only; the watermark
+  // claim in telemetryTokenDelta keeps concurrent readers from double counting.
   const tokens = telemetryTokenDelta();
   if (tokens) {
     event.tokens_processed = tokens.processed;
@@ -1022,14 +1140,83 @@ function emitRuntimeBootstrap(
   emitTelemetryEvents([event]);
 }
 
+// Fields every event carries. Cheap local reads only: no keychain lookup, no
+// network, and the install path never leaves the machine — only its channel.
+function telemetryContext(): Record<string, string> {
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(readFileSync(configPath(), "utf8")) as Record<string, unknown>;
+  } catch {
+    /* no config yet */
+  }
+  const connected = Boolean(process.env.CAVE_TOKEN || raw.tokenStore || raw.token);
+  const out: Record<string, string> = {
+    account: connected ? "connected" : "none",
+    install_channel: telemetryInstallChannel(),
+  };
+  // Logout leaves the cached entitlement behind, so only a live account's
+  // unexpired plan counts.
+  const entitlement = connected ? parseWrapEntitlement(raw.wrapEntitlement) : null;
+  if (entitlement?.plan && !(Date.parse(entitlement.expires_at) < Date.now())) out.plan = entitlement.plan;
+  try {
+    const { timeZone, locale } = Intl.DateTimeFormat().resolvedOptions();
+    if (timeZone) out.timezone = timeZone;
+    if (locale) out.locale = locale;
+  } catch {
+    /* runtime without Intl data */
+  }
+  return out;
+}
+
+function telemetryInstallChannel(): string {
+  const path = fileURLToPath(import.meta.url).replace(/\\/g, "/");
+  if (path.includes("/_npx/")) return "npx";
+  if (path.includes("/.pnpm/")) return "pnpm";
+  if (path.includes("/.bun/") || path.includes("/bunx-")) return "bun";
+  if (path.includes("/node_modules/")) return "npm";
+  return "source";
+}
+
+function telemetryBody(events: Record<string, unknown>[]): string {
+  const context = telemetryContext();
+  return JSON.stringify(events.map((event) => ({ ...event, ...context })));
+}
+
+// Sends run in a detached child so no command waits on the network at exit.
+// The child has no user-facing deadline, so it can outwait a cold endpoint.
 function emitTelemetryEvents(events: Record<string, unknown>[]): Promise<void> {
+  const body = telemetryBody(events);
+  try {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "telemetry", "send"], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...process.env, CAVEMAN_TELEMETRY_PAYLOAD: body },
+    });
+    child.on("error", () => {});
+    child.unref();
+    return Promise.resolve();
+  } catch {
+    return postTelemetry(body, 1500);
+  }
+}
+
+function postTelemetry(body: string, timeoutMs: number): Promise<void> {
   const url = process.env.CAVEMAN_TELEMETRY_URL || TELEMETRY_URL;
   return fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(events),
-    signal: AbortSignal.timeout(1500),
+    body,
+    signal: AbortSignal.timeout(timeoutMs),
   }).then(() => {}).catch(() => {});
+}
+
+// `caveman telemetry send` (unprinted): the detached child emitTelemetryEvents
+// spawns. Consent was checked by the emitter; this only delivers.
+async function telemetrySend() {
+  telemetryCommandSent = true;
+  const body = process.env.CAVEMAN_TELEMETRY_PAYLOAD;
+  if (body) await postTelemetry(body, 10_000);
 }
 
 function classifyTelemetryError(error: unknown): TelemetryErrorClass {
@@ -3859,11 +4046,25 @@ function mutateRawConfig(fn: (out: Record<string, unknown>) => void) {
   }
   fn(out);
   mkdirSync(dirname(configPath()), { recursive: true });
-  writeFileSync(configPath(), JSON.stringify(out, null, 2), { mode: 0o600 });
+  const target = configWriteTarget();
+  const tmp = `${target}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(out, null, 2), { mode: 0o600 });
+  renameSync(tmp, target);
   try {
-    chmodSync(configPath(), 0o600);
+    chmodSync(target, 0o600);
   } catch {
     /* best effort */
+  }
+}
+
+// Config writes go temp-file + rename so a concurrent reader (background
+// session senders) never sees a truncated file and rewrites it as {}. Resolves
+// a symlinked config.json so the rename replaces its target, not the link.
+function configWriteTarget(): string {
+  try {
+    return realpathSync(configPath());
+  } catch {
+    return configPath();
   }
 }
 
@@ -13826,6 +14027,8 @@ function cavemanBinForHook(powershell: boolean = process.platform === "win32"): 
 // unverified contract; if Codex ever honors that, caveman silently auto-approves a
 // command the user's `approval_policy` meant to gate. Both ends fail closed instead.
 async function shrinkHook() {
+  // Host hooks never report command_run: the POST would hold the host's turn.
+  telemetryCommandSent = true;
   if (nativePolicyMode() === "record" || !new Set(["full-safe", "full-max"]).has(nativeProfile())) process.exit(0);
   let raw: Buffer;
   try { raw = await readHookStdin(); } catch { process.exit(0); }
@@ -14432,6 +14635,8 @@ function nativeWhy(argv: string[]) {
 // never cross the adapter boundary. Any malformed input/write failure stays
 // fail-open and emits no blocking decision.
 async function nativeHook(argv: string[]) {
+  // Host hooks never report command_run: the POST would hold the host's turn.
+  telemetryCommandSent = true;
   const agent = argv[0] === "claude" || argv[0] === "codex" || argv[0] === "hermes" || argv[0] === "gemini" || argv[0] === "opencode" || argv[0] === "pi" ? argv[0] : undefined;
   if (!agent) process.exit(0);
   let raw: Buffer;
@@ -14457,6 +14662,8 @@ async function nativeHook(argv: string[]) {
   } as Record<string, string>)[rawEventName] ?? rawEventName : rawEventName;
   const normalizedEvent = eventName && NATIVE_EVENT_NAMES.has(eventName) ? eventName : "Unknown";
   const sessionId = boundedHookString(event.session_id ?? event.sessionId);
+  // A compaction re-fires SessionStart inside the same session; count real starts.
+  if (normalizedEvent === "SessionStart" && event.source !== "compact") startSessionTelemetry(agent, sessionId, event.source);
   const toolName = boundedHookString(event.tool_name ?? event.toolName);
   const cwd = boundedHookString(event.cwd, 4096);
   const entry: Record<string, unknown> = {
@@ -14819,6 +15026,8 @@ function writeRecallHookMarker(agentId: string) {
 // Fail-open by construction: any problem → exit 0 with no output (never blocks the
 // agent, never injects a guess).
 async function memRecallHook() {
+  // Host hooks never report command_run: the POST would hold the host's turn.
+  telemetryCommandSent = true;
   let raw: Buffer;
   try { raw = await readHookStdin(); } catch { process.exit(0); }
   let evt: { prompt?: string };
@@ -17673,7 +17882,7 @@ export function renderStatus(view: StatusView): string {
     lines.push(statusRow("plan", `${String(view.plan.plan)} · ${humanTokens(Number(view.plan.used))} of ${humanTokens(Number(view.plan.allowance))} optimized tokens this week · resets Mon 00:00 UTC · connected traffic only`));
   }
   lines.push(statusRow("config", `think: ${view.config_sources.think}  ·  remember: ${view.config_sources.remember}  ·  execute: ${view.config_sources.execute}`));
-  lines.push(statusRow("telemetry", `${view.telemetry.state} · anonymous usage ping   ·  change: ${view.telemetry.change}`));
+  lines.push(statusRow("telemetry", `${view.telemetry.state} · usage ping   ·  change: ${view.telemetry.change}`));
   if (view.next) lines.push("", `next:  ${view.next}`);
   return `${lines.join("\n")}\n`;
 }
@@ -17738,7 +17947,7 @@ async function status(argv: string[]) {
   const plan = entitlement && allowance !== null && entitlement.optimized_tokens_week !== undefined
     ? { plan: entitlement.plan, used: entitlement.optimized_tokens_week, allowance }
     : null;
-  const telemetry = telemetryState();
+  const telemetry = sessionTelemetryState();
   const view: StatusView = {
     mode: runningMode ?? resolvedMode,
     mode_source: runningMode ? "running" : "resolved",
@@ -18785,9 +18994,11 @@ async function readRawConfig(): Promise<Record<string, unknown>> {
 
 async function writeRawConfig(out: Record<string, unknown>) {
   await mkdir(dirname(configPath()), { recursive: true });
-  try { chmodSync(configPath(), 0o600); } catch { /* created below */ }
-  await writeFile(configPath(), JSON.stringify(out, null, 2), { mode: 0o600 });
-  chmodSync(configPath(), 0o600);
+  const target = configWriteTarget();
+  const tmp = `${target}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(out, null, 2), { mode: 0o600 });
+  await rename(tmp, target);
+  chmodSync(target, 0o600);
 }
 
 async function saveConfig(cfg: Config) {

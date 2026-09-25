@@ -22,21 +22,25 @@ reporting](https://github.com/JuliusBrussee/caveman/security/advisories/new).
 | Local Proxy + Engine | No | Request content, possibly transformed, and provider credentials go to the provider selected by the agent. Recovery originals stay in local CCR storage unless the agent retrieves and sends them later. |
 | Agent SDK `observe-only` | No | Directly to the configured provider. No Caveman gateway telemetry. |
 | Managed Caveman gateway | Yes | Requests and responses transit Caveman Cloud and the selected provider. Do not treat managed mode as local-only. |
-| Anonymous CLI telemetry | No | Content-free usage events, including token counts processed and saved, go to Caveman by default (opt-out). First interactive run prints the disclosure; `caveman telemetry off` or `DO_NOT_TRACK=1` turns it off for good. |
+| CLI usage telemetry | No | Content-free usage events, including token counts processed and saved, go to Caveman by default (opt-out) and are stored with the sender's IP address. First interactive run prints the disclosure; `caveman telemetry off` or `DO_NOT_TRACK=1` turns it off for good. |
 | Authenticated dashboard sync | Yes | Local span metadata and aggregate findings go to Caveman Cloud when credentials are present. Raw prompt and response bodies are excluded. |
 
 Your model provider, MCP servers, browser targets, agent plugins, and any command
 the agent runs remain separate data processors. Caveman cannot make those tools
 offline or private.
 
-## Anonymous CLI telemetry
+## CLI usage telemetry
 
 Telemetry is **on by default and opt-out**.
 The default is never silent: the first interactive command persists the decision
-(with a stable anonymous identifier) and prints a one-line disclosure naming the
+(with a stable random install ID) and prints a one-line disclosure naming the
 scope and the off switch. Nothing sends before that disclosure run, and CI /
-non-interactive runs never send and never persist the default. Login is not
-required; anonymous events go to `https://api.caveman.so/telemetry/cli`.
+non-interactive runs never persist the default. Once a yes is persisted, agent
+sessions started through caveman's native hooks (which have no terminal) also
+send a `session_start` event from a background process. Login is not
+required; events go to `https://xvfgtprkhzlvegvmeefq.supabase.co/functions/v1/cli-telemetry`,
+a Supabase Edge Function that validates each event and stores it in Caveman's
+Supabase database. Its source and table schema live in [`supabase/`](./supabase/).
 
 ```bash
 caveman telemetry status
@@ -48,12 +52,20 @@ Controls, in precedence order:
 
 - non-empty, non-zero `DO_NOT_TRACK` forces telemetry off;
 - `CAVEMAN_TELEMETRY=1|true|on` enables it and other non-empty values disable it;
-- CI and non-interactive runs are always off;
+- CI is always off; a non-interactive run (such as a native agent hook) sends
+  only under a yes already persisted by an interactive run, and never persists
+  one itself;
 - otherwise the persisted choice in `~/.caveman-cloud/config.json` applies —
   a persisted opt-out (from any version, including the old opt-in prompt's "no")
   is honored forever;
 - no persisted choice means on, persisted with a printed disclosure on the
   first interactive command.
+
+Agent hooks started by desktop apps or background services may never read your
+shell profile, so an environment variable alone can miss them. When an
+interactive command sees `DO_NOT_TRACK` or `CAVEMAN_TELEMETRY=0` while the saved
+choice is on, it saves a lasting opt-out. `caveman telemetry off` does the same
+immediately.
 
 `CAVEMAN_TELEMETRY_URL` overrides the destination, mainly for testing. Telemetry
 requests time out after 1.5 seconds and failures do not fail the CLI command.
@@ -62,11 +74,31 @@ When the disclosed scope widens, the persisted decision carries the wording
 version it was made under. A wider scope reprints the disclosure once on the next
 interactive command and bumps the stored version; it never re-asks, never flips a
 decision, and never touches a persisted opt-out. Version 4 added the token
-totals below.
+totals below; version 5 added the IP address, agent session starts, account
+and install type, timezone, and locale.
 
-Anonymous events can contain:
+This telemetry is pseudonymous, not anonymous: the install ID links one
+install's events together, and the stored IP address shows where they came
+from. IP addresses are cleared from stored events after 90 days; the rest of
+each event is kept. Separately, Supabase's platform request logs record each
+request's IP address and approximate location derived by Cloudflare (city,
+region, country, network) for the Supabase plan's log retention period; the
+90-day clearing covers the events table, not those logs.
 
-- random anonymous ID; CLI version; OS; architecture; Node major version;
+Events can contain:
+
+- the IP address the request came from, as seen by Supabase's edge network
+  (not a value the client can set). Stored with every event and used to
+  rate-limit each sender; the server also records when it received the event;
+- event name and client timestamp; random install ID; CLI version; OS;
+  architecture; Node major version;
+- account state (signed in or not, and the cached plan name), how the CLI was
+  installed (npm, npx, pnpm, bun, or a source checkout; never the path),
+  timezone, and locale;
+- agent session starts: which agent launched (Claude Code, Codex, ...) and
+  whether the session was new, resumed, or cleared, sent once per host session
+  by the native SessionStart hook, with the same token increment described
+  below;
 - allowlisted command, subcommand, and known agent ID; duration; outcome; broad
   error class;
 - tokens processed and tokens saved by the local Proxy, as the increment since
@@ -79,15 +111,18 @@ Anonymous events can contain:
 - local Proxy session aggregates: request and token counts, compression counts,
   cache read/write counts, measurement mode, and headline-suppression state;
 - first-run aggregate scan counts from local Claude Code or Codex history,
-  including sessions, turns, tokens, estimated cuts, scan timing, and whether an
+  including sessions, tokens, estimated cuts, scan timing, and whether an
   account was already connected;
 - Caveman MCP tool name, duration, and outcome.
 
-Anonymous telemetry does **not** include prompt or completion bodies, raw argv,
+Telemetry does **not** include prompt or completion bodies, raw argv,
 file paths, tool arguments or results, provider credentials, or local database
 rows/files. Source enforcement and runtime tests live in
-[`packages/cli/src/index.ts`](./packages/cli/src/index.ts) and
-[`packages/cli/tests/telemetry.runtime.mjs`](./packages/cli/tests/telemetry.runtime.mjs).
+[`packages/cli/src/index.ts`](./packages/cli/src/index.ts),
+[`packages/cli/tests/telemetry.runtime.mjs`](./packages/cli/tests/telemetry.runtime.mjs),
+and the receiving side in
+[`supabase/functions/cli-telemetry/`](./supabase/functions/cli-telemetry/), which
+stores only the fields listed above and drops malformed events.
 
 ## Authenticated Caveman Cloud traffic
 
@@ -117,7 +152,7 @@ Important files include:
   `trial_payloads` table for replay. Reports exclude those payloads.
 - local learn/first-run scans read supported Claude Code and Codex history files
   and write aggregate reports/state locally. Raw session content is not included
-  in anonymous telemetry or authenticated scan sync.
+  in CLI telemetry or authenticated scan sync.
 - `~/.caveman-cloud/config.json`: endpoints, project/account pointers, telemetry
   decision, and other CLI state.
 - account credentials: macOS Keychain when available, otherwise

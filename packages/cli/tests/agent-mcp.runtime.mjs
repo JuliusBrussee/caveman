@@ -249,6 +249,7 @@ test("cloud MCP telemetry carries only closed tool outcome fields", async () => 
   assert.deepEqual(
     Object.keys(toolEvent).sort(),
     [
+      "account",
       "anonymous_id",
       "arch",
       "cli_version",
@@ -257,10 +258,13 @@ test("cloud MCP telemetry carries only closed tool outcome fields", async () => 
       "error_class",
       "event",
       "exit_class",
+      "install_channel",
+      "locale",
       "node_major",
       "os",
       "schema",
       "subcommand",
+      "timezone",
       "ts",
     ],
   );

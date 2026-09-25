@@ -166,7 +166,7 @@ caveman login --instance https://caveman.example.com
 
 Approve the displayed code in your instance's browser, choose a project and
 grant its access scopes. This connection creates no inference key and does not
-sync local request history. The CLI's anonymous usage setting remains in effect;
+sync local request history. The CLI's usage telemetry setting remains in effect;
 `caveman telemetry off` disables it. Credentials use the existing secure store;
 `caveman logout` revokes the session. HTTPS is required except for HTTP loopback development.
 Hosted login remains unavailable during beta.
