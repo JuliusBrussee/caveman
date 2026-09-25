@@ -26,6 +26,7 @@ const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
 const OWNED = require('./lib/owned-install');
 const { transformOpencodeAgentFrontmatter } = require('./lib/opencode-agent');
+const CURSOR_AGENTS = require('./lib/cursor-agent');
 const PORTABLE = require('./lib/portable-process');
 const PLATFORM_PATHS = require('./lib/platform-paths');
 
@@ -622,7 +623,24 @@ function installViaSkills(ctx, prov) {
     args.push('-g');
   }
   const r = runSpawn('npx', args, null, opts.dryRun);
-  if (spawnOk(r)) results.installed.push(prov.id);
+  if (spawnOk(r)) {
+    results.installed.push(prov.id);
+    if (prov.id === 'cursor') {
+      try {
+        CURSOR_AGENTS.installCursorAgents({
+          repoRoot: ctx.repoRoot,
+          force: opts.force,
+          dryRun: opts.dryRun,
+          withMcpShrink: opts.withMcpShrink || false,
+          note,
+          warn: ctx.warn,
+        });
+      } catch (error) {
+        ctx.warn(`  Cursor Cavecrew agents were not installed: ${error.message}`);
+        results.failed.push(['cursor', error.message]);
+      }
+    }
+  }
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
   process.stdout.write('\n');
 }
@@ -1341,6 +1359,19 @@ function uninstall(ctx) {
     } else {
       note('  gemini extension not installed — skipping');
     }
+  }
+
+  // Cursor subagents. One user directory serves the IDE, the Agents Window,
+  // and the CLI on Windows, macOS, and Linux. The ownership journal is the
+  // only authority for which files this installer may delete.
+  try {
+    CURSOR_AGENTS.uninstallCursorAgents({
+      dryRun: opts.dryRun,
+      note,
+      warn,
+    });
+  } catch (error) {
+    warn(`  cursor ownership journal invalid; left integration untouched: ${error.message}`);
   }
 
   // opencode native install — ownership journal is authority. Never infer
