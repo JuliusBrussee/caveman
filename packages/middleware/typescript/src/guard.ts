@@ -14,13 +14,15 @@ export async function guard<T>(runtime: MiddlewareRuntime, adapter: string, sign
   }
 }
 
-/** Synchronous twin of guard() for wrap-time hooks and native method replacement. Nothing raises at wrap time
- * (spec §8), so only an SDK error, which strict mode raises on the request path, propagates. */
-export function guardSync<T>(runtime: MiddlewareRuntime, adapter: string, work: () => T, fallback: () => T): T {
+/** Synchronous twin of guard() for wrap-time hooks and native method replacement. On the request path strict mode
+ * raises `adapter_error` like guard(); at wrap time (`wrapping`) nothing raises (spec §8), so the adapter declines
+ * instead and strict ready() raises it. An SDK error always propagates. */
+export function guardSync<T>(runtime: MiddlewareRuntime, adapter: string, work: () => T, fallback: () => T, wrapping = false): T {
   try { return work(); }
   catch (error) {
     if (error instanceof MiddlewareError) throw error;
-    warnOnce(adapter, 'adapter_error');
+    if (runtime.strict && !wrapping) throw Object.assign(new MiddlewareError('adapter_error'), { cause: error });
+    if (wrapping) runtime.decline('adapter_error', adapter); else warnOnce(adapter, 'adapter_error');
     return fallback();
   }
 }

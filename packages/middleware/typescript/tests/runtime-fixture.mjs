@@ -9,8 +9,9 @@ export const handle = fixture.plan.replacements[0].recovery_handle;
 export const scope = { namespace: 'native-test', session_id: 'one', branch_id: 'main', cache_epoch: '0' };
 
 // The deadline is far past any in-process answer: these tests assert behavior, not latency, and a loaded CI host
-// (load average 54 observed) must not turn the first capabilities fetch into a `deadline` bypass.
-export function runtimeFixture(options = {}) {
+// (load average 54 observed) must not turn the first capabilities fetch into a `deadline` bypass. `retrieveError`
+// ([status, code]) makes every recovery fail the way the runtime answers an unknown handle or an outage.
+export function runtimeFixture({ retrieveError, ...options } = {}) {
   const requests = [], receipts = [], reports = [], retrievals = [];
   let source;
   const runtime = createMiddlewareRuntime({ deadlineMs: 60_000, ...options, onReport: report => reports.push(report), fetch: async (url, options) => {
@@ -19,6 +20,7 @@ export function runtimeFixture(options = {}) {
     if (url.endsWith('/receipts')) { receipts.push(request); return Response.json({ ok: true }); }
     if (url.endsWith('/retrieve')) {
       retrievals.push(request);
+      if (retrieveError) return Response.json({ schema_version: 1, error: { code: retrieveError[1] } }, { status: retrieveError[0] });
       if (!source) throw new Error('Recovery before storing a source');
       return Response.json({ schema_version: 1, handle, source_id: source.source_id, text: source.content,
         original_sha256: source.sha256, total_bytes: Buffer.byteLength(source.content), complete: true,

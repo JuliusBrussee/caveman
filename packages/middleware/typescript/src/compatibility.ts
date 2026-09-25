@@ -1,11 +1,10 @@
 import { warnOnce, type MiddlewareRuntime } from '@caveman-ai/sdk/middleware';
-import { inRange, installedFrameworkVersion } from './versions.js';
+import { inRange, installedFrameworkVersion, warnFrameworkMismatch } from './versions.js';
 
 // No npm peerDependencies (Decision 2): optional peers made `npm install` fail with ERESOLVE. These ranges are the
 // execution gate. `floor` is the pinned merge-gate version; `tested` lists every release the suite has passed.
 const frameworks = {
   ai: { floor: '7.0.94', high: '8', tested: ['7.0.94', '7.0.114'], entry: 'ai' },
-  '@ai-sdk/provider': { floor: '4.0.11', high: '5', tested: ['4.0.11', '4.0.18'], entry: '@ai-sdk/provider' },
   openai: { floor: '7.12.1', high: '8', tested: ['7.12.1', '7.23.0'], entry: 'openai' },
   '@anthropic-ai/sdk': { floor: '0.124.0', high: '0.129', tested: ['0.124.0', '0.125.0', '0.126.0', '0.127.0', '0.128.0'], entry: '@anthropic-ai/sdk' },
   '@google/genai': { floor: '2.21.0', high: '3', tested: ['2.21.0', '2.24.0'], entry: '@google/genai' },
@@ -18,9 +17,10 @@ const frameworks = {
 
 type Framework = keyof typeof frameworks;
 // Decision 11: certified adapters are gated by the conformance suite; the rest are experimental. Each entry is gated
-// only on the packages it imports (C11). `id` is the adapter id in reports and warnings.
+// only on the packages it imports at run time (C11); `@ai-sdk/provider` is imported for types only. `id` is the adapter
+// id in reports and warnings.
 const adapters = {
-  'ai-sdk': { id: 'ai-sdk', tier: 'certified', frameworks: ['ai', '@ai-sdk/provider'] },
+  'ai-sdk': { id: 'ai-sdk', tier: 'certified', frameworks: ['ai'] },
   openai: { id: 'openai-sdk', tier: 'certified', frameworks: ['openai'] },
   anthropic: { id: 'anthropic-sdk', tier: 'certified', frameworks: ['@anthropic-ai/sdk'] },
   langchain: { id: 'langchain', tier: 'certified', frameworks: ['langchain', '@langchain/core'] },
@@ -75,6 +75,7 @@ export function frameworkGate(adapter: AdapterName, options: GateOptions, detect
   let outside = false, unverified = false;
   for (const name of adapters[adapter].frameworks) {
     const version = name in versions ? versions[name] ?? null : frameworkVersion(name);
+    if (!(name in versions)) warnFrameworkMismatch(name, version);
     if (version === null) unverified = true;
     else if (!frameworkCompatible(name, version) && !options.acceptFrameworkVersion) outside = true;
   }

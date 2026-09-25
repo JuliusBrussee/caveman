@@ -3,9 +3,16 @@ import test from 'node:test';
 import { inRange, matchesFramework } from '../dist/versions.js';
 import { inspectFrameworkCompatibility, frameworkCompatible, frameworkGate } from '../dist/compatibility.js';
 import { nameConflict } from '../dist/common.js';
-import { createMiddlewareRuntime } from '@caveman-ai/sdk/middleware';
+import { REASON_CATALOG, createMiddlewareRuntime } from '@caveman-ai/sdk/middleware';
 import { runtimeFixture } from './runtime-fixture.mjs';
-import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { cp, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { MIDDLEWARE_VERSION } from '../dist/common.js';
+import { requirePeers } from './peers.mjs';
 
 test('stable releases in compatibility range are distinct from the exact test pin', () => {
   assert.equal(inRange('7.0.94', '7.0.94', '8'), true);
@@ -86,4 +93,74 @@ test('a missing or unparseable version is never in range', () => {
   assert.equal(inRange('', '1.0', '2'), false);
   assert.equal(inRange('latest', '1.0', '2'), false);
   assert.equal(matchesFramework('@caveman-ai/no-such-framework', '1.0', '2'), false);
+});
+
+// TS-2: an npm-workspaces layout. The middleware is hoisted to the root next to a stray ai@6 and openai@6; the app
+// workspace has its own ai and openai 7. The gate must read the copy the adapter runs (ai: the stray root copy it
+// imports; openai: the app's client) from either working directory, and warn about the ai mismatch only where the app
+// resolves another copy.
+test('TS-2: in an npm workspace the version gate reads the copy the adapter uses, whatever the working directory', async t => {
+  if (!requirePeers(t, 'ai-sdk') || !requirePeers(t, 'openai')) return;
+  const root = await mkdtemp(join(tmpdir(), 'caveman-workspace-')), here = fileURLToPath(new URL('../', import.meta.url));
+  const packageDir = url => { let directory = dirname(fileURLToPath(url)); while (!(directory.endsWith('/ai') || directory.endsWith('/openai'))) directory = dirname(directory); return directory; };
+  const write = async (path, text) => { await mkdir(dirname(join(root, path)), { recursive: true }); await writeFile(join(root, path), text); };
+  await write('package.json', JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  await write('apps/web/package.json', JSON.stringify({ name: 'web', private: true, type: 'module' }));
+  // The stray root copies: ai@6 re-exports the real module so the adapter can load; openai@6 answers `openai/version`.
+  await write('node_modules/ai/package.json', JSON.stringify({ name: 'ai', version: '6.0.0', type: 'module', exports: { '.': './index.js' } }));
+  await write('node_modules/ai/index.js', `export * from ${JSON.stringify(import.meta.resolve('ai'))};`);
+  await write('node_modules/openai/package.json', JSON.stringify({ name: 'openai', version: '6.0.0', type: 'module', exports: { './version': './version.js' } }));
+  await write('node_modules/openai/version.js', "export const VERSION = '6.0.0';");
+  // The hoisted middleware is a copy (a symlink would resolve its imports from this repository), the SDK a link.
+  await mkdir(join(root, 'node_modules/@caveman-ai/middleware'), { recursive: true });
+  await cp(join(here, 'dist'), join(root, 'node_modules/@caveman-ai/middleware/dist'), { recursive: true });
+  await cp(join(here, 'package.json'), join(root, 'node_modules/@caveman-ai/middleware/package.json'));
+  await symlink(join(here, 'node_modules/@caveman-ai/sdk'), join(root, 'node_modules/@caveman-ai/sdk'));
+  await mkdir(join(root, 'apps/web/node_modules'), { recursive: true });
+  for (const name of ['ai', 'openai']) await symlink(packageDir(import.meta.resolve(name)), join(root, 'apps/web/node_modules', name));
+  await write('apps/web/check.mjs', `
+    const warnings = []; console.warn = (...args) => warnings.push(args.join(' '));
+    const { default: OpenAI } = await import('openai');
+    const { inspectFrameworkCompatibility } = await import('@caveman-ai/middleware/compatibility');
+    const { withCaveman } = await import('@caveman-ai/middleware/ai-sdk'), { withCavemanOpenAI } = await import('@caveman-ai/middleware/openai');
+    const { createMiddlewareRuntime } = await import('@caveman-ai/sdk/middleware');
+    const runtime = createMiddlewareRuntime({ fetch: async () => Response.json({}) }), scope = { namespace: 'n', session_id: 's' };
+    withCaveman({ model: {} }, { runtime, scope }); withCavemanOpenAI(new OpenAI({ apiKey: 'k' }), { runtime, scope, fetch });
+    console.log(JSON.stringify({ ai: inspectFrameworkCompatibility('ai-sdk').frameworks[0].installed_version, warnings })); runtime.close();`);
+  const run = async cwd => JSON.parse((await promisify(execFile)(process.execPath, [join(root, 'apps/web/check.mjs')], { cwd })).stdout);
+  const app = await run(join(root, 'apps/web')), top = await run(root);
+  for (const result of [app, top]) {
+    assert.equal(result.ai, '6.0.0', 'the gate reads the ai copy the adapter imports');
+    assert.ok(result.warnings.some(line => line.includes('adapter=ai-sdk reason=unsupported_version')), result.warnings.join('\n'));
+    assert.ok(!result.warnings.some(line => line.includes('adapter=openai-sdk reason=unsupported_version')), `the openai client is 7: ${result.warnings.join('\n')}`);
+  }
+  const mismatch = line => line.includes('resolves ai') && line.includes('imports ai 6.0.0');
+  assert.equal(app.warnings.filter(mismatch).length, 1, app.warnings.join('\n'));
+  assert.equal(top.warnings.filter(mismatch).length, 0, 'at the root the application resolves the same copy');
+});
+
+test('adapter versions sent on the wire are the package version', async t => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(MIDDLEWARE_VERSION, pkg.version);
+  if (!requirePeers(t, 'ai-sdk')) return;
+  const { drivers } = await import('./drivers.mjs'), f = runtimeFixture();
+  try { await drivers['ai-sdk'].run(f.runtime); } finally { f.runtime.close(); }
+  assert.equal(f.requests[0].adapter.version, pkg.version);
+});
+
+// Every reason an adapter reports must be a §8 catalog key. Snake_case literals that are wire fields or identifiers,
+// not reasons, are listed with the adapter ids; single-word reasons are caught where they are passed or assigned.
+const NOT_REASONS = new Set(['cache_breakpoint', 'cache_control', 'call_id', 'caveman_retrieve', 'client_observed_sdk', 'dispatch_intent', 'function_call',
+  'function_call_output', 'is_error', 'lc_name', 'message_stop', 'node_modules', 'parsed_arguments', 'tool_addition', 'tool_call_id', 'tool_removal',
+  'tool_result', 'tool_use', 'tool_use_id', 'compatible', 'langchain', 'mastra', 'mcp']);
+test('every reason literal in src is a REASON_CATALOG key', async () => {
+  const literals = new Map();
+  for (const file of await readdir(new URL('../src/', import.meta.url))) {
+    const text = await readFile(new URL(`../src/${file}`, import.meta.url), 'utf8');
+    for (const [, word] of text.matchAll(/'([a-z][a-z0-9]*(?:_[a-z0-9]+)+)'/g)) literals.set(word, file);
+    for (const [, word] of text.matchAll(/(?:reason\s*[:=]\s*|\b(?:passive\w*|report|warnOnce|decline)\([^()]*?)(?<![=!]==\s*)'([a-z]+)'(?!\s*in\b)/g)) literals.set(word, file);
+  }
+  assert.ok(literals.has('recovery_unbound') && literals.has('disabled'), 'the scan finds reasons');
+  const unknown = [...literals].filter(([word]) => !NOT_REASONS.has(word) && !Object.hasOwn(REASON_CATALOG, word));
+  assert.deepEqual(unknown, []);
 });

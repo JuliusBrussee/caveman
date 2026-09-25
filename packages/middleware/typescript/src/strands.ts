@@ -1,13 +1,13 @@
 import { Model, Message, TextBlock, ToolResultBlock, FunctionTool, type AgentConfig, type BaseModelConfig,
   type StreamOptions, type CountTokensOptions, type ModelStreamEvent, type LocalAgent, type Plugin, type FunctionToolConfig, type Usage as NativeUsage } from '@strands-agents/sdk';
 import { MiddlewareRuntime, recoveryInputSchema, recoveryToolDescription, warnOnce, type Candidate, type RetrieveArgs, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
-import { bindRecovery, currentOwner, hintRecovery, manifest, nameConflict, observe, passiveAttempt, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
+import { MIDDLEWARE_VERSION, bindRecovery, currentOwner, hintRecovery, manifest, nameConflict, observe, passiveAttempt, recoveryResult, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
 import { frameworkGate, frameworkVersion, type GateOptions, type GateReason } from './compatibility.js';
 import { guard } from './guard.js';
 
 export type StrandsScope = ScopeSource<LocalAgent>;
 export interface StrandsOptions extends GateOptions, BudgetOptions { runtime:MiddlewareRuntime; scope:StrandsScope }
-const adapter={id:'strands',version:'0.1.0',framework_version:frameworkVersion('@strands-agents/sdk')??'unknown',serialization_revision:'strands-message-v1'};
+const adapter={id:'strands',version:MIDDLEWARE_VERSION,framework_version:frameworkVersion('@strands-agents/sdk')??'unknown',serialization_revision:'strands-message-v1'};
 const count=(n:unknown):number|null=>typeof n==='number'&&Number.isSafeInteger(n)&&n>=0?n:null;
 function nativeUsage(value:NativeUsage|undefined):Usage|null{
   if(!value)return null;
@@ -34,13 +34,13 @@ export class CavemanStrandsModel<T extends BaseModelConfig=BaseModelConfig> exte
   }
 
   private async prepare(messages:Message[],options:StreamOptions):Promise<{messages:Message[];attempt:Attempt|null}>{
-    if(options.cancelSignal?.aborted&&!currentOwner())this.options.runtime.report(null,{reason:'cancelled',adapter:adapter.id});
     options.cancelSignal?.throwIfAborted();
     if(currentOwner())return {messages,attempt:null};
     const passive=(reason:string)=>({messages,attempt:passiveAttempt(this.options.runtime,adapter.id,reason)});
     if(this.options.runtime.mode==='off')return passive('disabled');
     if(this.blocked)return passive(this.blocked);
-    if(this.stateful)return passive('opaque_context');
+    // The provider holds the conversation, so a compressed turn would persist there.
+    if(this.stateful)return passive('provider_state_retained');
     const scope=this.scope();
     if(!scope)return passive('recovery_unbound');
     return guard(this.options.runtime,adapter.id,options.cancelSignal,()=>this.project(messages,options,scope),()=>passive('adapter_error'));
@@ -104,7 +104,7 @@ class StrandsRegistration implements Plugin{
   readonly recoveryTool:FunctionTool;
   constructor(readonly options:StrandsOptions){
     this.recoveryTool=new FunctionTool({name:'caveman_retrieve',description:recoveryToolDescription,inputSchema:{...structuredClone(recoveryInputSchema),required:[...recoveryInputSchema.required]} as NonNullable<FunctionToolConfig['inputSchema']>,
-      callback:async(input,context)=>JSON.stringify(await options.runtime.retrieve(resolveScope(options.scope,context.agent) as Scope,input as RetrieveArgs,context.cancelSignal))});
+      callback:async(input,context)=>JSON.stringify(await recoveryResult(adapter.id,context.cancelSignal,()=>options.runtime.retrieve(resolveScope(options.scope,context.agent) as Scope,input as RetrieveArgs,context.cancelSignal)))});
   }
   initAgent(agent:LocalAgent){
     // One bundle per agent. Nothing raises at wrap time (spec §8): a second agent keeps running, recovery-free.

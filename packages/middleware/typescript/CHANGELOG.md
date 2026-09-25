@@ -50,6 +50,25 @@ never `latest`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-ver
 - `.d.cts` shims type-check under node16 CommonJS without `skipLibCheck`.
 - `CavemanDocumentCompressor` is also exported from `/langchain-model`, so it
   needs only `@langchain/core`.
+- A `caveman_retrieve` the runtime refuses (an unknown or expired handle, or
+  the runtime being down) now returns `{"error":"<code>"}`, or an MCP
+  `isError` result, instead of crashing the native tool loop.
+- The version gate reads the framework copy the adapter actually runs (openai
+  and anthropic: the client's own version), whatever the working directory.
+  It warns when the app resolves a different copy. `@ai-sdk/provider` is no
+  longer gated.
+- LangChain tool errors are marked `status:'error'` and never compressed.
+- `withCaveman` is idempotent, and its bundle stays mutable; only the recovery
+  tool is frozen. `CavemanChatModel.profile` returns the inner model's
+  profile.
+- ai-sdk retries reuse one logical call id and one optimization.
+- A Mastra thread that overflows the scan budget compresses again on its next
+  turn.
+- Recovery context no longer leaks into calls on other clients. The
+  `recovery_unbound` hint fires on use. Strict mode raises `adapter_error`
+  from synchronous hooks.
+- The wire now carries the real package version and the `@langchain/core`
+  version. Every reported reason is a spec §8 catalog code.
 
 ## 0.1.0-alpha.2 — 2026-09-15
 

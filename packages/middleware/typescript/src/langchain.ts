@@ -1,10 +1,10 @@
-import { createMiddleware, type AgentMiddleware } from 'langchain';
+import { ToolInvocationError, createMiddleware, type AgentMiddleware } from 'langchain';
 import { ToolMessage, isAIMessage } from '@langchain/core/messages';
 import { tool, type ClientTool, type ServerTool } from '@langchain/core/tools';
 import { ensureConfig, type RunnableConfig } from '@langchain/core/runnables';
 import type { JSONSchema } from '@langchain/core/utils/json_schema';
 import { recoveryInputSchema, recoveryToolDescription, type RetrieveArgs, type Scope } from '@caveman-ai/sdk/middleware';
-import { bindRecovery, currentOwner, nameConflict, observe, withOwner } from './common.js';
+import { bindRecovery, currentOwner, nameConflict, observe, recoveryResult, withOwner } from './common.js';
 import { frameworkGate, type GateReason } from './compatibility.js';
 import { langChainUsage, prepareLangChain, resolveLangChainScope, type LangChainOptions } from './langchain-model.js';
 
@@ -22,7 +22,7 @@ export function createCavemanLangChain(options:LangChainOptions){
   const blocked=langChainGate(options,'langchain');
   const recoveryTool=tool(async(input:unknown,config?:RunnableConfig)=>{
     const scope=resolveLangChainScope(options.scope,config);
-    return JSON.stringify(await options.runtime.retrieve(scope as Scope,input as RetrieveArgs,config?.signal));
+    return JSON.stringify(await recoveryResult('langchain',config?.signal,()=>options.runtime.retrieve(scope as Scope,input as RetrieveArgs,config?.signal)));
   // LangChain's JSON Schema validator annotates its input schema. Give the
   // native tool its own copy rather than exposing the SDK's frozen contract.
   },{name:'caveman_retrieve',description:recoveryToolDescription,schema:structuredClone(recoveryInputSchema) as JSONSchema});
@@ -52,13 +52,26 @@ export function createCavemanLangChain(options:LangChainOptions){
         return response;
       }catch(error){observe(attempt,config.signal?.aborted?'cancelled':'failed');throw error;}
     },
+    // TS-3: ToolNode turns a tool error into a ToolMessage without status:'error', so its text would be sent for
+    // compression; any error leaving a wrapToolCall is also fatal to the agent. Answer as ToolNode's default handler
+    // does, marked failed. Input-validation errors, interrupts and aborts keep their native handling.
+    async wrapToolCall(request,handler){
+      try{return await handler(request);}
+      catch(error){
+        if(ToolInvocationError.isInstance(error)||(error as {is_bubble_up?:unknown})?.is_bubble_up===true||request.runtime?.signal?.aborted)throw error;
+        return new ToolMessage({content:`${error}\n Please fix your mistakes.`,tool_call_id:request.toolCall.id??'',name:request.toolCall.name,status:'error'});
+      }
+    },
   });
   return {middleware,recoveryTool,blocked};
 }
 
 /** Native createAgent options; the LangChain entry point that compresses. No new loop. */
 export function withCavemanAgent<T extends {tools?: (ClientTool|ServerTool)[];middleware?:AgentMiddleware[]}>(input:T,options:LangChainOptions):T&{tools:(ClientTool|ServerTool)[];middleware:AgentMiddleware[]}{
-  const {middleware,recoveryTool,blocked}=createCavemanLangChain(options),tools=[...(input.tools??[])];
+  const {middleware:own,recoveryTool,blocked}=createCavemanLangChain(options),tools=[...(input.tools??[])];
+  // Another wrapToolCall already owns tool-error handling (toolRetryMiddleware, toolErrorMiddleware mark failures
+  // status:'error'); ours, innermost, would hide errors from it.
+  const middleware=input.middleware?.some(m=>m.wrapToolCall)?{...own,wrapToolCall:undefined}:own;
   if(options.runtime.mode==='compress'&&!blocked){
     if(tools.some(t=>t.name==='caveman_retrieve'))nameConflict(options.runtime,'langchain');
     else tools.push(recoveryTool);

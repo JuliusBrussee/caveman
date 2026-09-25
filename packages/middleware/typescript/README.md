@@ -46,9 +46,11 @@ Certified adapters are gated by the conformance suite. Experimental ones get the
 
 ## Framework versions
 
-The package declares **no peer dependencies**. Optional framework peers made a plain `npm install` fail with `ERESOLVE` (0.1.0-alpha.1), so the version check happens at run time instead, against the copy your application installed. Under pnpm with `hoist=false`, add the frameworks you use to `public-hoist-pattern`. `@strands-agents/sdk` itself declares peers on `openai` 6, `@ai-sdk/provider` 3 and `@anthropic-ai/sdk` 0.109, so npm needs `--legacy-peer-deps` to install it next to newer versions of those.
+The package declares **no peer dependencies**. Optional framework peers made a plain `npm install` fail with `ERESOLVE` (0.1.0-alpha.1), so the version check happens at run time instead, against the copy the adapter actually runs: for `openai` and `@anthropic-ai/sdk`, the version of the client you pass in; for every other framework, the copy this package resolves, whatever the working directory. When your application resolves a different copy of a framework than this package does, the gate still reads this package's copy and logs one warning naming both versions.
 
-`inspectFrameworkCompatibility(adapter)` from `@caveman-ai/middleware/compatibility` reports the installed version, supported range, tested releases and tier without importing a framework. `package.json` lists the same data in `supportedFrameworkVersions` and `testedFrameworkVersions`.
+In a workspace (npm, pnpm, Yarn), `@caveman-ai/middleware` can be hoisted to the repository root next to an older copy of a framework that another package pulled in (`ai@6`, say) while your app uses its own `ai@7`. The adapter then runs `ai@6` and passes through with `unsupported_version`. Make both resolve one copy: find the other one (`npm ls ai`, `pnpm why ai`), then dedupe it (`npm dedupe`, `pnpm dedupe`) or pin one version for the repository (`overrides` in npm, `pnpm.overrides`). Under pnpm with `hoist=false`, add the frameworks you use to `public-hoist-pattern`. `@strands-agents/sdk` itself declares peers on `openai` 6, `@ai-sdk/provider` 3 and `@anthropic-ai/sdk` 0.109, so npm needs `--legacy-peer-deps` to install it next to newer versions of those.
+
+`inspectFrameworkCompatibility(adapter)` from `@caveman-ai/middleware/compatibility` reports the version of the copy this package resolves, supported range, tested releases and tier without importing a framework (it has no client, so for `openai` and `anthropic` it can differ from what the wrapped client reports). `package.json` lists the same data in `supportedFrameworkVersions` and `testedFrameworkVersions`.
 
 - **Out of range** (including every prerelease, such as `7.1.0-canary.3`): calls pass through unchanged, reporting `unsupported_version`, with one warning. After testing that version, set `acceptFrameworkVersion: true` in the adapter options.
 - **Unreadable** (a deploy bundle with no `node_modules`): the adapter checks that the framework hooks it needs exist and runs, with one `version_unverified` warning. If a hook is missing it passes through with `version_unavailable`.
@@ -76,7 +78,7 @@ Node.js 22.12 or later, ESM `import` or CommonJS `require()`. TypeScript resolve
 
 ## Contracts to keep
 
-Keep original stored history. Register the actual recovery executor through the native helper; a tool schema alone does not attest recovery. Handles are scope-bound and expire according to runtime retention. Recoverability does not guarantee model quality.
+Keep original stored history. Register the actual recovery executor through the native helper; a tool schema alone does not attest recovery. Handles are scope-bound and expire according to runtime retention. A recovery the runtime refuses (unknown or expired handle, runtime down) answers the model `{"error": "<code>"}` (an `isError` result in MCP) and warns once, so the tool loop keeps running; caller cancellation still propagates. Recoverability does not guarantee model quality.
 
 Client modes are `off`, `record`, and `compress`. The client defaults to compression; the standalone runtime defaults to recording. Set both deliberately. Runtime unavailability normally retains original inference input. Strict mode, startup `ready()`, cancellation, and requested recovery failures have different error contracts.
 

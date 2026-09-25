@@ -1,7 +1,7 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import { MiddlewareRuntime, recoveryInputSchema, recoveryToolDescription, sha256, warnOnce, type ManifestItem, type Scope } from '@caveman-ai/sdk/middleware';
-import { bindRecovery, currentOwner, nameConflict, plain, resolveScope, type ScopeSource } from './common.js';
+import { MIDDLEWARE_VERSION, bindRecovery, currentOwner, nameConflict, plain, recoveryResult, resolveScope, type ScopeSource } from './common.js';
 import { frameworkGate, frameworkVersion, type GateOptions } from './compatibility.js';
 import { guard } from './guard.js';
 
@@ -37,13 +37,14 @@ export class CavemanMCPHost {
     const configured = !!options.serverId && !!options.protocolVersion;
     if (!configured) warnOnce('mcp', 'invalid_configuration');
     this.blocked = configured ? frameworkGate('mcp', options) : 'invalid_configuration';
-    this.adapter = { id: 'mcp', version: '0.1.0', framework_version: frameworkVersion('@modelcontextprotocol/sdk') ?? 'unknown', serialization_revision: `mcp-native-${options.protocolVersion}-v1` };
+    this.adapter = { id: 'mcp', version: MIDDLEWARE_VERSION, framework_version: frameworkVersion('@modelcontextprotocol/sdk') ?? 'unknown', serialization_revision: `mcp-native-${options.protocolVersion}-v1` };
     this.recovery = {
       tool: { name: 'caveman_retrieve', description: recoveryToolDescription, inputSchema: structuredClone(recoveryInputSchema) as unknown as Tool['inputSchema'] },
+      // A refused recovery is an MCP tool error result (isError) the model can read, never a throw (TS-1).
       execute: async (arguments_, call) => {
-        if (typeof arguments_.handle !== 'string') throw new TypeError('Recovery requires its scoped handle');
-        const page = await options.runtime.retrieve(resolveScope(options.scope, undefined) as Scope, { ...arguments_, handle: arguments_.handle }, call?.signal);
-        return { content: [{ type: 'text', text: JSON.stringify(page) }] };
+        const page = typeof arguments_.handle === 'string' ? await recoveryResult('mcp', call?.signal,
+          () => options.runtime.retrieve(resolveScope(options.scope, undefined) as Scope, { ...arguments_, handle: arguments_.handle as string }, call?.signal)) : { error: 'invalid_request' };
+        return { content: [{ type: 'text', text: JSON.stringify(page) }], ...('error' in page ? { isError: true } : {}) };
       },
     };
     this.recoveryExecutor = this.recovery.execute;
@@ -64,10 +65,9 @@ export class CavemanMCPHost {
     registeredTools?: readonly MCPToolBinding[]; sequence?: number; signal?: AbortSignal;
   }): Promise<CallToolResult> {
     const report = (reason: string) => this.options.runtime.report(null, { reason, adapter: this.adapter.id });
-    if (options.signal?.aborted && !currentOwner()) report('cancelled');
     options.signal?.throwIfAborted();
     if (currentOwner()) return result;
-    if (this.options.runtime.mode === 'off') { report('off'); return result; }
+    if (this.options.runtime.mode === 'off') { report('disabled'); return result; }
     if (this.blocked) { report(this.blocked); return result; }
     const scope = resolveScope(this.options.scope, undefined);
     if (!scope) { report('recovery_unbound'); return result; }
@@ -81,7 +81,7 @@ export class CavemanMCPHost {
     const report = (reason: string) => this.options.runtime.report(null, { reason, adapter: this.adapter.id });
     if (!plain(result) || !plain(options.tool) || !Array.isArray(result.content) ||
       result.isError || ('resultType' in result && result.resultType !== 'complete') || 'structuredContent' in result || options.tool.outputSchema !== undefined || options.tool.name.startsWith('caveman_')) {
-      report('protected_result'); return result;
+      report('protected'); return result;
     }
     const candidates = [], indices = new Map<string, number>();
     for (let i = 0; i < result.content.length; i++) {

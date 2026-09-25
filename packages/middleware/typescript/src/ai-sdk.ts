@@ -4,8 +4,8 @@ import { isDeepStrictEqual } from 'node:util';
 import type { LanguageModelV4, LanguageModelV4CallOptions, LanguageModelV4Middleware, LanguageModelV4Usage } from '@ai-sdk/provider';
 import { MiddlewareRuntime, normalizeScope, recoveryInputSchema, recoveryToolDescription, type Candidate, type RecoveryBinding, type RetrieveArgs,
   type Scope, type Usage } from '@caveman-ai/sdk/middleware';
-import { bindRecovery, currentOwner, hintRecovery, manifest, nameConflict, observe, observeStream, passiveAttempt, plain, resolveScope, withOwner,
-  type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
+import { MIDDLEWARE_VERSION, bindRecovery, currentOwner, hintRecovery, manifest, nameConflict, observe, observeStream, passiveAttempt, plain, recoveryResult,
+  resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
 import { frameworkGate, frameworkVersion, type GateOptions, type GateReason } from './compatibility.js';
 import { guard, guardSync } from './guard.js';
 
@@ -16,7 +16,7 @@ export interface CavemanOptions extends GateOptions, BudgetOptions {
 }
 interface RecoveryRegistration {
   /** The executor registered in the native tool table; it resolves the scope when the model calls it. */
-  execute: RecoveryBinding['execute'];
+  execute: (args: RetrieveArgs, call?: { signal?: AbortSignal }) => Promise<unknown>;
   tool: ToolSet[string];
   schema: ReturnType<typeof jsonSchema<RetrieveArgs>>;
   expectedSchema: unknown;
@@ -24,7 +24,7 @@ interface RecoveryRegistration {
   calls: WeakMap<readonly unknown[], ToolSet>;
 }
 
-const adapter = { id: 'ai-sdk', version: '0.1.0', framework_version: frameworkVersion('ai') ?? 'unknown', serialization_revision: 'ai-sdk-v4.1' };
+const adapter = { id: 'ai-sdk', version: MIDDLEWARE_VERSION, framework_version: frameworkVersion('ai') ?? 'unknown', serialization_revision: 'ai-sdk-v4.1' };
 type Blocked = GateReason | 'recovery_name_conflict' | null;
 const gate = (options: CavemanOptions): Blocked =>
   frameworkGate('ai-sdk', options, () => typeof wrapLanguageModel === 'function' && typeof tool === 'function' && typeof jsonSchema === 'function');
@@ -75,14 +75,17 @@ export function createCavemanMiddleware(options: CavemanOptions): LanguageModelV
 function nativeMiddleware(options: CavemanOptions, blocked: Blocked, registration?: RecoveryRegistration): LanguageModelV4Middleware {
   const { runtime } = options;
   const prepared = new WeakMap<LanguageModelV4CallOptions, Attempt>();
+  // TS-7: a native retry re-sends the same prompt array in a fresh params object. It keeps the first attempt's logical
+  // call id and reuses its prepared copy instead of optimizing again.
+  const retries = new WeakMap<LanguageModelV4CallOptions['prompt'], { logicalCallId: string; tools?: unknown; prompt?: LanguageModelV4CallOptions['prompt']; attempt?: Attempt }>();
   return {
     specificationVersion: 'v4',
     async transformParams({ params, model }) {
-      if (params.abortSignal?.aborted && !currentOwner()) runtime.report(null, { reason: 'cancelled', adapter: adapter.id });
       params.abortSignal?.throwIfAborted();
       if (currentOwner()) return params;
       // One logical call per request (C14); native retries of that request share it.
-      const logicalCallId = options.logicalCallId ?? crypto.randomUUID();
+      const retry = retries.get(params.prompt), logicalCallId = options.logicalCallId ?? retry?.logicalCallId ?? crypto.randomUUID();
+      if (!retry) retries.set(params.prompt, { logicalCallId });
       const scope = runtime.mode === 'off' || blocked ? null : resolveScope(options.scope, undefined);
       const reason = runtime.mode === 'off' ? 'disabled' : blocked ?? (!scope ? 'recovery_unbound' : model.specificationVersion !== 'v4' ? 'unsupported_shape' : null);
       const attempt: Attempt = reason ? passiveAttempt(runtime, adapter.id, reason, logicalCallId)
@@ -90,8 +93,16 @@ function nativeMiddleware(options: CavemanOptions, blocked: Blocked, registratio
       const next = { ...params };
       prepared.set(next, attempt);
       if (attempt.passive) return next;
-      return guard(runtime, adapter.id, params.abortSignal, () => project(params, next, model, attempt, options, registration),
+      // A lossy copy is reused only while its recovery tool is still attested.
+      if (retry?.attempt && retry.tools === params.tools && (retry.prompt === params.prompt || safeAttested(params, registration))) {
+        Object.assign(attempt, { optimization: retry.attempt.optimization, reason: retry.attempt.reason, passive: retry.attempt.passive });
+        next.prompt = retry.prompt!;
+        return next;
+      }
+      await guard(runtime, adapter.id, params.abortSignal, () => project(params, next, model, attempt, options, registration),
         () => { Object.assign(attempt, { passive: true, reason: 'adapter_error', optimization: null }); next.prompt = params.prompt; return next; });
+      retries.set(params.prompt, { logicalCallId, tools: params.tools, prompt: next.prompt, attempt });
+      return next;
     },
     async wrapGenerate({ params, doGenerate }) {
       const attempt = prepared.get(params);
@@ -118,6 +129,10 @@ function nativeMiddleware(options: CavemanOptions, blocked: Blocked, registratio
     },
   };
 }
+
+const safeAttested = (params: LanguageModelV4CallOptions, registration?: RecoveryRegistration): boolean => {
+  try { return attested(params, registration); } catch { return false; }
+};
 
 async function project(params: LanguageModelV4CallOptions, next: LanguageModelV4CallOptions, model: LanguageModelV4, attempt: Attempt,
   options: CavemanOptions, registration?: RecoveryRegistration): Promise<LanguageModelV4CallOptions> {
@@ -168,8 +183,8 @@ async function project(params: LanguageModelV4CallOptions, next: LanguageModelV4
     }
   }
   const nativeRecovery = params.tools?.find(t => t.type === 'function' && t.name === 'caveman_retrieve');
-  let binding: RecoveryBinding | null = null;
-  try { if (attested(params, registration)) binding = bindRecovery(options.runtime, attempt.scope); } catch { /* unknown registry/schema stays recovery-free */ }
+  // An unknown registry/schema stays recovery-free.
+  const binding: RecoveryBinding | null = safeAttested(params, registration) ? bindRecovery(options.runtime, attempt.scope) : null;
   const optimization = await options.runtime.optimize({ scope: attempt.scope, adapter, candidates, ...context,
     model: { provider: model.provider, id: model.modelId, protocol: 'ai-sdk-v4' },
     binding, logicalCallId: attempt.logicalCallId, attemptId: attempt.attemptId,
@@ -177,9 +192,9 @@ async function project(params: LanguageModelV4CallOptions, next: LanguageModelV4
     ...(params.abortSignal ? { signal: params.abortSignal } : {}),
   });
   attempt.optimization = optimization.replacements.length === 0 ? optimization : null;
-  if (optimization.replacements.length) attempt.reason = 'patch_not_applied';
-  let stillRegistered = binding === null;
-  try { stillRegistered = !binding || attested(params, registration); } catch { /* native definitions changed during optimize */ }
+  // Native definitions can change during optimize.
+  const stillRegistered = !binding || safeAttested(params, registration);
+  if (optimization.replacements.length) attempt.reason = stillRegistered ? 'invalid_plan' : 'recovery_unavailable';
   // Runtime validates all leaves first; local mappings are then checked as a
   // set before publishing the copy. Caller history/checkpoints keep originals.
   if (stillRegistered && optimization.replacements.every(r => setters.has(r.segment_id))) {
@@ -199,11 +214,17 @@ interface NativeHooks {
   onStepFinish?: GenerateTextOnStepEndCallback;
 }
 
+/** TS-4: every recovery tool withCaveman made, so wrapping a bundle again returns it unchanged. */
+const recoveryTools = new WeakSet<object>();
+
 /** Complete native model/tool/callback bundle, and the ai-sdk entry point that compresses. Pass it to the native
- * generation or ToolLoopAgent API. Replacing its tools table or removing its callbacks leaves model calls
- * recovery-free; application-owned source tools stay native. */
+ * generation or ToolLoopAgent API. The bundle and its tools table stay mutable in every mode; only the recovery tool is
+ * frozen. Replacing it or its tools table, or removing the callbacks, leaves model calls recovery-free;
+ * application-owned source tools stay native. Wrapping a bundle twice returns it unchanged. */
 export function withCaveman<T extends { model: LanguageModelV4; tools?: ToolSet }>(input: T, options: CavemanOptions): T {
   const { runtime } = options;
+  const existing = input.tools?.['caveman_retrieve'];
+  if (existing && recoveryTools.has(existing)) return input;
   let blocked: Blocked = runtime.mode === 'off' ? null : gate(options);
   const wrap = (registration?: RecoveryRegistration) => wrapLanguageModel({ model: input.model, middleware: nativeMiddleware(options, blocked, registration) });
   // A static scope that cannot be normalized binds no recovery tool; each call reports invalid_scope instead.
@@ -213,14 +234,16 @@ export function withCaveman<T extends { model: LanguageModelV4; tools?: ToolSet 
     return { ...input, model: wrap() };
   }
   return guardSync(runtime, adapter.id, () => {
-    const execute: RecoveryBinding['execute'] = (args, call) => runtime.retrieve(resolveScope(options.scope, undefined) as Scope, args, call?.signal);
+    const execute: RecoveryRegistration['execute'] = (args, call) =>
+      recoveryResult(adapter.id, call?.signal, () => runtime.retrieve(resolveScope(options.scope, undefined) as Scope, args, call?.signal));
     // Keep the runtime's schema separate from native framework annotations.
     const expectedSchema: RecoveryBinding['inputSchema'] = structuredClone(recoveryInputSchema);
     const nativeSchema = structuredClone(expectedSchema);
     freezeSchema(nativeSchema);
     const schema = Object.freeze(jsonSchema<RetrieveArgs>(nativeSchema));
     const recovery = Object.freeze(tool({ description: recoveryToolDescription, inputSchema: schema, execute }));
-    const tools = Object.freeze({ ...input.tools, caveman_retrieve: recovery });
+    recoveryTools.add(recovery);
+    const tools: ToolSet = { ...input.tools, caveman_retrieve: recovery };
     const registration: RecoveryRegistration = { execute, tool: recovery, schema, expectedSchema, calls: new WeakMap() };
     const hooks = input as T & NativeHooks;
     const steps = new Map<string, ToolSet>();
@@ -243,6 +266,6 @@ export function withCaveman<T extends { model: LanguageModelV4; tools?: ToolSet 
       steps.delete(event.callId);
       await (hooks.onStepEnd ?? hooks.onStepFinish)?.(event);
     };
-    return Object.freeze({ ...input, model: wrap(registration), tools, onStepStart, onLanguageModelCallStart, onStepEnd }) as T;
-  }, () => input);
+    return { ...input, model: wrap(registration), tools, onStepStart, onLanguageModelCallStart, onStepEnd } as T;
+  }, () => input, true);
 }

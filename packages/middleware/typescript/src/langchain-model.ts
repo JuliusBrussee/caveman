@@ -7,7 +7,7 @@ import { IterableReadableStream } from '@langchain/core/utils/stream';
 import { BaseDocumentCompressor } from '@langchain/core/retrievers/document_compressors';
 import type { DocumentInterface } from '@langchain/core/documents';
 import type { Candidate, MiddlewareRuntime, RecoveryBinding, Scope, Usage } from '@caveman-ai/sdk/middleware';
-import { currentOwner, hintRecovery, manifest, observe, passiveAttempt, plain, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
+import { MIDDLEWARE_VERSION, currentOwner, hintRecovery, manifest, observe, passiveAttempt, plain, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
 import { frameworkGate, frameworkVersion, type GateOptions, type GateReason } from './compatibility.js';
 import { guard } from './guard.js';
 
@@ -17,7 +17,8 @@ import { guard } from './guard.js';
 /** A scope, or a function of the run's RunnableConfig (e.g. `config => scopeFromConfig(config, 'app')`). */
 export type LangChainScope = ScopeSource<RunnableConfig>;
 export interface LangChainOptions extends GateOptions, BudgetOptions { runtime: MiddlewareRuntime; scope: LangChainScope }
-export const langChainAdapter = { id:'langchain', version:'0.1.0', framework_version:frameworkVersion('langchain')??'unknown', serialization_revision:'langchain-message-v1' };
+// The serialized messages are @langchain/core's, and this module never loads `langchain`.
+export const langChainAdapter = { id:'langchain', version:MIDDLEWARE_VERSION, framework_version:frameworkVersion('@langchain/core')??'unknown', serialization_revision:'langchain-message-v1' };
 
 /** LangGraph scope from `configurable.thread_id`. Throws without one; adapters catch that and run the call
  * recovery-free (`recovery_unbound`). Any thread_id text works: it is normalized per spec §9. */
@@ -59,7 +60,7 @@ export async function prepareLangChain(messages:BaseMessage[], options:LangChain
   const signal=config?.signal;signal?.throwIfAborted();
   if(currentOwner())return {messages,attempt:null};
   const passive=(reason:string)=>({messages,attempt:passiveAttempt(options.runtime,'langchain',reason)});
-  if(options.runtime.mode==='off')return passive('off');
+  if(options.runtime.mode==='off')return passive('disabled');
   if(blocked)return passive(blocked);
   const scope=resolveLangChainScope(options.scope,config);
   if(!scope)return passive('recovery_unbound');
@@ -82,7 +83,7 @@ export async function prepareLangChain(messages:BaseMessage[], options:LangChain
     const optimization=await options.runtime.optimize({scope,adapter:langChainAdapter,...context,candidates,binding:binding??null,
       ...(binding?{recoveryOverheadText:JSON.stringify({name:binding.name,description:binding.description,input_schema:binding.inputSchema})}:{}),
       logicalCallId:attempt.logicalCallId,attemptId:attempt.attemptId,...(signal?{signal}:{}),});
-    if(!optimization.replacements.every(r=>setters.has(r.segment_id))){attempt.reason='invalid_replacement_plan';return {messages,attempt};}
+    if(!optimization.replacements.every(r=>setters.has(r.segment_id))){attempt.reason='invalid_plan';return {messages,attempt};}
     const result=messages.slice();
     for(const replacement of optimization.replacements){
       const {mi,pi}=setters.get(replacement.segment_id)!,message=result[mi] as ToolMessage;
@@ -115,6 +116,8 @@ export class CavemanChatModel<Options extends BaseChatModelCallOptions=BaseChatM
     this.withStructuredOutput=((...args:Parameters<BaseChatModel<Options>['withStructuredOutput']>)=>this.project().pipe(inner.withStructuredOutput(...args))) as BaseChatModel<Options>['withStructuredOutput'];
   }
   _llmType():string{return this.inner?this.inner._llmType():'caveman';}
+  /** The inner model's capabilities (structured output, context size), which createAgent reads. */
+  override get profile(){return this.inner?this.inner.profile:super.profile;}
   private project(){return RunnableLambda.from<BaseLanguageModelInput,BaseMessage[],Options>(async(input,config)=>{
     const prepared=await prepareLangChain(messages(input),this.caveman,config,null,[],this.blocked);
     if(prepared.attempt){const attempt=prepared.attempt;attempt.runtime.report(attempt.optimization,{reason:attempt.reason??'no_candidate',adapter:'langchain',logicalCallId:attempt.logicalCallId,attemptId:attempt.attemptId});}
@@ -171,7 +174,7 @@ export class CavemanDocumentCompressor extends BaseDocumentCompressor{
   constructor(private readonly options:LangChainDocumentOptions){super();this.blocked=frameworkGate('langchain-core',options,()=>typeof ToolMessage.isInstance==='function');}
   async compressDocuments(documents:DocumentInterface[],_query:string):Promise<DocumentInterface[]>{
     const report=(reason:string)=>this.options.runtime.report(null,{reason,adapter:'langchain-rag'});
-    if(this.options.runtime.mode==='off'){report('off');return documents;}
+    if(this.options.runtime.mode==='off'){report('disabled');return documents;}
     if(this.blocked){report(this.blocked);return documents;}
     const scope=resolveLangChainScope(this.options.scope);
     if(!scope){report('recovery_unbound');return documents;}
@@ -185,7 +188,7 @@ export class CavemanDocumentCompressor extends BaseDocumentCompressor{
         candidates:documents.map((d,i)=>({id:`document-${i}`,sourceId:d.id??`document-${i}`,content:d.pageContent,kind:'artifact'})),binding});
       const replacements=new Map(result.replacements.map(r=>[r.segment_id,r.text]));
       const segments=new Set(documents.map((_document,index)=>`document-${index}`));
-      if(result.replacements.some(replacement=>!segments.has(replacement.segment_id))){report('invalid_replacement_plan');return documents;}
+      if(result.replacements.some(replacement=>!segments.has(replacement.segment_id))){report('invalid_plan');return documents;}
       const projected=documents.map((d,i)=>{
         if(!replacements.has(`document-${i}`))return d;
         // Host applications can load another copy of @langchain/core; keep their native constructor.

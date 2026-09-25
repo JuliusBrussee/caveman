@@ -1,7 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { hash } from 'node:crypto';
-import { MIDDLEWARE_DEFAULTS, MiddlewareRuntime, manifestWindow, normalizeScope, opaqueManifestValue, warnOnce,
+import { MIDDLEWARE_DEFAULTS, MiddlewareError, MiddlewareRuntime, manifestWindow, normalizeScope, opaqueManifestValue, warnOnce,
   type ManifestItem, type Optimization, type RecoveryBinding, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
+
+/** This package's version, sent as `adapter.version`; a test pins it to package.json. */
+export const MIDDLEWARE_VERSION = '1.0.0';
 
 export interface Attempt {
   runtime: MiddlewareRuntime;
@@ -111,6 +114,17 @@ export function nameConflict(runtime: MiddlewareRuntime, adapter: string): 'reco
   warnOnce(adapter, 'recovery_name_conflict');
   runtime.decline('recovery_name_conflict', adapter);
   return 'recovery_name_conflict';
+}
+
+/** TS-1: a recovery the runtime refuses (unknown or expired handle, runtime down) answers the model `{error: code}`
+ * with a warn-once instead of failing the host's native tool loop. Caller aborts and non-SDK errors propagate. */
+export async function recoveryResult<T>(adapter: string, signal: AbortSignal | null | undefined, retrieve: () => Promise<T>): Promise<T | { error: string }> {
+  try { return await retrieve(); }
+  catch (error) {
+    if (signal?.aborted || !(error instanceof MiddlewareError)) throw error;
+    warnOnce(adapter, error.code);
+    return { error: error.code };
+  }
 }
 
 const hinted = new Set<string>();

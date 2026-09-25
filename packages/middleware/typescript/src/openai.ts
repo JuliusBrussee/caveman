@@ -1,9 +1,9 @@
 import type OpenAI from 'openai';
-import { VERSION } from 'openai/version';
 import { MiddlewareRuntime, recoveryInputSchema, recoveryToolDescription, warnOnce, type RetrieveArgs, type Scope } from '@caveman-ai/sdk/middleware';
-import { bindRecovery, hintRecovery, nameConflict, plain, resolveScope, type BudgetOptions, type ScopeSource } from './common.js';
+import { bindRecovery, hintRecovery, nameConflict, plain, recoveryResult, resolveScope, type BudgetOptions, type ScopeSource } from './common.js';
 import { frameworkGate, type GateOptions } from './compatibility.js';
 import { guardSync } from './guard.js';
+import { clientVersion } from './versions.js';
 import { createCavemanFetch, withNativeRecovery, type FetchOptions, type RecoveryContext } from './transport.js';
 
 export interface OpenAIOptions extends GateOptions, BudgetOptions, Pick<FetchOptions, 'wireBytes' | 'allowStoredResponses'> {
@@ -26,14 +26,15 @@ export interface OpenAIToolLoop<T extends OpenAI, Tool> {
 type ChatFunction = OpenAI.Chat.Completions.ChatCompletionFunctionTool;
 type ResponseFunction = OpenAI.Responses.FunctionTool;
 const ID='openai-sdk';
-const gate=(options:OpenAIOptions)=>frameworkGate('openai',options,undefined,{openai:VERSION});
+// TS-2: gate on the SDK copy that built this client, not whichever `openai` resolves from this package.
+const gate=(client:OpenAI,options:OpenAIOptions)=>frameworkGate('openai',options,undefined,{openai:clientVersion(client)});
 export function withCavemanOpenAITools<T extends OpenAI>(client:T,options:OpenAIOptions & {protocol:'openai-chat';tools:ChatFunction[];functions:Functions}):OpenAIToolLoop<T,ChatFunction>;
 export function withCavemanOpenAITools<T extends OpenAI>(client:T,options:OpenAIOptions & {protocol:'openai-responses';tools:ResponseFunction[];functions:Functions}):OpenAIToolLoop<T,ResponseFunction>;
 /** Native application-owned Chat/Responses calls, with no added scheduler. The OpenAI entry point that compresses. */
 export function withCavemanOpenAITools<T extends OpenAI>(client:T,options:OpenAIOptions & {protocol:'openai-chat'|'openai-responses';tools:(ChatFunction|ResponseFunction)[];functions:Functions}):OpenAIToolLoop<T,ChatFunction|ResponseFunction>{
   const definitions=structuredClone(options.tools);
   let functions=Object.freeze({...options.functions});
-  const blocked=gate(options);
+  const blocked=gate(client,options);
   let context:(()=>RecoveryContext|null)|undefined,conflict=false;
   if(options.runtime.mode==='compress'&&!blocked){
     const names=definitions.map(tool=>'function' in tool?tool.function.name:tool.name);
@@ -45,7 +46,7 @@ export function withCavemanOpenAITools<T extends OpenAI>(client:T,options:OpenAI
       const schema={name:'caveman_retrieve',description:recoveryToolDescription,parameters:structuredClone(recoveryInputSchema)};
       const definition=options.protocol==='openai-chat'?{type:'function' as const,function:schema}:{type:'function' as const,...schema,strict:false};
       definitions.push(definition);
-      const execute=(input:unknown)=>options.runtime.retrieve(resolveScope(options.scope,undefined) as Scope,input as RetrieveArgs);
+      const execute=(input:unknown)=>recoveryResult(ID,undefined,()=>options.runtime.retrieve(resolveScope(options.scope,undefined) as Scope,input as RetrieveArgs));
       functions=Object.freeze({...functions,caveman_retrieve:execute});
       const overhead=JSON.stringify(definition);
       // Per request, so a scope function resolves in each caller's own context.
@@ -60,16 +61,15 @@ export function withCavemanOpenAITools<T extends OpenAI>(client:T,options:OpenAI
 }
 
 /** A native withOptions clone; APIPromise, parsers, streams and runners survive. `chat.completions.runTools`
- * compresses; plain `create` calls cannot bind the recovery tool and report `recovery_unbound`. */
+ * compresses; plain `create` calls cannot bind the recovery tool and report `recovery_unbound` (hinted once, on use). */
 export function withCavemanOpenAI<T extends OpenAI>(client:T,options:OpenAIOptions):T{
-  const blocked=gate(options);
-  if(!blocked)hintRecovery(options.runtime,ID,'withCavemanOpenAI create()','chat.completions.runTools or withCavemanOpenAITools');
-  return wrapOpenAI(client,options,blocked);
+  return wrapOpenAI(client,options,gate(client,options));
 }
 
 interface Tools { context:(()=>RecoveryContext|null)|undefined; conflict:boolean; protocol:'openai-chat'|'openai-responses' }
 function wrapOpenAI<T extends OpenAI>(client:T,options:OpenAIOptions,blocked:string|null,tools?:Tools):T{
-  const fetch=createCavemanFetch({...options,provider:'openai',providerBaseURL:client.baseURL,frameworkVersion:VERSION,...(blocked?{passiveReason:blocked}:{})});
+  const fetch=createCavemanFetch({...options,provider:'openai',providerBaseURL:client.baseURL,frameworkVersion:clientVersion(client)??'unknown',...(blocked?{passiveReason:blocked}:{}),
+    ...(tools?{}:{onUnbound:()=>hintRecovery(options.runtime,ID,'withCavemanOpenAI create()','chat.completions.runTools or withCavemanOpenAITools')})});
   const native=client.withOptions({fetch});
   if(blocked||options.runtime.mode==='off')return native;
   guardSync(options.runtime,ID,()=>{
@@ -80,20 +80,20 @@ function wrapOpenAI<T extends OpenAI>(client:T,options:OpenAIOptions,blocked:str
       return guardSync(options.runtime,ID,()=>{
         const names=bodyTools.map(t=>plain(t)&&plain(t.function)?t.function.name||(typeof t.function.function==='function'?t.function.function.name:null):null);
         const logicalCallId=crypto.randomUUID();
-        if(names.includes('caveman_retrieve'))return withNativeRecovery({runtime:options.runtime,reason:nameConflict(options.runtime,ID),logicalCallId},()=>run(body as never,requestOptions as never));
+        if(names.includes('caveman_retrieve'))return withNativeRecovery({runtime:options.runtime,reason:nameConflict(options.runtime,ID),logicalCallId,owner:fetch},()=>run(body as never,requestOptions as never));
         const binding=names.some(name=>typeof name!=='string'||!name)||new Set(names).size!==names.length?null:bindRecovery(options.runtime,resolveScope(options.scope,undefined));
         if(!binding)return run(body as never,requestOptions as never);
-        const execute=(input:Parameters<typeof binding.execute>[0],runner:{controller:AbortController})=>binding.execute(input,{signal:runner.controller.signal});
+        const execute=(input:Parameters<typeof binding.execute>[0],runner:{controller:AbortController})=>recoveryResult(ID,runner.controller.signal,()=>binding.execute(input,{signal:runner.controller.signal}));
         const recovery=Object.freeze({type:'function' as const,function:Object.freeze({name:binding.name,description:binding.description,parameters:binding.inputSchema,parse:JSON.parse,function:execute})});
         const params={...body,tools:[...bodyTools,recovery]};
         const overhead=JSON.stringify({type:'function',function:{name:binding.name,description:binding.description,parameters:binding.inputSchema}});
         // The native runner snapshots its dispatch table before any callbacks. The
         // invocation-owned recovery entry cannot change after that snapshot.
         const isRegistered=()=>options.runtime.ownsBinding(binding,binding.scope)&&recovery.function.function===execute&&recovery.function.parse===JSON.parse;
-        return withNativeRecovery({runtime:options.runtime,scope:binding.scope,binding,overhead,logicalCallId,isRegistered},()=>run(params as never,requestOptions as never));
+        return withNativeRecovery({runtime:options.runtime,scope:binding.scope,binding,overhead,logicalCallId,isRegistered,owner:fetch},()=>run(params as never,requestOptions as never));
       },()=>run(body as never,requestOptions as never));
     }) as typeof native.chat.completions.runTools;
-  },()=>undefined);
+  },()=>undefined,true);
   if(tools?.context||tools?.conflict){
     const {context,conflict,protocol}=tools;
     // `post` is an SDK-internal seam: if it moves, calls run recovery-free instead of failing.
@@ -102,9 +102,9 @@ function wrapOpenAI<T extends OpenAI>(client:T,options:OpenAIOptions,blocked:str
       native.post=(path,params)=>{
         if(path!==(protocol==='openai-chat'?'/chat/completions':'/responses'))return post(path,params);
         const current=conflict?{runtime:options.runtime,reason:'recovery_name_conflict',logicalCallId:crypto.randomUUID()}:context?.();
-        return current?withNativeRecovery(current,()=>post(path,params)):post(path,params);
+        return current?withNativeRecovery({...current,owner:fetch},()=>post(path,params)):post(path,params);
       };
-    },()=>undefined);
+    },()=>undefined,true);
   }
   const clone=native.withOptions.bind(native);
   native.withOptions=(next)=>{

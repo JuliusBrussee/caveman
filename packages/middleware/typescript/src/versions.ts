@@ -9,32 +9,44 @@ function packageVersion(directory: string, name: string): string | null {
   } catch { return null; }
 }
 
-// Decision 2: read the application's installed copy (node_modules above the working directory) before the copy next
-// to this module, so a stray hoisted copy cannot certify the app. Bundled deploys (CJS, esbuild, Next server bundles)
-// can have neither: the result is null and the adapter feature-detects instead (Decision 3).
+function nearest(directory: string, name: string, levels: number, nested: boolean): string | null {
+  for (let depth = 0; depth < levels; depth++) {
+    const version = packageVersion(nested ? join(directory, 'node_modules', name) : directory, name);
+    if (version !== null || dirname(directory) === directory) return version;
+    directory = dirname(directory);
+  }
+  return null;
+}
+
+// TS-2: the copy this module imports is the copy the adapter runs, so the gate reads that one, resolved from here and
+// never from the working directory: a stray hoisted copy in a workspace can neither certify nor block the app.
+// Bundled deploys (CJS, esbuild) cannot resolve it: the result is null and the adapter feature-detects (Decision 3).
 const installed = new Map<string, string | null>();
 export function installedFrameworkVersion(name: string, entry = name): string | null {
   const key = `${name}:${entry}`;
   if (installed.has(key)) return installed.get(key)!;
   let version: string | null = null;
-  try {
-    for (let directory = process.cwd(), depth = 0; version === null && depth < 32; depth++) {
-      version = packageVersion(join(directory, 'node_modules', name), name);
-      if (dirname(directory) === directory) break;
-      directory = dirname(directory);
-    }
-  } catch { /* no working directory */ }
-  try {
-    // import.meta.resolve is absent in CJS bundles; the throw leaves version null.
-    for (let directory = dirname(fileURLToPath(import.meta.resolve(entry))), depth = 0; version === null && depth < 16; depth++) {
-      version = packageVersion(directory, name);
-      if (dirname(directory) === directory) break;
-      directory = dirname(directory);
-    }
-  } catch { /* unresolvable from this module */ }
+  // import.meta.resolve is absent in CJS bundles; the throw leaves version null.
+  try { version = nearest(dirname(fileURLToPath(import.meta.resolve(entry))), name, 16, false); } catch { /* unresolvable from this module */ }
   if (installed.size >= 32) installed.clear();
   installed.set(key, version);
   return version;
+}
+
+/** Once per package: warn when the application's own copy (found from the working directory) differs from the copy
+ * this package imports. Only a warning; the gate never reads the application's copy. */
+const compared = new Set<string>();
+export function warnFrameworkMismatch(name: string, imported: string | null): void {
+  if (imported === null || compared.has(name)) return;
+  compared.add(name);
+  let application: string | null = null;
+  try { application = nearest(process.cwd(), name, 32, true); } catch { /* no working directory */ }
+  if (application !== null && application !== imported) console.warn(`Caveman middleware: the application resolves ${name} ${application}, but this package imports ${name} ${imported} and is gated on it; dedupe or link ${name} so both resolve one copy.`);
+}
+
+/** openai and anthropic: the version of the SDK copy that built this client, from its own User-Agent. */
+export function clientVersion(client: unknown): string | null {
+  try { return /\/JS (\S+)$/.exec((client as { getUserAgent(): string }).getUserAgent())?.[1] ?? null; } catch { return null; }
 }
 
 /** Stable releases only, deliberately: a prerelease (`7.1.0-canary.3`) is outside every range, reports

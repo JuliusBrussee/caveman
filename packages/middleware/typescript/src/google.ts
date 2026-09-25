@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { GoogleGenAI, Models, Chats, type GoogleGenAIOptions, type GenerateContentParameters, type GenerateContentConfig, type CallableTool, type FunctionCall, type HttpResponse, type Part, type Tool } from '@google/genai';
 import { MiddlewareRuntime, sha256, type RecoveryBinding, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
-import { bindRecovery, currentOwner, manifest, nameConflict, observe, passiveAttempt, plain, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
+import { MIDDLEWARE_VERSION, bindRecovery, currentOwner, manifest, nameConflict, observe, passiveAttempt, plain, recoveryResult, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
 import { parseWire, patchWire, pathKey, type StringLeaf } from './wire.js';
 import { frameworkGate, frameworkVersion, type GateOptions } from './compatibility.js';
 import { guard, guardSync } from './guard.js';
@@ -40,7 +40,7 @@ function recoveryTool(binding: RecoveryBinding): CallableTool {
       const parts: Part[] = [];
       for (const call of calls) if (call.name === binding.name) {
         const args = call.args;
-        const output = args && typeof args.handle === 'string' ? await binding.execute({ ...args, handle: args.handle }) : { error: 'invalid_recovery_arguments' };
+        const output = args && typeof args.handle === 'string' ? await recoveryResult(ID, undefined, () => binding.execute({ ...args, handle: args.handle as string })) : { error: 'invalid_request' };
         parts.push({ functionResponse: { name: binding.name, ...(call.id ? { id: call.id } : {}), response: { output } } });
       }
       return parts;
@@ -91,7 +91,7 @@ async function prepare(request: NativeRequest, options: GoogleOptions, defaults?
   const context = invocations.getStore(), logicalCallId = context?.logicalCallId ?? crypto.randomUUID();
   const scope = options.runtime.mode === 'off' || passiveReason || context?.reason ? null : context ? context.scope : resolveScope(options.scope, undefined);
   if (!scope) return [request, passiveAttempt(options.runtime, ID, options.runtime.mode === 'off' ? 'disabled' : passiveReason ?? context?.reason ?? 'recovery_unbound', logicalCallId)];
-  const attempt: Attempt = { runtime: options.runtime, scope, logicalCallId, attemptId: crypto.randomUUID(), optimization: null, wireSHA256: null, adapter: ID, reason: 'opaque_payload' };
+  const attempt: Attempt = { runtime: options.runtime, scope, logicalCallId, attemptId: crypto.randomUUID(), optimization: null, wireSHA256: null, adapter: ID, reason: 'unsupported_shape' };
   request.abortSignal?.throwIfAborted();
   return guard(options.runtime, ID, request.abortSignal, () => project(request, options, attempt, context, defaults),
     () => { Object.assign(attempt, { passive: true, reason: 'adapter_error', optimization: null, wireSHA256: null }); return [request, attempt]; });
@@ -105,12 +105,12 @@ async function project(request: NativeRequest, options: GoogleOptions, attempt: 
   const protectedBody = defaults?.extraBody || request.httpOptions?.extraBody || ['content-encoding', 'digest', 'content-digest', 'content-md5', 'signature', 'signature-input', 'x-amz-content-sha256', 'dpop'].some(name => headers.has(name));
   if (typeof request.body === 'string' && !protectedBody) {
     const wire = parseWire(request.body);
-    if (wire && plain(wire.value) && wire.value.cachedContent) attempt.reason = 'opaque_history_reference';
+    if (wire && plain(wire.value) && wire.value.cachedContent) attempt.reason = 'unsupported_request'; // history held by the provider
     if (wire && plain(wire.value) && Array.isArray(wire.value.contents) && !wire.value.cachedContent) {
       const { contents, ...envelope } = wire.value;
       const leaves = selected(wire.value, wire.strings), history = await manifest([envelope, ...contents], options.manifestBytes);
       const binding = context?.binding && options.runtime.ownsBinding(context.binding, attempt.scope) && acceptsRecovery(wire.value, context.binding) ? context.binding : null;
-      const optimization = await options.runtime.optimize({ scope: attempt.scope, adapter: { id: ID, version: '0.1.0', framework_version: frameworkVersion('@google/genai') ?? 'unknown', serialization_revision: 'google-genai-native-wire-v1' },
+      const optimization = await options.runtime.optimize({ scope: attempt.scope, adapter: { id: ID, version: MIDDLEWARE_VERSION, framework_version: frameworkVersion('@google/genai') ?? 'unknown', serialization_revision: 'google-genai-native-wire-v1' },
         model: { provider: 'google', id: request.path.replace(/:(?:generateContent|streamGenerateContent).*$/, ''), protocol: 'google-genai' }, ...history,
         candidates: leaves.map((leaf, i) => ({ id: `leaf-${i}`, sourceId: leaf.path.join('/'), content: leaf.value })), binding,
         ...(binding ? { recoveryOverheadText: context?.overhead ?? JSON.stringify(schema(binding)) } : {}), logicalCallId: attempt.logicalCallId, attemptId: attempt.attemptId,
@@ -239,7 +239,7 @@ export class CavemanGoogleGenAI extends GoogleGenAI {
       if (typeof this.apiClient?.request !== 'function' || typeof this.apiClient.requestStream !== 'function') throw new TypeError('ApiClient moved');
       const models = new Models(delegatedClient(this.apiClient, options, nativeOptions.httpOptions, passive));
       return { models, chats: new Chats(models, this.apiClient) };
-    }, () => null);
+    }, () => null, true);
     if (hooked) { this.models = hooked.models; this.chats = hooked.chats; }
     if (!hooked || passive) return;
     const generate = this.models.generateContent.bind(this.models), stream = this.models.generateContentStream.bind(this.models);

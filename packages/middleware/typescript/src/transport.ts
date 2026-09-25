@@ -1,14 +1,16 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { MiddlewareRuntime, sha256, type RecoveryBinding, type Scope } from '@caveman-ai/sdk/middleware';
-import { currentOwner, manifest, observe, passiveAttempt, plain, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
+import { MIDDLEWARE_VERSION, currentOwner, manifest, observe, passiveAttempt, plain, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
 import { guard } from './guard.js';
 import { observeResponse } from './provider-response.js';
 import { selectLeaves, type Protocol } from './provider-leaves.js';
 import { parseWire, patchWire } from './wire.js';
 
-export interface RecoveryContext { runtime:MiddlewareRuntime;scope:Scope;binding:RecoveryBinding;overhead:string;logicalCallId:string;isRegistered?:()=>boolean }
+/** `owner` is the Caveman fetch of the one client whose calls this context covers: a nested call made on another
+ * client (a tool calling a second client on the same runtime) resolves its own scope instead of inheriting it. */
+export interface RecoveryContext { runtime:MiddlewareRuntime;scope:Scope;binding:RecoveryBinding;overhead:string;logicalCallId:string;isRegistered?:()=>boolean;owner?:unknown }
 /** An invocation whose recovery tool could not be registered: its calls pass through reporting `reason`. */
-export interface UnboundContext { runtime:MiddlewareRuntime;reason:string;logicalCallId:string }
+export interface UnboundContext { runtime:MiddlewareRuntime;reason:string;logicalCallId:string;owner?:unknown }
 const recoveryContexts=new AsyncLocalStorage<RecoveryContext|UnboundContext>();
 export function withNativeRecovery<T>(context:RecoveryContext|UnboundContext,run:()=>T):T{return recoveryContexts.run(context,run);}
 function registered(context:RecoveryContext):boolean{
@@ -52,6 +54,8 @@ export interface FetchOptions extends BudgetOptions {
   /** Compress OpenAI Responses turns that OpenAI stores (`store` not false). Off by default: the compressed turn would
    * persist provider-side (`provider_state_retained`). */
   allowStoredResponses?:boolean;
+  /** Called on a compress-mode call that no recovery context covers, the path that cannot compress. */
+  onUnbound?:()=>void;
 }
 const WIRE_BYTES=16<<20;
 
@@ -66,11 +70,11 @@ function protocolFor(url:URL,provider:FetchOptions['provider']):Protocol|null{
 /** Fetch injection retains SDK-native promises, parsers, streams and retries. */
 export function createCavemanFetch(options:FetchOptions):typeof globalThis.fetch{
   const base=new URL(options.providerBaseURL);
-  return async (input,init)=>{
+  const cavemanFetch:typeof globalThis.fetch=async (input,init)=>{
     const url=new URL(input instanceof Request?input.url:String(input));
     const protocol=protocolFor(url,options.provider);
     const parent=currentOwner();
-    const passiveReason=options.runtime.mode==='off'?'disabled':options.passiveReason??(!protocol||url.origin!==base.origin||!url.pathname.startsWith(base.pathname.replace(/\/$/,''))?'unsupported_endpoint':null);
+    const passiveReason=options.runtime.mode==='off'?'disabled':options.passiveReason??(!protocol||url.origin!==base.origin||!url.pathname.startsWith(base.pathname.replace(/\/$/,''))?'unsupported_request':null);
     if(parent?.passive||parent?.runtime.mode==='off')return options.fetch(input,init);
     if(passiveReason){
       if(parent)return options.fetch(input,init);
@@ -80,7 +84,6 @@ export function createCavemanFetch(options:FetchOptions):typeof globalThis.fetch
     }
     if(!protocol)return options.fetch(input,init);
     const signal=init?.signal??(input instanceof Request?input.signal:undefined);
-    if(signal?.aborted&&!parent)options.runtime.report(null,{reason:'cancelled',adapter:`${options.provider}-sdk`});
     signal?.throwIfAborted();
     let next=init;
     let attempt=parent;
@@ -88,7 +91,8 @@ export function createCavemanFetch(options:FetchOptions):typeof globalThis.fetch
     const headers=new Headers(init?.headers??(input instanceof Request?input.headers:undefined));
     const signed=['digest','content-digest','content-md5','signature','signature-input','x-amz-content-sha256','dpop'].some(name=>headers.has(name))||/^(AWS4-HMAC|Signature )/.test(headers.get('authorization')??'');
     if(!parent&&options.runtime.mode!=='off'){
-      const adapter=`${options.provider}-sdk`,store=recoveryContexts.getStore(),context=store?.runtime===options.runtime?store:undefined;
+      const adapter=`${options.provider}-sdk`,store=recoveryContexts.getStore(),context=store?.owner===cavemanFetch?store:undefined;
+      if(!context&&options.runtime.mode==='compress')options.onUnbound?.();
       const logicalCallId=context?.logicalCallId??crypto.randomUUID();
       const recovery=context&&'binding'in context?context:undefined;
       const scope=context&&'reason'in context?null:recovery?.scope??resolveScope(options.scope,undefined);
@@ -117,6 +121,7 @@ export function createCavemanFetch(options:FetchOptions):typeof globalThis.fetch
     }
     return options.fetch(input,next);
   };
+  return cavemanFetch;
 }
 
 async function project(options:FetchOptions,protocol:Protocol,body:string,attempt:Attempt,headers:Headers,init:RequestInit|undefined,
@@ -130,16 +135,17 @@ async function project(options:FetchOptions,protocol:Protocol,body:string,attemp
   if(!wire||!selection)return init;
   const context=await manifest(selection.context,options.manifestBytes);
   const bound=recovery&&registered(recovery)&&options.runtime.ownsBinding(recovery.binding,attempt.scope)&&acceptsRecovery(wire.value,protocol,recovery.binding)?recovery:null;
-  const outcome=await options.runtime.optimize({scope:attempt.scope,adapter:{id:`${options.provider}-sdk`,version:'0.1.0',framework_version:options.frameworkVersion,serialization_revision:`${protocol}-wire-v1`},
+  const outcome=await options.runtime.optimize({scope:attempt.scope,adapter:{id:`${options.provider}-sdk`,version:MIDDLEWARE_VERSION,framework_version:options.frameworkVersion,serialization_revision:`${protocol}-wire-v1`},
     model:plain(wire.value)&&typeof wire.value.model==='string'?{provider:options.provider,id:wire.value.model,protocol}:null,...context,candidates:selection.leaves.map((leaf,i)=>({id:`leaf-${i}`,sourceId:JSON.stringify(leaf.path).replace(/[^a-zA-Z0-9._:/-]/g,'_'),content:leaf.value})),
     binding:bound?.binding??null,...(bound?{recoveryOverheadText:bound.overhead}:{}),logicalCallId:attempt.logicalCallId,attemptId:attempt.attemptId,
     ...(signal?{signal}:{}),});
   // A prepared replacement is associated with dispatch only after its
   // unchanged native executor is re-attested and the wire patch applied.
   attempt.optimization=outcome.replacements.length===0?outcome:null;
-  if(outcome.replacements.length)attempt.reason='patch_not_applied';
+  const lost=!!bound&&!registered(bound);
+  if(outcome.replacements.length)attempt.reason=lost?'recovery_unavailable':'invalid_plan';
   const patches=outcome.replacements.map(r=>({leaf:selection.leaves[Number(r.segment_id.slice(5))]!,replacement:r.text}));
-  if(!patches.length||!patches.every(p=>p.leaf)||(bound&&!registered(bound)))return init;
+  if(!patches.length||!patches.every(p=>p.leaf)||lost)return init;
   const modified=patchWire(body,patches);
   if(modified===null)return init;
   attempt.optimization=outcome;

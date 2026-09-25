@@ -1,9 +1,9 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { VERSION } from '@anthropic-ai/sdk/version';
 import { MiddlewareRuntime } from '@caveman-ai/sdk/middleware';
-import { bindRecovery, hintRecovery, nameConflict, plain, resolveScope, type BudgetOptions, type ScopeSource } from './common.js';
+import { bindRecovery, hintRecovery, nameConflict, plain, recoveryResult, resolveScope, type BudgetOptions, type ScopeSource } from './common.js';
 import { frameworkGate, type GateOptions } from './compatibility.js';
 import { guardSync } from './guard.js';
+import { clientVersion } from './versions.js';
 import { createCavemanFetch, withNativeRecovery, type FetchOptions, type RecoveryContext, type UnboundContext } from './transport.js';
 
 export interface AnthropicOptions extends GateOptions, BudgetOptions, Pick<FetchOptions, 'wireBytes'> {
@@ -26,16 +26,17 @@ function scopedIterator<T>(iterator: AsyncIterator<T>, context: RecoveryContext 
 }
 
 /** Messages and stream helpers remain native. `beta.messages.toolRunner` owns execution and is the entry point that
- * compresses; `messages.create`/`stream` cannot bind the recovery tool and report `recovery_unbound`. */
+ * compresses; `messages.create`/`stream` cannot bind the recovery tool and report `recovery_unbound` (hinted once, on use). */
 export function withCavemanAnthropic<T extends Anthropic>(client: T, options: AnthropicOptions): T {
-  const blocked = frameworkGate('anthropic', options, undefined, { '@anthropic-ai/sdk': VERSION });
-  if (!blocked) hintRecovery(options.runtime, ID, 'withCavemanAnthropic messages.create()/stream()', 'beta.messages.toolRunner');
-  return wrapAnthropic(client, options, blocked);
+  // TS-2: gate on the SDK copy that built this client, not whichever `@anthropic-ai/sdk` resolves from this package.
+  return wrapAnthropic(client, options, frameworkGate('anthropic', options, undefined, { '@anthropic-ai/sdk': clientVersion(client) }));
 }
 
 function wrapAnthropic<T extends Anthropic>(client: T, options: AnthropicOptions, blocked: string | null): T {
-  const native = client.withOptions({ fetch: createCavemanFetch({ ...options, provider: 'anthropic', providerBaseURL: client.baseURL, frameworkVersion: VERSION,
-    ...(blocked ? { passiveReason: blocked } : {}) }) });
+  const fetch = createCavemanFetch({ ...options, provider: 'anthropic', providerBaseURL: client.baseURL, frameworkVersion: clientVersion(client) ?? 'unknown',
+    ...(blocked ? { passiveReason: blocked } : {}),
+    onUnbound: () => hintRecovery(options.runtime, ID, 'withCavemanAnthropic messages.create()/stream()', 'beta.messages.toolRunner') });
+  const native = client.withOptions({ fetch });
   if (blocked || options.runtime.mode === 'off') return native;
   guardSync(options.runtime, ID, () => {
     const run = native.beta.messages.toolRunner.bind(native.beta.messages);
@@ -51,12 +52,13 @@ function wrapAnthropic<T extends Anthropic>(client: T, options: AnthropicOptions
         const binding = names.includes('caveman_retrieve') || names.some(name => typeof name !== 'string' || !name) || new Set(names).size !== names.length
           ? null : bindRecovery(options.runtime, resolveScope(options.scope, undefined));
         if (names.includes('caveman_retrieve')) {
-          context = { runtime: options.runtime, reason: nameConflict(options.runtime, ID), logicalCallId };
+          context = { runtime: options.runtime, reason: nameConflict(options.runtime, ID), logicalCallId, owner: fetch };
           runner = run(body as never, requestOptions as never);
         } else if (!binding) return run(body as never, requestOptions as never);
         else {
           const schema = { name: binding.name, description: binding.description, input_schema: binding.inputSchema };
-          const execute = async (input: unknown, context?: { signal?: AbortSignal | null }) => JSON.stringify(await binding.execute(input as never, context?.signal ? { signal: context.signal } : undefined));
+          const execute = async (input: unknown, context?: { signal?: AbortSignal | null }) =>
+            JSON.stringify(await recoveryResult(ID, context?.signal, () => binding.execute(input as never, context?.signal ? { signal: context.signal } : undefined)));
           const recovery = Object.freeze({ ...schema, parse: (input: unknown) => input, run: execute });
           const created = runner = run({ ...body, tools: [...bodyTools, recovery] } as never, requestOptions as never);
           const isRegistered = () => {
@@ -66,7 +68,7 @@ function wrapAnthropic<T extends Anthropic>(client: T, options: AnthropicOptions
               currentNames.every(name => typeof name === 'string' && name.length > 0) &&
               tools.filter(tool => plain(tool) && tool.name === binding.name).length === 1 && tools.find(tool => plain(tool) && tool.name === binding.name) === recovery && recovery.run === execute;
           };
-          context = { runtime: options.runtime, scope: binding.scope, binding, overhead: JSON.stringify(schema), logicalCallId, isRegistered };
+          context = { runtime: options.runtime, scope: binding.scope, binding, overhead: JSON.stringify(schema), logicalCallId, isRegistered, owner: fetch };
         }
         // The SDK runner is lazy. Wrapping only its constructor would lose the
         // binding before the first next(), and await runner uses this iterator too.
@@ -75,7 +77,7 @@ function wrapAnthropic<T extends Anthropic>(client: T, options: AnthropicOptions
         return runner;
       }, () => run(body as never, requestOptions as never));
     }) as typeof native.beta.messages.toolRunner;
-  }, () => undefined);
+  }, () => undefined, true);
   const clone = native.withOptions.bind(native);
   native.withOptions = next => {
     const nextFetch = (next.fetch ?? options.fetch) as typeof globalThis.fetch;

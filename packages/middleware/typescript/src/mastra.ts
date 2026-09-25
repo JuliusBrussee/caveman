@@ -6,8 +6,8 @@ import type { ProcessInputStepArgs, ProcessInputStepResult, ProcessLLMRequestArg
 import type { Agent, AgentExecutionOptions } from '@mastra/core/agent';
 import type { LanguageModelV4CallOptions, LanguageModelV4Usage } from '@ai-sdk/provider';
 import { MiddlewareRuntime, type Candidate, type RecoveryBinding, type RetrieveArgs, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
-import { bindRecovery, currentOwner, hintRecovery, manifest, nameConflict, observe, observeStream, passiveAttempt as passive, plain, resolveScope, withOwner,
-  type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
+import { MIDDLEWARE_VERSION, bindRecovery, currentOwner, hintRecovery, manifest, nameConflict, observe, observeStream, passiveAttempt as passive, plain,
+  recoveryResult, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
 import { frameworkGate, frameworkVersion, type GateOptions, type GateReason } from './compatibility.js';
 import { guard, guardSync } from './guard.js';
 
@@ -21,7 +21,7 @@ export interface CavemanMastraOptions extends GateOptions, BudgetOptions {
   id?: string;
 }
 
-const adapter = { id: 'mastra', version: '0.1.0', framework_version: frameworkVersion('@mastra/core') ?? 'unknown', serialization_revision: 'mastra-v4.1' };
+const adapter = { id: 'mastra', version: MIDDLEWARE_VERSION, framework_version: frameworkVersion('@mastra/core') ?? 'unknown', serialization_revision: 'mastra-v4.1' };
 const measured = (n: number | undefined): number | null => Number.isSafeInteger(n) && n! >= 0 ? n! : null;
 function usage(value: LanguageModelV4Usage): Usage {
   const input = measured(value.inputTokens.total), output = measured(value.outputTokens.total);
@@ -35,8 +35,9 @@ const passiveAttempt = (options: CavemanMastraOptions, reason: string): Attempt 
 const gate = (options: CavemanMastraOptions): GateReason | null =>
   frameworkGate('mastra', options, () => typeof createTool === 'function' && typeof standardSchemaToJSONSchema === 'function');
 
-/** Hashes of error texts the application saw before Mastra normalized them. `all` latches when a history is too
- * large or deep to scan; it is per thread (or per call without one), so it never spreads to other tenants (C4). */
+/** Hashes of error texts the application saw before Mastra normalized them, kept per thread (or per call without one),
+ * so they never spread to other tenants (C4). `all` latches when a history is too large or deep to scan; it lasts one
+ * turn (TS-8), so a thread that once overflowed compresses again when its next turn fits the budget. */
 interface Protection { hashes: Set<string>; all: boolean }
 function remember(protection: Protection, value: unknown, depth = 0, budget = { remaining: 16384 }): void {
   if (protection.all) return;
@@ -91,15 +92,15 @@ export function withCavemanMastra<T extends Agent>(agent: T, options: CavemanMas
   }
   // Mastra can normalize imported error-text into a plain DB result. Remember protected text before native
   // normalization, including later memory turns of the same thread. Only hashes are kept; overflow declines loss for
-  // that thread alone. An LRU bounds the threads remembered per wrapper.
-  const threads = new Map<string, Protection>();
+  // that thread's current turn alone. An LRU bounds the threads remembered per wrapper.
+  const threads = new Map<string, Set<string>>();
   const protection = (call: AgentExecutionOptions): Protection => {
     const thread = call.memory?.thread, id = typeof thread === 'string' ? thread : thread?.id;
     if (typeof id !== 'string') return { hashes: new Set(), all: false };
-    const key = JSON.stringify([call.memory?.resource ?? null, id]), found = threads.get(key) ?? { hashes: new Set(), all: false };
-    threads.delete(key); threads.set(key, found);
+    const key = JSON.stringify([call.memory?.resource ?? null, id]), hashes = threads.get(key) ?? new Set();
+    threads.delete(key); threads.set(key, hashes);
     if (threads.size > 256) threads.delete(threads.keys().next().value!);
-    return found;
+    return { hashes, all: false };
   };
   return new Proxy(agent, {
     get(target, key) {
@@ -119,10 +120,10 @@ export function withCavemanMastra<T extends Agent>(agent: T, options: CavemanMas
           if (bundle.attest(before, result)) return result;
           const selected = result?.model ?? before.model;
           if (!selected || typeof selected !== 'object') {
-            if (!currentOwner()) observe(passiveAttempt(options, 'unsupported_model'), 'dispatch_intent');
+            if (!currentOwner()) observe(passiveAttempt(options, 'unsupported_provider'), 'dispatch_intent');
             return result;
           }
-          return { ...result, model: passiveModel(selected, options, options.runtime.mode === 'off' ? 'off' : 'unattested_model') };
+          return { ...result, model: passiveModel(selected, options, options.runtime.mode === 'off' ? 'disabled' : 'unsupported_request') };
         };
         return Reflect.apply(target[key], target, [messages, { ...call, inputProcessors: [bundle.processor, ...processors], prepareStep }]);
       };
@@ -203,7 +204,7 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
       for (const replacement of replacements) setters.get(replacement.segment_id)!(replacement.text);
       return { params: { ...params, prompt }, attempt };
     }
-    if (replacements.length) { attempt.optimization = null; attempt.reason = 'invalid_replacement_plan'; }
+    if (replacements.length) { attempt.optimization = null; attempt.reason = 'invalid_plan'; }
     return { params, attempt };
   }
 
@@ -212,7 +213,7 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
     processInputStep(args) {
       args.abortSignal?.throwIfAborted();
       if (args.model.specificationVersion !== 'v4' || options.runtime.mode === 'off') {
-        return passiveStep(args.model, options.runtime.mode === 'off' ? 'off' : 'unsupported_model');
+        return passiveStep(args.model, options.runtime.mode === 'off' ? 'disabled' : 'unsupported_provider');
       }
       // messageList is a Mastra internal: if it moves, this step passes through (adapter_error) instead of failing.
       if (!guardSync(options.runtime, 'mastra', () => { rememberProtected(args.messageList.get.all.db()); return true; }, () => false)) {
@@ -236,7 +237,7 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
             params.abortSignal?.throwIfAborted();
             if (currentOwner()) return target[key](params);
             if (!step.outbound) {
-              const attempt = passiveAttempt(options, 'unattested_model'); observe(attempt, 'dispatch_intent');
+              const attempt = passiveAttempt(options, 'unsupported_request'); observe(attempt, 'dispatch_intent');
               return withOwner(attempt, () => target[key](params));
             }
             const prepared = await guard(options.runtime, 'mastra', params.abortSignal, () => prepare(params, nativeModel, step),
@@ -256,7 +257,7 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
       steps.set(model, step);
       if (!binding) return { model };
       const recovery = createTool({ id: binding.name, description: binding.description, inputSchema: structuredClone(binding.inputSchema),
-        execute: (input, context) => binding.execute(input as RetrieveArgs, context?.abortSignal ? { signal: context.abortSignal } : undefined),
+        execute: (input, context) => recoveryResult('mastra', context?.abortSignal, () => binding.execute(input as RetrieveArgs, context?.abortSignal ? { signal: context.abortSignal } : undefined)),
       });
       ours.add(recovery);
       if (recovery.inputSchema) step.recoverySchema = structuredClone(standardSchemaToJSONSchema(recovery.inputSchema, { io: 'input' }));
