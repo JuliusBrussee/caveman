@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -69,14 +70,17 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		o.status, o.responseBytes = http.StatusOK, writeJSON(w, http.StatusOK, caps)
 		return
 	}
-	if request.Method != http.MethodPost {
+	// An unknown route is 404 before it can hold a quota count, a queue slot or
+	// a body read (§1).
+	if request.Method != http.MethodPost || !postRoutes[o.route] {
 		fail(Failure{CodeNotFound})
 		return
 	}
-	// retrieve reads originals on its own queue and deadline, so a burst of
-	// recoveries cannot starve optimize and a large page is not held to 500ms.
+	// retrieve and sessions/delete run on their own queue and deadline
+	// (retrieve_deadline_ms, §13), so a burst of recoveries cannot starve
+	// optimize and neither a large page nor a large session is held to 500ms.
 	queue, fair, budget := r.queue, &r.fair, time.Duration(r.cfg.Limits.DeadlineMS)*time.Millisecond
-	if o.route == "retrieve" {
+	if o.route == "retrieve" || o.route == "sessions/delete" {
 		queue, fair, budget = r.retrieveQueue, &r.fairRetrieve, time.Duration(r.cfg.Limits.RetrieveDeadlineMS)*time.Millisecond
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), budget)
@@ -149,6 +153,12 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		if err := requestPresence(body, request.URL.Path); err != nil {
 			return err
 		}
+		// encoding/json matches keys case-insensitively: "Scope" would override
+		// "scope". A key that differs from a defined field only by case is refused
+		// rather than given that field's meaning (§4).
+		if caseFolded(body, reflect.TypeOf(target)) {
+			return Failure{CodeInvalidRequest}
+		}
 		d := json.NewDecoder(bytes.NewReader(body))
 		if !n.client {
 			d.DisallowUnknownFields() // protocol 1.0 rejected unknown fields
@@ -196,7 +206,11 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	case RoutePrefix + "sessions/delete":
 		var req SessionDeleteRequest
 		if err = decode(&req, &req.Scope); err == nil {
-			if req.SchemaVersion != ProtocolVersion || !scopeValid(req.Scope) {
+			if req.SchemaVersion != ProtocolVersion {
+				err = Failure{CodeUnsupportedVersion}
+				break
+			}
+			if !scopeValid(req.Scope) {
 				err = Failure{CodeInvalidRequest}
 				break
 			}
@@ -214,6 +228,9 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	}
 	o.status, o.responseBytes = http.StatusOK, writeJSON(w, http.StatusOK, out)
 }
+
+// postRoutes are the POST routes under RoutePrefix (§1).
+var postRoutes = map[string]bool{"optimize": true, "retrieve": true, "receipts": true, "sessions/delete": true}
 
 // short is a log-safe identifier for a digest.
 func short(hexDigest string) string { return hexDigest[:16] }

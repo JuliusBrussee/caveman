@@ -6,12 +6,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -246,37 +248,86 @@ func TestRevokedSessionStaysRevokedUnderANewScopeID(t *testing.T) {
 	})
 }
 
-// GO-4: a choice whose original no configured key opens is not reused; a new
-// choice for the same content stores it again under the current key.
-func TestOriginalUnderAMissingKeyIsNotReused(t *testing.T) {
+// GO-4: a choice whose original no configured key opens keeps its bytes (the
+// provider cache keeps its prefix): the request's verified content is sealed
+// under the current key, and the old grant recovers again.
+func TestOriginalUnderAMissingKeyIsResealed(t *testing.T) {
 	eachStore(t, func(t *testing.T, b backend) {
-		old := newKey(t)
+		old, current := newKey(t), newKey(t)
 		before := runtimeOn(t, b.store, func(c *Config) { c.Keys = old })
 		req := requestFor(before)
-		optimizeOK(t, before, req)
+		first := optimizeOK(t, before, req).Replacements[0]
 		var log bytes.Buffer
 		swapped := runtimeOn(t, b.store, func(c *Config) {
-			c.Keys, c.Logger = newKey(t), slog.New(slog.NewJSONHandler(&log, nil))
+			c.Keys, c.Logger = current, slog.New(slog.NewJSONHandler(&log, nil))
 		})
 		if !strings.Contains(log.String(), old.active) || !strings.Contains(log.String(), "unavailable key") {
 			t.Fatalf("startup did not name the unopenable key id %s:\n%s", old.active, log.String())
 		}
 		turn := nextTurn(req, "after-swap")
-		turn.Segments[0].CacheRegion = "live_zone"
-		plan := decodePlan(t, send(t, swapped, "optimize", turn, "alice", clientFeatures))
-		if len(plan.Replacements) != 0 || plan.Reason != CodeRecoveryUnavailable {
-			t.Fatalf("reused a choice whose original cannot be opened: %+v", plan)
+		for _, h := range []string{clientFeatures, ""} {
+			plan := decodePlan(t, send(t, swapped, "optimize", turn, "alice", h))
+			if len(plan.Replacements) != 1 || !plan.Replacements[0].Reused || plan.Replacements[0].SHA256 != first.SHA256 {
+				t.Fatalf("a lost original bypassed its reused choice: %+v", plan)
+			}
+			turn = nextTurn(turn, "after-swap-1.0")
 		}
-		sibling := turn
-		sibling.Adapter.ID, sibling.RequestID, sibling.IdempotencyKey = "sibling", "sibling", "sibling"
-		fresh := decodePlan(t, send(t, swapped, "optimize", sibling, "alice", clientFeatures))
-		if len(fresh.Replacements) != 1 || fresh.Replacements[0].Reused {
-			t.Fatalf("sibling scope: %+v", fresh)
+		if n := b.count(t, `SELECT count(*) FROM middleware_originals WHERE key_id='`+current.active+`'`); n != 1 {
+			t.Fatalf("%d originals under the current key, want the resealed one", n)
 		}
-		if page := recovered(t, swapped, sibling.Scope, fresh.Replacements[0].RecoveryHandle, "alice"); page.Text != req.Segments[0].Content {
-			t.Fatal("new grant recovered the wrong original")
+		if page := recovered(t, swapped, req.Scope, first.RecoveryHandle, "alice"); page.Text != req.Segments[0].Content {
+			t.Fatal("the resealed original did not recover through the old grant")
 		}
 	})
+}
+
+// A protocol 1.0 choice whose CCR original is gone cannot be recovered from
+// this store, so only its segment goes unreplaced: a 1.0 client gets a plan,
+// not a 503 on every turn until the scope expires.
+func TestLostCCROriginalSkipsOnlyItsSegment(t *testing.T) {
+	f := newFixture(t)
+	req := requestFor(f.runtime)
+	seedLostCCRChoice(t, f.state, req)
+	w := send(t, f.runtime, "optimize", req, "alice", "")
+	plan := decodePlan(t, w)
+	if len(plan.Replacements) != 0 || len(plan.Skipped) != 1 || plan.Skipped[0].Reason != CodeRecoveryUnavailable {
+		t.Fatalf("a lost CCR original: %d %+v", w.Code, plan)
+	}
+}
+
+// seedLostCCRChoice stores what a protocol 1.0 runtime left for req's first
+// segment in alice's scope: a choice whose original CCR no longer holds.
+func seedLostCCRChoice(t *testing.T, s store.MiddlewareStore, req OptimizeRequest) {
+	t.Helper()
+	choice, _ := json.Marshal(Replacement{SegmentID: "tool-1", SourceID: "document-1", OriginalSHA256: req.Segments[0].SHA256,
+		Text: "[caveman: shortened]", SHA256: digest([]byte("[caveman: shortened]")), TransformID: req.Policy.Transforms[0], RecoveryHandle: "cmw_" + strings.Repeat("cd", 24)})
+	scopeID := identity(authority("alice", req.Scope), req.Adapter.ID, req.Adapter.SerializationRevision)
+	now := time.Now().Unix()
+	manifest, _ := json.Marshal(req.ContextManifest[:1])
+	if err := s.WithMiddleware(t.Context(), func(tx *store.MiddlewareTx) error {
+		if err := tx.SaveScope(store.MiddlewareScope{ID: scopeID, Authority: authority("alice", req.Scope), Manifest: manifest, ExpiresAt: now + 3600, CreatedAt: now}); err != nil {
+			return err
+		}
+		return tx.SaveChoice(scopeID, choiceKey(req.Segments[0]), "cmw_"+strings.Repeat("cd", 24), "ccr_evicted", choice)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// racingWriter runs race once, right after the first snapshot read: another
+// writer committing between optimize's snapshot and its write transaction.
+type racingWriter struct {
+	store.MiddlewareStore
+	race func()
+}
+
+func (s *racingWriter) ReadMiddleware(ctx context.Context, fn func(*store.MiddlewareTx) error) error {
+	err := s.MiddlewareStore.ReadMiddleware(ctx, fn)
+	if s.race != nil {
+		s.race()
+		s.race = nil
+	}
+	return err
 }
 
 // S10: once a key is configured, plaintext originals are refused unless the
@@ -537,5 +588,263 @@ func TestTwoPrincipalsCannotFillAQueue(t *testing.T) {
 	answer, _ := io.ReadAll(resp.Body)
 	if elapsed := time.Since(start); resp.StatusCode != 200 || elapsed > time.Second || !strings.Contains(string(answer), `"replacements":[{`) {
 		t.Fatalf("a third principal's optimize: %d after %s %s", resp.StatusCode, elapsed, answer)
+	}
+}
+
+// failingStore fails the failAt-th write transaction (counting from 1) with err.
+type failingStore struct {
+	store.MiddlewareStore
+	writes, failAt int
+	err            error
+}
+
+func (f *failingStore) WithMiddleware(ctx context.Context, fn func(*store.MiddlewareTx) error) error {
+	if f.writes++; f.writes == f.failAt {
+		return f.err
+	}
+	return f.MiddlewareStore.WithMiddleware(ctx, fn)
+}
+
+// seedOriginals stores n more originals under req's authority.
+func seedOriginals(t *testing.T, s store.MiddlewareStore, req OptimizeRequest, n int) {
+	t.Helper()
+	originals := make([]store.MiddlewareOriginal, n)
+	for i := range originals {
+		originals[i] = store.MiddlewareOriginal{Digest: fmt.Sprintf("%064d", i), Body: []byte("original")}
+	}
+	if err := s.WithMiddleware(t.Context(), func(tx *store.MiddlewareTx) error {
+		tx.Principal = "alice"
+		_, err := tx.SaveOriginals(authority("alice", req.Scope), originals)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func deleteSession(t *testing.T, r *Runtime, scope Scope) (*httptest.ResponseRecorder, SessionDeleteResponse) {
+	t.Helper()
+	var out SessionDeleteResponse
+	w := send(t, r, "sessions/delete", SessionDeleteRequest{SchemaVersion: 1, Scope: scope}, "alice", clientFeatures)
+	if w.Code == 200 && json.Unmarshal(w.Body.Bytes(), &out) != nil {
+		t.Fatalf("delete body: %s", w.Body)
+	}
+	return w, out
+}
+
+// P1: sessions/delete commits the revocation before it purges in batches. A
+// delete that fails midway already answers "deleted" everywhere, and its retry
+// finishes the purge. A store conflict is a failed delete: 503, never 409.
+func TestInterruptedDeleteIsRevokedAndResumes(t *testing.T) {
+	eachStore(t, func(t *testing.T, b backend) {
+		faulty := &failingStore{MiddlewareStore: b.store}
+		r := runtimeOn(t, faulty, nil)
+		req := requestFor(r)
+		plan := optimizeOK(t, r, req)
+		seedOriginals(t, b.store, req, 2*deleteBatch+100)
+		faulty.writes, faulty.failAt, faulty.err = 0, 3, errors.New("injected outage") // revoke, one batch, then fail
+		if w, _ := deleteSession(t, r, req.Scope); w.Code != 503 || failureCode(t, w.Body.Bytes()) != CodeRuntimeUnavailable {
+			t.Fatalf("interrupted delete: %d %s", w.Code, w.Body)
+		}
+		retrieve := RetrieveRequest{SchemaVersion: 1, Scope: req.Scope, Handle: plan.Replacements[0].RecoveryHandle}
+		if w := send(t, r, "retrieve", retrieve, "alice", clientFeatures); w.Code != 410 || failureCode(t, w.Body.Bytes()) != CodeDeleted {
+			t.Fatalf("grant after an interrupted delete: %d %s", w.Code, w.Body)
+		}
+		left := b.count(t, `SELECT count(*) FROM middleware_originals`)
+		if left == 0 {
+			t.Fatal("the interrupted delete finished anyway; the test proves nothing")
+		}
+		faulty.writes, faulty.failAt, faulty.err = 0, 1, store.ErrMiddlewareConflict
+		if w, _ := deleteSession(t, r, req.Scope); w.Code != 503 || failureCode(t, w.Body.Bytes()) != CodeRuntimeUnavailable {
+			t.Fatalf("delete conflict: %d %s", w.Code, w.Body)
+		}
+		faulty.failAt = 0
+		w, out := deleteSession(t, r, req.Scope)
+		if w.Code != 200 || !out.OriginalsDeleted || out.Deleted.Originals != left || out.Deleted.Scopes != 0 {
+			t.Fatalf("resumed delete: %d %s, want the %d originals left", w.Code, w.Body, left)
+		}
+		if n := b.count(t, `SELECT (SELECT count(*) FROM middleware_originals)+(SELECT count(*) FROM middleware_choices WHERE length(payload)>0)+(SELECT count(*) FROM middleware_scopes WHERE length(manifest)>0)`); n != 0 {
+			t.Fatalf("resumed delete left %d rows of content", n)
+		}
+	})
+}
+
+// P1: a session far larger than one transaction can delete in 500ms is deleted
+// by one request under the default limits: delete has retrieve's deadline and
+// purges in batches.
+func TestLargeSessionDeletesUnderTheDefaultDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("writes 500 MiB of originals")
+	}
+	eachStore(t, func(t *testing.T, b backend) {
+		r := runtimeOn(t, b.store, func(c *Config) { c.Limits = Limits{} })
+		req := requestFor(r)
+		optimizeOK(t, r, req)
+		auth := authority("alice", req.Scope)
+		const originals, size = 2000, 256 << 10
+		if _, ok := b.store.(*store.PostgresMiddleware); ok {
+			// EXTERNAL keeps TOAST from compressing the repeated test bodies away.
+			b.exec(t, `ALTER TABLE middleware_originals ALTER COLUMN body SET STORAGE EXTERNAL`)
+			b.exec(t, fmt.Sprintf(`INSERT INTO middleware_originals(authority,digest,body,key_id,principal)
+SELECT '%s', lpad(v::text,64,'0'), decode(repeat(md5(v::text),%d),'hex'), '', 'alice' FROM generate_series(1,%d) v`, auth, size/16, originals))
+		} else {
+			b.exec(t, fmt.Sprintf(`WITH RECURSIVE n(v) AS (SELECT 1 UNION ALL SELECT v+1 FROM n WHERE v<%d)
+INSERT INTO middleware_originals(authority,digest,body,key_id,principal) SELECT '%s', printf('%%064d',v), randomblob(%d), '', 'alice' FROM n`, originals, auth, size))
+		}
+		// A call that runs out of its deadline answers 504 and a retry resumes
+		// (§12), so a loaded runner may need a second call; what must never
+		// happen again is a delete that cannot finish at all.
+		// A timed-out call's committed batches are in no response's counts, so
+		// completeness is checked in the store; a single call must count all.
+		start, calls := time.Now(), 0
+		for ; calls < 3; calls++ {
+			w, out := deleteSession(t, r, req.Scope)
+			if w.Code == 200 {
+				if calls == 0 && out.Deleted.Originals != originals+1 {
+					t.Fatalf("large delete counted %d of %d originals", out.Deleted.Originals, originals+1)
+				}
+				break
+			}
+			if w.Code != 504 {
+				t.Fatalf("large delete call %d: %d %s", calls+1, w.Code, w.Body)
+			}
+		}
+		if left := b.count(t, fmt.Sprintf(`SELECT count(*) FROM middleware_originals WHERE authority='%s'`, auth)); calls == 3 || left != 0 {
+			t.Fatalf("large delete after %s and %d calls: %d originals left", time.Since(start), calls, left)
+		}
+		t.Logf("deleted %d originals of %d KiB in %s over %d call(s)", originals, size>>10, time.Since(start), calls+1)
+	})
+}
+
+// §12: once deleted, a receipt answers "deleted" and stores nothing.
+func TestReceiptAfterDeleteAnswersDeleted(t *testing.T) {
+	f := newFixture(t)
+	req := requestFor(f.runtime)
+	optimizeOK(t, f.runtime, req)
+	receipt := Receipt{SchemaVersion: 1, Scope: req.Scope, LogicalCallID: req.LogicalCallID, AttemptID: req.AttemptID, EventKind: "dispatch_intent"}
+	if w := send(t, f.runtime, "receipts", receipt, "alice", clientFeatures); w.Code != 200 {
+		t.Fatalf("receipt: %d %s", w.Code, w.Body)
+	}
+	if w, _ := deleteSession(t, f.runtime, req.Scope); w.Code != 200 {
+		t.Fatalf("delete: %d %s", w.Code, w.Body)
+	}
+	receipt.AttemptID = "attempt-after-delete"
+	if w := send(t, f.runtime, "receipts", receipt, "alice", clientFeatures); w.Code != 410 || failureCode(t, w.Body.Bytes()) != CodeDeleted {
+		t.Fatalf("receipt after delete: %d %s", w.Code, w.Body)
+	}
+	var n int
+	if err := f.db(t).QueryRow(`SELECT count(*) FROM middleware_receipts`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d receipts stored under a revoked authority (%v)", n, err)
+	}
+}
+
+// A retried receipt is deduplicated on (logical_call_id, attempt_id,
+// event_kind): first write wins, so a changed body is not a retryable conflict
+// the client could never resolve.
+func TestRetriedReceiptWithADifferentBodyKeepsTheFirst(t *testing.T) {
+	f := newFixture(t)
+	req := requestFor(f.runtime)
+	receipt := Receipt{SchemaVersion: 1, Scope: req.Scope, LogicalCallID: req.LogicalCallID, AttemptID: req.AttemptID, EventKind: "failed"}
+	first := send(t, f.runtime, "receipts", receipt, "alice", clientFeatures)
+	sha := strings.Repeat("ab", 32)
+	receipt.ProviderRequestSHA256 = &sha
+	retried := send(t, f.runtime, "receipts", receipt, "alice", clientFeatures)
+	if first.Code != 200 || retried.Code != 200 || first.Body.String() != retried.Body.String() {
+		t.Fatalf("receipts: %d %s / %d %s", first.Code, first.Body, retried.Code, retried.Body)
+	}
+	var n int
+	if err := f.db(t).QueryRow(`SELECT count(*) FROM middleware_receipts WHERE CAST(payload AS TEXT) NOT LIKE '%` + sha + `%'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("stored receipts other than the first: %d (%v)", n, err)
+	}
+}
+
+// §1: an unknown route is 404 whatever its body, before it takes a quota count.
+func TestUnknownRouteIsNotFoundBeforeQuotaAndBody(t *testing.T) {
+	f := newFixture(t)
+	r := withRuntime(t, f, func(c *Config) { c.Limits.QuotaRequestsPerMinute = 1 })
+	for range 3 {
+		req := httptest.NewRequest("POST", RoutePrefix+"no-such-route", strings.NewReader("not json"))
+		req.Header.Set("Content-Type", "text/plain")
+		req.Header.Set("Authorization", "Bearer alice")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != 404 || failureCode(t, w.Body.Bytes()) != CodeNotFound {
+			t.Fatalf("unknown route: %d %s", w.Code, w.Body)
+		}
+	}
+	if w := send(t, r, "optimize", requestFor(r), "alice", clientFeatures); w.Code != 200 {
+		t.Fatalf("unknown routes spent the quota: %d %s", w.Code, w.Body)
+	}
+}
+
+// §4: encoding/json would match "Scope" to scope; a key that differs from a
+// defined field only by case is refused, at any depth, not given its meaning.
+func TestCaseFoldedKeysAreRefused(t *testing.T) {
+	f := newFixture(t)
+	req := requestFor(f.runtime)
+	plan := optimizeOK(t, f.runtime, req)
+	handle := plan.Replacements[0].RecoveryHandle
+	post := func(body string, features string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", RoutePrefix+"retrieve", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Authorization", "Bearer alice")
+		if features != "" {
+			r.Header.Set(HeaderFeatures, features)
+		}
+		w := httptest.NewRecorder()
+		f.runtime.ServeHTTP(w, r)
+		return w
+	}
+	right := `{"namespace":"app","session_id":"session-1","branch_id":"main","cache_epoch":"0"}`
+	wrong := `{"namespace":"app","session_id":"someone-else","branch_id":"main","cache_epoch":"0"}`
+	for _, h := range []string{clientFeatures, ""} {
+		for _, body := range []string{
+			`{"schema_version":1,"scope":` + wrong + `,"Scope":` + right + `,"handle":"` + handle + `","offset":0,"limit":0,"query":""}`,
+			`{"schema_version":1,"scope":{"namespace":"app","session_id":"x","Session_ID":"session-1","branch_id":"main","cache_epoch":"0"},"handle":"` + handle + `","offset":0,"limit":0,"query":""}`,
+		} {
+			if w := post(body, h); w.Code != 400 || failureCode(t, w.Body.Bytes()) != CodeInvalidRequest {
+				t.Fatalf("case-folded key (%q): %d %s", h, w.Code, w.Body)
+			}
+		}
+	}
+	if w := post(`{"schema_version":1,"scope":`+right+`,"handle":"`+handle+`","offset":0,"limit":0,"query":"","unknown":1}`, clientFeatures); w.Code != 200 {
+		t.Fatalf("an unknown field no longer passes the tolerant reader: %d %s", w.Code, w.Body)
+	}
+}
+
+// §6: an unsupported schema_version is unsupported_version on every route.
+func TestDeleteWithAnUnsupportedVersion(t *testing.T) {
+	f := newFixture(t)
+	w := send(t, f.runtime, "sessions/delete", SessionDeleteRequest{SchemaVersion: 2, Scope: Scope{"app", "s", "main", "0"}}, "alice", clientFeatures)
+	if w.Code != 400 || failureCode(t, w.Body.Bytes()) != CodeUnsupportedVersion {
+		t.Fatalf("delete schema_version 2: %d %s", w.Code, w.Body)
+	}
+}
+
+// A plan row exists for idempotent replay only, so it lasts the replay
+// window, not the whole retention.
+func TestPlanRowsLastTheReplayWindow(t *testing.T) {
+	f := newFixture(t)
+	now := time.Unix(2_000_000_000, 0)
+	r := withRuntime(t, f, func(c *Config) { c.Now = func() time.Time { return now } })
+	req := requestFor(r)
+	first := optimizeOK(t, r, req)
+	var expires int64
+	if err := f.db(t).QueryRow(`SELECT expires_at FROM middleware_plans`).Scan(&expires); err != nil || expires != now.Unix()+planReplaySeconds {
+		t.Fatalf("plan expires_at=%d (%v), want now+%d", expires, err, planReplaySeconds)
+	}
+	now = now.Add(planReplaySeconds*time.Second - time.Second)
+	if replay := optimizeOK(t, r, req); !reflect.DeepEqual(replay.Replacements, first.Replacements) || replay.ReplacementSetID != first.ReplacementSetID {
+		t.Fatalf("replay inside the window changed the plan: %+v", replay)
+	}
+	// Past the window the plan no longer binds the key, swept or not: another
+	// body plans afresh, and from then on that plan is the one that binds.
+	now = now.Add(2 * time.Second)
+	again := req
+	again.RequestID = "after-the-window"
+	if replay := optimizeOK(t, r, again); len(replay.Replacements) != 1 || replay.Replacements[0].SHA256 != first.Replacements[0].SHA256 {
+		t.Fatalf("a re-plan after the window changed the replacements: %+v", replay)
+	}
+	if code, body := call(t, r, "optimize", req, "alice"); code != 409 || !bytes.Contains(body, []byte("identity_conflict")) {
+		t.Fatalf("the replaced plan still binds: %d %s", code, body)
 	}
 }

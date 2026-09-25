@@ -18,8 +18,11 @@
 #     --from-literal=CAVEMAN_METRICS_TOKEN="$(openssl rand -hex 32)" \
 #     --from-literal=CAVEMAN_AUTH_TOKEN="$(openssl rand -hex 32)" \
 #     --from-literal=ANTHROPIC_API_KEY=<provider-key>
-#   # Files. The CA bundle signs your database's certificate; leave it empty
-#   # (--from-literal=postgres-ca.crt=) when the system roots already do.
+#   # Files. The database URL must say sslmode=verify-full (CAVE_ENV=prod
+#   # below refuses any other mode), and the server certificate is verified
+#   # against this CA bundle. Leave it empty (--from-literal=postgres-ca.crt=)
+#   # only when a public CA in the image's system roots signs it; a private
+#   # or cloud-provider database CA must go here.
 #   kubectl create secret generic caveman-proxy-files \
 #     --from-literal=middleware.key="$(openssl rand -base64 32)" \
 #     --from-file=postgres-ca.crt=<database-ca-bundle.pem>
@@ -27,7 +30,10 @@
 #   kubectl create secret generic caveman-proxy-tokens --from-file=tokens.yaml
 #
 # tokens.yaml maps token hashes (never tokens) to principals. List two hashes
-# for a principal to rotate without an outage; edits apply within 10 s:
+# for a principal to rotate without an outage. The proxy re-reads the file
+# every 10 s, but the kubelet refreshes Secret volumes on its own sync period,
+# so an edit (a revocation included) takes about 1-2 minutes to reach the pods.
+# To revoke at once: kubectl rollout restart deployment/caveman-proxy-ha
 #
 #   principals:
 #     - name: team-a
@@ -93,6 +99,11 @@ spec:
             - secretRef:
                 name: caveman-proxy-ha
           env:
+            # Production refusals: the database connection must be
+            # sslmode=verify-full, and Bedrock/Gemini/Vertex endpoints must be
+            # public provider hosts.
+            - name: CAVE_ENV
+              value: prod
             - name: CAVEMAN_MODE
               value: record
             - name: CAVEMAN_MIDDLEWARE_MODE
@@ -125,8 +136,11 @@ spec:
             - name: tls
               mountPath: /etc/caveman/tls
               readOnly: true
-          # Ready means Postgres just accepted a write; a replica that loses the
-          # database leaves the Service instead of answering 503s.
+          # Readiness stays 200 while the provider routes can serve, with the
+          # body saying "middleware":"degraded" when Postgres cannot take a
+          # write, so a database outage leaves inference up. Without
+          # CAVEMAN_AUTH_TOKEN the replicas serve the middleware only, and then
+          # a replica that loses the database leaves the Service.
           readinessProbe:
             httpGet:
               path: /health/ready

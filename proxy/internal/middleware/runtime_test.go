@@ -467,8 +467,21 @@ func TestExpiryDeletionAndFailedRecoveryStayClosed(t *testing.T) {
 			}
 			req.RequestID = "next"
 			req.IdempotencyKey = "next"
-			code, _ = call(t, f.runtime, "optimize", req, "alice")
-			if code == 200 {
+			code, body = call(t, f.runtime, "optimize", req, "alice")
+			if cause != "unavailable" {
+				if code == 200 {
+					t.Fatal("dangling marker issued")
+				}
+				return
+			}
+			// §12: the request carries the lost original, verified against the
+			// choice's digest, so the optimize stores it again and the marker it
+			// issues recovers.
+			var again OptimizeResponse
+			if code != 200 || json.Unmarshal(body, &again) != nil || len(again.Replacements) != 1 {
+				t.Fatalf("an optimize resending the lost original: %d %s", code, body)
+			}
+			if code, _ := call(t, f.runtime, "retrieve", RetrieveRequest{SchemaVersion: 1, Scope: req.Scope, Handle: again.Replacements[0].RecoveryHandle}, "alice"); code != 200 {
 				t.Fatal("dangling marker issued")
 			}
 		})
@@ -512,9 +525,10 @@ func TestProtocolLimitsAndReceipts(t *testing.T) {
 			t.Fatalf("receipt: %d %s", code, b)
 		}
 	}
+	// §12: the first write wins; a retry with another body changes nothing.
 	output = 21
-	if code, _ := call(t, f.runtime, "receipts", receipt, "alice"); code != 409 {
-		t.Fatal("duplicate usage not rejected")
+	if code, _ := call(t, f.runtime, "receipts", receipt, "alice"); code != 200 {
+		t.Fatal("a retried receipt with another body was not answered as recorded")
 	}
 	receipt.EventKind = "dispatch_intent"
 	if code, _ := call(t, f.runtime, "receipts", receipt, "alice"); code != 400 {

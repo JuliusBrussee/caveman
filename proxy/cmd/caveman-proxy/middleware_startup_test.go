@@ -61,9 +61,10 @@ func TestServeExitsWhenConfiguredMiddlewareCannotStart(t *testing.T) {
 	}
 }
 
-// GO-5: the default local middleware failing leaves inference up but the
-// replica unready, never a ready probe in front of 503s.
-func TestServeIsNotReadyWhenDefaultMiddlewareCannotStart(t *testing.T) {
+// The default local middleware failing leaves inference up and the replica
+// ready, with readiness saying the middleware is degraded (GO-5 made it unready,
+// which let a middleware store outage take provider inference down with it).
+func TestServeStaysReadyWhenDefaultMiddlewareCannotStart(t *testing.T) {
 	home := t.TempDir()
 	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(home, "caveman.db")))
 	if err != nil {
@@ -93,7 +94,7 @@ func TestServeIsNotReadyWhenDefaultMiddlewareCannotStart(t *testing.T) {
 	if status, _ := get("/health/live"); status != 200 {
 		t.Fatalf("proxy did not start:\n%s", output)
 	}
-	if status, body := get("/health/ready"); status != 503 || !strings.Contains(body, `"middleware":"degraded"`) {
+	if status, body := get("/health/ready"); status != 200 || !strings.Contains(body, `"middleware":"degraded"`) {
 		t.Fatalf("ready = %d %s with the middleware down:\n%s", status, body, output)
 	}
 }

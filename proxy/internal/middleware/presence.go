@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"strings"
 )
 
@@ -79,4 +80,63 @@ func requestPresence(raw []byte, path string) error {
 		return err
 	}
 	return nil
+}
+
+// caseFolded reports whether raw, decoded into t, holds at any depth an object
+// key that is not a field's exact JSON name but matches one case-insensitively,
+// as encoding/json would. Values that do not fit t are left to the decoder.
+func caseFolded(raw json.RawMessage, t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Struct:
+		var object map[string]json.RawMessage
+		if json.Unmarshal(raw, &object) != nil {
+			return false
+		}
+		fields := map[string]reflect.Type{}
+		for i := range t.NumField() {
+			f := t.Field(i)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			if name == "" {
+				name = f.Name
+			}
+			if f.IsExported() && name != "-" {
+				fields[name] = f.Type
+			}
+		}
+		for key, value := range object {
+			if field, ok := fields[key]; ok {
+				if caseFolded(value, field) {
+					return true
+				}
+				continue
+			}
+			for name := range fields {
+				if strings.EqualFold(name, key) {
+					return true
+				}
+			}
+		}
+	case reflect.Slice, reflect.Array, reflect.Map:
+		var values []json.RawMessage
+		if t.Kind() == reflect.Map {
+			var object map[string]json.RawMessage
+			if json.Unmarshal(raw, &object) != nil {
+				return false
+			}
+			for _, value := range object {
+				values = append(values, value)
+			}
+		} else if json.Unmarshal(raw, &values) != nil {
+			return false
+		}
+		for _, value := range values {
+			if caseFolded(value, t.Elem()) {
+				return true
+			}
+		}
+	}
+	return false
 }

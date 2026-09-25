@@ -64,17 +64,31 @@ func TestMetricsTokenGatesMetricsOnly(t *testing.T) {
 	}
 }
 
+// closedAuth is a listener whose provider routes refuse every request.
+type closedAuth struct{}
+
+func (closedAuth) Authenticate(context.Context, *http.Request) (RequestContext, error) {
+	return RequestContext{}, errors.New("closed")
+}
+func (closedAuth) RefusesAll() bool { return true }
+
+// A middleware store outage degrades readiness only where the middleware is all
+// the listener serves; provider inference keeps its replicas in the Service.
 func TestReadinessReflectsMiddlewareStore(t *testing.T) {
+	down := fakeMiddleware{readyErr: errors.New("attempt to write a readonly database")}
 	for _, tc := range []struct {
 		middleware http.Handler
+		auth       Authenticator
 		status     int
 		state      string
 	}{
-		{nil, 200, "unavailable"},
-		{fakeMiddleware{}, 200, "ok"},
-		{fakeMiddleware{readyErr: errors.New("attempt to write a readonly database")}, 503, "degraded"},
+		{nil, nil, 200, "unavailable"},
+		{fakeMiddleware{}, nil, 200, "ok"},
+		{down, nil, 200, "degraded"},
+		{fakeMiddleware{}, closedAuth{}, 200, "ok"},
+		{down, closedAuth{}, 503, "degraded"},
 	} {
-		rec := get(t, New(Config{Middleware: tc.middleware}), "/health/ready", "")
+		rec := get(t, New(Config{Middleware: tc.middleware, Auth: tc.auth}), "/health/ready", "")
 		var body struct {
 			OK         bool   `json:"ok"`
 			Middleware string `json:"middleware"`

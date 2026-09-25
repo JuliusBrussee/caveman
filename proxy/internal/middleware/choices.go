@@ -66,8 +66,21 @@ func (r *Runtime) prepareChoice(ctx context.Context, auth string, req OptimizeRe
 			p.eligible, p.reason = false, CodeUnknownCapability
 			return p, nil
 		}
-		if err := r.verifyOriginal(p.handle, r.held(owned, s.SHA256), s.SHA256); err != nil {
-			return p, err
+		if r.verifyOriginal(p.handle, r.held(owned, s.SHA256), s.SHA256) != nil {
+			if p.handle != "" {
+				// A protocol 1.0 grant recovers only from CCR, which lost it:
+				// this segment goes unreplaced, the rest of the request does not.
+				p.eligible, p.reason = false, CodeRecoveryUnavailable
+				return p, nil
+			}
+			// The stored original is gone or sealed with a key this runtime
+			// cannot open (rotated away, plaintext under a keyring). The
+			// request carries the content, verified against the choice's
+			// digest: the choice is kept and publish stores it again.
+			var err error
+			if p.sealed, p.keyID, err = r.cfg.Keys.seal(auth, s.SHA256, []byte(s.Content)); err != nil {
+				return p, err
+			}
 		}
 		p.replacement.Reused = true
 		return p, nil
@@ -150,7 +163,9 @@ func (r *Runtime) publishChoice(req OptimizeRequest, s Segment, p preparedChoice
 		// Usually already checked outside the write lock. Only a different
 		// first writer needs a fresh check here.
 		if c.Handle != p.handle || existing.SHA256 != p.replacement.SHA256 {
-			if err := r.verifyOriginal(c.Handle, r.held(owned, s.SHA256), s.SHA256); err != nil {
+			// p.sealed is this request's copy of the original: publish stores it
+			// for a choice whose own copy is unusable.
+			if err := r.verifyOriginal(c.Handle, r.held(owned, s.SHA256) || p.sealed != nil, s.SHA256); err != nil {
 				return Replacement{}, "", err
 			}
 		}

@@ -88,8 +88,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-          # Ready means the middleware store just accepted a write (a full disk
-          # or a read-only volume fails it); the check itself allows 2 s.
+          # The readiness body reports "middleware":"degraded" when its store
+          # cannot take a write (a full disk or a read-only volume); the check
+          # allows 2 s. The pod stays ready: the provider routes still serve.
           readinessProbe:
             httpGet:
               path: /health/ready

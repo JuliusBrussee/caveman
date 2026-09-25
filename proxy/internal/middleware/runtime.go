@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"math/rand/v2"
 	"net/http"
 	"slices"
 	"sync"
@@ -90,6 +91,29 @@ type Runtime struct {
 	readyMu  sync.Mutex
 	readyAt  time.Time
 	readyErr error
+}
+
+// initRetryBudget bounds how long New retries a migration that lost a lock
+// race with live writers (store.ErrMiddlewareConflict) before failing startup.
+const initRetryBudget = 60 * time.Second
+
+// initStore migrates the store. A migration that deadlocked with, or timed out
+// waiting for, another replica's writers rolled back whole; it is retried with
+// jittered backoff rather than failing this replica's start, which in a rolling
+// deploy would only restart it into the same race.
+func initStore(cfg Config) error {
+	deadline := time.Now().Add(initRetryBudget)
+	for backoff := 250 * time.Millisecond; ; backoff = min(backoff*2, 5*time.Second) {
+		err := cfg.Store.InitMiddleware(context.Background())
+		if err == nil || !errors.Is(err, store.ErrMiddlewareConflict) || time.Now().After(deadline) {
+			return err
+		}
+		wait := backoff/2 + rand.N(backoff/2)
+		if cfg.Logger != nil {
+			cfg.Logger.Warn("middleware store migration conflicted with live writers; retrying", "error", err, "retry_in", wait)
+		}
+		time.Sleep(wait)
+	}
 }
 
 // serverFeatures are the negotiable 1.1 features, sorted (§3).
@@ -187,7 +211,7 @@ func New(cfg Config) (*Runtime, error) {
 			*limit.value = limit.ceiling
 		}
 	}
-	if err := cfg.Store.InitMiddleware(context.Background()); err != nil {
+	if err := initStore(cfg); err != nil {
 		return nil, err
 	}
 	counter := newMemoCounter(tokens.Default())
@@ -220,7 +244,8 @@ func New(cfg Config) (*Runtime, error) {
 
 // reportKeys logs, once at startup, the stored originals this runtime cannot
 // open: sealed with a key it does not have, or plaintext under a keyring. Their
-// grants answer recovery_unavailable and their choices are not reused.
+// grants answer recovery_unavailable until an optimize that sends the same
+// content again restores the original under the current key.
 func (r *Runtime) reportKeys(ctx context.Context) {
 	if r.cfg.Logger == nil {
 		return
@@ -447,6 +472,11 @@ func (r *Runtime) publish(ctx context.Context, tx *store.MiddlewareTx, auth, sco
 			choices = append(choices, store.MiddlewareChoice{ID: choiceKey(segment), Grant: replacement.RecoveryHandle, Original: segment.SHA256, Payload: body})
 			originals = append(originals, store.MiddlewareOriginal{Digest: segment.SHA256, KeyID: prepared[i].keyID, Body: prepared[i].sealed})
 			owners = append(owners, len(response.Replacements))
+		} else if prepared[i].sealed != nil && chosen[choiceKey(segment)].Handle == "" && !r.held(owned, segment.SHA256) {
+			// A reused choice whose stored original this runtime cannot open
+			// gets it back from the request's verified content (prepareChoice).
+			originals = append(originals, store.MiddlewareOriginal{Digest: segment.SHA256, KeyID: prepared[i].keyID, Body: prepared[i].sealed})
+			owners = append(owners, -1)
 		}
 		response.Replacements = append(response.Replacements, replacement)
 	}
@@ -462,6 +492,8 @@ func (r *Runtime) publish(ctx context.Context, tx *store.MiddlewareTx, auth, sco
 		if err := tx.SaveChoices(scopeID, choices); err != nil {
 			return false, err
 		}
+	}
+	if len(originals) > 0 {
 		// The originals commit with the plan that references them, so an
 		// aborted or not_smaller plan leaves nothing recoverable behind.
 		credits, err := tx.SaveOriginals(auth, originals)
@@ -469,6 +501,9 @@ func (r *Runtime) publish(ctx context.Context, tx *store.MiddlewareTx, auth, sco
 			return false, err
 		}
 		for j, credit := range credits {
+			if owners[j] < 0 {
+				continue // a restored original is not new content
+			}
 			replacement := &response.Replacements[owners[j]]
 			replacement.UniqueOriginal = credit
 			if credit {
@@ -513,8 +548,20 @@ func (r *Runtime) publish(ctx context.Context, tx *store.MiddlewareTx, auth, sco
 	if err != nil {
 		return false, err
 	}
-	return rebaselined, tx.SavePlan(scopeID, req.IdempotencyKey, inputDigest, b, now+int64(r.cfg.Retention.Seconds()))
+	return rebaselined, tx.SavePlan(scopeID, req.IdempotencyKey, inputDigest, b, now, now+min(planReplaySeconds, int64(r.cfg.Retention.Seconds())))
 }
+
+// planReplaySeconds is how long a plan is kept for an idempotent replay. A
+// replay is a retry of one call: the SDK's own within its deadline, a
+// framework's after a provider timeout (10 minutes by default in the Anthropic
+// and OpenAI SDKs). Once the window ends the plan is absent even before the
+// sweep deletes it, and a later repeat of the key plans afresh like any new
+// request: since choices persist it gets the same replacement bytes, but if
+// the scope has moved on since, its older manifest is an epoch change
+// (1.0 epoch_changed, 1.1 re-baseline). Keeping plans for the whole
+// retention instead held one row per optimize for a day: at the default row
+// cap, capacity at ~11.5 optimize/s sustained; at 15 minutes, ~1100/s.
+const planReplaySeconds = 15 * 60
 
 // decision names an optimize outcome that is a verdict on the content, not a
 // failure of the request. http_status_v2 clients get it as a 200 bypass plan;
@@ -692,7 +739,7 @@ func previousPlan(tx *store.MiddlewareTx, scopeID, auth string, req OptimizeRequ
 		return nil, 0, false, Failure{CodeExpired}
 	}
 	// Exact replay may refer to a shorter, already prepared turn.
-	if b, err := tx.Plan(scopeID, req.IdempotencyKey, inputDigest); err == nil {
+	if b, err := tx.Plan(scopeID, req.IdempotencyKey, inputDigest, now); err == nil {
 		var response OptimizeResponse
 		if json.Unmarshal(b, &response) != nil {
 			return nil, 0, false, Failure{ReasonCacheStateUnavailable}

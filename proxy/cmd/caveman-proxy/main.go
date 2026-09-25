@@ -255,7 +255,7 @@ func runServe(logger *slog.Logger) {
 		os.Exit(1)
 	case err != nil:
 		// The default local middleware: inference keeps working, and readiness
-		// says the middleware is down instead of 200.
+		// reports the middleware "degraded" (see gateway.Server.ready).
 		logger.Warn("framework middleware unavailable", "code", "runtime_initialization", "error", err)
 		opts.Middleware = middlewareDown{err}
 	default:
@@ -390,7 +390,7 @@ func runServe(logger *slog.Logger) {
 
 // middlewareDown stands in for a default middleware that failed to start: its
 // routes answer 503 runtime_unavailable, as with no middleware at all, and
-// readiness fails with the startup error.
+// readiness reports it degraded.
 type middlewareDown struct{ err error }
 
 func (d middlewareDown) Ready(context.Context) error { return d.err }

@@ -60,6 +60,14 @@ type Auth struct {
 // the silence here costs no observability.
 var errInboundTokenRejected = errors.New("inbound token rejected")
 
+// RefusesAll reports that the provider routes refuse every request, so the
+// listener serves the middleware only (see gateway /health/ready).
+func (a Auth) RefusesAll() bool { return a.closed }
+
+// The gateway finds RefusesAll by an anonymous interface assertion, so a
+// renamed or re-signed method would silently stop matching: fail the build.
+var _ interface{ RefusesAll() bool } = Auth{}
+
 func (a Auth) Authenticate(ctx context.Context, r *http.Request) (gateway.RequestContext, error) {
 	if a.closed {
 		return gateway.RequestContext{}, errInboundTokenRejected

@@ -62,8 +62,12 @@ var middlewareColumns = []string{
 	`ALTER TABLE middleware_receipts ADD COLUMN principal TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE middleware_originals ADD COLUMN principal TEXT NOT NULL DEFAULT ''`,
 	choicesOriginalColumn,
-	`ALTER TABLE middleware_choices ADD COLUMN legacy INTEGER NOT NULL DEFAULT 0`,
+	choicesLegacyColumn,
 }
+
+// choicesLegacyColumn is the choice's legacy flag (see legacyChoice). The
+// migration that adds it sets it on every existing choice.
+const choicesLegacyColumn = `ALTER TABLE middleware_choices ADD COLUMN legacy INTEGER NOT NULL DEFAULT 0`
 
 // choicesOriginalColumn names the digest of the middleware original a choice
 // recovers ("" for a protocol 1.0 choice, whose original is in CCR), so expiry
@@ -76,13 +80,32 @@ const choicesOriginalColumn = `ALTER TABLE middleware_choices ADD COLUMN origina
 // original stays in CCR where no delete reaches it.
 const legacyChoice = `legacy=CASE WHEN legacy<>0 OR ccr_handle<>'' THEN 1 ELSE 0 END`
 
-// Byte accounting per table. %[1]s is NEW or OLD. An original is its 64-byte
-// digest key plus its (possibly sealed) body; credit-only rows have no body.
-// Compound sizes are parenthesized: triggers subtract them.
-var middlewareSizes = []struct{ table, size string }{
-	{"middleware_scopes", "length(%[1]s.manifest)"}, {"middleware_choices", "length(%[1]s.payload)"},
-	{"middleware_plans", "length(%[1]s.payload)"}, {"middleware_receipts", "length(%[1]s.payload)"},
-	{"middleware_originals", "(64+coalesce(length(%[1]s.body),0))"},
+// Accounting per table. %[1]s is NEW, OLD or the table itself. An original is
+// its 64-byte digest key plus its (possibly sealed) body; credit-only rows have
+// no body. counted is whether a row counts against the row limits: a scope or
+// choice tombstone (emptied manifest or payload) does not, so deleting a session
+// frees its rows at once instead of after the grace period. Compound
+// expressions are parenthesized: triggers subtract them.
+var middlewareSizes = []struct{ table, size, counted string }{
+	{"middleware_scopes", "length(%[1]s.manifest)", "(CASE WHEN length(%[1]s.manifest)>0 THEN 1 ELSE 0 END)"},
+	{"middleware_choices", "length(%[1]s.payload)", "(CASE WHEN length(%[1]s.payload)>0 THEN 1 ELSE 0 END)"},
+	{"middleware_plans", "length(%[1]s.payload)", "1"}, {"middleware_receipts", "length(%[1]s.payload)", "1"},
+	{"middleware_originals", "(64+coalesce(length(%[1]s.body),0))", "1"},
+}
+
+// rowExpr fills an accounting expression's %[1]s with row. Unlike Sprintf it
+// leaves a constant expression ("1") as it is.
+func rowExpr(format, row string) string { return strings.ReplaceAll(format, "%[1]s", row) }
+
+// middlewareUsageRows is every row's principal, counted and size, for
+// recomputing the counters from scratch.
+func middlewareUsageRows() string {
+	var parts []string
+	for _, table := range middlewareSizes {
+		parts = append(parts, fmt.Sprintf("SELECT principal,%[2]s AS counted,%[3]s AS size FROM %[1]s",
+			table.table, rowExpr(table.counted, table.table), fmt.Sprintf(table.size, table.table)))
+	}
+	return strings.Join(parts, " UNION ALL ")
 }
 
 var (
@@ -116,10 +139,11 @@ func (s *Store) InitMiddleware(ctx context.Context) error {
 	if _, err = tx.ExecContext(ctx, middlewareSchema); err != nil {
 		return err
 	}
-	backfill := false
+	backfill, legacy := false, false
 	for _, statement := range middlewareColumns {
 		if _, err = tx.ExecContext(ctx, statement); err == nil {
 			backfill = backfill || statement == choicesOriginalColumn
+			legacy = legacy || statement == choicesLegacyColumn
 		} else if !strings.Contains(err.Error(), "duplicate column name") {
 			return err
 		}
@@ -127,6 +151,15 @@ func (s *Store) InitMiddleware(ctx context.Context) error {
 	if backfill {
 		if _, err = tx.ExecContext(ctx, `UPDATE middleware_choices SET original=coalesce(json_extract(CAST(payload AS TEXT),'$.original_sha256'),'')
 WHERE ccr_handle='' AND json_valid(CAST(payload AS TEXT))`); err != nil {
+			return err
+		}
+	}
+	// A store without the legacy column was written by a protocol 1.0 runtime:
+	// every choice's original is in CCR, and that runtime's revocation blanked
+	// the handle that said so. (A choice the backfill above found an original
+	// for is not one.)
+	if legacy {
+		if _, err = tx.ExecContext(ctx, `UPDATE middleware_choices SET legacy=1 WHERE original=''`); err != nil {
 			return err
 		}
 	}
@@ -147,42 +180,49 @@ WHERE ccr_handle='' AND json_valid(CAST(payload AS TEXT))`); err != nil {
 			return err
 		}
 	}
-	// Backfill only at migration time. Trigger-maintained counters make each
-	// admission O(1), including writes by another process using this store.
-	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO middleware_usage SELECT 1,
- (SELECT count(*) FROM middleware_scopes)+(SELECT count(*) FROM middleware_choices)+
- (SELECT count(*) FROM middleware_plans)+(SELECT count(*) FROM middleware_receipts)+(SELECT count(*) FROM middleware_originals),
- coalesce((SELECT sum(length(payload)) FROM middleware_choices),0)+coalesce((SELECT sum(length(payload)) FROM middleware_plans),0)+
- coalesce((SELECT sum(length(payload)) FROM middleware_receipts),0)+coalesce((SELECT sum(length(manifest)) FROM middleware_scopes),0)+
- coalesce((SELECT sum(64+coalesce(length(body),0)) FROM middleware_originals),0) WHERE NOT EXISTS(SELECT 1 FROM middleware_usage)`); err != nil {
+	// Counters are recomputed only when the triggers maintaining them predate
+	// the current accounting (a new store, or one written by an older runtime:
+	// originals used to count a constant 64, tombstones used to count as rows).
+	// From then on trigger-maintained counters make each admission O(1),
+	// including writes by another process using this store.
+	var current string
+	if err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT sql FROM sqlite_master WHERE type='trigger' AND name='middleware_choices_usage_delete'),'')`).Scan(&current); err != nil {
 		return err
 	}
+	if !strings.Contains(current, rowExpr(middlewareSizes[1].counted, "OLD")) {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM middleware_usage; DELETE FROM middleware_principal_usage;
+INSERT INTO middleware_usage SELECT 1,coalesce(sum(counted),0),coalesce(sum(size),0) FROM (`+middlewareUsageRows()+`);
+INSERT INTO middleware_principal_usage SELECT principal,sum(counted),sum(size) FROM (`+middlewareUsageRows()+`) WHERE principal<>'' GROUP BY principal`); err != nil {
+			return err
+		}
+	}
 	// Triggers are dropped and recreated so a store migrated from an older
-	// runtime gets current definitions: originals used to count a constant 64.
-	// Per-principal counters skip an empty principal (rows older than the column).
-	// An update that stamps a principal on such a row (a protocol 1.0 credit
-	// getting its body) moves the whole row onto that principal.
+	// runtime gets current definitions. Per-principal counters skip an empty
+	// principal (rows older than the column). An update that stamps a principal
+	// on such a row (a protocol 1.0 credit getting its body) moves the whole row
+	// onto that principal.
 	for _, table := range middlewareSizes {
 		newSize, oldSize := fmt.Sprintf(table.size, "NEW"), fmt.Sprintf(table.size, "OLD")
+		newCounted, oldCounted := rowExpr(table.counted, "NEW"), rowExpr(table.counted, "OLD")
 		statements := fmt.Sprintf(`
 DROP TRIGGER IF EXISTS %[1]s_usage_insert; DROP TRIGGER IF EXISTS %[1]s_usage_delete; DROP TRIGGER IF EXISTS %[1]s_usage_update;
 DROP TRIGGER IF EXISTS %[1]s_quota_insert; DROP TRIGGER IF EXISTS %[1]s_quota_delete; DROP TRIGGER IF EXISTS %[1]s_quota_update;
 DROP TRIGGER IF EXISTS %[1]s_quota_move_out; DROP TRIGGER IF EXISTS %[1]s_quota_move_in;
-CREATE TRIGGER %[1]s_usage_insert AFTER INSERT ON %[1]s BEGIN UPDATE middleware_usage SET rows=rows+1,bytes=bytes+%[2]s WHERE singleton=1; END;
-CREATE TRIGGER %[1]s_usage_delete AFTER DELETE ON %[1]s BEGIN UPDATE middleware_usage SET rows=rows-1,bytes=bytes-%[3]s WHERE singleton=1; END;
-CREATE TRIGGER %[1]s_usage_update AFTER UPDATE ON %[1]s BEGIN UPDATE middleware_usage SET bytes=bytes+%[2]s-%[3]s WHERE singleton=1; END;
+CREATE TRIGGER %[1]s_usage_insert AFTER INSERT ON %[1]s BEGIN UPDATE middleware_usage SET rows=rows+%[4]s,bytes=bytes+%[2]s WHERE singleton=1; END;
+CREATE TRIGGER %[1]s_usage_delete AFTER DELETE ON %[1]s BEGIN UPDATE middleware_usage SET rows=rows-%[5]s,bytes=bytes-%[3]s WHERE singleton=1; END;
+CREATE TRIGGER %[1]s_usage_update AFTER UPDATE ON %[1]s BEGIN UPDATE middleware_usage SET rows=rows+%[4]s-%[5]s,bytes=bytes+%[2]s-%[3]s WHERE singleton=1; END;
 CREATE TRIGGER %[1]s_quota_insert AFTER INSERT ON %[1]s WHEN NEW.principal<>'' BEGIN
  INSERT OR IGNORE INTO middleware_principal_usage VALUES (NEW.principal,0,0);
- UPDATE middleware_principal_usage SET rows=rows+1,bytes=bytes+%[2]s WHERE principal=NEW.principal; END;
+ UPDATE middleware_principal_usage SET rows=rows+%[4]s,bytes=bytes+%[2]s WHERE principal=NEW.principal; END;
 CREATE TRIGGER %[1]s_quota_delete AFTER DELETE ON %[1]s WHEN OLD.principal<>'' BEGIN
- UPDATE middleware_principal_usage SET rows=rows-1,bytes=bytes-%[3]s WHERE principal=OLD.principal; END;
+ UPDATE middleware_principal_usage SET rows=rows-%[5]s,bytes=bytes-%[3]s WHERE principal=OLD.principal; END;
 CREATE TRIGGER %[1]s_quota_update AFTER UPDATE ON %[1]s WHEN NEW.principal<>'' AND NEW.principal=OLD.principal BEGIN
- UPDATE middleware_principal_usage SET bytes=bytes+%[2]s-%[3]s WHERE principal=NEW.principal; END;
+ UPDATE middleware_principal_usage SET rows=rows+%[4]s-%[5]s,bytes=bytes+%[2]s-%[3]s WHERE principal=NEW.principal; END;
 CREATE TRIGGER %[1]s_quota_move_out AFTER UPDATE ON %[1]s WHEN OLD.principal<>'' AND NEW.principal<>OLD.principal BEGIN
- UPDATE middleware_principal_usage SET rows=rows-1,bytes=bytes-%[3]s WHERE principal=OLD.principal; END;
+ UPDATE middleware_principal_usage SET rows=rows-%[5]s,bytes=bytes-%[3]s WHERE principal=OLD.principal; END;
 CREATE TRIGGER %[1]s_quota_move_in AFTER UPDATE ON %[1]s WHEN NEW.principal<>'' AND NEW.principal<>OLD.principal BEGIN
  INSERT OR IGNORE INTO middleware_principal_usage VALUES (NEW.principal,0,0);
- UPDATE middleware_principal_usage SET rows=rows+1,bytes=bytes+%[2]s WHERE principal=NEW.principal; END;`, table.table, newSize, oldSize)
+ UPDATE middleware_principal_usage SET rows=rows+%[4]s,bytes=bytes+%[2]s WHERE principal=NEW.principal; END;`, table.table, newSize, oldSize, newCounted, oldCounted)
 		if _, err = tx.ExecContext(ctx, statements); err != nil {
 			return err
 		}
@@ -213,7 +253,8 @@ type MiddlewareStore interface {
 	// them ("" is plaintext).
 	MiddlewareKeys(ctx context.Context) (map[string]int64, error)
 	// MiddlewareBacklog counts what has expired by now and is not reclaimed
-	// yet: elapsed scopes still holding payload, plans and receipts.
+	// yet: elapsed scopes still holding payload, revoked scopes whose purge is
+	// unfinished (see revokedUnpurged), plans and receipts.
 	MiddlewareBacklog(ctx context.Context, now int64) (int64, error)
 	// Persistent reports whether choices and originals survive a restart.
 	Persistent() bool
@@ -250,17 +291,35 @@ type middlewareTxOps interface {
 	// Revoked reports whether sessions/delete revoked the authority (its
 	// tombstones answer "deleted" until their grace ends).
 	Revoked(authority string) (bool, error)
-	Plan(scope, id, digest string) ([]byte, error)
-	SavePlan(scope, id, digest string, body []byte, expires int64) error
+	// Plan returns the plan stored for replay under (scope, id): sql.ErrNoRows
+	// once it expired by now, even before the sweep deletes it, and
+	// ErrMiddlewareConflict when it was planned for another digest.
+	Plan(scope, id, digest string, now int64) ([]byte, error)
+	// SavePlan stores a plan, replacing one expired by now (which Plan reported
+	// absent). A plan still live at now is never overwritten:
+	// ErrMiddlewareConflict.
+	SavePlan(scope, id, digest string, body []byte, now, expires int64) error
 	// Choices returns the scope's choices among ids, keyed by id.
 	Choices(scope string, ids []string) (map[string]MiddlewareChoice, error)
 	SaveChoices(scope string, choices []MiddlewareChoice) error
 	Grant(authority, grant string) ([]byte, string, int64, error)
 	Renew(authority string, now, retention, maxRetention int64) error
-	Delete(authority string, now int64) (MiddlewareDeleted, error)
+	// Revoke is sessions/delete's first step: from its commit on, every scope
+	// of the authority answers "deleted". It reports the scopes it revoked and
+	// the authority's legacy choices (see MiddlewareDeleted).
+	Revoke(authority string, now int64) (MiddlewareDeleted, error)
+	// PurgeBatch deletes at most limit rows per kind of a revoked authority's
+	// content (choice payloads, originals with a body, credit-only originals,
+	// receipts, plans), and once none is left empties its manifests. more
+	// reports that a kind filled its batch. Each batch commits on its own, so a
+	// retried delete resumes. Only originals with a body count as deleted.
+	PurgeBatch(authority string, limit int) (deleted MiddlewareDeleted, more bool, err error)
 	// ExpireBatch reclaims one batch of at most limit rows per kind, and
 	// reports how many rows it touched and whether any kind filled its batch.
 	ExpireBatch(now int64, limit int) (int64, bool, error)
+	// Receipt records one receipt per (authority, id). The first write wins: a
+	// retried receipt, whatever its body, stores nothing and succeeds, so a
+	// client never retries a receipt that cannot be accepted.
 	Receipt(authority, id, digest string, body []byte, expires int64) error
 	// Originals returns what the authority stores for each of digests.
 	Originals(authority string, digests []string) (map[string]StoredOriginal, error)
@@ -290,6 +349,10 @@ type MiddlewareTx struct {
 // MiddlewareSweepBatch is the default number of rows per kind one expiry batch
 // reclaims.
 const MiddlewareSweepBatch = 128
+
+// MiddlewarePurgeBatch bounds one PurgeBatch of sessions/delete or the sweep:
+// rows per kind, so at most 256 originals of at most segment_bytes each.
+const MiddlewarePurgeBatch = 256
 
 // Expire reclaims one default-sized batch (see ExpireBatch).
 func (t *MiddlewareTx) Expire(now int64) (int64, error) {
@@ -504,8 +567,22 @@ func (s *Store) MiddlewareBacklog(ctx context.Context, now int64) (n int64, err 
 // middlewareBacklog is MiddlewareBacklog's query with now bound as param.
 func middlewareBacklog(param string) string {
 	return strings.ReplaceAll(`SELECT (SELECT count(*) FROM middleware_scopes WHERE expires_at>0 AND expires_at<=$now AND length(manifest)>0)
+ +(SELECT count(*) FROM middleware_scopes WHERE `+revokedUnpurged+`)
  +(SELECT count(*) FROM middleware_plans WHERE expires_at<=$now)+(SELECT count(*) FROM middleware_receipts WHERE expires_at<=$now)`, "$now", param)
 }
+
+// revokedUnpurged selects the scopes of a revoked authority whose purge a
+// sessions/delete left unfinished: PurgeBatch empties every manifest last. It
+// is a range of the middleware_scopes_unpurged index, so a sweep with nothing
+// pending reads no tombstone. Receipts a revoked authority still holds (its
+// scopes were purged by expiry before the delete) flag nothing: Receipt
+// refuses a revoked authority, and they go with their own expiry.
+const revokedUnpurged = `expires_at<=0 AND length(manifest)>0`
+
+// nextRevoked is the revoked authority whose unfinished purge is oldest. The
+// ORDER BY is load-bearing: with LIMIT alone Postgres expects every tombstone
+// to match (it has no statistics on length(manifest)) and scans the table.
+const nextRevoked = `SELECT authority FROM middleware_scopes WHERE ` + revokedUnpurged + ` ORDER BY expires_at DESC LIMIT 1`
 
 func (t *sqliteMiddlewareTx) Scope(id string) (MiddlewareScope, error) {
 	s := MiddlewareScope{ID: id}
@@ -528,10 +605,10 @@ func (t *sqliteMiddlewareTx) Revoked(authority string) (revoked bool, err error)
 	return revoked, err
 }
 
-func (t *sqliteMiddlewareTx) Plan(scope, id, digest string) ([]byte, error) {
+func (t *sqliteMiddlewareTx) Plan(scope, id, digest string, now int64) ([]byte, error) {
 	var storedDigest string
 	var body []byte
-	err := t.tx.QueryRowContext(t.ctx, `SELECT digest,payload FROM middleware_plans WHERE scope=? AND id=?`, scope, id).Scan(&storedDigest, &body)
+	err := t.tx.QueryRowContext(t.ctx, `SELECT digest,payload FROM middleware_plans WHERE scope=? AND id=? AND expires_at>?`, scope, id, now).Scan(&storedDigest, &body)
 	if err == nil && storedDigest != digest {
 		return nil, ErrMiddlewareConflict
 	}
@@ -540,11 +617,21 @@ func (t *sqliteMiddlewareTx) Plan(scope, id, digest string) ([]byte, error) {
 
 // SavePlan records an idempotent replay. Plans carry their own expiry: a scope
 // renewed on every call would otherwise keep one row per call until it lapses.
-func (t *sqliteMiddlewareTx) SavePlan(scope, id, digest string, body []byte, expires int64) error {
+func (t *sqliteMiddlewareTx) SavePlan(scope, id, digest string, body []byte, now, expires int64) error {
 	t.grew = true
-	_, err := t.tx.ExecContext(t.ctx, `INSERT INTO middleware_plans(scope,id,digest,payload,expires_at,principal) VALUES (?,?,?,?,?,?)`,
-		scope, id, digest, body, expires, t.Principal)
-	return err
+	result, err := t.tx.ExecContext(t.ctx, `INSERT INTO middleware_plans(scope,id,digest,payload,expires_at,principal) VALUES (?,?,?,?,?,?)
+ON CONFLICT(scope,id) DO UPDATE SET digest=excluded.digest,payload=excluded.payload,expires_at=excluded.expires_at,principal=excluded.principal
+WHERE middleware_plans.expires_at<=?`,
+		scope, id, digest, body, expires, t.Principal, now)
+	if err != nil {
+		return err
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrMiddlewareConflict // a live plan was in the way
+	}
+	return nil
 }
 
 // Choices looks each id up in turn: SQLite runs in process, so a lookup costs
@@ -611,40 +698,78 @@ type MiddlewareDeleted struct {
 	Scopes, Choices, Originals, Legacy int64
 }
 
-func (t *sqliteMiddlewareTx) Delete(authority string, now int64) (MiddlewareDeleted, error) {
+// Add accumulates another batch's counts. Legacy is a property of the
+// authority, not of a batch, so the larger report wins.
+func (d *MiddlewareDeleted) Add(other MiddlewareDeleted) {
+	d.Scopes, d.Choices, d.Originals, d.Legacy = d.Scopes+other.Scopes, d.Choices+other.Choices, d.Originals+other.Originals, max(d.Legacy, other.Legacy)
+}
+
+// Delete revokes an authority and purges all of it in this one transaction:
+// Revoke plus PurgeBatch until nothing is left. sessions/delete commits the
+// revocation and each batch separately instead.
+func (t *MiddlewareTx) Delete(authority string, now int64) (MiddlewareDeleted, error) {
+	out, err := t.Revoke(authority, now)
+	for more := err == nil; more; {
+		var batch MiddlewareDeleted
+		batch, more, err = t.PurgeBatch(authority, MiddlewareSweepBatch)
+		out.Add(batch)
+		more = more && err == nil
+	}
+	return out, err
+}
+
+// Revoke keeps bounded metadata tombstones: old markers still return a typed
+// revoked result, and no epoch silently resumes old grants. expires_at<=0
+// records when, so Expire can eventually reclaim it; already-revoked scopes keep
+// their first revocation time.
+func (t *sqliteMiddlewareTx) Revoke(authority string, now int64) (MiddlewareDeleted, error) {
 	var out MiddlewareDeleted
-	const scopes = `SELECT id FROM middleware_scopes WHERE authority=?`
-	if err := t.tx.QueryRowContext(t.ctx, `SELECT count(*) FROM middleware_choices WHERE (ccr_handle<>'' OR legacy<>0) AND scope IN (`+scopes+`)`, authority).Scan(&out.Legacy); err != nil {
+	if err := t.tx.QueryRowContext(t.ctx, `SELECT count(*) FROM middleware_choices WHERE (ccr_handle<>'' OR legacy<>0)
+ AND scope IN (SELECT id FROM middleware_scopes WHERE authority=?)`, authority).Scan(&out.Legacy); err != nil {
 		return out, err
 	}
-	// Retain bounded metadata tombstones, not replacement text. Old markers
-	// still return a typed revoked result; no epoch silently resumes old grants.
-	// expires_at<=0 records when, so Expire can eventually reclaim it (below).
-	// Already-revoked scopes keep their first revocation time.
+	result, err := t.tx.ExecContext(t.ctx, `UPDATE middleware_scopes SET expires_at=? WHERE authority=? AND expires_at>0`, -now, authority)
+	if err == nil {
+		out.Scopes, err = result.RowsAffected()
+	}
+	return out, err
+}
+
+// PurgeBatch selects each batch by rowid first: SQLite is not built with
+// UPDATE/DELETE LIMIT here.
+func (t *sqliteMiddlewareTx) PurgeBatch(authority string, limit int) (MiddlewareDeleted, bool, error) {
+	var out MiddlewareDeleted
+	more := false
+	const scopes = `SELECT id FROM middleware_scopes WHERE authority=?1`
 	for _, step := range []struct {
 		count     *int64
 		statement string
-		args      []any
 	}{
-		{&out.Scopes, `UPDATE middleware_scopes SET expires_at=? WHERE authority=? AND expires_at>0`, []any{-now, authority}},
-		{&out.Choices, `UPDATE middleware_choices SET payload=x'',` + legacyChoice + `,ccr_handle='' WHERE (length(payload)>0 OR ccr_handle<>'') AND scope IN (` + scopes + `)`, []any{authority}},
-		{&out.Originals, `DELETE FROM middleware_originals WHERE authority=? AND body IS NOT NULL`, []any{authority}},
-		{nil, `DELETE FROM middleware_originals WHERE authority=?`, []any{authority}},
-		{nil, `DELETE FROM middleware_receipts WHERE authority=?`, []any{authority}},
-		{nil, `DELETE FROM middleware_plans WHERE scope IN (` + scopes + `)`, []any{authority}},
-		{nil, `UPDATE middleware_scopes SET manifest=x'' WHERE authority=?`, []any{authority}},
+		{&out.Choices, `UPDATE middleware_choices SET payload=x'',` + legacyChoice + `,ccr_handle='' WHERE rowid IN (SELECT rowid FROM middleware_choices
+ WHERE scope IN (` + scopes + `) AND (length(payload)>0 OR ccr_handle<>'') LIMIT ?2)`},
+		{&out.Originals, `DELETE FROM middleware_originals WHERE rowid IN (SELECT rowid FROM middleware_originals WHERE authority=?1 AND body IS NOT NULL LIMIT ?2)`},
+		{nil, `DELETE FROM middleware_originals WHERE rowid IN (SELECT rowid FROM middleware_originals WHERE authority=?1 AND body IS NULL LIMIT ?2)`},
+		{nil, `DELETE FROM middleware_receipts WHERE rowid IN (SELECT rowid FROM middleware_receipts WHERE authority=?1 LIMIT ?2)`},
+		{nil, `DELETE FROM middleware_plans WHERE rowid IN (SELECT rowid FROM middleware_plans WHERE scope IN (` + scopes + `) LIMIT ?2)`},
 	} {
-		result, err := t.tx.ExecContext(t.ctx, step.statement, step.args...)
+		result, err := t.tx.ExecContext(t.ctx, step.statement, authority, limit)
 		if err != nil {
-			return out, err
+			return out, more, err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return out, more, err
 		}
 		if step.count != nil {
-			if *step.count, err = result.RowsAffected(); err != nil {
-				return out, err
-			}
+			*step.count = n
 		}
+		more = more || n == int64(limit)
 	}
-	return out, nil
+	if !more {
+		_, err := t.tx.ExecContext(t.ctx, `UPDATE middleware_scopes SET manifest=x'' WHERE authority=? AND length(manifest)>0`, authority)
+		return out, false, err
+	}
+	return out, true, nil
 }
 
 // MiddlewareGraceSeconds is how long an elapsed scope keeps a metadata-only
@@ -655,7 +780,7 @@ const MiddlewareGraceSeconds int64 = 7 * 24 * 60 * 60
 
 // ExpireBatch reclaims one bounded batch and reports how many rows it touched,
 // and whether any kind filled its batch (more is likely waiting); a sweeper
-// calls it again while it does. Three batches, each on its own clock:
+// calls it again while it does. Four batches, each on its own clock:
 //
 //  1. Elapsed scopes whose payload is still present lose it at once: plans,
 //     choice payloads and CCR handles, manifest and originals no live scope's
@@ -665,11 +790,16 @@ const MiddlewareGraceSeconds int64 = 7 * 24 * 60 * 60
 //     so the next batch moves on to other scopes instead of reselecting these
 //     for a whole grace period (A4).
 //  2. Tombstones past the grace period go entirely. Revoked scopes
-//     (expires_at<=0, the negated revocation time) are purged by Delete and wait
-//     here: recovery reads the typed "deleted" answer off the choice row, and a
+//     (expires_at<=0, the negated revocation time) are purged by
+//     sessions/delete and wait here: recovery reads the typed "deleted" answer off the choice row, and a
 //     Grant that finds no row reports "not_found", a marker the caller never
 //     had, instead of "deleted", the one they had and lost.
 //  3. Receipts and plans past their own expiry.
+//  4. One PurgeBatch of one revoked authority whose sessions/delete nobody
+//     finished (§12), at most MiddlewarePurgeBatch rows per kind like the
+//     delete's own batches, so a large session goes over several calls
+//     instead of one transaction holding the writer that every optimize waits
+//     on.
 //
 // Every statement is keyed on an indexed column. SQLite is not built with
 // UPDATE/DELETE LIMIT here, so batches are selected first.
@@ -734,7 +864,18 @@ func (t *sqliteMiddlewareTx) ExpireBatch(now int64, limit int) (int64, bool, err
 		}
 		full = full || n == int64(limit)
 	}
-	return total, full, nil
+	var authority string
+	if err := t.tx.QueryRowContext(t.ctx, nextRevoked).Scan(&authority); errors.Is(err, sql.ErrNoRows) {
+		return total, full, nil
+	} else if err != nil {
+		return total, full, err
+	}
+	deleted, more, err := t.PurgeBatch(authority, min(limit, MiddlewarePurgeBatch))
+	if err == nil && !more {
+		// This one is done; another revoked authority may be waiting.
+		err = t.tx.QueryRowContext(t.ctx, `SELECT count(*)>0 FROM (`+nextRevoked+`) n`).Scan(&more)
+	}
+	return total + deleted.Choices + deleted.Originals, full || more, err
 }
 
 // ids returns now followed by the selected scope ids, ready to bind as ?1..?n+1.
@@ -759,10 +900,7 @@ func (t *sqliteMiddlewareTx) Receipt(authority, id, digest string, body []byte, 
 	var old string
 	err := t.tx.QueryRowContext(t.ctx, `SELECT digest FROM middleware_receipts WHERE authority=? AND id=?`, authority, id).Scan(&old)
 	if err == nil {
-		if old != digest {
-			return ErrMiddlewareConflict
-		}
-		return nil
+		return nil // first write wins (see middlewareTxOps)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err

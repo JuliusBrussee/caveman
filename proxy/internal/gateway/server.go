@@ -57,7 +57,9 @@ type RequestContext struct {
 
 // Authenticator accepts or rejects an inbound request and returns its context.
 // Standalone returns a static single-operator context; a connected build would
-// consult its key cache.
+// consult its key cache. One that refuses every request (the listener serves
+// only the middleware) should also implement RefusesAll() bool returning true,
+// so /health/ready fails when the middleware store does.
 type Authenticator interface {
 	Authenticate(ctx context.Context, r *http.Request) (RequestContext, error)
 }
@@ -625,9 +627,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ready is /health/ready. The proxy stays ready without a middleware runtime
-// (the body says "unavailable"), but a middleware store that cannot take a
-// write makes the replica unready: its framework clients would get 503s.
+// ready is /health/ready. The body reports the middleware ("unavailable" with
+// no runtime, "degraded" when its store cannot take a write), but only a
+// listener that serves nothing else goes unready over it. Provider routes never
+// touch that store, so a Postgres outage must not pull every replica's
+// inference out of the Service at once.
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	status, state := http.StatusOK, "unavailable"
 	if s.middleware != nil {
@@ -636,7 +640,10 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 			defer cancel()
 			if err := probe.Ready(ctx); err != nil {
-				status, state = http.StatusServiceUnavailable, "degraded"
+				state = "degraded"
+				if closed, ok := s.auth.(interface{ RefusesAll() bool }); ok && closed.RefusesAll() {
+					status = http.StatusServiceUnavailable
+				}
 				if s.logger != nil {
 					s.logger.Warn("middleware store not writable", "error", err)
 				}

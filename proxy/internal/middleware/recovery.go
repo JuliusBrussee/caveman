@@ -139,16 +139,47 @@ func (r *Runtime) narrow(handle string, original []byte, query string) ([]byte, 
 // deleteSession revokes the request's authority and deletes everything it owns
 // (§12). Grants protocol 1.0 issued keep their original in the shared CCR,
 // which this runtime cannot delete, so originals_deleted says so.
+//
+// The revocation commits first, so every later use answers "deleted" however
+// large the session. Its content then goes in bounded batches, each its own
+// transaction: a delete that runs out of time answers an error, and its retry
+// resumes where it stopped (the sweep finishes one nobody retries). The counts
+// are what this call's batches removed: nothing holds the authority between
+// them (SQLite has no per-authority lock; Postgres's ends with each batch), so
+// a concurrent sweep may remove the rest and the counts under-report.
 func (r *Runtime) deleteSession(ctx context.Context, principal ident.Principal, scope Scope) (SessionDeleteResponse, error) {
+	auth := authority(principal.Name, scope)
 	var deleted store.MiddlewareDeleted
 	err := r.write(ctx, principal, func(tx *store.MiddlewareTx) error {
 		var err error
-		deleted, err = tx.Delete(authority(principal.Name, scope), r.cfg.Now().Unix())
+		deleted, err = tx.Revoke(auth, r.cfg.Now().Unix())
 		return err
 	})
+	for more := err == nil; more; {
+		err = r.write(ctx, principal, func(tx *store.MiddlewareTx) error {
+			batch, next, err := tx.PurgeBatch(auth, deleteBatch)
+			if err == nil {
+				deleted.Add(batch)
+				more = next
+			}
+			return err
+		})
+		more = more && err == nil
+	}
+	// A failed delete is 503 (§12): a write conflict is not the caller's
+	// concurrent-writer condition to settle.
+	if errors.Is(err, store.ErrMiddlewareConflict) {
+		err = Failure{CodeRuntimeUnavailable}
+	}
+	// Every choice row carries exactly one grant (grant_id is its unique key),
+	// so the grants revoked are the choices revoked.
 	return SessionDeleteResponse{SchemaVersion: ProtocolVersion, Status: "revoked", OriginalsDeleted: deleted.Legacy == 0,
 		Deleted: &DeleteCounts{Scopes: deleted.Scopes, Choices: deleted.Choices, Grants: deleted.Choices, Originals: deleted.Originals}}, err
 }
+
+// deleteBatch bounds one sessions/delete purge transaction (see
+// store.MiddlewarePurgeBatch).
+const deleteBatch = store.MiddlewarePurgeBatch
 
 func (r *Runtime) receipt(ctx context.Context, principal ident.Principal, req Receipt) error {
 	if req.SchemaVersion != ProtocolVersion {
@@ -180,7 +211,16 @@ func (r *Runtime) receipt(ctx context.Context, principal ident.Principal, req Re
 	// carry their own expiry: retention, never longer (§12). sessions/delete
 	// removes them with the rest of the authority.
 	expires := r.cfg.Now().Unix() + int64(r.cfg.Retention.Seconds())
+	auth := authority(principal.Name, req.Scope)
 	return r.write(ctx, principal, func(tx *store.MiddlewareTx) error {
-		return tx.Receipt(authority(principal.Name, req.Scope), identity(req.LogicalCallID, req.AttemptID, req.EventKind), digest(b), b, expires)
+		// A revoked authority stores nothing new (§12).
+		revoked, err := tx.Revoked(auth)
+		if err != nil {
+			return err
+		}
+		if revoked {
+			return Failure{CodeDeleted}
+		}
+		return tx.Receipt(auth, identity(req.LogicalCallID, req.AttemptID, req.EventKind), digest(b), b, expires)
 	})
 }

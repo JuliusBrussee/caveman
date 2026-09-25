@@ -187,18 +187,28 @@ func condition(t *testing.T, name string, v2 bool) *httptest.ResponseRecorder {
 		req.RecoveryBinding.Kind = "bogus"
 	case "optimize_not_smaller":
 		req.RecoveryBinding.OverheadText = notSmallerOverhead()
-	case "optimize_cache_state_unavailable", "optimize_recovery_unavailable":
+	case "optimize_recovery_unavailable":
+		// Another writer publishes a choice between optimize's snapshot and its
+		// write, and CCR no longer holds that choice's protocol 1.0 original.
+		// (One the snapshot already saw is re-sealed from the request, or, for
+		// a 1.0 choice, skips only its segment: §6's exception.)
+		f.runtime = withRuntime(t, f, func(c *Config) {
+			c.Store = &racingWriter{MiddlewareStore: c.Store, race: func() { seedLostCCRChoice(t, f.state, req) }}
+		})
+	case "optimize_cache_state_unavailable":
 		optimizeOK(t, f.runtime, req)
-		statement := `UPDATE middleware_choices SET payload=x'7b'`
-		if name == "optimize_recovery_unavailable" {
-			statement = `DELETE FROM middleware_originals`
-		}
-		if _, err := f.db(t).Exec(statement); err != nil {
+		if _, err := f.db(t).Exec(`UPDATE middleware_choices SET payload=x'7b'`); err != nil {
 			t.Fatal(err)
 		}
 		req.RequestID, req.IdempotencyKey = "again", "again"
 	case "optimize_store_capacity":
 		f.runtime = withRuntime(t, f, func(c *Config) { c.Capacity.Bytes = 1 })
+	case "quota_exceeded":
+		// Both sends in one quota minute: the real clock could cross one.
+		now := time.Unix(2_000_000_000, 0)
+		r := withRuntime(t, f, func(c *Config) { c.Limits.QuotaRequestsPerMinute, c.Now = 1, func() time.Time { return now } })
+		send(t, r, "optimize", req, "alice", h)
+		return send(t, r, "optimize", req, "alice", h)
 	case "storage_error":
 		plan := optimizeOK(t, f.runtime, req)
 		_ = f.state.Close()

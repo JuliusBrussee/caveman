@@ -384,16 +384,40 @@ so pods wait until the Secrets exist. Its one placeholder is the image digest.
 `CAVEMAN_MIDDLEWARE_DATABASE_URL` selects Postgres. It is read only from the
 environment, because it carries a password; a `middleware.database_url:` key in
 `caveman.yaml` is refused at startup. The connection goes through the same
-hardened pool as the rest of Caveman: `CAVE_POSTGRES_CA_CERT` or
-`CAVE_POSTGRES_CA_CERT_FILE` adds the database's CA, and with `CAVE_ENV=prod`
-only `sslmode=verify-full` is accepted. A replica that cannot reach Postgres at
-startup exits (and restarts) instead of serving errors behind a ready probe.
+hardened pool as the rest of Caveman. Use
+`postgres://<user>:<password>@<host>:5432/<db>?sslmode=verify-full`: the server
+certificate is verified against `CAVE_POSTGRES_CA_CERT` or
+`CAVE_POSTGRES_CA_CERT_FILE` when one is set (an empty one counts as unset),
+else against the system roots, which is enough only for a database whose
+certificate a public CA signs. With `CAVE_ENV=prod` (as
+`deploy/kubernetes-ha.yaml` sets) only `sslmode=verify-full` is accepted.
+Without it, a database on a non-loopback host must still name its mode: a
+missing `sslmode` (or `prefer`/`allow`) is refused, and `disable`, `require` or
+`verify-ca` is accepted only as your explicit opt-out, for a private network or
+a TLS sidecar. Loopback hosts and unix sockets accept any mode. A replica that
+cannot reach Postgres at startup exits (and restarts) instead of serving errors
+behind a ready probe. A running replica that loses Postgres stays ready while
+its provider routes can serve (the readiness body says
+`"middleware":"degraded"` and the middleware routes answer errors); only a
+replica without `CAVEMAN_AUTH_TOKEN`, which serves the middleware alone, leaves
+the Service. See [Health and metrics](#health-and-metrics).
 
 Tables are created in the connection's schema (the first entry of
 `search_path`, which you can set in the URL: `...?search_path=caveman`).
 Migrations run at startup under an advisory lock, so replicas starting together
 migrate one after another, and they are idempotent. The database role needs
-`CREATE` on that schema for the first start and ordinary read/write afterwards.
+`CREATE` on that schema for the first start and ordinary read/write afterwards:
+a replica that finds the schema at its current version runs no DDL. An upgrade
+to a release with a newer middleware schema version migrates at its first
+start, so for that start the role needs `CREATE` again. Either grant it for the
+rollout and revoke it afterwards, or start one replica of the new release once
+with a role that has `CREATE` (for example, the schema owner) before the
+rollout. With a read/write-only role the new replicas fail at startup and
+restart; the old ones keep serving under `maxUnavailable: 0`.
+The upgrade to middleware schema version 3 pauses writes to the store while it
+runs: it waits up to 2 s for in-flight writes, then recounts the admission
+counters. If live writers hold it up, the replica rolls back and retries for up
+to 60 s before failing startup.
 Supported: PostgreSQL 14 or later (tested on 17).
 
 What several replicas guarantee:
@@ -558,8 +582,12 @@ printf %s "$TOKEN" | sha256sum
 
 **Rotation without an outage:** add the new hash beside the old one, hand out
 the new token, then remove the old hash. The file is re-read when it changes
-(checked every 10 s, which also catches Kubernetes Secret updates) and at once
-on `SIGHUP`. A file that no longer parses is logged and ignored: the previous
+(checked every 10 s) and at once on `SIGHUP`. On Kubernetes the proxy sees a
+Secret edit only once the kubelet has refreshed the mounted volume, which
+follows its sync period and cache TTL: usually 1-2 minutes, and `SIGHUP` cannot
+speed that up. To revoke a token at once, restart the pods after editing the
+Secret (`kubectl rollout restart deployment/caveman-proxy-ha`); new pods mount
+the current version. A file that no longer parses is logged and ignored: the previous
 map stays in force, **including tokens you meant to revoke**. It is retried
 every 10 s and counted in `caveman_identity_reload_failures_total`; alert on
 that counter (see [Health and metrics](#health-and-metrics)).
@@ -720,7 +748,7 @@ does not verify the certificate.
 | Path | Purpose |
 |---|---|
 | `GET /health/live` | Process is up |
-| `GET /health/ready` | Ready to serve: `503` when the middleware store cannot take a write (SQLite: a write transaction; Postgres: the primary is reachable and writable) |
+| `GET /health/ready` | Ready to serve. The body's `middleware` is `ok`, `unavailable` (no runtime) or `degraded` (the store cannot take a write — SQLite: a write transaction; Postgres: the primary is reachable and writable). A degraded middleware answers `503` only on a listener that serves nothing else (non-loopback, no `CAVEMAN_AUTH_TOKEN`, so the provider routes refuse every request); otherwise readiness stays `200`, so a database outage does not take provider inference down with it |
 | `GET /metrics` | Prometheus text; gated by `CAVEMAN_METRICS_TOKEN` when set |
 | `POST /caveman/keepalive` | No-op beacon from older CLIs; changes nothing |
 

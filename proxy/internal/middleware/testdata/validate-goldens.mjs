@@ -29,15 +29,19 @@ if (!dir) {
 }
 const schemaDir = path.join(contracts, "schemas");
 const ajv = new Ajv2020({ allErrors: true, strict: true });
+// Each schema is looked up by its own $id, whatever release tag that names.
+const ids = new Map();
 for (const file of (await readdir(schemaDir)).filter((name) => name.endsWith(".schema.json"))) {
-  ajv.addSchema(JSON.parse(await readFile(path.join(schemaDir, file), "utf8")));
+  const schema = JSON.parse(await readFile(path.join(schemaDir, file), "utf8"));
+  ajv.addSchema(schema);
+  ids.set(file, schema.$id);
 }
-const base = "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/packages/shared/contracts/schemas/";
 const goldens = (await readdir(dir)).filter((name) => name.endsWith(".json")).sort();
 let failed = 0;
 for (const file of goldens) {
   const schema = file.split("--")[0];
-  const validate = ajv.getSchema(`${base}middleware-${schema}.schema.json`);
+  const id = ids.get(`middleware-${schema}.schema.json`);
+  const validate = id && ajv.getSchema(id);
   if (!validate) {
     console.error(`${file}: no schema middleware-${schema}`);
     failed++;

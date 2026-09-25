@@ -1,13 +1,16 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -66,6 +69,63 @@ func postgresSchema(t *testing.T) string {
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+// A replica upgrading a store whose writers are live does not fail startup:
+// the migration's table lock times out (or deadlocks) behind a writer, rolls
+// back, and New retries it until the writer is done.
+func TestPostgresMigrationRetriesPastALiveWriter(t *testing.T) {
+	u := postgresSchema(t)
+	ctx := context.Background()
+	shared, err := store.OpenPostgresMiddleware(ctx, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(shared.Close)
+	if err := shared.InitMiddleware(ctx); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := pgx.Connect(ctx, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close(ctx)
+	// Back to version 2: the next start runs migration 3 again.
+	if _, err := writer.Exec(ctx, `DELETE FROM middleware_schema; INSERT INTO middleware_schema VALUES (2)`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := writer.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `INSERT INTO middleware_receipts(authority,id,digest,payload) VALUES ('auth','r','d','x')`); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		_, err := New(Config{Store: shared, Mode: "compress", Identify: bearerIdentity, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("New returned under a live writer: %v", err)
+	case <-time.After(3 * time.Second): // past the migration's 2s lock timeout
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("New after the writer committed: %v", err)
+	}
+	if !strings.Contains(logs.String(), "retrying") {
+		t.Fatalf("no retry logged:\n%s", logs.String())
+	}
+	var version int
+	if err := writer.QueryRow(ctx, `SELECT max(version) FROM middleware_schema`).Scan(&version); err != nil || version != 3 {
+		t.Fatalf("schema version %d %v after the retried migration", version, err)
+	}
 }
 
 // backend is one middleware store under test, with raw SQL both dialects

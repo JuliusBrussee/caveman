@@ -19,9 +19,9 @@ import (
 //     writer per file; here a transaction-scoped advisory lock per authority
 //     stands in for it. Scope takes it (re-reading afterwards, so a decision
 //     never rests on a read that predates a competing commit), as do SaveScope,
-//     Delete, Receipt and SaveOriginal. Every write path the runtime runs starts
-//     with one of them. A scope that does not exist yet is locked on its id
-//     until SaveScope names its authority. Different authorities write in
+//     Revoke, PurgeBatch, Receipt and SaveOriginal. Every write path the runtime
+//     runs starts with one of them. A scope that does not exist yet is locked on
+//     its id until SaveScope names its authority. Different authorities write in
 //     parallel.
 //   - Renew takes only row locks: it extends live, unpurged scopes and nothing
 //     else, so it cannot resurrect a revoked or swept one.
@@ -33,14 +33,18 @@ import (
 //     overshoot a limit by what they have in flight at that moment.
 //
 // Deadlocks, serialization failures and unique violations surface as
-// ErrMiddlewareConflict (identity_conflict: retryable).
+// ErrMiddlewareConflict (identity_conflict: retryable; sessions/delete answers
+// it as runtime_unavailable).
 type PostgresMiddleware struct {
 	pool *pgxpool.Pool
 }
 
-// OpenPostgresMiddleware connects through postgresconfig, so CAVE_POSTGRES_CA_CERT
-// / CAVE_POSTGRES_CA_CERT_FILE and the CAVE_ENV=prod verify-full rule apply.
-// The connection is not checked here; InitMiddleware is the first round trip.
+// OpenPostgresMiddleware connects through postgresconfig: a non-loopback host
+// needs sslmode=verify-full (checked against CAVE_POSTGRES_CA_CERT /
+// CAVE_POSTGRES_CA_CERT_FILE, else the system roots) or an explicit
+// sslmode=disable, require or verify-ca, and CAVE_ENV=prod accepts only
+// verify-full. The connection is not checked here; InitMiddleware is the first
+// round trip.
 func OpenPostgresMiddleware(ctx context.Context, databaseURL string) (*PostgresMiddleware, error) {
 	pool, err := postgresconfig.NewPool(ctx, databaseURL)
 	if err != nil {
@@ -125,33 +129,52 @@ ALTER TABLE middleware_choices ADD COLUMN IF NOT EXISTS legacy INT NOT NULL DEFA
 UPDATE middleware_choices SET original=substring(encode(payload,'escape') from '"original_sha256":"([0-9a-f]{64})"')
 WHERE original='' AND ccr_handle='' AND encode(payload,'escape') ~ '"original_sha256":"[0-9a-f]{64}"';
 CREATE INDEX IF NOT EXISTS middleware_choices_original ON middleware_choices(original);` + postgresMiddlewareAccounting(),
+	// 3: scope and choice tombstones stop counting as rows. Writers are shut out
+	// of every counted table before the accounting functions change: SHARE
+	// waits for each in-flight writer to commit, so the recount sees every delta
+	// the old functions computed, and holds new writers until this commits; they
+	// then run the new functions. (Locking only the counters is not enough: a
+	// writer already inside an old function would block there, then apply an
+	// old-rules delta to the recounted totals.) Every write to the store pauses
+	// from the lock to the commit: up to migrationLockTimeout queued behind
+	// in-flight writers, then the recount. A writer holding one of these tables
+	// while waiting for another can deadlock with this lock; Postgres aborts one
+	// of the two, a writer retries as for any conflict, and InitMiddleware's
+	// caller retries this migration (see ErrMiddlewareConflict there).
+	`LOCK TABLE middleware_scopes, middleware_choices, middleware_plans, middleware_receipts, middleware_originals IN SHARE MODE;` +
+		postgresMiddlewareAccounting() + fmt.Sprintf(`
+UPDATE middleware_usage SET rows=0,bytes=0;
+DELETE FROM middleware_principal_usage;
+UPDATE middleware_usage SET rows=t.rows,bytes=t.bytes FROM (SELECT coalesce(sum(counted),0) AS rows,coalesce(sum(size),0) AS bytes FROM (%[1]s) u) t WHERE stripe=0;
+INSERT INTO middleware_principal_usage SELECT principal,0,sum(counted),sum(size) FROM (%[1]s) u WHERE principal<>'' GROUP BY principal;`, middlewareUsageRows()),
 }
 
 // postgresMiddlewareAccounting maintains the counters the way SQLite's triggers
 // do, but once per statement over its transition tables: a row trigger would
 // update the same stripe row once per row, and a bulk delete or a large seed in
 // one transaction then walks an ever longer row-version chain. Updates that
-// change no size or principal (renewal, revocation) touch no counter. The sizes
-// are middlewareSizes, SQLite's.
+// change no size, count or principal (renewal, revocation) touch no counter.
+// The sizes and counts are middlewareSizes, SQLite's.
 func postgresMiddlewareAccounting() string {
 	var b strings.Builder
 	for _, table := range middlewareSizes {
 		newSize, oldSize := fmt.Sprintf(table.size, "n"), fmt.Sprintf(table.size, "o")
+		newCounted, oldCounted := rowExpr(table.counted, "n"), rowExpr(table.counted, "o")
 		fmt.Fprintf(&b, `
 CREATE OR REPLACE FUNCTION %[1]s_account() RETURNS trigger LANGUAGE plpgsql AS $fn$
 BEGIN
   IF TG_OP = 'INSERT' THEN
-    PERFORM middleware_count(n.principal, count(*), sum(%[2]s)) FROM new_rows n GROUP BY n.principal;
+    PERFORM middleware_count(n.principal, sum(%[4]s), sum(%[2]s)) FROM new_rows n GROUP BY n.principal;
   ELSIF TG_OP = 'DELETE' THEN
-    PERFORM middleware_count(o.principal, -count(*), -sum(%[3]s)) FROM old_rows o GROUP BY o.principal;
+    PERFORM middleware_count(o.principal, -sum(%[5]s), -sum(%[3]s)) FROM old_rows o GROUP BY o.principal;
   ELSE
     PERFORM middleware_count(d.principal, sum(d.counted), sum(d.size)) FROM (
-      SELECT n.principal, 1 AS counted, %[2]s AS size FROM new_rows n UNION ALL SELECT o.principal, -1, -%[3]s FROM old_rows o) d
+      SELECT n.principal, %[4]s AS counted, %[2]s AS size FROM new_rows n UNION ALL SELECT o.principal, -%[5]s, -%[3]s FROM old_rows o) d
     GROUP BY d.principal HAVING sum(d.size) <> 0 OR sum(d.counted) <> 0;
   END IF;
   RETURN NULL;
 END
-$fn$;`, table.table, newSize, oldSize)
+$fn$;`, table.table, newSize, oldSize, newCounted, oldCounted)
 	}
 	return b.String()
 }
@@ -171,13 +194,57 @@ CREATE TRIGGER %[1]s_account_delete AFTER DELETE ON %[1]s REFERENCING OLD TABLE 
 
 // InitMiddleware migrates under an advisory lock, so replicas starting together
 // run it one after another; the later ones find the version current and skip.
+// A current store is recognized before any DDL: Postgres checks the schema's
+// CREATE privilege even for CREATE TABLE IF NOT EXISTS on an existing table, and
+// a DML-only role must be able to restart once the schema is in place.
+//
+// A migration waits at most migrationLockTimeout for a table lock, so a
+// replica's writers never queue behind it for longer, and each statement runs
+// at most migrationStatementTimeout. A lock timeout, a deadlock or a
+// serialization failure rolls the whole migration back and is returned as
+// ErrMiddlewareConflict: running InitMiddleware again is safe.
 func (p *PostgresMiddleware) InitMiddleware(ctx context.Context) error {
+	err := p.initMiddleware(ctx)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.Code == "40P01" || pgErr.Code == "55P03" || pgErr.Code == "40001") {
+		return errors.Join(ErrMiddlewareConflict, err)
+	}
+	return err
+}
+
+// The migration's lock and statement bounds (see InitMiddleware). The
+// statement bound leaves room for migration 3's recount, two scans of every
+// counted row; it only stops a migration that would pause writes indefinitely.
+const (
+	migrationLockTimeout      = "2s"
+	migrationStatementTimeout = "5min"
+)
+
+func (p *PostgresMiddleware) initMiddleware(ctx context.Context) error {
+	var exists bool
+	if err := p.pool.QueryRow(ctx, `SELECT to_regclass('middleware_schema') IS NOT NULL`).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		var version int
+		if err := p.pool.QueryRow(ctx, `SELECT coalesce(max(version),0) FROM middleware_schema`).Scan(&version); err != nil {
+			return err
+		}
+		if version >= postgresMiddlewareVersion {
+			return nil
+		}
+	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(`+lockKey+`)`, "schema"); err != nil {
+		return err
+	}
+	// Set after the advisory lock: waiting for another replica's migration is
+	// not waiting on a writer.
+	if _, err = tx.Exec(ctx, `SET LOCAL lock_timeout='`+migrationLockTimeout+`'; SET LOCAL statement_timeout='`+migrationStatementTimeout+`'`); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS middleware_schema (version INT NOT NULL)`); err != nil {
@@ -343,20 +410,25 @@ func (t *postgresMiddlewareTx) Revoked(authority string) (revoked bool, err erro
 	return revoked, err
 }
 
-func (t *postgresMiddlewareTx) Plan(scope, id, digest string) ([]byte, error) {
+func (t *postgresMiddlewareTx) Plan(scope, id, digest string, now int64) ([]byte, error) {
 	var storedDigest string
 	var body []byte
-	err := t.tx.QueryRow(t.ctx, `SELECT digest,payload FROM middleware_plans WHERE scope=$1 AND id=$2`, scope, id).Scan(&storedDigest, &body)
+	err := t.tx.QueryRow(t.ctx, `SELECT digest,payload FROM middleware_plans WHERE scope=$1 AND id=$2 AND expires_at>$3`, scope, id, now).Scan(&storedDigest, &body)
 	if err == nil && storedDigest != digest {
 		return nil, ErrMiddlewareConflict
 	}
 	return body, err
 }
 
-func (t *postgresMiddlewareTx) SavePlan(scope, id, digest string, body []byte, expires int64) error {
+func (t *postgresMiddlewareTx) SavePlan(scope, id, digest string, body []byte, now, expires int64) error {
 	t.grew = true
-	_, err := t.tx.Exec(t.ctx, `INSERT INTO middleware_plans(scope,id,digest,payload,expires_at,principal) VALUES ($1,$2,$3,$4,$5,$6)`,
-		scope, id, digest, body, expires, t.Principal)
+	tag, err := t.tx.Exec(t.ctx, `INSERT INTO middleware_plans(scope,id,digest,payload,expires_at,principal) VALUES ($1,$2,$3,$4,$5,$6)
+ON CONFLICT(scope,id) DO UPDATE SET digest=excluded.digest,payload=excluded.payload,expires_at=excluded.expires_at,principal=excluded.principal
+WHERE middleware_plans.expires_at<=$7`,
+		scope, id, digest, body, expires, t.Principal, now)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrMiddlewareConflict
+	}
 	return err
 }
 
@@ -412,41 +484,57 @@ WHERE authority=$4 AND expires_at>$1 AND length(manifest)>0`, now, retention, ma
 	return err
 }
 
-func (t *postgresMiddlewareTx) Delete(authority string, now int64) (MiddlewareDeleted, error) {
+// Revoke is SQLite's, under the authority's lock.
+func (t *postgresMiddlewareTx) Revoke(authority string, now int64) (MiddlewareDeleted, error) {
 	var out MiddlewareDeleted
 	if err := t.lock("authority:" + authority); err != nil {
 		return out, err
 	}
-	const scopes = `SELECT id FROM middleware_scopes WHERE authority=$1`
-	if err := t.tx.QueryRow(t.ctx, `SELECT count(*) FROM middleware_choices WHERE (ccr_handle<>'' OR legacy<>0) AND scope IN (`+scopes+`)`, authority).Scan(&out.Legacy); err != nil {
+	if err := t.tx.QueryRow(t.ctx, `SELECT count(*) FROM middleware_choices WHERE (ccr_handle<>'' OR legacy<>0)
+ AND scope IN (SELECT id FROM middleware_scopes WHERE authority=$1)`, authority).Scan(&out.Legacy); err != nil {
 		return out, err
 	}
-	// The same steps, in the same order, as SQLite's Delete.
+	tag, err := t.tx.Exec(t.ctx, `UPDATE middleware_scopes SET expires_at=$1 WHERE authority=$2 AND expires_at>0`, -now, authority)
+	out.Scopes = tag.RowsAffected()
+	return out, err
+}
+
+// PurgeBatch runs SQLite's steps, in the same order, under the authority's lock.
+func (t *postgresMiddlewareTx) PurgeBatch(authority string, limit int) (MiddlewareDeleted, bool, error) {
+	var out MiddlewareDeleted
+	if err := t.lock("authority:" + authority); err != nil {
+		return out, false, err
+	}
+	more := false
+	const scopes = `SELECT id FROM middleware_scopes WHERE authority=$1`
 	for _, step := range []struct {
 		count     *int64
 		statement string
-		args      []any
 	}{
-		{&out.Scopes, `UPDATE middleware_scopes SET expires_at=$1 WHERE authority=$2 AND expires_at>0`, []any{-now, authority}},
-		{&out.Choices, `UPDATE middleware_choices SET payload=''::bytea,` + legacyChoice + `,ccr_handle='' WHERE (length(payload)>0 OR ccr_handle<>'') AND scope IN (` + scopes + `)`, []any{authority}},
-		{&out.Originals, `DELETE FROM middleware_originals WHERE authority=$1 AND body IS NOT NULL`, []any{authority}},
-		{nil, `DELETE FROM middleware_originals WHERE authority=$1`, []any{authority}},
-		{nil, `DELETE FROM middleware_receipts WHERE authority=$1`, []any{authority}},
-		{nil, `DELETE FROM middleware_plans WHERE scope IN (` + scopes + `)`, []any{authority}},
-		{nil, `UPDATE middleware_scopes SET manifest=''::bytea WHERE authority=$1`, []any{authority}},
+		{&out.Choices, `UPDATE middleware_choices SET payload=''::bytea,` + legacyChoice + `,ccr_handle='' WHERE (scope,id) IN (SELECT scope,id FROM middleware_choices
+ WHERE scope IN (` + scopes + `) AND (length(payload)>0 OR ccr_handle<>'') LIMIT $2)`},
+		{&out.Originals, `DELETE FROM middleware_originals WHERE (authority,digest) IN (SELECT authority,digest FROM middleware_originals WHERE authority=$1 AND body IS NOT NULL LIMIT $2)`},
+		{nil, `DELETE FROM middleware_originals WHERE (authority,digest) IN (SELECT authority,digest FROM middleware_originals WHERE authority=$1 AND body IS NULL LIMIT $2)`},
+		{nil, `DELETE FROM middleware_receipts WHERE (authority,id) IN (SELECT authority,id FROM middleware_receipts WHERE authority=$1 LIMIT $2)`},
+		{nil, `DELETE FROM middleware_plans WHERE (scope,id) IN (SELECT scope,id FROM middleware_plans WHERE scope IN (` + scopes + `) LIMIT $2)`},
 	} {
-		tag, err := t.tx.Exec(t.ctx, step.statement, step.args...)
+		tag, err := t.tx.Exec(t.ctx, step.statement, authority, limit)
 		if err != nil {
-			return out, err
+			return out, more, err
 		}
 		if step.count != nil {
 			*step.count = tag.RowsAffected()
 		}
+		more = more || tag.RowsAffected() == int64(limit)
 	}
-	return out, nil
+	if !more {
+		_, err := t.tx.Exec(t.ctx, `UPDATE middleware_scopes SET manifest=''::bytea WHERE authority=$1 AND length(manifest)>0`, authority)
+		return out, false, err
+	}
+	return out, true, nil
 }
 
-// ExpireBatch runs SQLite's three batches (see sqliteMiddlewareTx.ExpireBatch).
+// ExpireBatch runs SQLite's batches (see sqliteMiddlewareTx.ExpireBatch).
 // Only the replica holding the sweep lock works; the others return 0 and end
 // their pass. A batch keeps only scopes it can lock without waiting, both the
 // row and its authority, so it never deletes under a writer that is renewing or
@@ -510,7 +598,33 @@ func (t *postgresMiddlewareTx) ExpireBatch(now int64, limit int) (int64, bool, e
 		}
 		full = full || n == int64(limit)
 	}
-	return total, full, nil
+	// ponytail: one candidate per call; an authority whose writer holds its lock
+	// (a sessions/delete batch, say) waits for the next pass, and so does
+	// every revoked authority behind it. Try several candidates if that stalls.
+	var authority string
+	if err := t.tx.QueryRow(t.ctx, nextRevoked).Scan(&authority); errors.Is(err, pgx.ErrNoRows) {
+		return total, full, nil
+	} else if err != nil {
+		return total, full, err
+	}
+	if ok, err := t.tryLock(authority); err != nil || !ok {
+		return total, full, err
+	}
+	deleted, more, err := t.PurgeBatch(authority, min(limit, MiddlewarePurgeBatch))
+	if err == nil && !more {
+		err = t.tx.QueryRow(t.ctx, `SELECT count(*)>0 FROM (`+nextRevoked+`) n`).Scan(&more)
+	}
+	return total + deleted.Choices + deleted.Originals, full || more, err
+}
+
+// tryLock takes the authority's lock if no other transaction holds it.
+func (t *postgresMiddlewareTx) tryLock(authority string) (ok bool, err error) {
+	key := "authority:" + authority
+	if ok = t.locked[key]; !ok {
+		err = t.tx.QueryRow(t.ctx, `SELECT pg_try_advisory_xact_lock(`+lockKey+`)`, key).Scan(&ok)
+		t.locked[key] = ok
+	}
+	return ok, err
 }
 
 // sweepable selects a batch and keeps the scopes whose authority it can lock
@@ -538,11 +652,8 @@ func (t *postgresMiddlewareTx) sweepable(selection string, now int64) (ids, auth
 	for _, c := range candidates {
 		ok, seen := held[c.authority]
 		if !seen {
-			if ok = t.locked["authority:"+c.authority]; !ok {
-				if err := t.tx.QueryRow(t.ctx, `SELECT pg_try_advisory_xact_lock(`+lockKey+`)`, "authority:"+c.authority).Scan(&ok); err != nil {
-					return nil, nil, 0, err
-				}
-				t.locked["authority:"+c.authority] = ok
+			if ok, err = t.tryLock(c.authority); err != nil {
+				return nil, nil, 0, err
 			}
 			held[c.authority] = ok
 			if ok {
@@ -563,10 +674,7 @@ func (t *postgresMiddlewareTx) Receipt(authority, id, digest string, body []byte
 	var old string
 	err := t.tx.QueryRow(t.ctx, `SELECT digest FROM middleware_receipts WHERE authority=$1 AND id=$2`, authority, id).Scan(&old)
 	if err == nil {
-		if old != digest {
-			return ErrMiddlewareConflict
-		}
-		return nil
+		return nil // first write wins (see middlewareTxOps)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return err
