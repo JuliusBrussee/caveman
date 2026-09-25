@@ -49,6 +49,28 @@ test("root installer unwraps Windows Node shims without a shell", () => {
   });
 });
 
+test("root installer unwraps the Node.js npm npx.cmd variable form", () => {
+  const root = mkdtempSync(join(tmpdir(), "caveman-installer-npx-"));
+  const shim = join(root, "npx.CMD");
+  const script = join(root, "node_modules", "npm", "bin", "npx-cli.js");
+  mkdirSync(dirname(script), { recursive: true });
+  writeFileSync(shim, [
+    "@ECHO OFF",
+    "SETLOCAL",
+    'SET "NPX_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npx-cli.js"',
+    '"%NODE_EXE%" "%NPX_CLI_JS%" %*',
+    "",
+  ].join("\r\n"));
+  writeFileSync(script, "");
+  assert.deepEqual(portable.portableInvocation(shim, ["-y", "skills"], {
+    platform: "win32",
+    execPath: "node.exe",
+  }), {
+    command: "node.exe",
+    args: [script, "-y", "skills"],
+  });
+});
+
 test("root installer rejects non-Node command shims", () => {
   const root = mkdtempSync(join(tmpdir(), "caveman-installer-win-"));
   const shim = join(root, "unsafe.cmd");

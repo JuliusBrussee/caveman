@@ -33,8 +33,23 @@ import { connect as netConnect, createServer as netCreateServer, isIP, type Addr
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createHash, createHmac, createPublicKey, randomBytes, randomUUID, verify as edVerify, type KeyObject } from "node:crypto";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
+
+const requireCjs = createRequire(import.meta.url);
+
+type CursorMcpJsonLib = {
+  installCursorMcpJson: (
+    mcp: { command: string; args: string[] },
+    opts?: { home?: string; force?: boolean; warn?: (line: string) => void },
+  ) => boolean;
+  uninstallCursorMcpJson: (serverName?: string, opts?: { home?: string }) => boolean;
+};
+
+function cursorMcpJsonLib(): CursorMcpJsonLib {
+  return requireCjs(join(dirname(fileURLToPath(import.meta.url)), "cursor-mcp-json.cjs")) as CursorMcpJsonLib;
+}
 import { PROFILES, type AgentProfile } from "./agents.generated.js";
 import {
   BINARY_RELEASE,
@@ -11349,6 +11364,21 @@ function mcpUninstall(target?: string, serverName = "caveman") {
     console.error(`unknown MCP server '${serverName}'. valid: caveman, caveman-browse, caveman-cloud, caveman-delegate`);
     process.exit(2);
   }
+  if (target === "cursor") {
+    if (serverName !== "caveman") {
+      console.error("cursor MCP uninstall supports the caveman retrieve server only");
+      process.exit(2);
+    }
+    if (uninstallMcpCursorJson(serverName)) {
+      try {
+        unlinkSync(mcpServerMarkerPath("cursor", serverName));
+      } catch {
+        // marker already gone
+      }
+      process.stderr.write(`${mark("ok")} Cursor: ${serverName} MCP tool removed\n`);
+    }
+    return;
+  }
   let targets: AgentProfile[];
   if (target) {
     const a = findAgent(target);
@@ -13347,6 +13377,24 @@ function mcpInstall(target?: string, serverName = "caveman"): number {
     console.error(`unknown MCP server '${serverName}'. valid: caveman, caveman-browse, caveman-cloud, caveman-delegate`);
     process.exit(2);
   }
+  if (target === "cursor") {
+    if (serverName !== "caveman") {
+      console.error("cursor MCP install supports the caveman retrieve server only (`caveman mcp install cursor`)");
+      process.exit(2);
+    }
+    const binary = resolveGoBin("caveman-mcp", "CAVEMAN_MCP_BIN");
+    if (!binary) {
+      console.error("caveman-mcp binary not found — run `caveman setup --install` first");
+      process.exit(1);
+    }
+    const mcp = { command: binary, args: [] };
+    if (installMcpCursorJson(mcp)) {
+      writeMcpMarker("cursor", mcp);
+      process.stderr.write(`${mark("ok")} Cursor: caveman_retrieve installed\n`);
+      return 1;
+    }
+    return 0;
+  }
   let mcp: { command: string; args: string[] };
   if (serverName === "caveman") {
     mcp = resolveMcpCommand();
@@ -13428,6 +13476,68 @@ function mcpInstall(target?: string, serverName = "caveman"): number {
     process.stderr.write(dim("→ credentials stay in Caveman CLI store; run `caveman login` if disconnected\n"));
   }
   return installed;
+}
+
+function cursorMcpJsonPath(): string {
+  return join(homedir(), ".cursor", "mcp.json");
+}
+
+function cursorMcpRegistration(serverName: string): { present: boolean; command: string; args: string[] } {
+  const mcpPath = cursorMcpJsonPath();
+  let root: Record<string, unknown> = {};
+  try {
+    const raw = readFileSync(mcpPath, "utf8").trim();
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) root = parsed as Record<string, unknown>;
+    }
+  } catch {
+    return { present: false, command: "", args: [] };
+  }
+  const servers = root.mcpServers && typeof root.mcpServers === "object" && !Array.isArray(root.mcpServers)
+    ? root.mcpServers as Record<string, unknown>
+    : {};
+  if (!(serverName in servers)) return { present: false, command: "", args: [] };
+  const raw = servers[serverName];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { present: true, command: "", args: [] };
+  const entry = raw as Record<string, unknown>;
+  return {
+    present: true,
+    command: typeof entry.command === "string" ? entry.command : "",
+    args: Array.isArray(entry.args) && entry.args.every((arg) => typeof arg === "string") ? entry.args as string[] : [],
+  };
+}
+
+// ~/.cursor/mcp.json merge rules live in bin/lib/cursor-mcp-json.js (bundled as dist/cursor-mcp-json.cjs).
+function installMcpCursorJson(mcp: { command: string; args: string[] }, serverName = "caveman"): boolean {
+  if (serverName !== "caveman") {
+    console.error(`${mark("warn")} Cursor supports only the caveman retrieve server from \`caveman mcp install cursor\``);
+    return false;
+  }
+  const actual = cursorMcpRegistration(serverName);
+  const marker = readMcpServerMarker("cursor", serverName);
+  if (actual.present && marker
+    && actual.command === marker.command && JSON.stringify(actual.args) === JSON.stringify(marker.args)) {
+    return true;
+  }
+  return cursorMcpJsonLib().installCursorMcpJson(mcp, {
+    home: homedir(),
+    warn: (line) => console.error(`${mark("warn")}${line.trimStart()}`),
+  });
+}
+
+function uninstallMcpCursorJson(serverName = "caveman"): boolean {
+  const marker = readMcpServerMarker("cursor", serverName);
+  if (!marker) return false;
+  const actual = cursorMcpRegistration(serverName);
+  if (!actual.present) {
+    try { unlinkSync(mcpServerMarkerPath("cursor", serverName)); } catch { /* gone */ }
+    return true;
+  }
+  if (actual.command !== marker.command || JSON.stringify(actual.args) !== JSON.stringify(marker.args)) {
+    return false;
+  }
+  return cursorMcpJsonLib().uninstallCursorMcpJson(serverName, { home: homedir() });
 }
 
 function installMcpForAgent(a: AgentProfile, mcp: { command: string; args: string[] }, serverName = "caveman"): boolean {

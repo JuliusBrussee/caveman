@@ -286,6 +286,8 @@ def verify_manifests_and_syntax() -> None:
     manifest_paths = [
         claude_manifest_path,
         ROOT / ".claude-plugin/marketplace.json",
+        ROOT / ".cursor-plugin/plugin.json",
+        ROOT / "hooks/hooks-cursor.json",
         ROOT / ".codex/hooks.json",
         ROOT / "gemini-extension.json",
         ROOT / "plugins/caveman/.codex-plugin/plugin.json",
@@ -568,6 +570,12 @@ def verify_hook_install_flow() -> None:
     section("Claude Hook Flow")
 
     ensure(shutil.which("node") is not None, "node is required for hook verification")
+    # Windows installs go through install.ps1. shutil.which("bash") here is often
+    # WSL's System32\bash.exe, which does not share the Windows temp home this
+    # check reads, so install.sh can exit 0 and leave SessionStart absent.
+    if os.name == "nt":
+        print("SKIP: POSIX hook install flow; Windows uses install.ps1")
+        return
     bash = shutil.which("bash")
     if bash is None:
         print("SKIP: Bash hook install flow requires Bash; native PowerShell path covered statically")

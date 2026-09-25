@@ -27,6 +27,7 @@ const OPENCLAW = require('./lib/openclaw');
 const OWNED = require('./lib/owned-install');
 const PROVIDER_SKILLS = require('./lib/provider-skills');
 const { transformOpencodeAgentFrontmatter } = require('./lib/opencode-agent');
+const CURSOR_AGENTS = require('./lib/cursor-agent');
 const PORTABLE = require('./lib/portable-process');
 const PLATFORM_PATHS = require('./lib/platform-paths');
 const { parseCommandArgs } = require('./lib/command-args');
@@ -434,7 +435,9 @@ function spawnXplat(cmd, args, opts) {
 function runSpawn(cmd, args, opts, dry) {
   if (dry) { process.stdout.write(`  would run: ${cmd} ${args.join(' ')}\n`); return { status: 0 }; }
   process.stdout.write(`  $ ${cmd} ${args.join(' ')}\n`);
-  return spawnXplat(cmd, args, Object.assign({ stdio: 'inherit' }, opts || {}));
+  const result = spawnXplat(cmd, args, Object.assign({ stdio: 'inherit' }, opts || {}));
+  if (result && result.error) process.stderr.write(`  ${result.error.message}\n`);
+  return result;
 }
 
 // Create env with TMPDIR pointing to a temp dir inside configDir.
@@ -730,7 +733,24 @@ function installViaSkills(ctx, prov) {
   if (prov.skillsScope === 'project') note(`  Installing into this project: ${process.cwd()}`);
   else args.push('-g');
   const r = runSpawn('npx', args, null, opts.dryRun);
-  if (spawnOk(r)) results.installed.push(prov.id);
+  if (spawnOk(r)) {
+    results.installed.push(prov.id);
+    if (prov.id === 'cursor') {
+      try {
+        CURSOR_AGENTS.installCursorAgents({
+          repoRoot: ctx.repoRoot,
+          force: opts.force,
+          dryRun: opts.dryRun,
+          withMcpShrink: opts.withMcpShrink || false,
+          note,
+          warn: ctx.warn,
+        });
+      } catch (error) {
+        ctx.warn(`  Cursor Cavecrew agents were not installed: ${error.message}`);
+        results.failed.push(['cursor', error.message]);
+      }
+    }
+  }
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
   process.stdout.write('\n');
 }
@@ -1698,6 +1718,19 @@ function uninstall(ctx) {
     } else {
       note('  gemini extension not installed — skipping');
     }
+  }
+
+  // Cursor subagents. One user directory serves the IDE, the Agents Window,
+  // and the CLI on Windows, macOS, and Linux. The ownership journal is the
+  // only authority for which files this installer may delete.
+  try {
+    CURSOR_AGENTS.uninstallCursorAgents({
+      dryRun: opts.dryRun,
+      note,
+      warn,
+    });
+  } catch (error) {
+    warn(`  cursor ownership journal invalid; left integration untouched: ${error.message}`);
   }
 
   // opencode native install — ownership journal is authority. Never infer

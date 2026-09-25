@@ -23,7 +23,9 @@
     "test:windows": "node scripts/test-windows-compat.mjs"
   },
   "files": [
+    ".cursor-plugin/",
     "bin/",
+    "hooks/",
     "src/",
     "agents/",
     "skills/",
