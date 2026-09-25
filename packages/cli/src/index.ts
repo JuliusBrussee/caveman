@@ -6530,7 +6530,7 @@ function stripCodexCavemanProviderToml(text: string): string {
 // The api-key Codex route, in ONE place: the provider TOML writes it, the
 // install journal records it, and the doctor compares against it, and a route
 // only three of those four agree on reads as permanently degraded.
-const CODEX_API_KEY_ROUTE = "/w/codex/v1";
+const CODEX_PAYG_ROUTE = "/w/codex/v1";
 
 function codexGatewayBase(gw: string, subscription: boolean): string {
   // Codex's OpenAI-Responses client appends "/responses" onto base_url itself,
@@ -6542,7 +6542,7 @@ function codexGatewayBase(gw: string, subscription: boolean): string {
   // convention aider already uses (`/w/aider/openai/v1`). The subscription
   // route is a different mux handler (`/chatgpt/`) that takes the suffix
   // verbatim, so it must NOT gain a "/v1".
-  return appendUrlPath(gw, subscription ? "/chatgpt" : CODEX_API_KEY_ROUTE);
+  return appendUrlPath(gw, subscription ? "/chatgpt" : CODEX_PAYG_ROUTE);
 }
 
 // Codex clears the stdio MCP environment, including these non-secret store
