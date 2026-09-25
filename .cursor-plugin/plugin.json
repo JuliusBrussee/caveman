@@ -1,0 +1,12 @@
+{
+  "name": "caveman",
+  "displayName": "Caveman",
+  "description": "Ultra-compressed communication mode that preserves technical substance. Skills, sessionStart primer, and optional MCP recovery when caveman-mcp is installed.",
+  "version": "2.2.0",
+  "author": {
+    "name": "Julius Brussee",
+    "url": "https://github.com/JuliusBrussee"
+  },
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks-cursor.json"
+}
