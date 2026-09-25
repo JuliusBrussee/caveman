@@ -2,7 +2,7 @@
 // is ai/test's mock: no provider, no network. Its first step asks caveman_retrieve for the handle it was shown, so
 // the adapter's own tool loop performs the recovery.
 //
-//   node drive-ts.mjs --base URL --token T --from DIR --expect compress|passthrough
+//   node drive-ts.mjs --base URL --token T --from DIR --expect compress|passthrough [--default-deadlines]
 //
 // Bare imports (ai, @caveman-ai/sdk, @caveman-ai/middleware) resolve from --from: the repo's middleware package for
 // HEAD, or an install of published versions. Prints one JSON line; exits 1 when the expectation fails.
@@ -13,7 +13,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual, parseArgs } from 'node:util';
 
-const { values: args } = parseArgs({ options: { base: { type: 'string' }, token: { type: 'string' }, from: { type: 'string' }, expect: { type: 'string' } } });
+const { values: args } = parseArgs({ options: { base: { type: 'string' }, token: { type: 'string' }, from: { type: 'string' }, expect: { type: 'string' },
+  'default-deadlines': { type: 'boolean' } } });
 const parentURL = pathToFileURL(path.join(path.resolve(args.from), 'package.json')).href;
 registerHooks({ resolve: (specifier, context, next) =>
   next(specifier, context.parentURL === import.meta.url && !specifier.startsWith('node:') ? { ...context, parentURL } : context) });
@@ -39,7 +40,8 @@ const fetch = async (url, init) => {
   return response;
 };
 const reports = [];
-const runtime = createMiddlewareRuntime({ endpoint: args.base, token: args.token, deadlineMs: 10_000, retrieveDeadlineMs: 10_000, fetch,
+const deadlines = args['default-deadlines'] ? {} : { deadlineMs: 10_000, retrieveDeadlineMs: 10_000 };
+const runtime = createMiddlewareRuntime({ endpoint: args.base, token: args.token, ...deadlines, fetch,
   onReport: report => { reports.push(`${report.status}:${report.reason}`); } });
 const messages = [
   { role: 'user', content: 'Summarize this log.' },

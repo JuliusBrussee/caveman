@@ -10,6 +10,7 @@ on:
       - "agent-v*"
       - "create-agent-v*"
       - "pi-v*"
+      - "contracts-v*"
 
 permissions:
   contents: read
@@ -58,6 +59,8 @@ jobs:
           set -euo pipefail
           # @caveman-ai/middleware depends on the workspace SDK, so its tarball is
           # built with pnpm, which rewrites `workspace:^` to a concrete range.
+          # @caveman-ai/contracts has no lockfile of its own: it is a workspace
+          # package too.
           packager="npm"
           case "$GITHUB_REF_NAME" in
             middleware-ts-v*)
@@ -103,6 +106,13 @@ jobs:
               version="${GITHUB_REF_NAME#pi-v}"
               actual="$(node -p "require('./$package/package.json').version")"
               ;;
+            contracts-v*)
+              package="packages/shared/contracts"
+              ecosystem="npm"
+              packager="pnpm"
+              version="${GITHUB_REF_NAME#contracts-v}"
+              actual="$(node -p "require('./$package/package.json').version")"
+              ;;
             *)
               echo "unsupported package release tag: $GITHUB_REF_NAME" >&2
               exit 2
@@ -128,10 +138,10 @@ jobs:
             echo "name=$name"
             echo "version=$version"
           } >> "$GITHUB_OUTPUT"
-      # Middleware and SDK tags get a GitHub Release. Its notes come from the
-      # package CHANGELOG, so a missing entry stops the release before publish.
+      # Middleware, SDK and contracts tags get a GitHub Release. Its notes come
+      # from the package CHANGELOG, so a missing entry stops the release before publish.
       - name: Require changelog entry and write release notes
-        if: startsWith(github.ref_name, 'middleware-') || startsWith(github.ref_name, 'sdk-')
+        if: startsWith(github.ref_name, 'middleware-') || startsWith(github.ref_name, 'sdk-') || startsWith(github.ref_name, 'contracts-')
         env:
           PACKAGE: ${{ steps.package.outputs.package }}
           NAME: ${{ steps.package.outputs.name }}
@@ -170,6 +180,7 @@ jobs:
         if: steps.package.outputs.packager == 'pnpm'
         env:
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
+          PACKAGE: ${{ steps.package.outputs.package }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/package-dist"
@@ -177,14 +188,22 @@ jobs:
           # Build the workspace dependencies first: the adapters import the SDK's
           # built `./middleware` types, which do not exist until the SDK is built.
           pnpm --filter @caveman-ai/sdk run build
-          pnpm --filter ./${{ steps.package.outputs.package }} test
-          pnpm --filter ./${{ steps.package.outputs.package }} test:consumer
-          pnpm --filter ./${{ steps.package.outputs.package }} pack --pack-destination "$RUNNER_TEMP/package-dist"
+          pnpm --filter "./$PACKAGE" test
+          if [[ "$PACKAGE" == packages/middleware/typescript ]]; then
+            pnpm --filter "./$PACKAGE" test:consumer
+          fi
+          pnpm --filter "./$PACKAGE" pack --pack-destination "$RUNNER_TEMP/package-dist"
           mapfile -t tarballs < <(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name '*.tgz' -print)
           [[ "${#tarballs[@]}" == 1 ]] || { echo "expected exactly one npm tarball" >&2; exit 1; }
           smoke="$RUNNER_TEMP/npm-artifact-smoke"
           mkdir -p "$smoke"
           (cd "$smoke" && npm init --yes >/dev/null)
+          if [[ "$PACKAGE" == packages/shared/contracts ]]; then
+            (cd "$smoke" && npm install --ignore-scripts --no-audit --no-fund "${tarballs[0]}")
+            # Resolved through the package's exports map, as a consumer does.
+            (cd "$smoke" && node -e 'const fs=require("fs"); for (const f of ["schemas/middleware-plan.schema.json", "openapi/middleware.openapi.json"]) JSON.parse(fs.readFileSync(require.resolve("@caveman-ai/contracts/" + f), "utf8"))')
+            exit 0
+          fi
           # The ai-sdk adapter imports `ai` at runtime, so the smoke installs the
           # framework it exercises; every other adapter stays uninstalled.
           (cd "$smoke" && npm install --ignore-scripts --no-audit --no-fund "${tarballs[0]}" "ai@^7.0.94" "@ai-sdk/provider@^4.0.11")
@@ -339,7 +358,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: npm
-      url: https://www.npmjs.com/package/${{ needs.build.outputs.package == 'packages/agent' && '@caveman-ai/agent' || needs.build.outputs.package == 'packages/create-caveman-agent' && '@caveman-ai/create-agent' || needs.build.outputs.package == 'packages/pi-extension' && '@caveman-ai/pi' || needs.build.outputs.package == 'packages/middleware/typescript' && '@caveman-ai/middleware' || '@caveman-ai/sdk' }}
+      url: https://www.npmjs.com/package/${{ needs.build.outputs.name }}
     permissions:
       contents: read
       id-token: write
@@ -353,19 +372,41 @@ jobs:
           node-version: "24.16.0"
           registry-url: https://registry.npmjs.org
       - name: Publish with npm trusted publishing
+        env:
+          NAME: ${{ needs.build.outputs.name }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
           npm install --global npm@11.5.1
           # Only a stable version may take `latest`, so a bare `npm install`
           # never resolves a prerelease. Prereleases go to their channel
           # (alpha/beta/rc) or `next`.
-          version="${{ needs.build.outputs.version }}"
           tag=latest
-          if [[ "$version" == *-* ]]; then
-            tag="${version#*-}"
+          if [[ "$VERSION" == *-* ]]; then
+            tag="${VERSION#*-}"
             tag="${tag%%.*}"
             case "$tag" in alpha|beta|rc) ;; *) tag=next ;; esac
+          else
+            # A stable release takes `latest` only when it is semver-greater than
+            # the current `latest`: a patch on an older line goes to
+            # `release-<major>.x`. A package not on npm yet (404) takes it.
+            # Read anonymously: setup-node's placeholder token is not a credential.
+            status="$(curl -sS -H 'Accept: application/vnd.npm.install-v1+json' -o "$RUNNER_TEMP/packument.json" \
+              -w '%{http_code}' "https://registry.npmjs.org/${NAME/\//%2f}")"
+            case "$status" in
+              200) current="$(node -p 'require(process.argv[1])["dist-tags"]?.latest ?? ""' "$RUNNER_TEMP/packument.json")" ;;
+              404) current="" ;;
+              *) echo "npm registry answered HTTP $status for $NAME" >&2; exit 1 ;;
+            esac
+            if [[ -n "$current" ]] && ! node -e '
+              const parse = v => { const [core, pre] = v.split("+")[0].split(/-(.*)/s); return [...core.split(".").map(Number), pre === undefined ? 1 : 0]; };
+              const [next, latest] = process.argv.slice(1).map(parse);
+              const i = next.findIndex((part, index) => part !== latest[index]);
+              process.exit(i !== -1 && next[i] > latest[i] ? 0 : 1);' "$VERSION" "$current"; then
+              tag="release-${VERSION%%.*}.x"
+            fi
           fi
+          echo "publishing $NAME@$VERSION under dist-tag $tag"
           npm publish ./dist/*.tgz --access public --tag "$tag"
 
   publish-pypi:
@@ -394,7 +435,7 @@ jobs:
     if: >-
       always() && needs.build.result == 'success' &&
       (needs.publish-npm.result == 'success' || needs.publish-pypi.result == 'success') &&
-      (startsWith(github.ref_name, 'middleware-') || startsWith(github.ref_name, 'sdk-'))
+      (startsWith(github.ref_name, 'middleware-') || startsWith(github.ref_name, 'sdk-') || startsWith(github.ref_name, 'contracts-'))
     needs: [build, publish-npm, publish-pypi]
     runs-on: ubuntu-latest
     timeout-minutes: 10

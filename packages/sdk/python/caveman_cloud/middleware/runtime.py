@@ -1,7 +1,7 @@
 """Stdlib-only compression connection. No provider credentials or inference calls.
 
-Experimental: ``caveman_cloud.middleware`` implements middleware protocol 1.1
-(docs/technical/middleware-protocol.md) and may change in any minor release.
+``caveman_cloud.middleware`` implements middleware protocol 1.1
+(docs/technical/middleware-protocol.md).
 """
 import copy
 import importlib.metadata
@@ -148,7 +148,7 @@ if hasattr(os, "register_at_fork"):
 
 
 class MiddlewareRuntime:
-    """Synchronous middleware client (experimental API).
+    """Synchronous middleware client.
 
     Never raises at construction (spec §8): a refused endpoint or an invalid option value warns once, every call
     passes through with no I/O, and ready() raises / preflight() reports the reason. An invalid ``mode`` reads as

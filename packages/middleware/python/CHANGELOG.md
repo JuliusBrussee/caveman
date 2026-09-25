@@ -1,11 +1,14 @@
 # Changelog
 
-`caveman-middleware` is pre-1.0. Anything can change between alphas; read this
-file before upgrading. pip skips prereleases unless you pin one or pass `--pre`.
-Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
+`caveman-middleware` follows semver from 1.0.0: breaking changes wait for a new
+major. Read this file before upgrading. pip skips prereleases unless you pin one
+or pass `--pre`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
-## Unreleased
+## 1.0.0 — 2026-09-24
 
+- First stable release. Requires `caveman-sdk` 1.2.0 or later
+  (`caveman-sdk>=1.2,<2`): 1.1.0 lacks APIs the adapters import.
+- `caveman_middleware.__version__` is read from the installed distribution.
 - A refused `caveman_retrieve` (an unknown or expired handle, or a
   404/410/503) returns `{"error": code}` through each framework's tool-error
   result and warns once. The run carries on, and cancellation still

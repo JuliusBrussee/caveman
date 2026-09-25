@@ -20,7 +20,9 @@
     "tests",
     "fixtures",
     "METHOD.md",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "test": "node --test --test-force-exit tests/*.test.mjs"

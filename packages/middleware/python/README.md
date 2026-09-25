@@ -2,14 +2,14 @@
 
 Native framework adapters for the Caveman compression runtime. Your framework keeps its inference client, tools, retries, streams, and original conversation. Caveman projects eligible tool-result text into a copied outbound request. Inference stays with your provider.
 
-**Alpha.** This quickstart targets published middleware `0.1.0a1` and SDK `1.1.0`. Current source may contain unreleased APIs. Use the [release notes and limitations](https://github.com/JuliusBrussee/caveman/blob/main/packages/middleware/python/CHANGELOG.md) before upgrading.
+This quickstart targets middleware `1.0.0` and SDK `1.2.0`. Read the [release notes and limitations](https://github.com/JuliusBrussee/caveman/blob/main/packages/middleware/python/CHANGELOG.md) before upgrading.
 
 ## Run a complete example
 
 Follow the [LangChain quickstart](https://docs.caveman.so/docs/sdk/middleware/python) for a fresh environment and [runtime installation](https://docs.caveman.so/docs/sdk/middleware/deployment#run-it-as-a-process). Start the local runtime separately; the client package does not include it.
 
 ```sh
-python -m pip install 'caveman-sdk==1.1.0' 'caveman-middleware[langchain]==0.1.0a1' 'langchain==1.4.1' 'langchain-core==1.6.3' 'langgraph==1.2.11'
+python -m pip install 'caveman-sdk==1.2.0' 'caveman-middleware[langchain]==1.0.0' 'langchain==1.4.1' 'langchain-core==1.6.3' 'langgraph==1.2.11'
 curl -fsSLo quickstart.py https://docs.caveman.so/examples/middleware/quickstart.py
 DEMO_MODE=record python quickstart.py
 DEMO_MODE=compress python quickstart.py

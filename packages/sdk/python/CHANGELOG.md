@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 — 2026-09-24
 
+- **Breaking (license):** relicensed from MIT to Apache-2.0, along with the rest of
+  the repository in Caveman 3.0.0. Releases before this one keep the MIT license.
 - The transport bounds the whole exchange (connect, proxy tunnel, TLS, headers
   and body) by the deadline, and never reuses connections the server closed
   while idle.
@@ -21,8 +23,8 @@
 - `decline()` accepts any catalog reason and an optional adapter id, which the
   warn-once line names. It never raises in strict mode.
 - Python floor lowered from 3.13 to 3.11.
-- `caveman_cloud.middleware` implements middleware protocol 1.1 and is marked
-  experimental. Requests carry `Caveman-Middleware-Features`,
+- `caveman_cloud.middleware` implements middleware protocol 1.1 and is stable:
+  it follows semver, because `caveman-middleware` 1.0 depends on it. Requests carry `Caveman-Middleware-Features`,
   `Caveman-Middleware-Client`, and `traceparent`/`tracestate`.
 - Capabilities are parsed tolerantly and cached for 300 s with single-flight
   refresh. A new policy revision or transform version no longer rejects a plan.

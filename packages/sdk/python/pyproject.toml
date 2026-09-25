@@ -6,10 +6,11 @@ build-backend = "setuptools.build_meta"
 # Public PyPI distribution name. `caveman` belongs to an unrelated project;
 # keep distribution and import names distinct (`import caveman_cloud`).
 name = "caveman-sdk"
-version = "1.1.0"
+version = "1.2.0"
 description = "Stdlib-only Python client for Caveman gateway tracing, tool deferral, checkpoints, and recoverable compression."
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.11"
 dependencies = []
 authors = [{name = "Caveman"}]

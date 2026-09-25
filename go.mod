@@ -1,6 +1,6 @@
 module github.com/JuliusBrussee/caveman
 
-go 1.26.5
+go 1.26.8
 
 require (
 	github.com/Microsoft/go-winio v0.6.2

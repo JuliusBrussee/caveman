@@ -197,7 +197,7 @@ export const MIDDLEWARE_FEATURES_HEADER = 'Caveman-Middleware-Features';
 export const MIDDLEWARE_CLIENT_HEADER = 'Caveman-Middleware-Client';
 export const MIDDLEWARE_CLIENT_PRODUCT = 'caveman-sdk-typescript';
 /** Package version sent in `Caveman-Middleware-Client`; a test pins it to package.json. */
-export const SDK_VERSION = '1.1.0';
+export const SDK_VERSION = '1.2.0';
 export type Feature = 'http_status_v2' | 'originals_lifecycle' | 'revision_tolerant' | 'tolerant_reader';
 /** Every feature this SDK understands, sorted. */
 export const KNOWN_FEATURES: readonly Feature[] = Object.freeze(['http_status_v2', 'originals_lifecycle', 'revision_tolerant', 'tolerant_reader']);

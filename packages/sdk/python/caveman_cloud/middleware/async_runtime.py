@@ -1,4 +1,4 @@
-"""Explicit asynchronous API with bounded, lifecycle-owned stdlib I/O workers (experimental API).
+"""Explicit asynchronous API with bounded, lifecycle-owned stdlib I/O workers.
 
 Every await is bounded by its own deadline, even while queued or when a worker is stuck. Retrieve has its
 own pool, so slow recoveries never delay optimize. Pools are rebuilt in a forked child.

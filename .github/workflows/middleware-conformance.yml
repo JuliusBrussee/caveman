@@ -13,6 +13,8 @@ on:
     paths:
       - proxy/**
       - engine/**
+      - shared/**
+      - mem/**
       - go.mod
       - go.sum
       - packages/sdk/**
@@ -25,6 +27,8 @@ on:
     paths:
       - proxy/**
       - engine/**
+      - shared/**
+      - mem/**
       - go.mod
       - go.sum
       - packages/sdk/**

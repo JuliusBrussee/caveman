@@ -2360,15 +2360,18 @@ function spanToOtlp(sp: OTelSpan): Record<string, unknown> {
   };
 }
 
+/** Always `doubleValue`, even for a whole number: Python exports these as floats. */
+const DOUBLE_ATTRIBUTES = new Set(["gen_ai.usage.cost_usd", "caveman.usage.cost_usd"]);
+
 /**
  * Encode one attribute as an OTLP/JSON KeyValue.
  * Ints → `intValue` (proto3 int64 → JSON string), bools → `boolValue`,
- * non-integer numbers → `doubleValue`; everything else → `stringValue`.
+ * non-integer numbers and cost → `doubleValue`; everything else → `stringValue`.
  */
 function otlpKV(key: string, value: string | number | boolean): Record<string, unknown> {
   if (typeof value === "boolean") return { key, value: { boolValue: value } };
   if (typeof value === "number") {
-    return Number.isInteger(value) ? { key, value: { intValue: String(value) } } : { key, value: { doubleValue: value } };
+    return Number.isInteger(value) && !DOUBLE_ATTRIBUTES.has(key) ? { key, value: { intValue: String(value) } } : { key, value: { doubleValue: value } };
   }
   return { key, value: { stringValue: String(value) } };
 }

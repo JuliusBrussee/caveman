@@ -49,7 +49,7 @@ test('runtime delegates candidates, verifies binding, and preserves entire plan 
   const sent = JSON.parse(calls.at(-1).options.body);
   assert.deepEqual(sent, { ...fixture.request, recovery_binding: { ...fixture.request.recovery_binding, id: binding.id } });
   assert.deepEqual(calls.at(-1).options.headers, { 'Content-Type': 'application/json', 'Caveman-Middleware-Features': 'http_status_v2, revision_tolerant',
-    'Caveman-Middleware-Client': 'caveman-sdk-typescript/1.1.0', Authorization: 'Bearer runtime-token' });
+    'Caveman-Middleware-Client': 'caveman-sdk-typescript/1.2.0', Authorization: 'Bearer runtime-token' });
   assert.equal(calls.at(-1).options.redirect, 'error');
   corrupt = true;
   const bad = await runtime.optimize(input(binding));

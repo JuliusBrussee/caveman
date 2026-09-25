@@ -12,10 +12,10 @@ const packageJSON = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
 );
 
-test("package publishes only built runtime, types, license, and README", () => {
+test("package publishes only built runtime, types, license, notice, and README", () => {
   assert.equal(packageJSON.name, "@caveman-ai/sdk");
-  assert.equal(packageJSON.version, "1.1.0");
-  assert.deepEqual(packageJSON.files, ["dist", "README.md", "LICENSE"]);
+  assert.equal(packageJSON.version, "1.2.0");
+  assert.deepEqual(packageJSON.files, ["dist", "README.md", "LICENSE", "NOTICE"]);
   assert.deepEqual(packageJSON.exports, {
     ".": {
       import: { types: "./dist/index.d.ts", default: "./dist/index.js" },

@@ -48,6 +48,14 @@ exception) fonts. The upstream MIT and font notices are preserved in
 
 `browse/` links MIT-licensed chromedp modules; see `browse/NOTICE`.
 
+The runtime binaries and container image link third-party Go modules (MIT,
+BSD-3-Clause, Apache-2.0); every binary release ships their license texts as
+`THIRD_PARTY_GO_LICENSES.tar.gz`, and the image under `/licenses/third_party/`.
+The CLI contains a port of part of Qwen Code (Apache-2.0) and bundles
+MIT-licensed `@clack/prompts` and its dependencies; see `packages/cli/NOTICE`.
+The extension ships the Geist fonts under the SIL Open Font License 1.1
+(`extension/fonts/GEIST_LICENSE.txt`).
+
 ## Trademarks
 
 "Caveman" and Caveman logos are trademarks of Julius Brussee. The Apache

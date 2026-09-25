@@ -13,7 +13,8 @@
     "bin/release.generated.mjs",
     "README.md",
     "LICENSE.launcher",
-    "BINARY_LICENSE.md"
+    "BINARY_LICENSE.md",
+    "NOTICE"
   ],
   "scripts": {
     "prepack": "node ../packages/cli/scripts/gen-wedge-installer.mjs",

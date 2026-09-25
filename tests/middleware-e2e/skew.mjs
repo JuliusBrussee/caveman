@@ -1,30 +1,31 @@
 #!/usr/bin/env node
 // Version skew in both directions (docs/technical/middleware-protocol.md §16, plan Decision 10):
-//   runtime  HEAD SDK clients (TS ai-sdk, Python openai) against the published runtime bin-v1.1.8 for this host,
+//   runtime  HEAD SDK clients (TS ai-sdk, Python openai) against the published protocol 1.0 runtime for this host,
 //            downloaded with gh and verified by the repo's signed-checksum installer. They must negotiate the legacy
 //            view and still compress and recover.
-//   clients  The published clients, unchanged, against a HEAD runtime: @caveman-ai/sdk@1.1.0 +
-//            @caveman-ai/middleware@0.1.0-alpha.2, and caveman-sdk==1.1.0 + caveman-middleware==0.1.0a1 (Python 3.13+).
+//   clients  The published clients, unchanged and with their default deadlines, against a HEAD runtime:
+//            @caveman-ai/sdk@1.1.0 + @caveman-ai/middleware@0.1.0-alpha.2, and caveman-sdk==1.1.0 +
+//            caveman-middleware==0.1.0a1 (Python 3.13+).
 //
 //   node tests/middleware-e2e/skew.mjs [runtime|clients]      (default: both)
 //
 // Needs gh (authenticated, or GH_TOKEN), go, npm, node >= 22.15 and python >= 3.13 (CAVEMAN_E2E_PYTHON). The runtime
-// tag defaults to the installer's pin; CAVEMAN_SKEW_RUNTIME_TAG overrides it.
+// tag is N1_RUNTIME, not the installer's pin (which moves to the runtime under test); CAVEMAN_SKEW_RUNTIME_TAG
+// overrides it.
 import assert from 'node:assert/strict';
 import { createReadStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import http from 'node:http';
 import { once } from 'node:events';
 import path from 'node:path';
-import { BINARY_RELEASE } from '../../packages/shared/binary-installer/release.generated.mjs';
 import { ensureBinary, targetPlatform } from '../../packages/shared/binary-installer/installer.mjs';
 import { TOKEN, buildProxy, drivePython, driveTS, finish, kit, kitResult, npmEnv, pythonEnv, requireBuilt, sh, startRuntime, step, tempDir } from './harness.mjs';
 
 const REPO = 'JuliusBrussee/caveman';
-// bin-v1.1.8 is pinned but, as of 2026-09-24, not yet published. bin-v1.1.7 is the newest published runtime and its
-// middleware wire code is the same: `git diff bin-v1.1.7 ae26f3a4 -- proxy/internal/middleware` (ae26f3a4 = the
-// bin-v1.1.8 pin) only changes tombstone comparisons. The fallback is loud, and goes away once the pin is published.
-const FALLBACK = 'bin-v1.1.7';
+// N-1: the newest published 1.x runtime (protocol 1.0). bin-v1.1.8 was pinned but never published, and the next
+// runtime release is bin-v2.0.0; bin-v1.1.7's middleware wire code is the same as that pin's
+// (`git diff bin-v1.1.7 ae26f3a4 -- proxy/internal/middleware` only changes tombstone comparisons).
+const N1_RUNTIME = 'bin-v1.1.7';
 const HEADER = 'http_status_v2, revision_tolerant';
 const which = process.argv[2] ?? 'both';
 if (!['runtime', 'clients', 'both'].includes(which)) {
@@ -36,13 +37,9 @@ const work = await tempDir('skew');
 /** gh-downloads the proxy asset for this host and installs it through installer.mjs's ensureBinary, served from a
  * loopback mirror, so the signed checksums.txt and the asset digest are checked exactly as users' installs do. */
 async function publishedRuntime() {
-  let tag = process.env.CAVEMAN_SKEW_RUNTIME_TAG ?? BINARY_RELEASE;
+  const tag = process.env.CAVEMAN_SKEW_RUNTIME_TAG ?? N1_RUNTIME;
   if ((await sh('gh', ['release', 'view', tag, '-R', REPO, '--json', 'tagName'], { allowFail: true })).code !== 0) {
-    if (process.env.CAVEMAN_SKEW_RUNTIME_TAG) throw new Error(`${tag} is not a published release of ${REPO}`);
-    const message = `${tag} is not published; testing ${FALLBACK}, the newest published runtime (same middleware wire code)`;
-    console.log(`# NOTE: ${message}`);
-    if (process.env.GITHUB_ACTIONS) console.log(`::warning title=middleware skew::${message}`);
-    tag = FALLBACK;
+    throw new Error(`${tag} is not a published release of ${REPO}`);
   }
   const { os, arch } = targetPlatform();
   const assets = path.join(work, 'assets');
@@ -106,14 +103,14 @@ if (which !== 'runtime') {
     try {
       if (tsClients) {
         await step('clients: published TS middleware compresses and recovers against HEAD (1.0 wire)', async () => {
-          const result = await driveTS(runtime.base, 'compress', { from: tsClients });
+          const result = await driveTS(runtime.base, 'compress', { from: tsClients, defaultDeadlines: true });
           assert.equal(result.features_sent, null, 'the published client sent a features header');
           return `${result.sent_bytes}/${result.original_bytes} bytes sent`;
         });
       }
       if (pyClients) {
         await step('clients: published Python middleware compresses and recovers against HEAD (1.0 wire)', async () => {
-          const result = await drivePython(runtime.base, 'compress', { python: pyClients, pythonPath: null });
+          const result = await drivePython(runtime.base, 'compress', { python: pyClients, pythonPath: null, defaultDeadlines: true });
           assert.equal(result.runtime_features, null, 'HEAD served the 1.1 view to a client that sent no features header');
           return `${result.sent_bytes}/${result.original_bytes} bytes sent`;
         });

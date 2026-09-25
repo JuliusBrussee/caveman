@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 export const SHIPPABLE_FILES = Object.freeze([
   "LICENSE",
   "PRIVACY.md",
+  "fonts/GEIST_LICENSE.txt",
   "fonts/geist-mono.woff2",
   "fonts/geist-sans.woff2",
   "icons/icon16.png",

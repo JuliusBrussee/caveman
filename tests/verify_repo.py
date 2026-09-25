@@ -767,14 +767,12 @@ def verify_license_boundaries() -> None:
     notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
     ensure("Copyright 2026 Julius Brussee" in notice, "root NOTICE missing copyright line")
 
-    # packages/sdk/** is relicensed by the SDK release prep; drop this once its LICENSE files match.
-    pending = ("packages/sdk/",)
     tracked = [p for p in run(["git", "ls-files", "-z"]).stdout.split("\0") if p and (ROOT / p).is_file()]
     license_files = [
         p for p in tracked
         if re.fullmatch(r"LICENSE(\.[^/]+)?", Path(p).name) and "vendor" not in Path(p).parts
     ]
-    checked = [p for p in license_files if not p.startswith(pending)]
+    checked = license_files
     mismatched = sorted(p for p in checked if (ROOT / p).read_bytes().replace(b"\r\n", b"\n") != apache)
     ensure(not mismatched, f"LICENSE files differ from root Apache-2.0 LICENSE: {mismatched}")
     for relative in ("engine", "proxy", "rewriter", "browse", "mcp", "shrink", "mem", "shared/platform"):
@@ -783,7 +781,7 @@ def verify_license_boundaries() -> None:
     wrong_metadata = []
     for p in tracked:
         name = Path(p).name
-        if p.startswith(pending) or name not in {"package.json", "plugin.json", "pyproject.toml"}:
+        if name not in {"package.json", "plugin.json", "pyproject.toml"}:
             continue
         text = (ROOT / p).read_text(encoding="utf-8")
         if name == "pyproject.toml":
@@ -814,6 +812,109 @@ def verify_license_boundaries() -> None:
     ensure("[Apache-2.0](./LICENSE)" in readme, "README license section must name Apache-2.0")
 
     print(f"{len(checked)} LICENSE files match root Apache-2.0 text; no BSL text outside history")
+
+
+def _top_changelog_version(path: Path) -> str:
+    # release-packages.yml takes the first word of a `## ` heading as the
+    # version and uses that section as the GitHub Release notes.
+    heading = next((line for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("## ")), "")
+    match = re.fullmatch(r"## \[?([0-9][^\]\s]*)\]? — \d{4}-\d{2}-\d{2}", heading)
+    ensure(match is not None, f"{path.relative_to(ROOT)} must start with '## <version> — <YYYY-MM-DD>', not {heading!r}")
+    return match.group(1)
+
+
+def verify_release_metadata() -> None:
+    section("Release Metadata")
+    import tomllib
+
+    def pyproject(relative: str) -> dict:
+        return tomllib.loads((ROOT / relative / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    def npm(relative: str) -> dict:
+        return read_json(ROOT / relative / "package.json")
+
+    def literal(relative: str, pattern: str) -> str | None:
+        match = re.search(pattern, (ROOT / relative).read_text(encoding="utf-8"), re.M)
+        return match.group(1) if match else None
+
+    sdk_ts = npm("packages/sdk/typescript")["version"]
+    sdk_py = pyproject("packages/sdk/python")["version"]
+    mw_ts = npm("packages/middleware/typescript")
+    mw_py = pyproject("packages/middleware/python")
+
+    # Every version string a release carries agrees with the package metadata.
+    agree = {
+        "packages/sdk/typescript": {sdk_ts, literal("packages/sdk/typescript/src/middleware/types.ts", r"^export const SDK_VERSION = '([^']+)';")},
+        "packages/sdk/python": {sdk_py},
+        "packages/middleware/typescript": {mw_ts["version"], literal("packages/middleware/typescript/src/common.ts", r"^export const MIDDLEWARE_VERSION = '([^']+)';")},
+        "packages/middleware/python": {mw_py["version"]},
+        "packages/shared/contracts": {npm("packages/shared/contracts")["version"]},
+    }
+    for relative, versions in agree.items():
+        versions.add(_top_changelog_version(ROOT / relative / "CHANGELOG.md"))
+        ensure(len(versions) == 1, f"{relative}: package, version constant and top CHANGELOG heading disagree: {sorted(map(str, versions))}")
+    # Python reads __version__ from the installed distribution, never a literal.
+    ensure(
+        literal("packages/middleware/python/caveman_middleware/__init__.py", r"^(__version__\s*=)") is None,
+        "caveman_middleware.__version__ must come from importlib.metadata, not a literal",
+    )
+    for relative, project in (("packages/sdk/python", pyproject("packages/sdk/python")), ("packages/middleware/python", mw_py)):
+        stable = re.fullmatch(r"\d+\.\d+\.\d+", project["version"]) is not None
+        alpha = any("Development Status :: 3 - Alpha" in c for c in project.get("classifiers", []))
+        ensure(not (stable and alpha), f"{relative}: stable version {project['version']} still classified Alpha")
+
+    # R-1: each middleware package's SDK floor is exactly the repo SDK version, so
+    # it can never resolve an SDK that lacks the APIs it imports.
+    ts_range = mw_ts["dependencies"]["@caveman-ai/sdk"]
+    ensure(ts_range in {"workspace:^", f"^{sdk_ts}"}, f"@caveman-ai/middleware SDK range {ts_range!r} must pack as ^{sdk_ts}")
+    floors = [re.fullmatch(r"caveman-sdk>=([0-9.]+),<\d+", d) for d in mw_py["dependencies"] if d.startswith("caveman-sdk")]
+    ensure(len(floors) == 1 and floors[0] is not None, f"caveman-middleware needs one 'caveman-sdk>=X,<Y' dependency: {mw_py['dependencies']}")
+    floor = floors[0].group(1).split(".")
+    ensure(floor + ["0"] * (3 - len(floor)) == sdk_py.split("."), f"caveman-middleware SDK floor {floors[0].group(1)} != repo caveman-sdk {sdk_py}")
+
+    # Quickstart install lines name the versions this commit releases.
+    pins = {
+        "packages/sdk/typescript/README.md": {r"@caveman-ai/sdk@([0-9][^\s`]*)": sdk_ts},
+        "packages/sdk/python/README.md": {r"caveman-sdk==([0-9][^\s'`]*)": sdk_py},
+        "packages/middleware/typescript/README.md": {r"@caveman-ai/sdk@([0-9][^\s`]*)": sdk_ts, r"@caveman-ai/middleware@([0-9][^\s`]*)": mw_ts["version"]},
+        "packages/middleware/python/README.md": {r"caveman-sdk==([0-9][^\s'`]*)": sdk_py, r"caveman-middleware\[[^\]]*\]==([0-9][^\s'`]*)": mw_py["version"]},
+    }
+    for relative, patterns in pins.items():
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        for pattern, want in patterns.items():
+            found = set(re.findall(pattern, text))
+            ensure(found == {want}, f"{relative}: install pins {sorted(found)} must all be {want}")
+
+    # Every published artifact carries LICENSE and NOTICE: npm packages list both
+    # in `files`, Python packages in `license-files`.
+    unpublished = {
+        "packages/agent", "packages/create-caveman-agent",  # source of truth: caveman-agent-sdk
+        "packages/device-auth", "mem/js", "shared/provider-catalog", "src/hooks",  # not published from here
+    }
+    tracked = run(["git", "ls-files", "-z", "--", "*package.json", "*pyproject.toml"]).stdout.split("\0")
+    missing = []
+    for p in sorted(filter(None, tracked)):
+        directory = Path(p).parent.as_posix()
+        if directory in unpublished or {"node_modules", "fixtures", "testdata", "tests"} & set(Path(p).parts):
+            continue
+        if Path(p).name == "package.json":
+            manifest = read_json(ROOT / p)
+            if manifest.get("private") or "name" not in manifest:
+                continue
+            listed = set(manifest.get("files", ["LICENSE", "NOTICE"]))
+        else:
+            listed = set(tomllib.loads((ROOT / p).read_text(encoding="utf-8")).get("project", {}).get("license-files", []))
+        for name in ("LICENSE", "NOTICE"):
+            # npm packs LICENSE whatever `files` says; NOTICE only when listed.
+            shipped = name in listed or (name == "LICENSE" and Path(p).name == "package.json")
+            if not shipped or not (ROOT / directory / name).is_file():
+                missing.append(f"{directory}/{name}")
+        notice = ROOT / directory / "NOTICE"
+        if notice.is_file() and "Copyright 2026 Julius Brussee" not in notice.read_text(encoding="utf-8"):
+            missing.append(f"{directory}/NOTICE (copyright line)")
+    ensure(not missing, f"published packages must ship LICENSE and NOTICE: {missing}")
+
+    print(f"SDK {sdk_ts}/{sdk_py}, middleware {mw_ts['version']}/{mw_py['version']}: versions, SDK floors, pins and notices agree")
 
 
 def verify_untrusted_git_invocations() -> None:
@@ -858,6 +959,7 @@ def verify_untrusted_git_invocations() -> None:
 def main() -> int:
     checks = [
         verify_license_boundaries,
+        verify_release_metadata,
         verify_untrusted_git_invocations,
         verify_shipped_skills_are_documented,
         verify_skills_root_holds_only_skills,

@@ -5,8 +5,10 @@ name: docs-links
 on:
   pull_request:
     paths:
-      - README.md
-      - packages/middleware/*/README.md
+      - "**/README.md"
+      - INSTALL.md
+      - SECURITY.md
+      - LICENSING.md
       - packages/middleware/*/CHANGELOG.md
       - docs/technical/**
       - .github/scripts/check-doc-links.mjs
@@ -29,10 +31,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-      - run: >-
-          node .github/scripts/check-doc-links.mjs
-          README.md
-          packages/middleware/typescript/README.md
-          packages/middleware/python/README.md
-          packages/middleware/typescript/CHANGELOG.md
-          packages/middleware/python/CHANGELOG.md
+      - run: |
+          mapfile -t files < <(git ls-files '*README.md' INSTALL.md SECURITY.md LICENSING.md 'docs/technical/*.md' \
+            packages/middleware/typescript/CHANGELOG.md packages/middleware/python/CHANGELOG.md)
+          node .github/scripts/check-doc-links.mjs "${files[@]}"

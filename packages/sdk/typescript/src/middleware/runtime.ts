@@ -129,7 +129,7 @@ function untilAborted<T>(promise: PromiseLike<T>, signal?: AbortSignal): Promise
   });
 }
 
-/** @experimental Protocol 1.1 client for a Caveman middleware runtime. May change in any minor release. */
+/** Protocol 1.1 client for a Caveman middleware runtime. */
 export class MiddlewareRuntime {
   /** Runtime origin (scheme://host:port), or '' when the endpoint was refused. */
   readonly endpoint: string;
@@ -367,7 +367,8 @@ export class MiddlewareRuntime {
       // Never transfer a protected, opaque, malformed or oversized leaf merely to get a skip (spec §11 step 1).
       if (candidate?.protected) { c.protected++; continue; }
       if (candidate?.opaque) { c.opaque++; continue; }
-      if (!isToken(candidate?.id) || ids.has(candidate.id) || typeof candidate.content !== 'string' || !candidate.content.isWellFormed()) { c.unsupported++; continue; }
+      if (!isToken(candidate?.id) || ids.has(candidate.id) || typeof candidate.content !== 'string' || !candidate.content.isWellFormed() ||
+        (candidate.sourceId != null && !isToken(candidate.sourceId))) { c.unsupported++; continue; }
       ids.add(candidate.id);
       if (byteLength(candidate.content) > view.limits.segment_bytes) { c.budget_skipped++; continue; }
       segments.push({ id: candidate.id, source_id: candidate.sourceId ?? candidate.id, kind: candidate.kind ?? 'tool_result',
@@ -652,5 +653,4 @@ export class MiddlewareRuntime {
   }
 }
 
-/** @experimental */
 export function createMiddlewareRuntime(options: RuntimeOptions = {}): MiddlewareRuntime { return new MiddlewareRuntime(options); }

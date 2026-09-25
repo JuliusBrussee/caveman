@@ -1,7 +1,6 @@
 /** Node transport for the middleware runtime (spec §15): honors HTTP(S)_PROXY / NO_PROXY without Node's
  * NODE_USE_ENV_PROXY flag (CONNECT tunnel for https, absolute-form for http), accepts a custom CA, keeps connections
- * alive and never proxies loopback. node:http/https/tls load lazily, so edge bundles never touch them.
- * @experimental */
+ * alive and never proxies loopback. node:http/https/tls load lazily, so edge bundles never touch them. */
 
 // The SDK ships no @types/node; the node:* surface used here is typed loosely on purpose.
 type Loose = any;

@@ -141,15 +141,18 @@ export async function npmEnv(name, packages) {
 export const HEAD_TS = path.join(root, 'packages/middleware/typescript');
 export const HEAD_PYTHONPATH = [path.join(root, 'packages/sdk/python'), path.join(root, 'packages/middleware/python')].join(path.delimiter);
 
-export async function driveTS(base, expect, { from = HEAD_TS, token = TOKEN } = {}) {
-  const result = await sh(process.execPath, [path.join(here, 'drive-ts.mjs'), '--base', base, '--token', token, '--from', from, '--expect', expect], { allowFail: true });
+// defaultDeadlines keeps the client's own deadlines instead of the 10 s the drivers otherwise force.
+export async function driveTS(base, expect, { from = HEAD_TS, token = TOKEN, defaultDeadlines = false } = {}) {
+  const result = await sh(process.execPath, [path.join(here, 'drive-ts.mjs'), '--base', base, '--token', token, '--from', from, '--expect', expect,
+    ...(defaultDeadlines ? ['--default-deadlines'] : [])], { allowFail: true });
   return driven(result, 'drive-ts');
 }
 
-export async function drivePython(base, expect, { python, pythonPath = HEAD_PYTHONPATH, token = TOKEN } = {}) {
+export async function drivePython(base, expect, { python, pythonPath = HEAD_PYTHONPATH, token = TOKEN, defaultDeadlines = false } = {}) {
   const env = { ...process.env, PYTHONPATH: pythonPath ?? '' };
   if (!pythonPath) delete env.PYTHONPATH;
-  const result = await sh(python, [path.join(here, 'drive_py.py'), '--base', base, '--token', token, '--expect', expect], { allowFail: true, env });
+  const result = await sh(python, [path.join(here, 'drive_py.py'), '--base', base, '--token', token, '--expect', expect,
+    ...(defaultDeadlines ? ['--default-deadlines'] : [])], { allowFail: true, env });
   return driven(result, 'drive_py');
 }
 

@@ -215,6 +215,7 @@ def test_adapters_send_the_installed_package_version():
     from caveman_middleware._versions import VERSION, installed_version
 
     assert VERSION == (installed_version("caveman-middleware") or "unknown")
+    assert caveman_middleware.__version__ == VERSION
     literal = [f"{path.name}:{node.lineno}" for path in Path(caveman_middleware.__file__).parent.glob("*.py")
                for node in ast.walk(ast.parse(path.read_text()))
                if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Adapter"

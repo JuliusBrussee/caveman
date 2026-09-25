@@ -1,6 +1,5 @@
 """Protocol 1.1 client rules, pure and I/O-free (docs/technical/middleware-protocol.md).
 
-Experimental: ``caveman_cloud.middleware`` may change in any minor release.
 Every helper here is pinned by packages/sdk/parity/middleware-v1_1.fixtures.json.
 """
 import hashlib

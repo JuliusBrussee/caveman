@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 — 2026-09-24
 
+- **Breaking (license):** relicensed from MIT to Apache-2.0, along with the rest of
+  the repository in Caveman 3.0.0. Releases before this one keep the MIT license.
+- `@caveman-ai/sdk/middleware` is stable: the `@experimental` marker is gone,
+  and it follows semver, because `@caveman-ai/middleware` 1.0 depends on it.
+- A candidate whose `sourceId` is not a scope token is skipped as
+  `unsupported`, as in Python.
+- Exporter: cost is always exported as `doubleValue`, a whole-dollar amount
+  too, as in Python.
 - Middleware transport honors `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` without
   `NODE_USE_ENV_PROXY`, never proxies loopback, and adds a `ca` option.
 - Plan validation is total: any malformed plan is `invalid_plan`, never
@@ -24,8 +32,7 @@
 - `typesVersions` and `.d.cts` shims: TypeScript projects using node10 or
   node16 CommonJS resolution can import both entry points without
   `skipLibCheck`.
-- `@caveman-ai/sdk/middleware` implements middleware protocol 1.1 and is marked
-  `@experimental`:
+- `@caveman-ai/sdk/middleware` implements middleware protocol 1.1:
   - capabilities are parsed tolerantly, cached for 300 s and refreshed
     single-flight
   - plans survive a policy-revision change

@@ -33,6 +33,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -o /out/caveman-proxy ./proxy/cmd/caveman-proxy \
  && mkdir -p /out/data
 
+# License texts of the third-party Go modules the binary links, and the Go
+# runtime's, for /licenses. go-licenses is pinned and runs on the build
+# platform; GOOS/GOARCH select the target's build tags.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    GOBIN=/tmp/bin go install github.com/google/go-licenses/v2@v2.0.1 \
+ && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH /tmp/bin/go-licenses save ./proxy/cmd/caveman-proxy \
+      --ignore github.com/JuliusBrussee/caveman --save_path /out/licenses/third_party \
+ && mkdir -p /out/licenses/third_party/go.dev/go \
+ && cp "$(go env GOROOT)/LICENSE" /out/licenses/third_party/go.dev/go/LICENSE
+
 # distroless static: CA roots for outbound provider TLS, no shell, no package
 # manager, nothing to exploit. The :nonroot tag already runs as uid 65532.
 FROM gcr.io/distroless/static-debian12:nonroot
@@ -52,6 +63,7 @@ COPY --from=build /out/caveman-proxy /caveman-proxy
 COPY LICENSE NOTICE LICENSING.md /licenses/
 COPY engine/pixel/NOTICE /licenses/NOTICE.engine-pixel
 COPY engine/pixel/assets/SPLEEN_LICENSE.txt engine/pixel/assets/UNIFONT_LICENSE.txt /licenses/
+COPY --from=build /out/licenses/third_party /licenses/third_party/
 # An empty, correctly-owned /data so a named or anonymous volume inherits uid
 # 65532. A BIND mount does NOT inherit it — chown the host directory to 65532
 # yourself or the proxy cannot create its SQLite spend store under CAVEMAN_HOME.

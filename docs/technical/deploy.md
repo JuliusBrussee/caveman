@@ -640,6 +640,13 @@ key it does not hold:
 Back the keys up apart from the database. A restored database without its keys
 answers `recovery_unavailable` for every sealed original.
 
+Adding a key to a store that already holds plaintext originals: with a key
+configured, those originals are refused (`recovery_unavailable`, counted in
+`caveman_middleware_plaintext_originals_total{outcome="refused"}`). Set
+`middleware.allow_plaintext_originals: true`
+(`CAVEMAN_MIDDLEWARE_ALLOW_PLAINTEXT_ORIGINALS=true`) to keep them readable,
+then remove it once `max_retention_seconds` has passed since the key was added.
+
 ### Retention
 
 | Key (`middleware.*`, or `CAVEMAN_MIDDLEWARE_<KEY>`) | Default | Meaning |
@@ -660,7 +667,8 @@ its handles answer `410 deleted` for those 7 days.
 |---|---|---|
 | `max_bytes` | 576 MiB | Payload the middleware store admits: originals, replacements, manifests, plans, receipts |
 | `max_rows` | 1,000,000 | Rows the middleware store admits |
-| `quota_bytes` / `quota_rows` | none | The same per principal; the token map can override per principal |
+| `quota_bytes` / `quota_rows` | a quarter of `max_bytes` / `max_rows` with a token map, OIDC or mTLS; none with one shared token | The same per principal; the token map can override per principal |
+| `principal_in_flight` | half of each queue with a token map, OIDC or mTLS; unbounded with one shared token | Slots one principal may hold in each request queue (`queue_depth`, `retrieve_queue_depth`); its other requests wait for its own slots |
 
 When a limit is reached, optimize answers with a `capacity` decision (the
 request passes through uncompressed) while retrieval of stored originals keeps

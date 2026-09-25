@@ -4,7 +4,7 @@ The provider is a local fake OpenAI server on 127.0.0.1 (no network). After the
 call, the adapter's own caveman_retrieve executor recovers the handle the
 provider was shown.
 
-    python drive_py.py --base URL --token T --expect compress|passthrough
+    python drive_py.py --base URL --token T --expect compress|passthrough [--default-deadlines]
 
 Prints one JSON line; exits 1 when the expectation fails.
 """
@@ -51,6 +51,7 @@ def main():
     parser = argparse.ArgumentParser()
     for name in ("--base", "--token", "--expect"):
         parser.add_argument(name, required=True)
+    parser.add_argument("--default-deadlines", action="store_true")
     args = parser.parse_args()
 
     from openai import OpenAI
@@ -59,7 +60,8 @@ def main():
 
     received, reports, out = [], [], {}
     server = fake_openai(received)
-    runtime = MiddlewareRuntime(endpoint=args.base, token=args.token, deadline_ms=10000, retrieve_deadline_ms=10000,
+    deadlines = {} if args.default_deadlines else {"deadline_ms": 10000, "retrieve_deadline_ms": 10000}
+    runtime = MiddlewareRuntime(endpoint=args.base, token=args.token, **deadlines,
                                 on_report=lambda report: reports.append(f"{report.status}:{report.reason}"))
     messages = [{"role": "user", "content": "Summarize this log."},
                 {"role": "assistant", "tool_calls": [{"type": "function", "id": "call-1", "function": {"name": "read_log", "arguments": "{}"}}]},

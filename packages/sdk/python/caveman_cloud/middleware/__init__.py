@@ -1,7 +1,7 @@
 """Compression-only framework runtime. Optional frameworks import nothing here.
 
-Experimental: this subpackage implements middleware protocol 1.1 and may change in any minor
-release of ``caveman-sdk``. The core ``caveman_cloud`` client API is not affected.
+Implements middleware protocol 1.1. Stable: it follows ``caveman-sdk`` semver, because
+``caveman-middleware`` 1.x depends on it.
 """
 from .async_runtime import AsyncMiddlewareRuntime, ensure_async, ensure_sync
 from .protocol import (

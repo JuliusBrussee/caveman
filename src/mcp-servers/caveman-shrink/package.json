@@ -27,6 +27,8 @@
     "compress.js",
     "spawn-options.js",
     "shutdown.js",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ]
 }

@@ -84,11 +84,12 @@ test('B4: malformed candidates are skipped locally and never count as runtime ou
   } });
   try {
     const binding = runtime.recovery(r.scope);
-    const bad = [{ id: 'null-content', content: null }, { id: 'lone-surrogate', content: 'abc\ud800' }, { id: 'bad id', content: 'x' }];
+    const bad = [{ id: 'null-content', content: null }, { id: 'lone-surrogate', content: 'abc\ud800' }, { id: 'bad id', content: 'x' },
+      { id: 'bad-source', sourceId: 'bad source', content: 'x' }];
     const mixed = await runtime.optimize(input(binding, { candidates: [...bad, ...input().candidates] }));
     assert.equal(mixed.status, 'optimized');
     assert.deepEqual(sent[0].segments.map(s => s.id), ['tool-1']);
-    assert.equal(mixed.counts.unsupported, 3);
+    assert.equal(mixed.counts.unsupported, 4);
     for (let i = 0; i < 12; i++) assert.equal((await runtime.optimize(input(binding, { candidates: bad }))).reason, 'unsupported_shape');
     for (let i = 0; i < 12; i++) assert.equal((await runtime.optimize(input(binding, { candidates: 42 }))).reason, 'adapter_error');
     assert.equal((await runtime.optimize(input(binding))).status, 'optimized', 'local data errors never open the breaker');
@@ -303,7 +304,7 @@ test('B11: client headers, trace context, decision events, OpenTelemetry and war
     runtime.report(outcome);
     for (const { headers } of requests) {
       assert.equal(headers['Caveman-Middleware-Features'], 'http_status_v2, revision_tolerant');
-      assert.equal(headers['Caveman-Middleware-Client'], 'caveman-sdk-typescript/1.1.0');
+      assert.equal(headers['Caveman-Middleware-Client'], 'caveman-sdk-typescript/1.2.0');
       assert.equal(headers['traceparent'], '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01');
       assert.equal(headers['tracestate'], 'vendor=1');
     }

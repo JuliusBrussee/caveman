@@ -18,10 +18,11 @@ and the adapters built on them) and a Caveman middleware runtime
 Where this prose and a fixture disagree, the fixture is the bug report: fix one
 of them in the same change.
 
-**Versions.** Protocol 1.0 is what shipped in runtime `bin-v1.1.8`, SDK 1.1.0
-(TS and Python) and middleware `0.1.0-alpha.2` / `0.1.0a1`. Protocol 1.1 is
-additive: `schema_version` stays `1` on every body, and 1.1 behavior is
-negotiated per request (§3).
+**Versions.** Protocol 1.0 is what shipped in runtimes up to `bin-v1.1.7`, SDK 1.1.0
+(TS and Python) and middleware `0.1.0-alpha.2` / `0.1.0a1`. Protocol 1.1 ships
+in runtime `bin-v2.0.0`, SDK 1.2.0 and middleware 1.0.0. It is additive:
+`schema_version` stays `1` on every body, and 1.1 behavior is negotiated per
+request (§3).
 
 ## 1. Routes and transport basics
 
@@ -139,7 +140,7 @@ appear in both views, because 1.0 clients ignore unknown top-level fields.
 - MUST still require every required field and validate the known ones.
 - MUST NOT give an unknown field any meaning. Anything security-relevant is a
   negotiated feature.
-- Runtime `bin-v1.1.8` rejects unknown fields (`DisallowUnknownFields`), which
+- Runtimes before `bin-v2.0.0` reject unknown fields (`DisallowUnknownFields`), which
   is why clients gate new body fields on `tolerant_reader`. Protocol 1.1 adds
   no request body fields.
 
@@ -577,6 +578,11 @@ client.
     request's authority.
   - Answers 200 `{"schema_version":1,"status":"revoked","originals_deleted":true,"deleted":{"scopes","choices","grants","originals"}}`.
     This shape goes to every client; 1.0 clients ignore the body.
+  - `originals_deleted` is `false` when the authority holds grants a 1.0
+    runtime issued: their originals live in the process-wide CCR, which
+    `sessions/delete` cannot remove, so they stay until that store expires
+    them. It stays `false` for such an authority on a retried delete and after
+    a sweep.
   - Is idempotent: an unknown scope answers the same shape with zero counts.
   - If deletion fails, the answer is 503, never a success.
   - Later use of the scope answers 410 `deleted` for the grace period.
@@ -761,7 +767,7 @@ would feed the breaker.
   protocol with that protocol's shapes and statuses: today, protocol 1.0
   clients (SDK 1.1.0, middleware `0.1.0-alpha.2` / `0.1.0a1`) via the legacy
   mappings above. A client MUST work against a runtime of the previous minor
-  protocol: today, `bin-v1.1.8`.
+  protocol: today, `bin-v1.1.7`.
 - **Support window.** Protocol N-1 stays supported for at least 12 months after
   the first release of protocol N. For 1.0 that runs to at least 2027-09-30.
 - **Deprecation.** A deprecation is announced in this document and in the

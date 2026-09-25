@@ -11983,6 +11983,10 @@ function qwenStringList(root: JsonObject, path: string[], fallback: Record<strin
   return resolved;
 }
 
+// Through qwenCavemanToolDenied below: ported, with changes, from Qwen Code
+// 0.22.3 (https://github.com/QwenLM/qwen-code), Copyright 2025 Google LLC and
+// Copyright 2025 Qwen, Apache License 2.0. See NOTICE.
+//
 // Exact wildcard matcher used by Qwen 0.22 for mcp.allowed/mcp.excluded:
 // `*` spans any run, `?` spans one character, everything else is literal.
 function qwenMcpServerPatternMatches(name: string, pattern: string): boolean {

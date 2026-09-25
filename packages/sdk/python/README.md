@@ -1,6 +1,6 @@
 # caveman-sdk
 
-`caveman-sdk` is the MIT-licensed Python client in the main Caveman repository. Import it as `caveman_cloud`. It requires Python 3.11 or newer, uses only the standard library at runtime, and includes `py.typed` type information.
+`caveman-sdk` is the Apache-2.0-licensed Python client in the main Caveman repository. Import it as `caveman_cloud`. It requires Python 3.11 or newer, uses only the standard library at runtime, and includes `py.typed` type information.
 
 ## Install
 
@@ -9,7 +9,7 @@ mkdir caveman-python-example
 cd caveman-python-example
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install caveman-sdk==1.1.0
+python -m pip install caveman-sdk==1.2.0
 ```
 
 On Windows, activate with `.venv\Scripts\Activate.ps1` in PowerShell. Use `python -m pip` so installation targets the interpreter running your app. The PyPI package named `caveman` is unrelated.
@@ -95,7 +95,7 @@ async def compress_tool_output(text: str):
 
 Cancelling the awaiting task does not forcibly stop the underlying thread's HTTP request. Provider calls, compression, and shared-context calls use a 300-second urllib timeout; most other connected SDK operations use 30 seconds. The core `Cave` constructor has no timeout or cancellation option. These socket timeouts are not a whole-workflow deadline.
 
-For native async framework compression, the separate middleware entrypoint exposes `AsyncMiddlewareRuntime`. That does not turn the core provider clients into async clients. The `caveman_cloud.middleware` entrypoint is experimental; its API may change in any minor release.
+For native async framework compression, the separate middleware entrypoint exposes `AsyncMiddlewareRuntime`. That does not turn the core provider clients into async clients.
 
 ## Python naming and limits
 
@@ -109,6 +109,6 @@ The SDK does not execute tool calls, process provider SSE streams, or install a 
 
 ## Native framework middleware
 
-**Experimental.** `caveman_cloud.middleware` may change in any minor release of `caveman-sdk`. The core `caveman_cloud` client API above is not affected.
+`caveman_cloud.middleware` is stable and follows semver with the rest of `caveman-sdk`, because `caveman-middleware` 1.x depends on it.
 
 For automatic projection of eligible tool results in an existing framework, use the separate [middleware package](https://docs.caveman.so/docs/sdk/middleware). Start with the complete [LangChain quickstart](https://docs.caveman.so/docs/sdk/middleware/python). The local runtime is accountless; inference stays in your provider client. The thin connected APIs above remain explicit calls.

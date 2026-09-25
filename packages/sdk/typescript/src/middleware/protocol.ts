@@ -1,6 +1,5 @@
 /** Protocol 1.1 client rules, pure and I/O-free (docs/technical/middleware-protocol.md). Every helper is pinned by
- * packages/sdk/parity/middleware-v1_1.fixtures.json and mirrored by caveman_cloud.middleware.protocol.
- * @experimental */
+ * packages/sdk/parity/middleware-v1_1.fixtures.json and mirrored by caveman_cloud.middleware.protocol. */
 import { BREAKER_DEFAULTS, DEFAULT_BRANCH_ID, DEFAULT_CACHE_EPOCH, MIDDLEWARE_DEFAULTS, REASON_CATALOG, SCOPE_HASH_HEX_CHARS, SCOPE_HASH_PREFIX } from './types.js';
 import type { BreakerParams, BreakerState, BudgetItem, BudgetResult, FailureInput, FailureOutcome, OpaqueManifestValue, ReasonPolicy, Scope } from './types.js';
 import { isToken, MiddlewareError, positive, sha256, sha256Sync } from './validate.js';

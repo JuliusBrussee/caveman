@@ -13,7 +13,8 @@
     "schemas",
     "openapi",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "exports": {
     "./schemas/*": "./schemas/*",

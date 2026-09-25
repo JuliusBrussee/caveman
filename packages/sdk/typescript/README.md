@@ -1,6 +1,6 @@
 # @caveman-ai/sdk
 
-`@caveman-ai/sdk` is the MIT-licensed TypeScript client in the main Caveman repository. It ships ESM and TypeScript declarations with no runtime dependencies. This quickstart uses published version `1.1.0` on Node.js 22.13 or newer.
+`@caveman-ai/sdk` is the Apache-2.0-licensed TypeScript client in the main Caveman repository. It ships ESM and TypeScript declarations with no runtime dependencies. This quickstart uses published version `1.2.0` on Node.js 22.13 or newer.
 
 ## Install
 
@@ -8,7 +8,7 @@
 mkdir caveman-ts-example
 cd caveman-ts-example
 npm init -y
-npm install @caveman-ai/sdk@1.1.0
+npm install @caveman-ai/sdk@1.2.0
 ```
 
 Use an `.mjs` file for the first run. In a TypeScript project, use ESM and NodeNext module resolution. The package does not publish a CommonJS `require` entrypoint.
@@ -124,6 +124,6 @@ The SDK does not install the engine, run an agent loop, or guarantee that your c
 
 For automatic projection of eligible tool results in an existing framework, use the separate [middleware package](https://docs.caveman.so/docs/sdk/middleware). Start with the complete [AI SDK quickstart](https://docs.caveman.so/docs/sdk/middleware/vercel-ai-sdk). The local runtime is accountless; inference stays in your provider client. The thin connected APIs above remain explicit calls.
 
-**Experimental.** The `@caveman-ai/sdk/middleware` subpath is the protocol client those adapters build on. Every export in it may change in any minor release while the middleware packages are 0.x. The root `@caveman-ai/sdk` entrypoint keeps its stable API.
+The `@caveman-ai/sdk/middleware` subpath is the protocol client those adapters build on. It is stable and follows semver with the rest of the SDK, because `@caveman-ai/middleware` 1.x depends on it.
 
 Behind a corporate proxy, the middleware client honors `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` on its own; you do not need Node's `NODE_USE_ENV_PROXY`. A runtime on `localhost`, `127.0.0.1` or `::1` never goes through the proxy, so your content and runtime token stay on the machine. If you pass your own proxy-aware `fetch`, set `NO_PROXY=localhost,127.0.0.1,::1` so it does the same. For a runtime with a private certificate authority, pass its PEM certificate as the `ca` option.

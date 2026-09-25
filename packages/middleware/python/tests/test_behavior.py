@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import socket
+import sys
 import threading
 import time
 import warnings
@@ -672,10 +673,15 @@ def test_close_during_an_in_flight_call_passes_the_original_through_promptly(fam
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
 @pytest.mark.parametrize("family", sorted(DRIVERS))
 @pytest.mark.parametrize("view", ["sync", "async"])
-def test_forked_child_drives_the_adapter_without_hanging(family, view, lenient_runtime, monkeypatch):
+def test_forked_child_drives_the_adapter_without_hanging(family, view, lenient_runtime, monkeypatch, request):
     """D3: the parent's pools, threads and loops exist before the fork; the child must still finish, and compress."""
     from caveman_cloud.middleware import Scope
     require_adapter(family)
+    # Upstream, not the adapter: CPython < 3.12 leaves the parent's current event loop set in a forked child (reset at
+    # fork since 3.12, gh-66285), the driver's agent.run_sync() reuses it, and a kqueue selector does not survive fork.
+    request.applymarker(pytest.mark.xfail(
+        family == "pydantic_ai" and sys.platform == "darwin" and sys.version_info < (3, 12), strict=True,
+        reason="CPython < 3.12 keeps the parent's event loop in a forked child (gh-66285); pydantic-ai run_sync reuses it"))
     # macOS only: with no proxy variable set, urllib asks SystemConfiguration, which segfaults in a forked child
     # (litellm's httpx client does this). Any *_proxy variable skips that lookup; loopback is never proxied anyway.
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")

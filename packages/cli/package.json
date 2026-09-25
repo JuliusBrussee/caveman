@@ -23,7 +23,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "node scripts/gen-binaries.mjs && node scripts/gen-wedge-installer.mjs && node scripts/compile-registries.mjs && tsc && node scripts/bundle-delegate.mjs && node scripts/bundle-tui.mjs && node scripts/bundle-pi-extension.mjs && node scripts/shebang.mjs",

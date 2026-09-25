@@ -128,6 +128,29 @@ jobs:
           set -euo pipefail
           cd dist/binaries
           node ../../scripts/build-release-binaries.mjs --list | LC_ALL=C sort | xargs sha256sum -- > checksums.txt
+      # License texts of every third-party Go module the six binaries link, per
+      # platform (build tags differ), plus the Go runtime's. go-licenses is
+      # pinned and fails on a module whose license it cannot classify.
+      - name: Collect third-party Go module licenses
+        run: |
+          set -euo pipefail
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/google/go-licenses/v2@v2.0.1
+          bundle="$RUNNER_TEMP/third-party-go"
+          mkdir -p "$bundle/go.dev/go" dist/licenses
+          cp "$(go env GOROOT)/LICENSE" "$bundle/go.dev/go/LICENSE"
+          # The binaries scripts/build-release-binaries.mjs builds, with its CGO_ENABLED=0.
+          packages=(./proxy/cmd/caveman-proxy ./engine/cmd/caveman-engine ./mcp/cmd/caveman-mcp
+            ./mem/cmd/cavemem ./browse/cmd/caveman-browse ./shrink/cmd/caveman-shrink)
+          for goos in darwin linux windows; do
+            for goarch in amd64 arm64; do
+              CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" "$RUNNER_TEMP/bin/go-licenses" save "${packages[@]}" \
+                --ignore github.com/JuliusBrussee/caveman --save_path "$RUNNER_TEMP/go-licenses-$goos-$goarch"
+              # -f: go-licenses writes read-only files, and platforms share most of them.
+              cp -Rf "$RUNNER_TEMP/go-licenses-$goos-$goarch/." "$bundle/"
+            done
+          done
+          tar -C "$bundle" --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - . \
+            | gzip -n > dist/licenses/THIRD_PARTY_GO_LICENSES.tar.gz
       # Every binary is Apache-2.0 and embeds MIT pixel/font-licensed code,
       # so the license texts ship with the release and sit in the signed manifest.
       - name: Add license and notice files to the release set

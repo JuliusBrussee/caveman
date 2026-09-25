@@ -1,11 +1,12 @@
 # Changelog
 
-`@caveman-ai/middleware` is pre-1.0. Anything can change between alphas; read
-this file before upgrading. Prereleases publish under the `alpha` npm dist-tag,
-never `latest`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
+`@caveman-ai/middleware` follows semver from 1.0.0: breaking changes wait for a
+new major. Read this file before upgrading. Prereleases publish under their own
+npm dist-tag, never `latest`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
-## Unreleased
+## 1.0.0 — 2026-09-24
 
+- First stable release. Requires `@caveman-ai/sdk` 1.2.0 or later.
 - **Breaking (license):** relicensed from MIT to Apache-2.0, along with the rest of
   the repository in Caveman 3.0.0. Releases before this one keep the MIT license.
 - Release process: prereleases no longer take the `latest` dist-tag, each

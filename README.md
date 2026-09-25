@@ -114,11 +114,11 @@ caveman claude        # or codex · gemini · aider · kilo · qwen · opencode 
 
 ### Your own app: the middleware
 
-Building an agent in code instead of running one in a terminal? Same shrinking, one wrapper around the call you already make. Apache-2.0 client, alpha today:
+Building an agent in code instead of running one in a terminal? Same shrinking, one wrapper around the call you already make. Apache-2.0 client, stable 1.0:
 
 ```bash
 npm install @caveman-ai/middleware @caveman-ai/sdk        # TypeScript, plus your framework (ai, openai, …)
-pip install 'caveman-middleware[langchain]' caveman-sdk   # Python 3.13+, swap the extra for your framework
+pip install 'caveman-middleware[langchain]' caveman-sdk   # Python 3.11+, swap the extra for your framework
 ```
 
 Six lines of code and a local runtime. [Full walkthrough below](#-caveman-in-your-own-app).
@@ -526,7 +526,7 @@ CAVEMAN_MODE=compress caveman start     # binds 127.0.0.1:8787; plain `caveman s
 | **TypeScript** `@caveman-ai/middleware` | Vercel AI SDK · OpenAI · Anthropic · Google GenAI · LangChain · Strands · Mastra · MCP |
 | **Python** `caveman-middleware` | OpenAI · Anthropic · Google GenAI · LangChain + LangGraph · LiteLLM · Strands · Agno · CrewAI · PydanticAI · AutoGen · LlamaIndex · FastAPI · MCP |
 
-Straight talk on the alpha: a runtime left in record mode measures and changes nothing, whichever mode the client asks for, so set both. Decision reports say what was replaced and why, and carry no token counters; provider usage is the only savings number that counts. Runtime unreachable means your original request goes through untouched, unless you opt into strict mode.
+Straight talk: a runtime left in record mode measures and changes nothing, whichever mode the client asks for, so set both. Decision reports say what was replaced and why, and carry no token counters; provider usage is the only savings number that counts. Runtime unreachable means your original request goes through untouched, unless you opt into strict mode.
 
 Docs: [middleware overview](https://docs.caveman.so/docs/sdk/middleware) · [Vercel AI SDK guide](https://docs.caveman.so/docs/sdk/middleware/vercel-ai-sdk) · [Python guide](https://docs.caveman.so/docs/sdk/middleware/python) · [every framework and version](https://docs.caveman.so/docs/sdk/middleware/frameworks) · [deploy beside your app](https://docs.caveman.so/docs/sdk/middleware/deployment) · package READMEs for [TypeScript](./packages/middleware/typescript/README.md) and [Python](./packages/middleware/python/README.md).
 

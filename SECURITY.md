@@ -8,14 +8,15 @@ source; verify the tag you install when policy depends on an exact version.
 | Component | Supported line | Security fixes |
 |---|---|---|
 | Caveman skill, installer, CLI (`@caveman-ai/cli`), runtime binaries (`bin-v*`, container image) | Latest stable release | Yes |
-| SDKs: `@caveman-ai/sdk`, `caveman-sdk` | 1.x, latest minor | Yes |
-| Middleware: `@caveman-ai/middleware`, `caveman-middleware` | 0.x, latest published version (alpha today) | Yes, in the next 0.x version. No backports to older 0.x versions. |
+| SDKs: `@caveman-ai/sdk`, `caveman-sdk` | 1.2.x (latest 1.x minor) | Yes |
+| Middleware: `@caveman-ai/middleware`, `caveman-middleware` | 1.x, latest minor | Yes |
+| Middleware 0.x alphas (`0.1.0-alpha.*`, `0.1.0a1`) | — | No. Upgrade to 1.x. |
 | Anything older than the lines above | — | No |
 
-The `middleware` modules inside the 1.x SDKs (`@caveman-ai/sdk/middleware`,
-`caveman_cloud.middleware`) get security fixes on the SDK 1.x line, but their
-API is experimental like the 0.x middleware packages: it can change in a minor
-release.
+The `middleware` modules inside the SDKs (`@caveman-ai/sdk/middleware`,
+`caveman_cloud.middleware`) get security fixes on the SDK 1.x line. From SDK
+1.2.0 their API is stable and follows semver with the rest of the SDK, because
+the 1.x middleware packages depend on it.
 
 Response policy for reports sent through the channel below:
 
@@ -77,14 +78,13 @@ store:
   recovery grants, and receipts. The replacement text is derived from tool
   output, so it is sensitive too. No provider credentials, no model responses.
 
-Lifecycle **up to and including runtime `bin-v1.1.8`**: originals go into the
+Lifecycle **before runtime `bin-v2.0.0`**: originals go into the
 shared recovery store (`~/.caveman/ccr.db`) in plaintext and are not deleted
 when a session is deleted or expires; retention (`retention_seconds`, default
 24 hours) covers scope metadata only. Delete the recovery store yourself when
 you need the originals gone.
 
-Lifecycle **from the next runtime release after `bin-v1.1.8`** (being built on
-the middleware hardening branch; check the release notes before relying on it):
+Lifecycle **from runtime `bin-v2.0.0`**:
 
 - originals live in the middleware store and belong to their scope, not to the
   shared recovery store;
