@@ -466,6 +466,13 @@ test("telemetry off drops the token watermark so re-enabling re-seeds", async (t
 
   const off = await runCli(["telemetry", "off"], iso.env);
   assert.equal(off.code, 0, off.stderr);
+  // The id leaves the config here; it is the only key to a deletion request.
+  const offOut = JSON.parse(off.stdout);
+  assert.equal(offOut.anonymous_id, "none");
+  assert.equal(offOut.discarded_anonymous_id, "123e4567-e89b-12d3-a456-426614174000");
+  assert.match(offOut.delete_sent_data, /SECURITY\.md#delete-sent-telemetry$/);
+  const again = JSON.parse((await runCli(["telemetry", "off"], iso.env)).stdout);
+  assert.equal("discarded_anonymous_id" in again, false, "an id already discarded is not reprinted");
   const afterOff = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
   assert.ok(!("telemetryTokens" in afterOff), "the watermark must not outlive the opt-out");
 
@@ -771,6 +778,7 @@ test("an interactive run under DO_NOT_TRACK persists the opt-out", async (t) => 
   const cfg = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
   assert.equal(cfg.telemetry.enabled, false);
   assert.ok(!("telemetryTokens" in cfg), "the watermark goes with the decision");
+  assert.match(out.output, /old install id 123e4567-e89b-12d3-a456-426614174000/, "the discarded id is shown for deletion requests");
 });
 
 test("logout preserves telemetry config", async () => {

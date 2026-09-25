@@ -3,7 +3,9 @@
 # Build stage runs on the BUILDER's architecture and cross-compiles with the Go
 # toolchain, so multi-arch images need no QEMU. The runtime stage has no RUN, so
 # nothing ever has to execute a foreign-arch binary during the build.
-FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine AS build
+# Base images are pinned by digest (the tag stays for readability); Dependabot's
+# docker ecosystem proposes digest bumps.
+FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
@@ -46,7 +48,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # distroless static: CA roots for outbound provider TLS, no shell, no package
 # manager, nothing to exploit. The :nonroot tag already runs as uid 65532.
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 # release-binaries.yml passes the tag, commit, and repository URL.
 ARG VERSION=dev
 ARG REVISION=unknown
@@ -60,7 +62,7 @@ LABEL org.opencontainers.image.title="caveman-proxy" \
 COPY --from=build /out/caveman-proxy /caveman-proxy
 # The binary is Apache-2.0 and embeds MIT pixel and font-licensed atlas assets;
 # their license texts and notices ship with every copy.
-COPY LICENSE NOTICE LICENSING.md /licenses/
+COPY LICENSE LICENSE-MIT NOTICE LICENSING.md /licenses/
 COPY engine/pixel/NOTICE /licenses/NOTICE.engine-pixel
 COPY engine/pixel/assets/SPLEEN_LICENSE.txt engine/pixel/assets/UNIFONT_LICENSE.txt /licenses/
 COPY --from=build /out/licenses/third_party /licenses/third_party/

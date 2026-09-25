@@ -33,7 +33,7 @@ updates:
         patterns: ["*"]
 
   # pnpm workspace at the root, plus the packages that release from their own
-  # npm lockfile. packages/agent is a historical copy owned by another repo.
+  # npm lockfile.
   - package-ecosystem: npm
     directories:
       - /

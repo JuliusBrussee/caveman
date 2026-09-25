@@ -9,7 +9,6 @@ Choose either one or install both.
 |---|---|
 | Skill installer | Node.js 18 |
 | `@caveman-ai/cli` | Node.js 22.13 |
-| `@caveman-ai/agent` | Node.js 22.19 |
 | Source build | Go version in [`go.mod`](../../go.mod), Node.js, and pnpm |
 | Browser extension development | Node.js plus pinned Playwright dependencies |
 
@@ -187,6 +186,6 @@ These commands do not delete local usage, CCR, or account state. Review
 
 PowerShell 5.1+ can run root installer shim. Skills CLI may need
 `--copy` when symlink creation is unavailable. Native Windows supports local
-runtime binaries; Agent SDK tools requiring OS-level network isolation should
-run in WSL2. See [Windows fallback](../install-windows.md) for manual plugin
+runtime binaries; tools that need OS-level network isolation should run in
+WSL2. See [Windows fallback](../install-windows.md) for manual plugin
 recovery.

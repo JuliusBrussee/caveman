@@ -600,16 +600,22 @@ test("wrapWorkTags reads the launch repository deterministically and drops unsaf
 
 test("managed claude wrap names repo and branch as x-cave-tags", async () => {
   const repo = await tempRepo("feat/tags", "git@github.com:acme/checkout.git");
-  const out = await wrapAndEchoEnvJson("claude", ["ANTHROPIC_CUSTOM_HEADERS"], {
-    CAVE_GATEWAY_URL: "https://gateway.example.com",
-    ANTHROPIC_CUSTOM_HEADERS: "x-cave-tags: team=billing,branch=user-said-so\nx-other: 1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_SYSTEM: "/dev/null",
-  }, repo);
-  assert.equal(out.code, 0, out.stderr);
-  const lines = JSON.parse(out.stdout).ANTHROPIC_CUSTOM_HEADERS.split("\n");
+  const gitEnv = { CAVE_GATEWAY_URL: "https://gateway.example.com", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+  const headers = async (extra) => {
+    const out = await wrapAndEchoEnvJson("claude", ["ANTHROPIC_CUSTOM_HEADERS"], { ...gitEnv, ...extra }, repo);
+    assert.equal(out.code, 0, out.stderr);
+    return JSON.parse(out.stdout).ANTHROPIC_CUSTOM_HEADERS;
+  };
+  assert.equal(await headers({ ANTHROPIC_CUSTOM_HEADERS: undefined }), "x-cave-tags: repo=acme/checkout,branch=feat/tags");
+  // README promise: a user's own x-cave-tags is sent untouched, nothing appended.
+  const lines = (await headers({ ANTHROPIC_CUSTOM_HEADERS: "x-cave-tags: team=billing\nx-other: 1" })).split("\n");
   assert.ok(lines.includes("x-other: 1"), "unrelated custom headers survive");
-  assert.ok(lines.includes("x-cave-tags: team=billing,branch=user-said-so,repo=acme/checkout"), lines.join(" | "));
+  assert.ok(lines.includes("x-cave-tags: team=billing"), lines.join(" | "));
+  // Present but empty is still the user's value: nothing is added to it.
+  assert.equal(await headers({ ANTHROPIC_CUSTOM_HEADERS: "x-cave-tags:\nx-other: 1" }), "x-cave-tags:\nx-other: 1");
+  // The off switch sends no tags at all.
+  assert.equal(await headers({ ANTHROPIC_CUSTOM_HEADERS: undefined, CAVEMAN_WORK_TAGS: "0" }), null);
+  assert.equal(await headers({ ANTHROPIC_CUSTOM_HEADERS: "x-other: 1", CAVEMAN_WORK_TAGS: "off" }), "x-other: 1");
   // Local mode: the local proxy strips x-cave-* before forwarding, so no tag is written.
   const local = await wrapAndEchoEnvJson("claude", ["ANTHROPIC_CUSTOM_HEADERS"], { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" }, repo);
   assert.equal(local.code, 0, local.stderr);
@@ -617,7 +623,7 @@ test("managed claude wrap names repo and branch as x-cave-tags", async () => {
 });
 
 test("repo slug never carries a remote credential, host or non-GitHub repository", async () => {
-  const { repoSlugFromRemote, mergeWorkTags } = await import(pathToFileURL(join(dirname(cli), "index.js")).href);
+  const { repoSlugFromRemote, workTagsOff } = await import(pathToFileURL(join(dirname(cli), "index.js")).href);
   assert.equal(repoSlugFromRemote("https://user:token@github.com/acme/checkout.git"), "acme/checkout");
   assert.equal(repoSlugFromRemote("git@github.com:acme/checkout"), "acme/checkout");
   assert.equal(repoSlugFromRemote("ssh://git@github.com/acme/checkout.git/"), "acme/checkout");
@@ -626,8 +632,8 @@ test("repo slug never carries a remote credential, host or non-GitHub repository
   assert.equal(repoSlugFromRemote("git@github.example.internal:acme/checkout.git"), "", "an internal mirror is not github.com");
   assert.equal(repoSlugFromRemote("https://github.com/group/sub/project.git"), "", "nested paths are not owner/name");
   assert.equal(repoSlugFromRemote(""), "");
-  assert.equal(mergeWorkTags("", "repo=a/b,branch=x"), "repo=a/b,branch=x");
-  assert.equal(mergeWorkTags("repo=mine/own", "repo=a/b,branch=x"), "repo=mine/own,branch=x");
+  for (const off of ["0", "false", "OFF", " no "]) assert.equal(workTagsOff(off), true, off);
+  for (const on of [undefined, "", "1", "true", "on"]) assert.equal(workTagsOff(on), false, String(on));
 });
 
 test("gemini profile injects distinct Gemini and Vertex local routes", async () => {

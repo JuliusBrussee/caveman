@@ -1,7 +1,6 @@
 # SDKs and public packages
 
-Repository contains standalone packages for application integration, agent
-construction, schemas, evaluation, user-interface labels, provider prices, and
+Repository contains standalone packages for application integration, schemas, evaluation, user-interface labels, provider prices, and
 framework adapters. Package manifests and generated declarations remain exact
 API references; this page explains how pieces fit together.
 

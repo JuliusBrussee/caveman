@@ -256,7 +256,7 @@ Many tool in valley promise small token. They work at different layers, so first
 
 | Tool | What it shrinks | Get the original back? | Phones home |
 |---|---|---|---|
-| **Caveman** | What the agent **says** (skill) and what it **reads**: tool output, logs, JSON, diffs, test output, web pages (proxy) | **Always.** Byte-exact original in local SQLite, one recovery handle | CLI: anonymous counts on by default, `caveman telemetry off`. Skill and hooks: never |
+| **Caveman** | What the agent **says** (skill) and what it **reads**: tool output, logs, JSON, diffs, test output, web pages (proxy) | **Always.** Byte-exact original in local SQLite, one recovery handle | CLI and its agent hooks: usage stats with a random install ID and your IP, on by default, `caveman telemetry off`. Skill alone: never |
 | **[RTK](https://github.com/rtk-ai/rtk)** | Shell command output only: `ls`, `cat`, `grep`, `git`, test runners. `Read` and `Grep` tool calls bypass it | When a command fails or gets cut short, or opt-in for successful runs | Off by default, opt-in |
 | **[Headroom](https://github.com/headroomlabs-ai/headroom)** | Tool output, logs, files, and history, through a local proxy | Yes, reversible cache | On by default, `HEADROOM_BEACON=off` |
 | **[context-mode](https://github.com/mksglu/context-mode)** | Tool output, run in a sandbox so raw data never enters context | Matching sections from a searchable index, not the whole thing back | Never |
@@ -452,7 +452,7 @@ Convert only fires when pages beat the text. Any failure leaves the skill byte-i
 
 `caveman <agent>` turns the proxy on for good and launches the agent. `caveman wrap <agent>` runs one session and leaves nothing behind. It never edits your config files.
 
-In managed mode the wrap also sends the repository (github.com owner/name) and current branch as `x-cave-tags`, so Cloud can join a session's spend to the change it shipped. Branch names can carry a person's name; if that is not acceptable, launch outside a checkout or set your own `x-cave-tags` in `ANTHROPIC_CUSTOM_HEADERS` and the wrap keeps it.
+In managed mode the Claude Code wrap also sends the repository (github.com owner/name) and current branch name as `x-cave-tags`, so Cloud can join a session's spend to the change it shipped. Branch names can carry a person's or customer's name. Not OK? Set `CAVEMAN_WORK_TAGS=0` and no tags go. Or set your own `x-cave-tags` in `ANTHROPIC_CUSTOM_HEADERS`: the wrap sends yours exactly as written and adds nothing.
 
 | Agent                | Vendor           | How it's wrapped                                             |
 | -------------------- | ---------------- | ------------------------------------------------------------ |
@@ -566,11 +566,11 @@ Frozen ones still install and work. Their best ideas moved in here.
 
 ## 🔒 Privacy, and a small favor
 
-Your agent still talks to the provider you chose. The skill and hooks run entirely on your machine, and nothing here needs an account.
+Your agent still talks to the provider you chose. The skill runs entirely on your machine, and nothing here needs an account.
 
 The `caveman` CLI does send usage stats by default, and here's the honest why: caveman is free, one person maintains it, and those stats are how I find out which commands people actually use and which optimizations run in real workflows. That's what keeps this thing free and pointed in the right direction. Fair trade, we think.
 
-What it sends: which commands ran, when your agent starts a session, token counts through and cut, a random install ID, whether you're signed in, how you installed it, your timezone and language, and the IP address the stats come from (IPs get wiped after 90 days). What it never sends: your prompts, your code, or your file paths. It tells you all this the first time you run it.
+What it sends: which commands ran, when your agent starts a session (the CLI's agent hooks send that one), token counts through and cut, a random install ID, your OS and CLI version, whether you're signed in, how you installed it, your timezone and language, and the IP address the stats come from. IPs get wiped after 90 days, everything else after 13 months. What it never sends: your prompts, your code, or your file paths. It tells you all this the first time you run it.
 
 Not into it? One command and it's off forever, no hard feelings:
 
@@ -578,13 +578,15 @@ Not into it? One command and it's off forever, no hard feelings:
 caveman telemetry off      # or set DO_NOT_TRACK=1
 ```
 
+Want what it already sent gone too? `telemetry off` prints your install ID one last time. Send it to us and we delete it all. How: [SECURITY.md](./SECURITY.md#delete-sent-telemetry).
+
 Exact network, telemetry, and storage boundaries: [SECURITY.md](./SECURITY.md).
 
 ---
 
 ## 📜 License
 
-One license: [Apache-2.0](./LICENSE), whole repo, from Caveman 3.0.0 on. Skill, Agent SDK and initializer, CLI, client SDKs, middleware, contracts, provider catalog, extension, and the full runtime: Engine, Proxy, Cache Engine, rewriter, Browse, MCP server, `shrink`, cavemem, shared Go platform. Read it, fork it, ship it, host it. Free like mammoth on open plain.
+One license: [Apache-2.0](./LICENSE), whole repo, from Caveman 3.0.0 on. Skill, CLI, client SDKs, middleware, contracts, provider catalog, extension, and the full runtime: Engine, Proxy, Browse, MCP server, `shrink`, cavemem, shared Go platform. Read it, fork it, ship it, host it. Free like mammoth on open plain.
 
 Releases before 3.0.0 keep the license they shipped with. Details in [LICENSING.md](./LICENSING.md).
 

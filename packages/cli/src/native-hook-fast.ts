@@ -253,12 +253,18 @@ function gitDir(cwd: string): string | undefined {
   }
 }
 
+// Go's nativehook.repositoryStatusBudget, for the same reason: 100ms emptied the
+// state under ordinary load. Only search/test/build tool events pay it, never
+// alongside the prompt-time delegate; with the runtime call's 250ms it stays far
+// inside the host's 30s hook timeout.
+const REPOSITORY_STATUS_TIMEOUT_MS = 500;
+
 function repositoryState(cwd: string | undefined): string | undefined {
   if (!cwd) return undefined;
   try {
     const status = execFileSync("git", hardenedGitArgs(cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"), {
       env: hardenedGitEnv(),
-      timeout: 100, maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"],
+      timeout: REPOSITORY_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"],
     });
     const directory = gitDir(cwd);
     if (!directory) return undefined;

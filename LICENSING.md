@@ -2,7 +2,7 @@
 
 Everything in this repository is licensed under the Apache License, Version 2.0,
 starting with Caveman 3.0.0. That covers the skill, CLI, SDKs, middleware,
-extension, and the whole runtime: Engine, Proxy, rewriter, Browse, MCP server,
+extension, and the whole runtime: Engine, Proxy, Browse, MCP server,
 `shrink`, the cavemem Go core, and the shared Go platform.
 
 Caveman Cloud, the hosted service, is separate commercial software. Its source
@@ -12,6 +12,8 @@ is not in this repository and this license does not cover it.
 
 - Root `LICENSE` is the verbatim Apache License 2.0 text.
 - Root `NOTICE` carries the copyright line and third-party attributions.
+- Root `LICENSE-MIT` keeps the MIT License text that covered the MIT parts of
+  the repository before 3.0.0 (see below).
 - Every directory that ships its own `LICENSE` (npm and PyPI packages, the npm
   launchers, the Go modules) carries a byte-identical copy of the root `LICENSE`.
 
@@ -32,6 +34,11 @@ repository.
 
 Releases published before 3.0.0 keep the terms they shipped with. The Apache
 license applies to 3.0.0 and later.
+
+Outside contributors wrote code in the formerly MIT parts under MIT terms.
+That code stays available under the MIT License, whose notice must travel with
+it, so the pre-3.0.0 MIT text is kept verbatim in `LICENSE-MIT` and referenced
+from `NOTICE`.
 
 ## Contributions
 

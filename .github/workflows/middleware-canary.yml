@@ -46,6 +46,7 @@ jobs:
       - run: pnpm --filter @caveman-ai/middleware test
         env:
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
+      - run: node packages/middleware/typescript/scripts/check-latest-in-range.mjs
 
   # Separate job: code from upstream @latest never runs with issue-write
   # credentials, and there is no checkout to tamper with.

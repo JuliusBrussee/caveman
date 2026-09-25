@@ -496,6 +496,8 @@ const TELEMETRY_PROMPT_VERSION = 5;
 // Supabase Edge Function; source and schema live in supabase/ at the repo root.
 const TELEMETRY_URL = "https://xvfgtprkhzlvegvmeefq.supabase.co/functions/v1/cli-telemetry";
 const PROD_API_URL = "https://api.caveman.so";
+// Where `telemetry off` points someone who wants already-sent events deleted.
+const TELEMETRY_DELETION_URL = "https://github.com/JuliusBrussee/caveman/blob/main/SECURITY.md#delete-sent-telemetry";
 const TELEMETRY_DISCLOSURE_LINE =
   "usage stats on — commands, agent sessions, token totals, account and install type, timezone and language, and your IP address; never prompts, code, or file paths · caveman telemetry off";
 // Reading token totals means spawning caveman-proxy to query the local SQLite
@@ -667,6 +669,11 @@ async function persistTelemetryEnvKill(state: TelemetryRuntimeState) {
     });
   } catch {
     /* best effort: the env var still wins for this process */
+    return;
+  }
+  // The id is gone from disk now, and it is the only key to a deletion request.
+  if (state.config.anonymousId) {
+    process.stderr.write(`${dim(`telemetry off · old install id ${state.config.anonymousId} · delete what it sent: ${TELEMETRY_DELETION_URL}`)}\n`);
   }
 }
 
@@ -779,6 +786,7 @@ async function telemetryOn() {
 }
 
 async function telemetryOff() {
+  const prior = telemetryConfigFromDisk();
   const telemetry: TelemetryConfig = {
     enabled: false,
     decidedAt: new Date().toISOString(),
@@ -794,6 +802,12 @@ async function telemetryOff() {
     });
   } catch {
     /* best effort: the decision itself is already persisted */
+  }
+  // The id leaves the config here, and it is the only key to events already
+  // sent, so show it once with where to ask for their deletion.
+  if (prior?.anonymousId) {
+    print({ telemetry: "off", anonymous_id: "none", discarded_anonymous_id: prior.anonymousId, delete_sent_data: TELEMETRY_DELETION_URL });
+    return;
   }
   print({ telemetry: "off", anonymous_id: "none" });
 }
@@ -2456,7 +2470,23 @@ function verifiedLocalInstall(binDir: string): InstalledBinary[] | null {
   return installed;
 }
 
-function parseSignedChecksums(raw: string): Map<string, string> {
+// A signed manifest names its release through a `RELEASE` entry: the sha256 of
+// the release asset `RELEASE`, whose content is "<tag>\n". Without it, anyone
+// able to edit a release page could serve an older, validly signed manifest
+// and its binaries. It rides as an ordinary checksum line so the shipped
+// wedge installers' strict parsers keep accepting the manifest. Releases
+// before bin-v2.0.0 were signed without it, so it is required from there on.
+const FIRST_RELEASE_WITH_SIGNED_NAME = [2, 0, 0];
+
+function releaseRequiresSignedName(release: string): boolean {
+  const match = release.match(/^bin-v(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return true;
+  const version = match.slice(1, 4).map(Number);
+  const i = version.findIndex((part, index) => part !== FIRST_RELEASE_WITH_SIGNED_NAME[index]);
+  return i === -1 || version[i]! > FIRST_RELEASE_WITH_SIGNED_NAME[i]!;
+}
+
+export function parseSignedChecksums(raw: string, release: string = BINARY_RELEASE): Map<string, string> {
   const checksums = new Map<string, string>();
   for (const line of raw.split("\n")) {
     if (!line) continue;
@@ -2465,6 +2495,10 @@ function parseSignedChecksums(raw: string): Map<string, string> {
     const filename = match[2]!;
     if (checksums.has(filename)) throw new Error(`duplicate checksum manifest entry: ${filename}`);
     checksums.set(filename, match[1]!);
+  }
+  const signedName = checksums.get("RELEASE");
+  if (signedName === undefined ? releaseRequiresSignedName(release) : signedName !== createHash("sha256").update(`${release}\n`).digest("hex")) {
+    throw new Error(`manifest is not signed for release ${release}`);
   }
   return checksums;
 }
@@ -2638,8 +2672,8 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
   let checksums: Map<string, string>;
   try {
     checksums = parseSignedChecksums(checksumsRaw!);
-  } catch {
-    throw new Error("signature check failed for checksums.txt — refusing to install; partial download deleted");
+  } catch (error) {
+    throw new Error(`signature check failed for checksums.txt (${(error as Error).message}) — refusing to install; partial download deleted`);
   }
 
   const installed: InstalledBinary[] = [];
@@ -9771,26 +9805,20 @@ function mergeAnthropicCustomHeader(raw: string | undefined, name: string, value
 }
 
 // existingCustomHeader returns the value of one header inside the newline-
-// separated ANTHROPIC_CUSTOM_HEADERS block, or "" when absent.
-function existingCustomHeader(raw: string | undefined, name: string): string {
+// separated ANTHROPIC_CUSTOM_HEADERS block ("" when present but empty), or
+// undefined when absent.
+function existingCustomHeader(raw: string | undefined, name: string): string | undefined {
   const target = name.toLowerCase();
   for (const line of (raw ?? "").split(/\r\n|\n|\r/)) {
     const colon = line.indexOf(":");
     if (colon > 0 && line.slice(0, colon).trim().toLowerCase() === target) return line.slice(colon + 1).trim();
   }
-  return "";
+  return undefined;
 }
 
-// mergeWorkTags adds the repo/branch entries of `computed` that `existing`
-// (a caller's own "k=v,k=v" tag list) does not already name.
-export function mergeWorkTags(existing: string, computed: string): string {
-  const entries = existing.split(",").map((part) => part.trim()).filter(Boolean);
-  const keys = new Set(entries.map((part) => part.slice(0, part.indexOf("=") < 0 ? part.length : part.indexOf("="))));
-  for (const part of computed.split(",").filter(Boolean)) {
-    const key = part.slice(0, part.indexOf("="));
-    if (!keys.has(key)) entries.push(part);
-  }
-  return entries.join(",");
+// workTagsOff: CAVEMAN_WORK_TAGS=0 (or false/off/no) stops the repo/branch tags.
+export function workTagsOff(value: string | undefined): boolean {
+  return /^(0|false|off|no)$/i.test((value ?? "").trim());
 }
 
 function bedrockCredentialEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -9976,8 +10004,10 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
   if (agent.id === "claude" && wrapMode(gw) === "managed") {
     // Repository and branch ride every request as x-cave-tags so the managed
     // gateway can join this session's spend to the change it ships. A user's
-    // own x-cave-tags keeps its keys; only repo/branch it did not set are added.
-    const tags = mergeWorkTags(existingCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags"), wrapWorkTags());
+    // own x-cave-tags is sent exactly as set (even empty), and CAVEMAN_WORK_TAGS=0 sends none.
+    const tags = workTagsOff(env.CAVEMAN_WORK_TAGS) || existingCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags") !== undefined
+      ? ""
+      : wrapWorkTags();
     if (tags) env.ANTHROPIC_CUSTOM_HEADERS = mergeAnthropicCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags", tags);
   }
   if (agent.id === "claude" && wrapMode(gw) === "local" && env[CLAUDE_ASSUME_FIRST_PARTY_ENV] === undefined && proxyAnthropicUpstreamIsFirstParty()) {
@@ -14431,7 +14461,7 @@ function nativeRepositoryState(cwd: string | undefined): string | undefined {
   try {
     const status = execFileSync("git", hardenedGitArgs(cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"), {
       env: hardenedGitEnv(),
-      timeout: 100,
+      timeout: 500, // same budget as nativehook.repositoryStatusBudget; 100ms emptied the state under load
       maxBuffer: 8 * 1024 * 1024,
       encoding: "buffer",
       stdio: ["ignore", "pipe", "ignore"],

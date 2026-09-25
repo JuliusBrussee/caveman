@@ -92,8 +92,8 @@ jobs:
           CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}/caveman-proxy
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
 
-  # Its own job: `pnpm -r test` stops at the first failing package, and a red
-  # historical packages/agent copy used to mean these suites never ran.
+  # Its own job: `pnpm -r test` stops at the first failing package, so a red
+  # suite elsewhere in the workspace must not keep these from running.
   middleware-typescript:
     name: middleware-typescript / node ${{ matrix.node }}
     runs-on: ubuntu-latest

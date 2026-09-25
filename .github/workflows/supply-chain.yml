@@ -61,13 +61,16 @@ jobs:
           set -euo pipefail
           mapfile -t extras < <(python -c 'import tomllib; print("\n".join(tomllib.load(open("packages/middleware/python/pyproject.toml","rb"))["project"]["optional-dependencies"]))')
           certified=" langchain openai anthropic litellm "
+          # The middleware requires the in-repo SDK version, which reaches PyPI
+          # only when released; resolve it from a local wheel instead.
+          python -m pip wheel --disable-pip-version-check --quiet --no-deps -w "$RUNNER_TEMP/local-wheels" ./packages/sdk/python
           failed=()
           for extra in "${extras[@]}"; do
             echo "::group::caveman-middleware[$extra]"
             report="$RUNNER_TEMP/resolve-$extra.json"
             python -m pip install --disable-pip-version-check --quiet --dry-run --ignore-installed \
-              --report "$report" "./packages/middleware/python[$extra]"
-            # Our own distributions are not on PyPI at this version; audit the rest.
+              --find-links "$RUNNER_TEMP/local-wheels" --report "$report" "./packages/middleware/python[$extra]"
+            # Our own distributions are local builds; audit the rest.
             python -c 'import json,sys; [print(m["name"] + "==" + m["version"]) for m in (i["metadata"] for i in json.load(open(sys.argv[1]))["install"]) if not m["name"].startswith("caveman-")]' "$report" > "$RUNNER_TEMP/pins-$extra.txt"
             if ! pip-audit --progress-spinner off --no-deps --disable-pip -r "$RUNNER_TEMP/pins-$extra.txt"; then
               if [[ "$certified" == *" $extra "* ]]; then

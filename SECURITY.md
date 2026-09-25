@@ -40,9 +40,9 @@ reporting](https://github.com/JuliusBrussee/caveman/security/advisories/new).
 | Caveman skill and classic output hooks | No | Local agent context and local files. These components do not directly call a Caveman service. |
 | Local Proxy + Engine | No | Request content, possibly transformed, and provider credentials go to the provider selected by the agent. Recovery originals stay in local CCR storage unless the agent retrieves and sends them later. |
 | Agent SDK `observe-only` | No | Directly to the configured provider. No Caveman gateway telemetry. |
-| Managed Caveman gateway | Yes | Requests and responses transit Caveman Cloud and the selected provider. Do not treat managed mode as local-only. |
+| Managed Caveman gateway | Yes | Requests and responses transit Caveman Cloud and the selected provider. Do not treat managed mode as local-only. A managed Claude Code wrap also sends the launch repository (github.com `owner/name` only) and the current branch name on every request as `x-cave-tags`. Branch names can contain people's or customers' names: `CAVEMAN_WORK_TAGS=0` sends no tags, and your own `x-cave-tags` in `ANTHROPIC_CUSTOM_HEADERS` is sent exactly as set instead. |
 | Framework middleware (client, adapters, and the runtime you host) | No | Your app keeps calling its provider directly. The adapters send eligible tool-result text to the runtime you point them at, and the runtime stores the originals so the model can fetch them back. Nothing goes to Caveman servers. See [Framework middleware data](#framework-middleware-data). |
-| CLI usage telemetry | No | Content-free usage events, including token counts processed and saved, go to Caveman by default (opt-out) and are stored with the sender's IP address. First interactive run prints the disclosure; `caveman telemetry off` or `DO_NOT_TRACK=1` turns it off for good. |
+| CLI usage telemetry | No | Content-free usage events, including token counts processed and saved, go to Caveman by default (opt-out) and are stored with the sender's IP address (IPs cleared after 90 days, events deleted after 13 months). First interactive run prints the disclosure; `caveman telemetry off` or `DO_NOT_TRACK=1` turns it off for good. |
 | Authenticated dashboard sync | Yes | Local span metadata and aggregate findings go to Caveman Cloud when credentials are present. Raw prompt and response bodies are excluded. |
 
 Your model provider, MCP servers, browser targets, agent plugins, and any command
@@ -138,8 +138,13 @@ interactive command sees `DO_NOT_TRACK` or `CAVEMAN_TELEMETRY=0` while the saved
 choice is on, it saves a lasting opt-out. `caveman telemetry off` does the same
 immediately.
 
-`CAVEMAN_TELEMETRY_URL` overrides the destination, mainly for testing. Telemetry
-requests time out after 1.5 seconds and failures do not fail the CLI command.
+`CAVEMAN_TELEMETRY_URL` overrides the destination, mainly for testing. Events are
+sent by a detached background process that gives up after 10 seconds, so no
+command waits on the network; if that process cannot start, the CLI sends
+in-process with a 1.5-second limit. Failures never fail the CLI command. The
+request is a JSON `POST` with no browser headers; the receiver drops requests
+that carry `Origin` or `Sec-Fetch-Site` or are not `application/json`, so a web
+page cannot post events on a visitor's behalf.
 
 When the disclosed scope widens, the persisted decision carries the wording
 version it was made under. A wider scope reprints the disclosure once on the next
@@ -150,9 +155,9 @@ and install type, timezone, and locale.
 
 This telemetry is pseudonymous, not anonymous: the install ID links one
 install's events together, and the stored IP address shows where they came
-from. IP addresses are cleared from stored events after 90 days; the rest of
-each event is kept. Separately, Supabase's platform request logs record each
-request's IP address and approximate location derived by Cloudflare (city,
+from. IP addresses are cleared from stored events after 90 days, and whole
+events are deleted 13 months after they were received. Separately, Supabase's
+platform request logs record each request's IP address and approximate location derived by Cloudflare (city,
 region, country, network) for the Supabase plan's log retention period; the
 90-day clearing covers the events table, not those logs.
 
@@ -179,10 +184,13 @@ Events can contain:
   binary is present the fields are omitted rather than reported as zero. The
   first read on a machine only records a baseline and reports nothing, so a store
   holding traffic from before this disclosure is never reported retroactively;
-- local Proxy session aggregates: request and token counts, compression counts,
-  cache read/write counts, measurement mode, and headline-suppression state;
+- local Proxy session aggregates: request and token counts, compression-eligible
+  request counts, compression before/after/saved token counts, estimated cuts,
+  cache read/write token counts, cache-bust request counts, measurement mode, and
+  headline-suppression state;
 - first-run aggregate scan counts from local Claude Code or Codex history,
-  including sessions, tokens, estimated cuts, scan timing, and whether an
+  including sessions, tokens, estimated cuts, scan timing, whether the scan
+  succeeded, hit its time limit, or used the local Engine, and whether an
   account was already connected;
 - Caveman MCP tool name, duration, and outcome.
 
@@ -194,6 +202,22 @@ rows/files. Source enforcement and runtime tests live in
 and the receiving side in
 [`supabase/functions/cli-telemetry/`](./supabase/functions/cli-telemetry/), which
 stores only the fields listed above and drops malformed events.
+
+### Delete sent telemetry
+
+`caveman telemetry status` shows your install ID while telemetry is on.
+`caveman telemetry off` removes the ID from your machine and prints it once as
+`discarded_anonymous_id`; an interactive command that turns telemetry off
+because of `DO_NOT_TRACK` or `CAVEMAN_TELEMETRY=0` prints it too. Keep it: it is
+the only way to find your events, because Caveman does not know which install
+is yours.
+
+To have every stored event for an install ID deleted, send the ID through
+[GitHub private vulnerability
+reporting](https://github.com/JuliusBrussee/caveman/security/advisories/new)
+with "telemetry deletion" in the title. Deletion covers the events table;
+Supabase's platform request logs expire on their own schedule and cannot be
+deleted per install.
 
 ## Authenticated Caveman Cloud traffic
 
@@ -299,9 +323,27 @@ third-party tools trustworthy.
 Network installers fetch source from GitHub and may invoke npm or agent-specific
 registries. Per-agent installers can contact Anthropic/GitHub, Gemini extension,
 the Oh My Pi plugin manager, npm, or other configured registries. Detached hook
-installation downloads files from an immutable release tag and verifies SHA-256
-manifest entries. Runtime companion setup downloads a signed checksum manifest
-and verifies each binary's signature and SHA-256 before installation.
+installation downloads files pinned to a release tag (never the moving `main`
+branch) and checks each against the SHA-256 manifest committed at that same
+tag. If that manifest cannot be fetched or any file does not match, no hook is
+installed and `settings.json` is not changed. That catches corrupt, partial, or
+mismatched downloads; because manifest
+and files come from the same tag, it does not protect against the tag itself
+being moved. Git tags in this repository are not yet protected against moves or
+deletion, and GitHub immutable releases are not yet enabled. Runtime companion
+setup downloads a checksum manifest, verifies its signature against the public
+key compiled into the CLI, then verifies each binary's SHA-256 against that
+manifest before installation. A valid manifest needs the signing key, which is
+stored only as a secret of the release workflow's environment, so editing a tag
+or release page cannot forge one. From runtime `bin-v2.0.0` the signed manifest
+also names its release (a `RELEASE` entry: the SHA-256 of the attached
+`RELEASE` file, which holds the tag), and `caveman setup --install` and
+`caveman update` refuse a manifest that does not name the exact release the CLI
+pins, so an older signed manifest and its binaries cannot be served in its
+place. A CLI pinned to an earlier runtime accepts a manifest without the entry.
+The standalone binary installers in the browse, MCP, and shrink npm packages
+pin `bin-v2.0.0` and always require that entry, on top of the signature and
+each digest.
 
 For inspection-first installation, clone a pinned tag and run the local installer
 instead of piping a remote script into a shell. A source clone avoids installer

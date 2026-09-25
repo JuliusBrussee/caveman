@@ -766,6 +766,14 @@ def verify_license_boundaries() -> None:
     )
     notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
     ensure("Copyright 2026 Julius Brussee" in notice, "root NOTICE missing copyright line")
+    # Pre-3.0.0 contributions to the formerly MIT parts keep their MIT notice:
+    # LICENSE-MIT is that verbatim text (not matched by the LICENSE copy check).
+    ensure(
+        hashlib.sha256((ROOT / "LICENSE-MIT").read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+        == "5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb",
+        "LICENSE-MIT is not the verbatim pre-3.0.0 MIT License text",
+    )
+    ensure("LICENSE-MIT" in notice, "root NOTICE must point to LICENSE-MIT")
 
     tracked = [p for p in run(["git", "ls-files", "-z"]).stdout.split("\0") if p and (ROOT / p).is_file()]
     license_files = [
@@ -794,7 +802,7 @@ def verify_license_boundaries() -> None:
     ensure(not wrong_metadata, f"license metadata must be Apache-2.0: {wrong_metadata}")
 
     # The old split license survives only as history.
-    history = {"ANNOUNCEMENT.md", "LICENSING.md", "tests/verify_repo.py"}
+    history = {"LICENSING.md", "tests/verify_repo.py"}
     stale = re.compile(r"\bBUSL\b|\bBSL\b|Business Source")
     leftovers = []
     for p in tracked:
@@ -888,7 +896,6 @@ def verify_release_metadata() -> None:
     # Every published artifact carries LICENSE and NOTICE: npm packages list both
     # in `files`, Python packages in `license-files`.
     unpublished = {
-        "packages/agent", "packages/create-caveman-agent",  # source of truth: caveman-agent-sdk
         "packages/device-auth", "mem/js", "shared/provider-catalog", "src/hooks",  # not published from here
     }
     tracked = run(["git", "ls-files", "-z", "--", "*package.json", "*pyproject.toml"]).stdout.split("\0")

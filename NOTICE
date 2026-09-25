@@ -1,6 +1,12 @@
 Caveman
 Copyright 2026 Julius Brussee
 
+Before Caveman 3.0.0, the parts of this repository outside the Engine-linked
+runtime were licensed under the MIT License (see LICENSING.md). Contributions
+made to those parts before 3.0.0 were received under the MIT License and remain
+available under it. Its copyright and permission notice is retained in
+LICENSE-MIT.
+
 This product includes third-party software:
 
 - engine/pixel/ is a Go port of pxpipe (https://github.com/teamchong/pxpipe),

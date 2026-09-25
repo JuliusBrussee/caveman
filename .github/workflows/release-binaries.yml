@@ -157,11 +157,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/licenses
-          cp LICENSE NOTICE LICENSING.md dist/licenses/
+          cp LICENSE LICENSE-MIT NOTICE LICENSING.md dist/licenses/
           cp engine/pixel/NOTICE dist/licenses/NOTICE.engine-pixel
           cp engine/pixel/assets/SPLEEN_LICENSE.txt engine/pixel/assets/UNIFONT_LICENSE.txt dist/licenses/
           cp browse/NOTICE dist/licenses/NOTICE.browse
           (cd dist/licenses && sha256sum -- *) >> dist/binaries/checksums.txt
+      # The signed manifest names its release: a RELEASE asset holding the tag,
+      # listed like any other file. The CLI (pins from bin-v2.0.0) refuses a
+      # manifest naming another release, so an older signed manifest cannot be
+      # served in this one's place. The signer refuses a manifest without it.
+      - name: Name the release in the checksum manifest
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          printf '%s\n' "$GITHUB_REF_NAME" > dist/release/RELEASE
+          (cd dist/release && sha256sum -- RELEASE) >> dist/binaries/checksums.txt
       - name: Sign checksum manifest with pinned release key
         env:
           CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM }}
@@ -170,6 +180,7 @@ jobs:
           dist/binaries/checksums.txt
           dist/binaries/checksums.txt.keysig
           packages/cli/BINARY_SIGNING_PUBKEY.pub
+          "$GITHUB_REF_NAME"
       # Before the release is published, so a broken image blocks the release
       # instead of shipping a tag whose container never built. Plain docker
       # commands only: every action here is SHA-pinned and no new SHA can be
@@ -184,7 +195,9 @@ jobs:
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           # No QEMU setup: the Dockerfile's build stage runs on $BUILDPLATFORM and
           # cross-compiles with the Go toolchain, and the final stage has no RUN.
-          docker buildx create --use
+          # BuildKit pinned by digest (buildx's default builder image floats).
+          docker buildx create --use \
+            --driver-opt image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --provenance=true --sbom=true \
@@ -193,11 +206,11 @@ jobs:
             --build-arg SOURCE="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --metadata-file "$RUNNER_TEMP/image-metadata.json" \
             -t "ghcr.io/$owner/caveman-proxy:$GITHUB_REF_NAME" \
-            -t "ghcr.io/$owner/caveman-proxy:latest" \
             --push .
           digest="$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/image-metadata.json")"
           [[ "$digest" == sha256:* ]] || { echo "no pushed image digest in buildx metadata" >&2; exit 1; }
           echo "IMAGE_REF=ghcr.io/$owner/caveman-proxy@$digest" >> "$GITHUB_ENV"
+          echo "IMAGE_LATEST=ghcr.io/$owner/caveman-proxy:latest" >> "$GITHUB_ENV"
       # Keyless: the certificate names this workflow and tag, and the signature
       # is logged in Rekor. Verify with
       #   cosign verify ghcr.io/<owner>/caveman-proxy:<tag> \
@@ -220,7 +233,33 @@ jobs:
             echo "release $GITHUB_REF_NAME already exists; refusing overwrite" >&2
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" dist/binaries/* dist/licenses/* \
+          # --latest=false: the repo's "Latest" badge belongs to the Caveman
+          # product release (v*), not to a runtime companion release.
+          gh release create "$GITHUB_REF_NAME" dist/binaries/* dist/licenses/* dist/release/* \
             --repo "$GITHUB_REPOSITORY" \
+            --latest=false \
             --title "$GITHUB_REF_NAME" \
             --notes "Signed Caveman runtime companions for macOS, Linux, and Windows. The binaries are licensed under the Apache License 2.0 (LICENSE, NOTICE); see LICENSING.md and the attached third-party notices."
+      # Last: `latest` moves only to an image that is signed and whose release
+      # exists. Same digest as the version tag; no rebuild. Only a stable tag
+      # that is the highest stable bin-v* moves it, so an older-line patch or a
+      # prerelease never takes `latest` backwards.
+      - name: Point caveman-proxy:latest at the signed image
+        run: |
+          set -euo pipefail
+          stable='^bin-v[0-9]+\.[0-9]+\.[0-9]+$'
+          if [[ ! "$GITHUB_REF_NAME" =~ $stable ]]; then
+            echo "$GITHUB_REF_NAME is a prerelease; latest unchanged"
+            exit 0
+          fi
+          highest="$(git tag -l 'bin-v*' --sort=-v:refname | grep -E "$stable" | awk 'NR == 1')"
+          if [[ "$highest" != "$GITHUB_REF_NAME" ]]; then
+            echo "$highest is newer than $GITHUB_REF_NAME; latest unchanged"
+            exit 0
+          fi
+          docker buildx imagetools create -t "$IMAGE_LATEST" "$IMAGE_REF"
+          got="$(docker buildx imagetools inspect "$IMAGE_LATEST" --format '{{json .Manifest}}' | jq -r .digest)"
+          [[ "$got" == "${IMAGE_REF##*@}" ]] || {
+            echo "latest resolves to $got, not the signed ${IMAGE_REF##*@}" >&2
+            exit 1
+          }

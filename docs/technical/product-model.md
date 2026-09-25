@@ -14,7 +14,7 @@ independently.
 | Engine | Detect payload shape, apply a matching transform, count estimated tokens, and store recoveries | No | Apache-2.0 |
 | Local proxy | Route provider requests through Engine and write local usage rows | No | Apache-2.0 |
 | MCP, memory, browser, and shrink binaries | Expose recovery and specialized local context tools | No | Apache-2.0 |
-| SDKs and Agent SDK | Add tracing, context assembly, tools, evals, and provider routing to application code | Local use needs no account | Apache-2.0 |
+| SDKs and middleware | Add compression, context assembly, tools, tracing, and provider routing to application code | Local use needs no account | Apache-2.0 |
 | Connected commands | Access an authenticated hosted project | Yes | CLI remains Apache-2.0 |
 
 The whole repository is Apache-2.0; see [`LICENSING.md`](../../LICENSING.md).
@@ -105,7 +105,6 @@ stays `inferred` even when its result looks plausible.
 | Provider SDK integration | Change base URL or use `@caveman-ai/sdk` |
 | Durable local memory | `caveman tools mem` |
 | Compressed browser context | `caveman tools browse` |
-| Build a TypeScript agent | `npm create @caveman-ai/agent@latest` |
 
 Start with one layer. Add another only when its measured result clears its
 overhead for your workload.
