@@ -82,13 +82,16 @@ export class CircuitBreaker {
   }
 }
 
-/** Spec §10: optimize = override, else capabilities `deadline_ms`, else 500; retrieve/delete = override, else
- * `retrieve_deadline_ms`, else 5000. */
+/** Spec §10: optimize = override, else capabilities `deadline_ms` (capped at 5000), else 500; retrieve/delete =
+ * override, else `retrieve_deadline_ms` (capped at 30000), else 5000. Every result is capped at 2**31 - 1 ms, the
+ * largest delay setTimeout honors. */
 export function resolveDeadlines(options: { readonly deadlineMs?: number | null | undefined; readonly retrieveDeadlineMs?: number | null | undefined },
   limits?: { readonly deadline_ms?: unknown; readonly retrieve_deadline_ms?: unknown } | null): { optimizeMs: number; retrieveMs: number } {
-  const pick = (...values: unknown[]) => values.find(positive) as number;
-  return { optimizeMs: pick(options.deadlineMs, limits?.deadline_ms, MIDDLEWARE_DEFAULTS.bootstrap_deadline_ms),
-    retrieveMs: pick(options.retrieveDeadlineMs, limits?.retrieve_deadline_ms, MIDDLEWARE_DEFAULTS.retrieve_deadline_ms) };
+  const d = MIDDLEWARE_DEFAULTS;
+  const pick = (override: unknown, limit: unknown, cap: number, fallback: number) =>
+    Math.min(positive(override) ? override : positive(limit) ? Math.min(limit, cap) : fallback, d.timer_cap_ms);
+  return { optimizeMs: pick(options.deadlineMs, limits?.deadline_ms, d.deadline_cap_ms, d.bootstrap_deadline_ms),
+    retrieveMs: pick(options.retrieveDeadlineMs, limits?.retrieve_deadline_ms, d.retrieve_deadline_cap_ms, d.retrieve_deadline_ms) };
 }
 
 /** Spec §11: previously replaced keys first (input order), then newest first; first-fit; results in input order. */
@@ -115,20 +118,33 @@ export async function opaqueManifestValue(value: unknown): Promise<OpaqueManifes
   return { caveman_opaque: bytes ? await sha256(bytes) : typeof value === 'string' && value.isWellFormed() ? await sha256(value) : 'unhashable' };
 }
 
+const ENDPOINT = /^(https?):\/\/(\[[0-9a-f:.]+\]|[a-z0-9_.-]+)(?::([1-9][0-9]{0,4}))?((?:\/[A-Za-z0-9._~-]+)*)\/?$/i;
+const OCTET = /^(0|[1-9][0-9]{0,2})$/;
+/** Spec §15 host grammar: a bracketed IPv6 literal, a canonical dotted quad, or a name that does not end in a number
+ * (127.1, 0x7f.1 and 2130706433 are IPv4 to URL parsers; they are refused, never reinterpreted). */
+function endpointHost(host: string): boolean {
+  const labels = (host.endsWith('.') ? host.slice(0, -1) : host).split('.'), last = labels.at(-1) ?? '';
+  if (host.startsWith('[') || !labels.every(Boolean)) return host.startsWith('[');
+  if (!/^\d+$/.test(last) && !last.startsWith('0x')) return true;
+  return !host.endsWith('.') && labels.length === 4 && labels.every(x => OCTET.test(x) && Number(x) <= 255);
+}
+
 /** Spec §15: the base URL (prefix preserved, trailing `/`) that routes are appended to. Throws MiddlewareError with
- * `invalid_endpoint`, `remote_content_not_enabled` or `insecure_transport_not_enabled`. */
+ * `invalid_endpoint`, `remote_content_not_enabled` or `insecure_transport_not_enabled`. Strict: whitespace or control
+ * characters anywhere, percent-encoding, userinfo, query, fragment, an empty or leading-zero port and numeric host
+ * shorthands are all `invalid_endpoint`. Scheme and host are lowercased; nothing else is rewritten. */
 export function resolveEndpoint(endpoint: unknown, options: { readonly allowRemoteContent?: boolean | undefined; readonly allowInsecureTransport?: boolean | undefined } = {}): string {
-  // Validate the raw text: URL parsing would resolve `..`, drop an empty `?`/`#` and hide `@` userinfo.
-  const raw = typeof endpoint === 'string' ? /^https?:\/\/[^/?#@]+(\/[^?#]*)?$/i.exec(endpoint) : null;
-  const path = (raw?.[1] ?? '').replace(/\/$/, '');
+  // Validate the raw text: URL parsing would trim whitespace, drop tabs, resolve `..` and reinterpret numeric hosts.
+  const m = typeof endpoint === 'string' ? ENDPOINT.exec(endpoint) : null;
+  const [scheme = '', host = '', port = '', path = ''] = m ? [m[1]!.toLowerCase(), m[2]!.toLowerCase(), m[3] ?? '', m[4] ?? ''] : [];
   let url: URL;
-  try { url = new URL(endpoint as string); } catch { throw new MiddlewareError('invalid_endpoint'); }
-  if (!raw || !path.split('/').slice(1).every(s => /^[A-Za-z0-9._~-]+$/.test(s) && s !== '.' && s !== '..')) throw new MiddlewareError('invalid_endpoint');
+  try { url = new URL(`${scheme}://${host}`); } catch { throw new MiddlewareError('invalid_endpoint'); }
+  if (!m || Number(port) > 65535 || !endpointHost(host) || path.split('/').some(s => s === '.' || s === '..')) throw new MiddlewareError('invalid_endpoint');
   if (!LOOPBACK.has(url.hostname)) {
     if (!options.allowRemoteContent) throw new MiddlewareError('remote_content_not_enabled');
-    if (url.protocol === 'http:' && !options.allowInsecureTransport) throw new MiddlewareError('insecure_transport_not_enabled');
+    if (scheme === 'http' && !options.allowInsecureTransport) throw new MiddlewareError('insecure_transport_not_enabled');
   }
-  return `${url.origin}${path}/`;
+  return `${scheme}://${host}${port ? `:${port}` : ''}${path}/`;
 }
 
 const isIp = (host: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');

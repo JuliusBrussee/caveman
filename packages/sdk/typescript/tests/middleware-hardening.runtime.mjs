@@ -1,10 +1,14 @@
 // Protocol 1.1 client hardening (docs/plans/middleware-enterprise-hardening.md, findings B3–B12).
 // Every finding test here fails against the SDK 1.1.0 middleware client; the close() test guards the B7 rewrite.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import util from 'node:util';
 import v8 from 'node:v8';
@@ -148,6 +152,38 @@ test('Retry-After on 429 suppresses optimize-path I/O for its window', async () 
     await runtime.optimize(input(binding));
     assert.equal(posts, 2);
   } finally { runtime.close(); }
+});
+
+test('breaker, Retry-After and the capabilities TTL use a monotonic clock: a wall-clock step cannot hold the breaker open', async () => {
+  let posts = 0;
+  const runtime = createMiddlewareRuntime({ deadlineMs: 5000, fetch: async url => url.endsWith('/capabilities') ? Response.json(caps)
+    : (posts++, Response.json({ schema_version: 1, error: { code: 'runtime_unavailable' } }, { status: 503 })) });
+  const wallNow = Date.now, monoNow = performance.now;
+  let wall = 0, mono = 0;
+  Date.now = () => wallNow() + wall;
+  performance.now = () => monoNow.call(performance) + mono;
+  try {
+    const binding = runtime.recovery(r.scope);
+    for (let i = 0; i < 5; i++) assert.equal((await runtime.optimize(input(binding))).reason, 'runtime_unavailable');
+    assert.equal((await runtime.optimize(input(binding))).reason, 'circuit_open');
+    wall = -3_600_000; mono = 31_000; // NTP or a VM resume steps the wall clock back an hour while 31 s pass
+    assert.equal((await runtime.optimize(input(binding))).reason, 'runtime_unavailable', 'the half-open probe is sent');
+    assert.equal(posts, 6);
+  } finally { Date.now = wallNow; performance.now = monoNow; runtime.close(); }
+});
+
+test('retrieve and delete never take the optimize concurrency slots', async () => {
+  const hang = init => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
+  const runtime = createMiddlewareRuntime({ deadlineMs: 5000, retrieveDeadlineMs: 5000, fetch: async (url, init) => url.endsWith('/capabilities')
+    ? Response.json(caps) : url.endsWith('/retrieve') || url.endsWith('/sessions/delete') ? hang(init) : planFor(init.body) });
+  const binding = runtime.recovery(r.scope);
+  await runtime.ready();
+  const slow = [...Array.from({ length: 15 }, () => binding.execute({ handle: `cmw_${'a'.repeat(48)}` })), runtime.deleteSession(r.scope)]
+    .map(call => call.catch(error => error.code));
+  await tick();
+  assert.equal((await runtime.optimize(input(binding))).status, 'optimized', '16 hanging retrieves and deletes used to make optimize return capacity');
+  runtime.close();
+  assert.deepEqual([...new Set(await Promise.all(slow))], ['closed']);
 });
 
 test('B12: maxConcurrency bounds in-flight optimize calls (default 16)', async () => {
@@ -324,38 +360,67 @@ test('close() aborts in-flight requests; later calls pass through as closed with
   assert.equal(calls, 2);
 });
 
-test('B9: the default transport honors HTTP(S)_PROXY / NO_PROXY via Node env-proxy, and warns once when it cannot', async () => {
-  const target = http.createServer((_, res) => res.end(JSON.stringify(caps)));
-  const proxy = http.createServer((_, res) => { res.statusCode = 502; res.end(); }), connects = [];
+test('B9/§15: the default transport honors HTTP(S)_PROXY / NO_PROXY itself, never proxies loopback, and close() leaves no handles', async t => {
+  if (spawnSync('openssl', ['version']).status !== 0) return t.skip('openssl CLI mints the throwaway certificate');
+  const dir = mkdtempSync(join(tmpdir(), 'caveman-tls-')), cert = join(dir, 'cert.pem'), key = join(dir, 'key.pem');
+  spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1',
+    '-subj', '/CN=runtime.invalid', '-addext', 'subjectAltName=DNS:runtime.invalid'], { stdio: 'ignore' });
+  const serve = (res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(caps)); };
+  const loopback = http.createServer((_, res) => serve(res)), plain = http.createServer((_, res) => serve(res));
+  const secure = https.createServer({ cert: readFileSync(cert), key: readFileSync(key) }, (_, res) => serve(res));
+  const log = [];
+  let connections = 0;
+  // A logging proxy: CONNECT tunnels to the TLS runtime, absolute-form requests are forwarded to the plain one.
+  const proxy = http.createServer((req, res) => {
+    log.push(`${req.method} ${req.url} auth=${'authorization' in req.headers}`);
+    const up = http.request({ host: '127.0.0.1', port: plain.address().port, method: req.method, path: new URL(req.url).pathname, headers: req.headers },
+      answer => { res.writeHead(answer.statusCode, answer.headers); answer.pipe(res); });
+    up.on('error', () => { res.statusCode = 502; res.end(); });
+    req.pipe(up);
+  });
+  proxy.on('connection', () => { connections++; });
   proxy.on('connect', (req, socket, head) => {
-    connects.push(req.url);
-    const upstream = net.connect(target.address().port, '127.0.0.1', () => {
+    log.push(`CONNECT ${req.url}`);
+    const upstream = net.connect(secure.address().port, '127.0.0.1', () => {
       socket.write('HTTP/1.1 200 Connection Established\r\n\r\n'); upstream.write(head); upstream.pipe(socket); socket.pipe(upstream);
     });
     upstream.on('error', () => socket.destroy());
+    socket.on('error', () => upstream.destroy());
   });
-  await Promise.all([target, proxy].map(server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve))));
-  const host = `runtime.invalid:${target.address().port}`; // .invalid never resolves (RFC 6761): success proves the proxy carried it
-  const options = JSON.stringify({ endpoint: `http://${host}`, allowRemoteContent: true, allowInsecureTransport: true, deadlineMs: 5000 });
-  const script = `import { createMiddlewareRuntime } from ${JSON.stringify(new URL('../dist/middleware/index.js', import.meta.url).href)};
-    const runtime = createMiddlewareRuntime(${options}); createMiddlewareRuntime(${options});
-    console.log((await runtime.preflight()).reason); runtime.close();`;
-  const run = env => new Promise(resolve => {
+  await Promise.all([loopback, plain, secure, proxy].map(server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve))));
+  const dist = JSON.stringify(new URL('../dist/middleware/index.js', import.meta.url).href);
+  const run = (options, env) => new Promise(resolve => {
+    // The child reports the preflight reason, then the sockets still open 50 ms after close(), then must exit on its own.
+    const script = `import { createMiddlewareRuntime } from ${dist};
+      const runtime = createMiddlewareRuntime(${JSON.stringify({ deadlineMs: 5000, token: 'runtime-secret', ...options })});
+      console.log((await runtime.preflight()).reason); runtime.close();
+      setTimeout(() => console.log(JSON.stringify(process.getActiveResourcesInfo().filter(name => /TCP|TLS/.test(name)))), 50);`;
     const child = spawn(process.execPath, ['--no-warnings', '--input-type=module', '-e', script],
-      { env: { PATH: process.env.PATH, HTTP_PROXY: `http://127.0.0.1:${proxy.address().port}`, ...env } });
-    let out = '', err = '';
+      { env: { PATH: process.env.PATH, HTTP_PROXY: `http://127.0.0.1:${proxy.address().port}`, HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}`, ...env } });
+    let out = '';
+    const killer = setTimeout(() => child.kill('SIGKILL'), 10_000);
     child.stdout.on('data', data => { out += data; });
-    child.stderr.on('data', data => { err += data; });
-    child.on('close', () => resolve({ out: out.trim(), warnings: err.match(/reason=proxy_unsupported/g)?.length ?? 0 }));
+    child.on('close', (_, signal) => { clearTimeout(killer); const [reason, open] = out.trim().split('\n'); resolve({ reason, open: JSON.parse(open ?? 'null'), exited: !signal }); });
   });
+  const remote = { endpoint: `https://runtime.invalid:${secure.address().port}`, allowRemoteContent: true, ca: readFileSync(cert, 'utf8') };
   try {
-    const [major, minor] = process.versions.node.split('.').map(Number);
-    if (major > 22 || minor >= 21) {
-      assert.deepEqual(await run({ NODE_USE_ENV_PROXY: '1' }), { out: 'ready', warnings: 0 });
-      assert.deepEqual(connects, [host]);
-      assert.deepEqual(await run({ NODE_USE_ENV_PROXY: '1', NO_PROXY: 'runtime.invalid' }), { out: 'runtime_unavailable', warnings: 0 });
-      assert.equal(connects.length, 1, 'NO_PROXY bypasses the proxy');
+    for (const env of [{}, { NODE_USE_ENV_PROXY: '1' }]) {
+      connections = 0;
+      assert.deepEqual(await run({ endpoint: `http://127.0.0.1:${loopback.address().port}` }, env), { reason: 'ready', open: [], exited: true });
+      assert.equal(connections, 0, `loopback never reaches the proxy (${JSON.stringify(env)})`);
     }
-    assert.deepEqual(await run({}), { out: 'runtime_unavailable', warnings: 1 }, 'a proxy fetch cannot apply is named once, not silently ignored');
-  } finally { proxy.close(); target.close(); }
+    // .invalid never resolves (RFC 6761): success proves the proxy carried the request.
+    log.length = 0;
+    assert.deepEqual(await run(remote, {}), { reason: 'ready', open: [], exited: true }, 'https through a CONNECT tunnel, custom CA, no handles after close()');
+    assert.deepEqual(log, [`CONNECT runtime.invalid:${secure.address().port}`], 'one CONNECT, no storm');
+    assert.equal((await run({ ...remote, endpoint: `http://runtime.invalid:${plain.address().port}`, allowInsecureTransport: true }, {})).reason, 'ready');
+    assert.deepEqual(log.slice(1), [`GET http://runtime.invalid:${plain.address().port}/caveman/v1/middleware/capabilities auth=true`], 'http uses absolute-form');
+    connections = 0;
+    assert.equal((await run(remote, { NO_PROXY: 'runtime.invalid' })).reason, 'runtime_unavailable', 'NO_PROXY bypasses the proxy');
+    assert.equal(connections, 0);
+    assert.equal((await run({ endpoint: remote.endpoint, allowRemoteContent: true }, {})).reason, 'runtime_unavailable', 'the system trust store rejects the test CA');
+  } finally {
+    for (const server of [loopback, plain, secure, proxy]) { server.closeAllConnections?.(); server.close(); }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

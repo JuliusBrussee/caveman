@@ -195,11 +195,18 @@ capabilities view.
   validates the plan as usual (§7), applies it if valid, and starts a
   **single-flight** capabilities refresh:
   - at most one refresh is in flight per runtime instance;
+  - the refresh is inline: the next optimize call fetches it within its own
+    deadline, after the breaker and `Retry-After` checks (§10), so it is an
+    optimize-path request like any other;
   - concurrent calls keep the cached document until the refresh resolves;
   - a failed refresh clears the cache.
-- Cached capabilities expire after 300 seconds. A client whose cached view has
-  no transform it can use also refreshes (single-flight) on the next call,
-  instead of waiting for a restart or an error.
+- Cached capabilities expire after 300 seconds, measured on a monotonic clock;
+  an expired view is refreshed the same way. A client whose cached view has no
+  transform it can use also refreshes (single-flight) on the next call, instead
+  of waiting for a restart or an error. It does so once: an unusable answer to
+  that refresh is kept until it expires.
+- Without a cached view, concurrent calls share one capabilities fetch; each
+  still consults the breaker first (vectors: `runtime_scenarios`).
 
 ## 6. Errors and HTTP semantics (K4)
 
@@ -219,7 +226,7 @@ on every 429 and 503, in both modes.
 | `forbidden_namespace` | 403 | (new) | no | Principal may not use namespace |
 | `not_found` | 404 | 404 | no | Unknown or foreign handle; unknown route. Storage failures are never 404 |
 | `request_timeout` | 408 | (new) | yes | Request body not received before the deadline |
-| `epoch_changed` | 409 | 409 | no | Manifest is not an extension of the stored one, or sequence went backwards |
+| `epoch_changed` | 409 | 409 | no | Manifest is not an extension of the stored one, or sequence went backwards. Protocol 1.0 clients only: a 1.1 client starts a new epoch instead (§12) |
 | `identity_conflict` | 409 | 409 | yes | Concurrent writer conflict |
 | `deleted` | 410 | 410 | no | Scope revoked |
 | `expired` | 410 | 410 | no | Scope passed retention or max retention |
@@ -274,6 +281,13 @@ replicas behaves the same. Each outcome is
    `Retry-After` is a non-negative integer, else `null`. HTTP-date values are
    ignored.
 
+**Decoding.** A non-2xx body is decoded with invalid UTF-8 replaced, then
+classified by the steps above, so a 429 carrying a stray byte is still
+`capacity` with its `Retry-After`. A 2xx body must be strict UTF-8. Both SDKs
+read JSON the same way: `NaN`, `Infinity` and a leading byte order mark are not
+JSON (step 4, or `runtime_unavailable` for a 2xx body), and an integer-valued
+number such as `500.0` is the integer `500`.
+
 A 2xx capabilities body that fails §4 step 1 is `unsupported_version`,
 breaker yes, clear yes: an unusable document from the runtime is an invalid
 response, like `invalid_plan`. A 2xx plan that fails §7 is `invalid_plan`,
@@ -323,7 +337,7 @@ Nothing raises at wrap time, and configuration errors never raise at constructio
 | `opaque_part` | Image/bytes part: never sent, hashed into manifest; never a whole-call reason | no | no | none |
 | `recovery_unbound` | Compress mode but no owned recovery binding; local bypass, no I/O | no | yes | none |
 | `recovery_name_conflict` | Host already has a foreign `caveman_retrieve` tool | no | yes | raise |
-| `adapter_error` | Exception caught by the fail-open guard | no | yes | raise |
+| `adapter_error` | Exception caught by the fail-open guard, including a manifest or model identity that is not serializable as well-formed UTF-8 JSON | no | yes | raise |
 | `provider_state_retained` | Provider would persist the compressed turn (e.g. Responses `store`) | no | yes | none |
 | `capacity` | Local concurrency full, or server 429/legacy 503 `capacity` | no | yes | raise |
 | `circuit_open` | Breaker open; local bypass | no | yes | raise |
@@ -334,6 +348,8 @@ Nothing raises at wrap time, and configuration errors never raise at constructio
 | `no_candidate` | Nothing eligible to send | no | no | none |
 | `closed` | Runtime closed; in-flight calls pass through | no | yes | none |
 | `unsupported_shape` | Candidate id invalid/duplicate or content ill-formed Unicode (per candidate) | no | yes | raise |
+| `unsupported_provider` | The provider or model family is not supported by this adapter; pass-through | no | yes | ready |
+| `unsupported_request` | The request shape or method is not eligible for this adapter; pass-through | no | yes | ready |
 | `redirect_refused` | Runtime answered 3xx | yes | yes | raise |
 | `invalid_endpoint`, `remote_content_not_enabled`, `insecure_transport_not_enabled` | Endpoint refused by §15; every call bypasses, no I/O | no | yes | ready |
 | `invalid_configuration` | Invalid option value (`mode`, deadlines, `max_concurrency` outside 1–1024); warns once, every call passes through with no I/O (an invalid `mode` reads as `off`) | no | yes | ready |
@@ -343,13 +359,30 @@ Nothing raises at wrap time, and configuration errors never raise at constructio
 | `protected`, `record`, `eligible`, `disabled` | Plan or report outcomes, not failures | no | no | none |
 
 The exact table is `reason_catalog` in the fixture and `REASON_CATALOG` in
-each SDK. Warn-once:
+each SDK.
 
+`unsupported_provider` and `unsupported_request` describe endpoints that were
+never eligible, such as an embeddings call or a provider the adapter does not
+wrap. An adapter MAY warn once with them, but it MUST NOT emit a report or
+decision event for such a call: reports describe calls that went through the
+middleware path.
+
+Warn-once:
+
+- A call warns only when content passed through unchanged, for a reason whose
+  `warn_once` is yes:
+  - every bypass `optimize()` or `decline()` returns, naming the adapter or `-`
+    when there is none;
+  - each per-candidate `payload_budget` and `unsupported_shape` skip on a call
+    that still sends;
+  - `report()`, only when its status is `skipped`.
 - TS logs with `console.warn`; Python logs `WARNING` on
   `logging.getLogger("caveman.middleware")`.
 - The line MUST contain `adapter=<id or ->` and `reason=<code>`. It MUST NOT
   contain content, scope values, handles or credentials.
 - Deduplication is per process, bounded at 1024 (adapter, reason) pairs.
+
+Vectors: `runtime_scenarios` (`warn_once_rules`).
 
 **Local order.** An `optimize()` call reports the first reason that applies:
 
@@ -419,18 +452,29 @@ window of 20 outcomes, 10 failures, 30 000 ms open.
   records exactly one outcome after its last. A call that bypasses locally
   before any I/O neither consults nor records.
 - Retrieve, receipts and delete neither consult nor feed the breaker.
+- `now` is a monotonic clock, for the breaker, `Retry-After` windows and the
+  capabilities TTL alike: a wall-clock step (NTP, VM resume) never holds the
+  breaker open or ends a window early.
 
 Vectors: `breaker_sequences` (`local` = bypass before I/O).
 
 **Deadlines** (vectors: `deadlines`):
 
 - optimize: `deadlineMs` / `deadline_ms` when configured, else the cached
-  `limits.deadline_ms`, else 500 (bootstrap: `ready()`, `preflight()` and a
-  first call that must fetch capabilities).
+  `limits.deadline_ms` capped at 5000, else 500 (bootstrap: `ready()`,
+  `preflight()` and a first call that must fetch capabilities).
 - retrieve and `deleteSession`: `retrieveDeadlineMs` / `retrieve_deadline_ms`
-  when configured, else `limits.retrieve_deadline_ms`, else 5000.
+  when configured, else `limits.retrieve_deadline_ms` capped at 30 000, else
+  5000.
+- The caps apply only to server-advertised values; a configured deadline is the
+  caller's choice. Every resolved deadline, configured ones included, is capped
+  at 2 147 483 647 ms (2^31 − 1), the longest timer both SDKs can arm
+  (`constants.defaults`: `deadline_cap_ms`, `retrieve_deadline_cap_ms`,
+  `timer_cap_ms`).
 - receipts use the optimize deadline.
-- DNS, connect, TLS, upload and download all count inside the deadline.
+- DNS, connect, the proxy CONNECT tunnel, TLS, status line, headers, upload and
+  download all count inside the deadline: it bounds the whole exchange, not
+  each read, so a peer trickling bytes cannot extend it.
 
 **Server queues.**
 
@@ -447,7 +491,8 @@ window bypass locally with the same reason, do no I/O, and record nothing.
 
 **Concurrency.** Local in-flight optimize calls are bounded by
 `maxConcurrency` / `max_concurrency` (integer 1–1024, default 16). The excess
-bypasses with `capacity`.
+bypasses with `capacity`. Retrieve and delete have their own budget of the same
+size, so slow recoveries never take the optimize path's slots.
 
 ## 11. Budgets (K10)
 
@@ -508,6 +553,16 @@ client.
     `expires_at = min(now + retention_seconds, created_at + max_retention_seconds)`.
   - `max_retention_seconds` defaults to 604 800 and MUST be ≥
     `retention_seconds`.
+- **Epochs.** An optimize whose `context_manifest` does not extend the scope's
+  stored manifest, or whose `sequence` is below the stored one (a trimmed or
+  summarized history, a nested agent sharing the scope), starts a new epoch
+  when the request carries `Caveman-Middleware-Features`: the scope takes the
+  new manifest and sequence, keeps its choices and grants, and the optimize
+  proceeds as usual. Earlier recovery handles keep working and a repeated
+  segment keeps its replacement bytes. A protocol 1.0 client gets 409
+  `epoch_changed` instead, as in 1.0. The plan body is unchanged (its schema is
+  closed); the reference runtime counts new epochs in
+  `caveman_middleware_epoch_rebaselines_total`.
 - **Expiry.** An expired scope answers 410 `expired`. Its originals, choices,
   grants and plans become unreadable at once and MUST be physically deleted by
   the next sweeps. Sweeps MUST make progress across all expired scopes, not
@@ -570,9 +625,14 @@ delivered to `onDecision` / `on_decision`. Keys are identical in both SDKs:
   there was no optimize
 - `counts`: `{candidates, sent, protected, opaque, unsupported, budget_skipped,
   skipped, replaced, reused}`, where
-  `candidates = sent + protected + opaque + unsupported + budget_skipped`
-- `runtime_build`
+  `candidates = sent + protected + opaque + unsupported + budget_skipped` and
+  `skipped = sent − replaced`: a sent segment is skipped whether the runtime
+  skipped it or the call failed after admission. `disabled` events count zero.
+- `runtime_build`: the plan's `runtime_build` when there is a plan (the replica
+  that produced it), else that of the capabilities the call used, else null
 - `cache_continuity`: `persistent_choices|unavailable|off`
+
+Vectors: `examples.decision_events`, `runtime_scenarios`.
 
 Events MUST NOT contain content, scope values, handles or credentials. A sink
 exception MUST NOT affect the call. `no_candidate` emits an event too.
@@ -624,12 +684,24 @@ supplies a tracer and/or meter.
 
 `resolveEndpoint` / `resolve_endpoint`, vectors `endpoints`:
 
-- Scheme is `http` or `https`. No userinfo, query or fragment.
+- The endpoint is validated as written, before any URL parser can trim,
+  unescape or reinterpret it. Anything outside this grammar is
+  `invalid_endpoint`: `scheme://host[:port][/prefix][/]`.
+- Scheme is `http` or `https`. No userinfo, query, fragment, whitespace or
+  control characters anywhere.
+- Host is a bracketed IPv6 literal, a dotted quad of four decimal octets
+  without leading zeros, or a name from `[A-Za-z0-9._-]` whose last label is
+  not numeric. Shorthand IPv4 (`127.1`, `0x7f.1`, `2130706433`) and
+  percent-encoding (`ex%61mple.com`) are refused, never reinterpreted.
+- Port, when present, is 1–65535 without leading zeros; an empty port is
+  refused.
 - Path segments are non-empty, not `.` or `..`, from `[A-Za-z0-9._~-]` (no
   percent-encoding).
 - A trailing `/` is optional. The prefix is preserved and routes are appended
-  after it.
-- Loopback means `localhost`, `127.0.0.1` and `::1`.
+  after it. Scheme and host are lowercased; nothing else is rewritten (an
+  explicit default port stays).
+- Loopback means `localhost`, `127.0.0.1` and `::1` (any spelling of that IPv6
+  address).
 - A non-loopback endpoint requires `allowRemoteContent` /
   `allow_remote_content` (else `remote_content_not_enabled`).
 - Non-loopback `http` additionally requires `allowInsecureTransport` /
@@ -652,10 +724,25 @@ supplies a tracer and/or meter.
   - IP literals match exactly;
   - CIDR is not supported.
 
+**Default transports.** Both SDKs apply `resolveProxy` themselves: `https`
+goes through a CONNECT tunnel, `http` in absolute form, and loopback is never
+proxied, so neither the request content nor the runtime credential reaches a
+proxy for a local runtime. The TS SDK uses global `fetch` unless, on Node, a
+proxy applies, `ca` is set or Node runs with `NODE_USE_ENV_PROXY` (whose
+`fetch` would proxy loopback too); then it uses its own `node:http` transport.
+A caller-supplied transport (TS `fetch`, Python `transport`) owns proxying;
+behind a proxy it should run with `NO_PROXY=localhost,127.0.0.1,::1`.
+
+Default transports MUST NOT reuse a pooled connection that the peer (runtime or
+load balancer) closed while idle, and SHOULD retry a request that still meets
+one once on a fresh connection instead of reporting a runtime failure that
+would feed the breaker.
+
 **Other rules**
 
 - Python accepts `ssl_context` and an injectable transport. TS keeps `fetch`
-  injection.
+  injection and accepts `ca` (PEM certificates that replace the default trust
+  store for the runtime connection; default Node transport only).
 - Clients SHOULD reuse connections.
 - The credential MUST NOT appear in `JSON.stringify`, `inspect`, `repr` or
   `vars()` output.
@@ -700,3 +787,4 @@ supplies a tracer and/or meter.
 | `endpoints` | `resolveEndpoint(endpoint, {allowRemoteContent, allowInsecureTransport})` | `resolve_endpoint(endpoint, allow_remote_content=, allow_insecure_transport=)` |
 | `proxies` | `resolveProxy(url, env)` | `resolve_proxy(url, env)` |
 | `constants`, `reason_catalog` | constants in `middleware/types.ts` | constants in `middleware/types.py` |
+| `runtime_scenarios` | `createMiddlewareRuntime({fetch})` over a scripted `fetch` | `MiddlewareRuntime(transport=...)` over a scripted transport |

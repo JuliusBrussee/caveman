@@ -77,8 +77,13 @@ export function parseCapabilities(value: unknown): CapabilitiesView {
 /** The capabilities fields plan validation reads; a parsed CapabilitiesView or a raw document both qualify. */
 export type PlanCapabilities = { readonly transforms: readonly Transform[]; readonly mode: string; readonly limits: { readonly segment_bytes: number } };
 
-/** Validate every leaf before an adapter is allowed to apply any of them (spec §7). */
+/** Validate every leaf before an adapter is allowed to apply any of them (spec §7). Total: any malformed value,
+ * including one that would throw mid-check (a null replacement), is `invalid_plan`, never an adapter error. */
 export async function validatePlan(value: unknown, request: OptimizeRequest, inputDigest: string, caps: PlanCapabilities): Promise<Plan> {
+  try { return await checkPlan(value, request, inputDigest, caps); } catch { throw new MiddlewareError('invalid_plan'); }
+}
+
+async function checkPlan(value: unknown, request: OptimizeRequest, inputDigest: string, caps: PlanCapabilities): Promise<Plan> {
   const p = value as Plan;
   const invalid = () => { throw new MiddlewareError('invalid_plan'); };
   if (!p || p.schema_version !== 1 || p.request_id !== request.request_id || p.input_digest !== inputDigest ||
@@ -100,11 +105,11 @@ export async function validatePlan(value: unknown, request: OptimizeRequest, inp
     if (!s || !t || !CLIENT_RECOVERY_ALLOWLIST.includes(t.recovery) || seen.has(r.segment_id) || r.original_sha256 !== s.sha256 || r.source_id !== s.source_id ||
       !request.policy.transforms.includes(r.transform_id) || !isToken(r.transform_version) || !t.eligible_segment_kinds.includes(s.kind) ||
       s.protected || s.opaque || request.mode === 'record' || caps.mode === 'record' ||
-      typeof r.text !== 'string' || byteLength(r.text) > caps.limits.segment_bytes || byteLength(r.text) >= byteLength(s.content) || !isHash(r.sha256) ||
+      typeof r.text !== 'string' || !r.text.isWellFormed() || byteLength(r.text) > caps.limits.segment_bytes || byteLength(r.text) >= byteLength(s.content) || !isHash(r.sha256) ||
       r.sha256 !== await sha256(r.text) || !integer(r.tokens_before) || !integer(r.tokens_after) || r.tokens_after >= r.tokens_before || typeof r.reused !== 'boolean' ||
       typeof r.unique_original !== 'boolean' || (r.unique_original && (r.reused || credited.has(r.original_sha256))) ||
       !request.recovery_binding || p.recovery.binding_id !== request.recovery_binding.id || !p.recovery.available || !p.recovery.persistent ||
-      !/^cmw_[a-f0-9]{48}$/.test(r.recovery_handle) || !r.text.startsWith(`${RECOVERY_MARKER_PREFIX}${r.recovery_handle}]\n`)) invalid();
+      typeof r.recovery_handle !== 'string' || !/^cmw_[a-f0-9]{48}$/.test(r.recovery_handle) || !r.text.startsWith(`${RECOVERY_MARKER_PREFIX}${r.recovery_handle}]\n`)) invalid();
     seen.add(r.segment_id);
     reduction += r.tokens_before - r.tokens_after;
     if (r.unique_original) { unique += r.tokens_before - r.tokens_after; credited.add(r.original_sha256); }

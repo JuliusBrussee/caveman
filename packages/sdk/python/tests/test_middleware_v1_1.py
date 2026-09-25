@@ -236,6 +236,96 @@ class TestParityVectors(unittest.TestCase):
             self.assertEqual(json.loads(json.dumps(dataclasses.asdict(event))), example)
 
 
+class Scripted:
+    """The runtime_scenarios transport: per-route response queues over fixture defaults (see the fixture notes)."""
+
+    def __init__(self, scenario):
+        self.caps = patched(BASE["capabilities"], scenario.get("capabilities", []))
+        self.queue, self.latency, self.requests, self.lock = {}, {}, [], threading.Lock()
+
+    def __call__(self, method, url, headers, body, timeout):
+        route = urlsplit(url).path.split("/caveman/v1/middleware/", 1)[1]
+        with self.lock:
+            self.requests.append(route)
+            spec = self.queue[route].pop(0) if self.queue.get(route) else {}
+        if self.latency.get(route):
+            time.sleep(self.latency[route] / 1000)
+        if "json" in spec:
+            data = json.dumps(spec["json"]).encode()
+        elif "body_text" in spec:
+            data = spec["body_text"].encode()
+        elif "body_base64" in spec:
+            data = base64.b64decode(spec["body_base64"])
+        elif route == "capabilities":
+            data = json.dumps(patched(self.caps, spec.get("caps", []))).encode()
+        else:
+            sent, plan = json.loads(body), copy.deepcopy(BASE["plan"])
+            plan.update(request_id=sent["request_id"], input_digest=sha256(body.decode()))
+            plan["recovery"]["binding_id"] = sent["recovery_binding"]["id"] if sent["recovery_binding"] else None
+            data = json.dumps(patched(plan, spec.get("plan", []))).encode()
+        return spec.get("status", 200), spec.get("headers", {}), data
+
+
+class TestRuntimeScenarios(unittest.TestCase):
+    def test_runtime_scenarios(self):
+        # The TS SDK runs the same scenarios (middleware-v1_1.runtime.mjs).
+        request, lines = BASE["request"], []
+        handler = logging.Handler()
+        handler.emit = lambda record: lines.append(record.getMessage())
+        logging.getLogger("caveman.middleware").addHandler(handler)
+        self.addCleanup(logging.getLogger("caveman.middleware").removeHandler, handler)
+        for scenario in V11["runtime_scenarios"]:
+            protocol._warned.clear()
+            peer, events, last = Scripted(scenario), [], None
+            runtime = MiddlewareRuntime(transport=peer, on_decision=events.append, **{"deadline_ms": 5000, **scenario.get("options", {})})
+            self.addCleanup(runtime.close)
+
+            def optimize(step):
+                scope = step.get("scope", request["scope"])
+                adapter = None if "adapter" in step and step["adapter"] is None else Adapter(**{**request["adapter"], "id": scenario["adapter_id"]})
+                candidates = [Candidate(c["id"], c["content"], source_id=c.get("source_id")) for c in step.get("candidates", request["segments"])]
+                return runtime.optimize(scope=scope, adapter=adapter, candidates=candidates, manifest=step.get("manifest", request["context_manifest"]),
+                                        binding=None if "scope" in step else runtime.recovery(scope), request_id=request["request_id"])
+
+            for index, step in enumerate(scenario["steps"]):
+                with self.subTest(scenario["id"], step=index):
+                    peer.queue = {}
+                    for response in step.get("responses", []):
+                        peer.queue.setdefault(response["route"], []).append(response)
+                    peer.latency, peer.requests[:], lines[:] = step.get("latency_ms", {}), [], []
+                    result = None
+                    if step["op"] == "optimize":
+                        result = last = optimize(step)
+                    elif step["op"] == "report":
+                        runtime.report(mw_types.Optimization(**step["optimization"]) if "optimization" in step else last, adapter=step.get("adapter"))
+                    elif step["op"] == "decline":
+                        runtime.decline(step["reason"], step["adapter"])
+                    elif step["op"] == "preflight":
+                        result = runtime.preflight()
+                    elif step["op"] == "concurrent_optimize":
+                        barrier = threading.Barrier(step["count"])
+                        threads = [threading.Thread(target=lambda: (barrier.wait(), optimize(step))) for _ in range(step["count"])]
+                        [t.start() for t in threads]
+                        [t.join() for t in threads]
+                    else:
+                        self.fail(f"unknown scenario op {step['op']}")
+                    expect = step["expect"]
+                    for key in ("reason", "status"):
+                        if key in expect:
+                            self.assertEqual(getattr(result, key), expect[key], key)
+                    if "requests" in expect:
+                        self.assertEqual(peer.requests, expect["requests"])
+                    if "capabilities_gets" in expect:
+                        self.assertEqual(peer.requests.count("capabilities"), expect["capabilities_gets"])
+                    if "warnings" in expect:
+                        self.assertEqual(lines, expect["warnings"])
+                    if "preflight" in expect:
+                        self.assertEqual({"status": result.status, "reason": result.reason}, expect["preflight"])
+                    event = dataclasses.asdict(events[-1]) if "event" in expect else {}
+                    for key, value in expect.get("event", {}).items():
+                        self.assertEqual(event[key], value, f"event.{key}")
+
+
 class TestRuntimeProtocol(unittest.TestCase):
     def setUp(self):
         protocol._warned.clear()
@@ -304,7 +394,7 @@ class TestRuntimeProtocol(unittest.TestCase):
         self.assertEqual(len(peer.paths("optimize")), optimizes)
         self.assertEqual(runtime._breaker.state, "closed")
         manifest = [{"id": "message-0", "text": json.loads('"\\udc00"')}]
-        self.assertEqual(call(runtime, binding, manifest=manifest).reason, "unsupported_shape")
+        self.assertEqual(call(runtime, binding, manifest=manifest).reason, "adapter_error", "an ill-formed manifest is an adapter defect")
         self.assertEqual(runtime._breaker.state, "closed")
 
     def test_client_errors_keep_capabilities_and_unknown_capability_is_negative_cached(self):

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The transport bounds the whole exchange (connect, proxy tunnel, TLS, headers
+  and body) by the deadline, and never reuses connections the server closed
+  while idle.
+- `aclose()` never blocks on a stuck worker.
+- The first capabilities fetch is single-flight. An unusable capabilities view
+  is refreshed once. Server-advertised deadlines are capped.
+- JSON is parsed strictly (no NaN; integer-valued floats become ints), and
+  endpoint parsing is stricter.
+- Warn-once rules, the decision event's `runtime_build`, and `adapter_error`
+  for an unserializable manifest now match TypeScript.
+- New `unsupported_provider` and `unsupported_request` reason codes.
+- Exporter: cost is also emitted as `caveman.usage.cost_usd`.
 - The warn-once line now reads `Caveman middleware passed content through
   unchanged: adapter=… reason=…`, the same as TypeScript. Log filters that
   match the old `Caveman middleware decision:` prefix need updating.

@@ -179,3 +179,61 @@ test('examples: session delete responses parse; decision events carry exactly th
     assert.ok(events.every(event => Object.isFrozen(event) && Object.isFrozen(event.counts)));
   } finally { runtime.close(); }
 });
+
+test('runtime_scenarios (the Python SDK runs the same scenarios)', async t => {
+  const r = base.request, warn = console.warn;
+  for (const scenario of v11.runtime_scenarios) await t.test(scenario.id, async () => {
+    const caps = patch(base.capabilities, scenario.capabilities ?? []);
+    let queue = {}, latency = {}, requests = [];
+    const lines = [], events = [];
+    const fetch = async (url, init) => {
+      const route = url.split('/caveman/v1/middleware/')[1], spec = queue[route]?.shift();
+      requests.push(route);
+      if (latency[route]) await new Promise(resolve => setTimeout(resolve, latency[route]));
+      let body;
+      if (spec?.json !== undefined) body = JSON.stringify(spec.json);
+      else if (spec?.body_text !== undefined) body = spec.body_text;
+      else if (spec?.body_base64 !== undefined) body = Buffer.from(spec.body_base64, 'base64');
+      else if (route === 'capabilities') body = JSON.stringify(patch(caps, spec?.caps ?? []));
+      else {
+        const sent = JSON.parse(init.body), plan = structuredClone(base.plan);
+        Object.assign(plan, { request_id: sent.request_id, input_digest: await mw.sha256(init.body) });
+        plan.recovery.binding_id = sent.recovery_binding?.id ?? null;
+        body = JSON.stringify(patch(plan, spec?.plan ?? []));
+      }
+      return new Response(body, { status: spec?.status ?? 200, headers: spec?.headers ?? {} });
+    };
+    const runtime = mw.createMiddlewareRuntime({ deadlineMs: 5000, ...scenario.options, fetch, onDecision: event => events.push(event) });
+    let last = null;
+    const optimize = step => {
+      const scope = step.scope ?? r.scope;
+      return runtime.optimize({ scope, adapter: step.adapter === null ? undefined : { ...r.adapter, id: scenario.adapter_id },
+        binding: step.scope ? null : runtime.recovery(scope), manifest: step.manifest ?? r.context_manifest, requestId: r.request_id,
+        candidates: (step.candidates ?? r.segments).map(c => ({ id: c.id, content: c.content, ...(c.source_id ? { sourceId: c.source_id } : {}) })) });
+    };
+    console.warn = line => lines.push(line);
+    try {
+      for (const [i, step] of scenario.steps.entries()) {
+        const label = `${scenario.id} step ${i}`, e = step.expect;
+        queue = {};
+        for (const response of step.responses ?? []) (queue[response.route] ??= []).push(response);
+        latency = step.latency_ms ?? {}; requests = []; lines.length = 0;
+        let result = null;
+        if (step.op === 'optimize') result = last = await optimize(step);
+        else if (step.op === 'report') runtime.report(step.optimization ? { replacements: [], plan: null, request: null, cacheContinuity: 'unavailable', ...step.optimization } : last,
+          step.adapter ? { adapter: step.adapter } : {});
+        else if (step.op === 'decline') runtime.decline(step.reason, step.adapter);
+        else if (step.op === 'preflight') result = await runtime.preflight();
+        else if (step.op === 'concurrent_optimize') await Promise.all(Array.from({ length: step.count }, () => optimize(step)));
+        else throw new Error(`unknown scenario op ${step.op}`);
+        if ('reason' in e) assert.equal(result.reason, e.reason, label);
+        if ('status' in e) assert.equal(result.status, e.status, label);
+        if ('requests' in e) assert.deepEqual(requests, e.requests, label);
+        if ('capabilities_gets' in e) assert.equal(requests.filter(route => route === 'capabilities').length, e.capabilities_gets, label);
+        if ('warnings' in e) assert.deepEqual(lines, e.warnings, label);
+        if ('preflight' in e) assert.deepEqual({ status: result.status, reason: result.reason }, e.preflight, label);
+        for (const [key, value] of Object.entries(e.event ?? {})) assert.deepEqual(events.at(-1)[key], value, `${label} event.${key}`);
+      }
+    } finally { console.warn = warn; runtime.close(); }
+  });
+});

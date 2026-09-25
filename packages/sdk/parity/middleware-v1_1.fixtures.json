@@ -13,7 +13,8 @@
     "failure_classification": "input.body is raw response text; retry_after is the raw header value.",
     "breaker_sequences": "Fresh breaker per sequence. success/failure: call allow(at_ms); if it returns true, record(result, at_ms). local: do not touch the breaker. expect.sent is allow()'s result, expect.state is the state after the step.",
     "budgets": "replaced lists item keys; admitted/skipped are ids in input order; bypass payload_budget when items exist and none is admitted.",
-    "endpoints": "expect.capabilities_url is the resolved base plus caveman/v1/middleware/capabilities, or expect.error is the refusal code."
+    "endpoints": "expect.capabilities_url is the resolved base plus caveman/v1/middleware/capabilities, or expect.error is the refusal code.",
+    "runtime_scenarios": "Runtime-level parity over a scripted transport. The runtime gets deadline_ms 5000 plus `options`. Each route answers from the step's `responses` queue, else a default: capabilities = base.capabilities with the scenario `capabilities` patches; optimize = base.plan with request_id and recovery.binding_id from the request and input_digest = sha256 of the sent body. A response is {route, status, json | body_text | body_base64 | plan | caps, headers}; plan/caps are patches on those defaults. `latency_ms` delays a route's answers during the step. Ops: optimize sends base.request (scope, adapter with id `adapter_id`, candidates from base.request.segments, manifest base.request.context_manifest, request_id, an owned binding) unless the step overrides scope (then no binding), adapter (null = none), candidates or manifest; concurrent_optimize runs `count` optimize calls at once; report reports the step's `optimization` ({status, reason}) with context `adapter`, else the last optimize result; decline calls decline(reason, adapter); preflight calls preflight(). expect.reason/status read the optimize result; expect.requests lists the routes requested during the step in order; expect.capabilities_gets counts capabilities requests; expect.warnings is the exact list of warn-once lines logged during the step; expect.event is a subset of the last decision event; expect.preflight compares status and reason."
   },
   "constants": {
     "protocol": {
@@ -74,7 +75,10 @@
       "receipt_bytes": 16384,
       "replaced_memory_entries": 4096,
       "retry_after_cap_ms": 30000,
-      "warn_once_entries": 1024
+      "warn_once_entries": 1024,
+      "deadline_cap_ms": 5000,
+      "retrieve_deadline_cap_ms": 30000,
+      "timer_cap_ms": 2147483647
     }
   },
   "reason_catalog": {
@@ -267,6 +271,16 @@
       "breaker": false,
       "warn_once": true,
       "strict": "raise"
+    },
+    "unsupported_provider": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "ready"
+    },
+    "unsupported_request": {
+      "breaker": false,
+      "warn_once": true,
+      "strict": "ready"
     },
     "unsupported_shape": {
       "breaker": false,
@@ -1915,6 +1929,73 @@
         "valid": true,
         "refresh_capabilities": false
       }
+    },
+    {
+      "id": "replacement_null",
+      "patches": [
+        {
+          "op": "append",
+          "path": [
+            "plan",
+            "replacements"
+          ],
+          "value": null
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
+    },
+    {
+      "id": "recovery_handle_not_a_string",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "recovery_handle"
+          ],
+          "value": [
+            "cmw_abc123abc123abc123abc123abc123abc123abc123abc123"
+          ]
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
+    },
+    {
+      "id": "text_lone_surrogate",
+      "patches": [
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "text"
+          ],
+          "value": "[caveman: shortened; exact original via caveman_retrieve handle=cmw_abc123abc123abc123abc123abc123abc123abc123abc123]\nshort \ud800 excerpt"
+        },
+        {
+          "op": "set",
+          "path": [
+            "plan",
+            "replacements",
+            0,
+            "sha256"
+          ],
+          "value": "733e1fc386d39226129f1331d4611b40713dd840aae2c408057e99ebff9d28e1"
+        }
+      ],
+      "expect": {
+        "valid": false,
+        "reason": "invalid_plan"
+      }
     }
   ],
   "failure_classification": [
@@ -2373,6 +2454,36 @@
         "transport": "response",
         "status": 400,
         "body": "{\"schema_version\":1,\"error\":{\"code\":\"Invalid-Request\"}}"
+      },
+      "expect": {
+        "reason": "runtime_unavailable",
+        "breaker": true,
+        "clear_capabilities": true,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "error_body_nan_is_not_json",
+      "input": {
+        "transport": "response",
+        "status": 503,
+        "body": "{\"schema_version\":1,\"error\":{\"code\":\"capacity\"},\"n\":NaN}",
+        "retry_after": "5"
+      },
+      "expect": {
+        "reason": "runtime_unavailable",
+        "breaker": true,
+        "clear_capabilities": true,
+        "retry_after_ms": null
+      }
+    },
+    {
+      "id": "error_body_bom_is_not_json",
+      "input": {
+        "transport": "response",
+        "status": 503,
+        "body": "\ufeff{\"schema_version\":1,\"error\":{\"code\":\"capacity\"}}",
+        "retry_after": "5"
       },
       "expect": {
         "reason": "runtime_unavailable",
@@ -3146,6 +3257,48 @@
         "optimize_ms": 500,
         "retrieve_ms": 5000
       }
+    },
+    {
+      "id": "server_deadlines_capped",
+      "input": {
+        "deadline_ms": null,
+        "retrieve_deadline_ms": null,
+        "limits": {
+          "deadline_ms": 2147483648,
+          "request_bytes": 2097152,
+          "segment_bytes": 524288,
+          "page_bytes": 262144,
+          "retrieve_deadline_ms": 9007199254740991
+        }
+      },
+      "expect": {
+        "optimize_ms": 5000,
+        "retrieve_ms": 30000
+      }
+    },
+    {
+      "id": "override_not_server_capped",
+      "input": {
+        "deadline_ms": 8000,
+        "retrieve_deadline_ms": 60000,
+        "limits": null
+      },
+      "expect": {
+        "optimize_ms": 8000,
+        "retrieve_ms": 60000
+      }
+    },
+    {
+      "id": "override_capped_at_timer_max",
+      "input": {
+        "deadline_ms": 9007199254740991,
+        "retrieve_deadline_ms": 2147483648,
+        "limits": null
+      },
+      "expect": {
+        "optimize_ms": 2147483647,
+        "retrieve_ms": 2147483647
+      }
     }
   ],
   "budgets": [
@@ -3732,6 +3885,171 @@
       "expect": {
         "error": "invalid_endpoint"
       }
+    },
+    {
+      "id": "leading_whitespace_rejected",
+      "input": {
+        "endpoint": " http://127.0.0.1:8787",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "trailing_whitespace_rejected",
+      "input": {
+        "endpoint": "http://127.0.0.1:8787 ",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "tab_in_path_rejected",
+      "input": {
+        "endpoint": "http://127.0.0.1:8787/a\tb",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "newline_in_path_rejected",
+      "input": {
+        "endpoint": "http://127.0.0.1:8787/pre\nfix",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "short_ipv4_rejected",
+      "input": {
+        "endpoint": "http://127.1:8787",
+        "allow_remote_content": true,
+        "allow_insecure_transport": true
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "hex_ipv4_rejected",
+      "input": {
+        "endpoint": "http://0x7f.1:8787",
+        "allow_remote_content": true,
+        "allow_insecure_transport": true
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "integer_ipv4_rejected",
+      "input": {
+        "endpoint": "http://2130706433:8787",
+        "allow_remote_content": true,
+        "allow_insecure_transport": true
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "percent_encoded_host_rejected",
+      "input": {
+        "endpoint": "https://ex%61mple.com",
+        "allow_remote_content": true,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "leading_zero_port_rejected",
+      "input": {
+        "endpoint": "http://127.0.0.1:08787",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "empty_port_rejected",
+      "input": {
+        "endpoint": "http://127.0.0.1:",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "invalid_endpoint"
+      }
+    },
+    {
+      "id": "scheme_and_host_lowercased",
+      "input": {
+        "endpoint": "HTTP://LOCALHOST:8787",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "capabilities_url": "http://localhost:8787/caveman/v1/middleware/capabilities"
+      }
+    },
+    {
+      "id": "explicit_default_port_kept",
+      "input": {
+        "endpoint": "http://127.0.0.1:80",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "capabilities_url": "http://127.0.0.1:80/caveman/v1/middleware/capabilities"
+      }
+    },
+    {
+      "id": "ipv6_loopback_long_form",
+      "input": {
+        "endpoint": "http://[0:0:0:0:0:0:0:1]:8787",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "capabilities_url": "http://[0:0:0:0:0:0:0:1]:8787/caveman/v1/middleware/capabilities"
+      }
+    },
+    {
+      "id": "ipv4_mapped_ipv6_is_remote",
+      "input": {
+        "endpoint": "http://[::ffff:127.0.0.1]:8787",
+        "allow_remote_content": false,
+        "allow_insecure_transport": false
+      },
+      "expect": {
+        "error": "remote_content_not_enabled"
+      }
+    },
+    {
+      "id": "underscore_host_allowed",
+      "input": {
+        "endpoint": "http://caveman_rt:8787",
+        "allow_remote_content": true,
+        "allow_insecure_transport": true
+      },
+      "expect": {
+        "capabilities_url": "http://caveman_rt:8787/caveman/v1/middleware/capabilities"
+      }
     }
   ],
   "proxies": [
@@ -4155,5 +4473,439 @@
         }
       }
     ]
-  }
+  },
+  "runtime_scenarios": [
+    {
+      "id": "failure_after_admission_counts_sent_segments_skipped",
+      "adapter_id": "scn-counts",
+      "steps": [
+        {
+          "op": "optimize",
+          "responses": [
+            {
+              "route": "optimize",
+              "status": 503,
+              "json": {
+                "schema_version": 1,
+                "error": {
+                  "code": "runtime_unavailable"
+                }
+              }
+            }
+          ],
+          "expect": {
+            "reason": "runtime_unavailable",
+            "requests": [
+              "capabilities",
+              "optimize"
+            ]
+          }
+        },
+        {
+          "op": "report",
+          "expect": {
+            "event": {
+              "status": "skipped",
+              "reason": "runtime_unavailable",
+              "runtime_build": "protocol-fixture",
+              "counts": {
+                "candidates": 1,
+                "sent": 1,
+                "protected": 0,
+                "opaque": 0,
+                "unsupported": 0,
+                "budget_skipped": 0,
+                "skipped": 1,
+                "replaced": 0,
+                "reused": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "event_runtime_build_comes_from_the_plan",
+      "adapter_id": "scn-build",
+      "capabilities": [
+        {
+          "op": "set",
+          "path": [
+            "runtime_build"
+          ],
+          "value": "caps-build"
+        }
+      ],
+      "steps": [
+        {
+          "op": "optimize",
+          "responses": [
+            {
+              "route": "optimize",
+              "status": 200,
+              "plan": [
+                {
+                  "op": "set",
+                  "path": [
+                    "runtime_build"
+                  ],
+                  "value": "plan-build"
+                }
+              ]
+            }
+          ],
+          "expect": {
+            "status": "optimized",
+            "reason": "eligible",
+            "requests": [
+              "capabilities",
+              "optimize"
+            ]
+          }
+        },
+        {
+          "op": "report",
+          "expect": {
+            "event": {
+              "status": "applied",
+              "reason": "eligible",
+              "runtime_build": "plan-build",
+              "counts": {
+                "candidates": 1,
+                "sent": 1,
+                "protected": 0,
+                "opaque": 0,
+                "unsupported": 0,
+                "budget_skipped": 0,
+                "skipped": 0,
+                "replaced": 1,
+                "reused": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "no_usable_transform_is_unknown_capability_refreshed_once",
+      "adapter_id": "scn-transform",
+      "capabilities": [
+        {
+          "op": "set",
+          "path": [
+            "transforms"
+          ],
+          "value": []
+        }
+      ],
+      "steps": [
+        {
+          "op": "preflight",
+          "expect": {
+            "preflight": {
+              "status": "unavailable",
+              "reason": "unknown_capability"
+            },
+            "requests": [
+              "capabilities"
+            ]
+          }
+        },
+        {
+          "op": "optimize",
+          "expect": {
+            "reason": "unknown_capability",
+            "requests": [
+              "capabilities"
+            ]
+          }
+        },
+        {
+          "op": "optimize",
+          "expect": {
+            "reason": "unknown_capability",
+            "requests": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "bootstrap_capabilities_single_flight",
+      "adapter_id": "scn-herd",
+      "steps": [
+        {
+          "op": "concurrent_optimize",
+          "count": 16,
+          "latency_ms": {
+            "capabilities": 100
+          },
+          "expect": {
+            "capabilities_gets": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "capabilities_integral_numbers_are_integers",
+      "adapter_id": "scn-float",
+      "steps": [
+        {
+          "op": "preflight",
+          "responses": [
+            {
+              "route": "capabilities",
+              "status": 200,
+              "body_text": "{\"schema_version\": 1.0, \"runtime_build\": \"protocol-fixture\", \"policy_revision\": \"middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812\", \"transforms\": [{\"transform_id\": \"caveman.engine.log.v1\", \"implementation_version\": \"1\", \"safety_classes\": [\"S4\"], \"deterministic\": true, \"recovery\": \"exact_ccr\", \"eligible_segment_kinds\": [\"artifact\", \"history\", \"skill\", \"tool_result\"], \"requires_eval\": true, \"not_smaller_fallback\": \"original\", \"provenance\": {\"kind\": \"native\", \"source_manifest_sha256\": null}, \"conformance_digest\": \"5a58a4ebd6d3abd9da413e4ee822972606ca8dce34455e8c820cadeb51ce6602\"}], \"limits\": {\"deadline_ms\": 100.0, \"request_bytes\": 2097152, \"segment_bytes\": 524288, \"page_bytes\": 262144}, \"persistent\": true, \"recovery\": true, \"retention_seconds\": 86400, \"trust_mode\": \"single_operator\", \"mode\": \"compress\"}"
+            }
+          ],
+          "expect": {
+            "preflight": {
+              "status": "ready",
+              "reason": "ready"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "capabilities_nan_is_not_json",
+      "adapter_id": "scn-nan",
+      "steps": [
+        {
+          "op": "preflight",
+          "responses": [
+            {
+              "route": "capabilities",
+              "status": 200,
+              "body_text": "{\"schema_version\": 1, \"runtime_build\": \"protocol-fixture\", \"policy_revision\": \"middleware-v1:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812\", \"transforms\": [{\"transform_id\": \"caveman.engine.log.v1\", \"implementation_version\": \"1\", \"safety_classes\": [\"S4\"], \"deterministic\": true, \"recovery\": \"exact_ccr\", \"eligible_segment_kinds\": [\"artifact\", \"history\", \"skill\", \"tool_result\"], \"requires_eval\": true, \"not_smaller_fallback\": \"original\", \"provenance\": {\"kind\": \"native\", \"source_manifest_sha256\": null}, \"conformance_digest\": \"5a58a4ebd6d3abd9da413e4ee822972606ca8dce34455e8c820cadeb51ce6602\"}], \"limits\": {\"deadline_ms\": 100, \"request_bytes\": 2097152, \"segment_bytes\": 524288, \"page_bytes\": 262144}, \"persistent\": true, \"recovery\": true, \"retention_seconds\": 86400, \"trust_mode\": \"single_operator\", \"mode\": \"compress\", \"x\": NaN}"
+            }
+          ],
+          "expect": {
+            "preflight": {
+              "status": "unavailable",
+              "reason": "runtime_unavailable"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "capabilities_utf8_bom_is_not_json",
+      "adapter_id": "scn-bom",
+      "steps": [
+        {
+          "op": "preflight",
+          "responses": [
+            {
+              "route": "capabilities",
+              "status": 200,
+              "body_base64": "77u/eyJzY2hlbWFfdmVyc2lvbiI6IDEsICJydW50aW1lX2J1aWxkIjogInByb3RvY29sLWZpeHR1cmUiLCAicG9saWN5X3JldmlzaW9uIjogIm1pZGRsZXdhcmUtdjE6ODIzNDEyZDFlYWNiNjc5NTYyMjBlNTMyOTU5ZjAxMDQ2MDMwNTdjODg3MDQ4NjNjYTM4ZTdjZDE4OGZkYTgxMiIsICJ0cmFuc2Zvcm1zIjogW3sidHJhbnNmb3JtX2lkIjogImNhdmVtYW4uZW5naW5lLmxvZy52MSIsICJpbXBsZW1lbnRhdGlvbl92ZXJzaW9uIjogIjEiLCAic2FmZXR5X2NsYXNzZXMiOiBbIlM0Il0sICJkZXRlcm1pbmlzdGljIjogdHJ1ZSwgInJlY292ZXJ5IjogImV4YWN0X2NjciIsICJlbGlnaWJsZV9zZWdtZW50X2tpbmRzIjogWyJhcnRpZmFjdCIsICJoaXN0b3J5IiwgInNraWxsIiwgInRvb2xfcmVzdWx0Il0sICJyZXF1aXJlc19ldmFsIjogdHJ1ZSwgIm5vdF9zbWFsbGVyX2ZhbGxiYWNrIjogIm9yaWdpbmFsIiwgInByb3ZlbmFuY2UiOiB7ImtpbmQiOiAibmF0aXZlIiwgInNvdXJjZV9tYW5pZmVzdF9zaGEyNTYiOiBudWxsfSwgImNvbmZvcm1hbmNlX2RpZ2VzdCI6ICI1YTU4YTRlYmQ2ZDNhYmQ5ZGE0MTNlNGVlODIyOTcyNjA2Y2E4ZGNlMzQ0NTVlOGM4MjBjYWRlYjUxY2U2NjAyIn1dLCAibGltaXRzIjogeyJkZWFkbGluZV9tcyI6IDEwMCwgInJlcXVlc3RfYnl0ZXMiOiAyMDk3MTUyLCAic2VnbWVudF9ieXRlcyI6IDUyNDI4OCwgInBhZ2VfYnl0ZXMiOiAyNjIxNDR9LCAicGVyc2lzdGVudCI6IHRydWUsICJyZWNvdmVyeSI6IHRydWUsICJyZXRlbnRpb25fc2Vjb25kcyI6IDg2NDAwLCAidHJ1c3RfbW9kZSI6ICJzaW5nbGVfb3BlcmF0b3IiLCAibW9kZSI6ICJjb21wcmVzcyJ9"
+            }
+          ],
+          "expect": {
+            "preflight": {
+              "status": "unavailable",
+              "reason": "runtime_unavailable"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "error_status_classified_before_strict_decoding",
+      "adapter_id": "scn-utf8",
+      "steps": [
+        {
+          "op": "optimize",
+          "responses": [
+            {
+              "route": "optimize",
+              "status": 429,
+              "headers": {
+                "Retry-After": "5"
+              },
+              "body_base64": "eyJzY2hlbWFfdmVyc2lvbiI6MSwiZXJyb3IiOnsiY29kZSI6ImNhcGFjaXR5In0sIngiOiL/In0="
+            }
+          ],
+          "expect": {
+            "reason": "capacity",
+            "requests": [
+              "capabilities",
+              "optimize"
+            ]
+          }
+        },
+        {
+          "op": "optimize",
+          "expect": {
+            "reason": "capacity",
+            "requests": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "stale_revision_refresh_is_inline_and_gated",
+      "adapter_id": "scn-stale",
+      "steps": [
+        {
+          "op": "optimize",
+          "responses": [
+            {
+              "route": "optimize",
+              "status": 200,
+              "plan": [
+                {
+                  "op": "set",
+                  "path": [
+                    "policy_revision"
+                  ],
+                  "value": "middleware-v1:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                }
+              ]
+            }
+          ],
+          "expect": {
+            "status": "optimized",
+            "requests": [
+              "capabilities",
+              "optimize"
+            ]
+          }
+        },
+        {
+          "op": "optimize",
+          "responses": [
+            {
+              "route": "capabilities",
+              "status": 503,
+              "headers": {
+                "Retry-After": "5"
+              },
+              "json": {
+                "schema_version": 1,
+                "error": {
+                  "code": "runtime_unavailable"
+                }
+              }
+            }
+          ],
+          "expect": {
+            "reason": "runtime_unavailable",
+            "requests": [
+              "capabilities"
+            ]
+          }
+        },
+        {
+          "op": "optimize",
+          "expect": {
+            "reason": "runtime_unavailable",
+            "requests": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "warn_once_rules",
+      "adapter_id": "scn-warn",
+      "steps": [
+        {
+          "op": "optimize",
+          "scope": {
+            "namespace": "",
+            "session_id": "s"
+          },
+          "adapter": null,
+          "expect": {
+            "reason": "invalid_scope",
+            "requests": [],
+            "warnings": [
+              "Caveman middleware passed content through unchanged: adapter=- reason=invalid_scope"
+            ]
+          }
+        },
+        {
+          "op": "report",
+          "optimization": {
+            "status": "record",
+            "reason": "capacity"
+          },
+          "adapter": "scn-warn",
+          "expect": {
+            "warnings": []
+          }
+        },
+        {
+          "op": "decline",
+          "reason": "version_unverified",
+          "adapter": "scn-warn",
+          "expect": {
+            "warnings": [
+              "Caveman middleware passed content through unchanged: adapter=scn-warn reason=version_unverified"
+            ]
+          }
+        },
+        {
+          "op": "decline",
+          "reason": "version_unverified",
+          "adapter": "scn-warn",
+          "expect": {
+            "warnings": []
+          }
+        },
+        {
+          "op": "optimize",
+          "candidates": [
+            {
+              "id": "tool-1",
+              "source_id": "document-1",
+              "content": "[INFO] caf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\ncaf\u00e9 \ud83c\udf0d original bytes must survive.\r\n"
+            },
+            {
+              "id": "bad id",
+              "content": "x"
+            }
+          ],
+          "expect": {
+            "status": "optimized",
+            "requests": [
+              "capabilities",
+              "optimize"
+            ],
+            "warnings": [
+              "Caveman middleware passed content through unchanged: adapter=scn-warn reason=unsupported_shape"
+            ]
+          }
+        },
+        {
+          "op": "report",
+          "expect": {
+            "warnings": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "ill_formed_manifest_is_an_adapter_error",
+      "adapter_id": "scn-manifest",
+      "steps": [
+        {
+          "op": "optimize",
+          "manifest": [
+            {
+              "id": "message-0",
+              "sha256": "\ud800"
+            }
+          ],
+          "expect": {
+            "reason": "adapter_error",
+            "requests": [
+              "capabilities"
+            ]
+          }
+        }
+      ]
+    }
+  ]
 }

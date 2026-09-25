@@ -119,7 +119,7 @@ test("recordSpan() omits malformed counters and prevents reserved-attribute over
     attributes: {
       "gen_ai.usage.input_tokens": 999999,
       "gen_ai.usage.cost_usd": 999999,
-      "gen_ai.usage.cache_creation.input_tokens": 999999,
+      "caveman.usage.cost_usd": 999999,
       "cave.agent": "spoofed-agent",
     },
   });
@@ -128,7 +128,7 @@ test("recordSpan() omits malformed counters and prevents reserved-attribute over
   assert.ok(!("gen_ai.usage.output_tokens" in span.attributes));
   assert.ok(!("gen_ai.usage.cache_read.input_tokens" in span.attributes));
   assert.ok(!("gen_ai.usage.cost_usd" in span.attributes));
-  assert.ok(!("gen_ai.usage.cache_creation.input_tokens" in span.attributes));
+  assert.ok(!("caveman.usage.cost_usd" in span.attributes));
   assert.equal(span.attributes["cave.agent"], "real-agent");
 });
 

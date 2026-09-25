@@ -1695,12 +1695,15 @@ class OTelExporter:
             "gen_ai.usage.output_tokens",
             "gen_ai.usage.cached_tokens",
             "gen_ai.usage.cache_read.input_tokens",
-            "gen_ai.usage.cache_creation.input_tokens",
             "gen_ai.usage.cost_usd",
+            "caveman.usage.cost_usd",
             "cave.agent",
             "cave.workflow",
         ):
             attrs.pop(reserved, None)
+        # SDK 1.1.0 passed a caller-supplied cache-write count through; the typed argument replaces it only when given.
+        if cache_creation_tokens is not None:
+            attrs.pop("gen_ai.usage.cache_creation.input_tokens", None)
         if operation is not None:
             attrs["gen_ai.operation.name"] = operation
         if provider is not None:
@@ -1720,12 +1723,13 @@ class OTelExporter:
         if valid_cached is not None and (valid_input is None or valid_cached <= valid_input):
             attrs["gen_ai.usage.cache_read.input_tokens"] = valid_cached
         valid_creation = _strict_non_negative_int(cache_creation_tokens)
-        if valid_creation is not None:
+        if valid_creation is not None:  # never clamped to input: Anthropic reports cache writes outside input_tokens
             attrs["gen_ai.usage.cache_creation.input_tokens"] = valid_creation
-        # Deprecated: `gen_ai.usage.cost_usd` is not an OTel GenAI semconv name. It stays for 1.x because the
-        # gateway importer reads it; prefer the semconv token counts above.
+        # `caveman.usage.cost_usd` carries the cost. `gen_ai.usage.cost_usd` is not an OTel GenAI semconv name and is
+        # deprecated; it stays through 1.x because the gateway importer reads it.
         if isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool) and math.isfinite(float(cost_usd)) and cost_usd >= 0:
             attrs["gen_ai.usage.cost_usd"] = float(cost_usd)
+            attrs["caveman.usage.cost_usd"] = float(cost_usd)
         attrs["cave.agent"] = self.cave.agent
         attrs["cave.workflow"] = workflow or self.cave.default_workflow
 

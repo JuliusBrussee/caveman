@@ -115,6 +115,8 @@ MIDDLEWARE_DEFAULTS: Final = MappingProxyType({
     "bootstrap_deadline_ms": 500, "retrieve_deadline_ms": 5000, "max_concurrency": 16, "max_segments": 256,
     "max_manifest_items": 4096, "manifest_bytes": 2 << 20, "receipt_bytes": 16384, "replaced_memory_entries": 4096,
     "retry_after_cap_ms": 30000, "warn_once_entries": 1024,
+    # §10: a server-advertised deadline is capped; every timer (overrides included) is capped at 2**31 - 1 ms.
+    "deadline_cap_ms": 5000, "retrieve_deadline_cap_ms": 30000, "timer_cap_ms": 2147483647,
 })
 BreakerState = Literal["closed", "open", "half_open"]
 
@@ -178,6 +180,8 @@ REASON_CATALOG: Final[Mapping[str, ReasonPolicy]] = MappingProxyType({
     "runtime_unavailable": ReasonPolicy(True, True, "raise"),
     "unauthorized": ReasonPolicy(False, True, "raise"),
     "unknown_capability": ReasonPolicy(False, True, "raise"),
+    "unsupported_provider": ReasonPolicy(False, True, "ready"),
+    "unsupported_request": ReasonPolicy(False, True, "ready"),
     "unsupported_shape": ReasonPolicy(False, True, "raise"),
     "unsupported_version": ReasonPolicy(False, True, "ready"),
     "version_unavailable": ReasonPolicy(False, True, "ready"),

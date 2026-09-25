@@ -6,7 +6,9 @@ where ``timeout`` is the whole remaining budget in seconds, ``headers`` in the r
 
 This one keeps connections alive, bounds DNS + connect + TLS + upload + download by that one budget,
 honours ``HTTPS_PROXY`` / ``HTTP_PROXY`` / ``NO_PROXY`` (CONNECT tunnel for https, absolute-form for
-http) and accepts an ``ssl.SSLContext`` for a custom CA or client certificate (mTLS).
+http) and accepts an ``ssl.SSLContext`` for a custom CA or client certificate (mTLS). A pooled connection
+the peer closed while idle is never reused, and a request that still meets one is retried once on a fresh
+connection instead of failing.
 """
 import base64
 import http.client
@@ -57,10 +59,71 @@ def _resolve(host: str, port: int, deadline: float) -> list:
     return box[0]
 
 
-def _dial(address: tuple, deadline: float) -> socket.socket:
+def _shutdown(sock) -> None:
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
+class _Watchdog:
+    """Shuts an exchange's sockets down once its deadline passes.
+
+    Socket timeouts bound each operation, not the exchange: a peer that trickles one byte per timeout held a 500 ms
+    call for a minute. This covers connect, the CONNECT tunnel, TLS, status line, headers and body alike.
+    """
+
+    def __init__(self, deadline: float):
+        self.fired = False
+        self._lock = threading.Lock()
+        self._socks: list = []
+        # ponytail: one timer thread per exchange; a shared deadline heap if exchange rates reach thousands per second.
+        self._timer = threading.Timer(min(max(0.0, deadline - time.monotonic()), threading.TIMEOUT_MAX), self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def watch(self, sock) -> None:
+        try:  # a duplicate descriptor survives the TLS wrap, which detaches the raw socket object
+            dup = socket.socket(sock.family, sock.type, sock.proto, fileno=socket.dup(sock.fileno()))
+        except OSError:
+            return
+        with self._lock:
+            self._socks.append(dup)
+            if self.fired:
+                _shutdown(dup)
+
+    def _fire(self) -> None:
+        with self._lock:
+            self.fired = True
+            for sock in self._socks:
+                _shutdown(sock)
+
+    def cancel(self) -> None:
+        self._timer.cancel()
+        with self._lock:
+            for sock in self._socks:
+                sock.close()
+            self._socks.clear()
+
+
+def _reusable(sock) -> bool:
+    """An idle pooled connection has nothing to read: EOF (the peer idle-closed it) or stray bytes mean it cannot carry
+    the next request. Peeks the raw bytes, below any TLS layer, without blocking."""
+    try:
+        sock.settimeout(0)
+        socket.socket.recv(sock, 1, socket.MSG_PEEK)
+    except BlockingIOError:
+        return True
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+def _dial(address: tuple, deadline: float, watchdog: _Watchdog) -> socket.socket:
     error: OSError | None = None
     for family, kind, proto, _, target in _resolve(address[0], address[1], deadline):
         sock = socket.socket(family, kind, proto)
+        watchdog.watch(sock)
         try:
             sock.settimeout(_left(deadline))
             sock.connect(target)
@@ -97,18 +160,31 @@ class HTTPTransport:
             credentials = self._proxy_credentials(proxy)
             if credentials:
                 headers["Proxy-Authorization"] = credentials
-        for attempt in (0, 1):
-            connection, reused = self._checkout(key, parts, proxy, deadline)
-            try:
-                return self._exchange(connection, key, method, target, headers, body, deadline)
-            except _STALE:
-                self._drop(connection)
-                if not reused or attempt:  # only a reused idle connection may have been closed by the server
+        watchdog = _Watchdog(deadline)
+        try:
+            for attempt in (0, 1):
+                connection, reused = self._checkout(key, parts, proxy, deadline, watchdog, fresh=attempt > 0)
+                try:
+                    return self._exchange(connection, key, method, target, headers, body, deadline, watchdog)
+                except _STALE:
+                    self._drop(connection)
+                    # Only a reused connection may have been closed by the peer while idle, and then its pool
+                    # siblings are as old: flush them and retry once on a fresh connection.
+                    if watchdog.fired or not reused or attempt:
+                        raise
+                    self._flush(key)
+                except BaseException:
+                    self._drop(connection)
                     raise
-            except BaseException:
-                self._drop(connection)
-                raise
-        raise AssertionError("unreachable")
+            raise AssertionError("unreachable")
+        except TimeoutError:
+            raise
+        except BaseException:
+            if watchdog.fired:
+                raise TimeoutError("caveman middleware deadline") from None
+            raise
+        finally:
+            watchdog.cancel()
 
     def close(self) -> None:
         with self._lock:
@@ -133,7 +209,7 @@ class HTTPTransport:
         raw = f"{unquote(p.username)}:{unquote(p.password or '')}".encode()
         return "Basic " + base64.b64encode(raw).decode("ascii")
 
-    def _connect(self, parts, proxy: str | None, deadline: float) -> http.client.HTTPConnection:
+    def _connect(self, parts, proxy: str | None, deadline: float, watchdog: _Watchdog) -> http.client.HTTPConnection:
         host, port = parts.hostname, parts.port or (443 if parts.scheme == "https" else 80)
         via_host, via_port = host, port
         if proxy:
@@ -150,20 +226,30 @@ class HTTPTransport:
         else:
             connection = http.client.HTTPConnection(via_host, via_port)
         connection.timeout = _left(deadline)
-        connection._create_connection = lambda address, *_: _dial(address, deadline)
-        connection.connect()  # dial + CONNECT tunnel + TLS handshake, each bounded by the socket timeout
+        connection._create_connection = lambda address, *_: _dial(address, deadline, watchdog)
+        connection.connect()  # dial + CONNECT tunnel + TLS handshake, bounded together by the watchdog
         return connection
 
-    def _checkout(self, key, parts, proxy, deadline):
+    def _checkout(self, key, parts, proxy, deadline, watchdog: _Watchdog, fresh: bool = False):
+        stale = []
         with self._lock:
             if self._closed:
                 raise OSError("transport closed")
-            pool = self._idle.get(key)
-            connection = pool.pop() if pool else None
+            pool = [] if fresh else self._idle.get(key, [])
+            connection = None
+            while pool and connection is None:
+                connection = pool.pop()
+                if not _reusable(connection.sock):
+                    stale.append(connection)
+                    connection = None
             if connection is not None:
                 self._active.add(connection)
-                return connection, True
-        connection = self._connect(parts, proxy, deadline)
+        for dead in stale:
+            dead.close()
+        if connection is not None:
+            watchdog.watch(connection.sock)
+            return connection, True
+        connection = self._connect(parts, proxy, deadline, watchdog)
         with self._lock:
             if not self._closed:
                 self._active.add(connection)
@@ -176,7 +262,13 @@ class HTTPTransport:
             self._active.discard(connection)
         connection.close()
 
-    def _exchange(self, connection, key, method, target, headers, body, deadline):
+    def _flush(self, key) -> None:
+        with self._lock:
+            idle = self._idle.pop(key, [])
+        for connection in idle:
+            connection.close()
+
+    def _exchange(self, connection, key, method, target, headers, body, deadline, watchdog: _Watchdog):
         connection.sock.settimeout(_left(deadline))
         connection.request(method, target, body=body, headers=headers)
         connection.sock.settimeout(_left(deadline))
@@ -188,6 +280,8 @@ class HTTPTransport:
             if not part:
                 break
             data += part
+        if watchdog.fired:  # the shutdown may have ended the body early
+            raise TimeoutError("caveman middleware deadline")
         result = response.status, {k.lower(): v for k, v in response.getheaders()}, bytes(data)
         with self._lock:
             self._active.discard(connection)

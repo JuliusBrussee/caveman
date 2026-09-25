@@ -147,15 +147,12 @@ class AsyncMiddlewareRuntime:
         return await self._submit(self._retrieve_s(), True, self._runtime.delete_session, scope)
 
     async def aclose(self):
-        self._closed = True
+        # Never joins the workers: each in-flight await ends at its own deadline and queued jobs finish with a
+        # `closed` bypass instead of CancelledError. A view of a caller-owned runtime cannot abort that runtime's
+        # transport, so a join could wait on a stuck custom transport indefinitely.
+        self._shutdown_now()
         if self._owns_runtime:
             self._runtime.close()
-        # In-flight and queued jobs finish with a `closed` bypass instead of CancelledError.
-        await asyncio.to_thread(self._join)
-
-    def _join(self):
-        self._executor.shutdown(wait=True)
-        self._retrieve_executor.shutdown(wait=True)
 
     async def __aenter__(self):
         return self

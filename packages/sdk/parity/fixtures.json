@@ -980,6 +980,97 @@
       }
     },
     {
+      "name": "otlp_export_usage",
+      "description": "Usage attributes: a caller-supplied cache-write count passes through when the typed field is absent (SDK 1.1.0); the typed count replaces it and is never clamped to input (Anthropic reports cache writes outside input_tokens); cost goes to caveman.usage.cost_usd plus the deprecated gen_ai.usage.cost_usd; neither cost key can be set through attributes.",
+      "input": {
+        "service_name": "parity-svc",
+        "spans": [
+          {
+            "name": "passthrough",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcde1",
+            "start_time_ns": 1000000000,
+            "end_time_ns": 2000000000,
+            "input_tokens": 10,
+            "attributes": { "gen_ai.usage.cache_creation.input_tokens": 500, "gen_ai.usage.cost_usd": 9, "caveman.usage.cost_usd": 9 }
+          },
+          {
+            "name": "typed",
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcde2",
+            "start_time_ns": 1000000000,
+            "end_time_ns": 2000000000,
+            "input_tokens": 10,
+            "cache_creation_tokens": 500,
+            "cost_usd": 0.25,
+            "attributes": { "gen_ai.usage.cache_creation.input_tokens": 7 }
+          }
+        ]
+      },
+      "response": { "ok": true, "spans_accepted": 2, "spans_total": 2, "otel_schema_version": "1.0.0" },
+      "expect": {
+        "wire": {
+          "method": "POST",
+          "path": "/v1/traces",
+          "headers": "otlp_headers",
+          "body": {
+            "resourceSpans": [
+              {
+                "resource": {
+                  "attributes": [
+                    { "key": "service.name", "value": { "stringValue": "parity-svc" } },
+                    { "key": "cave.agent", "value": { "stringValue": "parity-agent" } }
+                  ]
+                },
+                "scopeSpans": [
+                  {
+                    "scope": { "name": "caveman-cloud", "version": "1.0.0" },
+                    "spans": [
+                      {
+                        "traceId": "0123456789abcdef0123456789abcdef",
+                        "spanId": "0123456789abcde1",
+                        "parentSpanId": "",
+                        "name": "passthrough",
+                        "kind": 3,
+                        "startTimeUnixNano": "1000000000",
+                        "endTimeUnixNano": "2000000000",
+                        "attributes": [
+                          { "key": "gen_ai.usage.cache_creation.input_tokens", "value": { "intValue": "500" } },
+                          { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "10" } },
+                          { "key": "cave.agent", "value": { "stringValue": "parity-agent" } },
+                          { "key": "cave.workflow", "value": { "stringValue": "parity-workflow" } }
+                        ],
+                        "status": { "code": 1 }
+                      },
+                      {
+                        "traceId": "0123456789abcdef0123456789abcdef",
+                        "spanId": "0123456789abcde2",
+                        "parentSpanId": "",
+                        "name": "typed",
+                        "kind": 3,
+                        "startTimeUnixNano": "1000000000",
+                        "endTimeUnixNano": "2000000000",
+                        "attributes": [
+                          { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "10" } },
+                          { "key": "gen_ai.usage.cache_creation.input_tokens", "value": { "intValue": "500" } },
+                          { "key": "gen_ai.usage.cost_usd", "value": { "doubleValue": 0.25 } },
+                          { "key": "caveman.usage.cost_usd", "value": { "doubleValue": 0.25 } },
+                          { "key": "cave.agent", "value": { "stringValue": "parity-agent" } },
+                          { "key": "cave.workflow", "value": { "stringValue": "parity-workflow" } }
+                        ],
+                        "status": { "code": 1 }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "result_from": "response"
+      }
+    },
+    {
       "name": "jobs_unavailable",
       "input": {
         "body": { "kind": "summarize" },

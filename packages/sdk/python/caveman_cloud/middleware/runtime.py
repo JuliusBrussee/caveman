@@ -13,7 +13,7 @@ import time
 import uuid
 import weakref
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, replace
 from typing import Any, Callable, Sequence
@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from . import validate
 from .protocol import (
-    CAPABILITIES_TTL_S, CircuitBreaker, classify_failure, code_outcome, normalize_scope, parse_capabilities, plan_budget,
+    CAPABILITIES_TTL_S, CircuitBreaker, classify_failure, code_outcome, loads, normalize_scope, parse_capabilities, plan_budget,
     resolve_deadlines, resolve_endpoint, warn_once,
 )
 from .transport import MAX_RESPONSE_BYTES, HTTPTransport
@@ -199,7 +199,8 @@ class MiddlewareRuntime:
             except Exception:
                 self._decisions = self._duration = None
         self._caps: CapabilitiesView | None = None
-        self._caps_at, self._caps_stale, self._refreshing = 0.0, False, False
+        self._caps_at, self._caps_stale, self._caps_refetched = 0.0, False, False
+        self._flight: Future | None = None  # the one capabilities fetch in flight (§5 single-flight)
         self._unknown_refreshed, self._negative_until = False, 0.0
         self._retry_until, self._retry_reason = 0.0, "capacity"
         self._breaker = CircuitBreaker()
@@ -218,7 +219,7 @@ class MiddlewareRuntime:
 
     def _after_fork(self) -> None:
         self._init_locks()
-        self._refreshing = False
+        self._flight = None
         if isinstance(self._transport, HTTPTransport):
             self._transport._reset()
 
@@ -245,11 +246,11 @@ class MiddlewareRuntime:
         caps = self._caps
         return resolve_deadlines(self.deadline_ms, self.retrieve_deadline_ms, caps.limits if caps else None)
 
-    def _store(self, view: CapabilitiesView) -> CapabilitiesView:
+    def _store(self, view: CapabilitiesView, refetched: bool = False) -> CapabilitiesView:
         with self._lock:
             if self._closed:
                 raise MiddlewareError("closed")
-            self._caps, self._caps_at, self._caps_stale = view, time.monotonic(), False
+            self._caps, self._caps_at, self._caps_stale, self._caps_refetched = view, time.monotonic(), False, refetched
         return view
 
     def _discover(self) -> CapabilitiesView:
@@ -348,14 +349,18 @@ class MiddlewareRuntime:
                            token(logical_call_id or request.get("logical_call_id")), token(attempt_id or request.get("attempt_id")))
         counts = optimization.counts if not disabled and optimization and optimization.counts else _ZERO
         continuity = "off" if disabled else optimization.cache_continuity if optimization else "unavailable"
+        # §14: the build of the replica that produced the plan, else the one whose capabilities the call used.
+        build = (optimization.plan or {}).get("runtime_build") if optimization else None
         decision = DecisionEvent(1, event.status, event.reason, event.adapter, event.logical_call_id, event.attempt_id, event.transform_ids,
                                  optimization.latency_ms if optimization and not disabled else 0,
+                                 # §14: skipped = sent segments not replaced, whether the runtime skipped them or the call failed
                                  replace(counts, skipped=max(counts.sent - len(replacements), 0), replaced=len(replacements), reused=reused),
-                                 token(optimization.runtime_build) if optimization else None,
+                                 token(build if build is not None else optimization.runtime_build) if optimization else None,
                                  continuity if continuity in ("persistent_choices", "unavailable", "off") else "unavailable")
         with self._lock:
             self._last_report = event
-        warn_once(event.adapter, event.reason)
+        if event.status == "skipped":  # §8: warn only when content passed through unchanged
+            warn_once(event.adapter, event.reason)
         for sink, value in ((self._report_sink, event), (self._decision_sink, decision)):
             if sink:
                 try:
@@ -390,7 +395,7 @@ class MiddlewareRuntime:
         telemetry, span = ExitStack(), None
         consulted, caps, counts, result = False, None, None, None
         outcome: FailureOutcome | None = None
-        code, strict, status_code = "unsupported_shape", None, None
+        code, strict, status_code = "adapter_error", None, None
 
         def gate():
             # §10: consult the breaker immediately before the first network request, once per call.
@@ -484,8 +489,9 @@ class MiddlewareRuntime:
                     self._diagnostic({"code": plan["reason"], "cache_continuity": continuity})
                 except Exception:
                     pass  # Diagnostics cannot change the host request.
+            build = plan.get("runtime_build")
             result = Optimization(plan["status"], plan["reason"], plan["replacements"], plan, request, continuity,
-                                  counts, _ms(started), caps.capabilities["runtime_build"])
+                                  counts, _ms(started), build if build is not None else caps.capabilities["runtime_build"])
         except _Stop as stop:
             code, strict = stop.code, stop.strict
         except _Failure as failure:
@@ -493,7 +499,7 @@ class MiddlewareRuntime:
             code = outcome.reason
             self._failed(outcome)
         except Exception:
-            pass  # a local error while building the request (unserializable manifest or model): unsupported_shape
+            pass  # a local error, e.g. an unserializable manifest or model: adapter_error, never a runtime outage
         finally:
             if consulted:
                 with self._lock:
@@ -511,7 +517,7 @@ class MiddlewareRuntime:
                     "caveman.middleware.adapter": adapter_id if validate.token(adapter_id) else None,
                     "caveman.middleware.status": result.status if result else "bypassed",
                     "caveman.middleware.reason": result.reason if result else code,
-                    "caveman.middleware.runtime_build": caps.capabilities["runtime_build"] if caps else None,
+                    "caveman.middleware.runtime_build": result.runtime_build if result else caps.capabilities["runtime_build"] if caps else None,
                     "caveman.middleware.policy_revision": caps.capabilities["policy_revision"] if caps else None,
                     "caveman.middleware.candidates": c.candidates, "caveman.middleware.sent": c.sent,
                     "caveman.middleware.replaced": len(result.replacements) if result else 0,
@@ -521,33 +527,46 @@ class MiddlewareRuntime:
             telemetry.close()
 
     def _capabilities(self, deadline_at: float, gate: Callable[[], None]) -> CapabilitiesView:
-        """Cached view; bootstrap fetch, or a single-flight refresh when stale (§5: TTL, revision change, no usable transform)."""
+        """Cached view, else one single-flight fetch (§5): concurrent bootstrap callers share it, and while a refresh
+        (TTL, revision change, first unusable view) runs, concurrent calls keep the cached view."""
         with self._lock:
             caps = self._caps
-            stale = caps is not None and (self._caps_stale or not caps.transforms or time.monotonic() - self._caps_at >= CAPABILITIES_TTL_S)
-            if caps is not None and (not stale or self._refreshing):
-                return caps  # concurrent calls keep the cached document while one call refreshes
-            if caps is not None:
-                self._refreshing = True
+            unusable = caps is not None and self.mode == "compress" and not caps.transforms and not self._caps_refetched
+            stale = caps is not None and (self._caps_stale or unusable or time.monotonic() - self._caps_at >= CAPABILITIES_TTL_S)
+            if caps is not None and (not stale or self._flight is not None):
+                return caps
+            flight, leader = self._flight, self._flight is None
+            if leader:
+                flight = self._flight = Future()
         try:
-            gate()
+            gate()  # §10: every call consults the breaker and Retry-After before its first request, shared or not
+            if not leader:
+                try:
+                    return flight.result(max(0.0, deadline_at - time.monotonic()))
+                except TimeoutError:
+                    raise _Failure(_DEADLINE) from None
             value = self._request("capabilities", None, deadline_at)
             try:
                 view = parse_capabilities(value)
             except MiddlewareError as error:  # an unusable 2xx document, including a protocol range excluding this client
                 raise _Failure(FailureOutcome(error.code, True, True, None), 200, strict=True) from None
             try:
-                return self._store(view)
+                view = self._store(view, refetched=unusable)
             except MiddlewareError:
                 raise _Stop("closed") from None
-        except _Failure:
-            with self._lock:
-                self._caps = None  # a failed refresh clears the cache
+            flight.set_result(view)
+            return view
+        except BaseException as error:
+            if leader:
+                if isinstance(error, _Failure):
+                    with self._lock:
+                        self._caps = None  # a failed refresh clears the cache
+                flight.set_exception(error)
             raise
         finally:
-            if caps is not None:
+            if leader:
                 with self._lock:
-                    self._refreshing = False
+                    self._flight = None
 
     def _request(self, path: str, body: str | None, deadline_at: float) -> Any:
         """One optimize-path request; every I/O or response problem becomes a classified _Failure."""
@@ -727,19 +746,16 @@ class MiddlewareRuntime:
         if self.mode == "off":
             return Optimization("off", "disabled", (), None, None, "off")
         self._declined = self._declined or reason
-        warn_once(adapter, reason)
-        return self._bypass(reason, strict=False)
+        return self._bypass(reason, adapter=adapter, strict=False)
 
     def _bypass(self, code: str, *, adapter: str | None = None, diagnostic: bool = True, strict: bool | None = None,
                 counts: DecisionCounts | None = None, started: float | None = None, caps: CapabilitiesView | None = None) -> Optimization:
-        if diagnostic:
-            if adapter is not None:
-                warn_once(adapter, code)
-            if self._diagnostic:
-                try:
-                    self._diagnostic({"code": code, "cache_continuity": "unavailable"})
-                except Exception:
-                    pass
+        warn_once(adapter, code)  # §8: every bypass warns once, naming the adapter or "-"
+        if diagnostic and self._diagnostic:
+            try:
+                self._diagnostic({"code": code, "cache_continuity": "unavailable"})
+            except Exception:
+                pass
         if self.strict and diagnostic:
             policy = REASON_CATALOG.get(code)
             # §8: only `raise` reasons raise on the request path; `ready` reasons surface from ready()/preflight().
@@ -781,6 +797,6 @@ class MiddlewareRuntime:
             retry_after = next((v for k, v in dict(response_headers).items() if str(k).lower() == "retry-after"), None)
             raise _failure(FailureInput("response", status, bytes(data).decode("utf-8", "replace"), retry_after), status)
         try:
-            return json.loads(bytes(data).decode("utf-8"))
+            return loads(bytes(data).decode("utf-8"))
         except ValueError:
             raise _failure(FailureInput("error"), status) from None

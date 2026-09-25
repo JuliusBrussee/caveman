@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Middleware transport honors `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` without
+  `NODE_USE_ENV_PROXY`, never proxies loopback, and adds a `ca` option.
+- Plan validation is total: any malformed plan is `invalid_plan`, never
+  `adapter_error`.
+- The breaker, Retry-After and the capabilities TTL use a monotonic clock.
+  Retrieve and delete have their own concurrency budget. Server-advertised
+  deadlines are capped (5 s optimize, 30 s retrieve).
+- Stricter endpoint parsing; BOM-prefixed responses are rejected; a 429 with a
+  bad UTF-8 body is still `capacity`.
+- `preflight()` reports `unknown_capability` when no transform is usable.
+  `counts.skipped` means sent minus replaced. A stale-revision refresh runs
+  inline through the breaker.
+- New `unsupported_provider` and `unsupported_request` reason codes.
+- Exporter: user-supplied cache-creation attributes pass through again and
+  are no longer clamped. Cost is also emitted as `caveman.usage.cost_usd`
+  (`gen_ai.usage.cost_usd` is deprecated).
 - New read-only `MiddlewareRuntime.strict`.
 - `decline()` accepts any catalog `ReasonCode` and an optional adapter id,
   which the warn-once log line then names.

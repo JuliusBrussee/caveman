@@ -310,9 +310,12 @@ export type SpanOptions = {
   outputTokens?: number;
   /** Provider-reported cached-input subset; never added to inputTokens. */
   cachedTokens?: number;
-  /** Provider-reported cache-write input subset (`gen_ai.usage.cache_creation.input_tokens`). */
+  /** Provider-reported cache-write input tokens (`gen_ai.usage.cache_creation.input_tokens`). Never clamped to
+   * inputTokens: Anthropic reports cache writes outside input_tokens. When absent, a caller-supplied attribute of the
+   * same name passes through. */
   cacheCreationTokens?: number;
-  /** Provider-reported/request-attributed cost in USD. */
+  /** Provider-reported/request-attributed cost in USD, exported as `caveman.usage.cost_usd` plus the deprecated
+   * non-semconv `gen_ai.usage.cost_usd` (kept through 1.x). */
   costUsd?: number;
   workflow?: string;
   status?: "unset" | "ok" | "error";
@@ -2229,11 +2232,13 @@ export class OTelExporter {
       "gen_ai.usage.output_tokens",
       "gen_ai.usage.cached_tokens",
       "gen_ai.usage.cache_read.input_tokens",
-      "gen_ai.usage.cache_creation.input_tokens",
       "gen_ai.usage.cost_usd",
+      "caveman.usage.cost_usd",
       "cave.agent",
       "cave.workflow",
     ]) delete attrs[key];
+    // SDK 1.1.0 passed a caller-supplied cache-write count through; the typed field replaces it only when given.
+    if (options.cacheCreationTokens != null) delete attrs["gen_ai.usage.cache_creation.input_tokens"];
     if (options.operation !== undefined) attrs["gen_ai.operation.name"] = options.operation;
     if (options.provider !== undefined) attrs["gen_ai.provider.name"] = options.provider;
     if (options.model !== undefined) {
@@ -2248,8 +2253,11 @@ export class OTelExporter {
     if (inputTokens !== null) attrs["gen_ai.usage.input_tokens"] = inputTokens;
     if (outputTokens !== null) attrs["gen_ai.usage.output_tokens"] = outputTokens;
     if (cachedTokens !== null && (inputTokens === null || cachedTokens <= inputTokens)) attrs["gen_ai.usage.cache_read.input_tokens"] = cachedTokens;
-    if (cacheCreationTokens !== null && (inputTokens === null || cacheCreationTokens <= inputTokens)) attrs["gen_ai.usage.cache_creation.input_tokens"] = cacheCreationTokens;
-    if (typeof options.costUsd === "number" && Number.isFinite(options.costUsd) && options.costUsd >= 0) attrs["gen_ai.usage.cost_usd"] = options.costUsd;
+    if (cacheCreationTokens !== null) attrs["gen_ai.usage.cache_creation.input_tokens"] = cacheCreationTokens;
+    if (typeof options.costUsd === "number" && Number.isFinite(options.costUsd) && options.costUsd >= 0) {
+      attrs["gen_ai.usage.cost_usd"] = options.costUsd; // deprecated: not an OTel GenAI semconv name; kept through 1.x
+      attrs["caveman.usage.cost_usd"] = options.costUsd;
+    }
     attrs["cave.agent"] = this.cave.options.agent;
     attrs["cave.workflow"] = options.workflow ?? this.cave.options.defaultWorkflow ?? "unlabeled-workflow";
 

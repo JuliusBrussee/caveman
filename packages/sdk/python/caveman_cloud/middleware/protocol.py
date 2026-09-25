@@ -27,7 +27,6 @@ LOOPBACK = frozenset(("localhost", "127.0.0.1", "::1"))
 CAPABILITIES_TTL_S = 300
 _TOKEN = re.compile(SCOPE_TOKEN_PATTERN)
 _REASON = re.compile(REASON_PATTERN)
-_PATH_SEGMENT = re.compile(r"[A-Za-z0-9._~-]+")
 _MAX_SAFE = 2**53 - 1
 _CLEARS = frozenset(("runtime_unavailable", "unknown_capability", "unsupported_version"))
 
@@ -70,6 +69,21 @@ def normalize_scope(value: Any) -> Scope | None:
         if out[key] is None:
             return None
     return Scope(**out)
+
+
+def _number(text: str) -> Any:
+    value = float(text)
+    # JSON has one number type: 500.0 is the integer 500, exactly as JSON.parse reads it in the TS SDK.
+    return int(value) if value.is_integer() and abs(value) <= _MAX_SAFE else value
+
+
+def _not_json(text: str) -> Any:
+    raise ValueError(f"{text} is not JSON")
+
+
+def loads(text: str) -> Any:
+    """Strict JSON, read as JSON.parse reads it: NaN/Infinity are rejected and integral numbers are ints."""
+    return json.loads(text, parse_float=_number, parse_constant=_not_json)
 
 
 def parse_capabilities(value: Any) -> CapabilitiesView:
@@ -128,7 +142,7 @@ def classify_failure(failure: FailureInput) -> FailureOutcome:
         return FailureOutcome("redirect_refused", True, True, None)
     status = failure.status or 0
     try:
-        code = json.loads(failure.body or "")["error"]["code"]
+        code = loads(failure.body or "")["error"]["code"]
     except (ValueError, TypeError, KeyError, IndexError):
         code = None
     if not isinstance(code, str) or not _REASON.fullmatch(code):
@@ -184,15 +198,21 @@ class CircuitBreaker:
 
 def resolve_deadlines(deadline_ms: int | None = None, retrieve_deadline_ms: int | None = None,
                       limits: EffectiveLimits | Mapping | None = None) -> tuple[int, int]:
-    """§10: (optimize_ms, retrieve_ms) = override, else capabilities limits, else 500 / 5000."""
+    """§10: (optimize_ms, retrieve_ms) = override, else capabilities limits (capped at 5000 / 30000), else 500 / 5000.
+
+    Every result is capped at 2**31 - 1 ms, the largest timer both SDKs can arm.
+    """
+    d = MIDDLEWARE_DEFAULTS
+
     def get(key):
         return getattr(limits, key, None) if isinstance(limits, EffectiveLimits) else (limits or {}).get(key)
 
-    def pick(override, key, default):
-        return next((v for v in (override, get(key)) if _positive(v)), default)
+    def pick(override, key, cap, default):
+        value = override if _positive(override) else min(get(key), cap) if _positive(get(key)) else default
+        return min(value, d["timer_cap_ms"])
 
-    return (pick(deadline_ms, "deadline_ms", MIDDLEWARE_DEFAULTS["bootstrap_deadline_ms"]),
-            pick(retrieve_deadline_ms, "retrieve_deadline_ms", MIDDLEWARE_DEFAULTS["retrieve_deadline_ms"]))
+    return (pick(deadline_ms, "deadline_ms", d["deadline_cap_ms"], d["bootstrap_deadline_ms"]),
+            pick(retrieve_deadline_ms, "retrieve_deadline_ms", d["retrieve_deadline_cap_ms"], d["retrieve_deadline_ms"]))
 
 
 def plan_budget(items: Sequence[BudgetItem], *, max_segments: int, max_bytes: int, replaced=()) -> BudgetResult:
@@ -229,26 +249,54 @@ def opaque_manifest_value(value: Any) -> dict[str, str]:
     return {"caveman_opaque": "unhashable"}
 
 
-def resolve_endpoint(endpoint: Any, allow_remote_content: bool = False, allow_insecure_transport: bool = False) -> str:
-    """§15: the base URL with its path prefix and a trailing slash, or MiddlewareError(refusal code)."""
+_ENDPOINT = re.compile(r"(https?)://(\[[0-9a-f:.]+\]|[a-z0-9_.-]+)(?::([1-9][0-9]{0,4}))?((?:/[A-Za-z0-9._~-]+)*)/?", re.I)
+_OCTET = re.compile(r"0|[1-9][0-9]{0,2}")
+
+
+def _loopback(host: str) -> bool:
+    """§15 loopback: localhost, 127.0.0.1 and ::1 (any spelling of that IPv6 address); `host` is unbracketed."""
+    if host in LOOPBACK:
+        return True
     try:
-        if not isinstance(endpoint, str) or "?" in endpoint or "#" in endpoint:
-            raise ValueError
-        url = urlsplit(endpoint)
-        host, _ = url.hostname, url.port  # .port raises ValueError for a malformed port
-        path = url.path[:-1] if url.path.endswith("/") else url.path
-        if (url.scheme not in ("http", "https") or not host or url.username is not None or url.password is not None
-                or (path and (not path.startswith("/") or any(
-                    s in (".", "..") or not _PATH_SEGMENT.fullmatch(s) for s in path[1:].split("/"))))):
-            raise ValueError
+        return ":" in host and ipaddress.IPv6Address(host) == ipaddress.IPv6Address("::1")
     except ValueError:
-        raise MiddlewareError("invalid_endpoint") from None
-    if host not in LOOPBACK:
+        return False
+
+
+def _endpoint_host(host: str) -> bool:
+    """§15 host grammar: a bracketed IPv6 literal, a canonical dotted quad, or a name that does not end in a number
+    (127.1, 0x7f.1 and 2130706433 are IPv4 in URL parsers; they are refused, never reinterpreted)."""
+    if host.startswith("["):
+        try:
+            ipaddress.IPv6Address(host[1:-1])
+            return True
+        except ValueError:
+            return False
+    labels = (host[:-1] if host.endswith(".") else host).split(".")
+    if not all(labels):
+        return False
+    if labels[-1].isdigit() or labels[-1].startswith("0x"):
+        return host == ".".join(labels) and len(labels) == 4 and all(_OCTET.fullmatch(x) and int(x) <= 255 for x in labels)
+    return True
+
+
+def resolve_endpoint(endpoint: Any, allow_remote_content: bool = False, allow_insecure_transport: bool = False) -> str:
+    """§15: the base URL with its path prefix and a trailing slash, or MiddlewareError(refusal code).
+
+    Strict: whitespace or control characters anywhere, percent-encoding, userinfo, query, fragment, an empty or
+    leading-zero port and numeric host shorthands are all invalid_endpoint. Scheme and host are lowercased.
+    """
+    match = _ENDPOINT.fullmatch(endpoint) if isinstance(endpoint, str) else None
+    if (match is None or (match[3] and int(match[3]) > 65535) or not _endpoint_host(match[2].lower())
+            or any(s in (".", "..") for s in match[4].split("/"))):
+        raise MiddlewareError("invalid_endpoint")
+    scheme, host, port, path = match[1].lower(), match[2].lower(), match[3], match[4]
+    if not _loopback(host.strip("[]")):
         if not allow_remote_content:
             raise MiddlewareError("remote_content_not_enabled")
-        if url.scheme == "http" and not allow_insecure_transport:
+        if scheme == "http" and not allow_insecure_transport:
             raise MiddlewareError("insecure_transport_not_enabled")
-    return f"{url.scheme}://{url.netloc}{path}/"
+    return f"{scheme}://{host}{':' + port if port else ''}{path}/"
 
 
 def _ip(host: str) -> bool:
@@ -264,7 +312,7 @@ def resolve_proxy(url: str, env: Mapping[str, str] | None = None) -> str | None:
     env = os.environ if env is None else env
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
-    if not host or host in LOOPBACK:
+    if not host or _loopback(host):
         return None
     name = "https_proxy" if parts.scheme == "https" else "http_proxy"
     proxy = env.get(name) or env.get(name.upper()) or None

@@ -218,6 +218,8 @@ export const MIDDLEWARE_DEFAULTS = Object.freeze({
   bootstrap_deadline_ms: 500, retrieve_deadline_ms: 5000, max_concurrency: 16, max_segments: 256,
   max_manifest_items: 4096, manifest_bytes: 2 << 20, receipt_bytes: 16384, replaced_memory_entries: 4096,
   retry_after_cap_ms: 30000, warn_once_entries: 1024,
+  // §10: a server-advertised deadline is capped; every timer (overrides included) is capped at 2**31 - 1 ms.
+  deadline_cap_ms: 5000, retrieve_deadline_cap_ms: 30000, timer_cap_ms: 2147483647,
 });
 export type BreakerState = 'closed' | 'open' | 'half_open';
 export interface BreakerParams { consecutive_failures: number; window_size: number; window_failures: number; open_ms: number }
@@ -232,7 +234,8 @@ export type ReasonCode =
   | 'unsupported_shape' | 'redirect_refused' | 'unauthorized' | 'forbidden_origin' | 'forbidden_namespace' | 'invalid_request'
   | 'payload_limit' | 'not_found' | 'deleted' | 'expired' | 'epoch_changed' | 'identity_conflict' | 'quota_exceeded'
   | 'not_smaller' | 'cache_state_unavailable' | 'recovery_unavailable' | 'protected' | 'record' | 'eligible' | 'disabled'
-  | 'invalid_endpoint' | 'remote_content_not_enabled' | 'insecure_transport_not_enabled' | 'invalid_configuration';
+  | 'invalid_endpoint' | 'remote_content_not_enabled' | 'insecure_transport_not_enabled' | 'invalid_configuration'
+  | 'unsupported_provider' | 'unsupported_request';
 export interface ReasonPolicy { readonly breaker: boolean; readonly warn_once: boolean; readonly strict: 'raise' | 'ready' | 'none' }
 export const REASON_CATALOG: Readonly<Record<ReasonCode, ReasonPolicy>> = Object.freeze({
   adapter_error: { breaker: false, warn_once: true, strict: 'raise' },
@@ -273,6 +276,8 @@ export const REASON_CATALOG: Readonly<Record<ReasonCode, ReasonPolicy>> = Object
   runtime_unavailable: { breaker: true, warn_once: true, strict: 'raise' },
   unauthorized: { breaker: false, warn_once: true, strict: 'raise' },
   unknown_capability: { breaker: false, warn_once: true, strict: 'raise' },
+  unsupported_provider: { breaker: false, warn_once: true, strict: 'ready' },
+  unsupported_request: { breaker: false, warn_once: true, strict: 'ready' },
   unsupported_shape: { breaker: false, warn_once: true, strict: 'raise' },
   unsupported_version: { breaker: false, warn_once: true, strict: 'ready' },
   version_unavailable: { breaker: false, warn_once: true, strict: 'ready' },
