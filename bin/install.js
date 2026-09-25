@@ -426,7 +426,9 @@ function spawnXplat(cmd, args, opts) {
 function runSpawn(cmd, args, opts, dry) {
   if (dry) { process.stdout.write(`  would run: ${cmd} ${args.join(' ')}\n`); return { status: 0 }; }
   process.stdout.write(`  $ ${cmd} ${args.join(' ')}\n`);
-  return spawnXplat(cmd, args, Object.assign({ stdio: 'inherit' }, opts || {}));
+  const result = spawnXplat(cmd, args, Object.assign({ stdio: 'inherit' }, opts || {}));
+  if (result && result.error) process.stderr.write(`  ${result.error.message}\n`);
+  return result;
 }
 
 // Create env with TMPDIR pointing to a temp dir inside configDir.

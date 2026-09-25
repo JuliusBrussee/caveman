@@ -289,7 +289,11 @@ test('pruneOrphanedManagedHooks removes managed hook whose target is missing (ab
   assert.equal(s.hooks, undefined);
 });
 
-test('pruneOrphanedManagedHooks keeps a foreign-platform absolute path it cannot judge', () => {
+test('pruneOrphanedManagedHooks keeps a foreign-platform absolute path it cannot judge', {
+  // The fixture is a Windows path. On win32 that path is native, so a missing
+  // file is a real orphan. The case under test is POSIX reading that path.
+  skip: process.platform === 'win32' ? 'Windows path is native on win32' : false,
+}, () => {
   // A roaming settings.json written on Windows, processed on POSIX: path
   // .isAbsolute() says false for `C:\...`, so the old code joined it under
   // baseDir, found nothing, and pruned a hook that is live on the machine that
