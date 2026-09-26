@@ -80,17 +80,18 @@ func (r *Registry) For(contentType string) (Compressor, bool) {
 }
 
 // Default returns a registry with the engine's built-in compressors registered:
-// JSON, log, code, diff, search-result, text, HTML, tabular, config, tool-schema,
-// lossless tool-schema, TOON, accessibility-tree, repetition, and terminal. The
-// code compressor is selected at build time — a tree-sitter-backed one when cgo is
-// enabled, a pure-Go go/ast one otherwise. HTML and terminal are auto-detected
-// (Detect → "html"/"terminal"); tool-schema, lossless tool-schema, TOON,
-// accessibility-tree, and repetition are never auto-detected and are reached only
-// by forcing Options.Type.
+// JSON, log, test-report, code, diff, search-result, text, HTML, tabular, config,
+// tool-schema, lossless tool-schema, TOON, accessibility-tree, repetition, and
+// terminal. The code compressor is selected at build time — a tree-sitter-backed
+// one when cgo is enabled, a pure-Go go/ast one otherwise. HTML, terminal, and
+// test-report are auto-detected (Detect → "html"/"terminal"/"test-report");
+// tool-schema, lossless tool-schema, TOON, accessibility-tree, and repetition are
+// never auto-detected and are reached only by forcing Options.Type.
 func Default() *Registry {
 	r := NewRegistry()
 	r.Register(NewJSON())
 	r.Register(NewLog())
+	r.Register(NewTestReport())
 	r.Register(newCode())
 	r.Register(NewDiff())
 	r.Register(NewSearchResult())

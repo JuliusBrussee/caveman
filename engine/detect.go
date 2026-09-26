@@ -22,6 +22,7 @@ const (
 	TypeTerminal     = "terminal"
 	TypeTabular      = "tabular"
 	TypeConfig       = "config"
+	TypeTestReport   = "test-report"
 )
 
 var (
@@ -47,6 +48,12 @@ func (e *Engine) Detect(input []byte) string {
 	trimmed := bytes.TrimSpace(input)
 	if len(trimmed) == 0 {
 		return TypeText
+	}
+	// Test reports are detected before generic JSON because pytest/Jest reports
+	// are valid JSON with a specific semantic shape that deserves specialized
+	// compression. The structural check is fast and specific.
+	if looksLikeTestReport(input) {
+		return TypeTestReport
 	}
 	if (trimmed[0] == '{' || trimmed[0] == '[') && json.Valid(trimmed) {
 		return TypeJSON
@@ -207,3 +214,32 @@ func looksLikeSearchResult(input []byte) bool {
 	}
 	return matched >= 4 && matched*3 >= len(lines)
 }
+
+// looksLikeTestReport detects test report formats deterministically. JUnit XML
+// is conclusive from its root elements. pytest and Jest JSON reports require
+// both their structural keys present to reduce false positives.
+func looksLikeTestReport(input []byte) bool {
+	s := bytes.ToLower(bytes.TrimSpace(input))
+
+	// JUnit XML: root <testsuites> or <testsuite> with <testcase> children
+	if bytes.HasPrefix(s, []byte("<testsuite")) || bytes.HasPrefix(s, []byte("<testsuites")) {
+		return true
+	}
+	if bytes.Contains(s, []byte("<testcase")) &&
+		(bytes.Contains(s, []byte("<testsuite")) || bytes.Contains(s, []byte("<testsuites"))) {
+		return true
+	}
+
+	// pytest JSON: requires BOTH "exitcode" AND "tests" keys at top level
+	if bytes.Contains(s, []byte("\"exitcode\"")) && bytes.Contains(s, []byte("\"tests\"")) {
+		return true
+	}
+
+	// Jest JSON: requires BOTH "numFailedTests" AND "testResults" keys
+	if bytes.Contains(s, []byte("\"numfailedtests\"")) && bytes.Contains(s, []byte("\"testresults\"")) {
+		return true
+	}
+
+	return false
+}
+
