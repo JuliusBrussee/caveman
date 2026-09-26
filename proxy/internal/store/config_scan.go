@@ -51,17 +51,24 @@ type mcpScopeScan struct {
 	Present bool
 }
 
+// claudeConfigDirOverride is the config-dir override Claude Code itself honors,
+// and the one the JS hooks, bin/install.js and INSTALL.md already read. Every
+// Claude-root resolver in this package goes through this one function: the three
+// entrypoints that resolve a root independently (config scan, learn, usage
+// import) had each grown its own home join, so honoring the variable in one of
+// them still left the others reporting "0 sessions" (#1124). Whitespace-only is
+// treated as unset — joining it would build a path relative to the process cwd.
+func claudeConfigDirOverride() string {
+	return strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
+}
+
 // Agent roots resolve local transcript/config dirs and stay env-overridable so
 // tests never read or write a user's real agent data.
 func claudeRoot() string {
 	if r := os.Getenv("CAVEMAN_CLAUDE_ROOT"); r != "" {
 		return r
 	}
-	// CLAUDE_CONFIG_DIR is the override Claude Code itself honors, and the one
-	// the CLI, the installer, and INSTALL.md already read. Falling through to
-	// ~/.claude instead leaves learn reporting "0 sessions" for a user whose
-	// config never lived there, so honor it before the home default.
-	if r := os.Getenv("CLAUDE_CONFIG_DIR"); r != "" {
+	if r := claudeConfigDirOverride(); r != "" {
 		return r
 	}
 	home, err := os.UserHomeDir()
@@ -212,6 +219,12 @@ func claudeGlobalConfigPath() string {
 	}
 	if root := os.Getenv("CAVEMAN_CLAUDE_ROOT"); root != "" {
 		// Tests and alternate Claude homes must not fall through to real user config.
+		return filepath.Join(root, ".claude.json")
+	}
+	// The CLI twin resolves this file inside a nonempty CLAUDE_CONFIG_DIR
+	// (claudeJSONPath in packages/cli/src/index.ts). Agreeing with it keeps the
+	// MCP-tax scan from reporting claude_global absent for every override user.
+	if root := claudeConfigDirOverride(); root != "" {
 		return filepath.Join(root, ".claude.json")
 	}
 	home, err := os.UserHomeDir()
