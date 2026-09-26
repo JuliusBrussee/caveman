@@ -176,6 +176,8 @@ process.stdin.on("end", () => {
   try {
     const { default: factory } = await import(pathToFileURL(extension).href);
     factory({ registerTool: (tool) => { retrieveTool = tool; }, on: (name, fn) => handlers.set(name, fn) });
+    // Hosts deliver tool results only inside a started session.
+    await handlers.get("session_start")?.({}, { hasUI: false, ui: { notify() {} }, sessionManager: { getSessionId: () => "test" } });
     const image = { type: "image", data: "cGl4ZWxz", mimeType: "image/png" };
     const content = [{ type: "text", text: original.slice(0, 8) }, image, { type: "text", text: original.slice(8) }];
     const shrunk = await handlers.get("tool_result")({ toolName: "read_file", input: {}, isError: false, content });
