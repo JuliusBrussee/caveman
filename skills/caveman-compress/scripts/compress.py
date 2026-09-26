@@ -362,6 +362,10 @@ from .validate import validate
 
 MAX_RETRIES = 2
 
+# Output ceiling for one compression call. Sized against MAX_FILE_SIZE (500KB
+# in, ~125k tokens) so a compressed body is never cut off mid-file.
+MAX_OUTPUT_TOKENS = 64000
+
 
 def _is_smaller_than_body(candidate_body: str, body: str) -> bool:
     """True when `candidate_body` actually compresses `body`.
@@ -416,11 +420,19 @@ def call_claude(prompt: str) -> str:
             import anthropic
 
             client = anthropic.Anthropic(api_key=api_key, timeout=CLAUDE_CALL_TIMEOUT_SECONDS)
-            msg = client.messages.create(
+            # Streaming, not create(): compress_file() accepts inputs up to
+            # MAX_FILE_SIZE (500KB, ~125k tokens). A compressed body routinely
+            # exceeds an 8192-token cap, and create() would truncate it
+            # silently -- validate() then fails on the missing tail and the
+            # retry loop burns two more paid calls before restoring the
+            # original. Streaming also keeps a large response under the SDK's
+            # non-streaming request timeout.
+            with client.messages.stream(
                 model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
-                max_tokens=8192,
+                max_tokens=MAX_OUTPUT_TOKENS,
                 messages=[{"role": "user", "content": prompt}],
-            )
+            ) as stream:
+                msg = stream.get_final_message()
             # Tool-heavy models can put a tool_use or thinking block first; take
             # the first text block instead of trusting content[0].
             text = next((block.text for block in msg.content if getattr(block, "type", None) == "text"), "")
