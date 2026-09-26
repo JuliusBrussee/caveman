@@ -43,6 +43,52 @@ test('mixed CJK technical descriptions retain articles, intent, case and whitesp
   }
 });
 
+test('a NUL byte in the input cannot forge a protected-segment sentinel', () => {
+  // withProtectedSegments swaps each protected match for a `\0<index>\0`
+  // sentinel and splices the originals back afterwards. The sentinel is
+  // spelled in NUL bytes because they "cannot occur" in real text — but a
+  // description is third-party data: JSON-RPC carries \u0000 happily, and the
+  // proxy rewrites MCP tool descriptions in place via
+  // compressDescriptionsInPlace, so whatever an MCP server sends lands in the
+  // model's tool list. An input that already spells a sentinel is restored as
+  // if it were one: index 0 splices in a protected segment lifted from
+  // somewhere else in the same string, and an out-of-range index splices in
+  // the literal string "undefined".
+  const NUL = '\u0000';
+
+  const forged = compress(`Run ${NUL}0${NUL} with \`realCode\` now`).compressed;
+  assert.ok(
+    !forged.includes('realCode') || forged.indexOf('realCode') === forged.lastIndexOf('realCode'),
+    `forged sentinel duplicated a protected segment: ${JSON.stringify(forged)}`
+  );
+  assert.ok(!forged.includes(NUL), `NUL survived into model context: ${JSON.stringify(forged)}`);
+
+  const outOfRange = compress(`Check ${NUL}99${NUL} value really`).compressed;
+  assert.ok(
+    !outOfRange.includes('undefined'),
+    `out-of-range sentinel injected "undefined": ${JSON.stringify(outOfRange)}`
+  );
+  assert.ok(!outOfRange.includes(NUL), `NUL survived into model context: ${JSON.stringify(outOfRange)}`);
+});
+
+test('compression never grows a description or invents words (NUL inputs included)', () => {
+  // SKILL.md's standing rule: "Compression only style never grow output."
+  // The forged-sentinel path violated it by substituting a longer string than
+  // it removed, which is the cheap signal that content was invented.
+  const NUL = '\u0000';
+  for (const input of [
+    `Check ${NUL}99${NUL} value really`,
+    `Run ${NUL}0${NUL} just now`,
+    `${NUL}${NUL} please`,
+  ]) {
+    const { compressed } = compress(input);
+    assert.ok(
+      compressed.length <= input.length,
+      `grew ${JSON.stringify(input)} -> ${JSON.stringify(compressed)}`
+    );
+  }
+});
+
 test('drops articles', () => {
   const { compressed } = compress('The user is the owner of an account');
   assert.match(compressed, /User is owner of account/i);

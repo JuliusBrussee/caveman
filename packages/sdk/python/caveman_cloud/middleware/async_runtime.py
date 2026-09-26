@@ -19,7 +19,18 @@ class AsyncMiddlewareRuntime:
     def _init_workers(self):
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="caveman-middleware")
         self._slots = threading.BoundedSemaphore(16)
+        # Receipts are never on the provider's critical path, so they get their
+        # own worker instead of competing for the four that optimize()/ready()/
+        # retrieve() share. Without this a burst of concurrent observe() calls
+        # holds every worker long enough for an unrelated optimize() to spend
+        # its whole deadline queued and bypass with reason="deadline", never
+        # having attempted its capabilities fetch. MiddlewareRuntime.
+        # observe_background() already isolates the synchronous path this way.
+        self._receipt_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="caveman-async-receipts")
+        self._receipt_slots = threading.BoundedSemaphore(16)
         self._closed = False
+        # Serializes _closed with _shutdown_now, which can run on another thread.
+        self._lifecycle_lock = threading.Lock()
 
     @classmethod
     def from_sync(cls, runtime: MiddlewareRuntime):
@@ -34,8 +45,10 @@ class AsyncMiddlewareRuntime:
         return instance
 
     def _shutdown_now(self):
-        self._closed = True
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        with self._lifecycle_lock:
+            self._closed = True
+            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._receipt_executor.shutdown(wait=False, cancel_futures=True)
 
     @property
     def mode(self):
@@ -91,7 +104,7 @@ class AsyncMiddlewareRuntime:
 
     async def observe(self, receipt):
         try:
-            await self._submit(self._runtime.observe, receipt)
+            await self._submit_to(self._receipt_executor, self._receipt_slots, self._runtime.observe, receipt)
         except MiddlewareError:
             pass
 
@@ -102,10 +115,11 @@ class AsyncMiddlewareRuntime:
         return await self._submit(self._runtime.delete_session, scope)
 
     async def aclose(self):
-        self._closed = True
+        self._shutdown_now()
         if self._owns_runtime:
             self._runtime.close()
         await asyncio.to_thread(self._executor.shutdown, wait=True, cancel_futures=True)
+        await asyncio.to_thread(self._receipt_executor.shutdown, wait=True, cancel_futures=True)
 
     async def __aenter__(self):
         return self
@@ -114,17 +128,26 @@ class AsyncMiddlewareRuntime:
         await self.aclose()
 
     async def _submit(self, function, *args, **kwargs):
+        return await self._submit_to(self._executor, self._slots, function, *args, **kwargs)
+
+    async def _submit_to(self, executor, slots, function, *args, **kwargs):
         if self._closed:
             raise MiddlewareError("closed")
-        if not self._slots.acquire(blocking=False):
+        if not slots.acquire(blocking=False):
             raise MiddlewareError("capacity")
         context = contextvars.copy_context()
         try:
-            future = self._executor.submit(context.run, functools.partial(function, *args, **kwargs))
+            # Re-checked under the lock: the fast check above cannot rule out
+            # a shutdown landing between it and the submit call below. Both
+            # pools shut down under the same lock, so this covers receipts too.
+            with self._lifecycle_lock:
+                if self._closed:
+                    raise MiddlewareError("closed")
+                future = executor.submit(context.run, functools.partial(function, *args, **kwargs))
         except BaseException:
-            self._slots.release()
+            slots.release()
             raise
         # Release only when the underlying worker actually terminates. Releasing
         # on coroutine cancellation would allow unlimited queued/running work.
-        future.add_done_callback(lambda _: self._slots.release())
+        future.add_done_callback(lambda _: slots.release())
         return await asyncio.wrap_future(future)

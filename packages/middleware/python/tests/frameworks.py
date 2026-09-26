@@ -15,7 +15,7 @@ import pytest
 from packaging.requirements import Requirement
 
 
-EXTRAS = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())["project"]["optional-dependencies"]
+EXTRAS = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))["project"]["optional-dependencies"]
 REQUIREMENTS = {name.replace("-", "_"): [Requirement(value) for value in values] for name, values in EXTRAS.items()}
 
 

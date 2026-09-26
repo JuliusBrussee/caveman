@@ -283,16 +283,16 @@ class SessionStartSourceTests(unittest.TestCase):
 
     def set_session_mode(self, session_id, mode):
         self.sessions.mkdir(parents=True, exist_ok=True)
-        (self.sessions / f"{session_id}.mode").write_text(mode)
+        (self.sessions / f"{session_id}.mode").write_text(mode, encoding="utf-8")
 
     def session_mode(self, session_id):
         p = self.sessions / f"{session_id}.mode"
-        return p.read_text() if p.exists() else None
+        return p.read_text(encoding="utf-8") if p.exists() else None
 
     def test_startup_persists_the_session_mode(self):
         self.activate({"session_id": "sessA", "source": "startup"})
         self.assertEqual(self.session_mode("sessA"), "full")
-        self.assertEqual((self.claude_dir / ".caveman-active").read_text(), "full")
+        self.assertEqual((self.claude_dir / ".caveman-active").read_text(encoding="utf-8"), "full")
 
     def test_compact_does_not_resurrect_a_deactivated_session(self):
         self.set_session_mode("sessA", "off")
@@ -337,7 +337,7 @@ class SessionStartSourceTests(unittest.TestCase):
     def test_a_pre_upgrade_legacy_flag_survives_a_compaction(self):
         # Upgrade path: the session began before per-session state existed, so
         # only the machine-wide flag holds its mode.
-        (self.claude_dir / ".caveman-active").write_text("lite")
+        (self.claude_dir / ".caveman-active").write_text("lite", encoding="utf-8")
         r = self.activate(
             {"session_id": "sessA", "source": "compact"},
             extra_env={"CAVEMAN_DEFAULT_MODE": "ultra"},
@@ -365,7 +365,7 @@ class SessionStartSourceTests(unittest.TestCase):
 
     def test_rejected_session_id_writes_no_state_file(self):
         self.activate({"session_id": "../../escape", "source": "startup"})
-        self.assertEqual((self.claude_dir / ".caveman-active").read_text(), "full")
+        self.assertEqual((self.claude_dir / ".caveman-active").read_text(encoding="utf-8"), "full")
         stray = list(self.claude_dir.rglob("*.mode")) + list(self.claude_dir.rglob("*escape*"))
         self.assertEqual(stray, [], f"unexpected files: {stray}")
 

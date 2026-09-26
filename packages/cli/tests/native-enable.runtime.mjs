@@ -1084,6 +1084,104 @@ test("enable/disable opencode installs one native plugin, routed providers and r
   assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "opencode.json")), false);
 });
 
+test("status recognizes native OpenCode MCP recovery without a legacy marker", async () => {
+  const fx = fixture();
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+
+  const configPath = join(configDir, "opencode.json");
+  writeFileSync(configPath, JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  assert.equal(
+    existsSync(join(fx.home, ".caveman", "mcp", "opencode.json")),
+    false,
+  );
+
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  assert.ok(installed.mcp?.caveman);
+
+  const status = await run(["status"], fx.env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.doesNotMatch(status.stdout + status.stderr, /MCP recovery missing/);
+});
+
+test("status keeps native OpenCode MCP recovery when provider routing drifts", async () => {
+  const fx = fixture();
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+
+  const configPath = join(configDir, "opencode.json");
+  writeFileSync(configPath, JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  installed.provider.openai.options.baseURL =
+    "http://127.0.0.1:8787/chatgpt";
+  writeFileSync(configPath, JSON.stringify(installed, null, 2) + "\n");
+
+  const status = await run(["status"], fx.env);
+  assert.equal(status.code, 0, status.stderr);
+
+  const output = status.stdout + status.stderr;
+  assert.doesNotMatch(output, /MCP recovery missing/);
+});
+
+test("status recognizes native OpenCode MCP recovery when the config rewrites key order", async () => {
+  const fx = fixture();
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+
+  const configPath = join(configDir, "opencode.json");
+  writeFileSync(configPath, JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  const caveman = installed.mcp.caveman;
+  const keys = Object.keys(caveman);
+  assert.ok(keys.length > 1, "registration needs >1 key for a reorder to be meaningful");
+
+  // Same registration, keys serialized in the opposite order. Any writer that
+  // round-trips this file through a sorted or rebuilt map produces this, and the
+  // registration is still byte-for-byte equivalent as a value.
+  const reordered = {};
+  for (const key of keys.slice().reverse()) reordered[key] = caveman[key];
+  installed.mcp.caveman = reordered;
+  writeFileSync(configPath, JSON.stringify(installed, null, 2) + "\n");
+
+  const status = await run(["status"], fx.env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.doesNotMatch(status.stdout + status.stderr, /MCP recovery missing/);
+});
+
+test("status reports native OpenCode MCP recovery missing when its registration is removed", async () => {
+  const fx = fixture();
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+
+  const configPath = join(configDir, "opencode.json");
+  writeFileSync(configPath, JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  delete installed.mcp.caveman;
+  writeFileSync(configPath, JSON.stringify(installed, null, 2) + "\n");
+
+  const status = await run(["status"], fx.env);
+  assert.equal(status.code, 0, status.stderr);
+
+  const output = status.stdout + status.stderr;
+  assert.match(output, /MCP recovery missing/);
+});
+
 test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {
   const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
   const configDir = join(fx.home, ".config", "opencode");

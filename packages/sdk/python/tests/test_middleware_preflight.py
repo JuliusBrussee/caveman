@@ -10,8 +10,8 @@ from pathlib import Path
 from caveman_cloud.middleware import AsyncMiddlewareRuntime, MiddlewareError, MiddlewareRuntime
 
 PARITY = Path(__file__).resolve().parents[2] / "parity"
-PROTOCOL = json.loads((PARITY / "middleware.fixtures.json").read_text())
-FIXTURE = json.loads((PARITY / "middleware-preflight.fixtures.json").read_text())
+PROTOCOL = json.loads((PARITY / "middleware.fixtures.json").read_text(encoding="utf-8"))
+FIXTURE = json.loads((PARITY / "middleware-preflight.fixtures.json").read_text(encoding="utf-8"))
 
 
 def transport(vector, calls):

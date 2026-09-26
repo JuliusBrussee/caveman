@@ -267,10 +267,10 @@ class SessionScopedModeTests(unittest.TestCase):
 
     def mode_of(self, session_id):
         p = self.sessions / f"{session_id}.mode"
-        return p.read_text() if p.exists() else None
+        return p.read_text(encoding="utf-8") if p.exists() else None
 
     def legacy_value(self):
-        return self.legacy.read_text() if self.legacy.exists() else None
+        return self.legacy.read_text(encoding="utf-8") if self.legacy.exists() else None
 
     def test_parallel_sessions_keep_separate_modes(self):
         self.send("/caveman ultra", "sessA")
@@ -339,7 +339,7 @@ class SessionScopedModeTests(unittest.TestCase):
 
     def test_one_shot_skill_does_not_switch_an_off_session_on(self):
         # A stale machine-wide prev from some earlier session-less run.
-        (self.claude_dir / ".caveman-active.prev").write_text("ultra")
+        (self.claude_dir / ".caveman-active.prev").write_text("ultra", encoding="utf-8")
 
         # This session never had caveman on, so /caveman-commit displaces
         # nothing and saves no prev. Borrowing the stale machine-wide one would
@@ -350,13 +350,13 @@ class SessionScopedModeTests(unittest.TestCase):
         self.assertNotIn("CAVEMAN MODE ACTIVE", r.stdout)
         self.assertEqual(self.mode_of("sessY"), "off")
         self.assertEqual(
-            (self.claude_dir / ".caveman-active.prev").read_text(), "ultra",
+            (self.claude_dir / ".caveman-active.prev").read_text(encoding="utf-8"), "ultra",
             "a session-scoped restore must not consume machine-wide state",
         )
 
     def test_existing_legacy_flag_is_honored_before_first_session_write(self):
         # Upgrade path: only the old flag exists when a new session starts.
-        self.legacy.write_text("wenyan")
+        self.legacy.write_text("wenyan", encoding="utf-8")
         r = self.send("ordinary prompt", "sessA")
         self.assertIn("CAVEMAN MODE ACTIVE (wenyan)", r.stdout)
 

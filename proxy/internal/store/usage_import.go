@@ -64,11 +64,14 @@ func (s *Store) ImportCodex(root, sinceExpr string) (ImportSummary, error) {
 
 func (s *Store) ImportClaude(root, sinceExpr string) (ImportSummary, error) {
 	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ImportSummary{}, err
+		// `caveman-proxy usage import claude` passes --path through verbatim and
+		// the flag defaults to "", so this fallback IS the shipped default. Route
+		// it through claudeRoot() so CLAUDE_CONFIG_DIR (and the test override)
+		// apply here exactly as they do to the config scan and learn (#1124).
+		root = claudeRoot()
+		if root == "" {
+			return ImportSummary{}, fmt.Errorf("cannot resolve the Claude config dir: set CLAUDE_CONFIG_DIR or pass --path")
 		}
-		root = filepath.Join(home, ".claude")
 	}
 	since := parseSince(sinceExpr)
 	paths, err := claudePaths(root)

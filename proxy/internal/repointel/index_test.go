@@ -503,3 +503,70 @@ func TestScanSymbolsCapsAtFiveHundredAcrossSiblingDeclarations(t *testing.T) {
 		t.Fatalf("scanSymbols(%s) returned %d symbols for %d top-level decls, want <= 500", symbolParserBasis(), len(out), total)
 	}
 }
+
+// .Trash is never first-party source in any ecosystem; without this guard a
+// cwd walk (e.g. an agent invoked with cwd somewhere under a user's home)
+// would map deleted files sitting in the Trash, including SDK headers from an
+// installed .app bundle.
+func TestWalkExcludesTrashDirectory(t *testing.T) {
+	forceWalkListing(t)
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"src/proxy.go":    "package src\n\nfunc Proxy() {}\n",
+		".Trash/x.h":      "// stray header\n",
+		".Trash/app/y.go": "package app\n",
+	})
+
+	repoMap, _, err := Build(context.Background(), root, "git:trash", []string{"proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range mappedPaths(repoMap) {
+		if strings.HasPrefix(path, ".Trash/") {
+			t.Fatalf(".Trash contents entered the map: %v", mappedPaths(repoMap))
+		}
+	}
+	if !slices.Contains(mappedPaths(repoMap), "src/proxy.go") {
+		t.Fatalf("project source missing: %v", mappedPaths(repoMap))
+	}
+}
+
+// A cwd equal to the user's home directory is never a repository: mapping it
+// walks everything a user keeps at home, including .Trash. listFiles must
+// recognize this and skip the walk entirely rather than report an empty
+// listing that looks like a completed, empty repository map.
+func TestListFilesSkipsWalkWhenRootIsHomeDirectory(t *testing.T) {
+	forceWalkListing(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeTree(t, home, map[string]string{
+		"Documents/notes.go": "package notes\n",
+		".Trash/x.h":         "// stray header\n",
+	})
+	resolved, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files, truncated, basis, err := listFiles(context.Background(), resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 || truncated {
+		t.Fatalf("home directory must map to zero files, got %v truncated=%v", files, truncated)
+	}
+	if basis != ListingHomeSkipped {
+		t.Fatalf("listing basis = %q, want %q", basis, ListingHomeSkipped)
+	}
+
+	repoMap, bundle, err := Build(context.Background(), resolved, "git:home", []string{"notes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repoMap.Files) != 0 || repoMap.ListingBasis != ListingHomeSkipped {
+		t.Fatalf("Build over home directory must report no files: %+v", repoMap)
+	}
+	if bundle.HasDirectEvidence() || len(bundle.Items) != 0 {
+		t.Fatalf("home directory must never produce evidence: %+v", bundle)
+	}
+}

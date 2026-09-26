@@ -896,6 +896,45 @@ function telemetryTokenWatermarkFromDisk(): TelemetryTokenWatermark | null {
   }
 }
 
+// telemetryClaimLockPath is the sidecar used to serialize the read-compare-write
+// below across OS processes; it sits beside config.json so its permission and
+// cross-filesystem behavior always matches the file it protects.
+function telemetryClaimLockPath(): string {
+  return `${configPath()}.telemetry.lock`;
+}
+
+// A lock older than this is presumed abandoned by a crashed holder; kept far
+// above a real claim's own write time and above any waiter's acquire budget,
+// so a slow but live holder is never mistaken for a dead one.
+const TELEMETRY_CLAIM_LOCK_STALE_MS = 5000;
+
+// acquireTelemetryClaimLock spins on an atomic O_CREAT|O_EXCL create until it
+// wins the lock or the budget runs out; a lock older than
+// TELEMETRY_CLAIM_LOCK_STALE_MS is treated as abandoned and reclaimed.
+function acquireTelemetryClaimLock(lockPath: string, budgetMs: number): boolean {
+  try {
+    mkdirSync(dirname(lockPath), { recursive: true });
+  } catch {
+    return false;
+  }
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    try {
+      closeSync(openSync(lockPath, "wx"));
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return false;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > TELEMETRY_CLAIM_LOCK_STALE_MS) unlinkSync(lockPath);
+      } catch {
+        /* raced the holder releasing it; loop back to the create attempt */
+      }
+      if (Date.now() >= deadline) return false;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+}
+
 // telemetryTokenDelta returns what to report for THIS event and advances the
 // watermark to the totals it read. The send is fire-and-forget, so a dropped POST
 // loses that delta rather than replaying it — undercounting beats double-counting
@@ -916,11 +955,13 @@ function telemetryTokenDelta(): { processed: number; saved: number; basis: strin
   const saved = prior && !rewound ? Math.max(0, totals.tokensSaved - prior.tokensSaved) : 0;
   const rebaselining = prior === null || rewound;
   if (processed === 0 && saved === 0 && !rebaselining) return null;
-  // Claim the delta optimistically: two CLI processes exiting together would
-  // otherwise read the same watermark and both report the same tokens, inflating
-  // a savings figure. Whoever writes second sees the watermark already moved and
-  // reports nothing.
+  // Claim the delta under a lock, not a bare compare: two processes exiting
+  // together can both read the pre-write watermark before either commits (see
+  // the regression test below).
+  const lockPath = telemetryClaimLockPath();
+  if (!acquireTelemetryClaimLock(lockPath, 500)) return null;
   let claimed = true;
+  let readOnly = false;
   try {
     mutateRawConfig((out) => {
       const current = parseTelemetryTokenWatermark(out.telemetryTokens);
@@ -935,10 +976,11 @@ function telemetryTokenDelta(): { processed: number; saved: number; basis: strin
       } satisfies TelemetryTokenWatermark;
     });
   } catch {
-    // Read-only home: report nothing rather than resend the same delta forever.
-    return null;
+    readOnly = true; // Read-only home: report nothing rather than resend the same delta forever.
+  } finally {
+    try { unlinkSync(lockPath); } catch { /* already gone */ }
   }
-  if (!claimed) return null;
+  if (readOnly || !claimed) return null;
   if (processed === 0 && saved === 0) return null;
   return { processed, saved, basis: totals.basis };
 }
@@ -5035,6 +5077,23 @@ async function agentShortcut(rest: string[]) {
     if (result.error) throw new Error(`failed to exec ${bin}: ${result.error.message}`);
     process.exitCode = result.status ?? 1;
     return;
+  }
+  // Some host surfaces cannot run routed at all — Claude Code Remote Control
+  // refuses any non-first-party ANTHROPIC_BASE_URL and its escape hatch does not
+  // cover the check (#947, #1101). The native door would install machine-wide
+  // routing and then launch the host straight into that refusal, leaving the
+  // user both unrouted and unable to start the surface they asked for. Resolve
+  // the override before any persistent write and hand these to wrap, whose
+  // route-override path launches the host directly and writes nothing.
+  const shortcutRouteOverride = agentRouteOverride(agent, rest.slice(1));
+  if (shortcutRouteOverride) {
+    // A native install already owns the host's base URL from its own config
+    // file, which launching directly cannot undo — say so rather than let the
+    // surface fail with the host's own opaque refusal.
+    if (readNativeJournal(native)) {
+      process.stderr.write(`${mark("warn")} ${routeOverrideLabel(agent)} ${shortcutRouteOverride.surface} ${shortcutRouteOverride.reason}, and the native integration still routes ${binOf(agent)} from its own config — run \`caveman disable ${native}\` first, then \`caveman enable ${native}\` afterwards\n`);
+    }
+    return wrap(rest);
   }
   // A Cave Build lock is enforced at the wrap door (claudeCaveBuildEnv); the
   // native door applies none of its transforms, so a locked project must keep
@@ -11024,8 +11083,37 @@ function mcpServerInstalled(agentId: string, serverName: string): boolean {
     return false;
   }
 }
+function nativeOpencodeMcpInstalled(): boolean {
+  const journal = readNativeJournal("opencode");
+  if (!journal) return false;
+
+  const operation = journal.operations.find((item) => item.kind === "opencode-config");
+  if (!operation?.owned?.installed_mcp) return false;
+
+  const current = fileBytes(operation.file);
+  if (!current) return false;
+
+  try {
+    const root = parseJsonFileObject(operation.file, current);
+    const mcp = root.mcp && typeof root.mcp === "object" && !Array.isArray(root.mcp)
+      ? root.mcp as Record<string, unknown>
+      : {};
+
+    // canonicalize, not JSON.stringify: the comparison is about whether the
+    // registration is still ours, and key order is not part of that. Any writer
+    // that round-trips opencode.json through a rebuilt or sorted map reorders
+    // these keys without changing the registration, and a raw stringify compare
+    // would then report "MCP recovery missing" for a registration that is
+    // present and correct — the same false negative this function exists to fix.
+    return canonicalize(mcp.caveman) === canonicalize(operation.owned.installed_mcp);
+  } catch {
+    return false;
+  }
+}
+
 function mcpInstalled(agentId: string, agentArgs: string[] = []): boolean {
   if (agentId === "kilo" || agentId === "qwen") return ownedMcpRegistration(agentId, agentArgs) !== null;
+  if (agentId === "opencode" && nativeOpencodeMcpInstalled()) return true;
   return mcpServerInstalled(agentId, "caveman");
 }
 
@@ -12819,10 +12907,28 @@ function agentRouteOverride(agent: AgentProfile, args: string[]): AgentRouteOver
   if (agent.id === "qwen") return qwenRouteOverride(agent, args);
   // Claude Code 2.1.196+ refuses Remote Control unless ANTHROPIC_BASE_URL is
   // api.anthropic.com, and the first-party escape hatch does not apply (#947).
-  if (agent.id === "claude" && args.includes("remote-control")) {
+  if (agent.id === "claude" && claudeStartsRemoteControl(args)) {
     return { surface: "remote-control", reason: "only runs against api.anthropic.com, so it cannot route through the proxy" };
   }
   return null;
+}
+
+// Claude Code spells Remote Control `--remote-control [name]`; the bare
+// `remote-control` word is the legacy subcommand. #947 matched only the latter,
+// so every user who followed the documented flag kept routing through the proxy
+// and kept being refused by the host (#1101).
+//
+// `--remote-control-session-name-prefix` only names auto-generated sessions and
+// does NOT start Remote Control, so it must not match — bypassing on it would
+// silently drop compression for a session that never needed the bypass. Scanning
+// stops at `--`, after which argv belongs to the agent's own payload.
+function claudeStartsRemoteControl(args: string[]): boolean {
+  for (const arg of args) {
+    if (arg === "--") return false;
+    if (arg === "remote-control" || arg === "--remote-control") return true;
+    if (arg.startsWith("--remote-control=")) return true;
+  }
+  return false;
 }
 
 function routeOverrideLabel(agent: AgentProfile): string {

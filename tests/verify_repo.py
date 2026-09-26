@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -521,6 +522,111 @@ def load_compress_modules():
     return cli, detect, validate
 
 
+def verify_python_text_io_encoding() -> None:
+    section("Python Text IO Encoding")
+
+    # Windows defaults text IO to the ANSI code page (cp1252), so every
+    # `open()` / `read_text()` / `write_text()` that omits `encoding=` reads and
+    # writes in whatever the runner's locale happens to be. That is not a
+    # portability nicety: `packages/sdk/parity/middleware.fixtures.json` carries
+    # UTF-8 emoji, and cp1252 has no mapping for the 0x8d continuation byte at
+    # offset 2105, so `engine-ci`'s windows job died with
+    # `UnicodeDecodeError: 'charmap' codec can't decode byte 0x8d in position
+    # 2105` while merely COLLECTING test_middleware_preflight.py. The failure
+    # only surfaces on main (the windows job is skipped on PRs) and only for
+    # files that happen to hold a byte cp1252 rejects, which is why ASCII-only
+    # flag reads sat here undetected next to it.
+    #
+    # A guard beats fixing the five call sites that bite today: the next fixture
+    # to gain an emoji re-breaks the build the same way, on a job nobody sees
+    # until it is already red.
+    skip_dirs = {
+        "node_modules", ".git", ".venv", "venv", "__pycache__",
+        "build", ".mypy_cache", "target", "dist",
+    }
+    # Routed to other repositories by CLAUDE.md, or a CI-generated mirror of a
+    # source this check already covers — a violation there is not fixable from
+    # this repo, so failing the build on one would only strand the next run.
+    skip_prefixes = (
+        "packages/agent/",
+        "packages/create-caveman-agent/",
+        "browse/",
+        "plugins/",
+    )
+
+    offenders: list[str] = []
+    scanned = 0
+    for path in sorted(ROOT.rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        if any(part in skip_dirs for part in path.relative_to(ROOT).parts):
+            continue
+        if rel.startswith(skip_prefixes):
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # A Python source that is not valid UTF-8 is the same defect one
+            # layer down, and skipping it would let the file this check exists
+            # to catch walk straight past the check.
+            offenders.append(f"{rel}: not valid UTF-8")
+            continue
+        except OSError:
+            continue
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            # Not this check's job to police syntax, and a real syntax error is
+            # already loud everywhere else.
+            continue
+        scanned += 1
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = None
+            if isinstance(func, ast.Attribute) and func.attr in ("read_text", "write_text"):
+                name = func.attr
+            elif isinstance(func, ast.Name) and func.id == "open":
+                name = "open"
+            elif isinstance(func, ast.Attribute) and func.attr == "open":
+                # `.open(` is overloaded: Path.open() is file IO, but
+                # urllib's `build_opener(...).open(req, timeout=...)` is not,
+                # and neither is os.open (a raw fd, with no encoding to pass).
+                # Path.open's first positional argument is the mode string, so
+                # a first argument that is anything other than a string literal
+                # means this is not a file being opened.
+                if isinstance(func.value, ast.Name) and func.value.id == "os":
+                    continue
+                if node.args and not (
+                    isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)
+                ):
+                    continue
+                name = "open"
+            if name is None:
+                continue
+            if name == "open":
+                mode = ""
+                if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                    mode = str(node.args[1].value)
+                for kw in node.keywords:
+                    if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                        mode = str(kw.value.value)
+                # Binary mode has no encoding to specify.
+                if "b" in mode:
+                    continue
+            if any(kw.arg == "encoding" for kw in node.keywords):
+                continue
+            offenders.append(f"{rel}:{node.lineno} {name}()")
+
+    ensure(
+        not offenders,
+        "text IO without an explicit encoding= (breaks on Windows cp1252): "
+        + ", ".join(offenders),
+    )
+    print(f"{scanned} Python sources checked; all text IO passes an explicit encoding")
+
+
 def verify_compress_fixtures() -> None:
     section("Compress Fixtures")
     _, detect, validate = load_compress_modules()
@@ -835,6 +941,7 @@ def main() -> int:
         verify_manifests_and_syntax,
         verify_package_contents,
         verify_powershell_static,
+        verify_python_text_io_encoding,
         verify_compress_fixtures,
         verify_compress_cli,
         verify_hook_install_flow,
