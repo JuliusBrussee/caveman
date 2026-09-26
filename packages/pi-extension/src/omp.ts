@@ -38,7 +38,16 @@ export default function (omp: ExtensionAPI) {
   omp.on("turn_start", () => runtime.turnStart());
   omp.on("turn_end", () => runtime.turnEnd());
   omp.on("tool_call", (event) => runtime.toolCall(event));
-  omp.on("tool_result", (event) => runtime.toolResult(event));
+  // OMP can also invoke extension tools through its xd:// device (`write` to
+  // `xd://caveman_retrieve`). That result is the recovered original too; shrinking
+  // it would hand the model a fresh handle and recovery would never terminate.
+  omp.on("tool_result", (event) => (isDeviceRetrieve(event) ? undefined : runtime.toolResult(event)));
   omp.on("session_before_compact", () => runtime.beforeCompact());
   omp.on("session_compact", () => runtime.compact());
+}
+
+function isDeviceRetrieve(event: { toolName: string; input: unknown }): boolean {
+  if (event.toolName !== "write" || !event.input || typeof event.input !== "object" || !("path" in event.input)) return false;
+  const path = event.input.path;
+  return typeof path === "string" && /^xd:\/\/caveman_retrieve(?:[/?#]|$)/.test(path.trim());
 }

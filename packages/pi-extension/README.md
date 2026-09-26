@@ -74,6 +74,9 @@ results from a previous session cannot replace the current session's context.
 OMP system-prompt blocks are preserved without flattening them into a string.
 OMP does not expose a model-selection extension event, so provider eligibility
 is rechecked at the start of each user run, not on each provider request.
+Recovered originals are never compressed again, whether OMP calls
+`caveman_retrieve` directly or through its device path (`write` to
+`xd://caveman_retrieve`).
 
 The native entry shares Caveman's existing `native-hook pi` protocol and
 `/w/pi` gateway routes. It does not add a `caveman wrap omp` installer path.
