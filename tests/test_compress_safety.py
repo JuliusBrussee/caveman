@@ -449,9 +449,11 @@ class FirstTextBlockTests(unittest.TestCase):
     def _run(self, blocks):
         import types
 
-        fake_msg = types.SimpleNamespace(content=blocks)
+        fake_msg = types.SimpleNamespace(content=blocks, stop_reason="end_turn")
         fake_client = mock.Mock()
-        fake_client.messages.create.return_value = fake_msg
+        stream_ctx = mock.MagicMock()
+        stream_ctx.__enter__.return_value.get_final_message.return_value = fake_msg
+        fake_client.messages.stream.return_value = stream_ctx
         anthropic_stub = types.SimpleNamespace(Anthropic=mock.Mock(return_value=fake_client))
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}), \
              mock.patch.dict(sys.modules, {"anthropic": anthropic_stub}):

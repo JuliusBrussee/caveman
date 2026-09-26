@@ -17,9 +17,9 @@ sys.path.insert(0, str(REPO_ROOT / "skills" / "caveman-compress"))
 from scripts import compress as compress_mod  # noqa: E402
 
 
-def _fake_client(text="compressed"):
+def _fake_client(text="compressed", stop_reason="end_turn"):
     """Anthropic client whose messages.stream() yields one text block."""
-    message = mock.Mock(content=[mock.Mock(type="text", text=text)])
+    message = mock.Mock(content=[mock.Mock(type="text", text=text)], stop_reason=stop_reason)
     stream_ctx = mock.MagicMock()
     stream_ctx.__enter__.return_value.get_final_message.return_value = message
     client = mock.Mock()
@@ -51,6 +51,11 @@ class CallClaudeStreamingTests(unittest.TestCase):
         self.assertEqual(max_tokens, compress_mod.MAX_OUTPUT_TOKENS)
         # 500KB of prose is ~125k tokens; 8192 could not hold a compression of it.
         self.assertGreater(max_tokens, 8192)
+
+    def test_output_at_the_cap_raises_instead_of_returning_a_truncated_body(self):
+        client = _fake_client(text="first half only", stop_reason="max_tokens")
+        with self.assertRaisesRegex(RuntimeError, "token cap"):
+            self._call(client)
 
 
 if __name__ == "__main__":
