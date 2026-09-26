@@ -13,13 +13,20 @@
 // test can count how many children ensure() actually created and whether
 // dispose() reaped them.
 
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 const KNOWN_HANDLE = "ccr_0123456789abcdef0123456789abcdef";
 const KNOWN_BYTES = "exact original bytes\nline two éø bytes";
+// Read on every retrieve: the hook fixture publishes fresh originals after the
+// MCP child has initialized, just as the separate native producer does.
+function storedText(handle) {
+  if (!process.env.STUB_MCP_STORE) return handle === KNOWN_HANDLE ? KNOWN_BYTES : undefined;
+  try { return JSON.parse(readFileSync(process.env.STUB_MCP_STORE, "utf8"))[handle]; } catch { return undefined; }
+}
 
 if (process.argv[2] === "version") {
-  const capabilities = process.env.STUB_MCP_DROP_CAPABILITY === "1" ? ["build_stamped_version"] : ["mcp_recovery", "build_stamped_version"];
+  const capabilities = process.env.STUB_MCP_DROP_CAPABILITY === "1" ? ["build_stamped_version"] : ["mcp_recovery", "build_stamped_version", ...(process.env.STUB_MCP_DROP_VERIFICATION === "1" ? [] : ["recovery_verification"])];
   process.stdout.write(JSON.stringify({ version: "1.0.0", schema: "caveman.mcp.version.v1", capabilities }) + "\n");
   process.exit(0);
 }
@@ -27,6 +34,7 @@ if (process.argv[2] === "version") {
 const spawnLog = process.env.STUB_MCP_SPAWN_LOG;
 if (spawnLog) appendFileSync(spawnLog, `${process.pid}\n`);
 
+const served = new Set();
 let buffer = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -49,10 +57,24 @@ process.stdin.on("data", (chunk) => {
       }
     } else if (message.method === "tools/call") {
       const args = message.params?.arguments ?? {};
+      const handle = args.recovery_handle?.replace(/^ccr:\/\//, "");
+      const text = storedText(handle);
       if (message.params?.name !== "caveman_retrieve") {
         reply(message.id, { content: [{ type: "text", text: JSON.stringify({ error: "cave_unknown_tool" }) }], isError: true });
-      } else if (args.recovery_handle === KNOWN_HANDLE) {
-        reply(message.id, { content: [{ type: "text", text: KNOWN_BYTES }], isError: false });
+      } else if (typeof text === "string") {
+        const key = `${handle}\0${args.query ?? ""}`;
+        if (args.verify_only && process.env.STUB_MCP_DROP_VERIFICATION !== "1") {
+          const proof = { recovery_handle: handle, byte_length: Buffer.byteLength(text), sha256: createHash("sha256").update(text).digest("hex") };
+          const fault = process.env.STUB_MCP_VERIFICATION_FAULT;
+          if (fault === "reference") proof.recovery_handle = "ccr_ffffffffffffffffffffffffffffffff";
+          if (fault === "length") proof.byte_length++;
+          if (fault === "digest") proof.sha256 = "0".repeat(64);
+          if (fault === "hang") continue;
+          reply(message.id, { content: [{ type: "text", text: fault === "malformed" ? "not JSON" : JSON.stringify(proof) }], isError: fault === "error" });
+        } else {
+          reply(message.id, { content: [{ type: "text", text: served.has(key) ? "already recovered" : text }], isError: false });
+          served.add(key);
+        }
       } else {
         reply(message.id, { content: [{ type: "text", text: JSON.stringify({ error: "cave_unknown_handle", message: "no original found for handle" }) }], isError: true });
       }
