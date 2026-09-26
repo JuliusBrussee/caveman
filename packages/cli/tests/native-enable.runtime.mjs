@@ -1131,6 +1131,35 @@ test("status keeps native OpenCode MCP recovery when provider routing drifts", a
   assert.doesNotMatch(output, /MCP recovery missing/);
 });
 
+test("status recognizes native OpenCode MCP recovery when the config rewrites key order", async () => {
+  const fx = fixture();
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+
+  const configPath = join(configDir, "opencode.json");
+  writeFileSync(configPath, JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  const caveman = installed.mcp.caveman;
+  const keys = Object.keys(caveman);
+  assert.ok(keys.length > 1, "registration needs >1 key for a reorder to be meaningful");
+
+  // Same registration, keys serialized in the opposite order. Any writer that
+  // round-trips this file through a sorted or rebuilt map produces this, and the
+  // registration is still byte-for-byte equivalent as a value.
+  const reordered = {};
+  for (const key of keys.slice().reverse()) reordered[key] = caveman[key];
+  installed.mcp.caveman = reordered;
+  writeFileSync(configPath, JSON.stringify(installed, null, 2) + "\n");
+
+  const status = await run(["status"], fx.env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.doesNotMatch(status.stdout + status.stderr, /MCP recovery missing/);
+});
+
 test("status reports native OpenCode MCP recovery missing when its registration is removed", async () => {
   const fx = fixture();
   const configDir = join(fx.home, ".config", "opencode");

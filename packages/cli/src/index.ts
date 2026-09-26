@@ -11008,7 +11008,13 @@ function nativeOpencodeMcpInstalled(): boolean {
       ? root.mcp as Record<string, unknown>
       : {};
 
-    return JSON.stringify(mcp.caveman) === JSON.stringify(operation.owned.installed_mcp);
+    // canonicalize, not JSON.stringify: the comparison is about whether the
+    // registration is still ours, and key order is not part of that. Any writer
+    // that round-trips opencode.json through a rebuilt or sorted map reorders
+    // these keys without changing the registration, and a raw stringify compare
+    // would then report "MCP recovery missing" for a registration that is
+    // present and correct — the same false negative this function exists to fix.
+    return canonicalize(mcp.caveman) === canonicalize(operation.owned.installed_mcp);
   } catch {
     return false;
   }
