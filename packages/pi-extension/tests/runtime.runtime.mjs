@@ -154,14 +154,14 @@ test("a recovery result from the old session cannot escape after navigation", as
 test("compression delegates eligibility to the native runtime for every non-recovery tool, uses PostToolUseFailure on error, and preserves images", async () => {
   let calls = 0;
   const seenEvents = [];
-  const bridge = { async call(event, payload) { calls++; seenEvents.push(event); return { output_replacement: `summary <<ccr:handle>> [${payload.tool_name}]` }; } };
+  const bridge = { async call(event, payload) { calls++; seenEvents.push(event); return { output_replacement: `summary <<ccr:ccr_obj_handle>> [${payload.tool_name}]` }; } };
   const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
   const result = (toolName, isError = false) => shrinkToolResult(bridge, "session", {
     toolName, isError, input: {}, content: [{ type: "text", text: "original" }, image],
-  });
+  }, { verify: async () => true });
   for (const tool of ["read", "bash", "write", "edit", "grep", "read_file", "custom"]) {
-    assert.deepEqual((await result(tool)).content, [{ type: "text", text: `summary <<ccr:handle>> [${tool}]` }, image]);
-    assert.deepEqual((await result(tool, true)).content, [{ type: "text", text: `summary <<ccr:handle>> [${tool}]` }, image]);
+    assert.deepEqual((await result(tool)).content, [{ type: "text", text: `summary <<ccr:ccr_obj_handle>> [${tool}]` }, image]);
+    assert.deepEqual((await result(tool, true)).content, [{ type: "text", text: `summary <<ccr:ccr_obj_handle>> [${tool}]` }, image]);
   }
   assert.equal(await result("caveman_retrieve"), undefined, "caveman_retrieve's own output must never be re-shrunk (recovery loop hazard)");
   assert.equal(calls, 14, "every non-recovery tool result must reach the native runtime's own classifyTool decision");

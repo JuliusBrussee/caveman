@@ -31,7 +31,7 @@ process.stdin.on("end", () => {
   appendFileSync(${JSON.stringify(hookLog)}, JSON.stringify({ event, id: payload.session_id }) + "\\n");
   const result = event === "SessionStart" ? { context: "CORE_" + payload.session_id }
     : event === "UserPromptSubmit" ? { context: "DYNAMIC" }
-    : event === "PostToolUse" ? { output_replacement: "SHRUNK <<ccr:handle>>" } : {};
+    : event === "PostToolUse" ? { output_replacement: "SHRUNK <<ccr:ccr_obj_handle>>" } : {};
   process.stdout.write(JSON.stringify(result));
 });
 `);
@@ -40,12 +40,17 @@ process.stdin.on("end", () => {
   writeFileSync(mcp, process.platform === "win32" ? `@node "${fixture}" %*\r\n` : `#!/bin/sh\nexec "${process.execPath}" "${fixture}" "$@"\n`);
   if (process.platform !== "win32") chmodSync(mcp, 0o755);
   mkdirSync(join(root, "run"));
+  // Companions that verify recovery before elision resolve the handle from this store.
+  writeFileSync(join(root, "store.json"), JSON.stringify({
+    ccr_obj_handle: "original",
+    ccr_0123456789abcdef0123456789abcdef: "exact original bytes\nline two éø bytes",
+  }));
   writeFileSync(join(root, "run", `${port}.json`), JSON.stringify({
     schema: "caveman.proxy.run.v1", pid: process.pid, port, instance_token: "test", owner: "wrap",
     recovery_via_mcp: true, provider_upstreams: { openai: "https://api.openai.com" },
   }));
   const env = {
-    HOME: root, USERPROFILE: root,
+    HOME: root, USERPROFILE: root, STUB_MCP_STORE: join(root, "store.json"),
     CAVEMAN_HOME: root, CAVE_GATEWAY_URL: `http://127.0.0.1:${port}`, CAVEMAN_MCP_BIN: mcp,
     CAVEMAN_PI_HOOK_CMD: JSON.stringify([process.execPath, hook]), STUB_MCP_SPAWN_LOG: spawnLog,
     STUB_MCP_DROP_CAPABILITY: "", STUB_MCP_EXIT_AFTER_INIT: "", STUB_MCP_EXIT_ONCE_FLAG: "", STUB_MCP_HANG_INIT: "",
@@ -94,9 +99,13 @@ process.stdin.on("end", () => {
     assert.equal(selected.baseUrl, `http://127.0.0.1:${port}/w/pi/openai/v1`);
     assert.deepEqual(prefix, ["system\nblock", "", "second\n\nblock"], "injection must not mutate OMP's input blocks");
     const result = { toolName: "read", isError: false, input: {}, content: [{ type: "text", text: "original" }] };
-    assert.equal((await handlers.get("tool_result")!(result)).content[0].text, "SHRUNK <<ccr:handle>>");
+    assert.equal((await handlers.get("tool_result")!(result)).content[0].text, "SHRUNK <<ccr:ccr_obj_handle>>");
     assert.equal(await handlers.get("tool_result")!({ ...result, isError: true }), undefined);
     assert.equal(await handlers.get("tool_result")!({ ...result, toolName: "caveman_retrieve" }), undefined);
+    // OMP invokes extension tools through its xd:// device: `write xd://caveman_retrieve`.
+    // That result is the recovered original and must reach the model unmasked.
+    assert.equal(await handlers.get("tool_result")!({ ...result, toolName: "write", input: { path: "xd://caveman_retrieve", content: "{}" } }), undefined);
+    assert.equal((await handlers.get("tool_result")!({ ...result, toolName: "write", input: { path: "notes.txt", content: "x" } })).content[0].text, "SHRUNK <<ccr:ccr_obj_handle>>");
     await handlers.get("session_shutdown")!();
     assert.equal(selected.baseUrl, original.baseUrl);
     await assert.rejects(tool.execute("after-close", { recovery_handle: "handle" }), /not active/);
