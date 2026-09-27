@@ -74,6 +74,7 @@ is rechecked at the start of each user run, not on each provider request.
 Recovered originals are never compressed again, whether OMP calls
 `caveman_retrieve` directly or through its device path (`write` to
 `xd://caveman_retrieve`).
+OMP's `todo` results, the agent's own task list, are never compressed either.
 
 The native entry shares Caveman's existing `native-hook pi` protocol and
 `/w/pi` gateway routes. It does not add a `caveman wrap omp` installer path.
