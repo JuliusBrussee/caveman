@@ -58,5 +58,57 @@ class CallClaudeStreamingTests(unittest.TestCase):
             self._call(client)
 
 
+class MaxOutputTokensOverrideTests(unittest.TestCase):
+    """CAVEMAN_MAX_OUTPUT_TOKENS lets a pinned model's lower ceiling be matched.
+
+    CAVEMAN_MODEL can name a model whose max output is below the default
+    ceiling (claude-opus-4-0 tops out at 32K). Asking for more than the model
+    allows is a 400 from the API, which replaces the silent truncation this cap
+    exists to prevent with an equally unhelpful opaque failure.
+    """
+
+    def _call(self, client, env):
+        full_env = {"ANTHROPIC_API_KEY": "sk-test"}
+        full_env.update(env)
+        fake_sdk = mock.Mock(Anthropic=mock.Mock(return_value=client))
+        with mock.patch.dict("os.environ", full_env, clear=False), \
+             mock.patch.dict(sys.modules, {"anthropic": fake_sdk}):
+            return compress_mod.call_claude("prompt")
+
+    def test_override_lowers_the_requested_ceiling(self):
+        client = _fake_client()
+        self._call(client, {"CAVEMAN_MAX_OUTPUT_TOKENS": "32000"})
+        self.assertEqual(client.messages.stream.call_args.kwargs["max_tokens"], 32000)
+
+    def test_unset_override_keeps_the_default_ceiling(self):
+        client = _fake_client()
+        self._call(client, {"CAVEMAN_MAX_OUTPUT_TOKENS": ""})
+        self.assertEqual(
+            client.messages.stream.call_args.kwargs["max_tokens"],
+            compress_mod.MAX_OUTPUT_TOKENS,
+        )
+
+    def test_whitespace_override_is_treated_as_unset(self):
+        client = _fake_client()
+        self._call(client, {"CAVEMAN_MAX_OUTPUT_TOKENS": "   "})
+        self.assertEqual(
+            client.messages.stream.call_args.kwargs["max_tokens"],
+            compress_mod.MAX_OUTPUT_TOKENS,
+        )
+
+    def test_malformed_override_raises_before_paying_for_a_call(self):
+        for bad in ("not-a-number", "0", "-1", "64000.5"):
+            with self.subTest(value=bad):
+                client = _fake_client()
+                with self.assertRaisesRegex(RuntimeError, "positive integer"):
+                    self._call(client, {"CAVEMAN_MAX_OUTPUT_TOKENS": bad})
+                client.messages.stream.assert_not_called()
+
+    def test_cap_error_reports_the_effective_ceiling_not_the_default(self):
+        client = _fake_client(text="first half only", stop_reason="max_tokens")
+        with self.assertRaisesRegex(RuntimeError, "32000-token cap"):
+            self._call(client, {"CAVEMAN_MAX_OUTPUT_TOKENS": "32000"})
+
+
 if __name__ == "__main__":
     unittest.main()

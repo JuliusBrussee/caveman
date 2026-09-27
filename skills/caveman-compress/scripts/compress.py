@@ -368,6 +368,35 @@ MAX_RETRIES = 2
 MAX_OUTPUT_TOKENS = 64000
 
 
+def resolve_max_output_tokens() -> int:
+    """Output ceiling for one SDK call, overridable per model.
+
+    The default tracks the max output of the default model. CAVEMAN_MODEL lets
+    a user pin a model whose ceiling is lower (claude-opus-4-0 tops out at
+    32K), and asking for more output than the model allows is a 400 from the
+    API — an opaque failure in place of the truncation this cap exists to
+    prevent. CAVEMAN_MAX_OUTPUT_TOKENS lets that user lower the ask to match.
+
+    A malformed value raises rather than silently falling back: an override
+    that is quietly ignored looks like the cap was raised when it was not, and
+    the symptom is the same truncation, one layer further from the cause.
+    """
+    raw = os.environ.get("CAVEMAN_MAX_OUTPUT_TOKENS", "").strip()
+    if not raw:
+        return MAX_OUTPUT_TOKENS
+    try:
+        value = int(raw)
+    except ValueError:
+        raise RuntimeError(
+            f"CAVEMAN_MAX_OUTPUT_TOKENS must be a positive integer, got {raw!r}."
+        ) from None
+    if value < 1:
+        raise RuntimeError(
+            f"CAVEMAN_MAX_OUTPUT_TOKENS must be a positive integer, got {raw!r}."
+        )
+    return value
+
+
 def _is_smaller_than_body(candidate_body: str, body: str) -> bool:
     """True when `candidate_body` actually compresses `body`.
 
@@ -420,13 +449,14 @@ def call_claude(prompt: str) -> str:
         try:
             import anthropic
 
+            max_output_tokens = resolve_max_output_tokens()
             client = anthropic.Anthropic(api_key=api_key, timeout=CLAUDE_CALL_TIMEOUT_SECONDS)
             # Streaming, not create(): a large compression needs far more than
             # the old 8192-token cap, and tokens that arrive as they are
             # generated keep a long call from tripping the request timeout.
             with client.messages.stream(
                 model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
-                max_tokens=MAX_OUTPUT_TOKENS,
+                max_tokens=max_output_tokens,
                 messages=[{"role": "user", "content": prompt}],
             ) as stream:
                 msg = stream.get_final_message()
@@ -435,7 +465,7 @@ def call_claude(prompt: str) -> str:
             # retries that end by restoring the original anyway.
             if msg.stop_reason == "max_tokens":
                 raise RuntimeError(
-                    f"Claude output hit the {MAX_OUTPUT_TOKENS}-token cap, so the result is incomplete. "
+                    f"Claude output hit the {max_output_tokens}-token cap, so the result is incomplete. "
                     "Split the file into smaller parts and compress each one."
                 )
             # Tool-heavy models can put a tool_use or thinking block first; take
