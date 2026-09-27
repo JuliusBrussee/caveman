@@ -41,7 +41,10 @@ export default function (omp: ExtensionAPI) {
   // OMP can also invoke extension tools through its xd:// device (`write` to
   // `xd://caveman_retrieve`). That result is the recovered original too; shrinking
   // it would hand the model a fresh handle and recovery would never terminate.
-  omp.on("tool_result", (event) => (isDeviceRetrieve(event) ? undefined : runtime.toolResult(event)));
+  // OMP's `todo` result is the agent's own task list, which it reads back on every
+  // update; masking it only costs a recovery call.
+  omp.on("tool_result", (event) =>
+    isDeviceRetrieve(event) || event.toolName === "todo" ? undefined : runtime.toolResult(event));
   omp.on("session_before_compact", () => runtime.beforeCompact());
   omp.on("session_compact", () => runtime.compact());
 }

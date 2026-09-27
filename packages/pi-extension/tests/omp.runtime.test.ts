@@ -105,6 +105,8 @@ process.stdin.on("end", () => {
     // OMP invokes extension tools through its xd:// device: `write xd://caveman_retrieve`.
     // That result is the recovered original and must reach the model unmasked.
     assert.equal(await handlers.get("tool_result")!({ ...result, toolName: "write", input: { path: "xd://caveman_retrieve", content: "{}" } }), undefined);
+    // OMP's todo result is the agent's own task list; masking it only costs a recovery call.
+    assert.equal(await handlers.get("tool_result")!({ ...result, toolName: "todo", input: { op: "view" } }), undefined);
     assert.equal((await handlers.get("tool_result")!({ ...result, toolName: "write", input: { path: "notes.txt", content: "x" } })).content[0].text, "SHRUNK <<ccr:ccr_obj_handle>>");
     await handlers.get("session_shutdown")!();
     assert.equal(selected.baseUrl, original.baseUrl);
