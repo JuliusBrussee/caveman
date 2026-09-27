@@ -1,7 +1,7 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { OpenAICompletionsCompat, OpenAIResponsesCompat } from "@earendil-works/pi-ai";
+import type { RoutingModel } from "./provider.ts";
 
-type SelectedModel = NonNullable<ExtensionContext["model"]>;
+type SelectedModel = RoutingModel;
 
 // Pi's coding-agent layer adds these after auth resolution, outside model.compat.
 // Canonical provider IDs keep their original attribution branch after routing.

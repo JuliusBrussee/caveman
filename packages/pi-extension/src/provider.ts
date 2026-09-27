@@ -1,23 +1,40 @@
-// Route only the selected model object. Pi keeps owning its provider registry,
-// auth, pricing, reasoning flags, context sizes, and model names. Registering
-// and later unregistering a provider would delete another extension's custom
-// models, API key fallback, OAuth registration, and stream handlers.
+// Route only the selected model object. The host keeps owning its provider
+// registry, auth, pricing, reasoning flags, context sizes, and model names.
+// Registering and later unregistering a provider would delete another
+// extension's custom models, API key fallback, OAuth registration, and stream
+// handlers — so this router only ever swaps the selected model's own baseUrl.
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+// Both hosts supply their own model objects; routing only inspects these fields.
+export type RoutingModel = {
+  provider: string; id: string; api: string; baseUrl: string;
+  headers?: Record<string, string>;
+  compat?: unknown;
+};
+export type RoutingHost<M extends RoutingModel> = {
+  setModel(model: M): Promise<boolean>;
+};
+export type RoutingContext<M extends RoutingModel> = {
+  model?: M;
+  modelRegistry: {
+    isUsingOAuth(model: M): boolean;
+    getApiKeyAndHeaders(model: M): Promise<{ ok: true; headers?: Record<string, string | null> } | { ok: false }>;
+  };
+  sessionManager: { getSessionId(): string | undefined };
+};
 import { unforwardedProviderHeaders } from "../../cli/src/provider-routing.ts";
 import { compatForRoutedModel, unpreservedAttributionHeaders } from "./provider-compat.ts";
 import { MAX_MESSAGE_BYTES, boundedString, compatUpstreamFor, hostOf, isLoopbackUrl, routeForApi, upstreamHostFor } from "./protocol.ts";
 
 type Notify = (message: string, kind: "warning" | "info") => void;
 
-export class ProviderRouter {
-  private pi: ExtensionAPI;
+export class ProviderRouter<M extends RoutingModel> {
+  private pi: RoutingHost<M>;
   private notify: Notify;
   private gateway: string | undefined;
   private gateOpen = false;
   private routed: {
     provider: string; id: string; originalBaseUrl: string; route: string;
-    originalCompat: NonNullable<ExtensionContext["model"]>["compat"]; hadCompat: boolean;
+    originalCompat: M["compat"]; hadCompat: boolean;
   } | undefined;
   // Named compat mounts the running proxy published in its run-state file.
   private compatUpstreams: Readonly<Record<string, string>> | undefined;
@@ -27,14 +44,14 @@ export class ProviderRouter {
   private gateGeneration = 0;
   private warnedModels = new Set<string>();
 
-  constructor(pi: ExtensionAPI, notify: Notify) {
+  constructor(pi: RoutingHost<M>, notify: Notify) {
     this.pi = pi;
     this.notify = notify;
   }
 
   // openGate is called once per session after the recovery gate held. Refuses
   // non-loopback gateways: managed routing needs auth proof v1 does not carry.
-  async openGate(gateway: string, ctx: ExtensionContext, compatUpstreams?: Readonly<Record<string, string>>, providerUpstreams?: Readonly<Record<string, string>>, compatForwardHeaders?: Readonly<Record<string, readonly string[]>>): Promise<void> {
+  async openGate(gateway: string, ctx: RoutingContext<M>, compatUpstreams?: Readonly<Record<string, string>>, providerUpstreams?: Readonly<Record<string, string>>, compatForwardHeaders?: Readonly<Record<string, readonly string[]>>): Promise<void> {
     if (!(await this.closeGate(ctx))) return;
     if (!isLoopbackUrl(gateway)) {
       this.notify("Caveman: direct mode, no compression this session (gateway is not loopback)", "warning");
@@ -48,7 +65,7 @@ export class ProviderRouter {
     await this.apply(ctx.model, ctx);
   }
 
-  async closeGate(ctx: ExtensionContext): Promise<boolean> {
+  async closeGate(ctx: RoutingContext<M>): Promise<boolean> {
     this.gateOpen = false;
     this.gateGeneration++;
     return this.restoreCurrentModel(ctx);
@@ -61,7 +78,7 @@ export class ProviderRouter {
   // apply routes one model object, or restores direct mode when the model
   // has no verified route. Called from the gate and from model_select; the
   // applying flag swallows the model_select echo of our own setModel call.
-  async apply(model: ExtensionContext["model"], ctx: ExtensionContext): Promise<void> {
+  async apply(model: M | undefined, ctx: RoutingContext<M>): Promise<void> {
     if (!this.gateOpen || this.applying || !this.gateway) return;
     if (!model) return;
     const gateGeneration = this.gateGeneration;
@@ -88,9 +105,10 @@ export class ProviderRouter {
     }
     if (!oauth && route && !compatibilityIssue) {
       try {
-        // Pi adds configured provider/auth headers during request preparation;
-        // they need not appear on model.headers. Use its public resolver and
-        // discard the API key. Never log values or replace the auth handler.
+        // The host adds configured provider/auth headers during request
+        // preparation; they need not appear on model.headers. Use its public
+        // resolver and discard the API key. Never log values or replace the
+        // auth handler.
         const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
         if (!auth.ok) throw new Error("request auth unavailable");
         const { headers } = auth;
@@ -145,8 +163,8 @@ export class ProviderRouter {
         provider: model.provider, id: model.id, originalBaseUrl: original, route,
         originalCompat: model.compat, hadCompat: Object.hasOwn(model, "compat"),
       };
-      // Pi's setModel retains this model object for the next provider request;
-      // only provider/id are persisted to session/settings. No provider-wide
+      // setModel retains this model object for the next provider request; only
+      // provider/id are persisted to session/settings. No provider-wide
       // override or replacement model catalogue is needed.
       const compat = compatForRoutedModel(model);
       if (!(await this.pi.setModel({ ...model, baseUrl: route, ...(compat === undefined ? {} : { compat }) }))) {
@@ -164,13 +182,13 @@ export class ProviderRouter {
     }
   }
 
-  private isOwnedRoute(model: ExtensionContext["model"]): boolean {
+  private isOwnedRoute(model: M | undefined): boolean {
     return !!model && !!this.routed
       && model.provider === this.routed.provider && model.id === this.routed.id
       && model.baseUrl === this.routed.route;
   }
 
-  private async restoreCurrentModel(ctx: ExtensionContext): Promise<boolean> {
+  private async restoreCurrentModel(ctx: RoutingContext<M>): Promise<boolean> {
     const current = ctx.model;
     if (!this.isOwnedRoute(current)) {
       this.routed = undefined;

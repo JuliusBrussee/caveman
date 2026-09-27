@@ -26,6 +26,7 @@ it as MIT adoption surface.
 | `packages/agent/` | MIT | Agent runtime, build compiler, Claude lane, framework adapters, and coding-agent API. |
 | `packages/create-caveman-agent/` | MIT | Zero-runtime-dependency Agent SDK initializer. |
 | `packages/cli/` | MIT | Funnel/on-ramp. Launches BSL binaries but does not contain engine code. |
+| `packages/pi-extension/` | MIT | Pi and OMP adoption surface; invokes the CLI and MCP binaries without embedding Engine code. |
 | `packages/sdk/typescript/` | MIT | Thin client and structural SDK surface. |
 | `packages/sdk/python/` | MIT | Thin client; distribution name is `caveman-sdk`. |
 | `packages/subagent-tax/` | MIT | Local zero-provider-call harness-prefix measurement tool. |
