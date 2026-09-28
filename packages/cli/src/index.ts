@@ -24,6 +24,7 @@ import {
   statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { chmod, mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
@@ -908,10 +909,17 @@ function telemetryClaimLockPath(): string {
 // so a slow but live holder is never mistaken for a dead one.
 const TELEMETRY_CLAIM_LOCK_STALE_MS = 5000;
 
-// acquireTelemetryClaimLock spins on an atomic O_CREAT|O_EXCL create until it
-// wins the lock or the budget runs out; a lock older than
-// TELEMETRY_CLAIM_LOCK_STALE_MS is treated as abandoned and reclaimed.
-function acquireTelemetryClaimLock(lockPath: string, budgetMs: number): boolean {
+// acquireClaimLock spins on an atomic O_CREAT|O_EXCL create until it wins the
+// lock or the budget runs out; a lock whose mtime is older than staleMs is
+// treated as abandoned by a crashed holder and reclaimed, so a killed process
+// cannot wedge the guarded operation off permanently.
+//
+// Shared by every watermark claim rather than copied per caller: the telemetry
+// claim (#1116) and the sync claim (#1132) are the same read-mutate-write
+// hazard over different state files, and a second copy of this spin is how the
+// two would drift apart. Callers supply their own stale window because their
+// hold times differ by orders of magnitude — see refreshClaimLock.
+function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number): boolean {
   try {
     mkdirSync(dirname(lockPath), { recursive: true });
   } catch {
@@ -925,13 +933,23 @@ function acquireTelemetryClaimLock(lockPath: string, budgetMs: number): boolean 
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") return false;
       try {
-        if (Date.now() - statSync(lockPath).mtimeMs > TELEMETRY_CLAIM_LOCK_STALE_MS) unlinkSync(lockPath);
+        if (Date.now() - statSync(lockPath).mtimeMs > staleMs) unlinkSync(lockPath);
       } catch {
         /* raced the holder releasing it; loop back to the create attempt */
       }
       if (Date.now() >= deadline) return false;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
+  }
+}
+
+// releaseClaimLock drops a lock taken above. Never throws: a lock already gone
+// (reclaimed as stale by someone else) is the same end state as one we removed.
+function releaseClaimLock(lockPath: string): void {
+  try {
+    unlinkSync(lockPath);
+  } catch {
+    /* already gone */
   }
 }
 
@@ -959,7 +977,7 @@ function telemetryTokenDelta(): { processed: number; saved: number; basis: strin
   // together can both read the pre-write watermark before either commits (see
   // the regression test below).
   const lockPath = telemetryClaimLockPath();
-  if (!acquireTelemetryClaimLock(lockPath, 500)) return null;
+  if (!acquireClaimLock(lockPath, 500, TELEMETRY_CLAIM_LOCK_STALE_MS)) return null;
   let claimed = true;
   let readOnly = false;
   try {
@@ -978,7 +996,7 @@ function telemetryTokenDelta(): { processed: number; saved: number; basis: strin
   } catch {
     readOnly = true; // Read-only home: report nothing rather than resend the same delta forever.
   } finally {
-    try { unlinkSync(lockPath); } catch { /* already gone */ }
+    releaseClaimLock(lockPath);
   }
   if (readOnly || !claimed) return null;
   if (processed === 0 && saved === 0) return null;
@@ -10200,6 +10218,7 @@ function sleep(ms: number) {
 type SyncOutcome =
   | { kind: "no_store"; dbPath: string }
   | { kind: "empty" }
+  | { kind: "busy" }
   | {
       kind: "synced";
       spans: number;
@@ -10500,6 +10519,40 @@ function writeSyncWatermark(key: string, id: number) {
   writeFileSync(syncStatePath(), JSON.stringify(state, null, 2) + "\n", { mode: 0o600 });
 }
 
+// syncClaimLockPath is the sidecar that serializes the read-query-POST-write
+// in syncLocalSavings across OS processes; it sits beside sync.json so its
+// permission and cross-filesystem behavior always matches the file it protects.
+function syncClaimLockPath(): string {
+  return `${syncStatePath()}.lock`;
+}
+
+// How long a waiter blocks before giving up and reporting `busy`. Deliberately
+// short: syncAfterWrap runs on the wrap exit path, and making a user wait out
+// someone else's upload to close a shell is worse than deferring their rows to
+// the next sync — nothing is lost either way, the watermark simply has not moved.
+const SYNC_CLAIM_LOCK_BUDGET_MS = 5000;
+
+// A sync lock is held across a network POST, which has no bounded duration, so
+// unlike the telemetry claim its stale window cannot be a guess at the hold
+// time: a live holder on a slow link would be judged dead and its rows POSTed
+// twice, which is the very bug the lock exists to prevent. The holder instead
+// heartbeats the lock while it works, so this window only has to outlast a
+// couple of missed beats.
+const SYNC_CLAIM_LOCK_STALE_MS = 15000;
+const SYNC_CLAIM_LOCK_HEARTBEAT_MS = 3000;
+
+// refreshClaimLock bumps a held lock's mtime so waiters keep seeing it as live.
+// Never throws — if the lock is gone the guarded work is already compromised,
+// and crashing the sync on a touch failure would lose the rows in flight.
+function refreshClaimLock(lockPath: string): void {
+  try {
+    const now = new Date();
+    utimesSync(lockPath, now, now);
+  } catch {
+    /* lock vanished or the FS refused the touch; the POST still completes */
+  }
+}
+
 // deriveDashboardUrl maps the control-api base URL to the dashboard costs page
 // for the two shapes Caveman ships (local docker web :3000; hosted api.<domain>
 // → apex, which serves the dashboard). Anything else returns "" — no guessing.
@@ -10645,84 +10698,111 @@ async function syncLocalSavings(cfg: Config): Promise<SyncOutcome> {
   }
   const db = new DatabaseSync(dbPath, { readOnly: true });
   let rows: Record<string, unknown>[];
-  const key = syncWatermarkKey(cfg, dbFingerprint(db, dbPath, DatabaseSync));
-  const firstSync = !hasSyncWatermark(key);
-  const since = readSyncWatermark(key);
+  let key: string;
   try {
-    const columns = new Set(
-      (db.prepare("PRAGMA table_info(requests)").all() as Record<string, unknown>[])
-        .map((row) => typeof row.name === "string" ? row.name : "")
-        .filter(Boolean),
-    );
-    const optional = (name: string, fallback: string) => columns.has(name) ? name : `${fallback} AS ${name}`;
-    rows = db
-      .prepare(
-        `SELECT id, ts, request_id, trace_id, agent_slug, provider, model,
-                status_code, error_code, latency_ms, request_bytes, response_bytes,
-                input_tokens, output_tokens, cached_input_tokens,
-                ${optional("cache_creation_input_tokens", "0")}, total_cost_usd,
-                savings_usd, basis, ${optional("token_usage_basis", "'unavailable'")},
-                ${optional("auth_mode", "'unknown'")}, runtime_mode, optimization_ids,
-                compression_tokens_before, compression_tokens_after,
-                ${optional("compression_token_count_basis", "'unavailable'")}
-           FROM requests WHERE id > ? ORDER BY id`,
-      )
-      .all(since) as Record<string, unknown>[];
-  } finally {
+    key = syncWatermarkKey(cfg, dbFingerprint(db, dbPath, DatabaseSync));
+  } catch (err) {
     db.close();
+    throw err;
   }
-  if (rows.length === 0) return { kind: "empty" };
-
-  // Per-row directive labels (review M12): a row synced from BEFORE a
-  // directive's install carries no label — backlog sessions are not evidence
-  // about a directive that did not exist yet. An unparseable row timestamp
-  // labels nothing (fail closed).
-  const directiveInstalls = installedDirectivesWithTimes();
-  const rowDirectives = (r: Record<string, unknown>): string[] => {
-    if (directiveInstalls.length === 0) return [];
-    const ts = typeof r.ts === "string" ? r.ts : "";
-    // The proxy writes ClickHouse-layout UTC timestamps ("YYYY-MM-DD HH:MM:SS.mmm").
-    const ms = Date.parse(ts.includes("T") ? ts : ts.replace(" ", "T") + "Z");
-    if (!Number.isFinite(ms)) return [];
-    return directiveInstalls.filter((d) => ms >= d.installedAtMs).map((d) => d.id);
-  };
-  const body = rows.map((r) => syncRequestSpan(r, rowDirectives(r))).join("\n") + "\n";
-  const response = await fetch(`${cfg.baseURL}/api/v1/imports?format=caveman-jsonl`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${cfg.token}`,
-      "content-type": "application/octet-stream",
-      "x-cave-csrf": "cli",
-    },
-    body,
-  });
-  const result = (await response.json().catch(() => ({}))) as { status?: string; error?: { message?: string } };
-  if (!response.ok || result.status !== "completed") {
-    throw new Error(result.error?.message ?? `sync import failed (${response.status})`);
+  // Everything from here to the watermark write is one claim: reading the
+  // watermark, selecting the rows past it, POSTing them and committing the new
+  // watermark. Without the lock two processes starting together both read the
+  // pre-write watermark, both select the same rows and both POST them, so the
+  // same spans land server-side twice (#1132). A waiter that cannot take the
+  // lock in its budget sends nothing and leaves the watermark alone, so its
+  // rows are picked up by the next sync rather than duplicated by this one.
+  const lockPath = syncClaimLockPath();
+  if (!acquireClaimLock(lockPath, SYNC_CLAIM_LOCK_BUDGET_MS, SYNC_CLAIM_LOCK_STALE_MS)) {
+    db.close();
+    return { kind: "busy" };
   }
+  // The POST below is unbounded, so keep proving this holder is alive; see
+  // SYNC_CLAIM_LOCK_STALE_MS.
+  const heartbeat = setInterval(() => refreshClaimLock(lockPath), SYNC_CLAIM_LOCK_HEARTBEAT_MS);
+  heartbeat.unref();
+  try {
+    const firstSync = !hasSyncWatermark(key);
+    const since = readSyncWatermark(key);
+    try {
+      const columns = new Set(
+        (db.prepare("PRAGMA table_info(requests)").all() as Record<string, unknown>[])
+          .map((row) => typeof row.name === "string" ? row.name : "")
+          .filter(Boolean),
+      );
+      const optional = (name: string, fallback: string) => columns.has(name) ? name : `${fallback} AS ${name}`;
+      rows = db
+        .prepare(
+          `SELECT id, ts, request_id, trace_id, agent_slug, provider, model,
+                  status_code, error_code, latency_ms, request_bytes, response_bytes,
+                  input_tokens, output_tokens, cached_input_tokens,
+                  ${optional("cache_creation_input_tokens", "0")}, total_cost_usd,
+                  savings_usd, basis, ${optional("token_usage_basis", "'unavailable'")},
+                  ${optional("auth_mode", "'unknown'")}, runtime_mode, optimization_ids,
+                  compression_tokens_before, compression_tokens_after,
+                  ${optional("compression_token_count_basis", "'unavailable'")}
+             FROM requests WHERE id > ? ORDER BY id`,
+        )
+        .all(since) as Record<string, unknown>[];
+    } finally {
+      db.close();
+    }
+    if (rows.length === 0) return { kind: "empty" };
 
-  const num = (v: unknown) => (typeof v === "bigint" ? Number(v) : typeof v === "number" && Number.isFinite(v) ? v : 0);
-  const maxId = rows.reduce((m, r) => Math.max(m, num(r.id)), since);
-  writeSyncWatermark(key, maxId);
-  const tokensSaved = rows.reduce((sum, r) => sum + Math.max(0, num(r.compression_tokens_before) - num(r.compression_tokens_after)), 0);
-  const tokenBases = new Set(rows.map((r) => (typeof r.compression_token_count_basis === "string" ? r.compression_token_count_basis : "")).filter(Boolean));
-  const tokenCountBasis = tokenBases.size === 0 ? "unavailable" : tokenBases.size === 1 ? [...tokenBases][0] ?? "unavailable" : "mixed";
-  const cachedInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cached_input_tokens)), 0);
-  const cacheCreationInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cache_creation_input_tokens)), 0);
-  const headlineCompressionRefused = cacheCreationInputTokens > cachedInputTokens;
-  const savingsUSD = rows.reduce((sum, r) => sum + num(r.savings_usd), 0);
-  return {
-    kind: "synced",
-    spans: rows.length,
-    tokensSaved,
-    tokenCountBasis,
-    cachedInputTokens,
-    cacheCreationInputTokens,
-    headlineCompressionRefused,
-    savingsUSD,
-    dashboard: deriveDashboardUrl(cfg.baseURL),
-    firstSync,
-  };
+    // Per-row directive labels (review M12): a row synced from BEFORE a
+    // directive's install carries no label — backlog sessions are not evidence
+    // about a directive that did not exist yet. An unparseable row timestamp
+    // labels nothing (fail closed).
+    const directiveInstalls = installedDirectivesWithTimes();
+    const rowDirectives = (r: Record<string, unknown>): string[] => {
+      if (directiveInstalls.length === 0) return [];
+      const ts = typeof r.ts === "string" ? r.ts : "";
+      // The proxy writes ClickHouse-layout UTC timestamps ("YYYY-MM-DD HH:MM:SS.mmm").
+      const ms = Date.parse(ts.includes("T") ? ts : ts.replace(" ", "T") + "Z");
+      if (!Number.isFinite(ms)) return [];
+      return directiveInstalls.filter((d) => ms >= d.installedAtMs).map((d) => d.id);
+    };
+    const body = rows.map((r) => syncRequestSpan(r, rowDirectives(r))).join("\n") + "\n";
+    const response = await fetch(`${cfg.baseURL}/api/v1/imports?format=caveman-jsonl`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${cfg.token}`,
+        "content-type": "application/octet-stream",
+        "x-cave-csrf": "cli",
+      },
+      body,
+    });
+    const result = (await response.json().catch(() => ({}))) as { status?: string; error?: { message?: string } };
+    if (!response.ok || result.status !== "completed") {
+      throw new Error(result.error?.message ?? `sync import failed (${response.status})`);
+    }
+
+    const num = (v: unknown) => (typeof v === "bigint" ? Number(v) : typeof v === "number" && Number.isFinite(v) ? v : 0);
+    const maxId = rows.reduce((m, r) => Math.max(m, num(r.id)), since);
+    writeSyncWatermark(key, maxId);
+    const tokensSaved = rows.reduce((sum, r) => sum + Math.max(0, num(r.compression_tokens_before) - num(r.compression_tokens_after)), 0);
+    const tokenBases = new Set(rows.map((r) => (typeof r.compression_token_count_basis === "string" ? r.compression_token_count_basis : "")).filter(Boolean));
+    const tokenCountBasis = tokenBases.size === 0 ? "unavailable" : tokenBases.size === 1 ? [...tokenBases][0] ?? "unavailable" : "mixed";
+    const cachedInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cached_input_tokens)), 0);
+    const cacheCreationInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cache_creation_input_tokens)), 0);
+    const headlineCompressionRefused = cacheCreationInputTokens > cachedInputTokens;
+    const savingsUSD = rows.reduce((sum, r) => sum + num(r.savings_usd), 0);
+    return {
+      kind: "synced",
+      spans: rows.length,
+      tokensSaved,
+      tokenCountBasis,
+      cachedInputTokens,
+      cacheCreationInputTokens,
+      headlineCompressionRefused,
+      savingsUSD,
+      dashboard: deriveDashboardUrl(cfg.baseURL),
+      firstSync,
+    };
+  } finally {
+    clearInterval(heartbeat);
+    releaseClaimLock(lockPath);
+  }
 }
 
 function syncSavingsLine(out: SyncedOutcome, local = false): string {
@@ -10818,6 +10898,10 @@ async function sync() {
       console.log(`nothing to sync — no local spend store at ${out.dbPath} (run \`caveman wrap <agent>\` to record local inferred savings first)`);
     } else if (out.kind === "empty") {
       console.log("nothing new to sync — local inferred savings are already up to date");
+    } else if (out.kind === "busy") {
+      // Not a failure: another caveman process holds the watermark and is
+      // uploading these rows right now. Exit 0 — re-running is always safe.
+      console.log("another sync is already running — local spans left for the next `caveman sync`");
     } else {
       if (out.firstSync) console.log(SYNC_DISCLOSURE);
       console.log(syncSavingsLine(out));
@@ -10859,6 +10943,8 @@ async function syncAfterLogin() {
     if (savingsLane.status === "fulfilled") {
       if (savingsLane.value.kind === "synced") {
         console.error(`  ${mark("ok")} ${syncSavingsLine(savingsLane.value, true)}`);
+      } else if (savingsLane.value.kind === "busy") {
+        console.error(dim(`  another sync is already running — run \`${invokedAs()} sync\` afterwards to pick up the rest`));
       } else {
         console.error(dim("  no local spans to sync yet — `caveman wrap <agent>` records inferred savings locally; `caveman sync` uploads them"));
       }
