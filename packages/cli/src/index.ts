@@ -13970,6 +13970,19 @@ const SHRINK_ALLOW = new Set([
   "aws", "gcloud", "az", "gh",
 ]);
 
+// Subcommands that must never be wrapped even though their tool is allowlisted:
+// they open an editor, attach a tty, or wait on a human. Keyed by tool, matched
+// against every token so a global option cannot hide the subcommand (#1133).
+const SHRINK_SKIP_SUBCOMMANDS = new Map<string, Set<string>>([
+  ["git", new Set(["commit", "rebase", "mergetool"])],
+  ["npm", new Set(["init"])],
+  ["yarn", new Set(["init"])],
+  ["pnpm", new Set(["init"])],
+  ["docker", new Set(["run", "exec", "attach"])],
+  ["kubectl", new Set(["edit", "exec", "attach"])],
+  ["terraform", new Set(["apply", "destroy"])],
+]);
+
 // shouldShrink decides whether a Bash command's output should be routed through
 // `caveman shrink`. Conservative by design: it only rewrites a known-noisy,
 // finite, non-interactive command with no shell operators (shrink execs argv
@@ -13983,13 +13996,16 @@ function shouldShrink(command: string): boolean {
   if (/(^|\s)-(f|it|ti|w)\b|--follow\b|--watch\b|--interactive\b|--tail\b/.test(cmd)) return false; // streaming/interactive
   const tokens = cmd.split(/\s+/);
   const first = tokens[0] ?? "";
-  const pair = `${first} ${tokens[1] ?? ""}`;
-  const skipPairs = new Set([
-    "git commit", "git rebase", "git mergetool", "npm init", "yarn init", "pnpm init",
-    "docker run", "docker exec", "docker attach", "kubectl edit", "kubectl exec",
-    "kubectl attach", "terraform apply", "terraform destroy",
-  ]);
-  if (skipPairs.has(pair)) return false;
+  // The excluded subcommand can sit anywhere after the tool, because a global
+  // option may precede it and an option may or may not take a separate value
+  // (`git -C . commit`, `docker --context x exec`, `terraform -chdir=infra apply`).
+  // Comparing only tokens[1] let every one of those walk past the guard and get
+  // wrapped anyway (#1133). We do not try to parse each tool's option grammar to
+  // find "the" subcommand — we fail closed and decline if the word appears at all.
+  // Over-matching costs one uncompressed command; under-matching hands `shrink`,
+  // which captures output and must terminate, a command that opens an editor.
+  const skip = SHRINK_SKIP_SUBCOMMANDS.get(first);
+  if (skip && tokens.slice(1).some((token) => skip.has(token))) return false;
   return SHRINK_ALLOW.has(first);
 }
 
@@ -14021,7 +14037,7 @@ async function shrinkHook() {
   if (nativePolicyMode() === "record" || !new Set(["full-safe", "full-max"]).has(nativeProfile())) process.exit(0);
   let raw: Buffer;
   try { raw = await readHookStdin(); } catch { process.exit(0); }
-  let evt: { tool_name?: string; tool_input?: { command?: string } };
+  let evt: { tool_name?: string; tool_input?: Record<string, unknown> };
   try { evt = JSON.parse(raw.toString("utf8") || "{}"); } catch { process.exit(0); }
   const tool = evt?.tool_name;
   const isGemini = tool === "run_shell_command"; // Gemini CLI's shell tool
@@ -14036,9 +14052,21 @@ async function shrinkHook() {
   const rewritten = `${cavemanBinForHook(false)} shrink -- ${command.trim()}`;
   // Gemini merges hookSpecificOutput.tool_input (snake_case, no event discriminator);
   // Claude replaces via hookSpecificOutput.updatedInput (camelCase + hookEventName).
+  // Claude REPLACES the tool input with updatedInput, so it must carry every field
+  // the host sent — rebuilding it from `command` alone dropped timeout,
+  // run_in_background and description and changed how the command ran (#1133).
+  // Gemini MERGES hookSpecificOutput.tool_input, so sending only `command` there
+  // already preserves the rest; that branch is correct as written.
+  //
+  // No permissionDecision either. It is the same objection #1037 raised for Codex,
+  // and Claude Code — unlike Codex — provably honors it: answering "allow" turned a
+  // compression decision into a permission grant covering every state-changing
+  // command the allowlist accepts (`git push --force`, `kubectl delete`, `aws s3 rm`).
+  // Whether the host applies updatedInput without a decision is its call; if it does
+  // not, the command runs unwrapped and uncompressed, which is the safe direction.
   const out = isGemini
     ? { hookSpecificOutput: { tool_input: { command: rewritten } } }
-    : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: { command: rewritten } } };
+    : { hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: { ...evt.tool_input, command: rewritten } } };
   process.stdout.write(JSON.stringify(out));
 }
 
