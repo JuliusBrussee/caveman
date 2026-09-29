@@ -2982,7 +2982,12 @@ function removeAgentNativeBundle(agent: "claude" | "codex"): void {
   recoverPendingAgentNativeBundle(agent);
   const journal = readAgentNativeBundleJournal(agent);
   if (!journal) {
-    process.stderr.write(`${mark("warn")} ${agent}: no agent-native bundle journal found\n`);
+    // Accurate, but on its own a dead end (#1134): this verb undoes the bundle that
+    // `setup --agent-native` installs, and nothing else. A user who reached the same
+    // config through `caveman <agent>` or `caveman enable <agent>` has no bundle and
+    // reads this as "caveman cannot be uninstalled". Name the verb that undoes theirs.
+    process.stderr.write(`${mark("warn")} ${agent}: no agent-native bundle journal found — nothing was installed by \`caveman setup --agent-native ${agent}\`\n`);
+    process.stderr.write(dim(`  if you set it up with \`caveman ${agent}\` or \`caveman enable ${agent}\`, remove that with \`caveman disable ${agent}\`\n`));
     return;
   }
   for (const skill of journal.skills) {
