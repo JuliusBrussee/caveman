@@ -13657,12 +13657,12 @@ function installMcpCodexToml(mcp: { command: string; args: string[] }, serverNam
     const blockStart = headerMatch.index + (headerMatch[1] ? 1 : 0);
     const contentStart = headerMatch.index + headerMatch[0].length;
     // /^[ \t]*\[/ — NOT [ \\t]. In a regex LITERAL `\\t` is an escaped backslash, so
-  // the class was [space, backslash, "t"] and never matched a tab (#1134). A
-  // tab-indented table is valid TOML, and Codex writes one for every trusted
-  // project, so the boundary ran past it: the verify below never compared equal,
-  // and the splice above deleted the user's tables. The uninstall twin
-  // (removeMcpCodexToml) has always spelled this correctly.
-  const nextHeaderOffset = existing.slice(contentStart).search(/^[ \t]*\[/m);
+    // the class was [space, backslash, "t"] and never matched a tab (#1134). A
+    // tab-indented table is valid TOML, and Codex writes one for every trusted
+    // project, so the boundary ran past it: the verify below never compared equal,
+    // and the splice above deleted the user's tables. The uninstall twin
+    // (removeMcpCodexToml) has always spelled this correctly.
+    const nextHeaderOffset = existing.slice(contentStart).search(/^[ \t]*\[/m);
     const blockEnd = nextHeaderOffset === -1 ? existing.length : contentStart + nextHeaderOffset;
     const currentBlock = existing.slice(blockStart, blockEnd).trim();
     if (currentBlock === expectedBlock.trim()) {
@@ -14063,12 +14063,11 @@ async function shrinkHook() {
   // not hook's explicit PowerShell shell. Never leak PowerShell `&` into it.
   const rewritten = `${cavemanBinForHook(false)} shrink -- ${command.trim()}`;
   // Gemini merges hookSpecificOutput.tool_input (snake_case, no event discriminator);
-  // Claude replaces via hookSpecificOutput.updatedInput (camelCase + hookEventName).
-  // Claude REPLACES the tool input with updatedInput, so it must carry every field
-  // the host sent — rebuilding it from `command` alone dropped timeout,
-  // run_in_background and description and changed how the command ran (#1133).
-  // Gemini MERGES hookSpecificOutput.tool_input, so sending only `command` there
-  // already preserves the rest; that branch is correct as written.
+  // Claude REPLACES via hookSpecificOutput.updatedInput (camelCase + hookEventName).
+  // Because Claude replaces, updatedInput must carry every field the host sent —
+  // rebuilding it from `command` alone dropped timeout, run_in_background and
+  // description, changing how the command ran (#1133). Gemini's merge already
+  // preserves the rest, so sending only `command` there is correct as written.
   //
   // No permissionDecision either. It is the same objection #1037 raised for Codex,
   // and Claude Code — unlike Codex — provably honors it: answering "allow" turned a
