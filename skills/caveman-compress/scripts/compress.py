@@ -416,11 +416,20 @@ def call_claude(prompt: str) -> str:
             import anthropic
 
             client = anthropic.Anthropic(api_key=api_key, timeout=CLAUDE_CALL_TIMEOUT_SECONDS)
-            msg = client.messages.create(
+            # Stream so a large max_tokens stays under the SDK's non-streaming
+            # timeout guard; 8192 truncated files well inside the 500KB input cap.
+            with client.messages.stream(
                 model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
-                max_tokens=8192,
+                max_tokens=64000,
                 messages=[{"role": "user", "content": prompt}],
-            )
+            ) as stream:
+                msg = stream.get_final_message()
+            # A truncated reply is still shorter than the input and can pass
+            # validation, so it must never reach the write path.
+            if getattr(msg, "stop_reason", None) == "max_tokens":
+                raise RuntimeError(
+                    "Claude output hit max_tokens; refusing to write a truncated file"
+                )
             # Tool-heavy models can put a tool_use or thinking block first; take
             # the first text block instead of trusting content[0].
             text = next((block.text for block in msg.content if getattr(block, "type", None) == "text"), "")
@@ -463,18 +472,13 @@ def call_claude(prompt: str) -> str:
 
 def build_compress_prompt(original: str) -> str:
     return f"""
-Compress this markdown into caveman format.
+Compress the natural-language prose in this markdown into caveman style: drop articles, filler, pleasantries, hedging and connective fluff; use short synonyms and fragments; merge bullets that repeat each other.
 
-STRICT RULES:
-- Do NOT modify anything inside ``` code blocks
-- Do NOT modify anything inside a 4-space-indented code block either — those are code too, and they are validated
-- Do NOT modify anything inside inline backticks
-- Preserve ALL URLs exactly
-- Preserve ALL headings exactly
-- Preserve file paths and commands
-- Return ONLY the compressed markdown body — do NOT wrap the entire output in a ```markdown fence or any other fence. Inner code blocks from the original stay as-is; do not add a new outer fence around the whole file.
+Code blocks have been replaced by marker lines starting with @@CAVEMAN_PRESERVED_CODE_. Keep every marker line exactly once, unchanged, in its original position, because the code is restored from them and a missing or altered marker aborts the run. Any remaining code (fenced or 4-space-indented) is also validated byte-for-byte.
 
-Only compress natural language.
+Everything technical must survive unchanged: inline code, URLs and links, file paths, commands, environment variables, technical terms, proper nouns, dates, version numbers and other numbers. Keep heading text, list nesting and numbering, and table structure unchanged (table cell prose may be compressed).
+
+Your reply is written directly to disk, so return the compressed body alone, without an outer fence around it.
 
 TEXT:
 {original}
@@ -485,11 +489,7 @@ def build_fix_prompt(original: str, compressed: str, errors: List[str]) -> str:
     errors_str = "\n".join(f"- {e}" for e in errors)
     return f"""You are fixing a caveman-compressed markdown file. Specific validation errors were found.
 
-CRITICAL RULES:
-- DO NOT recompress or rephrase the file
-- ONLY fix the listed errors — leave everything else exactly as-is
-- The ORIGINAL is provided as reference only (to restore missing content)
-- Preserve caveman style in all untouched sections
+Fix only the listed errors and leave every other line exactly as it is; the rest of the file already passed validation, so rephrasing it risks new errors. ORIGINAL is reference material for restoring missing content.
 
 ERRORS TO FIX:
 {errors_str}

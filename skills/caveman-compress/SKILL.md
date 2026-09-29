@@ -68,22 +68,7 @@ python3 -m scripts <absolute_filepath>
 - Merge redundant bullets that say the same thing differently
 - Keep one example where multiple examples show the same pattern
 
-CRITICAL RULE:
-Anything inside ``` ... ``` must be copied EXACTLY.
-Do not:
-- remove comments
-- remove spacing
-- reorder lines
-- shorten commands
-- simplify anything
-
-Inline code (`...`) must be preserved EXACTLY.
-Do not modify anything inside backticks.
-
-If file contains code blocks:
-- Treat code blocks as read-only regions
-- Only compress text outside them
-- Do not merge sections around code
+Code blocks and inline code are read-only regions, copied byte-for-byte (comments, spacing and line order included), because the validator compares them against the original. Compress only the prose around them, without merging sections across a code block.
 
 ## Pattern
 

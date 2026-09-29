@@ -446,12 +446,13 @@ class FirstTextBlockTests(unittest.TestCase):
     shape only — the only provider that reaches this call site).
     """
 
-    def _run(self, blocks):
+    def _run(self, blocks, stop_reason="end_turn"):
         import types
 
-        fake_msg = types.SimpleNamespace(content=blocks)
-        fake_client = mock.Mock()
-        fake_client.messages.create.return_value = fake_msg
+        fake_msg = types.SimpleNamespace(content=blocks, stop_reason=stop_reason)
+        fake_client = mock.MagicMock()
+        stream_cm = fake_client.messages.stream.return_value
+        stream_cm.__enter__.return_value.get_final_message.return_value = fake_msg
         anthropic_stub = types.SimpleNamespace(Anthropic=mock.Mock(return_value=fake_client))
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}), \
              mock.patch.dict(sys.modules, {"anthropic": anthropic_stub}):
@@ -482,3 +483,9 @@ class FirstTextBlockTests(unittest.TestCase):
         # contract, so the caller's "Claude returned an empty response"
         # message applies instead of an unhandled AttributeError traceback.
         self.assertEqual(self._run([mock.Mock(type="tool_use", id="toolu_1")]), "")
+
+    def test_max_tokens_truncation_raises_instead_of_returning_partial(self):
+        # A truncated body is shorter than the input and can pass validation,
+        # so it must fail before compress_file reaches the write path.
+        with self.assertRaises(RuntimeError):
+            self._run([mock.Mock(type="text", text="partial")], stop_reason="max_tokens")
