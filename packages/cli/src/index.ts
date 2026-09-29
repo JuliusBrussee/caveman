@@ -13651,7 +13651,13 @@ function installMcpCodexToml(mcp: { command: string; args: string[] }, serverNam
     }
     const blockStart = headerMatch.index + (headerMatch[1] ? 1 : 0);
     const contentStart = headerMatch.index + headerMatch[0].length;
-    const nextHeaderOffset = existing.slice(contentStart).search(/^[ \\t]*\[/m);
+    // /^[ \t]*\[/ — NOT [ \\t]. In a regex LITERAL `\\t` is an escaped backslash, so
+  // the class was [space, backslash, "t"] and never matched a tab (#1134). A
+  // tab-indented table is valid TOML, and Codex writes one for every trusted
+  // project, so the boundary ran past it: the verify below never compared equal,
+  // and the splice above deleted the user's tables. The uninstall twin
+  // (removeMcpCodexToml) has always spelled this correctly.
+  const nextHeaderOffset = existing.slice(contentStart).search(/^[ \t]*\[/m);
     const blockEnd = nextHeaderOffset === -1 ? existing.length : contentStart + nextHeaderOffset;
     const currentBlock = existing.slice(blockStart, blockEnd).trim();
     if (currentBlock === expectedBlock.trim()) {
@@ -13685,7 +13691,8 @@ function codexMcpRegistrationMatches(serverName: string, mcp: { command: string;
   if (!headerMatch) return false;
   const blockStart = headerMatch.index + (headerMatch[1] ? 1 : 0);
   const contentStart = headerMatch.index + headerMatch[0].length;
-  const nextHeaderOffset = existing.slice(contentStart).search(/^[ \\t]*\[/m);
+  // See the note in installMcpCodexToml: a literal [ \\t] never matched a tab (#1134).
+  const nextHeaderOffset = existing.slice(contentStart).search(/^[ \t]*\[/m);
   const blockEnd = nextHeaderOffset === -1 ? existing.length : contentStart + nextHeaderOffset;
   const argsLine = mcp.args.length ? `\nargs = [${mcp.args.map((arg) => JSON.stringify(arg)).join(", ")}]` : "";
   const recoveryEnv = serverName === "caveman" ? `\n${CODEX_RECOVERY_ENV}` : "";
