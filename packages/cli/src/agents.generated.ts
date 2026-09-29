@@ -111,10 +111,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "2.1.283",
+    "tested_agent_version": "2.1.284",
     "injection_completeness": "builder-assisted",
-    "last_verified_at": "2026-09-26",
-    "verified_by": "local pinned-binary probe (claude 2.1.283, agents/probe-installed.mjs)",
+    "last_verified_at": "2026-09-29",
+    "verified_by": "local pinned-binary probe (claude 2.1.284, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -148,10 +148,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "0.157.1",
+    "tested_agent_version": "0.158.0",
     "injection_completeness": "code-only",
-    "last_verified_at": "2026-09-26",
-    "verified_by": "local pinned-binary probe (codex 0.157.1, agents/probe-installed.mjs)",
+    "last_verified_at": "2026-09-29",
+    "verified_by": "local pinned-binary probe (codex 0.158.0, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
