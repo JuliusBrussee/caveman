@@ -6705,6 +6705,67 @@ function assertNativeHooksShape(path: string, root: Record<string, unknown>, age
   }
 }
 
+// #1137, in one place: every persistent artifact caveman writes bakes in the
+// invocation `enable` resolved, and nothing checked that the invocation still
+// resolves. nvm installs each Node release in its own directory and
+// `nvm uninstall <old>` deletes it, so a routine upgrade leaves every baked
+// path dangling — while the artifact's own bytes are untouched, which is what
+// every ownership check looked at. The hosts differ only in where the
+// invocation is written; whether its targets exist is one question, asked here.
+//
+// `which` answers an absolute path by testing it directly, so this covers both
+// a bare name resolved through PATH and a path into a removed directory.
+function invocationTargetsExist(tokens: string[]): boolean {
+  const executable = tokens[0];
+  if (executable === undefined || !which(executable)) return false;
+  // A `node <script>` invocation and a `--adapter <file>` argument name files
+  // the executable itself cannot vouch for: node exists on every host after an
+  // upgrade, the script it was pointed at does not.
+  const files = [hookCommandBasename(executable) === "node" ? tokens[1] : undefined];
+  const adapter = tokens.indexOf("--adapter");
+  if (adapter !== -1) files.push(tokens[adapter + 1]);
+  return !files.some((file) => file !== undefined && !existsSync(file));
+}
+
+// The generated opencode plugin and Pi extension bake their invocation as a
+// source literal rather than a host hook command, so ownership was judged by
+// the marker comment alone and #1137 stayed invisible on both. Parse what the
+// generators emit — not the journal, which for an install made before this
+// check records no invocation at all, and these are the installs already
+// broken on disk.
+//
+// Deliberately fail-open on an unrecognized shape: there is nothing to verify,
+// and answering `false` would report every install degraded. The regression
+// tests assert the emitted shape still matches, so a generator refactor that
+// silences this fails the suite instead of silently verifying nothing.
+function generatedInvocation(text: string): string[] | undefined {
+  // opencode: `const command = "…";` with `const prefix = […];`
+  const command = text.match(/^const command = ("(?:[^"\\]|\\.)*");$/m);
+  if (command) {
+    const prefix = text.match(/^const prefix = (\[(?:[^[\]\\]|\\.)*\]);$/m);
+    try {
+      const parsedPrefix = prefix ? JSON.parse(prefix[1]!) as unknown : [];
+      if (!Array.isArray(parsedPrefix) || parsedPrefix.some((item) => typeof item !== "string")) return undefined;
+      return [JSON.parse(command[1]!) as string, ...parsedPrefix as string[]];
+    } catch { return undefined; }
+  }
+  // Pi: `process.env.CAVEMAN_PI_HOOK_CMD ??= "<json array, re-encoded>";`
+  const pi = text.match(/^process\.env\.CAVEMAN_PI_HOOK_CMD \?\?= ("(?:[^"\\]|\\.)*");$/m);
+  if (pi) {
+    try {
+      const parsed = JSON.parse(JSON.parse(pi[1]!) as string) as unknown;
+      if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((item) => typeof item !== "string")) return undefined;
+      return parsed as string[];
+    } catch { return undefined; }
+  }
+  return undefined;
+}
+
+function generatedArtifactTargetsExist(text: string): boolean {
+  const tokens = generatedInvocation(text);
+  return tokens === undefined || invocationTargetsExist(tokens);
+}
+
 // A managed hook is only healthy while the files its command runs still exist.
 // Identity is judged by basename, so a hook rendered into a directory that has
 // since been deleted (an nvm Node upgrade, #1137) kept matching the expected
@@ -6718,12 +6779,7 @@ function managedHookTargetsExist(root: Record<string, unknown>): boolean {
     for (const entry of raw as Array<Record<string, unknown>>) {
       const command = entry && typeof entry === "object" ? hookEntryCommand(entry) : undefined;
       if (command === undefined || managedHookIdentity(command) === undefined) continue;
-      const tokens = hookCommandTokens(command)!;
-      if (!which(tokens[0]!)) return false;
-      const files = [hookCommandBasename(tokens[0]!) === "node" ? tokens[1] : undefined];
-      const adapter = tokens.indexOf("--adapter");
-      if (adapter !== -1) files.push(tokens[adapter + 1]);
-      if (files.some((file) => file !== undefined && !existsSync(file))) return false;
+      if (!invocationTargetsExist(hookCommandTokens(command)!)) return false;
     }
   }
   return true;
@@ -8943,9 +8999,11 @@ function nativeIntegrationStatus(agent: NativeAgent) {
             return options.baseURL === routes[providerID];
           }) && JSON.stringify(mcp.caveman) === JSON.stringify(operation.owned?.installed_mcp);
         } else if (operation.kind === "opencode-plugin") {
-          owned = current.toString("utf8").includes("caveman:native-opencode");
+          const text = current.toString("utf8");
+          owned = text.includes("caveman:native-opencode") && generatedArtifactTargetsExist(text);
         } else if (operation.kind === "pi-extension") {
-          owned = current.toString("utf8").includes("caveman:native-pi");
+          const text = current.toString("utf8");
+          owned = text.includes("caveman:native-pi") && generatedArtifactTargetsExist(text);
         } else if (operation.kind === "aider-config") {
           const text = current.toString("utf8");
           owned = typeof operation.owned?.route_block === "string" && typeof operation.owned?.read_block === "string"

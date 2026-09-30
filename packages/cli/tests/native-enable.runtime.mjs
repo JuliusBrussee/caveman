@@ -1452,3 +1452,44 @@ test("enable/disable aider stays shallow, preserves native repo map, and restore
   assert.doesNotMatch(restored, /caveman:native-aider|127\.0\.0\.1:8787/);
   assert.equal(existsSync(corePath), false);
 });
+
+// The generated opencode plugin bakes the invocation `enable` resolved, exactly
+// as the claude/codex hook documents bake theirs. Judging its ownership by the
+// marker comment alone left the same #1137 hole a step further along: the file
+// is byte-identical to what enable wrote, so nothing looks drifted, while the
+// path it names has gone with the removed nvm Node directory and every native
+// call fails silently.
+test("doctor flags an opencode plugin whose baked invocation no longer exists and --fix re-renders it", async () => {
+  const fx = fixture();
+  // A `caveman` earlier on PATH than the fixture's own, standing in for
+  // ~/.nvm/versions/node/<version>/bin — the directory nvm deletes on
+  // `nvm uninstall <old>`.
+  const versioned = join(fx.home, ".nvm", "versions", "node", "v26.9.0", "bin");
+  mkdirSync(versioned, { recursive: true });
+  writeFileSync(join(versioned, "caveman"), readFileSync(join(fx.home, "bin", "caveman")), { mode: 0o755 });
+  const env = { ...fx.env, PATH: `${versioned}:${fx.env.PATH}` };
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  assert.equal((await run(["enable", "opencode"], env)).code, 0);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  // Pin the shape the health check parses: if the generator stops emitting a
+  // `const command = "..."` line, the check silently verifies nothing.
+  assert.match(readFileSync(pluginPath, "utf8"), /^const command = ".*v26\.9\.0.*";$/m);
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], env)).stdout).state, "installed");
+
+  // The Node upgrade. The plugin's bytes do not change; its target disappears.
+  rmSync(dirname(versioned), { recursive: true, force: true });
+  const degraded = await run(["doctor", "opencode"], fx.env);
+  assert.notEqual(degraded.code, 0, "a plugin naming a missing executable must not report healthy");
+  const before = JSON.parse(degraded.stdout);
+  assert.equal(before.state, "degraded");
+  assert.equal(before.components.lifecycle_hooks, false);
+
+  const fixed = await run(["doctor", "opencode", "--fix"], fx.env);
+  assert.equal(fixed.code, 0, fixed.stderr);
+  assert.equal(JSON.parse(fixed.stdout).fix.result, "repaired");
+  assert.equal(JSON.parse(fixed.stdout).state, "installed");
+  assert.doesNotMatch(readFileSync(pluginPath, "utf8"), /v26\.9\.0/);
+});
