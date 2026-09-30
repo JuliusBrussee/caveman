@@ -6743,6 +6743,11 @@ function generatedInvocation(text: string): string[] | undefined {
   const command = text.match(/^const command = ("(?:[^"\\]|\\.)*");$/m);
   if (command) {
     const prefix = text.match(/^const prefix = (\[(?:[^[\]\\]|\\.)*\]);$/m);
+    // A prefix line we cannot read means we cannot see the whole invocation,
+    // and verifying the executable alone would be worse than verifying
+    // nothing: `node` survives every upgrade, so the dangling member would be
+    // exactly the script in the prefix we failed to parse.
+    if (!prefix && /^const prefix = /m.test(text)) return undefined;
     try {
       const parsedPrefix = prefix ? JSON.parse(prefix[1]!) as unknown : [];
       if (!Array.isArray(parsedPrefix) || parsedPrefix.some((item) => typeof item !== "string")) return undefined;
