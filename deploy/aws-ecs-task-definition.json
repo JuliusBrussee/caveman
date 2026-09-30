@@ -53,7 +53,7 @@
     },
     {
       "name": "caveman-proxy",
-      "image": "ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0@sha256:REPLACE_AT_RELEASE",
+      "image": "ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0@sha256:c031ef2cd357b91cbcbef39fe1d239acecc35e92bc117387ca2dea12a4b0d63f",
       "essential": true,
       "dependsOn": [
         {

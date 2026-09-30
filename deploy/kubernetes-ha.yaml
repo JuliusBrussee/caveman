@@ -6,10 +6,8 @@
 # state (spend rows, its recovery store, proxy.log) stays per pod on an emptyDir;
 # the proxy routes run in record mode, which needs no durable recovery.
 #
-# Needs runtime bin-v2.0.0 or later. This file holds no secrets. Its one
-# placeholder is the image digest (REPLACE_AT_RELEASE), which the release fills
-# in; until then the pull fails (InvalidImageName) rather than run an unpinned
-# image. Pods wait (CreateContainerConfigError) until these Secrets exist:
+# Needs runtime bin-v2.0.0 or later. This file holds no secrets. The image is
+# pinned by digest, so a moved tag can never change what runs. Pods wait (CreateContainerConfigError) until these Secrets exist:
 #
 #   # Environment. CAVEMAN_AUTH_TOKEN is optional: without it the provider
 #   # routes refuse every request and the replicas serve the middleware only.
@@ -88,9 +86,8 @@ spec:
               app: caveman-proxy-ha
       containers:
         - name: caveman-proxy
-          # Pinned by digest; the release replaces REPLACE_AT_RELEASE with the
-          # bin-v2.0.0 image digest (docker buildx imagetools inspect <image>).
-          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0@sha256:REPLACE_AT_RELEASE
+          # Pinned by digest to the signed bin-v2.0.0 image.
+          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0@sha256:c031ef2cd357b91cbcbef39fe1d239acecc35e92bc117387ca2dea12a4b0d63f
           imagePullPolicy: IfNotPresent
           ports:
             - name: https

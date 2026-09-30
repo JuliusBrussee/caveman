@@ -65,9 +65,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: caveman-proxy
-          # Pinned by digest; the release replaces REPLACE_AT_RELEASE with the
-          # bin-v2.0.0 image digest. Until then the pull fails (InvalidImageName).
-          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0@sha256:REPLACE_AT_RELEASE
+          # Pinned by digest to the signed bin-v2.0.0 image.
+          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0@sha256:c031ef2cd357b91cbcbef39fe1d239acecc35e92bc117387ca2dea12a4b0d63f
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8787

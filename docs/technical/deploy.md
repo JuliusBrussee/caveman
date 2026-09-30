@@ -70,9 +70,7 @@ digest with `docker buildx imagetools inspect <image>`), never `:latest`.
 `bin-v1.1.7` is the first tag that publishes the image; the middleware
 identity, TLS listener and Postgres store below need `bin-v2.0.0` or later,
 which every example here names. The Kubernetes and ECS manifests in `deploy/`
-carry `@sha256:REPLACE_AT_RELEASE` until the `bin-v2.0.0` release writes the
-real digest in; until then their image pull fails instead of running an
-unpinned image. To build it yourself, run `docker build -t caveman-proxy .` at
+pin the signed `bin-v2.0.0` image by digest. To build it yourself, run `docker build -t caveman-proxy .` at
 the repository root.
 
 A named volume inherits the right owner. A **bind** mount does not — `chown` the
