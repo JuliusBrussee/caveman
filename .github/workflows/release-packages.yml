@@ -411,6 +411,7 @@ jobs:
               echo "::endgroup::"
             done
           else
+            python -m pip install --disable-pip-version-check --require-hashes -r "$GITHUB_WORKSPACE/.github/requirements/release-python.txt"
             python -m pytest
           fi
           wheel="$(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name '*.whl' -print)"
