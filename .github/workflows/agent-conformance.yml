@@ -65,7 +65,7 @@ jobs:
           - id: aider
             install: python -m pip install aider-chat==0.86.2
           - id: claude
-            install: npm install -g @anthropic-ai/claude-code@2.1.284
+            install: npm install -g @anthropic-ai/claude-code@2.1.285
           - id: codex
             install: npm install -g @openai/codex@0.158.0
           - id: gemini
