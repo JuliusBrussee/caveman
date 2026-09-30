@@ -6623,11 +6623,36 @@ function assertNativeHooksShape(path: string, root: Record<string, unknown>, age
   }
 }
 
+// A managed hook is only healthy while the files its command runs still exist.
+// Identity is judged by basename, so a hook rendered into a directory that has
+// since been deleted (an nvm Node upgrade, #1137) kept matching the expected
+// document while the host ran a missing binary or adapter.
+function managedHookTargetsExist(root: Record<string, unknown>): boolean {
+  const hooks = root.hooks && typeof root.hooks === "object" && !Array.isArray(root.hooks)
+    ? root.hooks as Record<string, unknown>
+    : {};
+  for (const raw of Object.values(hooks)) {
+    if (!Array.isArray(raw)) continue;
+    for (const entry of raw as Array<Record<string, unknown>>) {
+      const command = entry && typeof entry === "object" ? hookEntryCommand(entry) : undefined;
+      if (command === undefined || managedHookIdentity(command) === undefined) continue;
+      const tokens = hookCommandTokens(command)!;
+      if (!which(tokens[0]!)) return false;
+      const files = [hookCommandBasename(tokens[0]!) === "node" ? tokens[1] : undefined];
+      const adapter = tokens.indexOf("--adapter");
+      if (adapter !== -1) files.push(tokens[adapter + 1]);
+      if (files.some((file) => file !== undefined && !existsSync(file))) return false;
+    }
+  }
+  return true;
+}
+
 function nativeHookEntriesHealthy(root: Record<string, unknown>, agentId: "claude" | "codex" | "gemini"): boolean {
   const hooks = root.hooks && typeof root.hooks === "object" && !Array.isArray(root.hooks)
     ? root.hooks as Record<string, unknown>
     : undefined;
   if (!hooks) return false;
+  if (!managedHookTargetsExist(root)) return false;
   const expected = nativeHooksDocument(agentId, nativeShrinkEnabled()).hooks as Record<string, unknown>;
   const required = Object.entries(expected).every(([event, expectedRaw]) => {
     const actual = Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [];

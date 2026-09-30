@@ -680,6 +680,12 @@ test("doctor and disable tolerate executable path drift with unchanged hook sema
   const fx = fixture();
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
   const path = join(fx.home, ".claude", "settings.json");
+  // Drift is only tolerated while the relocated files exist (#1137).
+  const moved = join(fx.home, "new");
+  mkdirSync(join(moved, "caveman", "bin"), { recursive: true });
+  mkdirSync(join(moved, "fnm"), { recursive: true });
+  for (const file of ["caveman/bin/caveman-proxy", "fnm/node"]) writeFileSync(join(moved, file), "#!/bin/sh\n", { mode: 0o755 });
+  for (const file of ["caveman/native-hook-fast.js", "caveman/index.js"]) writeFileSync(join(moved, file), "");
   const settings = JSON.parse(readFileSync(path, "utf8"));
   for (const entries of Object.values(settings.hooks)) {
     for (const entry of entries) {
@@ -687,9 +693,9 @@ test("doctor and disable tolerate executable path drift with unchanged hook sema
       if (typeof hook?.command === "string" && /native-hook claude|shrink-hook|mem recall-hook/.test(hook.command)) {
         hook.command = hook.command.includes("native-hook claude")
           ? hook.command
-              .replace(/^.*?(?=native-hook claude)/, "'/new/caveman/bin/caveman-proxy' ")
-              .replace(/--adapter\s+.*$/, "--adapter '/new/caveman/native-hook-fast.js'")
-          : hook.command.replace(/^.*?(?=shrink-hook|mem recall-hook)/, "'/new/fnm/node' '/new/caveman/index.js' ");
+              .replace(/^.*?(?=native-hook claude)/, `'${moved}/caveman/bin/caveman-proxy' `)
+              .replace(/--adapter\s+.*$/, `--adapter '${moved}/caveman/native-hook-fast.js'`)
+          : hook.command.replace(/^.*?(?=shrink-hook|mem recall-hook)/, `'${moved}/fnm/node' '${moved}/caveman/index.js' `);
       }
     }
   }
@@ -702,6 +708,47 @@ test("doctor and disable tolerate executable path drift with unchanged hook sema
   assert.equal(disabled.code, 0, disabled.stderr);
   assert.doesNotMatch(readFileSync(path, "utf8"), /native-hook claude|shrink-hook|mem recall-hook/);
 });
+
+// A managed hook whose executable or --adapter file no longer exists (#1137,
+// an nvm Node upgrade removing the versioned directory) is degraded, and
+// doctor --fix re-renders it.
+for (const [name, rewrite] of [
+  ["adapter", (command, dead) => command.replace(/--adapter\s+.*$/, `--adapter '${dead}/native-hook-fast.js'`)],
+  ["executable", (command, dead) => command.replace(/^.*?(?=native-hook claude|shrink-hook)/, `'${dead}/bin/${command.includes("shrink-hook") ? "caveman" : "caveman-proxy"}' `)],
+]) {
+  test(`doctor flags a managed hook whose ${name} no longer exists and --fix re-renders it`, async () => {
+    const fx = fixture();
+    assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+    const path = join(fx.home, ".claude", "settings.json");
+    const dead = join(fx.home, ".nvm", "versions", "node", "v26.9.0");
+    const settings = JSON.parse(readFileSync(path, "utf8"));
+    for (const entries of Object.values(settings.hooks)) {
+      for (const entry of entries) {
+        const hook = entry.hooks?.[0];
+        if (typeof hook?.command === "string" && /native-hook claude|shrink-hook/.test(hook.command)) {
+          hook.command = rewrite(hook.command, dead);
+        }
+      }
+    }
+    writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
+    assert.match(readFileSync(path, "utf8"), /v26\.9\.0/);
+
+    const degraded = await run(["doctor", "claude"], fx.env);
+    assert.notEqual(degraded.code, 0);
+    assert.equal(JSON.parse(degraded.stdout).state, "degraded");
+
+    const fixed = await run(["doctor", "claude", "--fix"], fx.env);
+    assert.equal(fixed.code, 0, fixed.stderr);
+    const result = JSON.parse(fixed.stdout);
+    assert.equal(result.fix.result, "repaired");
+    assert.equal(result.state, "installed");
+    assert.doesNotMatch(readFileSync(path, "utf8"), /v26\.9\.0/);
+
+    const disabled = await run(["disable", "claude"], fx.env);
+    assert.equal(disabled.code, 0, disabled.stderr);
+    assert.doesNotMatch(readFileSync(path, "utf8"), /native-hook claude|shrink-hook/);
+  });
+}
 
 test("doctor --fix transactionally repairs missing owned hooks and preserves unrelated edits", async () => {
   const fx = fixture();
