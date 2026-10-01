@@ -56,3 +56,17 @@ test('#565 install.ps1 invokes its function at the bottom (script still does som
     'install.ps1 must actually invoke Install-Caveman after defining it',
   );
 });
+
+test('npm 12+ opts the root package into git fetching', () => {
+  assert.match(code, /\$npxVersion\s*=\s*\[string\]\(& npx --version\)/i);
+  assert.match(
+    code,
+    /if\s*\(\s*\$npxMajor\s+-ge\s+12\s*\)\s*\{[\s\S]*?& npx --allow-git=root -y/i,
+    'npm 12+ must pass --allow-git=root before the GitHub package spec',
+  );
+  assert.match(
+    code,
+    /else\s*\{\s*& npx -y/i,
+    'older npm versions must keep the legacy npx invocation',
+  );
+});
