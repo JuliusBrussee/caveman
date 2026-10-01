@@ -222,7 +222,7 @@ if ($RemovedFiles -eq 0) {
 # .caveman-history.jsonl is deliberately NOT removed: it is the user's
 # accumulated lifetime savings record, not caveman plumbing. Keep this list in
 # sync with the uninstall block in bin/install.js.
-foreach ($state in @(".caveman-active", ".caveman-active.prev", ".caveman-mode-log.jsonl", ".caveman-statusline-suffix", ".caveman-nudge-shown")) {
+foreach ($state in @(".caveman-active", ".caveman-active.prev", ".caveman-mode-log.jsonl", ".caveman-statusline-suffix", ".caveman-nudge-shown", ".caveman-statusline-stale")) {
     $StatePath = Join-Path $ClaudeDir $state
     if (Test-Path $StatePath) {
         Remove-Item $StatePath -Force

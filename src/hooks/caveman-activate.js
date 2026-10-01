@@ -387,35 +387,124 @@ if (skillContent) {
 // One-shot (#661): the nudge costs ~90 tokens per session, so a marker file
 // gates it to the first session only. Users who declined stop paying for it.
 const nudgeMarkerPath = path.join(claudeDir, '.caveman-nudge-shown');
+// A plugin install runs this hook from the VERSIONED plugin cache
+// (~/.claude/plugins/cache/caveman/caveman/<version>/src/hooks/), so a command
+// built from __dirname froze whichever version was installed when the nudge
+// fired. Claude Code prunes old cache versions; once the pinned directory goes,
+// `bash <missing path>` exits 127 and Claude Code hides the whole status bar
+// (#711) — and because the nudge is one-shot, the badge is never offered again
+// (#1147). Recommend a version-independent copy instead: the same
+// <claudeDir>/hooks/ path the standalone installer already owns.
+//
+// `.caveman-sessions` is the ownership marker: both statusline scripts read the
+// session store, and verify_repo.py pins that string in each of them. A file at
+// the stable path without it is the user's own script and is never touched.
+const STATUSLINE_MARKER = (cfg.SESSIONS_DIRNAME || '.caveman-sessions');
+
+// The stable copy to recommend, or null to keep the caller on __dirname. Copies
+// only when the destination is absent or is a caveman script that has drifted
+// from the running one — so a plugin update reaches the badge, and a foreign or
+// hand-edited script survives untouched.
+function stableStatuslinePath(scriptName) {
+  try {
+    const source = path.join(__dirname, scriptName);
+    const target = path.join(claudeDir, 'hooks', scriptName);
+    if (path.resolve(source) === path.resolve(target)) return target; // standalone install
+    const wanted = fs.readFileSync(source, 'utf8');
+    if (!wanted.includes(STATUSLINE_MARKER)) return null; // not a script we recognize
+    if (fs.existsSync(target)) {
+      const current = fs.readFileSync(target, 'utf8');
+      if (current === wanted) return target;
+      if (!current.includes(STATUSLINE_MARKER)) return null; // foreign — leave it alone
+    }
+    safeWriteFlag(target, wanted);
+    // safeWriteFlag fails silently by design, so confirm the bytes landed
+    // rather than recommending a path that may not exist.
+    return fs.readFileSync(target, 'utf8') === wanted ? target : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// True when `command` runs a caveman statusline script that is no longer on
+// disk — the pruned-plugin-version case. A command naming no caveman statusline
+// is the user's own and is left alone.
+function statuslineScriptGone(command) {
+  if (typeof command !== 'string') return false;
+  const found = [];
+  // Quoted first, and the quoted form is what both recommended commands use.
+  // A whitespace-delimited scan alone would truncate "C:\\Users\\Jane Doe\\..."
+  // at the space, call an existing script missing, and re-nudge every user
+  // whose home directory has a space in it.
+  const quoted = /"([^"]*caveman-statusline\.(?:sh|ps1))"|'([^']*caveman-statusline\.(?:sh|ps1))'/g;
+  let match;
+  while ((match = quoted.exec(command)) !== null) found.push(match[1] || match[2]);
+  if (found.length === 0) {
+    const bare = command.match(/[^"'\s]*caveman-statusline\.(?:sh|ps1)/g);
+    if (bare) found.push(...bare);
+  }
+  if (found.length === 0) return false;
+  return found.every((candidate) => !fs.existsSync(candidate));
+}
+
 try {
+  const isWindows = process.platform === 'win32';
+  const scriptName = isWindows ? 'caveman-statusline.ps1' : 'caveman-statusline.sh';
+
   let hasStatusline = false;
+  let staleCommand = null;
   if (fs.existsSync(settingsPath)) {
     const rawSettings = fs.readFileSync(settingsPath, 'utf8');
+    let configured;
     try {
-      hasStatusline = !!JSON.parse(rawSettings).statusLine;
+      configured = JSON.parse(rawSettings).statusLine;
+      hasStatusline = !!configured;
     } catch (e) {
       // JSONC (comments / trailing commas) is legal in settings.json and the
       // hooks dir has no JSONC parser. Fall back to a substring probe and err
       // toward NOT nudging: a spurious "set up your statusline" for a user who
-      // already has one is worse than a missing nudge.
+      // already has one is worse than a missing nudge. The command cannot be
+      // extracted on this path, so a stale one is not detected either.
       hasStatusline = rawSettings.includes('"statusLine"');
+    }
+    if (hasStatusline && configured && statuslineScriptGone(configured.command)) {
+      // Configured, but pointing at a script that is gone: the status bar is
+      // hidden right now and the one-shot marker is already set.
+      hasStatusline = false;
+      staleCommand = String(configured.command);
     }
   }
 
-  if (!hasStatusline && !fs.existsSync(nudgeMarkerPath)) {
-    safeWriteFlag(nudgeMarkerPath, '1');
-    const isWindows = process.platform === 'win32';
-    const scriptName = isWindows ? 'caveman-statusline.ps1' : 'caveman-statusline.sh';
-    const scriptPath = path.join(__dirname, scriptName);
+  // Re-offer a dead path once per distinct broken command, so a user who
+  // declines is not asked again every session.
+  const stalePath = path.join(claudeDir, '.caveman-statusline-stale');
+  let alreadyReported = false;
+  if (staleCommand) {
+    try {
+      alreadyReported = fs.readFileSync(stalePath, 'utf8') === staleCommand;
+    } catch (e) {
+      alreadyReported = false;
+    }
+  }
+
+  if (!hasStatusline && (staleCommand ? !alreadyReported : !fs.existsSync(nudgeMarkerPath))) {
+    if (staleCommand) safeWriteFlag(stalePath, staleCommand);
+    else safeWriteFlag(nudgeMarkerPath, '1');
+    const scriptPath = stableStatuslinePath(scriptName) || path.join(__dirname, scriptName);
     const command = isWindows
       ? `powershell -ExecutionPolicy Bypass -File "${scriptPath}"`
       : `bash "${scriptPath}"`;
     const statusLineSnippet =
       '"statusLine": { "type": "command", "command": ' + JSON.stringify(command) + ' }';
     output += "\n\n" +
-      "STATUSLINE SETUP NEEDED: The caveman plugin includes a statusline badge showing active mode " +
-      "(e.g. [CAVEMAN], [CAVEMAN:ULTRA]). It is not configured yet. " +
-      "To enable, add this to " + path.join(claudeDir, 'settings.json') + ": " +
+      (staleCommand
+        ? "STATUSLINE REPAIR NEEDED: The caveman statusline badge is configured to run a script that no " +
+          "longer exists (" + staleCommand + "), which hides the Claude Code status bar. " +
+          "STATUSLINE SETUP NEEDED: repoint it in "
+        : "STATUSLINE SETUP NEEDED: The caveman plugin includes a statusline badge showing active mode " +
+          "(e.g. [CAVEMAN], [CAVEMAN:ULTRA]). It is not configured yet. " +
+          "To enable, add this to ") +
+      path.join(claudeDir, 'settings.json') + ": " +
       statusLineSnippet + " " +
       "Proactively offer to set this up for the user on first interaction.";
   }
