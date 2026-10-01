@@ -127,3 +127,77 @@ test("profile scope rejects non-JSON neighbor in concrete profile commit", (t) =
   assert.equal(result.ok, false);
   assert.match(result.message, /rejects non-contract profile path.*agents\/profiles\/README\.md/);
 });
+
+// gitIn runs git in an existing fixture repo, for the branch/merge shapes the
+// helper above does not cover.
+function gitIn(repo) {
+  return (...args) => {
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+}
+
+// A long-lived profile branch has to be able to take its base branch's commits.
+// Merging them in leaves a merge commit whose INHERITED paths are the base
+// branch's, not the merge's own work, so the lane must not read them as an
+// out-of-scope profile commit. Without this the gate makes "carries a profile
+// bump" and "is up to date with main" mutually exclusive.
+test("profile scope accepts a merge that brings the base branch in", (t) => {
+  const { repo, put, commit, base } = fixtureRepo(t);
+  const git = gitIn(repo);
+
+  // The base branch moves on, touching files the profile lane does not allow.
+  git("checkout", "-q", "-b", "mainline", base);
+  put(".claude-plugin/plugin.json", "{}\n");
+  put("README.md", "mainline\n");
+  const mainline = commit("mainline moves on");
+
+  // The profile branch carries a properly scoped concrete-profile commit...
+  git("checkout", "-q", "-b", "profile-lane", base);
+  put("agents/profiles/opencode.json", '{"id":"opencode"}\n');
+  put("agents/agents.json", '{"agents":[]}\n');
+  commit("bump the opencode pin");
+
+  // ...and then merges the base branch in, as any long-lived branch must.
+  git("merge", "-q", "--no-ff", "-m", "Merge mainline", mainline);
+  const head = git("rev-parse", "HEAD");
+
+  assert.deepEqual(checkProfileScope({ base: mainline, head, cwd: repo }), {
+    ok: true,
+    skipped: false,
+    message: "profile commit scope valid",
+  });
+});
+
+// The guard the merge handling must not cost us: a merge may still not be used
+// as a side door. If the RESOLUTION itself edits a concrete profile, that is the
+// merge commit's own work and the ordinary scope rule applies to it in full.
+test("profile scope still rejects a profile edited by a merge resolution", (t) => {
+  const { repo, put, commit, base } = fixtureRepo(t);
+  const git = gitIn(repo);
+
+  git("checkout", "-q", "-b", "mainline", base);
+  put("agents/profiles/opencode.json", '{"id":"opencode","v":"mainline"}\n');
+  const mainline = commit("mainline edits the profile");
+
+  git("checkout", "-q", "-b", "profile-lane", base);
+  put("agents/profiles/opencode.json", '{"id":"opencode","v":"lane"}\n');
+  put("agents/agents.json", '{"agents":[]}\n');
+  commit("lane edits the same profile");
+
+  // Conflicting edits to the same profile: resolve with a third value, and
+  // smuggle an out-of-scope path into the same resolution commit.
+  const merge = spawnSync("git", ["merge", "--no-ff", "-m", "Merge mainline", mainline], { cwd: repo, encoding: "utf8" });
+  assert.notEqual(merge.status, 0, "the profile edit must actually conflict for this test to mean anything");
+  put("agents/profiles/opencode.json", '{"id":"opencode","v":"resolved"}\n');
+  put(".claude-plugin/plugin.json", "{}\n");
+  git("add", ".");
+  git("commit", "-q", "--no-edit");
+  const head = git("rev-parse", "HEAD");
+
+  const result = checkProfileScope({ base: mainline, head, cwd: repo });
+  assert.equal(result.ok, false, "a merge resolution that edits a profile is still a profile commit");
+  assert.match(result.message, /out-of-scope path/);
+  assert.match(result.message, /\.claude-plugin\/plugin\.json/);
+});
