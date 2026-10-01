@@ -33,6 +33,7 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/providers/vertex"
 	"github.com/JuliusBrussee/caveman/shared/platform/awscreds"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
+	"github.com/JuliusBrussee/caveman/shared/platform/redact"
 	"github.com/JuliusBrussee/caveman/shared/platform/ssrf"
 )
 
@@ -330,13 +331,49 @@ func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.S
 type engineCompressor struct {
 	eng   *engine.Engine
 	store *ccr.Store
+
+	// A failed compression is byte-safe but invisible: the gateway reads the
+	// (segment, 0, 0) below as "nothing to compress", so a recovery store that
+	// cannot be written stops compression with nothing in proxy.log and no
+	// off-state in `caveman status` (#1149). Report it instead of dropping it,
+	// throttled because a broken store fails on every block of every request.
+	logger   *slog.Logger
+	warnMu   sync.Mutex
+	warnedAt time.Time
+}
+
+// warnDropped reports an engine error the byte-safe pass-through would otherwise
+// hide. At most one warning per warnInterval, so a persistently broken store
+// leaves a trail without burying the rest of the log.
+const warnInterval = time.Minute
+
+func (c *engineCompressor) warnDropped(err error, mode string) {
+	if c.logger == nil || err == nil {
+		return
+	}
+	c.warnMu.Lock()
+	now := time.Now()
+	if !c.warnedAt.IsZero() && now.Sub(c.warnedAt) < warnInterval {
+		c.warnMu.Unlock()
+		return
+	}
+	c.warnedAt = now
+	c.warnMu.Unlock()
+	c.logger.Warn("compress failed; forwarding the block uncompressed",
+		"error", redact.Error(err), "path", mode)
 }
 
 // NewEngineCompressor builds the engine-backed compressor over a CCR store. The
 // engine shares that store, so a handle returned by StoreOriginal resolves through
 // engine.Retrieve to the exact original bytes supplied by the gateway.
 func NewEngineCompressor(store *ccr.Store) gateway.Compressor {
-	return &engineCompressor{eng: engine.New(store, nil), store: store}
+	return NewEngineCompressorWithLogger(store, nil)
+}
+
+// NewEngineCompressorWithLogger is NewEngineCompressor with somewhere to report
+// a failed compression. A nil logger is legal and silences the reporting.
+func NewEngineCompressorWithLogger(store *ccr.Store, logger *slog.Logger) gateway.Compressor {
+	return &engineCompressor{eng: engine.New(store, nil), store: store, logger: logger}
 }
 
 // NewEstimateCompressor builds the observe-only compressor for record-mode
@@ -352,6 +389,7 @@ func NewEstimateCompressor() gateway.Compressor {
 func (c *engineCompressor) CompressSegment(segment []byte) ([]byte, int, int) {
 	res, err := c.eng.Compress(segment, engine.Options{Mode: engine.ModeCompress})
 	if err != nil {
+		c.warnDropped(err, "segment")
 		return segment, 0, 0 // byte-safe: keep the original segment, claim no delta.
 	}
 	return res.Output, res.TokensBefore, res.TokensAfter
@@ -360,6 +398,7 @@ func (c *engineCompressor) CompressSegment(segment []byte) ([]byte, int, int) {
 func (c *engineCompressor) CompressSegmentType(segment []byte, contentType string) ([]byte, int, int) {
 	res, err := c.eng.Compress(segment, engine.Options{Mode: engine.ModeCompress, Type: contentType})
 	if err != nil {
+		c.warnDropped(err, "segment-type")
 		return segment, 0, 0
 	}
 	return res.Output, res.TokensBefore, res.TokensAfter
@@ -371,6 +410,7 @@ func (c *engineCompressor) CompressSegmentType(segment []byte, contentType strin
 func (c *engineCompressor) CompressSegmentQuery(segment []byte, query string) ([]byte, int, int) {
 	res, err := c.eng.Compress(segment, engine.Options{Mode: engine.ModeCompress, Query: query})
 	if err != nil {
+		c.warnDropped(err, "segment-query")
 		return segment, 0, 0
 	}
 	return res.Output, res.TokensBefore, res.TokensAfter

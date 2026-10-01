@@ -267,7 +267,9 @@ func runServe(logger *slog.Logger) {
 	}
 	switch {
 	case (cfg.Mode == "compress" || cfg.Mode == "pixel") && recovery != nil:
-		opts.Compressor = standalone.NewEngineCompressor(recovery)
+		// With the logger: a recovery store that cannot be written stops
+		// compression, and that must not be silent (#1149).
+		opts.Compressor = standalone.NewEngineCompressorWithLogger(recovery, logger)
 		// The spend store doubles as the durable replacement cache that keeps a
 		// compressed message byte-identical on every later turn of a conversation.
 		opts.PrefixCache = spend
