@@ -290,3 +290,29 @@ func TestJSONElisionKeepsFrequentNumericOutlierCluster(t *testing.T) {
 		t.Errorf("timeout cluster partly elided: %d of %d 503 rows visible", got, bad)
 	}
 }
+
+// A minority state is not a cycling level. 12% of rows in a fixed-width
+// rollback_required state share one length, far from the jittered normal
+// rows, with no numeric or error-word signal: every one must stay visible.
+func TestJSONElisionKeepsMinorityStateClusterByLength(t *testing.T) {
+	owners := []string{"ana", "bo", "carmen", "dmitri", "eve", "francesca", "gu"}
+	rows := make([]map[string]any, 0, 500)
+	bad := 0
+	for i := 0; i < 500; i++ {
+		row := map[string]any{"deployment_id": fmt.Sprintf("dep-%04d", i), "status": "healthy", "owner": owners[(i*5)%len(owners)]}
+		if (i*37)%100 < 12 {
+			row = map[string]any{"deployment_id": fmt.Sprintf("dep-%04d", i), "status": "rollback_required", "owner": "oncall", "rollback_target": fmt.Sprintf("%08x", 0x4c12aa90)}
+			bad++
+		}
+		rows = append(rows, row)
+	}
+	in, _ := json.Marshal(map[string]any{"deployments": rows})
+
+	out, ok := compressors.NewJSON().Compress(in)
+	if !ok {
+		t.Fatal("expected compression")
+	}
+	if got := bytes.Count(out, []byte(`"status":"rollback_required"`)); got != bad {
+		t.Errorf("minority state partly elided: %d of %d rows visible", got, bad)
+	}
+}
