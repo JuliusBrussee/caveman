@@ -153,7 +153,7 @@ def test_every_adapter_family_has_a_tier():
     import tomllib
     from caveman_middleware import COMPATIBILITY
 
-    extras = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["optional-dependencies"]
+    extras = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["optional-dependencies"]
     assert set(COMPATIBILITY) == {name.replace("-", "_") for name in extras}
     assert {name for name, entry in COMPATIBILITY.items() if entry.tier == "certified"} == {"langchain", "openai", "anthropic", "litellm"}
     assert {entry.tier for entry in COMPATIBILITY.values()} == {"certified", "experimental"}
@@ -183,7 +183,7 @@ def _reason_literals():
 
     found = {}
     for path in sorted(Path(caveman_middleware.__file__).parent.glob("*.py")):
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             values = []
             if isinstance(node, ast.Call):
                 name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
@@ -217,7 +217,7 @@ def test_adapters_send_the_installed_package_version():
     assert VERSION == (installed_version("caveman-middleware") or "unknown")
     assert caveman_middleware.__version__ == VERSION
     literal = [f"{path.name}:{node.lineno}" for path in Path(caveman_middleware.__file__).parent.glob("*.py")
-               for node in ast.walk(ast.parse(path.read_text()))
+               for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
                if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Adapter"
                and len(node.args) > 1 and isinstance(node.args[1], ast.Constant)]
     assert literal == []
