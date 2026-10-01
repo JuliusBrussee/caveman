@@ -377,8 +377,21 @@ func anomalyIndices(arr []any, docs []string, zThresh float64) map[int]bool {
 		if scale <= 0 {
 			continue
 		}
+		// An anomaly is rare. A value shared by more than a tenth of the series is
+		// a level the data regularly takes, not an outlier: a categorical field
+		// cycling through a few values moves element length in lockstep, and two
+		// adjacent levels collapse the MAD so the third reads as z≫2 — which
+		// force-kept a third of every such array.
+		counts := make(map[float64]int, len(series))
+		for _, v := range series {
+			counts[v]++
+		}
+		rare := len(series) / 10
+		if rare < 2 {
+			rare = 2
+		}
 		for j, v := range series {
-			if math.Abs(0.6745*(v-med)/scale) >= zThresh {
+			if counts[v] <= rare && math.Abs(0.6745*(v-med)/scale) >= zThresh {
 				flags[idxs[j]] = true
 			}
 		}
