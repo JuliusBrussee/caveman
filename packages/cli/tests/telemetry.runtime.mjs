@@ -490,7 +490,7 @@ test("two CLI processes racing the same watermark do not both claim the delta", 
   const configDir = join(iso.home, ".caveman-cloud");
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(configDir, "config.json"), JSON.stringify({
-    telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-08-01T00:00:00.000Z", promptVersion: 4 },
+    telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-08-01T00:00:00.000Z", promptVersion: 5 },
     telemetryTokens: { tokensIn: 500, tokensSaved: 100, at: "2026-08-01T00:00:00.000Z" },
   }));
   const baseEnv = stubProxyStats(iso, { tokensIn: 1500, tokensSaved: 300 });
@@ -500,6 +500,12 @@ test("two CLI processes racing the same watermark do not both claim the delta", 
   assert.equal(a.code, 0, a.stderr);
   assert.equal(b.code, 0, b.stderr);
 
+  // The send is fire-and-forget from a detached sender, so it can land after the
+  // CLI has exited. Both processes emit a command_run — only the winner carries
+  // tokens — so wait for both, then settle, or "exactly one" could pass by
+  // simply having read too early.
+  await stub.waitForPosts(2);
+  await stub.settle(300);
   const events = stub.posts.flatMap((p) => JSON.parse(p.body));
   const withTokens = events.filter((e) => "tokens_processed" in e);
   assert.equal(withTokens.length, 1, "exactly one of the two racing processes may claim the delta");
@@ -526,7 +532,7 @@ test("a stale lock from a crashed holder does not wedge telemetry off", async (t
   mkdirSync(configDir, { recursive: true });
   const configFile = join(configDir, "config.json");
   writeFileSync(configFile, JSON.stringify({
-    telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-08-01T00:00:00.000Z", promptVersion: 4 },
+    telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-08-01T00:00:00.000Z", promptVersion: 5 },
     telemetryTokens: { tokensIn: 500, tokensSaved: 100, at: "2026-08-01T00:00:00.000Z" },
   }));
   // A holder that died without releasing, aged well past the stale window.
@@ -538,6 +544,7 @@ test("a stale lock from a crashed holder does not wedge telemetry off", async (t
   const run = await runCli(["version"], stubProxyStats(iso, { tokensIn: 1500, tokensSaved: 300 }));
   assert.equal(run.code, 0, run.stderr);
 
+  await stub.waitForPosts(1);
   const events = stub.posts.flatMap((p) => JSON.parse(p.body));
   const withTokens = events.filter((e) => "tokens_processed" in e);
   assert.equal(withTokens.length, 1, "an abandoned lock is reclaimed, not treated as held forever");
