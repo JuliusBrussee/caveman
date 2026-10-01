@@ -233,12 +233,12 @@ func buildLearnReconcile(billed map[string]int64, spend *LearnSpend, source stri
 		report.Unattributed = report.BilledTokens - covered
 	}
 	report.Caveats = append(report.Caveats,
-		"Billed tokens come from the provider export; measured tokens come from transcripts on this machine. The gap is traffic learn cannot see — other machines, CI agents, scripts, or tools that keep no transcript.",
-		"Coverage is a token comparison, not a savings claim, and it does not promote any figure to verified.",
+		"Billed tokens come from the provider's export. Measured tokens come from transcripts on this computer. The gap is use learn cannot see: other computers, CI agents, scripts, or tools that keep no transcript.",
+		"Coverage compares token counts. It is not a saving, and it does not make any number verified.",
 	)
 	if report.MeasuredTokens > report.BilledTokens {
 		report.Caveats = append(report.Caveats,
-			"Measured tokens exceed billed tokens for at least one model. The export window and the scan window probably differ; re-run with --since matching the export before reading the coverage figure.")
+			"For at least one model, Caveman measured more tokens than were billed. The export probably covers different dates than the scan. Re-run with --since set to match the export before trusting the coverage number.")
 	}
 	return report
 }

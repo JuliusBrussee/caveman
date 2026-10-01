@@ -1,0 +1,172 @@
+name: middleware-conformance
+
+# The framework middleware against a real caveman-proxy: the black-box protocol
+# conformance kit, one certified adapter per language end to end (plus Postgres
+# and fail-open), version skew in both directions (plan Decision 10: HEAD
+# clients vs the published runtime, published clients vs the HEAD runtime), the
+# perf gate, and the Go golden responses validated by ajv (engine-ci's go job
+# has no ajv, so that test skips there). Every step runs locally the same way:
+# see tests/middleware-e2e/*.mjs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - proxy/**
+      - engine/**
+      - shared/**
+      - mem/**
+      - go.mod
+      - go.sum
+      - packages/sdk/**
+      - packages/middleware/**
+      - packages/shared/contracts/**
+      - packages/shared/binary-installer/**
+      - tests/middleware-e2e/**
+      - .github/workflows/middleware-conformance.yml
+  pull_request:
+    paths:
+      - proxy/**
+      - engine/**
+      - shared/**
+      - mem/**
+      - go.mod
+      - go.sum
+      - packages/sdk/**
+      - packages/middleware/**
+      - packages/shared/contracts/**
+      - packages/shared/binary-installer/**
+      - tests/middleware-e2e/**
+      - .github/workflows/middleware-conformance.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: middleware-conformance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  goldens:
+    name: go goldens vs contract schemas
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter @caveman-ai/contracts
+      - run: pnpm --filter @caveman-ai/contracts test
+      # The test skips when ajv is missing; here a skip is a failure.
+      - name: Go golden responses validated against the schemas
+        run: |
+          set -euo pipefail
+          go test -count=1 -v -run '^TestMiddlewareGoldenResponsesMatchContractSchemas$' ./proxy/internal/middleware | tee "$RUNNER_TEMP/goldens.log"
+          grep -q -- '--- PASS: TestMiddlewareGoldenResponsesMatchContractSchemas' "$RUNNER_TEMP/goldens.log"
+
+  e2e:
+    name: e2e (sqlite + postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        env:
+          POSTGRES_USER: caveman
+          POSTGRES_PASSWORD: caveman
+          POSTGRES_DB: caveman_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U caveman -d caveman_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - run: pnpm install --frozen-lockfile --filter "@caveman-ai/middleware..." --filter @caveman-ai/contracts
+      - run: pnpm --filter "@caveman-ai/middleware..." build
+      - run: node tests/middleware-e2e/run.mjs
+        env:
+          CAVEMAN_TEST_POSTGRES_URL: postgres://caveman:caveman@localhost:5432/caveman_test?sslmode=disable
+
+  skew-runtime:
+    name: skew / HEAD clients vs published runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - run: pnpm install --frozen-lockfile --filter "@caveman-ai/middleware..." --filter @caveman-ai/contracts
+      - run: pnpm --filter "@caveman-ai/middleware..." build
+      # gh downloads the release asset; skew.mjs verifies its signed checksum manifest and digest.
+      - run: node tests/middleware-e2e/skew.mjs runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  skew-clients:
+    name: skew / published clients vs HEAD runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      # caveman-sdk 1.1.0 requires Python 3.13.
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - run: node tests/middleware-e2e/skew.mjs clients
+
+  perf:
+    name: perf gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      # Limits and their derivation: tests/middleware-e2e/perf-thresholds.json.
+      - run: node tests/middleware-e2e/perf.mjs

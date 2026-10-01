@@ -164,6 +164,7 @@ func scanLearnSessionMetricsUntil(sourceSet map[string]bool, since time.Time, re
 			}
 			metric := learnSessionMetric{Repo: refs[i].repo, Source: source.id(), Fingerprints: map[string]int{}}
 			seenUsage := map[string]bool{}
+			var windows sessionWindows
 			truncatedSessions[i] = source.scanSession(refs[i], since, func(event turnEvent) {
 				if event.sessionStart {
 					return
@@ -186,10 +187,7 @@ func scanLearnSessionMetricsUntil(sourceSet map[string]bool, since time.Time, re
 					if metric.Prefix == 0 {
 						metric.Prefix = event.ContextTotal
 					}
-					window, _ := contextWindow(event.ProviderKey, event.Model)
-					if event.ContextTotal > int(dumbzoneFraction*float64(window)) {
-						metric.Dumbzone++
-					}
+					windows.add(event.ProviderKey, event.Model, event.ContextTotal)
 				}
 				for _, payload := range event.TextPayloads {
 					for _, block := range segmentBlocks(payload) {
@@ -200,6 +198,7 @@ func scanLearnSessionMetricsUntil(sourceSet map[string]bool, since time.Time, re
 					}
 				}
 			}, deadline)
+			metric.Dumbzone = windows.dumbzone(windows.turns)
 			metrics[i] = metric
 		})
 		for i, metric := range metrics {
@@ -293,7 +292,7 @@ func buildLearnPortfolio(sinks []Sink, windowDays float64) *LearnPortfolio {
 		state.group.combinedKey += learnSinkDailyEquivalent(sink, windowDays)
 		state.group.actionable = state.group.actionable || sink.Class == classReducible || sink.Class == classRecurringContext
 		if family == "cavemem_offload" {
-			state.group.NetNote = "Net effect must subtract pointer and real cavemem recall cost; apply only when measured net-token-negative."
+			state.group.NetNote = "The real saving is smaller: recalling from memory costs tokens too. Apply it only if a measurement shows fewer tokens overall."
 		}
 		if rung := sinkConfidenceRung(sink); rung > state.rung {
 			state.rung = rung
@@ -339,22 +338,33 @@ func buildLearnPortfolio(sinks []Sink, windowDays float64) *LearnPortfolio {
 	return portfolio
 }
 
+// fixKindLabels are the plain names shown for fix kinds; the kinds stay as-is.
+var fixKindLabels = map[string]string{
+	"dedupe_rules":          "Remove duplicate rules",
+	"memory_index_condense": "Shorten the memory index",
+	"memory_index_repair":   "Fix memory links",
+	"skill_distillation":    "Write the routine down as a skill",
+}
+
 func learnFixFamily(sink Sink) (family, label string) {
 	if fix, _ := sink.Evidence["fix_kind"].(string); fix != "" {
 		if fix == "cavemem_offload" {
-			return fix, "Offload recurring context to cavemem"
+			return fix, "Move repeated text to Caveman memory"
+		}
+		if label := fixKindLabels[fix]; label != "" {
+			return fix, label
 		}
 		return fix, strings.ReplaceAll(fix, "_", " ")
 	}
 	switch {
 	case strings.HasPrefix(sink.SinkID, "claude_md_weight:"), strings.HasPrefix(sink.SinkID, "claude_md_sections:"):
-		return "config_trim", "Trim loaded config"
+		return "config_trim", "Trim always-loaded instructions"
 	case sink.SinkID == "config_tax:baseline":
-		return "config_baseline", "Loaded config baseline"
+		return "config_baseline", "Always-loaded instructions (needed)"
 	case sink.SinkID == "dead_load:skills":
-		return "skill_gating", "Gate unused skill descriptions"
+		return "skill_gating", "Turn off unused skills"
 	case sink.SinkID == "context_dumbzone":
-		return "dumbzone_advice", "Reduce long-session dumbzone exposure"
+		return "dumbzone_advice", "Keep sessions under half the context window"
 	default:
 		return "", ""
 	}

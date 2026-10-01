@@ -13,6 +13,15 @@ def adapter():
     return require_adapter("openai")
 
 
+@pytest.fixture
+def httpx2(adapter):
+    """The HTTP library of the installed openai major: httpx2 on 3.x, httpx on 2.x."""
+    import importlib
+    from openai import DefaultHttpxClient
+    from caveman_middleware._httpx2 import sdk_flavour
+    return importlib.import_module(sdk_flavour(DefaultHttpxClient))
+
+
 ORIGINAL = "[INFO] café 🌍\r\n" * 400
 
 
@@ -39,8 +48,7 @@ def reply(protocol):
 
 @pytest.mark.parametrize("protocol", ["openai-chat", "openai-responses"])
 @pytest.mark.parametrize("asynchronous", [False, True])
-def test_provider_projection_and_registered_recovery(adapter, protocol_runtime, protocol, asynchronous):
-    import httpx2
+def test_provider_projection_and_registered_recovery(adapter, httpx2, protocol_runtime, protocol, asynchronous):
     from openai import AsyncOpenAI, OpenAI
     from caveman_cloud.middleware import Scope
 
@@ -65,8 +73,9 @@ def test_provider_projection_and_registered_recovery(adapter, protocol_runtime, 
         return received[0]["input"][-1]["output"]
 
     def call(loop):
-        create = loop.client.chat.completions.create if protocol == "openai-chat" else loop.client.responses.create
-        return create(model="m", tools=loop.tools, **original)
+        if protocol == "openai-chat":
+            return loop.client.chat.completions.create(model="m", tools=loop.tools, **original)
+        return loop.client.responses.create(model="m", tools=loop.tools, store=False, **original)
 
     def handle():
         return projected().split("handle=", 1)[1].split("]", 1)[0]
@@ -94,8 +103,7 @@ def test_provider_projection_and_registered_recovery(adapter, protocol_runtime, 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("ending", ["completed", "cancelled", "failed"])
-def test_native_stream_lifecycle_preserved(adapter, protocol_runtime, asynchronous, ending):
-    import httpx2
+def test_native_stream_lifecycle_preserved(adapter, httpx2, protocol_runtime, asynchronous, ending):
     from openai import AsyncOpenAI, OpenAI
     from caveman_cloud.middleware import Scope
     from caveman_middleware._native import owner
@@ -124,7 +132,8 @@ def test_native_stream_lifecycle_preserved(adapter, protocol_runtime, asynchrono
             closed.append(True)
 
     def provider(request):
-        assert json.loads(request.content)["messages"][-1]["content"] == "short excerpt"
+        # Model-only wrap: no recovery executor, so compress mode sends the original (recovery_unbound).
+        assert json.loads(request.content)["messages"][-1]["content"] == ORIGINAL
         return httpx2.Response(200, headers={"content-type": "text/event-stream"}, stream=AsyncBody() if asynchronous else SyncBody())
 
     if asynchronous:
@@ -155,4 +164,6 @@ def test_native_stream_lifecycle_preserved(adapter, protocol_runtime, asynchrono
                     with pytest.raises(StopIteration):
                         next(stream)
     assert closed
+    assert [(event.status, event.reason) for event in protocol_runtime.reports] == [("skipped", "recovery_unbound")]
+    assert protocol_runtime.requests == []
     assert [receipt["event_kind"] for receipt in protocol_runtime.receipts] == ["dispatch_intent", ending]

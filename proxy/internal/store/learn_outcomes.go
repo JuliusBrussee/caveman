@@ -335,6 +335,10 @@ func scanConfirmedFixMetrics(sourceSet map[string]bool, records []AppliedFixReco
 			}
 			metrics := make([]learnSessionMetric, len(cutoffs))
 			seenUsage := make([]map[string]bool, len(cutoffs))
+			// One session-wide window view: a cutoff that only sees the early
+			// turns must still be measured against the window the full session proves.
+			var windows sessionWindows
+			cutoffTurns := make([][]windowTurn, len(cutoffs))
 			for j := range cutoffs {
 				metrics[j] = learnSessionMetric{Repo: refs[i].repo, Source: source.id(), Fingerprints: map[string]int{}}
 				seenUsage[j] = map[string]bool{}
@@ -350,6 +354,10 @@ func scanConfirmedFixMetrics(sourceSet map[string]bool, records []AppliedFixReco
 							fingerprints = append(fingerprints, hashText(normalizeBlock(block)))
 						}
 					}
+				}
+				var turn windowTurn
+				if event.ContextUsagePresent {
+					turn = windows.add(event.ProviderKey, event.Model, event.ContextTotal)
 				}
 				for j, cutoff := range cutoffs {
 					metric := &metrics[j]
@@ -369,16 +377,16 @@ func scanConfirmedFixMetrics(sourceSet map[string]bool, records []AppliedFixReco
 						if metric.Prefix == 0 {
 							metric.Prefix = event.ContextTotal
 						}
-						window, _ := contextWindow(event.ProviderKey, event.Model)
-						if event.ContextTotal > int(dumbzoneFraction*float64(window)) {
-							metric.Dumbzone++
-						}
+						cutoffTurns[j] = append(cutoffTurns[j], turn)
 					}
 					for _, fingerprint := range fingerprints {
 						metric.Fingerprints[fingerprint]++
 					}
 				}
 			}, deadline)
+			for j := range metrics {
+				metrics[j].Dumbzone = windows.dumbzone(cutoffTurns[j])
+			}
 			results[i] = sessionResult{metrics: metrics, truncated: truncated}
 		})
 		for _, result := range results {

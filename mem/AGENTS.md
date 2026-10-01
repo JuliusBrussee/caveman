@@ -1,4 +1,4 @@
-# mem — cavemem, durable agent memory (commercial Go core + MIT clients)
+# mem — cavemem, durable agent memory (Go core + clients, Apache-2.0)
 
 Durable, cross-session memory: `remember` / `recall` / `supersede` / `history` / `forget`. A local SQLite store holds the
 **raw** memories (the source of truth); recall ranks them with deterministic **BM25** behind a

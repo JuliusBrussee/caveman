@@ -49,13 +49,13 @@ func TestSubagentSpendMeasuresCostWithoutClaimingWaste(t *testing.T) {
 	}
 	// Scanned with the required disclaimer removed, so its own use of
 	// "unnecessary" cannot satisfy or trip this check.
-	lowered := strings.ToLower(strings.SplitN(sink.Suggestion, "It is reported for visibility only", 2)[0])
+	lowered := strings.ToLower(strings.SplitN(sink.Suggestion, "It is shown so you can see it", 2)[0])
 	for _, banned := range []string{"spawn fewer", "unnecessary", "avoid", "reduce the number", "too many"} {
 		if strings.Contains(lowered, banned) {
 			t.Fatalf("suggestion must not argue against delegation (%q): %q", banned, sink.Suggestion)
 		}
 	}
-	if !strings.Contains(sink.Suggestion, "nothing here says any spawn was unnecessary") {
+	if !strings.Contains(sink.Suggestion, "Nothing here says any subagent was unnecessary") {
 		t.Fatalf("the decree's disclaimer must be present: %q", sink.Suggestion)
 	}
 }

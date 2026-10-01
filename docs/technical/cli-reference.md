@@ -222,8 +222,8 @@ caveman learn --repo my-project
 caveman learn --json
 caveman learn implement codex --prompt "focus on config fixes"
 caveman learn apply claude_md_weight:project --dry-run
-caveman learn simulate claude_md_weight:project recurring_context:abc
-caveman learn applied claude_md_weight:project --fix-kind config_trim --note "approved and re-measured"
+caveman learn simulate claude_md_weight:project recurring_context:repaste:<fingerprint>
+caveman learn applied claude_md_weight:project --fix-kind claude_md_weight --note "approved and re-measured"
 ```
 
 Output formats include plain text, JSON, and Markdown. `--all` adds every sink,
@@ -233,6 +233,7 @@ confirmed outcomes, per-repository observations, and advanced command hints.
 completed, re-measured fix in Caveman's outcome store. A recommendation remains
 an inferred opportunity until stronger evidence exists. Aider scanning remains
 opt-in through `CAVEMAN_AIDER_ROOT` because its history is repository-local.
+Full reference: [caveman learn](./learn.md).
 
 ## Connected namespace
 

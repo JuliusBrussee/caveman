@@ -291,7 +291,7 @@ func TestLearnRetroExcludesUsageFreeSessionsFromEveryFamily(t *testing.T) {
 	}
 	found := false
 	for _, c := range retro.Caveats {
-		if strings.Contains(c, "without provider-counted usage") {
+		if strings.Contains(c, "without token counts from the provider") {
 			found = true
 		}
 	}
@@ -313,8 +313,8 @@ func TestLearnRetroFamilyLabelsNameTheirFix(t *testing.T) {
 		t.Fatal("retro block missing")
 	}
 	want := map[string]string{
-		retroFamilyToolOutputs:    "tool outputs (wrap compression)",
-		retroFamilyRepeatedBlocks: "re-pasted context (cavemem offload)",
+		retroFamilyToolOutputs:    "big tool results (compressed by Caveman)",
+		retroFamilyRepeatedBlocks: "repeated text (moved to Caveman memory)",
 	}
 	seen := map[string]bool{}
 	for _, family := range plan.Retro.Families {
@@ -689,7 +689,7 @@ func TestLearnRetroStreamOmitsUndatedRepeatedBlocks(t *testing.T) {
 	}
 	found := false
 	for _, caveat := range retro.Caveats {
-		if strings.Contains(caveat, "without complete transcript timestamps") {
+		if strings.Contains(caveat, "without complete timestamps") {
 			found = true
 		}
 	}
@@ -913,7 +913,7 @@ func TestLearnRetroTimeBoxTruncatesNewestFirst(t *testing.T) {
 	}
 	found := false
 	for _, c := range retro.Caveats {
-		if strings.Contains(c, "time budget") {
+		if strings.Contains(c, "ran out of time") {
 			found = true
 		}
 	}
@@ -986,7 +986,7 @@ func TestBehaviorBudgetCannotErasePartialRetroResult(t *testing.T) {
 	}
 	foundBehaviorCaveat := false
 	for _, caveat := range plan.Caveats {
-		if strings.Contains(caveat, "base behavioral scan hit its time budget") {
+		if strings.Contains(caveat, "The scan ran out of time, so the Setup Score") {
 			foundBehaviorCaveat = true
 		}
 	}
@@ -996,7 +996,7 @@ func TestBehaviorBudgetCannotErasePartialRetroResult(t *testing.T) {
 	if len(plan.Repos) != 0 || len(plan.Confirmed) != 0 {
 		t.Fatalf("deadline-truncated blocks were zero-filled instead of omitted: repos=%+v confirmed=%+v", plan.Repos, plan.Confirmed)
 	}
-	for _, want := range []string{"Repository summaries were omitted", "CLAUDE.md section-echo findings were omitted", "Applied-fix confirmations were omitted"} {
+	for _, want := range []string{"Per-repository summaries were skipped", "unused CLAUDE.md sections was skipped", "fixes you already applied were skipped"} {
 		if !containsCaveat(plan.Caveats, want) {
 			t.Fatalf("missing %q caveat: %v", want, plan.Caveats)
 		}
@@ -1048,7 +1048,7 @@ func TestRetroDiscoveryDeadlineReturnsMeasuredPartialResult(t *testing.T) {
 	}
 	found := false
 	for _, caveat := range plan.Retro.Caveats {
-		if strings.Contains(caveat, "discovery or scan time budget") {
+		if strings.Contains(caveat, "replay ran out of time while finding or reading files") {
 			found = true
 		}
 	}

@@ -75,12 +75,13 @@ func (s claudeSessionSource) scanSession(ref sessionRef, since time.Time, emit f
 		ctx, hasUsage := claudeTurnContext(obj)
 		cacheRead, cacheCreation, hasCacheUsage := claudeCacheUsage(obj)
 		fresh, out, hasBilling := claudeBillingUsage(obj)
+		provider, model := claudeProviderModel(claudeModel(obj))
 		emit(turnEvent{
 			Timestamp: ts, ContextTotal: ctx, ContextUsagePresent: hasUsage,
 			CacheReadInputTokens: cacheRead, CacheCreationInputTokens: cacheCreation,
 			CacheUsagePresent: hasCacheUsage,
 			InputFreshTokens:  fresh, OutputTokens: out, BillingUsagePresent: hasBilling,
-			UsageMessageID: claudeUsageMessageID(obj), Model: claudeModel(obj), ProviderKey: "anthropic",
+			UsageMessageID: claudeUsageMessageID(obj), Model: model, ProviderKey: provider,
 			ToolCalls: claudeTurnToolCalls(obj, pendingTools), TextPayloads: claudeTextPayloads(obj),
 			TaskSpawns: claudeTaskSpawns(obj), SkillUses: claudeStructuredSkillReferences(obj),
 			Compaction: claudeCompactionMarker(obj),
@@ -265,4 +266,22 @@ func claudeTurnToolCalls(obj map[string]any, pending map[string]turnToolCall) []
 		}
 	}
 	return completed
+}
+
+// claudeProviderModel attributes a Claude Code turn to its real provider. Claude
+// Code routed through a gateway can log a vendor-qualified model such as
+// "google/gemini-3.7-flash"; only known vendor prefixes are split so an ARN or
+// other slash-bearing id stays an anthropic model verbatim.
+func claudeProviderModel(model string) (string, string) {
+	vendor, name, ok := strings.Cut(model, "/")
+	if !ok || name == "" {
+		return "anthropic", model
+	}
+	switch vendor {
+	case "google", "gemini":
+		return "gemini", name
+	case "openai", "anthropic":
+		return vendor, name
+	}
+	return "anthropic", model
 }

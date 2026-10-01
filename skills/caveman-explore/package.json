@@ -1,7 +1,7 @@
 {
   "name": "@caveman/skill-caveman-explore",
   "version": "1.0.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "description": "Read-only FastContext exploration skill with parallel repository search and citation-only output.",

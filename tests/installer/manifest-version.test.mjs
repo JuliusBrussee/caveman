@@ -42,12 +42,10 @@ function releaseVersion() {
 }
 
 // Manifests a host reads to tell the user which caveman they are running.
-// plugins/caveman/.codex-plugin/plugin.json is the third one and is knowingly
-// absent here: it is part of the mirrored plugin distribution, which this
-// suite does not own. It is stale at 0.1.0 and tracked in #107.
 const HOST_MANIFESTS = [
   '.claude-plugin/plugin.json',
   'gemini-extension.json',
+  'plugins/caveman/.codex-plugin/plugin.json',
 ];
 
 for (const rel of HOST_MANIFESTS) {

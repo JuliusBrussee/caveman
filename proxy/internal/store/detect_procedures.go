@@ -207,12 +207,12 @@ func procedureSinks(miner procedureMiner, spend *LearnSpend) []Sink {
 		}
 		sinks = append(sinks, Sink{
 			SinkID: "procedure_repeat:" + entry.key,
-			Title: fmt.Sprintf("A %d-step procedure recurred in %d sessions (%s tokens)",
+			Title: fmt.Sprintf("The same %d-step routine came up in %d sessions (%s tokens)",
 				len(entry.agg.Steps), len(entry.agg.Sessions), humanTokens(entry.agg.Tokens)),
 			Class: classBehavioral, Basis: learnBasis, Framing: framingHistorical,
 			TokensObserved: entry.agg.Tokens,
 			Evidence:       evidence,
-			Suggestion:     "This sequence is re-derived from scratch each time it comes up. Writing it down as a skill may cut that, but a skill also loads every session - so it is worth proving with `caveman learn experiment` rather than assuming.",
+			Suggestion:     "The agent works these steps out from scratch each time. Writing them down as a skill may save that, but a skill also loads in every session. Test it with `caveman learn experiment` before assuming it helps.",
 		})
 	}
 	return sinks

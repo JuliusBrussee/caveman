@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/middleware-session-delete-response.schema.json",
+  "title": "Caveman middleware sessions/delete response",
+  "description": "sessions/delete 200 response. A protocol 1.1 runtime sends deleted counts, and originals_deleted true unless the authority holds grants a protocol 1.0 runtime issued (§12); protocol 1.0 runtimes sent originals_deleted false and no counts. Closed on purpose: describes exactly what a protocol 1.1 server emits, and the conformance kit holds servers to it. Clients MUST NOT validate responses against this schema; they ignore unknown fields (docs/technical/middleware-protocol.md §4, §16).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "originals_deleted"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "status": {
+      "const": "revoked"
+    },
+    "originals_deleted": {
+      "type": "boolean"
+    },
+    "deleted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopes",
+        "choices",
+        "grants",
+        "originals"
+      ],
+      "properties": {
+        "scopes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "choices": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "grants": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "originals": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    }
+  }
+}

@@ -157,19 +157,24 @@ func toolNeedsRepositoryState(name string, input any) bool {
 	return fields[0] == "pytest" || fields[0] == "test" || fields[0] == "build" || (fields[0] == "go" && len(fields) > 1 && (fields[1] == "test" || fields[1] == "build"))
 }
 
+// repositoryStatusBudget bounds `git status` on a search/test/build pre-tool
+// hook. It was 100ms, which an idle `git status` on a ~1.5k-file checkout
+// already takes 70-80ms of, so ordinary load emptied the state. The cost only
+// lands when status is slow, and 500ms plus the runtime call's 250ms stays far
+// inside the host's hook timeout.
+const repositoryStatusBudget = 500 * time.Millisecond
+
 func currentRepositoryState(ctx context.Context, cwd string) string {
 	if cwd == "" {
 		return ""
 	}
-	statusCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	statusCtx, cancel := context.WithTimeout(ctx, repositoryStatusBudget)
 	defer cancel()
 	// `status` refreshes the index, which runs core.fsmonitor — this is the
 	// hottest git call we make against a repository we do not trust. Disabling
 	// fsmonitor costs the people who configured it BECAUSE their repo is huge:
-	// if status then misses the 100ms budget above, repository state comes back
-	// empty and reuse silently stops. That degrades safely, and moving the
-	// budget is a latency decision for every user, so it needs a measurement
-	// this fix does not have.
+	// if status then misses the budget, repository state comes back empty and
+	// reuse silently stops. That degrades safely.
 	cmd := gitsafe.Command(statusCtx, cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all")
 	var status bytes.Buffer
 	cmd.Stdout = &status

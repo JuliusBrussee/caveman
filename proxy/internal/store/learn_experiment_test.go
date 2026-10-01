@@ -129,11 +129,14 @@ func TestExperimentReportGradesAHoldout(t *testing.T) {
 		t.Fatalf("an improved holdout must price its per-session saving: %+v", report.SavedUSD)
 	}
 	joined := strings.Join(report.Caveats, " ")
-	if !strings.Contains(joined, "different times against different work") {
+	if !strings.Contains(joined, "different times, on different work") {
 		t.Fatalf("the standing confounder must ship with the win: %v", report.Caveats)
 	}
-	if !strings.Contains(strings.Join(report.Attributed.Confounders, " "), "not randomized") {
+	if !strings.Contains(strings.Join(report.Attributed.Confounders, " "), "not random tasks") {
 		t.Fatalf("the rung's own confounder must be attached: %v", report.Attributed.Confounders)
+	}
+	if report.Attributed.Provenance != provenanceNotApplicable || strings.Contains(strings.Join(report.Attributed.Confounders, " "), "fingerprinting") {
+		t.Fatalf("an experiment has no applied edit to fingerprint: %+v", report.Attributed)
 	}
 }
 

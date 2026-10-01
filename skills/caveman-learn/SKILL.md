@@ -104,6 +104,29 @@ shortcut it.
 - The harness compares median tokens per session. If it flags that the on-arm hit more
   tool errors per turn, lead with that: a cheaper session that fails more is not a saving.
 
+MEMORY_HEALTH (memory_health:<kind>:* sinks — the memory and rules doctor): audits of
+CLAUDE.md, CLAUDE.local.md, .claude/rules, AGENTS.md, GEMINI.md and Claude Code auto
+memory (MEMORY.md plus its topic files). Every item is one edit, one yes. Never delete
+memory content without the user's yes.
+- duplicate_rules — reducible. The same rule loads from two files every turn. Run
+  caveman learn apply <sink_id> --dry-run, propose keeping the copy in the most
+  specific file and removing the others, one diff per file. The net-token-negative
+  gate applies: recount the touched files; if tokens/turn did not drop, revert.
+- memory_orphans — memory files the index never links, and index links to missing
+  files. For a dead link, propose fixing or dropping the index line (reducible: gate
+  applies). For an orphan file, show its first lines and ask: link it from MEMORY.md,
+  or retire it. Linking adds index tokens — say so; that edit is outside the gate.
+- memory_truncation — MEMORY.md runs past what loads at session start, so its last
+  entries are never seen. Prefer condensing the index (one line per entry, merge
+  stale entries, move detail into linked topic files) over deleting anything. Show
+  the new index and its line count against the limit before writing.
+- broken_imports — an @import points at nothing. For each one ask whether to fix the
+  path (show the candidate file you found) or remove the import.
+- stale_references — a backticked repo path no longer exists. Behavioral: show the
+  line and where the file likely moved; update or drop only on a yes.
+- buried_rules — a heuristic, and say so. Offer to move the listed emphatic rules
+  nearer the top; never rewrite their wording.
+
 LOAD_BEARING: never touch. It appears in the report only so the score stays honest.
 
 Reporting savings (caveman learn savings):
@@ -111,18 +134,26 @@ Reporting savings (caveman learn savings):
 The ledger shows what applied fixes returned, grouped by HOW it was measured. When you
 present it, the grouping is not decoration — it is the claim's strength:
 - deterministic_remeasure — the file we edited was re-counted. Strongest local rung.
-- controlled_holdout — measured with the change on vs off on this machine.
-- counterfactual_replay — real history re-run with the change applied.
 - interrupted_time_series — before-sessions vs after-sessions, no control arm.
+- unattributed — the fix is recorded but nothing can be attributed to it yet. Not a
+  saving; say so.
+
+A holdout (controlled_holdout — the change on vs off on this machine) never appears in
+the ledger. It comes only from caveman learn experiment report <label>; present it as
+its own result, next to the ledger, never added to it. No command produces a
+counterfactual_replay row yet, so never claim one.
 
 Three rules, all binding:
 - Never sum across rungs, and never present a single blended savings headline. A
-  re-counted file and a before/after median are not the same kind of evidence.
+  re-counted file, a holdout and a before/after median are not the same kind of
+  evidence.
 - Always read out the `confounders` on a row you are presenting as a win. They are
   standing caveats, not fine print, and they exist precisely for the good-news case.
 - Read `attribution.provenance`. `intact` means the file still carries the edit we
   proposed. `changed_since` means someone edited past it and part of the delta is not
   ours — say so. `target_missing` means the delta cannot be tied to the fix at all.
+  `not_fingerprinted` means the fix predates fingerprinting, so the edit's presence is
+  unverified. Experiments carry `not_applicable`: there is no single edit to check.
   Never present a `changed_since` or `target_missing` row as a caveman result.
 
 A regression carries no dollar figure by design. Present it with its verdict and offer

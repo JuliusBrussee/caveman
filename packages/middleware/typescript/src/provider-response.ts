@@ -1,6 +1,23 @@
 import type { Usage } from '@caveman-ai/sdk/middleware';
 import { observe, plain, type Attempt } from './common.js';
 
+const TAIL = 65536;
+/** The last `"usageMetadata"`/`"usage"` object in a JSON tail, parsed on its own: `{usage}` / `{usageMetadata}`. */
+function tailObject(text: string): Record<string, unknown> | null {
+  for (const key of ['usageMetadata', 'usage']) {
+    const at = text.lastIndexOf(`"${key}"`);
+    const start = at < 0 ? -1 : text.indexOf('{', at);
+    if (start < 0 || text.slice(at + key.length + 2, start).trim() !== ':') continue;
+    for (let i = start, depth = 0, quoted = false; i < text.length; i++) {
+      const char = text[i];
+      if (quoted) { if (char === '\\') i++; else if (char === '"') quoted = false; continue; }
+      if (char === '"') quoted = true;
+      else if (char === '{') depth++;
+      else if (char === '}' && --depth === 0) { try { return { [key]: JSON.parse(text.slice(start, i + 1)) }; } catch { return null; } }
+    }
+  }
+  return null;
+}
 const measured = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 class UsageReader {
   private text = '';
@@ -12,16 +29,16 @@ class UsageReader {
   feed(bytes: Uint8Array): void {
     if (this.overflow) return;
     this.text += this.decoder.decode(bytes,{stream:true});
-    if (this.text.length > (this.sse ? 262144 : 2<<20)) { this.text='';this.overflow=true;return; }
-    if (this.sse) {
-      for (;;) {
-        const newline=this.text.indexOf('\n'); if(newline<0)break;
-        const line=this.text.slice(0,newline).trimEnd();this.text=this.text.slice(newline+1);
-        if(!line.startsWith('data:'))continue;
-        const data=line.slice(5).trim();
-        if(data==='[DONE]'){this.terminal=true;continue;}
-        try{this.event(JSON.parse(data));}catch{/* unknown events do not affect delivery */}
-      }
+    // A JSON body keeps only its tail, where providers put usage; the SDK alone parses the whole body.
+    if (!this.sse) { if (this.text.length > 2*TAIL) this.text=this.text.slice(-TAIL); return; }
+    if (this.text.length > 262144) { this.text='';this.overflow=true;return; }
+    for (;;) {
+      const newline=this.text.indexOf('\n'); if(newline<0)break;
+      const line=this.text.slice(0,newline).trimEnd();this.text=this.text.slice(newline+1);
+      if(!line.startsWith('data:'))continue;
+      const data=line.slice(5).trim();
+      if(data==='[DONE]'){this.terminal=true;continue;}
+      try{this.event(JSON.parse(data));}catch{/* unknown events do not affect delivery */}
     }
   }
   private event(value: unknown): void {
@@ -33,7 +50,7 @@ class UsageReader {
   }
   finish():Usage|null{
     if(this.overflow)return null;
-    if(!this.sse){try{this.event(JSON.parse(this.text));this.terminal=true;}catch{return null;}}
+    if(!this.sse){const usage=tailObject(this.text);if(!usage)return null;this.event(usage);this.terminal=true;}
     const u=this.values;
     const input=measured(u.input_tokens??u.prompt_tokens??u.promptTokenCount);
     const output=measured(u.output_tokens??u.completion_tokens??u.candidatesTokenCount);

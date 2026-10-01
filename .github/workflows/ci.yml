@@ -160,6 +160,23 @@ jobs:
       - name: Go test suite
         run: go test ./engine/... ./proxy/... ./shared/...
 
+  # The Kubernetes manifests are deploy artifacts too: a wrong field or a typo
+  # would only surface at `kubectl apply`. -strict also rejects unknown fields.
+  # The kubeconform image is pinned by digest (v0.8.0).
+  deploy-manifests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: kubeconform -strict deploy/*.yaml
+        working-directory: deploy
+        run: >-
+          docker run --rm -v "$PWD:/deploy:ro" -w /deploy
+          ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e
+          -strict -summary ./*.yaml
+
   # The Dockerfile is a deploy artifact like the installer is: nothing else in
   # CI builds it, so a broken COPY or a moved package path would only surface at
   # release time. Cheap check — one native-arch build, no registry, no push.

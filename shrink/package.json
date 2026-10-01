@@ -1,8 +1,8 @@
 {
   "name": "caveman-shrink",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Compress MCP/OpenAI tool catalogs — drop annotation bloat, keep every selection token. Inferred-only.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "caveman-shrink": "bin/caveman-shrink.mjs"
@@ -13,7 +13,8 @@
     "bin/release.generated.mjs",
     "README.md",
     "LICENSE.launcher",
-    "BINARY_LICENSE.md"
+    "BINARY_LICENSE.md",
+    "NOTICE"
   ],
   "scripts": {
     "prepack": "node ../packages/cli/scripts/gen-wedge-installer.mjs",

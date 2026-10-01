@@ -37,6 +37,7 @@ import { createHash, createHmac, createPublicKey, randomBytes, randomUUID, verif
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 import { PROFILES, type AgentProfile } from "./agents.generated.js";
+import { autopilotStatusText, claimLearnNudge, confirmLearnNudge, maybeSpawnAutopilot, runAutopilot } from "./learn-autopilot.js";
 import {
   BINARY_RELEASE,
   BINARY_RELEASE_BASE_DEFAULT,
@@ -61,7 +62,8 @@ import {
 } from "./agent-mcp.js";
 import { portableInvocation } from "./portable-command.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
-import { publishedForwardHeadersOf, publishedUpstreamsOf, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
+import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-trends.js";
+import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
 
@@ -486,19 +488,21 @@ function invokedCommand(legacyVerb: string, groupedTail = ""): string {
 
 let currentInvocation: ResolvedInvocation;
 currentInvocation = resolveInvocation(process.argv.slice(2));
-// Version 4 = default-on (opt-out) plus token volume: command_run now carries
-// the local proxy's processed/saved token deltas, so a v3 "yes" was given for a
-// narrower scope and gets the new disclosure reprinted once (never re-asked, and
-// never flipped on). A persisted decision from any version — including a "no" to
-// the old v1 [y/N] prompt — is honored forever; the default only fills the
-// undecided gap, and the first default-on run prints the disclosure line.
-const TELEMETRY_PROMPT_VERSION = 4;
-const TELEMETRY_URL = "https://api.caveman.so/telemetry/cli";
-// The production control-API origin — derived from TELEMETRY_URL (the CLI's
-// other hardcoded prod-host literal) so the two can never drift apart.
-const PROD_API_URL = new URL(TELEMETRY_URL).origin;
+// Version 5 = the receiver stores the client IP address with each event. v4 was
+// default-on (opt-out) plus token volume (command_run carries the local proxy's
+// processed/saved token deltas). A stale-version "yes" was given for a narrower
+// scope and gets the new disclosure reprinted once (never re-asked, and never
+// flipped on). A persisted decision from any version — including a "no" to the
+// old v1 [y/N] prompt — is honored forever; the default only fills the undecided
+// gap, and the first default-on run prints the disclosure line.
+const TELEMETRY_PROMPT_VERSION = 5;
+// Supabase Edge Function; source and schema live in supabase/ at the repo root.
+const TELEMETRY_URL = "https://xvfgtprkhzlvegvmeefq.supabase.co/functions/v1/cli-telemetry";
+const PROD_API_URL = "https://api.caveman.so";
+// Where `telemetry off` points someone who wants already-sent events deleted.
+const TELEMETRY_DELETION_URL = "https://github.com/JuliusBrussee/caveman/blob/main/SECURITY.md#delete-sent-telemetry";
 const TELEMETRY_DISCLOSURE_LINE =
-  "anonymous usage stats on — command counts and token totals only, never prompts, code, or file paths · caveman telemetry off";
+  "usage stats on — commands, agent sessions, token totals, account and install type, timezone and language, and your IP address; never prompts, code, or file paths · caveman telemetry off";
 // Reading token totals means spawning caveman-proxy to query the local SQLite
 // store. It runs after the command's own work, so the cost lands on process exit;
 // a slow or wedged binary drops the token fields rather than holding the CLI.
@@ -572,9 +576,23 @@ function telemetryState(): TelemetryRuntimeState {
 
 // telemetrySendable is the single choke point every emitter must pass: on, and
 // never the un-persisted default (no silent sends, no ephemeral-id retention
-// noise from commands that skipped the disclosure).
+// noise from commands that skipped the disclosure). A config-sourced yes given
+// under older wording also waits until the current disclosure has printed —
+// help-like and `telemetry …` invocations skip that reprint, so without this
+// they would send the widened scope unseen.
 function telemetrySendable(state: TelemetryRuntimeState): boolean {
+  if (state.source === "config" && (state.config?.promptVersion ?? 0) < TELEMETRY_PROMPT_VERSION) return false;
   return state.state === "on" && state.source !== "default";
+}
+
+// Native agent sessions never have a TTY. A decision persisted by an
+// interactive run (which printed the disclosure) still covers them; CI and the
+// env kills still win, and no default is ever minted here.
+function sessionTelemetryState(): TelemetryRuntimeState {
+  const state = telemetryState();
+  if (state.source !== "runtime" || envTruthy(process.env.CI)) return state;
+  const cfg = state.config;
+  return cfg?.decidedAt ? { state: cfg.enabled ? "on" : "off", source: "config", config: cfg } : state;
 }
 
 function envTruthy(v: string | undefined): boolean {
@@ -617,6 +635,7 @@ function parseTelemetryConfig(value: unknown): TelemetryConfig | undefined {
 // any persisted decision — including a "no" to the old v1 prompt — win.
 async function ensureTelemetryDefault() {
   const state = telemetryState();
+  await persistTelemetryEnvKill(state);
   if (isHelpLikeInvocation()) return;
   // `caveman telemetry …` manages the decision explicitly — don't pre-mint an
   // "on" for someone whose first-ever command is `telemetry off`.
@@ -638,6 +657,27 @@ async function ensureTelemetryDefault() {
     return;
   }
   process.stderr.write(`${dim(TELEMETRY_DISCLOSURE_LINE)}\n`);
+}
+
+// persistTelemetryEnvKill turns DO_NOT_TRACK / CAVEMAN_TELEMETRY=0, seen by an
+// interactive run, into a persisted opt-out. Native agent hooks run under hosts
+// that often never read the shell rc (GUI apps, launchd/systemd services), so an
+// env-only kill would not reach them while config still says yes.
+async function persistTelemetryEnvKill(state: TelemetryRuntimeState) {
+  if (state.source !== "env" || state.state !== "off" || !state.config?.enabled || !interactive()) return;
+  try {
+    await saveTelemetryConfig({ enabled: false, decidedAt: new Date().toISOString(), promptVersion: TELEMETRY_PROMPT_VERSION });
+    mutateRawConfig((out) => {
+      delete out.telemetryTokens;
+    });
+  } catch {
+    /* best effort: the env var still wins for this process */
+    return;
+  }
+  // The id is gone from disk now, and it is the only key to a deletion request.
+  if (state.config.anonymousId) {
+    process.stderr.write(`${dim(`telemetry off · old install id ${state.config.anonymousId} · delete what it sent: ${TELEMETRY_DELETION_URL}`)}\n`);
+  }
 }
 
 // ensureTelemetryDisclosureVersion reprints the disclosure once for someone who
@@ -708,13 +748,18 @@ async function telemetryCmd(argv: string[]) {
   if (sub === "status") return telemetryStatus();
   if (sub === "on") return telemetryOn();
   if (sub === "off") return telemetryOff();
+  // Unprinted: the detached children startSessionTelemetry and emitTelemetryEvents spawn.
+  if (sub === "session") return telemetrySession(argv.slice(1));
+  if (sub === "send") return telemetrySend();
   emitCommandRunOnce("error", "usage");
   console.error(`usage: ${invokedCommand("telemetry")} [status|on|off]`);
   process.exit(2);
 }
 
 function telemetryStatus() {
-  const state = telemetryState();
+  // Session state, not command state: an agent or pipe running this has no TTY,
+  // yet native hooks still send under a persisted yes.
+  const state = sessionTelemetryState();
   print({
     enabled: state.state === "on",
     state: state.state,
@@ -733,6 +778,8 @@ async function telemetryOn() {
     promptVersion: TELEMETRY_PROMPT_VERSION,
   };
   await saveTelemetryConfig(telemetry);
+  // The stored version claims this wording was shown, so show it.
+  process.stderr.write(`${dim(TELEMETRY_DISCLOSURE_LINE)}\n`);
   if (!(prior?.enabled && prior.anonymousId) && !telemetryEnvForcesOff()) emitConsentGranted(anonymousId);
   if (telemetryEnvForcesOff()) {
     print({ telemetry: "on", anonymous_id: anonymousId, note: "env override active (DO_NOT_TRACK/CAVEMAN_TELEMETRY) — nothing is sent until it is unset" });
@@ -742,6 +789,7 @@ async function telemetryOn() {
 }
 
 async function telemetryOff() {
+  const prior = telemetryConfigFromDisk();
   const telemetry: TelemetryConfig = {
     enabled: false,
     decidedAt: new Date().toISOString(),
@@ -758,7 +806,91 @@ async function telemetryOff() {
   } catch {
     /* best effort: the decision itself is already persisted */
   }
+  // The id leaves the config here, and it is the only key to events already
+  // sent, so show it once with where to ask for their deletion.
+  if (prior?.anonymousId) {
+    print({ telemetry: "off", anonymous_id: "none", discarded_anonymous_id: prior.anonymousId, delete_sent_data: TELEMETRY_DELETION_URL });
+    return;
+  }
   print({ telemetry: "off", anonymous_id: "none" });
+}
+
+// Native sessions are where installed users show up: after setup most people
+// launch the agent directly and never run the CLI. The host waits on the
+// SessionStart hook, so the send runs in a detached child and never delays the
+// agent's start.
+function startSessionTelemetry(agent: string, sessionId: string | undefined, source: unknown) {
+  if (!telemetrySendable(sessionTelemetryState())) return;
+  // One event per host session: resumes, repeated SessionStart calls (the
+  // OpenCode V1 plugin re-asks on every model step when it gets no context) and
+  // hooks registered in two scopes would otherwise each count. Checked here so
+  // a repeat costs one failed file create, not a process spawn.
+  if (sessionId) {
+    const dir = join(cavemanHome(), "runtime", "telemetry-sessions");
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      closeSync(openSync(join(dir, createHash("sha256").update(`${agent}\0${sessionId}`).digest("hex")), "wx", 0o600));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
+      /* unwritable home: count it rather than lose it */
+    }
+  }
+  const sessionSource = source === "startup" || source === "resume" || source === "clear" ? source : "unknown";
+  try {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "telemetry", "session", agent, sessionSource], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    /* telemetry never blocks a session */
+  }
+}
+
+async function telemetrySession(argv: string[]) {
+  // session_start stands in for this invocation's command_run.
+  telemetryCommandSent = true;
+  pruneSessionMarkers();
+  const agent = findAgent(argv[0] ?? "")?.id;
+  const state = sessionTelemetryState();
+  // No persisted id means every session would mint a fresh "user".
+  if (!agent || !telemetrySendable(state) || !state.config?.anonymousId) return;
+  const event: Record<string, unknown> = {
+    schema: "cli/v1",
+    anonymous_id: state.config.anonymousId,
+    event: "session_start",
+    agent,
+    session_source: argv[1] === "startup" || argv[1] === "resume" || argv[1] === "clear" ? argv[1] : "unknown",
+    cli_version: cliVersion(),
+    os: process.platform,
+    arch: process.arch,
+    node_major: Number(process.versions.node.split(".")[0] ?? 0),
+    ts: new Date().toISOString(),
+  };
+  const tokens = telemetryTokenDelta();
+  if (tokens) {
+    event.tokens_processed = tokens.processed;
+    event.tokens_saved = tokens.saved;
+    event.tokens_basis = tokens.basis;
+  }
+  await postTelemetry(telemetryBody([event]), 10_000);
+}
+
+// Markers only need to outlive one session's repeated SessionStart calls; a
+// resume the next day counts as a new session. Bounded per run.
+function pruneSessionMarkers() {
+  const dir = join(cavemanHome(), "runtime", "telemetry-sessions");
+  try {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const name of readdirSync(dir).slice(0, 500)) {
+      const path = join(dir, name);
+      if (statSync(path).mtimeMs < cutoff) unlinkSync(path);
+    }
+  } catch {
+    /* nothing to prune */
+  }
 }
 
 function telemetryCommandName(): string {
@@ -857,6 +989,8 @@ function readProxyTokenTotals(): { tokensIn: number; tokensSaved: number; basis:
       encoding: "utf8",
       timeout: TELEMETRY_TOKEN_READ_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "ignore"],
+      // The detached session sender has no console; without this Windows opens one.
+      windowsHide: true,
     });
     const parsed = parseProxyStatsPayload(out);
     if (!parsed) return null;
@@ -1031,8 +1165,8 @@ function commandRunEventOnce(exitClass: TelemetryExitClass, errorClass?: Telemet
   if (sub) event.subcommand = sub;
   if (agent) event.agent = agent;
   if (exitClass === "error") event.error_class = errorClass ?? "other";
-  // Token volume rides on command_run only — runtime_bootstrap shares the same
-  // watermark and would race it into a double count.
+  // Token volume rides on command_run and session_start only; the watermark
+  // claim in telemetryTokenDelta keeps concurrent readers from double counting.
   const tokens = telemetryTokenDelta();
   if (tokens) {
     event.tokens_processed = tokens.processed;
@@ -1082,14 +1216,83 @@ function emitRuntimeBootstrap(
   emitTelemetryEvents([event]);
 }
 
+// Fields every event carries. Cheap local reads only: no keychain lookup, no
+// network, and the install path never leaves the machine — only its channel.
+function telemetryContext(): Record<string, string> {
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(readFileSync(configPath(), "utf8")) as Record<string, unknown>;
+  } catch {
+    /* no config yet */
+  }
+  const connected = Boolean(process.env.CAVE_TOKEN || raw.tokenStore || raw.token);
+  const out: Record<string, string> = {
+    account: connected ? "connected" : "none",
+    install_channel: telemetryInstallChannel(),
+  };
+  // Logout leaves the cached entitlement behind, so only a live account's
+  // unexpired plan counts.
+  const entitlement = connected ? parseWrapEntitlement(raw.wrapEntitlement) : null;
+  if (entitlement?.plan && !(Date.parse(entitlement.expires_at) < Date.now())) out.plan = entitlement.plan;
+  try {
+    const { timeZone, locale } = Intl.DateTimeFormat().resolvedOptions();
+    if (timeZone) out.timezone = timeZone;
+    if (locale) out.locale = locale;
+  } catch {
+    /* runtime without Intl data */
+  }
+  return out;
+}
+
+function telemetryInstallChannel(): string {
+  const path = fileURLToPath(import.meta.url).replace(/\\/g, "/");
+  if (path.includes("/_npx/")) return "npx";
+  if (path.includes("/.pnpm/")) return "pnpm";
+  if (path.includes("/.bun/") || path.includes("/bunx-")) return "bun";
+  if (path.includes("/node_modules/")) return "npm";
+  return "source";
+}
+
+function telemetryBody(events: Record<string, unknown>[]): string {
+  const context = telemetryContext();
+  return JSON.stringify(events.map((event) => ({ ...event, ...context })));
+}
+
+// Sends run in a detached child so no command waits on the network at exit.
+// The child has no user-facing deadline, so it can outwait a cold endpoint.
 function emitTelemetryEvents(events: Record<string, unknown>[]): Promise<void> {
+  const body = telemetryBody(events);
+  try {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "telemetry", "send"], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...process.env, CAVEMAN_TELEMETRY_PAYLOAD: body },
+    });
+    child.on("error", () => {});
+    child.unref();
+    return Promise.resolve();
+  } catch {
+    return postTelemetry(body, 1500);
+  }
+}
+
+function postTelemetry(body: string, timeoutMs: number): Promise<void> {
   const url = process.env.CAVEMAN_TELEMETRY_URL || TELEMETRY_URL;
   return fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(events),
-    signal: AbortSignal.timeout(1500),
+    body,
+    signal: AbortSignal.timeout(timeoutMs),
   }).then(() => {}).catch(() => {});
+}
+
+// `caveman telemetry send` (unprinted): the detached child emitTelemetryEvents
+// spawns. Consent was checked by the emitter; this only delivers.
+async function telemetrySend() {
+  telemetryCommandSent = true;
+  const body = process.env.CAVEMAN_TELEMETRY_PAYLOAD;
+  if (body) await postTelemetry(body, 10_000);
 }
 
 function classifyTelemetryError(error: unknown): TelemetryErrorClass {
@@ -2329,7 +2532,23 @@ function verifiedLocalInstall(binDir: string): InstalledBinary[] | null {
   return installed;
 }
 
-function parseSignedChecksums(raw: string): Map<string, string> {
+// A signed manifest names its release through a `RELEASE` entry: the sha256 of
+// the release asset `RELEASE`, whose content is "<tag>\n". Without it, anyone
+// able to edit a release page could serve an older, validly signed manifest
+// and its binaries. It rides as an ordinary checksum line so the shipped
+// wedge installers' strict parsers keep accepting the manifest. Releases
+// before bin-v2.0.0 were signed without it, so it is required from there on.
+const FIRST_RELEASE_WITH_SIGNED_NAME = [2, 0, 0];
+
+function releaseRequiresSignedName(release: string): boolean {
+  const match = release.match(/^bin-v(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return true;
+  const version = match.slice(1, 4).map(Number);
+  const i = version.findIndex((part, index) => part !== FIRST_RELEASE_WITH_SIGNED_NAME[index]);
+  return i === -1 || version[i]! > FIRST_RELEASE_WITH_SIGNED_NAME[i]!;
+}
+
+export function parseSignedChecksums(raw: string, release: string = BINARY_RELEASE): Map<string, string> {
   const checksums = new Map<string, string>();
   for (const line of raw.split("\n")) {
     if (!line) continue;
@@ -2338,6 +2557,10 @@ function parseSignedChecksums(raw: string): Map<string, string> {
     const filename = match[2]!;
     if (checksums.has(filename)) throw new Error(`duplicate checksum manifest entry: ${filename}`);
     checksums.set(filename, match[1]!);
+  }
+  const signedName = checksums.get("RELEASE");
+  if (signedName === undefined ? releaseRequiresSignedName(release) : signedName !== createHash("sha256").update(`${release}\n`).digest("hex")) {
+    throw new Error(`manifest is not signed for release ${release}`);
   }
   return checksums;
 }
@@ -2490,7 +2713,7 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
     return;
   }
 
-  const base = (process.env.CAVE_BINARY_RELEASE_BASE ?? BINARY_RELEASE_BASE_DEFAULT).replace(/\/+$/, "");
+  const base = trimTrailingSlashes(process.env.CAVE_BINARY_RELEASE_BASE ?? BINARY_RELEASE_BASE_DEFAULT);
   const releaseBase = `${base}/${BINARY_RELEASE}`;
   let checksumsRaw: string;
   let signatureRaw: string;
@@ -2511,8 +2734,8 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
   let checksums: Map<string, string>;
   try {
     checksums = parseSignedChecksums(checksumsRaw!);
-  } catch {
-    throw new Error("signature check failed for checksums.txt — refusing to install; partial download deleted");
+  } catch (error) {
+    throw new Error(`signature check failed for checksums.txt (${(error as Error).message}) — refusing to install; partial download deleted`);
   }
 
   const installed: InstalledBinary[] = [];
@@ -2573,7 +2796,7 @@ function cliVersionBehind(current: string, latest: string): boolean {
 }
 
 async function latestPublishedCliVersion(timeoutSeconds: number): Promise<string | null> {
-  const registry = (process.env.CAVEMAN_NPM_REGISTRY ?? "https://registry.npmjs.org").replace(/\/+$/, "");
+  const registry = trimTrailingSlashes(process.env.CAVEMAN_NPM_REGISTRY ?? "https://registry.npmjs.org");
   try {
     const response = await fetch(`${registry}/@caveman-ai%2fcli`, {
       headers: { accept: "application/vnd.npm.install-v1+json" },
@@ -3924,11 +4147,25 @@ function mutateRawConfig(fn: (out: Record<string, unknown>) => void) {
   }
   fn(out);
   mkdirSync(dirname(configPath()), { recursive: true });
-  writeFileSync(configPath(), JSON.stringify(out, null, 2), { mode: 0o600 });
+  const target = configWriteTarget();
+  const tmp = `${target}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(out, null, 2), { mode: 0o600 });
+  renameSync(tmp, target);
   try {
-    chmodSync(configPath(), 0o600);
+    chmodSync(target, 0o600);
   } catch {
     /* best effort */
+  }
+}
+
+// Config writes go temp-file + rename so a concurrent reader (background
+// session senders) never sees a truncated file and rewrites it as {}. Resolves
+// a symlinked config.json so the rename replaces its target, not the link.
+function configWriteTarget(): string {
+  try {
+    return realpathSync(configPath());
+  } catch {
+    return configPath();
   }
 }
 
@@ -5549,7 +5786,7 @@ async function spawnWrapped(
   if (direct) {
     // buildWrapEnv writes the agent-attributed `${gw}/w/<agent>` form, and an
     // outer routed wrap may leak the bare form; a direct launch strips both.
-    const gwPrefix = `${gw.replace(/\/+$/, "")}/`;
+    const gwPrefix = `${trimTrailingSlashes(gw)}/`;
     for (const k of WRAP_BASE_URL_ENV_VARS) {
       const value = env[k];
       if (value !== undefined && (value === gw || value.startsWith(gwPrefix))) delete env[k];
@@ -6255,7 +6492,7 @@ function freshOpenClawModelRef(ctx: OverlayBuilderContext): OpenClawModelRef {
 }
 
 function appendUrlPath(base: string, path: string): string {
-  return `${base.replace(/\/+$/, "")}${path}`;
+  return `${trimTrailingSlashes(base)}${path}`;
 }
 
 export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -6377,7 +6614,7 @@ function stripCodexCavemanProviderToml(text: string): string {
 // The api-key Codex route, in ONE place: the provider TOML writes it, the
 // install journal records it, and the doctor compares against it, and a route
 // only three of those four agree on reads as permanently degraded.
-const CODEX_API_KEY_ROUTE = "/w/codex/v1";
+const CODEX_PAYG_ROUTE = "/w/codex/v1";
 
 function codexGatewayBase(gw: string, subscription: boolean): string {
   // Codex's OpenAI-Responses client appends "/responses" onto base_url itself,
@@ -6389,7 +6626,7 @@ function codexGatewayBase(gw: string, subscription: boolean): string {
   // convention aider already uses (`/w/aider/openai/v1`). The subscription
   // route is a different mux handler (`/chatgpt/`) that takes the suffix
   // verbatim, so it must NOT gain a "/v1".
-  return appendUrlPath(gw, subscription ? "/chatgpt" : CODEX_API_KEY_ROUTE);
+  return appendUrlPath(gw, subscription ? "/chatgpt" : CODEX_PAYG_ROUTE);
 }
 
 // Codex clears the stdio MCP environment, including these non-secret store
@@ -9657,6 +9894,67 @@ function wrapBaseUrlEnv(gw: string): NodeJS.ProcessEnv {
   return env;
 }
 
+// wrapWorkTags names the repository and branch a wrapped session is launched
+// in, as the managed gateway's x-cave-tags value ("repo=owner/name,branch=…").
+// Delivery joins coding-agent spend to merged changes on exactly these two
+// keys, and nothing else in the request carries them. Read once at spawn with
+// hardened git (git-safe.ts); a launch outside a repository, without an origin,
+// or on a detached HEAD yields the tags it can and never fails the wrap.
+// The value is fixed for the process: a branch switch mid-session is picked up
+// by the next launch, not this one.
+//
+// Only github.com remotes are tagged: Cloud joins tags['repo'] to the GitHub
+// pull requests it imported, keyed owner/name, so a same-named fork on another
+// host would collide with the wrong repository. Values are printable ASCII
+// without comma or equals — a header value must be a ByteString, and the tag
+// list is comma/equals delimited — anything else drops the tag, never the wrap.
+export function wrapWorkTags(cwd = process.cwd()): string {
+  const read = (...args: string[]): string => {
+    try {
+      return execFileSync("git", hardenedGitArgs(cwd, ...args), {
+        encoding: "utf8", env: hardenedGitEnv(), stdio: ["ignore", "pipe", "ignore"], timeout: 2000,
+      }).trim();
+    } catch {
+      return "";
+    }
+  };
+  const parts: string[] = [];
+  const repo = repoSlugFromRemote(read("remote", "get-url", "origin"));
+  if (repo) parts.push(`repo=${repo}`);
+  const branch = read("branch", "--show-current");
+  if (branch && branch.length <= 255 && workTagValueSafe(branch)) parts.push(`branch=${branch}`);
+  return parts.join(",");
+}
+
+// workTagValueSafe: printable ASCII (0x21–0x7E) with no comma or equals.
+export function workTagValueSafe(value: string): boolean {
+  return /^[\x21-\x2B\x2D-\x3C\x3E-\x7E]+$/.test(value);
+}
+
+// repoSlugFromRemote reduces a github.com remote URL to owner/name — the form
+// Cloud's Delivery join and its imported pull requests use — or "" when the
+// remote is on any other host or has no such shape. Never the URL itself: a
+// remote can embed a credential.
+export function repoSlugFromRemote(remote: string): string {
+  const cleaned = trimTrailingSlashes(remote.trim()).replace(/\.git$/i, "");
+  let host = "";
+  let path = "";
+  const url = /^[a-z][a-z0-9+.-]*:\/\/([^/]+)\/(.*)$/i.exec(cleaned);
+  const scp = /^(?:[^@/:]+@)?([^/:]+):(.*)$/.exec(cleaned);
+  if (url) {
+    host = url[1]!.replace(/^[^@]*@/, "").replace(/:\d+$/, "");
+    path = url[2]!;
+  } else if (scp) {
+    host = scp[1]!;
+    path = scp[2]!;
+  } else {
+    return "";
+  }
+  if (host.toLowerCase() !== "github.com") return "";
+  const match = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/.exec(path);
+  return match ? `${match[1]}/${match[2]}` : "";
+}
+
 function attributedGatewayUrl(gw: string, agent: AgentProfile): string {
   return appendUrlPath(gw, `/w/${agent.id}`);
 }
@@ -9676,6 +9974,23 @@ function mergeAnthropicCustomHeader(raw: string | undefined, name: string, value
     });
   if (value !== undefined) kept.push(`${name}: ${value}`);
   return kept.join("\n");
+}
+
+// existingCustomHeader returns the value of one header inside the newline-
+// separated ANTHROPIC_CUSTOM_HEADERS block ("" when present but empty), or
+// undefined when absent.
+function existingCustomHeader(raw: string | undefined, name: string): string | undefined {
+  const target = name.toLowerCase();
+  for (const line of (raw ?? "").split(/\r\n|\n|\r/)) {
+    const colon = line.indexOf(":");
+    if (colon > 0 && line.slice(0, colon).trim().toLowerCase() === target) return line.slice(colon + 1).trim();
+  }
+  return undefined;
+}
+
+// workTagsOff: CAVEMAN_WORK_TAGS=0 (or false/off/no) stops the repo/branch tags.
+export function workTagsOff(value: string | undefined): boolean {
+  return /^(0|false|off|no)$/i.test((value ?? "").trim());
 }
 
 function bedrockCredentialEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -9858,6 +10173,15 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
     env.QWEN_CODE_LEGACY_MCP_BLOCKING = "1";
   }
   if (agent.id === "hermes") applyHermesAuthEnv(env, renderedGw, gw);
+  if (agent.id === "claude" && wrapMode(gw) === "managed") {
+    // Repository and branch ride every request as x-cave-tags so the managed
+    // gateway can join this session's spend to the change it ships. A user's
+    // own x-cave-tags is sent exactly as set (even empty), and CAVEMAN_WORK_TAGS=0 sends none.
+    const tags = workTagsOff(env.CAVEMAN_WORK_TAGS) || existingCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags") !== undefined
+      ? ""
+      : wrapWorkTags();
+    if (tags) env.ANTHROPIC_CUSTOM_HEADERS = mergeAnthropicCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags", tags);
+  }
   if (agent.id === "claude" && wrapMode(gw) === "local" && env[CLAUDE_ASSUME_FIRST_PARTY_ENV] === undefined && proxyAnthropicUpstreamIsFirstParty()) {
     // Keep Claude Code's first-party capability set (1M context window /
     // ~600k auto-compact window) intact behind the local pass-through proxy
@@ -10718,7 +11042,7 @@ function localScanSyncLine(out: Extract<LocalScanSyncOutcome, { kind: "synced" }
 }
 
 // syncRequestSpan converts one local `requests` row into a caveman-jsonl span
-// line (public/shared/platform/importers Span shape; timestamps are already in
+// line (Caveman-Cloud public/shared/platform/importers Span shape; timestamps are already in
 // the ClickHouse layout because the proxy writes them that way). The basis and
 // per-row inferred savings ride in attributes — the spans schema has no savings
 // column, and imported rows must never look like verified ledger entries.
@@ -12159,6 +12483,10 @@ function qwenStringList(root: JsonObject, path: string[], fallback: Record<strin
   return resolved;
 }
 
+// Through qwenCavemanToolDenied below: ported, with changes, from Qwen Code
+// 0.22.3 (https://github.com/QwenLM/qwen-code), Copyright 2025 Google LLC and
+// Copyright 2025 Qwen, Apache License 2.0. See NOTICE.
+//
 // Exact wildcard matcher used by Qwen 0.22 for mcp.allowed/mcp.excluded:
 // `*` spans any run, `?` spans one character, everything else is literal.
 function qwenMcpServerPatternMatches(name: string, pattern: string): boolean {
@@ -14134,6 +14462,8 @@ function cavemanBinForHook(powershell: boolean = process.platform === "win32"): 
 // unverified contract; if Codex ever honors that, caveman silently auto-approves a
 // command the user's `approval_policy` meant to gate. Both ends fail closed instead.
 async function shrinkHook() {
+  // Host hooks never report command_run: the POST would hold the host's turn.
+  telemetryCommandSent = true;
   if (nativePolicyMode() === "record" || !new Set(["full-safe", "full-max"]).has(nativeProfile())) process.exit(0);
   let raw: Buffer;
   try { raw = await readHookStdin(); } catch { process.exit(0); }
@@ -14452,7 +14782,7 @@ function nativeRepositoryState(cwd: string | undefined): string | undefined {
   try {
     const status = execFileSync("git", hardenedGitArgs(cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"), {
       env: hardenedGitEnv(),
-      timeout: 100,
+      timeout: 500, // same budget as nativehook.repositoryStatusBudget; 100ms emptied the state under load
       maxBuffer: 8 * 1024 * 1024,
       encoding: "buffer",
       stdio: ["ignore", "pipe", "ignore"],
@@ -14751,6 +15081,8 @@ function nativeWhy(argv: string[]) {
 // never cross the adapter boundary. Any malformed input/write failure stays
 // fail-open and emits no blocking decision.
 async function nativeHook(argv: string[]) {
+  // Host hooks never report command_run: the POST would hold the host's turn.
+  telemetryCommandSent = true;
   const agent = argv[0] === "claude" || argv[0] === "codex" || argv[0] === "hermes" || argv[0] === "gemini" || argv[0] === "opencode" || argv[0] === "pi" ? argv[0] : undefined;
   if (!agent) process.exit(0);
   let raw: Buffer;
@@ -14776,6 +15108,8 @@ async function nativeHook(argv: string[]) {
   } as Record<string, string>)[rawEventName] ?? rawEventName : rawEventName;
   const normalizedEvent = eventName && NATIVE_EVENT_NAMES.has(eventName) ? eventName : "Unknown";
   const sessionId = boundedHookString(event.session_id ?? event.sessionId);
+  // A compaction re-fires SessionStart inside the same session; count real starts.
+  if (normalizedEvent === "SessionStart" && event.source !== "compact") startSessionTelemetry(agent, sessionId, event.source);
   const toolName = boundedHookString(event.tool_name ?? event.toolName);
   const cwd = boundedHookString(event.cwd, 4096);
   const entry: Record<string, unknown> = {
@@ -14789,6 +15123,7 @@ async function nativeHook(argv: string[]) {
   if (sessionId) entry.host_session_id = sessionId;
   if (toolName) entry.tool_name = toolName;
   if (cwd) entry.cwd_sha256 = `sha256:${createHash("sha256").update(cwd).digest("hex")}`;
+  if (normalizedEvent === "SessionEnd") maybeSpawnAutopilot();
   // SessionStart revives a missing local proxy, but native routing points every
   // LATER turn of the session at that proxy too. Current proxies never expire,
   // but crashes and older binaries can still leave a dead base URL. A plain
@@ -14849,10 +15184,22 @@ async function nativeHook(argv: string[]) {
   // it before provider forwarding. Generated structure/order are byte-stable.
   const stableContext = [coreContext, marker].filter(Boolean).join("\n");
   const compactContext = [coreContext, runtimeContext, marker].filter(Boolean).join("\n");
-  if (normalizedEvent === "SessionStart" && agent !== "hermes" && stableContext) {
+  // systemMessage is the user-visible channel on Claude/Codex/Gemini SessionStart;
+  // additionalContext would put the nudge in model context instead.
+  // Under the fast hook the parent owns the token and confirms after relaying
+  // our stdout, since it may still drop the output on its own timeout.
+  const relayedToken = boundedHookString(process.env.CAVEMAN_LEARN_NUDGE_TOKEN);
+  const learnNudgeToken = relayedToken || randomUUID();
+  const learnNudge = normalizedEvent === "SessionStart" && (agent === "claude" || agent === "codex" || agent === "gemini")
+    ? claimLearnNudge(boundedHookString(event.source), learnNudgeToken)
+    : undefined;
+  if (normalizedEvent === "SessionStart" && agent !== "hermes" && (stableContext || learnNudge)) {
     process.stdout.write(JSON.stringify({
-      hookSpecificOutput: { hookEventName: normalizedEvent, additionalContext: stableContext },
-    }));
+      ...(learnNudge ? { systemMessage: learnNudge } : {}),
+      ...(stableContext ? { hookSpecificOutput: { hookEventName: normalizedEvent, additionalContext: stableContext } } : {}),
+    }), () => {
+      if (learnNudge && !relayedToken) confirmLearnNudge(learnNudgeToken);
+    });
   } else if (normalizedEvent === "PostCompact" && agent !== "hermes" && compactContext) {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: { hookEventName: normalizedEvent, additionalContext: compactContext },
@@ -15138,6 +15485,8 @@ function writeRecallHookMarker(agentId: string) {
 // Fail-open by construction: any problem → exit 0 with no output (never blocks the
 // agent, never injects a guess).
 async function memRecallHook() {
+  // Host hooks never report command_run: the POST would hold the host's turn.
+  telemetryCommandSent = true;
   let raw: Buffer;
   try { raw = await readHookStdin(); } catch { process.exit(0); }
   let evt: { prompt?: string };
@@ -16352,6 +16701,7 @@ type LearnPlan = {
   basis: "inferred";
   sessions_scanned?: number;
   sessions_by_source?: Record<string, number>;
+  window?: { from?: string; to?: string; since?: string };
   cave_score: { score: number; basis: string; scope?: string };
   sinks: LearnSink[];
   retro?: LearnRetro;
@@ -16359,6 +16709,7 @@ type LearnPlan = {
   confirmed?: LearnConfirmed[];
   portfolio?: LearnPortfolio;
   repos?: LearnRepo[];
+  trends?: LearnTrends;
 };
 
 // LearnRetro mirrors the proxy's optional `retro` block (learn scan --retro):
@@ -16387,14 +16738,46 @@ type LearnRetro = {
 
 type LearnDiff = { days: number; gone: number; back: number; fresh: number };
 
-const LEARN_EMPTY =
-  "no Claude Code or Codex sessions found in the last 30d — the plan needs a block repeated across ≥3 sessions; run `caveman claude` a few times, then `caveman learn`";
+// learnEmpty names the window the proxy actually scanned (plan.window.since;
+// older proxies omit it and always scanned 30d).
+function learnEmpty(plan: LearnPlan): string {
+  const since = learnSince(plan.window?.since || "30d");
+  return `no Claude Code, Codex, Gemini CLI, opencode or aider sessions found in the last ${since}. A score needs the same text repeated in at least 3 sessions. Use your agent a few times (for example \`caveman claude\`), then run \`caveman learn\` again`;
+}
+
+// learnNoScoreYet explains why there is no score: the score needs the same
+// text repeated in at least 3 sessions.
+function learnNoScoreYet(sessions: number): string {
+  return `${commaCount(sessions)} sessions read · no score yet: it needs the same text repeated in at least 3 sessions. Keep using your agent (for example \`${invokedAs()} claude\`), then run \`${invokedAs()} learn\` again`;
+}
+
+const LEARN_CLASS_LABELS: Record<string, string> = {
+  reducible: "safe fix",
+  recurring_context: "repeated text",
+  behavioral: "habit",
+  load_bearing: "needed",
+};
+
+function learnClassLabel(klass: string): string {
+  return LEARN_CLASS_LABELS[klass] ?? klass.replaceAll("_", " ");
+}
+
+// learnSince turns a --since value like "30d" into "30 days".
+function learnSince(since: string): string {
+  const days = /^(\d+)d$/.exec(since)?.[1];
+  return days ? `${days} day${days === "1" ? "" : "s"}` : since;
+}
+
+function commaCount(value: number): string {
+  return Math.round(value).toLocaleString("en-US");
+}
+
 const LEARN_DETAILED_NEXT =
-  "next:  caveman tools skills install caveman-learn   (review + apply, with consent)  ·  preview one: caveman learn apply <sink_id> --dry-run";
+  "next:  caveman tools skills install caveman-learn   (review and apply fixes; asks first)  ·  preview one fix: caveman learn apply <id> --dry-run";
 const LEARN_ALL_FOOTER = [
-  "advanced: caveman learn applied <sink_id> [--fix-kind <kind>] [--note <text>]   record an approved, re-measured fix",
-  "simulate: caveman learn simulate <sink_id...>   sum counterfactual scale over scanned history",
-  "scope:    caveman learn --repo <substring>   filter sessions before analysis",
+  "advanced: caveman learn applied <id> [--fix-kind <kind>] [--note <text>]   record a fix you approved, so later runs can measure it",
+  "simulate: caveman learn simulate <id...>   estimate what fixes would have saved over your past sessions",
+  "scope:    caveman learn --repo <substring>   only read sessions from matching repositories",
 ];
 const LEARN_SUMMARY_LIMIT = 3;
 
@@ -16428,14 +16811,15 @@ function renderLearnDetailedRows(plan: LearnPlan, markdown: boolean): string[] {
   const lines: string[] = [];
   for (const [index, sink] of plan.sinks.entries()) {
     const lead = markdown ? `${index + 1}. **${sink.title}**` : `${index + 1}. ${sink.title}`;
-    lines.push(`${lead}  ·  ${sink.sink_id}  ·  ${sink.class}`);
+    lines.push(lead);
+    lines.push(`   ${learnClassLabel(sink.class)}  ·  id: ${sink.sink_id}`);
     const observed = typeof sink.tokens_observed === "number" && sink.tokens_observed > 0
-      ? ` · ~${humanTokens(sink.tokens_observed)} tokens observed (historical)`
+      ? ` · ${commaCount(sink.tokens_observed)} tokens so far`
       : "";
     const prefix = learnMeasuredPrefixSuffix(sink);
-    lines.push(`   ~${humanTokens(sink.tokens_per_turn)} tokens/turn · ~${humanTokens(sink.tokens_per_day_rate)} tokens/day${observed} · basis: inferred${prefix}`);
+    lines.push(`   ${commaCount(sink.tokens_per_turn)} tokens per message · ${commaCount(sink.tokens_per_day_rate)} tokens a day${observed} · estimate${prefix}`);
     if (KNOWN_PRACTICE_IDS.has(sink.practice_id)) {
-      lines.push(`   practice: ${sink.practice_id} · unmeasured — verified nowhere yet`);
+      lines.push(`   practice: ${sink.practice_id} · not measured or verified yet`);
     }
     if (sink.suggestion) lines.push(`   ${sink.suggestion}`);
   }
@@ -16451,7 +16835,7 @@ function learnMeasuredPrefixSuffix(sink: LearnSink | undefined): string {
   if (!sink || sink.sink_id !== "config_tax:baseline") return "";
   const measured = learnEvidenceNumber(sink, "measured_prefix_tokens");
   return measured && measured > 0
-    ? ` · provider-counted prefix ~${humanTokens(measured)} (turn-1 median)`
+    ? ` · a session's first message is ~${humanTokens(measured)} tokens (typical, counted by your provider)`
     : "";
 }
 
@@ -16477,13 +16861,22 @@ export type LearnTuiViewModel = {
   scope: string;
   sessions: string;
   diff?: string;
+  trend?: string[];
   status?: string;
   moves: LearnSummaryMove[];
   protected?: string;
+  memory?: string;
   confirmed?: number;
   findings: number;
   report: string;
 };
+
+// learnMemoryHealthLine points at the memory & rules doctor findings in one
+// line; they carry no token rate, so they rarely make the top moves.
+function learnMemoryHealthLine(plan: LearnPlan): string | undefined {
+  const count = plan.sinks.filter((sink) => sink.sink_id.startsWith("memory_health:")).length;
+  return count > 0 ? `memory files  ${count} finding${count === 1 ? "" : "s"} — see ${invokedAs()} learn --all` : undefined;
+}
 
 export function learnSummaryMoves(plan: LearnPlan): LearnSummaryMove[] {
   const moves: LearnSummaryMove[] = [];
@@ -16492,17 +16885,17 @@ export function learnSummaryMoves(plan: LearnPlan): LearnSummaryMove[] {
   if (best) {
     const confidenceLabels: Record<string, string> = {
       measured_usage: "measured",
-      transcript_inferred: "transcript",
+      transcript_inferred: "estimated from transcripts",
       static_estimate: "estimate",
     };
     const confidence = confidenceLabels[best.confidence] ?? best.confidence;
     const detail = [
-      `sink: ${best.top_sink_id}`,
+      best.fix_label,
       best.combined_rate_per_day > 0
-        ? `~${humanTokens(best.combined_rate_per_day)} tokens/day`
+        ? `~${humanTokens(best.combined_rate_per_day)} tokens a day`
         : "",
       best.combined_observed_in_window > 0
-        ? `~${humanTokens(best.combined_observed_in_window)} tokens observed`
+        ? `~${humanTokens(best.combined_observed_in_window)} tokens so far`
         : "",
       confidence,
     ].filter(Boolean);
@@ -16525,27 +16918,29 @@ export function learnSummaryMoves(plan: LearnPlan): LearnSummaryMove[] {
       const largest = Math.max(0, ...recurring.map((item) => learnEvidenceNumber(item, "block_tokens") ?? 0));
       const sessions = Math.max(0, ...recurring.map((item) => learnEvidenceNumber(item, "recurrence_sessions") ?? 0));
       const facts = [
-        "recurring context",
+        "repeated text",
         largest > 0 ? `largest ~${humanTokens(largest)} tokens` : "",
-        sessions > 0 ? `up to ${sessions} sessions` : "",
-        "inferred",
+        sessions > 0 ? `in up to ${commaCount(sessions)} sessions` : "",
+        "estimate",
       ].filter(Boolean);
       moves.push({
-        title: `${recurring.length} context block${recurring.length === 1 ? "" : "s"} repeat across sessions`,
-        kind: "recurring context",
+        title: recurring.length === 1
+          ? "1 piece of text gets pasted again in many sessions"
+          : `${recurring.length} pieces of text get pasted again in many sessions`,
+        kind: "repeated text",
         detail: facts.join(" · "),
-        action: "Review selected blocks before moving them to memory; repetition does not prove they are unnecessary.",
+        action: "Check each one before moving it to Caveman memory. Repeating doesn't prove the text is unneeded.",
       });
     } else {
       const rates = [
-        sink.class.replaceAll("_", " "),
-        sink.tokens_per_turn > 0 ? `~${humanTokens(sink.tokens_per_turn)} tokens/turn` : "",
-        sink.tokens_per_day_rate > 0 ? `~${humanTokens(sink.tokens_per_day_rate)} tokens/day` : "",
-        "inferred",
+        learnClassLabel(sink.class),
+        sink.tokens_per_turn > 0 ? `~${humanTokens(sink.tokens_per_turn)} tokens in every message` : "",
+        sink.tokens_per_day_rate > 0 ? `~${humanTokens(sink.tokens_per_day_rate)} tokens a day` : "",
+        "estimate",
       ].filter(Boolean);
       moves.push({
         title: sink.title,
-        kind: sink.class.replaceAll("_", " "),
+        kind: learnClassLabel(sink.class),
         detail: rates.join(" · "),
         ...(sink.suggestion ? { action: compactLearnText(sink.suggestion) } : {}),
       });
@@ -16568,23 +16963,23 @@ function renderLearnSummaryRows(plan: LearnPlan): string[] {
 function learnSourceLine(plan: LearnPlan, sessions: number): string {
   const by = plan.sessions_by_source ?? {};
   const sourceBits = [
-    by.claude ? `Claude ${by.claude}` : "",
-    by.codex ? `Codex ${by.codex}` : "",
-    by.gemini ? `Gemini ${by.gemini}` : "",
-    by.opencode ? `opencode ${by.opencode}` : "",
-    by.aider ? `aider ${by.aider}` : "",
+    by.claude ? `Claude ${commaCount(by.claude)}` : "",
+    by.codex ? `Codex ${commaCount(by.codex)}` : "",
+    by.gemini ? `Gemini ${commaCount(by.gemini)}` : "",
+    by.opencode ? `opencode ${commaCount(by.opencode)}` : "",
+    by.aider ? `aider ${commaCount(by.aider)}` : "",
   ].filter(Boolean);
-  return `${sessions} sessions${sourceBits.length ? ` · ${sourceBits.join(" · ")}` : ""}`;
+  return `${commaCount(sessions)} sessions read${sourceBits.length ? ` · ${sourceBits.join(" · ")}` : ""}`;
 }
 
 function learnDiffText(diff: LearnDiff | undefined): string | undefined {
   if (!diff) return undefined;
   const bits = [
-    diff.gone ? `${diff.gone} move${diff.gone === 1 ? "" : "s"} gone` : "",
-    diff.back ? `${diff.back} back` : "",
+    diff.gone ? `${diff.gone} finding${diff.gone === 1 ? "" : "s"} gone` : "",
+    diff.back ? `${diff.back} came back` : "",
     diff.fresh ? `${diff.fresh} new` : "",
   ].filter(Boolean);
-  return bits.length ? `since your last run ${diff.days}d ago: ${bits.join(" · ")}` : undefined;
+  return bits.length ? `since your last run ${diff.days} day${diff.days === 1 ? "" : "s"} ago: ${bits.join(" · ")}` : undefined;
 }
 
 export function buildLearnTuiModel(
@@ -16596,54 +16991,76 @@ export function buildLearnTuiModel(
   const protectedSink = plan.sinks.find((sink) => sink.class === "load_bearing");
   const confirmed = plan.confirmed?.length ?? 0;
   const diffText = learnDiffText(options.diff);
+  const trend = learnTrendLines(plan.trends);
+  const memory = learnMemoryHealthLine(plan);
   const status = sessions === 0
-    ? LEARN_EMPTY
+    ? learnEmpty(plan)
     : !recurring
-      ? `${sessions} sessions scanned · no block repeated across ≥3 sessions yet — keep running \`${invokedAs()} claude\`, then re-run \`${invokedAs()} learn\``
+      ? learnNoScoreYet(sessions)
       : undefined;
   return {
     score: recurring ? plan.cave_score.score : null,
-    scope: "local setup · inferred · not billed spend · separate from org Cave Score",
+    scope: LEARN_SCORE_SCOPE,
     sessions: learnSourceLine(plan, sessions),
     ...(diffText ? { diff: diffText } : {}),
+    ...(trend.length ? { trend } : {}),
     ...(status ? { status } : {}),
     moves: learnSummaryMoves(plan),
     ...(protectedSink
-      ? { protected: `${protectedSink.title.replace(/^Your\s+/i, "")} · included in score, never auto-fixed${learnMeasuredPrefixSuffix(protectedSink)}` }
+      ? { protected: learnProtectedText(protectedSink) }
       : {}),
+    ...(memory ? { memory } : {}),
     ...(confirmed > 0 ? { confirmed } : {}),
     findings: plan.sinks.length,
     report: options.report ?? learnReportPath(),
   };
 }
 
+const LEARN_SCORE_SCOPE = "your setup on this computer · an estimate, not your bill · separate from Caveman Cloud's team score";
+
+// learnProtectedText describes the needed (load-bearing) baseline: counted in
+// the score, never changed.
+function learnProtectedText(sink: LearnSink): string {
+  return `${sink.title} · counts in the score, but Caveman never changes it${learnMeasuredPrefixSuffix(sink)}`;
+}
+
 // renderLearnSpendLines shows what the scanned window cost and, more usefully,
 // what a million input tokens ACTUALLY cost after the user's own cache mix.
 // The multiplier is the one number that decides whether every other finding in
 // the report is expensive or trivial, so it earns a line above the moves.
-function renderLearnSpendLines(spend: LearnSpend | undefined, markdown: boolean): string[] {
+function renderLearnSpendLines(spend: LearnSpend | undefined, markdown: boolean, full = true): string[] {
   if (!spend) return [];
   const lines: string[] = [];
   const currency = spend.currency || "USD";
-  const label = markdown ? "### Window cost" : "window cost";
+  const label = markdown ? "### Cost" : "cost";
   if (spend.usd > 0) {
-    const window = spend.window_days ? ` over ${spend.window_days}d` : "";
-    lines.push(`${label}  ${fmtMoney(spend.usd, currency)}${window}  ·  provider-counted tokens at published rates`);
+    const window = spend.window_days ? ` for the last ${spend.window_days} day${spend.window_days === 1 ? "" : "s"}` : "";
+    lines.push(`${label}  ${fmtMoney(spend.usd, currency)}${window}  ·  tokens your provider counted, at list prices`);
   }
   const multiplier = spend.effective_input_multiplier ?? 0;
   const rate = spend.effective_input_usd_per_mtok ?? 0;
   if (multiplier > 0 && rate > 0) {
-    lines.push(`effective input  ${fmtMoney(rate, currency)}/Mtok  ·  ${multiplier.toFixed(2)}x list after cache reuse`);
+    const share = multiplier * 100 >= 1 ? `${Math.round(multiplier * 100)}%` : "under 1%";
+    // Same thresholds as the proxy's effectiveInputSummary.
+    const verdict = multiplier < 0.25 ? "caching is doing its job" : multiplier < 0.6 ? "some caching" : "little or no caching";
+    lines.push(`input really costs  ${fmtMoney(rate, currency)} per 1M tokens  ·  ${share} of list price — ${verdict}`);
   }
   const components = (spend.components ?? []).filter((component) => component.usd > 0);
   if (components.length > 0 && spend.usd > 0) {
-    lines.push(components.map((component) => `${component.key.replace("_", " ")} ${Math.round(component.share_pct ?? 0)}%`).join("  ·  "));
+    lines.push(`where it went  ${components.map((component) => `${component.key.replaceAll("_", " ")} ${Math.round(component.share_pct ?? 0)}%`).join("  ·  ")}`);
   }
-  for (const row of spend.unpriced ?? []) {
-    lines.push(`unpriced  ${row.provider}/${row.model}  ${humanTokens(row.tokens)} tokens excluded — total is a floor`);
+  const unpriced = spend.unpriced ?? [];
+  if (!full && unpriced.length > 1) {
+    // Compact view: one line; --all, --md, JSON and HTML keep every model.
+    const tokens = unpriced.reduce((sum, row) => sum + row.tokens, 0);
+    lines.push(`no price  ${unpriced.length} models (${humanTokens(tokens)} tokens) left out, so the real total is higher · ${invokedAs()} learn --all lists them`);
+  } else {
+    for (const row of unpriced) {
+      lines.push(`no price  ${row.provider}/${row.model}  ${humanTokens(row.tokens)} tokens left out, so the real total is higher`);
+    }
   }
   if (lines.length > 0) {
-    lines.push("subscription plans have no marginal cost; the figure is then the API-equivalent value of the tokens");
+    lines.push("on a subscription plan you pay nothing extra per token; the cost then shows what the tokens would cost on the API");
   }
   return lines;
 }
@@ -16661,51 +17078,56 @@ export function renderLearnPlan(
   const confirmedLines = renderLearnConfirmed(plan.confirmed, markdown);
 
   if (sessions === 0) {
-    lines.push(LEARN_EMPTY);
+    lines.push(learnEmpty(plan));
     if (confirmedLines.length > 0) lines.push("", ...confirmedLines);
   } else if (!recurring) {
     if (plan.sinks.length > 0) {
-      lines.push(...(verbose ? renderLearnDetailedRows(plan, markdown) : ["top moves", ...renderLearnSummaryRows(plan)]), "");
+      lines.push(...(verbose ? renderLearnDetailedRows(plan, markdown) : ["top findings", ...renderLearnSummaryRows(plan)]), "");
+      const memory = verbose ? undefined : learnMemoryHealthLine(plan);
+      if (memory) lines.push(memory, "");
     }
-    lines.push(`${sessions} sessions scanned · no block repeated across ≥3 sessions yet — keep running \`caveman claude\`, then re-run \`caveman learn\``);
+    lines.push(learnNoScoreYet(sessions));
+    lines.push(...(verbose ? [] : learnTrendLines(plan.trends)));
     if (confirmedLines.length > 0) lines.push("", ...confirmedLines);
   } else {
     lines.push(markdown
-      ? `## Setup Score ${plan.cave_score.score} — basis: inferred (local sessions, not billed spend)`
+      ? `## Setup Score ${plan.cave_score.score}/100 — an estimate from your local sessions, not your bill`
       : verbose
-        ? `Setup Score ${plan.cave_score.score}  ·  basis: inferred (local sessions, not billed spend)`
+        ? `Setup Score ${plan.cave_score.score}/100  ·  an estimate from your local sessions, not your bill`
         : `Setup Score ${plan.cave_score.score}/100`);
     if (verbose) {
-      lines.push("scores your local agent setup — the console's Cave Score (org) scores org traffic;");
-      lines.push("the two are different scales and will not match");
-      lines.push(`${sessions} sessions scanned${learnSourceLine(plan, sessions).replace(`${sessions} sessions`, "")}`);
+      lines.push("scores your agent setup on this computer. Caveman Cloud's team score measures your team's traffic;");
+      lines.push("the two use different scales and will not match");
+      lines.push(learnSourceLine(plan, sessions));
     } else {
-      lines.push("local setup · inferred · not billed spend · separate from org Cave Score");
+      lines.push(LEARN_SCORE_SCOPE);
       lines.push(learnSourceLine(plan, sessions));
     }
     const diffText = learnDiffText(options.diff);
     if (diffText) lines.push(diffText);
-    const spendLines = renderLearnSpendLines(plan.spend, markdown);
+    lines.push(...(verbose ? [] : learnTrendLines(plan.trends)));
+    const spendLines = renderLearnSpendLines(plan.spend, markdown, verbose);
     if (spendLines.length > 0) lines.push("", ...spendLines);
     if (confirmedLines.length > 0) lines.push("", ...confirmedLines);
     if (verbose) {
+      const trendTable = learnTrendTable(plan.trends, markdown);
+      if (trendTable.length > 0) lines.push("", ...trendTable);
       lines.push("", ...renderLearnDetailedRows(plan, markdown), "", LEARN_DETAILED_NEXT);
     } else {
       const protectedSink = plan.sinks.find((sink) => sink.class === "load_bearing");
-      lines.push("", "top moves", ...renderLearnSummaryRows(plan));
-      if (protectedSink) {
-        const title = protectedSink.title.replace(/^Your\s+/i, "");
-        lines.push(`protected  ${title} · included in score, never auto-fixed${learnMeasuredPrefixSuffix(protectedSink)}`);
-      }
+      lines.push("", "top findings", ...renderLearnSummaryRows(plan));
+      if (protectedSink) lines.push(`needed  ${learnProtectedText(protectedSink)}`);
+      const memory = learnMemoryHealthLine(plan);
+      if (memory) lines.push(memory);
       lines.push(
         "",
         `next:  ${invokedAs()} learn implement   fix with Claude Code or Codex; asks before every edit`,
-        `details: ${invokedAs()} learn --all   ${plan.sinks.length} findings`,
+        `details: ${invokedAs()} learn --all   all ${plan.sinks.length} findings`,
       );
     }
   }
   if (options.all === true && (plan.repos?.length ?? 0) > 0) {
-    lines.push("", markdown ? "### Per-repo" : "per-repo", ...renderLearnRepos(plan.repos!, markdown));
+    lines.push("", markdown ? "### Per repository" : "per repository", ...renderLearnRepos(plan.repos!, markdown));
   }
   if (options.all === true) {
     lines.push("", ...(markdown ? ["### Advanced", ...LEARN_ALL_FOOTER.map((line) => `- ${line}`)] : LEARN_ALL_FOOTER));
@@ -16722,9 +17144,9 @@ function learnMeasureValue(value: number | undefined): string {
 
 function learnMeasureUnit(unit: string): string {
   const labels: Record<string, string> = {
-    config_tokens_per_turn: "config tokens/turn",
-    turns_over_half_window_pct: "turns over half-window (%)",
-    recurrence_present: "recurrence present",
+    config_tokens_per_turn: "setup tokens per message",
+    turns_over_half_window_pct: "% of messages past half the window",
+    recurrence_present: "repeated text still present",
   };
   return labels[unit] ?? unit.replaceAll("_", " ");
 }
@@ -16744,25 +17166,25 @@ function renderLearnConfirmed(confirmed: LearnConfirmed[] | undefined, markdown:
   const rows = confirmed.flatMap((entry) => {
     const applied = learnAppliedDate(entry.applied_at);
     if (entry.verdict === "insufficient_data") {
-      const line = `${symbols[entry.verdict]} ${entry.sink_id} — applied ${applied} · needs more post-fix sessions (${entry.sessions_after} sessions so far)`;
+      const line = `${symbols[entry.verdict]} ${entry.sink_id} — applied ${applied} · needs more sessions after the fix (${entry.sessions_after} so far)`;
       return [markdown ? `- *${line}*` : line];
     }
     if (entry.after === undefined || !Number.isFinite(entry.after)) return [];
     // How it was measured travels with the number. A confirmed row without its
     // attribution reads as stronger evidence than it is.
     const attribution = entry.attribution
-      ? ` · ${entry.attribution.method} (${entry.attribution.confidence}${entry.attribution.provenance === "intact" ? "" : `, ${entry.attribution.provenance}`})`
+      ? ` · ${learnMethodLabel(entry.attribution.method)} (${entry.attribution.confidence}${entry.attribution.provenance === "intact" ? "" : `, ${learnProvenanceLabel(entry.attribution.provenance)}`})`
       : "";
     const line = `${symbols[entry.verdict]} ${entry.sink_id} — ${learnMeasureValue(entry.before)} → ${learnMeasureValue(entry.after)} ${learnMeasureUnit(entry.unit)} over ${entry.sessions_after} sessions (${entry.verdict}) · applied ${applied}${attribution}`;
     return [markdown ? `- ${line}` : line];
   });
   if (rows.length === 0) return [];
-  return [markdown ? "### Confirmed fixes" : "confirmed fixes", ...rows];
+  return [markdown ? "### Fixes you applied" : "fixes you applied", ...rows];
 }
 
 function renderLearnRepos(repos: LearnRepo[], markdown: boolean): string[] {
   return repos.map((repo) =>
-    `${markdown ? "- " : ""}${repo.repo} · ${repo.sessions} sessions · dumbzone ${repo.dumbzone_pct}% · median context ~${humanTokens(repo.median_context)}`,
+    `${markdown ? "- " : ""}${repo.repo} · ${commaCount(repo.sessions)} sessions · ${repo.dumbzone_pct}% of messages past half the window · typical message ~${humanTokens(repo.median_context)} tokens`,
   );
 }
 
@@ -16830,7 +17252,7 @@ function proxyExecLearn(proxyArgs: string[], progress: boolean): string {
   } catch (error) {
     const e = error as { stdout?: string; stderr?: string; status?: number; code?: string; killed?: boolean; signal?: string; message?: string };
     if (e.code === "ETIMEDOUT" || (e.killed && e.code !== "ENOBUFS")) {
-      console.error(`learn scan timed out after ${seconds}s — no score computed; re-run with \`caveman learn --json\` to capture the raw scan`);
+      console.error(`learn scan timed out after ${seconds}s, so there is no score; run \`caveman learn --json\` to capture the raw scan`);
       process.exit(1);
     }
     if (e.stderr) process.stderr.write(e.stderr);
@@ -16879,7 +17301,7 @@ function proxyExecLearnAsync(proxyArgs: string[], onProgress?: (message: string)
     child.once("close", (code) => {
       clearTimeout(timer);
       if (timedOut) {
-        reject(new Error(`learn scan timed out after ${seconds}s — no score computed; re-run with \`caveman learn --json\` to capture the raw scan`));
+        reject(new Error(`learn scan timed out after ${seconds}s, so there is no score; run \`caveman learn --json\` to capture the raw scan`));
         return;
       }
       if (code !== 0) {
@@ -16934,22 +17356,22 @@ function renderLearnApply(raw: Record<string, any>, dryRun: boolean): string {
   const candidate = (raw.candidate && typeof raw.candidate === "object" ? raw.candidate : {}) as Record<string, any>;
   const klass = String(raw.class ?? candidate.class ?? "");
   if (klass === "behavioral" || klass === "load_bearing") {
-    return "behavioral finding — no automatic fix; the caveman-learn skill turns this into a consent-gated nudge\n";
+    return "this is a habit or a needed part of your setup — there is no automatic fix; the caveman-learn skill can turn it into a reminder, with your yes\n";
   }
   const lines = [
     String(candidate.title ?? raw.sink_id ?? "learn candidate"),
-    `sink: ${String(raw.sink_id ?? candidate.sink_id ?? "")}`,
+    `id: ${String(raw.sink_id ?? candidate.sink_id ?? "")}`,
   ];
   const locations = candidate.what_to_offload?.locators ?? candidate.evidence?.locators;
   if (locations) lines.push(`locations: ${JSON.stringify(locations)}`);
   if (candidate.expected_tokens_per_turn_saved != null) {
-    lines.push(`expected: ~${humanTokens(Number(candidate.expected_tokens_per_turn_saved))} tokens/turn`);
+    lines.push(`expected: ~${humanTokens(Number(candidate.expected_tokens_per_turn_saved))} fewer tokens in every message`);
   }
-  lines.push("gates: net-token-negative · never-dumber");
+  lines.push("applies only if: it uses fewer tokens overall · and answers don't get worse");
   if (dryRun) lines.push("nothing changed — this is a preview");
   else {
     lines.push(`prepared, not applied — ${String(raw.candidate_path ?? join(cavemanHome(), "candidates", `learn-${raw.sink_id}.json`))}`);
-    lines.push("the only thing that applies it: caveman tools skills install caveman-learn");
+    lines.push("to apply it, use the caveman-learn skill: caveman tools skills install caveman-learn");
   }
   return `${lines.join("\n")}\n`;
 }
@@ -16964,7 +17386,7 @@ export function renderLearnSavings(raw: Record<string, any>): string {
   const out: string[] = [];
   if (rows.length === 0) {
     out.push("no fix recorded yet");
-    out.push("apply one through the caveman-learn skill and it lands here with its attribution");
+    out.push("apply one with the caveman-learn skill and it shows up here, with how it was measured");
     for (const caveat of (raw.caveats ?? []) as string[]) out.push(dim(`· ${caveat}`));
     return `${out.join("\n")}\n`;
   }
@@ -16978,8 +17400,8 @@ export function renderLearnSavings(raw: Record<string, any>): string {
   for (const [method, group] of grouped) {
     const total = byRung?.[method];
     const head = total != null && currency
-      ? `${method}  ${fmtMoney(total, currency)}/day`
-      : method;
+      ? `${learnMethodLabel(method)}  ${fmtMoney(total, currency)}/day`
+      : learnMethodLabel(method);
     out.push(bold(head));
     for (const row of group) {
       const verdict = String(row.verdict ?? "");
@@ -16989,7 +17411,7 @@ export function renderLearnSavings(raw: Record<string, any>): string {
         : verdict;
       const money = row.saved_usd != null && currency ? `  ${fmtMoney(Number(row.saved_usd), currency)}/day` : "";
       out.push(`  ${badge} ${String(row.sink_id ?? "")}  ${saved}${money}`);
-      out.push(dim(`      ${String(row.attribution?.provenance ?? "")} · confidence ${String(row.attribution?.confidence ?? "")}`));
+      out.push(dim(`      ${learnProvenanceLabel(String(row.attribution?.provenance ?? ""))} · confidence ${String(row.attribution?.confidence ?? "")}`));
       for (const confounder of (row.attribution?.confounders ?? []) as string[]) {
         out.push(dim(`      · ${confounder}`));
       }
@@ -17000,12 +17422,36 @@ export function renderLearnSavings(raw: Record<string, any>): string {
   return `${out.join("\n")}\n`;
 }
 
+// Plain names for attribution methods and provenance; the enums stay in JSON.
+const LEARN_METHOD_LABELS: Record<string, string> = {
+  deterministic_remeasure: "re-counted the edited file",
+  counterfactual_replay: "replayed past sessions",
+  controlled_holdout: "on/off experiment",
+  interrupted_time_series: "before vs after",
+  unattributed: "not measured yet",
+};
+const LEARN_PROVENANCE_LABELS: Record<string, string> = {
+  intact: "fix still in place",
+  changed_since: "file changed since the fix",
+  target_missing: "file is gone",
+  not_fingerprinted: "can't confirm the fix is still there",
+  not_applicable: "",
+};
+
+function learnMethodLabel(method: string): string {
+  return LEARN_METHOD_LABELS[method] ?? method.replaceAll("_", " ");
+}
+
+function learnProvenanceLabel(provenance: string): string {
+  return LEARN_PROVENANCE_LABELS[provenance] ?? provenance.replaceAll("_", " ");
+}
+
 // fmtMoney keeps sub-cent figures legible instead of rounding real spend to
 // $0.00, which reads as "nothing" when it is not.
 export function fmtMoney(value: number, currency: string): string {
   const symbol = currency === "USD" ? "$" : `${currency} `;
   if (!Number.isFinite(value)) return `${symbol}0`;
-  if (Math.abs(value) >= 1) return `${symbol}${value.toFixed(2)}`;
+  if (Math.abs(value) >= 1) return `${symbol}${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   if (Math.abs(value) >= 0.01) return `${symbol}${value.toFixed(3)}`;
   return `${symbol}${value.toFixed(5)}`;
 }
@@ -17017,11 +17463,11 @@ export function fmtMoney(value: number, currency: string): string {
 export function renderExperimentReport(raw: Record<string, any>): string {
   const arms = Array.isArray(raw.arms) ? (raw.arms as Record<string, any>[]) : [];
   const out: string[] = [bold(`experiment ${String(raw.label ?? "")}`)];
-  if (raw.sink_id) out.push(dim(`sink ${String(raw.sink_id)} · ${String(raw.fix_kind ?? "")}`));
+  if (raw.sink_id) out.push(dim(`id ${String(raw.sink_id)} · ${String(raw.fix_kind ?? "")}`));
   for (const arm of arms) {
-    out.push(`  ${String(arm.arm).padEnd(4)}  ${arm.sessions} sessions  median ${humanTokens(Number(arm.median_session_tokens ?? 0))} tok/session  ${Number(arm.error_turns_per_turn ?? 0).toFixed(2)} err/turn`);
+    out.push(`  ${String(arm.arm).padEnd(4)}  ${arm.sessions} sessions  typical session ${humanTokens(Number(arm.median_session_tokens ?? 0))} tokens  ${Number(arm.error_turns_per_turn ?? 0).toFixed(2)} errors per message`);
   }
-  const verdict = String(raw.verdict ?? "insufficient_data");
+  const verdict = String(raw.verdict ?? "insufficient_data").replace("insufficient_data", "not enough data yet");
   const badge = verdict === "improved" ? green("✓") : verdict === "regressed" ? red("✗") : yellow("~");
   const delta = raw.median_session_tokens_delta_pct != null
     ? `  ${Number(raw.median_session_tokens_delta_pct) > 0 ? "+" : ""}${Number(raw.median_session_tokens_delta_pct).toFixed(1)}%`
@@ -17031,44 +17477,91 @@ export function renderExperimentReport(raw: Record<string, any>): string {
     : "";
   out.push(`  ${badge} ${verdict}${delta}${money}`);
   if (raw.attribution?.method) {
-    out.push(dim(`  ${String(raw.attribution.method)} · confidence ${String(raw.attribution.confidence ?? "")}`));
+    out.push(dim(`  ${learnMethodLabel(String(raw.attribution.method))} · confidence ${String(raw.attribution.confidence ?? "")}`));
     for (const confounder of (raw.attribution.confounders ?? []) as string[]) out.push(dim(`  · ${confounder}`));
   }
   for (const caveat of (raw.caveats ?? []) as string[]) out.push(dim(`  · ${caveat}`));
   return `${out.join("\n")}\n`;
 }
 
+// renderExperiments prints start/arm/stop (one experiment) or list (many):
+// label, state, and the arm currently running.
+export function renderExperiments(raw: Record<string, any> | Record<string, any>[]): string {
+  const experiments = Array.isArray(raw) ? raw : [raw];
+  if (experiments.length === 0) return "no experiments yet — start one: caveman learn experiment start <label>\n";
+  return experiments.map((exp) => {
+    const arms = Array.isArray(exp.arms) ? (exp.arms as Record<string, any>[]) : [];
+    const open = arms.find((arm) => !arm.ended_at);
+    const state = exp.stopped_at ? "stopped" : open ? `${String(open.arm)} since ${String(open.started_at)}` : "paused";
+    const sink = exp.sink_id ? dim(`  id ${String(exp.sink_id)}${exp.fix_kind ? ` · ${String(exp.fix_kind)}` : ""}`) : "";
+    return `${bold(String(exp.label ?? ""))}  ${state}  ${arms.length} on/off period${arms.length === 1 ? "" : "s"}${sink}\n`;
+  }).join("");
+}
+
+// renderLearnDigest names the file to inspect; the digest itself is the file.
+export function renderLearnDigest(raw: Record<string, any>): string {
+  return `digest written: ${String(raw.path ?? "")}\n${dim(String(raw.summary ?? ""))}\ninspect it before sharing; --json prints it\n`;
+}
+
+// renderLearnReconcile prints measured vs billed per model. Coverage is a token
+// comparison, never a savings claim, so there is no money column.
+export function renderLearnReconcile(raw: Record<string, any>): string {
+  const rows = Array.isArray(raw.models) ? (raw.models as Record<string, any>[]) : [];
+  const out: string[] = [bold(`reconcile  ${Number(raw.coverage_pct ?? 0).toFixed(1)}% of billed tokens seen locally`)];
+  for (const row of rows) {
+    out.push(`  ${String(row.model ?? "")}  billed ${humanTokens(Number(row.billed_tokens ?? 0))}  measured ${humanTokens(Number(row.measured_tokens ?? 0))}  ${Number(row.coverage_pct ?? 0).toFixed(1)}%`);
+  }
+  out.push(`  billed but not seen here ${humanTokens(Number(raw.unattributed_tokens ?? 0))} tokens`);
+  for (const caveat of (raw.caveats ?? []) as string[]) out.push(dim(`  · ${caveat}`));
+  return `${out.join("\n")}\n`;
+}
+
 function learnUsage(): void {
   console.log(`${invokedAs()} learn [--all|--plain|--json|--md] [--since 30d] [--sources claude,codex,gemini,opencode,aider]
-  default       interactive setup score + grouped top moves
-  --plain       compact text; no animation or keyboard menu
-  --all         every finding, internal id, basis, and suggestion
-  --json|--md   machine-readable or detailed Markdown output
+  shows where your agent's tokens go, and what to fix first
+  default       interactive Setup Score + top findings
+  --plain       short text; no animation or keyboard menu
+  --all         every finding, with its id and suggested fix
+  --json|--md   output for tools, or a full Markdown report
   implement     open Claude Code or Codex to review and fix findings
-  apply         prepare one finding for consent-gated editing
+  apply         prepare one fix; nothing changes without your yes
+  autopilot     [status|on|off] refresh the report after sessions end
 
-  savings       what applied fixes returned, grouped by how it was measured
-  experiment    prove a change with an on/off holdout over your own sessions
+  savings       what fixes you applied saved, grouped by how it was measured
+  experiment    test a change by switching it on and off across your own sessions
                 start <label> [--sink <id>] · arm <label> on|off · report <label>
                 · list · stop <label>
-  export        privacy-safe digest of findings (identities and magnitudes only)
+  export        a privacy-safe summary of findings (names and sizes only)
   reconcile --usage-export <csv>
-                compare what was measured against what the provider billed
+                compare what Caveman measured with what your provider billed
 
   advanced:
-  applied <sink_id> [--fix-kind <kind>] [--note <text>]
-                record an approved, re-measured fix
-  simulate <sink_id...>
-                sum counterfactual scale over scanned history
+  applied <id> [--fix-kind <kind>] [--note <text>]
+                record a fix you approved, so later runs can measure it
+  simulate <id...>
+                estimate what fixes would have saved over your past sessions
   --repo <substring>
-                filter sessions before analysis`);
+                only read sessions from matching repositories`);
+}
+
+// learnAutopilot: status/on/off for the SessionEnd background refresh. `run`
+// is the detached child the native hook spawns (see learn-autopilot.ts).
+function learnAutopilot(rest: string[]): void {
+  const sub = rest[0] ?? "status";
+  if (sub === "run") {
+    process.exitCode = runAutopilot(proxyBin());
+    return;
+  }
+  if (sub === "on" || sub === "off") mutateRawConfig((out) => { out.learnAutopilot = sub === "on"; });
+  else if (sub !== "status") return commandUsage("learn autopilot [status|on|off]");
+  process.stdout.write(autopilotStatusText());
 }
 
 function learnImplementUsage(): void {
   console.log(`${invokedAs()} learn implement [claude|codex] [--prompt "<focus>"]
   opens an interactive agent with the current local learn report
   installs the caveman-learn safety guide when missing
-  never edits load-bearing findings; asks before every edit`);
+  never edits findings marked needed; asks before every edit`);
 }
 
 function learnImplementPrompt(focus: string): string {
@@ -17077,7 +17570,7 @@ function learnImplementPrompt(focus: string): string {
     "Run `caveman learn report --json`; if no current report exists, run `caveman learn --json` once and retry. Then present a short list of actionable findings.",
     "Work through selected fixes one at a time. Never edit load_bearing findings.",
     "Show the proposed diff and before → after token count, ask before every edit, apply only approved changes, then verify the reduction and any recall path.",
-    "Keep every local savings claim labeled inferred and never attach currency.",
+    "Keep every local savings claim labeled inferred. Attach currency only where the report itself carries it (the spend block and priced savings rows), with that block's framing: window-bounded, never projected, never verified.",
   ];
   if (focus) lines.push(`User focus: ${focus}`);
   return lines.join(" ");
@@ -17174,20 +17667,19 @@ async function learn(rest: string[]) {
   const sub = rest[0];
   if (sub === "--help" || sub === "-h" || sub === "help") return learnUsage();
   if (sub === "implement") return learnImplement(rest.slice(1));
-  if (sub === "export" || sub === "reconcile") {
-    // Both are inspect-before-you-act surfaces, so they stay machine-readable:
-    // the digest is a file the user reads before deciding to share it, and a
-    // reconciliation is a table, not a headline.
-    process.stdout.write(formatLearnProxyJSON(proxyExecLearn(["learn", ...rest], false)));
-    return;
-  }
-  if (sub === "experiment") {
+  if (sub === "autopilot") return learnAutopilot(rest.slice(1));
+  if (sub === "export" || sub === "reconcile" || sub === "experiment") {
     const rawText = proxyExecLearn(["learn", ...rest], false);
-    if (rest.includes("--json") || !["report"].includes(String(rest[1] ?? ""))) {
+    if (rest.includes("--json")) {
       process.stdout.write(formatLearnProxyJSON(rawText));
       return;
     }
-    process.stdout.write(renderExperimentReport(JSON.parse(rawText) as Record<string, any>));
+    const parsed = JSON.parse(rawText);
+    const render = sub === "export" ? renderLearnDigest
+      : sub === "reconcile" ? renderLearnReconcile
+      : rest[1] === "report" ? renderExperimentReport
+      : renderExperiments;
+    process.stdout.write(render(parsed));
     return;
   }
   if (sub === "savings") {
@@ -17229,7 +17721,12 @@ async function learn(rest: string[]) {
   if (tui) {
     const learnTui = await import("./learn-tui.js");
     const progress = learnTui.createLearnProgress();
-    progress.start("Reading Claude Code and Codex sessions");
+    const flag = (name: string) => {
+      const at = forwarded.findIndex((arg) => arg === name || arg.startsWith(`${name}=`));
+      if (at < 0) return undefined;
+      return forwarded[at]!.includes("=") ? forwarded[at]!.split("=")[1] : forwarded[at + 1];
+    };
+    progress.start(`Reading ${flag("--sources") ?? "local agent"} sessions from the last ${flag("--since") ?? "30d"}`);
     try {
       const scanRaw = await proxyExecLearnAsync(
         ["learn", "scan", "--write-report", "--write-report-token", reportToken, ...forwarded],
@@ -17992,7 +18489,7 @@ export function renderStatus(view: StatusView): string {
     lines.push(statusRow("plan", `${String(view.plan.plan)} · ${humanTokens(Number(view.plan.used))} of ${humanTokens(Number(view.plan.allowance))} optimized tokens this week · resets Mon 00:00 UTC · connected traffic only`));
   }
   lines.push(statusRow("config", `think: ${view.config_sources.think}  ·  remember: ${view.config_sources.remember}  ·  execute: ${view.config_sources.execute}`));
-  lines.push(statusRow("telemetry", `${view.telemetry.state} · anonymous usage ping   ·  change: ${view.telemetry.change}`));
+  lines.push(statusRow("telemetry", `${view.telemetry.state} · usage ping   ·  change: ${view.telemetry.change}`));
   if (view.next) lines.push("", `next:  ${view.next}`);
   return `${lines.join("\n")}\n`;
 }
@@ -18057,7 +18554,7 @@ async function status(argv: string[]) {
   const plan = entitlement && allowance !== null && entitlement.optimized_tokens_week !== undefined
     ? { plan: entitlement.plan, used: entitlement.optimized_tokens_week, allowance }
     : null;
-  const telemetry = telemetryState();
+  const telemetry = sessionTelemetryState();
   const view: StatusView = {
     mode: runningMode ?? resolvedMode,
     mode_source: runningMode ? "running" : "resolved",
@@ -18893,7 +19390,7 @@ function renderRecipe(recipe: IntegrationRecipe, baseURL: string, app: string): 
 
 function renderRecipeTemplate(value: string, baseURL: string, app: string): string {
   return value
-    .replaceAll("{{baseURL}}", baseURL.replace(/\/+$/, ""))
+    .replaceAll("{{baseURL}}", trimTrailingSlashes(baseURL))
     .replaceAll("{{app}}", app);
 }
 
@@ -19104,9 +19601,11 @@ async function readRawConfig(): Promise<Record<string, unknown>> {
 
 async function writeRawConfig(out: Record<string, unknown>) {
   await mkdir(dirname(configPath()), { recursive: true });
-  try { chmodSync(configPath(), 0o600); } catch { /* created below */ }
-  await writeFile(configPath(), JSON.stringify(out, null, 2), { mode: 0o600 });
-  chmodSync(configPath(), 0o600);
+  const target = configWriteTarget();
+  const tmp = `${target}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(out, null, 2), { mode: 0o600 });
+  await rename(tmp, target);
+  chmodSync(target, 0o600);
 }
 
 async function saveConfig(cfg: Config) {

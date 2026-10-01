@@ -17,7 +17,7 @@ network connection) and **inferred-only** (it never claims `verified` savings).
 }
 ```
 
-The MIT launcher downloads matching BSL-1.1 binary on first run, verifies
+The launcher downloads matching binary on first run, verifies
 key-signed checksum manifest plus artifact SHA-256, and caches it under
 `~/.caveman/bin`. No Go toolchain or global Caveman install is required.
 To use an existing reviewed binary instead:
@@ -26,8 +26,7 @@ To use an existing reviewed binary instead:
 CAVEMAN_MCP_BIN=/path/to/caveman-mcp npx caveman-mcp
 ```
 
-MIT applies to npm launcher. Downloaded binary follows BSL-1.1 terms named
-in `BINARY_LICENSE.md`.
+npm launcher and downloaded binary are both Apache-2.0; see `BINARY_LICENSE.md`.
 
 ## Tools
 

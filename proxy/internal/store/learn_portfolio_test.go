@@ -37,18 +37,18 @@ func TestLearnPortfolioGroupingConfidenceAndBestNextMoveTieBreak(t *testing.T) {
 	for _, group := range portfolio.Groups {
 		groups[group.FixLabel] = group
 	}
-	trim := groups["Trim loaded config"]
+	trim := groups["Trim always-loaded instructions"]
 	if trim.CombinedRatePerDay != 120 || trim.CombinedObservedInWindow != 0 || trim.Confidence != "measured_usage" || len(trim.SinkIDs) != 2 {
 		t.Fatalf("trim group = %+v", trim)
 	}
 	if trim.TopSinkID != "claude_md_weight:user" || trim.TopSinkTitle == "" {
 		t.Fatalf("trim top sink = %+v", trim)
 	}
-	offload := groups["Offload recurring context to cavemem"]
+	offload := groups["Move repeated text to Caveman memory"]
 	if offload.Confidence != "transcript_inferred" || offload.NetNote == "" {
 		t.Fatalf("offload group = %+v", offload)
 	}
-	if portfolio.BestNextMove.FixLabel != "Trim loaded config" {
+	if portfolio.BestNextMove.FixLabel != "Trim always-loaded instructions" {
 		t.Fatalf("tie-break best next move = %+v", portfolio.BestNextMove)
 	}
 	raw, err := json.Marshal(portfolio)

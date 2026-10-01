@@ -140,13 +140,13 @@ func subagentSpendSink(tracker subagentSpendTracker, spend *LearnSpend) []Sink {
 	}
 	return []Sink{{
 		SinkID: "subagent_spend",
-		Title:  fmt.Sprintf("%.0f%% of measured context ran inside subagents", share),
+		Title:  fmt.Sprintf("%.0f%% of your tokens were used inside subagents", share),
 		Class:  classBehavioral, Basis: "provider_counted", Framing: framingHistorical,
 		TokensObserved: tracker.SideTokens,
 		Evidence:       evidence,
 		// Deliberately not a recommendation. Delegation is often the cheaper
 		// choice; this sink exists so the cost is visible, not to argue against it.
-		Suggestion: "Subagent context is invisible in the main conversation, so this share is usually a surprise. It is reported for visibility only — nothing here says any spawn was unnecessary.",
+		Suggestion: "You don't see subagent work in the main conversation, so this share is often a surprise. It is shown so you can see it. Nothing here says any subagent was unnecessary.",
 	}}
 }
 

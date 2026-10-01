@@ -8,8 +8,7 @@ conservative threshold and compresses each hit through the
 detail stays recoverable. Counts are inferred; component never claims `verified`
 savings.
 
-Go core and binary ship under BSL 1.1. Thin JS/Python clients remain MIT.
-BSL runtime is source-available, not OSI Open Source before Change Date. See
+Go core, binary, and thin JS/Python clients ship under Apache-2.0. See
 `LICENSE` and `../LICENSING.md`.
 
 ## CLI

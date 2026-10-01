@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -29,11 +30,9 @@ type ImportSummary struct {
 
 func (s *Store) ImportCodex(root, sinceExpr string) (ImportSummary, error) {
 	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ImportSummary{}, err
+		if root = codexRoot(); root == "" {
+			return ImportSummary{}, errors.New("codex home not found")
 		}
-		root = filepath.Join(home, ".codex")
 	}
 	since := parseSince(sinceExpr)
 	paths, err := codexPaths(root)

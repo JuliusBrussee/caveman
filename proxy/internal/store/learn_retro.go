@@ -286,13 +286,13 @@ func (s *Store) buildLearnRetro(sourceSet map[string]bool, since time.Time, sinc
 
 	if engineUsed && col.cutTokens > 0 {
 		retro.Families = append(retro.Families, LearnRetroFamily{
-			ID: retroFamilyToolOutputs, Label: "tool outputs (wrap compression)", Tokens: col.cutTokens,
+			ID: retroFamilyToolOutputs, Label: "big tool results (compressed by Caveman)", Tokens: col.cutTokens,
 		})
 	}
 	recurring := miner.result()
 	if repeated := retroRepeatedBlockTokens(recurring); repeated > 0 {
 		retro.Families = append(retro.Families, LearnRetroFamily{
-			ID: retroFamilyRepeatedBlocks, Label: "re-pasted context (cavemem offload)", Tokens: repeated,
+			ID: retroFamilyRepeatedBlocks, Label: "repeated text (moved to Caveman memory)", Tokens: repeated,
 		})
 	}
 	repeatedByFile, undatedRepeated := retroRepeatedStreamCandidates(recurring)
@@ -518,32 +518,32 @@ func retroRepeatedStreamCandidates(rec recurringResult) (map[string][]retroStrea
 
 func retroCaveats(retro LearnRetro, sourceSet map[string]bool, unusable int, engineErr string, undatedRepeated bool) []string {
 	caveats := []string{
-		"Provider usage is counted once per API response (message id), never once per transcript line.",
-		"would_cut_tokens counts each unique tool-output cut once plus a conservative repeated-block lower bound: occurrence sizes summed minus the largest normalized variant; it carries no ratio against tokens_observed.",
-		"would_cut_stream_tokens re-weights tool-output and timestamp-ordered repeated-block cuts by later provider-counted turns of the same session, with exact earliest timestamp ties kept as necessary context; both families share one residency cap per turn (oldest evicted first) and clear at compaction or end of session — same basis as tokens_observed, token volume only; the price of a re-sent token depends on provider caching.",
-		"Totals are sums over the sessions actually read; nothing is extrapolated to unscanned sessions, to a month, or to a dollar.",
-		"Config prefix is reported as a per-turn rate and is deliberately excluded from would_cut_tokens; trimming config is a different fix from wrap compression.",
+		"Provider usage is counted once per model reply, never once per transcript line.",
+		"The \"each cut counted once\" figure counts each tool-result cut once, plus a cautious minimum for repeated text: all copies added up, minus the biggest one. It is not a share of the tokens sent.",
+		"The headline \"could have saved\" figure counts a cut again for every later message in the same session that would have re-sent it, because the whole conversation is sent with every message. Repeated text is ordered by timestamp, and when two copies share the earliest timestamp both are kept as needed. Both kinds share one size limit per message (oldest dropped first) and stop counting at compaction or when the session ends. This is the same kind of count as the tokens sent: token volume only. What a re-sent token costs depends on the provider's caching.",
+		"Totals add up only the sessions actually read. Nothing is stretched to other sessions, to a month, or to dollars.",
+		"Always-loaded instructions are shown per message and left out of these totals on purpose. Trimming them is a different fix from compressing tool results.",
 	}
 	if retro.EngineUsed {
-		caveats = append(caveats, "Tool-output savings are engine-measured in o200k tokens; repeated-block savings use the scanner's byte-based estimate. The two are not the same estimator.")
+		caveats = append(caveats, "Tool-result savings are counted by the compression engine (o200k tokens). Repeated-text savings are estimated from file size in bytes. The two use different methods.")
 	} else {
-		msg := "The compression engine could not be started, so the tool-output family is omitted entirely rather than estimated."
+		msg := "The compression engine could not start, so tool-result savings are left out, not guessed."
 		if engineErr != "" {
 			msg += " (" + engineErr + ")"
 		}
 		caveats = append(caveats, msg)
 	}
 	if sourceSet["codex"] {
-		caveats = append(caveats, "Codex sessions contribute observed tokens only; tool outputs and repeated blocks are scanned from Claude Code transcripts, whose payload shape exposes them.")
+		caveats = append(caveats, "Codex sessions only add to the tokens-sent total. Tool results and repeated text are found only in Claude Code transcripts, because their format shows them.")
 	}
 	if undatedRepeated {
-		caveats = append(caveats, "Repeated blocks without complete transcript timestamps remain in would_cut_tokens but are omitted from would_cut_stream_tokens rather than guessing which occurrence came first.")
+		caveats = append(caveats, "Repeated text without complete timestamps counts in \"each cut counted once\" but not in the headline, instead of guessing which copy came first.")
 	}
 	if retro.TimeBoxed {
-		caveats = append(caveats, "The retro pass hit its discovery or scan time budget, so coverage is partial and the figures under-count. Complete paths discovered before expiry were read newest-first.")
+		caveats = append(caveats, "The replay ran out of time while finding or reading files, so it covers only part of your history and the numbers undercount. Files found before time ran out were read newest first.")
 	}
 	if unusable > 0 {
-		caveats = appendUnique(caveats, "Sessions without provider-counted usage were excluded from every total rather than estimated.")
+		caveats = appendUnique(caveats, "Sessions without token counts from the provider are left out of every total, not estimated.")
 	}
 	return caveats
 }

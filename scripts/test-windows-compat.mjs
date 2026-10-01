@@ -29,7 +29,6 @@ function runPnpm(label, args) {
 }
 
 runPnpm("build CLI", ["--dir", "packages/cli", "build"]);
-runPnpm("build agent", ["--dir", "packages/agent", "build"]);
 run("Node Windows contracts", process.execPath, [
   "--test",
   "--test-force-exit",
@@ -65,8 +64,6 @@ run("Node Windows contracts", process.execPath, [
   "tests/installer/mcp-command-args.test.mjs",
   "tests/installer/mcp-shrink-windows.test.mjs",
   "packages/subagent-tax/tests/process-tree.test.mjs",
-  "packages/agent/tests/windows-process.runtime.mjs",
-  "packages/agent/tests/windows-shell-smoke.runtime.mjs",
 ]);
 
 const baseGoEnv = {

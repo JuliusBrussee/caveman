@@ -7,12 +7,12 @@ import (
 	"math"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/shared/platform/cost"
+	providercatalog "github.com/JuliusBrussee/caveman/shared/provider-catalog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -278,22 +278,27 @@ func catalogVersion(verifiedAt string) string {
 	return "unknown"
 }
 
+// load decodes the catalog embedded at build time. CAVE_CATALOG_PATH swaps in an
+// on-disk file and is authoritative: a bad override fails closed (empty catalog)
+// instead of silently falling back to the embedded one. There is deliberately no
+// working-directory search — that made every window and price depend on where the
+// binary was launched, and left binaries outside the repo with no catalog at all.
 func load() {
-	for _, path := range catalogCandidates() {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			loadErr = err
-			continue
-		}
-		decoded, err := DecodeAndValidate(raw)
-		if err == nil {
-			entries = decoded
-			loadErr = nil
+	raw, path := providercatalog.Current, "embedded"
+	if p := os.Getenv("CAVE_CATALOG_PATH"); p != "" {
+		path = p
+		var err error
+		if raw, err = os.ReadFile(p); err != nil {
+			loadErr, entries = err, []Entry{}
 			return
 		}
-		loadErr = fmt.Errorf("catalog %s: %w", path, err)
 	}
-	entries = []Entry{}
+	decoded, err := DecodeAndValidate(raw)
+	if err != nil {
+		loadErr, entries = fmt.Errorf("catalog %s: %w", path, err), []Entry{}
+		return
+	}
+	entries, loadErr = decoded, nil
 }
 
 // DecodeAndValidate strictly parses a catalog. Unknown YAML fields, duplicate
@@ -360,39 +365,4 @@ func DecodeAndValidate(raw []byte) ([]Entry, error) {
 		seen[key] = struct{}{}
 	}
 	return decoded, nil
-}
-
-// catalogCandidates lists the paths to try, in order: an explicit env override,
-// the deploy-image and CWD-relative locations, then a walk up from the working
-// directory so the catalog resolves when binaries or tests run from subdirs.
-// Both repo layouts are tried: the monorepo keeps the catalog under public/,
-// the published caveman repo has it at the top level.
-func catalogCandidates() []string {
-	rels := []string{
-		"public/shared/provider-catalog/catalog/current.yaml",
-		"shared/provider-catalog/catalog/current.yaml",
-	}
-	candidates := []string{}
-	if p := os.Getenv("CAVE_CATALOG_PATH"); p != "" {
-		// Explicit override is authoritative. A bad override fails closed instead
-		// of silently falling back to a different on-disk catalog.
-		return []string{p}
-	}
-	for _, rel := range rels {
-		candidates = append(candidates, rel, "/app/"+rel)
-	}
-	if wd, err := os.Getwd(); err == nil {
-		dir := wd
-		for i := 0; i < 8; i++ {
-			for _, rel := range rels {
-				candidates = append(candidates, filepath.Join(dir, rel))
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
-		}
-	}
-	return candidates
 }

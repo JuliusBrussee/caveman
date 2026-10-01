@@ -1,4 +1,4 @@
-# mcp — the Caveman MCP server (commercial Go core + MIT launcher)
+# mcp — the Caveman MCP server (Go core + launcher, Apache-2.0)
 
 A thin **stdio JSON-RPC** adapter exposing the compression [engine](../engine/CLAUDE.md) as
 five MCP tools to any host (Claude Code, Cursor, …). It owns only the MCP framing; all

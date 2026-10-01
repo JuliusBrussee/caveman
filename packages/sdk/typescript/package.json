@@ -1,25 +1,45 @@
 {
   "name": "@caveman-ai/sdk",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Zero-dependency TypeScript client for Caveman gateway tracing, tool deferral, checkpoints, and recoverable compression.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "default": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.js"
+      }
     },
     "./middleware": {
-      "types": "./dist/middleware/index.d.ts",
-      "import": "./dist/middleware/index.js"
+      "import": {
+        "types": "./dist/middleware/index.d.ts",
+        "default": "./dist/middleware/index.js"
+      },
+      "default": {
+        "types": "./dist/middleware/index.d.cts",
+        "default": "./dist/middleware/index.js"
+      }
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "middleware": [
+        "./dist/middleware/index.d.ts"
+      ]
     }
   },
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "sideEffects": false,
   "repository": {
@@ -40,13 +60,13 @@
     "optimization"
   ],
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.12"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/cjs-types.mjs",
     "prepack": "npm run build",
     "lint": "tsc --noEmit",
     "test": "npm run build && npm run test:types && npm run test:node",

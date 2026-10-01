@@ -201,6 +201,22 @@ const handlers = {
     });
     return ex.export();
   },
+  otlp_export_usage: async (cave, input) => {
+    const ex = cave.exporter({ serviceName: input.service_name });
+    for (const s of input.spans) {
+      ex.recordSpan(s.name, {
+        traceId: s.trace_id,
+        spanId: s.span_id,
+        startTimeNs: s.start_time_ns,
+        endTimeNs: s.end_time_ns,
+        inputTokens: s.input_tokens,
+        cacheCreationTokens: s.cache_creation_tokens,
+        costUsd: s.cost_usd,
+        attributes: s.attributes
+      });
+    }
+    return ex.export();
+  },
   // The trace-bound exporter reuses the trace's id, so SDK spans and the
   // gateway's request rows land in one trace.
   otlp_export_traced: async (cave, input) =>

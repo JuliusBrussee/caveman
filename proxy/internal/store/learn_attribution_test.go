@@ -86,7 +86,7 @@ func TestAttributionRungsCarryTheirConfounders(t *testing.T) {
 	if tainted.Confidence != "low" {
 		t.Fatalf("changed provenance must drop confidence, got %q", tainted.Confidence)
 	}
-	if !strings.Contains(strings.Join(tainted.Confounders, " "), "changed after the fix") {
+	if !strings.Contains(strings.Join(tainted.Confounders, " "), "changed again after the fix") {
 		t.Fatalf("changed provenance must be disclosed: %+v", tainted.Confounders)
 	}
 }
@@ -131,7 +131,7 @@ func TestSavingsNeverSumAcrossRungs(t *testing.T) {
 		t.Fatal("there must be no blended cross-rung total")
 	}
 	joined := strings.Join(savings.Caveats, " ")
-	if !strings.Contains(joined, "never summed across methods") {
+	if !strings.Contains(joined, "never added across groups") {
 		t.Fatalf("the no-blending rule must be stated to the reader: %v", savings.Caveats)
 	}
 }

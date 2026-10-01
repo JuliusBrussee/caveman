@@ -124,6 +124,7 @@ test('removing native recovery callbacks prevents lossy compression', async t =>
   const bundle = api.withCaveman({ model }, { runtime: f.runtime, scope });
   await api.generateText({ model: bundle.model, tools: bundle.tools, messages: history(), maxRetries: 0 });
   assert.equal(model.doGenerateCalls[0].prompt.at(-1).content[0].output.value, original);
-  assert.equal(f.requests[0].recovery_binding, null);
-  assert.equal(f.reports.some(report => report.status === 'applied'), false);
+  // Compress mode with no attested binding bypasses locally: nothing is sent to the runtime at all.
+  assert.equal(f.requests.length, 0);
+  assert.deepEqual(f.reports.map(report => [report.status, report.reason]), [['skipped', 'recovery_unbound']]);
 });

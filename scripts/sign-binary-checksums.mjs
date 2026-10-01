@@ -31,19 +31,30 @@ export function verifyChecksumSignatureBundle(checksums, bundle, publicKeyPEM) {
     );
 }
 
+// The CLI refuses a manifest (bin-v2.0.0 on) whose RELEASE entry is not the
+// sha256 of "<its pinned tag>\n"; refuse to sign one that would not pass.
+export function assertManifestNamesRelease(checksums, release) {
+  const want = createHash("sha256").update(`${release}\n`).digest("hex");
+  const entries = String(checksums).split("\n").filter((line) => line.endsWith("  RELEASE"));
+  if (entries.length !== 1 || entries[0] !== `${want}  RELEASE`) {
+    throw new Error(`checksums.txt must carry exactly one RELEASE entry for ${release}: ${want}  RELEASE`);
+  }
+}
+
 function normalizePublicKey(value) {
   return createPublicKey(value).export({ type: "spki", format: "pem" }).toString();
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const [checksumsPath, outputPath, publicKeyPath] = process.argv.slice(2);
+    const [checksumsPath, outputPath, publicKeyPath, release] = process.argv.slice(2);
     const privateKeyPEM = process.env.CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM;
-    if (!checksumsPath || !outputPath || !publicKeyPath) {
-      throw new Error("usage: sign-binary-checksums.mjs <checksums.txt> <output.keysig> <public-key.pem>");
+    if (!checksumsPath || !outputPath || !publicKeyPath || !release) {
+      throw new Error("usage: sign-binary-checksums.mjs <checksums.txt> <output.keysig> <public-key.pem> <release-tag>");
     }
     if (!privateKeyPEM) throw new Error("CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM is required");
     const checksums = readFileSync(checksumsPath);
+    assertManifestNamesRelease(checksums, release);
     const publicKeyPEM = readFileSync(publicKeyPath, "utf8");
     if (normalizePublicKey(privateKeyPEM) !== normalizePublicKey(publicKeyPEM)) {
       throw new Error("binary signing private key does not match committed public key");

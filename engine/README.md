@@ -75,9 +75,8 @@ Persistent CCR storage retains at most 512 MiB of payloads by default. Set
 different cap. At cap, new lossy transforms fail closed to original-byte
 pass-through; existing handles are never evicted and remain recoverable.
 
-Engine source ships under BSL 1.1. It is source-available, not OSI Open Source
-before Change Date 2030-06-21; first-party self-hosted production is permitted.
-Agent SDK, thin CLI, contracts, evals, and other adoption surfaces are MIT.
+Engine source ships under Apache-2.0, like the rest of the repository. See
+`LICENSE` and `../LICENSING.md`.
 
 Build/test inside this repository:
 `make product-build PRODUCT=engine` / `make product-test PRODUCT=engine`.

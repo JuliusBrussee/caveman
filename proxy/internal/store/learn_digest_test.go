@@ -12,9 +12,9 @@ import (
 func TestDigestCarriesIdentityNotContent(t *testing.T) {
 	after := 400.0
 	plan := LearnPlan{
-		Window:          LearnWindow{Since: "30d", From: "2026-07-22T00:00:00Z", To: "2026-08-21T00:00:00Z"},
-		CaveScore:       CaveScore{Score: 71},
-		SessionsScanned: 42,
+		Window:           LearnWindow{Since: "30d", From: "2026-07-22T00:00:00Z", To: "2026-08-21T00:00:00Z"},
+		CaveScore:        CaveScore{Score: 71},
+		SessionsScanned:  42,
 		SessionsBySource: map[string]int{"claude": 30, "codex": 12},
 		Sinks: []Sink{
 			{
@@ -111,5 +111,20 @@ func TestDigestStatesWhatItIsAndIsNot(t *testing.T) {
 	}
 	if !strings.Contains(joined, "does not make anything verified") {
 		t.Fatalf("uploading must not read as a promotion to verified: %v", digest.Caveats)
+	}
+}
+
+func TestDigestSinkIDStripsUserDataHashes(t *testing.T) {
+	for in, want := range map[string]string{
+		"memory_health:broken_imports:abcd1234":      "memory_health:broken_imports:*",
+		"memory_health:memory_truncation:9f8e7d6c":   "memory_health:memory_truncation:*",
+		"recurring_context:repaste:4edfc5c7890a26d5": "recurring_context:repaste:*",
+		"claude_md_weight:project":                   "claude_md_weight:project",
+		"memory_health:duplicate_rules:claude":       "memory_health:duplicate_rules:claude",
+		"memory_health:duplicate_rules:codex":        "memory_health:duplicate_rules:codex",
+	} {
+		if got := digestSinkID(in); got != want {
+			t.Errorf("digestSinkID(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

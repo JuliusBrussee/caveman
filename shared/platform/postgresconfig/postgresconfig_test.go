@@ -19,14 +19,106 @@ func TestWithOrgRejectsEmptyScopeBeforeOpeningTransaction(t *testing.T) {
 	}
 }
 
-func TestProductionRequiresVerifyFullAndCA(t *testing.T) {
+func TestProductionRequiresVerifyFullAndUsesSystemRootsWithoutCA(t *testing.T) {
 	t.Setenv("CAVE_ENV", "prod")
 	t.Setenv(caEnvironment, "")
 	if _, err := ParsePoolConfig("postgres://user:pass@db.example:5432/cave?sslmode=require"); err == nil || !strings.Contains(err.Error(), "verify-full") {
 		t.Fatalf("sslmode=require error = %v", err)
 	}
-	if _, err := ParsePoolConfig("postgres://user:pass@db.example:5432/cave?sslmode=verify-full"); err == nil || !strings.Contains(err.Error(), caEnvironment) {
-		t.Fatalf("missing CA error = %v", err)
+	config, err := ParsePoolConfig("postgres://user:pass@db.example:5432/cave?sslmode=verify-full")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tls := config.ConnConfig.TLSConfig; tls == nil || tls.InsecureSkipVerify || tls.RootCAs != nil || len(config.ConnConfig.Fallbacks) != 0 {
+		t.Fatal("verify-full without a CA must verify against the system roots with no fallback")
+	}
+}
+
+// A remote host without an explicit sslmode would get pgx's prefer: TLS that
+// checks no certificate, then plaintext. Only loopback keeps that default.
+func TestRemoteHostRequiresExplicitSSLMode(t *testing.T) {
+	t.Setenv("CAVE_ENV", "local")
+	t.Setenv(caEnvironment, "")
+	t.Setenv("PGSSLMODE", "")
+	for _, refused := range []string{
+		"postgres://user:pass@db.example:5432/cave",
+		"postgres://user:pass@db.example:5432/cave?sslmode=prefer",
+		"postgres://user:pass@db.example:5432/cave?sslmode=allow",
+		"host=10.0.0.5 user=u dbname=cave",
+		"host=/tmp,db.example user=u dbname=cave",
+	} {
+		if _, err := ParsePoolConfig(refused); err == nil || !strings.Contains(err.Error(), "verify-full") {
+			t.Fatalf("ParsePoolConfig(%q) error = %v", refused, err)
+		}
+	}
+	for _, accepted := range []string{
+		"postgres://user:pass@db.example:5432/cave?sslmode=verify-full",
+		"postgres://user:pass@db.example:5432/cave?sslmode=disable",
+		"postgres://user:pass@db.example:5432/cave?sslmode=require",
+		"host=10.0.0.5 user=u dbname=cave sslmode=disable",
+		"postgres://user:pass@localhost:5432/cave",
+		"postgres://user:pass@127.0.0.1:5432/cave",
+		"postgres://user:pass@[::1]:5432/cave",
+		"host=/var/run/postgresql user=u dbname=cave",
+		// A socket attempt runs no TLS, whatever the mode: it does not make
+		// the TCP host's explicit require a prefer.
+		"host=/tmp,db.example user=u dbname=cave sslmode=require",
+	} {
+		if _, err := ParsePoolConfig(accepted); err != nil {
+			t.Fatalf("ParsePoolConfig(%q) error = %v", accepted, err)
+		}
+	}
+	t.Setenv("PGSSLMODE", "verify-full")
+	if _, err := ParsePoolConfig("postgres://user:pass@db.example:5432/cave"); err != nil {
+		t.Fatalf("PGSSLMODE=verify-full error = %v", err)
+	}
+}
+
+// The mode is pgx's reading of the string, not a second parse of it: a quoted
+// value that contains "sslmode=", a repeated key (pgx keeps the last) and
+// PGSSLMODE behind the string cannot pass a mode pgx does not run.
+func TestSSLModeIsTheOnePgxRuns(t *testing.T) {
+	t.Setenv(caEnvironment, "")
+	t.Setenv("PGSSLMODE", "")
+	for env, cases := range map[string]struct{ refused, accepted []string }{
+		"local": {
+			refused: []string{
+				"application_name='x sslmode=verify-full' host=db.example user=u dbname=cave",
+				"host=db.example user=u dbname=cave sslmode=verify-full sslmode=prefer",
+				"postgres://user:pass@db.example:5432/cave?sslmode=verify-full&sslmode=allow",
+			},
+			accepted: []string{
+				"host=db.example user=u dbname=cave sslmode=prefer sslmode=verify-full",
+				"postgres://user:pass@db.example:5432/cave?sslmode=prefer&sslmode=require",
+			},
+		},
+		"prod": {
+			refused: []string{
+				"postgres://user:pass@db.example:5432/cave?sslmode=verify-full&sslmode=disable",
+				"postgres://user:pass@db.example:5432/cave?application_name=sslmode%3Dverify-full",
+			},
+			accepted: []string{"postgres://user:pass@db.example:5432/cave?sslmode=prefer&sslmode=verify-full"},
+		},
+	} {
+		t.Setenv("CAVE_ENV", env)
+		for _, refused := range cases.refused {
+			if _, err := ParsePoolConfig(refused); err == nil || !strings.Contains(err.Error(), "verify-full") {
+				t.Errorf("%s: ParsePoolConfig(%q) error = %v", env, refused, err)
+			}
+		}
+		for _, accepted := range cases.accepted {
+			if _, err := ParsePoolConfig(accepted); err != nil {
+				t.Errorf("%s: ParsePoolConfig(%q) error = %v", env, accepted, err)
+			}
+		}
+	}
+	t.Setenv("CAVE_ENV", "prod")
+	t.Setenv("PGSSLMODE", "verify-full")
+	if _, err := ParsePoolConfig("postgres://user:pass@db.example:5432/cave?sslmode=require"); err == nil {
+		t.Error("PGSSLMODE=verify-full overrode the string's sslmode=require")
+	}
+	if _, err := ParsePoolConfig("postgres://user:pass@db.example:5432/cave"); err != nil {
+		t.Errorf("production with PGSSLMODE=verify-full: %v", err)
 	}
 }
 
@@ -131,146 +223,5 @@ func TestPoolConstructorsReturnParseErrorsWithoutDialing(t *testing.T) {
 	const invalid = "postgres://%zz"
 	if _, err := NewPool(context.Background(), invalid); err == nil || !strings.Contains(err.Error(), "parse DATABASE_URL") {
 		t.Fatalf("NewPool() error = %v", err)
-	}
-	if _, err := NewRuntimePool(context.Background(), invalid, "cave_control_runtime"); err == nil || !strings.Contains(err.Error(), "parse DATABASE_URL") {
-		t.Fatalf("NewRuntimePool() error = %v", err)
-	}
-}
-
-func TestValidateRuntimeIdentityRequiresExpectedRoleBeforeQuery(t *testing.T) {
-	if err := ValidateRuntimeIdentity(context.Background(), nil, " "); err == nil || !strings.Contains(err.Error(), "expected runtime role is required") {
-		t.Fatalf("empty expected role error = %v", err)
-	}
-}
-
-func TestRuntimeIdentityDecisionFailsClosed(t *testing.T) {
-	tests := []struct {
-		name       string
-		session    string
-		superuser  bool
-		bypassRLS  bool
-		member     bool
-		ownsTenant bool
-		want       string
-	}{
-		{name: "safe", session: "cave_control", member: true},
-		{name: "session role can be restored", session: "postgres", member: true, want: "differs from session_user"},
-		{name: "superuser", session: "cave_control", superuser: true, member: true, want: "unsafe runtime identity"},
-		{name: "bypass RLS", session: "cave_control", bypassRLS: true, member: true, want: "unsafe runtime identity"},
-		{name: "table owner", session: "cave_control", member: true, ownsTenant: true, want: "unsafe runtime identity"},
-		{name: "wrong group", session: "cave_control", want: "is not a member"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := validateRuntimeIdentity(
-				"cave_control",
-				test.session,
-				"cave_control_runtime",
-				test.superuser,
-				test.bypassRLS,
-				test.member,
-				test.ownsTenant,
-			)
-			if test.want == "" {
-				if err != nil {
-					t.Fatalf("safe identity error = %v", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("identity error = %v, want %q", err, test.want)
-			}
-		})
-	}
-}
-
-func TestTenantPolicyRequiresExactOrganizationEquality(t *testing.T) {
-	base := tenantTableSchema{
-		name:                  "spans",
-		rowSecurity:           true,
-		forceRowSecurity:      true,
-		policyExists:          true,
-		policyPermissive:      true,
-		policyCommand:         "*",
-		policyAppliesToPublic: true,
-		policyUsingExpression: `(organization_id = (current_setting('app.current_organization_id'::text, true))::uuid)`,
-		policyCheckExpression: `(organization_id = (current_setting('app.current_organization_id'::text, true))::uuid)`,
-	}
-	if !tenantPolicyIsCanonical(base) {
-		t.Fatal("canonical UUID tenant policy was rejected")
-	}
-	oneArgument := base
-	oneArgument.policyUsingExpression = `(organization_id = (current_setting('app.current_organization_id'::text))::uuid)`
-	oneArgument.policyCheckExpression = oneArgument.policyUsingExpression
-	if !tenantPolicyIsCanonical(oneArgument) {
-		t.Fatal("fail-closed one-argument current_setting policy was rejected")
-	}
-
-	unsafeExpressions := []string{
-		`(organization_id <> (current_setting('app.current_organization_id'::text, true))::uuid)`,
-		`((organization_id = (current_setting('app.current_organization_id'::text, true))::uuid) OR true)`,
-		`(organization_id = (current_setting('app.other_organization_id'::text, true))::uuid)`,
-	}
-	for _, expression := range unsafeExpressions {
-		t.Run(expression, func(t *testing.T) {
-			table := base
-			table.policyUsingExpression = expression
-			table.policyCheckExpression = expression
-			if tenantPolicyIsCanonical(table) {
-				t.Fatalf("unsafe tenant policy accepted: %s", expression)
-			}
-		})
-	}
-
-	mismatchedCheck := base
-	mismatchedCheck.policyCheckExpression = `true`
-	if tenantPolicyIsCanonical(mismatchedCheck) {
-		t.Fatal("policy with a weaker WITH CHECK expression was accepted")
-	}
-}
-
-func TestTenantSchemaValidatesEveryForeignKeyByAlignedColumnPosition(t *testing.T) {
-	tables := []tenantTableSchema{{
-		name:                  "children",
-		rowSecurity:           true,
-		forceRowSecurity:      true,
-		policyExists:          true,
-		policyPermissive:      true,
-		policyCommand:         "*",
-		policyAppliesToPublic: true,
-		policyUsingExpression: `(organization_id = current_setting('app.current_organization_id'::text, true))`,
-		policyCheckExpression: `(organization_id = current_setting('app.current_organization_id'::text, true))`,
-	}}
-	foreignKeys := []tenantForeignKeySchema{
-		{
-			name:                "children_parent_safe",
-			childTable:          "children",
-			parentTable:         "parents",
-			carriesOrganization: true,
-		},
-		{
-			name:                "children_parent_unsafe",
-			childTable:          "children",
-			parentTable:         "parents",
-			carriesOrganization: false,
-		},
-	}
-	violations := tenantSchemaViolations(tables, foreignKeys)
-	if len(violations) != 1 || !strings.Contains(violations[0], "children_parent_unsafe") {
-		t.Fatalf("per-constraint violations = %v, want only unsafe FK", violations)
-	}
-
-	foreignKeys = []tenantForeignKeySchema{{
-		name:                "children_parent_wrong_ordinal",
-		childTable:          "children",
-		parentTable:         "parents",
-		childHasProjectID:   true,
-		parentHasProjectID:  true,
-		carriesOrganization: true,
-		carriesProject:      false,
-	}}
-	violations = tenantSchemaViolations(tables, foreignKeys)
-	if len(violations) != 1 || !strings.Contains(violations[0], "organization+project") {
-		t.Fatalf("ordinal project-scope violations = %v", violations)
 	}
 }

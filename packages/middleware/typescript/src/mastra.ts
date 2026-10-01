@@ -5,21 +5,23 @@ import { hash } from 'node:crypto';
 import type { ProcessInputStepArgs, ProcessInputStepResult, ProcessLLMRequestArgs, Processor } from '@mastra/core/processors';
 import type { Agent, AgentExecutionOptions } from '@mastra/core/agent';
 import type { LanguageModelV4CallOptions, LanguageModelV4Usage } from '@ai-sdk/provider';
-import { MiddlewareRuntime, type Candidate, type RecoveryBinding, type RetrieveArgs, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
-import { currentOwner, manifest, observe, observeStream, plain, withOwner, type Attempt } from './common.js';
-import { adapterCompatible, frameworkVersion } from './compatibility.js';
+import { MiddlewareRuntime, type Candidate, type RecoveryBinding, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
+import { MIDDLEWARE_VERSION, bindRecovery, currentOwner, hintRecovery, manifest, nameConflict, observe, observeStream, passiveAttempt as passive, plain,
+  recoveryResult, resolveScope, withOwner, type Attempt, type BudgetOptions, type ScopeSource } from './common.js';
+import { frameworkGate, frameworkVersion, type GateOptions, type GateReason } from './compatibility.js';
+import { guard, guardSync } from './guard.js';
 
-export interface CavemanMastraOptions {
+export interface CavemanMastraOptions extends GateOptions, BudgetOptions {
   runtime: MiddlewareRuntime;
   /** Resolve from the application's authenticated RequestContext, never model input. */
-  scope: Scope | ((context: Pick<ProcessLLMRequestArgs, 'requestContext'>) => Scope);
+  scope: ScopeSource<Pick<ProcessLLMRequestArgs, 'requestContext'>>;
   /** Model-only callers can opt out of adding a recovery executor. */
   recovery?: boolean;
   /** Supply a distinct ID when an application installs multiple processors. */
   id?: string;
 }
 
-const adapter = { id: 'mastra', version: '0.1.0', framework_version: frameworkVersion('@mastra/core') ?? 'unknown', serialization_revision: 'mastra-v4.1' };
+const adapter = { id: 'mastra', version: MIDDLEWARE_VERSION, framework_version: frameworkVersion('@mastra/core') ?? 'unknown', serialization_revision: 'mastra-v4.1' };
 const measured = (n: number | undefined): number | null => Number.isSafeInteger(n) && n! >= 0 ? n! : null;
 function usage(value: LanguageModelV4Usage): Usage {
   const input = measured(value.inputTokens.total), output = measured(value.outputTokens.total);
@@ -29,10 +31,26 @@ function usage(value: LanguageModelV4Usage): Usage {
 
 type FinalStep = Pick<ProcessInputStepArgs, 'model' | 'tools'>;
 
-function passiveAttempt(options: CavemanMastraOptions, reason: string): Attempt {
-  return { runtime: options.runtime, scope: { namespace: 'caveman-passive', session_id: 'report-only', branch_id: 'main', cache_epoch: '0' },
-    logicalCallId: crypto.randomUUID(), attemptId: crypto.randomUUID(), optimization: null, wireSHA256: null,
-    passive: true, reason, adapter: 'mastra' };
+const passiveAttempt = (options: CavemanMastraOptions, reason: string): Attempt => passive(options.runtime, 'mastra', reason);
+const gate = (options: CavemanMastraOptions): GateReason | null =>
+  frameworkGate('mastra', options, () => typeof createTool === 'function' && typeof standardSchemaToJSONSchema === 'function');
+
+/** Hashes of error texts the application saw before Mastra normalized them, kept per thread (or per call without one),
+ * so they never spread to other tenants (C4). `all` latches when a history is too large or deep to scan; it lasts one
+ * turn (TS-8), so a thread that once overflowed compresses again when its next turn fits the budget. */
+interface Protection { hashes: Set<string>; all: boolean }
+function remember(protection: Protection, value: unknown, depth = 0, budget = { remaining: 16384 }): void {
+  if (protection.all) return;
+  if (depth > 32 || --budget.remaining < 0) { protection.all = true; return; }
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value)) { for (const part of value) remember(protection, part, depth + 1, budget); return; }
+  if (!plain(value)) return;
+  const failed = value.type === 'error-text' || value.type === 'error-json' || value.state === 'output-error' || value.state === 'output-denied' || value.isError === true;
+  if (failed) for (const text of [value.value, value.result, value.output, value.errorText]) if (typeof text === 'string') {
+    if (protection.hashes.size >= 1024) { protection.all = true; return; }
+    protection.hashes.add(hash('sha256', text));
+  }
+  for (const entry of Object.values(value)) remember(protection, entry, depth + 1, budget);
 }
 
 /** Observe only the native method boundary; no untested model shape is read. */
@@ -48,47 +66,44 @@ function passiveModel<T extends object>(model: T, options: CavemanMastraOptions,
   } });
 }
 
-/** Observe native calls without installing a lossy recovery grant. For native
- * executable-tool attestation use withCavemanMastra, which owns the final hook. */
+/** Observe native calls without installing a lossy recovery grant, so compress mode reports `recovery_unbound`. For
+ * native executable-tool attestation use withCavemanMastra, which owns the final hook and compresses. */
 export function createCavemanMastraProcessor(options: CavemanMastraOptions): Processor {
-  return createProcessor(options, false).processor;
+  const blocked = gate(options);
+  if (!blocked) hintRecovery(options.runtime, 'mastra', 'createCavemanMastraProcessor', 'withCavemanMastra');
+  return createProcessor(options, false, blocked).processor;
 }
 
 /** Wrap an existing Agent's public entry points. Each call keeps its native
  * processors and prepareStep callback, then attests the executable tool table
  * at Mastra's enforced final prepareStep boundary. No Agent config is mutated. */
 export function withCavemanMastra<T extends Agent>(agent: T, options: CavemanMastraOptions): T {
-  if (!adapterCompatible('mastra')) {
-    if (options.runtime.mode !== 'off') options.runtime.decline('unsupported_version');
-    return new Proxy(agent, { get(target, key) {
+  if (mastraAgents.has(agent)) return agent;
+  const blocked = gate(options);
+  if (blocked) {
+    return own(new Proxy(agent, { get(target, key) {
       const value = Reflect.get(target, key, target);
       if ((key === 'generate' || key === 'stream') && typeof value === 'function') return (...args: unknown[]) => {
         if (currentOwner()) return Reflect.apply(value, target, args);
-        const attempt = passiveAttempt(options, 'unsupported_version'); observe(attempt, 'dispatch_intent');
+        const attempt = passiveAttempt(options, blocked); observe(attempt, 'dispatch_intent');
         return withOwner(attempt, () => Reflect.apply(value, target, args));
       };
       return typeof value === 'function' ? value.bind(target) : value;
-    } });
+    } }));
   }
-  // Mastra can normalize imported error-text into a plain DB result. Remember
-  // protected text before native normalization, including subsequent memory
-  // turns on this wrapper. Only hashes are retained; overflow declines loss.
-  const protectedText = new Set<string>();
-  let protectAll = false;
-  function rememberProtected(value: unknown, depth = 0, budget = { remaining: 16384 }): void {
-    if (protectAll) return;
-    if (depth > 32 || --budget.remaining < 0) { protectAll = true; return; }
-    if (!value || typeof value !== 'object') return;
-    if (Array.isArray(value)) { for (const part of value) rememberProtected(part, depth + 1, budget); return; }
-    if (!plain(value)) return;
-    const failed = value.type === 'error-text' || value.type === 'error-json' || value.state === 'output-error' || value.state === 'output-denied' || value.isError === true;
-    if (failed) for (const text of [value.value, value.result, value.output, value.errorText]) if (typeof text === 'string') {
-      if (protectedText.size >= 1024) { protectAll = true; return; }
-      protectedText.add(hash('sha256', text));
-    }
-    for (const entry of Object.values(value)) rememberProtected(entry, depth + 1, budget);
-  }
-  return new Proxy(agent, {
+  // Mastra can normalize imported error-text into a plain DB result. Remember protected text before native
+  // normalization, including later memory turns of the same thread. Only hashes are kept; overflow declines loss for
+  // that thread's current turn alone. An LRU bounds the threads remembered per wrapper.
+  const threads = new Map<string, Set<string>>();
+  const protection = (call: AgentExecutionOptions): Protection => {
+    const thread = call.memory?.thread, id = typeof thread === 'string' ? thread : thread?.id;
+    if (typeof id !== 'string') return { hashes: new Set(), all: false };
+    const key = JSON.stringify([call.memory?.resource ?? null, id]), hashes = threads.get(key) ?? new Set();
+    threads.delete(key); threads.set(key, hashes);
+    if (threads.size > 256) threads.delete(threads.keys().next().value!);
+    return { hashes, all: false };
+  };
+  return own(new Proxy(agent, {
     get(target, key) {
       if (key === 'generate' || key === 'stream') return async (messages: Parameters<Agent['generate']>[0], call: AgentExecutionOptions = {}) => {
         call.abortSignal?.throwIfAborted();
@@ -96,32 +111,36 @@ export function withCavemanMastra<T extends Agent>(agent: T, options: CavemanMas
         const requestContext = call.requestContext ?? defaults.requestContext;
         const processors = call.inputProcessors ?? defaults.inputProcessors ?? await target.listConfiguredInputProcessors(requestContext);
         const applicationPrepare = call.prepareStep === undefined ? defaults.prepareStep : call.prepareStep;
-        rememberProtected(messages);
-        const bundle = createProcessor({ ...options, id: `${options.id ?? 'caveman'}-${crypto.randomUUID()}` }, true,
-          text => protectAll || protectedText.has(hash('sha256', text)), rememberProtected);
+        const protected_ = protection(call);
+        remember(protected_, messages);
+        const bundle = createProcessor({ ...options, id: `${options.id ?? 'caveman'}-${crypto.randomUUID()}` }, true, null,
+          text => protected_.all || protected_.hashes.has(hash('sha256', text)), value => remember(protected_, value));
         const prepareStep = async (args: ProcessInputStepArgs) => {
           const before: FinalStep = { model: args.model, ...(args.tools ? { tools: args.tools } : {}) };
           const result = await applicationPrepare?.(args);
           if (bundle.attest(before, result)) return result;
           const selected = result?.model ?? before.model;
           if (!selected || typeof selected !== 'object') {
-            if (!currentOwner()) observe(passiveAttempt(options, 'unsupported_model'), 'dispatch_intent');
+            if (!currentOwner()) observe(passiveAttempt(options, 'unsupported_provider'), 'dispatch_intent');
             return result;
           }
-          return { ...result, model: passiveModel(selected, options, options.runtime.mode === 'off' ? 'off' : 'unattested_model') };
+          return { ...result, model: passiveModel(selected, options, options.runtime.mode === 'off' ? 'disabled' : 'unsupported_request') };
         };
         return Reflect.apply(target[key], target, [messages, { ...call, inputProcessors: [bundle.processor, ...processors], prepareStep }]);
       };
       const value = Reflect.get(target, key, target);
       return typeof value === 'function' ? value.bind(target) : value;
     },
-  });
+  }));
 }
 
-function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boolean, isProtectedText: (text: string) => boolean = () => false, rememberProtected: (value: unknown) => void = () => {}): { processor: Processor; attest: (before: FinalStep, result: ProcessInputStepResult | undefined | void) => boolean } {
-  if (!adapterCompatible('mastra')) {
-    if (options.runtime.mode !== 'off') options.runtime.decline('unsupported_version');
-    return { processor: { id: options.id ?? 'caveman', processInputStep(args) { return { model: passiveModel(args.model, options, 'unsupported_version') }; } }, attest() { return false; } };
+/** Every agent withCavemanMastra returned. Wrapping one again returns it unchanged. */
+const mastraAgents = new WeakSet<object>();
+function own<T extends object>(agent: T): T { mastraAgents.add(agent); return agent; }
+
+function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boolean, blocked: GateReason | null, isProtectedText: (text: string) => boolean = () => false, rememberProtected: (value: unknown) => void = () => {}): { processor: Processor; attest: (before: FinalStep, result: ProcessInputStepResult | undefined | void) => boolean } {
+  if (blocked) {
+    return { processor: { id: options.id ?? 'caveman', processInputStep(args) { return { model: passiveModel(args.model, options, blocked) }; } }, attest() { return false; } };
   }
   type Model = Extract<ProcessInputStepArgs['model'], { specificationVersion: 'v4' }>;
   interface Step {
@@ -135,6 +154,10 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
     recoveryIntact: () => boolean;
   }
   const steps = new WeakMap<object, Step>();
+  const ours = new WeakSet<object>();
+  // A step this processor already made report-only keeps its own reason at the final prepareStep boundary.
+  const passives = new WeakSet<object>();
+  const passiveStep = (model: ProcessInputStepArgs['model'], reason: string) => { const wrapped = passiveModel(model, options, reason); passives.add(wrapped); return { model: wrapped }; };
   const calls = new WeakMap<object, string>();
 
   async function prepare(params: LanguageModelV4CallOptions, model: Model, step: Step): Promise<{ params: LanguageModelV4CallOptions; attempt: Attempt }> {
@@ -144,8 +167,7 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
     // Protected call parameters contribute hashes, never raw authorization or
     // provider options, to the runtime's append-only manifest.
     const envelope = { tools: params.tools, toolChoice: params.toolChoice, responseFormat: params.responseFormat, providerOptions: params.providerOptions };
-    const context = await manifest([envelope, ...params.prompt]);
-    if (!context) { attempt.reason = 'unsupported_shape'; return { params, attempt }; }
+    const context = await manifest([envelope, ...params.prompt], options.manifestBytes);
     const candidates: Candidate[] = [];
     const setters = new Map<string, (text: string) => void>();
     const prompt = params.prompt.slice();
@@ -177,7 +199,7 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
     const allowed = step.recoveryAllowed && (!params.toolChoice || params.toolChoice.type === 'auto') && (!params.responseFormat || params.responseFormat.type === 'text');
     const bound = allowed && step.recoveryIntact() && options.runtime.ownsBinding(step.binding, step.scope) && recovery?.type === 'function' &&
       recovery.description === step.binding.description && isDeepStrictEqual(recovery.inputSchema, step.recoverySchema);
-    attempt.optimization = await options.runtime.optimize({ scope: step.scope, adapter, candidates, manifest: context,
+    attempt.optimization = await options.runtime.optimize({ scope: step.scope, adapter, candidates, ...context,
       model: { provider: model.provider, id: model.modelId, protocol: 'ai-sdk-v4' }, binding: bound ? step.binding : null,
       logicalCallId: step.logicalCallId, attemptId: attempt.attemptId,
       ...(recovery ? { recoveryOverheadText: JSON.stringify(recovery) } : {}), ...(params.abortSignal ? { signal: params.abortSignal } : {}),
@@ -187,7 +209,7 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
       for (const replacement of replacements) setters.get(replacement.segment_id)!(replacement.text);
       return { params: { ...params, prompt }, attempt };
     }
-    if (replacements.length) { attempt.optimization = null; attempt.reason = 'invalid_replacement_plan'; }
+    if (replacements.length) { attempt.optimization = null; attempt.reason = 'invalid_plan'; }
     return { params, attempt };
   }
 
@@ -196,15 +218,22 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
     processInputStep(args) {
       args.abortSignal?.throwIfAborted();
       if (args.model.specificationVersion !== 'v4' || options.runtime.mode === 'off') {
-        return { model: passiveModel(args.model, options, options.runtime.mode === 'off' ? 'off' : 'unsupported_model') };
+        return passiveStep(args.model, options.runtime.mode === 'off' ? 'disabled' : 'unsupported_provider');
       }
-      rememberProtected(args.messageList.get.all.db());
-      const scope = Object.freeze({ ...(typeof options.scope === 'function' ? options.scope(args) : options.scope) });
+      // messageList is a Mastra internal: if it moves, this step passes through (adapter_error) instead of failing.
+      if (!guardSync(options.runtime, 'mastra', () => { rememberProtected(args.messageList.get.all.db()); return true; }, () => false)) {
+        return passiveStep(args.model, 'adapter_error');
+      }
+      const scope = resolveScope(options.scope, args);
+      if (!scope) return passiveStep(args.model, 'recovery_unbound');
       let logicalCallId = calls.get(args.state);
       if (!logicalCallId) { logicalCallId = crypto.randomUUID(); calls.set(args.state, logicalCallId); }
       const recoveryAllowed = enforcedFinalStep && options.recovery !== false && options.runtime.mode !== 'record' && !args.structuredOutput &&
         (!args.toolChoice || args.toolChoice === 'auto') && (!args.activeTools || args.activeTools.includes('caveman_retrieve'));
-      const binding = recoveryAllowed && !args.tools?.['caveman_retrieve'] ? options.runtime.recovery(scope) : null;
+      const existing = args.tools?.['caveman_retrieve'];
+      // C14: a host tool named caveman_retrieve keeps recovery off and the step reports why.
+      if (recoveryAllowed && existing && !ours.has(existing)) return passiveStep(args.model, nameConflict(options.runtime, 'mastra'));
+      const binding = recoveryAllowed && !existing ? bindRecovery(options.runtime, scope) : null;
       const step: Step = { scope, binding, logicalCallId, outbound: false, recoveryAllowed, recoverySchema: null, finalTools: undefined, recoveryIntact: () => false };
       const nativeModel = args.model;
       const model = new Proxy(nativeModel, {
@@ -213,10 +242,11 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
             params.abortSignal?.throwIfAborted();
             if (currentOwner()) return target[key](params);
             if (!step.outbound) {
-              const attempt = passiveAttempt(options, 'unattested_model'); observe(attempt, 'dispatch_intent');
+              const attempt = passiveAttempt(options, 'unsupported_request'); observe(attempt, 'dispatch_intent');
               return withOwner(attempt, () => target[key](params));
             }
-            const prepared = await prepare(params, nativeModel, step);
+            const prepared = await guard(options.runtime, 'mastra', params.abortSignal, () => prepare(params, nativeModel, step),
+              () => ({ params, attempt: passive(options.runtime, 'mastra', 'adapter_error', step.logicalCallId) }));
             params.abortSignal?.throwIfAborted();
             observe(prepared.attempt, 'dispatch_intent');
             try {
@@ -232,8 +262,9 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
       steps.set(model, step);
       if (!binding) return { model };
       const recovery = createTool({ id: binding.name, description: binding.description, inputSchema: structuredClone(binding.inputSchema),
-        execute: (input, context) => binding.execute(input as RetrieveArgs, context?.abortSignal ? { signal: context.abortSignal } : undefined),
+        execute: (input, context) => recoveryResult('mastra', context?.abortSignal, input, args => binding.execute(args, context?.abortSignal ? { signal: context.abortSignal } : undefined)),
       });
+      ours.add(recovery);
       if (recovery.inputSchema) step.recoverySchema = structuredClone(standardSchemaToJSONSchema(recovery.inputSchema, { io: 'input' }));
       const tools = { ...args.tools, [binding.name]: recovery };
       // A schema-only descriptor is insufficient: native processors can alter
@@ -264,6 +295,6 @@ function createProcessor(options: CavemanMastraOptions, enforcedFinalStep: boole
     if (!model || typeof model !== 'object') return false;
     const step = steps.get(model);
     if (step) step.finalTools = result && Object.hasOwn(result, 'tools') ? result.tools : before.tools;
-    return !!step;
+    return !!step || passives.has(model);
   } };
 }

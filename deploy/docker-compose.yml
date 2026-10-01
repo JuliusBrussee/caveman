@@ -1,17 +1,24 @@
 services:
   caveman-proxy:
-    image: ghcr.io/juliusbrussee/caveman-proxy:bin-v1.1.7
+    image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0
     # Alternative to pulling: build from a clone with `docker compose build`.
     build: ..
     ports:
       - "8787:8787"
     # Put configuration in deploy/.env, e.g.
     #   CAVEMAN_AUTH_TOKEN=<generate with: openssl rand -hex 32>
-    #     Required for the image's default 0.0.0.0 listen — the proxy has no
-    #     other inbound auth. Clients send it as x-cave-api-key or
+    #     This file's only inbound credential, so required for the image's
+    #     default 0.0.0.0 listen. Clients send it as x-cave-api-key or
     #     Authorization: Bearer.
     #   CAVEMAN_MODE=record          # record (default) | compress | pixel
+    #   CAVEMAN_MIDDLEWARE_MODE=compress  # framework middleware; default follows CAVEMAN_MODE
     #   ANTHROPIC_API_KEY=sk-ant-...  # or OPENAI_API_KEY / GEMINI_API_KEY / AWS_*
+    # With the postgres profile (`docker compose --profile postgres up -d`) add:
+    #   CAVEMAN_POSTGRES_PASSWORD=<generate with: openssl rand -hex 24>
+    #   CAVEMAN_MIDDLEWARE_DATABASE_URL=postgres://caveman:<that password>@postgres:5432/caveman?sslmode=disable
+    #     The middleware store then lives in Postgres instead of SQLite under
+    #     /data. sslmode=disable is for this compose network only; any other
+    #     database needs sslmode=verify-full.
     env_file:
       - path: .env
         required: false
@@ -24,10 +31,35 @@ services:
       # A named volume inherits the image's uid 65532 ownership; a bind mount
       # does not — chown the host directory to 65532 first if you use one.
       - caveman-data:/data
+    depends_on:
+      # Only with the postgres profile; otherwise the proxy starts alone.
+      postgres:
+        condition: service_healthy
+        required: false
     restart: unless-stopped
     # No healthcheck: the image is distroless, so there is no shell or curl to
     # run one inside the container. Probe GET http://localhost:8787/health/ready
     # from the host, or let a real orchestrator do it (see kubernetes.yaml).
 
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_USER: caveman
+      POSTGRES_DB: caveman
+      # Empty when unset, and the image then refuses to initialize: no default
+      # password ships in this file.
+      POSTGRES_PASSWORD: ${CAVEMAN_POSTGRES_PASSWORD:-}
+    volumes:
+      - caveman-postgres:/var/lib/postgresql/data
+    # Not published: only the proxy on this compose network reaches it.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "caveman", "-d", "caveman"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
 volumes:
   caveman-data:
+  caveman-postgres:

@@ -1,4 +1,9 @@
-"""Explicit asynchronous API with bounded, lifecycle-owned stdlib I/O workers."""
+"""Explicit asynchronous API with bounded, lifecycle-owned stdlib I/O workers.
+
+Every await is bounded by its own deadline, even while queued or when a worker is stuck. Retrieve has its
+own pool, so slow recoveries never delay optimize, and receipts have theirs (one worker, sixteen queued, as in the TS
+SDK), so a receipt burst never takes optimize's slots. Pools are rebuilt in a forked child.
+"""
 import asyncio
 import contextvars
 import functools
@@ -6,31 +11,35 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from .runtime import MiddlewareRuntime, _preflight_report
-from .types import MiddlewareError, Optimization, Scope
+from .protocol import normalize_scope
+from .runtime import MiddlewareRuntime, _live, _preflight_report, _retrieve_args, _sink_loop
+from .types import MiddlewareError, Scope
+
+
+def _local(code: str) -> MiddlewareError:
+    error = MiddlewareError(code)
+    error.local = True  # decided by this view, not by the sync runtime's strict policy
+    return error
 
 
 class AsyncMiddlewareRuntime:
     def __init__(self, **options):
         self._runtime = MiddlewareRuntime(**options)
         self._owns_runtime = True
+        self._closed = False
         self._init_workers()
+        _live.add(self)
 
     def _init_workers(self):
-        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="caveman-middleware")
-        self._slots = threading.BoundedSemaphore(16)
-        # Receipts are never on the provider's critical path, so they get their
-        # own worker instead of competing for the four that optimize()/ready()/
-        # retrieve() share. Without this a burst of concurrent observe() calls
-        # holds every worker long enough for an unrelated optimize() to spend
-        # its whole deadline queued and bypass with reason="deadline", never
-        # having attempted its capabilities fetch. MiddlewareRuntime.
-        # observe_background() already isolates the synchronous path this way.
-        self._receipt_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="caveman-async-receipts")
-        self._receipt_slots = threading.BoundedSemaphore(16)
-        self._closed = False
-        # Serializes _closed with _shutdown_now, which can run on another thread.
-        self._lifecycle_lock = threading.Lock()
+        size = self._runtime.max_concurrency
+        self._pools = {
+            "optimize": (ThreadPoolExecutor(max_workers=size, thread_name_prefix="caveman-middleware"), threading.BoundedSemaphore(size)),
+            "retrieve": (ThreadPoolExecutor(max_workers=size, thread_name_prefix="caveman-retrieve"), threading.BoundedSemaphore(size)),
+            "receipt": (ThreadPoolExecutor(max_workers=1, thread_name_prefix="caveman-receipts"), threading.BoundedSemaphore(16)),
+        }
+
+    def _after_fork(self):
+        self._init_workers()  # inherited workers are dead in the child; their executors would never run a job
 
     @classmethod
     def from_sync(cls, runtime: MiddlewareRuntime):
@@ -40,15 +49,24 @@ class AsyncMiddlewareRuntime:
         Closing this view does not close the caller-owned synchronous runtime.
         """
         instance = cls.__new__(cls)
-        instance._runtime, instance._owns_runtime = runtime, False
+        instance._runtime, instance._owns_runtime, instance._closed = runtime, False, False
         instance._init_workers()
+        _live.add(instance)
         return instance
 
+    def as_sync(self) -> MiddlewareRuntime:
+        """The underlying synchronous runtime, for sync code paths that must never receive coroutines."""
+        return self._runtime
+
+    def as_async(self) -> "AsyncMiddlewareRuntime":
+        """Identity; lets adapters call as_async() on whichever runtime they were given."""
+        return self
+
     def _shutdown_now(self):
-        with self._lifecycle_lock:
-            self._closed = True
-            self._executor.shutdown(wait=False, cancel_futures=True)
-            self._receipt_executor.shutdown(wait=False, cancel_futures=True)
+        # No cancel_futures: a cancelled job would raise CancelledError into its caller. It runs, sees closed, bypasses.
+        self._closed = True
+        for executor, _ in self._pools.values():
+            executor.shutdown(wait=False)
 
     @property
     def mode(self):
@@ -58,30 +76,42 @@ class AsyncMiddlewareRuntime:
     def endpoint(self):
         return self._runtime.endpoint
 
+    @property
+    def strict(self):
+        return self._runtime.strict
+
+    def _optimize_s(self) -> float:
+        return self._runtime._deadlines()[0] / 1000
+
+    def _retrieve_s(self) -> float:
+        return self._runtime._deadlines()[1] / 1000
+
     async def ready(self):
-        return await self._submit(self._runtime.ready)
+        return await self._submit(self._optimize_s(), "optimize", self._runtime.ready)
 
     async def preflight(self):
         """Nonthrowing discovery; caller cancellation still propagates."""
-        if self.mode == "off":
+        if self.mode == "off" and not self._runtime._config_error:
             return _preflight_report(self.mode, "disabled")
         try:
-            return await asyncio.wait_for(self._submit(self._runtime.preflight), self._runtime.deadline_ms / 1000)
-        except TimeoutError:
-            return _preflight_report(self.mode, "deadline")
+            return await self._submit(self._optimize_s(), "optimize", self._runtime.preflight)
         except Exception as error:
             return _preflight_report(self.mode, error.code if isinstance(error, MiddlewareError) else "runtime_unavailable")
 
     def recovery(self, scope: Scope):
+        normalized = normalize_scope(scope)
+        if normalized is None:
+            return self._runtime._no_scope()
+
         async def execute(args=None, **kwargs):
-            return await self.retrieve(scope, **(args or kwargs))
-        return self._runtime._new_binding(scope, execute)
+            return await self.retrieve(normalized, **_retrieve_args(args, kwargs))
+        return self._runtime._new_binding(normalized, execute)
 
     def owns_binding(self, binding, scope):
         return self._runtime.owns_binding(binding, scope)
 
-    def decline(self, reason):
-        return self._runtime.decline(reason)
+    def decline(self, reason, adapter=None):
+        return self._runtime.decline(reason, adapter)
 
     @property
     def last_report(self):
@@ -91,20 +121,24 @@ class AsyncMiddlewareRuntime:
         return self._runtime.report(optimization, **context)
 
     async def optimize(self, **options):
-        # The deadline begins before the executor queue. Cancelling this await
-        # propagates to the host; it never falls back into a fresh model call.
-        options["_deadline_at"] = time.monotonic() + self._runtime.deadline_ms / 1000
+        # The deadline begins before the executor queue and bounds the whole await, so a stuck or
+        # dead worker can never hold the host call. Cancelling this await propagates to the host.
+        started = time.monotonic()
+        budget = self._optimize_s()
+        options["_deadline_at"] = started + budget
         try:
-            return await self._submit(self._runtime.optimize, **options)
+            return await self._submit(budget, "optimize", self._runtime.optimize, **options)
         except MiddlewareError as error:
-            return self._runtime._bypass(error.code)
+            if self.strict and not getattr(error, "local", False):
+                raise  # the sync runtime already applied its strict policy
+            return self._runtime._bypass(error.code, adapter=getattr(options.get("adapter"), "id", None), started=started)
 
     async def retrieve(self, scope, **args):
-        return await self._submit(self._runtime.retrieve, scope, **args)
+        return await self._submit(self._retrieve_s(), "retrieve", self._runtime.retrieve, scope, **args)
 
     async def observe(self, receipt):
         try:
-            await self._submit_to(self._receipt_executor, self._receipt_slots, self._runtime.observe, receipt)
+            await self._submit(self._optimize_s(), "receipt", self._runtime.observe, receipt)
         except MiddlewareError:
             pass
 
@@ -112,14 +146,15 @@ class AsyncMiddlewareRuntime:
         return self._runtime.observe_background(receipt)
 
     async def delete_session(self, scope):
-        return await self._submit(self._runtime.delete_session, scope)
+        return await self._submit(self._retrieve_s(), "retrieve", self._runtime.delete_session, scope)
 
     async def aclose(self):
+        # Never joins the workers: each in-flight await ends at its own deadline and queued jobs finish with a
+        # `closed` bypass instead of CancelledError. A view of a caller-owned runtime cannot abort that runtime's
+        # transport, so a join could wait on a stuck custom transport indefinitely.
         self._shutdown_now()
         if self._owns_runtime:
             self._runtime.close()
-        await asyncio.to_thread(self._executor.shutdown, wait=True, cancel_futures=True)
-        await asyncio.to_thread(self._receipt_executor.shutdown, wait=True, cancel_futures=True)
 
     async def __aenter__(self):
         return self
@@ -127,27 +162,41 @@ class AsyncMiddlewareRuntime:
     async def __aexit__(self, *_):
         await self.aclose()
 
-    async def _submit(self, function, *args, **kwargs):
-        return await self._submit_to(self._executor, self._slots, function, *args, **kwargs)
-
-    async def _submit_to(self, executor, slots, function, *args, **kwargs):
+    def _run(self, function, *args, **kwargs):
         if self._closed:
-            raise MiddlewareError("closed")
+            raise _local("closed")
+        return function(*args, **kwargs)
+
+    async def _submit(self, timeout: float, pool: str, function, *args, **kwargs):
+        if self._closed:
+            raise _local("closed")
+        executor, slots = self._pools[pool]
         if not slots.acquire(blocking=False):
-            raise MiddlewareError("capacity")
+            raise _local("capacity")
         context = contextvars.copy_context()
+        context.run(_sink_loop.set, asyncio.get_running_loop())  # a coroutine sink called in the worker runs on this loop
         try:
-            # Re-checked under the lock: the fast check above cannot rule out
-            # a shutdown landing between it and the submit call below. Both
-            # pools shut down under the same lock, so this covers receipts too.
-            with self._lifecycle_lock:
-                if self._closed:
-                    raise MiddlewareError("closed")
-                future = executor.submit(context.run, functools.partial(function, *args, **kwargs))
+            future = executor.submit(context.run, functools.partial(self._run, function, *args, **kwargs))
+        except RuntimeError:  # shut down between the closed check and submit
+            slots.release()
+            raise _local("closed") from None
         except BaseException:
             slots.release()
             raise
         # Release only when the underlying worker actually terminates. Releasing
         # on coroutine cancellation would allow unlimited queued/running work.
         future.add_done_callback(lambda _: slots.release())
-        return await asyncio.wrap_future(future)
+        try:
+            return await asyncio.wait_for(asyncio.wrap_future(future), timeout)
+        except TimeoutError:
+            raise _local("deadline") from None
+
+
+def ensure_sync(runtime):
+    """Sync view of either runtime type, so sync code paths never receive coroutines. Other objects pass through."""
+    return runtime.as_sync() if isinstance(runtime, (MiddlewareRuntime, AsyncMiddlewareRuntime)) else runtime
+
+
+def ensure_async(runtime):
+    """Async view of either runtime type. Other objects pass through."""
+    return runtime.as_async() if isinstance(runtime, (MiddlewareRuntime, AsyncMiddlewareRuntime)) else runtime

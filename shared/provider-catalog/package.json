@@ -1,7 +1,7 @@
 {
   "name": "@caveman/provider-catalog",
   "version": "1.0.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "build": "go test ../platform/catalog -run TestCurrentCatalogRowsAreFreshAndStructurallyValid -count=1",

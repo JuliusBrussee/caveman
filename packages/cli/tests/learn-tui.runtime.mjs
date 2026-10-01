@@ -66,7 +66,7 @@ fi
     },
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /no Claude Code or Codex sessions found/);
+  assert.match(result.stdout, /no Claude Code, Codex, Gemini CLI, opencode or aider sessions found/);
   assert.doesNotMatch(readFileSync(argsFile, "utf8"), /--plain/);
   assert.match(readFileSync(argsFile, "utf8"), /--since\n7d/);
 });
@@ -139,7 +139,7 @@ exit 99
     },
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /3 sessions scanned/);
+  assert.match(result.stdout, /3 sessions read/);
   const args = readFileSync(argsFile, "utf8");
   assert.match(args, /--write-report-token/);
   assert.doesNotMatch(args, /report\n--json/);

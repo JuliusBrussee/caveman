@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://caveman.so/schemas/cache-guard.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/cache-guard.schema.json",
   "title": "Caveman CacheGuard Inspection",
   "type": "object",
   "additionalProperties": false,

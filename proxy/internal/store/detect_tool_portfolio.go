@@ -244,10 +244,10 @@ func toolPortfolioSink(tracker toolPortfolioTracker, spend *LearnSpend) []Sink {
 	}
 	return []Sink{{
 		SinkID: "tool_output_portfolio",
-		Title:  fmt.Sprintf("Tool output is %s tokens; %s is the heaviest call shape", humanTokens(total), top),
+		Title:  fmt.Sprintf("Tool results added up to %s tokens; %s is the biggest kind", humanTokens(total), top),
 		Class:  classBehavioral, Basis: learnBasis, Framing: framingHistorical,
 		TokensObserved: total,
 		Evidence:       evidence,
-		Suggestion:     "These call shapes dominate what re-enters context. Narrower reads and quieter commands cut them at the source; the wrap compresses them in place. Both are worth measuring against this list before changing anything.",
+		Suggestion:     "These kinds of tool calls put the most back into the conversation. Reading less and using quieter commands cuts them at the source. Caveman's compression shrinks them on the way. Measure against this list before you change anything.",
 	}}
 }

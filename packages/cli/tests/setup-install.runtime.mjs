@@ -2,18 +2,15 @@ import test from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { binaryBody, releaseManifest, signedReleaseCli } from "./_binary-release.mjs";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const cli = join(root, "dist", "index.js");
-const release = readFileSync(join(root, "BINARY_RELEASE"), "utf8").trim();
-const fixture = join(root, "tests", "fixtures", "binary-release");
-const checksums = readFileSync(join(fixture, "checksums.txt"), "utf8");
-const signature = readFileSync(join(fixture, "checksums.txt.keysig"), "utf8");
-const binaryBody = "#!/bin/sh\nexit 0\n";
+const { cli, release, sign } = signedReleaseCli();
+const checksums = releaseManifest(release);
+const signature = sign(checksums);
 
 function runCli(argv, env, prefix = []) {
   return new Promise((resolve, reject) => {
@@ -27,17 +24,24 @@ function runCli(argv, env, prefix = []) {
   });
 }
 
-async function releaseServer(mode = "valid") {
+// Same digest, signature over other bytes.
+function badSignature() {
+  const bundle = JSON.parse(signature);
+  bundle.messageSignature.signature = JSON.parse(sign("other")).messageSignature.signature;
+  return JSON.stringify(bundle);
+}
+
+async function releaseServer(mode = "valid", manifest = checksums) {
   let requests = 0;
   const server = createServer((request, response) => {
     requests++;
     const path = request.url ?? "";
     if (path === `/${release}/checksums.txt`) {
-      response.end(checksums);
+      response.end(manifest);
       return;
     }
     if (path === `/${release}/checksums.txt.keysig`) {
-      response.end(mode === "bad-signature" ? signature.replace("MEYCIQ", "MEUCIQ") : signature);
+      response.end(mode === "bad-signature" ? badSignature() : sign(manifest));
       return;
     }
     if (path.startsWith(`/${release}/`)) {
@@ -111,6 +115,37 @@ test("setup --install rejects a bad manifest signature before writing binaries",
   assert.notEqual(out.code, 0);
   assert.match(out.stderr, /signature check failed for checksums\.txt — refusing to install; partial download deleted/);
   assert.deepEqual(partials(home), []);
+});
+
+test("setup --install refuses a validly signed manifest for another release", async () => {
+  for (const [label, manifest] of [["older release", releaseManifest("bin-v1.9.9")], ["unnamed", releaseManifest(null)]]) {
+    const home = mkdtempSync(join(tmpdir(), "cave-setup-release-"));
+    const server = await releaseServer("valid", manifest);
+    const out = await runCli(["setup", "--install"], setupEnv(home, server.base));
+    await server.close();
+    assert.notEqual(out.code, 0, label);
+    assert.match(out.stderr, new RegExp(`signature check failed for checksums\\.txt \\(manifest is not signed for release ${release}\\)`), label);
+    assert.deepEqual(readdirSync(join(home, "bin")), [], label);
+  }
+});
+
+test("signed manifest must name the pinned release from bin-v2.0.0 on", async () => {
+  const { parseSignedChecksums } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js")).href);
+  const licenses = `${"b".repeat(64)}  LICENSE\n${"c".repeat(64)}  NOTICE\n`;
+  const named = releaseManifest("bin-v2.0.0") + licenses;
+  const unnamed = releaseManifest(null) + licenses;
+  // Matching name passes, appended license entries included.
+  assert.equal(parseSignedChecksums(named, "bin-v2.0.0").get("NOTICE"), "c".repeat(64));
+  // A manifest signed for another release is refused, older or newer.
+  assert.throws(() => parseSignedChecksums(named, "bin-v2.1.0"), /not signed for release bin-v2\.1\.0/);
+  assert.throws(() => parseSignedChecksums(releaseManifest("bin-v2.1.0"), "bin-v2.0.0"), /not signed for release/);
+  // No name at all: refused for bin-v2.0.0 and later (prereleases of it too)...
+  for (const pin of ["bin-v2.0.0", "bin-v2.0.0-rc.1", "bin-v2.0.1", "bin-v3.0.0"]) {
+    assert.throws(() => parseSignedChecksums(unnamed, pin), /not signed for release/, pin);
+  }
+  // ...accepted for the releases signed before the name existed.
+  assert.equal(parseSignedChecksums(unnamed, "bin-v1.1.8").size, 38);
+  assert.throws(() => parseSignedChecksums(named, "bin-v1.1.8"), /not signed for release/);
 });
 
 test("setup --install deletes a checksum-mismatched partial", async () => {

@@ -63,7 +63,9 @@ func claudeConfigDirOverride() string {
 }
 
 // Agent roots resolve local transcript/config dirs and stay env-overridable so
-// tests never read or write a user's real agent data.
+// tests never read or write a user's real agent data. After the CAVEMAN_*
+// test overrides come the agents' own relocation variables: CLAUDE_CONFIG_DIR
+// moves Claude Code's whole config dir, CODEX_HOME moves Codex's.
 func claudeRoot() string {
 	if r := os.Getenv("CAVEMAN_CLAUDE_ROOT"); r != "" {
 		return r
@@ -80,6 +82,9 @@ func claudeRoot() string {
 
 func codexRoot() string {
 	if r := os.Getenv("CAVEMAN_CODEX_ROOT"); r != "" {
+		return r
+	}
+	if r := os.Getenv("CODEX_HOME"); r != "" {
 		return r
 	}
 	home, err := os.UserHomeDir()

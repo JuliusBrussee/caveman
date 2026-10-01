@@ -106,7 +106,7 @@ func claudeMDSectionSink(snap *ConfigSnapshot, scope string, sessions []sessionT
 	}
 	return Sink{
 		SinkID: "claude_md_sections:" + scope,
-		Title:  "CLAUDE.md sections had no distinctive-line echo in the scanned session window",
+		Title:  "Some CLAUDE.md sections never showed up in your recent sessions",
 		Class:  classReducible, Basis: learnBasis, Framing: framingForward,
 		TokensPerTurn: int64(tokensPerTurn),
 		Evidence: map[string]any{
@@ -117,7 +117,7 @@ func claudeMDSectionSink(snap *ConfigSnapshot, scope string, sessions []sessionT
 			"session_text_cap": maxSectionSessions,
 			"session_byte_cap": maxSectionTextBytes,
 		},
-		Suggestion: "Consider these sections as consent-gated trim candidates. Distinctive-line echo sees only visible transcript text, not CLAUDE.md system-prompt injection; zero echo is window-bounded and not proof a section is unneeded.",
+		Suggestion: "These sections may be safe to trim, with your yes for each one. Caveman looked for their distinctive lines in what the agent wrote. It can't see the model reading CLAUDE.md itself, so not seeing a section in these sessions doesn't prove it is unneeded.",
 	}, true
 }
 

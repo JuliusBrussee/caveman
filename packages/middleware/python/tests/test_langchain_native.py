@@ -58,8 +58,8 @@ def test_agent_projection_and_native_recovery_preserve_history(langchain, protoc
     assert [receipt["event_kind"] for receipt in protocol_runtime.receipts] == ["dispatch_intent", "completed"]
 
 
-def test_model_projects_each_call_with_native_config(langchain, protocol_runtime):
-    from caveman_cloud.middleware import Scope
+def test_model_only_entry_resolves_scope_per_call_and_never_compresses(langchain, protocol_runtime, caplog):
+    """D-C7: with_caveman_model has no recovery executor, so compress mode is recovery_unbound, warned once."""
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
     scopes = []
@@ -72,9 +72,10 @@ def test_model_projects_each_call_with_native_config(langchain, protocol_runtime
     assert model.invoke(original, {"configurable": {"thread_id": "one"}}).content == "done"
     assert asyncio.run(model.ainvoke(original, {"configurable": {"thread_id": "two"}})).content == "done"
     assert scopes == ["one", "two"]
-    assert [request["scope"]["session_id"] for request in protocol_runtime.requests] == ["one", "two"]
+    assert protocol_runtime.requests == []
     assert original[-1].content.startswith("[INFO]")
-    assert [event.status for event in protocol_runtime.reports] == ["applied", "applied"]
+    assert [(event.status, event.reason) for event in protocol_runtime.reports] == [("skipped", "recovery_unbound")] * 2
+    assert "adapter=langchain reason=recovery_unbound" in caplog.text
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -133,7 +134,7 @@ def test_native_stream_completion(langchain, protocol_runtime, asynchronous):
     else:
         answer = "".join(value.content for value in model.stream(messages()))
     assert answer == "done"
-    assert len(protocol_runtime.requests) == 1
+    assert protocol_runtime.requests == []  # model-only: recovery_unbound, no optimize I/O
     assert [receipt["event_kind"] for receipt in protocol_runtime.receipts] == ["dispatch_intent", "completed"]
 
 
@@ -174,11 +175,12 @@ def test_async_agent_cancellation_propagates(langchain, protocol_runtime):
     assert [receipt["event_kind"] for receipt in protocol_runtime.receipts] == ["dispatch_intent", "cancelled"]
 
 
-def test_sync_document_entry_rejects_async_runtime(langchain, protocol_runtime):
+def test_sync_document_entry_accepts_async_runtime(langchain, protocol_runtime):
+    """D5: an async runtime on the sync path is coerced to its sync view instead of raising."""
     from caveman_cloud.middleware import Scope
     from langchain_core.documents import Document
 
     compressor = langchain.CavemanDocumentCompressor(runtime=protocol_runtime.as_async(), scope=Scope("tests", "documents"))
-    with pytest.raises(TypeError, match="Synchronous document compression requires MiddlewareRuntime"):
-        compressor.compress_documents([Document(page_content="original text")], "query")
-    assert protocol_runtime.requests == []
+    documents = [Document(page_content="original text")]
+    assert compressor.compress_documents(documents, "query") == documents
+    assert [(event.status, event.reason) for event in protocol_runtime.reports] == [("skipped", "recovery_unbound")]

@@ -47,11 +47,11 @@ func TestReconcileFindsTheUnattributedShare(t *testing.T) {
 	if report.CoveragePct < 88 || report.CoveragePct > 89 {
 		t.Fatalf("coverage = %v, want ~88.4", report.CoveragePct)
 	}
-	if !strings.Contains(strings.Join(report.Caveats, " "), "traffic learn cannot see") {
+	if !strings.Contains(strings.Join(report.Caveats, " "), "use learn cannot see") {
 		t.Fatalf("the gap must be explained: %v", report.Caveats)
 	}
 	if strings.Contains(strings.Join(report.Caveats, " "), "verified") &&
-		!strings.Contains(strings.Join(report.Caveats, " "), "does not promote") {
+		!strings.Contains(strings.Join(report.Caveats, " "), "does not make any number verified") {
 		t.Fatalf("reconciliation must not read as a promotion to verified: %v", report.Caveats)
 	}
 }
@@ -125,8 +125,7 @@ func TestReconcileFlagsMismatchedWindows(t *testing.T) {
 	if report.CoveragePct != 100 {
 		t.Fatalf("coverage must cap at 100, got %v", report.CoveragePct)
 	}
-	if !strings.Contains(strings.Join(report.Caveats, " "), "windows probably differ") &&
-		!strings.Contains(strings.Join(report.Caveats, " "), "window and the scan window probably differ") {
+	if !strings.Contains(strings.Join(report.Caveats, " "), "covers different dates than the scan") {
 		t.Fatalf("a window mismatch must be called out: %v", report.Caveats)
 	}
 }

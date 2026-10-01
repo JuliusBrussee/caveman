@@ -1,8 +1,8 @@
 {
   "name": "caveman-browse",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Caveman browser driver — compressed accessibility snapshots, uid actions, CCR recovery. Local-only, inferred-only.",
-  "license": "BSL-1.1",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "caveman-browse": "bin/caveman-browse.mjs"

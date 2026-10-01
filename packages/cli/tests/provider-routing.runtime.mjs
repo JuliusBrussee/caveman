@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { verifiedProviderRoute, publishedUpstreamsOf, unforwardedProviderHeaders, publishedForwardHeadersOf } from '../dist/provider-routing.js';
+import { trimTrailingSlashes, verifiedProviderRoute, publishedUpstreamsOf, unforwardedProviderHeaders, publishedForwardHeadersOf } from '../dist/provider-routing.js';
 const gw = 'http://127.0.0.1:8787/w/host';
 const native = { openai: 'https://api.openai.com', anthropic: 'https://api.anthropic.com', gemini: 'https://generativelanguage.googleapis.com' };
 test('provider-specific header forwarding requires a contract for the exact mount', () => {
@@ -60,4 +60,13 @@ test('empty query/fragment and whitespace cannot change SDK request-path joining
   for (const tail of ['?', '#', ' ', '\n', '\t']) {
     assert.equal(verifiedProviderRoute(gw, 'openai-responses', 'openai', 'https://api.openai.com/v1' + tail, { provider_upstreams: native }), undefined);
   }
+});
+test('gateway trailing-slash trim is linear on a long run of "/"', () => {
+  assert.equal(trimTrailingSlashes('a//'), 'a');
+  assert.equal(trimTrailingSlashes('///'), '');
+  assert.equal(trimTrailingSlashes('a/b'), 'a/b');
+  assert.equal(verifiedProviderRoute(gw + '/', 'anthropic-messages', 'selected', 'https://api.anthropic.com', { provider_upstreams: native }), gw + '/anthropic');
+  const started = Date.now();
+  verifiedProviderRoute(gw + '/'.repeat(100_000) + 'x', 'anthropic-messages', 'selected', 'https://api.anthropic.com', { provider_upstreams: native });
+  assert.ok(Date.now() - started < 1000, `route took ${Date.now() - started}ms`);
 });

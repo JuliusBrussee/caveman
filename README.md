@@ -18,7 +18,7 @@
 <a href="https://pypi.org/project/caveman-middleware/"><img src="https://img.shields.io/pypi/v/caveman-middleware?style=flat-square&color=F0A63C&label=middleware%20pypi" alt="middleware on PyPI"></a>
 <a href="./INSTALL.md"><img src="https://img.shields.io/badge/works_with-30%2B_agents-orange?style=flat-square" alt="30+ agents"></a>
 <a href="#wrap-any-agent"><img src="https://img.shields.io/badge/wraps-10_agents_natively-blue?style=flat-square" alt="10 native wrap profiles"></a>
-<a href="#-license"><img src="https://img.shields.io/badge/license-MIT_%2B_BSL-green?style=flat-square" alt="License"></a>
+<a href="#-license"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="License"></a>
 <a href="https://skills.sh/JuliusBrussee/caveman"><img src="https://skills.sh/b/JuliusBrussee/caveman" alt="skills.sh"></a>
 
 🏆 **#1 on GitHub Trending · July 2026** &nbsp;·&nbsp; 🥇 **#1 Repository of the Day on [Trendshift](https://trendshift.io/repositories/25391) · April 2026**
@@ -95,7 +95,7 @@ Caveman come in two sizes. Start small.
 
 ### Small rock: the skill
 
-A rule file that makes your agent answer in caveman. MIT, free forever, works in [30+ agents](./INSTALL.md) (Claude Code, Codex, Gemini, Cursor, Windsurf, Cline, Copilot, more). One command:
+A rule file that makes your agent answer in caveman. Apache-2.0, free forever, works in [30+ agents](./INSTALL.md) (Claude Code, Codex, Gemini, Cursor, Windsurf, Cline, Copilot, more). One command:
 
 ```bash
 npx skills add JuliusBrussee/caveman -g
@@ -105,7 +105,7 @@ Type `/caveman` if your agent doesn't wake up on its own. That the whole install
 
 ### Big rock: the proxy
 
-Runs on your machine, between your agent and the AI provider, and shrinks what the agent *reads* before every call. MIT CLI, BSL-1.1 runtime:
+Runs on your machine, between your agent and the AI provider, and shrinks what the agent *reads* before every call. Apache-2.0, CLI and runtime both:
 
 ```bash
 npm install -g @caveman-ai/cli && caveman setup --install
@@ -114,11 +114,11 @@ caveman claude        # or codex · gemini · aider · kilo · qwen · opencode 
 
 ### Your own app: the middleware
 
-Building an agent in code instead of running one in a terminal? Same shrinking, one wrapper around the call you already make. MIT client, alpha today:
+Building an agent in code instead of running one in a terminal? Same shrinking, one wrapper around the call you already make. Apache-2.0 client, stable 1.0:
 
 ```bash
 npm install @caveman-ai/middleware @caveman-ai/sdk        # TypeScript, plus your framework (ai, openai, …)
-pip install 'caveman-middleware[langchain]' caveman-sdk   # Python 3.13+, swap the extra for your framework
+pip install 'caveman-middleware[langchain]' caveman-sdk   # Python 3.11+, swap the extra for your framework
 ```
 
 Six lines of code and a local runtime. [Full walkthrough below](#-caveman-in-your-own-app).
@@ -133,13 +133,13 @@ They stack. Most people start with the small rock and graduate.
 The full installer wires up Claude Code hooks and the statusline badge, finds every supported agent on your machine, and skips agents you no have. Safe to re-run. Needs Node.js 22.13+.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.7.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.0.0/install.sh | bash
 ```
 
 Windows, PowerShell 5.1+:
 
 ```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.7.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.0.0/install.ps1 | iex
 ```
 
 Just one agent:
@@ -183,8 +183,8 @@ The full 30+ agent matrix, dry runs, flags, and verification live in [INSTALL.md
 
 **Big rock.** The proxy, right after `npm install -g @caveman-ai/cli`:
 
-1. **Find out where your tokens go.** `caveman learn` reads months of agent history already on your disk, locally, and ranks your token sinks worst-first with a one-line fix behind each. Do this before anything else. It is the most useful five minutes in this README.
-2. **Let it fix them.** `caveman learn implement` hands each fix to Claude Code or Codex one diff at a time, applied only on your yes, and reverts anything that did not lower tokens per turn.
+1. **Find out where your tokens go.** `caveman learn` reads months of agent history already on your disk, locally, and ranks the places your tokens go, biggest first, with a one-line fix behind each. Do this before anything else. It is the most useful five minutes in this README. After step 3 it keeps watching by itself and speaks up only when something new appears.
+2. **Let it fix them.** `caveman learn implement` hands each fix to Claude Code or Codex one diff at a time, applied only on your yes, and undoes anything that did not make each message smaller.
 3. **Wrap your agent.** `caveman claude` (or `codex`, `gemini`, `aider`, `opencode`, `pi`, …) puts the proxy in front of it. Logs, test output, JSON, and diffs get shrunk before the provider sees them. Originals stay on disk, and the agent can pull any of them back.
 4. **Shrink the noisy stuff.** `caveman shrink -- pnpm test` compresses command output. `caveman browse <url>` gives the agent a compressed view of a web page instead of a 15,000-token accessibility dump.
 5. **Prove it on your own work.** `caveman trial -- claude` runs a real session with and without caveman, then `caveman trial report` shows the difference. That A/B outranks every number on this page. A trial needs its own proxy, so if you already did step 3 it will tell you to run `caveman disable claude` first, and `caveman enable claude` after. Caveman rather say "cannot measure this" than hand you a report full of zeros.
@@ -256,7 +256,7 @@ Many tool in valley promise small token. They work at different layers, so first
 
 | Tool | What it shrinks | Get the original back? | Phones home |
 |---|---|---|---|
-| **Caveman** | What the agent **says** (skill) and what it **reads**: tool output, logs, JSON, diffs, test output, web pages (proxy) | **Always.** Byte-exact original in local SQLite, one recovery handle | CLI: anonymous counts on by default, `caveman telemetry off`. Skill and hooks: never |
+| **Caveman** | What the agent **says** (skill) and what it **reads**: tool output, logs, JSON, diffs, test output, web pages (proxy) | **Always.** Byte-exact original in local SQLite, one recovery handle | CLI and its agent hooks: usage stats with a random install ID and your IP, on by default, `caveman telemetry off`. Skill alone: never |
 | **[RTK](https://github.com/rtk-ai/rtk)** | Shell command output only: `ls`, `cat`, `grep`, `git`, test runners. `Read` and `Grep` tool calls bypass it | When a command fails or gets cut short, or opt-in for successful runs | Off by default, opt-in |
 | **[Headroom](https://github.com/headroomlabs-ai/headroom)** | Tool output, logs, files, and history, through a local proxy | Yes, reversible cache | On by default, `HEADROOM_BEACON=off` |
 | **[context-mode](https://github.com/mksglu/context-mode)** | Tool output, run in a sandbox so raw data never enters context | Matching sections from a searchable index, not the whole thing back | Never |
@@ -411,7 +411,9 @@ Any MCP host gets the same powers through five tools: `caveman_compress`, `cavem
 
 ### Where your tokens go
 
-Months of your agent history already sit on your disk. `caveman learn` reads it, locally, read-only, no account, and ranks your token sinks worst-first with a one-line fix behind each.
+Months of your agent history already sit on your disk. `caveman learn` reads it, locally, read-only, no account, and ranks the places your tokens go, biggest first, with a one-line fix behind each. Then it keep watching, so you not have to remember.
+
+Your agent re-sends its instructions (`CLAUDE.md`, skills, hooks) and the whole conversation with every message it sends the model. So a few hundred extra tokens in a setup file get paid again on every single message. That is what learn hunts.
 
 ```bash
 caveman learn             # Claude Code + Codex + Gemini CLI + opencode; aider via CAVEMAN_AIDER_ROOT
@@ -419,10 +421,34 @@ caveman learn implement   # hand the fixes to Claude Code or Codex, one diff at 
 ```
 
 <p align="center">
-  <img src="docs/assets/learn-report.png" alt="Caveman Learn report: TLDR summary and savings cards on the left; ranked token sinks with an expanded fix and a session context depth histogram on the right" width="900">
+  <img src="docs/assets/learn-report.png" alt="Caveman Learn report: a short summary and savings cards on the left; the biggest places tokens go, with one fix opened, and a chart of how full sessions get on the right" width="900">
 </p>
 
-`implement` re-measures after every change and reverts anything that didn't lower tokens per turn. Caveman never makes your agent dumber to make it cheaper.
+**It run itself.** Once caveman is on your agent (`caveman claude`, `caveman codex`, …), learn re-scans quietly after a session ends. Low priority, at most every 6 hours, never makes the session wait. When something new and heavy shows up, your next session opens with one line, one time:
+
+```
+caveman learn: new finding — Project CLAUDE.md is 423 lines (~9,699 tokens), loaded with every message (~9.7k tokens in every message, estimate). Run `caveman learn` to review.
+```
+
+Nothing new, nothing said. `caveman learn autopilot off` if you rather run it by hand.
+
+**It check your memory files.** Claude Code loads only the first 200 lines (or 25KB) of `MEMORY.md`. Everything past that, your agent never sees, and nothing tells you. Learn tells you. It also catches `@imports` pointing at files that are gone, the same rule pasted into two files your agent loads (you pay for it twice, every message), file paths in `CLAUDE.md` that no longer exist, and memory notes the index forgot to link.
+
+**It say if you getting better.** Week over week, from your own sessions, first run included. Real output from the maintainer's machine, bad news left in:
+
+```
+last 6 weeks  tokens per session   ▄▂▃▁█┊▄  +185% · worse
+              peak context used    ▁▁▄▅█┊▁  +4 points · worse
+              overloaded messages  ▁▂▃▇█┊▅  +2.9 points · worse
+              week of Sep 21 (928 sessions) vs the 4 weeks before
+              a trend is not a saving, and it does not show the cause
+```
+
+"Overloaded" means the conversation filled more than half of what the model can hold at once. Past that, answers tend to get worse (a common rule of thumb). Each week counts its middle session, not the average, so one giant session can't skew it. Weeks under 5 sessions say "not enough data" instead of guessing. The `┊` marks the week still running: shown, never compared.
+
+**It prove the fix, or undo it.** `implement` re-measures after every change and undoes anything that didn't make each message smaller. Some fixes can't be re-counted, like a new skill that only pays off when it gets used. For those, `caveman learn experiment` runs it on for a stretch and off for a stretch over your own sessions, and gives no verdict before 5 sessions each way. Caveman never makes your agent dumber to make it cheaper.
+
+Every verb, every check, every number it will and won't show: [docs/technical/learn.md](./docs/technical/learn.md).
 
 ### More verbs
 
@@ -451,6 +477,8 @@ Convert only fires when pages beat the text. Any failure leaves the skill byte-i
 ### Wrap any agent
 
 `caveman <agent>` turns the proxy on for good and launches the agent. `caveman wrap <agent>` runs one session and leaves nothing behind. It never edits your config files.
+
+In managed mode the Claude Code wrap also sends the repository (github.com owner/name) and current branch name as `x-cave-tags`, so Cloud can join a session's spend to the change it shipped. Branch names can carry a person's or customer's name. Not OK? Set `CAVEMAN_WORK_TAGS=0` and no tags go. Or set your own `x-cave-tags` in `ANTHROPIC_CUSTOM_HEADERS`: the wrap sends yours exactly as written and adds nothing.
 
 | Agent                | Vendor           | How it's wrapped                                             |
 | -------------------- | ---------------- | ------------------------------------------------------------ |
@@ -524,7 +552,7 @@ CAVEMAN_MODE=compress caveman start     # binds 127.0.0.1:8787; plain `caveman s
 | **TypeScript** `@caveman-ai/middleware` | Vercel AI SDK · OpenAI · Anthropic · Google GenAI · LangChain · Strands · Mastra · MCP |
 | **Python** `caveman-middleware` | OpenAI · Anthropic · Google GenAI · LangChain + LangGraph · LiteLLM · Strands · Agno · CrewAI · PydanticAI · AutoGen · LlamaIndex · FastAPI · MCP |
 
-Straight talk on the alpha: a runtime left in record mode measures and changes nothing, whichever mode the client asks for, so set both. Decision reports say what was replaced and why, and carry no token counters; provider usage is the only savings number that counts. Runtime unreachable means your original request goes through untouched, unless you opt into strict mode.
+Straight talk: a runtime left in record mode measures and changes nothing, whichever mode the client asks for, so set both. Decision reports say what was replaced and why, and carry no token counters; provider usage is the only savings number that counts. Runtime unreachable means your original request goes through untouched, unless you opt into strict mode.
 
 Docs: [middleware overview](https://docs.caveman.so/docs/sdk/middleware) · [Vercel AI SDK guide](https://docs.caveman.so/docs/sdk/middleware/vercel-ai-sdk) · [Python guide](https://docs.caveman.so/docs/sdk/middleware/python) · [every framework and version](https://docs.caveman.so/docs/sdk/middleware/frameworks) · [deploy beside your app](https://docs.caveman.so/docs/sdk/middleware/deployment) · package READMEs for [TypeScript](./packages/middleware/typescript/README.md) and [Python](./packages/middleware/python/README.md).
 
@@ -564,11 +592,11 @@ Frozen ones still install and work. Their best ideas moved in here.
 
 ## 🔒 Privacy, and a small favor
 
-Your agent still talks to the provider you chose. The skill and hooks run entirely on your machine, and nothing here needs an account.
+Your agent still talks to the provider you chose. The skill runs entirely on your machine, and nothing here needs an account.
 
-The `caveman` CLI does send anonymous usage stats by default, and here's the honest why: caveman is free, one person maintains it, and those stats are how I find out which commands people actually use and which optimizations run in real workflows. That's what keeps this thing free and pointed in the right direction. Fair trade, we think.
+The `caveman` CLI does send usage stats by default, and here's the honest why: caveman is free, one person maintains it, and those stats are how I find out which commands people actually use and which optimizations run in real workflows. That's what keeps this thing free and pointed in the right direction. Fair trade, we think.
 
-What it sends: which commands ran, plus token counts through and cut. What it never sends: your prompts, your code, your file paths, or anything that could identify you. It tells you all this the first time you run it.
+What it sends: which commands ran, when your agent starts a session (the CLI's agent hooks send that one), token counts through and cut, a random install ID, your OS and CLI version, whether you're signed in, how you installed it, your timezone and language, and the IP address the stats come from. IPs get wiped after 90 days, everything else after 13 months. What it never sends: your prompts, your code, or your file paths. It tells you all this the first time you run it.
 
 Not into it? One command and it's off forever, no hard feelings:
 
@@ -576,17 +604,17 @@ Not into it? One command and it's off forever, no hard feelings:
 caveman telemetry off      # or set DO_NOT_TRACK=1
 ```
 
+Want what it already sent gone too? `telemetry off` prints your install ID one last time. Send it to us and we delete it all. How: [SECURITY.md](./SECURITY.md#delete-sent-telemetry).
+
 Exact network, telemetry, and storage boundaries: [SECURITY.md](./SECURITY.md).
 
 ---
 
 ## 📜 License
 
-Split license. Skill and adoption surfaces are [MIT](./LICENSE). Engine-linked runtime is BSL-1.1 source-available, not OSI Open Source before Change Date.
+One license: [Apache-2.0](./LICENSE), whole repo, from Caveman 3.0.0 on. Skill, CLI, client SDKs, middleware, contracts, provider catalog, extension, and the full runtime: Engine, Proxy, Browse, MCP server, `shrink`, cavemem, shared Go platform. Read it, fork it, ship it, host it. Free like mammoth on open plain.
 
-**MIT:** the skill, Agent SDK and initializer, the CLI, both client SDKs, contracts, provider catalog, extension shell, and the thin cavemem clients. Free like mammoth on open plain.
-
-**BSL-1.1:** Engine, Proxy, Cache Engine, rewriter, Browse, MCP server, `shrink`, cavemem Go core, and shared Go platform. New Engine-linked runtime modules default to BSL-1.1. Read it, fork it, self-host it for your own first-party traffic free, production included. Each version converts to **Apache-2.0** on the earlier of `2030-06-21` or four years after it ships. Hosting it for third parties needs a commercial license.
+Releases before 3.0.0 keep the license they shipped with. Details in [LICENSING.md](./LICENSING.md).
 
 `engine/pixel` embeds [pxpipe](https://github.com/teamchong/pxpipe) (MIT) plus glyph atlases derived from Spleen 5×8 (BSD-2-Clause) and GNU Unifont (dual OFL-1.1 / GPLv2-with-font-exception); its `NOTICE` travels with that source.
 
@@ -622,5 +650,5 @@ Caveman save you token, save you money. Star cost zero. Fair trade. ⭐
 <a href="./CLAUDE.md">Maintainer guide</a> ·
 <a href="https://github.com/JuliusBrussee/caveman/issues">Issues</a>
 <br>
-MIT skill · BSL-1.1 engine. Few token. No lie.
+One license, Apache-2.0. Few token. No lie.
 </sub>

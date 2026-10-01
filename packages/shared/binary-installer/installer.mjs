@@ -197,6 +197,11 @@ export async function ensureBinary({ name, envVar }) {
   if (!signedDigest(checksums, signature)) {
     throw new Error("signature check failed for checksums.txt — refusing to install");
   }
+  // The signed manifest names its release through a RELEASE entry, so an older
+  // validly signed manifest served from a tampered release page is refused.
+  if (expectedDigest(checksums, "RELEASE") !== createHash("sha256").update(`${BINARY_RELEASE}\n`).digest("hex")) {
+    throw new Error(`signed checksum manifest is not for ${BINARY_RELEASE} — refusing to install`);
+  }
   const expected = expectedDigest(checksums, artifact);
   mkdirSync(binDir, { recursive: true });
   // Per-process part path, and NO pre-unlink. A fixed `${target}.part` plus a
