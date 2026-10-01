@@ -227,7 +227,10 @@ class TestAsyncMiddleware(unittest.IsolatedAsyncioTestCase):
         # observe() carries receipts, which are never on the provider's critical
         # path. Sharing optimize()'s executor lets a receipt burst hold every
         # worker until an unrelated optimize() has already spent its deadline.
-        runtime = AsyncMiddlewareRuntime(deadline_ms=200)
+        # max_concurrency must match the receipt burst below: with the default
+        # 16 workers, 4 blocked receipts could not starve the optimize pool even
+        # if they shared it, and the test would pass without proving anything.
+        runtime = AsyncMiddlewareRuntime(deadline_ms=200, max_concurrency=4)
         release = threading.Event()
         self.addCleanup(release.set)
         entered = []
@@ -238,15 +241,25 @@ class TestAsyncMiddleware(unittest.IsolatedAsyncioTestCase):
                 return {}
             return copy.deepcopy(FIXTURE["capabilities"])
         runtime._runtime._http = blocked_receipts
-        receipts = [asyncio.create_task(runtime.observe({"n": i})) for i in range(4)]
+        # The receipt needs a normalizable scope or _receipt() drops it before
+        # _deliver(), observe() no-ops, and nothing ever reaches the seam above.
+        scope = FIXTURE["request"]["scope"]
+        receipts = [asyncio.create_task(runtime.observe({"scope": scope, "n": i})) for i in range(4)]
+        # Bounded on purpose: if observe() stops routing through the receipt
+        # pool, this test must fail in seconds, not hang until the job timeout.
+        deadline = time.monotonic() + 5
         while not entered:
+            self.assertLess(time.monotonic(), deadline, "no receipt reached the HTTP seam")
             await asyncio.sleep(0.001)
         # Every receipt has had its chance to occupy a shared worker before
         # optimize() is submitted; CPU scheduling cannot turn this into a race.
         await asyncio.sleep(0.05)
         result = await runtime.optimize(**inputs())
-        self.assertNotEqual(result.reason, "deadline",
-                            "a receipt burst must not spend an unrelated optimize()'s deadline")
+        # Both starvation shapes must be excluded, not just the slow one: a
+        # shared pool shows up as `capacity` when every slot is already held and
+        # as `deadline` when the burst outlasts optimize()'s own window.
+        self.assertNotIn(result.reason, ("capacity", "deadline"),
+                         "a receipt burst must not starve an unrelated optimize()")
         release.set()
         await asyncio.gather(*receipts)
         await runtime.aclose()
@@ -256,14 +269,14 @@ class TestAsyncMiddleware(unittest.IsolatedAsyncioTestCase):
         # must run on a plain OS thread, not an awaited coroutine.
         runtime = AsyncMiddlewareRuntime()
         entered_submit, release_submit = threading.Event(), threading.Event()
-        real_submit = runtime._executor.submit
+        real_submit = runtime._pools["optimize"][0].submit
 
         def guarded_submit(*args, **kwargs):
             entered_submit.set()
             release_submit.wait(2)
             return real_submit(*args, **kwargs)
 
-        runtime._executor.submit = guarded_submit
+        runtime._pools["optimize"][0].submit = guarded_submit
 
         def trigger_shutdown_mid_submit():
             entered_submit.wait(2)
@@ -278,7 +291,7 @@ class TestAsyncMiddleware(unittest.IsolatedAsyncioTestCase):
         watcher = threading.Thread(target=trigger_shutdown_mid_submit)
         watcher.start()
         try:
-            result = await runtime._submit(lambda: "ok")
+            result = await runtime._submit(1.0, "optimize", lambda: "ok")
         except MiddlewareError as error:
             self.assertEqual(error.code, "closed")
         else:
@@ -289,45 +302,44 @@ class TestAsyncMiddleware(unittest.IsolatedAsyncioTestCase):
         # Forces _shutdown_now to complete strictly between _submit's two
         # checks, deterministically, by closing from inside the slot acquire.
         runtime = AsyncMiddlewareRuntime()
-        real_acquire = runtime._slots.acquire
+        real_acquire = runtime._pools["optimize"][1].acquire
 
         def acquire_then_close_first(*args, **kwargs):
             runtime._shutdown_now()
             return real_acquire(*args, **kwargs)
 
-        runtime._slots.acquire = acquire_then_close_first
+        runtime._pools["optimize"][1].acquire = acquire_then_close_first
         with self.assertRaisesRegex(MiddlewareError, "closed"):
-            await runtime._submit(lambda: "ok")
+            await runtime._submit(1.0, "optimize", lambda: "ok")
         # The failed submit must not have leaked the slot it acquired.
-        reacquired = [runtime._slots.acquire(blocking=False) for _ in range(16)]
+        reacquired = [runtime._pools["optimize"][1].acquire(blocking=False) for _ in range(16)]
         self.assertTrue(all(reacquired))
         for _ in range(16):
-            runtime._slots.release()
+            runtime._pools["optimize"][1].release()
 
     async def test_receipt_pool_shares_the_same_shutdown_guard(self):
         # observe() runs on its own executor/semaphore pair, so the guard has
-        # to live in _submit_to rather than on the optimize() pool alone.
+        # to live in _submit rather than on the optimize() pool alone.
         runtime = AsyncMiddlewareRuntime()
-        real_acquire = runtime._receipt_slots.acquire
+        real_acquire = runtime._pools["receipt"][1].acquire
 
         def acquire_then_close_first(*args, **kwargs):
             runtime._shutdown_now()
             return real_acquire(*args, **kwargs)
 
-        runtime._receipt_slots.acquire = acquire_then_close_first
+        runtime._pools["receipt"][1].acquire = acquire_then_close_first
         with self.assertRaisesRegex(MiddlewareError, "closed"):
-            await runtime._submit_to(
-                runtime._receipt_executor, runtime._receipt_slots, lambda: "ok")
-        reacquired = [runtime._receipt_slots.acquire(blocking=False) for _ in range(16)]
+            await runtime._submit(1.0, "receipt", lambda: "ok")
+        reacquired = [runtime._pools["receipt"][1].acquire(blocking=False) for _ in range(16)]
         self.assertTrue(all(reacquired))
         for _ in range(16):
-            runtime._receipt_slots.release()
+            runtime._pools["receipt"][1].release()
 
     async def test_aclose_closes_the_receipt_pool_under_the_same_guard(self):
-        # aclose() wrote _closed directly, outside the lock _submit_to rechecks
+        # aclose() wrote _closed directly, outside the closed check _submit rechecks
         # under, so it opened the identical window _shutdown_now() closes.
         runtime = AsyncMiddlewareRuntime()
-        real_acquire = runtime._slots.acquire
+        real_acquire = runtime._pools["optimize"][1].acquire
         closed = []
 
         def acquire_then_aclose(*args, **kwargs):
@@ -339,6 +351,6 @@ class TestAsyncMiddleware(unittest.IsolatedAsyncioTestCase):
                 done.wait(3)
             return real_acquire(*args, **kwargs)
 
-        runtime._slots.acquire = acquire_then_aclose
+        runtime._pools["optimize"][1].acquire = acquire_then_aclose
         with self.assertRaisesRegex(MiddlewareError, "closed"):
-            await runtime._submit(lambda: "ok")
+            await runtime._submit(1.0, "optimize", lambda: "ok")
