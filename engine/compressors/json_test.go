@@ -265,3 +265,28 @@ func TestJSONElisionKeepsRealAnomalyInCyclingArray(t *testing.T) {
 		t.Errorf("array should still collapse: %d -> %d bytes", len(in), len(out))
 	}
 }
+
+// A common value on a real numeric field is still an outlier. 60 timeouts at
+// exactly 503 / 30000ms share one value, so a rarity rule must not apply to
+// them; only element length tolerates frequent levels.
+func TestJSONElisionKeepsFrequentNumericOutlierCluster(t *testing.T) {
+	rows := make([]map[string]any, 0, 500)
+	bad := 0
+	for i := 0; i < 500; i++ {
+		code, lat := 200, 40+i%5
+		if (i*37)%100 < 12 {
+			code, lat = 503, 30000
+			bad++
+		}
+		rows = append(rows, map[string]any{"request_id": fmt.Sprintf("req-%04d", i), "route": "/api/checkout", "status_code": code, "latency_ms": lat})
+	}
+	in, _ := json.Marshal(map[string]any{"requests": rows})
+
+	out, ok := compressors.NewJSON().Compress(in)
+	if !ok {
+		t.Fatal("expected compression")
+	}
+	if got := bytes.Count(out, []byte(`"status_code":503`)); got != bad {
+		t.Errorf("timeout cluster partly elided: %d of %d 503 rows visible", got, bad)
+	}
+}
