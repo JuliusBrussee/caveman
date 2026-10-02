@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { OpenAICompletionsCompat, OpenAIResponsesCompat } from "@earendil-works/pi-ai";
+import type { AnthropicMessagesCompat, OpenAICompletionsCompat, OpenAIResponsesCompat } from "@earendil-works/pi-ai";
 
 type SelectedModel = NonNullable<ExtensionContext["model"]>;
 
@@ -37,9 +37,15 @@ export function unpreservedAttributionHeaders(
 // Freeze only URL-dependent defaults before replacing the endpoint. Pi's
 // public compat overrides take precedence over detection (nullish values do
 // not override defaults). Provider/id-based behavior keeps its original input.
-// Oracle: Pi 0.84.2's pi-ai 0.84.2, api/openai-completions.ts detectCompat/getCompat and
-// api/openai-responses.ts detectSessionAffinityFormat. Real SDK payload tests
-// cover this boundary so dependency updates cannot silently change semantics.
+// Oracle: Pi 1.0.0's pi-ai 1.0.0, api/openai-completions.ts detectCompat/getCompat,
+// api/openai-responses.ts detectSessionAffinityFormat and
+// api/anthropic-messages.ts getAnthropicCompat. Real SDK payload tests cover
+// this boundary so dependency updates cannot silently change semantics.
+// 1.0.0 changes carried here: OpenRouter hosts send session-affinity headers by
+// default on Chat and Anthropic; Chat strict mode is a constant false (so it is
+// no longer frozen). Its ChatGPT sign-in heuristic (openai + api.openai.com +
+// non-`sk-` key) is URL-derived too, but that credential is OAuth and the
+// router already keeps OAuth models direct.
 export function compatForRoutedModel(model: SelectedModel): SelectedModel["compat"] {
   const provider = model.provider;
   const url = model.baseUrl;
@@ -47,6 +53,15 @@ export function compatForRoutedModel(model: SelectedModel): SelectedModel["compa
   if (model.api === "openai-responses") {
     const explicit = model.compat as OpenAIResponsesCompat | undefined;
     return { ...explicit, sessionAffinityFormat: explicit?.sessionAffinityFormat ?? (openRouter ? "openrouter" : "openai") };
+  }
+  if (model.api === "anthropic-messages") {
+    if (!openRouter) return model.compat;
+    const explicit = model.compat as AnthropicMessagesCompat | undefined;
+    return {
+      ...explicit,
+      sendSessionAffinityHeaders: explicit?.sendSessionAffinityHeaders ?? true,
+      sessionAffinityFormat: explicit?.sessionAffinityFormat ?? "openrouter",
+    };
   }
   if (model.api !== "openai-completions") return model.compat;
 
@@ -73,7 +88,7 @@ export function compatForRoutedModel(model: SelectedModel): SelectedModel["compa
     maxTokensField: explicit?.maxTokensField ?? (maxTokens ? "max_tokens" : "max_completion_tokens"),
     requiresReasoningContentOnAssistantMessages: explicit?.requiresReasoningContentOnAssistantMessages ?? deepseek,
     thinkingFormat: explicit?.thinkingFormat ?? (deepseek ? "deepseek" : zai ? "zai" : together ? "together" : antLing ? "ant-ling" : openRouter ? "openrouter" : "openai"),
-    supportsStrictMode: explicit?.supportsStrictMode ?? !(moonshot || together || cloudflareGateway || nvidia),
+    sendSessionAffinityHeaders: explicit?.sendSessionAffinityHeaders ?? openRouter,
     sessionAffinityFormat: explicit?.sessionAffinityFormat ?? (openRouter ? "openrouter" : "openai"),
     supportsLongCacheRetention: explicit?.supportsLongCacheRetention ?? !(together || cloudflareWorkers || cloudflareGateway || nvidia || antLing),
   };

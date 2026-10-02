@@ -13,12 +13,16 @@ const hostRequire = createRequire(import.meta.resolve("@earendil-works/pi-coding
 const sdkManifest = hostRequire.resolve.paths("@earendil-works/pi-ai")
   .map(root => join(root, "@earendil-works/pi-ai/package.json")).find(existsSync);
 assert.ok(sdkManifest, "Pi's SDK dependency must be installed");
-assert.equal(JSON.parse(readFileSync(sdkManifest, "utf8")).version, "0.84.2", "Review compat detection when updating the pinned Pi SDK");
+assert.equal(JSON.parse(readFileSync(sdkManifest, "utf8")).version, "1.0.0", "Review compat detection when updating the pinned Pi SDK");
 const sdkStream = async api => (await import(pathToFileURL(join(dirname(sdkManifest), "dist/api", `${api}.js`)))).stream;
 const GATEWAY = "http://127.0.0.1:8787";
 const STREAMS = Object.fromEntries(await Promise.all(["openai-completions", "openai-responses", "anthropic-messages"]
   .map(async api => [api, await sdkStream(api)])));
-const OPTIONS = { apiKey: "fake-local-only", maxTokens: 2048, reasoningEffort: "low", thinkingEnabled: true,
+// `sk-` prefix: pi-ai 1.0.0 reads an `openai` model at api.openai.com with any other
+// key as a Sign in with ChatGPT token and drops max_output_tokens, temperature and
+// the prompt-cache fields. That credential is OAuth, which the router never routes,
+// so the fixture must look like the API key it stands for.
+const OPTIONS = { apiKey: "sk-fake-local-only", maxTokens: 2048, reasoningEffort: "low", thinkingEnabled: true,
   thinkingBudgetTokens: 1024, sessionId: "fixture-session", maxRetries: 0, env: {} };
 const OPENROUTER_HEADERS = { "HTTP-Referer": "https://pi.dev", "X-OpenRouter-Title": "pi", "X-OpenRouter-Categories": "cli-agent" };
 
@@ -139,6 +143,8 @@ test("real Pi Responses and Anthropic requests retain body and affinity settings
     fixture("https://api.openai.com/v1", { api: "openai-responses", provider: "openai" }),
     fixture("https://openrouter.ai/api/v1", { api: "openai-responses", headers: OPENROUTER_HEADERS, compat: { sessionAffinityFormat: "openai-nosession", supportsDeveloperRole: false } }),
     fixture("https://api.anthropic.com", { api: "anthropic-messages", provider: "anthropic" }),
+    // pi-ai 1.0.0: OpenRouter hosts send session-affinity headers by default on Anthropic too.
+    fixture("https://openrouter.ai/api", { api: "anthropic-messages", headers: OPENROUTER_HEADERS }),
     fixture("https://anthropic-relay.example", { api: "anthropic-messages", compat: {
       supportsEagerToolInputStreaming: false, supportsLongCacheRetention: false, sendSessionAffinityHeaders: true,
     } }),

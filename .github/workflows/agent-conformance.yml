@@ -79,7 +79,7 @@ jobs:
           - id: opencode
             install: npm install -g opencode-ai@1.18.31
           - id: pi
-            install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
+            install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.0
           - id: qwen
             install: npm install -g @qwen-code/qwen-code@0.24.0
     steps:

@@ -498,7 +498,7 @@ In managed mode the Claude Code wrap also sends the repository (github.com owner
 
 <br>
 
-Tested against real sessions on **Hermes v0.18.0**, **OpenClaw 2026.6.11**, **Pi 0.84.2**, **Kilo Code 7.5.6** (the CLI, not the editor extension), and **Qwen Code 0.22.3**. Persistent shortcuts are journaled and reversible with `caveman disable <agent>`.
+Tested against real sessions on **Hermes v0.18.0**, **OpenClaw 2026.6.11**, **Pi 1.0.0**, **Kilo Code 7.5.6** (the CLI, not the editor extension), and **Qwen Code 0.22.3**. Persistent shortcuts are journaled and reversible with `caveman disable <agent>`.
 
 OpenClaw, for the record, is a lobster. Lobster claw still sharp. Lobster mouth now small.
 
