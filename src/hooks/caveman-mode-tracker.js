@@ -109,9 +109,16 @@ const flagPath = path.join(claudeDir, '.caveman-active');
 const prevPath = path.join(claudeDir, '.caveman-active.prev');
 
 const REINFORCEMENT_RULES = {
-  lite: 'No filler, hedging, or pleasantries. Keep articles and full sentences OK, but stay tight.',
-  full: 'Drop articles (a/an/the), filler, pleasantries, and hedging. Prefer fragments over full natural-prose sentences. No preamble or recap.',
-  ultra: 'Drop articles, filler, pleasantries, hedging, and excess conjunctions. Prefer fragments over full natural-prose sentences. State each fact once. No preamble or recap.',
+  lite: 'Answer only what was asked: direct answer plus the one or two points'
+    + ' that matter, one short paragraph. No filler, hedging, or pleasantries.'
+    + ' Keep articles and full sentences OK, but stay tight.',
+  full: 'Answer only what was asked: answer plus key point, a few short lines.'
+    + ' Drop articles (a/an/the), filler, pleasantries, and hedging. Prefer'
+    + ' fragments over full natural-prose sentences. No preamble or recap.',
+  ultra: 'Answer only what was asked: core fact, one line when the question is'
+    + ' simple. Drop articles, filler, pleasantries, hedging, and excess'
+    + ' conjunctions. Prefer fragments over full natural-prose sentences.'
+    + ' State each fact once. No preamble or recap.',
   'wenyan-lite': 'Use wenyan-lite: semi-classical terse register. Drop filler and hedging. Keep meaning exact.',
   'wenyan-full': 'Use wenyan-full: maximum classical terseness. Drop filler and hedging. Keep meaning exact.',
   'wenyan-ultra': 'Use wenyan-ultra: extreme classical terseness. Drop filler and hedging. Keep meaning exact.',
@@ -121,6 +128,9 @@ function reinforcementForMode(mode) {
   const canonical = mode === 'wenyan' ? 'wenyan-full' : mode;
   const rules = REINFORCEMENT_RULES[canonical] || REINFORCEMENT_RULES.full;
   return 'CAVEMAN MODE ACTIVE (' + mode + '). Enforce this reply: ' + rules +
+    ' No unrequested background, lists, examples, walkthroughs, or follow-up' +
+    ' offers; give code, steps, or warnings when the task needs them.' +
+    ' Auto-clarity exceptions (security warnings, irreversible actions, multi-step order) stay normal prose.' +
     ' Technical terms, code, commands, paths, and errors stay exact.';
 }
 

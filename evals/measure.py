@@ -11,7 +11,7 @@ approximation of Claude's BPE. The ratios are still meaningful for
 comparing skills against each other, but the absolute numbers should be
 read as "approximate output-length reduction", not "exact Claude tokens".
 
-Run: uv run --with tiktoken python evals/measure.py
+Run: uv run --with tiktoken python evals/measure.py [snapshot.json]
 """
 
 from __future__ import annotations
@@ -58,6 +58,10 @@ def fmt_pct(x: float) -> str:
 
 
 def main() -> None:
+    # Optional path: reminder_run.py writes its own snapshot.
+    global SNAPSHOT
+    if len(sys.argv) > 1:
+        SNAPSHOT = Path(sys.argv[1])
     if not SNAPSHOT.exists():
         print(f"No snapshot at {SNAPSHOT}. Run `python evals/llm_run.py` first.")
         return
