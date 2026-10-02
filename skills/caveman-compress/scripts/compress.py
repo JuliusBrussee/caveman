@@ -362,6 +362,11 @@ from .validate import validate
 
 MAX_RETRIES = 2
 
+# Output ceiling for one SDK call: the max output of the default model
+# (claude-sonnet-4-5). A body that needs more is refused in call_claude(),
+# never written back truncated.
+MAX_OUTPUT_TOKENS = 64000
+
 
 def _is_smaller_than_body(candidate_body: str, body: str) -> bool:
     """True when `candidate_body` actually compresses `body`.
@@ -416,11 +421,23 @@ def call_claude(prompt: str) -> str:
             import anthropic
 
             client = anthropic.Anthropic(api_key=api_key, timeout=CLAUDE_CALL_TIMEOUT_SECONDS)
-            msg = client.messages.create(
+            # Streaming, not create(): a large compression needs far more than
+            # the old 8192-token cap, and tokens that arrive as they are
+            # generated keep a long call from tripping the request timeout.
+            with client.messages.stream(
                 model=os.environ.get("CAVEMAN_MODEL", "claude-sonnet-4-5"),
-                max_tokens=8192,
+                max_tokens=MAX_OUTPUT_TOKENS,
                 messages=[{"role": "user", "content": prompt}],
-            )
+            ) as stream:
+                msg = stream.get_final_message()
+            # At the cap the tail was never generated. validate() and the fix
+            # prompt cannot recover it, so fail now instead of paying for
+            # retries that end by restoring the original anyway.
+            if msg.stop_reason == "max_tokens":
+                raise RuntimeError(
+                    f"Claude output hit the {MAX_OUTPUT_TOKENS}-token cap, so the result is incomplete. "
+                    "Split the file into smaller parts and compress each one."
+                )
             # Tool-heavy models can put a tool_use or thinking block first; take
             # the first text block instead of trusting content[0].
             text = next((block.text for block in msg.content if getattr(block, "type", None) == "text"), "")
