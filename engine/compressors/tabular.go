@@ -5,7 +5,6 @@ import (
 	"encoding/csv"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -299,8 +298,13 @@ func keepNumericExtrema(rows [][]string, start int, keep []bool) {
 		minIndex, maxIndex := -1, -1
 		minValue, maxValue := 0.0, 0.0
 		for row := start; row < len(rows); row++ {
-			value, err := strconv.ParseFloat(strings.TrimSpace(rows[row][column]), 64)
-			if err != nil {
+			// invariantNumber, not ParseFloat: a NaN parses cleanly and then
+			// compares false against everything, so the first one seen would
+			// latch both minIndex and maxIndex and no later row could ever
+			// displace it — the column's real extrema would stop being kept,
+			// which is this function's whole job.
+			value, isNumber := invariantNumber(strings.TrimSpace(rows[row][column]))
+			if !isNumber {
 				continue
 			}
 			numeric++

@@ -377,8 +377,29 @@ func anomalyIndices(arr []any, docs []string, zThresh float64) map[int]bool {
 		if scale <= 0 {
 			continue
 		}
+		// Element length only: a length shared by more than a tenth of the series
+		// is a level the data regularly takes, not an outlier. A categorical field
+		// cycling through a few values moves element length in lockstep, and two
+		// adjacent levels collapse the MAD so the third reads as z≫2 — which
+		// force-kept a third of every such array. Real numeric leaves keep the
+		// plain z rule: a common value there (a cluster of 503s at a 30000ms
+		// timeout) is exactly what a reader needs to see.
+		// A level also has to be roughly as common as the most common one: cycling
+		// levels are near-equal in size, a minority state (a fixed-width
+		// rollback_required row in 12% of the array) is not, and stays flagged.
+		var counts map[float64]int
+		rare := len(series)
+		if p == "__len__" {
+			counts = make(map[float64]int, len(series))
+			mode := 0
+			for _, v := range series {
+				counts[v]++
+				mode = max(mode, counts[v])
+			}
+			rare = max(len(series)/10, mode/2, 2)
+		}
 		for j, v := range series {
-			if math.Abs(0.6745*(v-med)/scale) >= zThresh {
+			if counts[v] <= rare && math.Abs(0.6745*(v-med)/scale) >= zThresh {
 				flags[idxs[j]] = true
 			}
 		}
