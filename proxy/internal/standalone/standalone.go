@@ -430,9 +430,10 @@ func (c *engineCompressor) RetrieveOriginal(handle, query string) ([]byte, error
 // a configuration file that may have changed after this listener started.
 func ProviderUpstreams(cfg config.Config) map[string]string {
 	return map[string]string{
-		"anthropic": cfg.BaseURL("anthropic", "https://api.anthropic.com"),
-		"openai":    cfg.BaseURL("openai", "https://api.openai.com"),
-		"gemini":    cfg.BaseURL("gemini", "https://generativelanguage.googleapis.com"),
+		"anthropic":    cfg.BaseURL("anthropic", "https://api.anthropic.com"),
+		"openai":       cfg.BaseURL("openai", "https://api.openai.com"),
+		"gemini":       cfg.BaseURL("gemini", "https://generativelanguage.googleapis.com"),
+		"openai-codex": strings.TrimSuffix(gateway.DefaultChatGPTUpstream, "/codex"),
 	}
 }
 

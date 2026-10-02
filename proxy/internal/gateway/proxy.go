@@ -83,9 +83,27 @@ func connectionSetupFailure(err error) bool {
 	return opErr.Op == "dial" || opErr.Op == "proxyconnect"
 }
 
+func isPiChatGPTSubscription(r *http.Request, verifiedAgentPath bool) bool {
+	return verifiedAgentPath &&
+		r.Method == http.MethodPost &&
+		r.URL.Path == "/codex/responses" &&
+		r.URL.RawPath == "" &&
+		r.URL.RawQuery == "" &&
+		r.Header.Get("x-cave-agent") == "pi" &&
+		strings.TrimSpace(r.Header.Get("ChatGPT-Account-ID")) != "" &&
+		strings.HasPrefix(strings.TrimSpace(r.Header.Get("Authorization")), "Bearer ")
+}
+
 func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
+	piChatGPTPath := r.URL.Path == "/w/pi/codex/responses" && r.URL.RawPath == "" && r.URL.RawQuery == ""
 	if !normalizeAgentPath(r) {
 		httpx.Error(w, r, http.StatusNotFound, "cave_route_not_found", "Proxy path is not recognized.")
+		return
+	}
+	if isPiChatGPTSubscription(r, piChatGPTPath) {
+		r.URL.Path = "/chatgpt/responses"
+		r.URL.RawPath = ""
+		s.chatgpt(w, r)
 		return
 	}
 	start := time.Now()
@@ -544,7 +562,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	usageScanner := adapter.NewUsageScanner(resp.Header)
-	counter, copyErrCode := s.streamResponse(w, r, io.TeeReader(resp.Body, usageScanner), meta.Stream, requestID)
+	counter, copyErrCode := s.streamResponse(w, r, io.TeeReader(resp.Body, usageScanner), meta.Stream, requestID, nil)
 	ttfb := time.Since(start).Milliseconds()
 	if !counter.firstByteAt.IsZero() {
 		ttfb = counter.firstByteAt.Sub(start).Milliseconds()
@@ -1658,12 +1676,23 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // returned code is "" for a clean copy; anything else means the client holds a
 // partial body and the caller must panic(http.ErrAbortHandler) AFTER recording
 // the row, so HTTP framing breaks instead of looking like a clean EOF.
-func (s *Server) streamResponse(w http.ResponseWriter, r *http.Request, src io.Reader, stream bool, requestID string) (*countingWriter, string) {
+type streamCompletionTracker interface {
+	markClientWrite()
+	terminalDelivered() bool
+}
+
+func (s *Server) streamResponse(w http.ResponseWriter, r *http.Request, src io.Reader, stream bool, requestID string, completion streamCompletionTracker) (*countingWriter, string) {
 	if stream {
 		_ = http.NewResponseController(w).Flush()
 	}
 	counter := &countingWriter{w: w}
-	if _, err := copyFlush(counter, src); err != nil {
+	if _, err := copyFlush(counter, src, completion); err != nil {
+		if r.Context().Err() != nil && completion != nil && completion.terminalDelivered() {
+			// Pi closes the stream as soon as it has consumed response.completed.
+			// That cancellation is safe to accept only after the terminal frame
+			// was fully written to the client; every earlier interruption fails closed.
+			return counter, ""
+		}
 		if s.logger != nil {
 			s.logger.Warn("client stream copy failed", "error", redact.Error(err), "request_id", requestID)
 		}
@@ -1675,7 +1704,7 @@ func (s *Server) streamResponse(w http.ResponseWriter, r *http.Request, src io.R
 	return counter, ""
 }
 
-func copyFlush(dst *countingWriter, src io.Reader) (int64, error) {
+func copyFlush(dst *countingWriter, src io.Reader, completion streamCompletionTracker) (int64, error) {
 	buf := make([]byte, 32*1024)
 	var written int64
 	for {
@@ -1691,6 +1720,9 @@ func copyFlush(dst *countingWriter, src io.Reader) (int64, error) {
 			}
 			if nr != nw {
 				return written, io.ErrShortWrite
+			}
+			if completion != nil {
+				completion.markClientWrite()
 			}
 		}
 		if er != nil {

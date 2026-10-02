@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -38,7 +39,9 @@ const chatGPTCaptureLimit = 4 << 20
 //   - only /responses request content may be transformed, only through the
 //     account+MCP+prefix-stability gate. Any parse/store/shrink failure forwards
 //     original bytes; a transformed 4xx retries once with original bytes.
-//   - response bodies remain byte-identical and SSE streams stay unbuffered.
+//   - response bodies remain byte-exact, except a complete terminal SSE event
+//     gets its missing blank-line delimiter so Pi can dispatch it at EOF.
+//     A stream without a terminal Responses event fails closed.
 //   - metering is opportunistic and honest: parseable usage records token
 //     counts with TotalCostUSD 0 — subscription traffic has no per-token
 //     price, and pricing it at API rates would be a fake number.
@@ -90,16 +93,36 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 			originalBody = captured
 			_, _ = reqHash.Write(originalBody)
 			_, _ = reqCapture.Write(originalBody)
-			transform.Body = originalBody
-			headersForInspect := r.Header.Clone()
-			headersForInspect.Set("x-cave-route-path", suffix)
-			meta, inspectErr := adapter.InspectRequest(r.Context(), bytes.NewReader(originalBody), headersForInspect)
-			if inspectErr == nil {
-				meta.Endpoint = suffix
-				meta.SessionID = evidence.SessionID
-				if s.cacheEpochAllows(r, adapter, meta, originalBody, evidence.SessionID) {
-					comp = s.compressRequest(adapter, originalBody, meta, &transform, requestID, lockedRoutes)
+
+			logicalBody, requestEncoding, decodable := decodeChatGPTRequestBody(originalBody, r.Header.Get("Content-Encoding"))
+			if decodable {
+				transform.Body = logicalBody
+				headersForInspect := r.Header.Clone()
+				headersForInspect.Del("Content-Encoding")
+				headersForInspect.Set("x-cave-route-path", suffix)
+				meta, inspectErr := adapter.InspectRequest(r.Context(), bytes.NewReader(logicalBody), headersForInspect)
+				if inspectErr == nil {
+					meta.Endpoint = suffix
+					meta.SessionID = evidence.SessionID
+					if s.cacheEpochAllows(r, adapter, meta, logicalBody, evidence.SessionID) {
+						comp = s.compressRequest(adapter, logicalBody, meta, &transform, requestID, lockedRoutes)
+					}
 				}
+				if comp != nil {
+					if encoded, ok := encodeChatGPTRequestBody(transform.Body, requestEncoding); ok {
+						transform.Body = encoded
+					} else {
+						transform = providers.TransformResult{Body: originalBody, OptimizerIDs: []string{}}
+						comp = nil
+					}
+				} else {
+					// No logical transform means no reason to perturb Pi's
+					// original zstd frame.
+					transform.Body = originalBody
+				}
+			} else {
+				// Unknown or malformed encodings remain exact pass-through.
+				transform.Body = originalBody
 			}
 			reqBody = bytes.NewReader(transform.Body)
 		} else {
@@ -221,11 +244,22 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-caveman-tokens-after", strconv.Itoa(comp.after))
 		w.Header().Set("x-caveman-token-count-basis", "estimated_engine_o200k")
 	}
-	w.WriteHeader(resp.StatusCode)
-
 	respCapture := &cappedBuffer{limit: chatGPTCaptureLimit}
-	stream := streamingResponse(resp.Header)
-	counter, errCode := s.streamResponse(w, r, io.TeeReader(resp.Body, respCapture), stream, requestID)
+	piResponsesRoute := rc.AgentSlug == "pi" && r.Method == http.MethodPost && suffix == "/responses"
+	requestBodyComplete := chatGPTRequestHashComplete(requestBodyFullyRead, r.ContentLength, reqCapture, requestBodyTracker)
+	piResponsesStream := piResponsesRoute && chatGPTRequestWantsStream(reqCapture.buf.Bytes(), r.Header.Get("Content-Encoding"), reqCapture.truncated, requestBodyComplete)
+	stream := streamingResponse(resp.Header) || piResponsesStream
+	var responseBody io.Reader = resp.Body
+	var completionTracker streamCompletionTracker
+	if piResponsesRoute && stream && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusBadRequest && (piResponsesStream || isChatGPTEventStream(resp.Header)) {
+		completionReader := &chatGPTSSECompletionReader{source: responseBody}
+		responseBody = completionReader
+		completionTracker = completionReader
+		// EOF normalization can append a delimiter; upstream's length no longer applies.
+		w.Header().Del("Content-Length")
+	}
+	w.WriteHeader(resp.StatusCode)
+	counter, errCode := s.streamResponse(w, r, io.TeeReader(responseBody, respCapture), stream, requestID, completionTracker)
 	respBytes := counter.n
 
 	// The streaming path forwarded the request without ever holding it whole, so it
@@ -277,15 +311,21 @@ func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, tr
 	var usage providers.UsageObservation
 	// Opportunistic and honest: a truncated capture is never parsed — partial
 	// SSE could yield partial counters, and no number beats a wrong number.
-	if respCapture != nil && !respCapture.truncated {
+	if respCapture != nil && !respCapture.truncated && errCode != "cave_upstream_body_read_failed" && errCode != "cave_client_canceled" {
 		providers.ParseUsageBytes("openai", respCapture.buf.Bytes(), &usage)
 	}
+	var originalLogicalBody []byte
+	if requestHashComplete && reqCapture != nil && !reqCapture.truncated {
+		if decoded, _, ok := decodeChatGPTRequestBody(reqCapture.buf.Bytes(), r.Header.Get("Content-Encoding")); ok {
+			originalLogicalBody = decoded
+		}
+	}
 	model := "unknown"
-	if reqCapture != nil && !reqCapture.truncated {
+	if originalLogicalBody != nil {
 		var body struct {
 			Model string `json:"model"`
 		}
-		if json.Unmarshal(reqCapture.buf.Bytes(), &body) == nil && body.Model != "" {
+		if json.Unmarshal(originalLogicalBody, &body) == nil && body.Model != "" {
 			model = body.Model
 		}
 	}
@@ -351,11 +391,11 @@ func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, tr
 		CompressionTokenCountBasis: compBasis,
 		RecoveryHandle:             compHandle,
 	}
-	var originalBody []byte
 	meta := providers.RequestMetadata{Provider: "chatgpt-subscription", Model: model}
-	if requestHashComplete && reqCapture != nil && !reqCapture.truncated {
-		originalBody = reqCapture.buf.Bytes()
-		if inspected, err := openai.New("").InspectRequest(r.Context(), bytes.NewReader(originalBody), r.Header); err == nil {
+	if originalLogicalBody != nil {
+		headersForInspect := r.Header.Clone()
+		headersForInspect.Del("Content-Encoding")
+		if inspected, err := openai.New("").InspectRequest(r.Context(), bytes.NewReader(originalLogicalBody), headersForInspect); err == nil {
 			meta = inspected
 			meta.Provider = "chatgpt-subscription"
 		}
@@ -363,10 +403,13 @@ func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, tr
 	if s.chatGPTUpstream != DefaultChatGPTUpstream {
 		meta.PricingUnsupportedReason = "custom_subscription_origin"
 	}
+	var acceptedLogicalBody []byte
 	if acceptedBody == nil {
-		acceptedBody = originalBody
+		acceptedLogicalBody = originalLogicalBody
+	} else if decoded, _, ok := decodeChatGPTRequestBody(acceptedBody, r.Header.Get("Content-Encoding")); ok {
+		acceptedLogicalBody = decoded
 	}
-	requestAccounting(&row, meta, usage, originalBody, acceptedBody, false)
+	requestAccounting(&row, meta, usage, originalLogicalBody, acceptedLogicalBody, false)
 	s.sink.Record(row)
 }
 
@@ -393,6 +436,20 @@ func chatGPTRequestHashComplete(fullyRead bool, contentLength int64, capture *ca
 	return tracker != nil && tracker.sawEOF
 }
 
+func chatGPTRequestWantsStream(wire []byte, contentEncoding string, truncated, complete bool) bool {
+	if truncated || !complete {
+		return false
+	}
+	decoded, _, ok := decodeChatGPTRequestBody(wire, contentEncoding)
+	if !ok {
+		return false
+	}
+	var request struct {
+		Stream bool `json:"stream"`
+	}
+	return json.Unmarshal(decoded, &request) == nil && request.Stream
+}
+
 // cappedBuffer retains up to limit bytes and records the true total; past the
 // limit it flags truncation instead of growing (bounded memory, no partial
 // parses downstream).
@@ -401,6 +458,214 @@ type cappedBuffer struct {
 	limit     int
 	total     int
 	truncated bool
+}
+
+const chatGPTSSEEventLimit = 4 << 20
+
+// chatGPTSSECompletionReader keeps streaming response bytes unchanged while
+// confirming that Pi receives a terminal Responses event. Pi's SSE parser only
+// dispatches events terminated by a blank line, so a complete terminal JSON
+// event at EOF gets the missing delimiter. An EOF without a terminal event is a
+// truncated response, even when the HTTP body closed cleanly.
+type chatGPTSSECompletionReader struct {
+	source        io.Reader
+	event         []byte
+	eventOverflow bool
+	eventTypeHint bool
+	terminal      bool
+	delivered     bool
+	eof           bool
+	ending        []byte
+	endingErr     error
+}
+
+func (r *chatGPTSSECompletionReader) markClientWrite() {
+	if r.terminal {
+		r.delivered = true
+	}
+}
+
+func (r *chatGPTSSECompletionReader) terminalDelivered() bool {
+	return r.delivered
+}
+
+func isChatGPTEventStream(header http.Header) bool {
+	mediaType, _, err := mime.ParseMediaType(header.Get("Content-Type"))
+	return err == nil && strings.EqualFold(mediaType, "text/event-stream")
+}
+
+func (r *chatGPTSSECompletionReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if len(r.ending) > 0 {
+		n := copy(p, r.ending)
+		r.ending = r.ending[n:]
+		return n, nil
+	}
+	if r.eof {
+		if r.endingErr != nil {
+			err := r.endingErr
+			r.endingErr = nil
+			return 0, err
+		}
+		return 0, io.EOF
+	}
+
+	n, err := r.source.Read(p)
+	if n > 0 {
+		r.scan(p[:n])
+	}
+	if err == nil {
+		return n, nil
+	}
+	if err != io.EOF {
+		return n, err
+	}
+
+	r.eof = true
+	if !r.terminal {
+		if r.finalEventIsTerminal() {
+			r.terminal = true
+			if len(r.event) > 0 && r.event[len(r.event)-1] == '\n' {
+				r.ending = []byte{'\n'}
+			} else {
+				r.ending = []byte{'\n', '\n'}
+			}
+		} else {
+			r.endingErr = io.ErrUnexpectedEOF
+		}
+	}
+	if n > 0 {
+		return n, nil
+	}
+	if len(r.ending) > 0 || r.endingErr != nil {
+		return r.Read(p)
+	}
+	return 0, io.EOF
+}
+
+func (r *chatGPTSSECompletionReader) scan(p []byte) {
+	for len(p) > 0 {
+		if r.eventOverflow {
+			if len(r.event) > 0 && r.event[len(r.event)-1] == '\n' && p[0] == '\n' {
+				r.finishEvent()
+				p = p[1:]
+				continue
+			}
+			if i := bytes.Index(p, []byte("\n\n")); i >= 0 {
+				r.finishEvent()
+				p = p[i+2:]
+				continue
+			}
+			if len(p) > 0 && p[len(p)-1] == '\n' {
+				r.event = []byte{'\n'}
+			} else {
+				r.event = nil
+			}
+			return
+		}
+
+		if len(r.event) > 0 && r.event[len(r.event)-1] == '\n' && p[0] == '\n' {
+			r.finishEvent()
+			p = p[1:]
+			continue
+		}
+		if i := bytes.Index(p, []byte("\n\n")); i >= 0 {
+			r.appendEvent(p[:i])
+			r.finishEvent()
+			p = p[i+2:]
+			continue
+		}
+		r.appendEvent(p)
+		return
+	}
+}
+
+func (r *chatGPTSSECompletionReader) appendEvent(p []byte) {
+	if len(p) == 0 {
+		return
+	}
+	if len(p) > chatGPTSSEEventLimit-len(r.event) {
+		combined := append(append([]byte(nil), r.event...), p...)
+		r.eventTypeHint = chatGPTSSEPrefixIsTerminal(combined)
+		r.eventOverflow = true
+		if len(combined) > 0 && combined[len(combined)-1] == '\n' {
+			r.event = []byte{'\n'}
+		} else {
+			r.event = nil
+		}
+		return
+	}
+	r.event = append(r.event, p...)
+}
+
+func (r *chatGPTSSECompletionReader) finishEvent() {
+	if r.eventTypeHint || (!r.eventOverflow && chatGPTSSEEventIsTerminal(r.event)) {
+		r.terminal = true
+	}
+	r.event = nil
+	r.eventOverflow = false
+	r.eventTypeHint = false
+}
+
+func (r *chatGPTSSECompletionReader) finalEventIsTerminal() bool {
+	return !r.eventOverflow && chatGPTSSEEventIsTerminal(r.event)
+}
+
+func chatGPTSSEEventIsTerminal(frame []byte) bool {
+	var data []byte
+	for _, line := range bytes.Split(frame, []byte{'\n'}) {
+		line = bytes.TrimSuffix(line, []byte{'\r'})
+		if bytes.HasPrefix(line, []byte("data:")) {
+			if data != nil {
+				data = append(data, '\n')
+			}
+			data = append(data, bytes.TrimSpace(line[len("data:"):])...)
+		}
+	}
+	if len(data) == 0 {
+		return false
+	}
+	var event struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(data, &event) == nil && terminalChatGPTResponseEvent(event.Type)
+}
+
+func chatGPTSSEPrefixIsTerminal(frame []byte) bool {
+	var data []byte
+	for _, line := range bytes.Split(frame, []byte{'\n'}) {
+		line = bytes.TrimSuffix(line, []byte{'\r'})
+		if bytes.HasPrefix(line, []byte("data:")) {
+			data = bytes.TrimSpace(line[len("data:"):])
+			break
+		}
+	}
+	if len(data) == 0 {
+		return false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return false
+	}
+	key, err := decoder.Token()
+	if err != nil || key != "type" {
+		return false
+	}
+	typeToken, err := decoder.Token()
+	typeName, ok := typeToken.(string)
+	return err == nil && ok && terminalChatGPTResponseEvent(typeName)
+}
+
+func terminalChatGPTResponseEvent(eventType string) bool {
+	switch eventType {
+	case "response.completed", "response.incomplete", "response.done", "response.failed", "error":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *cappedBuffer) Write(p []byte) (int, error) {

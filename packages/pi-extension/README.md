@@ -33,7 +33,9 @@ One extension, four jobs:
 - **Honest fallback** — routing activates only after the recovery gate holds
   (proxy alive, recovery contract matched, MCP child initialized). Anything else
   is a visible pass-through: direct provider, one notice, no savings claims.
-  OAuth/subscription-authenticated models are never routed.
+  OAuth/subscription models stay direct unless the running proxy explicitly
+  advertises a verified subscription route. Pi's built-in `openai-codex`
+  ChatGPT Responses provider is supported; other OAuth providers remain direct.
 
 ## Install
 

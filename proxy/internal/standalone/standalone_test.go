@@ -720,6 +720,13 @@ func TestCreds_PassthroughThenBYOK(t *testing.T) {
 	}
 }
 
+func TestProviderUpstreamsPublishesChatGPTSubscriptionProof(t *testing.T) {
+	upstreams := ProviderUpstreams(config.Config{})
+	if got := upstreams["openai-codex"]; got != "https://chatgpt.com/backend-api" {
+		t.Fatalf("openai-codex upstream = %q, want ChatGPT backend base", got)
+	}
+}
+
 func TestBuildAdapters_RegistersNamedCompatBeforeLegacy(t *testing.T) {
 	cfg := config.Config{
 		Compat: map[string]config.CompatConfig{
