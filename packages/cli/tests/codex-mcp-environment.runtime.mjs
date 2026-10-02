@@ -72,3 +72,47 @@ for (const door of ["wrap", "enable", "mcp"]) {
     }
   });
 }
+
+// #1134: the block-boundary scan used the regex LITERAL /^[ \\t]*\[/m. Inside a
+// literal `\\t` is an escaped backslash, so the class is [space, backslash, "t"] —
+// it never matched a tab. A tab-indented table after our own (valid TOML: leading
+// whitespace before a header is allowed) therefore looked like part of the caveman
+// block, which has two consequences on the same shipped path:
+//   * the block never compares equal, so an install that should be idempotent
+//     takes the rewrite path every time, and
+//   * that rewrite splices out blockStart..blockEnd, and blockEnd is now EOF, so
+//     it DELETES the user's following tables from ~/.codex/config.toml.
+test("a tab-indented table after the caveman block survives a re-install", (t) => {
+  const fx = fixture(t);
+  assert.equal(fx.run(["mcp", "install", "codex"]).status, 0);
+
+  // A table the user (or Codex itself) owns, indented with a tab, placed after
+  // ours — installMcpCodexToml always appends its block last.
+  const foreign = '\t[projects."/home/u/app"]\n\ttrust_level = "trusted"\n';
+  writeFileSync(fx.config, readFileSync(fx.config, "utf8") + foreign);
+
+  const again = fx.run(["mcp", "install", "codex"]);
+  assert.equal(again.status, 0, again.stderr);
+  const after = readFileSync(fx.config, "utf8");
+  assert.match(after, /\[projects\."\/home\/u\/app"\]/, "the user's table must not be deleted");
+  assert.match(after, /trust_level = "trusted"/, "its keys must not be deleted either");
+  assert.match(after, /\[mcp_servers\.caveman\]/, "and ours must still be registered");
+});
+
+// The same boundary bug seen from the read side: `caveman doctor` asks whether the
+// registration still matches, and a tab-indented neighbour made it answer "no" for
+// a registration that is present and correct.
+test("a tab-indented neighbour does not make the registration look unregistered", (t) => {
+  const fx = fixture(t);
+  assert.equal(fx.run(["mcp", "install", "codex"]).status, 0);
+  const before = readFileSync(fx.config, "utf8");
+  writeFileSync(fx.config, before + '\t[history]\n\tpersistence = "none"\n');
+  const out = fx.run(["mcp", "install", "codex"]);
+  assert.equal(out.status, 0, out.stderr);
+  // Idempotent: our block is recognized, so nothing about it is rewritten.
+  assert.equal(
+    readFileSync(fx.config, "utf8"),
+    before + '\t[history]\n\tpersistence = "none"\n',
+    "an already-correct registration next to a tab-indented table must be a no-op",
+  );
+});

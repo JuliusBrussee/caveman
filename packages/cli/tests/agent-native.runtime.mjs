@@ -351,3 +351,28 @@ test("experiment CLI rejects lifecycle mutation verbs without HTTP", async () =>
   assert.equal(out.requests.length, 0);
   assert.match(out.stderr, /experiments list\|show <id>\|results <id>/);
 });
+
+// #1134: `setup --agent-native <agent> --remove` is the undo for the bundle that
+// `setup --agent-native <agent>` installs — and for nothing else. A user who
+// reached the same config.toml through `caveman codex` or `caveman enable codex`
+// has no bundle journal, so this path warns and stops. The warning was a dead end:
+// it named a journal the user has never heard of and no command to run instead,
+// which is how "it is also very difficult to uninstall" gets reported as a bug.
+// It must name the verb that actually undoes the install they did.
+for (const agent of ["codex", "claude"]) {
+  test(`setup --agent-native ${agent} --remove points at disable when there is no bundle`, async () => {
+    const isolated = isolatedCliEnv();
+    try {
+      const out = await runCli(["setup", "--agent-native", agent, "--remove"], { env: isolated.env });
+      assert.equal(out.code, 0, out.stderr);
+      assert.match(out.stderr, /no agent-native bundle journal found/, "the accurate part stays");
+      assert.match(
+        out.stderr,
+        new RegExp(`caveman disable ${agent}`),
+        "it must name the command that removes an enable/wrap install",
+      );
+    } finally {
+      isolated.cleanup();
+    }
+  });
+}

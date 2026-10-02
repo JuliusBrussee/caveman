@@ -24,7 +24,9 @@ import {
   statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { chmod, mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir, hostname, tmpdir, userInfo } from "node:os";
@@ -1030,6 +1032,86 @@ function telemetryTokenWatermarkFromDisk(): TelemetryTokenWatermark | null {
   }
 }
 
+// telemetryClaimLockPath is the sidecar used to serialize the read-compare-write
+// below across OS processes; it sits beside config.json so its permission and
+// cross-filesystem behavior always matches the file it protects.
+function telemetryClaimLockPath(): string {
+  return `${configPath()}.telemetry.lock`;
+}
+
+// A lock older than this is presumed abandoned by a crashed holder; kept far
+// above a real claim's own write time and above any waiter's acquire budget,
+// so a slow but live holder is never mistaken for a dead one.
+const TELEMETRY_CLAIM_LOCK_STALE_MS = 5000;
+
+// acquireClaimLock spins on an atomic O_CREAT|O_EXCL create until it wins the
+// lock or the budget runs out; a lock whose mtime is older than staleMs is
+// treated as abandoned by a crashed holder and reclaimed, so a killed process
+// cannot wedge the guarded operation off permanently.
+//
+// Shared by every watermark claim rather than copied per caller: the telemetry
+// claim (#1116) and the sync claim (#1132) are the same read-mutate-write
+// hazard over different state files, and a second copy of this spin is how the
+// two would drift apart. Callers supply their own stale window because their
+// hold times differ by orders of magnitude — see refreshClaimLock.
+function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number): string | null {
+  try {
+    mkdirSync(dirname(lockPath), { recursive: true });
+  } catch {
+    return null;
+  }
+  // The token names THIS holder. releaseClaimLock unlinks only a lock that
+  // still carries it, so a holder that was reclaimed as stale mid-section
+  // cannot delete its successor's lock on the way out.
+  const token = `${process.pid}:${randomUUID()}`;
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    try {
+      const fd = openSync(lockPath, "wx");
+      try {
+        writeSync(fd, token);
+      } finally {
+        closeSync(fd);
+      }
+      return token;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return null;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > staleMs) {
+          // Reclaim by rename, not unlink. Two waiters can both see the same
+          // stale lock; with unlink the slower one would delete the lock the
+          // faster one had already created in its place, and both would hold
+          // it. Only one rename of the stale file can succeed; the loser's
+          // rename fails and it loops back to the create attempt.
+          const grave = `${lockPath}.${process.pid}.${Date.now()}.stale`;
+          renameSync(lockPath, grave);
+          unlinkSync(grave);
+        }
+      } catch {
+        /* raced the holder releasing it, or another waiter reclaiming; loop back */
+      }
+      if (Date.now() >= deadline) return null;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+}
+
+// releaseClaimLock drops a lock taken above, but only while it is still ours:
+// a lock a waiter reclaimed as stale carries the waiter's token now, and
+// unlinking it would hand the guarded section to a third process. The read
+// and the unlink are not one step; a reclaim between them needs the lock to
+// cross the stale threshold in that gap, which the sync heartbeat and the
+// millisecond telemetry hold keep far away. Never throws: a lock already gone
+// is the same end state as one we removed.
+function releaseClaimLock(lockPath: string, token: string): void {
+  try {
+    if (readFileSync(lockPath, "utf8") !== token) return;
+    unlinkSync(lockPath);
+  } catch {
+    /* already gone */
+  }
+}
+
 // telemetryTokenDelta returns what to report for THIS event and advances the
 // watermark to the totals it read. The send is fire-and-forget, so a dropped POST
 // loses that delta rather than replaying it — undercounting beats double-counting
@@ -1050,11 +1132,14 @@ function telemetryTokenDelta(): { processed: number; saved: number; basis: strin
   const saved = prior && !rewound ? Math.max(0, totals.tokensSaved - prior.tokensSaved) : 0;
   const rebaselining = prior === null || rewound;
   if (processed === 0 && saved === 0 && !rebaselining) return null;
-  // Claim the delta optimistically: two CLI processes exiting together would
-  // otherwise read the same watermark and both report the same tokens, inflating
-  // a savings figure. Whoever writes second sees the watermark already moved and
-  // reports nothing.
+  // Claim the delta under a lock, not a bare compare: two processes exiting
+  // together can both read the pre-write watermark before either commits (see
+  // the regression test below).
+  const lockPath = telemetryClaimLockPath();
+  const lockToken = acquireClaimLock(lockPath, 500, TELEMETRY_CLAIM_LOCK_STALE_MS);
+  if (!lockToken) return null;
   let claimed = true;
+  let readOnly = false;
   try {
     mutateRawConfig((out) => {
       const current = parseTelemetryTokenWatermark(out.telemetryTokens);
@@ -1069,10 +1154,11 @@ function telemetryTokenDelta(): { processed: number; saved: number; basis: strin
       } satisfies TelemetryTokenWatermark;
     });
   } catch {
-    // Read-only home: report nothing rather than resend the same delta forever.
-    return null;
+    readOnly = true; // Read-only home: report nothing rather than resend the same delta forever.
+  } finally {
+    releaseClaimLock(lockPath, lockToken);
   }
-  if (!claimed) return null;
+  if (readOnly || !claimed) return null;
   if (processed === 0 && saved === 0) return null;
   return { processed, saved, basis: totals.basis };
 }
@@ -3145,7 +3231,12 @@ function removeAgentNativeBundle(agent: "claude" | "codex"): void {
   recoverPendingAgentNativeBundle(agent);
   const journal = readAgentNativeBundleJournal(agent);
   if (!journal) {
-    process.stderr.write(`${mark("warn")} ${agent}: no agent-native bundle journal found\n`);
+    // Accurate, but on its own a dead end (#1134): this verb undoes the bundle that
+    // `setup --agent-native` installs, and nothing else. A user who reached the same
+    // config through `caveman <agent>` or `caveman enable <agent>` has no bundle and
+    // reads this as "caveman cannot be uninstalled". Name the verb that undoes theirs.
+    process.stderr.write(`${mark("warn")} ${agent}: no agent-native bundle journal found — nothing was installed by \`caveman setup --agent-native ${agent}\`\n`);
+    process.stderr.write(dim(`  if you set it up with \`caveman ${agent}\` or \`caveman enable ${agent}\`, remove that with \`caveman disable ${agent}\`\n`));
     return;
   }
   for (const skill of journal.skills) {
@@ -5273,6 +5364,23 @@ async function agentShortcut(rest: string[]) {
     process.exitCode = result.status ?? 1;
     return;
   }
+  // Some host surfaces cannot run routed at all — Claude Code Remote Control
+  // refuses any non-first-party ANTHROPIC_BASE_URL and its escape hatch does not
+  // cover the check (#947, #1101). The native door would install machine-wide
+  // routing and then launch the host straight into that refusal, leaving the
+  // user both unrouted and unable to start the surface they asked for. Resolve
+  // the override before any persistent write and hand these to wrap, whose
+  // route-override path launches the host directly and writes nothing.
+  const shortcutRouteOverride = agentRouteOverride(agent, rest.slice(1));
+  if (shortcutRouteOverride) {
+    // A native install already owns the host's base URL from its own config
+    // file, which launching directly cannot undo — say so rather than let the
+    // surface fail with the host's own opaque refusal.
+    if (readNativeJournal(native)) {
+      process.stderr.write(`${mark("warn")} ${routeOverrideLabel(agent)} ${shortcutRouteOverride.surface} ${shortcutRouteOverride.reason}, and the native integration still routes ${binOf(agent)} from its own config — run \`caveman disable ${native}\` first, then \`caveman enable ${native}\` afterwards\n`);
+    }
+    return wrap(rest);
+  }
   // A Cave Build lock is enforced at the wrap door (claudeCaveBuildEnv); the
   // native door applies none of its transforms, so a locked project must keep
   // routing through wrap or the lock would be silently unenforced.
@@ -6860,11 +6968,97 @@ function assertNativeHooksShape(path: string, root: Record<string, unknown>, age
   }
 }
 
+// #1137, in one place: every persistent artifact caveman writes bakes in the
+// invocation `enable` resolved, and nothing checked that the invocation still
+// resolves. nvm installs each Node release in its own directory and
+// `nvm uninstall <old>` deletes it, so a routine upgrade leaves every baked
+// path dangling — while the artifact's own bytes are untouched, which is what
+// every ownership check looked at. The hosts differ only in where the
+// invocation is written; whether its targets exist is one question, asked here.
+//
+// `which` answers an absolute path by testing it directly, so this covers both
+// a bare name resolved through PATH and a path into a removed directory.
+function invocationTargetsExist(tokens: string[]): boolean {
+  const executable = tokens[0];
+  if (executable === undefined || !which(executable)) return false;
+  // A `node <script>` invocation and a `--adapter <file>` argument name files
+  // the executable itself cannot vouch for: node exists on every host after an
+  // upgrade, the script it was pointed at does not.
+  const files = [hookCommandBasename(executable) === "node" ? tokens[1] : undefined];
+  const adapter = tokens.indexOf("--adapter");
+  if (adapter !== -1) files.push(tokens[adapter + 1]);
+  return !files.some((file) => file !== undefined && !existsSync(file));
+}
+
+// The generated opencode plugin and Pi extension bake their invocation as a
+// source literal rather than a host hook command, so ownership was judged by
+// the marker comment alone and #1137 stayed invisible on both. Parse what the
+// generators emit — not the journal, which for an install made before this
+// check records no invocation at all, and these are the installs already
+// broken on disk.
+//
+// Deliberately fail-open on an unrecognized shape: there is nothing to verify,
+// and answering `false` would report every install degraded. The regression
+// tests assert the emitted shape still matches, so a generator refactor that
+// silences this fails the suite instead of silently verifying nothing.
+function generatedInvocation(text: string): string[] | undefined {
+  // opencode: `const command = "…";` with `const prefix = […];`
+  const command = text.match(/^const command = ("(?:[^"\\]|\\.)*");$/m);
+  if (command) {
+    const prefix = text.match(/^const prefix = (\[(?:[^[\]\\]|\\.)*\]);$/m);
+    // A prefix line we cannot read means we cannot see the whole invocation,
+    // and verifying the executable alone would be worse than verifying
+    // nothing: `node` survives every upgrade, so the dangling member would be
+    // exactly the script in the prefix we failed to parse.
+    if (!prefix && /^const prefix = /m.test(text)) return undefined;
+    try {
+      const parsedPrefix = prefix ? JSON.parse(prefix[1]!) as unknown : [];
+      if (!Array.isArray(parsedPrefix) || parsedPrefix.some((item) => typeof item !== "string")) return undefined;
+      return [JSON.parse(command[1]!) as string, ...parsedPrefix as string[]];
+    } catch { return undefined; }
+  }
+  // Pi: `process.env.CAVEMAN_PI_HOOK_CMD ??= "<json array, re-encoded>";`
+  const pi = text.match(/^process\.env\.CAVEMAN_PI_HOOK_CMD \?\?= ("(?:[^"\\]|\\.)*");$/m);
+  if (pi) {
+    try {
+      const parsed = JSON.parse(JSON.parse(pi[1]!) as string) as unknown;
+      if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((item) => typeof item !== "string")) return undefined;
+      return parsed as string[];
+    } catch { return undefined; }
+  }
+  return undefined;
+}
+
+function generatedArtifactTargetsExist(text: string): boolean {
+  const tokens = generatedInvocation(text);
+  return tokens === undefined || invocationTargetsExist(tokens);
+}
+
+// A managed hook is only healthy while the files its command runs still exist.
+// Identity is judged by basename, so a hook rendered into a directory that has
+// since been deleted (an nvm Node upgrade, #1137) kept matching the expected
+// document while the host ran a missing binary or adapter.
+function managedHookTargetsExist(root: Record<string, unknown>): boolean {
+  const hooks = root.hooks && typeof root.hooks === "object" && !Array.isArray(root.hooks)
+    ? root.hooks as Record<string, unknown>
+    : {};
+  for (const raw of Object.values(hooks)) {
+    if (!Array.isArray(raw)) continue;
+    for (const entry of raw as Array<Record<string, unknown>>) {
+      const command = entry && typeof entry === "object" ? hookEntryCommand(entry) : undefined;
+      if (command === undefined || managedHookIdentity(command) === undefined) continue;
+      if (!invocationTargetsExist(hookCommandTokens(command)!)) return false;
+    }
+  }
+  return true;
+}
+
 function nativeHookEntriesHealthy(root: Record<string, unknown>, agentId: "claude" | "codex" | "gemini"): boolean {
   const hooks = root.hooks && typeof root.hooks === "object" && !Array.isArray(root.hooks)
     ? root.hooks as Record<string, unknown>
     : undefined;
   if (!hooks) return false;
+  if (!managedHookTargetsExist(root)) return false;
   const expected = nativeHooksDocument(agentId, nativeShrinkEnabled()).hooks as Record<string, unknown>;
   const required = Object.entries(expected).every(([event, expectedRaw]) => {
     const actual = Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [];
@@ -9073,9 +9267,11 @@ function nativeIntegrationStatus(agent: NativeAgent) {
             return options.baseURL === routes[providerID];
           }) && JSON.stringify(mcp.caveman) === JSON.stringify(operation.owned?.installed_mcp);
         } else if (operation.kind === "opencode-plugin") {
-          owned = current.toString("utf8").includes("caveman:native-opencode");
+          const text = current.toString("utf8");
+          owned = text.includes("caveman:native-opencode") && generatedArtifactTargetsExist(text);
         } else if (operation.kind === "pi-extension") {
-          owned = current.toString("utf8").includes("caveman:native-pi");
+          const text = current.toString("utf8");
+          owned = text.includes("caveman:native-pi") && generatedArtifactTargetsExist(text);
         } else if (operation.kind === "aider-config") {
           const text = current.toString("utf8");
           owned = typeof operation.owned?.route_block === "string" && typeof operation.owned?.read_block === "string"
@@ -10465,6 +10661,7 @@ function sleep(ms: number) {
 type SyncOutcome =
   | { kind: "no_store"; dbPath: string }
   | { kind: "empty" }
+  | { kind: "busy" }
   | {
       kind: "synced";
       spans: number;
@@ -10765,6 +10962,40 @@ function writeSyncWatermark(key: string, id: number) {
   writeFileSync(syncStatePath(), JSON.stringify(state, null, 2) + "\n", { mode: 0o600 });
 }
 
+// syncClaimLockPath is the sidecar that serializes the read-query-POST-write
+// in syncLocalSavings across OS processes; it sits beside sync.json so its
+// permission and cross-filesystem behavior always matches the file it protects.
+function syncClaimLockPath(): string {
+  return `${syncStatePath()}.lock`;
+}
+
+// How long a waiter blocks before giving up and reporting `busy`. Deliberately
+// short: syncAfterWrap runs on the wrap exit path, and making a user wait out
+// someone else's upload to close a shell is worse than deferring their rows to
+// the next sync — nothing is lost either way, the watermark simply has not moved.
+const SYNC_CLAIM_LOCK_BUDGET_MS = 5000;
+
+// A sync lock is held across a network POST, which has no bounded duration, so
+// unlike the telemetry claim its stale window cannot be a guess at the hold
+// time: a live holder on a slow link would be judged dead and its rows POSTed
+// twice, which is the very bug the lock exists to prevent. The holder instead
+// heartbeats the lock while it works, so this window only has to outlast a
+// couple of missed beats.
+const SYNC_CLAIM_LOCK_STALE_MS = 15000;
+const SYNC_CLAIM_LOCK_HEARTBEAT_MS = 3000;
+
+// refreshClaimLock bumps a held lock's mtime so waiters keep seeing it as live.
+// Never throws — if the lock is gone the guarded work is already compromised,
+// and crashing the sync on a touch failure would lose the rows in flight.
+function refreshClaimLock(lockPath: string): void {
+  try {
+    const now = new Date();
+    utimesSync(lockPath, now, now);
+  } catch {
+    /* lock vanished or the FS refused the touch; the POST still completes */
+  }
+}
+
 // deriveDashboardUrl maps the control-api base URL to the dashboard costs page
 // for the two shapes Caveman ships (local docker web :3000; hosted api.<domain>
 // → apex, which serves the dashboard). Anything else returns "" — no guessing.
@@ -10910,84 +11141,112 @@ async function syncLocalSavings(cfg: Config): Promise<SyncOutcome> {
   }
   const db = new DatabaseSync(dbPath, { readOnly: true });
   let rows: Record<string, unknown>[];
-  const key = syncWatermarkKey(cfg, dbFingerprint(db, dbPath, DatabaseSync));
-  const firstSync = !hasSyncWatermark(key);
-  const since = readSyncWatermark(key);
+  let key: string;
   try {
-    const columns = new Set(
-      (db.prepare("PRAGMA table_info(requests)").all() as Record<string, unknown>[])
-        .map((row) => typeof row.name === "string" ? row.name : "")
-        .filter(Boolean),
-    );
-    const optional = (name: string, fallback: string) => columns.has(name) ? name : `${fallback} AS ${name}`;
-    rows = db
-      .prepare(
-        `SELECT id, ts, request_id, trace_id, agent_slug, provider, model,
-                status_code, error_code, latency_ms, request_bytes, response_bytes,
-                input_tokens, output_tokens, cached_input_tokens,
-                ${optional("cache_creation_input_tokens", "0")}, total_cost_usd,
-                savings_usd, basis, ${optional("token_usage_basis", "'unavailable'")},
-                ${optional("auth_mode", "'unknown'")}, runtime_mode, optimization_ids,
-                compression_tokens_before, compression_tokens_after,
-                ${optional("compression_token_count_basis", "'unavailable'")}
-           FROM requests WHERE id > ? ORDER BY id`,
-      )
-      .all(since) as Record<string, unknown>[];
-  } finally {
+    key = syncWatermarkKey(cfg, dbFingerprint(db, dbPath, DatabaseSync));
+  } catch (err) {
     db.close();
+    throw err;
   }
-  if (rows.length === 0) return { kind: "empty" };
-
-  // Per-row directive labels (review M12): a row synced from BEFORE a
-  // directive's install carries no label — backlog sessions are not evidence
-  // about a directive that did not exist yet. An unparseable row timestamp
-  // labels nothing (fail closed).
-  const directiveInstalls = installedDirectivesWithTimes();
-  const rowDirectives = (r: Record<string, unknown>): string[] => {
-    if (directiveInstalls.length === 0) return [];
-    const ts = typeof r.ts === "string" ? r.ts : "";
-    // The proxy writes ClickHouse-layout UTC timestamps ("YYYY-MM-DD HH:MM:SS.mmm").
-    const ms = Date.parse(ts.includes("T") ? ts : ts.replace(" ", "T") + "Z");
-    if (!Number.isFinite(ms)) return [];
-    return directiveInstalls.filter((d) => ms >= d.installedAtMs).map((d) => d.id);
-  };
-  const body = rows.map((r) => syncRequestSpan(r, rowDirectives(r))).join("\n") + "\n";
-  const response = await fetch(`${cfg.baseURL}/api/v1/imports?format=caveman-jsonl`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${cfg.token}`,
-      "content-type": "application/octet-stream",
-      "x-cave-csrf": "cli",
-    },
-    body,
-  });
-  const result = (await response.json().catch(() => ({}))) as { status?: string; error?: { message?: string } };
-  if (!response.ok || result.status !== "completed") {
-    throw new Error(result.error?.message ?? `sync import failed (${response.status})`);
+  // Everything from here to the watermark write is one claim: reading the
+  // watermark, selecting the rows past it, POSTing them and committing the new
+  // watermark. Without the lock two processes starting together both read the
+  // pre-write watermark, both select the same rows and both POST them, so the
+  // same spans land server-side twice (#1132). A waiter that cannot take the
+  // lock in its budget sends nothing and leaves the watermark alone, so its
+  // rows are picked up by the next sync rather than duplicated by this one.
+  const lockPath = syncClaimLockPath();
+  const lockToken = acquireClaimLock(lockPath, SYNC_CLAIM_LOCK_BUDGET_MS, SYNC_CLAIM_LOCK_STALE_MS);
+  if (!lockToken) {
+    db.close();
+    return { kind: "busy" };
   }
+  // The POST below is unbounded, so keep proving this holder is alive; see
+  // SYNC_CLAIM_LOCK_STALE_MS.
+  const heartbeat = setInterval(() => refreshClaimLock(lockPath), SYNC_CLAIM_LOCK_HEARTBEAT_MS);
+  heartbeat.unref();
+  try {
+    const firstSync = !hasSyncWatermark(key);
+    const since = readSyncWatermark(key);
+    try {
+      const columns = new Set(
+        (db.prepare("PRAGMA table_info(requests)").all() as Record<string, unknown>[])
+          .map((row) => typeof row.name === "string" ? row.name : "")
+          .filter(Boolean),
+      );
+      const optional = (name: string, fallback: string) => columns.has(name) ? name : `${fallback} AS ${name}`;
+      rows = db
+        .prepare(
+          `SELECT id, ts, request_id, trace_id, agent_slug, provider, model,
+                  status_code, error_code, latency_ms, request_bytes, response_bytes,
+                  input_tokens, output_tokens, cached_input_tokens,
+                  ${optional("cache_creation_input_tokens", "0")}, total_cost_usd,
+                  savings_usd, basis, ${optional("token_usage_basis", "'unavailable'")},
+                  ${optional("auth_mode", "'unknown'")}, runtime_mode, optimization_ids,
+                  compression_tokens_before, compression_tokens_after,
+                  ${optional("compression_token_count_basis", "'unavailable'")}
+             FROM requests WHERE id > ? ORDER BY id`,
+        )
+        .all(since) as Record<string, unknown>[];
+    } finally {
+      db.close();
+    }
+    if (rows.length === 0) return { kind: "empty" };
 
-  const num = (v: unknown) => (typeof v === "bigint" ? Number(v) : typeof v === "number" && Number.isFinite(v) ? v : 0);
-  const maxId = rows.reduce((m, r) => Math.max(m, num(r.id)), since);
-  writeSyncWatermark(key, maxId);
-  const tokensSaved = rows.reduce((sum, r) => sum + Math.max(0, num(r.compression_tokens_before) - num(r.compression_tokens_after)), 0);
-  const tokenBases = new Set(rows.map((r) => (typeof r.compression_token_count_basis === "string" ? r.compression_token_count_basis : "")).filter(Boolean));
-  const tokenCountBasis = tokenBases.size === 0 ? "unavailable" : tokenBases.size === 1 ? [...tokenBases][0] ?? "unavailable" : "mixed";
-  const cachedInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cached_input_tokens)), 0);
-  const cacheCreationInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cache_creation_input_tokens)), 0);
-  const headlineCompressionRefused = cacheCreationInputTokens > cachedInputTokens;
-  const savingsUSD = rows.reduce((sum, r) => sum + num(r.savings_usd), 0);
-  return {
-    kind: "synced",
-    spans: rows.length,
-    tokensSaved,
-    tokenCountBasis,
-    cachedInputTokens,
-    cacheCreationInputTokens,
-    headlineCompressionRefused,
-    savingsUSD,
-    dashboard: deriveDashboardUrl(cfg.baseURL),
-    firstSync,
-  };
+    // Per-row directive labels (review M12): a row synced from BEFORE a
+    // directive's install carries no label — backlog sessions are not evidence
+    // about a directive that did not exist yet. An unparseable row timestamp
+    // labels nothing (fail closed).
+    const directiveInstalls = installedDirectivesWithTimes();
+    const rowDirectives = (r: Record<string, unknown>): string[] => {
+      if (directiveInstalls.length === 0) return [];
+      const ts = typeof r.ts === "string" ? r.ts : "";
+      // The proxy writes ClickHouse-layout UTC timestamps ("YYYY-MM-DD HH:MM:SS.mmm").
+      const ms = Date.parse(ts.includes("T") ? ts : ts.replace(" ", "T") + "Z");
+      if (!Number.isFinite(ms)) return [];
+      return directiveInstalls.filter((d) => ms >= d.installedAtMs).map((d) => d.id);
+    };
+    const body = rows.map((r) => syncRequestSpan(r, rowDirectives(r))).join("\n") + "\n";
+    const response = await fetch(`${cfg.baseURL}/api/v1/imports?format=caveman-jsonl`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${cfg.token}`,
+        "content-type": "application/octet-stream",
+        "x-cave-csrf": "cli",
+      },
+      body,
+    });
+    const result = (await response.json().catch(() => ({}))) as { status?: string; error?: { message?: string } };
+    if (!response.ok || result.status !== "completed") {
+      throw new Error(result.error?.message ?? `sync import failed (${response.status})`);
+    }
+
+    const num = (v: unknown) => (typeof v === "bigint" ? Number(v) : typeof v === "number" && Number.isFinite(v) ? v : 0);
+    const maxId = rows.reduce((m, r) => Math.max(m, num(r.id)), since);
+    writeSyncWatermark(key, maxId);
+    const tokensSaved = rows.reduce((sum, r) => sum + Math.max(0, num(r.compression_tokens_before) - num(r.compression_tokens_after)), 0);
+    const tokenBases = new Set(rows.map((r) => (typeof r.compression_token_count_basis === "string" ? r.compression_token_count_basis : "")).filter(Boolean));
+    const tokenCountBasis = tokenBases.size === 0 ? "unavailable" : tokenBases.size === 1 ? [...tokenBases][0] ?? "unavailable" : "mixed";
+    const cachedInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cached_input_tokens)), 0);
+    const cacheCreationInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cache_creation_input_tokens)), 0);
+    const headlineCompressionRefused = cacheCreationInputTokens > cachedInputTokens;
+    const savingsUSD = rows.reduce((sum, r) => sum + num(r.savings_usd), 0);
+    return {
+      kind: "synced",
+      spans: rows.length,
+      tokensSaved,
+      tokenCountBasis,
+      cachedInputTokens,
+      cacheCreationInputTokens,
+      headlineCompressionRefused,
+      savingsUSD,
+      dashboard: deriveDashboardUrl(cfg.baseURL),
+      firstSync,
+    };
+  } finally {
+    clearInterval(heartbeat);
+    releaseClaimLock(lockPath, lockToken);
+  }
 }
 
 function syncSavingsLine(out: SyncedOutcome, local = false): string {
@@ -11083,6 +11342,10 @@ async function sync() {
       console.log(`nothing to sync — no local spend store at ${out.dbPath} (run \`caveman wrap <agent>\` to record local inferred savings first)`);
     } else if (out.kind === "empty") {
       console.log("nothing new to sync — local inferred savings are already up to date");
+    } else if (out.kind === "busy") {
+      // Not a failure: another caveman process holds the watermark and is
+      // uploading these rows right now. Exit 0 — re-running is always safe.
+      console.log("another sync is already running — local spans left for the next `caveman sync`");
     } else {
       if (out.firstSync) console.log(SYNC_DISCLOSURE);
       console.log(syncSavingsLine(out));
@@ -11124,6 +11387,8 @@ async function syncAfterLogin() {
     if (savingsLane.status === "fulfilled") {
       if (savingsLane.value.kind === "synced") {
         console.error(`  ${mark("ok")} ${syncSavingsLine(savingsLane.value, true)}`);
+      } else if (savingsLane.value.kind === "busy") {
+        console.error(dim(`  another sync is already running — run \`${invokedAs()} sync\` afterwards to pick up the rest`));
       } else {
         console.error(dim("  no local spans to sync yet — `caveman wrap <agent>` records inferred savings locally; `caveman sync` uploads them"));
       }
@@ -11257,8 +11522,37 @@ function mcpServerInstalled(agentId: string, serverName: string): boolean {
     return false;
   }
 }
+function nativeOpencodeMcpInstalled(): boolean {
+  const journal = readNativeJournal("opencode");
+  if (!journal) return false;
+
+  const operation = journal.operations.find((item) => item.kind === "opencode-config");
+  if (!operation?.owned?.installed_mcp) return false;
+
+  const current = fileBytes(operation.file);
+  if (!current) return false;
+
+  try {
+    const root = parseJsonFileObject(operation.file, current);
+    const mcp = root.mcp && typeof root.mcp === "object" && !Array.isArray(root.mcp)
+      ? root.mcp as Record<string, unknown>
+      : {};
+
+    // canonicalize, not JSON.stringify: the comparison is about whether the
+    // registration is still ours, and key order is not part of that. Any writer
+    // that round-trips opencode.json through a rebuilt or sorted map reorders
+    // these keys without changing the registration, and a raw stringify compare
+    // would then report "MCP recovery missing" for a registration that is
+    // present and correct — the same false negative this function exists to fix.
+    return canonicalize(mcp.caveman) === canonicalize(operation.owned.installed_mcp);
+  } catch {
+    return false;
+  }
+}
+
 function mcpInstalled(agentId: string, agentArgs: string[] = []): boolean {
   if (agentId === "kilo" || agentId === "qwen") return ownedMcpRegistration(agentId, agentArgs) !== null;
+  if (agentId === "opencode" && nativeOpencodeMcpInstalled()) return true;
   return mcpServerInstalled(agentId, "caveman");
 }
 
@@ -13056,10 +13350,30 @@ function agentRouteOverride(agent: AgentProfile, args: string[]): AgentRouteOver
   if (agent.id === "qwen") return qwenRouteOverride(agent, args);
   // Claude Code 2.1.196+ refuses Remote Control unless ANTHROPIC_BASE_URL is
   // api.anthropic.com, and the first-party escape hatch does not apply (#947).
-  if (agent.id === "claude" && args.includes("remote-control")) {
+  if (agent.id === "claude" && claudeStartsRemoteControl(args)) {
     return { surface: "remote-control", reason: "only runs against api.anthropic.com, so it cannot route through the proxy" };
   }
   return null;
+}
+
+// Claude Code spells Remote Control `--remote-control [name]`; the bare
+// `remote-control` word is the legacy subcommand. #947 matched only the latter,
+// so every user who followed the documented flag kept routing through the proxy
+// and kept being refused by the host (#1101).
+//
+// `--remote-control-session-name-prefix` only names auto-generated sessions and
+// does NOT start Remote Control, so it must not match — bypassing on it would
+// silently drop compression for a session that never needed the bypass. Scanning
+// stops at `--`, after which argv belongs to the agent's own payload.
+function claudeStartsRemoteControl(args: string[]): boolean {
+  // The bare legacy word is a subcommand, so it counts only in first position;
+  // anywhere else it is a value (`-p remote-control`) and must keep routing.
+  if (args[0] === "remote-control") return true;
+  for (const arg of args) {
+    if (arg === "--") return false;
+    if (arg === "--remote-control" || arg.startsWith("--remote-control=")) return true;
+  }
+  return false;
 }
 
 function routeOverrideLabel(agent: AgentProfile): string {
@@ -13787,7 +14101,13 @@ function installMcpCodexToml(mcp: { command: string; args: string[] }, serverNam
     }
     const blockStart = headerMatch.index + (headerMatch[1] ? 1 : 0);
     const contentStart = headerMatch.index + headerMatch[0].length;
-    const nextHeaderOffset = existing.slice(contentStart).search(/^[ \\t]*\[/m);
+    // /^[ \t]*\[/ — NOT [ \\t]. In a regex LITERAL `\\t` is an escaped backslash, so
+    // the class was [space, backslash, "t"] and never matched a tab (#1134). A
+    // tab-indented table is valid TOML, and Codex writes one for every trusted
+    // project, so the boundary ran past it: the verify below never compared equal,
+    // and the splice above deleted the user's tables. The uninstall twin
+    // (removeMcpCodexToml) has always spelled this correctly.
+    const nextHeaderOffset = existing.slice(contentStart).search(/^[ \t]*\[/m);
     const blockEnd = nextHeaderOffset === -1 ? existing.length : contentStart + nextHeaderOffset;
     const currentBlock = existing.slice(blockStart, blockEnd).trim();
     if (currentBlock === expectedBlock.trim()) {
@@ -13821,7 +14141,8 @@ function codexMcpRegistrationMatches(serverName: string, mcp: { command: string;
   if (!headerMatch) return false;
   const blockStart = headerMatch.index + (headerMatch[1] ? 1 : 0);
   const contentStart = headerMatch.index + headerMatch[0].length;
-  const nextHeaderOffset = existing.slice(contentStart).search(/^[ \\t]*\[/m);
+  // See the note in installMcpCodexToml: a literal [ \\t] never matched a tab (#1134).
+  const nextHeaderOffset = existing.slice(contentStart).search(/^[ \t]*\[/m);
   const blockEnd = nextHeaderOffset === -1 ? existing.length : contentStart + nextHeaderOffset;
   const argsLine = mcp.args.length ? `\nargs = [${mcp.args.map((arg) => JSON.stringify(arg)).join(", ")}]` : "";
   const recoveryEnv = serverName === "caveman" ? `\n${CODEX_RECOVERY_ENV}` : "";
@@ -14106,6 +14427,19 @@ const SHRINK_ALLOW = new Set([
   "aws", "gcloud", "az", "gh",
 ]);
 
+// Subcommands that must never be wrapped even though their tool is allowlisted:
+// they open an editor, attach a tty, or wait on a human. Keyed by tool, matched
+// against every token so a global option cannot hide the subcommand (#1133).
+const SHRINK_SKIP_SUBCOMMANDS = new Map<string, Set<string>>([
+  ["git", new Set(["commit", "rebase", "mergetool"])],
+  ["npm", new Set(["init"])],
+  ["yarn", new Set(["init"])],
+  ["pnpm", new Set(["init"])],
+  ["docker", new Set(["run", "exec", "attach"])],
+  ["kubectl", new Set(["edit", "exec", "attach"])],
+  ["terraform", new Set(["apply", "destroy"])],
+]);
+
 // shouldShrink decides whether a Bash command's output should be routed through
 // `caveman shrink`. Conservative by design: it only rewrites a known-noisy,
 // finite, non-interactive command with no shell operators (shrink execs argv
@@ -14119,13 +14453,16 @@ function shouldShrink(command: string): boolean {
   if (/(^|\s)-(f|it|ti|w)\b|--follow\b|--watch\b|--interactive\b|--tail\b/.test(cmd)) return false; // streaming/interactive
   const tokens = cmd.split(/\s+/);
   const first = tokens[0] ?? "";
-  const pair = `${first} ${tokens[1] ?? ""}`;
-  const skipPairs = new Set([
-    "git commit", "git rebase", "git mergetool", "npm init", "yarn init", "pnpm init",
-    "docker run", "docker exec", "docker attach", "kubectl edit", "kubectl exec",
-    "kubectl attach", "terraform apply", "terraform destroy",
-  ]);
-  if (skipPairs.has(pair)) return false;
+  // The excluded subcommand can sit anywhere after the tool, because a global
+  // option may precede it and an option may or may not take a separate value
+  // (`git -C . commit`, `docker --context x exec`, `terraform -chdir=infra apply`).
+  // Comparing only tokens[1] let every one of those walk past the guard and get
+  // wrapped anyway (#1133). We do not try to parse each tool's option grammar to
+  // find "the" subcommand — we fail closed and decline if the word appears at all.
+  // Over-matching costs one uncompressed command; under-matching hands `shrink`,
+  // which captures output and must terminate, a command that opens an editor.
+  const skip = SHRINK_SKIP_SUBCOMMANDS.get(first);
+  if (skip && tokens.slice(1).some((token) => skip.has(token))) return false;
   return SHRINK_ALLOW.has(first);
 }
 
@@ -14159,7 +14496,7 @@ async function shrinkHook() {
   if (nativePolicyMode() === "record" || !new Set(["full-safe", "full-max"]).has(nativeProfile())) process.exit(0);
   let raw: Buffer;
   try { raw = await readHookStdin(); } catch { process.exit(0); }
-  let evt: { tool_name?: string; tool_input?: { command?: string } };
+  let evt: { tool_name?: string; tool_input?: Record<string, unknown> };
   try { evt = JSON.parse(raw.toString("utf8") || "{}"); } catch { process.exit(0); }
   const tool = evt?.tool_name;
   const isGemini = tool === "run_shell_command"; // Gemini CLI's shell tool
@@ -14173,10 +14510,21 @@ async function shrinkHook() {
   // not hook's explicit PowerShell shell. Never leak PowerShell `&` into it.
   const rewritten = `${cavemanBinForHook(false)} shrink -- ${command.trim()}`;
   // Gemini merges hookSpecificOutput.tool_input (snake_case, no event discriminator);
-  // Claude replaces via hookSpecificOutput.updatedInput (camelCase + hookEventName).
+  // Claude REPLACES via hookSpecificOutput.updatedInput (camelCase + hookEventName).
+  // Because Claude replaces, updatedInput must carry every field the host sent —
+  // rebuilding it from `command` alone dropped timeout, run_in_background and
+  // description, changing how the command ran (#1133). Gemini's merge already
+  // preserves the rest, so sending only `command` there is correct as written.
+  //
+  // No permissionDecision either. It is the same objection #1037 raised for Codex,
+  // and Claude Code — unlike Codex — provably honors it: answering "allow" turned a
+  // compression decision into a permission grant covering every state-changing
+  // command the allowlist accepts (`git push --force`, `kubectl delete`, `aws s3 rm`).
+  // Whether the host applies updatedInput without a decision is its call; if it does
+  // not, the command runs unwrapped and uncompressed, which is the safe direction.
   const out = isGemini
     ? { hookSpecificOutput: { tool_input: { command: rewritten } } }
-    : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: { command: rewritten } } };
+    : { hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: { ...evt.tool_input, command: rewritten } } };
   process.stdout.write(JSON.stringify(out));
 }
 

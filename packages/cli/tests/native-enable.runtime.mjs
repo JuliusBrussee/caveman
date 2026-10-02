@@ -680,6 +680,12 @@ test("doctor and disable tolerate executable path drift with unchanged hook sema
   const fx = fixture();
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
   const path = join(fx.home, ".claude", "settings.json");
+  // Drift is only tolerated while the relocated files exist (#1137).
+  const moved = join(fx.home, "new");
+  mkdirSync(join(moved, "caveman", "bin"), { recursive: true });
+  mkdirSync(join(moved, "fnm"), { recursive: true });
+  for (const file of ["caveman/bin/caveman-proxy", "fnm/node"]) writeFileSync(join(moved, file), "#!/bin/sh\n", { mode: 0o755 });
+  for (const file of ["caveman/native-hook-fast.js", "caveman/index.js"]) writeFileSync(join(moved, file), "");
   const settings = JSON.parse(readFileSync(path, "utf8"));
   for (const entries of Object.values(settings.hooks)) {
     for (const entry of entries) {
@@ -687,9 +693,9 @@ test("doctor and disable tolerate executable path drift with unchanged hook sema
       if (typeof hook?.command === "string" && /native-hook claude|shrink-hook|mem recall-hook/.test(hook.command)) {
         hook.command = hook.command.includes("native-hook claude")
           ? hook.command
-              .replace(/^.*?(?=native-hook claude)/, "'/new/caveman/bin/caveman-proxy' ")
-              .replace(/--adapter\s+.*$/, "--adapter '/new/caveman/native-hook-fast.js'")
-          : hook.command.replace(/^.*?(?=shrink-hook|mem recall-hook)/, "'/new/fnm/node' '/new/caveman/index.js' ");
+              .replace(/^.*?(?=native-hook claude)/, `'${moved}/caveman/bin/caveman-proxy' `)
+              .replace(/--adapter\s+.*$/, `--adapter '${moved}/caveman/native-hook-fast.js'`)
+          : hook.command.replace(/^.*?(?=shrink-hook|mem recall-hook)/, `'${moved}/fnm/node' '${moved}/caveman/index.js' `);
       }
     }
   }
@@ -702,6 +708,47 @@ test("doctor and disable tolerate executable path drift with unchanged hook sema
   assert.equal(disabled.code, 0, disabled.stderr);
   assert.doesNotMatch(readFileSync(path, "utf8"), /native-hook claude|shrink-hook|mem recall-hook/);
 });
+
+// A managed hook whose executable or --adapter file no longer exists (#1137,
+// an nvm Node upgrade removing the versioned directory) is degraded, and
+// doctor --fix re-renders it.
+for (const [name, rewrite] of [
+  ["adapter", (command, dead) => command.replace(/--adapter\s+.*$/, `--adapter '${dead}/native-hook-fast.js'`)],
+  ["executable", (command, dead) => command.replace(/^.*?(?=native-hook claude|shrink-hook)/, `'${dead}/bin/${command.includes("shrink-hook") ? "caveman" : "caveman-proxy"}' `)],
+]) {
+  test(`doctor flags a managed hook whose ${name} no longer exists and --fix re-renders it`, async () => {
+    const fx = fixture();
+    assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+    const path = join(fx.home, ".claude", "settings.json");
+    const dead = join(fx.home, ".nvm", "versions", "node", "v26.9.0");
+    const settings = JSON.parse(readFileSync(path, "utf8"));
+    for (const entries of Object.values(settings.hooks)) {
+      for (const entry of entries) {
+        const hook = entry.hooks?.[0];
+        if (typeof hook?.command === "string" && /native-hook claude|shrink-hook/.test(hook.command)) {
+          hook.command = rewrite(hook.command, dead);
+        }
+      }
+    }
+    writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
+    assert.match(readFileSync(path, "utf8"), /v26\.9\.0/);
+
+    const degraded = await run(["doctor", "claude"], fx.env);
+    assert.notEqual(degraded.code, 0);
+    assert.equal(JSON.parse(degraded.stdout).state, "degraded");
+
+    const fixed = await run(["doctor", "claude", "--fix"], fx.env);
+    assert.equal(fixed.code, 0, fixed.stderr);
+    const result = JSON.parse(fixed.stdout);
+    assert.equal(result.fix.result, "repaired");
+    assert.equal(result.state, "installed");
+    assert.doesNotMatch(readFileSync(path, "utf8"), /v26\.9\.0/);
+
+    const disabled = await run(["disable", "claude"], fx.env);
+    assert.equal(disabled.code, 0, disabled.stderr);
+    assert.doesNotMatch(readFileSync(path, "utf8"), /native-hook claude|shrink-hook/);
+  });
+}
 
 test("doctor --fix transactionally repairs missing owned hooks and preserves unrelated edits", async () => {
   const fx = fixture();
@@ -1084,6 +1131,104 @@ test("enable/disable opencode installs one native plugin, routed providers and r
   assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "opencode.json")), false);
 });
 
+test("status recognizes native OpenCode MCP recovery without a legacy marker", async () => {
+  const fx = fixture();
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+
+  const configPath = join(configDir, "opencode.json");
+  writeFileSync(configPath, JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  assert.equal(
+    existsSync(join(fx.home, ".caveman", "mcp", "opencode.json")),
+    false,
+  );
+
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  assert.ok(installed.mcp?.caveman);
+
+  const status = await run(["status"], fx.env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.doesNotMatch(status.stdout + status.stderr, /MCP recovery missing/);
+});
+
+test("status keeps native OpenCode MCP recovery when provider routing drifts", async () => {
+  const fx = fixture();
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+
+  const configPath = join(configDir, "opencode.json");
+  writeFileSync(configPath, JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  installed.provider.openai.options.baseURL =
+    "http://127.0.0.1:8787/chatgpt";
+  writeFileSync(configPath, JSON.stringify(installed, null, 2) + "\n");
+
+  const status = await run(["status"], fx.env);
+  assert.equal(status.code, 0, status.stderr);
+
+  const output = status.stdout + status.stderr;
+  assert.doesNotMatch(output, /MCP recovery missing/);
+});
+
+test("status recognizes native OpenCode MCP recovery when the config rewrites key order", async () => {
+  const fx = fixture();
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+
+  const configPath = join(configDir, "opencode.json");
+  writeFileSync(configPath, JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  const caveman = installed.mcp.caveman;
+  const keys = Object.keys(caveman);
+  assert.ok(keys.length > 1, "registration needs >1 key for a reorder to be meaningful");
+
+  // Same registration, keys serialized in the opposite order. Any writer that
+  // round-trips this file through a sorted or rebuilt map produces this, and the
+  // registration is still byte-for-byte equivalent as a value.
+  const reordered = {};
+  for (const key of keys.slice().reverse()) reordered[key] = caveman[key];
+  installed.mcp.caveman = reordered;
+  writeFileSync(configPath, JSON.stringify(installed, null, 2) + "\n");
+
+  const status = await run(["status"], fx.env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.doesNotMatch(status.stdout + status.stderr, /MCP recovery missing/);
+});
+
+test("status reports native OpenCode MCP recovery missing when its registration is removed", async () => {
+  const fx = fixture();
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+
+  const configPath = join(configDir, "opencode.json");
+  writeFileSync(configPath, JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  delete installed.mcp.caveman;
+  writeFileSync(configPath, JSON.stringify(installed, null, 2) + "\n");
+
+  const status = await run(["status"], fx.env);
+  assert.equal(status.code, 0, status.stderr);
+
+  const output = status.stdout + status.stderr;
+  assert.match(output, /MCP recovery missing/);
+});
+
 test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {
   const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
   const configDir = join(fx.home, ".config", "opencode");
@@ -1306,4 +1451,45 @@ test("enable/disable aider stays shallow, preserves native repo map, and restore
   assert.match(restored, /later-user-option: keep/);
   assert.doesNotMatch(restored, /caveman:native-aider|127\.0\.0\.1:8787/);
   assert.equal(existsSync(corePath), false);
+});
+
+// The generated opencode plugin bakes the invocation `enable` resolved, exactly
+// as the claude/codex hook documents bake theirs. Judging its ownership by the
+// marker comment alone left the same #1137 hole a step further along: the file
+// is byte-identical to what enable wrote, so nothing looks drifted, while the
+// path it names has gone with the removed nvm Node directory and every native
+// call fails silently.
+test("doctor flags an opencode plugin whose baked invocation no longer exists and --fix re-renders it", async () => {
+  const fx = fixture();
+  // A `caveman` earlier on PATH than the fixture's own, standing in for
+  // ~/.nvm/versions/node/<version>/bin — the directory nvm deletes on
+  // `nvm uninstall <old>`.
+  const versioned = join(fx.home, ".nvm", "versions", "node", "v26.9.0", "bin");
+  mkdirSync(versioned, { recursive: true });
+  writeFileSync(join(versioned, "caveman"), readFileSync(join(fx.home, "bin", "caveman")), { mode: 0o755 });
+  const env = { ...fx.env, PATH: `${versioned}:${fx.env.PATH}` };
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  assert.equal((await run(["enable", "opencode"], env)).code, 0);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  // Pin the shape the health check parses: if the generator stops emitting a
+  // `const command = "..."` line, the check silently verifies nothing.
+  assert.match(readFileSync(pluginPath, "utf8"), /^const command = ".*v26\.9\.0.*";$/m);
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], env)).stdout).state, "installed");
+
+  // The Node upgrade. The plugin's bytes do not change; its target disappears.
+  rmSync(dirname(versioned), { recursive: true, force: true });
+  const degraded = await run(["doctor", "opencode"], fx.env);
+  assert.notEqual(degraded.code, 0, "a plugin naming a missing executable must not report healthy");
+  const before = JSON.parse(degraded.stdout);
+  assert.equal(before.state, "degraded");
+  assert.equal(before.components.lifecycle_hooks, false);
+
+  const fixed = await run(["doctor", "opencode", "--fix"], fx.env);
+  assert.equal(fixed.code, 0, fixed.stderr);
+  assert.equal(JSON.parse(fixed.stdout).fix.result, "repaired");
+  assert.equal(JSON.parse(fixed.stdout).state, "installed");
+  assert.doesNotMatch(readFileSync(pluginPath, "utf8"), /v26\.9\.0/);
 });
