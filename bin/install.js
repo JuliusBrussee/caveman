@@ -1869,6 +1869,7 @@ function uninstall(ctx) {
     '.caveman-mode-log.jsonl',
     '.caveman-statusline-suffix',
     '.caveman-nudge-shown',
+    '.caveman-statusline-stale',
   ];
   for (const file of stateFiles) {
     const statePath = path.join(configDir, file);
