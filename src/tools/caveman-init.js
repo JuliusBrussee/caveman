@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // Embedded so the tool works standalone (npx-style) without the src/rules/ dir.
 // Mirrors src/rules/caveman-activate.md verbatim — keep these in sync.
@@ -46,6 +47,32 @@ function countOccurrences(haystack, needle) {
   let n = 0;
   for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + needle.length)) n++;
   return n;
+}
+
+function snapshotExisting(fullPath) {
+  try {
+    const st = fs.lstatSync(fullPath);
+    if (st.isSymbolicLink() || !st.isFile()) return { existed: true };
+    const previousBytes = fs.readFileSync(fullPath);
+    return {
+      existed: true,
+      previousBytes,
+      previousSha256: crypto.createHash('sha256').update(previousBytes).digest('hex'),
+    };
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { existed: false };
+    return { existed: true };
+  }
+}
+
+function fileRecord(fullPath, snap, fence) {
+  return {
+    path: path.resolve(fullPath),
+    created: !(snap && snap.existed),
+    fence: !!fence,
+    previousSha256: snap && snap.previousSha256,
+    previousBytes: snap && snap.previousBytes,
+  };
 }
 
 function fencedBlock(ruleBody) {
@@ -132,15 +159,21 @@ function processAgent(agent, targetDir, ruleBody, opts) {
     return processOpenclaw(opts);
   }
   const fullPath = path.join(targetDir, agent.file);
-  const exists = fs.existsSync(fullPath);
   const isAppend = agent.mode === 'append';
+  const snap = snapshotExisting(fullPath);
+  const exists = snap.existed;
   // Append targets are shared with the user, so our contribution is fenced.
   // Replace targets are single-purpose files we own outright.
   const desired = isAppend ? fencedBlock(ruleBody) : agent.frontmatter + ruleBody;
+  const written = (status, label) => ({
+    status,
+    label,
+    files: opts.dryRun ? [] : [fileRecord(fullPath, snap, isAppend)],
+  });
 
   if (!exists) {
     if (!opts.dryRun) writeAtomic(fullPath, desired);
-    return { status: 'added', label: '+' };
+    return written('added', '+');
   }
 
   const existing = fs.readFileSync(fullPath, 'utf8');
@@ -157,30 +190,30 @@ function processAgent(agent, targetDir, ruleBody, opts) {
       && countOccurrences(existing, FENCE_END) === 1
       && begin !== -1 && end > begin;
     if (!paired && (existing.includes(FENCE_BEGIN) || existing.includes(FENCE_END))) {
-      return { status: 'skipped-damaged-fence', label: '!' };
+      return { status: 'skipped-damaged-fence', label: '!', files: [] };
     }
     if (paired) {
       // Refresh in place. A presence-only check meant a rule-body change never
       // reached anyone already initialized — the block went stale forever.
       const span = existing.slice(begin, end + FENCE_END.length + 1);
-      if (span === desired) return { status: 'skipped-already-installed', label: '=' };
+      if (span === desired) return { status: 'skipped-already-installed', label: '=', files: [] };
       if (!opts.dryRun) {
         writeAtomic(fullPath, existing.slice(0, begin) + desired
           + existing.slice(end + FENCE_END.length).replace(/^\n/, ''));
       }
-      return { status: 'refreshed', label: '~' };
+      return written('refreshed', '~');
     }
     if (existing.includes(SENTINEL)) {
       // Pre-fence install. Leave it: we cannot tell our bytes from the user's
       // edits around them, and silently rewriting a tracked repo file is worse
       // than a stale block. Re-run after deleting the old block to re-fence.
-      return { status: 'skipped-legacy-unfenced', label: '?' };
+      return { status: 'skipped-legacy-unfenced', label: '?', files: [] };
     }
     if (!opts.dryRun) {
       const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
       writeAtomic(fullPath, existing + sep + desired);
     }
-    return { status: 'appended', label: '~' };
+    return written('appended', '~');
   }
 
   // Replace-mode files carry no marker fence, so a sentinel hit cannot tell
@@ -188,15 +221,15 @@ function processAgent(agent, targetDir, ruleBody, opts) {
   // Refreshing on a guess would clobber their content, so skip and let the
   // existing --force flag be the deliberate refresh path.
   if (existing.includes(SENTINEL)) {
-    return { status: 'skipped-already-installed', label: '=' };
+    return { status: 'skipped-already-installed', label: '=', files: [] };
   }
 
   if (opts.force) {
     if (!opts.dryRun) writeAtomic(fullPath, desired);
-    return { status: 'overwritten', label: '!' };
+    return written('overwritten', '!');
   }
 
-  return { status: 'skipped-exists', label: '?' };
+  return { status: 'skipped-exists', label: '?', files: [] };
 }
 
 function processOpenclaw(opts) {
@@ -206,9 +239,15 @@ function processOpenclaw(opts) {
       status: 'unsupported-standalone',
       label: 'x',
       detail: '~/.openclaw/workspace (helper unavailable in standalone curl|node mode — use `npx -y github:JuliusBrussee/caveman -- --only openclaw`)',
+      files: [],
     };
   }
   const repoRoot = path.resolve(__dirname, '..', '..');
+  const ws = helper.resolveWorkspace ? helper.resolveWorkspace() : path.join(require('os').homedir(), '.openclaw', 'workspace');
+  const skillFile = path.join(ws, 'skills', 'caveman', 'SKILL.md');
+  const soulFile = path.join(ws, 'SOUL.md');
+  const skillSnap = snapshotExisting(skillFile);
+  const soulSnap = snapshotExisting(soulFile);
   const log = {
     write: (_) => {},
     note: (_) => {},
@@ -222,10 +261,13 @@ function processOpenclaw(opts) {
     log,
   });
   if (!r.ok) {
-    return { status: 'skipped-' + (r.reason || 'failed'), label: '?', detail: helper.resolveWorkspace ? helper.resolveWorkspace() : '~/.openclaw/workspace' };
+    return { status: 'skipped-' + (r.reason || 'failed'), label: '?', detail: ws, files: [] };
   }
-  if (r.dryRun) return { status: 'would-add', label: '+', detail: helper.resolveWorkspace() };
-  return { status: 'installed', label: '+', detail: helper.resolveWorkspace() };
+  if (r.dryRun) return { status: 'would-add', label: '+', detail: ws, files: [] };
+  const files = [];
+  if (fs.existsSync(skillFile)) files.push(fileRecord(skillFile, skillSnap, false));
+  if (fs.existsSync(soulFile)) files.push(fileRecord(soulFile, soulSnap, true));
+  return { status: 'installed', label: '+', detail: ws, files };
 }
 
 function parseArgs(argv) {
@@ -268,31 +310,43 @@ Flags:
 `);
 }
 
-function main() {
-  const opts = parseArgs(process.argv.slice(2));
-  if (opts.help) { help(); return; }
-
-  console.log(`🪨 caveman init — ${opts.target}${opts.dryRun ? ' (dry run)' : ''}\n`);
-
+function runInitTo(target, opts = {}) {
   const ruleBody = loadRuleBody();
   const counts = { added: 0, appended: 0, refreshed: 0, overwritten: 0, skipped: 0 };
+  const files = [];
+  const silent = opts.log === false;
+  const say = silent ? () => {} : (s) => console.log(s);
+
+  if (!silent) {
+    say(`🪨 caveman init — ${target}${opts.dryRun ? ' (dry run)' : ''}\n`);
+  }
 
   for (const agent of AGENTS) {
     if (opts.only && opts.only !== agent.id) continue;
-    const result = processAgent(agent, opts.target, ruleBody, opts);
-    const target = agent.file || result.detail || agent.description || agent.id;
-    console.log(`  ${result.label} ${target} (${result.status})`);
+    const result = processAgent(agent, target, ruleBody, opts);
+    const targetLabel = agent.file || result.detail || agent.description || agent.id;
+    if (!silent) say(`  ${result.label} ${targetLabel} (${result.status})`);
     if (result.status === 'added' || result.status === 'installed' || result.status === 'would-add') counts.added++;
     else if (result.status === 'appended') counts.appended++;
     else if (result.status === 'refreshed') counts.refreshed++;
     else if (result.status === 'overwritten') counts.overwritten++;
     else counts.skipped++;
+    if (Array.isArray(result.files)) files.push(...result.files);
   }
 
-  console.log(`\n${counts.added} added, ${counts.appended} appended, ` +
-              `${counts.refreshed} refreshed, ` +
-              `${counts.overwritten} overwritten, ${counts.skipped} skipped`);
-  if (opts.dryRun) console.log('(dry run — no files were written)');
+  if (!silent) {
+    say(`\n${counts.added} added, ${counts.appended} appended, ` +
+        `${counts.refreshed} refreshed, ` +
+        `${counts.overwritten} overwritten, ${counts.skipped} skipped`);
+    if (opts.dryRun) say('(dry run — no files were written)');
+  }
+  return { files, counts };
+}
+
+function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  if (opts.help) { help(); return; }
+  runInitTo(opts.target, opts);
 }
 
 // Run when executed directly AND when piped via `curl … | node -` (the
@@ -301,4 +355,4 @@ function main() {
 // no-ops with exit code 0 — the worst kind of failure.
 if (require.main === module || (!require.main && module.id === '[stdin]')) main();
 
-module.exports = { processAgent, loadRuleBody, AGENTS, SENTINEL, RULE_BODY };
+module.exports = { processAgent, loadRuleBody, runInitTo, AGENTS, SENTINEL, RULE_BODY };

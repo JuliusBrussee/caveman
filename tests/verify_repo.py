@@ -232,6 +232,10 @@ def verify_synced_files() -> None:
         (ROOT / "bin" / "lib" / "settings.js").exists(),
         "bin/lib/settings.js missing — installer would crash on JSONC settings.json",
     )
+    ensure(
+        (ROOT / "bin" / "lib" / "install-receipt.js").exists(),
+        "bin/lib/install-receipt.js missing — last-run verify/revert would not load",
+    )
 
     print("Synced copies, caveman.skill zip, and installer entrypoints OK")
 
@@ -325,6 +329,7 @@ def verify_manifests_and_syntax() -> None:
     run(["node", "--check", "src/hooks/cavecrew-model-overrides.js"])
     run(["node", "--check", "bin/install.js"])
     run(["node", "--check", "bin/lib/settings.js"])
+    run(["node", "--check", "bin/lib/install-receipt.js"])
     bash = shutil.which("bash")
     if bash is not None:
         run([bash, "-n", "src/hooks/install.sh"])

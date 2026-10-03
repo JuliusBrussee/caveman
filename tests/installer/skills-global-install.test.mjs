@@ -65,6 +65,15 @@ test('Cursor install passes -g so skills land in the user skills directory', { s
     assert.strictEqual(argv[argv.indexOf('-a') + 1], 'cursor');
     assert.ok(argv.includes('--skill'), '--skill * must survive (#370)');
     assert.ok(fs.existsSync(path.join(home, '.cursor', 'skills')), 'target dir should be pre-created');
+    const receiptPath = path.join(home, '.config', 'caveman', 'last-install.json');
+    assert.ok(fs.existsSync(receiptPath), `receipt missing:\n${result.stdout}\n${result.stderr}`);
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+    const command = receipt.entries.find(e => e.op === 'command');
+    assert.ok(command, `expected a command entry, got: ${JSON.stringify(receipt.entries)}`);
+    assert.equal(command.revert, 'manual');
+    assert.equal(command.argv[0], 'npx');
+    assert.ok(command.argv.includes('skills'));
+    assert.ok(command.argv.includes('add'));
   } finally {
     cleanup();
   }

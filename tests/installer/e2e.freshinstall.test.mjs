@@ -144,6 +144,40 @@ test('isolated Claude install and uninstall complete without network or real use
   }
 });
 
+test('last-install receipt verifies and revert-last removes this run\'s hooks, leaving a foreign package.json', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const env = isolatedInstallEnv(dir);
+  const foreign = '{\n  "type": "module",\n  "name": "some-other-plugin"\n}\n';
+  try {
+    const hooks = path.join(configDir, 'hooks');
+    fs.mkdirSync(hooks, { recursive: true });
+    const manifest = path.join(hooks, 'package.json');
+    fs.writeFileSync(manifest, foreign);
+
+    const installed = runInstaller(['--only', 'claude', '--with-hooks'], configDir, env);
+    assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+
+    const receiptPath = path.join(env.XDG_CONFIG_HOME, 'caveman', 'last-install.json');
+    assert.ok(fs.existsSync(receiptPath), 'last-install.json missing after install');
+    assert.match(installed.stdout, /receipt: /);
+
+    const verified = runInstaller(['--verify-last'], configDir, env);
+    assert.equal(verified.status, 0, verified.stderr || verified.stdout);
+
+    const reverted = runInstaller(['--revert-last'], configDir, env);
+    assert.equal(reverted.status, 0, reverted.stderr || reverted.stdout);
+    for (const file of ['caveman-config.js', 'caveman-parse.js', 'caveman-activate.js',
+      'caveman-mode-tracker.js', 'caveman-stats.js', STATUSLINE_FILE, 'cavecrew-model-overrides.js']) {
+      assert.equal(fs.existsSync(path.join(hooks, file)), false, `${file} survived --revert-last`);
+    }
+    assert.equal(fs.readFileSync(manifest, 'utf8'), foreign, '--revert-last touched a foreign hooks/package.json');
+    assert.equal(fs.existsSync(receiptPath), false, 'receipt should be renamed after successful revert');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('uninstall removes session state but keeps lifetime history', () => {
   const dir = freshTmpDir();
   const env = isolatedInstallEnv(dir);

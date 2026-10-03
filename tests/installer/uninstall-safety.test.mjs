@@ -100,6 +100,26 @@ test('uninstall keeps the hook files when settings.json cannot be updated', () =
   }
 });
 
+test('revert-last keeps the hook files when settings.json cannot be updated', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const env = isolatedEnv(dir);
+  try {
+    const installed = runInstaller(['--only', 'claude', '--with-hooks'], configDir, env);
+    assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+    const activate = path.join(configDir, 'hooks', 'caveman-activate.js');
+    assert.ok(fs.existsSync(activate), 'setup: the hook was never installed');
+
+    fs.writeFileSync(path.join(configDir, 'settings.json'), UNPARSEABLE);
+    const reverted = runInstaller(['--revert-last'], configDir, env);
+
+    assert.ok(fs.existsSync(activate), 'revert-last deleted a hook settings.json may still reference');
+    assert.notEqual(reverted.status, 0, 'a revert that could not rewrite settings must not exit 0');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("install and uninstall leave another plugin's hooks/package.json alone", () => {
   const dir = freshTmpDir();
   const configDir = path.join(dir, 'claude');

@@ -25,6 +25,7 @@ const crypto = require('crypto');
 const SETTINGS = require('./lib/settings');
 const OPENCLAW = require('./lib/openclaw');
 const OWNED = require('./lib/owned-install');
+const RECEIPT = require('./lib/install-receipt');
 const { transformOpencodeAgentFrontmatter } = require('./lib/opencode-agent');
 const PORTABLE = require('./lib/portable-process');
 const PLATFORM_PATHS = require('./lib/platform-paths');
@@ -76,6 +77,136 @@ function hooksManifestIsOurs(p) {
   }
 }
 
+function preWriteSnapshot(absPath) {
+  const resolved = path.resolve(absPath);
+  try {
+    const st = fs.lstatSync(resolved);
+    if (st.isSymbolicLink() || !st.isFile()) return { existed: true };
+    const bytes = fs.readFileSync(resolved);
+    return {
+      existed: true,
+      previousSha256: RECEIPT.sha256Bytes(bytes),
+      previousBytes: bytes,
+    };
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { existed: false };
+    return { existed: true };
+  }
+}
+
+function recordWriteAfter(ctx, absPath, snap) {
+  if (!ctx || !ctx.receipt || (ctx.opts && ctx.opts.dryRun)) return;
+  if (!fs.existsSync(absPath)) return;
+  RECEIPT.recordWrite(ctx.receipt, {
+    path: absPath,
+    created: !(snap && snap.existed),
+    previousSha256: snap && snap.previousSha256,
+    previousBytes: snap && snap.previousBytes,
+  });
+}
+
+function recordSettingsMerge(ctx, settingsPath, settings) {
+  if (!ctx || !ctx.receipt || (ctx.opts && ctx.opts.dryRun) || !settings) return;
+  const keys = [];
+  if (settings.hooks && typeof settings.hooks === 'object') {
+    for (const ev of Object.keys(settings.hooks)) {
+      if (SETTINGS.hasCavemanHook(settings, ev, 'caveman')) keys.push(`hooks.${ev}`);
+    }
+  }
+  const sl = settings.statusLine;
+  const cmd = typeof sl === 'string' ? sl : (sl && sl.command) || '';
+  if (cmd.includes('caveman-statusline')) keys.push('statusLine');
+  if (Array.isArray(settings.plugin) && settings.plugin.some(p => String(p).includes('caveman'))) {
+    keys.push('plugin');
+  }
+  if (settings.mcp && typeof settings.mcp === 'object' && settings.mcp['caveman-shrink']) {
+    keys.push('mcp');
+  }
+  if (keys.length === 0) return;
+  RECEIPT.recordMerge(ctx.receipt, { path: settingsPath, marker: 'caveman', keys });
+}
+
+function recordSpawnedCommand(ctx, cmd, args) {
+  if (!ctx || !ctx.receipt || (ctx.opts && ctx.opts.dryRun)) return;
+  RECEIPT.recordCommand(ctx.receipt, { argv: [cmd, ...args], revert: 'manual' });
+}
+
+function snapshotFiles(root) {
+  const map = new Map();
+  if (!root || !fs.existsSync(root)) return map;
+  const stack = [root];
+  while (stack.length) {
+    const cur = stack.pop();
+    let st;
+    try { st = fs.lstatSync(cur); } catch (_) { continue; }
+    if (st.isSymbolicLink()) continue;
+    if (st.isDirectory()) {
+      let names;
+      try { names = fs.readdirSync(cur); } catch (_) { continue; }
+      for (const n of names) stack.push(path.join(cur, n));
+      continue;
+    }
+    if (!st.isFile()) continue;
+    try {
+      const bytes = fs.readFileSync(cur);
+      map.set(path.resolve(cur), {
+        sha256: RECEIPT.sha256Bytes(bytes),
+        bytes,
+      });
+    } catch (_) { /* unreadable — skip */ }
+  }
+  return map;
+}
+
+function snapshotOwned(root, integration, operations) {
+  const map = new Map();
+  if (!root) return map;
+  for (const op of operations || []) {
+    if (!op || !op.relativePath) continue;
+    const target = path.join(root, ...String(op.relativePath).split('/'));
+    for (const [k, v] of snapshotFiles(target)) map.set(k, v);
+  }
+  const journal = path.join(root, `.caveman-${integration}-ownership.json`);
+  for (const [k, v] of snapshotFiles(journal)) map.set(k, v);
+  return map;
+}
+
+function recordOwnedDiff(ctx, before, root, integration, operations) {
+  if (!ctx || !ctx.receipt || (ctx.opts && ctx.opts.dryRun) || !root) return;
+  const after = snapshotOwned(root, integration, operations);
+  for (const [abs, now] of after) {
+    const prev = before.get(abs);
+    if (prev && prev.sha256 === now.sha256) continue;
+    RECEIPT.recordWrite(ctx.receipt, {
+      path: abs,
+      created: !prev,
+      previousSha256: prev && prev.sha256,
+      previousBytes: prev && prev.bytes,
+    });
+  }
+}
+
+function recordMarkedFence(ctx, filePath, begin, end) {
+  if (!ctx || !ctx.receipt || (ctx.opts && ctx.opts.dryRun)) return;
+  RECEIPT.recordFence(ctx.receipt, { path: filePath, begin, end });
+}
+
+function flushReceipt(ctx) {
+  if (!ctx || ctx._receiptFlushed) return;
+  if (!ctx.receipt || !ctx.receipt.entries || ctx.receipt.entries.length === 0) return;
+  if (ctx.opts && ctx.opts.dryRun) return;
+  ctx._receiptFlushed = true;
+  try {
+    const dest = RECEIPT.writeReceipt(ctx.receipt);
+    process.stdout.write(
+      `receipt: ${dest}  (verify: node bin/install.js --verify-last; undo this run: node bin/install.js --revert-last)\n`
+    );
+  } catch (e) {
+    process.stderr.write('receipt: unavailable\n');
+    if (e && e.message) process.stderr.write(`  ${e.message}\n`);
+  }
+}
+
 // ── Argv ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const opts = {
@@ -84,6 +215,7 @@ function parseArgs(argv) {
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
     configDir: null, help: false,
+    verifyLast: false, revertLast: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -131,6 +263,8 @@ function parseArgs(argv) {
       case '--list': opts.listOnly = true; break;
       case '--no-color': opts.noColor = true; break;
       case '--uninstall': case '-u': opts.uninstall = true; break;
+      case '--verify-last': opts.verifyLast = true; break;
+      case '--revert-last': opts.revertLast = true; break;
       case '--non-interactive': opts.nonInteractive = true; break;
       case '-h': case '--help': opts.help = true; break;
       // POSIX end-of-options marker. Older curl|bash flows pipe `-- --only foo`
@@ -154,6 +288,24 @@ function parseArgs(argv) {
     }
   }
   if (opts.all && opts.minimal) die('error: --all and --minimal are mutually exclusive');
+  if (opts.verifyLast && opts.revertLast) {
+    die('error: --verify-last and --revert-last are mutually exclusive');
+  }
+  if (opts.verifyLast && opts.uninstall) {
+    die('error: --verify-last and --uninstall are mutually exclusive');
+  }
+  if (opts.revertLast && opts.uninstall) {
+    die('error: --revert-last and --uninstall are mutually exclusive');
+  }
+  const installIntent = opts.only.length > 0 || opts.all || opts.minimal || opts.withInit
+    || opts.force || opts.skipSkills || !!opts.withMcpShrink
+    || opts.withHooks === true || opts.withHooks === false;
+  if (opts.verifyLast && installIntent) {
+    die('error: --verify-last cannot be combined with an install');
+  }
+  if (opts.revertLast && installIntent) {
+    die('error: --revert-last cannot be combined with an install');
+  }
   // --all turns on per-repo init only. It deliberately does NOT force:
   //   • withHooks — left at 'auto' so installClaude() can skip standalone
   //     settings.json wiring when the plugin manifest already wires the hooks
@@ -484,6 +636,10 @@ async function installClaude(ctx) {
     const pluginEnv = sameFilesystemTmpEnv(configDir);
     const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', REPO], { env: pluginEnv }, opts.dryRun);
     const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], { env: pluginEnv }, opts.dryRun);
+    if (!opts.dryRun) {
+      recordSpawnedCommand(ctx, 'claude', ['plugin', 'marketplace', 'add', REPO]);
+      recordSpawnedCommand(ctx, 'claude', ['plugin', 'install', 'caveman@caveman']);
+    }
     if (spawnOk(r1) && spawnOk(r2)) {
       results.installed.push('claude');
       pluginInstallSucceeded = true;
@@ -512,6 +668,7 @@ async function installClaude(ctx) {
         if (!opts.dryRun) {
           SETTINGS.validateHookFields(settings);
           SETTINGS.writeSettings(settingsPath, settings);
+          recordSettingsMerge(ctx, settingsPath, settings);
         }
       }
     }
@@ -579,6 +736,9 @@ function installGemini(ctx) {
     }
   }
   const r = runSpawn('gemini', ['extensions', 'install', `https://github.com/${REPO}`], null, opts.dryRun);
+  if (!opts.dryRun) {
+    recordSpawnedCommand(ctx, 'gemini', ['extensions', 'install', `https://github.com/${REPO}`]);
+  }
   if (spawnOk(r)) results.installed.push('gemini');
   else results.failed.push(['gemini', 'gemini extensions install failed']);
   process.stdout.write('\n');
@@ -622,6 +782,7 @@ function installViaSkills(ctx, prov) {
     args.push('-g');
   }
   const r = runSpawn('npx', args, null, opts.dryRun);
+  if (!opts.dryRun) recordSpawnedCommand(ctx, 'npx', args);
   if (spawnOk(r)) results.installed.push(prov.id);
   else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
   process.stdout.write('\n');
@@ -673,6 +834,7 @@ function installHermes(ctx) {
         write: (stage) => OWNED.copyPath(srcDir, stage),
       });
     }
+    const before = snapshotOwned(skillsRoot, 'hermes', operations);
     OWNED.installOwned({
       root: skillsRoot,
       integration: 'hermes',
@@ -680,6 +842,7 @@ function installHermes(ctx) {
       force: opts.force,
       note,
     });
+    recordOwnedDiff(ctx, before, skillsRoot, 'hermes', operations);
 
     results.installed.push('hermes');
   } catch (err) {
@@ -817,6 +980,7 @@ function installOpencode(ctx) {
         write: (stage) => OWNED.copyPath(src, stage),
       });
     }
+    const beforeOwned = snapshotOwned(dir, 'opencode', operations);
     OWNED.installOwned({
       root: dir,
       integration: 'opencode',
@@ -824,6 +988,7 @@ function installOpencode(ctx) {
       force: opts.force,
       note,
     });
+    recordOwnedDiff(ctx, beforeOwned, dir, 'opencode', operations);
     process.stdout.write(`  installed owned opencode payload under: ${dir}\n`);
 
     // 5. AGENTS.md — Tier-3 always-on ruleset. Wrapped in begin/end markers so
@@ -863,6 +1028,7 @@ function installOpencode(ctx) {
           const next = existing.slice(0, begin) + fencedBlock
             + existing.slice(end + OPENCODE_AGENTS_MD_END.length).replace(/^\n/, '');
           fs.writeFileSync(agentsMd, next, { mode: 0o644 });
+          recordMarkedFence(ctx, agentsMd, OPENCODE_AGENTS_MD_BEGIN, OPENCODE_AGENTS_MD_END);
           process.stdout.write(`  refreshed caveman ruleset in ${agentsMd}\n`);
         }
       } else if (alreadyByLegacySentinel) {
@@ -895,15 +1061,18 @@ function installOpencode(ctx) {
           }
           const next = (userPart ? userPart + '\n\n' : '') + fencedBlock;
           fs.writeFileSync(agentsMd, next, { mode: 0o644 });
+          recordMarkedFence(ctx, agentsMd, OPENCODE_AGENTS_MD_BEGIN, OPENCODE_AGENTS_MD_END);
           process.stdout.write(`  migrated ${agentsMd} legacy block to fenced (backup: ${agentsBak})\n`);
         }
       } else {
         const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
         fs.writeFileSync(agentsMd, existing + sep + fencedBlock, { mode: 0o644 });
+        recordMarkedFence(ctx, agentsMd, OPENCODE_AGENTS_MD_BEGIN, OPENCODE_AGENTS_MD_END);
         process.stdout.write(`  appended caveman ruleset to ${agentsMd}\n`);
       }
     } else {
       fs.writeFileSync(agentsMd, fencedBlock, { mode: 0o644 });
+      recordMarkedFence(ctx, agentsMd, OPENCODE_AGENTS_MD_BEGIN, OPENCODE_AGENTS_MD_END);
       process.stdout.write(`  installed: ${agentsMd}\n`);
     }
 
@@ -946,6 +1115,7 @@ function installOpencode(ctx) {
       }
     }
     SETTINGS.writeSettings(opencodeJson, cfg);
+    recordSettingsMerge(ctx, opencodeJson, cfg);
     process.stdout.write(`  patched: ${opencodeJson}\n`);
 
     results.installed.push('opencode');
@@ -973,6 +1143,14 @@ function installOpenclaw(ctx) {
     warn: (s) => warn(s),
   };
 
+  const ws = process.env.OPENCLAW_WORKSPACE || OPENCLAW.resolveWorkspace();
+  const skillFile = path.join(ws, 'skills', OPENCLAW.SKILL_NAME, 'SKILL.md');
+  const soulFile = path.join(ws, 'SOUL.md');
+  const skillSnap = preWriteSnapshot(skillFile);
+  const soulBefore = (() => {
+    try { return fs.readFileSync(soulFile, 'utf8'); } catch (_) { return null; }
+  })();
+
   const r = OPENCLAW.installOpenclaw({
     workspace: process.env.OPENCLAW_WORKSPACE || undefined,
     repoRoot,
@@ -981,6 +1159,15 @@ function installOpenclaw(ctx) {
     version: OPENCLAW_SKILL_VERSION,
     log,
   });
+
+  if (r.ok && !opts.dryRun) {
+    if (fs.existsSync(skillFile)) recordWriteAfter(ctx, skillFile, skillSnap);
+    let soulAfter = null;
+    try { soulAfter = fs.readFileSync(soulFile, 'utf8'); } catch (_) {}
+    if (soulAfter != null && soulAfter !== soulBefore) {
+      recordMarkedFence(ctx, soulFile, OPENCLAW.MARK_BEGIN, OPENCLAW.MARK_END);
+    }
+  }
 
   if (r.ok) results.installed.push('openclaw');
   else results.failed.push(['openclaw', r.reason || 'install failed']);
@@ -1019,6 +1206,7 @@ async function installHooks(ctx) {
       warn("  caveman's hooks are CommonJS; if that file declares \"type\":\"module\" they will not load.");
       continue;
     }
+    const snap = preWriteSnapshot(dest);
     if (sourceDir && fs.existsSync(path.join(sourceDir, f))) {
       fs.copyFileSync(path.join(sourceDir, f), dest);
     } else {
@@ -1038,6 +1226,7 @@ async function installHooks(ctx) {
         warn(`  note: no integrity manifest at ${PINNED_REF} — downloaded hooks installed unverified.`);
       }
     }
+    recordWriteAfter(ctx, dest, snap);
     process.stdout.write(`  installed: ${dest}\n`);
   }
 
@@ -1114,6 +1303,7 @@ async function installHooks(ctx) {
   // entire settings.json if any single hook is malformed (#249-class footgun).
   SETTINGS.validateHookFields(settings);
   SETTINGS.writeSettings(settingsPath, settings);
+  recordSettingsMerge(ctx, settingsPath, settings);
   process.stdout.write(`  hooks wired in ${settingsPath}\n`);
   return 'ok';
 }
@@ -1146,6 +1336,7 @@ function installMcpShrink(ctx) {
     null, opts.dryRun
   );
   if (spawnOk(r)) {
+    recordSpawnedCommand(ctx, 'claude', ['mcp', 'add', 'caveman-shrink', '--', 'npx', '-y', MCP_SHRINK_PKG, ...upstream]);
     note(`    registered, wrapping: ${upstream.join(' ')}`);
     note(`    Edit ~/.claude.json mcpServers["caveman-shrink"] to change the upstream,`);
     note('    or `claude mcp remove caveman-shrink` to drop it.');
@@ -1159,14 +1350,40 @@ function installMcpShrink(ctx) {
 async function runInit(ctx) {
   const { note, warn, opts, repoRoot } = ctx;
   const local = repoRoot && path.join(repoRoot, 'src/tools/caveman-init.js');
+  if (local && fs.existsSync(local)) {
+    if (opts.dryRun) {
+      const initMod = require(local);
+      initMod.runInitTo(process.cwd(), { dryRun: true, force: opts.force });
+      return true;
+    }
+    try {
+      const initMod = require(local);
+      const result = initMod.runInitTo(process.cwd(), { dryRun: false, force: opts.force });
+      if (ctx.receipt && result && Array.isArray(result.files)) {
+        for (const f of result.files) {
+          if (f.fence) {
+            recordMarkedFence(ctx, f.path, RECEIPT.DEFAULT_BEGIN, RECEIPT.DEFAULT_END);
+          } else {
+            RECEIPT.recordWrite(ctx.receipt, {
+              path: f.path,
+              created: !!f.created,
+              previousSha256: f.previousSha256,
+              previousBytes: f.previousBytes,
+            });
+          }
+        }
+      }
+      return true;
+    } catch (e) {
+      warn('  ' + ((e && e.message) || e));
+      return false;
+    }
+  }
   const args = [process.cwd()];
   if (opts.dryRun) args.push('--dry-run');
   if (opts.force)  args.push('--force');
-  if (local && fs.existsSync(local)) {
-    const r = runSpawn(absoluteNodePath(), [local, ...args], null, opts.dryRun);
-    return spawnOk(r);
-  }
-  // Curl-pipe fallback
+  // Curl-pipe fallback — no installer receipt (no bin/install.js parent
+  // recording the writes this downloaded script performs).
   if (opts.dryRun) {
     note(`  would download ${INIT_SCRIPT_URL} and run it on ${process.cwd()}`);
     return true;
@@ -1545,7 +1762,6 @@ FLAGS
                         is required. The value is whitespace-tokenized.
                         Example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"
   --no-mcp-shrink       Skip MCP shrink. (Default.)
-  --uninstall, -u       Remove caveman from this machine.
   --config-dir <path>   Claude Code config dir for hook files + settings.json.
                         Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT
                         scope \`claude plugin install\`, \`gemini extensions
@@ -1554,6 +1770,10 @@ FLAGS
   --non-interactive     Never prompt; use defaults. (Auto when stdin is not a TTY.)
   --list                Print provider matrix and exit.
   --no-color            Disable ANSI colors.
+  --verify-last         Check the last install transaction still matches disk.
+  --revert-last         Undo the last install transaction only. Does not spawn
+                        npx/claude/gemini removal. For a full wipe, use --uninstall.
+  --uninstall, -u       Remove caveman from this machine (full wipe).
   -h, --help            Show this help.
 
 EXAMPLES
@@ -1561,9 +1781,57 @@ EXAMPLES
   npx -y github:JuliusBrussee/caveman -- --all               # all the trimmings
   npx -y github:JuliusBrussee/caveman -- --only claude --no-mcp-shrink
   npx -y github:JuliusBrussee/caveman -- --uninstall
+  node bin/install.js --verify-last
+  node bin/install.js --revert-last
 
   Issues: https://github.com/${REPO}/issues
 `);
+}
+
+function runVerifyLast() {
+  let receipt;
+  try {
+    receipt = RECEIPT.readReceipt();
+  } catch (e) {
+    process.stderr.write(`caveman: ${(e && e.message) || e}\n`);
+    return 2;
+  }
+  if (!receipt) {
+    process.stderr.write('caveman: no last-install receipt\n');
+    return 2;
+  }
+  const result = RECEIPT.verifyReceipt(receipt, { settings: SETTINGS });
+  return result.ok ? 0 : 1;
+}
+
+function runRevertLast(opts) {
+  let receipt;
+  try {
+    receipt = RECEIPT.readReceipt();
+  } catch (e) {
+    process.stderr.write(`caveman: ${(e && e.message) || e}\n`);
+    return 2;
+  }
+  if (!receipt) {
+    process.stderr.write('caveman: no last-install receipt\n');
+    return 2;
+  }
+  const result = RECEIPT.revertReceipt(receipt, {
+    dryRun: opts.dryRun,
+    hooksManifestIsOurs,
+    settings: SETTINGS,
+    openclaw: OPENCLAW,
+  });
+  if (result.hardStop) return 1;
+  if (!opts.dryRun) {
+    try {
+      RECEIPT.markReceiptReverted();
+    } catch (e) {
+      process.stderr.write(`caveman: reverted files but could not rename receipt: ${(e && e.message) || e}\n`);
+      return 1;
+    }
+  }
+  return 0;
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────
@@ -1572,6 +1840,8 @@ async function main() {
   const c = makeChalk(opts.noColor);
   if (opts.help) { printHelp(); return 0; }
   if (opts.listOnly) { printList(opts.noColor); return 0; }
+  if (opts.verifyLast) return runVerifyLast();
+  if (opts.revertLast) return runRevertLast(opts);
 
   checkWslWindowsNode();
   checkNodeVersion();
@@ -1586,9 +1856,29 @@ async function main() {
     warn: (s) => process.stderr.write(c.red(s) + '\n'),
     ok:   (s) => process.stdout.write(c.green(s) + '\n'),
     results: { installed: [], skipped: [], failed: [], detected: 0 },
+    receipt: null,
   };
 
   if (opts.uninstall) return uninstall(ctx);
+
+  if (!opts.dryRun) {
+    ctx.receipt = RECEIPT.beginReceipt({
+      argv: process.argv.slice(2),
+      pinnedRef: PINNED_REF,
+      configDir,
+    });
+  }
+
+  try {
+    return await runInstall(ctx, c);
+  } finally {
+    flushReceipt(ctx);
+  }
+}
+
+async function runInstall(ctx, c) {
+  const { opts } = ctx;
+  void c;
 
   ctx.say('🪨 caveman installer');
   ctx.note(`  ${REPO}`);
@@ -1634,6 +1924,7 @@ async function main() {
     // --yes --all for the same reason as installViaSkills above (issue #370):
     // skip the interactive skill picker so curl|bash actually installs.
     const r = runSpawn('npx', ['-y', 'skills', 'add', REPO, '--yes', '--all'], null, opts.dryRun);
+    if (!opts.dryRun) recordSpawnedCommand(ctx, 'npx', ['-y', 'skills', 'add', REPO, '--yes', '--all']);
     if (spawnOk(r)) ctx.results.installed.push('skills-auto');
     else ctx.results.failed.push(['skills-auto', 'npx skills add (auto) failed']);
     process.stdout.write('\n');

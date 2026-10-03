@@ -132,6 +132,8 @@ Useful flags:
 | `--no-color` | Disable ANSI colors. |
 | `--list` | Print full agent matrix and exit. |
 | `--force` | Re-run even if already installed. |
+| `--verify-last` | Check the last install receipt still matches disk. |
+| `--revert-last` | Undo the last install transaction only. Does not run `npx skills` removal. Concurrent installs last-writer-wins — no lock. Full wipe: `--uninstall`. |
 | `--uninstall` | Remove everything. See below. |
 
 ## Always-on rules

@@ -80,3 +80,9 @@ test('broken symbolic-link targets are conflicts even with force', { skip: proce
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('install-receipt.js does not import CLI journal helpers', () => {
+  const src = fs.readFileSync(require.resolve('../../bin/lib/install-receipt.js'), 'utf8');
+  assert.doesNotMatch(src, /require\(['"]\.\/owned-install(?:\.js)?['"]\)/);
+  assert.doesNotMatch(src, /require\(['"].*owned-install/);
+});
