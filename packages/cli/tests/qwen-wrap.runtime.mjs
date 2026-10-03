@@ -264,8 +264,12 @@ function writePendingMcpUninstall(agent, markerPath, configPath, configBefore, c
 test("Qwen profile uses high-precedence system settings with a bounded extension guard", () => {
   assert.deepEqual(qwen.binary_names, ["qwen"]);
   assert.deepEqual(qwen.args, ["--extensions=none"]);
-  assert.equal(qwen.tested_agent_version, "0.24.6");
-  assert.equal(qwen.install, "npm i -g @qwen-code/qwen-code@0.24.6");
+  // The pin itself is owned by the nightly drift bump and guarded by
+  // agents/compile.mjs; here only the shape matters: install pins the tested
+  // version. Asserting the literal made every drift bump edit this file, and a
+  // bump that moved tested_agent_version alone left install silently stale.
+  assert.match(qwen.tested_agent_version, /^\d+\.\d+\.\d+$/);
+  assert.equal(qwen.install, `npm i -g @qwen-code/qwen-code@${qwen.tested_agent_version}`);
   assert.equal(qwen.injection.method, "config-file");
   assert.equal(qwen.injection.env_var, "QWEN_CODE_SYSTEM_SETTINGS_PATH");
   assert.equal(qwen.injection.base_config.platform_default, "qwen-system-settings");

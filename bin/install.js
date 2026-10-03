@@ -1790,9 +1790,14 @@ function uninstall(ctx) {
         }
       }
     }
-    // opencode flag file
-    const ocFlag = path.join(ocDir, '.caveman-active');
-    if (fs.existsSync(ocFlag) && !opts.dryRun) { try { fs.unlinkSync(ocFlag); } catch (_) {} }
+    // opencode mode state. Both files, matching the Claude-side stateFiles
+    // sweep below: the plugin writes `.prev` for the one-shot restore, and a
+    // stale one is not inert — a reinstall's first /caveman-commit would read
+    // it as that session's return target.
+    for (const name of ['.caveman-active', '.caveman-active.prev']) {
+      const ocFlag = path.join(ocDir, name);
+      if (fs.existsSync(ocFlag) && !opts.dryRun) { try { fs.unlinkSync(ocFlag); } catch (_) {} }
+    }
   }
 
   // OpenClaw native install — strip skill folder + SOUL.md marker block.

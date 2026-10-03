@@ -86,6 +86,33 @@ const { getDefaultMode, safeWriteFlag, readFlag } = config;
 // body silent-fails), so the no-op stub is the honest fallback.
 const recordModeChange = config.recordModeChange || function () {};
 
+// Displaced-prose-mode memory for the one-shot independent modes (#599),
+// resolved defensively for the same reason recordModeChange is: the installed
+// caveman-config.cjs is a COPY and can predate these exports (#848).
+//
+// All three or none. No-op stubs are NOT a safe fallback here, unlike
+// recordModeChange's: a stubbed read returns null, the restore path reads that
+// as "caveman was off when the one-shot started" and DELETES the flag, so a
+// single /caveman-commit would deactivate caveman for the rest of the session
+// on an older copy — worse than both the old behavior and the new one. When
+// any helper is missing, one-shot bookkeeping is skipped entirely and the
+// plugin behaves exactly as it did before this feature: the one-shot sticks
+// until the next session.created re-derives the default.
+//
+// opencode has no per-session id to scope by (its flag is one machine-wide
+// file already), so every call passes `null` and the shared helpers fall
+// through to <opencodeDir>/.caveman-active.prev. That is exactly the legacy
+// branch caveman-config documents for a caller with no session id.
+const oneShotMemory = typeof config.writeSessionPrev === 'function'
+  && typeof config.readSessionPrev === 'function'
+  && typeof config.clearSessionPrev === 'function'
+  ? {
+    write: (mode) => config.writeSessionPrev(opencodeDir, null, mode),
+    read: () => config.readSessionPrev(opencodeDir, null),
+    clear: () => config.clearSessionPrev(opencodeDir, null),
+  }
+  : null;
+
 // Load the shared mode-change parser (#602) the same way loadConfig() loads
 // caveman-config.js — see the doc comment above loadConfig() for why this
 // can't go through require()/import() in a compiled Bun binary.
@@ -178,16 +205,68 @@ function reinforcementLine(mode) {
   return thesis ? banner + '\n\n' + thesis : banner;
 }
 
+// Returns true when this change set a one-shot independent mode, so the caller
+// knows not to immediately restore it on the very turn it was requested.
 function applyModeChange(change) {
-  if (!change) return;
+  if (!change) return false;
   if (change.action === 'clear') {
     recordModeChange(opencodeDir, null);
     removeFlag();
-    return;
+    if (oneShotMemory) oneShotMemory.clear();
+    return false;
   }
   if (change.action === 'set' && change.mode) {
+    if (INDEPENDENT_MODES.has(change.mode)) {
+      // Remember the prose mode being displaced so the next ordinary prompt
+      // can bring it back. Mirrors caveman-mode-tracker.js exactly:
+      //   - a prose mode is saved,
+      //   - an already-saved target survives a SECOND one-shot chained onto
+      //     the first (/caveman-commit then /caveman-review restores the
+      //     original, not `commit`),
+      //   - entering a one-shot from off saves the literal 'off', so a stale
+      //     return target from an earlier one-shot cannot switch caveman on.
+      // The flag file never holds 'off' on opencode (clear unlinks it), so a
+      // null read is exactly "caveman was off".
+      if (oneShotMemory) {
+        const before = readFlag(flagPath);
+        if (before && !INDEPENDENT_MODES.has(before)) oneShotMemory.write(before);
+        else if (!before) oneShotMemory.write('off');
+      }
+      recordModeChange(opencodeDir, change.mode);
+      safeWriteFlag(flagPath, change.mode);
+      return true;
+    }
     recordModeChange(opencodeDir, change.mode);
     safeWriteFlag(flagPath, change.mode);
+  }
+  return false;
+}
+
+// One-shot restore (#599). An independent mode set on a PREVIOUS message has
+// served its turn: bring back the prose mode it displaced, or deactivate if
+// caveman was off then. Without this the plugin left the flag on `commit` and
+// experimental.chat.system.transform — which skips INDEPENDENT_MODES — stopped
+// reinforcing for the REST of the session, self-healing only at the next
+// session.created. Claude Code has restored on the next prompt since #599.
+function restoreAfterOneShot(setIndependentThisTurn) {
+  if (setIndependentThisTurn) return;
+  // No prev helpers means nothing was ever recorded, so there is no return
+  // target to read — restoring from that absence would read as "caveman was
+  // off" and deactivate. Leave the one-shot in place instead.
+  if (!oneShotMemory) return;
+  const active = readFlag(flagPath);
+  if (!active || !INDEPENDENT_MODES.has(active)) return;
+  const prev = oneShotMemory.read();
+  oneShotMemory.clear();
+  // `prev !== 'off'` is not redundant: 'off' is stored literally, and restoring
+  // it as a mode would reinforce "CAVEMAN MODE ACTIVE (off)" for a session that
+  // had deliberately turned caveman off.
+  if (prev && !INDEPENDENT_MODES.has(prev) && prev !== 'off') {
+    recordModeChange(opencodeDir, prev);
+    safeWriteFlag(flagPath, prev);
+  } else {
+    recordModeChange(opencodeDir, null);
+    removeFlag();
   }
 }
 
@@ -236,6 +315,14 @@ export const CavemanPlugin = async (_ctx) => {
   // `run` path delivers the message wrapped in literal quote characters.
   'chat.message': async (_input, output) => {
     if (!output || !output.parts) return;
+    // One message is one turn, so the one-shot bookkeeping spans the whole
+    // parts loop: a /caveman-commit in any part must not be restored away by
+    // the same message that requested it.
+    let setIndependentThisTurn = false;
+    // Status is observational — on Claude Code it returns before any state
+    // mutation, one-shot restore included. Keep that here: asking what mode is
+    // active must not be the thing that consumes a pending restore.
+    let statusThisTurn = false;
     for (const part of output.parts) {
       if (part && part.type === 'text' && part.text) {
         const change = parseModeChange(part.text, { getDefaultMode, expandedTpl: true, unwrapQuotes: true });
@@ -245,11 +332,13 @@ export const CavemanPlugin = async (_ctx) => {
           // Replace the expanded activation template for this message only.
           // No shared pending response: concurrent sessions cannot steal it.
           part.text = 'Report this status verbatim without changing mode: Caveman mode: ' + (active || 'off');
+          statusThisTurn = true;
           continue;
         }
-        if (change) applyModeChange(change);
+        if (change && applyModeChange(change)) setIndependentThisTurn = true;
       }
     }
+    if (!statusThisTurn) restoreAfterOneShot(setIndependentThisTurn);
   },
 
   // Inject the reinforcement line into the system prompt when caveman is

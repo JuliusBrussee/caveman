@@ -83,20 +83,36 @@ func codexRoot() string {
 	return filepath.Join(home, ".codex")
 }
 
+// GEMINI_CLI_HOME relocates Gemini CLI's HOME, not its .gemini directory, so
+// the subdirectory is still appended — the same semantics the TypeScript CLI
+// implements (packages/cli/src/index.ts). Verified against gemini 0.62.0,
+// which creates $GEMINI_CLI_HOME/.gemini and leaves $HOME untouched.
 func geminiRoot() string {
 	if r := os.Getenv("CAVEMAN_GEMINI_ROOT"); r != "" {
 		return r
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+	home := os.Getenv("GEMINI_CLI_HOME")
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
 	}
 	return filepath.Join(home, ".gemini")
 }
 
+// opencode stores sessions under the XDG data dir, so XDG_DATA_HOME replaces
+// ~/.local/share rather than the whole home. Verified against opencode 1.18.34,
+// which creates $XDG_DATA_HOME/opencode and never touches ~/.local/share.
+// Without this, learn scanned a directory opencode had not written to and
+// reported zero sessions for every user who sets XDG_DATA_HOME (#1081).
 func opencodeRoot() string {
 	if r := os.Getenv("CAVEMAN_OPENCODE_ROOT"); r != "" {
 		return r
+	}
+	if data := os.Getenv("XDG_DATA_HOME"); data != "" {
+		return filepath.Join(data, "opencode", "storage")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
