@@ -807,7 +807,16 @@ function installHermes(ctx) {
 const OPENCODE_SKILL_DIRS  = ['caveman', 'ultracave', 'megacave', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
 const OPENCODE_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
 const OPENCODE_COMMAND_FILES = ['caveman.md', 'ultracave.md', 'megacave.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md'];
+// The V1 entrypoint path (payload subdirectory), kept for legacy cleanup.
 const OPENCODE_PLUGIN_REL = './plugins/caveman/plugin.js';
+// V2 discovers local plugins as FLAT files under plugins/ (glob
+// `plugins/*.{js,ts}`); a subdirectory is not discovered. This shim re-exports
+// the real plugin so one flat file satisfies V2 while the payload stays
+// namespaced in plugins/caveman/. V1 (>=1.18.29, and auto-discovery builds)
+// loads the same shim once, deduped against auto-discovery.
+const OPENCODE_PLUGIN_SHIM = 'caveman.js';
+const OPENCODE_PLUGIN_SHIM_REL = './plugins/' + OPENCODE_PLUGIN_SHIM;
+const OPENCODE_PLUGIN_SHIM_SOURCE = "export { default } from './caveman/plugin.js';\n";
 const OPENCODE_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
 // Marker fence for the opencode AGENTS.md ruleset block. Same convention as
 // bin/lib/openclaw.js for SOUL.md — lets us strip our block cleanly even when
@@ -1045,6 +1054,18 @@ function opencodeConfigPath(dir) {
   return jsonc;
 }
 
+// Major version of the detected opencode, or null when it cannot be probed
+// (offline, a test shim that prints nothing, a future output format). V1 prints
+// `1.18.34`, V2 prints `opencode v2.0.22`; both match the same capture group.
+// null is treated as V1 so the historical config path is unchanged when in
+// doubt.
+function opencodeMajorVersion() {
+  const probe = captureSpawn('opencode', ['--version']);
+  if (!spawnOk(probe)) return null;
+  const m = /(\d+)\.\d+\.\d+/.exec(probe.stdout || '');
+  return m ? Number(m[1]) : null;
+}
+
 function installOpencode(ctx) {
   const { say, note, warn, opts, repoRoot, results } = ctx;
   results.detected++;
@@ -1069,10 +1090,11 @@ function installOpencode(ctx) {
   if (opts.dryRun) {
     note(`  would mkdir ${pluginDir}/, ${commandsDir}/, ${agentsDir}/, ${skillsDir}/`);
     note(`  would copy plugin.js + package.json + caveman-config.cjs + caveman-parse.cjs into ${pluginDir}/`);
+    note(`  would write the flat V2 discovery shim ${path.join(dir, 'plugins', OPENCODE_PLUGIN_SHIM)}`);
     note(`  would copy ${OPENCODE_COMMAND_FILES.length} command files into ${commandsDir}/`);
     note(`  would copy ${OPENCODE_AGENT_FILES.length} cavecrew agents into ${agentsDir}/`);
     note(`  would copy ${OPENCODE_SKILL_DIRS.length} skill dirs into ${skillsDir}/`);
-    note(`  would patch ${opencodeJson} with "plugin" entry${opts.withMcpShrink ? ' + caveman-shrink MCP' : ''}`);
+    note(`  would wire the opencode plugin (config key by detected major version)${opts.withMcpShrink ? ' + caveman-shrink MCP' : ''}`);
     note(`  would write Tier-3 ruleset to ${agentsMd}`);
     results.installed.push('opencode');
     process.stdout.write('\n');
@@ -1095,6 +1117,11 @@ function installOpencode(ctx) {
         // Shared mode parser keeps opencode and Claude hook behavior identical.
         fs.copyFileSync(path.join(repoRoot, 'src', 'hooks', 'caveman-parse.js'), path.join(stage, 'caveman-parse.cjs'));
       },
+    }, {
+      // Flat file so opencode V2 auto-discovers the plugin (glob
+      // plugins/*.{js,ts}); re-exports the real payload in plugins/caveman/.
+      relativePath: `plugins/${OPENCODE_PLUGIN_SHIM}`,
+      write: (stage) => fs.writeFileSync(stage, OPENCODE_PLUGIN_SHIM_SOURCE, { mode: 0o600 }),
     }];
 
     const cmdSrcDir = path.join(pluginSrc, 'commands');
@@ -1225,7 +1252,14 @@ function installOpencode(ctx) {
       process.stdout.write(`  installed: ${agentsMd}\n`);
     }
 
-    // 6. opencode.json — add plugin entry; optional caveman-shrink MCP.
+    // 6. opencode.json — wire the plugin; optional caveman-shrink MCP.
+    //    V1 reads `plugin: [...paths...]`. V2 renamed the key to `plugins` and
+    //    REJECTS a file-path entry ("configured plugin path must be a
+    //    directory"), preferring flat auto-discovery of plugins/*.js. So V2
+    //    gets no config entry (the flat shim is auto-discovered) while V1 gets
+    //    a `plugin` entry pointing at the flat shim. Remove whatever legacy
+    //    entry we may have written from both keys first, so a V1→V2 upgrade
+    //    stops emitting the V2 warning.
     const ocMeta = {};
     let cfg = SETTINGS.readSettings(opencodeJson, ocMeta);
     if (cfg === null) {
@@ -1245,9 +1279,19 @@ function installOpencode(ctx) {
       warn(`  note: ${opencodeJson} contains comments — rewriting it drops them.`);
       warn(`        Your original (with comments) is preserved at ${opencodeBak}`);
     }
-    if (!Array.isArray(cfg.plugin)) cfg.plugin = [];
-    if (!cfg.plugin.includes(OPENCODE_PLUGIN_REL)) {
-      cfg.plugin.push(OPENCODE_PLUGIN_REL);
+    const isV2 = (opencodeMajorVersion() || 1) >= 2;
+    const dropOwnEntries = (arr) => arr.filter((p) => p !== OPENCODE_PLUGIN_REL && p !== OPENCODE_PLUGIN_SHIM_REL);
+    if (Array.isArray(cfg.plugin)) {
+      cfg.plugin = dropOwnEntries(cfg.plugin);
+      if (cfg.plugin.length === 0) delete cfg.plugin;
+    }
+    if (Array.isArray(cfg.plugins)) {
+      cfg.plugins = dropOwnEntries(cfg.plugins);
+      if (cfg.plugins.length === 0) delete cfg.plugins;
+    }
+    if (!isV2) {
+      if (!Array.isArray(cfg.plugin)) cfg.plugin = [];
+      if (!cfg.plugin.includes(OPENCODE_PLUGIN_SHIM_REL)) cfg.plugin.push(OPENCODE_PLUGIN_SHIM_REL);
     }
     if (opts.withMcpShrink) {
       // opts.withMcpShrink is the array of upstream-cmd tokens parseArgs
@@ -1747,8 +1791,13 @@ function uninstall(ctx) {
       const cfg = SETTINGS.readSettings(ocJson);
       if (cfg) {
         if (Array.isArray(cfg.plugin)) {
-          cfg.plugin = cfg.plugin.filter(p => p !== OPENCODE_PLUGIN_REL);
+          cfg.plugin = cfg.plugin.filter(p => p !== OPENCODE_PLUGIN_REL && p !== OPENCODE_PLUGIN_SHIM_REL);
           if (cfg.plugin.length === 0) delete cfg.plugin;
+        }
+        // V2 key (in case a native install or a future version wrote it).
+        if (Array.isArray(cfg.plugins)) {
+          cfg.plugins = cfg.plugins.filter(p => p !== OPENCODE_PLUGIN_REL && p !== OPENCODE_PLUGIN_SHIM_REL);
+          if (cfg.plugins.length === 0) delete cfg.plugins;
         }
         if (cfg.mcp && typeof cfg.mcp === 'object' && cfg.mcp['caveman-shrink']) {
           delete cfg.mcp['caveman-shrink'];
