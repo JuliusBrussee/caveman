@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "taxonomy": [
+    {
+      "id": "CAV-SEM-01",
+      "key": "substance-preservation",
+      "description": "Remove filler while retaining the technical substance needed to act."
+    },
+    {
+      "id": "CAV-SEM-02",
+      "key": "exact-preservation",
+      "description": "Preserve polarity, limits, numbers, units, code, identifiers, APIs, commands, and quoted errors."
+    },
+    {
+      "id": "CAV-SEM-03",
+      "key": "no-caricature",
+      "description": "Do not add fake grammar, mode prefixes, invented abbreviations, or causal arrows."
+    },
+    {
+      "id": "CAV-SEM-04",
+      "key": "language-and-grammar",
+      "description": "Keep the requested or dominant language and preserve grammatical role markers."
+    },
+    {
+      "id": "CAV-SEM-05",
+      "key": "safety-clarity",
+      "description": "Use complete normal clarity for destructive actions, security, data loss, ambiguity, and ordered recovery."
+    },
+    {
+      "id": "CAV-SEM-06",
+      "key": "artifact-boundary",
+      "description": "Keep persisted or external human-facing artifacts in normal prose unless explicitly requested otherwise."
+    },
+    {
+      "id": "CAV-SEM-07",
+      "key": "mode-boundaries",
+      "description": "Preserve explicit activation, intensity, persistence, and deactivation boundaries."
+    }
+  ]
+}
