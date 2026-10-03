@@ -24,7 +24,7 @@ func TestCapabilityManifestStableAndComplete(t *testing.T) {
 	if err := json.Unmarshal(first, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.SchemaVersion != 1 || len(manifest.Capabilities) != 14 {
+	if manifest.SchemaVersion != 1 || len(manifest.Capabilities) != 15 {
 		t.Fatalf("unexpected manifest: version=%d capabilities=%d", manifest.SchemaVersion, len(manifest.Capabilities))
 	}
 	canonical, err := json.Marshal(manifest.Capabilities)
@@ -56,7 +56,7 @@ func TestCapabilityManifestStableAndComplete(t *testing.T) {
 // manifestExcluded is for. Changing this constant is a deliberate ABI break that
 // requires every lock to be rebuilt.
 func TestCapabilityManifestDigestIsPinned(t *testing.T) {
-	const pinned = "64b06ad2a9c99a5ff6a3ad7029ff9fa439c7435f5d94d01879c9e0e11e29513f"
+	const pinned = "38f594f2e53468b8fed1194a1af4f2a1df912b5e2494a2e627f47f5676d73e68"
 	raw, err := Default().CapabilityManifest()
 	if err != nil {
 		t.Fatal(err)

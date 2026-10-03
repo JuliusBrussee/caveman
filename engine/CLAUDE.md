@@ -8,12 +8,12 @@ is what the proxy, CLI, SDKs, MCP, and WASM build all share. Everything it repor
 ## Layout
 - `engine.go` — the `Engine` core: detect → route → compress → token ratio → CCR. `record` mode + miss + parse-fail + not-smaller + no-store all pass through.
 - `result.go` — `Result`/`Options`/`Mode`; unknown mode fails closed to `record`.
-- `detect.go` — content router (`json`/`diff`/`code`/`log`/`search-result`/`html`/`tabular`/`config`/`terminal`/`text`); low confidence → `text`.
+- `detect.go` — content router (`test-report`/`json`/`diff`/`code`/`log`/`search-result`/`html`/`tabular`/`config`/`terminal`/`text`); low confidence → `text`.
 - `listing.go` — strips a read tool's line-number gutter (`1\t{`, `2\t  "unit"`) before Detect and before the compressor, then restores it after. Agents send file *listings*, not files; the gutter is presentation, and left in place it made every guttered payload detect as `text` and compress ~0%. Restoration keeps each surviving line's ORIGINAL number and is declined entirely for transforms that restructure rather than elide (re-encoded JSON), because numbers that describe nothing are worse than none.
 - `safety/` — the S0–S4 registry; S4 is lossy and `RequiresCCR`. Unknown class → fail closed.
 - `tokens/` — `Counter` interface; default is an offline, vocab-embedded BPE tokenizer (o200k_base). `inferred` always.
 - `contextwindow/` — deterministic BM25 context packer with recency/error/priority signals and token-budget accounting.
-- `compressors/` — `Compressor` interface + registry; structural JSON/log/search/diff/text/HTML/table/config/code compressors plus forced-only TOON/tool-schema/tool-schema-annotations/accessibility/repetition paths — `Default()` registers 15. `toolschema-annotations` stays manifest-excluded because no compiled plan routes to it; advertising it would rotate `RegistrySHA256` and fail existing Cave Build locks. A compressor is a pure byte transform.
+- `compressors/` — `Compressor` interface + registry; structural JSON/log/test-report/search/diff/text/HTML/table/config/code compressors plus forced-only TOON/tool-schema/tool-schema-annotations/accessibility/repetition paths — `Default()` registers 16. `toolschema-annotations` stays manifest-excluded because no compiled plan routes to it; advertising it would rotate `RegistrySHA256` and fail existing Cave Build locks. A compressor is a pure byte transform.
 - `ccr/` — `~/.caveman/ccr.db` SQLite recovery plus typed native-session store;
   content-addressed handles, byte-exact `Get`, session scope, dependencies,
   current/stale state, and Hot/Warm/Cold/Archived lifecycle. Embedded SQLite uses
