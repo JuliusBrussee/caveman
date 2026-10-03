@@ -197,6 +197,34 @@ test('all valid modes round-trip through symlinked parent', (tmp) => {
   }
 });
 
+test('hold and override paths use safeWriteFlag', (tmp) => {
+  const { writeHold, writeOverride, readHold, readOverride, HOLD_BASENAME, OVERRIDE_BASENAME } =
+    require('../src/hooks/caveman-budget');
+  writeHold(tmp, 'lite');
+  writeOverride(tmp, 15000);
+  assert.strictEqual(readHold(tmp), 'lite');
+  assert.strictEqual(readOverride(tmp), 15000);
+
+  const holdPath = path.join(tmp, HOLD_BASENAME);
+  const overridePath = path.join(tmp, OVERRIDE_BASENAME);
+  const decoy = path.join(tmp, 'decoy.txt');
+  fs.writeFileSync(decoy, 'ATTACK');
+  fs.unlinkSync(holdPath);
+  fs.unlinkSync(overridePath);
+  try {
+    fs.symlinkSync(decoy, holdPath);
+    fs.symlinkSync(decoy, overridePath);
+  } catch (e) {
+    console.log('    (skipped: symlink not permitted)');
+    return;
+  }
+  writeHold(tmp, 'ultra');
+  writeOverride(tmp, 99);
+  assert.strictEqual(fs.readFileSync(decoy, 'utf8'), 'ATTACK', 'safeWriteFlag must refuse the symlink');
+  assert.strictEqual(readHold(tmp), null);
+  assert.strictEqual(readOverride(tmp), null);
+});
+
 // ---------- rename retry + guaranteed temp cleanup (#511/#578/#657) ----------
 
 test('recovers from transient rename failures within the retry budget', (tmp) => {

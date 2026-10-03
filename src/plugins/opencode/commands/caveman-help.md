@@ -10,6 +10,9 @@ Show the caveman quick-reference card.
 | `/caveman ultra` | Maximum compression |
 | `/caveman wenyan[-lite\|-ultra]` | Classical Chinese compression |
 | `/caveman off` | Deactivate |
+| `/caveman hold` | Pin the current level |
+| `/caveman release` | Drop the pin; resume budget ladder |
+| `/caveman budget` | Show ceiling / used / rung |
 | `/caveman-commit` | Terse commit message |
 | `/caveman-review` | One-line review findings |
 | `/caveman-compress <file>` | Compress a Markdown file |

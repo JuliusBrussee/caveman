@@ -64,6 +64,26 @@ if (configFailure) {
 }
 const { readFlag, appendFlag, readHistory, safeWriteFlag, VALID_MODES, MODE_LOG_BASENAME } = cavemanConfig;
 
+let cavemanBudget;
+try {
+  cavemanBudget = require('./caveman-budget');
+} catch (e) {
+  try { cavemanBudget = require('./caveman-budget.cjs'); } catch (e2) { cavemanBudget = null; }
+}
+if (cavemanBudget && !(typeof cavemanBudget.parseSession === 'function'
+    && typeof cavemanBudget.findRecentSession === 'function')) {
+  cavemanBudget = null;
+}
+
+const parseSession = cavemanBudget
+  ? cavemanBudget.parseSession
+  : function parseSessionFallback() {
+    return { outputTokens: 0, cacheReadTokens: 0, turns: 0, model: null, messages: [] };
+  };
+const findRecentSession = cavemanBudget
+  ? cavemanBudget.findRecentSession
+  : function findRecentSessionFallback() { return null; };
+
 // Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
 // 10 tasks, sonnet-4-20250514). Only 'full' has measured data; lite / ultra /
 // wenyan modes show no estimate until benchmarked. Add an entry here when a new
@@ -117,59 +137,6 @@ function formatUsd(amount) {
   if (amount >= 1) return `$${amount.toFixed(2)}`;
   if (amount >= 0.01) return `$${amount.toFixed(3)}`;
   return `$${amount.toFixed(4)}`;
-}
-
-function findRecentSession(claudeDir) {
-  const projectsDir = path.join(claudeDir, 'projects');
-  let entries;
-  try { entries = fs.readdirSync(projectsDir, { withFileTypes: true }); }
-  catch { return null; }
-
-  let best = null;
-  const stack = entries.map(e => path.join(projectsDir, e.name));
-  while (stack.length) {
-    const p = stack.pop();
-    let st;
-    try { st = fs.statSync(p); } catch { continue; }
-    if (st.isDirectory()) {
-      try {
-        for (const child of fs.readdirSync(p)) stack.push(path.join(p, child));
-      } catch {}
-    } else if (p.endsWith('.jsonl') && (!best || st.mtimeMs > best.mtime)) {
-      best = { file: p, mtime: st.mtimeMs };
-    }
-  }
-  return best ? best.file : null;
-}
-
-function parseSession(filePath) {
-  let raw;
-  try { raw = fs.readFileSync(filePath, 'utf8'); }
-  catch { return { outputTokens: 0, cacheReadTokens: 0, turns: 0, model: null, messages: [] }; }
-
-  let outputTokens = 0;
-  let cacheReadTokens = 0;
-  let turns = 0;
-  let model = null;
-  const messages = []; // per-message {ts, outputTokens} for mode attribution (#601)
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
-    if (entry.type !== 'assistant' || !entry.message) continue;
-    const usage = entry.message.usage;
-    if (!usage) continue;
-    outputTokens    += usage.output_tokens           || 0;
-    cacheReadTokens += usage.cache_read_input_tokens || 0;
-    turns++;
-    if (!model && entry.message.model) model = entry.message.model;
-    const ts = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
-    messages.push({
-      ts: Number.isFinite(ts) ? ts : null,
-      outputTokens: usage.output_tokens || 0,
-    });
-  }
-  return { outputTokens, cacheReadTokens, turns, model, messages };
 }
 
 // Detect *.original.md / *.md pairs left behind by caveman-compress. The
@@ -623,12 +590,38 @@ function main() {
     safeWriteFlag(path.join(claudeDir, '.caveman-statusline-suffix'), suffix);
   }
 
+  function budgetBlock() {
+    if (!cavemanBudget || typeof cavemanBudget.formatBudgetLines !== 'function') return '';
+    const budget = cavemanBudget.effectiveBudget
+      ? cavemanBudget.effectiveBudget(process.cwd(), claudeDir)
+      : cavemanBudget.readBudgetConfig(process.cwd());
+    if (!budget) return '';
+    const used = cavemanBudget.usedOutputTokens({
+      window: budget.window,
+      transcriptPath: sessionFile,
+      claudeDir,
+    });
+    if (typeof cavemanBudget.writeBudgetBadge === 'function') {
+      cavemanBudget.writeBudgetBadge(
+        claudeDir,
+        cavemanBudget.remainingTokens
+          ? cavemanBudget.remainingTokens(budget, used)
+          : Math.max(0, budget.outputTokens - used)
+      );
+    }
+    return '\n' + cavemanBudget.formatBudgetLines({
+      budget,
+      used,
+      hold: cavemanBudget.readHold(claudeDir),
+    }) + '\n';
+  }
+
   if (share) {
     process.stdout.write(formatShare({ ...parsed, mode, attribution }) + '\n');
   } else {
     const scanDirs = [claudeDir, process.cwd()].filter((d, i, a) => a.indexOf(d) === i);
     const compressed = summarizeCompressed(findCompressedPairs(scanDirs));
-    process.stdout.write(formatStats({ ...parsed, mode, sessionPath: sessionFile, compressed, attribution }));
+    process.stdout.write(formatStats({ ...parsed, mode, sessionPath: sessionFile, compressed, attribution }) + budgetBlock());
   }
 }
 

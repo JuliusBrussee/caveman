@@ -21,7 +21,7 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | **Wenyan-Full** | `/caveman wenyan` | Full 文言文. Maximum classical terseness. |
 | **Wenyan-Ultra** | `/caveman wenyan-ultra` | Extreme. Ancient scholar on a budget. |
 
-Mode stick until changed or session end.
+Mode stick until changed or session end. `/caveman hold` pins the current level. `/caveman release` (or `/caveman auto`) drops the pin so a configured budget can step intensity. `/caveman budget` shows ceiling / used / rung. `/caveman budget <n>` sets a session ceiling.
 
 ## Skills
 
@@ -49,10 +49,28 @@ Default mode = `full`. Change it:
 export CAVEMAN_DEFAULT_MODE=ultra
 ```
 
-**Config file** (`~/.config/caveman/config.json`):
+**Config file** (`~/.config/caveman/config.json` or repo-local `.caveman/config.json`):
 ```json
 { "defaultMode": "lite" }
 ```
+
+Optional output-token budget (omit the key and nothing changes):
+```json
+{
+  "defaultMode": "lite",
+  "budget": {
+    "window": "session",
+    "outputTokens": 20000,
+    "ladder": [
+      { "remainPct": 100, "mode": "lite" },
+      { "remainPct": 50, "mode": "full" },
+      { "remainPct": 20, "mode": "ultra" }
+    ]
+  }
+}
+```
+
+Or `export CAVEMAN_OUTPUT_BUDGET=20000` (optional `CAVEMAN_BUDGET_WINDOW=session|day`). Env synthesizes the default 100/50/20 lite/full/ultra ladder.
 
 Set `"off"` to disable auto-activation on session start. User can still activate manually with `/caveman`.
 

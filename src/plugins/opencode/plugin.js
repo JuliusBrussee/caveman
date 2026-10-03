@@ -15,7 +15,8 @@
 //   ├── package.json
 //   ├── plugin.js              ← this file
 //   ├── caveman-config.cjs     ← copied sibling of src/hooks/caveman-config.js
-//   └── caveman-parse.cjs      ← copied sibling of src/hooks/caveman-parse.js
+//   ├── caveman-parse.cjs      ← copied sibling of src/hooks/caveman-parse.js
+//   └── caveman-budget.cjs     ← copied sibling of src/hooks/caveman-budget.js
 //
 // The always-on caveman ruleset is provided separately via
 // ~/.config/opencode/AGENTS.md (Tier-3 base). This plugin handles dynamic
@@ -92,6 +93,26 @@ function loadParse() {
 }
 const { parseModeChange, INDEPENDENT_MODES } = loadParse();
 
+function loadBudget() {
+  const installed = join(here, 'caveman-budget.cjs');
+  const dev = join(here, '..', '..', 'hooks', 'caveman-budget.js');
+  const target = existsSync(installed) ? installed : dev;
+  if (!existsSync(target)) return null;
+  try {
+    const code = readFileSync(target, 'utf8').replace(/^#![^\n]*\n/, '');
+    const mod = { exports: {} };
+    new Function('module', 'exports', 'require', '__dirname', '__filename', code)(
+      mod, mod.exports, createRequire(pathToFileURL(target).href), dirname(target), target
+    );
+    const m = mod.exports;
+    if (!m || typeof m.readBudgetConfig !== 'function' || typeof m.resolveLadderMode !== 'function') return null;
+    return m;
+  } catch (e) {
+    return null;
+  }
+}
+const budgetMod = loadBudget();
+
 // opencode resolves its config dir from $XDG_CONFIG_HOME, else ~/.config/opencode
 // on every platform — including Windows, where it uses %USERPROFILE%\.config\opencode
 // (NOT %APPDATA%). os.homedir() is %USERPROFILE% on win32, so the default branch
@@ -104,6 +125,8 @@ function opencodeConfigDir() {
 }
 
 const flagPath = path.join(opencodeConfigDir(), '.caveman-active');
+const holdDir = opencodeConfigDir();
+const usedCounterPath = path.join(opencodeConfigDir(), '.caveman-budget-used');
 
 function removeFlag() {
   try {
@@ -115,29 +138,110 @@ function removeFlag() {
   }
 }
 
+function readOpencodeUsed(budget) {
+  // opencode has no Claude JSONL. Do not invent usage numbers.
+  // session window: only the local counter, incremented when the host later
+  // exposes usage. Missing counter → unknown → ladder no-ops (no flag write).
+  // day window: only if Claude Code project transcripts exist for today.
+  if (!budgetMod || !budget) return null;
+  if (budget.window === 'session') {
+    try {
+      if (!existsSync(usedCounterPath)) return null;
+      const raw = readFileSync(usedCounterPath, 'utf8').trim();
+      if (!/^[0-9]+$/.test(raw)) return null;
+      const used = Number(raw);
+      return Number.isInteger(used) && used >= 0 ? used : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  if (budget.window === 'day') {
+    const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+    if (!existsSync(path.join(claudeDir, 'projects'))) return null;
+    try {
+      if (!budgetMod.findRecentSession(claudeDir)) return null;
+    } catch (e) {
+      return null;
+    }
+    return budgetMod.usedOutputTokens({ window: 'day', claudeDir });
+  }
+  return null;
+}
+
+function applyLadderIfReady() {
+  if (!budgetMod) return false;
+  const hold = budgetMod.readHold(holdDir);
+  if (hold) {
+    safeWriteFlag(flagPath, hold);
+    return true;
+  }
+  const budget = budgetMod.effectiveBudget
+    ? budgetMod.effectiveBudget(undefined, holdDir)
+    : budgetMod.readBudgetConfig();
+  if (!budget) return false;
+  const used = readOpencodeUsed(budget);
+  if (used == null) return false; // no-op, no flag write from the ladder
+  const mode = budgetMod.resolveLadderMode(budget, used);
+  if (!mode) return false;
+  safeWriteFlag(flagPath, mode);
+  return true;
+}
+
 function reinforcementLine(mode) {
   return 'CAVEMAN MODE ACTIVE (' + mode + ') — session ruleset applies.';
 }
 
 function applyModeChange(change) {
-  if (!change) return;
+  if (!change) return { pinned: false, cleared: false, independent: false };
   if (change.action === 'clear') {
     removeFlag();
-    return;
+    if (budgetMod) budgetMod.clearHold(holdDir);
+    return { pinned: false, cleared: true, independent: false };
+  }
+  if (change.action === 'hold' && budgetMod) {
+    const current = readFlag(flagPath);
+    if (current && !INDEPENDENT_MODES.has(current)) {
+      budgetMod.writeHold(holdDir, current);
+      return { pinned: true, cleared: false, independent: false };
+    }
+    return { pinned: false, cleared: false, independent: false };
+  }
+  if (change.action === 'release' && budgetMod) {
+    budgetMod.clearHold(holdDir);
+    return { pinned: false, cleared: false, independent: false, released: true };
+  }
+  if (change.action === 'budget-override' && budgetMod) {
+    budgetMod.writeOverride(holdDir, change.outputTokens);
+    return { pinned: false, cleared: false, independent: false };
   }
   if (change.action === 'set' && change.mode) {
+    const independent = INDEPENDENT_MODES.has(change.mode);
+    if (change.pin && budgetMod && !independent) {
+      budgetMod.writeHold(holdDir, change.mode);
+    }
     safeWriteFlag(flagPath, change.mode);
+    return { pinned: !!(change.pin && !independent), cleared: false, independent };
   }
+  return { pinned: false, cleared: false, independent: false };
 }
 
 // Session-start logic — extracted so the `event` dispatcher (opencode >= 1.15)
 // drives one shared implementation. Re-fires on every `session.created` event,
 // so a new session in a long-lived plugin process re-asserts the flag.
+//
+// opencode has no Claude transcript. The session-window ladder uses
+// ~/.config/opencode/.caveman-budget-used, incremented only when the host
+// later exposes usage. Until then the ladder applies only for `day` if
+// Claude Code project history exists; otherwise it no-ops with no flag write.
 function handleSessionCreated() {
   const mode = getDefaultMode();
   if (mode === 'off') {
     removeFlag();
     return;
+  }
+  if (budgetMod) {
+    try { budgetMod.clearHold(holdDir); } catch (e) {}
+    if (applyLadderIfReady()) return;
   }
   safeWriteFlag(flagPath, mode);
 }
@@ -172,7 +276,9 @@ export const CavemanPlugin = async (_ctx) => {
     for (const part of output.parts) {
       if (part && part.type === 'text' && part.text) {
         const change = parseModeChange(part.text, { getDefaultMode, expandedTpl: true, unwrapQuotes: true });
-        if (change) applyModeChange(change);
+        const result = applyModeChange(change);
+        if (result.cleared || result.pinned || result.independent) continue;
+        if (!result.pinned) applyLadderIfReady();
       }
     }
   },

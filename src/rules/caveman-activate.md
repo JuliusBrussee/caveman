@@ -9,6 +9,7 @@ Rules:
 
 Switch level: /caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra
 Stop: "stop caveman" or "normal mode"
+Budget: ladder steps intensity as the configured output ceiling is spent. /caveman hold pins.
 
 Auto-Clarity: drop caveman for security warnings, irreversible actions, user confused. Resume after.
 

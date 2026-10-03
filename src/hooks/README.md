@@ -9,13 +9,14 @@ If you installed caveman standalone (without the plugin), the unified Node insta
 ### `caveman-activate.js` — SessionStart hook
 
 - Runs once when Claude Code starts
-- Writes `full` to `$CLAUDE_CONFIG_DIR/.caveman-active` (default `~/.claude/.caveman-active`) via the symlink-safe `safeWriteFlag` helper
+- Writes `full` to `$CLAUDE_CONFIG_DIR/.caveman-active` (default `~/.claude/.caveman-active`) via the symlink-safe `safeWriteFlag` helper. If a valid output-token budget is configured and no hold is set, writes the ladder mode instead of the raw default.
 - Emits caveman rules as hidden SessionStart context
 - Detects missing statusline config and emits setup nudge (Claude will offer to help)
 
 ### `caveman-mode-tracker.js` — UserPromptSubmit hook
 
 - Fires on every user prompt, checks for `/caveman` commands and natural-language activation/deactivation phrases ("talk like caveman", "stop caveman", "normal mode")
+- `/caveman hold` / "hold this caveman level" pins; `/caveman release` drops the pin so a configured budget can step intensity
 - Writes the active mode to the flag file when a caveman command is detected; deletes it on deactivation
 - Emits a small per-turn reinforcement reminder when the flag is set to a non-independent mode (`lite`/`full`/`ultra`/`wenyan*`)
 - Supports: `lite`, `full`, `ultra`, `wenyan`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`, `commit`, `review`, `compress`
@@ -25,6 +26,7 @@ If you installed caveman standalone (without the plugin), the unified Node insta
 - Reads `$CLAUDE_CONFIG_DIR/.caveman-active` (default `~/.claude/.caveman-active`) and outputs a colored badge
 - Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc.
 - Appends the lifetime savings suffix `⛏ 12.4k` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` (written by `caveman-stats.js` on each `/caveman-stats` run; absent until the first run, so fresh installs render no fake number). Opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`.
+- When `CAVEMAN_STATUSLINE_BUDGET` is not `0`, appends a remaining-tokens suffix from `$CLAUDE_CONFIG_DIR/.caveman-statusline-budget` (`12.4k left`). Absent file renders nothing.
 
 ## Statusline Badge
 
@@ -106,6 +108,6 @@ node bin/install.js --uninstall
 ```
 
 Or manually:
-1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-parse.js`, `caveman-stats.js`, `caveman-config.js`, `cavecrew-model-overrides.js`, and `caveman-statusline.{sh,ps1}`.
+1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-parse.js`, `caveman-budget.js`, `caveman-stats.js`, `caveman-config.js`, `cavecrew-model-overrides.js`, and `caveman-statusline.{sh,ps1}`.
 2. Remove the SessionStart, UserPromptSubmit, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
 3. Delete `$CLAUDE_CONFIG_DIR/.caveman-active` (and `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if you ran `/caveman-stats`).

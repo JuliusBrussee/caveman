@@ -60,3 +60,24 @@ if ($env:CAVEMAN_STATUSLINE_SAVINGS -ne "0") {
         } catch {}
     }
 }
+
+# Budget remaining suffix: on by default. Opt out via CAVEMAN_STATUSLINE_BUDGET=0.
+if ($env:CAVEMAN_STATUSLINE_BUDGET -ne "0") {
+    $BudgetFile = Join-Path $ClaudeDir ".caveman-statusline-budget"
+    if (Test-Path $BudgetFile) {
+        try {
+            $BudgetItem = Get-Item -LiteralPath $BudgetFile -Force -ErrorAction Stop
+            if (-not ($BudgetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and
+                $BudgetItem.Length -le 16) {
+                $Budget = (Get-Content -LiteralPath $BudgetFile -Encoding UTF8 -Raw -ErrorAction Stop).TrimEnd()
+                $Budget = ($Budget -replace '[\x00-\x1F]', '')
+                if ($Budget -match '^[0-9.]+[km]? left$') {
+                    [Console]::Write(" ${Esc}[38;5;172m$Budget${Esc}[0m")
+                }
+            }
+        } catch {}
+    }
+}
+
+# Always exit 0 — Claude Code hides the whole status bar on non-zero (#711).
+exit 0

@@ -45,7 +45,7 @@ test('empty/whitespace prompt is a no-op', () => {
 });
 
 test('slash level switch', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman ultra', defaultFull), { action: 'set', mode: 'ultra' });
+  assert.deepStrictEqual(parseModeChange('/caveman ultra', defaultFull), { action: 'set', mode: 'ultra', pin: true });
 });
 
 test('bare /caveman activates at the configured default', () => {
@@ -63,7 +63,7 @@ test('/caveman off|stop|disable all clear', () => {
 });
 
 test('wenyan-full alias stores as "wenyan"', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman wenyan-full', defaultFull), { action: 'set', mode: 'wenyan' });
+  assert.deepStrictEqual(parseModeChange('/caveman wenyan-full', defaultFull), { action: 'set', mode: 'wenyan', pin: true });
 });
 
 // A bogus level is now REPORTED rather than swallowed (#838), but the original
@@ -87,18 +87,18 @@ test('independent modes are not reachable via /caveman <arg>', () => {
 // already harmless — it is the glued character that broke it.
 test('punctuation glued to the level still resolves (#838)', () => {
   for (const prompt of ['/caveman ultra;', '/caveman ultra.', '/caveman ultra!', '/caveman ultra,']) {
-    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'ultra' }, prompt);
+    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'ultra', pin: true }, prompt);
   }
 });
 
 test('punctuation glued to a hyphenated level still resolves (#838)', () => {
   assert.deepStrictEqual(
     parseModeChange('/caveman wenyan-ultra.', defaultFull),
-    { action: 'set', mode: 'wenyan-ultra' }
+    { action: 'set', mode: 'wenyan-ultra', pin: true }
   );
   assert.deepStrictEqual(
     parseModeChange('/caveman wenyan-full,', defaultFull),
-    { action: 'set', mode: 'wenyan' }
+    { action: 'set', mode: 'wenyan', pin: true }
   );
 });
 
@@ -109,7 +109,7 @@ test('punctuation glued to off still deactivates (#838)', () => {
 test('trailing words after the level remain harmless', () => {
   assert.deepStrictEqual(
     parseModeChange('/caveman ultra; still too verbose', defaultFull),
-    { action: 'set', mode: 'ultra' }
+    { action: 'set', mode: 'ultra', pin: true }
   );
 });
 
@@ -179,7 +179,7 @@ test('skipNaturalLanguage suppresses activation/deactivation matching entirely',
 test('skipNaturalLanguage still lets literal slash commands through', () => {
   assert.deepStrictEqual(
     parseModeChange('/caveman ultra', { ...defaultFull, skipNaturalLanguage: true }),
-    { action: 'set', mode: 'ultra' }
+    { action: 'set', mode: 'ultra', pin: true }
   );
 });
 
@@ -188,7 +188,7 @@ test('skipNaturalLanguage still lets literal slash commands through', () => {
 test('unwrapQuotes strips a symmetric quote wrapper before matching', () => {
   assert.deepStrictEqual(
     parseModeChange('"/caveman lite"', { ...defaultFull, unwrapQuotes: true }),
-    { action: 'set', mode: 'lite' }
+    { action: 'set', mode: 'lite', pin: true }
   );
 });
 
@@ -201,7 +201,7 @@ test('without unwrapQuotes, a quoted command does not match', () => {
 test('expandedTpl recognizes the generic "/caveman <level>" template', () => {
   assert.deepStrictEqual(
     parseModeChange('Activate caveman mode: ultra', { ...defaultFull, expandedTpl: true }),
-    { action: 'set', mode: 'ultra' }
+    { action: 'set', mode: 'ultra', pin: true }
   );
 });
 
@@ -336,7 +336,7 @@ test('a slash-initiated prompt does not fire natural-language triggers', () => {
 
 test('slash commands themselves are unaffected by prompt length', () => {
   const long = '/caveman ultra ' + 'x'.repeat(400);
-  assert.deepStrictEqual(parseModeChange(long, defaultFull), { action: 'set', mode: 'ultra' });
+  assert.deepStrictEqual(parseModeChange(long, defaultFull), { action: 'set', mode: 'ultra', pin: true });
 });
 
 // An independent mode IS a real mode, just not reachable this way — saying
@@ -349,7 +349,35 @@ test('an independent mode via /caveman <arg> reports its own command', () => {
 });
 
 test('a quoted level resolves (leading punctuation stripped too)', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman "ultra"', defaultFull), { action: 'set', mode: 'ultra' });
+  assert.deepStrictEqual(parseModeChange('/caveman "ultra"', defaultFull), { action: 'set', mode: 'ultra', pin: true });
+});
+
+test('/caveman hold pins', () => {
+  assert.deepStrictEqual(parseModeChange('/caveman hold', defaultFull), { action: 'hold' });
+});
+
+test('/caveman release and /caveman auto drop the pin', () => {
+  assert.deepStrictEqual(parseModeChange('/caveman release', defaultFull), { action: 'release' });
+  assert.deepStrictEqual(parseModeChange('/caveman auto', defaultFull), { action: 'release' });
+});
+
+test('/caveman budget reports status; /caveman budget 15000 overrides', () => {
+  assert.deepStrictEqual(parseModeChange('/caveman budget', defaultFull), { action: 'budget-status' });
+  assert.deepStrictEqual(
+    parseModeChange('/caveman budget 15000', defaultFull),
+    { action: 'budget-override', outputTokens: 15000 }
+  );
+});
+
+test('quoted "hold this caveman level" does not pin', () => {
+  assert.strictEqual(
+    parseModeChange('the help card says "hold this caveman level" here', defaultFull),
+    null
+  );
+  assert.deepStrictEqual(parseModeChange('hold this caveman level', defaultFull), { action: 'hold' });
+  assert.deepStrictEqual(parseModeChange('keep this caveman level', defaultFull), { action: 'hold' });
+  assert.deepStrictEqual(parseModeChange('resume caveman budget', defaultFull), { action: 'release' });
+  assert.deepStrictEqual(parseModeChange('release caveman budget', defaultFull), { action: 'release' });
 });
 
 const parityCases = [

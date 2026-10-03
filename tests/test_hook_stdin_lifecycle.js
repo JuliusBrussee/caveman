@@ -114,6 +114,50 @@ console.log('hook stdin lifecycle — must not wait on a lagging pipe close\n');
     );
   });
 
+  await test('tracker: budget resolution does not wait on stdin EOF', async (dir) => {
+    const sessDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-budget-sess-'));
+    const sess = path.join(sessDir, 's.jsonl');
+    fs.writeFileSync(sess, JSON.stringify({
+      type: 'assistant', message: { usage: { output_tokens: 12000 } },
+    }) + '\n');
+    fs.writeFileSync(path.join(dir, '.caveman-active'), 'lite');
+    const payload = JSON.stringify({
+      prompt: 'hello there',
+      cwd: process.cwd(),
+      transcript_path: sess,
+    });
+    const child = spawn(process.execPath, [TRACKER], {
+      env: {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: dir,
+        CAVEMAN_OUTPUT_BUDGET: '20000',
+        CAVEMAN_BUDGET_WINDOW: 'session',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const started = Date.now();
+    const killer = setTimeout(() => {
+      child.kill('SIGKILL');
+    }, BUDGET_MS);
+    const r = await new Promise((resolve, reject) => {
+      child.on('error', reject);
+      child.on('exit', (code) => {
+        clearTimeout(killer);
+        resolve({ code, elapsed: Date.now() - started });
+      });
+      child.stdin.write(payload);
+    });
+    fs.rmSync(sessDir, { recursive: true, force: true });
+    assert.ok(r.code === 0 || r.code === null, `hook must exit on its own, code=${r.code}`);
+    if (r.code === null) {
+      throw new Error(`hook did not exit within ${BUDGET_MS}ms while stdin stayed open`);
+    }
+    assert.strictEqual(
+      fs.readFileSync(path.join(dir, '.caveman-active'), 'utf8'), 'full',
+      'ladder must settle before the hook exits',
+    );
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 })();

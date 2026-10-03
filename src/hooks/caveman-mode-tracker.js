@@ -73,6 +73,11 @@ const { parseModeChange, INDEPENDENT_MODES } = requireSibling('caveman-parse', (
   parseModeChange: () => null,
   INDEPENDENT_MODES: new Set(['commit', 'review', 'compress']),
 };
+const cavemanBudget = requireSibling('caveman-budget', (m) =>
+  m && typeof m.readBudgetConfig === 'function' && typeof m.usedOutputTokens === 'function'
+    && typeof m.resolveLadderMode === 'function' && typeof m.writeBudgetBadge === 'function'
+    && typeof m.readHold === 'function' && typeof m.writeHold === 'function'
+    && typeof m.clearHold === 'function') || null;
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -87,6 +92,43 @@ function removeFlag(path) {
     if (process.env.CAVEMAN_DEBUG === '1' && error.code !== 'ENOENT') {
       console.error(`caveman: failed to remove flag ${path}: ${error.message}`);
     }
+  }
+}
+
+function applyLadder(data, opts) {
+  // Missing or bad budget exports: skip ladder, keep current flag.
+  if (!cavemanBudget) return;
+  if (opts && opts.skip) return;
+  try {
+    const budget = cavemanBudget.effectiveBudget
+      ? cavemanBudget.effectiveBudget(data && data.cwd, claudeDir)
+      : cavemanBudget.readBudgetConfig(data && data.cwd);
+    if (!budget) return;
+    const hold = cavemanBudget.readHold(claudeDir);
+    const t0 = Date.now();
+    const used = cavemanBudget.usedOutputTokens({
+      window: budget.window,
+      transcriptPath: data && data.transcript_path,
+      claudeDir,
+    });
+    if (Date.now() - t0 > (cavemanBudget.MAX_PARSE_MS || 50)) return;
+    if (hold) {
+      recordModeChange(claudeDir, hold);
+      safeWriteFlag(flagPath, hold);
+    } else {
+      const mode = cavemanBudget.resolveLadderMode(budget, used);
+      if (!mode) return;
+      recordModeChange(claudeDir, mode);
+      safeWriteFlag(flagPath, mode);
+    }
+    cavemanBudget.writeBudgetBadge(
+      claudeDir,
+      cavemanBudget.remainingTokens
+        ? cavemanBudget.remainingTokens(budget, used)
+        : Math.max(0, budget.outputTokens - used)
+    );
+  } catch (e) {
+    // Fail open — leave the flag alone.
   }
 }
 
@@ -216,6 +258,8 @@ function handle(raw) {
     // "Level persist until changed or session end", and a one-shot skill
     // invocation should not count as "changed" forever.
     let setIndependentThisTurn = false;
+    let pinnedThisTurn = false;
+    let clearedThisTurn = false;
     if (change && change.action === 'set') {
       const mode = change.mode;
       if (INDEPENDENT_MODES.has(mode)) {
@@ -227,6 +271,9 @@ function handle(raw) {
           safeWriteFlag(prevPath, current);
         }
         setIndependentThisTurn = true;
+      } else if (change.pin && cavemanBudget) {
+        cavemanBudget.writeHold(claudeDir, mode);
+        pinnedThisTurn = true;
       }
       recordModeChange(claudeDir, mode); // #601: timestamped transition log
       safeWriteFlag(flagPath, mode);
@@ -234,6 +281,38 @@ function handle(raw) {
       recordModeChange(claudeDir, null); // #601
       removeFlag(flagPath);
       removeFlag(prevPath);
+      if (cavemanBudget) cavemanBudget.clearHold(claudeDir);
+      clearedThisTurn = true;
+    } else if (change && change.action === 'hold' && cavemanBudget) {
+      const current = readFlag(flagPath);
+      if (current && !INDEPENDENT_MODES.has(current)) {
+        cavemanBudget.writeHold(claudeDir, current);
+        pinnedThisTurn = true;
+      }
+    } else if (change && change.action === 'release' && cavemanBudget) {
+      cavemanBudget.clearHold(claudeDir);
+    } else if (change && change.action === 'budget-override' && cavemanBudget) {
+      cavemanBudget.writeOverride(claudeDir, change.outputTokens);
+    } else if (change && change.action === 'budget-status' && cavemanBudget) {
+      const budget = cavemanBudget.effectiveBudget
+        ? cavemanBudget.effectiveBudget(data.cwd, claudeDir)
+        : cavemanBudget.readBudgetConfig(data.cwd);
+      if (!budget) {
+        notice = 'Print this budget block verbatim inside a fenced code block. Say nothing else.\n\n' +
+          'No output-token budget configured.';
+      } else {
+        const used = cavemanBudget.usedOutputTokens({
+          window: budget.window,
+          transcriptPath: data.transcript_path,
+          claudeDir,
+        });
+        notice = 'Print this budget block verbatim inside a fenced code block. Say nothing else.\n\n' +
+          cavemanBudget.formatBudgetLines({
+            budget,
+            used,
+            hold: cavemanBudget.readHold(claudeDir),
+          });
+      }
     }
 
     // Per-turn reinforcement: emit a short reminder when caveman is active.
@@ -251,7 +330,8 @@ function handle(raw) {
 
     // One-shot restore (#599): an independent mode set on a PREVIOUS prompt
     // has served its turn — bring back the prose mode that was active before
-    // it, or deactivate if caveman wasn't active then.
+    // it, or deactivate if caveman wasn't active then. After restore, a hold
+    // wins; otherwise the ladder runs.
     if (activeMode && INDEPENDENT_MODES.has(activeMode) && !setIndependentThisTurn) {
       const prev = readFlag(prevPath);
       removeFlag(prevPath);
@@ -264,6 +344,11 @@ function handle(raw) {
         removeFlag(flagPath);
         activeMode = null;
       }
+      applyLadder(data);
+      activeMode = readFlag(flagPath);
+    } else if (!setIndependentThisTurn && !clearedThisTurn && !pinnedThisTurn) {
+      applyLadder(data);
+      activeMode = readFlag(flagPath);
     }
 
     // #634: a repo-local .caveman.json / .caveman/config.json can set

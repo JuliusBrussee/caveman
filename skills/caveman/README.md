@@ -23,12 +23,17 @@ Six intensity levels:
 
 Auto-clarity rule: caveman drops to normal prose for security warnings, irreversible-action confirmations, multi-step sequences where fragment ambiguity risks misread, and when user repeats a question. Resumes after the clear part.
 
+Optional output-token budget: set `budget` in `.caveman/config.json` or `CAVEMAN_OUTPUT_BUDGET`. Intensity steps up as the ceiling is spent. `/caveman <level>` pins until `/caveman release`. No budget configured means nothing changes.
+
 ## How to invoke
 
 ```
-/caveman              # full mode (default)
-/caveman lite         # lighter compression
-/caveman ultra        # extreme compression
+/caveman              # full mode (default); budget ladder may step it
+/caveman lite         # lighter compression (pins)
+/caveman ultra        # extreme compression (pins)
+/caveman hold         # pin the current level
+/caveman release      # drop the pin, resume budget ladder
+/caveman budget       # show ceiling / used / active rung
 /caveman wenyan       # classical Chinese
 stop caveman          # back to normal prose
 ```

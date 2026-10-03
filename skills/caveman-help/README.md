@@ -4,7 +4,7 @@ Quick-reference card. One shot, no mode change.
 
 ## What it does
 
-Prints a cheat sheet of all caveman modes, sibling skills, deactivation triggers, and how to set the default mode via env var or config file. One-shot display — does not flip the active mode, write flag files, or persist anything. Use when you forget the slash commands.
+Prints a cheat sheet of all caveman modes, sibling skills, deactivation triggers, budget hold/release commands, and how to set the default mode via env var or config file. One-shot display — does not flip the active mode, write flag files, or persist anything. Use when you forget the slash commands.
 
 ## How to invoke
 
@@ -21,6 +21,9 @@ Modes:
   /caveman              full (default)
   /caveman lite         lighter
   /caveman ultra        extreme
+  /caveman hold         pin current level
+  /caveman release      resume budget ladder
+  /caveman budget       show ceiling / used / rung
   /caveman wenyan       classical Chinese
 
 Skills:

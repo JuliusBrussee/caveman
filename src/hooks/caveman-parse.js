@@ -9,9 +9,13 @@
 // (and test) on the tracker side.
 //
 // parseModeChange(prompt, { getDefaultMode, skipNaturalLanguage, expandedTpl, unwrapQuotes })
-//   → { action: 'set', mode }  — caller should activate `mode`
-//   → { action: 'clear' }      — caller should deactivate (delete the flag)
-//   → null                     — prompt does not change state
+//   → { action: 'set', mode, pin? } — caller should activate `mode`; `pin` means hold it
+//   → { action: 'clear' }           — caller should deactivate (delete the flag)
+//   → { action: 'hold' }            — pin the current prose mode
+//   → { action: 'release' }         — drop the pin and re-run the budget ladder
+//   → { action: 'budget-status' }   — print ceiling / used / rung
+//   → { action: 'budget-override', outputTokens } — session ceiling override
+//   → null                          — prompt does not change state
 //
 // Options:
 //   getDefaultMode      — required; () => resolved default mode string.
@@ -98,10 +102,12 @@ function resolveModeArg(rawArg, getDefaultMode) {
     const mode = getDefaultMode();
     return mode === 'off' ? { action: 'clear' } : { action: 'set', mode };
   }
+  if (arg === 'hold') return { action: 'hold' };
+  if (arg === 'release' || arg === 'auto') return { action: 'release' };
   if (arg === 'off' || arg === 'stop' || arg === 'disable') return { action: 'clear' };
   // canonical alias — config stores wenyan-full as 'wenyan'
-  if (arg === 'wenyan-full') return { action: 'set', mode: 'wenyan' };
-  if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return { action: 'set', mode: arg };
+  if (arg === 'wenyan-full') return { action: 'set', mode: 'wenyan', pin: true };
+  if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return { action: 'set', mode: arg, pin: true };
   // An independent mode IS a real mode, just not reachable this way. Saying
   // "not recognized" would deny a mode the user can see in the docs; name its
   // own command instead. Echoing `arg` here is safe precisely because it
@@ -159,6 +165,11 @@ function parseModeChange(promptRaw, options) {
   );
   if (wantsOff) return { action: 'clear' };
 
+  if (naturalLanguage) {
+    if (/\b(hold|keep)\s+this\s+caveman\s+level\b/.test(nlPrompt)) return { action: 'hold' };
+    if (/\b(resume|release)\s+caveman\s+budget\b/.test(nlPrompt)) return { action: 'release' };
+  }
+
   // opencode expands a typed "/caveman <level>" (and the independent-mode
   // commands) into the command file's prose before chat.message fires, so
   // the literal slash-command branch below never sees the original text.
@@ -177,8 +188,20 @@ function parseModeChange(promptRaw, options) {
     if (/^compress the file at:/.test(prompt)) {
       return { action: 'set', mode: 'compress' };
     }
-    const tpl = /^activate caveman mode:[ \t]*(\S*)/.exec(firstLine);
-    if (tpl) return resolveModeArg(tpl[1], getDefaultMode);
+    const tpl = /^activate caveman mode:[ \t]*(\S*)(.*)$/.exec(firstLine);
+    if (tpl) {
+      const arg = tpl[1];
+      const rest = (tpl[2] || '').trim().split(/\s+/)[0] || '';
+      if (arg === 'budget') {
+        if (!rest) return { action: 'budget-status' };
+        const n = parseInt(rest, 10);
+        if (Number.isInteger(n) && n > 0 && String(n) === rest.replace(/[^0-9].*$/, '') && /^[0-9]+$/.test(rest)) {
+          return { action: 'budget-override', outputTokens: n };
+        }
+        return { action: 'unresolved' };
+      }
+      return resolveModeArg(arg, getDefaultMode);
+    }
   }
 
   if (naturalLanguage) {
@@ -225,6 +248,16 @@ function parseModeChange(promptRaw, options) {
       return { action: 'set', mode: 'compress' };
     }
     if (cmd === '/caveman' || cmd === '/caveman:caveman') {
+      if (arg === 'budget') {
+        const raw = parts[2] || '';
+        const nArg = raw.replace(/[^0-9].*$/, '');
+        if (!raw) return { action: 'budget-status' };
+        if (/^[0-9]+$/.test(nArg) && nArg.length > 0) {
+          const n = parseInt(nArg, 10);
+          if (Number.isInteger(n) && n > 0) return { action: 'budget-override', outputTokens: n };
+        }
+        return { action: 'unresolved' };
+      }
       // Bare /caveman → activate at configured default; otherwise resolve the
       // level (punctuation-tolerant, bogus values reported not swallowed).
       return resolveModeArg(arg, getDefaultMode);

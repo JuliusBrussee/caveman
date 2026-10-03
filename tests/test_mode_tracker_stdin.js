@@ -15,6 +15,9 @@ const { spawnSync } = require('child_process');
 const HOOK_PATH = path.resolve(__dirname, '..', 'src', 'hooks', 'caveman-mode-tracker.js');
 const CLEAN_EXIT = 0;
 
+delete process.env.CAVEMAN_OUTPUT_BUDGET;
+delete process.env.CAVEMAN_BUDGET_WINDOW;
+
 let passed = 0;
 let failed = 0;
 
@@ -87,10 +90,10 @@ function makeConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-tracker-'));
 }
 
-function send(configDir, payload) {
+function send(configDir, payload, extraEnv) {
   return spawnSync(process.execPath, [HOOK_PATH], {
     input: JSON.stringify(payload),
-    env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
+    env: { ...process.env, CLAUDE_CONFIG_DIR: configDir, ...extraEnv },
     stdio: ['pipe', 'pipe', 'pipe'],
     encoding: 'utf8',
   });
@@ -98,6 +101,11 @@ function send(configDir, payload) {
 
 function flagValue(configDir) {
   const p = path.join(configDir, '.caveman-active');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+}
+
+function holdValue(configDir) {
+  const p = path.join(configDir, '.caveman-budget-hold');
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
 }
 
@@ -339,6 +347,86 @@ test('the notice and the per-turn reinforcement share one write', () => {
     const ctx = contextOf(result);
     assert.match(ctx, /not recognized/);
     assert.match(ctx, /CAVEMAN MODE ACTIVE \(ultra\)/, 'the turn must not lose its reinforcement');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+// ---------- session token-budget intensity ladder ----------
+
+const BUDGET_ENV = { CAVEMAN_OUTPUT_BUDGET: '20000', CAVEMAN_BUDGET_WINDOW: 'session' };
+
+test('transcript with 12k used of 20k writes full', () => {
+  const cfg = makeConfigDir();
+  try {
+    const sess = makeSession(cfg, [
+      { type: 'assistant', message: { usage: { output_tokens: 12000 } } },
+    ]);
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'lite');
+    send(cfg, { prompt: 'keep going', transcript_path: sess }, BUDGET_ENV);
+    assert.strictEqual(flagValue(cfg), 'full');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('with hold file leaves lite', () => {
+  const cfg = makeConfigDir();
+  try {
+    const sess = makeSession(cfg, [
+      { type: 'assistant', message: { usage: { output_tokens: 12000 } } },
+    ]);
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'lite');
+    fs.writeFileSync(path.join(cfg, '.caveman-budget-hold'), 'lite');
+    send(cfg, { prompt: 'keep going', transcript_path: sess }, BUDGET_ENV);
+    assert.strictEqual(flagValue(cfg), 'lite');
+    assert.strictEqual(holdValue(cfg), 'lite');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('/caveman ultra writes ultra and hold', () => {
+  const cfg = makeConfigDir();
+  try {
+    const sess = makeSession(cfg, [
+      { type: 'assistant', message: { usage: { output_tokens: 12000 } } },
+    ]);
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'lite');
+    send(cfg, { prompt: '/caveman ultra', transcript_path: sess }, BUDGET_ENV);
+    assert.strictEqual(flagValue(cfg), 'ultra');
+    assert.strictEqual(holdValue(cfg), 'ultra');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('/caveman release clears hold and re-ladders', () => {
+  const cfg = makeConfigDir();
+  try {
+    const sess = makeSession(cfg, [
+      { type: 'assistant', message: { usage: { output_tokens: 12000 } } },
+    ]);
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'lite');
+    fs.writeFileSync(path.join(cfg, '.caveman-budget-hold'), 'lite');
+    send(cfg, { prompt: '/caveman release', transcript_path: sess }, BUDGET_ENV);
+    assert.strictEqual(holdValue(cfg), null);
+    assert.strictEqual(flagValue(cfg), 'full');
+  } finally {
+    fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('independent mode restore then ladders', () => {
+  const cfg = makeConfigDir();
+  try {
+    const sess = makeSession(cfg, [
+      { type: 'assistant', message: { usage: { output_tokens: 12000 } } },
+    ]);
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'commit');
+    fs.writeFileSync(path.join(cfg, '.caveman-active.prev'), 'lite');
+    send(cfg, { prompt: 'ordinary follow-up', transcript_path: sess }, BUDGET_ENV);
+    assert.strictEqual(flagValue(cfg), 'full', 'after #599 restore the ladder must run');
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
   }

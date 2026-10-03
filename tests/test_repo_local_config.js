@@ -17,8 +17,11 @@ const assert = require('assert');
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-userhome-'));
 process.env.XDG_CONFIG_HOME = tmpHome;
 delete process.env.CAVEMAN_DEFAULT_MODE;
+delete process.env.CAVEMAN_OUTPUT_BUDGET;
+delete process.env.CAVEMAN_BUDGET_WINDOW;
 
 const { getDefaultMode, findRepoConfigPath } = require('../src/hooks/caveman-config');
+const { readBudgetConfig } = require('../src/hooks/caveman-budget');
 
 let passed = 0;
 let failed = 0;
@@ -177,6 +180,28 @@ test('getDefaultMode() with no args is unchanged (defaults to process.cwd())', (
   process.chdir(tmp);
   assert.strictEqual(getDefaultMode(), 'lite');
   assert.strictEqual(getDefaultMode(undefined), 'lite');
+});
+
+test('budget in .caveman/config.json is visible to readBudgetConfig', (tmp) => {
+  fs.mkdirSync(path.join(tmp, '.caveman'));
+  fs.writeFileSync(path.join(tmp, '.caveman', 'config.json'), JSON.stringify({
+    defaultMode: 'lite',
+    budget: {
+      window: 'session',
+      outputTokens: 20000,
+      ladder: [
+        { remainPct: 100, mode: 'lite' },
+        { remainPct: 50, mode: 'full' },
+        { remainPct: 20, mode: 'ultra' },
+      ],
+    },
+  }));
+  process.chdir(tmp);
+  const b = readBudgetConfig(tmp);
+  assert.ok(b, 'budget must be visible');
+  assert.strictEqual(b.outputTokens, 20000);
+  assert.strictEqual(b.window, 'session');
+  assert.strictEqual(b.ladder.length, 3);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -49,6 +49,19 @@ if [ "${CAVEMAN_STATUSLINE_SAVINGS:-1}" != "0" ]; then
   fi
 fi
 
+# Budget remaining suffix: on by default. Opt out via CAVEMAN_STATUSLINE_BUDGET=0.
+# Written by caveman-budget.js. Refuses symlinks, 16-byte cap, whitelist
+# `[0-9.]+[km]? left`. Absent file renders nothing.
+if [ "${CAVEMAN_STATUSLINE_BUDGET:-1}" != "0" ]; then
+  BUDGET_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-statusline-budget"
+  if [ -f "$BUDGET_FILE" ] && [ ! -L "$BUDGET_FILE" ]; then
+    BUDGET=$(head -c 16 "$BUDGET_FILE" 2>/dev/null | tr -d '\000-\037')
+    if [ -n "$BUDGET" ] && [[ "$BUDGET" =~ ^[0-9.]+[km]?\ left$ ]]; then
+      printf ' \033[38;5;172m%s\033[0m' "$BUDGET"
+    fi
+  fi
+fi
+
 # An empty suffix file leaves the last [ -n ] test as the script's exit status
 # (1), and Claude Code hides the whole status bar on non-zero exit (#711).
 exit 0

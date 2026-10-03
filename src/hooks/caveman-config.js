@@ -262,9 +262,12 @@ function safeWriteFlag(flagPath, content) {
 //
 // MAX_FLAG_BYTES is a hard cap. The longest legitimate value is "wenyan-ultra"
 // (12 bytes); 64 leaves slack without enabling exfil.
+//
+// Optional `allowlist` replaces VALID_MODES for callers that need a stricter
+// set (hold files may only store prose modes). Size cap still applies.
 const MAX_FLAG_BYTES = 64;
 
-function readFlag(flagPath) {
+function readFlag(flagPath, allowlist) {
   try {
     let st;
     try {
@@ -289,7 +292,8 @@ function readFlag(flagPath) {
     }
 
     const raw = out.trim().toLowerCase();
-    if (!VALID_MODES.includes(raw)) return null;
+    const allowed = Array.isArray(allowlist) ? allowlist : VALID_MODES;
+    if (!allowed.includes(raw)) return null;
     return raw;
   } catch (e) {
     return null;

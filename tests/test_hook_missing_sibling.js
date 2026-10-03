@@ -140,6 +140,26 @@ test('missing caveman-parse.js: exits 0, emits nothing', () => {
   });
 });
 
+test('omit caveman-budget.js: still exits 0 and still honors /caveman ultra', () => {
+  withInstall(['caveman-budget.js'], ({ hooks }) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-home-'));
+    try {
+      const r = spawnSync(process.execPath, [path.join(hooks, 'caveman-mode-tracker.js')], {
+        input: JSON.stringify({ prompt: '/caveman ultra' }),
+        encoding: 'utf8',
+        env: { ...process.env, CLAUDE_CONFIG_DIR: home },
+      });
+      assert.strictEqual(r.status, 0, `expected exit 0, got ${r.status}\n${r.stderr}`);
+      assert.strictEqual(
+        fs.readFileSync(path.join(home, '.caveman-active'), 'utf8'),
+        'ultra',
+      );
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 console.log('\ncaveman-stats.js — missing caveman-config.js');
 
 test('prints one actionable line instead of a stack trace', () => {

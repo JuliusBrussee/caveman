@@ -134,6 +134,10 @@ const { getDefaultMode, safeWriteFlag, recordModeChange, readFlag, VALID_MODES }
   readFlag: () => null,
   VALID_MODES: FALLBACK_VALID_MODES,
 };
+const cavemanBudget = requireSibling('caveman-budget', (m) =>
+  m && typeof m.readBudgetConfig === 'function' && typeof m.usedOutputTokens === 'function'
+    && typeof m.resolveLadderMode === 'function' && typeof m.writeBudgetBadge === 'function'
+    && typeof m.readHold === 'function' && typeof m.clearHold === 'function') || null;
 
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const flagPath = path.join(claudeDir, '.caveman-active');
@@ -188,14 +192,16 @@ function activate(payload, timedOut) {
   // (including `defaultMode: "off"`, a project opting out) is missed — the same
   // #634 bug already fixed in caveman-mode-tracker.js.
   let sessionCwd;
+  let transcriptPath;
   try {
     if (payload) {
       const data = JSON.parse(payload);
       if (data && typeof data.source === 'string') source = data.source;
       if (data && typeof data.cwd === 'string') sessionCwd = data.cwd;
+      if (data && typeof data.transcript_path === 'string') transcriptPath = data.transcript_path;
     }
   } catch (e) { /* no/bad stdin → treat as startup */ }
-  run(source, sessionCwd);
+  run(source, sessionCwd, transcriptPath);
 }
 
 if (process.stdin.isTTY) {
@@ -235,11 +241,15 @@ if (process.stdin.isTTY) {
   process.stdin.on('end', () => finish());
 }
 
-function run(source, sessionCwd) {
+function run(source, sessionCwd, transcriptPath) {
 let mode = getDefaultMode(sessionCwd);
 if (source !== 'startup') {
   const existing = readFlag(flagPath);
   if (existing && VALID_MODES.includes(existing)) mode = existing;
+} else if (cavemanBudget) {
+  // Pin lasts for the session. A true startup drops a leftover hold file
+  // so a previous session's pin cannot leak.
+  try { cavemanBudget.clearHold(claudeDir); } catch (e) {}
 }
 
 // "off" mode — skip activation entirely, don't write flag or emit rules
@@ -248,6 +258,34 @@ if (mode === 'off') {
   removeFlag(flagPath);
   process.stdout.write('OK');
   process.exit(0);
+}
+
+if (source === 'startup' && cavemanBudget) {
+  try {
+    const budget = cavemanBudget.effectiveBudget
+      ? cavemanBudget.effectiveBudget(sessionCwd, claudeDir)
+      : cavemanBudget.readBudgetConfig(sessionCwd);
+    if (budget) {
+      const t0 = Date.now();
+      const used = cavemanBudget.usedOutputTokens({
+        window: budget.window,
+        transcriptPath,
+        claudeDir,
+      });
+      if (Date.now() - t0 <= (cavemanBudget.MAX_PARSE_MS || 50)) {
+        const ladderMode = cavemanBudget.resolveLadderMode(budget, used);
+        if (ladderMode) mode = ladderMode;
+        cavemanBudget.writeBudgetBadge(
+          claudeDir,
+          cavemanBudget.remainingTokens
+            ? cavemanBudget.remainingTokens(budget, used)
+            : Math.max(0, budget.outputTokens - used)
+        );
+      }
+    }
+  } catch (e) {
+    // Fail open — keep defaultMode
+  }
 }
 
 // 1. Write flag file (symlink-safe)

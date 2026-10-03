@@ -8,6 +8,9 @@ const os = require('os');
 const assert = require('assert');
 const { execFileSync } = require('child_process');
 
+delete process.env.CAVEMAN_OUTPUT_BUDGET;
+delete process.env.CAVEMAN_BUDGET_WINDOW;
+
 const ROOT = path.resolve(__dirname, '..');
 const STATS = path.join(ROOT, 'src', 'hooks', 'caveman-stats.js');
 const TRACKER = path.join(ROOT, 'src', 'hooks', 'caveman-mode-tracker.js');
@@ -794,6 +797,35 @@ test('lifetime view excludes legacy rows from net even when mixed with rows that
   // NOT 3436 against 1 turn, which would overstate the net.
   assert.match(out, /Est\. rule overhead:\s+1,250 \(input, ~1,250\/turn over 1 turn\)/);
   assert.match(out, /Est\. net:\s+\+1,536/);
+});
+
+test('budget lines appear only when configured; no fake savings', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 12000 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+
+  const envNo = { ...process.env, CLAUDE_CONFIG_DIR: claudeDir };
+  delete envNo.CAVEMAN_OUTPUT_BUDGET;
+  delete envNo.CAVEMAN_BUDGET_WINDOW;
+  const without = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: envNo,
+  });
+  assert.doesNotMatch(without, /Budget ceiling:/);
+
+  const withBudget = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...envNo, CAVEMAN_OUTPUT_BUDGET: '20000' },
+  });
+  assert.match(withBudget, /Budget ceiling:\s+20,000 output tokens/);
+  assert.match(withBudget, /Budget window:\s+session/);
+  assert.match(withBudget, /Budget used:\s+12,000/);
+  assert.match(withBudget, /40% remaining/);
+  assert.match(withBudget, /Active rung:/);
+  assert.match(withBudget, /Hold:\s+off/);
+  assert.doesNotMatch(withBudget, /budget saved|budget savings|ladder saved/i);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

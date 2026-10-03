@@ -51,6 +51,7 @@ const HOOK_FILES = [
   'package.json',
   'caveman-config.js',
   'caveman-parse.js',
+  'caveman-budget.js',
   'caveman-activate.js',
   'caveman-mode-tracker.js',
   'caveman-stats.js',
@@ -750,7 +751,7 @@ function installOpencode(ctx) {
 
   if (opts.dryRun) {
     note(`  would mkdir ${pluginDir}/, ${commandsDir}/, ${agentsDir}/, ${skillsDir}/`);
-    note(`  would copy plugin.js + package.json + caveman-config.cjs + caveman-parse.cjs into ${pluginDir}/`);
+    note(`  would copy plugin.js + package.json + caveman-config.cjs + caveman-parse.cjs + caveman-budget.cjs into ${pluginDir}/`);
     note(`  would copy ${OPENCODE_COMMAND_FILES.length} command files into ${commandsDir}/`);
     note(`  would copy ${OPENCODE_AGENT_FILES.length} cavecrew agents into ${agentsDir}/`);
     note(`  would copy ${OPENCODE_SKILL_DIRS.length} skill dirs into ${skillsDir}/`);
@@ -776,6 +777,7 @@ function installOpencode(ctx) {
         fs.copyFileSync(path.join(repoRoot, 'src', 'hooks', 'caveman-config.js'), path.join(stage, 'caveman-config.cjs'));
         // Shared mode parser keeps opencode and Claude hook behavior identical.
         fs.copyFileSync(path.join(repoRoot, 'src', 'hooks', 'caveman-parse.js'), path.join(stage, 'caveman-parse.cjs'));
+        fs.copyFileSync(path.join(repoRoot, 'src', 'hooks', 'caveman-budget.js'), path.join(stage, 'caveman-budget.cjs'));
       },
     }];
 

@@ -302,6 +302,7 @@ def verify_manifests_and_syntax() -> None:
         "package.json",
         "caveman-config.js",
         "caveman-parse.js",
+        "caveman-budget.js",
         "caveman-activate.js",
         "caveman-mode-tracker.js",
         "caveman-stats.js",
@@ -320,6 +321,7 @@ def verify_manifests_and_syntax() -> None:
 
     run(["node", "--check", "src/hooks/caveman-config.js"])
     run(["node", "--check", "src/hooks/caveman-parse.js"])
+    run(["node", "--check", "src/hooks/caveman-budget.js"])
     run(["node", "--check", "src/hooks/caveman-activate.js"])
     run(["node", "--check", "src/hooks/caveman-mode-tracker.js"])
     run(["node", "--check", "src/hooks/cavecrew-model-overrides.js"])

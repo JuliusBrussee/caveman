@@ -149,6 +149,31 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/rule
 
 `--with-init` writes the rule into every supported per-agent location it can detect (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`). It also installs the OpenClaw workspace bootstrap (skill folder + SOUL.md marker block) when `~/.openclaw/workspace/` exists. Single source: [`src/rules/caveman-activate.md`](src/rules/caveman-activate.md).
 
+## Output-token budget (optional)
+
+No `budget` key means today's behavior is unchanged. Set a ceiling and caveman steps intensity as the session (or calendar day) spends it. `/caveman lite` (any explicit level) pins until `/caveman release`. Bare `/caveman` does not pin.
+
+Repo-local `.caveman/config.json` or `.caveman.json`:
+
+```json
+{
+  "defaultMode": "lite",
+  "budget": {
+    "window": "session",
+    "outputTokens": 20000,
+    "ladder": [
+      { "remainPct": 100, "mode": "lite" },
+      { "remainPct": 50, "mode": "full" },
+      { "remainPct": 20, "mode": "ultra" }
+    ]
+  }
+}
+```
+
+Or `export CAVEMAN_OUTPUT_BUDGET=20000` (optional `CAVEMAN_BUDGET_WINDOW=session|day`). Env synthesizes the default 100/50/20 lite/full/ultra ladder. `/caveman budget` shows used vs ceiling; `/caveman budget 15000` sets a session ceiling. Statusline remaining suffix: opt out with `CAVEMAN_STATUSLINE_BUDGET=0`.
+
+opencode has no Claude transcript. A session-window ladder is a no-op until the host exposes usage. A day-window ladder applies only if Claude Code project history exists. No invented usage numbers.
+
 ## Verify
 
 After install, three quick checks:
@@ -185,11 +210,11 @@ npx -y github:JuliusBrussee/caveman -- --uninstall
 What it removes:
 
 - Caveman hook entries from `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/`; matched by the substring `caveman`).
-- Hook files in `$CLAUDE_CONFIG_DIR/hooks/` (`caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-parse.js`, `caveman-stats.js`, `caveman-config.js`, `cavecrew-model-overrides.js`, `caveman-statusline.{sh,ps1}`, plus the dir's `package.json` marker).
+- Hook files in `$CLAUDE_CONFIG_DIR/hooks/` (`caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-parse.js`, `caveman-budget.js`, `caveman-stats.js`, `caveman-config.js`, `cavecrew-model-overrides.js`, `caveman-statusline.{sh,ps1}`, plus the dir's `package.json` marker).
 - The Claude Code plugin and the Gemini CLI extension (if installed).
 - The opencode native plugin (`~/.config/opencode/plugins/caveman/`, the `plugin` and `mcp.caveman-shrink` entries from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file).
 - The OpenClaw workspace skill folder and the marker-fenced block from `~/.openclaw/workspace/SOUL.md` (when present).
-- Per-session state (`.caveman-active`, `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`, and `.caveman-nudge-shown`).
+- Per-session state (`.caveman-active`, `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`, `.caveman-statusline-budget`, `.caveman-budget-hold`, `.caveman-budget-override`, and `.caveman-nudge-shown`).
 
 What it does **not** remove:
 
