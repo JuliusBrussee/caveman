@@ -130,7 +130,7 @@ caveman/
 | `agents/cavecrew-investigator.md` | Read-only locator subagent (haiku). Output contract: `path:line — symbol — note`. |
 | `agents/cavecrew-builder.md` | Surgical 1-2 file editor subagent. Refuses 3+ file scope. |
 | `agents/cavecrew-reviewer.md` | Diff/file reviewer subagent (haiku). One-line findings with severity emoji. |
-| `src/plugins/opencode/plugin.js` | opencode native plugin. ESM Bun module — `session.created` writes flag, `tui.prompt.append` parses slash/natural-language activation and appends per-prompt reinforcement. Reuses `caveman-config.js` via `createRequire`. |
+| `src/plugins/opencode/plugin.js` | opencode native plugin. ESM module — default-exports `{ id, setup, server }` for both plugin APIs: V1 `server()` hooks (`event`, `chat.message`, `experimental.chat.system.transform`) and V2 `setup(ctx)` hooks (`ctx.event.subscribe`, `ctx.session.hook('prompt'/'context'/'compaction'/'generate'/'title')`). `setup()` bails on a V1 context. Reuses `caveman-config.js` via `createRequire`. Installed with a flat `plugins/caveman.js` shim for V2 discovery. |
 | `src/plugins/opencode/commands/*.md` | Six opencode slash-command prompt templates (`/caveman`, `/caveman-{commit,review,compress,stats,help}`). |
 
 ### `skills/` is auto-discovered wholesale — every subdirectory ships
@@ -349,7 +349,7 @@ How caveman reaches each agent type:
 | Claude Code | Plugin (hooks + skills) or standalone hooks | Yes — SessionStart hook injects rules |
 | Codex | Plugin in `plugins/caveman/` plus repo `.codex/hooks.json` and `.codex/config.toml` | Yes on macOS/Linux — SessionStart hook |
 | Gemini CLI | Extension with `GEMINI.md` context file | Yes — context file loads every session |
-| opencode | Native plugin (`src/plugins/opencode/`) copied into `~/.config/opencode/plugins/caveman/` + `AGENTS.md` ruleset + skills/agents/commands directories. Plugin uses `session.created` and `tui.prompt.append` lifecycle hooks. No statusline (opencode TUI exposes no plugin-writable badge). | Yes — `session.created` writes flag, `AGENTS.md` carries always-on ruleset |
+| opencode | Native plugin (`src/plugins/opencode/`) copied into `~/.config/opencode/plugins/caveman/` plus a flat `plugins/caveman.js` discovery shim (V2 only scans flat files) + `AGENTS.md` ruleset + skills/agents/commands directories. One dual-export plugin serves V1 (`server()` hooks) and V2 (`setup(ctx)` hooks). No statusline (opencode TUI exposes no plugin-writable badge). | Yes — plugin load/`session.created` writes flag, `AGENTS.md` carries always-on ruleset |
 | OpenClaw | Workspace skill at `~/.openclaw/workspace/skills/caveman/SKILL.md` (frontmatter merged with `version` + `always: true`) plus a marker-fenced bootstrap block in `~/.openclaw/workspace/SOUL.md`. Both writes go through `bin/lib/openclaw.js`; workspace path is overridable via `OPENCLAW_WORKSPACE`. | Yes — SOUL.md is auto-injected each turn under "Project Context" (subject to OpenClaw's 12K-per-file / 60K-total bootstrap caps) |
 | Cursor | `npx skills add ... -a cursor` (default via `--only cursor`) writes the upstream skill profile; per-repo `.cursor/rules/caveman.mdc` via `--with-init` (calls `src/tools/caveman-init.js`) | Yes — always-on rule |
 | Windsurf | `npx skills add ... -a windsurf` (default via `--only windsurf`); per-repo `.windsurf/rules/caveman.md` via `--with-init` | Yes — always-on rule |
