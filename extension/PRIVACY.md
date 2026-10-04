@@ -20,7 +20,7 @@ Your preferences only, saved with `chrome.storage.sync` so they persist and sync
 across your own signed-in Chrome instances:
 
 - the on/off toggle;
-- the intensity level (lite / full / ultra);
+- the mode (caveman / ultracave / megacave);
 - which supported sites the extension is active on.
 
 These contain no personal information and are never sent to us.

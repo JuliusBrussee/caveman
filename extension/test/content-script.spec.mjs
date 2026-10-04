@@ -30,7 +30,7 @@ test("first Enter sends full primer and later click sends short reminder exactly
   await expect.poll(() => page.evaluate(() => window.cavemanTest.transcript())).toHaveLength(1);
   let transcript = await page.evaluate(() => window.cavemanTest.transcript());
   expect(transcript[0]).toContain("[Caveman mode is ON");
-  expect(transcript[0]).toContain("Intensity FULL");
+  expect(transcript[0]).toContain("Mode CAVEMAN");
   expect(transcript[0]).toMatch(/\n\nfirst prompt$/);
 
   await page.waitForTimeout(250);
@@ -40,7 +40,7 @@ test("first Enter sends full primer and later click sends short reminder exactly
   });
   await expect.poll(() => page.evaluate(() => window.cavemanTest.transcript())).toHaveLength(2);
   transcript = await page.evaluate(() => window.cavemanTest.transcript());
-  expect(transcript[1]).toMatch(/^\[stay in caveman mode — FULL\]\n{2,}second prompt$/);
+  expect(transcript[1]).toMatch(/^\[stay in caveman mode — CAVEMAN\]\n{2,}second prompt$/);
   expect(transcript[1].match(/\[stay in caveman mode/g)).toHaveLength(1);
 });
 
@@ -52,8 +52,8 @@ test("site disable and indicator toggle preserve raw outgoing prompt", async ({ 
   });
   await expect.poll(() => page.evaluate(() => window.cavemanTest.transcript())).toEqual(["site disabled"]);
 
-  await page.evaluate(() => window.cavemanTest.setStorage({ sites: {}, enabled: true, level: "ultra" }));
-  await expect(page.locator("#caveman-indicator")).toContainText("ultra");
+  await page.evaluate(() => window.cavemanTest.setStorage({ sites: {}, enabled: true, level: "ultracave" }));
+  await expect(page.locator("#caveman-indicator")).toContainText("ultracave");
   await page.locator("#caveman-indicator").click();
   await expect(page.locator("#caveman-indicator")).toBeHidden();
   await page.evaluate(() => {
@@ -82,10 +82,10 @@ test("modifier Enter, blank draft, and already-prefixed prompt never get duplica
   expect(await page.evaluate(() => window.cavemanTest.transcript())).toEqual([]);
 
   await page.evaluate(() => {
-    window.cavemanTest.type("[stay in caveman mode — FULL]\n\nalready prefixed");
+    window.cavemanTest.type("[stay in caveman mode — CAVEMAN]\n\nalready prefixed");
     window.cavemanTest.clickSend();
   });
   await expect.poll(() => page.evaluate(() => window.cavemanTest.transcript())).toEqual([
-    "[stay in caveman mode — FULL]\n\nalready prefixed",
+    "[stay in caveman mode — CAVEMAN]\n\nalready prefixed",
   ]);
 });

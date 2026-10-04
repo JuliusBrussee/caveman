@@ -101,6 +101,32 @@ class TestMultiLineSpansStillCompared(unittest.TestCase):
         self.assertFalse(result.is_valid, "a changed CLI argument must not pass as a warning")
 
 
+class TestMidLineFenceRun(unittest.TestCase):
+    """A backtick run in the MIDDLE of a prose line ("inside a ```diff fence")
+    is matched by neither FENCE_OPEN_REGEX nor FENCE_MARKER_LINE_REGEX, so its
+    backticks used to leak into inline-code pairing. The naive `([^`]+)`
+    pattern then opened a span at the run's trailing backtick and closed it at
+    the NEXT real span's opening backtick, shifting every following pair and
+    making the file permanently uncompressible."""
+
+    def test_midline_triple_backtick_does_not_shift_pairing(self):
+        text = "Put the result inside a ```diff fence. Then state:\n\n- count of `BEGIN PRIVATE KEY` matches\n- check `base64 -d` output\n"
+        self.assertEqual(extract_inline_codes(text), ["BEGIN PRIVATE KEY", "base64 -d"])
+
+    def test_midline_run_file_validates_against_itself(self):
+        text = "Wrap it in a ```json fence and run `jq .` after.\n"
+        result = ValidationResult()
+        validate_inline_codes(text, text, result)
+        self.assertTrue(result.is_valid, result.errors)
+
+    def test_span_after_midline_run_still_protected(self):
+        orig = "Use a ```diff fence, then run `git apply /tmp/x.patch` to apply.\n"
+        comp = "Use a ```diff fence, then apply.\n"
+        result = ValidationResult()
+        validate_inline_codes(orig, comp, result)
+        self.assertFalse(result.is_valid, "span dropped after a mid-line run must be caught")
+
+
 class TestErrorRendering(unittest.TestCase):
     """#820's failures were undiagnosable because a garbled span was printed
     whole. That is a presentation problem — fix it in the message, not by
@@ -154,6 +180,25 @@ class TestValidateIntegration(unittest.TestCase):
             self.assertFalse(result.is_valid)
             self.assertTrue(any("Inline code lost" in e for e in result.errors))
 
+
+
+class TestInnerBacktickSpans(unittest.TestCase):
+    """CommonMark lets a span carry a backtick run of another length inside it
+    (``a`b``). A content class that excludes every backtick cannot match such a
+    span at all, so a rewrite of its code went unvalidated."""
+
+    def test_double_backtick_span_with_inner_backtick_is_extracted(self):
+        self.assertEqual(extract_inline_codes("use ``a`b`` here and `c`"), ["a`b", "c"])
+
+    def test_single_backtick_span_with_inner_double_run(self):
+        self.assertEqual(extract_inline_codes("see `a``b` now"), ["a``b"])
+
+    def test_inner_backtick_span_rewrite_still_fails_validation(self):
+        orig = "# T\n\nRun ``git log --format=`%h` -1`` first.\n"
+        comp = orig.replace("%h", "%H")
+        result = ValidationResult()
+        validate_inline_codes(orig, comp, result)
+        self.assertFalse(result.is_valid, result.errors)
 
 if __name__ == "__main__":
     unittest.main()

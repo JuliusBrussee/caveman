@@ -119,26 +119,43 @@ function makeSession(configDir, lines) {
 
 // ---------- #537: slash-command envelope unwrap ----------
 
-test('envelope one-line form switches level', () => {
+test('envelope one-line form switches mode', () => {
   const cfg = makeConfigDir();
   try {
-    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'full');
-    const r = send(cfg, { prompt: envelope('/caveman', 'lite', false) });
-    assert.strictEqual(flagValue(cfg), 'lite');
-    assert.match(r.stdout, /CAVEMAN MODE ACTIVE \(lite\)/);
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'caveman');
+    const r = send(cfg, { prompt: envelope('/caveman', 'ultra', false) });
+    assert.strictEqual(flagValue(cfg), 'ultracave', 'legacy alias must store the new id');
+    assert.match(r.stdout, /CAVEMAN MODE ACTIVE \(ultracave\)/);
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
   }
 });
 
-test('envelope newline-separated form switches level', () => {
+test('envelope newline-separated form switches mode', () => {
   const cfg = makeConfigDir();
   try {
-    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'full');
-    send(cfg, { prompt: envelope('/caveman', 'ultra', true) });
-    assert.strictEqual(flagValue(cfg), 'ultra');
+    fs.writeFileSync(path.join(cfg, '.caveman-active'), 'caveman');
+    send(cfg, { prompt: envelope('/caveman', 'wenyan-lite', true) });
+    assert.strictEqual(flagValue(cfg), 'megacave');
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
+  }
+});
+
+test('/ultracave and /megacave envelopes (bare and namespaced) switch mode', () => {
+  for (const [name, mode] of [
+    ['/ultracave', 'ultracave'], ['/caveman:ultracave', 'ultracave'],
+    ['/megacave', 'megacave'], ['/caveman:megacave', 'megacave'],
+  ]) {
+    const cfg = makeConfigDir();
+    try {
+      fs.writeFileSync(path.join(cfg, '.caveman-active'), 'caveman');
+      const r = send(cfg, { prompt: envelope(name, '', true) });
+      assert.strictEqual(flagValue(cfg), mode, name);
+      assert.match(r.stdout, new RegExp('CAVEMAN MODE ACTIVE \\(' + mode + '\\)'), name);
+    } finally {
+      fs.rmSync(cfg, { recursive: true, force: true });
+    }
   }
 });
 
@@ -183,7 +200,7 @@ test('brevity trigger ("be brief") activates caveman at the default mode', () =>
   const cfg = makeConfigDir();
   try {
     send(cfg, { prompt: 'be brief' });
-    assert.strictEqual(flagValue(cfg), 'full');
+    assert.strictEqual(flagValue(cfg), 'caveman');
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
   }
@@ -234,18 +251,19 @@ test('defaultMode off (via cwd-scoped repo config) suppresses reinforcement but 
 
 // ---------- #303: per-turn reinforcement must carry enough style rules ----------
 
-test('active full-mode reinforcement restates core anti-drift rules (#303)', () => {
+test('active caveman reinforcement: skill thesis plus answer-scope rule (#303, #1136)', () => {
   const cfg = makeConfigDir();
   try {
+    // A legacy 'full' mirror reads back as caveman.
     fs.writeFileSync(path.join(cfg, '.caveman-active'), 'full');
 
     const ctx = contextOf(send(cfg, { prompt: 'ordinary follow-up' }));
-    assert.match(ctx, /CAVEMAN MODE ACTIVE \(full\)/);
-    assert.match(ctx, /Drop articles \(a\/an\/the\), filler, pleasantries, and hedging/);
-    assert.match(ctx, /Prefer fragments over full natural-prose sentences/);
-    assert.match(ctx, /No preamble or recap/);
-    assert.match(ctx, /Technical terms, code, commands, paths, and errors stay exact/);
-    assert.doesNotMatch(ctx, /session ruleset applies/);
+    assert.strictEqual(ctx,
+      'CAVEMAN MODE ACTIVE (caveman). Respond terse like smart caveman. All technical substance stay.'
+      + ' Only fluff die. Answer only what was asked: no unrequested background, lists, examples,'
+      + ' walkthroughs, or follow-up offers; give code, steps, or warnings when the task needs them.'
+      + ' Security warnings, irreversible actions, multi-step order: normal prose. Technical terms,'
+      + ' code, commands, paths, and errors stay exact.');
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
   }
@@ -306,18 +324,12 @@ test('the rejected argument is never echoed back into model context', () => {
   }
 });
 
-test('the level list advertises the six documented levels, not the storage alias', () => {
+test('the notice names the three mode commands, not the legacy levels', () => {
   const cfg = makeConfigDir();
   try {
     const ctx = contextOf(send(cfg, { prompt: '/caveman nope' }));
-    const listed = /Valid levels: ([^.]+)\./.exec(ctx);
-    assert.ok(listed, `expected a level list, got: ${ctx}`);
-    const levels = listed[1].split(',').map(v => v.trim());
-    assert.deepStrictEqual(
-      levels.sort(),
-      ['full', 'lite', 'ultra', 'wenyan-full', 'wenyan-lite', 'wenyan-ultra'],
-      'wenyan is the storage alias for wenyan-full — listing both advertises seven levels',
-    );
+    assert.match(ctx, /Modes: \/caveman, \/ultracave, \/megacave\./);
+    assert.doesNotMatch(ctx, /lite|wenyan|ultra\b/, `legacy level names advertised: ${ctx}`);
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
   }
@@ -342,7 +354,8 @@ test('a typo does not strand the user in a one-shot independent mode (#599)', ()
     fs.writeFileSync(path.join(cfg, '.caveman-active'), 'commit');
     fs.writeFileSync(path.join(cfg, '.caveman-active.prev'), 'ultra');
     const ctx = contextOf(send(cfg, { prompt: '/caveman ultrra' }));
-    assert.strictEqual(flagValue(cfg), 'ultra', 'the prose mode must still be restored this turn');
+    // The legacy prev 'ultra' is restored as its new id.
+    assert.strictEqual(flagValue(cfg), 'ultracave', 'the prose mode must still be restored this turn');
     assert.match(ctx, /not recognized/, 'and the notice must still be delivered');
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
@@ -357,7 +370,7 @@ test('the notice and the per-turn reinforcement share one write', () => {
     assert.doesNotThrow(() => JSON.parse(result.stdout), 'two writes would produce invalid JSON');
     const ctx = contextOf(result);
     assert.match(ctx, /not recognized/);
-    assert.match(ctx, /CAVEMAN MODE ACTIVE \(ultra\)/, 'the turn must not lose its reinforcement');
+    assert.match(ctx, /CAVEMAN MODE ACTIVE \(ultracave\)/, 'the turn must not lose its reinforcement');
   } finally {
     fs.rmSync(cfg, { recursive: true, force: true });
   }

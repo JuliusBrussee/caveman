@@ -25,7 +25,7 @@ func compactionChurnSink(sessions []compactionSession) []Sink {
 	}
 	return []Sink{{
 		SinkID: "compaction_churn",
-		Title:  fmt.Sprintf("%d sessions re-fetched files after context compaction", sessionsAffected),
+		Title:  fmt.Sprintf("%s read files again after the conversation was compacted", plural(sessionsAffected, "session")),
 		Class:  classBehavioral, Basis: learnBasis, Framing: framingHistorical,
 		TokensObserved: int64(tokensObserved),
 		Evidence: map[string]any{
@@ -36,6 +36,6 @@ func compactionChurnSink(sessions []compactionSession) []Sink {
 			"tokens_observed_basis": "bytes4_estimate",
 			"overlap_note":          "May overlap reread_waste when a repeated read follows compaction; totals must not be summed.",
 		},
-		Suggestion: "This is the measured cost of running past the context window. Splitting work or checkpointing before compaction is the strongest locally grounded evidence for that advice.",
+		Suggestion: "This is the measured cost of filling the context window. When a conversation is compacted, the agent forgets file contents and reads them again. Splitting work into shorter sessions, or saving progress notes before compaction, avoids it.",
 	}}
 }

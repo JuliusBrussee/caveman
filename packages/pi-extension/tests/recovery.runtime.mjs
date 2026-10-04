@@ -8,7 +8,7 @@ const stub = join(here, "fixtures", "stub-caveman-mcp.mjs");
 // pathToFileURL, not a bare path: dynamic import() of an absolute Windows
 // path throws ERR_UNSUPPORTED_ESM_URL_SCHEME (the drive letter reads as a URL
 // scheme).
-const { RecoveryClient } = await import(pathToFileURL(join(here, "..", "dist", "testable.mjs")).href);
+const { RecoveryClient, shrinkToolResult, MAX_TOOL_OUTPUT_BYTES, MAX_OUTPUT_REPLACEMENT_BYTES } = await import(pathToFileURL(join(here, "..", "dist", "testable.mjs")).href);
 
 const KNOWN_HANDLE = "ccr_0123456789abcdef0123456789abcdef";
 const KNOWN_BYTES = "exact original bytes\nline two éø bytes";
@@ -204,4 +204,103 @@ test("a broken stdin pipe degrades the retrieve instead of crashing the host", a
     }
     recovery.dispose();
   }).finally(() => { cleanup(); rmSync(dirname(log), { recursive: true, force: true }); });
+});
+
+const outputEvent = (text = KNOWN_BYTES) => ({
+  toolName: "read_file", input: {}, isError: false,
+  content: [{ type: "text", text }, { type: "image", data: "cGl4ZWxz", mimeType: "image/png" }],
+});
+const shrink = (recovery, response, event = outputEvent()) =>
+  shrinkToolResult({ call: async () => response }, "publication-test", event, recovery);
+
+test("publication accepts only one exact recoverable identity across every advertised reference", async () => {
+  const { path, cleanup } = shim();
+  const recovery = new RecoveryClient(path);
+  const replacement = `full: ccr://${KNOWN_HANDLE}\nrecover: <<ccr:${KNOWN_HANDLE}>>`;
+  try {
+    const event = outputEvent();
+    assert.deepEqual(await shrink(recovery, { recovery_ref: `ccr:${KNOWN_HANDLE}`, output_replacement: replacement }, event),
+      { content: [{ type: "text", text: replacement }, event.content[1]] });
+    const nested = `compressed <<ccr:${KNOWN_HANDLE}>>`;
+    assert.deepEqual(await shrink(recovery, { hookSpecificOutput: { updatedToolOutput: nested } }, event),
+      { content: [{ type: "text", text: nested }, event.content[1]] });
+    assert.equal((await recovery.retrieve(KNOWN_HANDLE, undefined, undefined)).text, KNOWN_BYTES,
+      "silent verification must not mark originals as already delivered");
+  } finally { recovery.dispose(); cleanup(); }
+});
+
+test("unknown, mismatched and malformed publications keep original content", async () => {
+  const { path, cleanup } = shim();
+  const recovery = new RecoveryClient(path);
+  const other = "ccr_ffffffffffffffffffffffffffffffff";
+  const valid = `ccr://${KNOWN_HANDLE}`;
+  try {
+    const cases = [
+      ["unknown", { recovery_ref: other, output_replacement: `full: ccr://${other}` }],
+      ["reference mismatch", { recovery_ref: other, output_replacement: `full: ${valid}` }],
+      ["missing reference", { output_replacement: "summary with no recovery handle" }],
+      ["reference without replacement", { recovery_ref: valid }],
+      ["malformed response reference", { recovery_ref: `${valid}/bad`, output_replacement: `full: ${valid}` }],
+      ["multiple different handles", { output_replacement: `full: ${valid}\nrecover: ccr://${other}` }],
+      ["URI suffix", { output_replacement: `full: ${valid}/different` }],
+      ["URI query", { output_replacement: `full: ${valid}?handle=${other}` }],
+      ["marker suffix", { output_replacement: `<<ccr:${KNOWN_HANDLE}>>different` }],
+      ["unclosed marker", { output_replacement: `<<ccr:${KNOWN_HANDLE}` }],
+      ["extra marker delimiter", { output_replacement: `<<ccr:${KNOWN_HANDLE}>>>` }],
+      ["embedded reference", { output_replacement: `not${valid}` }],
+      ["oversized replacement", { output_replacement: `full: ${valid}\n${"x".repeat(MAX_OUTPUT_REPLACEMENT_BYTES)}` }],
+    ];
+    const event = outputEvent();
+    const original = structuredClone(event);
+    for (const [name, response] of cases) {
+      assert.equal(await shrink(recovery, response, event), undefined, name);
+      assert.deepEqual(event, original, `${name} changed original content`);
+    }
+    for (const text of [KNOWN_BYTES + "\n", KNOWN_BYTES.replace("é", "e\u0301"), "x".repeat(MAX_TOOL_OUTPUT_BYTES + 1)]) {
+      assert.equal(await shrink(recovery, { output_replacement: `full: ${valid}` }, outputEvent(text)), undefined,
+        "nonidentical or over-cap originals must not be replaced");
+    }
+  } finally { recovery.dispose(); cleanup(); }
+});
+
+test("missing verification capability keeps original and does not consume recovery on old companions", async () => {
+  const { path, cleanup } = shim();
+  await withEnv({ STUB_MCP_DROP_VERIFICATION: "1" }, async () => {
+    const recovery = new RecoveryClient(path);
+    try {
+      assert.equal(await shrink(recovery, { output_replacement: `<<ccr:${KNOWN_HANDLE}>>` }), undefined);
+      assert.equal((await recovery.retrieve(KNOWN_HANDLE, undefined, undefined)).text, KNOWN_BYTES);
+    } finally { recovery.dispose(); }
+  }).finally(cleanup);
+});
+
+test("invalid or failed verification proofs keep original output", async () => {
+  const { path, cleanup } = shim();
+  try {
+    for (const fault of ["reference", "length", "digest", "malformed", "error", "hang"]) {
+      await withEnv({ STUB_MCP_VERIFICATION_FAULT: fault }, async () => {
+        const recovery = new RecoveryClient(path);
+        try {
+          const started = Date.now();
+          assert.equal(await shrink(recovery, { output_replacement: `full: ccr://${KNOWN_HANDLE}` }), undefined, fault);
+          if (fault === "hang") assert.ok(Date.now() - started < 5000, "publication must not wait the model's 30s retrieval budget");
+        } finally { recovery.dispose(); }
+      });
+    }
+  } finally { cleanup(); }
+});
+
+test("unavailable recovery and thrown failures leave tool results untouched", async () => {
+  const { path, cleanup } = shim();
+  const recovery = new RecoveryClient(path);
+  recovery.dispose();
+  const response = { output_replacement: `full: ccr://${KNOWN_HANDLE}` };
+  const event = outputEvent();
+  const original = structuredClone(event);
+  try {
+    assert.equal(await shrink(recovery, response, event), undefined);
+    assert.equal(await shrink({ verify: async () => { throw new Error("transport broke"); } }, response, event), undefined);
+    assert.equal(await shrinkToolResult({ call: async () => { throw new Error("hook broke"); } }, "test", event, recovery), undefined);
+    assert.deepEqual(event, original);
+  } finally { cleanup(); }
 });

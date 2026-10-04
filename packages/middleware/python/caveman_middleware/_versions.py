@@ -1,6 +1,19 @@
 """Native version gates over release ranges, without importing the frameworks."""
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version
+from types import MappingProxyType
+import re
+
+from caveman_cloud.middleware import MiddlewareError, ensure_sync, warn_once
+
+
+_STABLE_VERSION = re.compile(
+    r"(?:(?P<epoch>[0-9]+)!)?(?P<release>[0-9]+(?:\.[0-9]+)*)"
+    r"(?:(?:[-_.]?(?:post|rev|r)[-_.]?(?P<post>[0-9]*))|-(?P<implicit_post>[0-9]+))?"
+    r"(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?",
+    re.IGNORECASE | re.ASCII,
+)
 
 
 @lru_cache(maxsize=32)
@@ -11,39 +24,43 @@ def installed_version(name):
         return None
 
 
-def _release(value):
-    """Leading numeric release segments of a PEP 440 version, as a tuple.
+# Adapter.version on the wire: the installed caveman-middleware release.
+VERSION = installed_version("caveman-middleware") or "unknown"
 
-    `packaging` is not a dependency of this package and may not be installed, so
-    epochs, prerelease and local segments are dropped rather than ordered: an
-    `rc` compares as its own release, which is what a support gate wants.
+
+def _stable_version(value):
+    """Validate stable PEP 440 release/post/local forms without a dependency.
+
+    Prereleases, development releases and nonzero epochs are not covered by our
+    support ranges. Local labels do not alter a stable public version's range
+    eligibility. An explicit zero epoch is equivalent to an omitted epoch.
     """
-    parts = []
-    for chunk in value.split("+")[0].split("!")[-1].split("."):
-        digits = ""
-        for character in chunk:
-            if not character.isdigit():
-                break
-            digits += character
-        if not digits:
-            break
-        parts.append(int(digits))
-        if digits != chunk:
-            break
-    return tuple(parts)
+    match = _STABLE_VERSION.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        return None
+    try:
+        if int(match["epoch"] or "0") != 0:
+            return None
+        release = tuple(int(part) for part in match["release"].split("."))
+        post = match["post"] if match["post"] is not None else match["implicit_post"]
+        return release, int(post or "0") if post is not None else -1
+    except ValueError:
+        return None
 
 
 def in_range(installed, low, high):
-    """`low <= installed < high` over release segments only.
+    """Whether a stable public version satisfies `low <= installed < high`.
 
-    A framework that breaks the wire shape inside the range is caught by the
-    adapter's serialization revision, which is part of the runtime's scope
-    identity. This gate only stops a different major from reaching the wire.
+    Range eligibility does not prove compatibility. Upstream API changes still
+    require native adapter tests; the serialization revision identifies our
+    adapter contract and cannot detect arbitrary framework changes.
     """
-    if not installed:
+    versions = [_stable_version(value) for value in (installed, low, high)]
+    if any(value is None for value in versions):
         return False
-    found = _release(installed)
-    return bool(found) and _release(low) <= found < _release(high)
+    width = max(len(value[0]) for value in versions)
+    found, lower, upper = [(release + (0,) * (width - len(release)), post) for release, post in versions]
+    return lower <= found < upper
 
 
 def matches_framework(*pins):
@@ -54,10 +71,96 @@ def matches_framework(*pins):
     return all(in_range(installed_version(name), low, high) for name, low, high in pins)
 
 
-def supports_framework(runtime, *pins):
-    if runtime.mode == "off":
-        return False
-    if matches_framework(*pins):
+def framework_state(*pins):
+    """``supported``; ``unsupported`` when a readable version is outside its pin; ``unverified`` when unreadable."""
+    versions = [installed_version(name) for name, _, _ in pins]
+    if any(found is not None and not in_range(found, low, high) for found, (_, low, high) in zip(versions, pins)):
+        return "unsupported"
+    return "unverified" if None in versions else "supported"
+
+
+def gate(runtime, adapter, *pins, accept=False):
+    """Decision 3: whether the adapter runs. Never raises.
+
+    A readable version outside the tested range skips the adapter and warns once
+    (``unsupported_version``) unless ``accept_framework_version=True``. An
+    unreadable version (vendored or bundled builds) runs after the adapter's own
+    imports proved the hooks exist, with a one-time ``version_unverified``.
+    Strict mode surfaces the skip from ``preflight()``/``ready()``, not here.
+    """
+    state = "supported" if accept else framework_state(*pins)
+    if state == "supported" or runtime.mode == "off":
+        return state != "unsupported"  # an off runtime is inert: nothing to warn about
+    if state == "unverified":
+        warn_once(adapter, "version_unverified")
         return True
-    runtime.decline("unsupported_version")
+    runtime.decline("unsupported_version", adapter)  # warns once and keeps the on_diagnostic signal for existing hosts
     return False
+
+
+@dataclass(frozen=True)
+class Compatibility:
+    """Decision 11 tier plus the tested ranges ``(distribution, oldest tested, exclusive maximum)``."""
+    tier: str
+    pins: tuple
+
+
+COMPATIBILITY = MappingProxyType({
+    "langchain": Compatibility("certified", (("langchain", "1.1", "2"), ("langchain-core", "1.1", "2"), ("langgraph", "1.0.2", "2"))),
+    "openai": Compatibility("certified", (("openai", "2.20", "4"),)),
+    "anthropic": Compatibility("certified", (("anthropic", "1.0", "2"),)),
+    "litellm": Compatibility("certified", (("litellm", "1.95", "2"),)),
+    "google": Compatibility("experimental", (("google-genai", "2.18", "3"),)),
+    "strands": Compatibility("experimental", (("strands-agents", "1.43", "2"),)),
+    "agno": Compatibility("experimental", (("agno", "3.0", "4"),)),
+    "crewai": Compatibility("experimental", (("crewai", "1.15.3", "2"),)),
+    "pydantic_ai": Compatibility("experimental", (("pydantic-ai-slim", "2.36", "3"),)),
+    "autogen": Compatibility("experimental", (("autogen-core", "0.7", "0.8"), ("autogen-agentchat", "0.7", "0.8"), ("autogen-ext", "0.7", "0.8"))),
+    "llama_index": Compatibility("experimental", (("llama-index-core", "0.14.5", "0.15"),)),
+    "mcp": Compatibility("experimental", (("mcp", "2.0", "3"),)),
+    "asgi": Compatibility("experimental", ()),  # pure ASGI: no framework to gate
+})
+
+
+def framework_import_failed(family, error, hint):
+    """Raise for an adapter module whose framework import failed.
+
+    An installed distribution outside the tested range names its version and the range
+    (``unsupported_version``, also on ``.code``); a missing framework gets ``hint``; an in-range
+    install that still fails keeps its own error.
+    """
+    unsupported = [f"{name} {found} is installed; this adapter requires {name}>={low},<{high}"
+                   for name, low, high in COMPATIBILITY[family].pins
+                   if (found := installed_version(name)) is not None and not in_range(found, low, high)]
+    if unsupported:
+        failure = ImportError("Caveman middleware: unsupported_version: " + "; ".join(unsupported))
+        failure.code = "unsupported_version"
+        raise failure from error
+    if isinstance(error, ModuleNotFoundError):
+        raise ImportError(hint) from error
+    raise error
+
+
+def family_gate(runtime, family, adapter=None, accept=False):
+    return gate(runtime, adapter or family, *COMPATIBILITY[family].pins, accept=accept)
+
+
+def preflight(runtime, family, *, accept_framework_version=False):
+    """The runtime's preflight plus this adapter family's version gate (Decision 3); never raises.
+
+    Blocking discovery: call it at startup, not from inside a running event loop.
+    """
+    report = ensure_sync(runtime).preflight()
+    if (report.status != "disabled" and not accept_framework_version
+            and framework_state(*COMPATIBILITY[family].pins) == "unsupported"):
+        return replace(report, status="unavailable", reason="unsupported_version", action=(
+            f"Install a {family} version inside caveman_middleware.COMPATIBILITY[{family!r}].pins, "
+            "or pass accept_framework_version=True after testing it."))
+    return report
+
+
+def ready(runtime, family, *, accept_framework_version=False):
+    """Strict startup gate: raises ``unsupported_version`` for an untested framework, else the runtime's ready()."""
+    if not accept_framework_version and framework_state(*COMPATIBILITY[family].pins) == "unsupported":
+        raise MiddlewareError("unsupported_version")
+    return ensure_sync(runtime).ready()

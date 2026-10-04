@@ -1,13 +1,8 @@
-"""Fail-open smoke: every adapter must import and expose its documented entry.
-
-The adapter modules raise ImportError with install guidance when their framework
-is missing, so an absent extra skips rather than fails. What is asserted here is
-the part that holds for all of them: importing an adapter never touches the
-network, and the names the README tells people to call actually exist.
-"""
-import importlib
+"""Every eligible adapter must import and expose its documented entry points."""
 
 import pytest
+
+from frameworks import require_adapter
 
 ADAPTERS = {
     "openai": ("with_caveman_openai", "with_caveman_openai_tools"),
@@ -28,9 +23,6 @@ ADAPTERS = {
 
 @pytest.mark.parametrize("family,names", sorted(ADAPTERS.items()))
 def test_adapter_exposes_its_documented_entry_points(family, names):
-    try:
-        module = importlib.import_module(f"caveman_middleware.{family}")
-    except ImportError as error:
-        pytest.skip(f"{family} framework not installed: {error}")
+    module = require_adapter(family)
     missing = [name for name in names if not hasattr(module, name)]
     assert not missing, f"caveman_middleware.{family} lost {missing}"

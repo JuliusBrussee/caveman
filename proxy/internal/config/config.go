@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
@@ -106,10 +107,32 @@ type Config struct {
 	// binary logs them at startup. An unusable bundle contributes nothing, never
 	// a partial set of roots.
 	SkippedCABundles []SkippedCABundle `yaml:"-"`
+	// Middleware configures the framework middleware runtime (see
+	// MiddlewareConfig); CAVEMAN_MIDDLEWARE_* environment variables override it.
+	Middleware MiddlewareConfig `yaml:"middleware"`
+	// TLS serves the listener over TLS (see TLSConfig).
+	TLS TLSConfig `yaml:"tls"`
+	// MetricsToken, read only from CAVEMAN_METRICS_TOKEN, makes /metrics require
+	// `Authorization: Bearer <token>`. Empty keeps /metrics open.
+	MetricsToken string `yaml:"-" json:"-"`
 
 	rootCAs             *x509.CertPool
 	upstreamProxy       func(*http.Request) (*url.URL, error)
 	upstreamProxyParsed bool
+}
+
+// TLSConfig is the `tls:` block. CAVEMAN_TLS_CERT_FILE, CAVEMAN_TLS_KEY_FILE and
+// CAVEMAN_TLS_CLIENT_CA_FILE override it. Certificate and key together turn the
+// listener into TLS 1.2+; files are reloaded on change or SIGHUP. A client CA
+// additionally verifies client certificates when presented (mTLS identity for
+// the middleware routes), which also counts as inbound authentication.
+type TLSConfig struct {
+	CertFile     string `yaml:"cert_file"`
+	KeyFile      string `yaml:"key_file"`
+	ClientCAFile string `yaml:"client_ca_file"`
+	// ClientCNFallback (CAVEMAN_TLS_CLIENT_CN_FALLBACK) names a client
+	// certificate with no URI or DNS SAN by its subject CN. Off by default.
+	ClientCNFallback bool `yaml:"client_cn_fallback"`
 }
 
 // SkippedCABundle names one inherited CA env var that Load could not use, with
@@ -176,7 +199,15 @@ func Load(path string) (Config, error) {
 	if err := validateAuthToken(cfg.AuthToken); err != nil {
 		return Config{}, err
 	}
-	if err := validateListen(cfg.Listen, cfg.AuthToken != ""); err != nil {
+	if strings.TrimSpace(cfg.Middleware.DatabaseURLYAML) != "" {
+		// Same reason as auth_token: a URL carries a password, and silently
+		// ignoring it would run the replica on SQLite the operator did not choose.
+		return Config{}, fmt.Errorf("middleware.database_url: in %s is ignored — the middleware database URL is read only from the CAVEMAN_MIDDLEWARE_DATABASE_URL environment variable; remove the key", path)
+	}
+	if (cfg.TLS.CertFile == "") != (cfg.TLS.KeyFile == "") || (cfg.TLS.ClientCAFile != "" && cfg.TLS.CertFile == "") {
+		return Config{}, fmt.Errorf("tls: cert_file and key_file go together, and client_ca_file needs both")
+	}
+	if err := validateListen(cfg.Listen, cfg.InboundAuthenticated()); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.validateCompat(); err != nil {
@@ -305,6 +336,15 @@ func validateAuthToken(token string) error {
 	return nil
 }
 
+// InboundAuthenticated reports whether any inbound credential gates the
+// listener: the shared token, or an identity source for the middleware routes
+// (token map, OIDC, client certificates). Provider routes accept only the shared
+// token; without it on a non-loopback listener they refuse every request (see
+// standalone.Auth).
+func (c Config) InboundAuthenticated() bool {
+	return c.AuthToken != "" || c.Middleware.TokenMapFile != "" || c.Middleware.OIDC.Issuer != "" || c.TLS.ClientCAFile != ""
+}
+
 // validateListen keeps standalone's BYOK proxy local to one operator unless an
 // inbound credential gates it. Binding an empty, wildcard, or non-loopback host
 // would expose every configured provider credential to the network with no
@@ -312,21 +352,26 @@ func validateAuthToken(token string) error {
 // standalone.Auth rejects every request that does not present it and the wider
 // bind becomes a deliberate operator choice instead of an accident.
 func validateListen(listen string, authenticated bool) error {
-	host, port, err := net.SplitHostPort(strings.TrimSpace(listen))
-	if err != nil || port == "" {
+	if _, port, err := net.SplitHostPort(strings.TrimSpace(listen)); err != nil || port == "" {
 		return fmt.Errorf("listen address %q must be loopback host:port", listen)
 	}
-	if strings.EqualFold(host, "localhost") {
-		return nil
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
+	if !LoopbackListen(listen) {
 		if authenticated {
 			return nil
 		}
-		return fmt.Errorf("listen address %q is not loopback; standalone proxy has no inbound authentication; set CAVEMAN_AUTH_TOKEN to expose the proxy beyond loopback", listen)
+		return fmt.Errorf("listen address %q is not loopback; standalone proxy has no inbound authentication; set CAVEMAN_AUTH_TOKEN (or a middleware token map, OIDC, or a TLS client CA) to expose the proxy beyond loopback", listen)
 	}
 	return nil
+}
+
+// LoopbackListen reports whether listen binds only the local machine.
+func LoopbackListen(listen string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(listen))
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback())
 }
 
 func (c Config) withDefaults() Config {
@@ -363,6 +408,16 @@ func (c Config) withDefaults() Config {
 	if bundle := env.String("CAVE_CA_BUNDLE", ""); bundle != "" {
 		c.CABundle = bundle
 	}
+	c.Middleware = c.Middleware.withEnv()
+	for name, field := range map[string]*string{"CERT_FILE": &c.TLS.CertFile, "KEY_FILE": &c.TLS.KeyFile, "CLIENT_CA_FILE": &c.TLS.ClientCAFile} {
+		if value := strings.TrimSpace(env.String("CAVEMAN_TLS_"+name, "")); value != "" {
+			*field = value
+		}
+	}
+	if value, err := strconv.ParseBool(strings.TrimSpace(env.String("CAVEMAN_TLS_CLIENT_CN_FALLBACK", ""))); err == nil {
+		c.TLS.ClientCNFallback = value
+	}
+	c.MetricsToken = strings.TrimSpace(env.String("CAVEMAN_METRICS_TOKEN", ""))
 	if c.Listen == "" {
 		c.Listen = DefaultListen
 	}

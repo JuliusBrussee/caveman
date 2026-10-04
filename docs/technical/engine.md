@@ -5,8 +5,7 @@ model context. It detects input shape, chooses a matching compressor, stores
 exact source when a lossy transform needs recovery, and emits output only when
 the result passes size and safety checks.
 
-Engine source is licensed under the Business Source License 1.1. Interfaces and
-adoption packages use their package-level licenses. See
+Engine source is licensed under Apache-2.0, like the rest of the repository. See
 [`LICENSING.md`](../../LICENSING.md).
 
 ## Library calls
@@ -86,6 +85,13 @@ Default registry contains 15 compressors:
 13. accessibility tree
 14. repetition
 15. terminal output
+
+The code compressor keeps imports, signatures, and type declarations and elides
+function bodies. A cgo build parses Go, Python, TypeScript, JavaScript, Rust,
+Java, C, and C++ with tree-sitter; the pure-Go build, which is how the release
+binaries are compiled, parses Go with the standard library. GDScript is elided
+by a line scanner in both builds: the language is indentation-scoped and has no
+grammar in either.
 
 Each compressor declares a safety class and implements its own parse and output
 rules. Current compressors belong to lossy class S4, even when a particular

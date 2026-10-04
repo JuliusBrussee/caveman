@@ -1,11 +1,13 @@
 # Publishing @caveman-ai/cli
 
-Founder sign-off remains required. Publish from a reviewed repository checkout,
-never from an unpacked tarball.
+Founder sign-off remains required: the `npm` environment approval. CI publishes
+from the `cli-v*` tag through `release-packages.yml`; never publish from a
+laptop or an unpacked tarball.
 
 ## Package name
 
-- Publish as **`@caveman-ai/cli`** with `npm publish --access public`.
+- Publishes as **`@caveman-ai/cli`** (`--access public`), with npm provenance
+  from trusted publishing.
 - Never publish under bare `caveman`; that npm name is unrelated.
 - Package bin entries install both `caveman` and `cave`.
 
@@ -13,7 +15,7 @@ never from an unpacked tarball.
 
 | Tag | Owns |
 |---|---|
-| `cli-v*` | Manual npm publication of this zero-runtime-dependency JS CLI |
+| `cli-v*` | npm publication of this zero-runtime-dependency JS CLI through `release-packages.yml` |
 | `bin-v*` | Signed Go companions through `release-binaries.yml` |
 
 (Caveman Cloud server images release from the Caveman Cloud repository, not
@@ -49,19 +51,24 @@ Ordering is load-bearing: assets must exist before npm package naming them.
    repository's Releases behind the `binary-release` environment approval.
 3. Without `GITHUB_TOKEN`, `GH_TOKEN`, `~/.netrc`, or authenticated `gh`, verify
    anonymous HTTP 200 for all 36 binaries and two manifest files.
-4. Bump `packages/cli/package.json`, cut CLI tag, then run:
+4. Bump `packages/cli/package.json` in a PR to `main`. On the release
+   machine, run `node agents/probe-installed.mjs --all --json`: missing,
+   broken, or version-drifted binaries fail it, and CI installs each pin
+   independently so local global installs cannot hide profile drift. Then cut
+   the tag (annotated, signed, on `main`):
 
    ```bash
-   node agents/compile.mjs
-   pnpm --dir packages/cli test
-   node agents/probe-installed.mjs --all --json
-   (cd packages/cli && npm pack --dry-run)
-   (cd packages/cli && npm publish --access public)
+   git tag -s cli-v<version> -m "@caveman-ai/cli <version>"
+   git push origin cli-v<version>
    ```
 
-   `probe-installed --all` is release-machine proof. Missing, broken, or version-drifted
-   binaries fail the gate; CI installs each pin independently so local global installs cannot
-   hide profile drift.
+   `release-packages.yml` repeats step 3's asset check and fails if any pinned
+   binary asset is missing, checks the generated constants, runs the full
+   suite against a freshly built proxy, packs, smoke-tests `caveman --version`
+   from the installed tarball, audits and writes a CycloneDX SBOM, then
+   publishes behind the `npm` environment approval. Repository settings it
+   needs: `cli-v*` in the `npm` environment's tag policy, and an npm trusted
+   publisher for `@caveman-ai/cli` (`docs/PACKAGE_RELEASES.md`).
 
 5. Post-publish smoke on clean machines (macOS ARM, Linux x64, Windows x64),
    pinned to the exact npm version: install the CLI, `caveman setup --install`,
@@ -79,12 +86,11 @@ No `postinstall` network fetch exists. Users explicitly run
 `caveman setup --install`; package-manager script policy cannot silently block
 runtime setup.
 
-Before publication:
+To inspect the tarball before tagging:
 
 ```bash
 node agents/compile.mjs
-pnpm --dir packages/cli test
-node agents/probe-installed.mjs --all --json
+env -u FORCE_COLOR -u ANTHROPIC_BASE_URL pnpm --dir packages/cli test
 (cd packages/cli && npm pack --dry-run)
 ```
 

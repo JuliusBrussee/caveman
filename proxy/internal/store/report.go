@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/JuliusBrussee/caveman/shared/platform/catalog"
 	"time"
 )
 
@@ -276,51 +278,47 @@ func commaInt(v int64) string {
 	return b.String()
 }
 
-// Input-token list prices in $/MTok, checked 2026-08 (Claude from Anthropic
-// docs; GPT-5.6 after OpenAI's 2026-07-30 Terra/Luna cuts). Used only for the
-// clearly-labeled cost chart in the HTML report: list-price arithmetic over
-// the forward rate at an assumed cache mix, never a bill, a savings claim, or
-// a verified figure.
+// Models in the HTML report's cost illustration. Input and cache-read prices
+// come from the embedded provider catalog; a model the catalog cannot price is
+// left out rather than drawn at a guessed rate. Used only for the clearly
+// labelled chart: price arithmetic over the forward rate at an assumed cache
+// mix, never a bill, a savings claim, or a verified figure.
 var costModels = []struct {
-	family string
-	label  string
-	rate   float64
+	family, label, provider, model string
 }{
-	{"claude", "Fable 5", 10.0},
-	{"claude", "Opus 5", 5.0},
-	{"claude", "Sonnet 5", 3.0},
-	{"gpt56", "Sol", 5.0},
-	{"gpt56", "Terra", 2.0},
-	{"gpt56", "Luna", 0.20},
+	{"claude", "Fable 5.1", "anthropic", "claude-fable-5-1"},
+	{"claude", "Opus 5.5", "anthropic", "claude-opus-5-5"},
+	{"claude", "Sonnet 5", "anthropic", "claude-sonnet-5"},
+	{"gpt56", "GPT-6 Astra", "openai", "gpt-6-astra"},
+	{"gpt56", "GPT-6 Sol", "openai", "gpt-6-sol"},
+	{"gpt56", "GPT-5.6 Luna", "openai", "gpt-5.6-luna"},
 }
 
 func fmtUSD(usd float64) string {
 	if usd > 0 && usd < 0.01 {
 		return "<$0.01"
 	}
-	return fmt.Sprintf("$%.2f", usd)
+	cents := int64(usd*100 + 0.5)
+	return fmt.Sprintf("$%s.%02d", commaInt(cents/100), cents%100)
 }
 
 func fmtRate(rate float64) string {
 	switch {
 	case rate == float64(int64(rate)):
-		return fmt.Sprintf("$%.0f/MTok in", rate)
+		return fmt.Sprintf("$%.0f per 1M input", rate)
 	case rate < 0.1:
-		return fmt.Sprintf("$%.3f/MTok in", rate)
+		return fmt.Sprintf("$%.3f per 1M input", rate)
 	}
-	return fmt.Sprintf("$%.2f/MTok in", rate)
+	return fmt.Sprintf("$%.2f per 1M input", rate)
 }
 
-// The cost chart assumes a 90% cache hit rate. Cache reads bill at 10% of the
-// input list price on both Anthropic and OpenAI, so the effective rate is
-// 0.1 + 0.9*0.1 = 0.19x list. An assumption, not this user's measured mix.
-const (
-	chartCacheHitRate      = 0.90
-	chartCacheReadDiscount = 0.10
-)
+// The cost chart assumes 90% of input is read from cache, billed at the model's
+// own catalog cache-read price (0.025x-0.1x list depending on the model). An
+// assumption, not this user's measured mix.
+const chartCacheHitRate = 0.90
 
-func cachedRate(list float64) float64 {
-	return list * ((1 - chartCacheHitRate) + chartCacheHitRate*chartCacheReadDiscount)
+func cachedRate(input, cacheRead float64) float64 {
+	return (1-chartCacheHitRate)*input + chartCacheHitRate*cacheRead
 }
 
 // costRow is one bar in the 30-day cost chart.
@@ -339,7 +337,7 @@ type costFamily struct {
 }
 
 // costFamilies prices the total forward tokens/day rate over 30 days at each
-// model's input list price under the chart's 90%-cache assumption, grouped by
+// model's catalog input and cache-read prices under the chart's 90%-cache assumption, grouped by
 // provider family for the chart's tab switch. Bar widths share one scale
 // across families (relative to the most expensive model anywhere) so
 // switching tabs stays comparable.
@@ -348,20 +346,33 @@ func costFamilies(sinks []Sink) []costFamily {
 	if total <= 0 {
 		return nil
 	}
+	type priced struct {
+		family, label string
+		rate          float64
+	}
+	var models []priced
 	var max float64
 	for _, m := range costModels {
-		if m.rate > max {
-			max = m.rate
+		price, version := catalog.Price(m.provider, m.model)
+		if strings.HasPrefix(version, "unpriced") || price.InputPerMillion <= 0 {
+			continue
+		}
+		rate := cachedRate(price.InputPerMillion, price.CacheReadPerMillion)
+		models = append(models, priced{m.family, m.label, rate})
+		if rate > max {
+			max = rate
 		}
 	}
+	if max <= 0 {
+		return nil
+	}
 	claude := costFamily{ID: "claude", Name: "Claude"}
-	gpt := costFamily{ID: "gpt56", Name: "GPT-5.6"}
-	for _, m := range costModels {
-		rate := cachedRate(m.rate)
+	gpt := costFamily{ID: "gpt56", Name: "GPT"}
+	for _, m := range models {
 		row := costRow{
 			Label: m.label,
-			Rate:  fmtRate(rate),
-			USD:   fmtUSD(float64(total) * 30 / 1e6 * rate),
+			Rate:  fmtRate(m.rate),
+			USD:   fmtUSD(float64(total) * 30 / 1e6 * m.rate),
 			Pct:   int(m.rate / max * 100),
 		}
 		if m.family == "claude" {
@@ -440,7 +451,7 @@ func famLabel(f LearnRetroFamily) string {
 	case retroFamilyToolOutputs:
 		return "big tool results, compressed"
 	case retroFamilyRepeatedBlocks:
-		return "re-pasted context, remembered once in cavemem"
+		return "repeated text, kept once in Caveman memory"
 	}
 	return f.Label
 }
@@ -506,6 +517,76 @@ func topSinks(sinks []Sink) []Sink {
 	return sinks
 }
 
+// reportMemoryFindings lists every memory & rules doctor finding. Most carry no
+// token rate, so on a busy machine topSinks would never reach them.
+func reportMemoryFindings(sinks []Sink) []Sink {
+	var out []Sink
+	for _, s := range sinks {
+		if strings.HasPrefix(s.SinkID, "memory_health:") {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// memoryHealthLabels are the plain names for memory_health:<kind>:<scope>.
+var memoryHealthLabels = map[string]string{
+	"memory_truncation": "Memory index too long",
+	"memory_orphans":    "Unlinked memory files",
+	"broken_imports":    "Broken @imports",
+	"stale_references":  "Outdated file paths",
+	"buried_rules":      "Buried important rules",
+	"duplicate_rules":   "Duplicate rules",
+}
+
+// memoryHealthKind is the plain label for the detector in memory_health:<kind>:<scope>.
+func memoryHealthKind(sinkID string) string {
+	parts := strings.SplitN(sinkID, ":", 3)
+	if len(parts) < 2 {
+		return sinkID
+	}
+	if label := memoryHealthLabels[parts[1]]; label != "" {
+		return label
+	}
+	return strings.ReplaceAll(parts[1], "_", " ")
+}
+
+// scoreLabels are the plain names for the Setup Score components.
+var scoreLabels = map[string]string{
+	scoreKeyConfigTax: "Instructions loaded every message",
+	scoreKeyDumbzone:  "Overloaded messages",
+	scoreKeyDeadLoad:  "Unused skills",
+	scoreKeySubagent:  "Subagent use",
+}
+
+// basisPlain names how a token count was made, in words.
+func basisPlain(basis string) string {
+	switch basis {
+	case "session_usage", "provider_counted":
+		return "counted by your model provider"
+	case "bytes4_estimate", "estimated_local":
+		return "estimated from text size"
+	case "o200k":
+		return "counted by Caveman"
+	case "observed_local":
+		return "measured on this computer"
+	case "inferred", "verified":
+		return "estimate"
+	}
+	return strings.ReplaceAll(basis, "_", " ")
+}
+
+// windowPlain turns a --since value like "30d" into "30 days".
+func windowPlain(since string) string {
+	if n := strings.TrimSuffix(since, "d"); n != since && n != "" && strings.Trim(n, "0123456789") == "" {
+		if n == "1" {
+			return "1 day"
+		}
+		return n + " days"
+	}
+	return since
+}
+
 func sumPerDay(sinks []Sink) int64 {
 	var total int64
 	for _, s := range sinks {
@@ -519,57 +600,64 @@ func plural(n int, noun string) string {
 		return fmt.Sprintf("%d %s", n, noun)
 	}
 	if strings.HasSuffix(noun, "x") {
-		return fmt.Sprintf("%d %ses", n, noun)
+		return fmt.Sprintf("%s %ses", commaInt(int64(n)), noun)
 	}
-	return fmt.Sprintf("%d %ss", n, noun)
+	return fmt.Sprintf("%s %ss", commaInt(int64(n)), noun)
 }
 
-// learnTLDR builds the caveman-voice summary at the top of the HTML report.
+// learnTLDR builds the short plain summary at the top of the HTML report:
+// score, the biggest thing to fix, safe fixes, one habit, what to do next.
 // Every number comes straight from the plan; framing stays forward-rate and
 // token-only: never "wasted", never a dollar.
 func learnTLDR(plan LearnPlan) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Cave score %d of 100.", plan.CaveScore.Score)
+	fmt.Fprintf(&b, "Your Setup Score is %d out of 100", plan.CaveScore.Score)
+	if plan.SessionsScanned > 0 {
+		fmt.Fprintf(&b, ", from %s", plural(plan.SessionsScanned, "session"))
+	}
+	b.WriteString(".")
 	if len(plan.Sinks) == 0 {
-		b.WriteString(" No token sinks found. Setup lean.")
+		b.WriteString(" Caveman found nothing to fix. Setup lean.")
 		savingsTLDR(&b, plan)
-		b.WriteString(" Keep going.")
 		return b.String()
 	}
-	var red, rec, beh int
+	var red, rec int
 	var redPerTurn int64
-	for _, s := range plan.Sinks {
+	var top *Sink
+	for i, s := range plan.Sinks {
 		switch s.Class {
 		case classReducible:
 			red++
 			redPerTurn += s.TokensPerTurn
 		case classRecurringContext:
 			rec++
-		case classBehavioral:
-			beh++
+		}
+		if top == nil && s.Class != classLoadBearing {
+			top = &plan.Sinks[i]
 		}
 	}
-	fmt.Fprintf(&b, " Found %s across %s.", plural(len(plan.Sinks), "token sink"), plural(plan.SessionsScanned, "scanned session"))
-	top := plan.Sinks[0]
-	if top.TokensObserved > 0 {
-		fmt.Fprintf(&b, " Top sink by daily equivalent: %s, with %s tokens observed in the window (basis: %s).", top.Title, commaInt(top.TokensObserved), observedTokenBasis(top))
-	} else {
-		fmt.Fprintf(&b, " Top sink by daily equivalent: %s, at %s tokens/day.", top.Title, commaInt(top.TokensPerDayRate))
+	if top != nil {
+		title := strings.TrimRight(top.Title, ".")
+		switch {
+		case top.TokensPerTurn > 0 && !strings.Contains(title, commaInt(top.TokensPerTurn)):
+			fmt.Fprintf(&b, " Biggest thing to fix: %s — about %s tokens in every message.", title, commaInt(top.TokensPerTurn))
+		case top.TokensPerTurn == 0 && top.TokensObserved > 0:
+			fmt.Fprintf(&b, " Biggest thing to fix: %s — about %s tokens so far.", title, humanTokens(top.TokensObserved))
+		default:
+			fmt.Fprintf(&b, " Biggest thing to fix: %s.", title)
+		}
 	}
 	if red > 0 {
-		fmt.Fprintf(&b, " %s safe to make now, worth ~%s tokens per turn.", plural(red, "fix"), commaInt(redPerTurn))
+		fmt.Fprintf(&b, " %s %s safe to make now, saving about %s tokens in every message.", plural(red, "fix"), pick(red, "is", "are"), commaInt(redPerTurn))
 	}
 	if rec > 0 {
-		fmt.Fprintf(&b, " %s better live in cavemem.", plural(rec, "recurring block"))
-	}
-	if beh > 0 {
-		fmt.Fprintf(&b, " %s observed. Changing habits is optional.", plural(beh, "habit"))
+		fmt.Fprintf(&b, " %s of repeated text could live in Caveman memory instead.", plural(rec, "piece"))
 	}
 	if d := plan.ContextDepth; d != nil && d.Over50Pct > 0 {
-		fmt.Fprintf(&b, " %s ran past half the context window.", plural(d.Over50Pct, "session"))
+		fmt.Fprintf(&b, " Habit to watch: %s of %s went past half the context window, where answers tend to get worse.", commaInt(int64(d.Over50Pct)), plural(d.Sessions, "session"))
 	}
 	savingsTLDR(&b, plan)
-	b.WriteString(" Cost chart below. Approve fixes one by one. Cost go down.")
+	b.WriteString(" Next: run caveman learn implement and approve each fix, one by one. Fewer tokens. Brain still big.")
 	return b.String()
 }
 
@@ -586,10 +674,10 @@ func observedTokenBasis(sink Sink) string {
 // cannot deliver.
 func savingsTLDR(b *strings.Builder, plan LearnPlan) {
 	if w := plan.WrapMeasured; w != nil && w.TokensSaved > 0 {
-		fmt.Fprintf(b, " Caveman already saved %s tokens.", humanTokens(w.TokensSaved))
+		fmt.Fprintf(b, " Caveman has already saved %s tokens.", humanTokens(w.TokensSaved))
 	}
 	if r := plan.Retro; r != nil && r.WouldCutStreamTokens > 0 {
-		fmt.Fprintf(b, " Replay of %s: the fixes here could have saved %s of the %s tokens sent.",
+		fmt.Fprintf(b, " Looking back at %s, these fixes could have saved %s of the %s tokens sent.",
 			plural(r.SessionsScanned, "past session"), humanTokens(r.WouldCutStreamTokens), humanTokens(r.TokensObserved))
 	}
 }
@@ -616,6 +704,17 @@ var learnTemplate = template.Must(template.New("learn").Funcs(template.FuncMap{
 	"human":         humanTokens,
 	"observedBasis": observedTokenBasis,
 	"topSinks":      topSinks,
+	"memoryHealth":  reportMemoryFindings,
+	"memoryKind":    memoryHealthKind,
+	"scoreLabel": func(key string) string {
+		if label := scoreLabels[key]; label != "" {
+			return label
+		}
+		return strings.ReplaceAll(key, "_", " ")
+	},
+	"basisPlain":  basisPlain,
+	"windowPlain": windowPlain,
+	"trends":      learnTrendsHTML,
 	"classClass": func(class string) string {
 		switch class {
 		case classReducible:
@@ -635,9 +734,9 @@ var learnTemplate = template.Must(template.New("learn").Funcs(template.FuncMap{
 		case classBehavioral:
 			return "habit"
 		case classRecurringContext:
-			return "offload"
+			return "repeated text"
 		default:
-			return "load-bearing"
+			return "needed"
 		}
 	},
 	"basisClass": func(basis string) string {
@@ -647,10 +746,7 @@ var learnTemplate = template.Must(template.New("learn").Funcs(template.FuncMap{
 		return "gray"
 	},
 	"scoreBasis": func(basis string) string {
-		if strings.EqualFold(basis, "verified") {
-			return "inferred"
-		}
-		return basis
+		return basisPlain(basis)
 	},
 	"scoreColor": func(score int) string {
 		switch {
@@ -767,6 +863,9 @@ summary .num{font-variant-numeric:tabular-nums;color:#787774;font-size:14px;whit
 .stack span{display:block;height:100%}
 .fine{font-size:12px;color:#9b9a97;margin:10px 0 0}
 .dcard details{border-bottom:none;margin-top:12px}
+details.raw{border-bottom:none}
+details.raw:not([open]) .caret{transform:none}
+details.raw summary{padding:2px 0;font-size:12px;color:#9b9a97}
 .dcard summary{padding:6px 0;color:#787774;font-size:13px}
 @media(max-width:560px){.dstats{flex-wrap:wrap;gap:20px}.split{grid-template-columns:1fr}.panel{padding-right:0}.panel+.panel{border-left:none;border-top:1px solid #ededec;padding:20px 0 0;margin-top:20px}}
 ul.caveats{margin:0;padding-left:20px;color:#787774;font-size:14px}
@@ -778,16 +877,16 @@ ul.caveats li{margin:6px 0}
 <main>
 <div class="icon">🪨</div>
 <h1>Caveman Learn</h1>
-<p class="meta">{{.Generated}} · window {{.Plan.Window.Since}} · {{plural .Plan.SessionsScanned "session"}} scanned · <span class="pill {{basisClass .Plan.Basis}}">{{.Plan.Basis}}</span></p>
+<p class="meta">{{.Generated}} · last {{windowPlain .Plan.Window.Since}} · {{plural .Plan.SessionsScanned "session"}} read · <span class="pill {{basisClass .Plan.Basis}}">{{basisPlain .Plan.Basis}}</span></p>
 
 <div class="callout">
   <div class="emoji">🗿</div>
-  <div><div class="label">TLDR</div>{{tldr .Plan}}</div>
+  <div><div class="label">In short</div>{{tldr .Plan}}</div>
 </div>
 
 {{if or .Plan.WrapMeasured .Plan.Retro}}
 <h2>Savings</h2>
-<p class="note">Counted in tokens, not dollars — what a token costs depends on caching. Each number is measured on its own set of requests; none are added together.</p>
+<p class="note">Counted in tokens, not dollars, because what a token costs depends on caching. Each number is measured on its own set of requests. They are never added together.</p>
 <div class="dcard">
   <div class="split">
     {{with .Plan.WrapMeasured}}
@@ -811,7 +910,7 @@ ul.caveats li{margin:6px 0}
       <div class="meter" title="{{comma .WouldCutStreamTokens}} of {{comma .TokensObserved}} tokens"><span style="width:{{pctOf .WouldCutStreamTokens .TokensObserved}}%"></span></div>
       <p class="pcap">{{pctOf .WouldCutStreamTokens .TokensObserved}}% of the {{human .TokensObserved}} tokens your last {{plural .SessionsScanned "session"}} sent, across the two fixes below.</p>
       {{else}}
-      <p class="pcap">The replay found savings but too few timestamps to state an honest total.</p>
+      <p class="pcap">Looking back found savings, but too few timestamps to give an honest total.</p>
       {{end}}
     </div>
     {{end}}
@@ -825,13 +924,13 @@ ul.caveats li{margin:6px 0}
   </div>
   <div class="hlegend">
     {{range $segs}}<span><span class="dot" style="background:{{.Color}}"></span>{{.Label}} · {{human .Tokens}}</span>{{end}}
-    <span class="hcap">a different count from the headline, which weighs every re-send</span>
+    <span class="hcap">a different count from the headline, which also counts every later message that would have re-sent a cut</span>
   </div>
   {{end}}
-  {{if .ConfigPrefixTokensPerTurn}}<p class="fine">Your always-on config adds {{comma .ConfigPrefixTokensPerTurn}} tokens every turn — a separate fix, not included above.</p>{{end}}
+  {{if .ConfigPrefixTokensPerTurn}}<p class="fine">Your always-loaded instructions add {{comma .ConfigPrefixTokensPerTurn}} tokens to every message. That is a separate fix, not included above.</p>{{end}}
   {{if not .EngineUsed}}<p class="fine">The compression engine could not start, so tool-result savings are missing from these numbers.</p>{{end}}
   {{end}}
-  {{with .Plan.WrapMeasured}}<p class="fine">Saved-so-far counts use Caveman's own token counter ({{.Basis}}), not provider numbers.</p>{{end}}
+  {{with .Plan.WrapMeasured}}<p class="fine">Saved so far uses Caveman's own token counter ({{.Basis}}), not your provider's numbers.</p>{{end}}
   {{with .Plan.Retro}}{{if .Caveats}}
   <details>
     <summary><span class="caret">▶</span>How this was measured</summary>
@@ -841,50 +940,60 @@ ul.caveats li{margin:6px 0}
 </div>
 {{end}}
 
-<h2>Cave Score</h2>
-<p class="note">Setup leanness. Starts at 100, subtracts capped penalties. Inferred and local-only, never a savings or dollar figure.</p>
+<h2>Setup Score</h2>
+<p class="note">How lean your agent setup is. It starts at 100 and loses points for each problem below, up to a limit per problem. It is an estimate from this computer only, never a saving or a dollar amount. Caveman Cloud's team score is a separate number. Here, a message means one request your agent sends to the model: your prompt, or one tool step.</p>
 <div class="score-row"><span class="score-num" style="color:{{scoreColor .Plan.CaveScore.Score}}">{{.Plan.CaveScore.Score}}</span><span class="score-of">/ 100 · {{scoreBasis .Plan.CaveScore.Basis}}</span></div>
 <div class="bar"><span style="width:{{.Plan.CaveScore.Score}}%;background:{{scoreColor .Plan.CaveScore.Score}}"></span></div>
 <div class="props">
   {{range .Plan.CaveScore.Components}}
-  <div class="prop"><span class="k">{{.Key}}</span><span>{{if .Measured}}{{.Detail}}{{else}}not measured{{end}}</span><span class="v">{{if .Measured}}−{{.Penalty}}{{else}}n/a{{end}}</span></div>
+  <div class="prop"><span class="k">{{scoreLabel .Key}}</span><span>{{if .Measured}}{{.Detail}}{{else}}not measured{{end}}</span><span class="v">{{if .Measured}}−{{.Penalty}}{{else}}n/a{{end}}</span></div>
   {{end}}
 </div>
 
-<h2>Token Sinks</h2>
-<p class="note">Ranked by daily-equivalent magnitude. Behavioral token totals remain historical observations, never rates. Open a row for evidence and suggested fix. Load-bearing rows are listed for honesty and never touched.</p>
+{{trends .Plan.Trends}}
+
+<h2>Where your tokens go</h2>
+<p class="note">Biggest first, by tokens a day at your usual pace. For habits, the count is what already happened, not a daily rate. Open a row to see the evidence and a suggested fix. Rows marked “needed” are shown so the picture is complete. Caveman never changes them.</p>
 {{if .Plan.Sinks}}
 <details>
-  <summary><span class="caret">▶</span><span class="title">Show {{plural (len (topSinks .Plan.Sinks)) "sink"}}</span>{{if gt (len .Plan.Sinks) 20}}<span class="num">top 20 of {{comma (len .Plan.Sinks)}}</span>{{end}}</summary>
+  <summary><span class="caret">▶</span><span class="title">Show {{plural (len (topSinks .Plan.Sinks)) "finding"}}</span>{{if gt (len .Plan.Sinks) 20}}<span class="num">biggest 20 of {{comma (len .Plan.Sinks)}}</span>{{end}}</summary>
   <div class="body">
 {{range topSinks .Plan.Sinks}}
 <details>
-  <summary><span class="caret">▶</span><span class="pill {{classClass .Class}}">{{classLabel .Class}}</span><span class="title">{{.Title}}</span><span class="num">{{if .TokensObserved}}{{comma .TokensObserved}} observed · {{observedBasis .}}{{else}}{{comma .TokensPerTurn}} / turn{{end}}</span></summary>
+  <summary><span class="caret">▶</span><span class="pill {{classClass .Class}}">{{classLabel .Class}}</span><span class="title">{{.Title}}</span><span class="num">{{if .TokensObserved}}{{human .TokensObserved}} tokens so far{{else}}{{comma .TokensPerTurn}} / message{{end}}</span></summary>
   <div class="body">
     {{if .Suggestion}}<p>{{.Suggestion}}</p>{{end}}
-    <p class="kv">{{if .TokensObserved}}{{comma .TokensObserved}} tokens observed in window · basis {{observedBasis .}}{{else}}{{comma .TokensPerDayRate}} tokens/day · basis {{.Basis}}{{end}}{{if .Evidence}} · {{evidence .Evidence}}{{end}}</p>
-    <p class="mono">{{.SinkID}}</p>
+    <p class="kv">{{if .TokensObserved}}{{comma .TokensObserved}} tokens in the period scanned ({{basisPlain (observedBasis .)}}){{else}}About {{human .TokensPerDayRate}} tokens a day at your usual pace ({{basisPlain .Basis}}){{end}}</p>
+    <details class="raw"><summary><span class="caret">▶</span>Raw data</summary><p class="mono">id: {{.SinkID}}{{if .Evidence}} · {{evidence .Evidence}}{{end}}</p></details>
   </div>
 </details>
 {{end}}
-    {{if gt (len .Plan.Sinks) 20}}<p class="fine">{{comma (len .Plan.Sinks)}} sinks found; the {{comma (len (topSinks .Plan.Sinks))}} largest by daily equivalent are shown. caveman learn report --json carries all of them.</p>{{end}}
+    {{if gt (len .Plan.Sinks) 20}}<p class="fine">{{comma (len .Plan.Sinks)}} findings in total; the {{comma (len (topSinks .Plan.Sinks))}} biggest are shown. Run caveman learn report --json to get all of them.</p>{{end}}
   </div>
 </details>
-{{else}}<div class="empty">No token sinks found yet. Scan more sessions, then come back.</div>{{end}}
+{{else}}<div class="empty">Nothing found yet. Run a few more agent sessions, then come back.</div>{{end}}
+
+{{with memoryHealth .Plan.Sinks}}
+<h2>Memory and instruction files</h2>
+<p class="note">Read-only checks of the memory and instruction files your agents load. {{if eq (len .) 1}}This finding is listed here.{{else}}These {{len .}} findings are all listed here.{{end}} Most have no token cost, so they rank low in the list above.</p>
+<div class="props">
+{{range .}}<div class="prop"><span class="k">{{memoryKind .SinkID}}</span><span>{{.Title}}{{if .Suggestion}}<br><span class="kv">{{.Suggestion}}</span>{{end}}{{with index .Evidence "path"}}<br><span class="mono">{{.}}</span>{{end}}</span><span class="v">{{if .TokensPerTurn}}{{comma .TokensPerTurn}} / message{{end}}</span></div>
+{{end}}</div>
+{{end}}
 
 {{with .Plan.ContextDepth}}
-<h2>Session Context Depth</h2>
-<p class="note">Each session's peak context as a share of its model's window, from provider-counted usage in {{plural .Sessions "session"}}. Window sizes are assumed per-provider defaults. This measures how deep sessions run, a quality and habit signal, not a dollar figure. Deep sessions re-send the whole history every turn, and quality degrades well before the window limit: compact or split before half the window, or offload recurring context to cavemem.</p>
+<h2>How full your sessions get</h2>
+<p class="note">For each session, how much of the model's context window (what it can hold at once) the conversation filled at its peak, as counted by your model provider in {{plural .Sessions "session"}}. Long sessions re-send the whole conversation with every message, and answers tend to get worse well before the window is full. Start a fresh session, or compact, before you pass half. Moving repeated text to Caveman memory helps too. This is a quality signal, not a cost.</p>
 <div class="dcard">
-  <div class="kicker">Session health · not a cost figure</div>
+  <div class="kicker">Session health · not a cost</div>
   <div class="dstats">
-    <div class="dstat"><span class="dn">{{.Over30Pct}}</span><span class="dk"><span class="dot" style="background:#e0b357"></span>past 30% of window</span></div>
-    <div class="dstat"><span class="dn">{{.Over50Pct}}</span><span class="dk"><span class="dot" style="background:#e0837c"></span>past 50% of window</span></div>
-    <div class="dstat"><span class="dn">{{.Sessions}}</span><span class="dk"><span class="dot" style="background:#cfcdc7"></span>sessions measured</span></div>
+    <div class="dstat"><span class="dn">{{comma .Over30Pct}}</span><span class="dk"><span class="dot" style="background:#e0b357"></span>sessions past 30% full</span></div>
+    <div class="dstat"><span class="dn">{{comma .Over50Pct}}</span><span class="dk"><span class="dot" style="background:#e0837c"></span>sessions past 50% full</span></div>
+    <div class="dstat"><span class="dn">{{comma .Sessions}}</span><span class="dk"><span class="dot" style="background:#cfcdc7"></span>sessions measured</span></div>
   </div>
   <div class="hist">
     {{range depthBars .}}
-    <div class="hcol" title="peak {{.Label}}% of window · {{plural .Count "session"}}">
+    <div class="hcol" title="peak {{.Label}}% full · {{plural .Count "session"}}">
       {{if .Count}}<span class="hcount">{{.Count}}</span>{{end}}
       <span class="hbar" style="height:{{.Pct}}%;background:{{.Color}}"></span>
     </div>
@@ -897,19 +1006,20 @@ ul.caveats li{margin:6px 0}
     <span><span class="dot" style="background:#cfcdc7"></span>under 30%</span>
     <span><span class="dot" style="background:#e0b357"></span>30 to 50%</span>
     <span><span class="dot" style="background:#e0837c"></span>past 50%</span>
-    <span class="hcap">peak context, share of window</span>
+    <span class="hcap">% of the window filled at peak</span>
   </div>
+  <p class="fine">Window sizes come from Caveman's model list. If a model is missing, a default size for its provider is used. If a session grew past that default, Caveman assumes the next bigger window (1M, then 2M tokens).</p>
 </div>
 {{end}}
 
 {{$fams := costFamilies .Plan.Sinks}}
 {{if $fams}}
-<h2>Cost per 30 Days</h2>
-<p class="note">Total sink flow of {{comma (sumPerDay .Plan.Sinks)}} tokens/day, priced at each model's input list price assuming 90% of it is a cache read (0.19x list). Bars share one scale across tabs. Illustration, not a bill; your real cache mix will differ.</p>
+<h2>What these findings could cost in 30 days</h2>
+<p class="note">The findings above add up to about {{human (sumPerDay .Plan.Sinks)}} tokens a day at your usual pace. This prices 30 days of that for each model. It assumes 90% of the input is read from cache, at that model's own cache price, which is much cheaper than list price. All bars use one scale. This is an illustration, not a bill. Your real cache use will differ.</p>
 <div class="dcard chart">
   <input type="radio" name="costfam" id="fam-claude" checked>
   <input type="radio" name="costfam" id="fam-gpt56">
-  <div class="kicker">Cost illustration · 90% cached list price</div>
+  <div class="kicker">Illustration · list price, 90% from cache</div>
   <div class="tabs">
     {{range $fams}}<label for="fam-{{.ID}}">{{.Name}}</label>{{end}}
   </div>
@@ -927,7 +1037,7 @@ ul.caveats li{margin:6px 0}
 </div>
 {{end}}
 
-<h2>Caveats</h2>
+<h2>Things to know</h2>
 <ul class="caveats">
   {{range .Plan.Caveats}}<li>{{.}}</li>{{end}}
 </ul>

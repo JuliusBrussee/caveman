@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://caveman.so/schemas/adapter-conformance.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/adapter-conformance.schema.json",
   "title": "Caveman Adapter Conformance Record",
   "type": "object",
   "additionalProperties": false,

@@ -2,8 +2,10 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -55,7 +57,7 @@ func TestLearnV2MeasuredPrefixUsesFirstDeduplicatedTurnAcrossSources(t *testing.
 	if got := sink.Evidence["unexplained_prefix_tokens"]; got != max(0, 200-static) {
 		t.Fatalf("unexplained prefix = %v, want %d", got, max(0, 200-static))
 	}
-	if !containsCaveat(plan.Caveats, "Turn-1 context includes the first user prompt") {
+	if !containsCaveat(plan.Caveats, "The first-message size includes your first prompt") {
 		t.Fatalf("measured-prefix caveat missing: %v", plan.Caveats)
 	}
 
@@ -343,4 +345,196 @@ func containsCaveat(caveats []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestSessionContextPastFallbackWindowInfersLargerWindow(t *testing.T) {
+	// An id the catalog cannot know, so the 200k fallback applies.
+	scan := func(contexts ...int) behaviorScan {
+		t.Helper()
+		var lines strings.Builder
+		for i, ctx := range contexts {
+			fmt.Fprintf(&lines, `{"type":"assistant","message":{"id":"m%d","model":"claude-uncataloged-9","usage":{"input_tokens":%d}}}`+"\n", i, ctx)
+		}
+		path := filepath.Join(t.TempDir(), "s.jsonl")
+		if err := os.WriteFile(path, []byte(lines.String()), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		beh := behaviorScan{SkillUse: map[string]int{}, SessionsBySource: map[string]int{}}
+		scanClaudeTranscriptBehavior(path, "repo/s.jsonl", time.Time{}, nil, &beh, newRecurringMiner())
+		return beh
+	}
+	// 300k cannot fit a 200k window, so the whole session is a 1M session:
+	// the earlier 150k turn is not dumbzone either.
+	big := scan(150_000, 300_000)
+	if big.Turns != 2 || big.DumbzoneTurns != 0 || !big.InferredWindowSources["claude"] || len(big.SessionPeakPct) != 1 || big.SessionPeakPct[0] != 30 {
+		t.Fatalf("inferred-window behavior = %+v", big)
+	}
+	claudeDir := t.TempDir()
+	t.Setenv("CAVEMAN_CLAUDE_ROOT", claudeDir)
+	writeClaudeProject(t, claudeDir, "repo", "a.jsonl", []string{
+		`{"type":"assistant","cwd":"/r","timestamp":"2026-09-20T10:00:00Z","message":{"id":"a","model":"claude-uncataloged-9","usage":{"input_tokens":150000}}}`,
+		`{"type":"assistant","cwd":"/r","timestamp":"2026-09-20T10:01:00Z","message":{"id":"b","model":"claude-uncataloged-9","usage":{"input_tokens":300000}}}`,
+	})
+	metrics := scanLearnSessionMetrics(map[string]bool{"claude": true}, time.Time{}, "", false)
+	for _, m := range metrics {
+		if m.Dumbzone != 0 || m.Turns != 2 || len(metrics) != 1 {
+			t.Fatalf("session metric kept the 200k window: %+v", m)
+		}
+	}
+	plan, err := openRetroTestStore(t).BuildLearnPlan(t.TempDir(), []string{"claude"}, "3650d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsCaveat(plan.Caveats, "assumed the next bigger window") {
+		t.Fatalf("plan does not say the window was inferred: %v", plan.Caveats)
+	}
+	small := scan(150_000, 190_000)
+	if small.DumbzoneTurns != 2 || small.InferredWindowSources["claude"] || small.SessionPeakPct[0] != 95 {
+		t.Fatalf("capped session must stay on the 200k fallback: %+v", small)
+	}
+}
+
+func TestInferredWindowOnCatalogModelIsNotAFallback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	body := `{"type":"assistant","message":{"id":"a","model":"claude-sonnet-4-5","usage":{"input_tokens":120000}}}` + "\n" +
+		`{"type":"assistant","message":{"id":"b","model":"claude-sonnet-4-5","usage":{"input_tokens":300000}}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	beh := behaviorScan{SkillUse: map[string]int{}, SessionsBySource: map[string]int{}}
+	scanClaudeTranscriptBehavior(path, "repo/s.jsonl", time.Time{}, nil, &beh, newRecurringMiner())
+	if !beh.InferredWindowSources["claude"] || beh.FallbackWindowSources["claude"] || beh.DumbzoneTurns != 0 || beh.DumbzoneExcessTokens != 0 {
+		t.Fatalf("catalog session past its 200k window = %+v", beh)
+	}
+}
+
+func TestProjectClaudeMDRateCountsOnlyThatProjectsClaudeSessions(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "proj")
+	cfg := configScan{ClaudeMDProject: &ConfigSnapshot{Scope: "project", Kind: "claude_md", Path: filepath.Join(project, "CLAUDE.md"), Lines: 400, Tokens: 3000}}
+	beh := behaviorScan{Turns: 100, SessionMetrics: []learnSessionMetric{
+		{Repo: project, Source: "claude", Turns: 10},
+		{Repo: filepath.Join(project, "sub"), Source: "claude", Turns: 5},
+		{Repo: project, Source: "codex", Turns: 20},                // Codex reads AGENTS.md, not CLAUDE.md
+		{Repo: project + "-worktree", Source: "claude", Turns: 30}, // sibling dir, own CLAUDE.md
+		{Repo: filepath.Join(root, "other"), Source: "claude", Turns: 35},
+	}}
+	projectSink := func(beh behaviorScan) Sink {
+		for _, sink := range configSinksWithBehavior(cfg, beh, 50) {
+			if sink.SinkID == "claude_md_weight:project" {
+				return sink
+			}
+		}
+		t.Fatal("missing claude_md_weight:project")
+		return Sink{}
+	}
+	// 15 of 100 turns at 50 turns/day -> 7.5 turns/day x 3000 tokens.
+	sink := projectSink(beh)
+	if sink.TokensPerDayRate != 22500 || sink.Evidence["turns_per_day_basis"] != "claude_sessions_under_project" {
+		t.Fatalf("rate = %d basis %v, want 22500 claude_sessions_under_project", sink.TokensPerDayRate, sink.Evidence["turns_per_day_basis"])
+	}
+	beh.SessionMetrics = beh.SessionMetrics[3:]
+	if sink := projectSink(beh); sink.TokensPerDayRate != 0 || sink.Evidence["turns_per_day_basis"] != "no_matching_sessions" ||
+		!strings.Contains(sink.Suggestion, "could not be measured") {
+		t.Fatalf("project with no sessions of its own = %d basis %v suggestion %q", sink.TokensPerDayRate, sink.Evidence["turns_per_day_basis"], sink.Suggestion)
+	}
+	beh.SessionMetrics = nil
+	if sink := projectSink(beh); sink.TokensPerDayRate != 150000 || sink.Evidence["turns_per_day_basis"] != "all_scanned_sessions" {
+		t.Fatalf("fallback rate = %d basis %v", sink.TokensPerDayRate, sink.Evidence["turns_per_day_basis"])
+	}
+}
+
+func TestProjectConfigRateMatchesSessionsThroughSymlinksAndCase(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "code", "proj")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "code")
+	if err := os.Symlink(filepath.Dir(real), link); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The config path arrives in $PWD form, through the link; Claude Code
+	// records the resolved getcwd path.
+	configPath := filepath.Join(link, "proj", "CLAUDE.md")
+	beh := behaviorScan{Turns: 100, SessionMetrics: []learnSessionMetric{{Repo: resolved, Source: "claude", Turns: 20}}}
+	if got, basis := configTurnsPerDay("project", "claude_md", configPath, beh, 50); got != 10 || basis != "claude_sessions_under_project" {
+		t.Fatalf("symlinked config = %v %s, want 10 claude_sessions_under_project", got, basis)
+	}
+	if runtime.GOOS == "darwin" {
+		beh.SessionMetrics[0].Repo = strings.ToUpper(resolved)
+		if got, _ := configTurnsPerDay("project", "claude_md", configPath, beh, 50); got != 10 {
+			t.Fatalf("case-differing repo on darwin = %v, want 10", got)
+		}
+	}
+}
+
+func TestClaudeProviderModelSplitsOnlyKnownVendorPrefixes(t *testing.T) {
+	for in, want := range map[string][2]string{
+		"claude-opus-5-5":         {"anthropic", "claude-opus-5-5"},
+		"google/gemini-3.7-flash": {"gemini", "gemini-3.7-flash"},
+		"openai/gpt-6-sol":        {"openai", "gpt-6-sol"},
+		"arn:aws:bedrock:us-east-1:1:application-inference-profile/x": {"anthropic", "arn:aws:bedrock:us-east-1:1:application-inference-profile/x"},
+	} {
+		if p, m := claudeProviderModel(in); p != want[0] || m != want[1] {
+			t.Errorf("claudeProviderModel(%q) = %s/%s, want %s/%s", in, p, m, want[0], want[1])
+		}
+	}
+}
+
+func TestUserClaudeMDAndCodexAgentsRatesCountOnlyTheirOwnSource(t *testing.T) {
+	cfg := configScan{
+		ClaudeMDUser: &ConfigSnapshot{Scope: "user", Kind: "claude_md", Path: "/home/u/.claude/CLAUDE.md", Lines: 400, Tokens: 3000},
+		CodexAgents:  &ConfigSnapshot{Scope: "user", Kind: "agents_md", Path: "/home/u/.codex/AGENTS.md", Lines: 400, Tokens: 3000},
+	}
+	// 10 of Claude's 60 turns ran in a session with no repo: SessionMetrics
+	// drops it, but the user-scope file still loaded there.
+	beh := behaviorScan{Turns: 100, TurnsBySource: map[string]int{"claude": 60, "codex": 40}, SessionMetrics: []learnSessionMetric{
+		{Repo: "/a", Source: "claude", Turns: 50},
+		{Repo: "/b", Source: "codex", Turns: 40},
+	}}
+	want := map[string][2]any{
+		"claude_md_weight:user":  {int64(90000), "claude_sessions"}, // 60/100 x 50/day x 3000
+		"claude_md_weight:codex": {int64(60000), "codex_sessions"},
+	}
+	for _, sink := range configSinksWithBehavior(cfg, beh, 50) {
+		w, ok := want[sink.SinkID]
+		if !ok {
+			continue
+		}
+		delete(want, sink.SinkID)
+		if sink.TokensPerDayRate != w[0] || sink.Evidence["turns_per_day_basis"] != w[1] {
+			t.Errorf("%s = %d basis %v, want %v %v", sink.SinkID, sink.TokensPerDayRate, sink.Evidence["turns_per_day_basis"], w[0], w[1])
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing sinks: %v", want)
+	}
+}
+
+func TestConfigGrowthChargesEachFileAtItsOwnSessionsRate(t *testing.T) {
+	project := filepath.Join(t.TempDir(), "proj")
+	rows := []configTrendRow{
+		{Scope: "project", Kind: "claude_md", Path: filepath.Join(project, "CLAUDE.md"), FirstTokens: 1000, LastTokens: 2000, Observations: 2},
+		{Scope: "user", Kind: "agents_md", Path: "/home/u/.codex/AGENTS.md", FirstTokens: 1000, LastTokens: 1500, Observations: 2},
+	}
+	beh := behaviorScan{Turns: 100, TurnsBySource: map[string]int{"claude": 60, "codex": 40}, SessionMetrics: []learnSessionMetric{
+		{Repo: project, Source: "claude", Turns: 10},
+		{Repo: "/elsewhere", Source: "claude", Turns: 50},
+		{Repo: "/elsewhere", Source: "codex", Turns: 40},
+	}}
+	sinks := configTrendSink(rows, beh, 50, nil)
+	if len(sinks) != 1 {
+		t.Fatalf("sinks = %+v", sinks)
+	}
+	// project: 1000 x (10/100 x 50) = 5000; codex: 500 x (40/100 x 50) = 10000.
+	if got := sinks[0].TokensPerDayRate; got != 15000 {
+		t.Fatalf("config_growth rate = %d, want 15000 (all-session rate would be 75000)", got)
+	}
+	if sinks[0].Evidence["turns_per_day_basis"] != "per_file" {
+		t.Fatalf("basis = %v", sinks[0].Evidence["turns_per_day_basis"])
+	}
 }

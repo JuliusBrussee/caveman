@@ -19,7 +19,7 @@ const { parseModeChange } = require('../src/hooks/caveman-parse');
 const HOOK_PATH = path.resolve(__dirname, '..', 'src', 'hooks', 'caveman-mode-tracker.js');
 const FIXTURES_PATH = path.resolve(__dirname, 'fixtures', 'mode-activation', 'cases.json');
 
-const defaultFull = { getDefaultMode: () => 'full' };
+const defaultCaveman = { getDefaultMode: () => 'caveman' };
 
 let passed = 0;
 let failed = 0;
@@ -62,7 +62,7 @@ assert.ok(Array.isArray(cases) && cases.length > 0, 'fixtures must contain array
 for (const tc of cases) {
   const label = `case #${tc.id} [${tc.category}]: "${tc.prompt}"`;
   test(label, () => {
-    const verdict = parseModeChange(tc.prompt, defaultFull);
+    const verdict = parseModeChange(tc.prompt, defaultCaveman);
     if (tc.known_failing) {
       assert.deepStrictEqual(
         verdict,
@@ -85,7 +85,7 @@ for (const id of parityIds) {
   const tc = cases.find((c) => c.id === id);
   if (!tc) continue;
   test(`parity hook execution: case #${tc.id} "${tc.prompt}"`, () => {
-    const verdict = parseModeChange(tc.prompt, defaultFull);
+    const verdict = parseModeChange(tc.prompt, defaultCaveman);
     const expectedFlag =
       verdict === null ? null :
       verdict.action === 'clear' ? null :

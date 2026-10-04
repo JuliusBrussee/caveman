@@ -57,25 +57,29 @@ try {
 }
 
 # Strip anything outside [a-z0-9-] — blocks terminal-escape and OSC hyperlink
-# injection via the flag contents. Then whitelist-validate.
+# injection via the flag contents.
 $Mode = $Mode.ToLowerInvariant()
 $Mode = ($Mode -replace '[^a-z0-9-]', '')
-
-$Valid = @('off','lite','full','ultra','wenyan-lite','wenyan','wenyan-full','wenyan-ultra','commit','review','compress')
-if (-not ($Valid -contains $Mode)) { exit 0 }
 
 # Durable off: caveman is deactivated for this session. Render nothing at all,
 # matching what an absent flag does — never "[CAVEMAN:OFF]", which would read
 # as a caveman mode rather than the absence of one.
 if ($Mode -eq "off") { exit 0 }
 
-$Esc = [char]27
-if ([string]::IsNullOrEmpty($Mode) -or $Mode -eq "full") {
-    [Console]::Write("${Esc}[38;5;172m[CAVEMAN]${Esc}[0m")
-} else {
-    $Suffix = $Mode.ToUpperInvariant()
-    [Console]::Write("${Esc}[38;5;172m[CAVEMAN:$Suffix]${Esc}[0m")
+# Whitelist and badge map in one, same as the bash port. Pre-three-skill level
+# names (lite, full, ultra, wenyan*) still sit in older session files and
+# mirrors; they render as the skill they became. Anything else → render nothing.
+$Badges = @{
+    'caveman' = 'CAVEMAN'; 'lite' = 'CAVEMAN'; 'full' = 'CAVEMAN'
+    'ultracave' = 'ULTRACAVE'; 'ultra' = 'ULTRACAVE'
+    'megacave' = 'MEGACAVE'; 'wenyan' = 'MEGACAVE'; 'wenyan-lite' = 'MEGACAVE'
+    'wenyan-full' = 'MEGACAVE'; 'wenyan-ultra' = 'MEGACAVE'
+    'commit' = 'CAVEMAN:COMMIT'; 'review' = 'CAVEMAN:REVIEW'; 'compress' = 'CAVEMAN:COMPRESS'
 }
+if (-not $Badges.ContainsKey($Mode)) { exit 0 }
+
+$Esc = [char]27
+[Console]::Write("${Esc}[38;5;172m[$($Badges[$Mode])]${Esc}[0m")
 
 # Historical numeric savings suffixes are not measurements. Ignore them,
 # including files written by older stats scripts before this update.

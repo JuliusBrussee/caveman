@@ -12,8 +12,9 @@ const base = {
 
 test("learn state 3 names real three-session threshold and prints no score", () => {
   const text = renderLearnPlan({ ...base, sessions_scanned: 0 }, { report: "/tmp/report.html" });
-  assert.match(text, /no Claude Code or Codex sessions found in the last 30d/);
-  assert.match(text, /repeated across ≥3 sessions/);
+  assert.match(text, /no Claude Code, Codex, Gemini CLI, opencode or aider sessions found in the last 30 days/);
+  assert.match(renderLearnPlan({ ...base, sessions_scanned: 0, window: { since: "7d" } }, { report: "/tmp/report.html" }), /found in the last 7 days/);
+  assert.match(text, /same text repeated in at least 3 sessions/);
   assert.doesNotMatch(text, /Setup Score/);
   assert.doesNotMatch(text, /\$/);
 });
@@ -24,7 +25,7 @@ test("learn state 2 reports thin history without a zero-score", () => {
     sessions_scanned: 2,
     sessions_by_source: { claude: 2 },
   }, { report: "/tmp/report.html" });
-  assert.match(text, /2 sessions scanned · no block repeated across ≥3 sessions yet/);
+  assert.match(text, /2 sessions read · no score yet: it needs the same text repeated in at least 3 sessions/);
   assert.doesNotMatch(text, /Setup Score/);
   assert.doesNotMatch(text, /\$/);
 });
@@ -81,13 +82,13 @@ test("learn state 1 defaults to a short summary with grouped recurring context",
     diff: { days: 12, gone: 2, back: 1, fresh: 1 },
   });
   assert.match(text, /Setup Score 88\/100/);
-  assert.match(text, /local setup · inferred · not billed spend · separate from org Cave Score/);
-  assert.match(text, /top moves/);
+  assert.match(text, /your setup on this computer · an estimate, not your bill · separate from Caveman Cloud's team score/);
+  assert.match(text, /top findings/);
   assert.match(text, /Project CLAUDE\.md/);
-  assert.match(text, /2 context blocks repeat across sessions/);
-  assert.match(text, /largest ~623 tokens · up to 75 sessions/);
-  assert.match(text, /protected\s+Agent config loads ~6,370 tokens into every turn/);
-  assert.match(text, /since your last run 12d ago: 2 moves gone · 1 back · 1 new/);
+  assert.match(text, /2 pieces of text get pasted again in many sessions/);
+  assert.match(text, /largest ~623 tokens · in up to 75 sessions/);
+  assert.match(text, /needed\s+Agent config loads ~6,370 tokens into every turn · counts in the score, but Caveman never changes it/);
+  assert.match(text, /since your last run 12 days ago: 2 findings gone · 1 came back · 1 new/);
   assert.match(text, /caveman learn implement/);
   assert.match(text, /caveman learn --all/);
   assert.doesNotMatch(text, /recurring_context:abc/);
@@ -102,16 +103,16 @@ test("learn state 1 defaults to a short summary with grouped recurring context",
   });
   assert.equal(model.score, 88);
   assert.equal(model.moves.length, 2);
-  assert.equal(model.moves[1].title, "2 context blocks repeat across sessions");
-  assert.match(model.protected, /included in score, never auto-fixed/);
-  assert.equal(model.diff, "since your last run 12d ago: 2 moves gone · 1 back · 1 new");
+  assert.equal(model.moves[1].title, "2 pieces of text get pasted again in many sessions");
+  assert.match(model.protected, /counts in the score, but Caveman never changes it/);
+  assert.equal(model.diff, "since your last run 12 days ago: 2 findings gone · 1 came back · 1 new");
 });
 
 test("learn TUI model handles empty history without inventing a score", () => {
   const model = buildLearnTuiModel({ ...base, sessions_scanned: 0 }, { report: "/tmp/report.html" });
   assert.equal(model.score, null);
   assert.equal(model.moves.length, 0);
-  assert.match(model.status, /repeated across ≥3 sessions/);
+  assert.match(model.status, /same text repeated in at least 3 sessions/);
   assert.doesNotMatch(model.status, /\$/);
 });
 
@@ -130,10 +131,10 @@ test("learn --all preserves sink ids, classes, practices, and suggestions", () =
       suggestion: "Offload after consent.",
     }],
   }, { report: "/tmp/report.html", verbose: true });
-  assert.match(text, /recurring_context:abc  ·  recurring_context/);
+  assert.match(text, /repeated text  ·  id: recurring_context:abc/);
   assert.match(text, /Offload after consent/);
   assert.doesNotMatch(text, /practice:/, "unknown practice must still be omitted");
-  assert.doesNotMatch(text, /verified nowhere yet/);
+  assert.doesNotMatch(text, /not measured or verified yet/);
 });
 
 test("learn Markdown stays detailed and preserves basis and per-day units", () => {
@@ -150,8 +151,8 @@ test("learn Markdown stays detailed and preserves basis and per-day units", () =
       tokens_per_day_rate: 1260,
     }],
   }, { markdown: true, report: "/tmp/report.html" });
-  assert.match(text, /^## Setup Score 88 — basis: inferred/m);
-  assert.match(text, /tokens\/day · basis: inferred/);
-  assert.match(text, /practice: context-compression · unmeasured — verified nowhere yet/);
+  assert.match(text, /^## Setup Score 88\/100 — an estimate from your local sessions/m);
+  assert.match(text, /tokens a day · estimate/);
+  assert.match(text, /practice: context-compression · not measured or verified yet/);
   assert.doesNotMatch(text, /\$/);
 });

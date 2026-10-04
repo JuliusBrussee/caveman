@@ -37,6 +37,9 @@ test('vendor directories honor absolute and cwd-relative overrides on POSIX and 
     assert.equal(providerSkills.skillsRoot('aider-desk', { ...context, env: { AIDER_DESK_DIR: '.custom desk' } }), paths.join(home, '.custom desk', 'skills'));
     assert.equal(providerSkills.skillsRoot('antigravity', { ...context, env: {} }), paths.join(home, '.gemini', 'antigravity', 'skills'));
     assert.equal(providerSkills.skillsRoot('antigravity-2', { ...context, env: {} }), paths.join(home, '.gemini', 'config', 'skills'));
+    assert.equal(providerSkills.skillsRoot('grok', { ...context, env: {} }), paths.join(home, '.grok', 'skills'));
+    assert.equal(providerSkills.skillsRoot('grok', { ...context, env: { GROK_HOME: absolute } }), paths.join(absolute, 'skills'));
+    assert.equal(providerSkills.skillsRoot('grok', { ...context, env: { GROK_HOME: 'relative config' } }), paths.join(cwd, 'relative config', 'skills'));
     assert.equal(providerSkills.skillsRoot('iflow', { ...context, env: { IFLOW_HOME: absolute } }), paths.join(absolute, 'skills'));
     assert.equal(providerSkills.skillsRoot('iflow', { ...context, env: { IFLOW_HOME: 'relative config' } }), paths.join(cwd, 'relative config', 'skills'));
     assert.equal(providerSkills.skillsRoot('crush', { ...context, env: { CRUSH_SKILLS_DIR: absolute } }), absolute);
@@ -49,11 +52,12 @@ test('vendor directories preserve truthy whitespace, as the native sources do', 
   assert.equal(providerSkills.skillsRoot('continue', { ...context, env: { CONTINUE_GLOBAL_DIR: ' ' } }), '/work/ /skills');
   assert.equal(providerSkills.skillsRoot('aider-desk', { ...context, env: { AIDER_DESK_HOME_DIR: ' ' } }), '/work/ /skills');
   assert.equal(providerSkills.skillsRoot('iflow', { ...context, env: { IFLOW_HOME: ' ' } }), '/work/ /skills');
+  assert.equal(providerSkills.skillsRoot('grok', { ...context, env: { GROK_HOME: ' ' } }), '/work/ /skills');
   assert.equal(providerSkills.skillsRoot('crush', { ...context, env: { CRUSH_SKILLS_DIR: ' ' } }), '/work/ ');
 });
 
 test('iFlow and Crush use native copies only for nonempty vendor overrides', () => {
-  for (const provider of ['continue', 'aider-desk', 'antigravity', 'antigravity-2']) assert.equal(providerSkills.usesNativeSkills(provider, {}), true);
+  for (const provider of ['continue', 'aider-desk', 'antigravity', 'antigravity-2', 'grok']) assert.equal(providerSkills.usesNativeSkills(provider, {}), true);
   for (const [provider, variable] of [['iflow', 'IFLOW_HOME'], ['crush', 'CRUSH_SKILLS_DIR']]) {
     assert.equal(providerSkills.usesNativeSkills(provider, {}), false);
     assert.equal(providerSkills.usesNativeSkills(provider, { [variable]: '' }), false);
@@ -63,7 +67,7 @@ test('iFlow and Crush use native copies only for nonempty vendor overrides', () 
   assert.equal(providerSkills.usesNativeSkills('cursor', { CRUSH_SKILLS_DIR: 'custom' }), false);
 });
 
-for (const provider of ['continue', 'aider-desk', 'antigravity', 'antigravity-2', 'iflow', 'crush']) {
+for (const provider of ['continue', 'aider-desk', 'antigravity', 'antigravity-2', 'grok', 'iflow', 'crush']) {
   test(`${provider} installs physical skills, updates them, and removes only owned content`, (t) => {
     const f = fixture(t);
     fs.mkdirSync(path.join(f.root, 'foreign'), { recursive: true });

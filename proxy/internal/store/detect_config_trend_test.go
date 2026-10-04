@@ -49,7 +49,7 @@ func TestConfigTrendComparesAgainstTheUsersOwnHistory(t *testing.T) {
 		t.Fatalf("endpoints = %d -> %d, want 1200 -> 1900", rows[0].FirstTokens, rows[0].LastTokens)
 	}
 
-	sinks := configTrendSink(rows, 10, &LearnSpend{EffectiveInputUSDPerMTok: 3.0})
+	sinks := configTrendSink(rows, behaviorScan{}, 10, &LearnSpend{EffectiveInputUSDPerMTok: 3.0})
 	if len(sinks) != 1 {
 		t.Fatalf("expected a growth sink, got %d", len(sinks))
 	}
@@ -86,7 +86,7 @@ func TestConfigTrendSilentWithoutHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("trend rows: %v", err)
 	}
-	if got := configTrendSink(rows, 10, nil); len(got) != 0 {
+	if got := configTrendSink(rows, behaviorScan{}, 10, nil); len(got) != 0 {
 		t.Fatalf("a single observation is not a trend: %+v", got)
 	}
 }
@@ -98,14 +98,14 @@ func TestConfigTrendIgnoresDriftAndShrinkage(t *testing.T) {
 		Scope: "project", Path: "/repo/CLAUDE.md", Kind: "claude_md",
 		FirstTokens: 2000, LastTokens: 2100, Observations: 2,
 	}}
-	if got := configTrendSink(drift, 10, nil); len(got) != 0 {
+	if got := configTrendSink(drift, behaviorScan{}, 10, nil); len(got) != 0 {
 		t.Fatalf("5%% drift must not be a finding: %+v", got)
 	}
 	shrunk := []configTrendRow{{
 		Scope: "project", Path: "/repo/CLAUDE.md", Kind: "claude_md",
 		FirstTokens: 4000, LastTokens: 1200, Observations: 2,
 	}}
-	if got := configTrendSink(shrunk, 10, nil); len(got) != 0 {
+	if got := configTrendSink(shrunk, behaviorScan{}, 10, nil); len(got) != 0 {
 		t.Fatalf("a file that shrank must not be reported as growth: %+v", got)
 	}
 }

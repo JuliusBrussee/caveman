@@ -72,13 +72,13 @@ test('opencode fresh install drops plugin, commands, agents, skills, AGENTS.md, 
     assert.ok(fs.existsSync(path.join(ocDir, 'plugins', 'caveman', 'caveman-config.cjs')), 'caveman-config.cjs sibling missing');
     assert.ok(fs.existsSync(path.join(ocDir, 'plugins', 'caveman', 'caveman-parse.cjs')), 'caveman-parse.cjs sibling missing');
 
-    for (const f of ['caveman.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md']) {
+    for (const f of ['caveman.md', 'ultracave.md', 'megacave.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md']) {
       assert.ok(fs.existsSync(path.join(ocDir, 'commands', f)), `command ${f} missing`);
     }
     for (const f of ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md']) {
       assert.ok(fs.existsSync(path.join(ocDir, 'agents', f)), `agent ${f} missing`);
     }
-    for (const name of ['caveman', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew']) {
+    for (const name of ['caveman', 'ultracave', 'megacave', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew']) {
       assert.ok(fs.existsSync(path.join(ocDir, 'skills', name, 'SKILL.md')), `skill ${name}/SKILL.md missing`);
     }
     assert.ok(fs.existsSync(path.join(ocDir, 'AGENTS.md')), 'AGENTS.md missing');
@@ -347,7 +347,7 @@ test('opencode uninstall removes plugin dir, command/agent/skill files, prunes o
 // parsing, `experimental.chat.system.transform` for reinforcement, and the
 // `event` dispatcher (filtering event.type === 'session.created') for session
 // init. This test drives those real hooks.
-test('opencode plugin handles /caveman ultra, stop caveman, and session init via real hooks', async () => {
+test('opencode plugin handles /caveman ultra, /megacave, stop caveman, and session init via real hooks', async () => {
   const xdg = freshTmpDir();
   const shimDir = shimOpencode();
   const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
@@ -364,7 +364,7 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     // and pin the default mode so session-init is deterministic regardless of
     // any ambient user/repo-local caveman config.
     process.env.XDG_CONFIG_HOME = xdg;
-    process.env.CAVEMAN_DEFAULT_MODE = 'full';
+    process.env.CAVEMAN_DEFAULT_MODE = 'caveman';
 
     const mod = await import(pathToFileURL(pluginPath).href);
     const factory = mod.default || mod.CavemanPlugin;
@@ -378,39 +378,57 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     assert.equal(typeof handlers['experimental.chat.system.transform'], 'function',
       'system.transform should be a function');
 
-    // Slash command in a chat.message text part activates ultra.
+    // Slash command in a chat.message text part activates ultracave (the
+    // legacy `ultra` argument is an alias).
     await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
-    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultra');
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultracave');
     assert.ok(fs.existsSync(modeLogPath), 'mode log missing after slash activation');
     const activationRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
-    assert.equal(activationRows.at(-1).mode, 'ultra');
+    assert.equal(activationRows.at(-1).mode, 'ultracave');
 
-    // opencode expands "/caveman <level>" into the command template before
-    // chat.message fires — the level must be recovered from the expanded text.
+    // Status must replace the activation template and report the actual flag,
+    // without touching mode history or refreshing its mtime.
+    const beforeStatus = [fs.readFileSync(modeLogPath, 'utf8'), fs.statSync(flagPath).mtimeMs];
+    for (const text of ['/caveman status', '/caveman:caveman status',
+      'Activate caveman mode: status\n\nIf no argument given, use caveman.']) {
+      const output = { parts: [{ type: 'text', text }] };
+      await handlers['chat.message']({}, output);
+      assert.equal(output.parts[0].text, 'Report this status verbatim without changing mode: Caveman mode: ultracave');
+      assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultracave');
+      assert.deepEqual([fs.readFileSync(modeLogPath, 'utf8'), fs.statSync(flagPath).mtimeMs], beforeStatus);
+    }
+
+    // opencode expands "/caveman <arg>" into the command template before
+    // chat.message fires — the argument must be recovered from the expanded text.
     await handlers['chat.message']({}, { parts: [{ type: 'text', text:
-      'Activate caveman mode: wenyan-lite\n\nIf no level given, use full. If "off", deactivate.' }] });
-    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'wenyan-lite');
+      'Activate caveman mode: wenyan-lite\n\nIf no argument given, use caveman. If "off", deactivate.' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'megacave');
     await handlers['chat.message']({}, { parts: [{ type: 'text', text:
-      'Activate caveman mode: off\n\nIf no level given, use full. If "off", deactivate.' }] });
+      'Activate caveman mode: off\n\nIf no argument given, use caveman. If "off", deactivate.' }] });
     assert.equal(fs.existsSync(flagPath), false, 'expanded template with off should delete the flag');
     await handlers['chat.message']({}, { parts: [{ type: 'text', text:
-      'Activate caveman mode: \n\nIf no level given, use full. If "off", deactivate.' }] });
-    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full', 'expanded template without level uses default');
-    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
-    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultra');
+      'Activate caveman mode: \n\nIf no argument given, use caveman. If "off", deactivate.' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'caveman', 'expanded template without argument uses default');
+    // /ultracave and /megacave expand to their own command templates.
+    for (const [file, mode] of [['ultracave.md', 'ultracave'], ['megacave.md', 'megacave']]) {
+      const tpl = fs.readFileSync(path.join(REPO_ROOT, 'src', 'plugins', 'opencode', 'commands', file), 'utf8')
+        .replace(/^---[\s\S]*?---\s*/, '');
+      await handlers['chat.message']({}, { parts: [{ type: 'text', text: tpl }] });
+      assert.equal(fs.readFileSync(flagPath, 'utf8'), mode, file);
+    }
 
     // opencode's non-interactive `run` path wraps the message in literal
     // quotes ("/caveman lite"\n) — the parser must unwrap them.
     await handlers['chat.message']({}, { parts: [{ type: 'text', text: '"/caveman lite"\n' }] });
-    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'lite');
-    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
-    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultra');
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'caveman');
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/ultracave' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultracave');
 
     // system.transform injects the reinforcement line while active.
     const sys1 = { system: [] };
     await handlers['experimental.chat.system.transform']({}, sys1);
     assert.equal(sys1.system.length, 1, 'expected one reinforcement line');
-    assert.match(sys1.system[0], /CAVEMAN MODE ACTIVE \(ultra\)/);
+    assert.match(sys1.system[0], /CAVEMAN MODE ACTIVE \(ultracave\)/);
 
     // Existing system prompts must remain a single entry. Some vLLM chat
     // templates reject a second system message even when both precede user
@@ -418,7 +436,7 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     const sysWithExisting = { system: ['existing system prompt'] };
     await handlers['experimental.chat.system.transform']({}, sysWithExisting);
     assert.equal(sysWithExisting.system.length, 1, 'must not add a second system message');
-    assert.match(sysWithExisting.system[0], /^existing system prompt\n\nCAVEMAN MODE ACTIVE \(ultra\)/);
+    assert.match(sysWithExisting.system[0], /^existing system prompt\n\nCAVEMAN MODE ACTIVE \(ultracave\)/);
 
     // Idempotent across repeated transforms on the SAME array: if opencode
     // ever reuses output.system between turns, an unguarded append would grow
@@ -438,6 +456,20 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     const deactivationRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(deactivationRows.at(-1).mode, null);
 
+    const offStatus = { parts: [{ type: 'text', text: '/caveman status' }] };
+    await handlers['chat.message']({}, offStatus);
+    assert.equal(offStatus.parts[0].text, 'Report this status verbatim without changing mode: Caveman mode: off');
+    assert.equal(fs.existsSync(flagPath), false, 'status must not activate the default');
+
+    process.env.CAVEMAN_DEFAULT_MODE = 'manual';
+    await handlers.event({ event: { type: 'session.created' } });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'caveman', 'Claude-only manual policy must not pretend OpenCode static rules are disabled');
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman' }] });
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'caveman', 'manual policy permits explicit activation');
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: 'stop caveman' }] });
+    assert.equal(fs.existsSync(flagPath), false);
+    process.env.CAVEMAN_DEFAULT_MODE = 'caveman';
+
     // No reinforcement injected when inactive.
     const sys2 = { system: [] };
     await handlers['experimental.chat.system.transform']({}, sys2);
@@ -448,11 +480,11 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     await handlers.event({ event: { type: 'session.idle' } });
     assert.equal(fs.existsSync(flagPath), false, 'non-session.created event must not write the flag');
     await handlers.event({ event: { type: 'session.created' } });
-    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'full');
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'caveman');
     const sessionInitRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
     assert.deepEqual(
       { mode: sessionInitRows.at(-1).mode, prev: sessionInitRows.at(-1).prev },
-      { mode: 'full', prev: null },
+      { mode: 'caveman', prev: null },
     );
 
     // A session starting with the default resolved to "off" turns caveman off,
@@ -464,7 +496,7 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
     const sessionOffRows = fs.readFileSync(modeLogPath, 'utf8').trim().split('\n').map(JSON.parse);
     assert.deepEqual(
       { mode: sessionOffRows.at(-1).mode, prev: sessionOffRows.at(-1).prev },
-      { mode: null, prev: 'full' },
+      { mode: null, prev: 'caveman' },
     );
   } finally {
     if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
@@ -474,10 +506,10 @@ test('opencode plugin handles /caveman ultra, stop caveman, and session init via
   }
 });
 
-// ── system.transform must inject the ACTIVE LEVEL's filtered ruleset ─────
-// Checks injected content differs per level and a mid-session switch
-// replaces the whole block rather than stacking behind the prior one (#792).
-test('opencode system.transform injects the active level\'s filtered SKILL.md rules, not just the banner', async () => {
+// ── system.transform must inject the ACTIVE MODE's skill ─────────────────
+// Checks injected content differs per mode and a mid-session switch replaces
+// the whole block rather than stacking behind the prior one (#792).
+test('opencode system.transform injects the active mode\'s SKILL.md body or thesis, not just the banner', async () => {
   const xdg = freshTmpDir();
   const shimDir = shimOpencode();
   const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
@@ -488,44 +520,40 @@ test('opencode system.transform injects the active level\'s filtered SKILL.md ru
 
     const pluginPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'plugin.js');
     process.env.XDG_CONFIG_HOME = xdg;
-    process.env.CAVEMAN_DEFAULT_MODE = 'full';
+    process.env.CAVEMAN_DEFAULT_MODE = 'caveman';
 
     const mod = await import(pathToFileURL(pluginPath).href);
     const factory = mod.default || mod.CavemanPlugin;
     const handlers = await factory({});
 
-    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
-    const sysUltra = { system: [] };
-    await handlers['experimental.chat.system.transform']({}, sysUltra);
-    assert.match(sysUltra.system[0], /CAVEMAN MODE ACTIVE \(ultra\)/);
-    // The ultra row's own text, present ONLY on the ultra intensity-table row.
-    assert.match(sysUltra.system[0], /NO prose abbreviations/,
-      'ultra should carry its own SKILL.md row, not just the banner');
-    assert.doesNotMatch(sysUltra.system[0], /No filler\/hedging\. Keep articles/,
-      'ultra must not carry the lite row');
+    // The caveman skill is installed beside the plugin, so its whole body
+    // travels.
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman' }] });
+    const sys = { system: [] };
+    await handlers['experimental.chat.system.transform']({}, sys);
+    assert.match(sys.system[0], /CAVEMAN MODE ACTIVE \(caveman\)/);
+    assert.match(sys.system[0], /Caveman is a voice, not broken grammar\./,
+      'caveman should carry its SKILL.md body, not just the banner');
 
-    // Switching level mid-session must swap in the NEW level's rules, not
-    // leave ultra's stacked behind lite's (the idempotent-rewrite path).
-    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman lite' }] });
-    const sysLite = { system: [] };
-    await handlers['experimental.chat.system.transform']({}, sysLite);
-    await handlers['experimental.chat.system.transform']({}, sysLite); // reuse same array, as opencode may
-    assert.match(sysLite.system[0], /CAVEMAN MODE ACTIVE \(lite\)/);
-    assert.match(sysLite.system[0], /No filler\/hedging\. Keep articles/,
-      'lite should carry its own SKILL.md row');
-    assert.doesNotMatch(sysLite.system[0], /NO prose abbreviations/,
-      'switching to lite must drop ultra\'s row, not accumulate it');
-    assert.equal((sysLite.system[0].match(/CAVEMAN MODE ACTIVE/g) || []).length, 1,
+    // Switching mode mid-session must swap in the NEW mode's rules, not leave
+    // caveman's stacked behind it (the idempotent-rewrite path). Whether the
+    // ultracave skill dir is installed or not, its thesis line is present.
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/ultracave' }] });
+    await handlers['experimental.chat.system.transform']({}, sys); // reuse same array, as opencode may
+    await handlers['experimental.chat.system.transform']({}, sys);
+    assert.match(sys.system[0], /CAVEMAN MODE ACTIVE \(ultracave\)/);
+    assert.match(sys.system[0], /Only fluff die\. Then cut again\./, 'ultracave must carry its own thesis');
+    assert.doesNotMatch(sys.system[0], /Caveman is a voice, not broken grammar\./,
+      'switching to ultracave must drop caveman\'s body, not accumulate it');
+    assert.equal((sys.system[0].match(/CAVEMAN MODE ACTIVE/g) || []).length, 1,
       'banner must not duplicate across repeated transforms');
 
-    // wenyan (bare, the stored flag value) must resolve to the wenyan-full
-    // SKILL.md row via the same alias caveman-activate.js uses, not emit an
-    // empty intensity section.
+    // The legacy wenyan argument lands on megacave.
     await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman wenyan' }] });
-    const sysWenyan = { system: [] };
-    await handlers['experimental.chat.system.transform']({}, sysWenyan);
-    assert.match(sysWenyan.system[0], /Maximum classical terseness/,
-      'bare wenyan flag should resolve to the wenyan-full row');
+    const sysMega = { system: [] };
+    await handlers['experimental.chat.system.transform']({}, sysMega);
+    assert.match(sysMega.system[0], /CAVEMAN MODE ACTIVE \(megacave\)/);
+    assert.match(sysMega.system[0], /以文言答。技術之實皆存，唯贅言去之。/);
   } finally {
     if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
     else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
@@ -535,10 +563,10 @@ test('opencode system.transform injects the active level\'s filtered SKILL.md ru
 });
 
 // ── a stale caveman-config.cjs must degrade, not throw ───────────────────
-// plugin.js reads the intensity filter out of caveman-config.js instead of
+// plugin.js reads the skill loader out of caveman-config.js instead of
 // keeping its own copy, and the installed caveman-config.cjs is a COPY: an
 // opencode plugin dir left over from before the shared loader existed has no
-// loadFilteredRuleset export. That is plugin-cache drift, the same case the
+// loadRuleset/thesisLine export. That is plugin-cache drift, the same case the
 // hooks guard against, and it lands inside a system-prompt hook — throwing
 // there costs the user the banner too, not just the ruleset.
 test('opencode system.transform degrades to the banner when caveman-config.cjs predates the shared ruleset loader', async () => {
@@ -556,24 +584,24 @@ test('opencode system.transform degrades to the banner when caveman-config.cjs p
     // rather than a corrupt file.
     const cfgPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'caveman-config.cjs');
     const body = fs.readFileSync(cfgPath, 'utf8');
-    const stripped = body.replace(/^\s*canonicalModeLabel, loadFilteredRuleset, rulesetBanner,\n/m, '');
+    const stripped = body.replace(/^\s*skillPathCandidates, loadRuleset, thesisLine, rulesetBanner,\n/m, '');
     assert.notEqual(stripped, body, 'export line to strip not found — test is stale');
     fs.writeFileSync(cfgPath, stripped);
 
     process.env.XDG_CONFIG_HOME = xdg;
-    process.env.CAVEMAN_DEFAULT_MODE = 'full';
+    process.env.CAVEMAN_DEFAULT_MODE = 'caveman';
     const pluginPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'plugin.js');
     const mod = await import(pathToFileURL(pluginPath).href + '?stale');
     const handlers = await (mod.default || mod.CavemanPlugin)({});
 
-    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman' }] });
     const sys = { system: [] };
     await handlers['experimental.chat.system.transform']({}, sys);
 
-    assert.match(sys.system[0], /CAVEMAN MODE ACTIVE \(ultra\)/,
+    assert.match(sys.system[0], /CAVEMAN MODE ACTIVE \(caveman\)/,
       'a stale config must still leave the user the banner');
-    assert.doesNotMatch(sys.system[0], /NO prose abbreviations/,
-      'a config with no loader cannot have produced a ruleset');
+    assert.doesNotMatch(sys.system[0], /Respond terse like smart caveman/,
+      'a config with no loader cannot have produced a ruleset or thesis');
   } finally {
     if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
     else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
@@ -606,18 +634,19 @@ test('opencode session init still activates when caveman-config.cjs predates rec
     fs.writeFileSync(cfgPath, stripped);
 
     process.env.XDG_CONFIG_HOME = xdg;
+    // A legacy level name in the env still resolves (to caveman).
     process.env.CAVEMAN_DEFAULT_MODE = 'full';
     const pluginPath = path.join(pluginDir, 'plugin.js');
     // Factory construction is where the unguarded call would throw.
     const mod = await import(pathToFileURL(pluginPath).href + '?norecord');
     const handlers = await (mod.default || mod.CavemanPlugin)({});
 
-    assert.equal(fs.readFileSync(path.join(xdg, 'opencode', '.caveman-active'), 'utf8').trim(), 'full',
+    assert.equal(fs.readFileSync(path.join(xdg, 'opencode', '.caveman-active'), 'utf8').trim(), 'caveman',
       'session init must still write the mode flag with no recordModeChange export');
 
     // And a later mode change must still take effect rather than throwing.
     await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
-    assert.equal(fs.readFileSync(path.join(xdg, 'opencode', '.caveman-active'), 'utf8').trim(), 'ultra',
+    assert.equal(fs.readFileSync(path.join(xdg, 'opencode', '.caveman-active'), 'utf8').trim(), 'ultracave',
       'a mode change must still apply with no recordModeChange export');
     assert.ok(!fs.existsSync(path.join(xdg, 'opencode', MODE_LOG_BASENAME)),
       'a stripped config cannot have written a history log');
@@ -660,6 +689,173 @@ test('opencode leaves an AGENTS.md with unmatched caveman markers untouched', ()
     }
     assert.equal(fs.readFileSync(agentsMd, 'utf8'), original, 'damaged-marker AGENTS.md must be byte-identical');
   } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+// ── 9. One-shot independent modes restore the displaced prose mode ──────────
+// #599 parity. On Claude Code, caveman-mode-tracker.js remembers the prose mode
+// a one-shot (/caveman-commit, /caveman-review, /caveman-compress) displaces and
+// restores it on the next ordinary prompt. The opencode plugin wrote the
+// one-shot mode and never came back: `experimental.chat.system.transform` skips
+// INDEPENDENT_MODES, so a single /caveman-commit silently killed per-turn
+// reinforcement for the rest of the session — it only self-healed at the next
+// session.created. Same shared helpers (writeSessionPrev/readSessionPrev/
+// clearSessionPrev), same restore rule, so the two hosts cannot drift again.
+test('opencode plugin restores the displaced prose mode after a one-shot mode', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  const origXdg = process.env.XDG_CONFIG_HOME;
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    const r = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);
+
+    const pluginPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'plugin.js');
+    const flagPath = path.join(xdg, 'opencode', '.caveman-active');
+    const prevPath = path.join(xdg, 'opencode', '.caveman-active.prev');
+
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.CAVEMAN_DEFAULT_MODE = 'caveman';
+
+    const mod = await import(pathToFileURL(pluginPath).href);
+    const handlers = await (mod.default || mod.CavemanPlugin)({});
+
+    const send = (text) => handlers['chat.message']({}, { parts: [{ type: 'text', text }] });
+    const reinforced = async () => {
+      const out = { system: ['base'] };
+      await handlers['experimental.chat.system.transform']({}, out);
+      return /CAVEMAN MODE ACTIVE/.test(out.system[0]);
+    };
+    const flag = () => (fs.existsSync(flagPath) ? fs.readFileSync(flagPath, 'utf8') : null);
+
+    // A one-shot displaces ultracave and remembers it.
+    await send('/ultracave');
+    assert.equal(flag(), 'ultracave');
+    await send('/caveman-commit');
+    assert.equal(flag(), 'commit', 'one-shot must take effect for its own turn');
+    assert.equal(await reinforced(), false, 'independent modes carry their own skill, not caveman reinforcement');
+    assert.equal(fs.readFileSync(prevPath, 'utf8'), 'ultracave', 'displaced prose mode must be remembered');
+
+    // The next ordinary prompt restores it — this is what regressed.
+    await send('now fix the parser bug');
+    assert.equal(flag(), 'ultracave', 'next ordinary prompt must restore the displaced prose mode');
+    assert.equal(await reinforced(), true, 'reinforcement must resume after the one-shot');
+    assert.equal(fs.existsSync(prevPath), false, 'prev must be cleared once consumed');
+
+    // A second one-shot chained onto the first must still restore the ORIGINAL
+    // prose mode, not the intervening one-shot.
+    await send('/caveman-commit');
+    await send('/caveman-review');
+    assert.equal(flag(), 'review');
+    assert.equal(fs.readFileSync(prevPath, 'utf8'), 'ultracave', 'chained one-shots keep the first return target');
+    await send('ship it');
+    assert.equal(flag(), 'ultracave', 'chained one-shots restore the original prose mode');
+
+    // A one-shot entered while caveman is OFF must restore off, never a stale
+    // return target left behind by an earlier one-shot.
+    await send('stop caveman');
+    assert.equal(flag(), null);
+    await send('/caveman-compress');
+    assert.equal(flag(), 'compress');
+    await send('summarize that');
+    assert.equal(flag(), null, 'a one-shot entered from off must return to off');
+    assert.equal(await reinforced(), false);
+  } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
+    if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = origXdg;
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+// ── 10. Uninstall removes the opencode mode state, both files ──────────────
+// The Claude-side cleanup sweeps a `stateFiles` list that already names
+// `.caveman-active.prev`; the opencode branch only unlinked `.caveman-active`,
+// which was correct while the plugin never wrote a prev file. It writes one now
+// (one-shot restore, test 9), so uninstall has to take both or it leaves state
+// behind — and a stale prev is not inert: a reinstall's first one-shot would
+// read it as that session's return target.
+test('opencode uninstall removes both the mode flag and the one-shot prev file', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    const installed = runInstaller(['--only', 'opencode'], env);
+    assert.equal(installed.status, 0, installed.stderr);
+
+    const ocDir = path.join(xdg, 'opencode');
+    const flag = path.join(ocDir, '.caveman-active');
+    const prev = path.join(ocDir, '.caveman-active.prev');
+    fs.writeFileSync(flag, 'commit');
+    fs.writeFileSync(prev, 'ultracave');
+
+    const removed = runInstaller(['--uninstall'], env);
+    assert.equal(removed.status, 0, removed.stderr);
+    assert.equal(fs.existsSync(flag), false, 'mode flag must be removed');
+    assert.equal(fs.existsSync(prev), false, 'one-shot prev file must be removed');
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+// ── 11. An older caveman-config.cjs copy must not turn caveman OFF ─────────
+// The installed plugin loads a COPY of caveman-config (#848 plugin-cache
+// drift), which can predate writeSessionPrev/readSessionPrev/clearSessionPrev.
+// With no-op stubs the restore path reads a null return target and falls to its
+// deactivate branch, so a single /caveman-commit deleted the flag on the next
+// prompt — strictly worse than both the old behavior (one-shot sticks until the
+// next session) and the new one. Degrade to the old behavior instead.
+test('opencode plugin does not deactivate caveman when the config copy predates the prev helpers', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  const origXdg = process.env.XDG_CONFIG_HOME;
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' };
+    const r = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);
+
+    const pluginDir = path.join(xdg, 'opencode', 'plugins', 'caveman');
+    const configCjs = path.join(pluginDir, 'caveman-config.cjs');
+    // Simulate the older copy: everything else intact, the three prev exports
+    // absent — exactly what a pre-#599 caveman-config.cjs looks like.
+    fs.appendFileSync(configCjs,
+      '\ndelete module.exports.writeSessionPrev;'
+      + '\ndelete module.exports.readSessionPrev;'
+      + '\ndelete module.exports.clearSessionPrev;\n');
+
+    const flagPath = path.join(xdg, 'opencode', '.caveman-active');
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.CAVEMAN_DEFAULT_MODE = 'caveman';
+
+    // Cache-bust: earlier tests in this file already imported plugin.js.
+    const mod = await import(`${pathToFileURL(path.join(pluginDir, 'plugin.js')).href}?legacy-config`);
+    const handlers = await (mod.default || mod.CavemanPlugin)({});
+    const send = (text) => handlers['chat.message']({}, { parts: [{ type: 'text', text }] });
+    const flag = () => (fs.existsSync(flagPath) ? fs.readFileSync(flagPath, 'utf8') : null);
+
+    await send('/ultracave');
+    assert.equal(flag(), 'ultracave');
+    await send('/caveman-commit');
+    assert.equal(flag(), 'commit');
+
+    // The regression: this deleted the flag. Without the prev helpers the
+    // one-shot simply sticks, which is what this plugin did before #599 landed
+    // here — never a silent deactivation.
+    await send('now fix the parser bug');
+    assert.notEqual(flag(), null, 'a one-shot must never deactivate caveman on an older config copy');
+    assert.equal(flag(), 'commit', 'without prev helpers the one-shot sticks, as it did before');
+  } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
+    if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = origXdg;
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });
   }

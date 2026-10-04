@@ -274,6 +274,23 @@ def _otlp_export(cave: Cave, inp: dict[str, Any]) -> dict[str, Any]:
     return ex.export()
 
 
+def _otlp_export_usage(cave: Cave, inp: dict[str, Any]) -> dict[str, Any]:
+    ex = cave.exporter(service_name=inp["service_name"])
+    for s in inp["spans"]:
+        ex.record_span(
+            s["name"],
+            trace_id=s["trace_id"],
+            span_id=s["span_id"],
+            start_time_ns=s["start_time_ns"],
+            end_time_ns=s["end_time_ns"],
+            input_tokens=s["input_tokens"],
+            cache_creation_tokens=s.get("cache_creation_tokens"),
+            cost_usd=s.get("cost_usd"),
+            attributes=s["attributes"],
+        )
+    return ex.export()
+
+
 def _otlp_export_traced(cave: Cave, inp: dict[str, Any]) -> dict[str, Any]:
     # The trace-bound exporter reuses the trace's id, so SDK spans and the
     # gateway's request rows land in one trace.
@@ -344,6 +361,7 @@ HANDLERS: dict[str, Callable[[Cave, dict[str, Any]], Any]] = {
     "event_tool_call": _event_tool_call,
     "otlp_export": _otlp_export,
     "otlp_export_traced": _otlp_export_traced,
+    "otlp_export_usage": _otlp_export_usage,
     "jobs_unavailable": _jobs_unavailable,
     "retry_loop_breaker": _run_breaker,
     "retry_loop_breaker_key_order": _run_breaker,

@@ -69,6 +69,12 @@ type LearnPlan struct {
 	// in Caveman's own outcome ledger. It is omitted until at least one outcome
 	// can be stated, including an honest insufficient-data verdict.
 	Confirmed []LearnConfirmed `json:"confirmed,omitempty"`
+	// Trends is week-over-week change bucketed by UTC ISO week from the
+	// scanned sessions, plus snapshot-derived score history and sink movers
+	// (see learn_trends.go for every field). Medians with n per bucket, no
+	// currency, never a saving; omitted when no dated session was scanned or
+	// the behavioral scan was time-boxed.
+	Trends *LearnTrends `json:"trends,omitempty"`
 	// Portfolio groups existing sink ranking keys for presentation. It introduces
 	// no new estimate and is omitted when no sink has a practice/fix-family join.
 	Portfolio *LearnPortfolio `json:"portfolio,omitempty"`

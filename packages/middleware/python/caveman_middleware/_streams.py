@@ -1,4 +1,6 @@
 """Observe native iterators without keeping ownership in consumer code."""
+import asyncio
+
 from ._native import owner
 
 
@@ -34,8 +36,12 @@ def observe_iterator(iterator, attempt):
 
 async def observe_async_iterator(iterator, attempt):
     if attempt is None:
-        async for value in iterator:
-            yield value
+        try:
+            async for value in iterator:
+                yield value
+        finally:
+            if hasattr(iterator, "aclose"):
+                await iterator.aclose()
         return
     attempt.observe("dispatch_intent")
     last = None
@@ -52,8 +58,11 @@ async def observe_async_iterator(iterator, attempt):
                 owner.reset(token)
             last = getattr(value, "usage_metadata", None) or last
             yield value
-    except BaseException:
+    except (asyncio.CancelledError, GeneratorExit):
         attempt.observe("cancelled")
+        raise
+    except BaseException:
+        attempt.observe("failed")
         raise
     finally:
         if hasattr(iterator, "aclose"):

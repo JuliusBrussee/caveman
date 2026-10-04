@@ -72,7 +72,7 @@ func TestSpendNeverBorrowsAnotherModelsPrice(t *testing.T) {
 		t.Fatalf("unknown model must be disclosed with its tokens: %+v", spend.Unpriced)
 	}
 	joined := strings.Join(spend.Caveats, " ")
-	if !strings.Contains(joined, "floor") {
+	if !strings.Contains(joined, "real total is higher") {
 		t.Fatalf("an excluded model must make the total a disclosed floor: %v", spend.Caveats)
 	}
 }

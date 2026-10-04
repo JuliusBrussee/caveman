@@ -131,7 +131,7 @@ func rereadWasteSink(sessions []rereadSession) []Sink {
 	topPaths := rankedPaths(pathFloors, 5)
 	return []Sink{{
 		SinkID: "reread_waste",
-		Title:  fmt.Sprintf("Repeated full file reads consumed at least %d observed tokens", tokensObserved),
+		Title:  fmt.Sprintf("Reading the same whole files again used at least %s tokens", commaInt(int64(tokensObserved))),
 		Class:  classBehavioral, Basis: learnBasis, Framing: framingHistorical,
 		TokensObserved: int64(tokensObserved),
 		Evidence: map[string]any{
@@ -142,7 +142,7 @@ func rereadWasteSink(sessions []rereadSession) []Sink {
 			"overlap_note":          "May overlap compaction_churn when a repeated read follows compaction; totals must not be summed.",
 			"top_paths":             topPaths,
 		},
-		Suggestion: "Repeated full re-reads of the same file are measured; the wrap's recovery/CCR path or narrower reads would cut this. Repetition alone is not proof any specific re-read was unneeded.",
+		Suggestion: "The agent read the same whole files more than once. Reading only the part it needs, or letting Caveman's compression keep a recoverable copy, would cut this. A repeat alone doesn't prove any one re-read was unneeded.",
 	}}
 }
 

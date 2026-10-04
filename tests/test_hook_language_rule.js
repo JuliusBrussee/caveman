@@ -11,7 +11,7 @@
 //
 // The ruleset reaches the model by TWO paths and the fix has to hold on both:
 //
-//   1. SKILL.md, read at runtime by loadFilteredRuleset() — the plugin install
+//   1. SKILL.md, read at runtime by loadRuleset() — the plugin install
 //      and any standalone install that also has a skills/ directory.
 //   2. The ruleset hardcoded in caveman-activate.js, used when SKILL.md cannot
 //      be found. bin/install.js's installHooks() copies HOOK_FILES alone into
@@ -73,7 +73,7 @@ function makeInstall({ withSkills }) {
   return { root, hooks };
 }
 
-function activate({ withSkills }) {
+function activate({ withSkills, mode }) {
   const install = makeInstall({ withSkills });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-langhome-'));
   try {
@@ -84,7 +84,7 @@ function activate({ withSkills }) {
       encoding: 'utf8',
       // CLAUDE_PLUGIN_ROOT would add a third SKILL.md candidate and defeat the
       // point of the no-skills case, so it is cleared for both.
-      env: { ...process.env, CLAUDE_CONFIG_DIR: home, CLAUDE_PLUGIN_ROOT: '' },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: home, CLAUDE_PLUGIN_ROOT: '', CAVEMAN_DEFAULT_MODE: mode || 'caveman' },
     });
     assert.strictEqual(res.status, 0, `hook exited ${res.status}: ${res.stderr}`);
     return res.stdout || '';
@@ -126,6 +126,30 @@ test('fallback ruleset teaches the language rule without naming a language', () 
 test('fallback still tells the model not to switch languages', () => {
   const out = activate({ withSkills: false });
   assert.match(out, /never switch/i, 'the fallback dropped the rule instead of the example');
+});
+
+test('megacave fallback does not pair "never switch language" with its 文言 thesis', () => {
+  const out = activate({ withSkills: false, mode: 'megacave' });
+  assert.ok(out.includes('mode: megacave'), 'expected a megacave session');
+  assert.ok(out.includes('以文言答'), 'the 文言 thesis went missing');
+  assert.doesNotMatch(out, /never switch/i, 'megacave fallback contradicts its own thesis');
+  assert.doesNotMatch(out, /User's language/, 'megacave fallback contradicts its own thesis');
+});
+
+test('ultracave fallback keeps the user-language rule (its skill floor keeps it too)', () => {
+  const out = activate({ withSkills: false, mode: 'ultracave' });
+  assert.ok(out.includes('mode: ultracave'), 'expected an ultracave session');
+  assert.match(out, /never switch/i);
+});
+
+test('every fallback keeps the plain-prose exceptions', () => {
+  for (const mode of ['caveman', 'ultracave', 'megacave']) {
+    const out = activate({ withSkills: false, mode });
+    assert.ok(
+      out.includes('Plain prose for security warnings, irreversible actions, and anything persisted outside chat (code, commits, PRs, docs).'),
+      `${mode} fallback lost the auto-clarity / persisted-output exceptions`
+    );
+  }
 });
 
 // ── The same example must not come back anywhere it is injected from ────────

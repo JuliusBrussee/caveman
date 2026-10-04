@@ -1,112 +1,91 @@
-# Caveman framework middleware
+# Caveman Typescript middleware
 
-Native framework adapters over the local Caveman compression runtime. Your
-framework keeps its models, tool loop, retries, streams and stored conversation.
-Caveman only changes the text of selected tool results in the outbound model
-view, and only when the local runtime answers in time.
+Native framework adapters for the Caveman compression runtime. Your framework keeps its inference client, tools, retries, streams, and original conversation. Caveman projects eligible tool-result text into a copied outbound request. Inference stays with your provider.
 
-Alpha. Install the package plus whichever framework you already use — every
-framework is an optional peer, so installing this package installs none of them.
+This quickstart targets middleware `1.0.0` and SDK `1.2.0`. Read the [release notes and limitations](https://github.com/JuliusBrussee/caveman/blob/main/packages/middleware/typescript/CHANGELOG.md) before upgrading.
+
+## Run a complete example
+
+Follow the [AI SDK quickstart](https://docs.caveman.so/docs/sdk/middleware/vercel-ai-sdk) for a fresh environment and [runtime installation](https://docs.caveman.so/docs/sdk/middleware/deployment#run-it-as-a-process). Start the local runtime separately; the client package does not include it.
 
 ```sh
-npm install @caveman-ai/sdk @caveman-ai/middleware
+npm install --save-exact @caveman-ai/sdk@1.2.0 @caveman-ai/middleware@1.0.0 ai@7.0.94 @ai-sdk/provider@4.0.11 zod@4.4.3
+curl -fsSLo quickstart.ts https://docs.caveman.so/examples/middleware/quickstart.ts
+DEMO_MODE=record node --experimental-strip-types quickstart.ts
+DEMO_MODE=compress node --experimental-strip-types quickstart.ts
+DEMO_MODE=off node --experimental-strip-types quickstart.ts
 ```
+
+The default example makes no provider request. It runs a deterministic native model/tool loop against the real local runtime, checks compression and exact paginated recovery, and asserts that application history retains originals. The optional provider run is separately labeled and can incur charges.
+
+## Choose an integration
+
+- [Framework guide](https://docs.caveman.so/docs/sdk/middleware/frameworks#typescript): public entrypoints, native APIs, recovery ownership, transports, and limitations.
+- [Compatibility matrix](https://docs.caveman.so/docs/sdk/middleware/frameworks): resolver ranges versus accepted ranges versus exact validation evidence. A range is not an exhaustive test result.
+- [Deployment](https://docs.caveman.so/docs/sdk/middleware/deployment): process/container lifecycle, remote TLS/authentication, persistence, session affinity, deadlines, and rollback.
+- [Recovery and scope](https://github.com/JuliusBrussee/caveman/blob/main/docs/technical/middleware-protocol.md): namespace/session/branch/cache epoch, exact originals, excerpts, and expiry.
+- [Troubleshooting](https://docs.caveman.so/docs/sdk/troubleshooting#middleware): final reason codes and strict readiness versus normal inference fallback.
+- [Measurement](https://docs.caveman.so/docs/sdk/middleware/deployment#what-to-measure): quality, latency, retries, recovery calls, cache effects, and provider usage.
+
+## Entry points: which ones compress
+
+Compression needs a recovery tool the adapter registered itself, so the model can always fetch an exact original. Entry points that cannot register one only record: in `compress` mode they pass content through unchanged, report `recovery_unbound`, and log once which entry point to use instead.
+
+| Adapter | Tier | Compresses | Records only (`recovery_unbound` in compress mode) |
+|---|---|---|---|
+| `ai-sdk` | certified | `withCaveman` | `createCavemanMiddleware` (`wrapLanguageModel`) |
+| `openai` | certified | `withCavemanOpenAITools`, `chat.completions.runTools` on `withCavemanOpenAI` | plain `create` calls on `withCavemanOpenAI` |
+| `anthropic` | certified | `beta.messages.toolRunner` on `withCavemanAnthropic` | `messages.create` / `messages.stream` |
+| `langchain` | certified | `withCavemanAgent`, `createCavemanLangChain` | `withCavemanModel`, `CavemanChatModel` |
+| `google` | experimental | `CavemanGoogleGenAI` with callable tools (automatic function calling) | calls without callable tools |
+| `strands` | experimental | `withCavemanStrands` | `withCavemanStrandsModel` |
+| `mastra` | experimental | `withCavemanMastra` | `createCavemanMastraProcessor` |
+| `mcp` | experimental | `CavemanMCPHost` with `register()`ed tools | |
+
+Certified adapters are gated by the conformance suite. Experimental ones get the same fail-open guard, logging and tests, but may change in a minor release. `CavemanGoogleGenAI` hooks the Google SDK's internal `ApiClient`; if that moves, the client falls back to the native one (`adapter_error`). `CavemanDocumentCompressor` (LangChain RAG) compresses only with a `sourceExpansion` reader. `@caveman-ai/middleware/langchain` loads `langchain`; if you only wrap a chat model or compress documents, import `withCavemanModel`, `CavemanChatModel`, `CavemanDocumentCompressor` and `scopeFromConfig` from `@caveman-ai/middleware/langchain-model` instead, which needs only `@langchain/core`. Every compressing entry point disables recovery if your tools already include one named `caveman_retrieve`; calls then report `recovery_name_conflict`.
+
+## Framework versions
+
+The package declares its frameworks as optional peers with no version range (`*`), so strict resolvers such as Yarn PnP let it import them. Ranged peers made a plain `npm install` fail with `ERESOLVE` (0.1.0-alpha.1), so the version check happens at run time instead, against the copy the adapter actually runs: for `openai` and `@anthropic-ai/sdk`, the version of the client you pass in; for every other framework, the copy this package resolves, whatever the working directory. When your application resolves a different copy of a framework than this package does, the gate still reads this package's copy and logs one warning naming both versions.
+
+In a workspace (npm, pnpm, Yarn), `@caveman-ai/middleware` can be hoisted to the repository root next to an older copy of a framework that another package pulled in (`ai@6`, say) while your app uses its own `ai@7`. The adapter then runs `ai@6` and passes through with `unsupported_version`. Make both resolve one copy: find the other one (`npm ls ai`, `pnpm why ai`), then dedupe it (`npm dedupe`, `pnpm dedupe`) or pin one version for the repository (`overrides` in npm, `pnpm.overrides`). Under pnpm with `hoist=false`, add the frameworks you use to `public-hoist-pattern`. `@strands-agents/sdk` itself declares peers on `openai` 6, `@ai-sdk/provider` 3 and `@anthropic-ai/sdk` 0.109, so npm needs `--legacy-peer-deps` to install it next to newer versions of those.
+
+`inspectFrameworkCompatibility(adapter)` from `@caveman-ai/middleware/compatibility` reports the version of the copy this package resolves, supported range, tested releases and tier without importing a framework (it has no client, so for `openai` and `anthropic` it can differ from what the wrapped client reports). `package.json` lists the same data in `supportedFrameworkVersions` and `testedFrameworkVersions`.
+
+- **Out of range** (including every prerelease, such as `7.1.0-canary.3`): calls pass through unchanged, reporting `unsupported_version`, with one warning. After testing that version, set `acceptFrameworkVersion: true` in the adapter options.
+- **Unreadable** (a deploy bundle with no `node_modules`): the adapter checks that the framework hooks it needs exist and runs, with one `version_unverified` warning. If a hook is missing it passes through with `version_unavailable`.
+- Nothing throws when you wrap a client. With `strict: true`, the version decision surfaces from `runtime.ready()` / `preflight()`.
+
+## Scope per request
+
+Every adapter takes `scope` as a value or a function. A function is called for each request, inside that request's async context, so one module-level client can serve many users, and `runtime.deleteSession(scope)` removes exactly one user's originals:
 
 ```ts
-import { createMiddlewareRuntime } from '@caveman-ai/sdk/middleware';
-import { withCaveman } from '@caveman-ai/middleware/ai-sdk';
-import { streamText } from 'ai';
-
-const runtime = createMiddlewareRuntime({
-  endpoint: 'http://127.0.0.1:8787',
-  onReport: report => console.log(report.status, report.reason),
-});
-await runtime.ready();
-const scope = { namespace: 'my-app', session_id: 'conversation-1', branch_id: 'main', cache_epoch: '0' };
-
-// Keep the application's existing model, tools, messages and stop conditions.
-const result = streamText(withCaveman(existingOptions, { runtime, scope }));
+const client = withCavemanOpenAI(new OpenAI(), { runtime, fetch, scope: () => ({ namespace: 'app', session_id: currentUser().id }) });
 ```
 
-`withCaveman` registers a native `caveman_retrieve` tool so the model can read
-an original back. The `createCavemanMiddleware` model-only variant uses
-recovery-free transforms instead. Neither rewrites your stored messages. Call
-`runtime.close()` at shutdown.
+LangChain passes the `RunnableConfig` (`config => scopeFromConfig(config, 'app')` reads `configurable.thread_id`), Mastra its `RequestContext`, Strands the agent. Any ID text works: values outside `[A-Za-z0-9._:/-]` (emails, `user 42 / chat #7`) become a stable `h-` hash. A missing scope (no `thread_id`) runs the call recovery-free with `recovery_unbound`. An unusable one reports `invalid_scope`. Neither throws, except `invalid_scope` in strict mode.
 
-## Supported frameworks
+## Budgets and logs
 
-The range is the band the adapter's version gate accepts; the left-hand value is
-the version its wire handling was written against.
+A large history never skips the whole call. Each tool result over the runtime's `segment_bytes` is skipped on its own (`payload_budget`), and images or bytes enter the context manifest as hashes. `manifestBytes` (default 2 MiB) bounds how much history is hashed, and `wireBytes` (default 16 MiB, OpenAI and Anthropic) bounds the request body the adapter parses. OpenAI Responses turns pass through with `provider_state_retained` unless `store: false`, because OpenAI would store the compressed turn; `allowStoredResponses: true` opts in.
 
-| Subpath | Tested range |
-|---|---|
-| `@caveman-ai/middleware/ai-sdk` | `ai >=7.0.94 <8`, `@ai-sdk/provider >=4.0.11 <5` |
-| `@caveman-ai/middleware/openai` | `openai >=7.12 <8` |
-| `@caveman-ai/middleware/anthropic` | `@anthropic-ai/sdk >=0.124 <1` |
-| `@caveman-ai/middleware/google` | `@google/genai >=2.21 <3` |
-| `@caveman-ai/middleware/langchain` | `langchain >=1.5 <2`, `@langchain/core >=1.2 <2`, `@langchain/langgraph >=1.4 <2` |
-| `@caveman-ai/middleware/strands` | `@strands-agents/sdk >=1.17 <2` |
-| `@caveman-ai/middleware/mastra` | `@mastra/core >=1.65 <2` |
-| `@caveman-ai/middleware/mcp` | `@modelcontextprotocol/sdk >=1.30 <2` |
+Each pass-through reason logs once per process through `console.warn`, as `adapter=<id> reason=<code>`, never content, scope values or credentials. Any exception inside adapter code becomes a pass-through with `adapter_error`; with `strict: true` the call raises `MiddlewareError('adapter_error')` instead.
 
-Outside its range an adapter keeps the caller's native input unchanged and
-reports `unsupported_version`. It never throws. Set `strict: true` on the
-runtime only if you want a pre-inference error instead.
+## Runtimes and module systems
 
-## OpenAI SDK
+Node.js 22.12 or later, ESM `import` or CommonJS `require()`. TypeScript resolves the types with `moduleResolution` `bundler`, `nodenext`, `node16` or `node10`. Edge runtimes (Cloudflare `workerd`, Vercel `edge-light`) are not supported: adapters rely on `node:async_hooks` call ownership, and importing one under those conditions throws an explanatory error. Run the adapter in a Node.js function instead.
 
-```ts
-import { withCavemanOpenAI } from '@caveman-ai/middleware/openai';
+## Contracts to keep
 
-const client = withCavemanOpenAI(existingOpenAIClient, { runtime, scope, fetch: existingFetch });
-const runner = client.chat.completions.runTools(existingToolLoopOptions);
-const answer = await runner.finalContent();
-```
+Keep original stored history. Register the actual recovery executor through the native helper; a tool schema alone does not attest recovery. Handles are scope-bound and expire according to runtime retention. A recovery the runtime refuses (unknown or expired handle, runtime down) answers the model `{"error": "<code>"}` (an `isError` result in MCP) and warns once, so the tool loop keeps running; caller cancellation still propagates. Recoverability does not guarantee model quality.
 
-Pass the fetch function the existing client uses. The returned native client
-keeps its public response helpers. `runTools` supplies the native recovery
-executor; plain generation calls stay recovery-free. Server-held Responses
-histories remain opaque.
+Client modes are `off`, `record`, and `compress`. The client defaults to compression; the standalone runtime defaults to recording. Set both deliberately. Runtime unavailability normally retains original inference input. Strict mode, startup `ready()`, cancellation, and requested recovery failures have different error contracts.
 
-## What you lose
+Final decision reports contain status, reason, transform IDs, replacement/reuse counts, and call IDs. **They contain no token counters.** Local segment estimates are inferred; provider usage and billed savings are separate evidence. Nothing in this local example verifies billing savings.
 
-Read this before turning on `compress`.
+Close the runtime client and native framework/provider resources at shutdown. Closing the client does not stop the runtime process. See the deployment guide before sharing a runtime across workers or tenants.
 
-- **Markers are scoped.** A replacement marker is bound to
-  `namespace` + `session_id` + `branch_id` + `cache_epoch` and to the
-  authenticated principal that created it. Replaying it under any other scope
-  returns nothing.
-- **Markers expire.** A scope lives 24 hours, renewed each time it is used.
-  After that the stored original is released.
-- **Persisted compressed history is a trap.** If you save the transformed
-  messages and replay them later — under a different scope, or after the scope
-  expired — that text is gone for good. Caveman does not rewrite your stored
-  history for this reason: keep the originals, let Caveman transform the
-  outbound copy on every call.
-- **Recovery needs a registered executor.** In `compress` mode a lossy
-  transform is only used when your framework really holds the
-  `caveman_retrieve` tool. Without it, only recovery-free transforms apply.
-- **Eligible content is narrow.** Successful tool-result text and explicitly
-  passed document bodies. Never system prompts, user messages, assistant
-  reasoning, errored tool results, images or other non-text parts, anything
-  marked protected, and never a payload the adapter cannot parse exactly.
-- **Failure is silent and safe.** Runtime down, over deadline, out of capacity,
-  expired scope: the original request goes to the provider and the decision is
-  reported as skipped.
+## Licence and support
 
-## Runtime modes and reports
-
-- `off` delegates every native call and reports `disabled`, with no optimizer
-  request and no receipts.
-- `record` measures candidates without replacing any request text.
-- `compress` replaces text, and requires recovery when the transform is lossy.
-
-`onReport` receives one immutable record per native call after the adapter picks
-its final request view: status, reason, transform ids, replacement and reuse
-counts. No original content, no provider credentials. `runtime.lastReport` holds
-the most recent one; it is not a history. A callback that throws cannot affect
-inference.
-
-Token counts in reports are estimates from the runtime's tokenizer over the
-segments it saw. They are not measured billing savings, and this package does
-not claim a reduction figure.
+The client, adapters, and Engine runtime are all Apache-2.0. Read [LICENSING.md](https://github.com/JuliusBrussee/caveman/blob/main/LICENSING.md). This package is separate from Caveman Agent SDK. File sanitized reproducible issues in [Caveman](https://github.com/JuliusBrussee/caveman/issues).

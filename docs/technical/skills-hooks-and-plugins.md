@@ -6,8 +6,8 @@ plugins. Each has different permissions and failure behavior.
 ## Response skill
 
 `skills/caveman` asks an agent to communicate with less filler while preserving
-technical terms, code, error text, and necessary ordering. Available density
-profiles include lite, full, ultra, and Wenyan variants. Auto-clarity relaxes
+technical terms, code, error text, and necessary ordering. Three skills ship:
+`caveman` (the voice), `ultracave` (grammar stripped), `megacave` (classical Chinese). Auto-clarity relaxes
 compression when terse phrasing could make security warnings or irreversible
 steps hard to understand.
 

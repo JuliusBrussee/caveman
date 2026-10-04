@@ -6,7 +6,7 @@ description: >
   or using `Explore`. Their output is compressed, so main context lasts longer.
 ---
 
-Cavecrew = three subagent presets that emit caveman output. Same job as Anthropic defaults (`Explore`, edit-style agents, reviewer); difference is the tool-result they return is compressed, so main context shrinks per delegation.
+Cavecrew = three subagent presets that answer in ultracave voice (tool runs: one status line in, one out; nothing between routine calls). Same job as Anthropic defaults (`Explore`, edit-style agents, reviewer); difference is the tool-result they return is compressed, so main context shrinks per delegation.
 
 ## When to use cavecrew vs alternatives
 
@@ -15,9 +15,9 @@ Cavecrew = three subagent presets that emit caveman output. Same job as Anthropi
 | "Where is X defined / what calls Y / list uses of Z" | `cavecrew-investigator` |
 | Same but you also want suggestions/architecture commentary | `Explore` (vanilla) |
 | Surgical edit, ≤2 files, scope obvious | `cavecrew-builder` |
-| New feature / 3+ files / cross-cutting refactor | Main thread or `feature-dev:code-architect` |
+| New feature / 3+ files / cross-cutting refactor | Main thread, or `feature-dev:code-architect` if installed |
 | Review diff, branch, or file for bugs | `cavecrew-reviewer` |
-| Deep code review with rationale + alternatives | `Code Reviewer` (vanilla) |
+| Deep code review with rationale + alternatives | `Code Reviewer` (vanilla) if installed, else main thread |
 | One-line answer you already know | Main thread, no subagent |
 
 Rule of thumb: **if you'd want the subagent's output in 1/3 the tokens, pick cavecrew. If you'd want prose, pick vanilla.**
@@ -69,7 +69,7 @@ Skip investigator. Hand exact path:line to `cavecrew-builder` directly.
 
 - Don't use `cavecrew-builder` when you don't already know the file. Spawn investigator first or main thread will eat tokens passing context.
 - Don't chain `cavecrew-investigator → cavecrew-builder` for a 5-file refactor. Builder will return `too-big.` and you'll have wasted a turn.
-- Don't ask `cavecrew-reviewer` for "general feedback" — it returns findings only, no architecture opinions. Use `Code Reviewer` for that.
+- Don't ask `cavecrew-reviewer` for "general feedback" — it returns findings only, no architecture opinions. Use `Code Reviewer` for that when installed.
 - Don't expect prose. Cavecrew output is structured, sometimes terse to the point of cryptic. If a human will read it directly, paraphrase.
 
 ## Auto-clarity (inherited)

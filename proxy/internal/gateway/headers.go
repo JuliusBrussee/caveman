@@ -68,6 +68,8 @@ func copySafeResponseHeaders(dst, src http.Header) {
 			dst.Add(name, value)
 		}
 	}
+	// Relayed bodies are provider bytes; a browser must never sniff one into HTML.
+	dst.Set("X-Content-Type-Options", "nosniff")
 }
 
 // streamingResponse recognizes wire streaming even when request metadata cannot

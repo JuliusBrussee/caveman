@@ -12,7 +12,8 @@ gateway with `x-cave-agent` / `x-cave-workflow` / `x-cave-retention` headers set
 - `tests/test_parity.py` — cross-language conformance suite; drives `../../parity/fixtures.json` (shared with sdk-ts). Same fixtures, two languages → a field in one SDK and not the other fails CI.
 - `tests/test_runtime_policy.py` — runtime-policy client; drives every section of `../../parity/runtime-policy.fixtures.json` (fetch wire, signature cases, the `guard_cases` fail-closed truth table, assignment vectors with exact float equality — including the weighted `exp-w` vectors that pin the `(1-h)*(w/t)` propensity association — and decision cases). Mirrors the TS `tests/runtime-policy.runtime.mjs`
 - `tests/test_trace_continuity.py` — trace/span id minting + which requests carry `x-cave-trace-id` / `x-cave-parent-span-id`; mirrors the TS `tests/trace-continuity.runtime.mjs`
-- `pyproject.toml` — distribution name `caveman-sdk` (import package stays `caveman_cloud`), `requires-python = ">=3.13"`, no runtime dependencies
+- `caveman_cloud/middleware/` — stable framework-middleware client for protocol 1.1 (`docs/technical/middleware-protocol.md`): `protocol.py` pure rules (scope normalization, tolerant capabilities, failure classification, breaker, budgets, endpoint/proxy resolution, `warn_once`), `transport.py` default keep-alive stdlib transport, `runtime.py` / `async_runtime.py` clients, `validate.py` plan/page checks. `tests/test_middleware_v1_1.py` drives `../../parity/middleware-v1_1.fixtures.json`; `tests/test_middleware_transport.py` uses real local sockets
+- `pyproject.toml` — distribution name `caveman-sdk` (import package stays `caveman_cloud`), `requires-python = ">=3.11"`, no runtime dependencies
 
 ## Key API surface (`core.py`)
 
@@ -32,7 +33,7 @@ gateway with `x-cave-agent` / `x-cave-workflow` / `x-cave-retention` headers set
 - `Trace.checkpoint(messages, options)` — POSTs to `/sdk/v1/checkpoints`; the gateway persists it (Valkey) and returns a reversible `source_ref` you can later expand via `GET /sdk/v1/checkpoints/{ref}/expand`
 - `Cave.exporter(service_name=None)` → `OTelExporter`; `record_span(...)` maps current GenAI fields to `gen_ai.*`, `export()` POSTs OTLP/JSON to standard `/v1/traces` (headers via `otlp_headers()`; legacy `/otlp/v1/traces` remains server-only compatibility)
 - `Cave.retry_loop_breaker(threshold=3)` → `RetryLoopBreaker`; `.record(name, args)` raises `RetryLoopError` after `threshold` consecutive identical tool calls (interrupts a stuck loop). `.guard(name, args, fn)` records then runs `fn`
-- `Cave.runtime_policy(*, public_key, auto_refresh_seconds, kill_env, workflow)` → `RuntimePolicyClient`. `refresh()` GETs `/sdk/v1/runtime-policy` with a 30s timeout and a 1 MiB response cap (`oversized_response`; last-known-good stays active); the bundle travels as a signed STRING, Ed25519 verified before parsing, pinned or TOFU. `decide(task_family, unit_key, context, trace)` is **synchronous, local-only, never raises** and returns a `PolicyDecision` (`execute`/`fallback`/`baseline` + `reason`); `kill()` latches baseline locally; `state()` → `RuntimePolicyState`. Holdout is carved first onto the fallback path; assignment is the exported `policy_unit_fraction(*keys)` (byte-for-byte port of Go `shared/platform/sampling.Fraction`, mirrors the TS `policyUnitFraction`; the parity `assignment_vectors` are its authority, including the empty-unit-key vector `decide()` refuses to assign on). Decision spans are observability only — no savings/dollar/`verified` field exists here. MIRRORS the TS `cave.runtimePolicy`
+- `Cave.runtime_policy(*, public_key, auto_refresh_seconds, kill_env, workflow)` → `RuntimePolicyClient`. `refresh()` GETs `/sdk/v1/runtime-policy` with a 30s timeout and a 1 MiB response cap (`oversized_response`; last-known-good stays active); the bundle travels as a signed STRING, Ed25519 verified before parsing, pinned or TOFU. `decide(task_family, unit_key, context, trace)` is **synchronous, local-only, never raises** and returns a `PolicyDecision` (`execute`/`fallback`/`baseline` + `reason`); `kill()` latches baseline locally; `state()` → `RuntimePolicyState`. Holdout is carved first onto the fallback path; assignment is the exported `policy_unit_fraction(*keys)` (byte-for-byte port of Go Caveman-Cloud `shared/platform/sampling.Fraction`, mirrors the TS `policyUnitFraction`; the parity `assignment_vectors` are its authority, including the empty-unit-key vector `decide()` refuses to assign on). Decision spans are observability only — no savings/dollar/`verified` field exists here. MIRRORS the TS `cave.runtimePolicy`
 - `Cave.jobs` → reserved `JobsClient` surface. Every method fails locally with `cave_async_jobs_unavailable`; it performs no network request until durable encrypted request storage, credential custody, and a draining worker exist. MIRRORS the TS `Cave.jobs`
 
 ## Conventions
@@ -41,7 +42,7 @@ gateway with `x-cave-agent` / `x-cave-workflow` / `x-cave-retention` headers set
 - Add new gateway endpoints via `Trace._request(path, body)` or `Provider.create(path, body)`
 - `headers()` is the single source for all outgoing headers; edit there, nowhere else
 - Deferred tool-search session handoff uses request/result `session_id` plus provider header `x-cave-tool-session`; update sdk-ts + parity fixtures with any change
-- Run tests: `pytest` from this directory (Python ≥ 3.13 required)
+- Run tests: `pytest` from this directory (Python ≥ 3.11 required)
 
 ## Gotchas
 

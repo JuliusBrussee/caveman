@@ -55,7 +55,7 @@
 
   // ---- live state from storage ----
   let enabled = false;
-  let level = "full";
+  let level = "caveman";
   let bypass = false; // true only during our synchronous button click
   let pending = null;
   let settingsVersion = 0;
@@ -68,11 +68,11 @@
   function refresh() {
     const version = ++settingsVersion;
     cancelPending();
-    chrome.storage.sync.get({ enabled: true, level: "full", sites: {} }, (s) => {
+    chrome.storage.sync.get({ enabled: true, level: "caveman", sites: {} }, (s) => {
       if (version !== settingsVersion) return;
       const siteOn = (s.sites || {})[HOST === "chat.openai.com" ? "chatgpt.com" : HOST] !== false;
       enabled = !!s.enabled && siteOn;
-      level = D.normLevel(s.level);
+      level = D.normMode(s.level);
       renderIndicator();
     });
   }

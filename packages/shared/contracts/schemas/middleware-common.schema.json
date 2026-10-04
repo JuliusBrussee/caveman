@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://caveman.so/schemas/middleware-common.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/middleware-common.schema.json",
   "$defs": {
     "token": {
       "type": "string",
@@ -21,16 +21,16 @@
       ],
       "properties": {
         "namespace": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "session_id": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "branch_id": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "cache_epoch": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         }
       }
     },
@@ -45,16 +45,16 @@
       ],
       "properties": {
         "id": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "version": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "framework_version": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "serialization_revision": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         }
       }
     },
@@ -68,13 +68,13 @@
       ],
       "properties": {
         "provider": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "id": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "protocol": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         }
       }
     },
@@ -87,12 +87,12 @@
       ],
       "properties": {
         "revision": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "transforms": {
           "type": "array",
           "items": {
-            "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+            "$ref": "#/$defs/token"
           },
           "maxItems": 128,
           "uniqueItems": true
@@ -108,10 +108,10 @@
       ],
       "properties": {
         "id": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "sha256": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+          "$ref": "#/$defs/sha256"
         }
       }
     },
@@ -126,7 +126,7 @@
       ],
       "properties": {
         "id": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "kind": {
           "enum": [
@@ -158,23 +158,23 @@
       ],
       "properties": {
         "id": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "kind": {
-          "$ref": "https://caveman.so/schemas/context-ir.schema.json#/$defs/segment/properties/kind"
+          "$ref": "context-ir.schema.json#/$defs/segment/properties/kind"
         },
         "cache_region": {
-          "$ref": "https://caveman.so/schemas/context-ir.schema.json#/$defs/segment/properties/cache_region"
+          "$ref": "context-ir.schema.json#/$defs/segment/properties/cache_region"
         },
         "content": {
           "type": "string",
           "maxLength": 2097152
         },
         "sha256": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+          "$ref": "#/$defs/sha256"
         },
         "source_id": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "protected": {
           "type": "boolean"
@@ -203,26 +203,26 @@
       ],
       "properties": {
         "segment_id": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "source_id": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "original_sha256": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+          "$ref": "#/$defs/sha256"
         },
         "text": {
           "type": "string",
           "maxLength": 524288
         },
         "sha256": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/sha256"
+          "$ref": "#/$defs/sha256"
         },
         "transform_id": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "transform_version": {
-          "$ref": "https://caveman.so/schemas/middleware-common.schema.json#/$defs/token"
+          "$ref": "#/$defs/token"
         },
         "recovery_handle": {
           "type": "string",
@@ -326,6 +326,19 @@
           ]
         }
       }
+    },
+    "feature": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    },
+    "reason": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    },
+    "positive_limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
     }
   }
 }

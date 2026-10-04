@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -214,7 +215,7 @@ func buildLearnSpend(acc spendAccumulator, windowDays int) *LearnSpend {
 			if total > 0 {
 				spend.Unpriced = append(spend.Unpriced, LearnSpendUnpriced{
 					Provider: key.Provider, Model: key.Model, Tokens: total,
-					Reason: "no catalog row for this model; tokens excluded from the priced total",
+					Reason: "no known price for this model; its tokens are left out of the total",
 				})
 			}
 			continue
@@ -272,12 +273,12 @@ func buildLearnSpend(acc spendAccumulator, windowDays int) *LearnSpend {
 	sort.Slice(spend.Unpriced, func(i, j int) bool { return spend.Unpriced[i].Tokens > spend.Unpriced[j].Tokens })
 
 	spend.Caveats = append(spend.Caveats,
-		"Spend is provider-counted tokens priced at published list rates from the dated catalog. It is arithmetic over the scanned window, not an invoice, and it is never projected forward.",
-		"If this traffic ran on a subscription plan (Claude Max, ChatGPT Plus, Gemini Advanced) its marginal cost is zero; the figure is then the API-equivalent value of the tokens, not money spent.",
+		"Cost is the tokens your model provider counted, priced at published list prices. It covers only the period scanned. It is not a bill and it is never a forecast.",
+		"On a subscription plan (Claude Max, ChatGPT Plus, Gemini Advanced) you pay nothing extra per token. The figure then shows what those tokens would cost on the pay-per-token API, not money you spent.",
 	)
 	if len(spend.Unpriced) > 0 {
 		spend.Caveats = append(spend.Caveats,
-			"Some scanned models are not in the catalog; their tokens are listed separately and excluded, so the total is a floor.")
+			"Some models have no known price. Their tokens are listed separately and left out, so the real total is higher.")
 	}
 	return spend
 }
@@ -330,8 +331,10 @@ func roundRate(v float64) float64 {
 	return float64(int64(v*10_000+0.5)) / 10_000
 }
 
+// roundPct rounds half away from zero; the old +0.5 truncation turned an exact
+// -50% experiment delta into -49.9.
 func roundPct(v float64) float64 {
-	return float64(int64(v*10+0.5)) / 10
+	return math.Round(v*10) / 10
 }
 
 func roundMultiplier(v float64) float64 {
@@ -348,12 +351,20 @@ func effectiveInputSummary(multiplier float64) string {
 	case multiplier <= 0:
 		return ""
 	case multiplier < 0.25:
-		return fmt.Sprintf("input costs %.2fx list — cache is doing its job", multiplier)
+		return fmt.Sprintf("%s of list price — caching is doing its job", listShare(multiplier))
 	case multiplier < 0.6:
-		return fmt.Sprintf("input costs %.2fx list — partial cache reuse", multiplier)
+		return fmt.Sprintf("%s of list price — some caching", listShare(multiplier))
 	default:
-		return fmt.Sprintf("input costs %.2fx list — little or no cache reuse", multiplier)
+		return fmt.Sprintf("%s of list price — little or no caching", listShare(multiplier))
 	}
+}
+
+// listShare renders a price multiplier as a share of list price: 0.13 → "13%".
+func listShare(multiplier float64) string {
+	if pct := multiplier * 100; pct >= 1 {
+		return fmt.Sprintf("%.0f%%", pct)
+	}
+	return "under 1%"
 }
 
 // priceLearnSinks attaches spend to every ranked sink. It prices at the user's

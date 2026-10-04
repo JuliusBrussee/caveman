@@ -13,7 +13,8 @@ see [Product model](technical/product-model.md).
 
 | What | Number | How measured | Source |
 |---|---|---|---|
-| Output reduction vs default verbose replies | Not published | Harness exists, but repository has no committed reviewed raw result | [`benchmarks/`](../benchmarks/) |
+| Output reduction vs a plain `Answer concisely.` control | caveman 3%, ultracave 35%, megacave 9% at the median (n=10, single run, output length only, tiktoken o200k approximation) | `evals/llm_run.py` on claude-opus-5-5 with host settings isolated; `evals/measure.py` | [`evals/snapshots/results.json`](../evals/snapshots/results.json) |
+| Output reduction vs default verbose replies (no benchmark harness run) | Not published | `benchmarks/` harness exists, but the repository has no committed reviewed raw result | [`benchmarks/`](../benchmarks/) |
 | Input reduction from the skill | 0% | It's an output-style instruction | Not applicable |
 | Input cost the skill *adds* | Not measured here | Depends on which rules the agent loads, when it injects them, and cache behavior; file size is not a billed token count | [`skills/caveman/SKILL.md`](../skills/caveman/SKILL.md) |
 | `/caveman-compress` on memory files | ~46% average input reduction across five listed fixtures | Fixture token counts plus structural checks; no general quality-equivalence claim | [caveman-compress fixtures](../skills/caveman-compress/README.md#benchmarks) |

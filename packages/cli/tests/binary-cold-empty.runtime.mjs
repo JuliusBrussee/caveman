@@ -33,7 +33,7 @@ test("cold package renders honest empty learn state", { skip: !enabled }, async 
     assert.equal(out.code, 0, out.stderr);
     assert.match(
       out.stdout,
-      /no Claude Code or Codex sessions found in the last 30d — the plan needs a block repeated across ≥3 sessions/,
+      /no Claude Code, Codex, Gemini CLI, opencode or aider sessions found in the last 30d — the plan needs a block repeated across ≥3 sessions/,
     );
   } finally {
     rmSync(home, { recursive: true, force: true });

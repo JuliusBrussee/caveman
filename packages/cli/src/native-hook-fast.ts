@@ -3,10 +3,11 @@ import { appendFileSync, chmodSync, lstatSync, mkdirSync, readFileSync, realpath
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { connect as netConnect } from "node:net";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
+import { confirmLearnNudge, maybeSpawnAutopilot } from "./learn-autopilot.js";
 
 type NativeAgent = "claude" | "codex" | "hermes" | "gemini" | "opencode" | "pi";
 type NativePolicyMode = "record" | "safe" | "max";
@@ -253,12 +254,18 @@ function gitDir(cwd: string): string | undefined {
   }
 }
 
+// Go's nativehook.repositoryStatusBudget, for the same reason: 100ms emptied the
+// state under ordinary load. Only search/test/build tool events pay it, never
+// alongside the prompt-time delegate; with the runtime call's 250ms it stays far
+// inside the host's 30s hook timeout.
+const REPOSITORY_STATUS_TIMEOUT_MS = 500;
+
 function repositoryState(cwd: string | undefined): string | undefined {
   if (!cwd) return undefined;
   try {
     const status = execFileSync("git", hardenedGitArgs(cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"), {
       env: hardenedGitEnv(),
-      timeout: 100, maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"],
+      timeout: REPOSITORY_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"],
     });
     const directory = gitDir(cwd);
     if (!directory) return undefined;
@@ -403,9 +410,13 @@ const DELEGATE_TIMEOUT_MS = 3000;
 
 function delegateToFullCLI(raw: Buffer, agent: NativeAgent): boolean {
   const cli = join(dirname(fileURLToPath(import.meta.url)), "index.js");
-  const result = spawnSync(process.execPath, [cli, "native-hook", agent], { input: raw, maxBuffer: 3 * 1024 * 1024, env: process.env, timeout: DELEGATE_TIMEOUT_MS });
+  const nudgeToken = randomUUID();
+  const result = spawnSync(process.execPath, [cli, "native-hook", agent], { input: raw, maxBuffer: 3 * 1024 * 1024, env: { ...process.env, CAVEMAN_LEARN_NUDGE_TOKEN: nudgeToken }, timeout: DELEGATE_TIMEOUT_MS });
   if (!result.error && result.status === 0) {
-    if (result.stdout?.length) process.stdout.write(result.stdout);
+    // The child left any learn nudge in-flight; it is announced only once it
+    // actually reaches the host, so a delegate timeout lets it re-show once.
+    const nudged = result.stdout?.includes('"systemMessage"') === true;
+    if (result.stdout?.length) process.stdout.write(result.stdout, () => { if (nudged) confirmLearnNudge(nudgeToken); });
     if (result.stderr?.length) process.stderr.write(result.stderr);
     return true;
   }
@@ -427,6 +438,7 @@ async function main(): Promise<void> {
   const rawName = bounded(event.hook_event_name ?? event.event_name ?? event.event ?? process.argv[4]);
   const mapped = agent === "gemini" && rawName ? ({ BeforeAgent: "UserPromptSubmit", BeforeTool: "PreToolUse", AfterTool: "PostToolUse", BeforeModel: "ModelBefore", AfterModel: "ModelAfter", PreCompress: "PreCompact", AfterAgent: "Stop" } as Record<string, string>)[rawName] ?? rawName : rawName;
   const eventName = mapped && EVENTS.has(mapped) ? mapped : "Unknown";
+  if (eventName === "SessionEnd") maybeSpawnAutopilot();
   if (eventName === "SessionStart" || eventName === "PostCompact") {
     delegateToFullCLI(raw, agent);
     return;

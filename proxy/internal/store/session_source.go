@@ -82,6 +82,7 @@ type sessionEventConsumer struct {
 	seenSlugs      map[string]bool
 	prefixRecorded bool
 	sessionPeakPct int
+	windows        sessionWindows
 	sessionTasks   int
 	toolCalls      []learnToolCall
 	cacheHygiene   cacheHygieneTracker
@@ -95,6 +96,7 @@ type sessionEventConsumer struct {
 	metric         learnSessionMetric
 	repo           string
 	opened         bool
+	counted        bool
 }
 
 func newSessionEventConsumer(sourceID string, ref sessionRef, slugs []string, behavior *behaviorScan, miner *recurringMiner) *sessionEventConsumer {
@@ -116,8 +118,14 @@ func newSessionEventConsumer(sourceID string, ref sessionRef, slugs []string, be
 func (c *sessionEventConsumer) consume(event turnEvent) {
 	if event.sessionStart {
 		c.opened = true
-		c.behavior.recordSession(c.sourceID)
 		return
+	}
+	// A source's scanSession applies the `since` cutoff before emitting a
+	// real turn, so the first non-start event here already fell inside the
+	// window; sessionStart counted every session file, in range or not.
+	if !c.counted {
+		c.counted = true
+		c.behavior.recordSession(c.sourceID)
 	}
 	if event.Repo != "" {
 		c.repo = event.Repo
@@ -184,6 +192,10 @@ func (c *sessionEventConsumer) consume(event turnEvent) {
 			CacheCreation: event.CacheCreationInputTokens, Present: event.CacheUsagePresent,
 		})
 		c.behavior.Turns++
+		if c.behavior.TurnsBySource == nil {
+			c.behavior.TurnsBySource = map[string]int{}
+		}
+		c.behavior.TurnsBySource[c.sourceID]++
 		c.behavior.Contexts = append(c.behavior.Contexts, ctx)
 		c.behavior.Spend.observe(event)
 		c.outcome.Turns++
@@ -193,26 +205,7 @@ func (c *sessionEventConsumer) consume(event turnEvent) {
 			c.behavior.recordPrefix(c.sourceID, ctx)
 			c.prefixRecorded = true
 		}
-		window, exactWindow := contextWindow(event.ProviderKey, event.Model)
-		if !exactWindow {
-			if c.behavior.FallbackWindowSources == nil {
-				c.behavior.FallbackWindowSources = map[string]bool{}
-			}
-			c.behavior.FallbackWindowSources[c.sourceID] = true
-		}
-		if pct := ctx * 100 / window; pct > c.sessionPeakPct {
-			c.sessionPeakPct = pct
-		}
-		if ctx > int(dumbzoneFraction*float64(window)) {
-			c.behavior.DumbzoneTurns++
-			c.metric.Dumbzone++
-			if exactWindow {
-				excess := int64(ctx - int(dumbzoneFraction*float64(window)))
-				if sum, ok := checkedNonNegativeSum(c.behavior.DumbzoneExcessTokens, excess); ok {
-					c.behavior.DumbzoneExcessTokens = sum
-				}
-			}
-		}
+		c.windows.add(event.ProviderKey, event.Model, ctx)
 		c.metric.Turns++
 		c.metric.Contexts = append(c.metric.Contexts, ctx)
 		if c.metric.Prefix == 0 {
@@ -238,6 +231,7 @@ func (c *sessionEventConsumer) consume(event turnEvent) {
 }
 
 func (c *sessionEventConsumer) finish() {
+	c.resolveWindows()
 	if !c.opened {
 		return
 	}
@@ -273,6 +267,9 @@ func (c *sessionEventConsumer) finish() {
 	if c.metric.Turns > 0 && strings.TrimSpace(c.metric.Repo) != "" {
 		c.behavior.SessionMetrics = append(c.behavior.SessionMetrics, c.metric)
 	}
+	if trend, ok := c.trendSession(); ok {
+		c.behavior.TrendSessions = append(c.behavior.TrendSessions, trend)
+	}
 	c.behavior.ToolPortfolio.merge(c.toolPortfolio)
 	if c.subagentSpend.SideTurns > 0 || c.subagentSpend.MainTurns > 0 {
 		c.subagentSpend.sessions = 1
@@ -285,6 +282,41 @@ func (c *sessionEventConsumer) finish() {
 		c.outcome.Repo = c.repo
 		c.behavior.SessionOutcomes = append(c.behavior.SessionOutcomes, c.outcome)
 	}
+}
+
+// resolveWindows applies the session's resolved windows to every buffered
+// turn: dumbzone counts, peak depth, and the exact-window excess floor.
+func (c *sessionEventConsumer) resolveWindows() {
+	for _, t := range c.windows.turns {
+		window, exact, inferred := c.windows.resolve(t)
+		if !exact {
+			if c.behavior.FallbackWindowSources == nil {
+				c.behavior.FallbackWindowSources = map[string]bool{}
+			}
+			c.behavior.FallbackWindowSources[c.sourceID] = true
+		}
+		if inferred {
+			if c.behavior.InferredWindowSources == nil {
+				c.behavior.InferredWindowSources = map[string]bool{}
+			}
+			c.behavior.InferredWindowSources[c.sourceID] = true
+		}
+		if pct := t.ctx * 100 / window; pct > c.sessionPeakPct {
+			c.sessionPeakPct = pct
+		}
+		line := int(dumbzoneFraction * float64(window))
+		if t.ctx <= line {
+			continue
+		}
+		c.behavior.DumbzoneTurns++
+		c.metric.Dumbzone++
+		if exact && !inferred {
+			if sum, ok := checkedNonNegativeSum(c.behavior.DumbzoneExcessTokens, int64(t.ctx-line)); ok {
+				c.behavior.DumbzoneExcessTokens = sum
+			}
+		}
+	}
+	c.windows.turns = nil
 }
 
 func scanSessionSourceUntil(source sessionSource, since time.Time, slugs []string, beh *behaviorScan, miner *recurringMiner, deadline *behaviorDeadline) bool {

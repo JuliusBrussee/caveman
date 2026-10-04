@@ -1,4 +1,4 @@
-# shrink — caveman-shrink, the tool-catalog compressor (commercial Go core + MIT launcher)
+# shrink — caveman-shrink, the tool-catalog compressor (Go core + launcher, Apache-2.0)
 
 Compress MCP/OpenAI **tool definitions** before they fill the context window. A thin Go wrapper
 over the [engine](../engine/CLAUDE.md)'s `toolschema` compressor: it drops annotation metadata

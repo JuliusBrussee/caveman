@@ -41,6 +41,33 @@ func TestLogKeepsErrorsDropsNoise(t *testing.T) {
 	}
 }
 
+func TestLogKeepsSyslogEmergencySeverities(t *testing.T) {
+	var input strings.Builder
+	input.WriteString("INFO starting\n")
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&input, "INFO worker %d ready\n", i)
+		if i == 10 {
+			input.WriteString("CRIT database unavailable\n")
+		}
+		if i == 20 {
+			input.WriteString("ALERT failover exhausted\n")
+		}
+		if i == 30 {
+			input.WriteString("EMERG shutting down\n")
+		}
+	}
+	input.WriteString("INFO cleanup complete\n")
+	out, ok := compressors.NewLog().Compress([]byte(input.String()))
+	if !ok {
+		t.Fatal("expected log compression")
+	}
+	for _, message := range []string{"CRIT database unavailable", "ALERT failover exhausted", "EMERG shutting down"} {
+		if !bytes.Contains(out, []byte(message)) {
+			t.Errorf("critical syslog line %q must be kept:\n%s", message, out)
+		}
+	}
+}
+
 func TestLogIdempotent(t *testing.T) {
 	c := compressors.NewLog()
 	first, ok := c.Compress(noisyLog())

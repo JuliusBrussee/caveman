@@ -42,8 +42,8 @@ echo
 
 echo "1. Session start writes a per-session mode"
 activate '{"session_id":"sess-A","source":"startup"}' > /dev/null
-check "sess-A is full"            "full" "$(mode_of sess-A)"
-check "legacy mirror follows"     "full" "$(legacy)"
+check "sess-A is caveman"         "caveman" "$(mode_of sess-A)"
+check "legacy mirror follows"     "caveman" "$(legacy)"
 
 echo
 echo "2. Deactivation is durable, and never leaks 'off' into the legacy mirror"
@@ -65,21 +65,21 @@ check "resume stays off"          "OK"  "$OUT"
 echo
 echo "4. A second window is independent"
 activate '{"session_id":"sess-B","source":"startup"}' > /dev/null
-prompt '{"session_id":"sess-B","prompt":"/caveman ultra"}' > /dev/null
-check "sess-A untouched"          "off"   "$(mode_of sess-A)"
-check "sess-B is ultra"           "ultra" "$(mode_of sess-B)"
+prompt '{"session_id":"sess-B","prompt":"/ultracave"}' > /dev/null
+check "sess-A untouched"          "off"       "$(mode_of sess-A)"
+check "sess-B is ultracave"       "ultracave" "$(mode_of sess-B)"
 
 echo
 echo "5. The statusline badge shows each window its own mode"
 check "sess-A renders nothing"    ""                 "$(badge '{"session_id":"sess-A"}')"
-check "sess-B renders ultra"      "[CAVEMAN:ULTRA]"  "$(badge '{"session_id":"sess-B"}')"
+check "sess-B renders ultracave"  "[ULTRACAVE]"      "$(badge '{"session_id":"sess-B"}')"
 
 echo
 echo "6. Per-turn reinforcement follows the session, not the machine"
 check "sess-A gets none"          "" "$(prompt '{"session_id":"sess-A","prompt":"hi"}')"
 case "$(prompt '{"session_id":"sess-B","prompt":"hi"}')" in
-  *'CAVEMAN MODE ACTIVE (ultra)'*) check "sess-B reinforced as ultra" "yes" "yes" ;;
-  *)                               check "sess-B reinforced as ultra" "yes" "no"  ;;
+  *'CAVEMAN MODE ACTIVE (ultracave)'*) check "sess-B reinforced as ultracave" "yes" "yes" ;;
+  *)                                   check "sess-B reinforced as ultracave" "yes" "no"  ;;
 esac
 
 echo
@@ -91,12 +91,12 @@ esac
 
 echo
 echo "8. A malformed session id can never reach the filesystem"
-prompt '{"session_id":"../../pwned","prompt":"/caveman ultra"}' > /dev/null
+prompt '{"session_id":"../../pwned","prompt":"/ultracave"}' > /dev/null
 check "nothing escapes the store" "0" "$(find "$SANDBOX" -name '*pwned*' | wc -l | tr -d ' ')"
 
 echo
 echo "9. Stale session files are swept on startup, not on compaction"
-printf 'full' > "$CLAUDE_CONFIG_DIR/.caveman-sessions/sess-STALE.mode"
+printf 'caveman' > "$CLAUDE_CONFIG_DIR/.caveman-sessions/sess-STALE.mode"
 touch -t 202001010000 "$CLAUDE_CONFIG_DIR/.caveman-sessions/sess-STALE.mode"
 activate '{"session_id":"sess-C","source":"compact"}' > /dev/null
 check "compact leaves it alone"   "yes" "$([ -f "$CLAUDE_CONFIG_DIR/.caveman-sessions/sess-STALE.mode" ] && echo yes || echo no)"
@@ -104,18 +104,18 @@ activate '{"session_id":"sess-C","source":"startup"}' > /dev/null
 check "startup sweeps it"         "no"  "$([ -f "$CLAUDE_CONFIG_DIR/.caveman-sessions/sess-STALE.mode" ] && echo yes || echo no)"
 
 echo
-echo "10. Upgrade path: an old install has only the legacy flag"
+echo "10. Upgrade path: an old install has only the legacy flag, holding an old level name"
 export CLAUDE_CONFIG_DIR="$SANDBOX/old"
 mkdir -p "$CLAUDE_CONFIG_DIR"
-printf 'lite' > "$CLAUDE_CONFIG_DIR/.caveman-active"
-check "badge reads legacy flag"   "[CAVEMAN:LITE]" "$(badge '{"session_id":"sess-X"}')"
+printf 'wenyan-lite' > "$CLAUDE_CONFIG_DIR/.caveman-active"
+check "badge maps legacy flag"    "[MEGACAVE]" "$(badge '{"session_id":"sess-X"}')"
 case "$(prompt '{"session_id":"sess-X","prompt":"hi"}')" in
-  *'(lite)'*) check "reinforcement reads legacy flag" "yes" "yes" ;;
-  *)          check "reinforcement reads legacy flag" "yes" "no"  ;;
+  *'(megacave)'*) check "reinforcement maps legacy flag" "yes" "yes" ;;
+  *)              check "reinforcement maps legacy flag" "yes" "no"  ;;
 esac
 case "$(CAVEMAN_DEFAULT_MODE=ultra activate '{"session_id":"sess-X","source":"compact"}')" in
-  *'level: lite'*) check "compaction keeps the legacy level" "yes" "yes" ;;
-  *)               check "compaction keeps the legacy level" "yes" "no"  ;;
+  *'mode: megacave'*) check "compaction keeps the legacy mode" "yes" "yes" ;;
+  *)                  check "compaction keeps the legacy mode" "yes" "no"  ;;
 esac
 
 echo
@@ -123,7 +123,7 @@ echo "11. A payload-less hook call behaves like the old machine-wide version"
 export CLAUDE_CONFIG_DIR="$SANDBOX/nopayload"
 mkdir -p "$CLAUDE_CONFIG_DIR"
 activate '' > /dev/null
-check "legacy flag still written" "full" "$(legacy)"
+check "legacy flag still written" "caveman" "$(legacy)"
 
 echo
 echo "12. The hook cannot wedge on a stdin that never closes"

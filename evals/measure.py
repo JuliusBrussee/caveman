@@ -11,17 +11,17 @@ approximation of Claude's BPE. The ratios are still meaningful for
 comparing skills against each other, but the absolute numbers should be
 read as "approximate output-length reduction", not "exact Claude tokens".
 
-Run: uv run --with tiktoken python evals/measure.py
+Run: uv run --with tiktoken python evals/measure.py [snapshot.json]
 """
 
 from __future__ import annotations
 
-import json
 import statistics
 import sys
 from pathlib import Path
 
 import tiktoken
+from snapshot_contract import SnapshotContractError, load_snapshot
 
 # Windows consoles and piped stdout default to the ANSI code page (cp1252),
 # which cannot encode the arrows, em-dashes and minus signs printed below —
@@ -58,11 +58,19 @@ def fmt_pct(x: float) -> str:
 
 
 def main() -> None:
+    # Optional path: reminder_run.py writes its own snapshot.
+    global SNAPSHOT
+    if len(sys.argv) > 1:
+        SNAPSHOT = Path(sys.argv[1])
     if not SNAPSHOT.exists():
         print(f"No snapshot at {SNAPSHOT}. Run `python evals/llm_run.py` first.")
         return
 
-    data = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    try:
+        data = load_snapshot(SNAPSHOT)
+    except SnapshotContractError as error:
+        print(f"Invalid snapshot: {error}", file=sys.stderr)
+        raise SystemExit(1) from error
     arms = data["arms"]
     meta = data.get("metadata", {})
 

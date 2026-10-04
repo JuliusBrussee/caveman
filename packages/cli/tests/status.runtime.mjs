@@ -69,7 +69,7 @@ test("status observe block carries today-scoped basis, config, telemetry, and fo
   assert.match(text, /41k tokens observed on the layer/);
   assert.match(text, /basis: inferred \(local counters · 812 provider_complete \/ 24 provider_partial\)/);
   assert.match(text, /~118k tokens\/day would-have-saved/);
-  assert.match(text, /telemetry  off · anonymous usage ping/);
+  assert.match(text, /telemetry  off · usage ping/);
   assert.match(text, /change: caveman telemetry on\|off/);
   assert.match(text, /next:  caveman login/);
   assert.doesNotMatch(text, /\b(?:measured|verified)\b/i);

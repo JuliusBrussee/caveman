@@ -140,11 +140,11 @@ test("learn v2 summary promotes portfolio move and keeps historical totals separ
   assert.equal(moves.length, 3, "summary cap stays three");
   assert.equal(moves[0].title, "Trim project instructions");
   assert.equal(moves[0].kind, "Trim loaded config");
-  assert.match(moves[0].detail, /sink: claude_md_weight:project · ~5k tokens\/day · ~52k tokens observed · measured/);
+  assert.match(moves[0].detail, /Trim loaded config · ~5k tokens a day · ~52k tokens so far · measured/);
   assert.doesNotMatch(moves[0].detail, /equivalent/);
   assert.doesNotMatch(moves.slice(1).map((move) => move.title).join("\n"), /Trim project instructions/);
   for (const [confidence, label] of [
-    ["transcript_inferred", "transcript"],
+    ["transcript_inferred", "estimated from transcripts"],
     ["static_estimate", "estimate"],
   ]) {
     const [mapped] = learnSummaryMoves({
@@ -159,45 +159,45 @@ test("learn v2 summary promotes portfolio move and keeps historical totals separ
 
   const text = renderLearnPlan(plan, { report: "/tmp/report.html" });
   assert.match(text, /1  Trim project instructions/);
-  assert.match(text, /confirmed fixes/);
-  assert.match(text, /✓ fix:improved — 1200 → 800 config tokens\/turn over 6 sessions \(improved\) · applied 2026-08-01/);
-  assert.match(text, /! fix:regressed — 12\.5 → 19 turns over half-window \(%\) over 5 sessions \(regressed\) · applied 2026-08-03/);
-  assert.match(text, /· fix:pending — applied 2026-08-04 · needs more post-fix sessions \(2 sessions so far\)/);
+  assert.match(text, /fixes you applied/);
+  assert.match(text, /✓ fix:improved — 1200 → 800 setup tokens per message over 6 sessions \(improved\) · applied 2026-08-01/);
+  assert.match(text, /! fix:regressed — 12\.5 → 19 % of messages past half the window over 5 sessions \(regressed\) · applied 2026-08-03/);
+  assert.match(text, /· fix:pending — applied 2026-08-04 · needs more sessions after the fix \(2 so far\)/);
   assert.doesNotMatch(text, /fix:unavailable/);
-  assert.match(text, /provider-counted prefix ~7k \(turn-1 median\)/);
-  assert.doesNotMatch(text, /per-repo/);
+  assert.match(text, /a session's first message is ~7k tokens \(typical, counted by your provider\)/);
+  assert.doesNotMatch(text, /per repository/);
   assert.doesNotMatch(text, /saved you/i);
 });
 
 test("learn v2 detailed and Markdown views expose history without blending rates", () => {
   const detailed = renderLearnPlan(plan, { report: "/tmp/report.html", verbose: true, all: true });
-  assert.match(detailed, /~0 tokens\/turn · ~0 tokens\/day · ~52k tokens observed \(historical\) · basis: inferred/);
-  assert.match(detailed, /per-repo\napi · 5 sessions · dumbzone 23% · median context ~18k/);
-  assert.match(detailed, /web · 3 sessions · dumbzone 5% · median context ~9k/);
-  assert.match(detailed, /caveman learn applied <sink_id>/);
-  assert.match(detailed, /caveman learn simulate <sink_id\.\.\.>/);
+  assert.match(detailed, /0 tokens per message · 0 tokens a day · 52,400 tokens so far · estimate/);
+  assert.match(detailed, /per repository\napi · 5 sessions · 23% of messages past half the window · typical message ~18k tokens/);
+  assert.match(detailed, /web · 3 sessions · 5% of messages past half the window · typical message ~9k tokens/);
+  assert.match(detailed, /caveman learn applied <id>/);
+  assert.match(detailed, /caveman learn simulate <id\.\.\.>/);
   assert.match(detailed, /caveman learn --repo <substring>/);
 
   const markdown = renderLearnPlan(plan, { report: "/tmp/report.html", markdown: true });
-  assert.match(markdown, /~52k tokens observed \(historical\)/);
-  assert.match(markdown, /### Confirmed fixes/);
+  assert.match(markdown, /52,400 tokens so far/);
+  assert.match(markdown, /### Fixes you applied/);
   assert.match(markdown, /\*· fix:pending/);
-  assert.doesNotMatch(markdown, /per-repo/);
+  assert.doesNotMatch(markdown, /per repository/);
   assert.doesNotMatch(markdown, /caveman learn applied/);
 
   const withoutRecurring = renderLearnPlan({
     ...plan,
     sinks: plan.sinks.filter((sink) => sink.class !== "recurring_context"),
   }, { report: "/tmp/report.html", verbose: true, all: true });
-  assert.match(withoutRecurring, /per-repo\napi · 5 sessions/);
-  assert.match(withoutRecurring, /caveman learn applied <sink_id>/);
+  assert.match(withoutRecurring, /per repository\napi · 5 sessions/);
+  assert.match(withoutRecurring, /caveman learn applied <id>/);
 });
 
 test("learn v2 TUI model reports confirmed-fix count under score", () => {
   const model = buildLearnTuiModel(plan, { report: "/tmp/report.html" });
   assert.equal(model.confirmed, 5);
   assert.equal(model.moves[0].title, "Trim project instructions");
-  assert.match(model.protected, /provider-counted prefix ~7k \(turn-1 median\)/);
+  assert.match(model.protected, /a session's first message is ~7k tokens \(typical, counted by your provider\)/);
   assert.match(learnScoreBody(model), /5 fixes measured since you applied them — run caveman learn --all/);
 
   const noScore = buildLearnTuiModel({ ...plan, sinks: [] }, { report: "/tmp/report.html" });
@@ -279,4 +279,21 @@ test("learn v2 skill embedded by CLI stays byte-identical to canonical skill", a
   } finally {
     isolated.cleanup();
   }
+});
+
+test("memory-file findings get one pointer line in plain and TUI output", () => {
+  const doctor = (kind) => ({
+    sink_id: `memory_health:${kind}:abcd1234`, title: `${kind} finding`, class: "behavioral", basis: "inferred",
+    tokens_per_turn: 0, tokens_per_day_rate: 0, evidence: { path: "/repo/CLAUDE.md" }, suggestion: "fix it", framing: "forward",
+  });
+  const withDoctor = { ...plan, sinks: [...plan.sinks, doctor("broken_imports"), doctor("stale_references")] };
+  const text = renderLearnPlan(withDoctor, { report: "/tmp/report.html" });
+  const lines = text.split("\n").filter((line) => line.startsWith("memory files"));
+  assert.equal(lines.length, 1, text);
+  assert.match(lines[0], /^memory files {2}2 findings — see \S+ learn --all$/);
+  assert.match(buildLearnTuiModel(withDoctor, { report: "/tmp/report.html" }).memory, /2 findings/);
+  const one = renderLearnPlan({ ...plan, sinks: [...plan.sinks, doctor("broken_imports")] }, { report: "/tmp/report.html" });
+  assert.match(one, /memory files {2}1 finding — /);
+  assert.ok(!renderLearnPlan(plan, { report: "/tmp/report.html" }).includes("memory files"));
+  assert.equal(buildLearnTuiModel(plan, { report: "/tmp/report.html" }).memory, undefined);
 });

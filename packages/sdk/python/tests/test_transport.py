@@ -11,7 +11,7 @@ import pytest
 
 from caveman_cloud import Cave
 
-CONTRACT = json.loads((Path(__file__).resolve().parents[2] / "parity" / "fixtures.json").read_text())["transport"]
+CONTRACT = json.loads((Path(__file__).resolve().parents[2] / "parity" / "fixtures.json").read_text(encoding="utf-8"))["transport"]
 
 
 @contextmanager

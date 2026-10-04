@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - skills/caveman/SKILL.md
+      - skills/ultracave/SKILL.md
+      - skills/megacave/SKILL.md
       - skills/cavecrew/SKILL.md
       - agents/cavecrew-*.md
       - skills/caveman-compress/SKILL.md
@@ -20,7 +22,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: main
           persist-credentials: false
@@ -34,6 +36,9 @@ jobs:
       - name: Sync SKILL.md copies
         run: |
           cp skills/caveman/SKILL.md plugins/caveman/skills/caveman/SKILL.md
+          mkdir -p plugins/caveman/skills/ultracave plugins/caveman/skills/megacave
+          cp skills/ultracave/SKILL.md plugins/caveman/skills/ultracave/SKILL.md
+          cp skills/megacave/SKILL.md plugins/caveman/skills/megacave/SKILL.md
 
       - name: Sync caveman-compress skill to plugin
         run: |
@@ -67,6 +72,8 @@ jobs:
             skills/caveman-compress/ \
             plugins/caveman/skills/caveman-compress/ \
             plugins/caveman/skills/caveman/SKILL.md \
+            plugins/caveman/skills/ultracave/SKILL.md \
+            plugins/caveman/skills/megacave/SKILL.md \
             plugins/caveman/skills/cavecrew/SKILL.md \
             plugins/caveman/agents/cavecrew-investigator.md \
             plugins/caveman/agents/cavecrew-builder.md \

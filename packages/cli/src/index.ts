@@ -24,7 +24,9 @@ import {
   statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { chmod, mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir, hostname, tmpdir, userInfo } from "node:os";
@@ -36,6 +38,7 @@ import { createHash, createHmac, createPublicKey, randomBytes, randomUUID, verif
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 import { PROFILES, type AgentProfile } from "./agents.generated.js";
+import { autopilotStatusText, claimLearnNudge, confirmLearnNudge, maybeSpawnAutopilot, runAutopilot } from "./learn-autopilot.js";
 import {
   BINARY_RELEASE,
   BINARY_RELEASE_BASE_DEFAULT,
@@ -60,7 +63,8 @@ import {
 } from "./agent-mcp.js";
 import { portableInvocation } from "./portable-command.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
-import { publishedForwardHeadersOf, publishedUpstreamsOf, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
+import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-trends.js";
+import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
 
@@ -485,19 +489,21 @@ function invokedCommand(legacyVerb: string, groupedTail = ""): string {
 
 let currentInvocation: ResolvedInvocation;
 currentInvocation = resolveInvocation(process.argv.slice(2));
-// Version 4 = default-on (opt-out) plus token volume: command_run now carries
-// the local proxy's processed/saved token deltas, so a v3 "yes" was given for a
-// narrower scope and gets the new disclosure reprinted once (never re-asked, and
-// never flipped on). A persisted decision from any version — including a "no" to
-// the old v1 [y/N] prompt — is honored forever; the default only fills the
-// undecided gap, and the first default-on run prints the disclosure line.
-const TELEMETRY_PROMPT_VERSION = 4;
-const TELEMETRY_URL = "https://api.caveman.so/telemetry/cli";
-// The production control-API origin — derived from TELEMETRY_URL (the CLI's
-// other hardcoded prod-host literal) so the two can never drift apart.
-const PROD_API_URL = new URL(TELEMETRY_URL).origin;
+// Version 5 = the receiver stores the client IP address with each event. v4 was
+// default-on (opt-out) plus token volume (command_run carries the local proxy's
+// processed/saved token deltas). A stale-version "yes" was given for a narrower
+// scope and gets the new disclosure reprinted once (never re-asked, and never
+// flipped on). A persisted decision from any version — including a "no" to the
+// old v1 [y/N] prompt — is honored forever; the default only fills the undecided
+// gap, and the first default-on run prints the disclosure line.
+const TELEMETRY_PROMPT_VERSION = 5;
+// Supabase Edge Function; source and schema live in supabase/ at the repo root.
+const TELEMETRY_URL = "https://xvfgtprkhzlvegvmeefq.supabase.co/functions/v1/cli-telemetry";
+const PROD_API_URL = "https://api.caveman.so";
+// Where `telemetry off` points someone who wants already-sent events deleted.
+const TELEMETRY_DELETION_URL = "https://github.com/JuliusBrussee/caveman/blob/main/SECURITY.md#delete-sent-telemetry";
 const TELEMETRY_DISCLOSURE_LINE =
-  "anonymous usage stats on — command counts and token totals only, never prompts, code, or file paths · caveman telemetry off";
+  "usage stats on — commands, agent sessions, token totals, account and install type, timezone and language, and your IP address; never prompts, code, or file paths · caveman telemetry off";
 // Reading token totals means spawning caveman-proxy to query the local SQLite
 // store. It runs after the command's own work, so the cost lands on process exit;
 // a slow or wedged binary drops the token fields rather than holding the CLI.
@@ -571,9 +577,23 @@ function telemetryState(): TelemetryRuntimeState {
 
 // telemetrySendable is the single choke point every emitter must pass: on, and
 // never the un-persisted default (no silent sends, no ephemeral-id retention
-// noise from commands that skipped the disclosure).
+// noise from commands that skipped the disclosure). A config-sourced yes given
+// under older wording also waits until the current disclosure has printed —
+// help-like and `telemetry …` invocations skip that reprint, so without this
+// they would send the widened scope unseen.
 function telemetrySendable(state: TelemetryRuntimeState): boolean {
+  if (state.source === "config" && (state.config?.promptVersion ?? 0) < TELEMETRY_PROMPT_VERSION) return false;
   return state.state === "on" && state.source !== "default";
+}
+
+// Native agent sessions never have a TTY. A decision persisted by an
+// interactive run (which printed the disclosure) still covers them; CI and the
+// env kills still win, and no default is ever minted here.
+function sessionTelemetryState(): TelemetryRuntimeState {
+  const state = telemetryState();
+  if (state.source !== "runtime" || envTruthy(process.env.CI)) return state;
+  const cfg = state.config;
+  return cfg?.decidedAt ? { state: cfg.enabled ? "on" : "off", source: "config", config: cfg } : state;
 }
 
 function envTruthy(v: string | undefined): boolean {
@@ -616,6 +636,7 @@ function parseTelemetryConfig(value: unknown): TelemetryConfig | undefined {
 // any persisted decision — including a "no" to the old v1 prompt — win.
 async function ensureTelemetryDefault() {
   const state = telemetryState();
+  await persistTelemetryEnvKill(state);
   if (isHelpLikeInvocation()) return;
   // `caveman telemetry …` manages the decision explicitly — don't pre-mint an
   // "on" for someone whose first-ever command is `telemetry off`.
@@ -637,6 +658,27 @@ async function ensureTelemetryDefault() {
     return;
   }
   process.stderr.write(`${dim(TELEMETRY_DISCLOSURE_LINE)}\n`);
+}
+
+// persistTelemetryEnvKill turns DO_NOT_TRACK / CAVEMAN_TELEMETRY=0, seen by an
+// interactive run, into a persisted opt-out. Native agent hooks run under hosts
+// that often never read the shell rc (GUI apps, launchd/systemd services), so an
+// env-only kill would not reach them while config still says yes.
+async function persistTelemetryEnvKill(state: TelemetryRuntimeState) {
+  if (state.source !== "env" || state.state !== "off" || !state.config?.enabled || !interactive()) return;
+  try {
+    await saveTelemetryConfig({ enabled: false, decidedAt: new Date().toISOString(), promptVersion: TELEMETRY_PROMPT_VERSION });
+    mutateRawConfig((out) => {
+      delete out.telemetryTokens;
+    });
+  } catch {
+    /* best effort: the env var still wins for this process */
+    return;
+  }
+  // The id is gone from disk now, and it is the only key to a deletion request.
+  if (state.config.anonymousId) {
+    process.stderr.write(`${dim(`telemetry off · old install id ${state.config.anonymousId} · delete what it sent: ${TELEMETRY_DELETION_URL}`)}\n`);
+  }
 }
 
 // ensureTelemetryDisclosureVersion reprints the disclosure once for someone who
@@ -707,13 +749,18 @@ async function telemetryCmd(argv: string[]) {
   if (sub === "status") return telemetryStatus();
   if (sub === "on") return telemetryOn();
   if (sub === "off") return telemetryOff();
+  // Unprinted: the detached children startSessionTelemetry and emitTelemetryEvents spawn.
+  if (sub === "session") return telemetrySession(argv.slice(1));
+  if (sub === "send") return telemetrySend();
   emitCommandRunOnce("error", "usage");
   console.error(`usage: ${invokedCommand("telemetry")} [status|on|off]`);
   process.exit(2);
 }
 
 function telemetryStatus() {
-  const state = telemetryState();
+  // Session state, not command state: an agent or pipe running this has no TTY,
+  // yet native hooks still send under a persisted yes.
+  const state = sessionTelemetryState();
   print({
     enabled: state.state === "on",
     state: state.state,
@@ -732,6 +779,8 @@ async function telemetryOn() {
     promptVersion: TELEMETRY_PROMPT_VERSION,
   };
   await saveTelemetryConfig(telemetry);
+  // The stored version claims this wording was shown, so show it.
+  process.stderr.write(`${dim(TELEMETRY_DISCLOSURE_LINE)}\n`);
   if (!(prior?.enabled && prior.anonymousId) && !telemetryEnvForcesOff()) emitConsentGranted(anonymousId);
   if (telemetryEnvForcesOff()) {
     print({ telemetry: "on", anonymous_id: anonymousId, note: "env override active (DO_NOT_TRACK/CAVEMAN_TELEMETRY) — nothing is sent until it is unset" });
@@ -741,6 +790,7 @@ async function telemetryOn() {
 }
 
 async function telemetryOff() {
+  const prior = telemetryConfigFromDisk();
   const telemetry: TelemetryConfig = {
     enabled: false,
     decidedAt: new Date().toISOString(),
@@ -757,7 +807,91 @@ async function telemetryOff() {
   } catch {
     /* best effort: the decision itself is already persisted */
   }
+  // The id leaves the config here, and it is the only key to events already
+  // sent, so show it once with where to ask for their deletion.
+  if (prior?.anonymousId) {
+    print({ telemetry: "off", anonymous_id: "none", discarded_anonymous_id: prior.anonymousId, delete_sent_data: TELEMETRY_DELETION_URL });
+    return;
+  }
   print({ telemetry: "off", anonymous_id: "none" });
+}
+
+// Native sessions are where installed users show up: after setup most people
+// launch the agent directly and never run the CLI. The host waits on the
+// SessionStart hook, so the send runs in a detached child and never delays the
+// agent's start.
+function startSessionTelemetry(agent: string, sessionId: string | undefined, source: unknown) {
+  if (!telemetrySendable(sessionTelemetryState())) return;
+  // One event per host session: resumes, repeated SessionStart calls (the
+  // OpenCode V1 plugin re-asks on every model step when it gets no context) and
+  // hooks registered in two scopes would otherwise each count. Checked here so
+  // a repeat costs one failed file create, not a process spawn.
+  if (sessionId) {
+    const dir = join(cavemanHome(), "runtime", "telemetry-sessions");
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      closeSync(openSync(join(dir, createHash("sha256").update(`${agent}\0${sessionId}`).digest("hex")), "wx", 0o600));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
+      /* unwritable home: count it rather than lose it */
+    }
+  }
+  const sessionSource = source === "startup" || source === "resume" || source === "clear" ? source : "unknown";
+  try {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "telemetry", "session", agent, sessionSource], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    /* telemetry never blocks a session */
+  }
+}
+
+async function telemetrySession(argv: string[]) {
+  // session_start stands in for this invocation's command_run.
+  telemetryCommandSent = true;
+  pruneSessionMarkers();
+  const agent = findAgent(argv[0] ?? "")?.id;
+  const state = sessionTelemetryState();
+  // No persisted id means every session would mint a fresh "user".
+  if (!agent || !telemetrySendable(state) || !state.config?.anonymousId) return;
+  const event: Record<string, unknown> = {
+    schema: "cli/v1",
+    anonymous_id: state.config.anonymousId,
+    event: "session_start",
+    agent,
+    session_source: argv[1] === "startup" || argv[1] === "resume" || argv[1] === "clear" ? argv[1] : "unknown",
+    cli_version: cliVersion(),
+    os: process.platform,
+    arch: process.arch,
+    node_major: Number(process.versions.node.split(".")[0] ?? 0),
+    ts: new Date().toISOString(),
+  };
+  const tokens = telemetryTokenDelta();
+  if (tokens) {
+    event.tokens_processed = tokens.processed;
+    event.tokens_saved = tokens.saved;
+    event.tokens_basis = tokens.basis;
+  }
+  await postTelemetry(telemetryBody([event]), 10_000);
+}
+
+// Markers only need to outlive one session's repeated SessionStart calls; a
+// resume the next day counts as a new session. Bounded per run.
+function pruneSessionMarkers() {
+  const dir = join(cavemanHome(), "runtime", "telemetry-sessions");
+  try {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const name of readdirSync(dir).slice(0, 500)) {
+      const path = join(dir, name);
+      if (statSync(path).mtimeMs < cutoff) unlinkSync(path);
+    }
+  } catch {
+    /* nothing to prune */
+  }
 }
 
 function telemetryCommandName(): string {
@@ -856,6 +990,8 @@ function readProxyTokenTotals(): { tokensIn: number; tokensSaved: number; basis:
       encoding: "utf8",
       timeout: TELEMETRY_TOKEN_READ_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "ignore"],
+      // The detached session sender has no console; without this Windows opens one.
+      windowsHide: true,
     });
     const parsed = parseProxyStatsPayload(out);
     if (!parsed) return null;
@@ -896,6 +1032,86 @@ function telemetryTokenWatermarkFromDisk(): TelemetryTokenWatermark | null {
   }
 }
 
+// telemetryClaimLockPath is the sidecar used to serialize the read-compare-write
+// below across OS processes; it sits beside config.json so its permission and
+// cross-filesystem behavior always matches the file it protects.
+function telemetryClaimLockPath(): string {
+  return `${configPath()}.telemetry.lock`;
+}
+
+// A lock older than this is presumed abandoned by a crashed holder; kept far
+// above a real claim's own write time and above any waiter's acquire budget,
+// so a slow but live holder is never mistaken for a dead one.
+const TELEMETRY_CLAIM_LOCK_STALE_MS = 5000;
+
+// acquireClaimLock spins on an atomic O_CREAT|O_EXCL create until it wins the
+// lock or the budget runs out; a lock whose mtime is older than staleMs is
+// treated as abandoned by a crashed holder and reclaimed, so a killed process
+// cannot wedge the guarded operation off permanently.
+//
+// Shared by every watermark claim rather than copied per caller: the telemetry
+// claim (#1116) and the sync claim (#1132) are the same read-mutate-write
+// hazard over different state files, and a second copy of this spin is how the
+// two would drift apart. Callers supply their own stale window because their
+// hold times differ by orders of magnitude — see refreshClaimLock.
+function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number): string | null {
+  try {
+    mkdirSync(dirname(lockPath), { recursive: true });
+  } catch {
+    return null;
+  }
+  // The token names THIS holder. releaseClaimLock unlinks only a lock that
+  // still carries it, so a holder that was reclaimed as stale mid-section
+  // cannot delete its successor's lock on the way out.
+  const token = `${process.pid}:${randomUUID()}`;
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    try {
+      const fd = openSync(lockPath, "wx");
+      try {
+        writeSync(fd, token);
+      } finally {
+        closeSync(fd);
+      }
+      return token;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return null;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > staleMs) {
+          // Reclaim by rename, not unlink. Two waiters can both see the same
+          // stale lock; with unlink the slower one would delete the lock the
+          // faster one had already created in its place, and both would hold
+          // it. Only one rename of the stale file can succeed; the loser's
+          // rename fails and it loops back to the create attempt.
+          const grave = `${lockPath}.${process.pid}.${Date.now()}.stale`;
+          renameSync(lockPath, grave);
+          unlinkSync(grave);
+        }
+      } catch {
+        /* raced the holder releasing it, or another waiter reclaiming; loop back */
+      }
+      if (Date.now() >= deadline) return null;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+}
+
+// releaseClaimLock drops a lock taken above, but only while it is still ours:
+// a lock a waiter reclaimed as stale carries the waiter's token now, and
+// unlinking it would hand the guarded section to a third process. The read
+// and the unlink are not one step; a reclaim between them needs the lock to
+// cross the stale threshold in that gap, which the sync heartbeat and the
+// millisecond telemetry hold keep far away. Never throws: a lock already gone
+// is the same end state as one we removed.
+function releaseClaimLock(lockPath: string, token: string): void {
+  try {
+    if (readFileSync(lockPath, "utf8") !== token) return;
+    unlinkSync(lockPath);
+  } catch {
+    /* already gone */
+  }
+}
+
 // telemetryTokenDelta returns what to report for THIS event and advances the
 // watermark to the totals it read. The send is fire-and-forget, so a dropped POST
 // loses that delta rather than replaying it — undercounting beats double-counting
@@ -916,11 +1132,14 @@ function telemetryTokenDelta(): { processed: number; saved: number; basis: strin
   const saved = prior && !rewound ? Math.max(0, totals.tokensSaved - prior.tokensSaved) : 0;
   const rebaselining = prior === null || rewound;
   if (processed === 0 && saved === 0 && !rebaselining) return null;
-  // Claim the delta optimistically: two CLI processes exiting together would
-  // otherwise read the same watermark and both report the same tokens, inflating
-  // a savings figure. Whoever writes second sees the watermark already moved and
-  // reports nothing.
+  // Claim the delta under a lock, not a bare compare: two processes exiting
+  // together can both read the pre-write watermark before either commits (see
+  // the regression test below).
+  const lockPath = telemetryClaimLockPath();
+  const lockToken = acquireClaimLock(lockPath, 500, TELEMETRY_CLAIM_LOCK_STALE_MS);
+  if (!lockToken) return null;
   let claimed = true;
+  let readOnly = false;
   try {
     mutateRawConfig((out) => {
       const current = parseTelemetryTokenWatermark(out.telemetryTokens);
@@ -935,10 +1154,11 @@ function telemetryTokenDelta(): { processed: number; saved: number; basis: strin
       } satisfies TelemetryTokenWatermark;
     });
   } catch {
-    // Read-only home: report nothing rather than resend the same delta forever.
-    return null;
+    readOnly = true; // Read-only home: report nothing rather than resend the same delta forever.
+  } finally {
+    releaseClaimLock(lockPath, lockToken);
   }
-  if (!claimed) return null;
+  if (readOnly || !claimed) return null;
   if (processed === 0 && saved === 0) return null;
   return { processed, saved, basis: totals.basis };
 }
@@ -971,8 +1191,8 @@ function commandRunEventOnce(exitClass: TelemetryExitClass, errorClass?: Telemet
   if (sub) event.subcommand = sub;
   if (agent) event.agent = agent;
   if (exitClass === "error") event.error_class = errorClass ?? "other";
-  // Token volume rides on command_run only — runtime_bootstrap shares the same
-  // watermark and would race it into a double count.
+  // Token volume rides on command_run and session_start only; the watermark
+  // claim in telemetryTokenDelta keeps concurrent readers from double counting.
   const tokens = telemetryTokenDelta();
   if (tokens) {
     event.tokens_processed = tokens.processed;
@@ -1022,14 +1242,83 @@ function emitRuntimeBootstrap(
   emitTelemetryEvents([event]);
 }
 
+// Fields every event carries. Cheap local reads only: no keychain lookup, no
+// network, and the install path never leaves the machine — only its channel.
+function telemetryContext(): Record<string, string> {
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(readFileSync(configPath(), "utf8")) as Record<string, unknown>;
+  } catch {
+    /* no config yet */
+  }
+  const connected = Boolean(process.env.CAVE_TOKEN || raw.tokenStore || raw.token);
+  const out: Record<string, string> = {
+    account: connected ? "connected" : "none",
+    install_channel: telemetryInstallChannel(),
+  };
+  // Logout leaves the cached entitlement behind, so only a live account's
+  // unexpired plan counts.
+  const entitlement = connected ? parseWrapEntitlement(raw.wrapEntitlement) : null;
+  if (entitlement?.plan && !(Date.parse(entitlement.expires_at) < Date.now())) out.plan = entitlement.plan;
+  try {
+    const { timeZone, locale } = Intl.DateTimeFormat().resolvedOptions();
+    if (timeZone) out.timezone = timeZone;
+    if (locale) out.locale = locale;
+  } catch {
+    /* runtime without Intl data */
+  }
+  return out;
+}
+
+function telemetryInstallChannel(): string {
+  const path = fileURLToPath(import.meta.url).replace(/\\/g, "/");
+  if (path.includes("/_npx/")) return "npx";
+  if (path.includes("/.pnpm/")) return "pnpm";
+  if (path.includes("/.bun/") || path.includes("/bunx-")) return "bun";
+  if (path.includes("/node_modules/")) return "npm";
+  return "source";
+}
+
+function telemetryBody(events: Record<string, unknown>[]): string {
+  const context = telemetryContext();
+  return JSON.stringify(events.map((event) => ({ ...event, ...context })));
+}
+
+// Sends run in a detached child so no command waits on the network at exit.
+// The child has no user-facing deadline, so it can outwait a cold endpoint.
 function emitTelemetryEvents(events: Record<string, unknown>[]): Promise<void> {
+  const body = telemetryBody(events);
+  try {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "telemetry", "send"], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...process.env, CAVEMAN_TELEMETRY_PAYLOAD: body },
+    });
+    child.on("error", () => {});
+    child.unref();
+    return Promise.resolve();
+  } catch {
+    return postTelemetry(body, 1500);
+  }
+}
+
+function postTelemetry(body: string, timeoutMs: number): Promise<void> {
   const url = process.env.CAVEMAN_TELEMETRY_URL || TELEMETRY_URL;
   return fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(events),
-    signal: AbortSignal.timeout(1500),
+    body,
+    signal: AbortSignal.timeout(timeoutMs),
   }).then(() => {}).catch(() => {});
+}
+
+// `caveman telemetry send` (unprinted): the detached child emitTelemetryEvents
+// spawns. Consent was checked by the emitter; this only delivers.
+async function telemetrySend() {
+  telemetryCommandSent = true;
+  const body = process.env.CAVEMAN_TELEMETRY_PAYLOAD;
+  if (body) await postTelemetry(body, 10_000);
 }
 
 function classifyTelemetryError(error: unknown): TelemetryErrorClass {
@@ -2269,7 +2558,23 @@ function verifiedLocalInstall(binDir: string): InstalledBinary[] | null {
   return installed;
 }
 
-function parseSignedChecksums(raw: string): Map<string, string> {
+// A signed manifest names its release through a `RELEASE` entry: the sha256 of
+// the release asset `RELEASE`, whose content is "<tag>\n". Without it, anyone
+// able to edit a release page could serve an older, validly signed manifest
+// and its binaries. It rides as an ordinary checksum line so the shipped
+// wedge installers' strict parsers keep accepting the manifest. Releases
+// before bin-v2.0.0 were signed without it, so it is required from there on.
+const FIRST_RELEASE_WITH_SIGNED_NAME = [2, 0, 0];
+
+function releaseRequiresSignedName(release: string): boolean {
+  const match = release.match(/^bin-v(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return true;
+  const version = match.slice(1, 4).map(Number);
+  const i = version.findIndex((part, index) => part !== FIRST_RELEASE_WITH_SIGNED_NAME[index]);
+  return i === -1 || version[i]! > FIRST_RELEASE_WITH_SIGNED_NAME[i]!;
+}
+
+export function parseSignedChecksums(raw: string, release: string = BINARY_RELEASE): Map<string, string> {
   const checksums = new Map<string, string>();
   for (const line of raw.split("\n")) {
     if (!line) continue;
@@ -2278,6 +2583,10 @@ function parseSignedChecksums(raw: string): Map<string, string> {
     const filename = match[2]!;
     if (checksums.has(filename)) throw new Error(`duplicate checksum manifest entry: ${filename}`);
     checksums.set(filename, match[1]!);
+  }
+  const signedName = checksums.get("RELEASE");
+  if (signedName === undefined ? releaseRequiresSignedName(release) : signedName !== createHash("sha256").update(`${release}\n`).digest("hex")) {
+    throw new Error(`manifest is not signed for release ${release}`);
   }
   return checksums;
 }
@@ -2430,7 +2739,7 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
     return;
   }
 
-  const base = (process.env.CAVE_BINARY_RELEASE_BASE ?? BINARY_RELEASE_BASE_DEFAULT).replace(/\/+$/, "");
+  const base = trimTrailingSlashes(process.env.CAVE_BINARY_RELEASE_BASE ?? BINARY_RELEASE_BASE_DEFAULT);
   const releaseBase = `${base}/${BINARY_RELEASE}`;
   let checksumsRaw: string;
   let signatureRaw: string;
@@ -2451,8 +2760,8 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
   let checksums: Map<string, string>;
   try {
     checksums = parseSignedChecksums(checksumsRaw!);
-  } catch {
-    throw new Error("signature check failed for checksums.txt — refusing to install; partial download deleted");
+  } catch (error) {
+    throw new Error(`signature check failed for checksums.txt (${(error as Error).message}) — refusing to install; partial download deleted`);
   }
 
   const installed: InstalledBinary[] = [];
@@ -2513,7 +2822,7 @@ function cliVersionBehind(current: string, latest: string): boolean {
 }
 
 async function latestPublishedCliVersion(timeoutSeconds: number): Promise<string | null> {
-  const registry = (process.env.CAVEMAN_NPM_REGISTRY ?? "https://registry.npmjs.org").replace(/\/+$/, "");
+  const registry = trimTrailingSlashes(process.env.CAVEMAN_NPM_REGISTRY ?? "https://registry.npmjs.org");
   try {
     const response = await fetch(`${registry}/@caveman-ai%2fcli`, {
       headers: { accept: "application/vnd.npm.install-v1+json" },
@@ -2922,7 +3231,12 @@ function removeAgentNativeBundle(agent: "claude" | "codex"): void {
   recoverPendingAgentNativeBundle(agent);
   const journal = readAgentNativeBundleJournal(agent);
   if (!journal) {
-    process.stderr.write(`${mark("warn")} ${agent}: no agent-native bundle journal found\n`);
+    // Accurate, but on its own a dead end (#1134): this verb undoes the bundle that
+    // `setup --agent-native` installs, and nothing else. A user who reached the same
+    // config through `caveman <agent>` or `caveman enable <agent>` has no bundle and
+    // reads this as "caveman cannot be uninstalled". Name the verb that undoes theirs.
+    process.stderr.write(`${mark("warn")} ${agent}: no agent-native bundle journal found — nothing was installed by \`caveman setup --agent-native ${agent}\`\n`);
+    process.stderr.write(dim(`  if you set it up with \`caveman ${agent}\` or \`caveman enable ${agent}\`, remove that with \`caveman disable ${agent}\`\n`));
     return;
   }
   for (const skill of journal.skills) {
@@ -3859,11 +4173,25 @@ function mutateRawConfig(fn: (out: Record<string, unknown>) => void) {
   }
   fn(out);
   mkdirSync(dirname(configPath()), { recursive: true });
-  writeFileSync(configPath(), JSON.stringify(out, null, 2), { mode: 0o600 });
+  const target = configWriteTarget();
+  const tmp = `${target}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(out, null, 2), { mode: 0o600 });
+  renameSync(tmp, target);
   try {
-    chmodSync(configPath(), 0o600);
+    chmodSync(target, 0o600);
   } catch {
     /* best effort */
+  }
+}
+
+// Config writes go temp-file + rename so a concurrent reader (background
+// session senders) never sees a truncated file and rewrites it as {}. Resolves
+// a symlinked config.json so the rename replaces its target, not the link.
+function configWriteTarget(): string {
+  try {
+    return realpathSync(configPath());
+  } catch {
+    return configPath();
   }
 }
 
@@ -5036,6 +5364,23 @@ async function agentShortcut(rest: string[]) {
     process.exitCode = result.status ?? 1;
     return;
   }
+  // Some host surfaces cannot run routed at all — Claude Code Remote Control
+  // refuses any non-first-party ANTHROPIC_BASE_URL and its escape hatch does not
+  // cover the check (#947, #1101). The native door would install machine-wide
+  // routing and then launch the host straight into that refusal, leaving the
+  // user both unrouted and unable to start the surface they asked for. Resolve
+  // the override before any persistent write and hand these to wrap, whose
+  // route-override path launches the host directly and writes nothing.
+  const shortcutRouteOverride = agentRouteOverride(agent, rest.slice(1));
+  if (shortcutRouteOverride) {
+    // A native install already owns the host's base URL from its own config
+    // file, which launching directly cannot undo — say so rather than let the
+    // surface fail with the host's own opaque refusal.
+    if (readNativeJournal(native)) {
+      process.stderr.write(`${mark("warn")} ${routeOverrideLabel(agent)} ${shortcutRouteOverride.surface} ${shortcutRouteOverride.reason}, and the native integration still routes ${binOf(agent)} from its own config — run \`caveman disable ${native}\` first, then \`caveman enable ${native}\` afterwards\n`);
+    }
+    return wrap(rest);
+  }
   // A Cave Build lock is enforced at the wrap door (claudeCaveBuildEnv); the
   // native door applies none of its transforms, so a locked project must keep
   // routing through wrap or the lock would be silently unenforced.
@@ -5133,7 +5478,7 @@ async function agentShortcut(rest: string[]) {
 // is the one-command compression path. If the proxy can't be reached, a TTY run
 // offers to launch the agent directly (no Caveman, no compression this run) rather
 // than wire it to a dead endpoint; non-TTY runs warn and route through as before.
-async function runWrapped(bin: string, cmdArgs: string[], agent?: AgentProfile, opts: WrapOptions = { mode: "compress", noProxy: false, toon: true, noShrink: false, mcpMode: "auto", noBrowse: false, delegate: false, minimal: false, command: [] }, codexSubscription = false, routeDecision?: AgentRouteOverride | null) {
+async function runWrapped(bin: string, cmdArgs: string[], agent?: AgentProfile, opts: WrapOptions = { mode: "compress", noProxy: false, toon: true, noShrink: false, mcpMode: "auto", noBrowse: false, delegate: false, minimal: false, command: [] }, codexSubscription?: boolean, routeDecision?: AgentRouteOverride | null) {
   const result = await spawnWrapped(bin, cmdArgs, agent, opts, gatewayURL(), codexSubscription, routeDecision);
   // Preflight route bypass is intentionally outside Caveman's lifecycle: no
   // savings read, sync, telemetry, or other post-child mutation.
@@ -5197,9 +5542,23 @@ async function spawnWrapped(
   agent: AgentProfile | undefined,
   opts: WrapOptions,
   gw: string,
-  codexSubscription = false,
+  codexSubscriptionOverride?: boolean,
   routeDecision?: AgentRouteOverride | null,
 ): Promise<{ code: number; proxyStarted: boolean; routeBypass: boolean; sessionStart?: string | undefined; summaryKind?: "observe" | "compress" | undefined }> {
+  // Which Codex route is correct is a fact about ~/.codex/auth.json, not about
+  // the caller: a ChatGPT login must reach the `/chatgpt` mux handler, an api-key
+  // login the attributed `/w/codex/v1`. This used to be a defaulted parameter, so
+  // every caller had to remember to pass it. `wrap codex` did (it resolves the
+  // mode for --pixel anyway); `trial` and the interactive picker did not, and
+  // their `false` built an ephemeral CODEX_HOME pinning the api-key route. Codex
+  // then sent the OAuth token to the platform Responses API, which rejects it
+  // with "Missing scopes: api.responses.write", while the model refresh 404s
+  // because `/w/codex/v1/models` is not in the openai adapter's closed
+  // allowlist (#1092). Resolving it here fixes every caller that forgets; an
+  // explicit override still wins, which is what `wrap` passes.
+  const codexSubscription = agent?.id === "codex"
+    ? codexSubscriptionOverride ?? detectCodexWrapAuthMode() === "subscription"
+    : false;
   const { host, port } = gatewayHostPort(gw);
   const local = wrapMode(gw) === "local";
   let proxyStarted = false;
@@ -5453,7 +5812,7 @@ async function spawnWrapped(
   if (direct) {
     // buildWrapEnv writes the agent-attributed `${gw}/w/<agent>` form, and an
     // outer routed wrap may leak the bare form; a direct launch strips both.
-    const gwPrefix = `${gw.replace(/\/+$/, "")}/`;
+    const gwPrefix = `${trimTrailingSlashes(gw)}/`;
     for (const k of WRAP_BASE_URL_ENV_VARS) {
       const value = env[k];
       if (value !== undefined && (value === gw || value.startsWith(gwPrefix))) delete env[k];
@@ -6159,7 +6518,7 @@ function freshOpenClawModelRef(ctx: OverlayBuilderContext): OpenClawModelRef {
 }
 
 function appendUrlPath(base: string, path: string): string {
-  return `${base.replace(/\/+$/, "")}${path}`;
+  return `${trimTrailingSlashes(base)}${path}`;
 }
 
 export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -6281,7 +6640,7 @@ function stripCodexCavemanProviderToml(text: string): string {
 // The api-key Codex route, in ONE place: the provider TOML writes it, the
 // install journal records it, and the doctor compares against it, and a route
 // only three of those four agree on reads as permanently degraded.
-const CODEX_API_KEY_ROUTE = "/w/codex/v1";
+const CODEX_PAYG_ROUTE = "/w/codex/v1";
 
 function codexGatewayBase(gw: string, subscription: boolean): string {
   // Codex's OpenAI-Responses client appends "/responses" onto base_url itself,
@@ -6293,7 +6652,7 @@ function codexGatewayBase(gw: string, subscription: boolean): string {
   // convention aider already uses (`/w/aider/openai/v1`). The subscription
   // route is a different mux handler (`/chatgpt/`) that takes the suffix
   // verbatim, so it must NOT gain a "/v1".
-  return appendUrlPath(gw, subscription ? "/chatgpt" : CODEX_API_KEY_ROUTE);
+  return appendUrlPath(gw, subscription ? "/chatgpt" : CODEX_PAYG_ROUTE);
 }
 
 // Codex clears the stdio MCP environment, including these non-secret store
@@ -6609,11 +6968,97 @@ function assertNativeHooksShape(path: string, root: Record<string, unknown>, age
   }
 }
 
+// #1137, in one place: every persistent artifact caveman writes bakes in the
+// invocation `enable` resolved, and nothing checked that the invocation still
+// resolves. nvm installs each Node release in its own directory and
+// `nvm uninstall <old>` deletes it, so a routine upgrade leaves every baked
+// path dangling — while the artifact's own bytes are untouched, which is what
+// every ownership check looked at. The hosts differ only in where the
+// invocation is written; whether its targets exist is one question, asked here.
+//
+// `which` answers an absolute path by testing it directly, so this covers both
+// a bare name resolved through PATH and a path into a removed directory.
+function invocationTargetsExist(tokens: string[]): boolean {
+  const executable = tokens[0];
+  if (executable === undefined || !which(executable)) return false;
+  // A `node <script>` invocation and a `--adapter <file>` argument name files
+  // the executable itself cannot vouch for: node exists on every host after an
+  // upgrade, the script it was pointed at does not.
+  const files = [hookCommandBasename(executable) === "node" ? tokens[1] : undefined];
+  const adapter = tokens.indexOf("--adapter");
+  if (adapter !== -1) files.push(tokens[adapter + 1]);
+  return !files.some((file) => file !== undefined && !existsSync(file));
+}
+
+// The generated opencode plugin and Pi extension bake their invocation as a
+// source literal rather than a host hook command, so ownership was judged by
+// the marker comment alone and #1137 stayed invisible on both. Parse what the
+// generators emit — not the journal, which for an install made before this
+// check records no invocation at all, and these are the installs already
+// broken on disk.
+//
+// Deliberately fail-open on an unrecognized shape: there is nothing to verify,
+// and answering `false` would report every install degraded. The regression
+// tests assert the emitted shape still matches, so a generator refactor that
+// silences this fails the suite instead of silently verifying nothing.
+function generatedInvocation(text: string): string[] | undefined {
+  // opencode: `const command = "…";` with `const prefix = […];`
+  const command = text.match(/^const command = ("(?:[^"\\]|\\.)*");$/m);
+  if (command) {
+    const prefix = text.match(/^const prefix = (\[(?:[^[\]\\]|\\.)*\]);$/m);
+    // A prefix line we cannot read means we cannot see the whole invocation,
+    // and verifying the executable alone would be worse than verifying
+    // nothing: `node` survives every upgrade, so the dangling member would be
+    // exactly the script in the prefix we failed to parse.
+    if (!prefix && /^const prefix = /m.test(text)) return undefined;
+    try {
+      const parsedPrefix = prefix ? JSON.parse(prefix[1]!) as unknown : [];
+      if (!Array.isArray(parsedPrefix) || parsedPrefix.some((item) => typeof item !== "string")) return undefined;
+      return [JSON.parse(command[1]!) as string, ...parsedPrefix as string[]];
+    } catch { return undefined; }
+  }
+  // Pi: `process.env.CAVEMAN_PI_HOOK_CMD ??= "<json array, re-encoded>";`
+  const pi = text.match(/^process\.env\.CAVEMAN_PI_HOOK_CMD \?\?= ("(?:[^"\\]|\\.)*");$/m);
+  if (pi) {
+    try {
+      const parsed = JSON.parse(JSON.parse(pi[1]!) as string) as unknown;
+      if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((item) => typeof item !== "string")) return undefined;
+      return parsed as string[];
+    } catch { return undefined; }
+  }
+  return undefined;
+}
+
+function generatedArtifactTargetsExist(text: string): boolean {
+  const tokens = generatedInvocation(text);
+  return tokens === undefined || invocationTargetsExist(tokens);
+}
+
+// A managed hook is only healthy while the files its command runs still exist.
+// Identity is judged by basename, so a hook rendered into a directory that has
+// since been deleted (an nvm Node upgrade, #1137) kept matching the expected
+// document while the host ran a missing binary or adapter.
+function managedHookTargetsExist(root: Record<string, unknown>): boolean {
+  const hooks = root.hooks && typeof root.hooks === "object" && !Array.isArray(root.hooks)
+    ? root.hooks as Record<string, unknown>
+    : {};
+  for (const raw of Object.values(hooks)) {
+    if (!Array.isArray(raw)) continue;
+    for (const entry of raw as Array<Record<string, unknown>>) {
+      const command = entry && typeof entry === "object" ? hookEntryCommand(entry) : undefined;
+      if (command === undefined || managedHookIdentity(command) === undefined) continue;
+      if (!invocationTargetsExist(hookCommandTokens(command)!)) return false;
+    }
+  }
+  return true;
+}
+
 function nativeHookEntriesHealthy(root: Record<string, unknown>, agentId: "claude" | "codex" | "gemini"): boolean {
   const hooks = root.hooks && typeof root.hooks === "object" && !Array.isArray(root.hooks)
     ? root.hooks as Record<string, unknown>
     : undefined;
   if (!hooks) return false;
+  if (!managedHookTargetsExist(root)) return false;
   const expected = nativeHooksDocument(agentId, nativeShrinkEnabled()).hooks as Record<string, unknown>;
   const required = Object.entries(expected).every(([event, expectedRaw]) => {
     const actual = Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [];
@@ -7147,7 +7592,31 @@ function opencodeNativePluginPath(): string {
   return join(homedir(), ".config", "opencode", "plugins", "caveman-native.js");
 }
 
+function opencodePluginMajor(): number | null {
+  const profile = AGENTS.find((agent) => agent.id === "opencode");
+  const semver = parsedSemver(profile ? detectedAgentVersion(profile) : null);
+  return semver ? semver[0]! : null;
+}
+
 function opencodeNativePluginSource(): string {
+  // OpenCode 2 replaced the plugin API: a V1 hook map no longer loads
+  // (PluginModule.LoadError, missing "default"). Emit the implementation
+  // matching the detected host major. See #1083.
+  //
+  // An unreadable version keeps V1, the status quo. nativeHostProbe returns
+  // version: null for an empty/non-zero/unspawnable `opencode --version`
+  // ("version_probe_failed"), and #1081 records exactly that state on a live
+  // OpenCode 1.18.31 host — so "unknown" is not evidence of "new". Defaulting
+  // it to V2 would break a 1.x user whose probe merely flaked, turning a
+  // working install into one whose plugin the host refuses to load; a 2.x user
+  // in the same state is no worse off than before this gate existed. Only a
+  // version that positively reads as major >= 2 opts into the V2 API.
+  const major = opencodePluginMajor();
+  if (major === null || major < 2) return opencodeNativePluginSourceV1();
+  return opencodeNativePluginSourceV2();
+}
+
+function opencodeNativePluginSourceV1(): string {
   const { cmd, pre } = cavemanInvocation();
   return `// caveman:native-opencode — GENERATED by \`caveman enable opencode\`.
 // Contract: @opencode-ai/plugin 1.17.8 Hooks (installed local type source).
@@ -7316,6 +7785,212 @@ export const CavemanNative = async () => ({
     pending.clear();
   },
 });
+`;
+}
+
+function opencodeNativePluginSourceV2(): string {
+  const { cmd, pre } = cavemanInvocation();
+  return `// caveman:native-opencode — GENERATED by \`caveman enable opencode\`.
+// Contract: OpenCode 2 plugin API — default export { id, setup }
+// (https://opencode.ai/v2/docs/build/plugins/migrate-v1).
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+
+const command = ${JSON.stringify(cmd)};
+const prefix = ${JSON.stringify(pre)};
+
+function call(event, payload = {}) {
+  try {
+    const raw = execFileSync(command, [...prefix, "native-hook", "opencode", event], {
+      input: JSON.stringify({ event_name: event, ...payload }),
+      encoding: "utf8",
+      timeout: 2000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    if (!raw.trim()) return undefined;
+    const value = JSON.parse(raw);
+    return value && typeof value === "object" ? value : undefined;
+  } catch { return undefined; }
+}
+
+function digest(value) {
+  try {
+    const raw = JSON.stringify(value);
+    return { bytes: Buffer.byteLength(raw), sha256: "sha256:" + createHash("sha256").update(raw).digest("hex") };
+  } catch { return undefined; }
+}
+
+function taskType(value) {
+  let text;
+  try { text = JSON.stringify(value).toLowerCase(); } catch { return "general"; }
+  const has = (...terms) => terms.some((term) => text.includes(term));
+  if (has("migration", "migrate", "schema change", "backfill", "rollback")) return "migration";
+  if (has("bug", "fix", "broken", "regression", "crash", "error", "incorrect")) return "bugfix";
+  if (has("investigate", "diagnose", "root cause", "why does", "trace")) return "investigation";
+  if (has("refactor", "restructure", "reorganize", "cleanup")) return "refactor";
+  if (has("review", "audit", "critique", "assess")) return "review";
+  if (has("verify", "verification", "prove", "validate", "check that")) return "verification";
+  if (has("build", "implement", "add", "create", "ship", "feature")) return "feature";
+  return "general";
+}
+
+function taskTerms(value) {
+  let text;
+  try { text = JSON.stringify(value); } catch { return []; }
+  const stop = new Set(["about", "after", "agent", "before", "build", "change", "code", "create", "from", "have", "help", "implement", "into", "make", "please", "project", "repository", "should", "spec", "task", "that", "then", "there", "these", "they", "this", "through", "user", "want", "what", "when", "where", "which", "with", "would", "your"]);
+  const out = [];
+  const seen = new Set();
+  for (const raw of text.match(/[A-Za-z][A-Za-z0-9_./-]{2,63}/g) ?? []) {
+    const term = raw.toLowerCase().replace(/^[-./]+|[-./]+$/g, "");
+    if (!term || term.includes("..") || stop.has(term) || seen.has(term) || /^(?:sk|pk|rk|ghp|github_pat|xox[baprs]|akia)[-_]/i.test(term) || /^[a-z0-9_-]{40,}$/i.test(term)) continue;
+    seen.add(term);
+    out.push(term);
+    if (out.length === 12) break;
+  }
+  return out;
+}
+
+function taskContinuation(value) {
+  const visit = (item) => {
+    if (typeof item === "string") return item;
+    if (Array.isArray(item)) return item.map(visit).filter(Boolean).join(" ");
+    if (!item || typeof item !== "object") return "";
+    return visit(item.text ?? item.content ?? item.message ?? "");
+  };
+  const prompt = visit(value).trim().toLowerCase();
+  if (!prompt || prompt.length > 160 || prompt.split(/\\s+/).length > 14) return false;
+  return /^(?:please\\s+)?(?:continue|go ahead|keep going|proceed|do (?:it|that)|fix (?:it|that)|retry|try again|explain (?:it|that)|what do you mean|yes|yep|yeah|why\\??|how\\??)[.!?\\s]*$/.test(prompt);
+}
+
+export default {
+  id: "caveman-native",
+  async setup(ctx) {
+    // Per-plugin-instance state: one setup() runs per location, so two
+    // projects never share session context through module scope.
+    const contexts = new Map();
+    const pending = new Map();
+
+    function sessionContext(sessionID) {
+      if (!contexts.has(sessionID)) {
+        const out = call("SessionStart", { session_id: sessionID, surface: "cli" });
+        const context = out?.hookSpecificOutput?.additionalContext;
+        contexts.set(sessionID, typeof context === "string" ? context : "");
+      }
+      return contexts.get(sessionID);
+    }
+
+    const controller = new AbortController();
+    const events = (async () => {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        handleEvent(event);
+      }
+    })().catch(() => {
+      if (!controller.signal.aborted) console.warn("[caveman-native] Event subscription failed");
+    });
+
+    function sameLocation(event) {
+      return event.location?.directory === ctx.location.directory &&
+        event.location?.workspaceID === ctx.location.workspaceID;
+    }
+
+    function handleEvent(event) {
+      if (!sameLocation(event)) return;
+      const type = event.type;
+      const sessionID = event.data?.sessionID;
+      if (typeof sessionID !== "string" || !sessionID) return;
+      if (type === "session.created") sessionContext(sessionID);
+      if (type === "session.idle") call("Stop", { session_id: sessionID });
+      // "session.compacted" is the V1 event name; V2 reports compaction
+      // through "session.compaction.ended". Handle both.
+      if (type === "session.compaction.ended" || type === "session.compacted") {
+        const out = call("PostCompact", { session_id: sessionID });
+        const context = out?.hookSpecificOutput?.additionalContext;
+        if (typeof context === "string" && context) contexts.set(sessionID, context);
+      }
+      if (type === "session.deleted") {
+        call("SessionEnd", { session_id: sessionID });
+        contexts.delete(sessionID);
+        pending.delete(sessionID);
+      }
+    }
+
+    await ctx.session.hook("prompt", (event) => {
+      const prompt = event.prompt ?? {};
+      const decision = call("UserPromptSubmit", {
+        session_id: event.sessionID,
+        prompt: digest(prompt),
+        task_type: taskType(prompt),
+        task_terms: taskTerms(prompt),
+        task_continuation: taskContinuation(prompt),
+      });
+      const dynamic = decision?.hookSpecificOutput?.additionalContext;
+      if (typeof dynamic === "string" && dynamic) pending.set(event.sessionID, dynamic);
+    });
+
+    await ctx.session.hook("context", (event) => {
+      const stable = sessionContext(event.sessionID);
+      if (stable) event.system.push({ type: "text", text: stable });
+      const hint = pending.get(event.sessionID);
+      if (hint) {
+        event.system.push({ type: "text", text: hint });
+        pending.delete(event.sessionID);
+      }
+    });
+
+    await ctx.session.hook("compaction", (event) => {
+      call("PreCompact", { session_id: event.sessionID });
+      const stable = sessionContext(event.sessionID);
+      if (stable) event.system.push({ type: "text", text: stable });
+    });
+
+    await ctx.tool.hook("execute.before", (event) => {
+      const decision = call("PreToolUse", {
+        session_id: event.sessionID,
+        tool_name: event.tool,
+        tool_input: event.input,
+      });
+      if (typeof decision?.hookSpecificOutput?.additionalContext === "string") {
+        pending.set(event.sessionID, decision.hookSpecificOutput.additionalContext);
+      }
+      // V1 named this tool "bash"; V2 renamed the permission action to
+      // "shell". Accept both so the rewrite survives either host.
+      const input = event.input;
+      if ((event.tool === "bash" || event.tool === "shell") &&
+          input && typeof input === "object" && typeof input.command === "string") {
+        try {
+          const raw = execFileSync(command, [...prefix, "shrink-hook"], {
+            input: JSON.stringify({ tool_name: "Bash", tool_input: { command: input.command } }),
+            encoding: "utf8",
+            timeout: 750,
+          });
+          const rewritten = JSON.parse(raw)?.hookSpecificOutput?.updatedInput?.command;
+          if (typeof rewritten === "string" && rewritten) input.command = rewritten;
+        } catch {}
+      }
+    });
+
+    await ctx.tool.hook("execute.after", (event) => {
+      if (event.status !== "completed") return;
+      const decision = call("PostToolUse", {
+        session_id: event.sessionID,
+        tool_name: event.tool,
+        tool_input: event.input,
+        tool_output: event.result,
+      });
+      const replacement = decision?.hookSpecificOutput?.updatedToolOutput ?? decision?.output_replacement;
+      if (typeof replacement === "string") {
+        event.result = { ...event.result, content: replacement };
+      }
+    });
+
+    return () => {
+      controller.abort();
+      for (const sessionID of contexts.keys()) call("SessionEnd", { session_id: sessionID });
+      contexts.clear();
+      pending.clear();
+    };
+  },
+};
 `;
 }
 
@@ -8592,9 +9267,11 @@ function nativeIntegrationStatus(agent: NativeAgent) {
             return options.baseURL === routes[providerID];
           }) && JSON.stringify(mcp.caveman) === JSON.stringify(operation.owned?.installed_mcp);
         } else if (operation.kind === "opencode-plugin") {
-          owned = current.toString("utf8").includes("caveman:native-opencode");
+          const text = current.toString("utf8");
+          owned = text.includes("caveman:native-opencode") && generatedArtifactTargetsExist(text);
         } else if (operation.kind === "pi-extension") {
-          owned = current.toString("utf8").includes("caveman:native-pi");
+          const text = current.toString("utf8");
+          owned = text.includes("caveman:native-pi") && generatedArtifactTargetsExist(text);
         } else if (operation.kind === "aider-config") {
           const text = current.toString("utf8");
           owned = typeof operation.owned?.route_block === "string" && typeof operation.owned?.read_block === "string"
@@ -8638,13 +9315,35 @@ function nativeIntegrationStatus(agent: NativeAgent) {
       return false;
     }
   })();
+  // Same class as piBundleCurrent above, one step removed: opencode's plugin API
+  // is chosen when the mutations are built, so an install made against OpenCode
+  // 1.x keeps its V1 hook map after the host upgrades to 2.x — which that host
+  // refuses to load (#1083). Nothing else drifts on that upgrade: same journal,
+  // same bytes, so packCurrent and ownedHealthy both still pass and doctor called
+  // an unloadable plugin "installed". `caveman opencode` deliberately skips
+  // enableNative whenever a journal exists (status probes spawn subprocesses),
+  // which is exactly why that skip's own comment names doctor as the repair door
+  // for drifted installs — so the drift has to be visible here to be repairable.
+  // An unreadable version yields no judgement, matching opencodeNativePluginSource:
+  // "unknown" is not evidence of a new host, so it must not degrade a good install.
+  const opencodePluginApiCurrent = agent !== "opencode" || (() => {
+    const operation = journal?.operations.find((item) => item.kind === "opencode-plugin");
+    const current = operation ? fileBytes(operation.file)?.toString("utf8") : null;
+    if (!current) return true;
+    const installedV2 = current.includes("async setup(ctx)");
+    const installedV1 = current.includes("export const CavemanNative");
+    if (installedV1 === installedV2) return true;
+    const semver = parsedSemver(host.version);
+    if (!semver) return true;
+    return (semver[0]! >= 2) === installedV2;
+  })();
   const routeHealthy = ownedHealthy && (agent === "opencode"
     ? (routeOperation?.owned?.routes as Record<string, unknown> | undefined)?.openai === appendUrlPath(expectedRoute, "/openai/v1")
       && (routeOperation?.owned?.routes as Record<string, unknown> | undefined)?.anthropic === appendUrlPath(expectedRoute, "/anthropic/v1")
     : agent === "pi" ? piBundleCurrent : routeOperation?.owned?.route === expectedRoute);
   const proxyHealthy = wrapMode(gatewayURL()) === "managed" || Boolean(probeProxyVersion()?.capabilities.includes("native_runtime_v1"));
   const recoveryHealthy = agent === "aider" || Boolean(mcp?.probe.current);
-  const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy ? "degraded" : "installed";
+  const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy || !opencodePluginApiCurrent ? "degraded" : "installed";
 	const coreSupported = agent === "aider" ? ownedHealthy : ownedHealthy && Boolean(NATIVE_PACK.core);
 	const coreActive = agent === "aider"
 	  ? ownedHealthy
@@ -8652,7 +9351,8 @@ function nativeIntegrationStatus(agent: NativeAgent) {
   const fileText = checks.map((check) => fileBytes(check.file)?.toString("utf8") ?? "").join("\n");
   const components: NativeComponents = {
     routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? fileText.includes(HERMES_NATIVE_ROUTE_BEGIN) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
-    lifecycle_hooks: agent !== "aider" && ownedHealthy,
+    // A plugin the host cannot load runs no hooks, whatever its bytes hash to.
+    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent,
     core: coreActive,
     mcp_recovery: agent !== "aider" && ownedHealthy && Boolean(mcp?.probe.current),
     // Codex is false for the same reason hermes is: no command rewrite happens. The
@@ -9220,6 +9920,67 @@ function wrapBaseUrlEnv(gw: string): NodeJS.ProcessEnv {
   return env;
 }
 
+// wrapWorkTags names the repository and branch a wrapped session is launched
+// in, as the managed gateway's x-cave-tags value ("repo=owner/name,branch=…").
+// Delivery joins coding-agent spend to merged changes on exactly these two
+// keys, and nothing else in the request carries them. Read once at spawn with
+// hardened git (git-safe.ts); a launch outside a repository, without an origin,
+// or on a detached HEAD yields the tags it can and never fails the wrap.
+// The value is fixed for the process: a branch switch mid-session is picked up
+// by the next launch, not this one.
+//
+// Only github.com remotes are tagged: Cloud joins tags['repo'] to the GitHub
+// pull requests it imported, keyed owner/name, so a same-named fork on another
+// host would collide with the wrong repository. Values are printable ASCII
+// without comma or equals — a header value must be a ByteString, and the tag
+// list is comma/equals delimited — anything else drops the tag, never the wrap.
+export function wrapWorkTags(cwd = process.cwd()): string {
+  const read = (...args: string[]): string => {
+    try {
+      return execFileSync("git", hardenedGitArgs(cwd, ...args), {
+        encoding: "utf8", env: hardenedGitEnv(), stdio: ["ignore", "pipe", "ignore"], timeout: 2000,
+      }).trim();
+    } catch {
+      return "";
+    }
+  };
+  const parts: string[] = [];
+  const repo = repoSlugFromRemote(read("remote", "get-url", "origin"));
+  if (repo) parts.push(`repo=${repo}`);
+  const branch = read("branch", "--show-current");
+  if (branch && branch.length <= 255 && workTagValueSafe(branch)) parts.push(`branch=${branch}`);
+  return parts.join(",");
+}
+
+// workTagValueSafe: printable ASCII (0x21–0x7E) with no comma or equals.
+export function workTagValueSafe(value: string): boolean {
+  return /^[\x21-\x2B\x2D-\x3C\x3E-\x7E]+$/.test(value);
+}
+
+// repoSlugFromRemote reduces a github.com remote URL to owner/name — the form
+// Cloud's Delivery join and its imported pull requests use — or "" when the
+// remote is on any other host or has no such shape. Never the URL itself: a
+// remote can embed a credential.
+export function repoSlugFromRemote(remote: string): string {
+  const cleaned = trimTrailingSlashes(remote.trim()).replace(/\.git$/i, "");
+  let host = "";
+  let path = "";
+  const url = /^[a-z][a-z0-9+.-]*:\/\/([^/]+)\/(.*)$/i.exec(cleaned);
+  const scp = /^(?:[^@/:]+@)?([^/:]+):(.*)$/.exec(cleaned);
+  if (url) {
+    host = url[1]!.replace(/^[^@]*@/, "").replace(/:\d+$/, "");
+    path = url[2]!;
+  } else if (scp) {
+    host = scp[1]!;
+    path = scp[2]!;
+  } else {
+    return "";
+  }
+  if (host.toLowerCase() !== "github.com") return "";
+  const match = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/.exec(path);
+  return match ? `${match[1]}/${match[2]}` : "";
+}
+
 function attributedGatewayUrl(gw: string, agent: AgentProfile): string {
   return appendUrlPath(gw, `/w/${agent.id}`);
 }
@@ -9239,6 +10000,23 @@ function mergeAnthropicCustomHeader(raw: string | undefined, name: string, value
     });
   if (value !== undefined) kept.push(`${name}: ${value}`);
   return kept.join("\n");
+}
+
+// existingCustomHeader returns the value of one header inside the newline-
+// separated ANTHROPIC_CUSTOM_HEADERS block ("" when present but empty), or
+// undefined when absent.
+function existingCustomHeader(raw: string | undefined, name: string): string | undefined {
+  const target = name.toLowerCase();
+  for (const line of (raw ?? "").split(/\r\n|\n|\r/)) {
+    const colon = line.indexOf(":");
+    if (colon > 0 && line.slice(0, colon).trim().toLowerCase() === target) return line.slice(colon + 1).trim();
+  }
+  return undefined;
+}
+
+// workTagsOff: CAVEMAN_WORK_TAGS=0 (or false/off/no) stops the repo/branch tags.
+export function workTagsOff(value: string | undefined): boolean {
+  return /^(0|false|off|no)$/i.test((value ?? "").trim());
 }
 
 function bedrockCredentialEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -9421,6 +10199,15 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
     env.QWEN_CODE_LEGACY_MCP_BLOCKING = "1";
   }
   if (agent.id === "hermes") applyHermesAuthEnv(env, renderedGw, gw);
+  if (agent.id === "claude" && wrapMode(gw) === "managed") {
+    // Repository and branch ride every request as x-cave-tags so the managed
+    // gateway can join this session's spend to the change it ships. A user's
+    // own x-cave-tags is sent exactly as set (even empty), and CAVEMAN_WORK_TAGS=0 sends none.
+    const tags = workTagsOff(env.CAVEMAN_WORK_TAGS) || existingCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags") !== undefined
+      ? ""
+      : wrapWorkTags();
+    if (tags) env.ANTHROPIC_CUSTOM_HEADERS = mergeAnthropicCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags", tags);
+  }
   if (agent.id === "claude" && wrapMode(gw) === "local" && env[CLAUDE_ASSUME_FIRST_PARTY_ENV] === undefined && proxyAnthropicUpstreamIsFirstParty()) {
     // Keep Claude Code's first-party capability set (1M context window /
     // ~600k auto-compact window) intact behind the local pass-through proxy
@@ -9874,6 +10661,7 @@ function sleep(ms: number) {
 type SyncOutcome =
   | { kind: "no_store"; dbPath: string }
   | { kind: "empty" }
+  | { kind: "busy" }
   | {
       kind: "synced";
       spans: number;
@@ -10174,6 +10962,40 @@ function writeSyncWatermark(key: string, id: number) {
   writeFileSync(syncStatePath(), JSON.stringify(state, null, 2) + "\n", { mode: 0o600 });
 }
 
+// syncClaimLockPath is the sidecar that serializes the read-query-POST-write
+// in syncLocalSavings across OS processes; it sits beside sync.json so its
+// permission and cross-filesystem behavior always matches the file it protects.
+function syncClaimLockPath(): string {
+  return `${syncStatePath()}.lock`;
+}
+
+// How long a waiter blocks before giving up and reporting `busy`. Deliberately
+// short: syncAfterWrap runs on the wrap exit path, and making a user wait out
+// someone else's upload to close a shell is worse than deferring their rows to
+// the next sync — nothing is lost either way, the watermark simply has not moved.
+const SYNC_CLAIM_LOCK_BUDGET_MS = 5000;
+
+// A sync lock is held across a network POST, which has no bounded duration, so
+// unlike the telemetry claim its stale window cannot be a guess at the hold
+// time: a live holder on a slow link would be judged dead and its rows POSTed
+// twice, which is the very bug the lock exists to prevent. The holder instead
+// heartbeats the lock while it works, so this window only has to outlast a
+// couple of missed beats.
+const SYNC_CLAIM_LOCK_STALE_MS = 15000;
+const SYNC_CLAIM_LOCK_HEARTBEAT_MS = 3000;
+
+// refreshClaimLock bumps a held lock's mtime so waiters keep seeing it as live.
+// Never throws — if the lock is gone the guarded work is already compromised,
+// and crashing the sync on a touch failure would lose the rows in flight.
+function refreshClaimLock(lockPath: string): void {
+  try {
+    const now = new Date();
+    utimesSync(lockPath, now, now);
+  } catch {
+    /* lock vanished or the FS refused the touch; the POST still completes */
+  }
+}
+
 // deriveDashboardUrl maps the control-api base URL to the dashboard costs page
 // for the two shapes Caveman ships (local docker web :3000; hosted api.<domain>
 // → apex, which serves the dashboard). Anything else returns "" — no guessing.
@@ -10246,7 +11068,7 @@ function localScanSyncLine(out: Extract<LocalScanSyncOutcome, { kind: "synced" }
 }
 
 // syncRequestSpan converts one local `requests` row into a caveman-jsonl span
-// line (public/shared/platform/importers Span shape; timestamps are already in
+// line (Caveman-Cloud public/shared/platform/importers Span shape; timestamps are already in
 // the ClickHouse layout because the proxy writes them that way). The basis and
 // per-row inferred savings ride in attributes — the spans schema has no savings
 // column, and imported rows must never look like verified ledger entries.
@@ -10319,84 +11141,112 @@ async function syncLocalSavings(cfg: Config): Promise<SyncOutcome> {
   }
   const db = new DatabaseSync(dbPath, { readOnly: true });
   let rows: Record<string, unknown>[];
-  const key = syncWatermarkKey(cfg, dbFingerprint(db, dbPath, DatabaseSync));
-  const firstSync = !hasSyncWatermark(key);
-  const since = readSyncWatermark(key);
+  let key: string;
   try {
-    const columns = new Set(
-      (db.prepare("PRAGMA table_info(requests)").all() as Record<string, unknown>[])
-        .map((row) => typeof row.name === "string" ? row.name : "")
-        .filter(Boolean),
-    );
-    const optional = (name: string, fallback: string) => columns.has(name) ? name : `${fallback} AS ${name}`;
-    rows = db
-      .prepare(
-        `SELECT id, ts, request_id, trace_id, agent_slug, provider, model,
-                status_code, error_code, latency_ms, request_bytes, response_bytes,
-                input_tokens, output_tokens, cached_input_tokens,
-                ${optional("cache_creation_input_tokens", "0")}, total_cost_usd,
-                savings_usd, basis, ${optional("token_usage_basis", "'unavailable'")},
-                ${optional("auth_mode", "'unknown'")}, runtime_mode, optimization_ids,
-                compression_tokens_before, compression_tokens_after,
-                ${optional("compression_token_count_basis", "'unavailable'")}
-           FROM requests WHERE id > ? ORDER BY id`,
-      )
-      .all(since) as Record<string, unknown>[];
-  } finally {
+    key = syncWatermarkKey(cfg, dbFingerprint(db, dbPath, DatabaseSync));
+  } catch (err) {
     db.close();
+    throw err;
   }
-  if (rows.length === 0) return { kind: "empty" };
-
-  // Per-row directive labels (review M12): a row synced from BEFORE a
-  // directive's install carries no label — backlog sessions are not evidence
-  // about a directive that did not exist yet. An unparseable row timestamp
-  // labels nothing (fail closed).
-  const directiveInstalls = installedDirectivesWithTimes();
-  const rowDirectives = (r: Record<string, unknown>): string[] => {
-    if (directiveInstalls.length === 0) return [];
-    const ts = typeof r.ts === "string" ? r.ts : "";
-    // The proxy writes ClickHouse-layout UTC timestamps ("YYYY-MM-DD HH:MM:SS.mmm").
-    const ms = Date.parse(ts.includes("T") ? ts : ts.replace(" ", "T") + "Z");
-    if (!Number.isFinite(ms)) return [];
-    return directiveInstalls.filter((d) => ms >= d.installedAtMs).map((d) => d.id);
-  };
-  const body = rows.map((r) => syncRequestSpan(r, rowDirectives(r))).join("\n") + "\n";
-  const response = await fetch(`${cfg.baseURL}/api/v1/imports?format=caveman-jsonl`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${cfg.token}`,
-      "content-type": "application/octet-stream",
-      "x-cave-csrf": "cli",
-    },
-    body,
-  });
-  const result = (await response.json().catch(() => ({}))) as { status?: string; error?: { message?: string } };
-  if (!response.ok || result.status !== "completed") {
-    throw new Error(result.error?.message ?? `sync import failed (${response.status})`);
+  // Everything from here to the watermark write is one claim: reading the
+  // watermark, selecting the rows past it, POSTing them and committing the new
+  // watermark. Without the lock two processes starting together both read the
+  // pre-write watermark, both select the same rows and both POST them, so the
+  // same spans land server-side twice (#1132). A waiter that cannot take the
+  // lock in its budget sends nothing and leaves the watermark alone, so its
+  // rows are picked up by the next sync rather than duplicated by this one.
+  const lockPath = syncClaimLockPath();
+  const lockToken = acquireClaimLock(lockPath, SYNC_CLAIM_LOCK_BUDGET_MS, SYNC_CLAIM_LOCK_STALE_MS);
+  if (!lockToken) {
+    db.close();
+    return { kind: "busy" };
   }
+  // The POST below is unbounded, so keep proving this holder is alive; see
+  // SYNC_CLAIM_LOCK_STALE_MS.
+  const heartbeat = setInterval(() => refreshClaimLock(lockPath), SYNC_CLAIM_LOCK_HEARTBEAT_MS);
+  heartbeat.unref();
+  try {
+    const firstSync = !hasSyncWatermark(key);
+    const since = readSyncWatermark(key);
+    try {
+      const columns = new Set(
+        (db.prepare("PRAGMA table_info(requests)").all() as Record<string, unknown>[])
+          .map((row) => typeof row.name === "string" ? row.name : "")
+          .filter(Boolean),
+      );
+      const optional = (name: string, fallback: string) => columns.has(name) ? name : `${fallback} AS ${name}`;
+      rows = db
+        .prepare(
+          `SELECT id, ts, request_id, trace_id, agent_slug, provider, model,
+                  status_code, error_code, latency_ms, request_bytes, response_bytes,
+                  input_tokens, output_tokens, cached_input_tokens,
+                  ${optional("cache_creation_input_tokens", "0")}, total_cost_usd,
+                  savings_usd, basis, ${optional("token_usage_basis", "'unavailable'")},
+                  ${optional("auth_mode", "'unknown'")}, runtime_mode, optimization_ids,
+                  compression_tokens_before, compression_tokens_after,
+                  ${optional("compression_token_count_basis", "'unavailable'")}
+             FROM requests WHERE id > ? ORDER BY id`,
+        )
+        .all(since) as Record<string, unknown>[];
+    } finally {
+      db.close();
+    }
+    if (rows.length === 0) return { kind: "empty" };
 
-  const num = (v: unknown) => (typeof v === "bigint" ? Number(v) : typeof v === "number" && Number.isFinite(v) ? v : 0);
-  const maxId = rows.reduce((m, r) => Math.max(m, num(r.id)), since);
-  writeSyncWatermark(key, maxId);
-  const tokensSaved = rows.reduce((sum, r) => sum + Math.max(0, num(r.compression_tokens_before) - num(r.compression_tokens_after)), 0);
-  const tokenBases = new Set(rows.map((r) => (typeof r.compression_token_count_basis === "string" ? r.compression_token_count_basis : "")).filter(Boolean));
-  const tokenCountBasis = tokenBases.size === 0 ? "unavailable" : tokenBases.size === 1 ? [...tokenBases][0] ?? "unavailable" : "mixed";
-  const cachedInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cached_input_tokens)), 0);
-  const cacheCreationInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cache_creation_input_tokens)), 0);
-  const headlineCompressionRefused = cacheCreationInputTokens > cachedInputTokens;
-  const savingsUSD = rows.reduce((sum, r) => sum + num(r.savings_usd), 0);
-  return {
-    kind: "synced",
-    spans: rows.length,
-    tokensSaved,
-    tokenCountBasis,
-    cachedInputTokens,
-    cacheCreationInputTokens,
-    headlineCompressionRefused,
-    savingsUSD,
-    dashboard: deriveDashboardUrl(cfg.baseURL),
-    firstSync,
-  };
+    // Per-row directive labels (review M12): a row synced from BEFORE a
+    // directive's install carries no label — backlog sessions are not evidence
+    // about a directive that did not exist yet. An unparseable row timestamp
+    // labels nothing (fail closed).
+    const directiveInstalls = installedDirectivesWithTimes();
+    const rowDirectives = (r: Record<string, unknown>): string[] => {
+      if (directiveInstalls.length === 0) return [];
+      const ts = typeof r.ts === "string" ? r.ts : "";
+      // The proxy writes ClickHouse-layout UTC timestamps ("YYYY-MM-DD HH:MM:SS.mmm").
+      const ms = Date.parse(ts.includes("T") ? ts : ts.replace(" ", "T") + "Z");
+      if (!Number.isFinite(ms)) return [];
+      return directiveInstalls.filter((d) => ms >= d.installedAtMs).map((d) => d.id);
+    };
+    const body = rows.map((r) => syncRequestSpan(r, rowDirectives(r))).join("\n") + "\n";
+    const response = await fetch(`${cfg.baseURL}/api/v1/imports?format=caveman-jsonl`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${cfg.token}`,
+        "content-type": "application/octet-stream",
+        "x-cave-csrf": "cli",
+      },
+      body,
+    });
+    const result = (await response.json().catch(() => ({}))) as { status?: string; error?: { message?: string } };
+    if (!response.ok || result.status !== "completed") {
+      throw new Error(result.error?.message ?? `sync import failed (${response.status})`);
+    }
+
+    const num = (v: unknown) => (typeof v === "bigint" ? Number(v) : typeof v === "number" && Number.isFinite(v) ? v : 0);
+    const maxId = rows.reduce((m, r) => Math.max(m, num(r.id)), since);
+    writeSyncWatermark(key, maxId);
+    const tokensSaved = rows.reduce((sum, r) => sum + Math.max(0, num(r.compression_tokens_before) - num(r.compression_tokens_after)), 0);
+    const tokenBases = new Set(rows.map((r) => (typeof r.compression_token_count_basis === "string" ? r.compression_token_count_basis : "")).filter(Boolean));
+    const tokenCountBasis = tokenBases.size === 0 ? "unavailable" : tokenBases.size === 1 ? [...tokenBases][0] ?? "unavailable" : "mixed";
+    const cachedInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cached_input_tokens)), 0);
+    const cacheCreationInputTokens = rows.reduce((sum, r) => sum + Math.max(0, num(r.cache_creation_input_tokens)), 0);
+    const headlineCompressionRefused = cacheCreationInputTokens > cachedInputTokens;
+    const savingsUSD = rows.reduce((sum, r) => sum + num(r.savings_usd), 0);
+    return {
+      kind: "synced",
+      spans: rows.length,
+      tokensSaved,
+      tokenCountBasis,
+      cachedInputTokens,
+      cacheCreationInputTokens,
+      headlineCompressionRefused,
+      savingsUSD,
+      dashboard: deriveDashboardUrl(cfg.baseURL),
+      firstSync,
+    };
+  } finally {
+    clearInterval(heartbeat);
+    releaseClaimLock(lockPath, lockToken);
+  }
 }
 
 function syncSavingsLine(out: SyncedOutcome, local = false): string {
@@ -10492,6 +11342,10 @@ async function sync() {
       console.log(`nothing to sync — no local spend store at ${out.dbPath} (run \`caveman wrap <agent>\` to record local inferred savings first)`);
     } else if (out.kind === "empty") {
       console.log("nothing new to sync — local inferred savings are already up to date");
+    } else if (out.kind === "busy") {
+      // Not a failure: another caveman process holds the watermark and is
+      // uploading these rows right now. Exit 0 — re-running is always safe.
+      console.log("another sync is already running — local spans left for the next `caveman sync`");
     } else {
       if (out.firstSync) console.log(SYNC_DISCLOSURE);
       console.log(syncSavingsLine(out));
@@ -10533,6 +11387,8 @@ async function syncAfterLogin() {
     if (savingsLane.status === "fulfilled") {
       if (savingsLane.value.kind === "synced") {
         console.error(`  ${mark("ok")} ${syncSavingsLine(savingsLane.value, true)}`);
+      } else if (savingsLane.value.kind === "busy") {
+        console.error(dim(`  another sync is already running — run \`${invokedAs()} sync\` afterwards to pick up the rest`));
       } else {
         console.error(dim("  no local spans to sync yet — `caveman wrap <agent>` records inferred savings locally; `caveman sync` uploads them"));
       }
@@ -10666,8 +11522,37 @@ function mcpServerInstalled(agentId: string, serverName: string): boolean {
     return false;
   }
 }
+function nativeOpencodeMcpInstalled(): boolean {
+  const journal = readNativeJournal("opencode");
+  if (!journal) return false;
+
+  const operation = journal.operations.find((item) => item.kind === "opencode-config");
+  if (!operation?.owned?.installed_mcp) return false;
+
+  const current = fileBytes(operation.file);
+  if (!current) return false;
+
+  try {
+    const root = parseJsonFileObject(operation.file, current);
+    const mcp = root.mcp && typeof root.mcp === "object" && !Array.isArray(root.mcp)
+      ? root.mcp as Record<string, unknown>
+      : {};
+
+    // canonicalize, not JSON.stringify: the comparison is about whether the
+    // registration is still ours, and key order is not part of that. Any writer
+    // that round-trips opencode.json through a rebuilt or sorted map reorders
+    // these keys without changing the registration, and a raw stringify compare
+    // would then report "MCP recovery missing" for a registration that is
+    // present and correct — the same false negative this function exists to fix.
+    return canonicalize(mcp.caveman) === canonicalize(operation.owned.installed_mcp);
+  } catch {
+    return false;
+  }
+}
+
 function mcpInstalled(agentId: string, agentArgs: string[] = []): boolean {
   if (agentId === "kilo" || agentId === "qwen") return ownedMcpRegistration(agentId, agentArgs) !== null;
+  if (agentId === "opencode" && nativeOpencodeMcpInstalled()) return true;
   return mcpServerInstalled(agentId, "caveman");
 }
 
@@ -11625,6 +12510,10 @@ function qwenStringList(root: JsonObject, path: string[], fallback: Record<strin
   return resolved;
 }
 
+// Through qwenCavemanToolDenied below: ported, with changes, from Qwen Code
+// 0.22.3 (https://github.com/QwenLM/qwen-code), Copyright 2025 Google LLC and
+// Copyright 2025 Qwen, Apache License 2.0. See NOTICE.
+//
 // Exact wildcard matcher used by Qwen 0.22 for mcp.allowed/mcp.excluded:
 // `*` spans any run, `?` spans one character, everything else is literal.
 function qwenMcpServerPatternMatches(name: string, pattern: string): boolean {
@@ -12461,10 +13350,30 @@ function agentRouteOverride(agent: AgentProfile, args: string[]): AgentRouteOver
   if (agent.id === "qwen") return qwenRouteOverride(agent, args);
   // Claude Code 2.1.196+ refuses Remote Control unless ANTHROPIC_BASE_URL is
   // api.anthropic.com, and the first-party escape hatch does not apply (#947).
-  if (agent.id === "claude" && args.includes("remote-control")) {
+  if (agent.id === "claude" && claudeStartsRemoteControl(args)) {
     return { surface: "remote-control", reason: "only runs against api.anthropic.com, so it cannot route through the proxy" };
   }
   return null;
+}
+
+// Claude Code spells Remote Control `--remote-control [name]`; the bare
+// `remote-control` word is the legacy subcommand. #947 matched only the latter,
+// so every user who followed the documented flag kept routing through the proxy
+// and kept being refused by the host (#1101).
+//
+// `--remote-control-session-name-prefix` only names auto-generated sessions and
+// does NOT start Remote Control, so it must not match — bypassing on it would
+// silently drop compression for a session that never needed the bypass. Scanning
+// stops at `--`, after which argv belongs to the agent's own payload.
+function claudeStartsRemoteControl(args: string[]): boolean {
+  // The bare legacy word is a subcommand, so it counts only in first position;
+  // anywhere else it is a value (`-p remote-control`) and must keep routing.
+  if (args[0] === "remote-control") return true;
+  for (const arg of args) {
+    if (arg === "--") return false;
+    if (arg === "--remote-control" || arg.startsWith("--remote-control=")) return true;
+  }
+  return false;
 }
 
 function routeOverrideLabel(agent: AgentProfile): string {
@@ -13192,7 +14101,13 @@ function installMcpCodexToml(mcp: { command: string; args: string[] }, serverNam
     }
     const blockStart = headerMatch.index + (headerMatch[1] ? 1 : 0);
     const contentStart = headerMatch.index + headerMatch[0].length;
-    const nextHeaderOffset = existing.slice(contentStart).search(/^[ \\t]*\[/m);
+    // /^[ \t]*\[/ — NOT [ \\t]. In a regex LITERAL `\\t` is an escaped backslash, so
+    // the class was [space, backslash, "t"] and never matched a tab (#1134). A
+    // tab-indented table is valid TOML, and Codex writes one for every trusted
+    // project, so the boundary ran past it: the verify below never compared equal,
+    // and the splice above deleted the user's tables. The uninstall twin
+    // (removeMcpCodexToml) has always spelled this correctly.
+    const nextHeaderOffset = existing.slice(contentStart).search(/^[ \t]*\[/m);
     const blockEnd = nextHeaderOffset === -1 ? existing.length : contentStart + nextHeaderOffset;
     const currentBlock = existing.slice(blockStart, blockEnd).trim();
     if (currentBlock === expectedBlock.trim()) {
@@ -13226,7 +14141,8 @@ function codexMcpRegistrationMatches(serverName: string, mcp: { command: string;
   if (!headerMatch) return false;
   const blockStart = headerMatch.index + (headerMatch[1] ? 1 : 0);
   const contentStart = headerMatch.index + headerMatch[0].length;
-  const nextHeaderOffset = existing.slice(contentStart).search(/^[ \\t]*\[/m);
+  // See the note in installMcpCodexToml: a literal [ \\t] never matched a tab (#1134).
+  const nextHeaderOffset = existing.slice(contentStart).search(/^[ \t]*\[/m);
   const blockEnd = nextHeaderOffset === -1 ? existing.length : contentStart + nextHeaderOffset;
   const argsLine = mcp.args.length ? `\nargs = [${mcp.args.map((arg) => JSON.stringify(arg)).join(", ")}]` : "";
   const recoveryEnv = serverName === "caveman" ? `\n${CODEX_RECOVERY_ENV}` : "";
@@ -13511,6 +14427,19 @@ const SHRINK_ALLOW = new Set([
   "aws", "gcloud", "az", "gh",
 ]);
 
+// Subcommands that must never be wrapped even though their tool is allowlisted:
+// they open an editor, attach a tty, or wait on a human. Keyed by tool, matched
+// against every token so a global option cannot hide the subcommand (#1133).
+const SHRINK_SKIP_SUBCOMMANDS = new Map<string, Set<string>>([
+  ["git", new Set(["commit", "rebase", "mergetool"])],
+  ["npm", new Set(["init"])],
+  ["yarn", new Set(["init"])],
+  ["pnpm", new Set(["init"])],
+  ["docker", new Set(["run", "exec", "attach"])],
+  ["kubectl", new Set(["edit", "exec", "attach"])],
+  ["terraform", new Set(["apply", "destroy"])],
+]);
+
 // shouldShrink decides whether a Bash command's output should be routed through
 // `caveman shrink`. Conservative by design: it only rewrites a known-noisy,
 // finite, non-interactive command with no shell operators (shrink execs argv
@@ -13524,13 +14453,16 @@ function shouldShrink(command: string): boolean {
   if (/(^|\s)-(f|it|ti|w)\b|--follow\b|--watch\b|--interactive\b|--tail\b/.test(cmd)) return false; // streaming/interactive
   const tokens = cmd.split(/\s+/);
   const first = tokens[0] ?? "";
-  const pair = `${first} ${tokens[1] ?? ""}`;
-  const skipPairs = new Set([
-    "git commit", "git rebase", "git mergetool", "npm init", "yarn init", "pnpm init",
-    "docker run", "docker exec", "docker attach", "kubectl edit", "kubectl exec",
-    "kubectl attach", "terraform apply", "terraform destroy",
-  ]);
-  if (skipPairs.has(pair)) return false;
+  // The excluded subcommand can sit anywhere after the tool, because a global
+  // option may precede it and an option may or may not take a separate value
+  // (`git -C . commit`, `docker --context x exec`, `terraform -chdir=infra apply`).
+  // Comparing only tokens[1] let every one of those walk past the guard and get
+  // wrapped anyway (#1133). We do not try to parse each tool's option grammar to
+  // find "the" subcommand — we fail closed and decline if the word appears at all.
+  // Over-matching costs one uncompressed command; under-matching hands `shrink`,
+  // which captures output and must terminate, a command that opens an editor.
+  const skip = SHRINK_SKIP_SUBCOMMANDS.get(first);
+  if (skip && tokens.slice(1).some((token) => skip.has(token))) return false;
   return SHRINK_ALLOW.has(first);
 }
 
@@ -13559,10 +14491,12 @@ function cavemanBinForHook(powershell: boolean = process.platform === "win32"): 
 // unverified contract; if Codex ever honors that, caveman silently auto-approves a
 // command the user's `approval_policy` meant to gate. Both ends fail closed instead.
 async function shrinkHook() {
+  // Host hooks never report command_run: the POST would hold the host's turn.
+  telemetryCommandSent = true;
   if (nativePolicyMode() === "record" || !new Set(["full-safe", "full-max"]).has(nativeProfile())) process.exit(0);
   let raw: Buffer;
   try { raw = await readHookStdin(); } catch { process.exit(0); }
-  let evt: { tool_name?: string; tool_input?: { command?: string } };
+  let evt: { tool_name?: string; tool_input?: Record<string, unknown> };
   try { evt = JSON.parse(raw.toString("utf8") || "{}"); } catch { process.exit(0); }
   const tool = evt?.tool_name;
   const isGemini = tool === "run_shell_command"; // Gemini CLI's shell tool
@@ -13576,10 +14510,21 @@ async function shrinkHook() {
   // not hook's explicit PowerShell shell. Never leak PowerShell `&` into it.
   const rewritten = `${cavemanBinForHook(false)} shrink -- ${command.trim()}`;
   // Gemini merges hookSpecificOutput.tool_input (snake_case, no event discriminator);
-  // Claude replaces via hookSpecificOutput.updatedInput (camelCase + hookEventName).
+  // Claude REPLACES via hookSpecificOutput.updatedInput (camelCase + hookEventName).
+  // Because Claude replaces, updatedInput must carry every field the host sent —
+  // rebuilding it from `command` alone dropped timeout, run_in_background and
+  // description, changing how the command ran (#1133). Gemini's merge already
+  // preserves the rest, so sending only `command` there is correct as written.
+  //
+  // No permissionDecision either. It is the same objection #1037 raised for Codex,
+  // and Claude Code — unlike Codex — provably honors it: answering "allow" turned a
+  // compression decision into a permission grant covering every state-changing
+  // command the allowlist accepts (`git push --force`, `kubectl delete`, `aws s3 rm`).
+  // Whether the host applies updatedInput without a decision is its call; if it does
+  // not, the command runs unwrapped and uncompressed, which is the safe direction.
   const out = isGemini
     ? { hookSpecificOutput: { tool_input: { command: rewritten } } }
-    : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: { command: rewritten } } };
+    : { hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: { ...evt.tool_input, command: rewritten } } };
   process.stdout.write(JSON.stringify(out));
 }
 
@@ -13866,7 +14811,7 @@ function nativeRepositoryState(cwd: string | undefined): string | undefined {
   try {
     const status = execFileSync("git", hardenedGitArgs(cwd, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"), {
       env: hardenedGitEnv(),
-      timeout: 100,
+      timeout: 500, // same budget as nativehook.repositoryStatusBudget; 100ms emptied the state under load
       maxBuffer: 8 * 1024 * 1024,
       encoding: "buffer",
       stdio: ["ignore", "pipe", "ignore"],
@@ -14165,6 +15110,8 @@ function nativeWhy(argv: string[]) {
 // never cross the adapter boundary. Any malformed input/write failure stays
 // fail-open and emits no blocking decision.
 async function nativeHook(argv: string[]) {
+  // Host hooks never report command_run: the POST would hold the host's turn.
+  telemetryCommandSent = true;
   const agent = argv[0] === "claude" || argv[0] === "codex" || argv[0] === "hermes" || argv[0] === "gemini" || argv[0] === "opencode" || argv[0] === "pi" ? argv[0] : undefined;
   if (!agent) process.exit(0);
   let raw: Buffer;
@@ -14190,6 +15137,8 @@ async function nativeHook(argv: string[]) {
   } as Record<string, string>)[rawEventName] ?? rawEventName : rawEventName;
   const normalizedEvent = eventName && NATIVE_EVENT_NAMES.has(eventName) ? eventName : "Unknown";
   const sessionId = boundedHookString(event.session_id ?? event.sessionId);
+  // A compaction re-fires SessionStart inside the same session; count real starts.
+  if (normalizedEvent === "SessionStart" && event.source !== "compact") startSessionTelemetry(agent, sessionId, event.source);
   const toolName = boundedHookString(event.tool_name ?? event.toolName);
   const cwd = boundedHookString(event.cwd, 4096);
   const entry: Record<string, unknown> = {
@@ -14203,6 +15152,7 @@ async function nativeHook(argv: string[]) {
   if (sessionId) entry.host_session_id = sessionId;
   if (toolName) entry.tool_name = toolName;
   if (cwd) entry.cwd_sha256 = `sha256:${createHash("sha256").update(cwd).digest("hex")}`;
+  if (normalizedEvent === "SessionEnd") maybeSpawnAutopilot();
   // SessionStart revives a missing local proxy, but native routing points every
   // LATER turn of the session at that proxy too. Current proxies never expire,
   // but crashes and older binaries can still leave a dead base URL. A plain
@@ -14263,10 +15213,22 @@ async function nativeHook(argv: string[]) {
   // it before provider forwarding. Generated structure/order are byte-stable.
   const stableContext = [coreContext, marker].filter(Boolean).join("\n");
   const compactContext = [coreContext, runtimeContext, marker].filter(Boolean).join("\n");
-  if (normalizedEvent === "SessionStart" && agent !== "hermes" && stableContext) {
+  // systemMessage is the user-visible channel on Claude/Codex/Gemini SessionStart;
+  // additionalContext would put the nudge in model context instead.
+  // Under the fast hook the parent owns the token and confirms after relaying
+  // our stdout, since it may still drop the output on its own timeout.
+  const relayedToken = boundedHookString(process.env.CAVEMAN_LEARN_NUDGE_TOKEN);
+  const learnNudgeToken = relayedToken || randomUUID();
+  const learnNudge = normalizedEvent === "SessionStart" && (agent === "claude" || agent === "codex" || agent === "gemini")
+    ? claimLearnNudge(boundedHookString(event.source), learnNudgeToken)
+    : undefined;
+  if (normalizedEvent === "SessionStart" && agent !== "hermes" && (stableContext || learnNudge)) {
     process.stdout.write(JSON.stringify({
-      hookSpecificOutput: { hookEventName: normalizedEvent, additionalContext: stableContext },
-    }));
+      ...(learnNudge ? { systemMessage: learnNudge } : {}),
+      ...(stableContext ? { hookSpecificOutput: { hookEventName: normalizedEvent, additionalContext: stableContext } } : {}),
+    }), () => {
+      if (learnNudge && !relayedToken) confirmLearnNudge(learnNudgeToken);
+    });
   } else if (normalizedEvent === "PostCompact" && agent !== "hermes" && compactContext) {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: { hookEventName: normalizedEvent, additionalContext: compactContext },
@@ -14552,6 +15514,8 @@ function writeRecallHookMarker(agentId: string) {
 // Fail-open by construction: any problem → exit 0 with no output (never blocks the
 // agent, never injects a guess).
 async function memRecallHook() {
+  // Host hooks never report command_run: the POST would hold the host's turn.
+  telemetryCommandSent = true;
   let raw: Buffer;
   try { raw = await readHookStdin(); } catch { process.exit(0); }
   let evt: { prompt?: string };
@@ -15766,6 +16730,7 @@ type LearnPlan = {
   basis: "inferred";
   sessions_scanned?: number;
   sessions_by_source?: Record<string, number>;
+  window?: { from?: string; to?: string; since?: string };
   cave_score: { score: number; basis: string; scope?: string };
   sinks: LearnSink[];
   retro?: LearnRetro;
@@ -15773,6 +16738,7 @@ type LearnPlan = {
   confirmed?: LearnConfirmed[];
   portfolio?: LearnPortfolio;
   repos?: LearnRepo[];
+  trends?: LearnTrends;
 };
 
 // LearnRetro mirrors the proxy's optional `retro` block (learn scan --retro):
@@ -15801,14 +16767,46 @@ type LearnRetro = {
 
 type LearnDiff = { days: number; gone: number; back: number; fresh: number };
 
-const LEARN_EMPTY =
-  "no Claude Code or Codex sessions found in the last 30d — the plan needs a block repeated across ≥3 sessions; run `caveman claude` a few times, then `caveman learn`";
+// learnEmpty names the window the proxy actually scanned (plan.window.since;
+// older proxies omit it and always scanned 30d).
+function learnEmpty(plan: LearnPlan): string {
+  const since = learnSince(plan.window?.since || "30d");
+  return `no Claude Code, Codex, Gemini CLI, opencode or aider sessions found in the last ${since}. A score needs the same text repeated in at least 3 sessions. Use your agent a few times (for example \`caveman claude\`), then run \`caveman learn\` again`;
+}
+
+// learnNoScoreYet explains why there is no score: the score needs the same
+// text repeated in at least 3 sessions.
+function learnNoScoreYet(sessions: number): string {
+  return `${commaCount(sessions)} sessions read · no score yet: it needs the same text repeated in at least 3 sessions. Keep using your agent (for example \`${invokedAs()} claude\`), then run \`${invokedAs()} learn\` again`;
+}
+
+const LEARN_CLASS_LABELS: Record<string, string> = {
+  reducible: "safe fix",
+  recurring_context: "repeated text",
+  behavioral: "habit",
+  load_bearing: "needed",
+};
+
+function learnClassLabel(klass: string): string {
+  return LEARN_CLASS_LABELS[klass] ?? klass.replaceAll("_", " ");
+}
+
+// learnSince turns a --since value like "30d" into "30 days".
+function learnSince(since: string): string {
+  const days = /^(\d+)d$/.exec(since)?.[1];
+  return days ? `${days} day${days === "1" ? "" : "s"}` : since;
+}
+
+function commaCount(value: number): string {
+  return Math.round(value).toLocaleString("en-US");
+}
+
 const LEARN_DETAILED_NEXT =
-  "next:  caveman tools skills install caveman-learn   (review + apply, with consent)  ·  preview one: caveman learn apply <sink_id> --dry-run";
+  "next:  caveman tools skills install caveman-learn   (review and apply fixes; asks first)  ·  preview one fix: caveman learn apply <id> --dry-run";
 const LEARN_ALL_FOOTER = [
-  "advanced: caveman learn applied <sink_id> [--fix-kind <kind>] [--note <text>]   record an approved, re-measured fix",
-  "simulate: caveman learn simulate <sink_id...>   sum counterfactual scale over scanned history",
-  "scope:    caveman learn --repo <substring>   filter sessions before analysis",
+  "advanced: caveman learn applied <id> [--fix-kind <kind>] [--note <text>]   record a fix you approved, so later runs can measure it",
+  "simulate: caveman learn simulate <id...>   estimate what fixes would have saved over your past sessions",
+  "scope:    caveman learn --repo <substring>   only read sessions from matching repositories",
 ];
 const LEARN_SUMMARY_LIMIT = 3;
 
@@ -15842,14 +16840,15 @@ function renderLearnDetailedRows(plan: LearnPlan, markdown: boolean): string[] {
   const lines: string[] = [];
   for (const [index, sink] of plan.sinks.entries()) {
     const lead = markdown ? `${index + 1}. **${sink.title}**` : `${index + 1}. ${sink.title}`;
-    lines.push(`${lead}  ·  ${sink.sink_id}  ·  ${sink.class}`);
+    lines.push(lead);
+    lines.push(`   ${learnClassLabel(sink.class)}  ·  id: ${sink.sink_id}`);
     const observed = typeof sink.tokens_observed === "number" && sink.tokens_observed > 0
-      ? ` · ~${humanTokens(sink.tokens_observed)} tokens observed (historical)`
+      ? ` · ${commaCount(sink.tokens_observed)} tokens so far`
       : "";
     const prefix = learnMeasuredPrefixSuffix(sink);
-    lines.push(`   ~${humanTokens(sink.tokens_per_turn)} tokens/turn · ~${humanTokens(sink.tokens_per_day_rate)} tokens/day${observed} · basis: inferred${prefix}`);
+    lines.push(`   ${commaCount(sink.tokens_per_turn)} tokens per message · ${commaCount(sink.tokens_per_day_rate)} tokens a day${observed} · estimate${prefix}`);
     if (KNOWN_PRACTICE_IDS.has(sink.practice_id)) {
-      lines.push(`   practice: ${sink.practice_id} · unmeasured — verified nowhere yet`);
+      lines.push(`   practice: ${sink.practice_id} · not measured or verified yet`);
     }
     if (sink.suggestion) lines.push(`   ${sink.suggestion}`);
   }
@@ -15865,7 +16864,7 @@ function learnMeasuredPrefixSuffix(sink: LearnSink | undefined): string {
   if (!sink || sink.sink_id !== "config_tax:baseline") return "";
   const measured = learnEvidenceNumber(sink, "measured_prefix_tokens");
   return measured && measured > 0
-    ? ` · provider-counted prefix ~${humanTokens(measured)} (turn-1 median)`
+    ? ` · a session's first message is ~${humanTokens(measured)} tokens (typical, counted by your provider)`
     : "";
 }
 
@@ -15891,13 +16890,22 @@ export type LearnTuiViewModel = {
   scope: string;
   sessions: string;
   diff?: string;
+  trend?: string[];
   status?: string;
   moves: LearnSummaryMove[];
   protected?: string;
+  memory?: string;
   confirmed?: number;
   findings: number;
   report: string;
 };
+
+// learnMemoryHealthLine points at the memory & rules doctor findings in one
+// line; they carry no token rate, so they rarely make the top moves.
+function learnMemoryHealthLine(plan: LearnPlan): string | undefined {
+  const count = plan.sinks.filter((sink) => sink.sink_id.startsWith("memory_health:")).length;
+  return count > 0 ? `memory files  ${count} finding${count === 1 ? "" : "s"} — see ${invokedAs()} learn --all` : undefined;
+}
 
 export function learnSummaryMoves(plan: LearnPlan): LearnSummaryMove[] {
   const moves: LearnSummaryMove[] = [];
@@ -15906,17 +16914,17 @@ export function learnSummaryMoves(plan: LearnPlan): LearnSummaryMove[] {
   if (best) {
     const confidenceLabels: Record<string, string> = {
       measured_usage: "measured",
-      transcript_inferred: "transcript",
+      transcript_inferred: "estimated from transcripts",
       static_estimate: "estimate",
     };
     const confidence = confidenceLabels[best.confidence] ?? best.confidence;
     const detail = [
-      `sink: ${best.top_sink_id}`,
+      best.fix_label,
       best.combined_rate_per_day > 0
-        ? `~${humanTokens(best.combined_rate_per_day)} tokens/day`
+        ? `~${humanTokens(best.combined_rate_per_day)} tokens a day`
         : "",
       best.combined_observed_in_window > 0
-        ? `~${humanTokens(best.combined_observed_in_window)} tokens observed`
+        ? `~${humanTokens(best.combined_observed_in_window)} tokens so far`
         : "",
       confidence,
     ].filter(Boolean);
@@ -15939,27 +16947,29 @@ export function learnSummaryMoves(plan: LearnPlan): LearnSummaryMove[] {
       const largest = Math.max(0, ...recurring.map((item) => learnEvidenceNumber(item, "block_tokens") ?? 0));
       const sessions = Math.max(0, ...recurring.map((item) => learnEvidenceNumber(item, "recurrence_sessions") ?? 0));
       const facts = [
-        "recurring context",
+        "repeated text",
         largest > 0 ? `largest ~${humanTokens(largest)} tokens` : "",
-        sessions > 0 ? `up to ${sessions} sessions` : "",
-        "inferred",
+        sessions > 0 ? `in up to ${commaCount(sessions)} sessions` : "",
+        "estimate",
       ].filter(Boolean);
       moves.push({
-        title: `${recurring.length} context block${recurring.length === 1 ? "" : "s"} repeat across sessions`,
-        kind: "recurring context",
+        title: recurring.length === 1
+          ? "1 piece of text gets pasted again in many sessions"
+          : `${recurring.length} pieces of text get pasted again in many sessions`,
+        kind: "repeated text",
         detail: facts.join(" · "),
-        action: "Review selected blocks before moving them to memory; repetition does not prove they are unnecessary.",
+        action: "Check each one before moving it to Caveman memory. Repeating doesn't prove the text is unneeded.",
       });
     } else {
       const rates = [
-        sink.class.replaceAll("_", " "),
-        sink.tokens_per_turn > 0 ? `~${humanTokens(sink.tokens_per_turn)} tokens/turn` : "",
-        sink.tokens_per_day_rate > 0 ? `~${humanTokens(sink.tokens_per_day_rate)} tokens/day` : "",
-        "inferred",
+        learnClassLabel(sink.class),
+        sink.tokens_per_turn > 0 ? `~${humanTokens(sink.tokens_per_turn)} tokens in every message` : "",
+        sink.tokens_per_day_rate > 0 ? `~${humanTokens(sink.tokens_per_day_rate)} tokens a day` : "",
+        "estimate",
       ].filter(Boolean);
       moves.push({
         title: sink.title,
-        kind: sink.class.replaceAll("_", " "),
+        kind: learnClassLabel(sink.class),
         detail: rates.join(" · "),
         ...(sink.suggestion ? { action: compactLearnText(sink.suggestion) } : {}),
       });
@@ -15982,23 +16992,23 @@ function renderLearnSummaryRows(plan: LearnPlan): string[] {
 function learnSourceLine(plan: LearnPlan, sessions: number): string {
   const by = plan.sessions_by_source ?? {};
   const sourceBits = [
-    by.claude ? `Claude ${by.claude}` : "",
-    by.codex ? `Codex ${by.codex}` : "",
-    by.gemini ? `Gemini ${by.gemini}` : "",
-    by.opencode ? `opencode ${by.opencode}` : "",
-    by.aider ? `aider ${by.aider}` : "",
+    by.claude ? `Claude ${commaCount(by.claude)}` : "",
+    by.codex ? `Codex ${commaCount(by.codex)}` : "",
+    by.gemini ? `Gemini ${commaCount(by.gemini)}` : "",
+    by.opencode ? `opencode ${commaCount(by.opencode)}` : "",
+    by.aider ? `aider ${commaCount(by.aider)}` : "",
   ].filter(Boolean);
-  return `${sessions} sessions${sourceBits.length ? ` · ${sourceBits.join(" · ")}` : ""}`;
+  return `${commaCount(sessions)} sessions read${sourceBits.length ? ` · ${sourceBits.join(" · ")}` : ""}`;
 }
 
 function learnDiffText(diff: LearnDiff | undefined): string | undefined {
   if (!diff) return undefined;
   const bits = [
-    diff.gone ? `${diff.gone} move${diff.gone === 1 ? "" : "s"} gone` : "",
-    diff.back ? `${diff.back} back` : "",
+    diff.gone ? `${diff.gone} finding${diff.gone === 1 ? "" : "s"} gone` : "",
+    diff.back ? `${diff.back} came back` : "",
     diff.fresh ? `${diff.fresh} new` : "",
   ].filter(Boolean);
-  return bits.length ? `since your last run ${diff.days}d ago: ${bits.join(" · ")}` : undefined;
+  return bits.length ? `since your last run ${diff.days} day${diff.days === 1 ? "" : "s"} ago: ${bits.join(" · ")}` : undefined;
 }
 
 export function buildLearnTuiModel(
@@ -16010,54 +17020,76 @@ export function buildLearnTuiModel(
   const protectedSink = plan.sinks.find((sink) => sink.class === "load_bearing");
   const confirmed = plan.confirmed?.length ?? 0;
   const diffText = learnDiffText(options.diff);
+  const trend = learnTrendLines(plan.trends);
+  const memory = learnMemoryHealthLine(plan);
   const status = sessions === 0
-    ? LEARN_EMPTY
+    ? learnEmpty(plan)
     : !recurring
-      ? `${sessions} sessions scanned · no block repeated across ≥3 sessions yet — keep running \`${invokedAs()} claude\`, then re-run \`${invokedAs()} learn\``
+      ? learnNoScoreYet(sessions)
       : undefined;
   return {
     score: recurring ? plan.cave_score.score : null,
-    scope: "local setup · inferred · not billed spend · separate from org Cave Score",
+    scope: LEARN_SCORE_SCOPE,
     sessions: learnSourceLine(plan, sessions),
     ...(diffText ? { diff: diffText } : {}),
+    ...(trend.length ? { trend } : {}),
     ...(status ? { status } : {}),
     moves: learnSummaryMoves(plan),
     ...(protectedSink
-      ? { protected: `${protectedSink.title.replace(/^Your\s+/i, "")} · included in score, never auto-fixed${learnMeasuredPrefixSuffix(protectedSink)}` }
+      ? { protected: learnProtectedText(protectedSink) }
       : {}),
+    ...(memory ? { memory } : {}),
     ...(confirmed > 0 ? { confirmed } : {}),
     findings: plan.sinks.length,
     report: options.report ?? learnReportPath(),
   };
 }
 
+const LEARN_SCORE_SCOPE = "your setup on this computer · an estimate, not your bill · separate from Caveman Cloud's team score";
+
+// learnProtectedText describes the needed (load-bearing) baseline: counted in
+// the score, never changed.
+function learnProtectedText(sink: LearnSink): string {
+  return `${sink.title} · counts in the score, but Caveman never changes it${learnMeasuredPrefixSuffix(sink)}`;
+}
+
 // renderLearnSpendLines shows what the scanned window cost and, more usefully,
 // what a million input tokens ACTUALLY cost after the user's own cache mix.
 // The multiplier is the one number that decides whether every other finding in
 // the report is expensive or trivial, so it earns a line above the moves.
-function renderLearnSpendLines(spend: LearnSpend | undefined, markdown: boolean): string[] {
+function renderLearnSpendLines(spend: LearnSpend | undefined, markdown: boolean, full = true): string[] {
   if (!spend) return [];
   const lines: string[] = [];
   const currency = spend.currency || "USD";
-  const label = markdown ? "### Window cost" : "window cost";
+  const label = markdown ? "### Cost" : "cost";
   if (spend.usd > 0) {
-    const window = spend.window_days ? ` over ${spend.window_days}d` : "";
-    lines.push(`${label}  ${fmtMoney(spend.usd, currency)}${window}  ·  provider-counted tokens at published rates`);
+    const window = spend.window_days ? ` for the last ${spend.window_days} day${spend.window_days === 1 ? "" : "s"}` : "";
+    lines.push(`${label}  ${fmtMoney(spend.usd, currency)}${window}  ·  tokens your provider counted, at list prices`);
   }
   const multiplier = spend.effective_input_multiplier ?? 0;
   const rate = spend.effective_input_usd_per_mtok ?? 0;
   if (multiplier > 0 && rate > 0) {
-    lines.push(`effective input  ${fmtMoney(rate, currency)}/Mtok  ·  ${multiplier.toFixed(2)}x list after cache reuse`);
+    const share = multiplier * 100 >= 1 ? `${Math.round(multiplier * 100)}%` : "under 1%";
+    // Same thresholds as the proxy's effectiveInputSummary.
+    const verdict = multiplier < 0.25 ? "caching is doing its job" : multiplier < 0.6 ? "some caching" : "little or no caching";
+    lines.push(`input really costs  ${fmtMoney(rate, currency)} per 1M tokens  ·  ${share} of list price — ${verdict}`);
   }
   const components = (spend.components ?? []).filter((component) => component.usd > 0);
   if (components.length > 0 && spend.usd > 0) {
-    lines.push(components.map((component) => `${component.key.replace("_", " ")} ${Math.round(component.share_pct ?? 0)}%`).join("  ·  "));
+    lines.push(`where it went  ${components.map((component) => `${component.key.replaceAll("_", " ")} ${Math.round(component.share_pct ?? 0)}%`).join("  ·  ")}`);
   }
-  for (const row of spend.unpriced ?? []) {
-    lines.push(`unpriced  ${row.provider}/${row.model}  ${humanTokens(row.tokens)} tokens excluded — total is a floor`);
+  const unpriced = spend.unpriced ?? [];
+  if (!full && unpriced.length > 1) {
+    // Compact view: one line; --all, --md, JSON and HTML keep every model.
+    const tokens = unpriced.reduce((sum, row) => sum + row.tokens, 0);
+    lines.push(`no price  ${unpriced.length} models (${humanTokens(tokens)} tokens) left out, so the real total is higher · ${invokedAs()} learn --all lists them`);
+  } else {
+    for (const row of unpriced) {
+      lines.push(`no price  ${row.provider}/${row.model}  ${humanTokens(row.tokens)} tokens left out, so the real total is higher`);
+    }
   }
   if (lines.length > 0) {
-    lines.push("subscription plans have no marginal cost; the figure is then the API-equivalent value of the tokens");
+    lines.push("on a subscription plan you pay nothing extra per token; the cost then shows what the tokens would cost on the API");
   }
   return lines;
 }
@@ -16075,51 +17107,56 @@ export function renderLearnPlan(
   const confirmedLines = renderLearnConfirmed(plan.confirmed, markdown);
 
   if (sessions === 0) {
-    lines.push(LEARN_EMPTY);
+    lines.push(learnEmpty(plan));
     if (confirmedLines.length > 0) lines.push("", ...confirmedLines);
   } else if (!recurring) {
     if (plan.sinks.length > 0) {
-      lines.push(...(verbose ? renderLearnDetailedRows(plan, markdown) : ["top moves", ...renderLearnSummaryRows(plan)]), "");
+      lines.push(...(verbose ? renderLearnDetailedRows(plan, markdown) : ["top findings", ...renderLearnSummaryRows(plan)]), "");
+      const memory = verbose ? undefined : learnMemoryHealthLine(plan);
+      if (memory) lines.push(memory, "");
     }
-    lines.push(`${sessions} sessions scanned · no block repeated across ≥3 sessions yet — keep running \`caveman claude\`, then re-run \`caveman learn\``);
+    lines.push(learnNoScoreYet(sessions));
+    lines.push(...(verbose ? [] : learnTrendLines(plan.trends)));
     if (confirmedLines.length > 0) lines.push("", ...confirmedLines);
   } else {
     lines.push(markdown
-      ? `## Setup Score ${plan.cave_score.score} — basis: inferred (local sessions, not billed spend)`
+      ? `## Setup Score ${plan.cave_score.score}/100 — an estimate from your local sessions, not your bill`
       : verbose
-        ? `Setup Score ${plan.cave_score.score}  ·  basis: inferred (local sessions, not billed spend)`
+        ? `Setup Score ${plan.cave_score.score}/100  ·  an estimate from your local sessions, not your bill`
         : `Setup Score ${plan.cave_score.score}/100`);
     if (verbose) {
-      lines.push("scores your local agent setup — the console's Cave Score (org) scores org traffic;");
-      lines.push("the two are different scales and will not match");
-      lines.push(`${sessions} sessions scanned${learnSourceLine(plan, sessions).replace(`${sessions} sessions`, "")}`);
+      lines.push("scores your agent setup on this computer. Caveman Cloud's team score measures your team's traffic;");
+      lines.push("the two use different scales and will not match");
+      lines.push(learnSourceLine(plan, sessions));
     } else {
-      lines.push("local setup · inferred · not billed spend · separate from org Cave Score");
+      lines.push(LEARN_SCORE_SCOPE);
       lines.push(learnSourceLine(plan, sessions));
     }
     const diffText = learnDiffText(options.diff);
     if (diffText) lines.push(diffText);
-    const spendLines = renderLearnSpendLines(plan.spend, markdown);
+    lines.push(...(verbose ? [] : learnTrendLines(plan.trends)));
+    const spendLines = renderLearnSpendLines(plan.spend, markdown, verbose);
     if (spendLines.length > 0) lines.push("", ...spendLines);
     if (confirmedLines.length > 0) lines.push("", ...confirmedLines);
     if (verbose) {
+      const trendTable = learnTrendTable(plan.trends, markdown);
+      if (trendTable.length > 0) lines.push("", ...trendTable);
       lines.push("", ...renderLearnDetailedRows(plan, markdown), "", LEARN_DETAILED_NEXT);
     } else {
       const protectedSink = plan.sinks.find((sink) => sink.class === "load_bearing");
-      lines.push("", "top moves", ...renderLearnSummaryRows(plan));
-      if (protectedSink) {
-        const title = protectedSink.title.replace(/^Your\s+/i, "");
-        lines.push(`protected  ${title} · included in score, never auto-fixed${learnMeasuredPrefixSuffix(protectedSink)}`);
-      }
+      lines.push("", "top findings", ...renderLearnSummaryRows(plan));
+      if (protectedSink) lines.push(`needed  ${learnProtectedText(protectedSink)}`);
+      const memory = learnMemoryHealthLine(plan);
+      if (memory) lines.push(memory);
       lines.push(
         "",
         `next:  ${invokedAs()} learn implement   fix with Claude Code or Codex; asks before every edit`,
-        `details: ${invokedAs()} learn --all   ${plan.sinks.length} findings`,
+        `details: ${invokedAs()} learn --all   all ${plan.sinks.length} findings`,
       );
     }
   }
   if (options.all === true && (plan.repos?.length ?? 0) > 0) {
-    lines.push("", markdown ? "### Per-repo" : "per-repo", ...renderLearnRepos(plan.repos!, markdown));
+    lines.push("", markdown ? "### Per repository" : "per repository", ...renderLearnRepos(plan.repos!, markdown));
   }
   if (options.all === true) {
     lines.push("", ...(markdown ? ["### Advanced", ...LEARN_ALL_FOOTER.map((line) => `- ${line}`)] : LEARN_ALL_FOOTER));
@@ -16136,9 +17173,9 @@ function learnMeasureValue(value: number | undefined): string {
 
 function learnMeasureUnit(unit: string): string {
   const labels: Record<string, string> = {
-    config_tokens_per_turn: "config tokens/turn",
-    turns_over_half_window_pct: "turns over half-window (%)",
-    recurrence_present: "recurrence present",
+    config_tokens_per_turn: "setup tokens per message",
+    turns_over_half_window_pct: "% of messages past half the window",
+    recurrence_present: "repeated text still present",
   };
   return labels[unit] ?? unit.replaceAll("_", " ");
 }
@@ -16158,25 +17195,25 @@ function renderLearnConfirmed(confirmed: LearnConfirmed[] | undefined, markdown:
   const rows = confirmed.flatMap((entry) => {
     const applied = learnAppliedDate(entry.applied_at);
     if (entry.verdict === "insufficient_data") {
-      const line = `${symbols[entry.verdict]} ${entry.sink_id} — applied ${applied} · needs more post-fix sessions (${entry.sessions_after} sessions so far)`;
+      const line = `${symbols[entry.verdict]} ${entry.sink_id} — applied ${applied} · needs more sessions after the fix (${entry.sessions_after} so far)`;
       return [markdown ? `- *${line}*` : line];
     }
     if (entry.after === undefined || !Number.isFinite(entry.after)) return [];
     // How it was measured travels with the number. A confirmed row without its
     // attribution reads as stronger evidence than it is.
     const attribution = entry.attribution
-      ? ` · ${entry.attribution.method} (${entry.attribution.confidence}${entry.attribution.provenance === "intact" ? "" : `, ${entry.attribution.provenance}`})`
+      ? ` · ${learnMethodLabel(entry.attribution.method)} (${entry.attribution.confidence}${entry.attribution.provenance === "intact" ? "" : `, ${learnProvenanceLabel(entry.attribution.provenance)}`})`
       : "";
     const line = `${symbols[entry.verdict]} ${entry.sink_id} — ${learnMeasureValue(entry.before)} → ${learnMeasureValue(entry.after)} ${learnMeasureUnit(entry.unit)} over ${entry.sessions_after} sessions (${entry.verdict}) · applied ${applied}${attribution}`;
     return [markdown ? `- ${line}` : line];
   });
   if (rows.length === 0) return [];
-  return [markdown ? "### Confirmed fixes" : "confirmed fixes", ...rows];
+  return [markdown ? "### Fixes you applied" : "fixes you applied", ...rows];
 }
 
 function renderLearnRepos(repos: LearnRepo[], markdown: boolean): string[] {
   return repos.map((repo) =>
-    `${markdown ? "- " : ""}${repo.repo} · ${repo.sessions} sessions · dumbzone ${repo.dumbzone_pct}% · median context ~${humanTokens(repo.median_context)}`,
+    `${markdown ? "- " : ""}${repo.repo} · ${commaCount(repo.sessions)} sessions · ${repo.dumbzone_pct}% of messages past half the window · typical message ~${humanTokens(repo.median_context)} tokens`,
   );
 }
 
@@ -16244,7 +17281,7 @@ function proxyExecLearn(proxyArgs: string[], progress: boolean): string {
   } catch (error) {
     const e = error as { stdout?: string; stderr?: string; status?: number; code?: string; killed?: boolean; signal?: string; message?: string };
     if (e.code === "ETIMEDOUT" || (e.killed && e.code !== "ENOBUFS")) {
-      console.error(`learn scan timed out after ${seconds}s — no score computed; re-run with \`caveman learn --json\` to capture the raw scan`);
+      console.error(`learn scan timed out after ${seconds}s, so there is no score; run \`caveman learn --json\` to capture the raw scan`);
       process.exit(1);
     }
     if (e.stderr) process.stderr.write(e.stderr);
@@ -16293,7 +17330,7 @@ function proxyExecLearnAsync(proxyArgs: string[], onProgress?: (message: string)
     child.once("close", (code) => {
       clearTimeout(timer);
       if (timedOut) {
-        reject(new Error(`learn scan timed out after ${seconds}s — no score computed; re-run with \`caveman learn --json\` to capture the raw scan`));
+        reject(new Error(`learn scan timed out after ${seconds}s, so there is no score; run \`caveman learn --json\` to capture the raw scan`));
         return;
       }
       if (code !== 0) {
@@ -16348,22 +17385,22 @@ function renderLearnApply(raw: Record<string, any>, dryRun: boolean): string {
   const candidate = (raw.candidate && typeof raw.candidate === "object" ? raw.candidate : {}) as Record<string, any>;
   const klass = String(raw.class ?? candidate.class ?? "");
   if (klass === "behavioral" || klass === "load_bearing") {
-    return "behavioral finding — no automatic fix; the caveman-learn skill turns this into a consent-gated nudge\n";
+    return "this is a habit or a needed part of your setup — there is no automatic fix; the caveman-learn skill can turn it into a reminder, with your yes\n";
   }
   const lines = [
     String(candidate.title ?? raw.sink_id ?? "learn candidate"),
-    `sink: ${String(raw.sink_id ?? candidate.sink_id ?? "")}`,
+    `id: ${String(raw.sink_id ?? candidate.sink_id ?? "")}`,
   ];
   const locations = candidate.what_to_offload?.locators ?? candidate.evidence?.locators;
   if (locations) lines.push(`locations: ${JSON.stringify(locations)}`);
   if (candidate.expected_tokens_per_turn_saved != null) {
-    lines.push(`expected: ~${humanTokens(Number(candidate.expected_tokens_per_turn_saved))} tokens/turn`);
+    lines.push(`expected: ~${humanTokens(Number(candidate.expected_tokens_per_turn_saved))} fewer tokens in every message`);
   }
-  lines.push("gates: net-token-negative · never-dumber");
+  lines.push("applies only if: it uses fewer tokens overall · and answers don't get worse");
   if (dryRun) lines.push("nothing changed — this is a preview");
   else {
     lines.push(`prepared, not applied — ${String(raw.candidate_path ?? join(cavemanHome(), "candidates", `learn-${raw.sink_id}.json`))}`);
-    lines.push("the only thing that applies it: caveman tools skills install caveman-learn");
+    lines.push("to apply it, use the caveman-learn skill: caveman tools skills install caveman-learn");
   }
   return `${lines.join("\n")}\n`;
 }
@@ -16378,7 +17415,7 @@ export function renderLearnSavings(raw: Record<string, any>): string {
   const out: string[] = [];
   if (rows.length === 0) {
     out.push("no fix recorded yet");
-    out.push("apply one through the caveman-learn skill and it lands here with its attribution");
+    out.push("apply one with the caveman-learn skill and it shows up here, with how it was measured");
     for (const caveat of (raw.caveats ?? []) as string[]) out.push(dim(`· ${caveat}`));
     return `${out.join("\n")}\n`;
   }
@@ -16392,8 +17429,8 @@ export function renderLearnSavings(raw: Record<string, any>): string {
   for (const [method, group] of grouped) {
     const total = byRung?.[method];
     const head = total != null && currency
-      ? `${method}  ${fmtMoney(total, currency)}/day`
-      : method;
+      ? `${learnMethodLabel(method)}  ${fmtMoney(total, currency)}/day`
+      : learnMethodLabel(method);
     out.push(bold(head));
     for (const row of group) {
       const verdict = String(row.verdict ?? "");
@@ -16403,7 +17440,7 @@ export function renderLearnSavings(raw: Record<string, any>): string {
         : verdict;
       const money = row.saved_usd != null && currency ? `  ${fmtMoney(Number(row.saved_usd), currency)}/day` : "";
       out.push(`  ${badge} ${String(row.sink_id ?? "")}  ${saved}${money}`);
-      out.push(dim(`      ${String(row.attribution?.provenance ?? "")} · confidence ${String(row.attribution?.confidence ?? "")}`));
+      out.push(dim(`      ${learnProvenanceLabel(String(row.attribution?.provenance ?? ""))} · confidence ${String(row.attribution?.confidence ?? "")}`));
       for (const confounder of (row.attribution?.confounders ?? []) as string[]) {
         out.push(dim(`      · ${confounder}`));
       }
@@ -16414,12 +17451,36 @@ export function renderLearnSavings(raw: Record<string, any>): string {
   return `${out.join("\n")}\n`;
 }
 
+// Plain names for attribution methods and provenance; the enums stay in JSON.
+const LEARN_METHOD_LABELS: Record<string, string> = {
+  deterministic_remeasure: "re-counted the edited file",
+  counterfactual_replay: "replayed past sessions",
+  controlled_holdout: "on/off experiment",
+  interrupted_time_series: "before vs after",
+  unattributed: "not measured yet",
+};
+const LEARN_PROVENANCE_LABELS: Record<string, string> = {
+  intact: "fix still in place",
+  changed_since: "file changed since the fix",
+  target_missing: "file is gone",
+  not_fingerprinted: "can't confirm the fix is still there",
+  not_applicable: "",
+};
+
+function learnMethodLabel(method: string): string {
+  return LEARN_METHOD_LABELS[method] ?? method.replaceAll("_", " ");
+}
+
+function learnProvenanceLabel(provenance: string): string {
+  return LEARN_PROVENANCE_LABELS[provenance] ?? provenance.replaceAll("_", " ");
+}
+
 // fmtMoney keeps sub-cent figures legible instead of rounding real spend to
 // $0.00, which reads as "nothing" when it is not.
 export function fmtMoney(value: number, currency: string): string {
   const symbol = currency === "USD" ? "$" : `${currency} `;
   if (!Number.isFinite(value)) return `${symbol}0`;
-  if (Math.abs(value) >= 1) return `${symbol}${value.toFixed(2)}`;
+  if (Math.abs(value) >= 1) return `${symbol}${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   if (Math.abs(value) >= 0.01) return `${symbol}${value.toFixed(3)}`;
   return `${symbol}${value.toFixed(5)}`;
 }
@@ -16431,11 +17492,11 @@ export function fmtMoney(value: number, currency: string): string {
 export function renderExperimentReport(raw: Record<string, any>): string {
   const arms = Array.isArray(raw.arms) ? (raw.arms as Record<string, any>[]) : [];
   const out: string[] = [bold(`experiment ${String(raw.label ?? "")}`)];
-  if (raw.sink_id) out.push(dim(`sink ${String(raw.sink_id)} · ${String(raw.fix_kind ?? "")}`));
+  if (raw.sink_id) out.push(dim(`id ${String(raw.sink_id)} · ${String(raw.fix_kind ?? "")}`));
   for (const arm of arms) {
-    out.push(`  ${String(arm.arm).padEnd(4)}  ${arm.sessions} sessions  median ${humanTokens(Number(arm.median_session_tokens ?? 0))} tok/session  ${Number(arm.error_turns_per_turn ?? 0).toFixed(2)} err/turn`);
+    out.push(`  ${String(arm.arm).padEnd(4)}  ${arm.sessions} sessions  typical session ${humanTokens(Number(arm.median_session_tokens ?? 0))} tokens  ${Number(arm.error_turns_per_turn ?? 0).toFixed(2)} errors per message`);
   }
-  const verdict = String(raw.verdict ?? "insufficient_data");
+  const verdict = String(raw.verdict ?? "insufficient_data").replace("insufficient_data", "not enough data yet");
   const badge = verdict === "improved" ? green("✓") : verdict === "regressed" ? red("✗") : yellow("~");
   const delta = raw.median_session_tokens_delta_pct != null
     ? `  ${Number(raw.median_session_tokens_delta_pct) > 0 ? "+" : ""}${Number(raw.median_session_tokens_delta_pct).toFixed(1)}%`
@@ -16445,44 +17506,91 @@ export function renderExperimentReport(raw: Record<string, any>): string {
     : "";
   out.push(`  ${badge} ${verdict}${delta}${money}`);
   if (raw.attribution?.method) {
-    out.push(dim(`  ${String(raw.attribution.method)} · confidence ${String(raw.attribution.confidence ?? "")}`));
+    out.push(dim(`  ${learnMethodLabel(String(raw.attribution.method))} · confidence ${String(raw.attribution.confidence ?? "")}`));
     for (const confounder of (raw.attribution.confounders ?? []) as string[]) out.push(dim(`  · ${confounder}`));
   }
   for (const caveat of (raw.caveats ?? []) as string[]) out.push(dim(`  · ${caveat}`));
   return `${out.join("\n")}\n`;
 }
 
+// renderExperiments prints start/arm/stop (one experiment) or list (many):
+// label, state, and the arm currently running.
+export function renderExperiments(raw: Record<string, any> | Record<string, any>[]): string {
+  const experiments = Array.isArray(raw) ? raw : [raw];
+  if (experiments.length === 0) return "no experiments yet — start one: caveman learn experiment start <label>\n";
+  return experiments.map((exp) => {
+    const arms = Array.isArray(exp.arms) ? (exp.arms as Record<string, any>[]) : [];
+    const open = arms.find((arm) => !arm.ended_at);
+    const state = exp.stopped_at ? "stopped" : open ? `${String(open.arm)} since ${String(open.started_at)}` : "paused";
+    const sink = exp.sink_id ? dim(`  id ${String(exp.sink_id)}${exp.fix_kind ? ` · ${String(exp.fix_kind)}` : ""}`) : "";
+    return `${bold(String(exp.label ?? ""))}  ${state}  ${arms.length} on/off period${arms.length === 1 ? "" : "s"}${sink}\n`;
+  }).join("");
+}
+
+// renderLearnDigest names the file to inspect; the digest itself is the file.
+export function renderLearnDigest(raw: Record<string, any>): string {
+  return `digest written: ${String(raw.path ?? "")}\n${dim(String(raw.summary ?? ""))}\ninspect it before sharing; --json prints it\n`;
+}
+
+// renderLearnReconcile prints measured vs billed per model. Coverage is a token
+// comparison, never a savings claim, so there is no money column.
+export function renderLearnReconcile(raw: Record<string, any>): string {
+  const rows = Array.isArray(raw.models) ? (raw.models as Record<string, any>[]) : [];
+  const out: string[] = [bold(`reconcile  ${Number(raw.coverage_pct ?? 0).toFixed(1)}% of billed tokens seen locally`)];
+  for (const row of rows) {
+    out.push(`  ${String(row.model ?? "")}  billed ${humanTokens(Number(row.billed_tokens ?? 0))}  measured ${humanTokens(Number(row.measured_tokens ?? 0))}  ${Number(row.coverage_pct ?? 0).toFixed(1)}%`);
+  }
+  out.push(`  billed but not seen here ${humanTokens(Number(raw.unattributed_tokens ?? 0))} tokens`);
+  for (const caveat of (raw.caveats ?? []) as string[]) out.push(dim(`  · ${caveat}`));
+  return `${out.join("\n")}\n`;
+}
+
 function learnUsage(): void {
   console.log(`${invokedAs()} learn [--all|--plain|--json|--md] [--since 30d] [--sources claude,codex,gemini,opencode,aider]
-  default       interactive setup score + grouped top moves
-  --plain       compact text; no animation or keyboard menu
-  --all         every finding, internal id, basis, and suggestion
-  --json|--md   machine-readable or detailed Markdown output
+  shows where your agent's tokens go, and what to fix first
+  default       interactive Setup Score + top findings
+  --plain       short text; no animation or keyboard menu
+  --all         every finding, with its id and suggested fix
+  --json|--md   output for tools, or a full Markdown report
   implement     open Claude Code or Codex to review and fix findings
-  apply         prepare one finding for consent-gated editing
+  apply         prepare one fix; nothing changes without your yes
+  autopilot     [status|on|off] refresh the report after sessions end
 
-  savings       what applied fixes returned, grouped by how it was measured
-  experiment    prove a change with an on/off holdout over your own sessions
+  savings       what fixes you applied saved, grouped by how it was measured
+  experiment    test a change by switching it on and off across your own sessions
                 start <label> [--sink <id>] · arm <label> on|off · report <label>
                 · list · stop <label>
-  export        privacy-safe digest of findings (identities and magnitudes only)
+  export        a privacy-safe summary of findings (names and sizes only)
   reconcile --usage-export <csv>
-                compare what was measured against what the provider billed
+                compare what Caveman measured with what your provider billed
 
   advanced:
-  applied <sink_id> [--fix-kind <kind>] [--note <text>]
-                record an approved, re-measured fix
-  simulate <sink_id...>
-                sum counterfactual scale over scanned history
+  applied <id> [--fix-kind <kind>] [--note <text>]
+                record a fix you approved, so later runs can measure it
+  simulate <id...>
+                estimate what fixes would have saved over your past sessions
   --repo <substring>
-                filter sessions before analysis`);
+                only read sessions from matching repositories`);
+}
+
+// learnAutopilot: status/on/off for the SessionEnd background refresh. `run`
+// is the detached child the native hook spawns (see learn-autopilot.ts).
+function learnAutopilot(rest: string[]): void {
+  const sub = rest[0] ?? "status";
+  if (sub === "run") {
+    process.exitCode = runAutopilot(proxyBin());
+    return;
+  }
+  if (sub === "on" || sub === "off") mutateRawConfig((out) => { out.learnAutopilot = sub === "on"; });
+  else if (sub !== "status") return commandUsage("learn autopilot [status|on|off]");
+  process.stdout.write(autopilotStatusText());
 }
 
 function learnImplementUsage(): void {
   console.log(`${invokedAs()} learn implement [claude|codex] [--prompt "<focus>"]
   opens an interactive agent with the current local learn report
   installs the caveman-learn safety guide when missing
-  never edits load-bearing findings; asks before every edit`);
+  never edits findings marked needed; asks before every edit`);
 }
 
 function learnImplementPrompt(focus: string): string {
@@ -16491,7 +17599,7 @@ function learnImplementPrompt(focus: string): string {
     "Run `caveman learn report --json`; if no current report exists, run `caveman learn --json` once and retry. Then present a short list of actionable findings.",
     "Work through selected fixes one at a time. Never edit load_bearing findings.",
     "Show the proposed diff and before → after token count, ask before every edit, apply only approved changes, then verify the reduction and any recall path.",
-    "Keep every local savings claim labeled inferred and never attach currency.",
+    "Keep every local savings claim labeled inferred. Attach currency only where the report itself carries it (the spend block and priced savings rows), with that block's framing: window-bounded, never projected, never verified.",
   ];
   if (focus) lines.push(`User focus: ${focus}`);
   return lines.join(" ");
@@ -16588,20 +17696,19 @@ async function learn(rest: string[]) {
   const sub = rest[0];
   if (sub === "--help" || sub === "-h" || sub === "help") return learnUsage();
   if (sub === "implement") return learnImplement(rest.slice(1));
-  if (sub === "export" || sub === "reconcile") {
-    // Both are inspect-before-you-act surfaces, so they stay machine-readable:
-    // the digest is a file the user reads before deciding to share it, and a
-    // reconciliation is a table, not a headline.
-    process.stdout.write(formatLearnProxyJSON(proxyExecLearn(["learn", ...rest], false)));
-    return;
-  }
-  if (sub === "experiment") {
+  if (sub === "autopilot") return learnAutopilot(rest.slice(1));
+  if (sub === "export" || sub === "reconcile" || sub === "experiment") {
     const rawText = proxyExecLearn(["learn", ...rest], false);
-    if (rest.includes("--json") || !["report"].includes(String(rest[1] ?? ""))) {
+    if (rest.includes("--json")) {
       process.stdout.write(formatLearnProxyJSON(rawText));
       return;
     }
-    process.stdout.write(renderExperimentReport(JSON.parse(rawText) as Record<string, any>));
+    const parsed = JSON.parse(rawText);
+    const render = sub === "export" ? renderLearnDigest
+      : sub === "reconcile" ? renderLearnReconcile
+      : rest[1] === "report" ? renderExperimentReport
+      : renderExperiments;
+    process.stdout.write(render(parsed));
     return;
   }
   if (sub === "savings") {
@@ -16643,7 +17750,12 @@ async function learn(rest: string[]) {
   if (tui) {
     const learnTui = await import("./learn-tui.js");
     const progress = learnTui.createLearnProgress();
-    progress.start("Reading Claude Code and Codex sessions");
+    const flag = (name: string) => {
+      const at = forwarded.findIndex((arg) => arg === name || arg.startsWith(`${name}=`));
+      if (at < 0) return undefined;
+      return forwarded[at]!.includes("=") ? forwarded[at]!.split("=")[1] : forwarded[at + 1];
+    };
+    progress.start(`Reading ${flag("--sources") ?? "local agent"} sessions from the last ${flag("--since") ?? "30d"}`);
     try {
       const scanRaw = await proxyExecLearnAsync(
         ["learn", "scan", "--write-report", "--write-report-token", reportToken, ...forwarded],
@@ -17036,7 +18148,7 @@ function readStdin(): Promise<Buffer> {
       return;
     }
     const chunks: Buffer[] = [];
-    process.stdin.on("data", (chunk) => chunks.push(chunk));
+    process.stdin.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
     process.stdin.on("end", () => resolve(Buffer.concat(chunks)));
     process.stdin.on("error", reject);
   });
@@ -17406,7 +18518,7 @@ export function renderStatus(view: StatusView): string {
     lines.push(statusRow("plan", `${String(view.plan.plan)} · ${humanTokens(Number(view.plan.used))} of ${humanTokens(Number(view.plan.allowance))} optimized tokens this week · resets Mon 00:00 UTC · connected traffic only`));
   }
   lines.push(statusRow("config", `think: ${view.config_sources.think}  ·  remember: ${view.config_sources.remember}  ·  execute: ${view.config_sources.execute}`));
-  lines.push(statusRow("telemetry", `${view.telemetry.state} · anonymous usage ping   ·  change: ${view.telemetry.change}`));
+  lines.push(statusRow("telemetry", `${view.telemetry.state} · usage ping   ·  change: ${view.telemetry.change}`));
   if (view.next) lines.push("", `next:  ${view.next}`);
   return `${lines.join("\n")}\n`;
 }
@@ -17471,7 +18583,7 @@ async function status(argv: string[]) {
   const plan = entitlement && allowance !== null && entitlement.optimized_tokens_week !== undefined
     ? { plan: entitlement.plan, used: entitlement.optimized_tokens_week, allowance }
     : null;
-  const telemetry = telemetryState();
+  const telemetry = sessionTelemetryState();
   const view: StatusView = {
     mode: runningMode ?? resolvedMode,
     mode_source: runningMode ? "running" : "resolved",
@@ -18307,7 +19419,7 @@ function renderRecipe(recipe: IntegrationRecipe, baseURL: string, app: string): 
 
 function renderRecipeTemplate(value: string, baseURL: string, app: string): string {
   return value
-    .replaceAll("{{baseURL}}", baseURL.replace(/\/+$/, ""))
+    .replaceAll("{{baseURL}}", trimTrailingSlashes(baseURL))
     .replaceAll("{{app}}", app);
 }
 
@@ -18518,9 +19630,11 @@ async function readRawConfig(): Promise<Record<string, unknown>> {
 
 async function writeRawConfig(out: Record<string, unknown>) {
   await mkdir(dirname(configPath()), { recursive: true });
-  try { chmodSync(configPath(), 0o600); } catch { /* created below */ }
-  await writeFile(configPath(), JSON.stringify(out, null, 2), { mode: 0o600 });
-  chmodSync(configPath(), 0o600);
+  const target = configWriteTarget();
+  const tmp = `${target}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(out, null, 2), { mode: 0o600 });
+  await rename(tmp, target);
+  chmodSync(target, 0o600);
 }
 
 async function saveConfig(cfg: Config) {

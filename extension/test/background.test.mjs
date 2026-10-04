@@ -54,6 +54,6 @@ test("background lifecycle and storage changes keep toolbar badge truthful", asy
   ]);
 
   listeners.changed({ enabled: { oldValue: true, newValue: false } }, "local");
-  listeners.changed({ level: { oldValue: "full", newValue: "lite" } }, "sync");
+  listeners.changed({ level: { oldValue: "caveman", newValue: "ultracave" } }, "sync");
   assert.deepEqual(calls, []);
 });

@@ -188,10 +188,10 @@ func learningLoopSinks(loops []learningLoop) []Sink {
 	sinks := make([]Sink, 0, len(loops))
 	for _, loop := range loops {
 		label := "failed"
-		suggestion := "Review the first failure before retrying the same call; record a project-local guardrail only after confirming the corrected command."
+		suggestion := "Look at the first failure before retrying the same call. Once the right command is confirmed, consider writing it down as a project rule."
 		if loop.Kind == "refetch_loop" {
 			label = "re-fetched"
-			suggestion = "Request enough output once, or narrow the query before repeating pagination variants. Treat this as a measured pattern, not proof that every repeat was waste."
+			suggestion = "Ask for enough output once, or narrow the query, instead of fetching page after page. This is a measured pattern, not proof that every repeat was waste."
 		}
 		sinks = append(sinks, Sink{
 			SinkID:         "learning_loop:" + loop.Kind + ":" + loop.SessionRef + ":" + loop.SignatureHash,

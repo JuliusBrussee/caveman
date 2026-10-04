@@ -11,6 +11,7 @@
 // parseModeChange(prompt, { getDefaultMode, skipNaturalLanguage, expandedTpl, unwrapQuotes })
 //   → { action: 'set', mode }  — caller should activate `mode`
 //   → { action: 'clear' }      — caller should deactivate (delete the flag)
+//   → { action: 'status' }     — report the current mode without changing state
 //   → null                     — prompt does not change state
 //
 // Options:
@@ -24,7 +25,7 @@
 //                          another command's arguments can't misfire our
 //                          triggers.
 //   expandedTpl         — when true, also recognize opencode's expanded
-//                          command-template bodies (a typed "/caveman ultra"
+//                          command-template bodies (a typed "/ultracave"
 //                          gets replaced by the command file's prose before
 //                          this parser ever sees it). Claude Code prompts
 //                          never take this shape, so Claude Code callers
@@ -47,6 +48,17 @@ try {
   cavemanConfig = require('./caveman-config.cjs');
 }
 const { VALID_MODES } = cavemanConfig;
+// Maps the legacy level names (`/caveman ultra`, `/caveman wenyan-lite`, ...)
+// onto the three skills. The stand-in covers a config module from before the
+// three-skill model (#848 plugin-cache drift): current ids only.
+const canonicalMode = cavemanConfig.canonicalMode
+  || ((m) => (VALID_MODES.includes(m) ? m : null));
+
+// Each prose mode has its own command, bare or plugin-namespaced.
+const MODE_COMMANDS = {
+  '/ultracave': 'ultracave', '/caveman:ultracave': 'ultracave',
+  '/megacave': 'megacave', '/caveman:megacave': 'megacave',
+};
 
 // Modes handled by their own slash commands (/caveman-commit, etc.) — not
 // selectable via /caveman <arg>.
@@ -72,7 +84,7 @@ const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 const QUOTED_SPAN_REGEX = /(["`])(?:(?!\1).)*\1/g;
 
 // A mode argument with punctuation glued to it ("/caveman ultra; still too
-// verbose") matched no mode, left the level untouched, and said nothing. Only
+// verbose") matched no mode, left the mode untouched, and said nothing. Only
 // parts[1] is ever read, so extra WORDS after the mode were already harmless;
 // it is the trailing character that broke it. Modes are [a-z-] only, so
 // stripping every trailing character outside that class is safe.
@@ -174,19 +186,21 @@ function resolveModeArg(rawArg, getDefaultMode) {
     // like `/caveman ?` — plausibly someone asking for help, who should not be
     // switched into the mode by it.
     if (rawArg) return { action: 'unresolved' };
-    const mode = getDefaultMode();
+    const configured = getDefaultMode();
+    const mode = configured === 'manual' ? 'caveman' : configured;
     return mode === 'off' ? { action: 'clear' } : { action: 'set', mode };
   }
   if (arg === 'off' || arg === 'stop' || arg === 'disable') return { action: 'clear' };
-  // canonical alias — config stores wenyan-full as 'wenyan'
-  if (arg === 'wenyan-full') return { action: 'set', mode: 'wenyan' };
-  if (VALID_MODES.includes(arg) && !INDEPENDENT_MODES.has(arg)) return { action: 'set', mode: arg };
+  if (arg === 'status') return { action: 'status' };
   // An independent mode IS a real mode, just not reachable this way. Saying
   // "not recognized" would deny a mode the user can see in the docs; name its
   // own command instead. Echoing `arg` here is safe precisely because it
   // matched this fixed whitelist — it is no longer free-form user text.
   if (INDEPENDENT_MODES.has(arg)) return { action: 'unresolved', independentMode: arg };
-  // Bogus level: never silently overwrite with the default (#602). The
+  // caveman/ultracave/megacave, or a legacy level name mapped onto one.
+  const mode = canonicalMode(arg);
+  if (mode && mode !== 'off') return { action: 'set', mode };
+  // Bogus argument: never silently overwrite with the default (#602). The
   // rejected string is untrusted input and is deliberately NOT echoed back —
   // it would land in model context.
   return { action: 'unresolved' };
@@ -204,11 +218,11 @@ function parseModeChange(promptRaw, options) {
   // Capture the first line before whitespace collapse. The expandedTpl
   // templates (opencode's commands/caveman.md etc.) put $ARGUMENTS at the end
   // of the first line, followed by a blank line and then fixed boilerplate
-  // ("If no level given, use full. If \"off\", deactivate."). Collapsing all
-  // whitespace to single spaces (below) merges an EMPTY argument directly
-  // into that boilerplate, so a bare `/caveman` with no level looked like the
-  // level was the word "if" and got rejected as bogus. Extract the template
-  // argument from this uncollapsed first line instead.
+  // ("If no argument given, use caveman. If \"off\", deactivate."). Collapsing
+  // all whitespace to single spaces (below) merges an EMPTY argument directly
+  // into that boilerplate, so a bare `/caveman` with no argument looked like
+  // the argument was the word "if" and got rejected as bogus. Extract the
+  // template argument from this uncollapsed first line instead.
   const firstLine = prompt.toLowerCase().split(/\r?\n/, 1)[0];
   // Collapse whitespace so phrase triggers still match multiline prompts —
   // every regex below expects a single-line prompt (#598).
@@ -223,6 +237,11 @@ function parseModeChange(promptRaw, options) {
   // prompt that CITES a trigger does not fire it. A prompt that starts with a
   // slash is a command invocation: its own text must not toggle our mode,
   // symmetric with the skipNaturalLanguage a foreign command envelope sets.
+  // opencode's expanded /caveman-help card lists the commands and quotes the
+  // triggers; its prose ("Activate caveman" once the backtick span is blanked)
+  // must not switch the mode. Checked before every trigger, deactivation too.
+  if (options.expandedTpl && /^show the caveman quick-reference card\b/.test(prompt)) return null;
+
   const naturalLanguage = !options.skipNaturalLanguage && !prompt.startsWith('/');
   const nlPrompt = naturalLanguage ? prompt.replace(QUOTED_SPAN_REGEX, ' ') : '';
 
@@ -233,19 +252,20 @@ function parseModeChange(promptRaw, options) {
     // "normal mode" only as a command (prompt-initial, optionally led by a
     // switch-back verb) or with caveman context — never mid-sentence for
     // e.g. vim's normal mode ("how do I exit vim normal mode").
-    /^(please\s+)?(go\s+|back\s+to\s+|switch\s+(back\s+)?to\s+|return\s+to\s+)?normal\s+mode\b/.test(nlPrompt) ||
+    /^(please\s+)?(go\s+(back\s+)?(to\s+)?|back\s+to\s+|switch\s+(back\s+)?to\s+|return\s+to\s+)?normal\s+mode\b/.test(nlPrompt) ||
     (/\bnormal\s+mode\b/.test(nlPrompt) && /\bcaveman\b/.test(nlPrompt))
   );
   if (wantsOff) return { action: 'clear' };
 
-  // opencode expands a typed "/caveman <level>" (and the independent-mode
-  // commands) into the command file's prose before chat.message fires, so
-  // the literal slash-command branch below never sees the original text.
-  // Recover the level from each template's fixed prefix instead. This MUST
-  // run before the generic NL-activation match below: "Activate caveman
-  // mode: ultra" would otherwise trip the "activate ... caveman" trigger and
-  // swallow the level, activating at the default instead (#602). Claude Code
-  // prompts never take this shape, so gate behind expandedTpl (opencode-only).
+  // opencode expands a typed "/caveman <arg>", "/ultracave", "/megacave" (and
+  // the independent-mode commands) into the command file's prose before
+  // chat.message fires, so the literal slash-command branch below never sees
+  // the original text. Recover the mode from each template's fixed prefix
+  // instead. This MUST run before the generic NL-activation match below:
+  // "Activate caveman mode: ultra" would otherwise trip the "activate ...
+  // caveman" trigger and swallow the argument, activating at the default
+  // instead (#602). Claude Code prompts never take this shape, so gate behind
+  // expandedTpl (opencode-only).
   if (options.expandedTpl) {
     if (/^generate a commit message for the current staged changes\b/.test(prompt)) {
       return { action: 'set', mode: 'commit' };
@@ -256,6 +276,8 @@ function parseModeChange(promptRaw, options) {
     if (/^compress the file at:/.test(prompt)) {
       return { action: 'set', mode: 'compress' };
     }
+    const own = /^activate (ultracave|megacave) mode\b/.exec(prompt);
+    if (own) return { action: 'set', mode: own[1] };
     const tpl = /^activate caveman mode:[ \t]*(\S*)/.exec(firstLine);
     if (tpl) return resolveModeArg(tpl[1], getDefaultMode);
   }
@@ -273,7 +295,8 @@ function parseModeChange(promptRaw, options) {
     // one-off instruction, not a session-wide mode switch.
     if (!isQuestion) {
       if (wantsActivation(nlPrompt)) {
-        const mode = getDefaultMode();
+        const configured = getDefaultMode();
+        const mode = configured === 'manual' ? 'caveman' : configured;
         // Mirrors the tracker exactly: a configured-off default makes this a
         // no-op (leave whatever flag state already exists), NOT a clear —
         // that's only what an explicit "/caveman" bare command does.
@@ -285,9 +308,16 @@ function parseModeChange(promptRaw, options) {
   // Match /caveman commands. Marketplace plugin installs surface commands
   // namespaced as /caveman:caveman-<name> — accept both forms for every
   // skill (#599: only compress and stats had the namespaced variant).
+  const parts = prompt.split(/\s+/);
+  const cmd = parts[0]; // /caveman, /ultracave, /caveman-commit, etc.
+  if (Object.prototype.hasOwnProperty.call(MODE_COMMANDS, cmd)) {
+    // Same off/status words /caveman takes; anything else is just the mode.
+    const arg = normalizeModeArg(parts[1]);
+    if (arg === 'off' || arg === 'stop' || arg === 'disable') return { action: 'clear' };
+    if (arg === 'status') return { action: 'status' };
+    return { action: 'set', mode: MODE_COMMANDS[cmd] };
+  }
   if (prompt.startsWith('/caveman')) {
-    const parts = prompt.split(/\s+/);
-    const cmd = parts[0]; // /caveman, /caveman-commit, /caveman-review, etc.
     const arg = parts[1] || '';
 
     if (cmd === '/caveman-commit' || cmd === '/caveman:caveman-commit') {
@@ -301,7 +331,7 @@ function parseModeChange(promptRaw, options) {
     }
     if (cmd === '/caveman' || cmd === '/caveman:caveman') {
       // Bare /caveman → activate at configured default; otherwise resolve the
-      // level (punctuation-tolerant, bogus values reported not swallowed).
+      // argument (punctuation-tolerant, bogus values reported not swallowed).
       return resolveModeArg(arg, getDefaultMode);
     }
   }

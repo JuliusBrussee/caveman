@@ -8,7 +8,7 @@ description: >
   cross-file refactors.
 ---
 
-Caveman-ultra. Drop articles/filler. Code/paths exact, backticked. No narration.
+Ultracave voice. Drop articles/filler. Code/paths exact, backticked. Tool runs: one status line in, one out; nothing between routine calls.
 
 ## Scope
 

@@ -56,23 +56,24 @@ fi
 MODE=$(head -c 64 "$FLAG" 2>/dev/null | tr -d '\n\r' | tr '[:upper:]' '[:lower:]')
 MODE=$(printf '%s' "$MODE" | tr -cd 'a-z0-9-')
 
-# Whitelist. Anything else → render nothing rather than echo attacker bytes.
-case "$MODE" in
-  off|lite|full|ultra|wenyan-lite|wenyan|wenyan-full|wenyan-ultra|commit|review|compress) ;;
-  *) exit 0 ;;
-esac
-
 # Durable off: caveman is deactivated for this session. Render nothing at all,
 # matching what an absent flag does — never "[CAVEMAN:OFF]", which would read
 # as a caveman mode rather than the absence of one.
 [ "$MODE" = "off" ] && exit 0
 
-if [ -z "$MODE" ] || [ "$MODE" = "full" ]; then
-  printf '\033[38;5;172m[CAVEMAN]\033[0m'
-else
-  SUFFIX=$(printf '%s' "$MODE" | tr '[:lower:]' '[:upper:]')
-  printf '\033[38;5;172m[CAVEMAN:%s]\033[0m' "$SUFFIX"
-fi
+# Whitelist and badge map in one. Pre-three-skill level names (lite, full,
+# ultra, wenyan*) still sit in older session files and mirrors; they render
+# as the skill they became. Anything else → render nothing rather than echo
+# attacker bytes.
+case "$MODE" in
+  caveman|lite|full) BADGE="CAVEMAN" ;;
+  ultracave|ultra) BADGE="ULTRACAVE" ;;
+  megacave|wenyan|wenyan-lite|wenyan-full|wenyan-ultra) BADGE="MEGACAVE" ;;
+  commit|review|compress) BADGE="CAVEMAN:$(printf '%s' "$MODE" | tr '[:lower:]' '[:upper:]')" ;;
+  *) exit 0 ;;
+esac
+
+printf '\033[38;5;172m[%s]\033[0m' "$BADGE"
 
 # Historical numeric savings suffixes are not measurements. Ignore them,
 # including files written by older stats scripts before this update.

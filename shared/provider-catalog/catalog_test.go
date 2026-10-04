@@ -280,7 +280,7 @@ func TestNullCapabilitiesCarryAnUnverifiedNote(t *testing.T) {
 	if checked == 0 {
 		t.Skip("no rows carry a documented-unknown routing capability")
 	}
-	if checked != 20 {
-		t.Errorf("rows with documented-unknown routing capabilities = %d, want 20 (the Bedrock rows the 2026-07-30 pass guessed); if that changed, re-read the capabilities_verified_at narrowing in CLAUDE.md before updating this number", checked)
+	if checked != 21 {
+		t.Errorf("rows with documented-unknown routing capabilities = %d, want 21 (the 20 Bedrock rows the 2026-07-30 pass guessed, plus claude-fable-5 vision); if that changed, re-read the capabilities_verified_at narrowing in CLAUDE.md before updating this number", checked)
 	}
 }

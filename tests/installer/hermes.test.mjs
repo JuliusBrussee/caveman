@@ -22,7 +22,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
 
-const SKILLS = ['caveman', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
+const SKILLS = ['caveman', 'ultracave', 'megacave', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
 
 function freshHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-hermes-'));
@@ -39,8 +39,8 @@ function productivityDir(hermesHome) {
   return path.join(hermesHome, 'skills', 'productivity');
 }
 
-// ── 1. Fresh install drops all 7 skills with SKILL.md in the productivity category ──
-test('hermes fresh install lands 7 skill dirs with SKILL.md under skills/productivity/', () => {
+// ── 1. Fresh install drops all 9 skills with SKILL.md in the productivity category ──
+test('hermes fresh install lands 9 skill dirs with SKILL.md under skills/productivity/', () => {
   const home = freshHome();
   try {
     const r = runInstaller(['--only', 'hermes'], home);

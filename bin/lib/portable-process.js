@@ -49,6 +49,7 @@ function portableInvocation(command, args, {
   platform = process.platform,
   env = process.env,
   execPath = process.execPath,
+  allowBun = false,
 } = {}) {
   if (platform !== 'win32') return { command, args: [...args] };
   const executable = resolveWindowsCommand(command, env) || command;
@@ -65,6 +66,20 @@ function portableInvocation(command, args, {
     ? relativeScript
     : path.resolve(path.dirname(executable), ...relativeScript.split(/[\\/]+/));
   if (!fs.statSync(script).isFile()) throw new Error(`Windows command shim target is missing: ${script}`);
+  if (allowBun) {
+    // OMP's npm shim wraps a Bun CLI. Keep argv out of cmd.exe and use the
+    // declared runtime instead of evaluating Bun-specific code with Node.
+    const fd = fs.openSync(script, 'r');
+    const header = Buffer.alloc(128);
+    let length;
+    try { length = fs.readSync(fd, header, 0, header.length, 0); }
+    finally { fs.closeSync(fd); }
+    if (/^#!\/usr\/bin\/env bun(?:\r?\n|$)/.test(header.subarray(0, length).toString('utf8'))) {
+      const bun = resolveWindowsCommand('bun', env);
+      if (!bun || !/\.exe$/i.test(bun)) throw new Error('Bun CLI requires bun.exe on PATH');
+      return { command: bun, args: [script, ...args] };
+    }
+  }
   return { command: execPath, args: [script, ...args] };
 }
 

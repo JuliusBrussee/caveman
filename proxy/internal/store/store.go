@@ -352,6 +352,18 @@ func sqliteDSN(path string) string {
 // Open opens (creating if needed) the SQLite database at path and migrates the
 // schema. logger may be nil.
 func Open(path string, logger *slog.Logger) (*Store, error) {
+	if path != ":memory:" {
+		// SQLite creates -wal and -shm with the database file's mode, and they
+		// hold the same plaintext as the database: create the file 0600 before
+		// SQLite first opens it, and tighten what an older build left at the
+		// umask's mode.
+		if f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600); err == nil {
+			_ = f.Close()
+		}
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			_ = os.Chmod(path+suffix, 0o600)
+		}
+	}
 	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
@@ -359,9 +371,6 @@ func Open(path string, logger *slog.Logger) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate sqlite %q: %w", path, err)
-	}
-	if path != ":memory:" {
-		_ = os.Chmod(path, 0o600)
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column name") {

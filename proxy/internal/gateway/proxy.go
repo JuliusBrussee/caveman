@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,9 +83,24 @@ func connectionSetupFailure(err error) bool {
 	return opErr.Op == "dial" || opErr.Op == "proxyconnect"
 }
 
+func isOpenCodeChatGPTSubscription(r *http.Request) bool {
+
+	return r.Method == http.MethodPost &&
+		r.URL.Path == "/openai/v1/responses" &&
+		r.Header.Get("x-cave-agent") == "opencode" &&
+		r.Header.Get("ChatGPT-Account-ID") != ""
+
+}
+
 func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if !normalizeAgentPath(r) {
 		httpx.Error(w, r, http.StatusNotFound, "cave_route_not_found", "Proxy path is not recognized.")
+		return
+	}
+	if isOpenCodeChatGPTSubscription(r) {
+		r.URL.Path = "/chatgpt/responses"
+		r.URL.RawPath = ""
+		s.chatgpt(w, r)
 		return
 	}
 	start := time.Now()
@@ -1250,8 +1266,7 @@ func joinRecoveryHandles(handles []string) string {
 
 func appendCCRMarker(out []byte, handle string) []byte {
 	marker := []byte("<<ccr:" + handle + ">>")
-	withMarker := make([]byte, 0, len(out)+1+len(marker))
-	withMarker = append(withMarker, out...)
+	withMarker := slices.Grow(slices.Clone(out), 1+len(marker))
 	if len(out) == 0 || out[len(out)-1] != '\n' {
 		withMarker = append(withMarker, '\n')
 	}

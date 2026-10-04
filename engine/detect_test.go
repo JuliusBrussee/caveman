@@ -19,6 +19,7 @@ func TestDetect(t *testing.T) {
 		{"go code", "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hi\")\n}\n", engine.TypeCode},
 		{"python code", "import os\n\ndef run(x):\n    return x + 1\n\nclass A:\n    def m(self):\n        return 2\n", engine.TypeCode},
 		{"log", "2026-01-01T00:00:00Z [INFO] start\n[INFO] step\n[WARN] slow\n[ERROR] boom\n[INFO] end\n", engine.TypeLog},
+		{"syslog emergency levels", "CRIT database unavailable\nALERT failover exhausted\nEMERG shutting down\nCRITICAL replica unavailable\n", engine.TypeLog},
 		{"search results", "src/a.go:10:match\nsrc/b.go:11:match\nsrc/c.go:12:match\nsrc/d.go:13:match\nsrc/e.go:14:match\nsrc/f.go:15:match\n", engine.TypeSearchResult},
 		{"csv table", "name,region,revenue,status\nalpha,eu,120,ok\nbravo,us,140,ok\ncharlie,apac,90,ok\ndelta,eu,180,ok\necho,us,160,ok\nfoxtrot,apac,110,ok\ngolf,eu,200,ok\nhotel,us,170,ok\nindia,apac,130,ok\n", engine.TypeTabular},
 		{"markdown table", "| name | region | revenue |\n| --- | --- | ---: |\n| alpha | eu | 120 |\n| bravo | us | 140 |\n| charlie | apac | 90 |\n| delta | eu | 180 |\n| echo | us | 160 |\n| foxtrot | apac | 110 |\n", engine.TypeTabular},

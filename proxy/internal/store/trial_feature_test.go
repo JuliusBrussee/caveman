@@ -695,7 +695,7 @@ func TestLearnHTMLReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	for _, want := range []string{"TLDR", "Cave score", "Cave Score", "Token Sinks", "Caveats"} {
+	for _, want := range []string{"In short", "Your Setup Score is", "<h2>Setup Score</h2>", "Where your tokens go", "Things to know"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report missing section %q", want)
 		}
@@ -777,7 +777,7 @@ func TestLearnRecurringContextSink(t *testing.T) {
 		t.Fatalf("components = %d, want 4 (recurring folds into config_tax)", len(plan.CaveScore.Components))
 	}
 	cTax := componentByKey(plan.CaveScore, scoreKeyConfigTax)
-	if !cTax.Measured || !strings.Contains(cTax.Detail, "recurring re-paste") {
+	if !cTax.Measured || !strings.Contains(cTax.Detail, "of repeated text") {
 		t.Fatalf("config_tax component must disclose recurring re-paste: %+v", cTax)
 	}
 }

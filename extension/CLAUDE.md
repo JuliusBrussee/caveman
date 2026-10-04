@@ -9,10 +9,10 @@ removed it after Chrome Web Store review couldn't reproduce "compress prompt loc
 
 ## Layout
 - `manifest.json` — MV3. `storage` permission only. Content scripts load `src/directive.js` **then** `src/caveman.js` (order matters). Only the fonts are web-accessible — no WASM, no special CSP.
-- `src/directive.js` — the **pure** caveman directive text: `buildPrimer`/`buildReminder`/`isPrefixed`/`normLevel`. No chrome/DOM/network. Loaded first (exposes `self.CavemanDirective`) and required directly by the test suite.
+- `src/directive.js` — the **pure** caveman directive text: `buildPrimer`/`buildReminder`/`isPrefixed`/`normMode`. No chrome/DOM/network. Loaded first (exposes `self.CavemanDirective`) and required directly by the test suite.
 - `src/caveman.js` — content script: per-site composer adapter + capture-phase send interception. Prepends the directive (full primer on the first message, short reminder after) and re-fires send. Exact composer-scoped selectors; `prependText` inserts at a collapsed selection without rebuilding the rich draft. Pending sends cancel on draft, editor, conversation, or settings changes; unknown controls keep native behavior.
 - `src/background.js` — service worker: just reflects the on/off state on the toolbar badge.
-- `popup.{html,js,css}` — the on/off toggle, intensity (lite/full/ultra), per-site switches, and a **Leave-a-review** CTA (Chrome Web Store via `chrome.runtime.id`; hidden on Firefox until a verified AMO URL is available).
+- `popup.{html,js,css}` — the on/off toggle, mode (caveman/ultracave/megacave), per-site switches, and a **Leave-a-review** CTA (Chrome Web Store via `chrome.runtime.id`; hidden on Firefox until a verified AMO URL is available).
 - `test/` — pure directive/service-worker tests plus real Chromium
   content-script and popup/storage journeys against `harness.html`.
 

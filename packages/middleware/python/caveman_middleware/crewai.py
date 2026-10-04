@@ -16,27 +16,64 @@ from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import Any
 
+from ._versions import framework_import_failed
+
 try:
     from crewai import BaseLLM
     from crewai.events import LLMCallCompletedEvent, crewai_event_bus
-    from crewai.hooks import InterceptionPoint, on, unregister_hook
+    from crewai.hooks import InterceptionPoint, on
     from crewai.llms.base_llm import call_stop_override, call_stream_override
     from crewai.tools import BaseTool
     from crewai.utilities.agent_utils import convert_tools_to_openai_schema
     from crewai.utilities.string_utils import sanitize_tool_name
     from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
-except ModuleNotFoundError as error:
-    raise ImportError("Install caveman-middleware[crewai] to use the CrewAI adapter") from error
+except ImportError as error:
+    framework_import_failed("crewai", error, "Install caveman-middleware[crewai] to use the CrewAI adapter")
 
-from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, MiddlewareRuntime, Scope
+from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, Scope, ensure_async, ensure_sync
 from caveman_cloud.middleware.runtime import RECOVERY_DESCRIPTION
+from ._guard import fail_open, recovery, recovery_failed, recovery_name_conflict
 from ._native import Attempt, leaves, manifest, owner, plain, replace_path
-from ._versions import matches_framework
+from ._versions import VERSION, family_gate
 from ._usage import usage
 
 FRAMEWORK_VERSION = version("crewai")
-ADAPTER = Adapter("crewai", "0.1.0", FRAMEWORK_VERSION, "crewai-messages-v1")
+ADAPTER = Adapter("crewai", VERSION, FRAMEWORK_VERSION, "crewai-messages-v1")
 _call = contextvars.ContextVar("caveman_crewai_call", default=None)
+# (weakref to the CavemanLLM, weakref to its executor) set by the one PRE_MODEL_CALL hook for the next call.
+_executor = contextvars.ContextVar("caveman_crewai_executor", default=None)
+_hooks_lock = threading.Lock()
+_hooks_registered = False
+
+
+def _before_model_call(context):
+    model = getattr(context, "llm", None)
+    if isinstance(model, CavemanLLM) and not model.closed:
+        # Weak references only: aborted hooks and stale executor snapshots
+        # cannot retain complete message histories.
+        _executor.set((weakref.ref(model), weakref.ref(context.executor) if context.executor is not None else None))
+
+
+def _call_completed(source, event):
+    state = _call.get()
+    if state is None or source is not state.model.delegate:
+        return
+    measured = usage(event.usage)
+    # Some native paths synthesize zero totals when no provider usage
+    # was received. Those defaults are not billing measurements.
+    if measured and measured["input_tokens"] == measured["output_tokens"] == 0:
+        measured = None
+    state.finish("completed", measured)
+
+
+def _register_hooks():
+    """One PRE_MODEL_CALL hook and one event-bus handler per process, however many CavemanLLMs exist (D7)."""
+    global _hooks_registered
+    with _hooks_lock:
+        if not _hooks_registered:
+            on(InterceptionPoint.PRE_MODEL_CALL)(_before_model_call)
+            crewai_event_bus.on(LLMCallCompletedEvent)(_call_completed)
+            _hooks_registered = True
 
 
 class _RecoveryInput(BaseModel):
@@ -62,14 +99,17 @@ class CavemanRecoveryTool(BaseTool):
 
     def __init__(self, model):
         super().__init__()
-        self._binding = model.runtime.recovery(model.scope)
+        self._binding = recovery(model.runtime, model.scope)
         self._model = weakref.ref(model)
 
     def _run(self, handle, offset=0, limit=262144, query=""):
         model = self._model()
-        if model is None or model.closed:
-            raise MiddlewareError("recovery_unavailable")
-        result = self._binding.execute(handle=handle, offset=offset, limit=limit, query=query)
+        try:
+            if model is None or model.closed or self._binding is None:
+                raise MiddlewareError("recovery_unavailable")
+            result = self._binding.execute(handle=handle, offset=offset, limit=limit, query=query)
+        except MiddlewareError as error:  # the {"error": code} result the model reads
+            return json.dumps(recovery_failed(ADAPTER.id, error))
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -92,58 +132,31 @@ class CavemanLLM(BaseLLM):
     """Wrap a native CrewAI LLM; assign a separate trusted Scope per context.
 
     Use ``with_caveman_agent`` to register the matching recovery BaseTool.
-    Register before creating the Agent, whose executor snapshots native hooks.
-    ``close`` removes only this delegate's registrations. The application keeps
-    ownership of the native provider client and the Caveman runtime.
+    Construct it before the Agent, whose executor snapshots native hooks: the
+    first CavemanLLM installs the one process-wide hook. ``close`` makes this
+    delegate inert. The application keeps ownership of the native provider
+    client and the Caveman runtime (either SDK runtime type).
     """
     llm_type: str = "caveman"
     delegate: BaseLLM = Field(exclude=True, repr=False)
     runtime: Any = Field(exclude=True, repr=False)
     scope: Scope
     closed: bool = Field(default=False, exclude=True)
-    _context: Any = PrivateAttr()
-    _hook: Any = PrivateAttr(default=None)
-    _completed: Any = PrivateAttr(default=None)
+    version_supported: bool = Field(default=True, exclude=True)
     _recovery: Any = PrivateAttr(default=None)
 
-    def __init__(self, delegate, *, runtime, scope):
+    def __init__(self, delegate, *, runtime, scope, accept_framework_version=False):
         if not isinstance(delegate, BaseLLM):
             raise TypeError("Expected an installed CrewAI BaseLLM")
-        if not isinstance(runtime, MiddlewareRuntime) or not isinstance(scope, Scope):
-            raise TypeError("CrewAI requires a MiddlewareRuntime and a stable Scope per agent context")
+        if not isinstance(scope, Scope):
+            raise TypeError("CrewAI requires a stable Scope per agent context")
+        runtime = ensure_sync(runtime)
         super().__init__(delegate=delegate, runtime=runtime, scope=scope, model=delegate.model,
                          provider=delegate.provider, stream=delegate.stream, stop=list(delegate.stop),
-                         is_litellm=delegate.is_litellm)
-        self._context = contextvars.ContextVar(f"caveman_crewai_context_{id(self)}", default=None)
-        supported = matches_framework(("crewai", "1.15", "2"))
-        if not supported and runtime.mode != "off":
-            runtime.decline("unsupported_version")
-        if not supported or runtime.mode == "off":
-            return
-        reference = weakref.ref(self)
-
-        @on(InterceptionPoint.PRE_MODEL_CALL)
-        def before(context):
-            model = reference()
-            if model is not None and not model.closed and context.llm is model:
-                # Store only a weak executor reference. Aborted hooks and stale
-                # executor snapshots cannot retain complete message histories.
-                model._context.set(weakref.ref(context.executor) if context.executor is not None else None)
-
-        @crewai_event_bus.on(LLMCallCompletedEvent)
-        def completed(source, event):
-            state = _call.get()
-            model = reference()
-            if model is None or state is None or state.model is not model or source is not model.delegate:
-                return
-            measured = usage(event.usage)
-            # Some native paths synthesize zero totals when no provider usage
-            # was received. Those defaults are not billing measurements.
-            if measured and measured["input_tokens"] == measured["output_tokens"] == 0:
-                measured = None
-            state.finish("completed", measured)
-
-        self._hook, self._completed = before, completed
+                         is_litellm=delegate.is_litellm,
+                         version_supported=family_gate(runtime, "crewai", ADAPTER.id, accept_framework_version))
+        if self.version_supported and runtime.mode != "off":
+            _register_hooks()
 
     @property
     def recovery_tool(self):
@@ -153,11 +166,6 @@ class CavemanLLM(BaseLLM):
 
     def close(self):
         self.closed = True
-        if self._hook is not None:
-            unregister_hook(InterceptionPoint.PRE_MODEL_CALL, self._hook)
-        if self._completed is not None:
-            crewai_event_bus.off(LLMCallCompletedEvent, self._completed)
-        self._context.set(None)
 
     def supports_function_calling(self):
         function = getattr(self.delegate, "supports_function_calling", None)
@@ -184,22 +192,29 @@ class CavemanLLM(BaseLLM):
     def to_config_dict(self):
         raise ValueError("Rebind CavemanLLM from the original provider configuration and trusted runtime; active middleware is not serializable")
 
+    def _passive(self, reason):
+        return Attempt(self.runtime, None, str(uuid.uuid4()), str(uuid.uuid4()), passive=True, reason=reason, adapter="crewai"), {}, None
+
+    def _guarded_options(self, messages, *args):
+        try:
+            return self._options(messages, *args)
+        except Exception as error:  # Decision 4: the delegate still receives the executor's messages
+            return None if owner.get() is not None else self._passive(fail_open(self.runtime, ADAPTER.id, error))
+
     def _options(self, messages, tools, available_functions, from_task, from_agent, response_model):
-        reference = self._context.get()
-        self._context.set(None)
-        executor = reference() if reference is not None else None
+        entry = _executor.get()
+        _executor.set(None)
+        executor = entry[1]() if entry is not None and entry[0]() is self and entry[1] is not None else None
         if owner.get() is not None:
             return None
-        reason = ("closed" if self.closed else "off" if self.runtime.mode == "off" else
-                  "unsupported_version" if not matches_framework(("crewai", "1.15", "2")) else
+        reason = ("closed" if self.closed else "disabled" if self.runtime.mode == "off" else
+                  "unsupported_version" if not self.version_supported else
                   "unsupported_shape" if type(messages) is not list else None)
         if reason:
-            return Attempt(self.runtime, self.scope, str(uuid.uuid4()), str(uuid.uuid4()),
-                           passive=True, reason=reason, adapter="crewai"), {}, None
+            return self._passive(reason)
         context = manifest(messages)
         if context is None:
-            return Attempt(self.runtime, self.scope, str(uuid.uuid4()), str(uuid.uuid4()),
-                           passive=True, reason="unsupported_shape", adapter="crewai"), {}, None
+            return self._passive("unsupported_shape")
         bound = (executor is not None and executor.llm is self and executor.messages is messages
                  and executor.task is from_task and executor.agent is from_agent)
         originals = executor.original_tools if bound else []
@@ -233,7 +248,7 @@ class CavemanLLM(BaseLLM):
             candidates.append(Candidate(key, content, "/".join(map(str, path)),
                                         cache_region="frozen_prefix" if path[1] <= frozen else "live_zone"))
         attempt = Attempt(self.runtime, self.scope, str(uuid.uuid4()), str(uuid.uuid4()), adapter="crewai")
-        options = dict(scope=self.scope, adapter=ADAPTER, candidates=candidates, manifest=context,
+        options = dict(scope=self.scope, adapter=ADAPTER, candidates=candidates, manifest=context, sequence=context.sequence,
                        binding=binding, model={"provider": self.delegate.provider, "id": self.delegate.model, "protocol": "crewai"},
                        recovery_overhead_text=json.dumps(native_schemas, ensure_ascii=False, separators=(",", ":")) if binding else None,
                        logical_call_id=attempt.logical_call_id, attempt_id=attempt.attempt_id)
@@ -249,7 +264,7 @@ class CavemanLLM(BaseLLM):
             attempt.optimization = result
             attempt.plan_id = result.plan["replacement_set_id"] if result.plan else None
         else:
-            attempt.reason = "invalid_replacement_plan"
+            attempt.reason = "invalid_plan"
         return view, attempt
 
     def _native_call(self, attempt):
@@ -272,7 +287,7 @@ class CavemanLLM(BaseLLM):
 
     def call(self, messages, tools=None, callbacks=None, available_functions=None, from_task=None, from_agent=None, response_model=None):
         args = (tools, available_functions, from_task, from_agent, response_model)
-        state = self._options(messages, *args)
+        state = self._guarded_options(messages, *args)
         view, attempt = ((messages, None) if state is None else (messages, state[0]) if state[2] is None
                          else self._apply(messages, state, self.runtime.optimize(**state[2])))
         stack, active = self._native_call(attempt)
@@ -289,9 +304,9 @@ class CavemanLLM(BaseLLM):
 
     async def acall(self, messages, tools=None, callbacks=None, available_functions=None, from_task=None, from_agent=None, response_model=None):
         args = (tools, available_functions, from_task, from_agent, response_model)
-        state = self._options(messages, *args)
+        state = self._guarded_options(messages, *args)
         view, attempt = ((messages, None) if state is None else (messages, state[0]) if state[2] is None
-                         else self._apply(messages, state, await self.runtime.as_async().optimize(**state[2])))
+                         else self._apply(messages, state, await ensure_async(self.runtime).optimize(**state[2])))
         stack, active = self._native_call(attempt)
         with stack:
             try:
@@ -318,21 +333,35 @@ class CavemanLLM(BaseLLM):
             state.finish("completed")
 
 
-def with_caveman_llm(llm, *, runtime, scope):
-    return CavemanLLM(llm, runtime=runtime, scope=scope)
+def with_caveman_llm(llm, *, runtime, scope, accept_framework_version=False):
+    """Record-only unless its ``recovery_tool`` is registered with the agent (see ``with_caveman_agent``)."""
+    if isinstance(llm, CavemanLLM):  # already wrapped: one Caveman layer, unchanged
+        return llm
+    return CavemanLLM(llm, runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
 
 
-def with_caveman_agent(options, *, runtime, scope):
-    """Return native Agent constructor options, preserving its native scheduler."""
-    model = CavemanLLM(options["llm"], runtime=runtime, scope=scope)
+def with_caveman_agent(options, *, runtime, scope, accept_framework_version=False):
+    """Return native Agent constructor options, preserving its native scheduler.
+
+    Compresses when the agent has tools. A host tool already named
+    ``caveman_retrieve`` keeps its name and recovery stays off (``recovery_name_conflict``).
+    """
+    if isinstance(options.get("llm"), CavemanLLM):
+        if any(tool is options["llm"]._recovery for tool in options.get("tools", [])):  # this function's own result
+            return options
+        options = {**options, "llm": options["llm"].delegate}  # a with_caveman_llm layer is replaced, not nested
+    model = CavemanLLM(options["llm"], runtime=runtime, scope=scope, accept_framework_version=accept_framework_version)
     tools = list(options.get("tools", []))
     # Adding the first tool switches CrewAI out of its native no-tool/typed
     # response path. There is no eligible tool result in that path anyway.
     params = model.delegate.additional_params
-    recovery_allowed = (runtime.mode == "compress" and matches_framework(("crewai", "1.15", "2")) and tools
+    recovery_allowed = (model.runtime.mode == "compress" and model.version_supported and tools
                         and not getattr(model.delegate, "response_format", None)
                         and params.get("tool_choice", "auto") == "auto"
                         and not any(params.get(key) for key in ("response_format", "output_config", "output_format")))
-    if recovery_allowed and not any(sanitize_tool_name(tool.name) == "caveman_retrieve" for tool in tools):
+    conflict = any(sanitize_tool_name(tool.name) == "caveman_retrieve" for tool in tools)
+    if recovery_allowed and conflict:
+        recovery_name_conflict(model.runtime, ADAPTER.id)
+    if recovery_allowed and not conflict:
         tools.append(model.recovery_tool)
     return {**options, "llm": model, "tools": tools}

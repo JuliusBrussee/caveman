@@ -109,6 +109,61 @@ test("shrink-hook never emits an approval decision for a Codex tool event", asyn
   assert.doesNotMatch(out.stdout, /permissionDecision/, "must not answer Codex's approval question");
 });
 
+// #1133: the Codex half of that argument was never applied to Claude Code, which
+// DOES honor permissionDecision. Answering "allow" on the user's behalf turns the
+// shrink rewrite — a compression decision — into a permission grant, for every
+// state-changing command the allowlist happens to accept. The hook compresses
+// output; it does not get a vote on whether the command may run.
+for (const command of ["git push --force origin main", "git reset --hard HEAD~3", "kubectl delete pod web", "aws s3 rm s3://bucket --recursive", "gh repo delete acme/site"]) {
+  test(`shrink-hook never grants permission for a Claude Bash event: ${command}`, async () => {
+    const out = await runHook({ tool_name: "Bash", tool_input: { command } });
+    assert.equal(out.code, 0, out.stderr);
+    if (out.stdout === "") return; // not rewritten at all is also fine
+    const o = JSON.parse(out.stdout);
+    assert.equal(o.hookSpecificOutput.permissionDecision, undefined,
+      "the shrink hook must leave the permission decision to the host");
+  });
+}
+
+// #1133: Claude replaces the WHOLE tool input with updatedInput, so a rewrite that
+// rebuilds the object from `command` alone silently drops timeout,
+// run_in_background and description — changing how the command runs, not just how
+// it is spelled. Every field the host sent must survive the rewrite untouched.
+test("shrink-hook preserves every other tool_input field through the rewrite", async () => {
+  const tool_input = {
+    command: "git status",
+    timeout: 120000,
+    run_in_background: true,
+    description: "check the worktree",
+  };
+  const out = await runHook({ tool_name: "Bash", tool_input });
+  assert.equal(out.code, 0, out.stderr);
+  const updated = JSON.parse(out.stdout).hookSpecificOutput.updatedInput;
+  assert.match(updated.command, /shrink -- git status$/, "the command itself is still rewritten");
+  for (const [key, value] of Object.entries(tool_input)) {
+    if (key === "command") continue;
+    assert.deepEqual(updated[key], value, `updatedInput must carry ${key} through unchanged`);
+  }
+});
+
+// #1133: the skip-pair guard reads tokens[0] and tokens[1] only, so any global
+// option before the subcommand walks straight past it. `git commit` is excluded
+// because it opens an editor and shrink captures output — `git -C . commit` opens
+// the same editor.
+for (const command of [
+  "git -C . commit -m wip",                        // → pair "git -C"
+  "git --no-pager commit -m wip",                  // → pair "git --no-pager"
+  "docker --context example exec example id",      // → pair "docker --context"
+  "kubectl -n prod exec web -- sh",                // → pair "kubectl -n"
+  "terraform -chdir=infra apply",                  // → pair "terraform -chdir=infra"
+]) {
+  test(`shrink-hook honors the skip pair behind a global option: ${command}`, async () => {
+    const out = await runHook({ tool_name: "Bash", tool_input: { command } });
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(out.stdout, "", `must not rewrite an excluded subcommand: ${command}`);
+  });
+}
+
 test("native-hook injects stable Core, stores bounded metadata, and emits no marker when proxy is off", async () => {
   const caveHome = mkdtempSync(join(tmpdir(), "cave-native-"));
   writeWrapConfig(caveHome, { proxy: false });

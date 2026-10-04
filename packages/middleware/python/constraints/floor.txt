@@ -1,0 +1,25 @@
+# Oldest framework releases each adapter family is tested against: the floors
+# of the [project.optional-dependencies] extras and caveman_middleware.COMPATIBILITY.
+#   pip install -c constraints/floor.txt ".[family]"
+# openai and mcp are not pinned here: other families depend on them with
+# incompatible ranges (litellm/crewai/llama-index need openai<3, strands and
+# crewai need mcp<2.2), so the openai and mcp CI lanes pin them themselves
+# (openai==2.20.0, mcp==2.0.0 at the floor).
+langchain==1.1.0
+langchain-core==1.1.0
+langgraph==1.0.2
+# langgraph 1.0.2 accepts a newer langgraph-prebuilt that no longer imports with it.
+langgraph-prebuilt==1.0.2
+anthropic==1.0.0
+litellm==1.95.0
+google-genai==2.18.0
+strands-agents==1.43.0
+agno==3.0.0
+crewai==1.15.3
+pydantic-ai-slim==2.36.0
+autogen-agentchat==0.7.0
+autogen-core==0.7.0
+autogen-ext==0.7.0
+llama-index-core==0.14.5
+# Test-only: the LlamaIndex driver's provider LLM.
+llama-index-llms-openai==0.6.0

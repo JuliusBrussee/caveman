@@ -5,10 +5,9 @@ Show the caveman quick-reference card.
 
 | Command | What |
 |---|---|
-| `/caveman` | Activate at default level (full) |
-| `/caveman lite` | Light compression — ~30% tokens dropped |
-| `/caveman ultra` | Maximum compression |
-| `/caveman wenyan[-lite\|-ultra]` | Classical Chinese compression |
+| `/caveman` | Caveman voice, default |
+| `/ultracave` | Maximum compression |
+| `/megacave` | Classical Chinese (文言文) |
 | `/caveman off` | Deactivate |
 | `/caveman-commit` | Terse commit message |
 | `/caveman-review` | One-line review findings |

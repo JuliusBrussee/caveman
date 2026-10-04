@@ -74,6 +74,10 @@ const resolveActiveMode = cavemanConfig.resolveActiveMode
 const validateSessionId = cavemanConfig.validateSessionId || (() => null);
 const sessionActivePath = cavemanConfig.sessionActivePath || (() => null);
 const legacyFlagPath = cavemanConfig.legacyFlagPath || ((dir) => path.join(dir, '.caveman-active'));
+// Mode-log rows written before the three-skill model name the old levels
+// (lite/full/ultra/wenyan*); attribute them to the skill each became.
+const canonicalMode = cavemanConfig.canonicalMode
+  || ((m) => (VALID_MODES.includes(m) ? m : null));
 
 function findRecentSession(claudeDir) {
   const projectsDir = path.join(claudeDir, 'projects');
@@ -226,7 +230,7 @@ function readModeLog(logPath, sessionId) {
     try { e = JSON.parse(line); } catch { continue; }
     if (!e || typeof e !== 'object' || !Number.isFinite(e.ts)) continue;
     if (wanted && e.session_id != null && e.session_id !== wanted) continue;
-    const norm = (v) => (v == null ? null : (VALID_MODES.includes(String(v)) ? String(v) : undefined));
+    const norm = (v) => (v == null ? null : (canonicalMode(String(v)) || undefined));
     const mode = norm(e.mode);
     const prev = norm(e.prev);
     if (mode === undefined || prev === undefined) continue; // reject non-whitelisted values

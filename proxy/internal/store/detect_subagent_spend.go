@@ -52,8 +52,28 @@ func (t *subagentSpendTracker) observeTurn(tokens int, side bool) {
 	t.MainTurns++
 }
 
+// isSubagentSpawnTool reports whether a Claude Code tool call spawns a
+// subagent. The tool was renamed Task -> Agent, and four separate sites
+// recognized a spawn by an inline literal, so the rename had to be repeated in
+// each one and was not: the raw-line counter in source_claude.go learned
+// "Agent" while this tracker and the structured reference scan kept matching
+// "task" alone, which zeroed subagent spend and its per-type breakdown on
+// exactly the transcripts the counter had just started detecting (#1075).
+// Keep the knowledge here so the next rename is one edit.
+//
+// Codex has its own spawn names ("spawn_agent" and MCP-suffixed variants,
+// see codexTaskSpawns) and is deliberately not folded in here.
+func isSubagentSpawnTool(toolName string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "task", "agent":
+		return true
+	default:
+		return false
+	}
+}
+
 func (t *subagentSpendTracker) observeSpawn(toolName, input string) {
-	if !strings.EqualFold(strings.TrimSpace(toolName), "task") {
+	if !isSubagentSpawnTool(toolName) {
 		return
 	}
 	t.Spawns++
@@ -120,13 +140,13 @@ func subagentSpendSink(tracker subagentSpendTracker, spend *LearnSpend) []Sink {
 	}
 	return []Sink{{
 		SinkID: "subagent_spend",
-		Title:  fmt.Sprintf("%.0f%% of measured context ran inside subagents", share),
+		Title:  fmt.Sprintf("%.0f%% of your tokens were used inside subagents", share),
 		Class:  classBehavioral, Basis: "provider_counted", Framing: framingHistorical,
 		TokensObserved: tracker.SideTokens,
 		Evidence:       evidence,
 		// Deliberately not a recommendation. Delegation is often the cheaper
 		// choice; this sink exists so the cost is visible, not to argue against it.
-		Suggestion: "Subagent context is invisible in the main conversation, so this share is usually a surprise. It is reported for visibility only — nothing here says any spawn was unnecessary.",
+		Suggestion: "You don't see subagent work in the main conversation, so this share is often a surprise. It is shown so you can see it. Nothing here says any subagent was unnecessary.",
 	}}
 }
 

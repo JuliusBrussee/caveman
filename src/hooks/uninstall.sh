@@ -187,7 +187,7 @@ fi
 # .caveman-history.jsonl is deliberately NOT removed: it is the user's
 # accumulated lifetime savings record, not caveman plumbing. Keep this list in
 # sync with the uninstall block in bin/install.js.
-for state in ".caveman-active" ".caveman-active.prev" ".caveman-mode-log.jsonl" ".caveman-statusline-suffix" ".caveman-nudge-shown"; do
+for state in ".caveman-active" ".caveman-active.prev" ".caveman-mode-log.jsonl" ".caveman-statusline-suffix" ".caveman-nudge-shown" ".caveman-statusline-stale"; do
   if [ -f "$CLAUDE_DIR/$state" ]; then
     rm "$CLAUDE_DIR/$state"
     echo "  Removed: $CLAUDE_DIR/$state"

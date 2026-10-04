@@ -570,3 +570,111 @@ func TestChatGPTCodexArrayToolOutputCompresses(t *testing.T) {
 		t.Fatalf("compression accounting missing: %+v", row)
 	}
 }
+func TestOpenCodeChatGPTOAuthReroutesToSubscriptionUpstream(t *testing.T) {
+	const bearer = "Bearer opencode-oauth-secret"
+	const account = "acct-opencode"
+
+	var gotPath string
+	var gotAuth string
+	var gotAccount string
+	var gotAgent string
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotAccount = r.Header.Get("ChatGPT-Account-ID")
+		gotAgent = r.Header.Get("x-cave-agent")
+		w.Write([]byte(`{"id":"resp"}`))
+	}))
+	defer upstream.Close()
+
+	srv, _, _ := chatgptTestServer(t, upstream.URL)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/w/opencode/openai/v1/responses",
+		strings.NewReader(`{"model":"gpt-5.5"}`),
+	)
+	req.Header.Set("Authorization", bearer)
+	req.Header.Set("ChatGPT-Account-ID", account)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/responses" {
+		t.Fatalf("upstream path = %q, want /responses", gotPath)
+	}
+	if gotAuth != bearer {
+		t.Fatalf("Authorization changed: %q", gotAuth)
+	}
+	if gotAccount != account {
+		t.Fatalf("ChatGPT-Account-ID changed: %q", gotAccount)
+	}
+	if gotAgent != "" {
+		t.Fatalf("internal agent header reached upstream: %q", gotAgent)
+	}
+}
+
+func TestOpenCodeChatGPTSubscriptionDetection(t *testing.T) {
+	tests := []struct {
+		name    string
+		method  string
+		path    string
+		agent   string
+		account string
+		want    bool
+	}{
+		{
+			name:    "opencode responses with account",
+			method:  http.MethodPost,
+			path:    "/openai/v1/responses",
+			agent:   "opencode",
+			account: "acct",
+			want:    true,
+		},
+		{
+			name:   "missing account",
+			method: http.MethodPost,
+			path:   "/openai/v1/responses",
+			agent:  "opencode",
+		},
+		{
+			name:    "different agent",
+			method:  http.MethodPost,
+			path:    "/openai/v1/responses",
+			agent:   "other",
+			account: "acct",
+		},
+		{
+			name:    "different route",
+			method:  http.MethodPost,
+			path:    "/openai/v1/chat/completions",
+			agent:   "opencode",
+			account: "acct",
+		},
+		{
+			name:    "different method",
+			method:  http.MethodGet,
+			path:    "/openai/v1/responses",
+			agent:   "opencode",
+			account: "acct",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			req.Header.Set("x-cave-agent", tt.agent)
+			if tt.account != "" {
+				req.Header.Set("ChatGPT-Account-ID", tt.account)
+			}
+
+			if got := isOpenCodeChatGPTSubscription(req); got != tt.want {
+				t.Fatalf("isOpenCodeChatGPTSubscription() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

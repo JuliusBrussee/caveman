@@ -34,22 +34,88 @@ function test(name, fn) {
 
 console.log('caveman-parse (shared mode-change parser) tests\n');
 
-const defaultFull = { getDefaultMode: () => 'full' };
+const defaultCaveman = { getDefaultMode: () => 'caveman' };
 const defaultOff = { getDefaultMode: () => 'off' };
+const MODE_OF = {
+  '/ultracave': 'ultracave', '/caveman:ultracave': 'ultracave',
+  '/megacave': 'megacave', '/caveman:megacave': 'megacave',
+};
+
+test('status uses one read-only verdict for literal and expanded commands', () => {
+  const options = { getDefaultMode: () => { throw new Error('status must not resolve a default'); } };
+  for (const prompt of ['/caveman status', '/caveman:caveman status', '/caveman status.']) {
+    assert.deepStrictEqual(parseModeChange(prompt, options), { action: 'status' });
+  }
+  assert.deepStrictEqual(parseModeChange('Activate caveman mode: status\n\nIf no argument given, use caveman.', {
+    ...options, expandedTpl: true,
+  }), { action: 'status' });
+  assert.strictEqual(parseModeChange('What does `/caveman status` do?', options), null);
+});
+
+test('manual startup policy permits explicit activation but is not a mode', () => {
+  const options = { getDefaultMode: () => 'manual', expandedTpl: true };
+  for (const prompt of ['/caveman', 'talk like caveman', 'Activate caveman mode: \n\nIf no argument given, use caveman.']) {
+    assert.deepStrictEqual(parseModeChange(prompt, options), { action: 'set', mode: 'caveman' });
+  }
+  assert.deepStrictEqual(parseModeChange('/caveman manual', options), { action: 'unresolved' });
+  assert.strictEqual(parseModeChange('ordinary request', options), null);
+});
 
 // ---------- basic unit coverage ----------
 
 test('empty/whitespace prompt is a no-op', () => {
-  assert.strictEqual(parseModeChange('', defaultFull), null);
-  assert.strictEqual(parseModeChange('   ', defaultFull), null);
+  assert.strictEqual(parseModeChange('', defaultCaveman), null);
+  assert.strictEqual(parseModeChange('   ', defaultCaveman), null);
 });
 
-test('slash level switch', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman ultra', defaultFull), { action: 'set', mode: 'ultra' });
+test('/ultracave and /megacave set their own mode, bare or namespaced', () => {
+  for (const [prompt, mode] of [
+    ['/ultracave', 'ultracave'], ['/caveman:ultracave', 'ultracave'],
+    ['/megacave', 'megacave'], ['/caveman:megacave', 'megacave'],
+  ]) {
+    assert.deepStrictEqual(parseModeChange(prompt, defaultCaveman), { action: 'set', mode }, prompt);
+    // A configured default never overrides the command's own mode.
+    assert.deepStrictEqual(parseModeChange(prompt, defaultOff), { action: 'set', mode }, prompt);
+  }
+});
+
+test('/caveman <arg> accepts the three mode names', () => {
+  for (const mode of ['caveman', 'ultracave', 'megacave']) {
+    assert.deepStrictEqual(parseModeChange('/caveman ' + mode, defaultCaveman), { action: 'set', mode });
+  }
+});
+
+test('legacy level names still parse as aliases of the three modes', () => {
+  for (const [arg, mode] of [
+    ['lite', 'caveman'], ['full', 'caveman'], ['ultra', 'ultracave'],
+    ['wenyan', 'megacave'], ['wenyan-lite', 'megacave'],
+    ['wenyan-full', 'megacave'], ['wenyan-ultra', 'megacave'],
+  ]) {
+    assert.deepStrictEqual(parseModeChange('/caveman ' + arg, defaultCaveman), { action: 'set', mode }, arg);
+  }
+});
+
+test('/ultracave and /megacave take the same off/status words as /caveman', () => {
+  for (const cmd of ['/ultracave', '/caveman:ultracave', '/megacave', '/caveman:megacave']) {
+    for (const word of ['off', 'stop', 'disable', 'off.']) {
+      assert.deepStrictEqual(parseModeChange(`${cmd} ${word}`, defaultCaveman), { action: 'clear' }, `${cmd} ${word}`);
+    }
+    assert.deepStrictEqual(parseModeChange(`${cmd} status`, defaultCaveman), { action: 'status' }, `${cmd} status`);
+    assert.deepStrictEqual(
+      parseModeChange(`${cmd} please`, defaultCaveman),
+      { action: 'set', mode: MODE_OF[cmd] },
+      `${cmd} please`
+    );
+  }
+});
+
+test('/ultracave-like prefixes are not the command', () => {
+  assert.strictEqual(parseModeChange('/ultracaveman', defaultCaveman), null);
+  assert.strictEqual(parseModeChange('/megacave-stats', defaultCaveman), null);
 });
 
 test('bare /caveman activates at the configured default', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman', defaultFull), { action: 'set', mode: 'full' });
+  assert.deepStrictEqual(parseModeChange('/caveman', defaultCaveman), { action: 'set', mode: 'caveman' });
 });
 
 test('bare /caveman with an off default clears instead of setting mode "off"', () => {
@@ -57,13 +123,9 @@ test('bare /caveman with an off default clears instead of setting mode "off"', (
 });
 
 test('/caveman off|stop|disable all clear', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman off', defaultFull), { action: 'clear' });
-  assert.deepStrictEqual(parseModeChange('/caveman stop', defaultFull), { action: 'clear' });
-  assert.deepStrictEqual(parseModeChange('/caveman disable', defaultFull), { action: 'clear' });
-});
-
-test('wenyan-full alias stores as "wenyan"', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman wenyan-full', defaultFull), { action: 'set', mode: 'wenyan' });
+  assert.deepStrictEqual(parseModeChange('/caveman off', defaultCaveman), { action: 'clear' });
+  assert.deepStrictEqual(parseModeChange('/caveman stop', defaultCaveman), { action: 'clear' });
+  assert.deepStrictEqual(parseModeChange('/caveman disable', defaultCaveman), { action: 'clear' });
 });
 
 // A bogus level is now REPORTED rather than swallowed (#838), but the original
@@ -71,13 +133,13 @@ test('wenyan-full alias stores as "wenyan"', () => {
 // default. 'unresolved' carries no mode, and applyModeChange/the tracker act
 // only on 'set'/'clear'.
 test('bogus level is unresolved — never falls through to the default', () => {
-  const verdict = parseModeChange('/caveman not-a-real-level', defaultFull);
+  const verdict = parseModeChange('/caveman not-a-real-level', defaultCaveman);
   assert.deepStrictEqual(verdict, { action: 'unresolved' });
   assert.strictEqual(verdict.mode, undefined, 'must not carry a mode');
 });
 
 test('independent modes are not reachable via /caveman <arg>', () => {
-  const verdict = parseModeChange('/caveman commit', defaultFull);
+  const verdict = parseModeChange('/caveman commit', defaultCaveman);
   assert.strictEqual(verdict.action, 'unresolved');
   assert.strictEqual(verdict.mode, undefined, 'must not activate the mode');
 });
@@ -87,67 +149,67 @@ test('independent modes are not reachable via /caveman <arg>', () => {
 // already harmless — it is the glued character that broke it.
 test('punctuation glued to the level still resolves (#838)', () => {
   for (const prompt of ['/caveman ultra;', '/caveman ultra.', '/caveman ultra!', '/caveman ultra,']) {
-    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'ultra' }, prompt);
+    assert.deepStrictEqual(parseModeChange(prompt, defaultCaveman), { action: 'set', mode: 'ultracave' }, prompt);
   }
 });
 
 test('punctuation glued to a hyphenated level still resolves (#838)', () => {
   assert.deepStrictEqual(
-    parseModeChange('/caveman wenyan-ultra.', defaultFull),
-    { action: 'set', mode: 'wenyan-ultra' }
+    parseModeChange('/caveman wenyan-ultra.', defaultCaveman),
+    { action: 'set', mode: 'megacave' }
   );
   assert.deepStrictEqual(
-    parseModeChange('/caveman wenyan-full,', defaultFull),
-    { action: 'set', mode: 'wenyan' }
+    parseModeChange('/caveman wenyan-full,', defaultCaveman),
+    { action: 'set', mode: 'megacave' }
   );
 });
 
 test('punctuation glued to off still deactivates (#838)', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman off.', defaultFull), { action: 'clear' });
+  assert.deepStrictEqual(parseModeChange('/caveman off.', defaultCaveman), { action: 'clear' });
 });
 
 test('trailing words after the level remain harmless', () => {
   assert.deepStrictEqual(
-    parseModeChange('/caveman ultra; still too verbose', defaultFull),
-    { action: 'set', mode: 'ultra' }
+    parseModeChange('/caveman ultra; still too verbose', defaultCaveman),
+    { action: 'set', mode: 'ultracave' }
   );
 });
 
 // `/caveman ?` is plausibly someone asking for help. Bare `/caveman` still
 // activates; an argument that was PRESENT but normalized away must not.
 test('a punctuation-only argument does not activate', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman ?', defaultFull), { action: 'unresolved' });
-  assert.deepStrictEqual(parseModeChange('/caveman', defaultFull), { action: 'set', mode: 'full' });
+  assert.deepStrictEqual(parseModeChange('/caveman ?', defaultCaveman), { action: 'unresolved' });
+  assert.deepStrictEqual(parseModeChange('/caveman', defaultCaveman), { action: 'set', mode: 'caveman' });
 });
 
 test('/caveman-commit, /caveman-review, /caveman-compress set independent modes', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman-commit', defaultFull), { action: 'set', mode: 'commit' });
-  assert.deepStrictEqual(parseModeChange('/caveman-review', defaultFull), { action: 'set', mode: 'review' });
-  assert.deepStrictEqual(parseModeChange('/caveman-compress', defaultFull), { action: 'set', mode: 'compress' });
+  assert.deepStrictEqual(parseModeChange('/caveman-commit', defaultCaveman), { action: 'set', mode: 'commit' });
+  assert.deepStrictEqual(parseModeChange('/caveman-review', defaultCaveman), { action: 'set', mode: 'review' });
+  assert.deepStrictEqual(parseModeChange('/caveman-compress', defaultCaveman), { action: 'set', mode: 'compress' });
 });
 
 test('namespaced /caveman:caveman-* variants are recognized', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman:caveman-commit', defaultFull), { action: 'set', mode: 'commit' });
-  assert.deepStrictEqual(parseModeChange('/caveman:caveman-review', defaultFull), { action: 'set', mode: 'review' });
-  assert.deepStrictEqual(parseModeChange('/caveman:caveman', defaultFull), { action: 'set', mode: 'full' });
+  assert.deepStrictEqual(parseModeChange('/caveman:caveman-commit', defaultCaveman), { action: 'set', mode: 'commit' });
+  assert.deepStrictEqual(parseModeChange('/caveman:caveman-review', defaultCaveman), { action: 'set', mode: 'review' });
+  assert.deepStrictEqual(parseModeChange('/caveman:caveman', defaultCaveman), { action: 'set', mode: 'caveman' });
 });
 
 test('natural-language activation', () => {
-  assert.deepStrictEqual(parseModeChange('activate caveman', defaultFull), { action: 'set', mode: 'full' });
-  assert.deepStrictEqual(parseModeChange('talk like a caveman', defaultFull), { action: 'set', mode: 'full' });
+  assert.deepStrictEqual(parseModeChange('activate caveman', defaultCaveman), { action: 'set', mode: 'caveman' });
+  assert.deepStrictEqual(parseModeChange('talk like a caveman', defaultCaveman), { action: 'set', mode: 'caveman' });
 });
 
 test('brevity triggers activate', () => {
-  assert.deepStrictEqual(parseModeChange('be brief', defaultFull), { action: 'set', mode: 'full' });
-  assert.deepStrictEqual(parseModeChange('fewer tokens please', defaultFull), { action: 'set', mode: 'full' });
+  assert.deepStrictEqual(parseModeChange('be brief', defaultCaveman), { action: 'set', mode: 'caveman' });
+  assert.deepStrictEqual(parseModeChange('fewer tokens please', defaultCaveman), { action: 'set', mode: 'caveman' });
 });
 
 test('scoped brevity ("be brief in the summary") does not activate', () => {
-  assert.strictEqual(parseModeChange('be brief in the summary section', defaultFull), null);
+  assert.strictEqual(parseModeChange('be brief in the summary section', defaultCaveman), null);
 });
 
 test('questions about caveman do not activate', () => {
-  assert.strictEqual(parseModeChange('what is caveman mode?', defaultFull), null);
+  assert.strictEqual(parseModeChange('what is caveman mode?', defaultCaveman), null);
 });
 
 // #187: the gap between the activation verb and "caveman" was any 40
@@ -161,7 +223,7 @@ test('prose with a verb and a downstream "caveman" does not activate (#187)', ()
     'we should use the sprite sheet from the caveman assets folder',
     'switch to the branch that renames the caveman skill directory',
   ]) {
-    assert.strictEqual(parseModeChange(prompt, defaultFull), null, prompt);
+    assert.strictEqual(parseModeChange(prompt, defaultCaveman), null, prompt);
   }
 });
 
@@ -179,7 +241,7 @@ test('real activation phrasings still activate (positive control, #187)', () => 
     'talk like caveman',
     'talk like a caveman',
   ]) {
-    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'full' }, prompt);
+    assert.deepStrictEqual(parseModeChange(prompt, defaultCaveman), { action: 'set', mode: 'caveman' }, prompt);
   }
 });
 
@@ -195,7 +257,7 @@ test('a negated activation does not activate (#187)', () => {
     "please don't talk like a caveman",
     'no need to use caveman here',
   ]) {
-    assert.strictEqual(parseModeChange(prompt, defaultFull), null, prompt);
+    assert.strictEqual(parseModeChange(prompt, defaultCaveman), null, prompt);
   }
 });
 
@@ -211,7 +273,7 @@ test('a negated activation with a complement clause does not activate (#187)', (
     "i don't need you to talk like a caveman",
     'never ask me to turn on caveman mode',
   ]) {
-    assert.strictEqual(parseModeChange(prompt, defaultFull), null, prompt);
+    assert.strictEqual(parseModeChange(prompt, defaultCaveman), null, prompt);
   }
 });
 
@@ -224,17 +286,33 @@ test('a negated clause does not suppress a later activation (#187)', () => {
     "i don't like verbose output. activate caveman",
     "never mind the linter — turn on caveman",
   ]) {
-    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'full' }, prompt);
+    assert.deepStrictEqual(parseModeChange(prompt, defaultCaveman), { action: 'set', mode: 'caveman' }, prompt);
   }
 });
 
 test('natural-language deactivation', () => {
-  assert.deepStrictEqual(parseModeChange('turn caveman mode off', defaultFull), { action: 'clear' });
-  assert.deepStrictEqual(parseModeChange('normal mode', defaultFull), { action: 'clear' });
+  assert.deepStrictEqual(parseModeChange('turn caveman mode off', defaultCaveman), { action: 'clear' });
+  assert.deepStrictEqual(parseModeChange('normal mode', defaultCaveman), { action: 'clear' });
+});
+
+// "go back to normal mode" and "go to normal mode" are ordinary switch-back
+// phrasings, but the verb alternation listed "go" and "back to" as separate,
+// mutually exclusive prefixes, so "go back to" matched nothing and "go to" had
+// no alternative at all. Both deactivations were silently dropped, leaving the
+// user in the mode with no feedback.
+test('"go back to normal mode" / "go to normal mode" deactivate like the other switch-back phrasings', () => {
+  for (const prompt of [
+    'go back to normal mode',
+    'go to normal mode',
+    'please go back to normal mode',
+    'go back to normal mode and summarize the diff',
+  ]) {
+    assert.deepStrictEqual(parseModeChange(prompt, defaultCaveman), { action: 'clear' }, prompt);
+  }
 });
 
 test('vim "normal mode" (no caveman context) does not deactivate', () => {
-  assert.strictEqual(parseModeChange('how do I exit vim normal mode', defaultFull), null);
+  assert.strictEqual(parseModeChange('how do I exit vim normal mode', defaultCaveman), null);
 });
 
 test('INDEPENDENT_MODES is exported and matches the known set', () => {
@@ -245,19 +323,19 @@ test('INDEPENDENT_MODES is exported and matches the known set', () => {
 
 test('skipNaturalLanguage suppresses activation/deactivation matching entirely', () => {
   assert.strictEqual(
-    parseModeChange('please activate caveman mode now', { ...defaultFull, skipNaturalLanguage: true }),
+    parseModeChange('please activate caveman mode now', { ...defaultCaveman, skipNaturalLanguage: true }),
     null
   );
   assert.strictEqual(
-    parseModeChange('stop caveman', { ...defaultFull, skipNaturalLanguage: true }),
+    parseModeChange('stop caveman', { ...defaultCaveman, skipNaturalLanguage: true }),
     null
   );
 });
 
 test('skipNaturalLanguage still lets literal slash commands through', () => {
   assert.deepStrictEqual(
-    parseModeChange('/caveman ultra', { ...defaultFull, skipNaturalLanguage: true }),
-    { action: 'set', mode: 'ultra' }
+    parseModeChange('/caveman ultra', { ...defaultCaveman, skipNaturalLanguage: true }),
+    { action: 'set', mode: 'ultracave' }
   );
 });
 
@@ -265,28 +343,46 @@ test('skipNaturalLanguage still lets literal slash commands through', () => {
 
 test('unwrapQuotes strips a symmetric quote wrapper before matching', () => {
   assert.deepStrictEqual(
-    parseModeChange('"/caveman lite"', { ...defaultFull, unwrapQuotes: true }),
-    { action: 'set', mode: 'lite' }
+    parseModeChange('"/caveman lite"', { ...defaultCaveman, unwrapQuotes: true }),
+    { action: 'set', mode: 'caveman' }
   );
 });
 
 test('without unwrapQuotes, a quoted command does not match', () => {
-  assert.strictEqual(parseModeChange('"/caveman lite"', defaultFull), null);
+  assert.strictEqual(parseModeChange('"/caveman lite"', defaultCaveman), null);
 });
 
 // ---------- expandedTpl (opencode's expanded command-template bodies) ----------
 
-test('expandedTpl recognizes the generic "/caveman <level>" template', () => {
+test('expandedTpl recognizes the ultracave and megacave templates', () => {
+  const read = (name) => fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'plugins', 'opencode', 'commands', name), 'utf8',
+  ).replace(/^---[\s\S]*?---\s*/, '');
   assert.deepStrictEqual(
-    parseModeChange('Activate caveman mode: ultra', { ...defaultFull, expandedTpl: true }),
-    { action: 'set', mode: 'ultra' }
+    parseModeChange(read('ultracave.md'), { ...defaultCaveman, expandedTpl: true }),
+    { action: 'set', mode: 'ultracave' }
+  );
+  assert.deepStrictEqual(
+    parseModeChange(read('megacave.md'), { ...defaultCaveman, expandedTpl: true }),
+    { action: 'set', mode: 'megacave' }
+  );
+  assert.deepStrictEqual(
+    parseModeChange(read('caveman.md').replace('$ARGUMENTS', ''), { ...defaultCaveman, expandedTpl: true }),
+    { action: 'set', mode: 'caveman' }
+  );
+});
+
+test('expandedTpl recognizes the generic "/caveman <arg>" template', () => {
+  assert.deepStrictEqual(
+    parseModeChange('Activate caveman mode: ultra', { ...defaultCaveman, expandedTpl: true }),
+    { action: 'set', mode: 'ultracave' }
   );
 });
 
 test('expandedTpl: empty level (bare "/caveman", multi-line template head) uses the default', () => {
   // The real commands/caveman.md template puts `Activate caveman mode:
   // $ARGUMENTS` on its own line, followed by a blank line and then fixed
-  // boilerplate ("If no level given, use full. If \"off\", deactivate.").
+  // boilerplate ("If no argument given, use caveman. If \"off\", deactivate.").
   // With $ARGUMENTS empty, whitespace-collapse used to merge that boilerplate
   // directly onto the same line as the (empty) argument, so the word "if"
   // (from "If no level given ...") was captured as the level and rejected as
@@ -295,38 +391,70 @@ test('expandedTpl: empty level (bare "/caveman", multi-line template head) uses 
   // tests/installer/opencode.test.mjs's real-hooks test).
   const templateNoArgs =
     'Activate caveman mode: \n\n' +
-    'If no level given, use full. If "off", deactivate.';
+    'If no argument given, use caveman. If "off", deactivate.';
   assert.deepStrictEqual(
-    parseModeChange(templateNoArgs, { ...defaultFull, expandedTpl: true }),
-    { action: 'set', mode: 'full' }
+    parseModeChange(templateNoArgs, { ...defaultCaveman, expandedTpl: true }),
+    { action: 'set', mode: 'caveman' }
   );
 });
 
 test('expandedTpl: bogus level in the template is unresolved, not the default (#602 drift)', () => {
   assert.deepStrictEqual(
-    parseModeChange('Activate caveman mode: not-a-real-level', { ...defaultFull, expandedTpl: true }),
+    parseModeChange('Activate caveman mode: not-a-real-level', { ...defaultCaveman, expandedTpl: true }),
     { action: 'unresolved' }
   );
 });
 
 test('expandedTpl recognizes the independent-mode command templates (#602 drift)', () => {
   assert.deepStrictEqual(
-    parseModeChange('Generate a commit message for the current staged changes.', { ...defaultFull, expandedTpl: true }),
+    parseModeChange('Generate a commit message for the current staged changes.', { ...defaultCaveman, expandedTpl: true }),
     { action: 'set', mode: 'commit' }
   );
   assert.deepStrictEqual(
-    parseModeChange('Review the current diff (or files: ).', { ...defaultFull, expandedTpl: true }),
+    parseModeChange('Review the current diff (or files: ).', { ...defaultCaveman, expandedTpl: true }),
     { action: 'set', mode: 'review' }
   );
   assert.deepStrictEqual(
-    parseModeChange('Compress the file at: notes.md', { ...defaultFull, expandedTpl: true }),
+    parseModeChange('Compress the file at: notes.md', { ...defaultCaveman, expandedTpl: true }),
     { action: 'set', mode: 'compress' }
+  );
+});
+
+test('expandedTpl: no non-activation opencode template switches a prose mode', () => {
+  // Every shipped command file, expanded the way opencode delivers it: front
+  // matter stripped, $ARGUMENTS empty. /caveman-help listed "Activate caveman"
+  // in its table, which flipped ultracave back to caveman (or turned it on).
+  const dir = path.join(__dirname, '..', 'src', 'plugins', 'opencode', 'commands');
+  const PROSE = new Set(['caveman', 'ultracave', 'megacave']);
+  const checked = [];
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.md'))) {
+    if (PROSE.has(file.replace(/\.md$/, ''))) continue; // activation templates by design
+    const body = fs.readFileSync(path.join(dir, file), 'utf8')
+      .replace(/^---[\s\S]*?---\s*/, '').split('$ARGUMENTS').join('');
+    for (const getDefaultMode of [() => 'caveman', () => 'ultracave']) {
+      const verdict = parseModeChange(body, { getDefaultMode, expandedTpl: true, unwrapQuotes: true });
+      const switches = verdict && (verdict.action === 'clear' || (verdict.action === 'set' && PROSE.has(verdict.mode)));
+      assert.ok(!switches, `${file} → ${JSON.stringify(verdict)}`);
+    }
+    checked.push(file);
+  }
+  for (const f of ['caveman-help.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md']) {
+    assert.ok(checked.includes(f), `${f} not checked`);
+  }
+});
+
+test('expandedTpl: the help card opener short-circuits even a trigger in its body', () => {
+  assert.strictEqual(
+    parseModeChange('Show the caveman quick-reference card.\n\n| /caveman | Activate caveman |\nstop caveman', {
+      ...defaultCaveman, expandedTpl: true,
+    }),
+    null
   );
 });
 
 test('without expandedTpl, template bodies are inert plain text', () => {
   assert.strictEqual(
-    parseModeChange('Generate a commit message for the current staged changes.', defaultFull),
+    parseModeChange('Generate a commit message for the current staged changes.', defaultCaveman),
     null
   );
 });
@@ -359,18 +487,18 @@ function runTracker(prompt, presetFlag) {
 // text that merely QUOTED them fired them.
 test('prose quoting "stop caveman" no longer deactivates (#838)', () => {
   const prompt = 'why does the help card say "stop caveman" or "normal mode" here?';
-  assert.strictEqual(parseModeChange(prompt, defaultFull), null);
+  assert.strictEqual(parseModeChange(prompt, defaultCaveman), null);
 });
 
 test('prose quoting "activate caveman" no longer activates (#838)', () => {
   assert.strictEqual(
-    parseModeChange('the readme says you can "activate caveman" by typing it', defaultFull),
+    parseModeChange('the readme says you can "activate caveman" by typing it', defaultCaveman),
     null
   );
 });
 
 test('backtick-quoted triggers are inert too', () => {
-  assert.strictEqual(parseModeChange('the `stop caveman` phrase is documented', defaultFull), null);
+  assert.strictEqual(parseModeChange('the `stop caveman` phrase is documented', defaultCaveman), null);
 });
 
 // The cap that was tried first broke exactly these: a user explaining WHY they
@@ -382,68 +510,69 @@ test('long compound deactivation still works — no length cap (#838)', () => {
     'ok this is getting hard to read, stop caveman mode and then go through the auth middleware and explain the token expiry check',
   ]) {
     assert.ok(prompt.length > 120, 'fixture must be long enough to matter');
-    assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'clear' }, prompt);
+    assert.deepStrictEqual(parseModeChange(prompt, defaultCaveman), { action: 'clear' }, prompt);
   }
 });
 
 test('long compound activation still works', () => {
   const prompt = 'activate caveman mode and then start by reading the proxy package and summarising how the dial guard is wired up';
   assert.ok(prompt.length > 110);
-  assert.deepStrictEqual(parseModeChange(prompt, defaultFull), { action: 'set', mode: 'full' });
+  assert.deepStrictEqual(parseModeChange(prompt, defaultCaveman), { action: 'set', mode: 'caveman' });
 });
 
 test('apostrophes do not blank the command ("don\'t stop caveman, it\'s useful")', () => {
   assert.deepStrictEqual(
-    parseModeChange("don't stop caveman, it's useful", defaultFull),
+    parseModeChange("don't stop caveman, it's useful", defaultCaveman),
     { action: 'clear' }
   );
 });
 
 test('short natural-language triggers still work (positive control)', () => {
-  assert.deepStrictEqual(parseModeChange('stop caveman', defaultFull), { action: 'clear' });
-  assert.deepStrictEqual(parseModeChange('back to normal mode please', defaultFull), { action: 'clear' });
-  assert.deepStrictEqual(parseModeChange('activate caveman', defaultFull), { action: 'set', mode: 'full' });
+  assert.deepStrictEqual(parseModeChange('stop caveman', defaultCaveman), { action: 'clear' });
+  assert.deepStrictEqual(parseModeChange('back to normal mode please', defaultCaveman), { action: 'clear' });
+  assert.deepStrictEqual(parseModeChange('activate caveman', defaultCaveman), { action: 'set', mode: 'caveman' });
 });
 
 // A foreign slash command's own text must not toggle our mode — symmetric with
 // the skipNaturalLanguage that a foreign command ENVELOPE already sets.
 test('a slash-initiated prompt does not fire natural-language triggers', () => {
-  assert.strictEqual(parseModeChange('/caveman-help stop caveman', defaultFull), null);
-  assert.strictEqual(parseModeChange('/some-other-command activate caveman', defaultFull), null);
+  assert.strictEqual(parseModeChange('/caveman-help stop caveman', defaultCaveman), null);
+  assert.strictEqual(parseModeChange('/some-other-command activate caveman', defaultCaveman), null);
 });
 
 test('slash commands themselves are unaffected by prompt length', () => {
   const long = '/caveman ultra ' + 'x'.repeat(400);
-  assert.deepStrictEqual(parseModeChange(long, defaultFull), { action: 'set', mode: 'ultra' });
+  assert.deepStrictEqual(parseModeChange(long, defaultCaveman), { action: 'set', mode: 'ultracave' });
 });
 
 // An independent mode IS a real mode, just not reachable this way — saying
 // "not recognized" would deny a mode the user can see in the docs.
 test('an independent mode via /caveman <arg> reports its own command', () => {
   assert.deepStrictEqual(
-    parseModeChange('/caveman commit', defaultFull),
+    parseModeChange('/caveman commit', defaultCaveman),
     { action: 'unresolved', independentMode: 'commit' }
   );
 });
 
 test('a quoted level resolves (leading punctuation stripped too)', () => {
-  assert.deepStrictEqual(parseModeChange('/caveman "ultra"', defaultFull), { action: 'set', mode: 'ultra' });
+  assert.deepStrictEqual(parseModeChange('/caveman "ultra"', defaultCaveman), { action: 'set', mode: 'ultracave' });
 });
 
 const parityCases = [
   { prompt: '/caveman ultra', preset: null },
-  { prompt: '/caveman off', preset: 'full' },
-  { prompt: '/caveman not-a-real-level', preset: 'ultra' },
+  { prompt: '/ultracave', preset: 'caveman' },
+  { prompt: '/caveman off', preset: 'caveman' },
+  { prompt: '/caveman not-a-real-level', preset: 'ultracave' },
   { prompt: 'be brief', preset: null },
   { prompt: 'activate caveman', preset: null },
-  { prompt: 'stop caveman', preset: 'full' },
+  { prompt: 'stop caveman', preset: 'caveman' },
   { prompt: 'what is caveman mode?', preset: null },
 ];
 
 for (const { prompt, preset } of parityCases) {
   test(`parity: "${prompt}" (preset=${preset}) matches shared-parser verdict`, () => {
     const normalized = prompt.trim().toLowerCase().replace(/\s+/g, ' ');
-    const verdict = parseModeChange(normalized, { getDefaultMode: () => 'full' });
+    const verdict = parseModeChange(normalized, { getDefaultMode: () => 'caveman' });
     // null and 'unresolved' both mean "leave the flag exactly as it was".
     const expected =
       verdict === null ? (preset || null) :

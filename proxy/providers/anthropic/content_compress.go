@@ -13,7 +13,10 @@ import (
 // FrozenPrefixComponents returns exact JSON value bytes that Anthropic treats as
 // frozen context: top-level system/tools plus messages below cache floor.
 // Length-prefixed framing prevents concatenation ambiguity. Live tail stays out,
-// so its growth cannot rotate observed prefix digest.
+// so its growth cannot rotate observed prefix digest. cache_control markers are
+// stripped from every component first: the provider caches content, not marker
+// placement, and Claude Code moves its marker forward every turn — the message it
+// just unmarked must still hash as the message the previous turn froze (#1094).
 func (a Adapter) FrozenPrefixComponents(body []byte, meta providers.RequestMetadata) ([][]byte, bool) {
 	if strings.Contains(meta.Endpoint, "count_tokens") {
 		return nil, false
@@ -41,13 +44,13 @@ func (a Adapter) FrozenPrefixComponents(body []byte, meta providers.RequestMetad
 	out := [][]byte{[]byte("cave.anthropic.frozen-prefix.v1")}
 	for _, name := range []string{"system", "tools"} {
 		if span, exists := findObjectField(body, root, name); exists {
-			out = append(out, frozenField(name, body[span.start:span.end]))
+			out = append(out, frozenField(name, stripCacheControl(body[span.start:span.end])))
 		} else {
 			out = append(out, frozenField(name, nil))
 		}
 	}
 	for i := 0; i < floor; i++ {
-		out = append(out, frozenField("message", body[messages[i].start:messages[i].end]))
+		out = append(out, frozenField("message", stripCacheControl(body[messages[i].start:messages[i].end])))
 	}
 	return out, true
 }

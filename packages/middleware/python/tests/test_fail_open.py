@@ -7,10 +7,11 @@ caller's own input and report that it skipped, not raise and not hang.
 import pytest
 
 from conftest import bypassed
+from frameworks import require_adapter
 
 
 def test_langchain_returns_the_callers_messages(unreachable_runtime):
-    pytest.importorskip("langchain_core", reason="install caveman-middleware[langchain]")
+    require_adapter("langchain")
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
     from caveman_middleware.langchain import _Connection
@@ -28,8 +29,7 @@ def test_langchain_returns_the_callers_messages(unreachable_runtime):
 
 
 def test_asgi_passes_the_original_request_body_downstream():
-    pytest.importorskip("caveman_cloud", reason="caveman-sdk is not installed")
-    pytest.importorskip("starlette", reason="install caveman-middleware[asgi]")
+    require_adapter("asgi")
     import asyncio
     import json
 
@@ -78,7 +78,7 @@ def test_asgi_passes_the_original_request_body_downstream():
 
 
 def test_openai_client_still_reaches_the_provider(unreachable_runtime):
-    pytest.importorskip("openai", reason="install caveman-middleware[openai]")
+    require_adapter("openai")
     import json
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer

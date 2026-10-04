@@ -105,6 +105,20 @@ func beta(b string) string {
 	}
 }
 
+// GDScript arrives the same way and must reach the code compressor in both
+// builds, gutter and all.
+func TestGutteredGDScriptReachesTheCodeCompressor(t *testing.T) {
+	e := New(nil, nil)
+	source := "@tool\nextends Node2D\n\nsignal hit(damage: int)\n\n@export var speed: float = 120.0\n\n\nfunc _ready() -> void:\n\tvar t := get_tree()\n\tt.paused = false\n\tprint(speed)\n\n\nfunc take_hit(damage: int) -> void:\n\tif damage <= 0:\n\t\treturn\n\thit.emit(damage)\n\tqueue_free()\n"
+	res := e.Simulate([]byte(gutterLines(source)), Options{Mode: ModeCompress})
+	if res.ContentType != TypeCode {
+		t.Fatalf("guttered GDScript detected as %q, want %q", res.ContentType, TypeCode)
+	}
+	if res.TokensSaved == 0 {
+		t.Fatal("guttered GDScript compressed nothing")
+	}
+}
+
 // Content that is not a listing must be completely unaffected.
 func TestNonListingContentIsUntouched(t *testing.T) {
 	content := jsonFixture(t)

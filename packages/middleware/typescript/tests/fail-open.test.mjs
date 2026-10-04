@@ -1,21 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createServer } from 'node:http';
 import { createMiddlewareRuntime } from '@caveman-ai/sdk/middleware';
-
-/** A port nothing is listening on: the proxy-is-not-running failure. */
-async function closedPort() {
-  const server = createServer();
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  await new Promise(resolve => server.close(resolve));
-  return port;
-}
+import { requirePeers } from './peers.mjs';
 
 async function unreachableRuntime() {
   const reports = [];
   const runtime = createMiddlewareRuntime({
-    endpoint: `http://127.0.0.1:${await closedPort()}`,
+    // Deterministic refused transport, without a racy listen/close reservation.
+    fetch: async () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }); },
     deadlineMs: 200,
     onReport: report => reports.push(report),
   });
@@ -38,15 +30,8 @@ test('the runtime bypasses instead of throwing when the proxy is down', async ()
 });
 
 test('ai-sdk hands the provider the caller\'s own messages when the proxy is down', async t => {
-  let withCaveman, wrapLanguageModel;
-  try {
-    ({ withCaveman } = await import('../dist/ai-sdk.js'));
-    ({ wrapLanguageModel } = await import('ai'));
-  } catch (error) {
-    if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
-    t.skip(`framework peer not installed: ${error.message}`);
-    return;
-  }
+  if (!requirePeers(t, 'ai-sdk')) return;
+  const { withCaveman } = await import('../dist/ai-sdk.js');
   const original = 'ERROR keep this exactly\n' + 'noise '.repeat(400);
   const seen = [];
   const model = {

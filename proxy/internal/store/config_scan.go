@@ -52,9 +52,14 @@ type mcpScopeScan struct {
 }
 
 // Agent roots resolve local transcript/config dirs and stay env-overridable so
-// tests never read or write a user's real agent data.
+// tests never read or write a user's real agent data. After the CAVEMAN_*
+// test overrides come the agents' own relocation variables: CLAUDE_CONFIG_DIR
+// moves Claude Code's whole config dir, CODEX_HOME moves Codex's.
 func claudeRoot() string {
 	if r := os.Getenv("CAVEMAN_CLAUDE_ROOT"); r != "" {
+		return r
+	}
+	if r := os.Getenv("CLAUDE_CONFIG_DIR"); r != "" {
 		return r
 	}
 	home, err := os.UserHomeDir()
@@ -68,6 +73,9 @@ func codexRoot() string {
 	if r := os.Getenv("CAVEMAN_CODEX_ROOT"); r != "" {
 		return r
 	}
+	if r := os.Getenv("CODEX_HOME"); r != "" {
+		return r
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -75,20 +83,36 @@ func codexRoot() string {
 	return filepath.Join(home, ".codex")
 }
 
+// GEMINI_CLI_HOME relocates Gemini CLI's HOME, not its .gemini directory, so
+// the subdirectory is still appended — the same semantics the TypeScript CLI
+// implements (packages/cli/src/index.ts). Verified against gemini 0.62.0,
+// which creates $GEMINI_CLI_HOME/.gemini and leaves $HOME untouched.
 func geminiRoot() string {
 	if r := os.Getenv("CAVEMAN_GEMINI_ROOT"); r != "" {
 		return r
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+	home := os.Getenv("GEMINI_CLI_HOME")
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
 	}
 	return filepath.Join(home, ".gemini")
 }
 
+// opencode stores sessions under the XDG data dir, so XDG_DATA_HOME replaces
+// ~/.local/share rather than the whole home. Verified against opencode 1.18.34,
+// which creates $XDG_DATA_HOME/opencode and never touches ~/.local/share.
+// Without this, learn scanned a directory opencode had not written to and
+// reported zero sessions for every user who sets XDG_DATA_HOME (#1081).
 func opencodeRoot() string {
 	if r := os.Getenv("CAVEMAN_OPENCODE_ROOT"); r != "" {
 		return r
+	}
+	if data := os.Getenv("XDG_DATA_HOME"); data != "" {
+		return filepath.Join(data, "opencode", "storage")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -205,6 +229,10 @@ func claudeGlobalConfigPath() string {
 	}
 	if root := os.Getenv("CAVEMAN_CLAUDE_ROOT"); root != "" {
 		// Tests and alternate Claude homes must not fall through to real user config.
+		return filepath.Join(root, ".claude.json")
+	}
+	if root := os.Getenv("CLAUDE_CONFIG_DIR"); root != "" {
+		// A relocated Claude Code keeps its global config inside the config dir.
 		return filepath.Join(root, ".claude.json")
 	}
 	home, err := os.UserHomeDir()

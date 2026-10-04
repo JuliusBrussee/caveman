@@ -57,9 +57,21 @@ export function checkProfileScope({ base, head, cwd = process.cwd() }) {
 
   for (const commit of commits) {
     const changedBuffer = requireGit(
-      // -m takes the union across merge parents; otherwise a merge commit can hide
-      // an out-of-scope path from an ordinary single-parent diff-tree view.
-      runGit(cwd, ["diff-tree", "--root", "-m", "--no-commit-id", "--name-only", "-r", "-z", commit], null),
+      // -c asks what THIS commit authored: for an ordinary commit its own diff,
+      // for a merge only the paths it resolved differently from every parent.
+      //
+      // -m, which takes the union across merge parents, was used here to stop a
+      // merge hiding an out-of-scope path. It also attributed every path the
+      // merged-in branch carried to the merge commit itself, so a branch holding
+      // a profile commit could never take its base branch in -- "carries a pin
+      // bump" and "is up to date with main" became mutually exclusive.
+      //
+      // Nothing is hidden by the narrower view: a path that arrives through a
+      // merge arrives in some commit, and rev-list above walks every commit in
+      // base..head, so that commit is scope-checked on its own. What a merge
+      // genuinely authors -- a resolution that edits a profile -- still shows up
+      // under -c and is still held to the full rule.
+      runGit(cwd, ["diff-tree", "--root", "-c", "--no-commit-id", "--name-only", "-r", "-z", commit], null),
       `git diff-tree ${commit}`,
     );
     const changedFiles = changedBuffer.toString("utf8").split("\0").filter(Boolean);

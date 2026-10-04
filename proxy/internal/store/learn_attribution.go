@@ -51,6 +51,9 @@ const (
 	provenanceChanged      = "changed_since"
 	provenanceMissing      = "target_missing"
 	provenanceUnfingerprnt = "not_fingerprinted"
+	// provenanceNotApplicable: an experiment toggles a change on and off, so
+	// there is no single applied edit whose presence needs proving.
+	provenanceNotApplicable = "not_applicable"
 )
 
 // attributionRung orders the methods. Higher is stronger. Used to pick the best
@@ -94,25 +97,25 @@ func attributionConfounders(method, provenance string) []string {
 	switch method {
 	case attrDeterministic:
 		out = append(out,
-			"The token delta is arithmetic on the edited file; whether you would have trimmed it anyway is not measured.")
+			"The token change is simple math on the edited file. Whether you would have trimmed it anyway is not measured.")
 	case attrHoldout:
 		out = append(out,
-			"Arms are your own consecutive sessions, not randomized tasks; task difficulty may differ between arms.")
+			"The on and off periods are your own sessions, one after another, not random tasks. The work may have been harder in one of them.")
 	case attrReplay:
 		out = append(out,
-			"Replay applies the change to sessions that already happened; an agent given the changed context might have acted differently.")
+			"The replay applies the change to sessions that already happened. An agent that saw the changed setup might have acted differently.")
 	case attrTimeSeries:
 		out = append(out,
-			"Before/after sessions differ in more than this fix: task mix, model version, and repository state all moved too.",
-			"No control arm exists, so a coincident change elsewhere would look identical to this fix working.")
+			"Sessions before and after differ in more than this fix: the tasks, the model version, and the code all changed too.",
+			"There is no comparison group, so something else changing at the same time would look exactly like this fix working.")
 	}
 	switch provenance {
 	case provenanceChanged:
-		out = append(out, "The targeted file changed after the fix was recorded, so part of any delta belongs to that later edit.")
+		out = append(out, "The file changed again after the fix was recorded, so part of any change belongs to that later edit.")
 	case provenanceMissing:
-		out = append(out, "The targeted file is gone, so the delta cannot be tied to the recorded fix at all.")
+		out = append(out, "The file is gone, so the change cannot be tied to the recorded fix at all.")
 	case provenanceUnfingerprnt:
-		out = append(out, "This fix predates artifact fingerprinting, so the edit's continued presence is unverified.")
+		out = append(out, "This fix was recorded before Caveman kept a fingerprint of the file, so it can't confirm the edit is still there.")
 	}
 	return out
 }
@@ -296,12 +299,12 @@ func buildLearnSavings(plan LearnPlan) LearnSavings {
 		}
 	}
 	out.Caveats = append(out.Caveats,
-		"Savings are grouped by attribution method and never summed across methods: a re-counted file and a before/after session median are not the same kind of evidence.",
-		"Priced savings are a per-day rate over the scanned window at your measured effective input rate. They are inferred, never verified, and never projected to a month.",
+		"Savings are grouped by how they were measured and never added across groups. A re-counted file and a before/after comparison of sessions are not the same kind of evidence.",
+		"Dollar savings are a per-day rate over the period scanned, at what input really cost you. They are estimates, never verified, and never stretched to a month.",
 	)
 	if len(out.Rows) == 0 {
 		out.Caveats = append(out.Caveats,
-			"No fix has been recorded yet. Apply one through the caveman-learn skill and it will appear here with its attribution.")
+			"No fix has been recorded yet. Apply one with the caveman-learn skill and it will show up here, with how it was measured.")
 	}
 	return out
 }

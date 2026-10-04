@@ -6,6 +6,7 @@
 package standalone
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
@@ -32,16 +33,24 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/providers/vertex"
 	"github.com/JuliusBrussee/caveman/shared/platform/awscreds"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
+	"github.com/JuliusBrussee/caveman/shared/platform/redact"
 	"github.com/JuliusBrussee/caveman/shared/platform/ssrf"
 )
 
-// Auth is the single-operator authenticator: it returns a static context built
-// from caveman.yaml. There is still no multi-tenant key to validate — token is
-// one shared secret (CAVEMAN_AUTH_TOKEN), and it exists only so an operator can
-// bind past loopback (config.validateListen refuses that bind without it).
+// Auth is the single-operator authenticator for the provider routes: it
+// returns a static context built from caveman.yaml. There is still no
+// multi-tenant key to validate — token is one shared secret
+// (CAVEMAN_AUTH_TOKEN). The middleware's token map, OIDC and mTLS identities
+// are not accepted here: a provider-route caller spends the server's provider
+// keys, which is exactly the operator's shared authority.
+//
+// closed covers a non-loopback listener that is legal only because a
+// middleware identity source is configured: with no token, the provider routes
+// then refuse every request instead of accepting every one.
 type Auth struct {
-	rc    gateway.RequestContext
-	token string
+	rc     gateway.RequestContext
+	token  string
+	closed bool
 }
 
 // errInboundTokenRejected is deliberately uniform: the gateway maps any non-nil
@@ -52,7 +61,18 @@ type Auth struct {
 // the silence here costs no observability.
 var errInboundTokenRejected = errors.New("inbound token rejected")
 
+// RefusesAll reports that the provider routes refuse every request, so the
+// listener serves the middleware only (see gateway /health/ready).
+func (a Auth) RefusesAll() bool { return a.closed }
+
+// The gateway finds RefusesAll by an anonymous interface assertion, so a
+// renamed or re-signed method would silently stop matching: fail the build.
+var _ interface{ RefusesAll() bool } = Auth{}
+
 func (a Auth) Authenticate(ctx context.Context, r *http.Request) (gateway.RequestContext, error) {
+	if a.closed {
+		return gateway.RequestContext{}, errInboundTokenRejected
+	}
 	if a.token == "" {
 		// Loopback single-operator mode, unchanged: accept everything.
 		return a.rc, nil
@@ -280,10 +300,12 @@ func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.S
 	if client == nil {
 		client = StandaloneHTTPClient(cfg, time.Duration(env.Int("CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS", 0))*time.Millisecond)
 	}
+	auth := Auth{rc: gateway.RequestContext{Label: cfg.Label, RuntimeMode: cfg.Mode, Optimizers: cfg.Optimizers, ProviderBillingTiers: cfg.BillingTiers()}, token: cfg.AuthToken,
+		closed: cfg.AuthToken == "" && !config.LoopbackListen(cmp.Or(cfg.Listen, config.DefaultListen))}
 	return gateway.New(gateway.Config{
 		Middleware:           opts.Middleware,
 		Adapters:             buildAdapters(cfg),
-		Auth:                 Auth{rc: gateway.RequestContext{Label: cfg.Label, RuntimeMode: cfg.Mode, Optimizers: cfg.Optimizers, ProviderBillingTiers: cfg.BillingTiers()}, token: cfg.AuthToken},
+		Auth:                 auth,
 		Creds:                Creds{cfg: cfg, bedrock: awscreds.New(awscreds.Options{Region: cfg.BedrockRegion()}), logger: opts.Logger, sourceLogged: new(sync.Once)},
 		Sink:                 sink,
 		Compressor:           opts.Compressor,
@@ -297,6 +319,7 @@ func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.S
 		BreakpointPlan:       cfg.BreakpointPlan,
 		HTTPClient:           client,
 		Logger:               opts.Logger,
+		MetricsToken:         cfg.MetricsToken,
 	})
 }
 
@@ -308,13 +331,49 @@ func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.S
 type engineCompressor struct {
 	eng   *engine.Engine
 	store *ccr.Store
+
+	// A failed compression is byte-safe but invisible: the gateway reads the
+	// (segment, 0, 0) below as "nothing to compress", so a recovery store that
+	// cannot be written stops compression with nothing in proxy.log and no
+	// off-state in `caveman status` (#1149). Report it instead of dropping it,
+	// throttled because a broken store fails on every block of every request.
+	logger   *slog.Logger
+	warnMu   sync.Mutex
+	warnedAt time.Time
+}
+
+// warnDropped reports an engine error the byte-safe pass-through would otherwise
+// hide. At most one warning per warnInterval, so a persistently broken store
+// leaves a trail without burying the rest of the log.
+const warnInterval = time.Minute
+
+func (c *engineCompressor) warnDropped(err error, mode string) {
+	if c.logger == nil || err == nil {
+		return
+	}
+	c.warnMu.Lock()
+	now := time.Now()
+	if !c.warnedAt.IsZero() && now.Sub(c.warnedAt) < warnInterval {
+		c.warnMu.Unlock()
+		return
+	}
+	c.warnedAt = now
+	c.warnMu.Unlock()
+	c.logger.Warn("compress failed; forwarding the block uncompressed",
+		"error", redact.Error(err), "path", mode)
 }
 
 // NewEngineCompressor builds the engine-backed compressor over a CCR store. The
 // engine shares that store, so a handle returned by StoreOriginal resolves through
 // engine.Retrieve to the exact original bytes supplied by the gateway.
 func NewEngineCompressor(store *ccr.Store) gateway.Compressor {
-	return &engineCompressor{eng: engine.New(store, nil), store: store}
+	return NewEngineCompressorWithLogger(store, nil)
+}
+
+// NewEngineCompressorWithLogger is NewEngineCompressor with somewhere to report
+// a failed compression. A nil logger is legal and silences the reporting.
+func NewEngineCompressorWithLogger(store *ccr.Store, logger *slog.Logger) gateway.Compressor {
+	return &engineCompressor{eng: engine.New(store, nil), store: store, logger: logger}
 }
 
 // NewEstimateCompressor builds the observe-only compressor for record-mode
@@ -330,6 +389,7 @@ func NewEstimateCompressor() gateway.Compressor {
 func (c *engineCompressor) CompressSegment(segment []byte) ([]byte, int, int) {
 	res, err := c.eng.Compress(segment, engine.Options{Mode: engine.ModeCompress})
 	if err != nil {
+		c.warnDropped(err, "segment")
 		return segment, 0, 0 // byte-safe: keep the original segment, claim no delta.
 	}
 	return res.Output, res.TokensBefore, res.TokensAfter
@@ -338,6 +398,7 @@ func (c *engineCompressor) CompressSegment(segment []byte) ([]byte, int, int) {
 func (c *engineCompressor) CompressSegmentType(segment []byte, contentType string) ([]byte, int, int) {
 	res, err := c.eng.Compress(segment, engine.Options{Mode: engine.ModeCompress, Type: contentType})
 	if err != nil {
+		c.warnDropped(err, "segment-type")
 		return segment, 0, 0
 	}
 	return res.Output, res.TokensBefore, res.TokensAfter
@@ -349,6 +410,7 @@ func (c *engineCompressor) CompressSegmentType(segment []byte, contentType strin
 func (c *engineCompressor) CompressSegmentQuery(segment []byte, query string) ([]byte, int, int) {
 	res, err := c.eng.Compress(segment, engine.Options{Mode: engine.ModeCompress, Query: query})
 	if err != nil {
+		c.warnDropped(err, "segment-query")
 		return segment, 0, 0
 	}
 	return res.Output, res.TokensBefore, res.TokensAfter

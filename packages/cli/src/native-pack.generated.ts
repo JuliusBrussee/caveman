@@ -5,7 +5,7 @@ export const NATIVE_PACK = {
   "version": "2.2.0",
   "protocol": 1,
   "core": {
-    "source": "native-core.md",
+    "source": "native/native-core.md",
     "mandatory": true,
     "prompt_token_budget": 560,
     "estimated_tokens": 556,

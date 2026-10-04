@@ -37,6 +37,13 @@ export function publishedUpstreamsOf(raw: unknown): Record<string, string> {
   return out;
 }
 
+/** Linear-time `s.replace(/\/+$/, '')`: that regex backtracks quadratically on a long run of '/'. */
+export function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47) end--;
+  return s.slice(0, end);
+}
+
 function append(base: URL, path: string): string {
   return base.origin + base.pathname.replace(/\/+$/, '') + path;
 }
@@ -72,14 +79,14 @@ export function verifiedProviderRoute(
     if (!upstream || family === 'gemini') return undefined;
     const suffix = family === 'openai' ? '/v1' : '';
     if (compatTarget(upstream, suffix + operation) !== expected) return undefined;
-    return gateway.replace(/\/+$/, '') + `/compat/${provider}${suffix}`;
+    return trimTrailingSlashes(gateway) + `/compat/${provider}${suffix}`;
   }
   const upstream = endpoint(published?.provider_upstreams?.[family]);
   if (!upstream) return undefined;
   const versions = family === 'gemini' ? ['/v1beta', '/v1'] : [family === 'openai' ? '/v1' : ''];
   for (const version of versions) {
     if (append(upstream, version + operation) === expected) {
-      return gateway.replace(/\/+$/, '') + `/${family}${version}`;
+      return trimTrailingSlashes(gateway) + `/${family}${version}`;
     }
   }
   return undefined;

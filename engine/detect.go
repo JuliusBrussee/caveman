@@ -26,7 +26,7 @@ const (
 
 var (
 	// Log lines carry a level token or a timestamp.
-	logLineRe    = regexp.MustCompile(`(?i)(\b(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|PANIC)\b|^\s*\[[A-Z]+\]|\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}|\b\d{2}:\d{2}:\d{2}\b)`)
+	logLineRe    = regexp.MustCompile(`(?i)(\b(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|PANIC|CRIT|CRITICAL|ALERT|EMERG|EMERGENCY)\b|^\s*\[[A-Z]+\]|\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}|\b\d{2}:\d{2}:\d{2}\b)`)
 	diffLineRe   = regexp.MustCompile(`(?m)^(diff --git |@@ |--- |\+\+\+ |[+-][^+-])`)
 	searchLineRe = regexp.MustCompile(`(?m)^([./~A-Za-z0-9_-][^:\n]{0,240}:\d+(:\d+)?:|https?://\S+)`)
 	// Strong source-code signals (word-boundary keywords across common langs).

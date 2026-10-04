@@ -108,7 +108,7 @@ func TestLearnPlanCarriesWrapMeasured(t *testing.T) {
 	}
 	found := false
 	for _, c := range plan.Caveats {
-		if strings.Contains(c, "basis: estimated_engine_o200k") {
+		if strings.Contains(c, "own counter (estimated_engine_o200k)") {
 			found = true
 		}
 	}
@@ -158,10 +158,10 @@ func TestLearnHTMLSavingsSection(t *testing.T) {
 		"<h2>Savings</h2>", "Saved so far", "Could have saved",
 		"25k", "2.1M", "9M", "23%", "700k",
 		"estimated_engine_o200k", "3,900",
-		"big tool results, compressed", "remembered once in cavemem",
+		"big tool results, compressed", "kept once in Caveman memory",
 		"each cut counted once", "How this was measured",
-		"Caveman already saved 25k tokens",
-		"the fixes here could have saved 2.1M of the 9M tokens sent",
+		"Caveman has already saved 25k tokens",
+		"these fixes could have saved 2.1M of the 9M tokens sent",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("savings report missing %q", want)
@@ -170,7 +170,7 @@ func TestLearnHTMLSavingsSection(t *testing.T) {
 	// The savings story stays token-only, and the could-have-saved figure is
 	// never attributed to the wrap alone — part of it needs a cavemem offload.
 	section := text[strings.Index(text, "<h2>Savings</h2>"):]
-	section = section[:strings.Index(section, "<h2>Cave Score</h2>")]
+	section = section[:strings.Index(section, "<h2>Setup Score</h2>")]
 	if strings.Contains(section, "$") {
 		t.Error("savings section carries a dollar figure")
 	}

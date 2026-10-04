@@ -43,6 +43,52 @@ test('mixed CJK technical descriptions retain articles, intent, case and whitesp
   }
 });
 
+test('a NUL byte in the input cannot forge a protected-segment sentinel', () => {
+  // withProtectedSegments swaps each protected match for a `\0<index>\0`
+  // sentinel and splices the originals back afterwards. The sentinel is
+  // spelled in NUL bytes because they "cannot occur" in real text — but a
+  // description is third-party data: JSON-RPC carries \u0000 happily, and the
+  // proxy rewrites MCP tool descriptions in place via
+  // compressDescriptionsInPlace, so whatever an MCP server sends lands in the
+  // model's tool list. An input that already spells a sentinel is restored as
+  // if it were one: index 0 splices in a protected segment lifted from
+  // somewhere else in the same string, and an out-of-range index splices in
+  // the literal string "undefined".
+  const NUL = '\u0000';
+
+  const forged = compress(`Run ${NUL}0${NUL} with \`realCode\` now`).compressed;
+  assert.ok(
+    !forged.includes('realCode') || forged.indexOf('realCode') === forged.lastIndexOf('realCode'),
+    `forged sentinel duplicated a protected segment: ${JSON.stringify(forged)}`
+  );
+  assert.ok(!forged.includes(NUL), `NUL survived into model context: ${JSON.stringify(forged)}`);
+
+  const outOfRange = compress(`Check ${NUL}99${NUL} value really`).compressed;
+  assert.ok(
+    !outOfRange.includes('undefined'),
+    `out-of-range sentinel injected "undefined": ${JSON.stringify(outOfRange)}`
+  );
+  assert.ok(!outOfRange.includes(NUL), `NUL survived into model context: ${JSON.stringify(outOfRange)}`);
+});
+
+test('compression never grows a description or invents words (NUL inputs included)', () => {
+  // SKILL.md's standing rule: "Compression only style never grow output."
+  // The forged-sentinel path violated it by substituting a longer string than
+  // it removed, which is the cheap signal that content was invented.
+  const NUL = '\u0000';
+  for (const input of [
+    `Check ${NUL}99${NUL} value really`,
+    `Run ${NUL}0${NUL} just now`,
+    `${NUL}${NUL} please`,
+  ]) {
+    const { compressed } = compress(input);
+    assert.ok(
+      compressed.length <= input.length,
+      `grew ${JSON.stringify(input)} -> ${JSON.stringify(compressed)}`
+    );
+  }
+});
+
 test('drops articles', () => {
   const { compressed } = compress('The user is the owner of an account');
   assert.match(compressed, /User is owner of account/i);
@@ -149,6 +195,55 @@ test('never eats a hyphen-joined component of a compound word', () => {
   const { compressed } = compress('This is just a maybe wrong value');
   assert.doesNotMatch(compressed, /\bjust\b/i);
   assert.doesNotMatch(compressed, /\bmaybe\b/i);
+});
+
+test('never eats "sure" out of the "make sure" / "be sure" / "not sure" collocations', () => {
+  // `sure` is a pleasantry as a bare interjection ("Sure, this returns the
+  // value"), but in these fixed collocations it is the complement of the verb,
+  // so dropping it does not weaken the sentence — it changes what the sentence
+  // says. "Make sure the file exists" is a check; "Make file exists" reads as a
+  // create. Same class as the hyphenated-compound corruption above: a word that
+  // is filler on its own is not filler inside a collocation. The proxy rewrites
+  // MCP tool descriptions in place via compressDescriptionsInPlace, so the
+  // mangled contract is what the model reads as the tool's behavior (#1073).
+  const cases = [
+    'Make sure the file exists.',
+    'Make sure to call init before any other tool.',
+    'Be sure to pass an absolute path.',
+    'Not sure why this fails.',
+    'Please make sure.',
+    "I'm sure that works.",
+    'Ensure you make sure of the ordering.',
+    // CRLF: the interjection rule anchors on line starts, so a Windows-newline
+    // description must not take a different branch from the LF one.
+    'Step one.\r\nMake sure the file exists.',
+    'MAKE SURE THE PATH IS ABSOLUTE.',
+    'Surely, this works.',
+  ];
+  for (const input of cases) {
+    const { compressed } = compress(input);
+    assert.match(
+      compressed,
+      /sure/i,
+      `dropped the verb complement "sure": "${input}" → "${compressed}"`
+    );
+  }
+  // The bare interjection is still dropped — the fix must not turn the rule
+  // off, only stop it from reaching inside a collocation.
+  for (const input of [
+    'Sure, this returns the value',
+    'Sure! That is the default.',
+    'Done. Sure, that works too.',
+    'Done.\r\nSure, that works.',
+    'Done.\nSure, that works.',
+  ]) {
+    const { compressed } = compress(input);
+    assert.doesNotMatch(
+      compressed,
+      /sure/i,
+      `kept a bare "sure" interjection: "${input}" → "${compressed}"`
+    );
+  }
 });
 
 test('compresses real MCP-style description', () => {

@@ -109,6 +109,7 @@ func TestOldestVerifiedAtIsNotSilentlyAdvanced(t *testing.T) {
 		"2026-08-05T00:00:00Z": 1,
 		"2026-08-07T00:00:00Z": 1,
 		"2026-08-10T00:00:00Z": 9,
+		"2026-09-28T00:00:00Z": 7,
 	}
 	gotDates := map[string]int{}
 	for _, entry := range entries {

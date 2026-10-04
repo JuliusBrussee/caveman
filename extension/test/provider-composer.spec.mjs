@@ -33,14 +33,14 @@ for (const [name, url] of providers) {
     const sent = await page.evaluate(() => window.fixture.sent);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toContain("[Caveman mode is ON");
-    expect(sent[0]).toContain("Intensity FULL");
+    expect(sent[0]).toContain("Mode CAVEMAN");
     expect(sent[0].slice(-original.length)).toBe(original);
     await page.getByRole("textbox").fill("second prompt");
     await page.locator("#composer button").click();
     await page.clock.runFor(50);
     const allSent = await page.evaluate(() => window.fixture.sent);
     expect(allSent).toHaveLength(2);
-    expect(allSent[1]).toMatch(/^\[stay in caveman mode — FULL\]\n{2,}second prompt$/);
+    expect(allSent[1]).toMatch(/^\[stay in caveman mode — CAVEMAN\]\n{2,}second prompt$/);
     expect(await page.evaluate(() => window.fixture.feedback)).toBe(0);
   });
 

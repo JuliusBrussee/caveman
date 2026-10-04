@@ -2,7 +2,9 @@
 // Tests for repo-local config resolution in getDefaultMode().
 // Covers the resolution-order contract:
 //   env CAVEMAN_DEFAULT_MODE → repo-local (.caveman/config.json or .caveman.json,
-//   walking up to filesystem root) → user config → 'full'.
+//   walking up to filesystem root) → user config → 'caveman'.
+// Legacy level names (lite/full/ultra/wenyan*) in any source resolve to the
+// skill they became.
 //
 // Run: node tests/test_repo_local_config.js
 
@@ -45,9 +47,9 @@ function test(name, fn) {
 
 console.log('repo-local config resolution tests\n');
 
-test('returns "full" when no env, no repo config, no user config', (tmp) => {
+test('returns "caveman" when no env, no repo config, no user config', (tmp) => {
   process.chdir(tmp);
-  assert.strictEqual(getDefaultMode(), 'full');
+  assert.strictEqual(getDefaultMode(), 'caveman');
 });
 
 test('reads .caveman/config.json in cwd', (tmp) => {
@@ -55,14 +57,14 @@ test('reads .caveman/config.json in cwd', (tmp) => {
   fs.writeFileSync(path.join(tmp, '.caveman', 'config.json'),
     JSON.stringify({ defaultMode: 'lite' }));
   process.chdir(tmp);
-  assert.strictEqual(getDefaultMode(), 'lite');
+  assert.strictEqual(getDefaultMode(), 'caveman');
 });
 
 test('reads .caveman.json in cwd', (tmp) => {
   fs.writeFileSync(path.join(tmp, '.caveman.json'),
     JSON.stringify({ defaultMode: 'ultra' }));
   process.chdir(tmp);
-  assert.strictEqual(getDefaultMode(), 'ultra');
+  assert.strictEqual(getDefaultMode(), 'ultracave');
 });
 
 test('.caveman/config.json wins over .caveman.json at same level', (tmp) => {
@@ -72,7 +74,7 @@ test('.caveman/config.json wins over .caveman.json at same level', (tmp) => {
   fs.writeFileSync(path.join(tmp, '.caveman.json'),
     JSON.stringify({ defaultMode: 'ultra' }));
   process.chdir(tmp);
-  assert.strictEqual(getDefaultMode(), 'lite');
+  assert.strictEqual(getDefaultMode(), 'caveman');
 });
 
 test('walks up from nested cwd to find repo config', (tmp) => {
@@ -82,7 +84,7 @@ test('walks up from nested cwd to find repo config', (tmp) => {
   const nested = path.join(tmp, 'a', 'b', 'c');
   fs.mkdirSync(nested, { recursive: true });
   process.chdir(nested);
-  assert.strictEqual(getDefaultMode(), 'wenyan-lite');
+  assert.strictEqual(getDefaultMode(), 'megacave');
 });
 
 test('env var beats repo-local config', (tmp) => {
@@ -91,7 +93,7 @@ test('env var beats repo-local config', (tmp) => {
     JSON.stringify({ defaultMode: 'lite' }));
   process.chdir(tmp);
   process.env.CAVEMAN_DEFAULT_MODE = 'ultra';
-  assert.strictEqual(getDefaultMode(), 'ultra');
+  assert.strictEqual(getDefaultMode(), 'ultracave');
 });
 
 test('repo-local config beats user config', (tmp) => {
@@ -105,7 +107,7 @@ test('repo-local config beats user config', (tmp) => {
     JSON.stringify({ defaultMode: 'lite' }));
   process.chdir(tmp);
   try {
-    assert.strictEqual(getDefaultMode(), 'lite');
+    assert.strictEqual(getDefaultMode(), 'caveman');
   } finally {
     fs.rmSync(path.join(tmpHome, 'caveman'), { recursive: true, force: true });
   }
@@ -127,14 +129,14 @@ test('invalid mode in repo config falls through to default', (tmp) => {
   fs.writeFileSync(path.join(tmp, '.caveman.json'),
     JSON.stringify({ defaultMode: 'definitely-not-a-mode' }));
   process.chdir(tmp);
-  assert.strictEqual(getDefaultMode(), 'full');
+  assert.strictEqual(getDefaultMode(), 'caveman');
 });
 
 test('malformed JSON in repo config falls through to default', (tmp) => {
   fs.mkdirSync(path.join(tmp, '.caveman'));
   fs.writeFileSync(path.join(tmp, '.caveman', 'config.json'), '{ not json');
   process.chdir(tmp);
-  assert.strictEqual(getDefaultMode(), 'full');
+  assert.strictEqual(getDefaultMode(), 'caveman');
 });
 
 test('refuses symlinked .caveman.json (symmetric with readFlag policy)', (tmp) => {
@@ -148,7 +150,7 @@ test('refuses symlinked .caveman.json (symmetric with readFlag policy)', (tmp) =
     return;
   }
   process.chdir(tmp);
-  assert.strictEqual(getDefaultMode(), 'full');
+  assert.strictEqual(getDefaultMode(), 'caveman');
 });
 
 test('findRepoConfigPath returns null outside any repo', (tmp) => {
@@ -163,7 +165,7 @@ test('getDefaultMode(startDir) resolves repo config for a directory other than p
   const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-elsewhere-'));
   try {
     process.chdir(elsewhere); // process cwd has no repo config
-    assert.strictEqual(getDefaultMode(), 'full', 'process cwd alone should not see the other dir\'s config');
+    assert.strictEqual(getDefaultMode(), 'caveman', 'process cwd alone should not see the other dir\'s config');
     assert.strictEqual(getDefaultMode(tmp), 'off', 'startDir should resolve that directory\'s repo config');
   } finally {
     // Leave the directory before removing it — Windows EBUSYs on rmdir of cwd.
@@ -175,8 +177,18 @@ test('getDefaultMode(startDir) resolves repo config for a directory other than p
 test('getDefaultMode() with no args is unchanged (defaults to process.cwd())', (tmp) => {
   fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ defaultMode: 'lite' }));
   process.chdir(tmp);
-  assert.strictEqual(getDefaultMode(), 'lite');
-  assert.strictEqual(getDefaultMode(undefined), 'lite');
+  assert.strictEqual(getDefaultMode(), 'caveman');
+  assert.strictEqual(getDefaultMode(undefined), 'caveman');
+});
+
+test('new mode ids are accepted from every source', (tmp) => {
+  fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ defaultMode: 'megacave' }));
+  process.chdir(tmp);
+  assert.strictEqual(getDefaultMode(), 'megacave');
+  process.env.CAVEMAN_DEFAULT_MODE = 'ultracave';
+  assert.strictEqual(getDefaultMode(), 'ultracave');
+  process.env.CAVEMAN_DEFAULT_MODE = 'manual';
+  assert.strictEqual(getDefaultMode(), 'manual', 'manual stays a default-policy value');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

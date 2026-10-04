@@ -1,0 +1,87 @@
+name: supply-chain
+
+# Known-vulnerability scans for the Go module and the Python packages' resolved
+# dependency graphs. npm lanes audit in release-packages.yml; Dependabot
+# (.github/dependabot.yml) proposes the upgrades.
+# New advisories land without a code change, hence main pushes and the weekly
+# run; pull requests only when the scanned inputs change.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - go.mod
+      - go.sum
+      - "**/*.go"
+      - packages/**/pyproject.toml
+      - .github/workflows/supply-chain.yml
+  schedule:
+    - cron: "11 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Call-graph based: fails only when a vulnerable symbol is reachable.
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
+        with:
+          go-version-file: go.mod
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  # Resolves each advertised extra the way `pip install caveman-middleware[x]`
+  # would (no install, metadata only) and audits the pinned result. The SDK
+  # has no dependencies, so its graph is only itself. Certified adapter
+  # families fail the job; experimental ones warn, since their framework's own
+  # graph (e.g. crewai -> chromadb) can carry advisories with no fixed release.
+  pip-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --disable-pip-version-check pip-audit==2.10.1
+      - name: Audit every middleware extra
+        run: |
+          set -euo pipefail
+          mapfile -t extras < <(python -c 'import tomllib; print("\n".join(tomllib.load(open("packages/middleware/python/pyproject.toml","rb"))["project"]["optional-dependencies"]))')
+          certified=" langchain openai anthropic litellm "
+          # The middleware requires the in-repo SDK version, which reaches PyPI
+          # only when released; resolve it from a local wheel instead.
+          python -m pip wheel --disable-pip-version-check --quiet --no-deps -w "$RUNNER_TEMP/local-wheels" ./packages/sdk/python
+          failed=()
+          for extra in "${extras[@]}"; do
+            echo "::group::caveman-middleware[$extra]"
+            report="$RUNNER_TEMP/resolve-$extra.json"
+            python -m pip install --disable-pip-version-check --quiet --dry-run --ignore-installed \
+              --find-links "$RUNNER_TEMP/local-wheels" --report "$report" "./packages/middleware/python[$extra]"
+            # Our own distributions are local builds; audit the rest.
+            python -c 'import json,sys; [print(m["name"] + "==" + m["version"]) for m in (i["metadata"] for i in json.load(open(sys.argv[1]))["install"]) if not m["name"].startswith("caveman-")]' "$report" > "$RUNNER_TEMP/pins-$extra.txt"
+            if ! pip-audit --progress-spinner off --no-deps --disable-pip -r "$RUNNER_TEMP/pins-$extra.txt"; then
+              if [[ "$certified" == *" $extra "* ]]; then
+                failed+=("$extra")
+              else
+                echo "::warning::known vulnerabilities in experimental extra [$extra]; see the log above"
+              fi
+            fi
+            echo "::endgroup::"
+          done
+          if (( ${#failed[@]} )); then
+            echo "::error::known vulnerabilities in certified extras: ${failed[*]}"
+            exit 1
+          fi

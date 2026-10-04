@@ -5,6 +5,7 @@ const assets = new Map([
   ["/popup.html", new URL("../popup.html", import.meta.url)],
   ["/popup.css", new URL("../popup.css", import.meta.url)],
   ["/popup.js", new URL("../popup.js", import.meta.url)],
+  ["/src/directive.js", new URL("../src/directive.js", import.meta.url)],
 ]);
 
 async function routePopup(page) {
@@ -23,7 +24,7 @@ async function routePopup(page) {
 
 test("popup loads Chrome storage and persists master, level, and site controls", async ({ page }) => {
   await page.addInitScript(() => {
-    const store = { enabled: true, level: "full", sites: {} };
+    const store = { enabled: true, level: "caveman", sites: {} };
     window.__cavemanPopupStore = store;
     window.chrome = {
       runtime: { id: "fixture-extension-id" },
@@ -46,22 +47,21 @@ test("popup loads Chrome storage and persists master, level, and site controls",
   await page.goto("https://extension.fixture/popup.html");
 
   await expect(page.locator("#master")).toBeChecked();
-  await expect(page.locator('input[name="level"][value="full"]')).toBeChecked();
-  await expect(page.locator("#levelHint")).toContainText("Classic caveman");
+  await expect(page.locator('input[name="level"][value="caveman"]')).toBeChecked();
+  await expect(page.locator("#levelHint")).toContainText("Answer first");
   await expect(page.locator("#review")).toHaveAttribute(
     "href",
     "https://chromewebstore.google.com/detail/fixture-extension-id/reviews",
   );
 
-  await page.locator('label:has(input[name="level"][value="ultra"]) span').click();
-  await expect(page.locator("#levelHint")).toContainText("Max compression");
-  await expect(page.locator("#levelHint")).toContainText("No invented abbreviations");
+  await page.locator('label:has(input[name="level"][value="ultracave"]) span').click();
+  await expect(page.locator("#levelHint")).toContainText("Grammar stripped");
   await page.locator('label:has(input[data-site="claude.ai"]) span').click();
   await page.locator("label.switch .slider").click();
   await expect(page.locator("body")).toHaveAttribute("data-enabled", "0");
   await expect.poll(() => page.evaluate(() => window.__cavemanPopupStore)).toEqual({
     enabled: false,
-    level: "ultra",
+    level: "ultracave",
     sites: { "claude.ai": false },
   });
 });
@@ -78,7 +78,8 @@ test("popup file-preview fallback uses localStorage and safe generic review URL"
   await page.goto("https://extension.fixture/popup.html");
 
   await expect(page.locator("#master")).not.toBeChecked();
-  await expect(page.locator('input[name="level"][value="lite"]')).toBeChecked();
+  // A value saved by the old lite/full/ultra popup selects its new mode.
+  await expect(page.locator('input[name="level"][value="caveman"]')).toBeChecked();
   await expect(page.locator('input[data-site="gemini.google.com"]')).not.toBeChecked();
   await expect(page.locator("#review")).toHaveAttribute("href", "https://chromewebstore.google.com/");
 

@@ -326,13 +326,13 @@ func recurringSinks(rec recurringResult, beh behaviorScan, turnsPerDay float64) 
 		perTurn := recurringPerTurn(e, beh.Turns)
 		sinks = append(sinks, Sink{
 			SinkID:           "recurring_context:repaste:" + e.Fingerprint,
-			Title:            fmt.Sprintf("A recurring context pattern (up to ~%d tokens) was re-established across %d sessions", e.BlockTokens, e.Sessions),
+			Title:            fmt.Sprintf("The same text (up to ~%s tokens) was pasted again in %s", commaInt(int64(e.BlockTokens)), plural(e.Sessions, "session")),
 			Class:            classRecurringContext,
 			Basis:            observedLocal,
 			TokensPerTurn:    int64(perTurn),
 			TokensPerDayRate: rate(perTurn, turnsPerDay),
 			Framing:          framingForward,
-			Suggestion:       "Consider offloading this to cavemem so it's recalled compactly instead of re-established each session. (Recurrence is window-bounded, not proof the content is unneeded.)",
+			Suggestion:       "Consider moving this to Caveman memory (cavemem). The agent then recalls a short version when it needs it, instead of pasting it into each session. Repeating in these sessions doesn't prove the text is unneeded.",
 			Evidence: map[string]any{
 				"fix_kind":                "cavemem_offload",
 				"fingerprint":             e.Fingerprint,

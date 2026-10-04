@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadSurfaces, scanSkillBody } from "./verbs-gate.mjs";
+import { activationRule, embedRuleBody } from "./activation-rule.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BANNED = ["TO" + "DO", "FIX" + "ME", "not " + "implemented", "not-" + "implemented"];
@@ -58,7 +59,7 @@ exactKeys(nativePackMeta, NATIVE_PACK_KEYS, "native_pack");
 if (typeof nativePackMeta.id !== "string" || !/^[a-z0-9-]+$/.test(nativePackMeta.id)) die("native_pack.id invalid");
 if (typeof nativePackMeta.version !== "string" || !/^\d+\.\d+\.\d+$/.test(nativePackMeta.version)) die("native_pack.version invalid");
 if (!Number.isInteger(nativePackMeta.protocol) || nativePackMeta.protocol < 1) die("native_pack.protocol invalid");
-if (typeof nativePackMeta.core_source !== "string" || nativePackMeta.core_source.includes("..") || nativePackMeta.core_source.includes("/")) die("native_pack.core_source invalid");
+if (typeof nativePackMeta.core_source !== "string" || nativePackMeta.core_source.includes("..") || nativePackMeta.core_source.startsWith("/")) die("native_pack.core_source invalid");
 if (!Number.isInteger(nativePackMeta.core_prompt_token_budget) || nativePackMeta.core_prompt_token_budget < 1) die("native_pack.core_prompt_token_budget invalid");
 if (!Array.isArray(nativePackMeta.targets) || nativePackMeta.targets.length === 0 || nativePackMeta.targets.some((target) => !NATIVE_TARGETS.has(target))) die("native_pack.targets invalid");
 if (new Set(nativePackMeta.targets).size !== nativePackMeta.targets.length) die("native_pack.targets contains duplicates");
@@ -256,6 +257,23 @@ if (cliDir) {
   console.error(`compiled ${cliSkills.length} agent skill(s) into ${join(cliDir, "src", "agent-skills.generated.ts")}`);
 } else {
   die("CLI source directory not found");
+}
+
+// Always-on activation rule, derived from the caveman skill so the IDE rule,
+// the opencode AGENTS.md body and the caveman-init.js fallback cannot drift.
+const repoRoot = join(here, "..");
+if (existsSync(join(repoRoot, "src", "rules"))) {
+  const initPath = join(repoRoot, "src", "tools", "caveman-init.js");
+  let rule, init;
+  try {
+    rule = activationRule(readFileSync(join(here, "caveman", "SKILL.md"), "utf8"));
+    init = embedRuleBody(readFileSync(initPath, "utf8"), rule);
+  } catch (error) {
+    die(error.message);
+  }
+  writeFileSync(join(repoRoot, "src", "rules", "caveman-activate.md"), rule);
+  writeFileSync(initPath, init);
+  console.error("compiled the always-on activation rule into src/rules/caveman-activate.md and src/tools/caveman-init.js");
 }
 
 const nativePackJSON = JSON.stringify(compiledNativePack, null, 2) + "\n";

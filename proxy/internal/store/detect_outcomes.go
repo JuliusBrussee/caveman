@@ -253,12 +253,12 @@ func outcomeSink(sessions []sessionOutcome, spend *LearnSpend) []Sink {
 	}
 	return []Sink{{
 		SinkID: "session_outcomes",
-		Title: fmt.Sprintf("%.0f%% of scanned tokens ran in sessions with no commit in their window",
+		Title: fmt.Sprintf("%.0f%% of your tokens went to sessions that ended without a commit",
 			quietShare),
 		Class: classBehavioral, Basis: "provider_counted", Framing: framingHistorical,
 		TokensObserved: quiet.Tokens,
 		Evidence:       evidence,
-		Suggestion:     "Sessions that end without a commit are not automatically wasted — reading, review and debugging all land here. The number is worth knowing because it is usually the largest single cohort, and because the error-turn ratio between the two cohorts says whether these sessions were exploring or stuck.",
+		Suggestion:     "A session that ends without a commit is not automatically wasted. Reading, reviewing, and debugging all land here. The number is worth knowing because it is usually the biggest group, and comparing how often each group hit errors hints whether these sessions were exploring or stuck.",
 	}}
 }
 

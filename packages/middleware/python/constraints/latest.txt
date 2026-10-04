@@ -1,0 +1,26 @@
+# Newest framework releases each adapter family is tested against. PR lanes,
+# the engine-ci Windows job and the release smoke install extras with it:
+#   pip install -c constraints/latest.txt ".[family]"
+# The nightly canary runs unconstrained and opens an issue when a new release
+# breaks an adapter; bump these pins (and COMPATIBILITY ranges) after it passes.
+# openai and mcp are not pinned here: other families depend on them with
+# incompatible ranges (litellm/crewai/llama-index need openai<3, strands and
+# crewai need mcp<2.2), so the openai and mcp CI lanes pin them themselves
+# (openai==3.19.2, mcp==2.2.0).
+langchain==1.4.2
+langchain-core==1.6.5
+langgraph==1.2.12
+langgraph-prebuilt==1.1.0
+anthropic==1.8.0
+litellm==1.102.1
+google-genai==2.25.0
+strands-agents==1.57.0
+agno==3.0.11
+crewai==1.15.22
+pydantic-ai-slim==2.49.0
+autogen-agentchat==0.7.5
+autogen-core==0.7.5
+autogen-ext==0.7.5
+llama-index-core==0.14.25
+# Test-only: the LlamaIndex driver's provider LLM.
+llama-index-llms-openai==0.8.1

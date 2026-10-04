@@ -37,11 +37,16 @@ const (
 	// ListingGit and ListingWalk disclose how the file set was obtained. The
 	// two can disagree (git omits submodule contents; the walk sees them), so
 	// the basis is part of the map and of its content hash.
-	ListingGit   = "git_index_and_untracked_excluding_ignored"
-	ListingWalk  = "filesystem_walk_dependency_marker_filtered"
-	maxFiles     = 20_000
-	maxFileBytes = 2 << 20
-	maxEvidence  = 8
+	ListingGit  = "git_index_and_untracked_excluding_ignored"
+	ListingWalk = "filesystem_walk_dependency_marker_filtered"
+	// ListingHomeSkipped means the resolved root is the user's home directory
+	// and not a repository, so no walk ran: the whole home tree (including
+	// ~/.Trash) is not source, and reporting zero files as a completed walk
+	// would still let the caller show a map/evidence bundle for it.
+	ListingHomeSkipped = "home_directory_not_a_repository"
+	maxFiles           = 20_000
+	maxFileBytes       = 2 << 20
+	maxEvidence        = 8
 	// gitListTimeout caps the listing so a slow one degrades to the walk. It is
 	// further capped at half the caller's remaining budget (gitListBudget): the
 	// fallback walk is the MORE expensive path, so spending most of the warm
@@ -248,8 +253,27 @@ func listFiles(ctx context.Context, root string) ([]string, bool, string, error)
 	if files, truncated, ok := gitListFiles(ctx, root); ok && len(files) > 0 {
 		return files, truncated, ListingGit, nil
 	}
+	if isHomeDirectory(root) {
+		return nil, false, ListingHomeSkipped, nil
+	}
 	files, truncated, err := walkFiles(ctx, root)
 	return files, truncated, ListingWalk, err
+}
+
+// isHomeDirectory reports whether root is the user's home directory, which is
+// never itself a repository: an agent invoked with cwd == home has no project
+// to map, and walking it anyway picks up ~/.Trash and everything else a user
+// keeps there. root is already EvalSymlinks+Clean'd by Build's caller, so the
+// same normalization is applied to the home path before comparing.
+func isHomeDirectory(root string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(home); resolveErr == nil {
+		home = resolved
+	}
+	return filepath.Clean(root) == filepath.Clean(home)
 }
 
 // gitListBudget leaves the fallback walk at least as much time as git gets.
@@ -408,7 +432,7 @@ func (f *directoryFilter) excludes(relative string) bool {
 // dependencyDirectoryNames are directory names that are never first-party
 // source in any ecosystem, so the name alone is sufficient evidence.
 var dependencyDirectoryNames = map[string]bool{
-	".git": true, "node_modules": true, "bower_components": true, "site-packages": true,
+	".git": true, ".trash": true, "node_modules": true, "bower_components": true, "site-packages": true,
 	"__pycache__": true, "__pypackages__": true, ".pnpm-store": true, ".yarn-cache": true,
 	".venv": true, "venv": true, "virtualenv": true, ".tox": true, ".nox": true, ".eggs": true,
 	".pixi": true, ".conda": true, ".mamba": true, "miniconda3": true, "anaconda3": true, "miniforge3": true,

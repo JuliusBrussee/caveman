@@ -11,7 +11,7 @@ import (
 
 var (
 	// Lines worth keeping: errors, failures, warnings, stack-trace frames.
-	importantLineRe = regexp.MustCompile(`(?i)(\b(ERROR|FATAL|PANIC|EXCEPTION|TRACEBACK|FAIL|FAILED|FAILURE|WARN|WARNING)\b|^\s+at\s|^\s+File "|\.go:\d+|^\s+--->|caused by)`)
+	importantLineRe = regexp.MustCompile(`(?i)(\b(ERROR|FATAL|PANIC|EXCEPTION|TRACEBACK|FAIL|FAILED|FAILURE|WARN|WARNING|CRIT|CRITICAL|ALERT|EMERG|EMERGENCY)\b|^\s+at\s|^\s+File "|\.go:\d+|^\s+--->|caused by)`)
 	// A run of dropped lines is collapsed into this marker, which is itself
 	// kept on later passes so the compressor stays idempotent.
 	logMarkerRe = regexp.MustCompile(`lines elided \(caveman\)`)
@@ -34,7 +34,7 @@ func importantLogLine(line []byte) bool {
 		}
 	}
 	lower := bytes.ToLower(line)
-	for _, literal := range []string{"error", "fatal", "panic", "exception", "traceback", "fail", "warn", ".go:", "caused by"} {
+	for _, literal := range []string{"error", "fatal", "panic", "exception", "traceback", "fail", "warn", "crit", "alert", "emerg", ".go:", "caused by"} {
 		if bytes.Contains(lower, []byte(literal)) {
 			return importantLineRe.Match(line)
 		}

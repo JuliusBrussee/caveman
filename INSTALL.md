@@ -9,16 +9,16 @@ If just want it to work, run the one-liner. If want to know what gets touched, s
 **macOS / Linux / WSL / Git Bash**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.7.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.1.0/install.sh | bash
 ```
 
 **Windows (PowerShell 5.1+)**
 
 ```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.7.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.1.0/install.ps1 | iex
 ```
 
-> Piping a script straight into a shell runs it sight-unseen. If you'd rather read it first, download then run: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.7.0/install.sh -o install.sh` (review it) `&& bash install.sh`. Bootstrap, package, and hook downloads stay pinned to that immutable release. Set `CAVEMAN_REF` only when intentionally testing another ref.
+> Piping a script straight into a shell runs it sight-unseen. If you'd rather read it first, download then run: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.1.0/install.sh -o install.sh` (review it) `&& bash install.sh`. Bootstrap, package, and hook downloads stay pinned to that release tag, never the moving `main` branch. Hook files are checked against a SHA-256 list from the same tag: that catches a broken or partial download, not a tag that was moved. If that list can't be fetched or any file fails it, no hook is installed and your settings stay as they were. Runtime binaries are checked against a checksum list signed with a key built into the CLI. Set `CAVEMAN_REF` only when intentionally testing another ref.
 
 What it does:
 
@@ -31,7 +31,7 @@ What it does:
 Want to preview before installing? Use `--dry-run`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.7.0/install.sh | bash -s -- --dry-run
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.1.0/install.sh | bash -s -- --dry-run
 ```
 
 ## Per-agent install
@@ -45,6 +45,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Claude Code** | `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman` | Yes |
 | **Gemini CLI** | `gemini extensions install https://github.com/JuliusBrussee/caveman` | Yes |
 | **opencode** | `node bin/install.js --only opencode` *(or `npx -y github:JuliusBrussee/caveman -- --only opencode`)* | Yes (plugin + AGENTS.md) |
+| **Oh My Pi (OMP)** | `npx -y github:JuliusBrussee/caveman -- --only omp` *(or `node bin/install.js --only omp` from a clone)* | Yes (native OMP plugin) |
 | **OpenClaw** | `npx -y github:JuliusBrussee/caveman -- --only openclaw` | Yes (workspace skill + SOUL.md) |
 | **Hermes Agent** | `npx -y github:JuliusBrussee/caveman -- --only hermes` *(or `node bin/install.js --only hermes` from a clone)* | Yes (native skills, enabled on load) |
 | **Codex CLI** | `npx skills add JuliusBrussee/caveman -a codex -g` | Per-session: `/caveman` |
@@ -64,6 +65,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 | **Droid (Factory)** | `npx skills add JuliusBrussee/caveman -a droid -g` | No |
 | **ForgeCode** | `npx skills add JuliusBrussee/caveman -a forgecode -g` | No |
 | **Block Goose** | `npx skills add JuliusBrussee/caveman -a goose -g` | No |
+| **Grok Build** | `npx -y github:JuliusBrussee/caveman -- --only grok` | No |
 | **iFlow CLI** | `npx -y github:JuliusBrussee/caveman -- --only iflow` | No |
 | **Kiro CLI** | `npx skills add JuliusBrussee/caveman -a kiro-cli -g` | No |
 | **Mistral Vibe** | `npx skills add JuliusBrussee/caveman -a mistral-vibe -g` | No |
@@ -83,7 +85,7 @@ If you want to install for one agent (or want to know exactly what command runs 
 
 For "auto-activates? No" agents, invoke the Caveman skill using the host's skill menu, `/caveman` where supported, or a prompt naming the skill. Enable skills first if your host requires it: Augment has a Skills beta setting; AiderDesk requires Skills Tools in the active agent profile; custom Kiro agents need skill resources.
 
-Continue needs physical skill directories because its current loader skips per-skill symlinks. The unified installer copies into `CONTINUE_GLOBAL_DIR/skills` (default `~/.continue/skills`) and follows AiderDesk's `AIDER_DESK_HOME_DIR` / `AIDER_DESK_DIR` overrides. It also honors `IFLOW_HOME` and Crush's exact `CRUSH_SKILLS_DIR`. Use the same environment when uninstalling. Existing unowned skill directories or symlinks produce a conflict rather than being silently replaced. See the [vendor discovery matrix](docs/technical/installer-provider-discovery.md) for sources and product limits.
+Continue needs physical skill directories because its current loader skips per-skill symlinks. The unified installer copies into `CONTINUE_GLOBAL_DIR/skills` (default `~/.continue/skills`) and follows AiderDesk's `AIDER_DESK_HOME_DIR` / `AIDER_DESK_DIR` overrides. It also honors `IFLOW_HOME`, Crush's exact `CRUSH_SKILLS_DIR`, and `GROK_HOME` (Grok Build reads `GROK_HOME/skills`, default `~/.grok/skills`). Use the same environment when uninstalling — for a relative override, that means the same working directory too, since the path resolves against `cwd`. Existing unowned skill directories or symlinks produce a conflict rather than being silently replaced. See the [vendor discovery matrix](docs/technical/installer-provider-discovery.md) for sources and product limits.
 
 Antigravity IDE reads `~/.gemini/antigravity/skills`; Antigravity 2.0 reads `~/.gemini/config/skills`. Select the matching product. Each command copies only into that product's directory.
 
@@ -99,6 +101,26 @@ npx -y github:JuliusBrussee/caveman -- --list   # no clone needed
 ```
 
 Each row prints the agent id, profile slug (where applicable), and whether it was auto-detected on your machine. Full agent matrix (with detection rules) is also defined in `bin/install.js` under the `PROVIDERS` array.
+
+### Oh My Pi (OMP)
+
+With `omp` on your PATH, run `node bin/install.js --only omp` from this clone,
+then restart OMP. The native plugin adds nine skills, eight commands, Cavecrew
+presets, a CAVEMAN badge, and Caveman instructions on each agent turn. Commands
+such as `/ultracave` and `stop caveman` instruct the model; the badge indicates
+that the plugin is loaded. Host lifecycle and prompt delivery were checked with
+OMP 18.2.6. This integration does not read Claude Code session statistics.
+
+The installer keeps its package at `~/.omp/caveman-plugin/` and asks OMP to
+register it in OMP's own configured plugin directory. Use the same OMP environment
+when uninstalling. A plugin already named `caveman` at another location is a
+conflict: resolve it through OMP first, even when using `--force`.
+
+Untracked or edited package files are preserved. To replace them intentionally,
+use `--only omp --force`; the ownership journal records a backup for restoration
+on uninstall. Failed registration retains the owned package, journal, and backups
+so OMP cannot be left pointing at deleted files. Fix the reported host error and
+rerun the install, or uninstall. Failed deregistration retains those files too.
 
 ## Manual install (no `curl | bash`)
 
@@ -131,7 +153,8 @@ Useful flags:
 | `--with-mcp-shrink="<upstream cmd>"` | Register `caveman-shrink` MCP proxy wrapping the given upstream MCP server. **Off by default.** A value is required — caveman-shrink is a proxy and exits immediately without one. Example: `--with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"`. Within the value, single or double quotes group paths containing spaces; backslashes stay literal. A JSON array of strings also works when arguments contain quotes. No shell expansion occurs. |
 | `--no-mcp-shrink` | Skip MCP-shrink registration. (Default.) |
 | `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code hook installer. (Default: on.) |
-| `--config-dir <path>` | Claude Code config dir for hook files + `settings.json`. **Does NOT scope** `claude plugin install`, `gemini extensions install`, opencode (`XDG_CONFIG_HOME`), or openclaw (`OPENCLAW_WORKSPACE`) — those use their own paths. Default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. `~` is expanded. |
+| `--skip-skills` | Don't run the npx-skills auto-detect fallback when nothing else matched. |
+| `--config-dir <path>` | Claude Code config dir for hook files + `settings.json`. **Does NOT scope** `claude plugin install`, `gemini extensions install`, OMP (`~/.omp/`), opencode (`XDG_CONFIG_HOME`), or openclaw (`OPENCLAW_WORKSPACE`) — those use their own paths. Default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. `~` is expanded. |
 | `--non-interactive` | Never prompt; use defaults. (Auto when stdin is not a TTY.) |
 | `--no-color` | Disable ANSI colors. |
 | `--list` | Print full agent matrix and exit. |
@@ -175,13 +198,13 @@ You should see ~30 rows. Detected agents are marked. Anything you wanted but isn
 
 **2. Talk to Claude Code.**
 
-Open Claude Code, type `/caveman`. Response should be terse fragments — "Got it. Caveman mode on." or similar. Try a real question: "What is closures in JS?" — answer should drop articles and read like grunts.
+Open Claude Code, type `/caveman`. The reply should answer first, with no greeting or recap. Try a real question: "What is closures in JS?" — the answer should be short, articles optional, every technical term intact.
 
 **3. Check the flag file.**
 
 ```bash
 cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-active"
-# expected output: full
+# expected output: caveman
 ```
 
 If it's missing or empty, the SessionStart hook didn't fire. See troubleshooting below.
@@ -246,8 +269,9 @@ What it removes:
 - Hook files in `$CLAUDE_CONFIG_DIR/hooks/` (`caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-parse.js`, `caveman-stats.js`, `caveman-config.js`, `cavecrew-model-overrides.js`, `caveman-statusline.{sh,ps1}`, plus the dir's `package.json` marker).
 - The Claude Code plugin and the Gemini CLI extension (if installed).
 - The opencode native plugin (`~/.config/opencode/plugins/caveman/`, the `plugin` and `mcp.caveman-shrink` entries from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file).
+- The Oh My Pi plugin (`omp plugin uninstall caveman`) and Caveman's managed OMP plugin package at `~/.omp/caveman-plugin/`.
 - The OpenClaw workspace skill folder and the marker-fenced block from `~/.openclaw/workspace/SOUL.md` (when present).
-- All mode state in `$CLAUDE_CONFIG_DIR`: the `.caveman-sessions/` directory (one file per window), `.caveman-active`, `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`, and `.caveman-nudge-shown`.
+- All mode state in `$CLAUDE_CONFIG_DIR`: the `.caveman-sessions/` directory (one file per window), `.caveman-active`, `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`, `.caveman-nudge-shown`, and `.caveman-statusline-stale`.
 
 What it does **not** remove:
 
@@ -271,7 +295,7 @@ Still broken? [Open an issue](https://github.com/JuliusBrussee/caveman/issues).
 
 1. Run `node bin/install.js --list` — confirm `claude` is on the detected list. If not, `claude` isn't on `PATH`. Fix that first.
 2. Open `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/settings.json`) and look for `"hooks"` containing `caveman-activate.js` and `caveman-mode-tracker.js`. If missing, re-run with `--force`.
-3. Check `$CLAUDE_CONFIG_DIR/.caveman-active` exists with content `full`. If not, the SessionStart hook silent-failed — check `$CLAUDE_CONFIG_DIR/hooks/` for the JS files and try `node $CLAUDE_CONFIG_DIR/hooks/caveman-activate.js < /dev/null` to see if it errors. Keep the `< /dev/null`: the hook reads its payload from stdin, and a pipe that never closes makes it wait out its 3s watchdog.
+3. Check `$CLAUDE_CONFIG_DIR/.caveman-active` exists with content `caveman`. If not, the SessionStart hook silent-failed — check `$CLAUDE_CONFIG_DIR/hooks/` for the JS files and try `node $CLAUDE_CONFIG_DIR/hooks/caveman-activate.js < /dev/null` to see if it errors. Keep the `< /dev/null`: the hook reads its payload from stdin, and a pipe that never closes makes it wait out its 2s watchdog.
 4. Restart Claude Code. The SessionStart hook only fires on session start, not mid-session.
 
 **"One window is caveman, another isn't."**
@@ -329,11 +353,12 @@ The installer doesn't phone home. It writes to:
 - `$CLAUDE_CONFIG_DIR` (default `~/.claude/`) — hooks, flag file, `settings.json` merge.
 - Each agent's own config location — Cursor's `.cursor/rules/`, Windsurf's `.windsurf/rules/`, opencode's `~/.config/opencode/`, etc.
 - Your current working directory (only with `--with-init`) — repo-local rule files.
+- `~/.omp/caveman-plugin/` (only with `--only omp`, or auto-detect when `omp` is on `PATH`) — managed OMP plugin package installed through `omp plugin install`.
 - `~/.openclaw/workspace/` (only with `--only openclaw` or `--with-init` when OpenClaw is detected) — the one `--with-init` side-effect outside the cwd.
 
-Installer sends no Caveman telemetry or analytics. Run from a clone or via npx, its own code copies files locally. One exception: run detached from any checkout (the rare curl-fallback path), it downloads hook files from raw.githubusercontent.com pinned to an immutable release tag and verifies each against a SHA-256 manifest before wiring anything. Network requests also happen indirectly through per-agent CLIs it shells out to — `claude plugin marketplace add`, `claude plugin install`, `gemini extensions install`, `npm view caveman-shrink`, and `npx -y skills add`. Each fetches from its own registry (Anthropic / GitHub / npm). Source: [`bin/install.js`](bin/install.js).
+Installer sends no Caveman telemetry or analytics. Run from a clone or via npx, its own code copies files locally. One exception: run detached from any checkout (the rare curl-fallback path), it downloads hook files from raw.githubusercontent.com pinned to the release tag and checks each against the SHA-256 manifest committed at that same tag before wiring anything. The manifest catches corrupt or partial downloads; because it comes from the same tag, it cannot detect a tag that was moved. Network requests also happen indirectly through per-agent CLIs it shells out to — `claude plugin marketplace add`, `claude plugin install`, `gemini extensions install`, `omp plugin install`, `npm view caveman-shrink`, and `npx -y skills add`. Each fetches from its own registry or local plugin manager (Anthropic / GitHub / OMP / npm). Source: [`bin/install.js`](bin/install.js).
 
-After install, classic skill and output hooks stay local. CLI telemetry is off by default and sends content-free events only after explicit opt-in. Proxy, SDK, provider, authenticated sync, and managed gateway commands use network according to their configured purpose. Full data-flow statement: [SECURITY.md](./SECURITY.md#privacy--telemetry).
+After install, classic skill and output hooks stay local. CLI telemetry is on by default (turn it off with `caveman telemetry off`) and sends content-free usage events, stored with your IP address, including a start event for each agent session launched through the CLI's native install. Proxy, SDK, provider, authenticated sync, and managed gateway commands use network according to their configured purpose. Full data-flow statement: [SECURITY.md](./SECURITY.md#cli-usage-telemetry).
 
 ---
 

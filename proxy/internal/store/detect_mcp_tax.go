@@ -47,9 +47,9 @@ func mcpSurfaceSink(cfg configScan, existing []Sink) []Sink {
 	}
 	return []Sink{{
 		SinkID: "mcp_surface",
-		Title:  fmt.Sprintf("%d MCP servers are configured; their tool schemas load into every turn's prefix", len(unique)),
+		Title:  fmt.Sprintf("%d MCP servers are set up; their tool descriptions load with every message", len(unique)),
 		Class:  classBehavioral, Basis: learnBasis, Framing: framingHistorical,
 		Evidence:   evidence,
-		Suggestion: "Schemas of unused servers ride every turn; project-scoping or disabling unused servers trims fixed prefix. Server count alone is not proof any particular server is unneeded.",
+		Suggestion: "Tool descriptions of servers you don't use still ride along with every message. Turning them off, or enabling them only in the projects that need them, makes every message smaller. The count alone doesn't prove any one server is unneeded.",
 	}}
 }

@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -54,6 +56,7 @@ func EngineTools(eng Engine, log *slog.Logger) []Tool {
 			InputSchema: ObjectSchema(map[string]any{
 				"recovery_handle": StringProp("Exact ccr_ handle returned by Caveman or copied from a <<ccr:HANDLE>> marker."),
 				"query":           StringProp("Optional broad query covering related details. Omit for the byte-exact full original."),
+				"verify_only":     map[string]any{"type": "boolean", "description": "Check exact-original availability and return its byte length and SHA-256 without consuming a recovery delivery. Ignores query."},
 			}, "recovery_handle"),
 			// Recovery returns the exact original bytes: exempt from the
 			// result-size cap so a >cap original (the shared gateway store has no
@@ -166,6 +169,7 @@ func retrieveTool(eng Engine, args json.RawMessage) ToolResult {
 	var a struct {
 		RecoveryHandle string `json:"recovery_handle"`
 		Query          string `json:"query"`
+		VerifyOnly     bool   `json:"verify_only"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil || a.RecoveryHandle == "" {
 		return ToolError("cave_invalid_arguments", "retrieve: missing recovery_handle")
@@ -173,6 +177,17 @@ func retrieveTool(eng Engine, args json.RawMessage) ToolResult {
 	a.RecoveryHandle = normalizeRecoveryHandle(a.RecoveryHandle)
 	if a.RecoveryHandle == "" {
 		return ToolError("cave_invalid_arguments", "retrieve: missing recovery_handle")
+	}
+	if a.VerifyOnly {
+		original, err := eng.Retrieve(a.RecoveryHandle)
+		if err != nil {
+			return ToolError("cave_unknown_handle", "no original found for handle")
+		}
+		return ToolText(map[string]any{
+			"recovery_handle": a.RecoveryHandle,
+			"byte_length":     len(original),
+			"sha256":          fmt.Sprintf("%x", sha256.Sum256(original)),
+		})
 	}
 	// A query narrows recovery to the relevant sections (BM25); empty query is
 	// byte-exact full recovery. RetrieveQuery never drops detail it cannot rank.

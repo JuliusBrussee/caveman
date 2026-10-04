@@ -76,3 +76,22 @@ test("root installer parses pnpm cross-drive shims whose target is drive-absolut
     "..\\pkg\\cli.js",
   );
 });
+
+test("OMP npm shims use Bun without interpreting argument bytes in a shell", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "caveman-omp-bun-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const script = join(root, "cli.js");
+  writeFileSync(script, "#!/usr/bin/env bun\nBun.version;\n");
+  writeFileSync(join(root, "omp.CMD"), '@echo off\r\nendLocal & "%_prog%" "%dp0%\\cli.js" %*\r\n');
+  const env = { Path: root, PATHEXT: ".EXE;.CMD" };
+  const args = ["plugin", "install", "space & %PATH% ! value"];
+  const options = { platform: "win32", env, execPath: "node.exe", allowBun: true };
+  assert.throws(() => portable.portableInvocation("omp", args, options), /requires bun.exe/);
+  writeFileSync(join(root, "bun.CMD"), "@echo off\r\necho unsafe %*\r\n");
+  assert.throws(() => portable.portableInvocation("omp", args, options), /requires bun.exe/);
+  const bun = join(root, "bun.EXE");
+  writeFileSync(bun, "fixture");
+  assert.deepEqual(portable.portableInvocation("omp", args, options), { command: bun, args: [script, ...args] });
+  // Other callers retain their Node-only launch contract.
+  assert.equal(portable.portableInvocation("omp", args, { ...options, allowBun: false }).command, "node.exe");
+});

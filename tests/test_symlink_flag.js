@@ -10,7 +10,7 @@ const path = require('path');
 const os = require('os');
 const assert = require('assert');
 
-const { safeWriteFlag, readFlag, VALID_MODES, writeSessionMode, appendFlag } = require('../src/hooks/caveman-config');
+const { safeWriteFlag, readFlag, VALID_MODES, writeSessionMode, appendFlag, clearSessionPrev } = require('../src/hooks/caveman-config');
 
 let passed = 0;
 let failed = 0;
@@ -88,7 +88,7 @@ test('readFlag works through symlinked parent directory', (tmp) => {
   fs.writeFileSync(realFlagPath, 'lite', { mode: 0o600 });
 
   const result = readFlag(path.join(symlinkDir, '.caveman-active'));
-  assert.strictEqual(result, 'lite');
+  assert.strictEqual(result, 'caveman', 'legacy "lite" reads back as caveman');
 });
 
 test('safeWriteFlag then readFlag round-trip through symlink', (tmp) => {
@@ -99,11 +99,12 @@ test('safeWriteFlag then readFlag round-trip through symlink', (tmp) => {
   fs.symlinkSync(realDir, symlinkDir);
 
   const flagPath = path.join(symlinkDir, '.caveman-active');
+  // The longest legacy value still fits under MAX_FLAG_BYTES.
   safeWriteFlag(flagPath, 'wenyan-ultra');
 
   // Read back through the same symlink path
   const result = readFlag(flagPath);
-  assert.strictEqual(result, 'wenyan-ultra');
+  assert.strictEqual(result, 'megacave');
 });
 
 test('refuses flag file that is itself a symlink (even through symlinked parent)', (tmp) => {
@@ -161,11 +162,11 @@ test('overwrites existing flag through symlinked parent', (tmp) => {
 
   const flagPath = path.join(symlinkDir, '.caveman-active');
 
-  safeWriteFlag(flagPath, 'lite');
-  assert.strictEqual(readFlag(flagPath), 'lite');
+  safeWriteFlag(flagPath, 'caveman');
+  assert.strictEqual(readFlag(flagPath), 'caveman');
 
-  safeWriteFlag(flagPath, 'ultra');
-  assert.strictEqual(readFlag(flagPath), 'ultra');
+  safeWriteFlag(flagPath, 'ultracave');
+  assert.strictEqual(readFlag(flagPath), 'ultracave');
 });
 
 test('creates parent directory via mkdirSync even when it does not exist yet', (tmp) => {
@@ -210,6 +211,20 @@ test('all valid modes round-trip through symlinked parent', (tmp) => {
   }
 });
 
+test('every legacy level name reads back as its skill mode', (tmp) => {
+  const flagPath = path.join(tmp, '.caveman-active');
+  const legacy = {
+    lite: 'caveman', full: 'caveman', ultra: 'ultracave', wenyan: 'megacave',
+    'wenyan-lite': 'megacave', 'wenyan-full': 'megacave', 'wenyan-ultra': 'megacave',
+  };
+  for (const [old, mode] of Object.entries(legacy)) {
+    fs.writeFileSync(flagPath, old + '\n');
+    assert.strictEqual(readFlag(flagPath), mode, old);
+  }
+  fs.writeFileSync(flagPath, 'manual');
+  assert.strictEqual(readFlag(flagPath), null, 'manual is a default policy, never a stored mode');
+});
+
 // ---------- rename retry + guaranteed temp cleanup (#511/#578/#657) ----------
 
 test('recovers from transient rename failures within the retry budget', (tmp) => {
@@ -231,12 +246,12 @@ test('recovers from transient rename failures within the retry budget', (tmp) =>
     return realRenameSync(...args);
   };
   try {
-    safeWriteFlag(flagPath, 'ultra');
+    safeWriteFlag(flagPath, 'ultracave');
   } finally {
     fs.renameSync = realRenameSync;
   }
 
-  assert.strictEqual(readFlag(flagPath), 'ultra', 'flag should be written once the lock clears');
+  assert.strictEqual(readFlag(flagPath), 'ultracave', 'flag should be written once the lock clears');
   const leftovers = fs.readdirSync(flagDir).filter(n => n !== '.caveman-active');
   assert.deepStrictEqual(leftovers, [], 'no temp file should remain after a successful retry');
 });
@@ -310,14 +325,14 @@ test('write succeeds through a symlinked config dir pointing outside home (win32
   const realGetuid = process.getuid;
   try {
     delete process.getuid;
-    safeWriteFlag(flagPath, 'full');
+    safeWriteFlag(flagPath, 'caveman');
   } finally {
     process.getuid = realGetuid;
   }
 
   assert.strictEqual(fs.existsSync(flagPath), true,
     'flag must be written through a junction to a writable dir outside home');
-  assert.strictEqual(readFlag(flagPath), 'full');
+  assert.strictEqual(readFlag(flagPath), 'caveman');
 });
 
 test('append succeeds through a symlinked config dir pointing outside home (win32 branch)', (tmp) => {
@@ -383,6 +398,34 @@ test('delete is refused through a symlinked parent owned by another user', (tmp)
     'delete must not follow a symlinked parent the write path refuses');
 });
 
+test('session prev delete is refused through a symlinked sessions dir owned by another user', (tmp) => {
+  // Same asymmetry as the legacy-mirror case above, one level down: the
+  // per-session prev file lives under claudeDir/sessions/, and
+  // clearSessionPrev used a bare fs.unlinkSync there too.
+  const foreign = path.join(tmp, 'foreign-sessions');
+  fs.mkdirSync(foreign, { recursive: true });
+  try {
+    fs.chownSync(foreign, 65534, 65534); // nobody
+  } catch (e) {
+    skip('needs privileges to stage a directory owned by another user');
+  }
+  if (typeof process.getuid !== 'function' || fs.statSync(foreign).uid === process.getuid()) {
+    skip('could not stage a foreign-owned directory');
+  }
+
+  const claudeDir = path.join(tmp, 'claude-config');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.symlinkSync(foreign, path.join(claudeDir, '.caveman-sessions'));
+  const prevPath = path.join(foreign, 'abc123def.prev');
+
+  fs.writeFileSync(prevPath, 'victim');
+  fs.chownSync(prevPath, 65534, 65534);
+  clearSessionPrev(claudeDir, 'abc123def');
+
+  assert.strictEqual(fs.existsSync(prevPath), true,
+    'session prev delete must not follow a symlinked sessions dir the write path refuses');
+});
+
 // ---------- Source code audit ----------
 
 test('legacy flag delete goes through a guarded helper, not a bare unlinkSync', () => {
@@ -398,6 +441,23 @@ test('legacy flag delete goes through a guarded helper, not a bare unlinkSync', 
     'writeSessionMode must not delete the legacy mirror with a bare unlinkSync');
   assert.match(source, /safeDeleteFlag\(legacy\)/,
     'writeSessionMode should clear the legacy mirror via safeDeleteFlag');
+});
+
+test('clearSessionPrev goes through a guarded helper, not a bare unlinkSync', () => {
+  // Holds on every runner regardless of chown privileges, same reasoning as
+  // the legacy-mirror audit above.
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'hooks', 'caveman-config.js'), 'utf8'
+  );
+  const fnMatch = source.match(/function clearSessionPrev\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(fnMatch, 'clearSessionPrev should be defined');
+  const body = fnMatch[0];
+  assert.doesNotMatch(body, /fs\.unlinkSync/,
+    'clearSessionPrev must not delete either prev file with a bare unlinkSync');
+  assert.match(body, /safeDeleteFlag\(/g,
+    'clearSessionPrev should clear both prev locations via safeDeleteFlag');
+  assert.strictEqual((body.match(/safeDeleteFlag\(/g) || []).length, 2,
+    'clearSessionPrev has two delete sites (session-scoped and legacy); both must use safeDeleteFlag');
 });
 
 test('safeWriteFlag no longer has blanket symlink parent refusal', (tmp) => {

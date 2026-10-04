@@ -82,11 +82,11 @@ func cacheChurnSink(sessions []cacheHygieneSession, perTurnHooks []string) []Sin
 	}
 	return []Sink{{
 		SinkID: "cache_churn",
-		Title:  fmt.Sprintf("%d sessions re-wrote a large prompt-cache prefix repeatedly", len(churned)),
+		Title:  fmt.Sprintf("%s kept rebuilding a large part of the prompt cache", plural(len(churned), "session")),
 		Class:  classBehavioral, Basis: learnBasis, Framing: framingHistorical,
 		TokensObserved: tokensObserved,
 		Evidence:       evidence,
-		Suggestion:     "Something in the setup injects per-turn-changing content near the top of the prompt (hooks, plugins, or timestamps) and is worth finding. Churn is measured; the cause is not identified.",
+		Suggestion:     "Something in the setup puts content that changes every message near the top of the prompt (a hook, a plugin, or a timestamp), so the cache can't be reused. It is worth finding. The rebuilds are measured; the cause is not known.",
 	}}
 }
 
@@ -124,10 +124,10 @@ func cacheEfficiencySink(spend *LearnSpend, perTurnHooks []string) []Sink {
 		return nil
 	}
 	class := classLoadBearing
-	suggestion := "Cache reuse is already doing most of the work here; the remaining input cost is close to the floor for this workload."
+	suggestion := "Caching already does most of the work here. What input still costs is close to the lowest it can be for this kind of work."
 	if spend.EffectiveInputMultiplier >= cacheEfficiencyPoorMultiplier {
 		class = classBehavioral
-		suggestion = "Most input is being billed at full rate rather than as a cache read. Content that changes every turn near the top of the prompt is the usual cause; per-turn hooks are the first candidates to inspect."
+		suggestion = "Most input is billed at full price instead of the cheaper cached price. The usual cause is content that changes every message near the top of the prompt. Hooks that run on every message are the first candidates to check."
 	}
 	evidence := map[string]any{
 		"effective_input_usd_per_mtok": spend.EffectiveInputUSDPerMTok,
@@ -141,7 +141,7 @@ func cacheEfficiencySink(spend *LearnSpend, perTurnHooks []string) []Sink {
 	}
 	return []Sink{{
 		SinkID:   "cache_efficiency",
-		Title:    "Input cost after cache reuse: " + effectiveInputSummary(spend.EffectiveInputMultiplier),
+		Title:    "What input really costs after caching: " + effectiveInputSummary(spend.EffectiveInputMultiplier),
 		Class:    class,
 		Basis:    "provider_counted",
 		Framing:  framingHistorical,

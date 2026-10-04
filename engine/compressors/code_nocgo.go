@@ -15,8 +15,9 @@ import (
 
 // codeCompressor is the pure-Go (cgo-free / WASM) fallback. Without tree-sitter
 // it compresses Go only — via the stdlib go/ast — by emptying function bodies
-// while keeping every import, signature, and type declaration. Other languages
-// pass through unchanged. It is S4 (lossy); the original is recoverable via CCR.
+// while keeping every import, signature, and type declaration. GDScript is
+// handled by the line-based elider in code_gdscript.go; other languages pass
+// through unchanged. It is S4 (lossy); the original is recoverable via CCR.
 type codeCompressor struct{ opts CodeOptions }
 
 func newCode() Compressor { return &codeCompressor{} }
@@ -30,6 +31,9 @@ func (c *codeCompressor) ContentType() string       { return "code" }
 func (c *codeCompressor) SafetyClass() safety.Class { return safety.S4 }
 
 func (c *codeCompressor) Compress(input []byte) ([]byte, bool) {
+	if isGDScript(input) {
+		return compressGDScript(input) // line-based, needs no grammar; see code_gdscript.go
+	}
 	if !bytes.Contains(input, []byte("package ")) || !bytes.Contains(input, []byte("func ")) {
 		return nil, false // the pure-Go fallback only handles Go
 	}

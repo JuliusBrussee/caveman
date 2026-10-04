@@ -84,7 +84,7 @@ console.log('hook stdin lifecycle — must not wait on a lagging pipe close\n');
     const r = await runHoldingPipeOpen(ACTIVATE, payload, dir);
     assert.strictEqual(r.code, 0, `expected clean exit, got ${r.code}`);
     assert.match(r.stdout, /CAVEMAN MODE ACTIVE/, 'ruleset must still be emitted');
-    assert.strictEqual(fs.readFileSync(path.join(dir, '.caveman-active'), 'utf8'), 'full');
+    assert.strictEqual(fs.readFileSync(path.join(dir, '.caveman-active'), 'utf8'), 'caveman');
   });
 
   await test('activate: activates on the watchdog when no payload ever arrives', async (dir) => {
@@ -96,20 +96,20 @@ console.log('hook stdin lifecycle — must not wait on a lagging pipe close\n');
   });
 
   await test('tracker: exits after a complete payload without waiting for EOF', async (dir) => {
-    fs.writeFileSync(path.join(dir, '.caveman-active'), 'full');
+    fs.writeFileSync(path.join(dir, '.caveman-active'), 'caveman');
     const payload = JSON.stringify({ prompt: 'hello there', cwd: process.cwd() });
     const r = await runHoldingPipeOpen(TRACKER, payload, dir);
     assert.strictEqual(r.code, 0, `expected clean exit, got ${r.code}`);
-    assert.match(r.stdout, /CAVEMAN MODE ACTIVE \(full\)/, 'reinforcement must still be emitted');
+    assert.match(r.stdout, /CAVEMAN MODE ACTIVE \(caveman\)/, 'reinforcement must still be emitted');
   });
 
   await test('tracker: a mode change is persisted before the hook exits', async (dir) => {
-    fs.writeFileSync(path.join(dir, '.caveman-active'), 'full');
-    const payload = JSON.stringify({ prompt: '/caveman ultra', cwd: process.cwd() });
+    fs.writeFileSync(path.join(dir, '.caveman-active'), 'caveman');
+    const payload = JSON.stringify({ prompt: '/ultracave', cwd: process.cwd() });
     const r = await runHoldingPipeOpen(TRACKER, payload, dir);
     assert.strictEqual(r.code, 0);
     assert.strictEqual(
-      fs.readFileSync(path.join(dir, '.caveman-active'), 'utf8'), 'ultra',
+      fs.readFileSync(path.join(dir, '.caveman-active'), 'utf8'), 'ultracave',
       'the flag write must land even though stdin never closed',
     );
   });

@@ -62,12 +62,11 @@ const cavemanConfig = requireSibling('caveman-config', (m) =>
   m && typeof m.getDefaultMode === 'function' && typeof m.safeWriteFlag === 'function'
     && typeof m.readFlag === 'function' && typeof m.recordModeChange === 'function'
     && Array.isArray(m.VALID_MODES));
-const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange, VALID_MODES } = cavemanConfig || {
-  getDefaultMode: () => 'full',
+const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange } = cavemanConfig || {
+  getDefaultMode: () => 'caveman',
   safeWriteFlag: () => {},
   readFlag: () => null,
   recordModeChange: () => {},
-  VALID_MODES: [],
 };
 
 // Per-session helpers, resolved individually rather than folded into the shape
@@ -93,9 +92,10 @@ const clearSessionPrev = cfg.clearSessionPrev || (() => removeFlag(prevPath));
 // individually like the per-session helpers above: a caveman-config.js
 // predating them passes the shape check, and the stand-ins below degrade this
 // hook to exactly its pre-#975 behavior — the one-line reminder, nothing more.
-const canonicalModeLabel = cfg.canonicalModeLabel || ((m) => (m === 'wenyan' ? 'wenyan-full' : m));
-const rulesetBanner = cfg.rulesetBanner || ((m) => 'CAVEMAN MODE ACTIVE — level: ' + canonicalModeLabel(m));
-const loadFilteredRuleset = cfg.loadFilteredRuleset || (() => null);
+const rulesetBanner = cfg.rulesetBanner || ((m) => 'CAVEMAN MODE ACTIVE — mode: ' + m);
+const loadRuleset = cfg.loadRuleset || (() => null);
+const thesisLine = cfg.thesisLine
+  || (() => 'Respond terse like smart caveman. All technical substance stay. Only fluff die.');
 const { parseModeChange, INDEPENDENT_MODES } = requireSibling('caveman-parse', (m) =>
   m && typeof m.parseModeChange === 'function' && m.INDEPENDENT_MODES instanceof Set) || {
   parseModeChange: () => null,
@@ -108,20 +108,15 @@ const flagPath = path.join(claudeDir, '.caveman-active');
 // (/caveman-commit etc.) so the next ordinary prompt can restore it (#599).
 const prevPath = path.join(claudeDir, '.caveman-active.prev');
 
-const REINFORCEMENT_RULES = {
-  lite: 'No filler, hedging, or pleasantries. Keep articles and full sentences OK, but stay tight.',
-  full: 'Drop articles (a/an/the), filler, pleasantries, and hedging. Prefer fragments over full natural-prose sentences. No preamble or recap.',
-  ultra: 'Drop articles, filler, pleasantries, hedging, and excess conjunctions. Prefer fragments over full natural-prose sentences. State each fact once. No preamble or recap.',
-  'wenyan-lite': 'Use wenyan-lite: semi-classical terse register. Drop filler and hedging. Keep meaning exact.',
-  'wenyan-full': 'Use wenyan-full: maximum classical terseness. Drop filler and hedging. Keep meaning exact.',
-  'wenyan-ultra': 'Use wenyan-ultra: extreme classical terseness. Drop filler and hedging. Keep meaning exact.',
-};
-
+// The mode's own thesis line comes from its SKILL.md, so the reminder cannot
+// drift from the skill. The answer-scope sentence (#1136/#1162) is shared by
+// all three modes.
 function reinforcementForMode(mode) {
-  const canonical = mode === 'wenyan' ? 'wenyan-full' : mode;
-  const rules = REINFORCEMENT_RULES[canonical] || REINFORCEMENT_RULES.full;
-  return 'CAVEMAN MODE ACTIVE (' + mode + '). Enforce this reply: ' + rules +
-    ' Technical terms, code, commands, paths, and errors stay exact.';
+  return 'CAVEMAN MODE ACTIVE (' + mode + '). ' + thesisLine(mode, __dirname) +
+    ' Answer only what was asked: no unrequested background, lists, examples,' +
+    ' walkthroughs, or follow-up offers; give code, steps, or warnings when the' +
+    ' task needs them. Security warnings, irreversible actions, multi-step order:' +
+    ' normal prose. Technical terms, code, commands, paths, and errors stay exact.';
 }
 
 function removeFlag(path) {
@@ -176,15 +171,15 @@ function handle(raw) {
     // into single spaces; <command-args> may be empty or absent). Every
     // switch below matches against the literal command string, so this
     // envelope was a silent no-op for every slash command, including
-    // '/caveman off'. Reconstruct '<name> <args>' for /caveman* envelopes so
-    // the rest of this hook sees exactly what the user selected. A foreign
-    // command's envelope is left untouched, and natural-language detection
-    // is skipped for it so another command's own args can't misfire our
-    // activation/deactivation triggers.
+    // '/caveman off'. Reconstruct '<name> <args>' for /caveman*, /ultracave
+    // and /megacave envelopes so the rest of this hook sees exactly what the
+    // user selected. A foreign command's envelope is left untouched, and
+    // natural-language detection is skipped for it so another command's own
+    // args can't misfire our activation/deactivation triggers.
     let skipNaturalLanguage = false;
     const envName = /<command-name>\s*([^<\s]+)\s*<\/command-name>/.exec(prompt);
     if (envName) {
-      if (envName[1].startsWith('/caveman')) {
+      if (/^\/(?:caveman|ultracave\b|megacave\b)/.test(envName[1])) {
         const envArgs = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(prompt);
         const args = envArgs ? envArgs[1].trim() : '';
         prompt = args ? envName[1] + ' ' + args : envName[1];
@@ -241,10 +236,26 @@ function handle(raw) {
     // Shared mode-change parser (#602) — single source of truth with the
     // opencode plugin for slash commands, namespaced /caveman:caveman-*,
     // natural-language activation/deactivation, and brevity triggers.
-    const change = parseModeChange(prompt, { getDefaultMode, skipNaturalLanguage });
+    const change = parseModeChange(prompt, {
+      getDefaultMode: () => getDefaultMode(data.cwd), skipNaturalLanguage,
+    });
 
-    // A /caveman argument that resolves to no mode used to leave the level
-    // untouched and say nothing, so a typo or punctuation glued to the level
+    // Status is observational: do not consume a one-shot mode's pending
+    // restore, refresh flag mtimes, or log a transition. The parser is shared
+    // with OpenCode, including its expanded command templates.
+    if (change && change.action === 'status') {
+      const activeMode = resolveActiveMode(claudeDir, sessionId);
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'UserPromptSubmit',
+          additionalContext: 'Report this status verbatim without changing mode: Caveman mode: ' + (activeMode || 'off')
+        }
+      }));
+      return;
+    }
+
+    // A /caveman argument that resolves to no mode used to leave the mode
+    // untouched and say nothing, so a typo or punctuation glued to the argument
     // ("/caveman ultra;") looked like it worked. Build a notice instead — but
     // do NOT return here: an early exit would skip the #599 one-shot restore
     // below, stranding the user in /caveman-commit for an extra turn because
@@ -256,21 +267,16 @@ function handle(raw) {
         // would contradict the docs.
         notice = 'Tell the user ' + change.independentMode + ' mode is set with its own command, '
           + '/caveman-' + change.independentMode + ', not /caveman ' + change.independentMode
-          + '. The level is unchanged.';
+          + '. The mode is unchanged.';
       } else {
-        // Levels are derived from VALID_MODES so they cannot drift from the
-        // parser, minus 'off', the independent modes, and 'wenyan' — that is
-        // the storage alias for wenyan-full, and listing both would advertise
-        // seven levels for a product documented as having six. The rejected
-        // argument is never echoed: it is untrusted input headed for model
-        // context.
-        const levels = VALID_MODES.filter(m => m !== 'off' && m !== 'wenyan' && !INDEPENDENT_MODES.has(m));
-        notice = 'Tell the user their /caveman level was not recognized and the level is '
-          + 'unchanged. Valid levels: ' + levels.join(', ') + '. Use /caveman off to deactivate.';
+        // The rejected argument is never echoed: it is untrusted input headed
+        // for model context.
+        notice = 'Tell the user their /caveman argument was not recognized and the mode is '
+          + 'unchanged. Modes: /caveman, /ultracave, /megacave. Use /caveman off to deactivate.';
       }
     }
 
-    // The level the model is actually holding rules for, read BEFORE any write:
+    // The mode the model is actually holding rules for, read BEFORE any write:
     // a switch can only be detected against this, never against the value we
     // are about to store. Read only on a `set`, so an ordinary turn — every
     // turn, on the hot path — still makes the single state read it always did.
@@ -279,19 +285,17 @@ function handle(raw) {
       : null;
 
     // Independent one-shot modes remember the prose mode active before them
-    // so the next ordinary prompt restores it (#599) — SKILL.md promises
-    // "Level persist until changed or session end", and a one-shot skill
-    // invocation should not count as "changed" forever.
+    // so the next ordinary prompt restores it (#599) — the mode persists until
+    // changed or session end, and a one-shot skill invocation should not count
+    // as "changed" forever.
     let setIndependentThisTurn = false;
-    // Set to the new level only when this prompt genuinely CHANGES it, so the
+    // Set to the new mode only when this prompt genuinely CHANGES it, so the
     // ruleset re-injection below is paid for by an actual switch and nothing
-    // else (#975). Compared through canonicalModeLabel because the two
-    // spellings of wenyan-full both reach storage — parseModeChange writes the
-    // 'wenyan' alias while getDefaultMode accepts either — and a raw compare
-    // would read that no-op as a switch. A null previous mode (caveman was
-    // off) counts as a change: the model holds no ruleset at all in that case,
-    // which is the strongest reason to send one.
-    let switchedToLevel = null;
+    // else (#975). Both sides are canonical ids (the parser and readFlag map
+    // legacy level names), so a raw compare is exact. A null previous mode
+    // (caveman was off) counts as a change: the model holds no ruleset at all
+    // in that case, which is the strongest reason to send one.
+    let switchedToMode = null;
     if (change && change.action === 'set') {
       const mode = change.mode;
       if (INDEPENDENT_MODES.has(mode)) {
@@ -300,10 +304,15 @@ function handle(raw) {
         // followed by /caveman-review must still restore the original).
         if (modeBeforeChange && !INDEPENDENT_MODES.has(modeBeforeChange)) {
           writeSessionPrev(claudeDir, sessionId, modeBeforeChange);
+        } else if (!modeBeforeChange) {
+          // An explicit reset can leave a previous one-shot's return target
+          // behind. A new one-shot from off must restore off, never that stale
+          // mode. Store the displaced off state through the shared writer.
+          writeSessionPrev(claudeDir, sessionId, 'off');
         }
         setIndependentThisTurn = true;
-      } else if (canonicalModeLabel(mode) !== canonicalModeLabel(modeBeforeChange)) {
-        switchedToLevel = mode;
+      } else if (mode !== modeBeforeChange) {
+        switchedToMode = mode;
       }
       recordModeChange(claudeDir, mode, sessionId); // #601: timestamped transition log
       writeSessionMode(claudeDir, sessionId, mode);
@@ -360,13 +369,12 @@ function handle(raw) {
       ? reinforcementForMode(activeMode)
       : null;
 
-    // A level switch has to carry the new level's RULES, not just relabel the
-    // banner (#975). SessionStart injected exactly one level's ruleset and it
-    // is still the previous level's in the model's context — its intensity row
-    // and its "Default: **full**" line included — so a reminder that merely
-    // names the new level leaves the model working from the old one's rules,
-    // silently and self-confirmingly: the banner agrees with the user while
-    // the output does not.
+    // A mode switch has to carry the new mode's RULES, not just relabel the
+    // banner (#975). SessionStart injected exactly one skill body and it is
+    // still the previous mode's in the model's context, so a reminder that
+    // merely names the new mode leaves the model working from the old one's
+    // rules, silently and self-confirmingly: the banner agrees with the user
+    // while the output does not.
     //
     // `reinforce` is the gate as well as the reminder: it already encodes both
     // "caveman is active and not an independent mode" and the #634 repo
@@ -375,12 +383,12 @@ function handle(raw) {
     // standalone hook install with no skills dir, the case activate.js covers
     // with its hardcoded fallback.
     let ruleset = null;
-    if (switchedToLevel && reinforce) {
-      const body = loadFilteredRuleset(switchedToLevel, __dirname);
-      if (body) ruleset = rulesetBanner(switchedToLevel) + '\n\n' + body;
+    if (switchedToMode && reinforce) {
+      const body = loadRuleset(switchedToMode, __dirname);
+      if (body) ruleset = rulesetBanner(switchedToMode) + '\n\n' + body.trimEnd();
     }
 
-    // One write, so an unresolved-level notice, a switch's ruleset and the
+    // One write, so an unresolved-argument notice, a switch's ruleset and the
     // per-turn reinforcement can all land on the same turn. Only one
     // hookSpecificOutput per hook run is read, so emitting them separately
     // would drop whichever came second. The reminder goes last: it is the

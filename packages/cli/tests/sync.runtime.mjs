@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -703,6 +703,100 @@ test("sync labels only rows created at or after a directive's install", async ()
   const after = spans.find((s) => s.span_id === "req-after");
   assert.equal(backlog.attributes["cave.directives"], undefined, "pre-install backlog rows must carry no directive label");
   assert.equal(after.attributes["cave.directives"], "exploration-offload-directive", "post-install rows carry the directive id; a marker without installed_at labels nothing");
+
+  server.close();
+});
+
+// delaySyncWrite wires a --require preload that stalls fs.writeFileSync for
+// delayMs when the target path is this run's sync.json, widening the gap
+// between reading the watermark and committing it the way process jitter can.
+// Application code is untouched — the delay lives entirely in the preload.
+function delaySyncWrite(env, home, delayMs) {
+  const dir = mkdtempSync(join(tmpdir(), "cave-sync-delay-"));
+  const preload = join(dir, "delay-write.cjs");
+  writeFileSync(preload, [
+    'const fs = require("node:fs");',
+    "const target = process.env.CAVEMAN_TEST_DELAY_SYNC_PATH;",
+    "const ms = Number(process.env.CAVEMAN_TEST_DELAY_WRITE_MS || 0);",
+    "const original = fs.writeFileSync;",
+    "fs.writeFileSync = function (path, ...rest) {",
+    "  if (ms > 0 && target && String(path) === target) {",
+    "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);",
+    "  }",
+    "  return original.call(fs, path, ...rest);",
+    "};",
+  ].join("\n"));
+  return {
+    ...env,
+    NODE_OPTIONS: `${env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ` : ""}--require ${preload}`,
+    CAVEMAN_TEST_DELAY_SYNC_PATH: join(home, ".caveman-cloud", "sync.json"),
+    CAVEMAN_TEST_DELAY_WRITE_MS: String(delayMs),
+  };
+}
+
+// Two `caveman sync` runs starting together (two terminals closing a `cave
+// wrap` session, or two explicit syncs) both read the watermark before either
+// writes it back, so both fetch the same rows and both POST them. The upload
+// is what must not double: every local row reaches the server exactly once,
+// whichever process happens to win.
+test("two sync processes racing the same watermark upload each local row once", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("the --require preload path quoting here is POSIX-only");
+    return;
+  }
+  const { server, imports } = startImportStub();
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
+
+  const { db, insert } = makeSpendDb(caveDir);
+  insert("req-1", 1000, 400);
+  insert("req-2", 2000, 1200);
+  db.close();
+
+  const racingEnv = delaySyncWrite(env, home, 1200);
+  const [a, b] = await Promise.all([runCli(["sync"], racingEnv), runCli(["sync"], racingEnv)]);
+  assert.equal(a.code, 0, `first sync failed: ${a.stderr}`);
+  assert.equal(b.code, 0, `second sync failed: ${b.stderr}`);
+
+  assert.equal(imports.length, 1, "exactly one of the two racing processes may POST the rows");
+  const uploaded = imports.reduce((n, i) => n + i.rowCount, 0);
+  assert.equal(uploaded, 2, "two local spans must land as two server-side rows, not four");
+
+  const state = JSON.parse(readFileSync(join(home, ".caveman-cloud", "sync.json"), "utf8"));
+  assert.equal(Object.values(state.watermarks)[0], 2, "the watermark still advances to the last confirmed rowid");
+
+  server.close();
+});
+
+// A lock left behind by a killed holder must not wedge sync off forever: the
+// next run reclaims it once it is past the stale window, and releases it.
+test("a stale sync lock from a crashed holder does not wedge sync off", async () => {
+  const { server, imports } = startImportStub();
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
+
+  const { db, insert } = makeSpendDb(caveDir);
+  insert("req-1", 1000, 400);
+  db.close();
+
+  // A lock file whose mtime is far past the stale window — what a SIGKILLed
+  // holder leaves behind.
+  const cloudDir = join(home, ".caveman-cloud");
+  mkdirSync(cloudDir, { recursive: true });
+  const lockPath = join(cloudDir, "sync.json.lock");
+  writeFileSync(lockPath, "");
+  const ancient = new Date(Date.now() - 600_000);
+  utimesSync(lockPath, ancient, ancient);
+
+  const out = await runCli(["sync"], env);
+  assert.equal(out.code, 0, `sync failed behind a stale lock: ${out.stderr}`);
+  assert.match(out.stdout, /synced 1 spans?/, "a stale lock must be reclaimed, not obeyed forever");
+  assert.equal(imports.length, 1, "the reclaiming process must actually upload");
+  assert.equal(existsSync(lockPath), false, "the lock must be released on the way out");
 
   server.close();
 });

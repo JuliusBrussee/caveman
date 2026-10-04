@@ -4,7 +4,7 @@
     "prompt": "activate caveman",
     "expected": {
       "action": "set",
-      "mode": "full"
+      "mode": "caveman"
     },
     "issue": null,
     "reason": "Direct natural-language activation command",
@@ -16,7 +16,7 @@
     "prompt": "turn on caveman mode",
     "expected": {
       "action": "set",
-      "mode": "full"
+      "mode": "caveman"
     },
     "issue": null,
     "reason": "Natural-language turn-on phrase",
@@ -28,7 +28,7 @@
     "prompt": "talk like caveman",
     "expected": {
       "action": "set",
-      "mode": "full"
+      "mode": "caveman"
     },
     "issue": null,
     "reason": "Persona activation phrase",
@@ -62,7 +62,7 @@
     "prompt": "be brief",
     "expected": {
       "action": "set",
-      "mode": "full"
+      "mode": "caveman"
     },
     "issue": null,
     "reason": "Brevity shortcut trigger",
@@ -74,10 +74,10 @@
     "prompt": "/caveman ultra",
     "expected": {
       "action": "set",
-      "mode": "ultra"
+      "mode": "ultracave"
     },
     "issue": 975,
-    "reason": "Slash command setting specific intensity level",
+    "reason": "Legacy level alias resolves to its skill mode",
     "category": "slash_command",
     "known_failing": false
   },

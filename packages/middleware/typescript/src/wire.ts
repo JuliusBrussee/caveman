@@ -3,8 +3,9 @@ export interface StringLeaf { path: (string | number)[]; start: number; end: num
 export interface WireJSON { value: unknown; strings: Map<string,StringLeaf> }
 export const pathKey = (path: (string | number)[]): string => JSON.stringify(path);
 
-export function parseWire(text: string): WireJSON | null {
-  if (text.length > 2 << 20) return null;
+/** Bounded by `maxBytes` (UTF-16 units) and one node per 16 of them; beyond either the body stays unparsed. */
+export function parseWire(text: string, maxBytes = 16 << 20): WireJSON | null {
+  if (text.length > maxBytes) return null;
   try {
     const value: unknown = JSON.parse(text);
     const strings = new Map<string,StringLeaf>();
@@ -20,7 +21,7 @@ export function parseWire(text: string): WireJSON | null {
       throw new Error('unterminated');
     };
     const walk = (path: (string|number)[], depth: number) => {
-      if (++nodes > 65536 || depth > 64) throw new Error('bounded');
+      if (++nodes > Math.max(65536, maxBytes >> 4) || depth > 64) throw new Error('bounded');
       white();
       const char = text[i];
       if (char === '"') { strings.set(pathKey(path), { ...string(), path }); return; }

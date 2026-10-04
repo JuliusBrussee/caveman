@@ -2,52 +2,36 @@
 
 <img src="docs/assets/caveman-logo-banner.png" alt="Caveman" width="720">
 
-# why use many token when few do trick
+# why many token when few do trick
 
-**Your AI coding agent bills by the word and writes like it knows that. Caveman make it stop.**
-
-<a href="https://www.youtube.com/watch?v=L29q2LRiMRc">
-  <img src="https://img.youtube.com/vi/L29q2LRiMRc/hqdefault.jpg" alt="ThePrimeagen reacts to Caveman: No way this actually works" width="360">
-</a>
-
-▶️ **[ThePrimeagen reacts: "No way this actually works"](https://www.youtube.com/watch?v=L29q2LRiMRc)**
+**Caveman make your AI agent say less and read less. Code stay exact. Brain still big.**
 
 <a href="https://github.com/JuliusBrussee/caveman/stargazers"><img src="https://img.shields.io/github/stars/JuliusBrussee/caveman?style=flat-square&color=F0A63C&label=stars" alt="GitHub stars"></a>
 <a href="https://www.npmjs.com/package/@caveman-ai/cli"><img src="https://img.shields.io/npm/dm/@caveman-ai/cli?style=flat-square&color=F0A63C&label=cli%20downloads" alt="npm downloads"></a>
 <a href="./INSTALL.md"><img src="https://img.shields.io/badge/works_with-30%2B_agents-orange?style=flat-square" alt="30+ agents"></a>
-<a href="#wrap-any-agent"><img src="https://img.shields.io/badge/wraps-10_agents_natively-blue?style=flat-square" alt="10 native wrap profiles"></a>
-<a href="#-license"><img src="https://img.shields.io/badge/license-MIT_%2B_BSL-green?style=flat-square" alt="License"></a>
-<a href="https://skills.sh/JuliusBrussee/caveman"><img src="https://skills.sh/b/JuliusBrussee/caveman" alt="skills.sh"></a>
-
-🏆 **#1 on GitHub Trending · July 2026** &nbsp;·&nbsp; 🥇 **#1 Repository of the Day on [Trendshift](https://trendshift.io/repositories/25391) · April 2026**
-
-**[#1 on Hacker News](https://news.ycombinator.com/item?id=47647455)** · 904 points · 366 comments &nbsp;·&nbsp; **[#8 Product of the Day](https://www.producthunt.com/products/caveman)** on Product Hunt
-
-📄 Cited in **[CAVEWOMAN](https://arxiv.org/abs/2606.24083)**, an Adobe Research paper that measured caveman-style output cutting cost **1.4 to 2.4×, up to 3×** &nbsp;·&nbsp; 🧪 Tested by **[JetBrains](https://blog.jetbrains.com/ai/2026/07/speak-to-ai-agents-like-cavemen-tosave-tokens/)** on 86 real coding tasks: *"costs you nothing measurable in quality"*
-
-<a href="https://www.producthunt.com/products/caveman?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-caveman-2" target="_blank" rel="noopener noreferrer"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1220849&amp;theme=light&amp;t=1786634691828" alt="Caveman - why use many token when few do trick | Product Hunt" width="250" height="54"/></a>
-<a href="https://trendshift.io/repositories/25391?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-25391" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/25391" alt="JuliusBrussee%2Fcaveman | Trendshift" width="250" height="55"/></a>
-
-⚡ **One command, no account, no API key.** `npx skills add JuliusBrussee/caveman -g` **[→ Quick Start](#-quick-start)**
-
-</div>
-
----
-
-<div align="center">
-
-**[See it](#-see-it) · [Quick Start](#-quick-start) · [The Numbers](#-the-numbers) · [In the Wild](#-in-the-wild) · [The Skill](#-the-skill-unpacked) · [The Proxy](#-the-proxy-unpacked) · [Wrap](#wrap-any-agent) · [When to Skip](#-when-to-use--when-to-skip) · [Docs](./docs/README.md)**
-
-</div>
-
----
-
-## 🪨 See it
+<a href="#license"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="License"></a>
 
 <table>
 <tr>
-<th width="50%">🗣️ Normal agent · 69 tokens</th>
-<th width="50%"><img src="docs/assets/dancing-rock.svg" width="18" height="18" alt=""> Caveman agent · 19 tokens</th>
+<td align="center" width="33%"><h3>33.2% fewer</h3>input tokens through <a href="#the-proxy-332-fewer-input-tokens">the proxy</a><br><sub>54 Claude Code runs, 18 of 18 answers right</sub></td>
+<td align="center" width="33%"><h3>129.8× smaller</h3>web pages for the agent<br><sub><a href="./browse/BENCHMARK.md"><code>caveman browse</code></a> vs a Playwright snapshot</sub></td>
+<td align="center" width="33%"><h3>1.4 to 2.4× cheaper</h3>with caveman-style output<br><sub><a href="https://arxiv.org/abs/2606.24083">Adobe Research</a>, eight models</sub></td>
+</tr>
+</table>
+
+Cited by **[Adobe Research](https://arxiv.org/abs/2606.24083)** · A/B tested by **[JetBrains](https://blog.jetbrains.com/ai/2026/07/speak-to-ai-agents-like-cavemen-tosave-tokens/)** · Remade for Elasticsearch on **[Elasticsearch Labs](https://www.elastic.co/search-labs/blog/elastic-caveman-ai-token-reduction)**<br>
+**#1** on [Hacker News](https://news.ycombinator.com/item?id=47647455) · **#1** on GitHub Trending · *"No way this actually works."* [ThePrimeagen](https://www.youtube.com/watch?v=L29q2LRiMRc)
+
+**[How it talks](#how-caveman-talks) · [Install](#install) · [The numbers](#the-numbers) · [The proxy](#big-rock-the-proxy) · [What you get](#what-you-get) · [In the wild](#in-the-wild)**
+
+</div>
+
+---
+
+<table>
+<tr>
+<th width="50%">Normal agent · 63 tokens</th>
+<th width="50%"><img src="docs/assets/dancing-rock.svg" width="18" height="18" alt=""> Caveman agent · 20 tokens</th>
 </tr>
 <tr>
 <td valign="top">
@@ -57,462 +41,230 @@
 </td>
 <td valign="top">
 
-> New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`.
+> New object ref each render, so React re-renders. Wrap the prop in `useMemo`.
 
 </td>
 </tr>
 </table>
 
-Same diagnosis. Same fix. Same `useMemo`. The only thing that died was the throat-clearing.
+**Same fix. 63 token become 20. Brain still big.**
 
-Code, commands, file paths, and exact error messages never get cavemanned. Only the prose around them does. Security warnings and "are you sure?" confirmations come back in full sentences on their own, then caveman resumes.
+Pick your club:
 
-Caveman no make brain smaller. Caveman make *mouth* smaller.
+| Skill | Same answer | Tokens |
+|---|---|---:|
+| `/caveman` | New object ref each render, so React re-renders. Wrap the prop in `useMemo`. | 20 |
+| `/ultracave` | Inline object prop, new ref, re-render. `useMemo`. | 14 |
+| `/megacave` | 新參照致重繪。`useMemo`。 | **13** |
 
-> Half the fun is that your agent talks like it just discovered fire. The other half is that it is still right.
+<sub>Token counts: tiktoken o200k.</sub>
 
----
+## How caveman talks
 
-## 🌍 Why this exists
+Caveman is a voice, not broken grammar. Every reply follows the same structure:
 
-A token is what AI billing counts, roughly three quarters of a word. Your agent pays for every token it **writes** and every token it **reads**. Most agents write like a cover letter and read like a firehose.
+| Rule | What it means |
+|---|---|
+| **Answer first** | `[thing] [action] [reason]. [next step].` No greeting, no "let me", no recap, no "hope this helps" |
+| **One idea per sentence** | Built on [ASD-STE100](https://www.asd-ste100.org/), the controlled English written for aircraft maintenance manuals: 20 words max, active voice, one term per thing |
+| **Meaning never dropped** | Articles can go. *not*, *never*, *no*, *only* never go. Numbers and units stay exact |
+| **Payload verbatim** | Code, commands, paths, and error messages untouched, character for character |
+| **Quiet tool runs** | No chatter between tool calls. One line per phase, one line with the result |
+| **Knows when to stop** | Security warnings, irreversible actions, step-by-step orders, and confused users get full sentences. Then grunt resumes |
+| **Never performs** | No "me think", no caveman prefix. If caveman phrasing isn't shorter, plain wins |
+| **Your prompts stay yours** | Never rewritten. [Research say that backfire](#the-numbers) |
 
-Caveman attacks both ends:
+Every reply runs a check before it sends: opener that announces the plan, deleted; closer that recaps, deleted; every negation, path, and number still there.
 
-- **The skill** shrinks what the agent *says*. One rule file. Free forever. Works in 30+ agents.
-- **The proxy** shrinks what the agent *reads*: logs, test output, JSON, diffs, search results. Runs on your machine. Every squeezed byte gets a backup, so the agent can always pull the original back.
-
-Started as a joke on a Friday in April 2026. Hit 4,000 stars in a week. Now past 100,000, with a research paper, a JetBrains lab test, and a Primeagen reaction video. The joke got serious. The voice did not.
-
----
-
-## ⚡ Quick Start
-
-Caveman come in two sizes. Start small.
-
-### Small rock: the skill
-
-A rule file that makes your agent answer in caveman. MIT, free forever, works in [30+ agents](./INSTALL.md) (Claude Code, Codex, Gemini, Cursor, Windsurf, Cline, Copilot, more). One command:
+## Install
 
 ```bash
 npx skills add JuliusBrussee/caveman -g
 ```
 
-Type `/caveman` if your agent doesn't wake up on its own. That the whole install. One rock.
+Works in Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Cline, Copilot, and [30+ more](./INSTALL.md). Type `/caveman` if it doesn't start on its own. Say `stop caveman` to go back. One rock. That it.
 
-### Big rock: the proxy
+<details>
+<summary><strong>Other ways in</strong>: Claude Code plugin, Gemini, every agent at once, Windows, uninstall</summary>
 
-Runs on your machine, between your agent and the AI provider, and shrinks what the agent *reads* before every call. MIT CLI, BSL-1.1 runtime:
+<br>
+
+```bash
+# Claude Code plugin, auto-starts every session
+claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman
+
+# Gemini CLI
+gemini extensions install https://github.com/JuliusBrussee/caveman
+
+# Every agent on your machine at once, plus the Claude Code statusline badge (Node.js 22.13+)
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.1.0/install.sh | bash
+```
+
+Windows, PowerShell 5.1+:
+
+```powershell
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.1.0/install.ps1 | iex
+```
+
+Changed your mind: `npx -y github:JuliusBrussee/caveman -- --uninstall`
+
+Install broke? Open your agent in this repo and say *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent fix own brain.
+
+</details>
+
+## The numbers
+
+Outside labs first, then ours. Nothing rounded up. Red rows stay red.
+
+| Who | Setup | Result |
+|---|---|---|
+| **[Adobe Research](https://arxiv.org/abs/2606.24083)**, CAVEWOMAN paper (cites this repo) | Caveman-style output, eight models, five datasets | **Cost cut 1.4 to 2.4× per model, up to 3×** |
+| **[Elastic](https://www.elastic.co/search-labs/blog/elastic-caveman-ai-token-reduction)**, Elasticsearch Labs | Caveman mode remade for Elasticsearch, eight live MCP scenarios | **63.6% fewer response tokens.** *"Zero information loss."* |
+| **[JetBrains](https://blog.jetbrains.com/ai/2026/07/speak-to-ai-agents-like-cavemen-tosave-tokens/)** | 86 real coding tasks, paired A/B | **No measurable quality loss** (p = 0.82). 8.5% fewer output tokens |
+
+Two findings shaped caveman. Adobe found that cavemanning *your* prompt makes answers longer and worse, so caveman never touches your prompt. JetBrains found that agent sessions are mostly code and tool calls, which the skill leaves alone. So caveman grew a second rock that shrinks what the agent *reads*: [the proxy](#big-rock-the-proxy).
+
+### The proxy: 33.2% fewer input tokens
+
+| File type | The file, through caveman | File saved | Whole Claude Code session, 3 runs | Session saved |
+|---|---:|---:|---:|---:|
+| CSV | 28,041 → **314** | **98.9%** | 165,823 → 74,484 | **55.1%** |
+| Logs | 22,810 → **348** | **98.5%** | 148,807 → 74,068 | **50.2%** |
+| YAML | 20,447 → **178** | **99.1%** | 132,124 → 71,027 | **46.2%** |
+| Test output | 18,806 → **203** | **98.9%** | 150,377 → 108,514 | **27.8%** |
+| JSON | 18,837 → **281** | **98.5%** | 147,975 → 108,939 | **26.4%** |
+| HTML | 21,670 → 21,670 | none yet | 140,687 → 154,641 | 9.9% worse |
+| **All six** | 130,611 → 22,994 | 82.4% | **885,793 → 591,673** | **33.2%** |
+
+**18 of 18 answers right.** *The file* is each benchmark file run through today's compressor on its own. *The session* is the whole agent run, which also carries the system prompt, tool definitions, conversation, and caveman's own rules, so it moves less than the file. The session run is from August 2026, on an engine that only got the JSON file down to 8,106 tokens. HTML has no compressor yet, so caveman paid its overhead and won nothing back. Each file hides one record in 61 to 72 KB of noise; your files will vary. Headroom on the same suite got 15 of 18 right and used 6.7% fewer tokens on those 15. [Method](./docs/WRAP-BENCHMARK.md#per-file-compression)
+
+### The skill: ten dev questions on claude-opus-5-5
+
+| Instruction | Output tokens |
+|---|---:|
+| None | 6,983 |
+| `Answer concisely.` | 4,334 |
+| `/caveman` | 4,119 |
+| `/ultracave` | **2,693** |
+
+New models already know "be concise", so that line is the real baseline. On top of it, `/caveman` cuts 3% more at the median and `/ultracave` cuts 35% more. [Harness](./evals/README.md)
+
+<!-- BENCHMARK-TABLE-START -->
+<!-- BENCHMARK-TABLE-END -->
+
+### Everything else
+
+| What | Result |
+|---|---|
+| A web page the agent reads (`caveman browse`, 200-row table) | **121 tokens instead of 15,704** for a Playwright snapshot, 129.8× smaller. Tiny forms lose 2.3×. [Bench](./browse/BENCHMARK.md) |
+| Memory files like `CLAUDE.md` (`/caveman-compress`) | **46% smaller** across five fixtures, with every heading, code block, and path intact. [Bench](./skills/caveman-compress/README.md#benchmarks) |
+
+The rules add about 1,000 input tokens to every call. If you pay per request instead of per token (GitHub Copilot premium requests), a shorter answer costs the same, so skip it. Every case where caveman loses: [HONEST-NUMBERS.md](./docs/HONEST-NUMBERS.md).
+
+## Big rock: the proxy
+
+**Logs, CSV, YAML, JSON, and test output come out 98.5% to 99.1% smaller. Whole sessions use 33.2% fewer input tokens, same answers.** ([benchmark](#the-proxy-332-fewer-input-tokens))
+
+The skill shrinks what the agent **says**. The proxy shrinks what it **reads**: logs, test output, JSON, diffs, web pages. It runs on your machine, with your keys and your Claude Pro/Max login. Every original stays on your disk, and the agent can pull it back any time.
 
 ```bash
 npm install -g @caveman-ai/cli && caveman setup --install
 caveman claude        # or codex · gemini · aider · kilo · qwen · opencode · hermes · openclaw · pi
 ```
 
-They stack. Most people start with the small rock and graduate.
-
-<details>
-<summary><strong>More doors into the cave</strong> · full installer, Windows, single agents, uninstall</summary>
-
-<br>
-
-The full installer wires up Claude Code hooks and the statusline badge, finds every supported agent on your machine, and skips agents you no have. Safe to re-run. Needs Node.js 22.13+.
+Then:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.7.0/install.sh | bash
+caveman learn                 # rank where your tokens go, from agent history already on disk
+caveman learn implement       # apply the fixes one diff at a time, only on your yes
+caveman trial -- claude       # A/B a real session on your own work
+caveman shrink -- pnpm test   # compress noisy command output
+caveman browse <url>          # a compressed web page instead of a 15,000-token dump
+caveman convert --dry-run     # pixel mode: skills the model reads as images
+caveman stats                 # your token history
 ```
 
-Windows, PowerShell 5.1+:
+<p align="center">
+  <img src="docs/assets/learn-report.png" alt="Caveman Learn report: a summary and savings cards on the left; the biggest places tokens go, with one fix opened, and a chart of how full sessions get on the right" width="900">
+</p>
 
-```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.7.0/install.ps1 | iex
-```
-
-Just one agent:
+**Building your own agent?** Same shrinking, as one wrapper around the Vercel AI SDK, LangChain, OpenAI, or Anthropic call you already make:
 
 ```bash
-# Claude Code
-claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman
-
-# Gemini CLI
-gemini extensions install https://github.com/JuliusBrussee/caveman
-
-# Qwen Code CLI, then its Caveman wrapper
-npm i -g @qwen-code/qwen-code
-caveman qwen
-
-# Codex, Cursor, Windsurf, Cline, and other skills-compatible agents
-npx skills add JuliusBrussee/caveman --skill '*' -a codex --yes -g  # replace codex with your agent profile
+npm install @caveman-ai/middleware @caveman-ai/sdk        # TypeScript
+pip install 'caveman-middleware[langchain]' caveman-sdk   # Python 3.11+
 ```
 
-**Install broke?** Open your agent in this repo and say: *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent read repo, agent fix own brain. Snake eat tail.
+[TypeScript guide](./packages/middleware/typescript/README.md) · [Python guide](./packages/middleware/python/README.md) · [Every framework](https://docs.caveman.so/docs/sdk/middleware/frameworks) · [One container for the whole team](docs/technical/deploy.md)
 
-Changed your mind: `npx -y github:JuliusBrussee/caveman -- --uninstall`
+## What you get
 
-</details>
+| Command | What it does |
+|---|---|
+| `/caveman` · `/ultracave` · `/megacave` | The voice, the grunt, the 文言文. `/caveman status` shows the mode, `/caveman off` stops it |
+| `/caveman-commit` | One-line Conventional Commit |
+| `/caveman-review` | One finding per line: `L42: 🔴 null deref. Guard it.` |
+| `/caveman-compress <file>` | Shrinks memory files and backs up the original |
+| `/caveman-stats` | Real token usage for this Claude Code session |
+| `/caveman-help` | Every mode and command on one screen |
+| `cavecrew` | Subagents that find, edit, and review code, then report back in caveman |
+| `investigate-first` · `lean-build` · `surgical-patch` · `safe-refactor` · `migration` · `verify-and-stop` | Work patterns that write less code. Your agent picks them up when a task fits |
+| `caveman-setup` · `caveman-discover` · `caveman-learn` · `caveman-manage` · `caveman-optimize` · `caveman-explore` · `caveman-evidence-review` | Drive the proxy from inside your agent |
 
-The full 30+ agent matrix, dry runs, flags, and verification live in [INSTALL.md](./INSTALL.md).
+## In the wild
 
-### 🕐 The first five minutes
+<a href="https://www.youtube.com/watch?v=L29q2LRiMRc"><img src="https://img.youtube.com/vi/L29q2LRiMRc/hqdefault.jpg" alt="ThePrimeagen reacts to Caveman: No way this actually works" width="340" align="right"></a>
 
-**Small rock.** The skill, right after `npx skills add`:
+**ThePrimeagen**: *"No way this actually works."* [Watch](https://www.youtube.com/watch?v=L29q2LRiMRc)
 
-1. **Ask it something.** Any coding question. Watch the preamble vanish and the answer stay.
-2. **Turn the dial.** `/caveman lite` for tight-but-polite. `/caveman ultra` for grunts. `/caveman wenyan` for classical Chinese, because someone asked.
-3. **Commit like a caveman.** `/caveman-commit` writes a Conventional Commit in one line.
-4. **Review like a caveman.** `/caveman-review` gives one finding per line: `L42: 🔴 null deref. Guard it.`
-5. **Shrink your memory files.** `/caveman-compress CLAUDE.md` cuts the prose, keeps every heading, path, and command, and backs up the original.
-6. **Come home.** Say `stop caveman`. Normal prose returns. No hard feelings.
+**Adobe Research**: [CAVEWOMAN](https://arxiv.org/abs/2606.24083), arXiv, June 2026
 
-**Big rock.** The proxy, right after `npm install -g @caveman-ai/cli`:
+**JetBrains**: *"It is fun, and it costs you nothing measurable in quality."* [Read](https://blog.jetbrains.com/ai/2026/07/speak-to-ai-agents-like-cavemen-tosave-tokens/)
 
-1. **Find out where your tokens go.** `caveman learn` reads months of agent history already on your disk, locally, and ranks your token sinks worst-first with a one-line fix behind each. Do this before anything else. It is the most useful five minutes in this README.
-2. **Let it fix them.** `caveman learn implement` hands each fix to Claude Code or Codex one diff at a time, applied only on your yes, and reverts anything that did not lower tokens per turn.
-3. **Wrap your agent.** `caveman claude` (or `codex`, `gemini`, `aider`, `opencode`, `pi`, …) puts the proxy in front of it. Logs, test output, JSON, and diffs get shrunk before the provider sees them. Originals stay on disk, and the agent can pull any of them back.
-4. **Shrink the noisy stuff.** `caveman shrink -- pnpm test` compresses command output. `caveman browse <url>` gives the agent a compressed view of a web page instead of a 15,000-token accessibility dump.
-5. **Prove it on your own work.** `caveman trial -- claude` runs a real session with and without caveman, then `caveman trial report` shows the difference. That A/B outranks every number on this page. A trial needs its own proxy, so if you already did step 3 it will tell you to run `caveman disable claude` first, and `caveman enable claude` after. Caveman rather say "cannot measure this" than hand you a report full of zeros.
-6. **Shrink caveman itself.** `caveman convert --dry-run` shows which installed skills get cheaper as PNG pages the model reads as an image. Convert the profitable ones, revert byte-for-byte any time.
-7. **Watch the bill.** `caveman stats` for history and estimates. `/caveman-stats` inside Claude Code for that session.
+**Elastic**: [elastic-caveman](https://www.elastic.co/search-labs/blog/elastic-caveman-ai-token-reduction) on Elasticsearch Labs, April 2026
 
----
+**Hacker News**: [#1, 904 points](https://news.ycombinator.com/item?id=47647455)
 
-## 📊 The Numbers
+**GitHub Trending** #1 overall, July 2026 · **[Trendshift](https://trendshift.io/repositories/25391)** #1 repo of the day, April 2026 · **[Product Hunt](https://www.producthunt.com/products/caveman)** #8 of the day
 
-Every number below is either from a committed run in this repo or from a named third party. Nothing rounded up. Where a number is small, it says so. Where a row is red, it stays red.
+Started as a joke in April 2026. Now past 100,000 stars. Joke got serious. Voice did not.
 
-### What the skill saves (writing less)
-
-| Who measured | What they measured | Result |
-|---|---|---|
-| **[Adobe Research](https://arxiv.org/abs/2606.24083)** (CAVEWOMAN, arXiv 2606.24083) | Eight models, five datasets, five compression levels | Output-side caveman style cuts realized cost **1.4 to 2.4× per model, up to 3×** in the best case |
-| **[JetBrains](https://blog.jetbrains.com/ai/2026/07/speak-to-ai-agents-like-cavemen-tosave-tokens/)** | 86 real coding tasks, paired A/B, Claude Code 2.1.200. **Skill only, no proxy** (July 2026, before the proxy existed) | **8.5% fewer output tokens**, about 10% cost. **No detectable quality change** (sign test p = 0.82) |
-| **This repo** ([committed eval snapshot](./evals/README.md)) | Ten dev questions, skill vs a plain `Answer concisely.` control, claude-opus-4-6 | **50% fewer output tokens at the median** on top of the terse control. Length only, not correctness |
-
-Read those three together and you get the honest picture. Chat-style Q&A: big cut. Agentic coding sessions, where most tokens are code and tool calls that the skill never touches: high single digits on output, quality flat.
-
-**The JetBrains number is why the proxy exists.** They measured the skill alone, in July 2026, before the proxy shipped. Their finding was that an agent's bill is mostly *reading*, not writing, and no talking style fixes that. So we built the thing that shrinks the reading. The table below is what that changed.
-
-The Adobe paper's other finding matters too: compressing the *human's* prompt into caveman-speak makes models answer longer and worse. Caveman never rewrites your prompts. Only the agent's mouth.
-
-The rules add input tokens on every call, and whether shorter output pays for them depends on your agent, caching, and billing. Full accounting: [docs/HONEST-NUMBERS.md](./docs/HONEST-NUMBERS.md).
-
-<!-- BENCHMARK-TABLE-START -->
-No reviewed API benchmark result is published here yet. Run
-`uv run python benchmarks/run.py` to generate a new result, then review its raw
-response pairs and quality before publishing the generated table.
-<!-- BENCHMARK-TABLE-END -->
-
-### What the proxy saves (reading less)
-
-Your agent rereads logs, test output, diffs, and half your repo all day. The proxy shrinks that stream before it reaches the provider. Pinned 54-run Claude Code benchmark, provider-reported input tokens, three runs per case, every answer checked against an exact oracle:
-
-| Case                   | Direct Claude Code | Through caveman | Change     |
-| ---------------------- | -----------------: | --------------: | ---------: |
-| CSV outlier hunt       | 165,823            | 74,484          | -55.1%     |
-| Log needle in haystack | 148,807            | 74,068          | -50.2%     |
-| YAML config drift      | 132,124            | 71,027          | -46.2%     |
-| Test output failure    | 150,377            | 108,514         | -27.8%     |
-| Deployment JSON drift  | 147,975            | 108,939         | -26.4%     |
-| Dashboard HTML alert   | 140,687            | 154,641         | **+9.9%**  |
-| **Total**              | **885,793**        | **591,673**     | **-33.2%** |
-
-**18 of 18 answer checks passed.** Case-clustered 95% interval: 14.6% to 48.5%. In the same suite, Headroom's wrap saved 6.7% and failed 3 of 18 checks. Method, provenance hashes, and limits: [docs/WRAP-BENCHMARK.md](./docs/WRAP-BENCHMARK.md). Raw harness artifacts are not in this checkout, so treat it as a pinned report, not a public reproduction.
-
-> **Maintainer note.** The HTML row is red and it stays red. That case had no compression transform, so caveman paid its own overhead and won nothing back. The day I hide a red row is the day you should stop trusting the green ones.
-
-### Everything else caveman shrinks
-
-| Surface | Measured | Number |
-|---|---|---|
-| **Browser pages** | Focused question against a 200-row table, vs the Playwright ARIA snapshot | **121 tokens vs 15,704. 129.8× smaller.** Tiny forms lose 2.3×; the [benchmark](./browse/BENCHMARK.md) says so |
-| **Memory files** (`/caveman-compress`) | Five real `CLAUDE.md`-style fixtures | **46% smaller on average**, headings, code, paths, and URLs verified intact |
-| **The skill itself** (pixel mode) | Rendered to PNG pages the model reads as an image | **1,069 to 415 estimated tokens, a 61% cut** |
-| **Your harness prefix** (`subagent-tax`) | What every subagent re-sends before doing any work | On one real machine, **219k of a 267k-char request was tool schemas**. Run it on yours |
-
----
-
-## 📣 In the Wild
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-**ThePrimeagen** · *"No way this actually works"*<br>
-[Full reaction on The PrimeTime →](https://www.youtube.com/watch?v=L29q2LRiMRc)
-
-**Adobe Research** · [CAVEWOMAN: How Large Language Models Behave Under Linguistic Input and Output Compression](https://arxiv.org/abs/2606.24083)<br>
-Adeyemi, Rossi, Dernoncourt · arXiv, June 2026 · cites this repo. The style is now a benchmarked register.
-
-**JetBrains** · [Speaking to AI Agents like Cavemen Saves 65% of Tokens. We Test.](https://blog.jetbrains.com/ai/2026/07/speak-to-ai-agents-like-cavemen-tosave-tokens/)<br>
-The most rigorous outside A/B so far, run on the skill alone before the proxy existed. Their verdict: *"Use it if you like it. It is fun, and it costs you nothing measurable in quality."* Their 8.5% is the number that made us build the proxy.
-
-</td>
-<td width="50%" valign="top">
-
-**Hacker News** · [#1, 904 points, 366 comments](https://news.ycombinator.com/item?id=47647455)
-
-**The New Stack** · [Getting Claude Code to grunt in Caveman-speak might not save as many tokens as you think](https://thenewstack.io/caveman-mode-token-savings/)<br>
-Fair headline. We link it anyway. See [The Numbers](#-the-numbers).
-
-**GitHub Trending** · #1 overall, July 2026<br>
-**Trendshift** · #1 Repository of the Day (April 2026) · #1 JavaScript repo of the month (April) · #1 Go repo of the month (July)
-
-**Product Hunt** · #8 Product of the Day
-
-</td>
-</tr>
-</table>
+<br clear="right">
 
 [![Star History Chart](./docs/assets/star-history.png)](https://star-history.com/#JuliusBrussee/caveman&Date)
 
----
+## Privacy
 
-## 💬 The skill, unpacked
+The skill runs on your machine and sends nothing. The `caveman` CLI sends usage stats by default: commands run, token counts, a random install ID, OS, and IP. Never your prompts, code, or file paths. One person maintains this for free, and those stats show what to build next. Turn it off for good with `caveman telemetry off` or `DO_NOT_TRACK=1`. The full list, and how to delete what was sent: [SECURITY.md](./SECURITY.md).
 
-One rule file, one talking style, plus a small toolbox. `/caveman lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra` sets intensity. `/caveman off` or `normal mode` turns it off.
+## License
 
-| Level | Same question: "Why does my React component re-render?" |
-|---|---|
-| **lite** | Your component re-renders because you create a new object reference each render. Wrap it in `useMemo`. |
-| **full** *(default)* | New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`. |
-| **ultra** | Inline obj prop, new ref, re-render. `useMemo`. |
-| **wenyan-full** | 每繪新生對象參照，故重繪；以 useMemo 包之則免。 |
+[Apache-2.0](./LICENSE), whole repo. Read it, fork it, ship it, host it. Free like mammoth on open plain. Older releases and third-party notices: [LICENSING.md](./LICENSING.md). "Caveman" and the rock logo are trademarks of Julius Brussee.
 
-Three things the skill will never do: shorten your code, paraphrase an error message, or grunt through a security warning. It drops to full sentences for anything irreversible, then picks the club back up.
-
-<details>
-<summary><strong>Everything in the box</strong> · commit messages, reviews, subagents, work patterns</summary>
-
-<br>
-
-| Tool / command                                                                                                                                  | What you get                                                                                                                |
-| ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `/caveman [lite\|full\|ultra\|wenyan-lite\|wenyan-full\|wenyan-ultra\|off]`                                                                     | Shorter replies at the intensity you choose.                                                                                |
-| `cavecrew-investigator`, `cavecrew-builder`, `cavecrew-reviewer`                                                                                | Compressed subagent presets for locating, editing, and reviewing code.                                                      |
-| `/caveman-commit`                                                                                                                               | Terse Conventional Commit messages.                                                                                         |
-| `/caveman-review`                                                                                                                               | One-line, actionable review findings.                                                                                       |
-| `/caveman-compress <file>`                                                                                                                      | Smaller Markdown memory files, with the original backed up.                                                                 |
-| `/caveman-stats`                                                                                                                                | Recorded Claude Code token usage; savings unknown without a measured comparison.                                            |
-| `/caveman-help`                                                                                                                                 | One-screen reminder of every mode and command.                                                                              |
-| `investigate-first`, `lean-build`, `surgical-patch`, `safe-refactor`, `migration`, `verify-and-stop`                                            | Work patterns that write less code, so the agent bills fewer tokens. Your agent picks these up on its own when a task fits. |
-| `/caveman-setup`, `/caveman-discover`, `/caveman-learn`, `/caveman-manage`, `/caveman-optimize`, `/caveman-explore`, `/caveman-evidence-review` | Drive the caveman engine and proxy: set it up, find where tokens go, act on what it finds.                                  |
-
-</details>
-
----
-
-## 🔧 The proxy, unpacked
-
-One local process. Your agent talks to it, it talks to your provider. No Caveman server in the path, and your Claude Pro/Max login passes through to Anthropic untouched. Originals of everything it compresses sit in a SQLite file on your machine with a recovery handle, so the agent can always ask for the full version back.
-
-```
- Your agent  (Claude Code · Codex · Gemini · Aider · opencode · Pi · …)
-      │   tool output · logs · JSON · diffs · search results
-      ▼
- ┌────────────────────────────────────────────────────┐
- │  caveman proxy   (your machine, your keys)          │
- │  detect() → json · log · code · diff · search · text│
- │  originals → local SQLite, recovery handle returned │
- └────────────────────────────────────────────────────┘
-      │   smaller prompt, same answer
-      ▼
- Your provider  (Anthropic · OpenAI · Google · Bedrock · Vertex · Azure · OpenRouter)
-```
-
-**Whole team? One container.** Same proxy in your VPC, one shared token, keys stay on server. [Deploy it →](docs/technical/deploy.md)
-
-<p align="center">
-  <img src="docs/assets/caveman-demo.gif" alt="Terminal demo: caveman compress reads a large JSON payload and emits a much smaller compressed version, byte-exact recoverable">
-</p>
-
-<details>
-<summary><strong>What the engine keeps, by payload type</strong> · and the wrap stack diagram</summary>
-
-<br>
-
-<p align="center">
-  <img src="docs/assets/wrap-stack.svg" alt="coding agent talks to a local caveman proxy that forwards upstream to the provider with auth passed through byte-exact; a CCR store below the proxy keeps the original bytes and returns a recovery handle to the agent; an MCP toolkit side-channel gives the agent caveman_retrieve, toon encode/decode, and browse" width="820">
-</p>
-
-`detect()` types each payload and routes it to a compressor that keeps what answers depend on:
-
-| Detected type   | Keeps                                                                  | Target savings |
-| --------------- | ---------------------------------------------------------------------- | -------------- |
-| `json`          | keys, structure, error/message subtrees; collapses repetitive arrays   | 70-90%         |
-| `log`           | errors, stack traces, first/last lines; drops INFO and progress noise  | 85-95%         |
-| `code`          | imports, signatures, types; elides function bodies, syntax stays valid | 40-70%         |
-| `diff`          | file/hunk headers and changed lines; elides repeated context           | 60-80%         |
-| `search-result` | top/bottom hits plus diagnostic/security hits                          | 80-95%         |
-| `text` / HTML   | headings, opening/closing context, important sections                  | 50-80%         |
-
-`contextwindow.Pack()` additionally fits candidate context into a token budget by BM25 relevance, recency, and error signal, returned in original order so chronology survives.
-
-Any MCP host gets the same powers through five tools: `caveman_compress`, `caveman_retrieve`, `caveman_stats`, `caveman_toon_encode`, `caveman_toon_decode`.
-
-</details>
-
-### Where your tokens go
-
-Months of your agent history already sit on your disk. `caveman learn` reads it, locally, read-only, no account, and ranks your token sinks worst-first with a one-line fix behind each.
-
-```bash
-caveman learn             # Claude Code + Codex + Gemini CLI + opencode; aider via CAVEMAN_AIDER_ROOT
-caveman learn implement   # hand the fixes to Claude Code or Codex, one diff at a time, applied only on your yes
-```
-
-<p align="center">
-  <img src="docs/assets/learn-report.png" alt="Caveman Learn report: TLDR summary and savings cards on the left; ranked token sinks with an expanded fix and a session context depth histogram on the right" width="900">
-</p>
-
-`implement` re-measures after every change and reverts anything that didn't lower tokens per turn. Caveman never makes your agent dumber to make it cheaper.
-
-### More verbs
-
-```bash
-caveman explore install         # read-only FastContext subagent: finds code as path:line
-caveman shrink -- pnpm test     # compress noisy command output, byte-exact recoverable
-caveman browse <url>            # local Chrome over a compressed a11y tree
-caveman mem remember|recall     # durable memory; `mem recover <handle>` = original bytes
-caveman trial -- claude         # A/B a real session, then `trial report` (needs `disable` first)
-caveman toon encode|decode      # the TOON re-encoder, standalone
-caveman stats                   # token history, API estimates, subscription equivalents
-```
-
-### Pixel mode
-
-Caveman eating its own tail. Every skill you install is prompt text your agent reloads on every call. `caveman convert` renders the skill body to PNG pages in place, and the model reads it as an image. On the caveman skill itself: **1,069 to 415 estimated tokens, a 61% cut**.
-
-```bash
-caveman convert --dry-run        # every installed skill, with the token math, no writes
-caveman convert --agent claude   # convert the profitable ones
-caveman convert --revert         # byte-identical restore from SKILL.orig.md
-```
-
-Convert only fires when pages beat the text. Any failure leaves the skill byte-identical and names the gate that said no.
-
-### Wrap any agent
-
-`caveman <agent>` turns the proxy on for good and launches the agent. `caveman wrap <agent>` runs one session and leaves nothing behind. It never edits your config files.
-
-| Agent                | Vendor           | How it's wrapped                                             |
-| -------------------- | ---------------- | ------------------------------------------------------------ |
-| **Claude Code**      | Anthropic        | env vars                                                     |
-| **OpenAI Codex CLI** | OpenAI           | env vars (API key) · ephemeral `CODEX_HOME` (ChatGPT login)  |
-| **Gemini CLI**       | Google           | env vars                                                     |
-| **Aider**            | OpenAI/Anthropic | env vars                                                     |
-| **Kilo Code**        | Kilo Code        | `KILO_CONFIG_CONTENT`, your `kilo.json` untouched            |
-| **Qwen Code**        | QwenLM           | ephemeral system-settings overlay, source settings untouched |
-| **opencode**         | sst              | inline config via env, your `opencode.json` untouched        |
-| **Hermes Agent**     | Nous Research    | `--provider custom` + env                                    |
-| **OpenClaw**         | OpenClaw         | ephemeral merged config, your config read-only               |
-| **Pi**               | pi.dev           | bundled native extension, your `~/.pi` config untouched      |
-
-<details>
-<summary><strong>Fine print</strong> · tested versions, default loadout, SDK recipes</summary>
-
-<br>
-
-Tested against real sessions on **Hermes v0.18.0**, **OpenClaw 2026.6.11**, **Pi 0.84.2**, **Kilo Code 7.5.6** (the CLI, not the editor extension), and **Qwen Code 0.22.3**. Persistent shortcuts are journaled and reversible with `caveman disable <agent>`.
-
-OpenClaw, for the record, is a lobster. Lobster claw still sharp. Lobster mouth now small.
-
-The default wrap hands the agent the five MCP tools, the browse server when Chrome resolves, command-output shrink on Claude, opencode, Gemini, Hermes, and OpenClaw, and pixel mode on new skill installs. Codex skips the shrink hook because its runtime rejects the rewrite ([openai/codex#18491](https://github.com/openai/codex/issues/18491)). Turn pieces off in `~/.caveman-cloud/config.json`.
-
-Agent not on the list? Point any provider SDK or framework (Vercel AI SDK, LangChain, LiteLLM, OpenAI Agents, CrewAI, PydanticAI) at the local proxy with a `baseURL` swap: [`integrations/recipes/`](./integrations/recipes/). New native agent is usually one JSON profile in [`agents/profiles/`](./agents/profiles/).
-
-</details>
-
----
-
-## 🧭 When to use · when to skip
-
-**Good fit if you** read your agent's answers more than you paste them somewhere, run long sessions full of logs and test output, or pay per token and want the reading side shrunk without changing your code.
-
-**Skip it if you** are billed per request rather than per token (GitHub Copilot premium requests, for one: a shorter answer is the same request), or your workload is pure code generation with almost no prose to cut. The ruleset rides along as input tokens on every call (about 1,000 estimated for the full skill), and on terse one-liner Q&A that can cost more than it saves.
-
-**Measure it yourself.** Run the same task with and without caveman and compare the provider's billing page. That A/B outranks every number on this page. If caveman loses on your workload, turn it off. Full list of where it loses: [docs/HONEST-NUMBERS.md](./docs/HONEST-NUMBERS.md).
-
----
-
-## 🏔 The whole cave
-
-One idea everywhere: **agent do more with less.**
-
-| Repo                                                                  | What it shrinks                                          | Status            |
-| --------------------------------------------------------------------- | -------------------------------------------------------- | ----------------- |
-| **[caveman](https://github.com/JuliusBrussee/caveman)** *(you here)*  | What the agent **says** (skill) and **reads** (proxy)    | live              |
-| **[caveman-browse](https://github.com/JuliusBrussee/caveman-browse)** | What the agent **sees in the browser**                   | live              |
-| **caveman-agent-sdk**                                                 | What your production agent **loads, calls, and spends**  | own repo · in dev |
-| **[cavegemma](https://github.com/JuliusBrussee/cavegemma)**           | The compression **baked into weights** (Gemma fine-tune) | labs              |
-| **[caveman-code](https://github.com/JuliusBrussee/caveman-code)**     | The **whole agent**, end to end                          | frozen            |
-| **[cavemem](https://github.com/JuliusBrussee/cavemem)**               | What the agent **remembers**, across sessions            | frozen            |
-| **[cavekit](https://github.com/JuliusBrussee/cavekit)**               | The **build loop**, spec-driven                          | frozen            |
-
-Frozen ones still install and work. Their best ideas moved in here.
-
-**Caveman make token small. Caveman Cloud make it *provable*.** Local numbers are `inferred`, pinned benchmarks `benchmark_counterfactual`, neither is an invoice. Live traffic behind eval gates with signed receipts earns `verified`. That's Cloud. **[Waitlist at caveman.so](https://caveman.so)**
-
----
-
-## 🔒 Privacy, and a small favor
-
-Your agent still talks to the provider you chose. The skill and hooks run entirely on your machine, and nothing here needs an account.
-
-The `caveman` CLI does send anonymous usage stats by default, and here's the honest why: caveman is free, one person maintains it, and those stats are how I find out which commands people actually use and which optimizations run in real workflows. That's what keeps this thing free and pointed in the right direction. Fair trade, we think.
-
-What it sends: which commands ran, plus token counts through and cut. What it never sends: your prompts, your code, your file paths, or anything that could identify you. It tells you all this the first time you run it.
-
-Not into it? One command and it's off forever, no hard feelings:
-
-```bash
-caveman telemetry off      # or set DO_NOT_TRACK=1
-```
-
-Exact network, telemetry, and storage boundaries: [SECURITY.md](./SECURITY.md).
-
----
-
-## 📜 License
-
-Split license. Skill and adoption surfaces are [MIT](./LICENSE). Engine-linked runtime is BSL-1.1 source-available, not OSI Open Source before Change Date.
-
-**MIT:** the skill, Agent SDK and initializer, the CLI, both client SDKs, contracts, provider catalog, extension shell, and the thin cavemem clients. Free like mammoth on open plain.
-
-**BSL-1.1:** Engine, Proxy, Cache Engine, rewriter, Browse, MCP server, `shrink`, cavemem Go core, and shared Go platform. New Engine-linked runtime modules default to BSL-1.1. Read it, fork it, self-host it for your own first-party traffic free, production included. Each version converts to **Apache-2.0** on the earlier of `2030-06-21` or four years after it ships. Hosting it for third parties needs a commercial license.
-
-`engine/pixel` embeds [pxpipe](https://github.com/teamchong/pxpipe) (MIT) plus glyph atlases derived from Spleen 5×8 (BSD-2-Clause) and GNU Unifont (dual OFL-1.1 / GPLv2-with-font-exception); its `NOTICE` travels with that source.
-
-"Caveman" and the rock logo are trademarks of Julius Brussee. "Powered by Caveman" is fine when true.
-
-## 📚 Cite
-
-If caveman shows up in your paper, the way it showed up in Adobe's:
+## Cite
 
 ```bibtex
 @software{brussee2026caveman,
   author = {Brussee, Julius},
-  title  = {Caveman: why use many token when few do trick},
+  title  = {Caveman: why many token when few do trick},
   year   = {2026},
   url    = {https://github.com/JuliusBrussee/caveman}
 }
 ```
 
-## ⭐ Star this repo
-
-Caveman save you token, save you money. Star cost zero. Fair trade. ⭐
-
 ---
 
+<div align="center">
+
+🪨 **Caveman save you token. Star cost zero. Fair trade.**
+
 <sub>
-<strong>Docs:</strong>
-<a href="./docs/README.md">Technical manual</a> ·
+<a href="./docs/README.md">Docs</a> ·
 <a href="./INSTALL.md">Install matrix</a> ·
 <a href="./docs/HONEST-NUMBERS.md">Honest numbers</a> ·
-<a href="./docs/WRAP-BENCHMARK.md">Wrap benchmark</a> ·
-<a href="./LICENSE">License</a> ·
 <a href="./CONTRIBUTING.md">Contributing</a> ·
-<a href="./CLAUDE.md">Maintainer guide</a> ·
+<a href="https://caveman.so">Caveman Cloud</a> ·
 <a href="https://github.com/JuliusBrussee/caveman/issues">Issues</a>
-<br>
-MIT skill · BSL-1.1 engine. Few token. No lie.
 </sub>
+
+</div>

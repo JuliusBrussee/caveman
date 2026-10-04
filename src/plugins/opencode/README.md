@@ -9,7 +9,7 @@ opencode's `session.created` + `tui.prompt.append` lifecycle hooks.
 |---|---|
 | `plugin.js` | ESM Bun module. Default-exports an opencode `Plugin` factory. |
 | `package.json` | Marks the directory as ESM so Bun loads `plugin.js` correctly. |
-| `commands/*.md` | Six slash-command prompt templates (`/caveman`, `/caveman-commit`, …). |
+| `commands/*.md` | Slash-command prompt templates (`/caveman`, `/ultracave`, `/megacave`, `/caveman-commit`, …). |
 
 The installer (`bin/install.js --only opencode`) copies these alongside
 `src/hooks/caveman-config.js` (for the symlink-safe flag-write helpers, renamed
@@ -23,8 +23,8 @@ to `caveman-config.cjs` because this directory is `"type": "module"`) into
   `~/.config/opencode/.caveman-active` via the same `safeWriteFlag` helper
   Claude Code uses (O_NOFOLLOW, atomic temp+rename, 0600 perms, symlink
   refusal, ownership check).
-- `tui.prompt.append` → flips the flag in response to `/caveman[ <level>]`,
-  `/caveman-commit`, `/caveman-review`, `/caveman-compress`, and natural
+- `tui.prompt.append` → flips the flag in response to `/caveman`, `/ultracave`,
+  `/megacave`, `/caveman off`, `/caveman-commit`, `/caveman-review`, `/caveman-compress`, and natural
   language ("turn on caveman", "stop caveman", "normal mode"). When a
   non-independent mode is active, appends a one-line reinforcement to keep
   caveman in the model's attention each turn.
