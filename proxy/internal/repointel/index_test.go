@@ -539,6 +539,7 @@ func TestListFilesSkipsWalkWhenRootIsHomeDirectory(t *testing.T) {
 	forceWalkListing(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	writeTree(t, home, map[string]string{
 		"Documents/notes.go": "package notes\n",
 		".Trash/x.h":         "// stray header\n",

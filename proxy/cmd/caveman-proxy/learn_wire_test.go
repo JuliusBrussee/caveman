@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -191,7 +192,9 @@ func TestLearnExportWritesPrivacySafeDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows does not preserve POSIX owner-only permission bits. The file is
+	// still created with the requested mode on platforms that implement it.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("digest mode = %v, want 0600", info.Mode().Perm())
 	}
 	raw, _ := os.ReadFile(out.Path)

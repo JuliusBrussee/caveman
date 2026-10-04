@@ -129,16 +129,28 @@ func captureStdout(t *testing.T, fn func()) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	type readResult struct {
+		out []byte
+		err error
+	}
+	result := make(chan readResult, 1)
+	go func() {
+		out, readErr := io.ReadAll(r)
+		result <- readResult{out: out, err: readErr}
+	}()
 	previous := os.Stdout
 	os.Stdout = w
 	fn()
 	os.Stdout = previous
-	_ = w.Close()
-	out, err := io.ReadAll(r)
-	if err != nil {
+	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return string(out)
+	read := <-result
+	_ = r.Close()
+	if read.err != nil {
+		t.Fatal(read.err)
+	}
+	return string(read.out)
 }
 
 // The identity header exists so the local CLI can match a run-state file it can
