@@ -149,7 +149,7 @@
   "scripts": {
     "build": "tsc && node scripts/cjs-types.mjs",
     "lint": "tsc --noEmit",
-    "test": "npm run build && node --test tests/*.test.mjs",
+    "test": "npm run build && node --test --test-force-exit tests/*.test.mjs",
     "prepack": "npm run build",
     "test:required": "npm run build && node tests/required.mjs",
     "test:consumer": "npm run build && node tests/consumer.mjs"
