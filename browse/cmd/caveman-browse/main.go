@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -23,6 +24,11 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// Before runDirect, which opens the recovery store.
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		runVersion(os.Args[2:], os.Stdout)
+		return
+	}
 	if len(os.Args) > 1 {
 		runDirect(logger, os.Args[1:])
 		return
@@ -56,6 +62,23 @@ func main() {
 		logger.Error("serve", "err", err)
 		os.Exit(1)
 	}
+}
+
+// version is the build version (go build -ldflags "-X main.version=...").
+var version = "dev"
+
+// runVersion prints the version, or with --json {version, capabilities}: the
+// shape every caveman binary answers so the CLI can probe what a build supports.
+// The capabilities are the MCP server (no arguments) and its direct commands.
+func runVersion(args []string, stdout io.Writer) {
+	if len(args) > 0 && args[0] == "--json" {
+		_ = json.NewEncoder(stdout).Encode(map[string]any{
+			"version":      version,
+			"capabilities": []string{"mcp", "snapshot", "act", "eval", "recover", "close"},
+		})
+		return
+	}
+	fmt.Fprintln(stdout, version)
 }
 
 func openRecoveryStore() (*ccr.Store, error) {

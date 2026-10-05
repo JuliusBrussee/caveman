@@ -4,6 +4,7 @@
 //	caveman-shrink shrink        same as above (explicit)
 //	caveman-shrink lint FILE     print per-tool inferred token reductions
 //	caveman-shrink recover HAND  print the original catalog for a recovery handle
+//	caveman-shrink version       print the version; --json adds capabilities
 //
 // Everything it reports is `inferred`. The S4 compress path is fail-open: on any
 // problem it forwards the original bytes unchanged. A shrink writes the original to
@@ -22,6 +23,23 @@ import (
 
 const maxStdinBytes int64 = 32 << 20
 
+// version is the build version (go build -ldflags "-X main.version=...").
+var version = "dev"
+
+// runVersion prints the version, or with --json {version, capabilities}: the
+// shape every caveman binary answers so the CLI can probe what a build supports.
+// The capabilities are its subcommands.
+func runVersion(args []string, stdout io.Writer) {
+	if len(args) > 0 && args[0] == "--json" {
+		_ = json.NewEncoder(stdout).Encode(map[string]any{
+			"version":      version,
+			"capabilities": []string{"shrink", "lint", "recover"},
+		})
+		return
+	}
+	fmt.Fprintln(stdout, version)
+}
+
 func main() {
 	args := os.Args[1:]
 	cmd := "shrink"
@@ -35,8 +53,10 @@ func main() {
 		runLint(args[1:])
 	case "recover":
 		runRecover(args[1:])
+	case "version":
+		runVersion(args[1:], os.Stdout)
 	case "help", "--help", "-h":
-		fmt.Fprintln(os.Stderr, "caveman-shrink [shrink] | lint <file> | recover <handle>")
+		fmt.Fprintln(os.Stderr, "caveman-shrink [shrink] | lint <file> | recover <handle> | version [--json]")
 	default:
 		// No subcommand: treat the whole invocation as a shrink over stdin.
 		runShrink()
