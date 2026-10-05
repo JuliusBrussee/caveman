@@ -15,6 +15,26 @@ func New(baseURL string) providers.Adapter {
 	}}}
 }
 
+func (a Adapter) MatchRoute(method, path string) bool {
+	if method == http.MethodGet && isModelDiscoveryRoute(path) {
+		return true
+	}
+	return a.Base.MatchRoute(method, path)
+}
+
+func isModelDiscoveryRoute(path string) bool {
+	for _, prefix := range []string{"/v1/models", "/openai/v1/models"} {
+		if path == prefix {
+			return true
+		}
+		modelID, ok := strings.CutPrefix(path, prefix+"/")
+		if ok && modelID != "" && !strings.Contains(modelID, "/") {
+			return true
+		}
+	}
+	return false
+}
+
 func isInputTokenCountEndpoint(endpoint string) bool {
 	return strings.HasSuffix(endpoint, "/responses/input_tokens")
 }
