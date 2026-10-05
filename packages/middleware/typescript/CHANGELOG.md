@@ -40,7 +40,8 @@ npm dist-tag, never `latest`. Support policy: [SECURITY.md](../../../SECURITY.md
   Minified bundles keep compressing.
 - Tiers: `ai-sdk`, `langchain`, `openai` and `anthropic` are certified; the
   others are experimental.
-- `@anthropic-ai/sdk` range widened to `<0.129`. Tested up to ai 7.0.114,
+- `@anthropic-ai/sdk` range widened to `<0.132` and tested through `0.131.0`.
+  Tested up to ai 7.0.114,
   openai 7.23.0, @google/genai 2.24.0, langchain 1.5.12, @langchain/core 1.2.12,
   strands 1.19.0, mastra 1.70.0 and MCP 1.30.1.
 - In strict mode, adapter exceptions now raise

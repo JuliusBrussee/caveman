@@ -59,7 +59,8 @@ test('framework peers are optional and unranged (Decision 2); tested releases, m
   assert.deepEqual(inspectFrameworkCompatibility('langchain').frameworks.map(check => check.package), ['langchain', '@langchain/core']);
   assert.deepEqual(inspectFrameworkCompatibility('langchain-core').frameworks.map(check => check.package), ['@langchain/core']);
   assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.128.0'), true, 'released 0.125-0.128 were tested');
-  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.129.0'), false, 'zero-major next minor may break APIs');
+  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.131.0'), true, 'latest canary release was tested');
+  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.132.0'), false, 'zero-major next minor may break APIs');
   assert.equal(frameworkCompatible('openai', '7.12.0'), false, 'older patch than validated floor');
   assert.throws(() => inspectFrameworkCompatibility('typo'), /Unknown Caveman adapter/);
 });
@@ -175,10 +176,10 @@ test('check-latest-in-range reads every TypeScript and Python range and flags on
   assert.deepEqual(entries.filter(([registry]) => registry === 'npm').map(([, name]) => name), Object.keys(pkg.supportedFrameworkVersions));
   assert.deepEqual(entries.find(([registry, name]) => registry === 'pypi' && name === 'anthropic'), ['pypi', 'anthropic', '1.0', '2']);
   assert.ok(entries.some(([registry, name]) => registry === 'pypi' && name === 'autogen-ext'));
-  const sample = [['npm', '@anthropic-ai/sdk', '0.124.0', '0.129'], ['pypi', 'openai', '2.20', '4'], ['npm', 'openai', '7.12.1', '8']];
+  const sample = [['npm', '@anthropic-ai/sdk', '0.124.0', '0.132'], ['pypi', 'openai', '2.20', '4'], ['npm', 'openai', '7.12.1', '8']];
   assert.deepEqual(drift(sample, { 'npm:@anthropic-ai/sdk': '0.128.0', 'pypi:openai': '3.9.1', 'npm:openai': '7.23.0' }), []);
-  assert.deepEqual(drift(sample, { 'npm:@anthropic-ai/sdk': '0.129.0', 'pypi:openai': '4.0.0', 'npm:openai': '8.0.0-beta.1' }), [
-    'npm @anthropic-ai/sdk 0.129.0 is outside >=0.124.0 <0.129', 'pypi openai 4.0.0 is outside >=2.20 <4', 'npm openai 8.0.0-beta.1 is outside >=7.12.1 <8']);
+  assert.deepEqual(drift(sample, { 'npm:@anthropic-ai/sdk': '0.132.0', 'pypi:openai': '4.0.0', 'npm:openai': '8.0.0-beta.1' }), [
+    'npm @anthropic-ai/sdk 0.132.0 is outside >=0.124.0 <0.132', 'pypi openai 4.0.0 is outside >=2.20 <4', 'npm openai 8.0.0-beta.1 is outside >=7.12.1 <8']);
   // PyPI versions follow PEP 440, not semver: any release length, post and local labels are in range like the Python gate.
   const pypi = [['pypi', 'google-genai', '2.18', '3'], ['pypi', 'litellm', '1.95', '2'], ['pypi', 'llama-index-core', '0.14.5', '0.15'], ['pypi', 'mcp', '2.0', '3']];
   assert.deepEqual(drift(pypi, { 'pypi:google-genai': '2.21', 'pypi:litellm': '1.95.3.post1', 'pypi:llama-index-core': '0.14.5.1', 'pypi:mcp': '2.0+local.1' }), []);

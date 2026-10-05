@@ -6,7 +6,7 @@ import { inRange, installedFrameworkVersion, warnFrameworkMismatch } from './ver
 const frameworks = {
   ai: { floor: '7.0.94', high: '8', tested: ['7.0.94', '7.0.114'], entry: 'ai' },
   openai: { floor: '7.12.1', high: '8', tested: ['7.12.1', '7.23.0'], entry: 'openai' },
-  '@anthropic-ai/sdk': { floor: '0.124.0', high: '0.129', tested: ['0.124.0', '0.125.0', '0.126.0', '0.127.0', '0.128.0'], entry: '@anthropic-ai/sdk' },
+  '@anthropic-ai/sdk': { floor: '0.124.0', high: '0.132', tested: ['0.124.0', '0.125.0', '0.126.0', '0.127.0', '0.128.0', '0.131.0'], entry: '@anthropic-ai/sdk' },
   '@google/genai': { floor: '2.21.0', high: '3', tested: ['2.21.0', '2.24.0'], entry: '@google/genai' },
   langchain: { floor: '1.5.10', high: '2', tested: ['1.5.10', '1.5.12'], entry: 'langchain' },
   '@langchain/core': { floor: '1.2.9', high: '2', tested: ['1.2.9', '1.2.12'], entry: '@langchain/core/messages' },
