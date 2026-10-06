@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -79,7 +80,7 @@ func TestEffortForResponsesChatAndTopLevel(t *testing.T) {
 		if c.endpoint == "/v1/messages" {
 			provider = "anthropic"
 		}
-		got := s.applyEffort(newRouteRun(http.Header{}, ""), provider, c.endpoint, []byte(c.body), RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: c.mode})
+		got := s.applyEffort(newRouteRun(http.Header{}, ""), provider, c.endpoint, "m", []byte(c.body), RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: c.mode})
 		if string(got) != c.want {
 			t.Errorf("%s %s:\n got %s\nwant %s", c.endpoint, c.body, got, c.want)
 		}
@@ -87,7 +88,7 @@ func TestEffortForResponsesChatAndTopLevel(t *testing.T) {
 	// No effort, or the route stage off: the body is left as sent.
 	body := `{"reasoning_effort":"high","messages":[]}`
 	for _, answer := range []RouteAnswer{{Outcome: "kept"}, {Outcome: "off", Effort: "low"}, {Outcome: "degraded"}} {
-		if got := s.applyEffort(newRouteRun(http.Header{}, ""), "openai", "/v1/chat/completions", []byte(body), answer); string(got) != body {
+		if got := s.applyEffort(newRouteRun(http.Header{}, ""), "openai", "/v1/chat/completions", "m", []byte(body), answer); string(got) != body {
 			t.Errorf("%+v changed the body: %s", answer, got)
 		}
 	}
@@ -454,7 +455,8 @@ func TestRouteEffortAndLastOnOpenAI(t *testing.T) {
 	}
 }
 
-// Every failure leaves the request byte-identical; no session, no marks.
+// A session without marks: every failure leaves the request byte-identical, and
+// so does a message answer without a session.
 func TestRouteEffortFailsOpenByteIdentical(t *testing.T) {
 	body := convo("high", uA, aB, uC)
 	for _, answer := range []RouteAnswer{
@@ -503,14 +505,198 @@ func BenchmarkRouteEffort5MB(b *testing.B) {
 	body := []byte(`{"model":"claude-opus-5-5","messages":[` + strings.Join(append(messages, aE, uC), ",") + `],"max_tokens":5,"output_config":{"effort":"high"}}`)
 	s := &Server{}
 	header := http.Header{"X-Claude-Code-Session-Id": {"s"}}
-	s.applyEffort(newRouteRun(header, ""), "anthropic", "/v1/messages", body, RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"})
+	s.applyEffort(newRouteRun(header, ""), "anthropic", "/v1/messages", "claude-opus-5-5", body, RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"})
 	b.SetBytes(int64(len(body)))
 	b.ResetTimer()
 	for b.Loop() {
 		run := newRouteRun(header, "")
-		if s.applyEffort(run, "anthropic", "/v1/messages", body, RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}); !run.marked || run.effort != "low" {
+		if s.applyEffort(run, "anthropic", "/v1/messages", "claude-opus-5-5", body, RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}); !run.marked || run.effort != "low" {
 			b.Fatal("no marks replayed")
 		}
 		_ = withPerMessageBeta(header)
+	}
+}
+
+// Agents and the breakpoint planner move cache_control every request; the
+// anchors ignore it, so the marks stay put.
+func TestPerMessageMarksSurviveMovingCacheControl(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, nil)
+	cached := func(message string) string { // cache_control on the message's last block
+		return strings.Replace(message, `}]}`, `,"cache_control":{"type":"ephemeral"}}]}`, 1)
+	}
+	post(t, srv, convo("high", uA, aB, uC, aD, cached(uTR)), nil)
+	if sent, _ := log.last(); string(sent) != convo("high", uA, aB, uC, aD, cached(uTR), mark("medium")) {
+		t.Fatalf("end mark: %s", sent)
+	}
+	post(t, srv, convo("high", uA, aB, uC, aD, uTR, aE, cached(`{"role":"user","content":[{"type":"text","text":"and step two"}]}`)), nil)
+	want := convo("high", uA, aB, uC, aD, uTR, mark("medium"), aE, cached(`{"role":"user","content":[{"type":"text","text":"and step two"}]}`))
+	if sent, _ := log.last(); string(sent) != want {
+		t.Fatalf("the breakpoint moved off the anchor:\n got %s\nwant %s", sent, want)
+	}
+}
+
+// A side request with its own history reads the session's marks but never
+// changes them; the main thread keeps its marks.
+func TestSideRequestLeavesTheSessionsMarks(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	post(t, srv, convo("high", `{"role":"user","content":"title this"}`), map[string]string{"x-claude-code-request-class": "auxiliary"})
+	if sent, _ := log.last(); string(sent) != convo("high", `{"role":"user","content":"title this"}`) {
+		t.Fatalf("side request: %s", sent)
+	}
+	post(t, srv, convo("high", uA, aB, uC, aD, uTR), nil)
+	if sent, _ := log.last(); string(sent) != convo("high", uA, aB, mark("low"), uC, aD, uTR) {
+		t.Fatalf("main thread after a side request: %s", sent)
+	}
+	if cloud.asks[2].Last == nil || cloud.asks[2].Last.InputTokens == 0 || len(cloud.asks) != 3 {
+		t.Fatalf("asks = %d", len(cloud.asks))
+	}
+}
+
+// A compressed refusal is read decoded: the heal and the latch still fire.
+func TestPerMessageHealReadsACompressedRefusal(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	var mu sync.Mutex
+	attempts := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		attempts++
+		mu.Unlock()
+		w.Header().Set("content-type", "application/json")
+		if bytes.Contains(raw, []byte(`"role":"system"`)) && r.Header.Get("accept-encoding") == "gzip" {
+			var zipped bytes.Buffer
+			zw := gzip.NewWriter(&zipped)
+			_, _ = io.WriteString(zw, errorBody("output_config.effort requires a model that supports per-turn effort; this model does not"))
+			_ = zw.Close()
+			w.Header().Set("content-encoding", "gzip")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write(zipped.Bytes())
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","model":"claude-opus-5-5","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	srv := New(Config{
+		Adapters: []providers.Adapter{anthropic.New("https://api.anthropic.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
+	})
+	if rec := post(t, srv, convo("high", uA, aB, uC), map[string]string{"accept-encoding": "gzip"}); rec.Code != http.StatusOK || attempts != 2 {
+		t.Fatalf("status %d after %d attempts", rec.Code, attempts)
+	}
+	post(t, srv, convo("high", uA, aB, uC, aD, uTR), map[string]string{"accept-encoding": "gzip"})
+	if !cloud.asks[1].PerMessageOff || attempts != 3 {
+		t.Errorf("latch %v, attempts %d", cloud.asks[1].PerMessageOff, attempts)
+	}
+}
+
+// The binding heal is for history the marks changed: a routed model is left
+// to the original-bytes retry on the asked one (which rejects the decision),
+// and an agent's own broken binding is not touched.
+func TestBindingHealOnlyForMarkedHistory(t *testing.T) {
+	binding := errorBody("messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.")
+	rejected := 0
+	cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed", Effort: "low", EffortMode: "message", Reject: func() { rejected++ }}}
+	srv, log := effortServer(t, cloud, func(body []byte) (int, string) {
+		if bytes.Contains(body, []byte(`claude-sonnet-5-5`)) {
+			return http.StatusBadRequest, binding
+		}
+		return 0, ""
+	})
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	if len(log.bodies) != 2 || string(log.bodies[1]) != convo("high", uA, aB, uC) || rejected != 1 {
+		t.Fatalf("routed model: %d attempts, last %s, rejected %d", len(log.bodies), log.bodies[len(log.bodies)-1], rejected)
+	}
+	cloud2 := &fakeCloud{answer: RouteAnswer{Outcome: "kept"}}
+	srv2, log2 := effortServer(t, cloud2, func([]byte) (int, string) { return http.StatusBadRequest, binding })
+	post(t, srv2, convo("high", uA, aB, uC), nil)
+	if len(log2.bodies) != 1 {
+		t.Errorf("an untouched request was healed: %d attempts", len(log2.bodies))
+	}
+}
+
+// After a served binding heal the session's later requests strip the same
+// thinking blocks up front (one attempt each) and keep the newer ones.
+func TestBindingHealIsRemembered(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, func(body []byte) (int, string) {
+		if bytes.Contains(body, []byte(`sig-b`)) {
+			return http.StatusBadRequest, errorBody("messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.")
+		}
+		return 0, ""
+	})
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	if len(log.bodies) != 2 {
+		t.Fatalf("attempts = %d", len(log.bodies))
+	}
+	aBplain := `{"role":"assistant","content":[{"type":"text","text":"Three steps."}]}`
+	aH := `{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig-h"},{"type":"text","text":"Ok."}]}`
+	post(t, srv, convo("high", uA, aB, uC, aH, uF), nil)
+	if len(log.bodies) != 3 {
+		t.Fatalf("attempts = %d, want the remembered strip to need no 400", len(log.bodies))
+	}
+	if sent, _ := log.last(); string(sent) != convo("high", uA, aBplain, uC, aH, mark("low"), uF) {
+		t.Fatalf("remembered strip: %s", sent)
+	}
+}
+
+// A session's marks come back whatever the answer: a Cloud failure, routing
+// off, or a top-level answer without an effort.
+func TestPerMessageMarksComeBackOnEveryAnswer(t *testing.T) {
+	for _, answer := range []RouteAnswer{
+		{Outcome: "degraded", Reason: "timeout"},
+		{Outcome: "off"},
+		{Outcome: "kept", EffortMode: "top"},
+	} {
+		cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+		srv, log := effortServer(t, cloud, nil)
+		post(t, srv, convo("high", uA, aB, uC), nil)
+		cloud.answer = answer
+		post(t, srv, convo("high", uA, aB, uC, aD, uTR), nil)
+		if sent, header := log.last(); string(sent) != convo("high", uA, aB, mark("low"), uC, aD, uTR) || header.Get("anthropic-beta") != perMessageBeta {
+			t.Errorf("%+v: %s", answer, sent)
+		}
+	}
+	// A model the marks never went to does not get them.
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	cloud.answer = RouteAnswer{Outcome: "degraded"}
+	other := strings.Replace(convo("high", uA, aB, uC, aD, uTR), "claude-opus-5-5", "claude-sonnet-5-5", 1)
+	post(t, srv, other, nil)
+	if sent, _ := log.last(); string(sent) != other {
+		t.Errorf("another model got the marks: %s", sent)
+	}
+}
+
+// A provider refusing a routed effort rejects the decision like a refused model.
+func TestRefusedEffortRejectsTheDecision(t *testing.T) {
+	rejected := 0
+	var sent [][]byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		sent = append(sent, raw)
+		w.Header().Set("content-type", "application/json")
+		if bytes.Contains(raw, []byte(`reasoning_effort`)) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"Unsupported parameter: 'reasoning_effort'","type":"invalid_request_error"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"c","object":"chat.completion","model":"gpt-6-sol","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", Reject: func() { rejected++ }}}
+	srv := New(Config{
+		Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-6-sol","messages":[]}`))
+	req.Header.Set("authorization", "Bearer sk-proj-api-key")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || len(sent) != 2 || rejected != 1 {
+		t.Fatalf("status %d, attempts %d, rejected %d", rec.Code, len(sent), rejected)
 	}
 }

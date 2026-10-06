@@ -140,7 +140,8 @@ func TestStateRoundTripsPerSessionAndChild(t *testing.T) {
 	}
 }
 
-// An oversized or empty state is not kept; a new login forgets every state.
+// An oversized state is not kept; an answer without one (a side request's)
+// keeps the one there; a new login forgets every state.
 func TestStateBoundsAndLogin(t *testing.T) {
 	state := ""
 	cloud := &cloudRecorder{answer: func(int) string {
@@ -153,17 +154,19 @@ func TestStateBoundsAndLogin(t *testing.T) {
 	link.Ask(t.Context(), askFor("s1", "", "one"))()
 	state = "kept"
 	link.Ask(t.Context(), askFor("s1", "", "two"))()
+	state = ""
 	link.Ask(t.Context(), askFor("s1", "", "three"))()
-	if _, ok := cloud.bodies[1]["state"]; ok || cloud.bodies[2]["state"] != "kept" {
-		t.Fatalf("states sent: %v, %v", cloud.bodies[1]["state"], cloud.bodies[2]["state"])
+	link.Ask(t.Context(), askFor("s1", "", "three and a half"))()
+	if _, ok := cloud.bodies[1]["state"]; ok || cloud.bodies[2]["state"] != "kept" || cloud.bodies[3]["state"] != "kept" {
+		t.Fatalf("states sent: %v, %v, %v", cloud.bodies[1]["state"], cloud.bodies[2]["state"], cloud.bodies[3]["state"])
 	}
 	// A new login rewrites the credentials with another session token.
 	if err := os.WriteFile(filepath.Join(home, "credentials"), []byte(`{"access_token":"`+token(time.Now().Add(2*time.Hour))+`x"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	link.Ask(t.Context(), askFor("s1", "", "four"))()
-	if _, ok := cloud.bodies[3]["state"]; ok {
-		t.Errorf("a new login sent the old login's state: %v", cloud.bodies[3]["state"])
+	if _, ok := cloud.bodies[4]["state"]; ok {
+		t.Errorf("a new login sent the old login's state: %v", cloud.bodies[4]["state"])
 	}
 }
 
@@ -200,6 +203,7 @@ func TestAnswerEffortIsCheckedNotGuessed(t *testing.T) {
 		`{"model":"claude-opus-5-5","effort":"max"}`:                             {"max", ""},
 		`{"model":"claude-opus-5-5","effort":"High\"}","effort_mode":"message"}`: {"", ""},
 		`{"model":"claude-opus-5-5","effort":"low","effort_mode":"sometimes"}`:   {"", ""},
+		`{"model":"claude-opus-5-5","effort":"","effort_mode":"top"}`:            {"", ""},
 	} {
 		cloud := &cloudRecorder{answer: func(int) string { return answer }}
 		link := newLink(cloudHome(t, cloud.server(t).URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))

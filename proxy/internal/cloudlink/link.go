@@ -5,8 +5,9 @@
 // in or out, or switching the routing module, takes effect without a restart.
 //
 // It never touches compression or any other local stage, and every failure
-// fails open: a Cloud error, timeout, 401 or allowance answer keeps the request
-// as the agent sent it. The ask carries the caller's models, counts, what the
+// fails open: a Cloud error, timeout, 401 or allowance answer keeps the asked
+// model and the request's own effort (the gateway still puts back a session's
+// existing per-message marks). The ask carries the caller's models, counts, what the
 // request declares (labels, tool names, effort), what the session's previous
 // request ran, and the conversation's text Cloud picks the model and effort
 // from: the latest human turn, the one before it and the end of the agent's
@@ -454,11 +455,11 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	}
 	<-d.done
 	answer := d.answer
-	if answer.Model != "" {
+	if answer.Model != "" || answer.Effort != "" {
 		k := string(key[:])
 		answer.Reject = func() {
-			// The provider refused the routed model: the rest of this ask keeps
-			// the asked one instead of failing over on every turn.
+			// The provider refused the routed model or effort: the rest of this
+			// ask keeps what the agent asked for instead of failing over every turn.
 			done := make(chan struct{})
 			close(done)
 			l.mu.Lock()
@@ -804,7 +805,7 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	l.keepState(ask.SessionID, answer.State)
 	out := gateway.RouteAnswer{Outcome: "kept", Reason: truncate(answer.Reason, 64), DecisionID: answer.DecisionID}
 	// An effort the runtime cannot splice in safely is left out, never guessed at.
-	if effortRE.MatchString(answer.Effort) && slices.Contains([]string{"", "message", "top"}, answer.EffortMode) {
+	if answer.Effort != "" && effortRE.MatchString(answer.Effort) && slices.Contains([]string{"", "message", "top"}, answer.EffortMode) {
 		out.Effort, out.EffortMode = answer.Effort, answer.EffortMode
 	}
 	if answer.Model != ask.Model {
@@ -826,10 +827,11 @@ func (l *Link) state(key string) string {
 	return ""
 }
 
-// keepState stores the state Cloud answered for a session key; an empty one
-// clears it and one over stateMax bytes is not kept.
+// keepState stores the state Cloud answered for a session key. An empty one
+// keeps the one there (a compaction or side answer need not carry it); one over
+// stateMax bytes drops it.
 func (l *Link) keepState(key, state string) {
-	if key == "" {
+	if key == "" || state == "" {
 		return
 	}
 	l.mu.Lock()
@@ -838,7 +840,7 @@ func (l *Link) keepState(key, state string) {
 		l.stateOrder.Remove(element)
 		delete(l.states, key)
 	}
-	if state == "" || len(state) > stateMax {
+	if len(state) > stateMax {
 		return
 	}
 	if l.states == nil {
