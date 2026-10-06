@@ -74,7 +74,7 @@ import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, u
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
 import { moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
-import { billingCommand, cloudMe, routingStatus, type CloudMe } from "./modules/cloud.js";
+import { billingCommand, cloudMe, printSignInLines, routingStatus, type CloudMe } from "./modules/cloud.js";
 import { modulesDoctor } from "./modules/doctor.js";
 import { findModule } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
@@ -102,8 +102,9 @@ type Config = {
   organizationId?: string;
   tokenStore?: TokenStore;
   gatewayUrl?: string;
-  // Agent traffic goes to gatewayUrl: chosen with `login --gateway-url` or
-  // CAVE_GATEWAY_URL at login, never by signing in alone.
+  // Agent traffic goes to gatewayUrl only when true: chosen with `login
+  // --gateway-url` or CAVE_GATEWAY_URL at login, never by signing in alone.
+  // v4 logins write it either way; absent means a pre-v4 login.
   managedGateway?: boolean;
   logoutPendingLocalCleanup?: boolean;
   telemetry?: TelemetryConfig;
@@ -155,23 +156,33 @@ function journaledRouteOrigins(agent: string): string[] {
   }))];
 }
 
-// Wiring written before this rule pointed an agent at the managed gateway; it
-// stays until the person re-runs setup, on/off or enable (which re-wire it).
-function agentRouteStale(agent: string): boolean {
+// The base URL an agent's wiring points at when it is not the current traffic
+// target (an earlier login's managed gateway). It stays until the person
+// re-runs setup, on/off or enable, which re-wire it.
+function agentStaleRoute(agent: string): string | undefined {
   const target = new URL(gatewayURL()).origin;
-  return journaledRouteOrigins(agent).some((origin) => origin !== target);
+  return journaledRouteOrigins(agent).find((origin) => origin !== target);
 }
 
 // Where agent traffic goes, for status and doctor; `fix` only when an earlier
 // login left agents on the managed gateway without an explicit choice.
-function agentTraffic(): { target: WrapMode; line: string; fix?: string } {
+// `next` is the command status puts on its next line.
+function agentTraffic(): { target: WrapMode; line: string; fix?: string; next?: string } {
   const gw = gatewayURL();
   if (wrapMode(gw) === "managed") return { target: "managed", line: `agent traffic: managed gateway (${gw})` };
   const agents: NativeAgent[] = ["claude", "codex", "hermes", "gemini", "opencode", "pi", "aider"];
-  const earlier = agents.some((agent) => journaledRouteOrigins(agent).some((origin) => wrapMode(origin) === "managed"));
-  return earlier
-    ? { target: "local", line: "agent traffic: managed gateway (from an earlier login)", fix: "caveman setup to use the local runtime" }
-    : { target: "local", line: "agent traffic: local runtime" };
+  const earlier = agents.find((agent) => journaledRouteOrigins(agent).some((origin) => wrapMode(origin) === "managed"));
+  if (earlier) {
+    const was = journaledRouteOrigins(earlier).find((origin) => wrapMode(origin) === "managed");
+    return { target: "local", line: `agent traffic: managed gateway (${was}, from an earlier login)`, fix: "caveman setup to use the local runtime", next: "caveman setup" };
+  }
+  // A pre-v4 login stored its gateway with no choice recorded either way; v4
+  // logins record managedGateway true or false.
+  const raw = globalCapabilityDocument();
+  if (raw.managedGateway === undefined && typeof raw.gatewayUrl === "string" && raw.gatewayUrl && wrapMode(raw.gatewayUrl) === "managed") {
+    return { target: "local", line: `agent traffic: local runtime (was ${raw.gatewayUrl} before v4)`, fix: `caveman login --gateway-url ${raw.gatewayUrl} to keep it` };
+  }
+  return { target: "local", line: "agent traffic: local runtime" };
 }
 
 // Known agents `caveman wrap` can launch by short id come from the agent-profile
@@ -519,12 +530,20 @@ setModuleHost({
     const response = await fetch(`${cfg.baseURL}/api/v1/auth/me`, { headers: { authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(`${cfg.baseURL} answered ${response.status}`);
   },
+  // Bounded so an offline status fails fast: 1.5 s for a token refresh, 1.5 s for /me.
   cloudMe: async () => {
-    if (process.env.CAVEMAN_OFFLINE === "1") return null;
-    const cfg = await config();
-    const response = await fetch(`${cfg.baseURL}/api/v1/auth/me`, { headers: { authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(3000) });
-    return response.ok ? await response.json() as CloudMe : null;
+    if (process.env.CAVEMAN_OFFLINE === "1") return { status: 0, me: null };
+    try {
+      const cfg = await config(1500);
+      const response = await fetch(`${cfg.baseURL}/api/v1/auth/me`, { headers: { authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(1500) });
+      return { status: response.status, me: response.ok ? await response.json() as CloudMe : null };
+    } catch {
+      return { status: 0, me: null };
+    }
   },
+  signIn: async () => { await login([]); },
+  // The same opt-out caveman-proxy honours for runtime events.
+  telemetryOff: () => telemetryConfigFromDisk()?.enabled === false || telemetryEnvForcesOff(),
   openBrowser: openLoginBrowser,
   localRuntimes: async () => {
     const version = probeProxyVersion();
@@ -541,7 +560,7 @@ setModuleHost({
   interactive,
   confirm: promptYesNo,
   agentTraffic,
-  agentRouteStale,
+  agentStaleRoute,
 });
 
 function commandUsage(suffix: string): never {
@@ -9015,7 +9034,8 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
       nativeProxyBinaryRequired(gw);
       const existing = nativeIntegrationStatus(agent);
       if (existing.installed) {
-        if (existing.state === "installed") return "already" as const;
+        // Wiring an earlier login pointed elsewhere is re-wired below, outside the lock.
+        if (existing.state === "installed") return agentStaleRoute(agent) ? "stale" as const : "already" as const;
         // `--fix` on purpose: bare `caveman doctor <agent>` prints JSON that says
         // `degraded` and nothing that says how to leave that state, so pointing
         // at it alone dead-ends the user who followed this line here (#1049).
@@ -9059,8 +9079,13 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
     // accidental side effect of the first install rather than something the
     // command does. The integration lock is for file mutations — a liveness
     // probe and a detached spawn need no part of it.
+    if (outcome === "stale") {
+      const was = agentStaleRoute(agent);
+      repairNativeAgent(agent, { quiet: true });
+      if (!quiet) process.stderr.write(`${mark("ok")} point ${agent} at ${wrapMode(gw) === "local" ? "the local runtime" : gw} (was ${was})\n`);
+    }
     ensureLocalProxyForNative(agent, gw);
-    if (quiet) continue;
+    if (quiet || outcome === "stale") continue;
     if (outcome === "already") {
       process.stderr.write(`${mark("ok")} ${profile.display_name}: ${agent === "aider" ? "shallow" : "native"} Caveman already enabled\n`);
       continue;
@@ -9380,6 +9405,7 @@ function repairNativeAgent(target: NativeAgent, { quiet = false }: { quiet?: boo
   }
   const profile = findAgent(target)!;
   const gw = gatewayURL();
+  const was = agentStaleRoute(target);
   withIntegrationLock(target, () => {
     recoverPendingNativeInstallUnlocked(target);
     const journal = readNativeJournal(target);
@@ -9401,6 +9427,7 @@ function repairNativeAgent(target: NativeAgent, { quiet = false }: { quiet?: boo
     }
   });
   if (!quiet) process.stderr.write(`${mark("ok")} ${profile.display_name}: native Caveman repaired; unrelated host edits preserved\n`);
+  if (!quiet && was) process.stderr.write(`routing: ${was} → ${new URL(gw).origin}\n`);
 }
 
 function disableNative(argv: string[]) {
@@ -9677,7 +9704,7 @@ async function nativeDoctor(argv: string[]) {
     } else if (!before.installed) {
       enableNative([target]);
       fixResult = "enabled";
-    } else if (before.state === "installed") {
+    } else if (before.state === "installed" && !agentStaleRoute(target)) {
       fixResult = "not_needed";
     } else {
       repairNativeAgent(target);
@@ -10496,13 +10523,11 @@ function wrapNotFoundUI(requested: string, agent?: AgentProfile) {
 // login runs the RFC-8628 device-authorization flow: request a code, show the
 // user the URL + code to approve in a browser, then poll until the code is
 // exchanged for an access token. The token is stored in the OS keychain (or a
-// resolveLoginGatewayUrl decides the managed gateway URL to persist so that, after
-// login, `caveman wrap` routes through the cloud with no env var
-// (SIMPLICITY_SPEC §6.5). Precedence: explicit --gateway-url flag > CAVE_GATEWAY_URL
-// set at login > a gateway_url advertised by the device/authorization response
-// (forward-compatible if control-api starts returning it) > derived from the
-// control-API base URL for the two shapes Caveman ships. Returns "" when it cannot
-// derive one honestly — wrap then stays local until the user sets CAVE_GATEWAY_URL.
+// resolveLoginGatewayUrl decides the Cloud gateway login stores for Cloud calls
+// (/v1/route). Agent traffic moves there only on an explicit choice (see
+// gatewayURL). Precedence: --gateway-url > CAVE_GATEWAY_URL at login > a
+// gateway_url the device grant advertises > derived from the control-API base
+// URL for the two shapes Caveman ships. "" when it cannot be derived honestly.
 function resolveLoginGatewayUrl(baseURL: string, tok: Record<string, unknown>, code: Record<string, unknown>, argv: string[]): string {
   const flagged = flagFrom(argv, "--gateway-url", "");
   if (flagged) return flagged;
@@ -10691,7 +10716,7 @@ async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: stri
   if (gateway) saved.gatewayUrl = gateway;
   // Only an explicit gateway choice moves agent traffic; the stored gateway
   // otherwise serves Cloud calls alone.
-  if (gateway && (explicitGateway || kept)) saved.managedGateway = true;
+  saved.managedGateway = Boolean(gateway && (explicitGateway || kept));
   // Persist the complete local login state before the server-side receipt fence:
   // an ACK may permanently purge the replay bundle, so a config write that fails
   // must leave the grant retryable rather than acknowledging an undiscoverable
@@ -10699,6 +10724,7 @@ async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: stri
   // bridge until the control plane has recorded that this CLI stored the bundle.
   await saveConfig(saved);
   await grant.acknowledge();
+  await printSignInLines();
   const email = tokenClaim(accessToken, "email");
   if (instance) {
     print({ authenticated: true, baseURL, organization_id: organizationId ?? null, project_id: credentials.project_id, scope: tok.scope, credential_kind: "none", token_store: tokenStore });
@@ -18769,8 +18795,9 @@ async function status(argv: string[]) {
   });
   const integrations = [...native, { ...genericIntegrationStatus(listening), runtime_reachable: listening }];
   const modules = await moduleStates();
+  const traffic = agentTraffic();
   if (argv.includes("--json")) {
-    print({ ...view, native_integrations: integrations, modules });
+    print({ ...view, agent_traffic: { target: traffic.target, line: traffic.line, ...(traffic.fix ? { fix: traffic.fix } : {}) }, native_integrations: integrations, modules });
     return;
   }
   const saved = view.mode === "compress" ? Number(today?.compression_tokens_saved ?? 0) : 0;
@@ -18781,9 +18808,11 @@ async function status(argv: string[]) {
   };
   const degraded = native.filter((integration) => integration.state === "degraded").map((integration) => integration.agent);
   const lines = [...(routing.notice ? [routing.notice] : []), ...view.off_states.map((state) => state.fix ? `${state.line} · ${state.fix}` : state.line)];
-  const traffic = agentTraffic();
   lines.push(traffic.fix ? `${traffic.line} · ${traffic.fix}` : traffic.line);
-  process.stdout.write(renderModuleGrid(modules, { notes, next: nextStep(modules, { degraded: degraded[0], fallback: next }), degraded, lines }));
+  // ADR 0083 §7: subscription (OAuth Pro/Max) turns cost no per-request dollars.
+  if (modules.some((state) => state.id === "routing" && state.active)) lines.push("routing has no effect on subscription turns");
+  const step = nextStep(modules, { degraded: degraded[0], fallback: next });
+  process.stdout.write(renderModuleGrid(modules, { notes, next: traffic.next && step !== "caveman setup --install" ? traffic.next : step, degraded, lines }));
 }
 
 // cliVersion reads the published version from package.json (next to the built
@@ -19730,7 +19759,7 @@ export function resolveConfigBaseUrl(savedBaseURL: string | undefined): string {
   return savedBaseURL ?? process.env.CAVE_API_URL ?? PROD_API_URL;
 }
 
-async function config(): Promise<Config> {
+async function config(refreshTimeoutMs = 5000): Promise<Config> {
   const raw = await readFile(configPath(), "utf8").catch(() => "{}");
   const parsed = JSON.parse(raw) as Partial<Config>;
 	const credentials = resolveCredentials(parsed);
@@ -19746,11 +19775,11 @@ async function config(): Promise<Config> {
   if (parsed.organizationId) cfg.organizationId = parsed.organizationId;
   if (parsed.tokenStore) cfg.tokenStore = parsed.tokenStore;
   if (parsed.gatewayUrl) cfg.gatewayUrl = parsed.gatewayUrl;
-  if (parsed.managedGateway === true) cfg.managedGateway = true;
+  if (typeof parsed.managedGateway === "boolean") cfg.managedGateway = parsed.managedGateway;
   if (parsed.logoutPendingLocalCleanup === true) cfg.logoutPendingLocalCleanup = true;
   const telemetry = parseTelemetryConfig((parsed as Record<string, unknown>).telemetry);
   if (telemetry) cfg.telemetry = telemetry;
-	if (!cfg.logoutPendingLocalCleanup && cfg.refreshToken && accessTokenExpiresSoon(cfg.token)) return refreshCLIConfig(cfg);
+	if (!cfg.logoutPendingLocalCleanup && cfg.refreshToken && accessTokenExpiresSoon(cfg.token)) return refreshCLIConfig(cfg, refreshTimeoutMs);
 	return cfg;
 }
 
@@ -19775,7 +19804,7 @@ async function saveConfig(cfg: Config) {
   if (cfg.projectId) out.projectId = cfg.projectId; else delete out.projectId;
   if (cfg.organizationId) out.organizationId = cfg.organizationId; else delete out.organizationId;
   if (cfg.gatewayUrl) out.gatewayUrl = cfg.gatewayUrl; else delete out.gatewayUrl;
-  if (cfg.managedGateway) out.managedGateway = true; else delete out.managedGateway;
+  if (cfg.managedGateway !== undefined) out.managedGateway = cfg.managedGateway; else delete out.managedGateway;
   if (cfg.tokenStore) out.tokenStore = cfg.tokenStore; else delete out.tokenStore;
   if (cfg.telemetry) out.telemetry = cfg.telemetry;
   if (cfg.logoutPendingLocalCleanup) out.logoutPendingLocalCleanup = true; else delete out.logoutPendingLocalCleanup;
@@ -19865,7 +19894,7 @@ function accessTokenExpiresSoon(token: string): boolean {
 	}
 }
 
-async function refreshCLIConfig(cfg: Config): Promise<Config> {
+async function refreshCLIConfig(cfg: Config, timeoutMs = 5000): Promise<Config> {
 	if (!cfg.refreshToken) return cfg;
 	try {
 	  const response = await fetch(`${cfg.baseURL}/api/v1/auth/refresh`, {
@@ -19873,7 +19902,7 @@ async function refreshCLIConfig(cfg: Config): Promise<Config> {
 	    redirect: "manual",
 	    headers: { "content-type": "application/json", "x-cave-client": "cli" },
 	    body: JSON.stringify({ refresh_token: cfg.refreshToken }),
-	    signal: AbortSignal.timeout(5000),
+	    signal: AbortSignal.timeout(timeoutMs),
 	  });
 	  if (!response.ok) return cfg;
 	  const body = await response.json() as Record<string, unknown>;

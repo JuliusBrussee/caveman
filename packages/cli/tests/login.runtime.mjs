@@ -275,13 +275,20 @@ test("login alone never changes where agent traffic goes", async () => {
   const settings = `${JSON.stringify({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8787" } }, null, 2)}\n`;
   writeFileSync(join(home, ".claude", "settings.json"), settings);
 
+  delete env.DO_NOT_TRACK;
+  delete env.CAVEMAN_TELEMETRY;
   const login = await runCli(["login", "--no-browser", "--base-url", `http://127.0.0.1:${port}`], env);
   assert.equal(login.code, 0, `login failed: ${login.stderr}`);
   assert.doesNotMatch(login.stderr, /wrap (now )?routes through/);
+  // Every sign-in says what routing does now and what data leaves, each with its off switch.
+  assert.match(login.stderr, /^routing is on · the right model each turn · caveman off routing to stop$/m);
+  assert.match(login.stderr, /^runtime data: counts per request to your Cloud, never prompt text · caveman telemetry off to stop$/m);
+  const optedOut = await runCli(["login", "--no-browser", "--base-url", `http://127.0.0.1:${port}`], { ...env, DO_NOT_TRACK: "1" });
+  assert.match(optedOut.stderr, /^runtime data: nothing sent \(telemetry is off\)/m);
 
   const cfg = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
   assert.equal(cfg.gatewayUrl, "https://gateway.example.test", "the Cloud gateway stays known for Cloud calls");
-  assert.equal(cfg.managedGateway, undefined, "signing in is not a traffic choice");
+  assert.equal(cfg.managedGateway, false, "signing in is not a traffic choice, and v4 records that");
   assert.equal(readFileSync(join(home, ".claude", "settings.json"), "utf8"), settings, "login never touches a harness file");
   cfg.wrap = { proxy: false };
   writeFileSync(join(caveDir, "cloud.json"), JSON.stringify(cfg, null, 2));
@@ -313,7 +320,7 @@ test("status names agent wiring an earlier login left on the managed gateway", a
   writeFileSync(join(caveDir, "cloud.json"), JSON.stringify({ gatewayUrl: "https://gateway.example.test" }));
 
   const status = await runCli(["status"], env);
-  assert.match(status.stdout, /^agent traffic: managed gateway \(from an earlier login\) · caveman setup to use the local runtime$/m);
+  assert.match(status.stdout, /^agent traffic: managed gateway \(https:\/\/gateway\.example\.test, from an earlier login\) · caveman setup to use the local runtime$/m);
 });
 
 // With no explicit --gateway-url, login derives the sibling gateway for the
@@ -354,4 +361,19 @@ test("signing in again keeps an explicitly chosen gateway", async () => {
   assert.equal(cfg.gatewayUrl, "http://127.0.0.1:9876");
   assert.equal(cfg.managedGateway, true);
   server.close();
+});
+
+// A pre-v4 login stored its gateway without recording a choice; v4 keeps agent
+// traffic local and says how to keep the gateway.
+test("status names a pre-v4 login's gateway and how to keep it", async () => {
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_NO_KEYCHAIN: "1", CAVEMAN_OFFLINE: "1" };
+  delete env.CAVE_TOKEN;
+  delete env.CAVE_GATEWAY_URL;
+  writeFileSync(join(caveDir, "cloud.json"), JSON.stringify({ gatewayUrl: "https://gateway.example.test" }));
+  const status = await runCli(["status"], env);
+  assert.match(status.stdout, /^agent traffic: local runtime \(was https:\/\/gateway\.example\.test before v4\) · caveman login --gateway-url https:\/\/gateway\.example\.test to keep it$/m);
+  const json = JSON.parse((await runCli(["status", "--json"], env)).stdout);
+  assert.equal(json.agent_traffic.target, "local");
 });

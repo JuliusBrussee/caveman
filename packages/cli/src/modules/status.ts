@@ -6,7 +6,7 @@ import { findModule, type ModuleId } from "./registry.js";
 // The command that clears an on-but-inactive module, when there is one.
 export function moduleFix(state: ModuleState): string | undefined {
   const reason = state.reason ?? "";
-  if (reason.startsWith("sign in")) return "caveman login";
+  if (reason.startsWith("sign in") || reason === "login expired") return "caveman login";
   if (reason.startsWith(`${state.id} paused · `)) return "caveman billing";
   if (reason.startsWith(`${state.id} degraded · `)) return "caveman login";
   if (reason === "paused while input is off") return "caveman on input";

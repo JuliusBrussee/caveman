@@ -15,15 +15,17 @@ test("an earlier login's managed wiring moves to the local runtime only on the n
     const local = { ...fx.env };
     delete local.CAVE_GATEWAY_URL;
     const status = await runCli(["status"], local);
-    assert.match(status.stdout, /^agent traffic: managed gateway \(from an earlier login\) · caveman setup to use the local runtime$/m);
+    assert.match(status.stdout, /^agent traffic: managed gateway \(https:\/\/gateway\.example\.test, from an earlier login\) · caveman setup to use the local runtime$/m);
+    assert.match(status.stdout, /^next: caveman setup$/m);
     assert.match(harness(fx.home)[".claude/settings.json"], /gateway\.example\.test/, "status never rewrites wiring");
 
     const plan = await runCli(["on", "output", "--dry-run"], local);
     assert.equal(plan.code, 0, plan.stderr);
-    assert.match(plan.stdout, /UPDATE +~\/\.claude\/settings\.json +point claude at the local runtime/);
+    assert.match(plan.stdout, /UPDATE +~\/\.claude\/settings\.json +point claude at the local runtime \(was https:\/\/gateway\.example\.test\)/);
 
     const moved = await runCli(["on", "output", "--yes"], local);
     assert.equal(moved.code, 0, moved.stderr);
+    assert.match(moved.stdout, /✓ Claude Code routing: local runtime/);
     const settings = harness(fx.home)[".claude/settings.json"];
     assert.doesNotMatch(settings, /gateway\.example\.test/);
     assert.match(settings, /"ANTHROPIC_BASE_URL": "http:\/\/127\.0\.0\.1:8787\/w\/claude"/);

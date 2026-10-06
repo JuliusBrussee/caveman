@@ -5,7 +5,7 @@
 // field, is "no answer": nothing fails because of it.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { moduleHost } from "./apply.js";
+import { currentSelection, moduleHost } from "./apply.js";
 import { cavemanHome } from "./config-home.js";
 
 export type CloudProduct = {
@@ -19,13 +19,47 @@ export type CloudProduct = {
   notice?: string;
 };
 export type CloudMe = { plan?: string; deployment?: string; data?: { level?: string }; products?: CloudProduct[] };
+// status 0: no answer (offline, timeout, not signed in).
+export type MeAnswer = { status: number; me: CloudMe | null };
 
-let me: Promise<CloudMe | null> | undefined;
+let answer: Promise<MeAnswer> | undefined;
 
-// One /me per command, shared by the module states and the status row.
-export function cloudMe(): Promise<CloudMe | null> {
-  me ??= moduleHost().cloudMe().catch(() => null);
-  return me;
+// One /me per command, shared by the module states, the status row and the
+// sign-in lines.
+export function cloudAnswer(): Promise<MeAnswer> {
+  answer ??= moduleHost().cloudMe().catch(() => ({ status: 0, me: null }));
+  return answer;
+}
+
+export async function cloudMe(): Promise<CloudMe | null> {
+  return (await cloudAnswer()).me;
+}
+
+const LEVELS = ["off", "counts", "usage", "decisions"];
+
+// What caveman-proxy sends per request, by the same rule: the CLI telemetry
+// opt-out sends nothing; otherwise /me's data.level, counts when /me names
+// none or cannot be read (never more).
+export function runtimeDataLevel(me: CloudMe | null, telemetryOff: boolean): string {
+  if (telemetryOff) return "off";
+  const level = me?.data?.level;
+  return typeof level === "string" && LEVELS.includes(level) ? level : "counts";
+}
+
+// After every sign-in: what routing does now and what data leaves the machine,
+// each with the way to stop it.
+export async function printSignInLines(): Promise<void> {
+  const h = moduleHost();
+  const lines: string[] = [];
+  if (currentSelection().routing) lines.push("routing is on · the right model each turn · caveman off routing to stop");
+  const telemetryOff = h.telemetryOff();
+  const level = runtimeDataLevel(await cloudMe(), telemetryOff);
+  lines.push(telemetryOff
+    ? "runtime data: nothing sent (telemetry is off) · caveman telemetry on to send counts"
+    : level === "off"
+      ? "runtime data: nothing sent (your organization's data level is off)"
+      : `runtime data: ${level} per request to your Cloud, never prompt text · caveman telemetry off to stop`);
+  for (const line of lines) process.stderr.write(`${line}\n`);
 }
 
 export function cloudProduct(answer: CloudMe | null, id: string): CloudProduct | undefined {

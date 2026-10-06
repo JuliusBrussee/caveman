@@ -164,6 +164,7 @@ if (cmd === "version") {
       "config_sources",
       "telemetry",
       "next",
+      "agent_traffic",
       "native_integrations",
       "modules",
     ]);

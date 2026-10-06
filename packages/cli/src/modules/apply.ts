@@ -12,7 +12,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { portableInvocation } from "../portable-command.js";
-import { cloudMe, cloudProduct, routeState, routingPause, type CloudMe } from "./cloud.js";
+import { cloudAnswer, cloudProduct, routeState, routingPause, type MeAnswer } from "./cloud.js";
 import { findModule, MODULES, type ModuleDef, type ModuleId } from "./registry.js";
 import { moduleFix } from "./status.js";
 
@@ -69,11 +69,15 @@ export type ModuleHost = {
   // Where new wiring sends agent traffic, and the line status prints; `fix`
   // when an earlier login left agents on the managed gateway unasked.
   agentTraffic(): { target: "local" | "managed"; line: string; fix?: string };
-  // A wired agent's written base URL is not the current traffic target.
-  agentRouteStale(agent: string): boolean;
-  // Cloud's GET /api/v1/auth/me answer, or null when it cannot be read.
-  cloudMe(): Promise<CloudMe | null>;
+  // The base URL a wired agent points at when it is not the current target.
+  agentStaleRoute(agent: string): string | undefined;
+  // Cloud's GET /api/v1/auth/me: its status (0 when there is no answer) and body.
+  cloudMe(): Promise<MeAnswer>;
   openBrowser(url: string): void;
+  // `caveman login`'s device flow.
+  signIn(): Promise<void>;
+  // The CLI telemetry opt-out (config, DO_NOT_TRACK, CAVEMAN_TELEMETRY=0).
+  telemetryOff(): boolean;
 };
 
 let host: ModuleHost | undefined;
@@ -182,7 +186,7 @@ function refreshAgents(effects: readonly (readonly [string, unknown])[], unwire:
   const h = moduleHost();
   const keyChanged = effects.some(([key]) => h.wiringKeys.includes(key));
   return h.nativeAgents()
-    .filter((agent) => agent.wired && !unwire.includes(agent.id) && (keyChanged || h.agentRouteStale(agent.id)))
+    .filter((agent) => agent.wired && !unwire.includes(agent.id) && (keyChanged || h.agentStaleRoute(agent.id)))
     .map((agent) => agent.id);
 }
 
@@ -368,7 +372,8 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
   }
   const target = h.agentTraffic().target === "local" ? "the local runtime" : "the managed gateway";
   for (const agent of refreshAgents(effects, unwire)) {
-    const detail = h.agentRouteStale(agent) ? `point ${agent} at ${target}` : `refresh ${agent} hooks`;
+    const was = h.agentStaleRoute(agent);
+    const detail = was ? `point ${agent} at ${target} (was ${was})` : `refresh ${agent} hooks`;
     for (const file of h.wiredFiles(agent)) lines.push({ action: "UPDATE", target: tilde(file), detail });
   }
   // aider is wired without the runtime; every other agent starts it.
@@ -436,7 +441,8 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   };
   for (const agent of unwire) step(agent, "unwired", () => h.unwireAgent(agent));
   for (const agent of wire) step(agent, "wired", () => h.wireAgent(agent));
-  for (const agent of refresh) step(agent, "hooks refreshed", () => h.refreshAgent(agent));
+  const target = h.agentTraffic().target === "local" ? "local runtime" : "managed gateway";
+  for (const agent of refresh) step(agent, h.agentStaleRoute(agent) ? `routing: ${target}` : "hooks refreshed", () => h.refreshAgent(agent));
   if (startsRuntime) {
     say(await h.runtimeListening(1000) ? "✓ local runtime started" : "○ local runtime starts with your next agent session");
   }
@@ -473,14 +479,16 @@ const ENV_NAMES: Record<string, string> = {
 
 // A sign-in module is active once Cloud answers for the signed-in account;
 // a /me without the product's fields still counts as an answer.
-function inactiveReason(m: ModuleDef, selection: ModuleSelection, signedIn: boolean, external?: { bin: string | null; status: Record<string, boolean> | undefined }, me?: CloudMe | null): string | undefined {
+function inactiveReason(m: ModuleDef, selection: ModuleSelection, signedIn: boolean, external?: { bin: string | null; status: Record<string, boolean> | undefined }, cloud?: MeAnswer | null): string | undefined {
   const h = moduleHost();
   if (m.needsSignIn) {
     if (!signedIn) return `sign in to turn on ${m.id}`;
     // caveman-proxy acts only on an explicit switch: signing in alone never
     // starts a Cloud feature (a config from before modules has none).
     if (storedModules()[m.id] !== true) return `${m.id} not switched on in config`;
-    const product = cloudProduct(me ?? null, m.id);
+    if (cloud?.status === 401) return "login expired";
+    const me = cloud?.me ?? null;
+    const product = cloudProduct(me, m.id);
     if (!me || product?.state === "off") return `waiting for Cloud ${m.id}`;
     const pause = m.id === "routing" ? routingPause(product) : product?.state === "limited" ? product : undefined;
     if (pause) return `${m.id} paused · ${(pause.reason ?? "limit").replace(/_/g, " ")}`;
@@ -508,12 +516,12 @@ export async function moduleStates(): Promise<ModuleState[]> {
   const selection = currentSelection();
   const agents = h.nativeAgents().filter((agent) => agent.detected || agent.wired);
   const signedIn = h.signedIn();
-  const me = signedIn && MODULES.some((m) => m.needsSignIn && selection[m.id]) ? await cloudMe() : null;
+  const cloud = signedIn && MODULES.some((m) => m.needsSignIn && selection[m.id]) ? await cloudAnswer() : null;
   return MODULES.map((m) => {
     const on = selection[m.id];
     const bin = on && m.external ? externalBin(m) : null;
     const status = m.external && bin ? externalStatus(m, bin) : undefined;
-    const reason = on ? inactiveReason(m, selection, signedIn, { bin, status }, me) : undefined;
+    const reason = on ? inactiveReason(m, selection, signedIn, { bin, status }, cloud) : undefined;
     const perAgent = Object.fromEntries(agents.map((agent) => [
       agent.id,
       m.wiresAgents ? agent.wired ? "wired" : "not wired" : externalAgentState(status, agent.id),
@@ -555,6 +563,7 @@ export async function moduleSwitchCommand(on: boolean, argv: string[]): Promise<
   const label = all ? "every module" : named.join(", ");
   if (plan.lines.length === 0) {
     console.log(`✓ ${label} already ${verb}`);
+    if (on) await signInFor(named);
     return;
   }
   process.stdout.write(renderPlan(plan));
@@ -565,9 +574,17 @@ export async function moduleSwitchCommand(on: boolean, argv: string[]): Promise<
     process.exitCode = 1;
     return;
   }
+  if (on) await signInFor(named);
   for (const state of (await moduleStates()).filter((item) => named.includes(item.id))) {
     const fix = moduleFix(state);
     const why = state.on && !state.active ? ` · ${state.reason}${fix ? ` · ${fix}` : ""}` : "";
     console.log(`✓ ${state.id} ${verb}${why}`);
   }
+}
+
+// `on routing` signs in when it needs to, in a terminal only; login then says
+// what routing does now and what data leaves the machine.
+async function signInFor(named: ModuleId[]): Promise<void> {
+  const h = moduleHost();
+  if (named.some((id) => findModule(id)?.needsSignIn) && !h.signedIn() && h.interactive()) await h.signIn();
 }

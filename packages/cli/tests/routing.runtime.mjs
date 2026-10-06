@@ -38,8 +38,15 @@ async function routingRow(me, state) {
 const routing = (fields) => ({ user: { email: "a@b.c" }, plan: "free", products: [{ id: "routing", unit: "decision", ...fields }] });
 
 test("status shows routing's free decisions from /me", async () => {
-  const { row } = await routingRow(routing({ free_allowance: 100000, used: 1204, period_end: "2026-11-01T00:00:00Z", state: "ok" }));
+  const { row, first } = await routingRow(routing({ free_allowance: 100000, used: 1204, period_end: "2026-11-01T00:00:00Z", state: "ok" }));
   assert.match(row, /^  on  routing +wired +wired +1,204 of 100,000 free decisions this month$/);
+  assert.match(first, /^routing has no effect on subscription turns$/m);
+});
+
+test("a 401 from /me reads as an expired login", async () => {
+  const { row, first } = await routingRow(401);
+  assert.match(row, /—.*login expired · caveman login$/);
+  assert.match(first, /^next: caveman login$/m);
 });
 
 test("status shows the routing row without numbers when /me has none yet", async () => {
