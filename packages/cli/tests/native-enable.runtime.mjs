@@ -1225,8 +1225,8 @@ test("status reports native OpenCode MCP recovery missing when its registration 
   const status = await run(["status"], fx.env);
   assert.equal(status.code, 0, status.stderr);
 
-  const output = status.stdout + status.stderr;
-  assert.match(output, /MCP recovery missing/);
+  // The broken registration degrades the wiring, and the grid says so.
+  assert.match(status.stdout, /^ {2}on {2}output .* degraded /m);
 });
 
 test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {

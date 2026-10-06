@@ -67,11 +67,16 @@ import {
   type JSONValue,
 } from "./agent-mcp.js";
 import { portableInvocation } from "./portable-command.js";
+import { ensureModuleBinaries, NoModuleIndexError, readLock } from "./modules/index-file.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
 import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-trends.js";
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
+import { moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
+import { modulesDoctor } from "./modules/doctor.js";
+import { nextStep, renderModuleGrid } from "./modules/status.js";
+import { stopRuntime } from "./modules/stop.js";
 
 type TokenStore = "keychain" | "file";
 type TelemetryConfig = { enabled: boolean; anonymousId?: string; decidedAt: string; promptVersion: number };
@@ -348,7 +353,10 @@ const LEGACY_HANDLERS: Record<string, CommandHandler> = {
   login,
   logout: () => logout(),
   init,
-  doctor: (argv) => argv[0] ? nativeDoctor(argv) : doctor(),
+  doctor: (argv) => argv[0] ? nativeDoctor(argv) : modulesDoctor(),
+  on: (argv) => moduleSwitchCommand(true, argv),
+  off: (argv) => moduleSwitchCommand(false, argv),
+  stop: () => stopRuntime(),
   enable: (argv) => enableNative(argv),
   disable: (argv) => disableNative(argv),
   inspect: (argv) => nativeInspect(argv),
@@ -390,6 +398,92 @@ for (const [verb, handler] of Object.entries(TOOL_HANDLERS)) {
   if (verb !== "practices") LEGACY_HANDLERS[verb] = handler;
 }
 for (const [verb, handler] of Object.entries(CLOUD_HANDLERS)) LEGACY_HANDLERS[verb] = handler;
+
+// `caveman on|off`, status, doctor and stop (src/modules) act through these:
+// the same config writer, native wiring and journal as the verbs above.
+setModuleHost({
+  configPath,
+  readConfig: globalCapabilityDocument,
+  mutateConfig: mutateRawConfig,
+  setConfigValue: (key, value) => {
+    if (CAPABILITY_KEYS.includes(key as CapabilityKey)) return setGlobalCapability(key as CapabilityKey, value);
+    if (key !== "learnAutopilot") throw new Error(`refusing to write unknown config key ${key}`);
+    mutateRawConfig((out) => { out[key] = value; });
+  },
+  capability: (key) => {
+    const doc = globalCapabilityDocument();
+    if (!CAPABILITY_KEYS.includes(key as CapabilityKey)) return { value: doc[key], source: doc[key] === undefined ? "default" : "global", global: doc[key] };
+    const resolved = resolveCapabilities().values[key as CapabilityKey];
+    const raw = nestedCapabilityValue(doc, key as CapabilityKey);
+    const parsed = raw === undefined ? undefined : capabilityInputValue(key as CapabilityKey, raw);
+    const overridden = resolved.source === "project" || resolved.source === "env";
+    const invalid = resolved.invalid ?? (raw !== undefined && parsed === undefined ? String(raw) : undefined);
+    return {
+      value: resolved.value,
+      source: resolved.source,
+      global: overridden ? parsed ?? CAPABILITY_DEFAULTS[key as CapabilityKey] : resolved.value,
+      ...(invalid !== undefined ? { invalid } : {}),
+    };
+  },
+  // nativeHooksDocument writes the shrink hook only while think.shrink is on.
+  wiringKeys: ["think.shrink"],
+  binaryRelease: BINARY_RELEASE,
+  resolveBinary: (name) => resolveGoBin(name, GO_BINARIES.find((binary) => binary.name === name)?.env ?? ""),
+  installBinaries: async (modules) => {
+    try {
+      const { problems } = await ensureModuleBinaries(modules);
+      if (problems.length > 0) throw new Error(problems.join("; "));
+    } catch (error) {
+      // A release cut before modules.json: install every signed hub binary instead.
+      if (error instanceof NoModuleIndexError) return setupInstall(false, { continuing: true });
+      throw error;
+    }
+  },
+  staleBinaries: () => [
+    ...(probeProxyVersion()?.capabilities.includes("run_state") === false ? ["caveman-proxy"] : []),
+    ...(probeMcpBinary()?.probe.current === false ? ["caveman-mcp"] : []),
+  ],
+  which,
+  nativeAgents: () => (["claude", "codex", "hermes", "gemini", "opencode", "pi", "aider"] as NativeAgent[]).map((id) => ({
+    id,
+    detected: Boolean(which(binOf(findAgent(id)!))),
+    wired: Boolean(readNativeJournal(id) || readPendingNativeJournal(id)),
+  })),
+  planWiring: (agent) => nativeMutationsFor(agent as NativeAgent, gatewayURL(), probeMcpBinary()?.binary ?? "caveman-mcp")
+    .map((mutation) => ({ file: mutation.file, exists: mutation.before !== null, kind: mutation.kind })),
+  wiredFiles: (agent) => (readNativeJournal(agent) ?? readPendingNativeJournal(agent))?.operations.map((operation) => operation.file) ?? [],
+  wireAgent: (agent) => enableNative([agent]),
+  unwireAgent: (agent) => { disableNativeAgent(agent as NativeAgent); },
+  refreshAgent: (agent) => repairNativeAgent(agent as NativeAgent),
+  runtimeAutostarts: async () => {
+    const gw = gatewayURL();
+    if (wrapMode(gw) !== "local" || !wrapRuntimeConfig().proxy) return false;
+    const { host, port } = gatewayHostPort(gw);
+    return !(await portListening(host, port));
+  },
+  agentState: (agent) => nativeIntegrationStatus(agent as NativeAgent).state,
+  coreActive: () => nativeCoreRuntimeState().active,
+  signedIn: () => Boolean(resolveCredentials(globalCapabilityDocument() as Partial<Config>).access_token),
+  cloudCheck: async () => {
+    const cfg = await config();
+    const response = await fetch(`${cfg.baseURL}/api/v1/auth/me`, { headers: { authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`${cfg.baseURL} answered ${response.status}`);
+  },
+  localRuntimes: async () => {
+    const version = probeProxyVersion();
+    const gw = gatewayURL();
+    const endpoints = [...(wrapMode(gw) === "local" ? [gatewayHostPort(gw)] : []), standaloneProxyEndpoint()]
+      .filter((endpoint, index, all) => all.findIndex((other) => other.port === endpoint.port) === index);
+    return Promise.all(endpoints.map(async ({ host, port }) => {
+      const pid = readProxyRuntimeState(port, version).pid;
+      const listening = await portListening(host, port);
+      const foreign = listening && !pid && Boolean(version?.capabilities.includes("run_state"));
+      return { host, port, listening, foreign, ...(pid ? { pid } : {}) };
+    }));
+  },
+  interactive,
+  confirm: promptYesNo,
+});
 
 function commandUsage(suffix: string): never {
   const prefix = currentInvocation?.group ? `${invokedAs()} ${currentInvocation.group}` : invokedAs();
@@ -524,6 +618,7 @@ const TELEMETRY_COMMAND_ALLOWLIST = [
   "explore", "help", "hooks", "init", "keys", "learn", "login", "logout", "mcp", "mem", "opportunities", "plan",
   "projects", "providers", "receipts", "retrieve", "score", "sdk", "setup", "shrink", "shrink-hook", "skills",
   "run", "snippets", "start", "stats", "status", "sync", "telemetry", "toon", "traces", "trial", "unknown", "update", "usage", "verify", "version", "welcome", "whoami", "wrap",
+  "on", "off", "stop",
 ] as const;
 const TELEMETRY_COMMANDS = new Set<string>(TELEMETRY_COMMAND_ALLOWLIST);
 const TELEMETRY_SUBCOMMANDS = new Set([
@@ -2428,6 +2523,10 @@ const GO_BINARIES = [
   { name: "cavemem", env: "CAVEMEM_BIN", required: true, powers: "remember · recall · learn offload", without: "memory and auto-recall are off" },
   { name: "caveman-browse", env: "CAVEMAN_BROWSE_BIN", required: false, powers: "browse + agent-side compressed browsing MCP tools — wrap auto-registers once present", without: "agent-side compressed browsing MCP tools unavailable; wrap auto-registers once installed" },
   { name: "caveman-shrink", env: "CAVEMAN_SHRINK_BIN", required: false, powers: "compress catalog — dedicated tool-schema compression, lint, and recovery", without: "tool-catalog compression is unavailable; command-output shrink is unaffected" },
+  // From caveman-ai/blocks, mirrored into the signed release; installed by the
+  // scripts module (modules/index-file.ts), not by setup --install. setup
+  // lists it only once present or once a module installed it.
+  { name: "caveman-blocks", env: "CAVEMAN_BLOCKS_BIN", required: false, external: true, powers: "scripts module — reusable scripts your agent keeps", without: "the scripts module cannot run until it is installed again" },
 ] as const;
 
 // resolveGoBin is cavemanBin plus an honest "is it actually there" answer: the
@@ -2508,9 +2607,9 @@ type BinaryInstallManifest = {
   artifacts: Record<string, string>;
 };
 
-const INSTALL_BINARIES = GO_BINARIES.map((binary) => binary.name);
+const INSTALL_BINARIES = GO_BINARIES.filter((binary) => !("external" in binary)).map((binary) => binary.name);
 
-function setupTimeoutSeconds(): number {
+export function setupTimeoutSeconds(): number {
   const raw = process.env.CAVE_SETUP_TIMEOUT ?? "300";
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -2539,7 +2638,7 @@ function binaryInstallManifestPath(): string {
   return join(cavemanHome(), "bin", ".bin-manifest.json");
 }
 
-function sha256File(path: string): string | null {
+export function sha256File(path: string): string | null {
   try {
     return createHash("sha256").update(readFileSync(path)).digest("hex");
   } catch {
@@ -2611,7 +2710,7 @@ export function parseSignedChecksums(raw: string, release: string = BINARY_RELEA
   return checksums;
 }
 
-function verifyChecksumSignature(checksums: string, signature: string): boolean {
+export function verifyChecksumSignature(checksums: string, signature: string): boolean {
   try {
     const bundle = JSON.parse(signature) as {
       mediaType?: unknown;
@@ -2648,7 +2747,7 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
-async function fetchReleaseAsset(url: string, timeoutSeconds: number): Promise<Response> {
+export async function fetchReleaseAsset(url: string, timeoutSeconds: number): Promise<Response> {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(timeoutSeconds * 1000) });
     if (!response.ok) throw new BinaryDownloadError("unreachable", `${response.status} ${response.statusText}`);
@@ -2660,7 +2759,7 @@ async function fetchReleaseAsset(url: string, timeoutSeconds: number): Promise<R
   }
 }
 
-async function downloadReleaseBinary(
+export async function downloadReleaseBinary(
   url: string,
   partPath: string,
   timeoutSeconds: number,
@@ -2690,7 +2789,7 @@ async function downloadReleaseBinary(
   return { sha256: hash.digest("hex"), bytes };
 }
 
-function cleanupPartial(path: string) {
+export function cleanupPartial(path: string) {
   try {
     unlinkSync(path);
   } catch (error) {
@@ -3388,7 +3487,9 @@ async function setup(argv: string[] = []) {
   if (install) return setupInstall(json);
 
   // Only `setup --json` reaches here: the binary status for scripts.
-  const rows = GO_BINARIES.map((b) => ({ ...b, resolved: resolveGoBin(b.name, b.env) }));
+  const locked = Object.values(readLock().modules).flatMap((entry) => Object.keys(entry?.binaries ?? {}));
+  const rows = GO_BINARIES.map((b) => ({ ...b, resolved: resolveGoBin(b.name, b.env) }))
+    .filter((row) => !("external" in row) || row.resolved || locked.includes(row.name));
   const missingRequired = rows.filter((r) => r.required && !r.resolved);
   print({
     binaries: rows.map((row) => ({
@@ -11413,7 +11514,7 @@ export function wrapExternalWritesDisabled(env: NodeJS.ProcessEnv = process.env)
 // Headroom does it. Install writes a marker; wrap reads it (mcpInstalled) and only
 // then signals the proxy (CAVEMAN_RECOVERY=mcp) that recovery is available.
 
-function cavemanHome(): string {
+export function cavemanHome(): string {
   return process.env.CAVEMAN_HOME ?? join(homedir(), ".caveman");
 }
 
@@ -11422,7 +11523,7 @@ function cavemanHome(): string {
 // this directory is group/world writable, and recursive mkdir with a mode only
 // applies it to directories it creates — an earlier no-mode caller (login, mcp
 // install) would otherwise have already created it 0775 under umask 002.
-function ensureCavemanHome(): string {
+export function ensureCavemanHome(): string {
   const home = cavemanHome();
   mkdirSync(home, { recursive: true, mode: 0o700 });
   try { chmodSync(home, 0o700); } catch { /* not ours / Windows */ }
@@ -11596,7 +11697,23 @@ function startMcpRecoveryAvailable(): boolean {
 }
 
 function anyMcpInstalled(): boolean {
-  return AGENTS.some((agent) => mcpInstalled(agent.id));
+  return AGENTS.some((agent) => mcpInstalled(agent.id)) || nativeMcpRegistered("claude") || nativeMcpRegistered("codex");
+}
+
+// Native Claude/Codex wiring registers the caveman MCP server in the host's own
+// config (journaled, no `mcp install` marker). It counts while that journaled
+// registration is still in the file.
+function nativeMcpRegistered(agent: "claude" | "codex"): boolean {
+  const operation = readNativeJournal(agent)?.operations.find((item) => item.kind === `${agent}-${agent === "claude" ? "mcp" : "config"}`);
+  const current = operation ? fileBytes(operation.file) : null;
+  if (!operation || !current) return false;
+  try {
+    if (agent === "codex") return typeof operation.owned?.tables_block === "string" && current.toString("utf8").includes(operation.owned.tables_block);
+    const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
+    return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
+  } catch {
+    return false;
+  }
 }
 
 // resolveMcpCommand decides how to launch the caveman MCP server, in order:
@@ -18584,40 +18701,16 @@ async function status(argv: string[]) {
     };
   });
   const integrations = [...native, { ...genericIntegrationStatus(listening), runtime_reachable: listening }];
+  const modules = await moduleStates();
   if (argv.includes("--json")) {
-    print({ ...view, native_integrations: integrations });
+    print({ ...view, native_integrations: integrations, modules });
     return;
   }
-  process.stdout.write(renderStatus(view));
-  process.stdout.write("\nnative integrations\n");
-  for (const integration of integrations) {
-    const active = Object.entries(integration.capabilities).filter(([, value]) => value.active).map(([name]) => name);
-    process.stdout.write(statusRow(integration.agent, `${integration.state} · ${integration.version_status} · ${active.join(", ") || "proxy-only/none active"}`) + "\n");
-  }
-  const degraded = native.find((integration) => integration.state === "degraded");
-  const available = native.find((integration) => integration.state === "available" && integration.components.shared_runtime);
-  const needsRuntime = native.find((integration) => integration.state === "available" && !integration.components.shared_runtime);
-  const installed = native.find((integration) => integration.state === "installed");
-  if (degraded) process.stdout.write(`\nnext native:  caveman doctor ${degraded.agent} --fix\n`);
-  else if (available) process.stdout.write(`\nnext native:  caveman enable ${available.agent}\n`);
-  else if (needsRuntime) process.stdout.write(`\nnext native:  caveman setup --install\nthen:         caveman enable ${needsRuntime.agent}\n`);
-  else if (installed) process.stdout.write(`\nnative ready: run ${installed.agent} normally\n`);
-}
-
-async function doctor() {
-  const status = await get("/api/v1/system/status");
-  const me = await get("/api/v1/auth/me");
-  print({
-    // Derived from the actual status payload, not hardcoded: a real status object
-    // (with no error envelope) means the API answered; the telemetry/cache health
-    // echo what the server reports for ClickHouse/Valkey.
-    "Cave API reachable": !!status && !status.error,
-    authenticated_as: me.user?.email,
-    "policy cache healthy": status.valkey === "ready",
-    "telemetry pipeline healthy": status.clickhouse === "ready",
-    "retention mode": "metadata-only",
-    "dead-letter jobs": status.dead_letter_jobs
-  });
+  const saved = view.mode === "compress" ? Number(today?.compression_tokens_saved ?? 0) : 0;
+  const notes = saved > 0 ? { input: `today: ~${humanTokens(saved)} tokens kept out of context (inferred)` } : {};
+  const degraded = native.filter((integration) => integration.state === "degraded").map((integration) => integration.agent);
+  const lines = view.off_states.map((state) => state.fix ? `${state.line} · ${state.fix}` : state.line);
+  process.stdout.write(renderModuleGrid(modules, { notes, next: nextStep(modules, { degraded: degraded[0], fallback: next }), degraded, lines }));
 }
 
 // cliVersion reads the published version from package.json (next to the built

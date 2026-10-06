@@ -9,7 +9,8 @@ export type ModuleId = "output" | "input" | "waste-fixes" | "routing" | "scripts
 
 // Capability config keys this module owns, with the value written when the
 // module is switched on and when it is switched off. Keys are the existing
-// CAPABILITY_KEYS in index.ts.
+// CAPABILITY_KEYS in index.ts, or a top-level key of the same config file
+// (`learnAutopilot`).
 export type CapabilityEffect = { key: string; on: string | boolean; off: string | boolean };
 
 export type ModuleDef = {
@@ -20,6 +21,10 @@ export type ModuleDef = {
   defaultOn: boolean;
   // Signing in to Caveman Cloud is required before the module does anything.
   needsSignIn: boolean;
+  // Works through the native agent wiring (`caveman enable <agent>`: route,
+  // hooks, recovery MCP). The wiring stays while any such module is on, and
+  // needs caveman-proxy and caveman-mcp, so such modules list both.
+  wiresAgents: boolean;
   capabilities: CapabilityEffect[];
   // Names from GO_BINARIES the module needs on disk.
   binaries: string[];
@@ -36,8 +41,9 @@ export const MODULES: readonly ModuleDef[] = [
     summary: "the agent says less",
     defaultOn: true,
     needsSignIn: false,
+    wiresAgents: true,
     capabilities: [{ key: "think.core", on: true, off: false }],
-    binaries: [],
+    binaries: ["caveman-proxy", "caveman-mcp"],
   },
   {
     id: "input",
@@ -45,6 +51,7 @@ export const MODULES: readonly ModuleDef[] = [
     summary: "logs, JSON, code and diffs shrink before the model reads them",
     defaultOn: true,
     needsSignIn: false,
+    wiresAgents: true,
     capabilities: [
       { key: "think.mode", on: "compress", off: "record" },
       { key: "think.toon", on: true, off: false },
@@ -58,8 +65,10 @@ export const MODULES: readonly ModuleDef[] = [
     summary: "finds your agent's worst waste and fixes it",
     defaultOn: true,
     needsSignIn: false,
-    capabilities: [],
-    binaries: ["caveman-proxy"],
+    wiresAgents: true,
+    // The learn autopilot the native SessionEnd hook starts.
+    capabilities: [{ key: "learnAutopilot", on: true, off: false }],
+    binaries: ["caveman-proxy", "caveman-mcp"],
   },
   {
     id: "routing",
@@ -67,8 +76,9 @@ export const MODULES: readonly ModuleDef[] = [
     summary: "the right model each turn",
     defaultOn: true,
     needsSignIn: true,
+    wiresAgents: true,
     capabilities: [],
-    binaries: ["caveman-proxy"],
+    binaries: ["caveman-proxy", "caveman-mcp"],
   },
   {
     id: "scripts",
@@ -76,6 +86,7 @@ export const MODULES: readonly ModuleDef[] = [
     summary: "reusable scripts your agent keeps",
     defaultOn: true,
     needsSignIn: false,
+    wiresAgents: false,
     capabilities: [],
     binaries: [],
     external: {
@@ -91,6 +102,7 @@ export const MODULES: readonly ModuleDef[] = [
     summary: "compressed pages for browser tools",
     defaultOn: true,
     needsSignIn: false,
+    wiresAgents: false,
     capabilities: [{ key: "execute.browse_tool", on: true, off: false }],
     binaries: ["caveman-browse"],
   },
