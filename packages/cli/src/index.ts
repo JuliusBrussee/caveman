@@ -449,7 +449,7 @@ setModuleHost({
     detected: Boolean(which(binOf(findAgent(id)!))),
     wired: Boolean(readNativeJournal(id) || readPendingNativeJournal(id)),
   })),
-  planWiring: (agent) => nativeMutationsFor(agent as NativeAgent, gatewayURL(), probeMcpBinary()?.binary ?? "caveman-mcp")
+  planWiring: (agent) => nativeMutationsFor(agent as NativeAgent, gatewayURL(), probeMcpBinary()?.binary ?? "caveman-mcp", { plan: true })
     .map((mutation) => ({ file: mutation.file, exists: mutation.before !== null, kind: mutation.kind })),
   wiredFiles: (agent) => (readNativeJournal(agent) ?? readPendingNativeJournal(agent))?.operations.map((operation) => operation.file) ?? [],
   agentName: (agent) => agentShortName(findAgent(agent)!),
@@ -3536,10 +3536,12 @@ function runOnboarding(options: OnboardOptions, launching?: AgentProfile): Promi
 
 // The agents onboarding offers are the ones module wiring supports, in its
 // order (Claude Code first); missing ones show disabled unless already wired.
+// Nothing runs an agent before Continue (`gemini --version` writes ~/.gemini):
+// the version shown is the one the wiring journal recorded, if any.
 function onboardAgents(): OnboardAgent[] {
   return moduleHost().nativeAgents().map(({ id, detected, wired }) => {
     const agent = findAgent(id)!;
-    const version = detected ? detectedAgentVersion(agent) : null;
+    const version = detected ? readNativeJournal(id)?.detected_agent_version : null;
     return { id, name: agentShortName(agent), installed: detected, wired, ...(version ? { version } : {}) };
   });
 }
@@ -8162,7 +8164,7 @@ export default {
 `;
 }
 
-function opencodeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
+function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): NativeMutation[] {
   const configPath = join(homedir(), ".config", "opencode", "opencode.json");
   const before = fileBytes(configPath);
   const root = parseJsonFileObject(configPath, before);
@@ -8207,7 +8209,8 @@ function opencodeNativeMutations(gw: string, mcpBinary: string): NativeMutation[
     {
       file: pluginPath,
       before: pluginBefore,
-      after: Buffer.from(opencodeNativePluginSource()),
+      // The plugin source reads `opencode --version`; a plan only names the file.
+      after: Buffer.from(plan ? "" : opencodeNativePluginSource()),
       kind: "opencode-plugin",
     },
   ];
@@ -8941,7 +8944,8 @@ function recoverPendingNativeInstallUnlocked(agent: NativeAgent): boolean {
   return true;
 }
 
-function nativeMutationsFor(agent: NativeAgent, gw: string, mcpBinary: string | undefined): NativeMutation[] {
+// `plan`: only the files and their kinds are wanted, so nothing runs the agent.
+function nativeMutationsFor(agent: NativeAgent, gw: string, mcpBinary: string | undefined, { plan = false } = {}): NativeMutation[] {
   return agent === "claude"
     ? claudeNativeMutations(gw, mcpBinary!)
     : agent === "codex"
@@ -8951,7 +8955,7 @@ function nativeMutationsFor(agent: NativeAgent, gw: string, mcpBinary: string | 
         : agent === "gemini"
           ? geminiNativeMutations(gw, mcpBinary!)
           : agent === "opencode"
-            ? opencodeNativeMutations(gw, mcpBinary!)
+            ? opencodeNativeMutations(gw, mcpBinary!, plan)
             : agent === "pi"
               ? piNativeMutations()
               : aiderNativeMutations(gw);
