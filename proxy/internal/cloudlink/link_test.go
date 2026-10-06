@@ -76,11 +76,12 @@ func TestAskSendsModelsSignalsAndText(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A first turn: the tool-result message after it is no human turn, and the
-	// empty optional fields are left out.
+	// empty optional fields are left out (no labels, no last, no state yet).
 	want := map[string]any{
 		"models":  []any{"claude-opus-5-5", "claude-sonnet-5-5"},
 		"signals": map[string]any{"agent": "claude", "context_tokens": float64(ask.InputBytes / 4), "tools_declared": float64(1), "tool_errors": float64(1), "images": true},
 		"ask":     map[string]any{"text": promptText},
+		"request": map[string]any{"endpoint": "messages", "tool_names": []any{"bash"}, "effort": "", "thinking": "", "per_message_off": false},
 	}
 	if fmt.Sprint(body) != fmt.Sprint(want) {
 		t.Fatalf("ask body = %v\nwant %v", body, want)
@@ -362,7 +363,7 @@ func TestAskTextKeepsTheEnds(t *testing.T) {
 func TestAskBodyFitsTheContract(t *testing.T) {
 	side := strings.Repeat("\x02", askSideMax) // "\u0002" in JSON
 	text := strings.Repeat("\x01", askTextMax)
-	raw := askBody(routeAsk{Models: pools["anthropic"], Signals: signals{Agent: "claude"}, Ask: askText{Text: text, PrevText: side, ReplyTail: side, Turn: 3}})
+	raw := askBody(routeAsk{Models: pools["anthropic"], Signals: signals{Agent: "claude"}, Ask: &askText{Text: text, PrevText: side, ReplyTail: side, Turn: 3}})
 	var got routeAsk
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
@@ -374,12 +375,12 @@ func TestAskBodyFitsTheContract(t *testing.T) {
 		t.Errorf("ask = text %d bytes, prev %d, reply %d, turn %d", len(got.Ask.Text), len(got.Ask.PrevText), len(got.Ask.ReplyTail), got.Ask.Turn)
 	}
 	blank := "ask" + strings.Repeat("\n", askTextMax-3)
-	if raw := askBody(routeAsk{Models: pools["anthropic"], Signals: signals{Agent: "claude"}, Ask: askText{Text: blank, PrevText: side, ReplyTail: side}}); raw != nil {
+	if raw := askBody(routeAsk{Models: pools["anthropic"], Signals: signals{Agent: "claude"}, Ask: &askText{Text: blank, PrevText: side, ReplyTail: side}}); raw != nil {
 		t.Errorf("a blank kept end was sent: %d bytes", len(raw))
 	}
 	// An ordinary ask goes whole, its <tags> and && unescaped.
-	small := routeAsk{Models: pools["openai"], Signals: signals{Agent: "codex"}, Ask: askText{Text: "<system-reminder>a && b</system-reminder>"}}
-	if raw := string(askBody(small)); !strings.HasSuffix(raw, `"ask":{"text":"<system-reminder>a && b</system-reminder>"}}`) {
+	small := routeAsk{Models: pools["openai"], Signals: signals{Agent: "codex"}, Ask: &askText{Text: "<system-reminder>a && b</system-reminder>"}}
+	if raw := string(askBody(small)); !strings.Contains(raw, `"ask":{"text":"<system-reminder>a && b</system-reminder>"},`) {
 		t.Errorf("askBody = %s", raw)
 	}
 }

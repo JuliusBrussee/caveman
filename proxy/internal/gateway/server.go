@@ -388,6 +388,8 @@ type Server struct {
 	// what is sent, recorded, or claimed.
 	capture *bodyCapture
 	cloud   CloudLink
+	// routes is what the route stage remembers per session (route.go).
+	routes routeSessions
 }
 
 // liveZoneCompressionAllowed reports whether subscription- or OAuth-classified

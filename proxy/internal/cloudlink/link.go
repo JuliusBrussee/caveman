@@ -5,15 +5,18 @@
 // in or out, or switching the routing module, takes effect without a restart.
 //
 // It never touches compression or any other local stage, and every failure
-// fails open: a Cloud error, timeout, 401 or allowance answer keeps the model
-// the agent asked for. The ask carries the caller's models, counts and the
-// conversation's text Cloud picks the model from: the latest human turn, the
-// one before it and the end of the agent's last reply (contracts route-ask-v1).
-// Events carry counts and labels only, never prompt text.
+// fails open: a Cloud error, timeout, 401 or allowance answer keeps the request
+// as the agent sent it. The ask carries the caller's models, counts, what the
+// request declares (labels, tool names, effort), what the session's previous
+// request ran, and the conversation's text Cloud picks the model and effort
+// from: the latest human turn, the one before it and the end of the agent's
+// last reply (contracts route-ask-v1). Events carry counts and labels only,
+// never prompt text.
 package cloudlink
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -48,6 +51,8 @@ const (
 	pauseRecheck = 15 * time.Minute // how often a limit pause asks /me whether it still holds
 	refusedPause = 10 * time.Minute // after a 401/403: a stale or revoked login
 	decisionsMax = 1024
+	statesMax    = 1024
+	stateMax     = 4096 // bytes of Cloud's opaque state kept and sent back
 	answerMax    = 1 << 20
 )
 
@@ -70,12 +75,16 @@ type Link struct {
 	// keychain reads the CLI's macOS keychain entry; tests replace it.
 	keychain func() string
 
-	mu         sync.Mutex
-	stamp      string
-	loaded     bool
-	stale      bool // a background keychain read found a new secret
-	cfg        settings
-	decisions  map[string]*decision
+	mu        sync.Mutex
+	stamp     string
+	loaded    bool
+	stale     bool // a background keychain read found a new secret
+	cfg       settings
+	decisions map[string]*decision
+	// states is Cloud's opaque state per session key, least recently used
+	// first out, memory only, for as long as one login.
+	states     map[string]*list.Element
+	stateOrder *list.List
 	pauseUntil time.Time
 	paused     gateway.RouteAnswer // what an ask answers while paused
 	recheckAt  time.Time           // the last /me check of a limit pause
@@ -158,7 +167,7 @@ func (l *Link) settings() settings {
 		if (cfg.access != "" || cfg.key != "") && (cfg.access != previous.access || cfg.key != previous.key) {
 			// A new login starts fresh: no pause and no decision from the old one.
 			// Signing out needs no reset: nothing is asked while signed out.
-			l.pauseUntil, l.decisions = time.Time{}, nil
+			l.pauseUntil, l.decisions, l.states = time.Time{}, nil, nil
 			l.forgetLocked()
 		}
 	}
@@ -401,6 +410,18 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 		// on, so routing it would switch model halfway through a turn.
 		return gateway.RouteAnswer{Outcome: "off", Reason: "stateful_chain"}
 	}
+	request := requestFor(ask, root)
+	if ask.PerRequest {
+		// A compaction or side request is answered on its own, without the ask.
+		l.mu.Lock()
+		paused, answer := l.now().Before(l.pauseUntil), l.paused
+		l.mu.Unlock()
+		if paused {
+			l.recheckPause(cfg)
+			return answer
+		}
+		return l.ask(cfg, bearer, ask, request, nil, models, deadline)
+	}
 	text := askTextFor(ask.Endpoint, ask.Body, root)
 	if text.Text == "" {
 		return gateway.RouteAnswer{Outcome: "kept", Reason: "no_human_text"}
@@ -428,7 +449,7 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	if !seen {
 		func() {
 			defer close(d.done) // waiters on this ask never hang, even on a panic
-			d.answer = l.ask(cfg, bearer, ask, text, models, deadline)
+			d.answer = l.ask(cfg, bearer, ask, request, &text, models, deadline)
 		}()
 	}
 	<-d.done
@@ -469,11 +490,69 @@ var (
 )
 
 // routeAsk is POST /v1/route's body (contracts route-ask-v1): the caller's
-// models, counts computed on this machine, and the conversation's text.
+// models, counts computed on this machine, what the request declares, what the
+// session's previous request ran, Cloud's state, and the conversation's text
+// (left out for a compaction or side request).
 type routeAsk struct {
-	Models  []string `json:"models"`
-	Signals signals  `json:"signals"`
-	Ask     askText  `json:"ask"`
+	Models      []string           `json:"models"`
+	Signals     signals            `json:"signals"`
+	Ask         *askText           `json:"ask,omitempty"`
+	Request     routeRequest       `json:"request"`
+	Last        *gateway.RouteLast `json:"last,omitempty"`
+	State       string             `json:"state,omitempty"`
+	ParentState string             `json:"parent_state,omitempty"`
+}
+
+// routeRequest is what the request itself declares, as sent.
+type routeRequest struct {
+	Endpoint      string            `json:"endpoint"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	ToolNames     []string          `json:"tool_names,omitempty"`
+	Effort        string            `json:"effort"`
+	Thinking      string            `json:"thinking"`
+	PerMessageOff bool              `json:"per_message_off"`
+}
+
+// requestFor reads routeRequest from the body: the declared tool names (at
+// most 128, each cut to 64 bytes), the top-level effort field, and Anthropic's
+// thinking.type. Labels come as the gateway read them.
+func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
+	out := routeRequest{Endpoint: "messages", Labels: ask.Labels, PerMessageOff: ask.PerMessageOff}
+	body := ask.Body
+	var effort string
+	switch {
+	case strings.HasSuffix(ask.Endpoint, "/responses"):
+		out.Endpoint = "responses"
+		reasoning, _ := jsonsplice.Field(body, root, "reasoning")
+		effort, _ = jsonsplice.StringField(body, reasoning, "effort")
+	case strings.HasSuffix(ask.Endpoint, "/chat/completions"):
+		out.Endpoint = "chat"
+		effort, _ = jsonsplice.StringField(body, root, "reasoning_effort")
+	default:
+		config, _ := jsonsplice.Field(body, root, "output_config")
+		effort, _ = jsonsplice.StringField(body, config, "effort")
+		thinking, _ := jsonsplice.Field(body, root, "thinking")
+		if kind, _ := jsonsplice.StringField(body, thinking, "type"); slices.Contains([]string{"adaptive", "enabled", "disabled", "between_tools"}, kind) {
+			out.Thinking = kind
+		}
+	}
+	out.Effort = truncate(effort, 32)
+	list, _ := jsonsplice.Field(body, root, "tools")
+	tools, _ := jsonsplice.Elements(body, list)
+	for _, tool := range tools {
+		if len(out.ToolNames) == 128 {
+			break
+		}
+		name, _ := jsonsplice.StringField(body, tool, "name")
+		if name == "" {
+			function, _ := jsonsplice.Field(body, tool, "function")
+			name, _ = jsonsplice.StringField(body, function, "name")
+		}
+		if name = truncate(name, 64); name != "" {
+			out.ToolNames = append(out.ToolNames, name)
+		}
+	}
+	return out
 }
 
 // The contract's bounds, in bytes.
@@ -591,20 +670,21 @@ func messageText(body []byte, message jsonsplice.Span, types ...string) (text st
 
 // askBody is the ask's JSON within askBodyMax. Escaping can grow text past it
 // (a control byte encodes as six), so then text keeps its longest end that
-// fits. The other fields always fit: even escaped they stay under 200 KiB.
-// Nil when the text left is blank: Cloud refuses a blank text.
+// fits. Nil when the text left is blank (Cloud refuses a blank text) or the
+// rest alone does not fit, which only escaping-heavy labels can do.
 func askBody(ask routeAsk) []byte {
 	raw := encodeAsk(ask)
-	if len(raw) > askBodyMax {
-		text := ask.Ask.Text
+	if len(raw) > askBodyMax && ask.Ask != nil {
+		text, trimmed := ask.Ask.Text, *ask.Ask
+		ask.Ask = &trimmed
 		n := sort.Search(len(text)+1, func(n int) bool {
-			ask.Ask.Text = tail(text, n)
+			trimmed.Text = tail(text, n)
 			return len(encodeAsk(ask)) > askBodyMax
 		}) - 1
-		ask.Ask.Text = tail(text, n)
+		trimmed.Text = tail(text, max(n, 0))
 		raw = encodeAsk(ask)
 	}
-	if strings.TrimSpace(ask.Ask.Text) == "" {
+	if ask.Ask != nil && strings.TrimSpace(ask.Ask.Text) == "" || len(raw) > askBodyMax {
 		return nil
 	}
 	return raw
@@ -644,8 +724,20 @@ func signalsFor(ask gateway.RouteAsk) signals {
 	}
 }
 
-func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, text askText, models []string, deadline time.Time) gateway.RouteAnswer {
-	raw := askBody(routeAsk{Models: models, Signals: signalsFor(ask), Ask: text})
+func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared routeRequest, text *askText, models []string, deadline time.Time) gateway.RouteAnswer {
+	var last *gateway.RouteLast
+	if ask.Last != nil {
+		bounded := *ask.Last
+		bounded.Model, bounded.Effort = truncate(bounded.Model, 128), truncate(bounded.Effort, 32)
+		for _, count := range []*int{&bounded.AgeS, &bounded.InputTokens, &bounded.CacheReadTokens, &bounded.CacheWriteTokens} {
+			*count = min(max(*count, 0), 1_000_000_000)
+		}
+		last = &bounded
+	}
+	raw := askBody(routeAsk{
+		Models: models, Signals: signalsFor(ask), Ask: text, Request: declared, Last: last,
+		State: l.state(ask.SessionID), ParentState: l.state(ask.ParentSessionID),
+	})
 	if raw == nil {
 		return gateway.RouteAnswer{Outcome: "kept", Reason: "no_human_text"}
 	}
@@ -669,6 +761,9 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, text askTe
 	body, _ := io.ReadAll(io.LimitReader(response.Body, answerMax))
 	var answer struct {
 		Model      string `json:"model"`
+		Effort     string `json:"effort"`
+		EffortMode string `json:"effort_mode"`
+		State      string `json:"state"`
 		Reason     string `json:"reason"`
 		DecisionID string `json:"decision_id"`
 		Notice     string `json:"notice"`
@@ -706,10 +801,55 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, text askTe
 		return gateway.RouteAnswer{Outcome: "degraded", Reason: "answer_outside_pool"}
 	}
 	l.forget()
-	if answer.Model == ask.Model {
-		return gateway.RouteAnswer{Outcome: "kept", Reason: truncate(answer.Reason, 64), DecisionID: answer.DecisionID}
+	l.keepState(ask.SessionID, answer.State)
+	out := gateway.RouteAnswer{Outcome: "kept", Reason: truncate(answer.Reason, 64), DecisionID: answer.DecisionID}
+	// An effort the runtime cannot splice in safely is left out, never guessed at.
+	if effortRE.MatchString(answer.Effort) && slices.Contains([]string{"", "message", "top"}, answer.EffortMode) {
+		out.Effort, out.EffortMode = answer.Effort, answer.EffortMode
 	}
-	return gateway.RouteAnswer{Model: answer.Model, Outcome: "routed", Reason: truncate(answer.Reason, 64), DecisionID: answer.DecisionID}
+	if answer.Model != ask.Model {
+		out.Model, out.Outcome = answer.Model, "routed"
+	}
+	return out
+}
+
+var effortRE = regexp.MustCompile(`^[a-z]{0,16}$`)
+
+// state is Cloud's opaque state for a session key, "" when none.
+func (l *Link) state(key string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if element, ok := l.states[key]; ok {
+		l.stateOrder.MoveToFront(element)
+		return element.Value.([2]string)[1]
+	}
+	return ""
+}
+
+// keepState stores the state Cloud answered for a session key; an empty one
+// clears it and one over stateMax bytes is not kept.
+func (l *Link) keepState(key, state string) {
+	if key == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if element, ok := l.states[key]; ok {
+		l.stateOrder.Remove(element)
+		delete(l.states, key)
+	}
+	if state == "" || len(state) > stateMax {
+		return
+	}
+	if l.states == nil {
+		l.states, l.stateOrder = map[string]*list.Element{}, list.New()
+	}
+	if l.stateOrder.Len() >= statesMax {
+		oldest := l.stateOrder.Back()
+		l.stateOrder.Remove(oldest)
+		delete(l.states, oldest.Value.([2]string)[0])
+	}
+	l.states[key] = l.stateOrder.PushFront([2]string{key, state})
 }
 
 // remember writes a pause the person can act on (a refused key, a used-up

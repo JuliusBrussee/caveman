@@ -213,6 +213,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// Ask (ADR 0083 §4): the Cloud round trip runs while compression does. The
 	// request-wide opt-out and an encoded body keep the model untouched too.
 	var awaitRoute func() RouteAnswer
+	var run *routeRun
 	modelRequested := meta.Model
 	evidence.modelRequested = modelRequested
 	if s.cloud != nil && strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" &&
@@ -228,9 +229,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		case uerr != nil || !statsPricingOriginKnown(meta.Provider, upstream):
 			evidence.route = RouteAnswer{Outcome: "off", Reason: "custom_provider_origin"}
 		default:
+			run = newRouteRun(r.Header, evidence.SessionID)
+			last, perMessageOff := s.routes.facts(run.key, time.Now())
 			awaitRoute = s.cloud.Ask(r.Context(), RouteAsk{
 				Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
-				SessionID: evidence.SessionID, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
+				SessionID: run.key, ParentSessionID: run.parent, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
+				Labels: run.labels, PerRequest: run.perRequest, Last: last, PerMessageOff: perMessageOff,
 			})
 		}
 	}
@@ -380,7 +384,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Route: the answer moves the compressed request to another model of the
-	// same provider. Anything else keeps the asked model.
+	// same provider and sets its effort. Anything else keeps the asked model.
 	if awaitRoute != nil {
 		answer := awaitRoute()
 		if answer.Model != "" && answer.Model != meta.Model {
@@ -392,6 +396,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				answer = RouteAnswer{Outcome: "degraded", Reason: "model_field_unreadable"}
 			}
 		}
+		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, transform.Body, answer)
 		evidence.route = answer
 	}
 	transformedHash := sha256.Sum256(transform.Body)
@@ -435,6 +440,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		upstreamHeaders.Set("user-agent", r.UserAgent())
 	}
 	s.applyUpstreamAuthFallback(adapter.Name(), credential, upstreamHeaders)
+	healHeaders := upstreamHeaders // the heal retry carries no marks, so no per-message beta
+	if run != nil && run.marked {
+		upstreamHeaders = withPerMessageBeta(upstreamHeaders)
+	}
 	// Each retry attempt needs a fresh body reader, so the request is built per
 	// attempt from the buffered payload rather than once up front.
 	buildUpstream := func(payload []byte, header http.Header) func() (*http.Request, error) {
@@ -467,6 +476,35 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		estimateWG.Wait() // join the observe estimate before record() reads it
 		s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, transformedHash, "cave_upstream_unavailable", transform.OptimizerIDs, providers.UsageObservation{CacheStatus: "unknown"}, comp, toolSchemaHandle, false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBust, compressionEligible)
 		return
+	}
+	// A 400 naming the thinking binding or the per-message marks earns one heal
+	// retry (route.go routeHeal); if that is refused too, the original-bytes
+	// retry below still runs.
+	if run != nil && !run.off && resp.StatusCode == http.StatusBadRequest {
+		if retry, marks := s.routeHeal(run, resp, transform.Body); retry != nil {
+			s.capture.record(captureMeta{
+				RequestID:   requestID,
+				Provider:    meta.Provider,
+				Endpoint:    meta.Endpoint,
+				RuntimeMode: effectiveRuntimeMode,
+				Optimizers:  strings.Join(transform.OptimizerIDs, ","),
+			}, wholeBody(body), wholeBody(retry))
+			s.inflight.Add(1)
+			healed, herr := s.doUpstream(r.Context(), buildUpstream(retry, healHeaders))
+			s.inflight.Add(-1)
+			if herr == nil {
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+				_ = resp.Body.Close()
+				resp, upstreamHeaders = healed, healHeaders
+				transform.Body, transformedHash, evidence.acceptedBody = retry, sha256.Sum256(retry), retry
+				run.marked = false
+				if !marks {
+					run.effort = "" // read back from the bytes sent
+				} else if healed.StatusCode < 300 {
+					s.routes.latch(run.key) // top-level effort served where the marks were not
+				}
+			}
+		}
 	}
 	// byte-safe fail-open: if the upstream rejects a request whose bytes we
 	// modified, retry ONCE with the original bytes before surfacing the error —
@@ -502,6 +540,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		resp = retryResp
 		upstreamHeaders = retryHeaders
+		if run != nil {
+			run.effort = "" // the original bytes: read back from them
+		}
 		if meta.Model != modelRequested {
 			meta.Model = modelRequested
 			w.Header().Del("x-caveman-routed-from")
@@ -538,6 +579,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		resp, retrieveCalls, retrieved, replayedOriginal = s.runRetrieveLoop(r.Context(), s.httpClient, upstreamURL, upstreamHeaders, transform.Body, body, comp.recoveryHandles(), resp, adapter, meta.Provider, meta.Endpoint, requestID)
 	}
 	if replayedOriginal {
+		if run != nil {
+			run.effort = ""
+		}
 		if meta.Model != modelRequested {
 			meta.Model = modelRequested
 			w.Header().Del("x-caveman-routed-from")
@@ -611,7 +655,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	usageScanner := adapter.NewUsageScanner(resp.Header)
-	counter, copyErrCode := s.streamResponse(w, r, io.TeeReader(resp.Body, usageScanner), meta.Stream, requestID)
+	var served servedModel
+	scanned := io.Writer(usageScanner)
+	if run != nil {
+		scanned = io.MultiWriter(usageScanner, &served)
+	}
+	counter, copyErrCode := s.streamResponse(w, r, io.TeeReader(resp.Body, scanned), meta.Stream, requestID)
 	ttfb := time.Since(start).Milliseconds()
 	if !counter.firstByteAt.IsZero() {
 		ttfb = counter.firstByteAt.Sub(start).Milliseconds()
@@ -647,6 +696,18 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		activeLevers = append(activeLevers, leverBreakpointPlan)
 	}
 	s.observeSession(evidence.SessionID, activeLevers, finalUsage, requestID)
+	if run != nil && !run.off && run.key != "" && resp.StatusCode < 300 && errCode == "" {
+		// What this session's next ask reports as its previous request (route-ask-v1
+		// last); one the route stage was off for (another model, signed out) is not it.
+		if run.effort == "" {
+			run.effort = effortInForce(meta.Endpoint, transform.Body)
+		}
+		s.routes.served(run.key, RouteLast{
+			Model: labelOrDefault(served.name(), meta.Model), Effort: run.effort,
+			InputTokens: finalUsage.InputTokens, CacheReadTokens: finalUsage.CachedInputTokens,
+			CacheWriteTokens: finalUsage.CacheCreationInputTokens, Compacted: run.compacted,
+		}, time.Now())
+	}
 	combinedUsage := finalUsage
 	if resp.Request != nil && !statsPricingOriginKnown(meta.Provider, resp.Request.URL) {
 		evidence.statsPricingUnsupportedReason = "custom_provider_origin"
