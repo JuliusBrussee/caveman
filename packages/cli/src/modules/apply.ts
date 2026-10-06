@@ -477,6 +477,9 @@ function inactiveReason(m: ModuleDef, selection: ModuleSelection, signedIn: bool
   const h = moduleHost();
   if (m.needsSignIn) {
     if (!signedIn) return `sign in to turn on ${m.id}`;
+    // caveman-proxy acts only on an explicit switch: signing in alone never
+    // starts a Cloud feature (a config from before modules has none).
+    if (storedModules()[m.id] !== true) return `${m.id} not switched on in config`;
     const product = cloudProduct(me ?? null, m.id);
     if (!me || product?.state === "off") return `waiting for Cloud ${m.id}`;
     const pause = m.id === "routing" ? routingPause(product) : product?.state === "limited" ? product : undefined;

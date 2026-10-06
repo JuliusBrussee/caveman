@@ -124,3 +124,19 @@ test("status --json carries the plan from /me and no weekly cap", async () => {
     fx.cleanup();
   }
 });
+
+// caveman-proxy routes only on an explicit switch; status never claims routing
+// for a config that never turned it on.
+test("routing never switched on says so, even signed in", async () => {
+  const fx = modulesFixture();
+  const stub = await cloud(routing({ free_allowance: 100000, used: 3, state: "ok" }));
+  try {
+    assert.equal((await runCli(["on", "input", "--yes"], fx.env)).code, 0);
+    const out = await runCli(["status"], { ...fx.env, CAVE_TOKEN: "test-token", CAVE_API_URL: stub.url });
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /^  on  routing .*routing not switched on in config · caveman on routing$/m);
+  } finally {
+    stub.close();
+    fx.cleanup();
+  }
+});
